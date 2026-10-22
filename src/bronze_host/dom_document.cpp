@@ -372,14 +372,15 @@ std::string locationHref() {
 // always visible) for every document the engine hosts, sub-documents
 // included, since they share the window.
 void decorateDocumentExtras(ObjectBuilder& b, dom::Document* fixed) {
-    (void)fixed;
-    b.accessor("hidden", [](Value, std::span<const Value>) {
+    b.accessor("hidden", [fixed](Value, std::span<const Value>) {
         auto* e = hostEngine();
-        return ev::fromBool(e ? !e->pageVisible() : false);
+        dom::Document* doc = documentFor(fixed);
+        return ev::fromBool(e ? !e->documentPageVisible(doc) : false);
     }, nullptr);
-    b.accessor("visibilityState", [](Value, std::span<const Value>) {
+    b.accessor("visibilityState", [fixed](Value, std::span<const Value>) {
         auto* e = hostEngine();
-        return ev::fromUtf8(e && !e->pageVisible() ? "hidden" : "visible");
+        dom::Document* doc = documentFor(fixed);
+        return ev::fromUtf8(e && !e->documentPageVisible(doc) ? "hidden" : "visible");
     }, nullptr);
     b.accessor("location", [](Value, std::span<const Value>) {
         ev::GlobalValue loc = ev::globalValue("location");

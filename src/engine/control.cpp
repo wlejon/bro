@@ -67,7 +67,7 @@ double ControlCall::number(const std::string& name, double fallback) const {
 // ---------------------------------------------------------------------------
 
 ControlServer::ControlServer(Engine& engine)
-    : engine_(engine), socket_(std::make_unique<platform::ControlSocket>()),
+    : engine_(engine), socket_(std::make_shared<platform::ControlSocket>()),
       inbox_(std::make_unique<AgentInbox>([this] { return clockMs(); }, AgentInbox::defaultLogPath(engine))) {
     registerCommand("help", "[command]  list the commands, or one command's usage",
                     [this](const ControlCallPtr& call) {
@@ -79,7 +79,10 @@ ControlServer::ControlServer(Engine& engine)
                     });
 }
 
-ControlServer::~ControlServer() { stop(); }
+ControlServer::~ControlServer() {
+    stop();
+    releaseControlView(this);
+}
 
 bool ControlServer::start(const std::string& name, std::string* why) {
     if (!socket_->start(name, why)) return false;
@@ -213,10 +216,13 @@ void ControlServer::post(std::vector<std::string> argv, size_t outArg, FileSink 
 
 void ControlServer::pump() {
     if (socket_->running()) {
+        std::weak_ptr<platform::ControlSocket> weakSocket = socket_;
         for (auto& req : socket_->take()) {
             const uint64_t conn = req.conn, id = req.id;
-            auto reply = [this, conn, id](bool ok, std::string payload, std::string file) {
-                socket_->reply(conn, id, ok, std::move(payload), std::move(file));
+            auto reply = [weakSocket, conn, id](bool ok, std::string payload, std::string file) {
+                if (auto sock = weakSocket.lock()) {
+                    sock->reply(conn, id, ok, std::move(payload), std::move(file));
+                }
             };
             if (!req.parseError.empty()) {
                 reply(false, req.parseError, {});

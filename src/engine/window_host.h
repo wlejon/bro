@@ -58,6 +58,7 @@ struct WindowHost {
     bool focused = false;
     bool minimized = false;
     bool occluded = false;
+    bool pageVisible = true;
     int width = 0, height = 0;  // client size in window coords
     float clearColor[4] = {0.07f, 0.07f, 0.09f, 1.0f};
 

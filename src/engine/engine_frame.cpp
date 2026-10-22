@@ -355,7 +355,10 @@ void Engine::installWindowEventHandlers() {
         if (mainWin(id)) setPageVisibility(false);
         else handleHostMinimized(id, true);
     };
-    eventLoop_->onMaximized = [this, mainWin](uint32_t id) { if (mainWin(id)) setPageVisibility(true); };
+    eventLoop_->onMaximized = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) setPageVisibility(true);
+        else handleHostMinimized(id, false);
+    };
     eventLoop_->onRestored = [this, mainWin](uint32_t id) {
         if (mainWin(id)) setPageVisibility(true);
         else handleHostMinimized(id, false);
@@ -368,7 +371,10 @@ void Engine::installWindowEventHandlers() {
         else handleHostOccluded(id, false);
     };
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
-    eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) { if (mainWin(id)) handleDisplayScaleChanged(); };
+    eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) handleDisplayScaleChanged();
+        else handleHostDisplayScaleChanged(id);
+    };
 }
 
 // The layout and raster workers and the handoffs between them and this thread.

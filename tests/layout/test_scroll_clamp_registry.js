@@ -120,3 +120,32 @@ function scroller(h = 100, content = 1000) {
     eq(s.scrollTop, 150, 'adopted away and back: clamped in this document again');
     s.remove(); flush();
 }
+
+// ---- scrollToBottom element freed or adopted before flush does not UAF -------------------
+{
+    const wrap = document.createElement('div');
+    const s = scroller(100, 500);
+    wrap.append(s);
+    root.append(wrap);
+    flush();
+    // Dirty the document and request scroll-to-bottom in the same turn, then free via innerHTML = ''
+    const extra = document.createElement('div');
+    extra.style.height = '200px';
+    s.append(extra);
+    s.scrollTop = 99999;
+    wrap.innerHTML = '';
+    flush();
+
+    // Same with cross-document adoption while scrollToBottom is pending
+    const s2 = scroller(100, 500);
+    root.append(s2);
+    flush();
+    const extra2 = document.createElement('div');
+    extra2.style.height = '300px';
+    s2.append(extra2);
+    s2.scrollTop = 99999;
+    const other = document.implementation.createHTMLDocument('other2');
+    other.adoptNode(s2);
+    flush();
+    wrap.remove(); flush();
+}

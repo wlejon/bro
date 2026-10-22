@@ -133,6 +133,13 @@ void Document::adoptOne(Node* node, Document* src) {
                 src->noteVideoElement(elem, false);
                 noteVideoElement(elem, true);
             }
+            if (src->scrollToBottomElements_.count(elem)) {
+                src->removeScrollToBottomElement(elem);
+                addScrollToBottomElement(elem);
+            }
+            if (!src->topLayer_.empty()) src->removeFromTopLayer(elem);
+            if (src->transitionManager_) src->transitionManager_->forgetElement(elem);
+            if (src->animationManager_) src->animationManager_->forgetElement(elem);
         }
         // Live ranges in the source document can't span into another document.
         for (auto* r : src->liveRanges_) r->onNodeDestroyed(node);
@@ -226,6 +233,10 @@ void Document::freeNode(Node* node) {
         }
         // And the top layer, which the paint and hit-test paths walk.
         if (!topLayer_.empty()) removeFromTopLayer(elem);
+        removeScrollToBottomElement(elem);
+        forgetScrolled(elem);
+        forgetScrollContainer(elem);
+        noteVideoElement(elem, false);
         // Same reasoning, one layer up: the CSS transition and animation
         // managers index by raw Element* and dereference the key on the next
         // tick (markDirty() when a transition/animation completes, and the

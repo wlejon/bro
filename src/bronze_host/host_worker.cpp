@@ -476,13 +476,22 @@ void WorkerInstance::threadFunc() {
     bk::installSqliteJS();
     bk::installRequire();
     auto* eng = hostEngine();
-    if (eng) {
+    if (mounts_) {
+        for (const auto& [prefix, target] : mounts_->mounts()) {
+            brokit::api::addFsPrefixMount(prefix, target);
+            brokit::api::addFetchPrefixMount(prefix, target);
+        }
+    } else if (eng) {
         for (const auto& [prefix, target] : eng->assetMounts().mounts()) {
             brokit::api::addFsPrefixMount(prefix, target);
+            brokit::api::addFetchPrefixMount(prefix, target);
         }
-        if (!eng->appDir().empty()) {
-            brokit::api::addFsBasePath(eng->appDir());
-        }
+    }
+    const std::string& workerBase = !basePath_.empty() ? basePath_ : (eng ? eng->appDir() : basePath_);
+    if (!workerBase.empty()) {
+        brokit::api::addFsBasePath(workerBase);
+        brokit::api::addFetchBasePath(workerBase);
+        brokit::api::setIndexedDBPath(workerBase);
     }
     // `bro`: bro.net / bro.net.sync over this thread's own subscriber, the
     // sibling compute APIs over this thread's own classes, bro.server over
@@ -633,6 +642,8 @@ void WorkerInstance::threadFunc() {
 
     ev::Persistent fetchTick(ev::globalValue("__brokit_fetch_tick").value);
     ev::Persistent wsTick(ev::globalValue("__brokit_ws_tick").value);
+    ev::Persistent netTick(ev::globalValue("__brokit_net_tick").value);
+    ev::Persistent fsWatchTick(ev::globalValue("__brokit_fs_watch_tick").value);
     ev::Persistent timersTick(ev::globalValue("__brokit_tick_timers").value);
     ev::Persistent timersNext(ev::globalValue("__brokit_next_timer").value);
     // Date.now()'s clock, which brokit's timers are set on.
@@ -642,6 +653,9 @@ void WorkerInstance::threadFunc() {
                                        .count());
     };
     ev::Persistent fetchHasPending(ev::globalValue("__brokit_fetch_has_pending").value);
+    ev::Persistent wsHasPending(ev::globalValue("__brokit_ws_has_pending").value);
+    ev::Persistent netHasPending(ev::globalValue("__brokit_net_has_pending").value);
+    ev::Persistent fsWatchHasPending(ev::globalValue("__brokit_fs_watch_has_pending").value);
     ev::Persistent fsAsyncTick(ev::globalValue("__brokit_fs_async_tick").value);
     ev::Persistent fsAsyncHasPending(ev::globalValue("__brokit_fs_async_has_pending").value);
 
@@ -726,6 +740,12 @@ void WorkerInstance::threadFunc() {
         if (ev::isFunction(wsTick.get())) {
             ev::call(wsTick.get(), ev::undefined(), {});
         }
+        if (ev::isFunction(netTick.get())) {
+            ev::call(netTick.get(), ev::undefined(), {});
+        }
+        if (ev::isFunction(fsWatchTick.get())) {
+            ev::call(fsWatchTick.get(), ev::undefined(), {});
+        }
         // fs.promises / callback fs calls this worker made, settled here.
         if (ev::isFunction(fsAsyncTick.get())) {
             ev::call(fsAsyncTick.get(), ev::undefined(), {});
@@ -742,14 +762,17 @@ void WorkerInstance::threadFunc() {
         flushRejections();
 
         bool hasPendingWork = false;
-        if (ev::isFunction(fetchHasPending.get())) {
-            Value has = ev::call(fetchHasPending.get(), ev::undefined(), {}).value;
-            if (ev::toBool(has)) hasPendingWork = true;
-        }
-        if (!hasPendingWork && ev::isFunction(fsAsyncHasPending.get())) {
-            Value has = ev::call(fsAsyncHasPending.get(), ev::undefined(), {}).value;
-            if (ev::toBool(has)) hasPendingWork = true;
-        }
+        auto checkPending = [&](const ev::Persistent& fn) {
+            if (!hasPendingWork && ev::isFunction(fn.get())) {
+                Value has = ev::call(fn.get(), ev::undefined(), {}).value;
+                if (ev::toBool(has)) hasPendingWork = true;
+            }
+        };
+        checkPending(fetchHasPending);
+        checkPending(wsHasPending);
+        checkPending(netHasPending);
+        checkPending(fsWatchHasPending);
+        checkPending(fsAsyncHasPending);
 
         // The next timer, read after everything this turn ran: a timer set
         // by a message, a fetch, a sibling job or a microtask counts.
@@ -786,6 +809,13 @@ void WorkerInstance::threadFunc() {
     // This thread's sibling jobs still in flight, joined while the realm
     // their callbacks belong to is alive.
     shutdownWorkerSiblingApis();
+    // Tear down per-thread brokit handles while this thread's Persistent slots exist.
+    brokit::api::uninstallFetch();
+    brokit::api::uninstallWebSocket();
+    brokit::api::uninstallNet();
+    brokit::api::uninstallFSWatch();
+    brokit::api::cleanupSqlite();
+    brokit::api::cleanupIndexedDB();
     // Before workerListeners (which the sink's dispatch names) goes out of
     // scope, and while this thread's Persistent slots still exist.
     uninstallRejectionTracking();

@@ -18,6 +18,8 @@ struct EventSpec {
     std::string type;
     bool bubbles = false;
     bool cancelable = false;
+    bool composed = false;
+    bool hasComposed = false;
     bool isTrusted = false;
     // CustomEvent payload — set only for a descriptor that is not one of the
     // UI event shapes, whose numeric `detail` is a click count.

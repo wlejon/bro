@@ -774,11 +774,12 @@ void Engine::hostDropText(uint64_t hostId, const std::string& text,
 // ---------------------------------------------------------------------------
 
 void Engine::windowHostSetVisibility(WindowHost& h, bool visible) {
-    if (!h.document) return;
-    (void)visible;
+    if (h.pageVisible == visible) return;
+    h.pageVisible = visible;
+    if (!h.document || !h.document->documentElement()) return;
     dom::Event evt("visibilitychange", /*bubbles=*/true, /*cancelable=*/false);
     evt.setIsTrusted(true);
-    dom::dispatchWindowEvent(h.document.get(), evt);
+    windowHostDispatch(h, h.document->documentElement(), evt);
 }
 
 } // namespace bro::engine

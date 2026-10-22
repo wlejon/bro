@@ -18,18 +18,43 @@ struct EventPathEntry {
     Element* retargetedTarget = nullptr;
 };
 
-std::vector<EventPathEntry> buildEventPath(Element* target) {
+bool isInsideShadowRoot(const Element* el, const ShadowRoot* sr) {
+    const Node* n = el;
+    while (n && n->parentNode()) n = n->parentNode();
+    return n == sr;
+}
+
+std::vector<EventPathEntry> buildEventPath(Element* target, const Event& event,
+                                           bool& stoppedAtShadowBoundary) {
     std::vector<EventPathEntry> path;
     Element* current = target;
     Element* effectiveTarget = target;
+    stoppedAtShadowBoundary = false;
 
     while (current) {
         path.push_back({current, effectiveTarget});
         auto* parentNode = current->parentNode();
+        if (parentNode && parentNode->nodeType() == NodeType::Element) {
+            auto* parentElem = static_cast<Element*>(parentNode);
+            if (parentElem->hasShadow()) {
+                if (auto* sr = parentElem->shadowRoot()) {
+                    if (auto* slot = sr->assignedSlot(current)) {
+                        current = slot;
+                        continue;
+                    }
+                }
+            }
+        }
         if (parentNode && parentNode->nodeType() == NodeType::DocumentFragment) {
             auto* sr = dynamic_cast<ShadowRoot*>(parentNode);
             if (sr && sr->host()) {
-                effectiveTarget = sr->host();
+                if (isInsideShadowRoot(effectiveTarget, sr)) {
+                    if (!event.composed()) {
+                        stoppedAtShadowBoundary = true;
+                        break;
+                    }
+                    effectiveTarget = sr->host();
+                }
                 current = sr->host();
                 continue;
             }
@@ -79,10 +104,11 @@ void dispatchDomEvent(Element* target, Event& event) {
     if (!target) return;
 
     event.setTarget(target);
-    auto path = buildEventPath(target);
+    bool stoppedAtShadowBoundary = false;
+    auto path = buildEventPath(target, event, stoppedAtShadowBoundary);
     if (path.empty()) return;
 
-    Document* doc = target->document();
+    Document* doc = stoppedAtShadowBoundary ? nullptr : target->document();
 
     // What `event.target` reads as at each step of the walk. Shadow
     // encapsulation is exactly this: a listener OUTSIDE the shadow tree is

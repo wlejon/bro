@@ -213,7 +213,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     b.set("eventPhase", ev::fromDouble(e.eventPhase()));
     b.set("bubbles", ev::fromBool(e.bubbles()));
     b.set("cancelable", ev::fromBool(e.cancelable()));
-    b.set("composed", ev::fromBool(true));
+    b.set("composed", ev::fromBool(e.composed()));
     b.set("defaultPrevented", ev::fromBool(e.defaultPrevented()));
     b.set("isTrusted", ev::fromBool(e.isTrusted()));
     b.set("timeStamp", ev::fromDouble(e.timeStamp()));

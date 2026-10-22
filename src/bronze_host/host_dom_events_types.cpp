@@ -70,6 +70,7 @@ void installDomEventTypes() {
                 b.set("type", ev::fromUtf8(type));
                 b.set("bubbles", ev::fromBool(false));
                 b.set("cancelable", ev::fromBool(false));
+                b.set("composed", ev::fromBool(false));
                 b.set("detail", ev::null());
                 if (a.size() > 1 && ev::isObject(a[1])) {
                     // Read through the argument slot each time: b.set
@@ -78,6 +79,8 @@ void installDomEventTypes() {
                     if (!ev::isUndefined(bub)) b.set("bubbles", ev::fromBool(ev::toBool(bub)));
                     Value canc = ev::getProperty(a[1], "cancelable");
                     if (!ev::isUndefined(canc)) b.set("cancelable", ev::fromBool(ev::toBool(canc)));
+                    Value comp = ev::getProperty(a[1], "composed");
+                    if (!ev::isUndefined(comp)) b.set("composed", ev::fromBool(ev::toBool(comp)));
                     Value det = ev::getProperty(a[1], "detail");
                     if (!ev::isUndefined(det)) b.set("detail", det);
                 }

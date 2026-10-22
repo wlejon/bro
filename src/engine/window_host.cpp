@@ -421,6 +421,38 @@ void Engine::handleHostOccluded(uint32_t sdlWindowId, bool occluded) {
     }
 }
 
+void Engine::handleHostDisplayScaleChanged(uint32_t sdlWindowId) {
+    WindowHost* host = windowHostBySdlId(sdlWindowId);
+    if (!host || !host->window) return;
+    int w = 0, ht = 0;
+    host->window->getSize(w, ht);
+    if (w > 0 && ht > 0) {
+        host->width = w;
+        host->height = ht;
+    }
+    const double newScale = (displayMode_ == DisplayMode::Headless)
+                                ? 1.0
+                                : static_cast<double>(host->window->getDevicePixelRatio());
+    if (newScale != host->displayScale) {
+        host->displayScale = newScale;
+        if (host->document) {
+            host->document->setMediaResolution(static_cast<float>(newScale));
+            host->document->markDirty();
+            deliverMediaQueryChangesAllRealms();
+        }
+    }
+    uiDirty_ = true;
+}
+
+bool Engine::documentPageVisible(const dom::Document* doc) const {
+    if (doc) {
+        for (const auto& h : windowHosts_) {
+            if (h && h->document.get() == doc) return h->pageVisible;
+        }
+    }
+    return pageVisible_;
+}
+
 // ---------------------------------------------------------------------------
 // The host's document realm
 // ---------------------------------------------------------------------------

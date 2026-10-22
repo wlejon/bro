@@ -160,7 +160,7 @@ private:
         ControlOrigin origin;
     };
     Engine& engine_;
-    std::unique_ptr<platform::ControlSocket> socket_;
+    std::shared_ptr<platform::ControlSocket> socket_;
     std::unique_ptr<AgentInbox> inbox_;
     std::map<std::string, Command> commands_;
     std::vector<Ticker> tickers_;
@@ -176,6 +176,7 @@ void registerControlRecordCommands(ControlServer& server);
 /// shot, the handle forms of the input commands. Registered after the input
 /// commands, which it wraps.
 void registerAgentViewCommands(ControlServer& server);
+void releaseControlView(const ControlServer* server);
 /// The agent inbox's commands (control_inbox.cpp): agents, ask, inbox.
 void registerInboxCommands(ControlServer& server);
 /// Whether this user's session has a display serving agent control (the

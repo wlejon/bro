@@ -61,6 +61,10 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             if (document_ && !document_->scrollToBottomElements().empty()) {
                 auto pending = document_->scrollToBottomElements();
                 for (auto* elem : pending) {
+                    if (!document_->ownsNode(elem)) {
+                        document_->removeScrollToBottomElement(elem);
+                        continue;
+                    }
                     std::string ov = getOverflowY(elem->computedStyle());
                     if (overflowClips(ov)) {
                         elem->setScrollTopValue(dom::maxScrollTopOf(elem));

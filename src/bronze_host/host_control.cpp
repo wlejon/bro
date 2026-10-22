@@ -552,10 +552,13 @@ void installInboxNamespace(engine::Engine& engine) {
     // (their Persistents leaked rather than freed against a gone realm).
     g_clientCb.clear();
     g_inboxNs = nullptr;
-    static bool pumping = false;
-    if (!pumping) {
-        pumping = true;
+    static engine::Engine* pumpingEngine = nullptr;
+    if (pumpingEngine != &engine) {
+        pumpingEngine = &engine;
         engine.addFramePump(pumpControlClient);
+        engine.addShutdownHook([&engine] {
+            if (pumpingEngine == &engine) pumpingEngine = nullptr;
+        });
     }
     ev::GlobalValue broG = ev::globalValue("bro");
     if (!broG.found || !ev::isObject(broG.value)) return;
@@ -590,6 +593,15 @@ void installInboxNamespace(engine::Engine& engine) {
 }  // namespace
 
 void installControlCommands(engine::Engine& engine) {
+    // Reset any cached realm handles from a prior realm (app hot-reload or
+    // previous Engine instance) and fail any in-flight eval calls.
+    for (auto& [id, call] : g_eval.pending) {
+        if (call && !call->done()) call->fail("realm reloaded");
+    }
+    g_eval.pending.clear();
+    g_eval.settle = nullptr;
+    g_eval.reply = nullptr;
+
     engine::ControlServer& s = engine.control();
     s.registerCommand("eval",
                       "<javascript> [--timeout=10000]  run in the page's realm; prints the completion value "

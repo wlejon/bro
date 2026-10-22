@@ -220,6 +220,8 @@ public:
     void handleHostFocusChanged(uint32_t sdlWindowId, bool focused);
     void handleHostMinimized(uint32_t sdlWindowId, bool minimized);
     void handleHostOccluded(uint32_t sdlWindowId, bool occluded);
+    void handleHostDisplayScaleChanged(uint32_t sdlWindowId);
+    bool documentPageVisible(const dom::Document* doc) const;
     void processPendingWindowHosts();
 
     // Per-window input routing (window_host_input.cpp)

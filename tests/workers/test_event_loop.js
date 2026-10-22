@@ -9,6 +9,8 @@ const w = new Worker('../workers/worker_eventloop.js');
 let last = null;
 const ticks = [];
 let fetched = null;
+let fileRead = null;
+let netEchoed = null;
 let closing = false;
 w.onmessage = (e) => {
     const m = e.data;
@@ -17,6 +19,8 @@ w.onmessage = (e) => {
     if (m.tick !== undefined) ticks.push(m.tick);
     if (m.fetched !== undefined) fetched = m.fetched;
     if (m.fetchError !== undefined) fetched = 'ERROR: ' + m.fetchError;
+    if (m.fileRead !== undefined) fileRead = m.fileRead;
+    if (m.netEchoed !== undefined) netEchoed = m.netEchoed;
     if (m.closing) closing = true;
 };
 
@@ -54,6 +58,16 @@ assert(waitForReal(() => ticks.length >= 5, 5000),
 w.postMessage({ cmd: 'fetch', path: 'index.html' });
 assert(waitForReal(() => fetched !== null, 5000), 'fetch completed in worker');
 assert(!String(fetched).startsWith('ERROR'), 'fetch succeeded: ' + fetched);
+
+// ── FileReader posts completion to worker's own thread_local hostTaskPoster ─
+w.postMessage({ cmd: 'filereader', text: 'hello-worker-blob' });
+assert(waitForReal(() => fileRead !== null, 5000), 'FileReader completed in worker');
+assert(fileRead === 'hello-worker-blob', 'FileReader result in worker: ' + fileRead);
+
+// ── net TCP echo server/client pumped in worker via __brokit_net_tick ────
+w.postMessage({ cmd: 'netEcho', payload: 'worker-tcp-ok' });
+assert(waitForReal(() => netEchoed !== null, 5000), 'net TCP echo completed in worker');
+assert(netEchoed === 'worker-tcp-ok', 'net TCP echo result: ' + netEchoed);
 
 // ── self.close() exits the loop ──────────────────────────────────────────
 w.postMessage({ cmd: 'close' });

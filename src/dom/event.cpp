@@ -46,6 +46,7 @@ CustomEvent::CustomEvent(const std::string& type, bool bubbles, bool cancelable)
 MouseEvent::MouseEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
+    setComposed(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ MouseEvent::MouseEvent(const std::string& type, bool bubbles, bool cancelable)
 KeyboardEvent::KeyboardEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
+    setComposed(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,7 @@ KeyboardEvent::KeyboardEvent(const std::string& type, bool bubbles, bool cancela
 FocusEvent::FocusEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
+    setComposed(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -82,11 +85,13 @@ WheelEvent::WheelEvent(const std::string& type, bool bubbles, bool cancelable)
 InputEvent::InputEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
+    setComposed(true);
 }
 
 CompositionEvent::CompositionEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
+    setComposed(true);
 }
 
 TransitionEvent::TransitionEvent(const std::string& type, bool bubbles, bool cancelable)

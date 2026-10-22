@@ -953,6 +953,10 @@ bool controlDisplayServes() {
     return false;
 }
 
+void releaseControlView(const ControlServer* server) {
+    g_states.erase(server);
+}
+
 void registerAgentViewCommands(ControlServer& s) {
     ViewState& st = stateOf(s);
     // The input commands' own forms stay; a handle (or --diff) takes the agent path.

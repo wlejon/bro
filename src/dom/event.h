@@ -34,7 +34,7 @@ public:
     void setTargetToWindow() { target_ = nullptr; targetIsWindow_ = true; }
     void setCurrentTargetToWindow() { currentTarget_ = nullptr; currentTargetIsWindow_ = true; }
     void setComposed(bool v) { composed_ = v; }
-    void setIsTrusted(bool v) { isTrusted_ = v; }
+    void setIsTrusted(bool v) { isTrusted_ = v; if (v) composed_ = true; }
     void setEventPhase(int v) { eventPhase_ = v; }
     void preventDefault();
     void stopPropagation();
