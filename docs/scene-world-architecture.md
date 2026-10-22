@@ -550,9 +550,22 @@ ambient is the open sky's as before.
   the middle column; storage wraps (column i at `(corner + i) mod 32`). A
   column's layers stand 0.25 m over its ground up to the canopy's top
   (`max(8, 1.15 × the tallest crown)`), spread by the power 1.6. The
-  columns a move brings in are fresh boxes (required, traced afresh), cut
-  into slices' rows so every job costs about a slice's; the rest refresh a
-  slice (2 rows) at a time.
+  columns a move brings in are fresh boxes (traced afresh), at most 8
+  columns each; the rest refresh a slice (2 rows) at a time.
+- **Unseen columns.** A lit surface gives a cascade's outermost column no
+  weight (the blend into the next coarser ramps in over columns 1 to 4), so
+  the strip a one-column move brings in is not seen until the next move
+  takes it inside. Its world and its fresh traces are offered at 1 px
+  (ahead of a refresh's aged error), not required, the traces once its world
+  is made; the next move makes them required. A walk's moves are made in
+  the slack of the frames between them, not all in the frame of the move:
+  biomes' glade walked at 1.4 m/s, the frame of a move had cost about
+  0.85 ms of required world and fresh traces (6 of 150 frames over
+  2.78 ms, to 3.2 ms); now 0–4 over, by at most 0.15 ms (the frames' noise
+  past the budget's window), the walk's mean 2.43 → 2.23 ms. Until made,
+  the column holds what its storage held: the light of the column that
+  left across the square. The last cascade, blended into nothing, is seen
+  to its edge, as is a strip two columns wide.
 - **The world it traces** (`lighting/scene_probe_grid`): the ground's
   heights (128² a cascade, the still opaque casters drawn straight down
   through the shared caster drawer), the canopy (64 × 64 × 32 RGBA16F of

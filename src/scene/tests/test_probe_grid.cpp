@@ -90,12 +90,14 @@ void testPlace() {
     makeAll(g);
     bool overlap = false;
     check(freshColumns(g, 0, overlap).size() == 64 && !overlap, "a new square is fresh, every column once");
-    int required = 0, deepest = 0;
+    int required = 0, widest = 0;
     for (const auto& j : g.traceJobs()) {
         required += j.required ? 1 : 0;
-        if (j.box.fresh) deepest = std::max(deepest, j.box.z1 - j.box.z0);
+        if (j.box.fresh) widest = std::max(widest, j.box.columnCount());
     }
-    check(required == 12 && deepest == 2, "fresh boxes are required, a slice's rows each (four a cascade)");
+    // Eight boxes a cascade, a row each; the outermost rows of the two finer
+    // cascades are unseen, so wanted, not required.
+    check(required == 20 && widest == 8, "fresh boxes are required where seen, freshColumns columns each");
     traceFresh(g);
     check(freshColumns(g, 0, overlap).empty(), "traced, the fresh boxes go");
 }
@@ -137,17 +139,18 @@ void testMoves() {
     check(!again.count({0, 3}), "an old column stays traced");
 
     // Moved a column every frame (the world remade each frame): each
-    // frame's strip is offered that frame, never piled up for a still one.
+    // frame's strip is offered the frame after its world, never piled up.
     g.volumesMade(0);
     traceFresh(g);
     bool eachFrame = true;
     for (int f = 1; f <= 10; ++f) {
         g.place(6.0 + 2.0 * f, -2.0);
-        eachFrame = eachFrame && !g.volumesCurrent(0) && freshColumns(g, 0, overlap).size() == 8;
-        traceFresh(g);
+        eachFrame = eachFrame && !g.volumesCurrent(0) && freshColumns(g, 0, overlap).empty();
         g.volumesMade(0);
+        eachFrame = eachFrame && freshColumns(g, 0, overlap).size() == 8;
+        traceFresh(g);
     }
-    check(eachFrame, "a cascade moving every frame traces each frame's strip that frame");
+    check(eachFrame, "a cascade moving every frame traces each frame's strip once its world is made");
 
     // A jump past the square: all of it fresh.
     g.place(1000.0, 1000.0);
@@ -155,6 +158,48 @@ void testMoves() {
     check(stale.size() == 1 && stale[0].columnCount() == 64, "a jump makes the whole world stale");
     g.volumesMade(0);
     check(freshColumns(g, 0, overlap).size() == 64, "a jump makes the whole square fresh");
+}
+
+// The strip a one-column move brings in is the square's outermost column,
+// which no lit surface sees: wanted, not required, until the next move
+// takes it inside; the last cascade's is seen.
+void testUnseen() {
+    ProbeGrid g = grid(8);
+    g.place(0.0, 0.0);
+    makeAll(g);
+    traceFresh(g);
+    g.place(2.0, 0.0);   // one column east in cascade 0 alone
+    check(!g.volumesCurrent(0) && !g.staleSeen(0), "a one-column move's world is stale and unseen");
+    bool overlap = false;
+    check(freshColumns(g, 0, overlap).empty(), "its fresh traces wait for its world");
+    g.volumesMade(0);
+    bool wanted = true;
+    int boxes = 0;
+    for (const auto& j : g.traceJobs()) {
+        if (!j.box.fresh) continue;
+        ++boxes;
+        wanted = wanted && !j.required && j.error == g.config().unseenPixels && j.box.x0 == 7 && j.box.columnCount() <= 8;
+    }
+    check(boxes == 1 && wanted, "then they are offered, wanted at unseenPixels, not required");
+    // Not traced, and moved on: the strip is inside now, and required; the
+    // new one is unseen.
+    g.place(4.0, 0.0);
+    check(!g.staleSeen(0), "the next strip's world is unseen too");
+    bool inside = false, early = false;
+    for (const auto& j : g.traceJobs()) {
+        if (!j.box.fresh) continue;
+        inside = inside || (j.box.x0 == 6 && j.required);
+        early = early || j.box.x0 == 7;
+    }
+    check(inside && !early, "a strip taken inside is required; the new one waits for its world");
+    // Two columns at once: the strip is two wide, and seen.
+    g.volumesMade(0);
+    traceFresh(g);
+    g.place(8.0, 0.0);
+    check(g.staleSeen(0), "a two-column move's world is seen (required)");
+    // The last cascade blends into nothing: its edge is seen.
+    g.place(36.0, 0.0);
+    check(g.staleSeen(2), "the last cascade's outermost column is seen");
 }
 
 void testVolumes() {
@@ -251,6 +296,7 @@ int main() {
     testLayers();
     testPlace();
     testMoves();
+    testUnseen();
     testVolumes();
     testRefresh();
     std::printf("probe grid: %d checks, %d failed\n", g_checks, g_failures);

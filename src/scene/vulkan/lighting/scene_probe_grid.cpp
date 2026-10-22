@@ -305,17 +305,22 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
     block.atm = light.atm;
     blockInfo_ = frame.gpu.device.frameUniform(&block, sizeof(block));
 
-    // The cascades whose worlds are to be made: one job, required.
+    // The cascades whose worlds are to be made: one job, required where any
+    // of what is stale is seen.
     uint32_t stale = 0;
-    for (int c = 0; c < config.cascades && c < PG_MAX_CASCADES; ++c)
-        if (!grid_.volumesCurrent(c)) ++stale;
+    bool seen = false;
+    for (int c = 0; c < config.cascades && c < PG_MAX_CASCADES; ++c) {
+        if (grid_.volumesCurrent(c)) continue;
+        ++stale;
+        seen = seen || grid_.staleSeen(c);
+    }
     if (stale > 0) {
         WorldJob job;
         job.key = 0;
         job.kind = kind_;
-        job.error = 1.0f;
+        job.error = config.unseenPixels;
         job.size = static_cast<double>(stale);
-        job.required = true;
+        job.required = seen;
         service.offer(job);
     }
 

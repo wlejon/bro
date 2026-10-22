@@ -11,6 +11,7 @@ void ProbeGrid::configure(const ProbeGridConfig& config) {
     config_.columns = std::max(config_.columns, 2);
     config_.layers = std::max(config_.layers, 2);
     config_.sliceRows = std::clamp(config_.sliceRows, 1, config_.columns);
+    config_.freshColumns = std::max(config_.freshColumns, 1);
     cascades_.assign(static_cast<size_t>(config_.cascades), Cascade{});
     const int slices = (config_.columns + config_.sliceRows - 1) / config_.sliceRows;
     // The slices start spread over their period, so they come due one by one
@@ -42,12 +43,34 @@ double ProbeGrid::spacing(int c) const {
 }
 
 void ProbeGrid::queueFresh(Cascade& c, const ProbeBox& box) const {
-    for (int z0 = box.z0; z0 < box.z1; z0 += config_.sliceRows) {
-        ProbeBox b = box;
-        b.z0 = z0;
-        b.z1 = std::min(z0 + config_.sliceRows, box.z1);
-        c.fresh.push_back(b);
-    }
+    // Tiles as wide as the box, or the most a box holds, and as many rows
+    // as that leaves.
+    const int w = std::min(box.x1 - box.x0, config_.freshColumns);
+    const int h = std::max(config_.freshColumns / std::max(w, 1), 1);
+    for (int z0 = box.z0; z0 < box.z1; z0 += h)
+        for (int x0 = box.x0; x0 < box.x1; x0 += w) {
+            ProbeBox b = box;
+            b.x0 = x0;
+            b.x1 = std::min(x0 + w, box.x1);
+            b.z0 = z0;
+            b.z1 = std::min(z0 + h, box.z1);
+            c.fresh.push_back(b);
+        }
+}
+
+bool ProbeGrid::seen(const ProbeBox& b) const {
+    if (b.cascade + 1 >= config_.cascades) return true;
+    const int n = config_.columns;
+    const bool edgeX = b.x1 - b.x0 == 1 && (b.x0 == 0 || b.x0 == n - 1);
+    const bool edgeZ = b.z1 - b.z0 == 1 && (b.z0 == 0 || b.z0 == n - 1);
+    return !edgeX && !edgeZ;
+}
+
+bool ProbeGrid::madeOver(const Cascade& c, const ProbeBox& box) const {
+    if (!c.made || c.madeSun != sun_ || c.madeTop != top_) return false;
+    return std::none_of(c.stale.begin(), c.stale.end(), [&](const ProbeBox& s) {
+        return s.x0 < box.x1 && box.x0 < s.x1 && s.z0 < box.z1 && box.z0 < s.z1;
+    });
 }
 
 void ProbeGrid::addStale(Cascade& c, ProbeBox box) {
@@ -195,6 +218,12 @@ bool ProbeGrid::volumesCurrent(int c) const {
     return k.made && k.stale.empty() && k.madeSun == sun_ && k.madeTop == top_;
 }
 
+bool ProbeGrid::staleSeen(int c) const {
+    const Cascade& k = cascades_[static_cast<size_t>(c)];
+    if (!k.made || k.madeSun != sun_ || k.madeTop != top_) return true;
+    return std::any_of(k.stale.begin(), k.stale.end(), [&](const ProbeBox& b) { return seen(b); });
+}
+
 void ProbeGrid::staleBoxes(int c, std::vector<ProbeBox>& out) const {
     out.clear();
     const Cascade& k = cascades_[static_cast<size_t>(c)];
@@ -223,7 +252,10 @@ const std::vector<ProbeGrid::TraceJob>& ProbeGrid::traceJobs() {
     const int n = config_.columns;
     for (int i = 0; i < config_.cascades; ++i) {
         const Cascade& c = cascades_[static_cast<size_t>(i)];
-        for (const ProbeBox& b : c.fresh) jobs_.push_back(TraceJob{b, 0.0f, true});
+        for (const ProbeBox& b : c.fresh) {
+            if (seen(b)) jobs_.push_back(TraceJob{b, 0.0f, true});
+            else if (madeOver(c, b)) jobs_.push_back(TraceJob{b, config_.unseenPixels, false});
+        }
         const float weight = config_.refreshPixelsPerSecond / static_cast<float>(1 << i);
         const float period = config_.refreshSeconds * static_cast<float>(1 << i);
         for (size_t s = 0; s < c.sliceAge.size(); ++s) {

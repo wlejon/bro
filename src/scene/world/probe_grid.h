@@ -28,11 +28,21 @@
 //
 // Traces. A trace job is a box of a cascade's columns, every layer, its
 // probes' rays traced and blended into what they held. The columns a move
-// brought in are required, traced afresh (no history to blend), in boxes of
-// at most a slice's rows (so every job costs about a slice's, and the world
-// service's cost of a job means one thing); the rest are refreshed a slice
-// of rows at a time, each offered once its refresh period has passed, its
-// error growing with its age so the oldest go first.
+// brought in are traced afresh (no history to blend), in boxes of at most
+// freshColumns columns (small enough for a frame's slack); the rest are
+// refreshed a slice of rows at a time, each offered once its refresh period
+// has passed, its error growing with its age so the oldest go first.
+//
+// Unseen columns. A lit surface blends a cascade into the next coarser over
+// the outer columns of its square, and gives its outermost column no weight
+// (scene_lighting.glsl's sceneProbeSh): the strip a one-column move brings
+// in is not seen until the next move takes it inside. Its world and its
+// fresh traces are wanted (unseenPixels, ahead of light that has only aged)
+// but not required, so a walk's moves are made in the slack of the frames
+// between them, not all in the frame of the move; until they are, the
+// column holds what its storage held, the light of the column that left
+// the square across from it. The last cascade, blended into nothing, is
+// seen to its edge.
 
 #include <cstdint>
 #include <vector>
@@ -46,6 +56,8 @@ struct ProbeGridConfig {
     float spacing = 2.0f;      // cascade 0's column spacing (m)
     float ratio = 4.0f;        // each cascade's spacing over the last's
     int sliceRows = 2;         // a refresh's rows of columns
+    int freshColumns = 8;      // a fresh box's most columns
+    float unseenPixels = 1.0f; // the error of an unseen column's world or fresh traces
     // A refresh's error: this many pixels a second of its age in the finest
     // cascade, halved each coarser one (its probes light what is further
     // off, smaller on screen). A slice just due is a quarter pixel wrong,
@@ -105,8 +117,14 @@ public:
     /// cascade's volumes.
     void setSun(float x, float y, float z, uint64_t generation);
 
+    /// Whether a lit surface sees any of `box` (not all of it in its
+    /// cascade's outermost columns, or the last cascade's).
+    bool seen(const ProbeBox& box) const;
+
     /// Whether cascade c's volumes are made for what it stands on now.
     bool volumesCurrent(int c) const;
+    /// Whether any of cascade c's stale volumes is seen.
+    bool staleSeen(int c) const;
     /// The boxes of cascade c's columns whose volumes are stale (none when
     /// current; the whole square when nothing of it can be kept).
     void staleBoxes(int c, std::vector<ProbeBox>& out) const;
@@ -119,11 +137,11 @@ public:
     /// Seconds pass (the frame's step): the refresh slices' ages grow.
     void advance(float seconds);
 
-    /// This frame's trace jobs: the fresh boxes (required) and every
-    /// refresh slice (its error by age), of every cascade, stale or not:
-    /// what is stale of its world is a required job of the frame's that
-    /// records ahead of the traces. A box's index in this list is its job
-    /// key.
+    /// This frame's trace jobs: the fresh boxes (required where seen; an
+    /// unseen one once its world is made) and every refresh slice (its
+    /// error by age), of every cascade, stale or not: what is stale and
+    /// seen of its world is a required job of the frame's that records
+    /// ahead of the traces. A box's index in this list is its job key.
     struct TraceJob {
         ProbeBox box;
         float error = 0.0f;
@@ -148,8 +166,10 @@ private:
         std::vector<float> sliceAge;     // seconds since each slice's refresh
     };
     void queueMove(Cascade& c, int index, int64_t dx, int64_t dz);
-    /// `box` queued fresh, cut into boxes of at most a slice's rows.
+    /// `box` queued fresh, cut into boxes of at most freshColumns columns.
     void queueFresh(Cascade& c, const ProbeBox& box) const;
+    /// Whether c's volumes over `box` are made.
+    bool madeOver(const Cascade& c, const ProbeBox& box) const;
     /// `box` stale in c: merged with those it overlaps, and with all the
     /// rest past kMaxStaleBoxes.
     static void addStale(Cascade& c, ProbeBox box);
