@@ -1332,23 +1332,216 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet
+## 11. The planet (design, for review)
 
-- **Roots:** six cube-sphere faces of world cells (§1), each a quadtree to
-  64 m leaves, every origin eye-relative in double.
-- **Its fields:** the terrain's shape (plates, the isostatic datum, mountain
-  belts, warp, erosion), its climate (belts, snow lines, rain) and its biomes,
-  each a field with a CPU reference (for physics and gameplay queries) and a
-  GPU kernel the world service runs to make tiles. Every additive term
-  switchable from the host, so a wrong look is ablated before it is guessed.
-- **Culling** adds the horizon: a cell below it is behind the planet's curve.
-- **Going up** brings things in as well as folding them away: the
-  atmosphere seen as a shell, space, other bodies. They are providers like
-  any other, refined by the pixels they cover: a planet a few pixels across
-  is a point of light, then a lit disc, then a body with its own face roots,
-  as a tree goes from a layer's texels to a card to a mesh. So there is a
-  level above the face roots (a system, its bodies, each body's six faces),
-  with every body's origin, like every cell's, taken eye-relative in double.
+A body of Earth's radius (6371 km) seen from a person in its grass to
+geostationary orbit as one place: the land's rings, its tiles, the plants
+and their canopy, the cover, the air, the probe grid, the shadow pages and
+the land's sun, all reading one state. ../planet-bro had the shape and
+scale right and the look wrong; ../PLANET-LESSONS.md holds what it taught
+(fields not objects, shape from process, the fine scale conditioned on the
+coarse, lighting as the lens, ablation and reference renders from day
+one, regeneration under a second). This section is what the engine adds
+for it; the planet itself (its plates, belts, climate and biomes) is a
+world's code (§13).
+
+### What already holds, and what does not
+
+Holds as it is: detail from pixels; the world service and its cut; the
+air (`world/atmosphere.h` is one spherical model from the ground to space,
+and draws the shell and the planet's disc from above); the canopy as the
+land past the plants' range; placement per cell about the eye at a flat
+cost; every clipmap about the eye (the cover's rings, the probe grid, the
+shadow pages, the land's sun); reversed depth.
+
+Does not: the land is a square plane `extent` each way, its rings reach
+32 km, its tiles are keyed on the plane, and every position the engine
+keeps (the plants' records, a node's transform, a field's input) is a
+float in one world frame, good to millimetres out to 32 km and to half a
+metre at 6371 km. Of those, the last is the one that shapes the design:
+every other gap is a map from the plane to the sphere.
+
+### The body and its place frame
+
+- **A body** is the land's shape: a sphere of radius R about its centre,
+  its spin axis and its day (the sun's direction at every point follows
+  from them, so the terminator is where the planet's night begins, not a
+  setting). A flat world is the body of infinite radius: one root, the
+  identity map, the atmosphere's flat mode. It is the same path with the
+  degenerate map, not a second one: everything below takes the body's map
+  and nothing else.
+- **The place frame.** Everything the GPU draws and the scene graph holds
+  stays in float, in a frame anchored on the body near the eye: its origin
+  a point on the datum, y its radial, x and z its tangents. The anchors lie
+  on a lattice of the face cells 16 km on a side; when the eye's nadir
+  leaves its anchor's cell by a margin, the frame re-anchors to the cell
+  under it. The eye's position on the body, every anchor and every cell's
+  origin are double on the CPU; the GPU never sees a number at 6371 km
+  except as a direction, which a float carries to 0.6 m at the surface.
+- **A re-anchor is a rigid move,** a translation and a tilt of at most
+  0.2° (a diagonal step of the lattice, 23 km, over R). The engine moves what it owns: the scene graph's
+  root nodes, Jolt's bodies, the plants' and placement's cell origins
+  (their records are cell-relative already, §1), the cover's and the
+  land's rings (re-centred every frame anyway). The eye-centred caches
+  scroll: the probe grid's cascades take the move as a scroll and the
+  tilt as error (0.45 m over a 128 m column, under its finest voxel),
+  refreshed as they age. What lives in the body's frame does not move at
+  all: the shadow pages and the land's sun are laid out in the body's
+  light space, their page origins double, so a re-anchor redraws nothing.
+  The app gets a `reanchor` event with the move, for positions it keeps
+  in its own variables.
+- **Gravity** is the world's rule (§13, 5): radial on a body, any strength,
+  handed to Jolt, the sway and the plants' `build` in the place frame. At
+  the plants' range a tree's radial is up to 0.3° off the frame's y, so
+  each stands on its own radial, a direction, which a float carries
+  exactly enough.
+
+### Fields at the body's scale
+
+A field evaluated at a position 6371 km from the centre in float has half
+a metre of resolution, and a lattice noise's octaves finer than a few
+metres break on it (on the CPU too: FastNoise2 is float). So a position a
+field is evaluated at is **split**: an integer part and a float fraction.
+
+- The CPU hands each tile, placement cell and region its origin in double.
+  For each frequency a tree uses, the origin times the frequency is split
+  in double into a lattice integer (taken mod 2^32) and a remainder; the
+  integer goes into the noise's hash (whose arithmetic is mod 2^32, so the
+  result is exact), and only the remainder and the local offset are float.
+- This is a change inside the noise on both sides: brokit's `noise_glsl`
+  (its emitter knows every node's frequency chain) and FastNoise2's
+  generators, which take the lattice offset (the wlejon fork, offered
+  upstream). `bro_noise_glsl_test` checks the two agree at Earth-radius
+  coordinates as they agree at the origin now.
+- Domain warps add a small float displacement to the remainder, so they
+  keep working.
+
+### The land on the body
+
+- **Its module's domain** is the point on the body's datum, `vec3 p` in
+  the body's frame (the plane's (x, 0, z) on a flat body), and `LandPoint`
+  gains the radial and the latitude and longitude from the spin axis, so
+  climate belts and snow lines are the world's own GLSL. Noise on a sphere
+  is 3D noise at p, which has no seam and no pole.
+- **Tiles on a cube-sphere:** six face roots of the surface layers' key
+  space (§1, §5), each a quadtree, the cube's faces tan-warped (the largest
+  texel 1.4 times the smallest in area, against 5.2 for a plain cube). A
+  tile's border is evaluated from the body's directions like its inside,
+  so a tile on a face's edge filters across it with no seam. The page
+  tables are three toroidal windows a level, given to the faces the level
+  reaches about the eye (a fine level spans a few kilometres and meets at
+  most three faces, at a corner); the coarse levels, where a face fits in
+  256² tiles, are whole.
+- **The rings** stay concentric squares of fixed topology parked on the
+  eye, laid out in the azimuthal-equidistant map about the anchor (as
+  planet-bro's charts were: it covers the body to the antipode, its worst
+  stretch 36% across at the limb, where the ground is foreshortened anyway).
+  A vertex finds its body direction, its face and its texel by its
+  difference from its ring's centre, in closed form (the warp's difference
+  through atan's subtraction rule), so no float carries 6371 km. The
+  rings continue to about 20 levels (0.5 m to 260 km cells, the last
+  reaching the hemisphere), and a level whose cells are under a pixel's
+  ground from the eye's altitude is not drawn, as a geometry clipmap drops
+  its fine levels when it climbs: 10 to 12 rings drawn at any height. A
+  block past the body's horizon is culled before it is drawn.
+- **The land's sun** follows the same ladder: its levels continue up to
+  kilometre texels about the eye, the ones finer than the eye's pixels not
+  made, so a mountain range at the terminator throws its shade seen from
+  orbit.
+- **Horizon culling** (§1) folds the curve into the land's horizon: the
+  body's drop d²/2R joins each distance's slope, so from orbit most of the
+  body is culled by its own curve and at eye level the far hills still are.
+
+### Processes
+
+Shape comes from process (lessons 5 and 6): drainage that connects,
+ridges that divide basins, coastlines from erosion. A height kernel
+evaluated a texel at a time cannot make any of it, so a world may also
+write **processes**: GLSL compute kernels the engine iterates over grids
+of the body, whose results its height and surface read.
+
+- **Two scales.** A global grid (six faces of 512², 12 km cells: plates,
+  the isostatic datum, the belts, hypsometric sea level, global drainage
+  and its erosion), made when the world is made, under a second (lesson
+  8). Regional grids under the eye (a face cell of 64 km at 64 m), made
+  ahead of the eye by the world service as a streaming job, each taking
+  the global grid's flow at its edges as its boundary, so a river crossing
+  a continent crosses the regions too.
+- **The kernels are the world's;** the engine owns the grids, their keys,
+  their borders and halos, their iteration and scheduling, and the
+  sampler the land's module reads them through (`landGrid(name, p)`).
+- **The CPU reads the same grids:** a grid is read back once when it is
+  made (a region is 4 MB, made long before the eye arrives) and the CPU's
+  heights sample it as the GPU does, then add the FastNoise2 detail. One
+  source still, and nothing read back per query: §13's decision 2 kept,
+  with grids added to trees.
+- **Every term switchable from the host** (lesson 2): a process or a
+  tree term off is a uniform, so an ablation run is one command.
+
+### Going up
+
+- **Plants and cover** need nothing new: their cells become face cells,
+  their fields take split positions, and they stand on the land the
+  place frame gives. Past the plants' range the canopy is the land (§5),
+  which from orbit is the forest's tone and height in the tiles.
+- **Space:** the air's shell and the planet's disc are drawn now; the
+  stars, the moon and other bodies are step 12, and the level above the
+  face roots (a system, its bodies, each body's faces) is as before: a
+  body a few pixels across is a point of light, then a lit disc, then a
+  body with its own roots, every body's origin eye-relative in double.
+- **Clouds** are a volume (§13, 4; step 11), drawn from below and above
+  as one deck. Not part of this step.
+
+### What it costs
+
+- **Eye level** is biomes' frame plus the ring's closed-form mapping (a
+  few ALU in the land's vertex stage) and nothing else: the place frame
+  is free per frame.
+- **Orbit:** 10 to 12 rings, the air's tables, the tiles' fills while the
+  view moves, no plants (the canopy is the land). Under 1.5 ms expected.
+- **Descent** refines each tile one level as the altitude halves: from
+  400 km to the ground in 30 s is nine halvings, about 260 tiles a second,
+  under one a frame at 360 fps. The plants come in as their cells reach
+  the plants' range.
+- **The atlas** holds the view's tiles: from 400 km a pixel's ground is
+  about 300 m, the view's ground 400–850 tiles of 64² (a texel 1.5 to 1
+  pixel), inside the 1024 slots with little room; the slots grow, or the tiles grow to 128², with
+  that measurement.
+
+### Build order
+
+Each lands as a measured step on its own; biomes stays the oracle for
+every eye-level cost and must not move.
+
+| Step | What | Win it should show | Size |
+|---|---|---|---|
+| 9a | The body and the place frame: a flat world as the infinite body, an Earth-radius body, re-anchoring | biomes byte-identical; on the sphere a 100 km walk and a 1,000 m/s flight re-anchor with no frame over 2.78 ms and no step in the ground's change a frame at a re-anchor | ~1.5k |
+| 9b | Split positions in noise_glsl and FastNoise2 | the two agree at 6371 km as they do at the origin; heights there with the same detail as at the origin | ~0.8k |
+| 9c | The land on the body: cube-sphere tiles, the rings to orbit, the land's sun's ladder, horizon culling | a flight from the grass to 36,000 km and back, every frame under 2.78 ms, no crack over a cube's corner, the ground's change a frame steady through the descent | ~2k |
+| 9d | Processes: global and regional grids, read back for the CPU | a world's erosion over the global grid under a second; drainage continuous across regions | ~1.5k |
+| 9e | demos/planet (broworkshop): continents by hypsometry, belts, climate, biomes as plant and cover modules chosen by climate | planet-bro's legibility targets: from orbit a range, a river system, a desert basin and a shelf; from eye level the same place; reference renders at every scale | world code |
+
+### Decisions for review
+
+1. **The place frame on a 16 km anchor lattice** (recommended: every
+   cache already scrolls, and a re-anchor's tilt is under a voxel; at
+   1,000 m/s it re-anchors every 16 s, at a walk every few hours), against
+   a frame re-centred on the eye every frame (no tilt, but every cache in
+   it moves continuously, and the shadow pages could not stay put).
+2. **Split positions inside FastNoise2** (recommended: the noise stays the
+   one library on both sides, exact; it puts the fork back in use), against
+   evaluating fine octaves in region-local coordinates blended across
+   region edges (four evaluations in the overlaps, and the overlap's
+   contrast lower).
+3. **A flat world is the infinite body** (recommended: one path, biomes
+   and every flat game keep their look and costs), against every world on
+   a sphere (biomes' land re-tuned for 3D noise and its oracles reset).
+4. **Processes on the GPU, read back once a grid** (recommended: a world's
+   kernels are GLSL like the rest of it), against processes in C++ on the
+   CPU (fast enough for the global grid, but code a world cannot write).
+5. **The cube's warp: tan** (recommended: simple, invertible in closed
+   form, 1.4 area ratio), against equal-area maps (closer to 1.0, no
+   closed-form difference for the rings).
 
 ## 12. Where the code lives
 
@@ -1530,7 +1723,7 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 6 | Done: the ground and its cover as one surface (§9), the cover planned on the GPU and drawn before the ground | the cover's hidden work gone: 0.36–0.42 ms off every eye-level shot, all of them under 2.0 ms; what is left is the far fans' lighting and overdraw, not worth its machinery yet | +0.5k |
 | 7 | Done: the probe grid (§7), with the canopy's density it traces against | forests lit as places: a crown's shade within 2% of a CPU march, the open sky within 1%, the ground's bounce within 1.5%; biomes' forest 5–11% darker under its crowns, the meadow unchanged; +0.25–0.4 ms a frame at a 30 Hz clock (a refresh slice nearly every frame), no frame over 2.78 ms, no refresh step in motion | +2.9k |
 | 8 | Done: placement per cell (§10), its fields FastNoise2 trees placed on worker threads, the plants' store paged by cell | a world of any size placed around the eye at a flat cost: 0.25 ms of the main thread a frame at 0 to 1,000 m/s, the resident set flat over 20 km; biomes placed in 9 frames; shadow pages and probe cascades redone only over the cells that changed | +1.7k |
-| 9 | The planet (§11), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~5k |
+| 9 | The planet (§11, steps 9a–9e there), with the terrain's height tiles and their horizons (§7) | ground to orbit, one place, the frame following the pixels; the sun's shadow and the sky's occlusion past the pages | ~6k |
 | 10 | Far-field cell cards (§2) | far plants and terrain cost by the cells on screen | ~4k |
 | 11 | Volumetric light and clouds (§7) | shafts, mist, weather from every altitude | ~5k |
 | 12 | Night and many lights (§7) | moon, stars, cities from orbit, fires | ~2k |
