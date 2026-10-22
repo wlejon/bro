@@ -132,12 +132,13 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarFrag);
     fsCoverFarIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
+    vsChartFill_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::GroundChartFillVert);
     covers_.push_back(std::make_unique<CoverShaders>());
     bool vsAll = true;
     for (int k = 0; k < kMeshKindCount; ++k)
         vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass) || k == static_cast<int>(MeshKind::Plants));
     if (!fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
-        !fsLand_ || !fsLandIndirect_ || !covers_[0]->createBuiltin(device_)) {
+        !fsLand_ || !fsLandIndirect_ || !vsChartFill_ || !covers_[0]->createBuiltin(device_)) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -215,7 +216,8 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
     SceneVkShaderModule::destroy(device_, fsLand_);
     SceneVkShaderModule::destroy(device_, fsLandIndirect_);
-    fsCoverFar_ = fsCoverFarIndirect_ = fsLand_ = fsLandIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, vsChartFill_);
+    fsCoverFar_ = fsCoverFarIndirect_ = fsLand_ = fsLandIndirect_ = vsChartFill_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -380,6 +382,15 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
             fs = cover[indirect ? CoverShaders::GrassIndirectFrag : CoverShaders::GrassFrag];
         }
         return buildPipeline(vs, fs, draw.kind, rasterBits, target);
+    });
+}
+
+VkPipeline SceneMeshDrawer::chartFillPipeline(CoverShaders& cover, const TargetFormat& target) {
+    // (Past builtinPipeline's variants; streamless, as a land's.)
+    const uint32_t variant = 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
+    return cover.pipelines.get(variant, target, [&] {
+        return buildPipeline(vsChartFill_, cover[CoverShaders::GroundChartFill], MeshKind::Land, raster::kTwoSided,
+                             target);
     });
 }
 

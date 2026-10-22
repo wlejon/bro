@@ -161,21 +161,15 @@ GroundBake groundBake(vec2 xz, GroundData g, float fp) {
 #ifndef GROUND_LAYER_FILL
 #include "ground/scene_ground_layers.glsl"
 
-// The ground at a fragment: `rel` its camera-relative position, `vdata` the
-// vertex colour (density, dryness, floor) for where the field does not
-// reach. Sets the colour, the roughness and the occlusion.
-void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
-                   out vec4 thin, out vec4 swardLight) {
-    vec3 eye = camera.eyeWorld.xyz;
-    vec2 xz = rel.xz + eye.xz;
-    float fp = max(length(fwidth(rel)), 1e-4);
-
+// The ground at the cover's frame's point `xz` (scene_grass.glsl; a round
+// body's cell's, coverUse), the fragment camera-relative at `rel` with the
+// footprint `fp`: its patterns `b` from the surface layer where `baked`,
+// else worked out here.
+void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake b, inout vec3 color,
+                 inout vec3 N, inout float roughness, inout float ao, out vec4 thin, out vec4 swardLight) {
     GroundData g = groundData(xz, vdata);
     float density = g.density, dry = g.dry, under = g.under, herbs = g.herbs, inside = g.inside;
-    // Its patterns from the surface layer, or worked out here where no
-    // tile holds them yet.
-    GroundBake b;
-    if (!groundLayerSample(xz, fp, b)) b = groundBake(xz, g, fp);
+    if (!baked) b = groundBake(xz, g, fp);
 
     // The sward (the module's swardTurf): its tops, and between its blades
     // their roots and the soil near the eye; further off, where a gap is a
@@ -263,7 +257,8 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     if (asBlades > 0.0) {
         // Tipped by the sward's lay and its gusts as the far blades are,
         // and a gust lifts the sheen of what it bends.
-        vec4 lay = swardLay(xz, N);
+        vec4 lay = swardLay(xz, coverUnturn(N));
+        lay.xyz = coverTurn(lay.xyz);
         N = normalize(mix(N, grassCanopyNormal(lay.xyz, normalize(-rel)), asBlades));
         // Past the blades the sun on it is all the sward's, as on the far
         // blades (their weight 1 from 12 m): the share left to the canopy
@@ -309,5 +304,52 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
             color = mix(color, bloom * mott, blooms * stand);
         }
     }
+}
+
+// The ground at a fragment: `rel` its camera-relative position, `vdata` the
+// vertex colour (density, dryness, floor) for where the field does not
+// reach. Sets the colour, the roughness and the occlusion. On a round body
+// in the frame of the lattice cell holding it, across a cell's edge the
+// cells either side blended (scene_grass.glsl's coverTurfCells).
+void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
+                   out vec4 thin, out vec4 swardLight) {
+    float fp = max(length(fwidth(rel)), 1e-4);
+    GroundBake b;
+    if (!landRound()) {
+        vec2 xz = rel.xz + camera.eyeWorld.xz;
+        bool baked = groundLayerSample(groundPosOf(xz), fp, b);
+        groundShade(xz, rel, fp, vdata, baked, b, color, N, roughness, ao, thin, swardLight);
+        return;
+    }
+    vec3 p = rel + landEye3();
+    bool baked = groundLayerSample(groundChartPosOf(landMapOf(p)), fp, b);
+    CoverCell cells[4];
+    float w[4];
+    int n = coverTurfCells(p, cells, w);
+    vec3 c0 = color, n0 = N, cSum = vec3(0.0), nSum = vec3(0.0);
+    float r0 = roughness, a0 = ao, rSum = 0.0, aSum = 0.0;
+    vec4 tSum = vec4(0.0), sSum = vec4(0.0);
+    for (int i = 0; i < n; ++i) {
+        vec4 rows[4];
+        coverCellFrame(cells[i], rows);
+        coverUse(rows);
+        vec3 c = c0, nn = n0;
+        float r = r0, a = a0;
+        vec4 t, s;
+        groundShade(coverFlatOf(rows, p).xz, rel, fp, vdata, baked, b, c, nn, r, a, t, s);
+        cSum += w[i] * c;
+        nSum += w[i] * nn;
+        rSum += w[i] * r;
+        aSum += w[i] * a;
+        tSum += w[i] * t;
+        sSum += w[i] * s;
+    }
+    coverDone();
+    color = cSum;
+    N = normalize(nSum);
+    roughness = rSum;
+    ao = aSum;
+    thin = tSum;
+    swardLight = sSum;
 }
 #endif  // GROUND_LAYER_FILL

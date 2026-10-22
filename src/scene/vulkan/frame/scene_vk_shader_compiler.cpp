@@ -37,6 +37,7 @@
 #include "mesh_cover_far.vert.src.h"
 #include "shadow_grass.vert.src.h"
 #include "ground_layer_fill.frag.src.h"
+#include "ground_chart_fill.vert.src.h"
 #include "scene_plants.glsl.src.h"
 #include "scene_plant_records.glsl.src.h"
 #include "scene_plant_layer.glsl.src.h"
@@ -190,6 +191,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/mesh_cover_far.vert", kVkMeshCoverFarVertSrc},
         {"ground/shadow_grass.vert", kVkShadowGrassVertSrc},
         {"ground/ground_layer_fill.frag", kVkGroundLayerFillFragSrc},
+        {"ground/ground_chart_fill.vert", kVkGroundChartFillVertSrc},
         {"foliage/plants.vert", kVkPlantsVertSrc},
         {"foliage/plants.frag", kVkPlantsFragSrc},
         {"foliage/shadow_plants.vert", kVkShadowPlantsVertSrc},

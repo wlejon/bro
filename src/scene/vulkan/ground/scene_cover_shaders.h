@@ -29,6 +29,7 @@ public:
         GroundFrag,           // mesh.frag's SCENE_GROUND build
         GroundIndirectFrag,
         GroundFill,           // ground_layer_fill.frag
+        GroundChartFill,      // its GROUND_LAYER_CHART build (a round body's tiles)
         kStages
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {
@@ -38,7 +39,7 @@ public:
         BuiltinSceneShader::MeshHerbVert,      BuiltinSceneShader::MeshHerbFrag,
         BuiltinSceneShader::MeshHerbIndirectFrag, BuiltinSceneShader::MeshCoverFarVert,
         BuiltinSceneShader::MeshGroundFrag,    BuiltinSceneShader::MeshGroundIndirectFrag,
-        BuiltinSceneShader::GroundLayerFillFrag,
+        BuiltinSceneShader::GroundLayerFillFrag, BuiltinSceneShader::GroundChartFillFrag,
     };
 
     /// The built-in set.

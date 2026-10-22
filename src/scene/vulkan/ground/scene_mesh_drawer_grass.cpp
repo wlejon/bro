@@ -33,6 +33,9 @@ namespace bro::scene::vk {
 
 namespace {
 
+/// The most regions the turf's table holds (scene_grass.glsl's GRASS_TURF_REGIONS).
+constexpr int kTurfRegions = 16;
+
 /// shaders/ground/scene_grass.glsl's GrassUBO.
 struct GrassUBO {
     float cells[4];
@@ -50,17 +53,23 @@ struct GrassUBO {
     float frame[16];   // the cover's frame (CoverRegion: its region's)
     float own[4];
     float own2[4];
+    float turf[4];   // the turf's regions: how many, a face's cells a side, the band (m), page layers a root
+    float turfRegions[kTurfRegions * 20];   // each its frame (16) and its cell (face, x, z)
     float land[LD_WORDS];   // the land it stands on (LandDraw)
     float swardData[GrassNode::kSwardDataVec4s * 4];   // the sward module's
     float herbData[GrassNode::kHerbDataVec4s * 4];     // the herb module's
 };
-static_assert(sizeof(GrassUBO) == (18 + LD_WORDS / 4 + GrassNode::kSwardDataVec4s + GrassNode::kHerbDataVec4s) * 16);
+static_assert(sizeof(GrassUBO) ==
+              (19 + kTurfRegions * 5 + LD_WORDS / 4 + GrassNode::kSwardDataVec4s + GrassNode::kHerbDataVec4s) * 16);
 
 // How wide the band is where the cover's regions hand over (m), and how far
 // from the eye any of its draws reaches (the far tier's range and an
 // element's spread).
 constexpr double kRegionBand = 48.0;
 constexpr double kRegionReach = 3400.0;
+// How far from the eye the turf's regions' frames are kept exact: past it a
+// pixel is metres across, and the turf works a cell's frame out itself.
+constexpr double kTurfReach = 12000.0;
 
 void setRegion(const CoverRegion& r, GrassUBO& u) {
     std::copy(std::begin(r.frame), std::end(r.frame), u.frame);
@@ -361,6 +370,24 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
         u.layer2[1] = static_cast<float>(gl->tiles.pageShift());
         u.layer2[2] = static_cast<float>(c.pageSize);
         u.layer2[3] = gl->tiles.texelMetres(0);
+        u.turf[3] = static_cast<float>(c.maxLevels);
+    }
+    // On a round body the turf's regions about the eye, their frames exact.
+    const Place& place = frame.graph.place();
+    if (!place.body().flat()) {
+        std::vector<CoverRegion> regions;
+        coverRegions(place, frame.world.eye, kTurfReach, kRegionBand, regions);
+        const int n = std::min(static_cast<int>(regions.size()), kTurfRegions);
+        for (int i = 0; i < n; ++i) {
+            float* r = u.turfRegions + i * 20;
+            std::copy(std::begin(regions[i].frame), std::end(regions[i].frame), r);
+            r[16] = static_cast<float>(regions[i].cell.face);
+            r[17] = static_cast<float>(regions[i].cell.x);
+            r[18] = static_cast<float>(regions[i].cell.z);
+        }
+        u.turf[0] = static_cast<float>(n);
+        u.turf[1] = static_cast<float>(place.faceCells());
+        u.turf[2] = static_cast<float>(kRegionBand);
     }
     return writeSet(frame, device_, *defaults_, u, img, &layers);
 }

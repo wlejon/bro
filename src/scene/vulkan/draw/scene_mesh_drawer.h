@@ -351,6 +351,7 @@ private:
         SurfaceLayers tiles;
         SceneSurfaceLayerAtlas atlas;
         uint64_t frame = 0;
+        int roots = 1;         // a round body's land's chart: its six faces
         uint64_t turfKey = 0;  // the turf meshes the tiles' items were taken from
         bromath::AABB3 bounds = bromath::aempty3();   // the items' union
         bool failed = false;   // its atlas could not be made: the turf works everything out
@@ -384,6 +385,9 @@ private:
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
     VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
                              const TargetFormat& target);
+    /// The fill of a round body's turf tile (ground_layer_fill.frag's
+    /// GROUND_LAYER_CHART build) with `cover`'s modules.
+    VkPipeline chartFillPipeline(CoverShaders& cover, const TargetFormat& target);
 
     VkDevice device_ = VK_NULL_HANDLE;
     SceneDefaults* defaults_ = nullptr;
@@ -401,6 +405,7 @@ private:
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsLand_ = VK_NULL_HANDLE;           // Land, not turf: mesh.frag's SCENE_LAND build
     VkShaderModule fsLandIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsChartFill_ = VK_NULL_HANDLE;      // a round body's turf tile, whole: ground_chart_fill.vert
     /// The shaders a grass node's cover is planned and drawn with (the
     /// blades, their shadows, the herbs, the far tier's vertex stage, the
     /// turf and its fill): [0] the built-in set, then one per pair of a

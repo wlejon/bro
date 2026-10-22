@@ -10,7 +10,8 @@ layout(set = 4, binding = 4) uniform sampler2DArray groundLayerA;
 layout(set = 4, binding = 5) uniform sampler2DArray groundLayerB;
 layout(set = 4, binding = 6) uniform sampler2DArray groundLayerC;
 layout(set = 4, binding = 7) uniform sampler2DArray groundLayerD;
-// A level a layer: an entry per tile (x, z mod the entries a side), holding
+// A level a layer, a root's levels together (root * grass.turf.w + level):
+// an entry per tile (x, z mod the entries a side), holding
 // its slot + 1 and the tile's x and z above the entry's own bits
 // (SurfaceLayers::encodePage), 0 for none.
 layout(set = 4, binding = 8) uniform usampler2DArray groundLayerPage;
@@ -19,20 +20,54 @@ layout(set = 4, binding = 8) uniform usampler2DArray groundLayerPage;
 // out where it is drawn).
 float groundLayerFinest() { return grass.layer.w > 0.5 ? grass.layer2.w : 0.0; }
 
-// The slot of the tile of `level` holding `xz`, and `uv` there; -1 when no
+// Where a point is on the tiles: a flat body's x and z (one root), a round
+// body's land's chart (its cube faces the roots, scene_land.glsl's
+// landPosOf), in level-0 tiles of the turf's: the tile and the fraction.
+LandPos groundPosOf(vec2 xz) {
+    LandPos q;
+    q.root = 0;
+    vec2 t = xz / grass.layer.x;
+    q.cell = ivec2(floor(t));
+    q.frac = t - floor(t);
+    return q;
+}
+LandPos groundChartPosOf(vec2 m) {
+    int f;
+    vec2 off;
+    bool near = landChartOff(m, f, off);
+    float g = grass.layer.x;
+    LandPos q;
+    q.root = f;
+    vec2 t = off / g;
+    if (near) {
+        // The anchor's land tile in the turf's (a land tile is a power of
+        // two of them: SceneMeshDrawer::groundLayers).
+        vec4 a = landFaceAnchor(f);
+        int k = int(LAND_W(LD_TILES / 4).x / g + 0.5);
+        t += a.zw * float(k);
+        vec2 w = floor(t);
+        q.cell = ivec2(a.xy) * k + ivec2(w);
+        q.frac = t - w;
+        return q;
+    }
+    q.cell = ivec2(floor(t));
+    q.frac = t - floor(t);
+    return q;
+}
+
+// The slot of the tile of `level` holding `q`, and `uv` there; -1 when no
 // tile there is resident.
-int groundLayerSlot(vec2 xz, int level, out vec2 uv) {
-    float side = grass.layer.x * exp2(float(level));
-    vec2 t = xz / side;
-    ivec2 ti = ivec2(floor(t));
+int groundLayerSlot(LandPos q, int level, out vec2 uv) {
+    ivec2 ti = q.cell >> level;
+    vec2 t = (vec2(q.cell - (ti << level)) + q.frac) / exp2(float(level));
     int n = int(grass.layer2.z);
-    uint e = texelFetch(groundLayerPage, ivec3(ti & (n - 1), level), 0).r;
+    uint e = texelFetch(groundLayerPage, ivec3(ti & (n - 1), q.root * int(grass.turf.w) + level), 0).r;
     uv = vec2(0.0);
     if (e == 0u) return -1;
     uvec2 hi = uvec2(ti >> int(grass.layer2.y)) & 1023u;
     if (((e >> 12u) & 1023u) != hi.x || (e >> 22u) != hi.y) return -1;
     float texels = grass.layer.y, border = grass.layer.z;
-    uv = (border + (t - vec2(ti)) * texels) / (texels + 2.0 * border);
+    uv = (border + t * texels) / (texels + 2.0 * border);
     return int(e & 4095u) - 1;
 }
 
@@ -46,12 +81,12 @@ GroundBake groundLayerFetch(vec2 uv, int slot) {
     return b;
 }
 
-// The patterns at `xz` for a footprint `fp` from the tiles: the level
+// The patterns at `q` for a footprint `fp` from the tiles: the level
 // whose texel is the selection's most pixels at `fp` (SurfaceLayerConfig::
 // texelPixels), blended toward the next coarser one across the level, or
 // the finest coarser level resident when that one is not. False when no
 // level is.
-bool groundLayerSample(vec2 xz, float fp, out GroundBake b) {
+bool groundLayerSample(LandPos q, float fp, out GroundBake b) {
     b.a = b.b = b.c = b.d = vec4(0.0);
     int levels = int(grass.layer.w + 0.5);
     if (levels <= 0) return false;
@@ -61,14 +96,14 @@ bool groundLayerSample(vec2 xz, float fp, out GroundBake b) {
     vec2 uv;
     int slot = -1, level = l0;
     for (; level < levels; ++level) {
-        slot = groundLayerSlot(xz, level, uv);
+        slot = groundLayerSlot(q, level, uv);
         if (slot >= 0) break;
     }
     if (slot < 0) return false;
     b = groundLayerFetch(uv, slot);
     if (level == l0 && f > 0.0 && l0 + 1 < levels) {
         vec2 uv1;
-        int s1 = groundLayerSlot(xz, l0 + 1, uv1);
+        int s1 = groundLayerSlot(q, l0 + 1, uv1);
         if (s1 >= 0) {
             GroundBake c = groundLayerFetch(uv1, s1);
             b.a = mix(b.a, c.a, f);

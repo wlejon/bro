@@ -3,7 +3,9 @@
 // offered to the world service (§6, scene/vulkan/world/scene_world_service.h)
 // as fills, filled as it grants them by drawing the turf meshes straight
 // down into them with ground_layer_fill.frag, and found by the turf's
-// fragments through the page table (scene_ground_layers.glsl).
+// fragments through the page table (scene_ground_layers.glsl). On a round
+// body the tiles are squares of the land's chart (its six faces the roots),
+// each filled whole by the fill's GROUND_LAYER_CHART build.
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
@@ -16,6 +18,8 @@
 #include "scene/vulkan/frame/scene_vk_depth.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/ground/scene_cover_shaders.h"
+#include "scene/world/place.h"
 
 #include "util/log.h"
 
@@ -145,13 +149,39 @@ const std::vector<SurfaceItem>& SceneMeshDrawer::turfItems(GroundLayers& gl, con
     return t.items;
 }
 
+namespace {
+
+/// The land a grass node stands on when it is a round body's: its turf's
+/// tiles are that land's chart's.
+const LandNode* roundLand(SceneGraph& graph, const GrassNode& grass) {
+    SceneNode* n = grass.ground() ? graph.findById(grass.ground()) : nullptr;
+    const LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
+    return land && land->tileMap() ? land : nullptr;
+}
+
+}  // namespace
+
 SceneMeshDrawer::GroundLayers* SceneMeshDrawer::groundLayers(SceneFrame& frame, const GrassNode& grass) {
     auto& slot = groundLayers_[grass.id()];
+    const LandNode* land = roundLand(frame.graph, grass);
+    const int roots = land ? land->tileMap()->roots() : 1;
+    if (slot && slot->roots != roots) {
+        slot->atlas.destroy(frame.gpu.device, frame.gpu.allocator);
+        slot.reset();
+    }
     if (!slot) {
         slot = std::make_unique<GroundLayers>();
-        const SurfaceLayerConfig config = groundConfig();
-        slot->tiles.configure(config, bromath::aempty3());
-        if (!slot->atlas.create(frame.gpu.device, frame.gpu.allocator, config, config.maxLevels, kLayerFormats)) {
+        slot->roots = roots;
+        SurfaceLayerConfig config = groundConfig();
+        if (land) {
+            // On the land's chart, a land tile a power of two of the turf's
+            // (scene_ground_layers.glsl's groundChartPosOf).
+            const float t = land->tileConfig().tileMetres;
+            config.tileMetres = t / std::exp2(std::round(std::log2(t / config.tileMetres)));
+        }
+        slot->tiles.configure(config, bromath::aempty3(), land ? land->tileMap() : nullptr);
+        if (!slot->atlas.create(frame.gpu.device, frame.gpu.allocator, config, config.maxLevels * roots,
+                                kLayerFormats)) {
             LOG_ERROR("SceneMeshDrawer: the turf's surface layer atlas could not be made; the turf works its "
                       "patterns out where it draws");
             slot->failed = true;
@@ -216,7 +246,16 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
             mixKey(&g, sizeof(g));
             mixKey(&db, sizeof(db));
         }
-        if (turfKey != gl.turfKey) {
+        if (const LandNode* land = roundLand(frame.graph, *grass)) {
+            // On a round body the tiles are the land's chart's, over its
+            // items (the meshes on it read them as they are).
+            if (turfKey != gl.turfKey) {
+                gl.turfKey = turfKey;
+                gl.tiles.setItems(land->items());
+                gl.turf.clear();
+            }
+            gl.bounds = land->chartBounds();
+        } else if (turfKey != gl.turfKey) {
             gl.turfKey = turfKey;
             std::vector<SurfaceItem> items;
             gl.bounds = bromath::aempty3();
@@ -334,6 +373,51 @@ uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob
                 SceneVkDescriptorWriter camWriter;
                 camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
                 camWriter.updateSet(frame.gpu.device.device(), cameraSet);
+
+                if (gl.roots > 1) {
+                    // A square of the land's chart, filled whole: its corner
+                    // from the anchor's point on its face (where the anchor
+                    // is near enough to it to be precise from there, as
+                    // scene_land.glsl's landChartOff takes it), its texel and
+                    // border, its face.
+                    const MeshDraw& turf = *draws.front();
+                    VkPipeline pipeline = chartFillPipeline(
+                        *covers_[turf.moduleSet < covers_.size() ? turf.moduleSet : 0], target);
+                    if (pipeline == VK_NULL_HANDLE || !turf.customSet) {
+                        frame.gpu.device.cmdEndRendering(cmd);
+                        continue;
+                    }
+                    const Place& place = frame.graph.place();
+                    const double* B = place.basis();
+                    const double up[3] = {B[1], B[4], B[7]};
+                    const int face = f.key.root;
+                    const CubeFace& F = cubeFace(face);
+                    const bool near = F.n[0] * up[0] + F.n[1] * up[1] + F.n[2] * up[2] > 0.1;
+                    double ox = f.x0, oz = f.z0;
+                    if (near) {
+                        const ChartPoint a = chartOf(place.body(), up, face);
+                        ox -= a.x;
+                        oz -= a.z;
+                    }
+                    MeshPushConstants push{};
+                    push.model[0] = static_cast<float>(ox);
+                    push.model[1] = static_cast<float>(oz);
+                    push.model[2] = static_cast<float>(texel);
+                    push.model[3] = static_cast<float>(config.border);
+                    push.model[4] = static_cast<float>(face);
+                    push.model[5] = near ? 1.0f : 0.0f;
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &cameraSet, 0,
+                                            nullptr);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &turf.customSet, 0,
+                                            nullptr);
+                    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                       sizeof(MeshPushConstants), &push);
+                    vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
+                    vkCmdDraw(cmd, 3, 1, 0, 0);
+                    frame.gpu.device.cmdEndRendering(cmd);
+                    continue;
+                }
 
                 // The tile's box, for its meshes and their chunks.
                 const double pad = texel * config.border;

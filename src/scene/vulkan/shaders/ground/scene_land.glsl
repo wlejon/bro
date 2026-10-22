@@ -152,6 +152,30 @@ bool landChartOff(vec2 m, out int f, out vec2 off) {
     return false;
 }
 
+// landChartOff's inverse: the map point at `off` on face `f`'s chart, from
+// the anchor's point there when `near`, else from the face's middle. (Near,
+// as a difference from the anchor's tangents, whose own error then only
+// scales the difference.)
+vec2 landChartMap(int f, vec2 off, bool near) {
+    float R = landRadius();
+    vec3 u = landFaceU(f), v = landFaceV(f);
+    vec3 w;
+    if (near) {
+        vec4 a = landFaceAnchor(f);
+        vec2 ta = tan((a.xy + a.zw) * (LAND_W(LD_TILES / 4).x / R));
+        vec2 td = tan(off / R);
+        // n + t u + t' v is the anchor's |w| up plus tan(A + D) - tan A
+        // along each axis.
+        vec2 dt = td * (1.0 + ta * ta) / (1.0 - ta * td);
+        w = vec3(0.0, sqrt(1.0 + dot(ta, ta)), 0.0) + dt.x * u + dt.y * v;
+    } else {
+        vec2 t = tan(off / R);
+        w = landFaceN(f) + t.x * u + t.y * v;
+    }
+    float rho = length(w.xz);
+    return rho > 0.0 ? w.xz * (R * atan(rho, w.y) / rho) : vec2(0.0);
+}
+
 LandPos landPosOf(vec2 m) {
     LandPos q;
     float tile0 = LAND_W(LD_TILES / 4).x;

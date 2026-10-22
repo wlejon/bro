@@ -1591,9 +1591,8 @@ field is evaluated at is **split**: an integer part and a float fraction.
   as many a square metre on the edge as either side, the range reached
   every way, the same plants with the frame anchored 30 km off, and each
   where it stood on the body after a re-anchor.
-- **Not yet on the body:** the turf (still on the anchor's tangent plane;
-  the cover's blades, herbs and far tier are on the body since, below);
-  the land's sun is one level about the eye (its ladder to
+- **Not yet on the body:** (the cover and the turf are since, below) the
+  land's sun is one level about the eye (its ladder to
   kilometre texels comes with the plants' canopy on the body); the module
   gets no latitude or longitude (a spin axis is the world's: `at` is enough
   to compute them).
@@ -1723,17 +1722,35 @@ of the body, whose results its height and surface read.
 - **The push map** keeps place coordinates and is moved with the place
   (`GrassNode::placeMoved`: each cell resampled through the move, its bend
   turned).
-- **Not yet:** the turf (`groundSurface`'s layers are keyed on place xz:
-  it takes the regions as its surface roots next); the wind's gusts are in
-  region coordinates, a little off the trees' far from the anchor; a round
-  land's `heightRange` is the whole body's, so tiles cull loosely.
+- **The turf** is shaded everywhere the land is, so past the draws'
+  regions: a fragment takes the frame of the lattice cell holding its
+  point (`coverTurfCells`), exact from a table of the cells within 12 km
+  of the eye, else worked out on the GPU (half a metre coarse at most,
+  where a pixel is metres across), and across the 48 m band about a cell's
+  edge it is the blend of the cells either side (each shaded in its own
+  frame: `groundShade` once a cell). Its surface layer's tiles are the
+  land's chart's (the six faces the roots, a land tile a power of two of
+  the turf's), so they are keyed on the body and a re-anchor refills none;
+  each is filled whole (`ground_chart_fill.vert`, the fill's
+  `GROUND_LAYER_CHART` build), a texel's point found from the anchor's
+  chart point by `landChartMap`, the inverse of `landChartOff`, and its
+  patterns blended as the fragments blend them.
+- **Not yet:** the wind's gusts are in region coordinates, a little off
+  the trees' far from the anchor; a round land's `heightRange` is the
+  whole body's, so tiles cull loosely; a turf mesh that is not the land on
+  a round body reads the land's tiles.
 - **The oracle:** `tests/scene/test_cover_body.js` on an Earth-radius
   body: the blades seen standing 9.5 km from the anchor (the ground 7 m
   under its tangent plane) as at it (0.851 against 0.853 of the view's
   lower half), a re-anchor moving 11 px of 25,600, and either side of a
   region's edge as thick as a region's middle (0.494 and 0.490 against
-  0.528). On the plane biomes is unchanged: with the wind still, HEAD
-  against this 60.8 dB at the glade, two runs of this 64.4 dB.
+  0.528). `tests/scene/test_turf_body.js`: a turf of a wave in the cover's
+  frame drawn in the next cell, a re-anchor changing none of it (0 px), and
+  across a cell's edge the columns' mean stepping no more than across a
+  cell's middle (1.01 against 1.20; with the blend taken out, 18.2). On the
+  plane biomes is unchanged: with the wind still, HEAD against this 60.8 dB
+  at the glade, two runs of this 64.4 dB, the turf's change against the
+  regions' 77 dB.
 
 ### Build order
 

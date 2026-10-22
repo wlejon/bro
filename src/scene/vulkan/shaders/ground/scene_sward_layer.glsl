@@ -123,7 +123,7 @@ struct SwardFarLook {
 
 // What the turf asks of the sward at a point (swardTurf).
 struct SwardTurfIn {
-    vec2 xz;          // absolute
+    vec2 xz;          // absolute, in the cover's frame (a round body's lattice cell's)
     vec3 rel;         // camera-relative
     float fp;         // a pixel's footprint (m): detail finer fades to its mean
     float density;    // the field's (or the ground mesh's) density, dryness

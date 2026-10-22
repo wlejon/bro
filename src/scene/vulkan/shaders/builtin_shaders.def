@@ -134,6 +134,9 @@ BRO_SCENE_SHADER(MeshGroundIndirectFrag,   "mesh_ground_indirect.frag",   "draw/
 // A tile of the turf's surface layer, the ground drawn straight down into it
 // (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
 BRO_SCENE_SHADER(GroundLayerFillFrag,      "ground_layer_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "")
+// On a round body a tile is a square of the land's chart, filled whole.
+BRO_SCENE_SHADER(GroundChartFillVert,      "ground_chart_fill.vert",      "ground/ground_chart_fill.vert",      "vert", "")
+BRO_SCENE_SHADER(GroundChartFillFrag,      "ground_chart_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "GROUND_LAYER_CHART")
 // The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
 // (transmittance, multiple scattering, the sky's light) and the per-frame
 // view tables (sky view, aerial-perspective froxels).

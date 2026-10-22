@@ -130,9 +130,14 @@
  *   - under `SWARD_SHADE` (mesh.frag): `SwardShade swardShade(SwardFragment
  *     f)`, what a fragment of a blade is.
  * It may use anything of scene_camera.glsl and scene_grass.glsl (the land
- * under it, grassGround / coverHeightAt, the movers' push `grassInfluence`, grassHash, the wind, the band-limited
- * ground noise), its points the cover's frame's as a herb module's are (`coverEye()`). It compiles and caches as a herb module does; one that
- * does not compile is logged and the node draws neither blades nor herbs.
+ * under it, grassGround / coverHeightAt, the movers' push
+ * `grassInfluence`, grassHash, the wind, the band-limited ground noise).
+ * Every point it is given or works out (a cell's, the turf's, its eye
+ * `coverEye()`) is the cover's frame's, as a herb module's are: on a round
+ * body the flat frame of the lattice cell it lies in, so a module is
+ * written as for a flat world. It compiles and caches as a herb module
+ * does; one that does not compile is logged and the node draws neither
+ * blades nor herbs.
  *
  * broworkshop's lib/sward is such a module: a meadow of fine leaves from
  * crowns in bunches (tussocks with `tufts`), arching, drooping, folded and

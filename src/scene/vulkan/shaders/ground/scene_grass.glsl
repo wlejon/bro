@@ -23,6 +23,10 @@
 
 #include "ground/scene_land_layout.h"
 
+// The most regions the turf's table holds (scene_mesh_drawer_grass.cpp's
+// kTurfRegions).
+#define GRASS_TURF_REGIONS 16
+
 layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 cells;      // x: the sward's blades' mean height (m), y: the ring's blade width (m), z: its growth a metre of distance, w: cell size (m) (the draw's cells are grassRect())
     vec4 ring;       // x: inner radius, y: outer radius, z: the cross-fade band at the inner edge, w: at the outer (m)
@@ -45,6 +49,13 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 frame[4];
     vec4 own;        // the region's bounds on its face's chart from the anchor's point there (face metres): lo x, lo z, hi x, hi z
     vec4 own2;       // x: its face, y: the hand-over band (m), z: the half side of the square about its middle wholly its own (m)
+    // The turf's regions on a round body (scene_ground.glsl): x how many the
+    // table below holds, y a face's cells a side, z the hand-over band (m),
+    // w the turf's tiles' page layers a root.
+    vec4 turf;
+    // The cells about the eye whose frames are kept exact: each its rows as
+    // `frame`'s, then its cell (face, x, z).
+    vec4 turfRegions[GRASS_TURF_REGIONS * 5];
     // The land the node stands on (scene_land_layout.h's LandDraw, its eye
     // the frame's): where its tiles are read.
     vec4 land[LD_WORDS / 4];
@@ -83,10 +94,16 @@ layout(set = 4, binding = LG_CANOPY) uniform sampler2DArray landCanopies;
 // it (coverOwns), so a place's cover is the same wherever the place frame
 // is anchored, and a re-anchor changes none of it.
 
-bool coverRound() { return grass.frame[3].w > 0.5; }
+// The frame the helpers below read: the draw's region (`grass.frame`), or
+// the one the turf shades a point in (coverUse; scene_ground.glsl).
+bool coverLocal = false;
+vec4 coverLocalFrame[4];
+vec4 coverRow(int i) { return coverLocal ? coverLocalFrame[i] : grass.frame[i]; }
+
+bool coverRound() { return coverRow(3).w > 0.5; }
 
 // The eye in the cover's frame.
-vec3 coverEye() { return coverRound() ? grass.frame[3].xyz : camera.eyeWorld.xyz; }
+vec3 coverEye() { return coverRound() ? coverRow(3).xyz : camera.eyeWorld.xyz; }
 
 // What the body's curve adds to the region's flat point P (map x, z, its
 // height y) in its frame (place.h's mapToLand less (x, y, z)), in series:
@@ -102,17 +119,35 @@ vec3 coverCurve(vec3 P) {
     return vec3(xz.x, -2.0 * hs2 * (P.y + R), xz.y);
 }
 
+// A direction in the cover's frame as the land's frame has it, and back.
 vec3 coverTurn(vec3 d) {
     if (!coverRound()) return d;
-    return vec3(dot(grass.frame[0].xyz, d), dot(grass.frame[1].xyz, d), dot(grass.frame[2].xyz, d));
+    return vec3(dot(coverRow(0).xyz, d), dot(coverRow(1).xyz, d), dot(coverRow(2).xyz, d));
+}
+vec3 coverUnturn(vec3 d) {
+    if (!coverRound()) return d;
+    return d.x * coverRow(0).xyz + d.y * coverRow(1).xyz + d.z * coverRow(2).xyz;
 }
 
 // The land's map point under the cover's flat point `xz`.
 vec2 coverMap(vec2 xz) {
     if (!coverRound()) return xz;
     vec3 p = vec3(xz.x, 0.0, xz.y);
-    vec3 q = coverTurn(p + coverCurve(p)) + vec3(grass.frame[0].w, grass.frame[1].w, grass.frame[2].w);
+    vec3 q = coverTurn(p + coverCurve(p)) + vec3(coverRow(0).w, coverRow(1).w, coverRow(2).w);
     return landMapOf(q);
+}
+
+// The flat point (map x, height over the datum, map z) of the frame with
+// rows `rows` under land's-frame point `p` (place.h's landToMap there).
+vec3 coverFlatOf(vec4 rows[4], vec3 p) {
+    vec3 d = p - vec3(rows[0].w, rows[1].w, rows[2].w);
+    vec3 q = d.x * rows[0].xyz + d.y * rows[1].xyz + d.z * rows[2].xyz;
+    float R = landRadius();
+    float rho = length(q.xz);
+    vec2 xz = rho > 0.0 ? q.xz * (R * atan(rho, R + q.y) / rho) : vec2(0.0);
+    // (|q + (0, R, 0)| - R, taken apart so a float of R loses nothing.)
+    float h = (dot(q, q) + 2.0 * R * q.y) / (length(q + vec3(0.0, R, 0.0)) + R);
+    return vec3(xz.x, h, xz.y);
 }
 
 // An offset `v` from the cover's eye (camera-relative in its flat frame)
@@ -142,6 +177,111 @@ bool coverOwns(vec2 xz, float u) {
     return f == int(grass.own2.x + 0.5) && all(greaterThanEqual(off, grass.own.xy)) && all(lessThan(off, grass.own.zw));
 }
 
+// --- the turf's regions ---
+//
+// The turf is shaded everywhere the land is, far past the draws' regions:
+// a point takes the frame of the cell holding it, the table's (exact) for
+// the cells about the eye, else worked out here, half a metre coarse at
+// most, where a pixel is metres across. Through the band about a cell's
+// edge the turf is the blend of the cells either side.
+
+// A round body's lattice cell under map point `m`: its face, the cell, and
+// where in it the point is (0..1 each way).
+struct CoverCell {
+    int face;
+    ivec2 cell;
+    vec2 at;
+};
+CoverCell coverCellOf(vec2 m) {
+    int f;
+    vec2 off;
+    bool near = landChartOff(m, f, off);
+    float cells = grass.turf.y;
+    vec2 chart = off;
+    if (near) {
+        vec4 a = landFaceAnchor(f);
+        chart += (a.xy + a.zw) * LAND_W(LD_TILES / 4).x;
+    }
+    vec2 L = chart / (landRadius() * (0.5 * 3.14159265 / cells)) + 0.5 * cells;
+    CoverCell c;
+    c.face = f;
+    c.cell = clamp(ivec2(floor(L)), ivec2(0), ivec2(int(cells) - 1));
+    c.at = clamp(L - vec2(c.cell), 0.0, 1.0);
+    return c;
+}
+
+// Cell `c`'s frame, as `grass.frame`'s rows.
+void coverCellFrame(CoverCell c, out vec4 rows[4]) {
+    int n = int(grass.turf.x + 0.5);
+    for (int i = 0; i < n; ++i) {
+        vec4 id = grass.turfRegions[i * 5 + 4];
+        if (int(id.x + 0.5) == c.face && ivec2(id.yz + 0.5) == c.cell) {
+            for (int k = 0; k < 4; ++k) rows[k] = grass.turfRegions[i * 5 + k];
+            return;
+        }
+    }
+    // Its middle and axes (place.cpp's frameOf) in the land's frame, whose
+    // up is the anchor's.
+    float R = landRadius(), step = 0.5 * 3.14159265 / grass.turf.y;
+    vec2 t = tan(-0.25 * 3.14159265 + (vec2(c.cell) + 0.5) * step);
+    vec3 u = landFaceU(c.face);
+    vec3 y = normalize(landFaceN(c.face) + t.x * u + t.y * landFaceV(c.face));
+    vec3 x = normalize(u - dot(u, y) * y);
+    vec3 z = cross(x, y);
+    vec3 o = R * (y - vec3(0.0, 1.0, 0.0));
+    rows[0] = vec4(x.x, y.x, z.x, o.x);
+    rows[1] = vec4(x.y, y.y, z.y, o.y);
+    rows[2] = vec4(x.z, y.z, z.z, o.z);
+    rows[3] = vec4(coverFlatOf(rows, landEye3()), 1.0);
+}
+
+// The cells the turf at land's-frame point `p` is shaded in and how much
+// each: the one holding it, and in the band about its edges the one across
+// each edge near (found a nudge over it, on this face or the next), mixed
+// bilinearly. Returns how many.
+int coverTurfCells(vec3 p, out CoverCell cells[4], out float w[4]) {
+    vec2 m = landMapOf(p);
+    cells[0] = coverCellOf(m);
+    float side = landRadius() * (0.5 * 3.14159265 / grass.turf.y);
+    float hb = 0.5 * grass.turf.z;
+    // Its distance in from the nearer edge each way (chart metres), and
+    // that edge's side.
+    vec2 depth = min(cells[0].at, 1.0 - cells[0].at) * side;
+    vec2 toward = mix(vec2(-1.0), vec2(1.0), greaterThanEqual(cells[0].at, vec2(0.5)));
+    // Its own share each way: a half at the edge, all of it half the band in.
+    vec2 own = 0.5 + 0.5 * smoothstep(0.0, hb, depth);
+    w[0] = own.x * own.y;
+    int n = 1;
+    bvec2 across = lessThan(depth, vec2(hb));
+    if (!any(across)) return n;
+    vec3 up = landUp(m);
+    int f = cells[0].face;
+    vec3 tu = normalize(landFaceU(f) - dot(landFaceU(f), up) * up);
+    vec3 tv = normalize(landFaceV(f) - dot(landFaceV(f), up) * up);
+    vec3 nx = tu * (toward.x * (2.0 * depth.x + 1.0));
+    vec3 nz = tv * (toward.y * (2.0 * depth.y + 1.0));
+    if (across.x) {
+        cells[n] = coverCellOf(landMapOf(p + nx));
+        w[n++] = (1.0 - own.x) * own.y;
+    }
+    if (across.y) {
+        cells[n] = coverCellOf(landMapOf(p + nz));
+        w[n++] = own.x * (1.0 - own.y);
+    }
+    if (all(across)) {
+        cells[n] = coverCellOf(landMapOf(p + nx + nz));
+        w[n++] = (1.0 - own.x) * (1.0 - own.y);
+    }
+    return n;
+}
+
+// Shades with the cover's helpers in the frame of `rows` (until coverDone).
+void coverUse(vec4 rows[4]) {
+    coverLocal = true;
+    for (int k = 0; k < 4; ++k) coverLocalFrame[k] = rows[k];
+}
+void coverDone() { coverLocal = false; }
+
 // Sward density under which nothing grows (a few blades in a closed wood's
 // shade are not seen).
 const float GRASS_DENSITY_FLOOR = 0.06;
@@ -158,11 +298,7 @@ void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
     vec4 surface, cover;
     vec2 m = coverMap(xz);
     landSampleCover(m, landLevel(m), h, normal, surface, cover);
-    // (The ground's normal in the cover's frame: its rotation's inverse.)
-    if (coverRound())
-        normal = vec3(dot(vec3(grass.frame[0].x, grass.frame[1].x, grass.frame[2].x), normal),
-                      dot(vec3(grass.frame[0].y, grass.frame[1].y, grass.frame[2].y), normal),
-                      dot(vec3(grass.frame[0].z, grass.frame[1].z, grass.frame[2].z), normal));
+    normal = coverUnturn(normal);   // (in the cover's frame)
     float herbs = grass.herbInfo.x > 0.5 ? surface.a : 0.0;
     float density = cover.x < GRASS_DENSITY_FLOOR ? 0.0 : cover.x * (1.0 - 0.5 * herbs);
     field = vec4(h, density, cover.y, cover.z * (1.0 - 0.45 * herbs));
