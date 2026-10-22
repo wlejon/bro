@@ -424,7 +424,8 @@ void main() {
         s.sward = vec4(normalize(mix(s.sward.w > 0.0 ? s.sward.xyz : N, vec3(0.0, 1.0, 0.0), canopyShown)),
                        mix(s.sward.w, 1.0, canopyShown));
 
-    vec3 indirect = sceneAmbient(s);
+    SceneProbe probe = sceneProbe(shadePos);
+    vec3 indirect = sceneAmbient(s, probe);
     if ((flags & MESH_OCCLUSION_MAP) != 0u) indirect *= texture(texOcclusion, inUV).r;
 #ifdef SCENE_VEGETATION
     indirect *= vegAO;
@@ -433,9 +434,9 @@ void main() {
     indirect *= groundAO;
 #endif
 #ifdef SCENE_HERB
-    vec3 color = sceneDirectLight(s) * herb.sun + indirect + emissive;
+    vec3 color = sceneDirectLight(s, probe) * herb.sun + indirect + emissive;
 #else
-    vec3 color = sceneDirectLight(s) + indirect + emissive;
+    vec3 color = sceneDirectLight(s, probe) + indirect + emissive;
 #endif
 
     // SSR mask phase: alpha carries the reflectance the SSR pass weights its

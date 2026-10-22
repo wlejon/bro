@@ -35,7 +35,7 @@
 //
 // Unseen columns. A lit surface blends a cascade into the next coarser over
 // the outer columns of its square, and gives its outermost column no weight
-// (scene_lighting.glsl's sceneProbeSh): the strip a one-column move brings
+// (scene_lighting.glsl's sceneProbe): the strip a one-column move brings
 // in is not seen until the next move takes it inside. Its world and its
 // fresh traces are wanted (unseenPixels, ahead of light that has only aged)
 // but not required, so a walk's moves are made in the slack of the frames

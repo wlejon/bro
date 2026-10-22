@@ -186,16 +186,31 @@ vec3 sceneOpenSkyIrradiance(vec3 pos, vec3 n) {
     return lighting.ambientColor.rgb;
 }
 
-// The probe grid's SH at camera-relative `pos` (a texel a colour channel):
-// the finest cascade holding it, blended into the next coarser over the
-// outer columns of its square; false where the grid is off or ends.
-bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
-    r = vec4(0.0);
-    g = vec4(0.0);
-    b = vec4(0.0);
-    if (PG.params.x < 0.5) return false;
+// The probe grid at camera-relative `pos`, from one walk over its cascades
+// (the finest holding it, blended into the next coarser over the outer
+// columns of its square, the ground under it read once a cascade): its SH
+// (a texel a colour channel), its land shade (its sun volume's g, 1 where
+// the grid is off or ends) and the spacing of its finest cascade there (m;
+// what is much larger than it, the probes resolve; 0 where off or ended).
+// Each lit shader reads it once a pixel and hands it to what lights it.
+struct SceneProbe {
+    bool on;   // the grid reaches pos
+    vec4 r, g, b;
+    float land;
+    float spacing;
+};
+SceneProbe sceneProbe(vec3 pos) {
+    SceneProbe p;
+    p.on = false;
+    p.r = p.g = p.b = vec4(0.0);
+    p.land = 1.0;
+    p.spacing = 0.0;
+    if (PG.params.x < 0.5) return p;
     int c = pgCascadeAt(pos.xz, 0);
-    if (c < 0) return false;
+    if (c < 0) return p;
+    p.on = true;
+    p.spacing = PG.cascade[c].z;
+    p.land = 0.0;
     float left = 1.0;
     for (int n = 0; n < 2 && c < pgCascades(); ++n, ++c) {
         vec2 col = (pos.xz - PG.cascade[c].xy) * PG.cascade[c].w;
@@ -203,14 +218,17 @@ bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
         float w = c + 1 < pgCascades() ? left * clamp((edge - 1.0) / 3.0, 0.0, 1.0) : left;
         if (n == 1) w = left;
         if (w <= 0.0) continue;
-        vec3 uvw = pgProbeUvw(c, pos.xz, pos.y - pgBase(pgGround(c, pos.xz)));
-        r += w * textureLod(sampler3D(probeShRImage, probeGridSampler), uvw, 0.0);
-        g += w * textureLod(sampler3D(probeShGImage, probeGridSampler), uvw, 0.0);
-        b += w * textureLod(sampler3D(probeShBImage, probeGridSampler), uvw, 0.0);
+        float h = pos.y - pgBase(pgGround(c, pos.xz));
+        vec3 uvw = pgProbeUvw(c, pos.xz, h);
+        p.r += w * textureLod(sampler3D(probeShRImage, probeGridSampler), uvw, 0.0);
+        p.g += w * textureLod(sampler3D(probeShGImage, probeGridSampler), uvw, 0.0);
+        p.b += w * textureLod(sampler3D(probeShBImage, probeGridSampler), uvw, 0.0);
+        p.land += w * textureLod(sampler3D(probeSunImage, probeGridSampler), pgVolumeUvw(c, pos.xz, h), 0.0).g;
         left -= w;
         if (left <= 0.0) break;
     }
-    return true;
+    p.land += left;
+    return p;
 }
 
 // The land's sun at camera-relative `pos`: how much of the sun the land
@@ -242,45 +260,14 @@ float landSunLevels(vec3 pos) {
     return sun + left;
 }
 
-// The probe grid's land shade at camera-relative `pos` (its sun volume's g,
-// blended over the cascades as the SH are); 1 where the grid is off or
-// ends.
-float probeLandSun(vec3 pos) {
-    if (PG.params.x < 0.5) return 1.0;
-    int c = pgCascadeAt(pos.xz, 0);
-    if (c < 0) return 1.0;
-    float land = 0.0, left = 1.0;
-    for (int n = 0; n < 2 && c < pgCascades(); ++n, ++c) {
-        vec2 col = (pos.xz - PG.cascade[c].xy) * PG.cascade[c].w;
-        float edge = min(min(col.x, col.y), min(float(PG_COLUMNS) - col.x, float(PG_COLUMNS) - col.y));
-        float w = c + 1 < pgCascades() ? left * clamp((edge - 1.0) / 3.0, 0.0, 1.0) : left;
-        if (n == 1) w = left;
-        if (w <= 0.0) continue;
-        vec3 uvw = pgVolumeUvw(c, pos.xz, pos.y - pgBase(pgGround(c, pos.xz)));
-        land += w * textureLod(sampler3D(probeSunImage, probeGridSampler), uvw, 0.0).g;
-        left -= w;
-        if (left <= 0.0) break;
-    }
-    return land + left;
-}
-
 // What the land leaves of the sun at camera-relative `pos`: the hills'
 // shade (and a canopy's past the plants' cast range), however far off they
 // stand and however low the sun (the shadow pages' depth offsets swallow a
 // slope that runs along a low sun's rays, and end at their reach). The
-// lesser of the land's sun and the probe grid's, which see the same hills:
-// the grid's ground is every mesh's that grounds it, the land's sun the
-// land node's alone.
-float sceneLandSun(vec3 pos) { return min(landSunLevels(pos), probeLandSun(pos)); }
-
-// The spacing (m) of the probes lighting camera-relative `pos` (its finest
-// cascade's): what is much larger than it, they resolve. 0 where the grid is
-// off or ends.
-float sceneProbeSpacing(vec3 pos) {
-    if (PG.params.x < 0.5) return 0.0;
-    int c = pgCascadeAt(pos.xz, 0);
-    return c < 0 ? 0.0 : PG.cascade[c].z;
-}
+// lesser of the land's sun and the probe grid's (`probe`, read at `pos`),
+// which see the same hills: the grid's ground is every mesh's that grounds
+// it, the land's sun the land node's alone.
+float sceneLandSun(vec3 pos, SceneProbe probe) { return min(landSunLevels(pos), probe.land); }
 
 // How much of the open sky's light a direction keeps among what stands about
 // (a specular's occlusion): the probes' irradiance facing it over the open
@@ -291,11 +278,11 @@ float sceneSkySeen(vec3 probed, vec3 open) {
 }
 
 // The ambient irradiance over pi on a surface at `pos` facing `n`: the
-// probe grid's where it reaches (the sky through the canopy and past the
-// ground, the light the ground and the leaves send back), else the open sky's.
-vec3 sceneAmbientIrradiance(vec3 pos, vec3 n) {
-    vec4 r, g, b;
-    if (sceneProbeSh(pos, r, g, b)) return pgShIrradiance(r, g, b, n);
+// probe grid's (`probe`, read at `pos`) where it reaches (the sky through
+// the canopy and past the ground, the light the ground and the leaves send
+// back), else the open sky's.
+vec3 sceneAmbientIrradiance(vec3 pos, SceneProbe probe, vec3 n) {
+    if (probe.on) return pgShIrradiance(probe.r, probe.g, probe.b, n);
     return sceneOpenSkyIrradiance(pos, n);
 }
 
@@ -764,8 +751,9 @@ float swardGlow(vec3 V, vec3 L) {
     return (1.0 - SWARD_GLOW_SHARE) + SWARD_GLOW_SHARE * (SWARD_GLOW_POWER + 1.0) * c2 * c2;
 }
 
-// The direct light of every scene light on `s`.
-vec3 sceneDirectLight(SceneSurface s) {
+// The direct light of every scene light on `s`, the probe grid read at its
+// position `probe` (sceneProbe).
+vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
     vec3 N = s.normal;
     vec3 V = s.view;
     float NdotV = max(dot(N, V), 1e-4);
@@ -801,7 +789,7 @@ vec3 sceneDirectLight(SceneSurface s) {
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
         // The sun's shade of the land (the land's sun and the probe grid's),
         // over its shadow pages'.
-        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1 ? sceneLandSun(s.position) : 1.0;
+        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1 ? sceneLandSun(s.position, probe) : 1.0;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
@@ -913,7 +901,8 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
 // diffuse part is its irradiance, and the specular is dimmed as the probes
 // see less than the open sky along R. A bound reflection probe replaces the
 // global specular by its weight at the surface (probes are specular-only).
-vec3 sceneAmbient(SceneSurface s) {
+// `probe` is the grid read at the surface's position (sceneProbe).
+vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
     // Leaves are lit through their crown's bulk normal, which turns edge-on
     // at the crown's outline; their own faces lie every way, so the sky they
     // mirror is a mean over angles, never the grazing sheen a solid's rim
@@ -937,8 +926,8 @@ vec3 sceneAmbient(SceneSurface s) {
     // turn (a far meadow lit by the horizon's glow behind the eye shone a
     // half brighter than the grass at one's feet).
     vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
-    vec4 pr, pg, pb;
-    bool probed = sceneProbeSh(s.position, pr, pg, pb);
+    vec4 pr = probe.r, pg = probe.g, pb = probe.b;
+    bool probed = probe.on;
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
         // faces (the sky above, the lit ground below, through the air at

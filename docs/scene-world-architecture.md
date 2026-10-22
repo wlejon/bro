@@ -789,8 +789,12 @@ ambient is the open sky's as before.
   over its outer 1–4 columns), else the open sky's; the ambient's specular is
   scaled by how much of the open sky the probes see along the reflection. A
   plant's crown keeps its own occlusion only where the crown is smaller than
-  the probes' spacing there (`sceneProbeSpacing`), a quarter for the leaves'
-  crowding where they resolve it.
+  the probes' spacing there (`SceneProbe::spacing`), a quarter for the
+  leaves' crowding where they resolve it. A lit shader reads the grid once a
+  pixel (`sceneProbe`: one walk over the cascades, the ground under the
+  point read once a cascade, giving the SH, the land's shade and the spacing)
+  and hands it to `sceneDirectLight` and `sceneAmbient`; walked once for
+  each, the ground's four texels a cascade read up to three times a pixel.
 - **The land's shade** (binding 22, `sceneLandSun`, blended over the
   cascades as the probes are) multiplies the sun's shadow wherever it is
   read: `sceneDirectLight` (leaves past their shadow's floor, so a hill's

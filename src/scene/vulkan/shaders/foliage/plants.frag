@@ -63,6 +63,8 @@ void main() {
     vec3 albedo = surf.albedo;
     float density = plantSpecies(inSpecies).density;
 
+    // The probe grid here, read once for the land's shade and the sky.
+    SceneProbe probe = sceneProbe(pos);
     // The path to the sun through the crown (an ellipsoid about inCrown.xyz).
     int sun = plantSun();
     vec3 L = vec3(0.0, 1.0, 0.0);
@@ -83,7 +85,7 @@ void main() {
         if ((floatBitsToUint(push.pbrParams.w) & MESH_RECEIVES_SHADOW) != 0u) {
             // (And the land's shade, the land's sun's and the probe grid's,
             // for the sun they traced.)
-            if (sun == int(lighting.sunDirection.w) - 1) vis *= sceneLandSun(pos);
+            if (sun == int(lighting.sunDirection.w) - 1) vis *= sceneLandSun(pos, probe);
             if (vis > 0.0) vis *= lightShadow(sun, pos + L * exitT, camDist, 0.0, L, 1.0, -2.0);
         }
     }
@@ -108,8 +110,8 @@ void main() {
     // the crown's own shade where it spans their spacing (its medium in their
     // world, a probe inside it); the leaves' crowding finer than that is
     // left, and all of it where the crown is smaller than the spacing.
-    vec3 irr = sceneAmbientIrradiance(pos, N);
-    float spacing = sceneProbeSpacing(pos);
+    vec3 irr = sceneAmbientIrradiance(pos, probe, N);
+    float spacing = probe.spacing;
     float resolved = spacing > 0.0 ? clamp(inCrown.w / spacing - 0.5, 0.0, 1.0) : 0.0;
     float ao = mix(1.0, mix(0.3, 0.75, resolved), depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
     vec3 indirect = irr * albedo * ao;

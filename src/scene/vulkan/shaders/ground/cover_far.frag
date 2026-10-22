@@ -122,8 +122,9 @@ void main() {
     // themselves, on top.
     s.sward = vec4(gn, 1.0 - bloomShare);
 
-    vec3 indirect = sceneAmbient(s) * ao;
-    vec3 color = sceneDirectLight(s) * mix(0.6, 1.0, height) + indirect;
+    SceneProbe probe = sceneProbe(worldPos);
+    vec3 indirect = sceneAmbient(s, probe) * ao;
+    vec3 color = sceneDirectLight(s, probe) * mix(0.6, 1.0, height) + indirect;
 
     float alpha = 1.0;
     if ((flags & MESH_REFLECTANCE) != 0u) {
