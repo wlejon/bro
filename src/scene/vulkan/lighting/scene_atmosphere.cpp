@@ -3,6 +3,7 @@
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
 #include "scene/nodes/light_node.h"
+#include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
@@ -212,12 +213,23 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     g.shell[0] = a.planetRadius;
     g.shell[1] = a.planetRadius + a.thickness;
     g.shell[2] = std::max(a.ozoneWidth, 1.0f);
-    g.shell[3] = a.spherical ? 1.0f : 0.0f;
+    g.shell[3] = 0.0f;
     std::copy(a.groundAlbedo, a.groundAlbedo + 3, g.ground);
     g.ground[3] = static_cast<float>(sunLight);
     seaLevel_ = a.seaLevel;
-    for (int k = 0; k < 3; ++k) center_[k] = a.center[k];
     eye_ = frame.world.eye;   // its centre and sea level are the body's
+    // On a round body the air wraps the body: its radius, about its centre
+    // where the body's frame (the place's axes, its origin added) has it.
+    const Place& place = frame.graph.place();
+    if (!place.body().flat()) {
+        const double zero[3] = {0.0, 0.0, 0.0};
+        double c[3];
+        place.toPlace(zero, c);
+        for (int k = 0; k < 3; ++k) center_[k] = c[k] + frame.view.origin[k];
+        g.shell[0] = static_cast<float>(place.body().radius);
+        g.shell[1] = g.shell[0] + a.thickness;
+        g.shell[3] = 1.0f;
+    }
     originFor(eye_, g.origin);
 
     // The tables' inputs: a change remakes them (the world-service jobs).

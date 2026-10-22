@@ -612,8 +612,6 @@ void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32
     at(18, a.planetRadius, 1.0f, 1e10f);
     at(19, a.thickness, 1.0f, 1e9f);
     at(20, a.seaLevel, -1e9f, 1e9f);
-    if (given(21)) a.spherical = params[21] > 0.5;
-    rgb(22, a.center, -1e12f, 1e12f);
     if (given(25) && given(26) && given(27)) {
         rgb(25, a.sunDir, -1.0f, 1.0f);
         a.sunDirExplicit = true;

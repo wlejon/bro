@@ -140,7 +140,7 @@ private:
     float froxelInv_[16] = {};
     bromath::Vec3 eye_{0.0f, 0.0f, 0.0f};
     double seaLevel_ = 0.0;
-    double center_[3] = {0.0, 0.0, 0.0};
+    double center_[3] = {0.0, 0.0, 0.0};   // a round body's centre, in the body's frame
     uint32_t slot_ = 0;
     bool remakeSkyView_ = false;
     bool tablesOnCompute_ = false;

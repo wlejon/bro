@@ -186,11 +186,9 @@
  * @property {number} [ozoneAltitude]  The ozone peak's altitude, metres (default 25000).
  * @property {number} [ozoneWidth]  Its half-width, metres (default 15000).
  * @property {Array<number>} [groundAlbedo]  The planet's surface, Lambertian [r, g, b] (default [0.3, 0.3, 0.3]): it lights the air and the lower half of every surface's sky light.
- * @property {number} [planetRadius]  Metres (default 6360000).
+ * @property {number} [planetRadius]  Metres (default 6360000), on a flat body: on a round one (`scene.setBody`) the air wraps the body, its radius the body's.
  * @property {number} [thickness]  The air's depth above the surface, metres (default 100000).
- * @property {number} [seaLevel]  Flat mode: the world y that sits on the planet's surface (default 0).
- * @property {boolean} [spherical]  false (default): the world is flat with +y up and the planet is placed under the eye; true: the scene holds a globe at `center` and the air wraps it.
- * @property {Array<number>} [center]  Spherical mode: the planet's centre, world units (metres).
+ * @property {number} [seaLevel]  On a flat body, the world y that sits on the planet's surface, which is placed under the eye (default 0).
  * @property {Array<number>} [sunDirection]  Pins the direction towards the sun, [x, y, z] (`sunPosition` is an alias).
  * @property {Array<number>} [sunColor]  With sunIntensity, pins the sun's illuminance above the air (sunColor * sunIntensity).
  * @property {number} [sunIntensity]
