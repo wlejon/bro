@@ -277,6 +277,11 @@ A capability of the frame graph, not of any one pass.
   Submitting the head (and the compute) at the join instead of at the
   frame's end made it every walk, the GPU idling there until the rest was
   recorded and submitted, so the submissions stay together at the end.
+  It falls on the same frame of the walk (the 147th of 150) in four walks
+  of six, and none of the frame's own causes shows there: its compute
+  waits only for an old, finished horizon's ticket, as the frames about it
+  do; no device memory is allocated near it; no plants' records or cells
+  are uploaded.
 - **Versioning:** anything compute writes for frame N lives in the slot for
   N's frame in flight. Frame N−1's draws still read their own slot, so compute
   never waits for graphics to finish with a buffer.
