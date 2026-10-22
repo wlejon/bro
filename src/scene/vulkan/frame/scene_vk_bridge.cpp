@@ -45,17 +45,18 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         // The plants' plans and the atmosphere's froxels run on the async
         // compute queue: what needs neither goes first, beside them (the
         // other casters, the frame's uniforms, the atmosphere's sky view and
-        // the sky, which opens the frame's first scope), and the graphics
-        // waits for the compute at its first reader (the planned casters,
-        // else the opaque meshes; the sky itself on a frame the world
-        // service remade the atmosphere's tables there). The probe stays
-        // after the planned casters: its faces are lit through the shadow
-        // pages, the plants' shadows included.
+        // the sky, which opens the frame's first scope, and the cover's
+        // depth in it), and the graphics waits for the compute at its first
+        // reader (the planned casters, else the opaque meshes; the sky
+        // itself on a frame the world service remade the atmosphere's tables
+        // there). The probe stays after the planned casters: its faces are
+        // lit through the shadow pages, the plants' shadows included.
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassEnvironment>());
+        graph_.add(std::make_unique<PassCoverDepth>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
         graph_.add(std::make_unique<PassShadowCopy>());
         graph_.add(std::make_unique<PassReflectionProbe>());
@@ -67,6 +68,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
+        graph_.add(std::make_unique<PassCoverDepth>());
     }
     graph_.add(std::make_unique<PassOpaque>());
     // The pages the opaque surfaces' pixels need, for the next plans.

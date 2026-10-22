@@ -19,6 +19,27 @@
 
 namespace bro::scene::vk {
 
+bool PassCoverDepth::active(const SceneFrame& frame) const {
+    for (uint32_t i : frame.lists.opaque)
+        if (frame.gpu.meshes.coverPrepassed(frame.lists.meshes[i])) return true;
+    return false;
+}
+
+void PassCoverDepth::declare(const SceneFrame& frame, PassIO& io) const {
+    io.hdr({.mark = true, .indirect = frame.ssao});
+}
+
+void PassCoverDepth::record(SceneFrame& frame) {
+    const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
+    SceneMeshDrawer& meshes = frame.gpu.meshes;
+    for (uint32_t i : frame.lists.opaque) {
+        const MeshDraw& draw = frame.lists.meshes[i];
+        if (meshes.coverPrepassed(draw))
+            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull,
+                          SceneMeshDrawer::CoverPass::Depth);
+    }
+}
+
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr({.mark = true, .indirect = frame.ssao});
     // (Its draws light through the shadow pages' pool and overlays.)
@@ -36,15 +57,7 @@ void PassOpaque::record(SceneFrame& frame) {
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
     using CoverPass = SceneMeshDrawer::CoverPass;
     SceneMeshDrawer& meshes = frame.gpu.meshes;
-    // The cover's depth first, so its blades and herbs are lit once a pixel.
-    bool prepassed = false;
-    for (uint32_t i : frame.lists.opaque) {
-        const MeshDraw& draw = frame.lists.meshes[i];
-        if (!meshes.coverPrepassed(draw)) continue;
-        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull, CoverPass::Depth);
-        prepassed = true;
-    }
-    if (prepassed && frame.timer) frame.timer->mark(frame.cmd, "cover:depth");
+    // (The cover's depth is drawn by now, PassCoverDepth: it is lit once a pixel.)
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
         meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull,
