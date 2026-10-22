@@ -1,6 +1,7 @@
 #include "scene/world/world_service.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace bro::scene {
 
@@ -19,8 +20,12 @@ void WorldService::observe(const WorldFrameTiming& timing) {
         if (s.units <= 0.0 || s.ms <= 0.0) continue;
         Kind& k = kinds_[static_cast<size_t>(s.kind)];
         const float sample = static_cast<float>(s.ms / s.units);
-        // The first measurement replaces the guess; later ones are followed.
-        k.cost = k.measured ? k.cost + config_.costRate * (sample - k.cost) : sample;
+        // The first measurement replaces the guess; later ones move it
+        // toward themselves by a power of their ratio to it, costQuantile
+        // of the rate when dearer and the rest when cheaper.
+        const float q = config_.costQuantile;
+        k.cost = k.measured ? k.cost * std::pow(sample / k.cost, config_.costRate * (sample > k.cost ? q : 1.0f - q))
+                            : sample;
         k.cost = std::max(k.cost, 1e-9f);
         k.measured = true;
     }

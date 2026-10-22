@@ -423,8 +423,16 @@ tiles it wants) and gives up its own budget.
   the headroom (above: the surprise's 98th percentile, learned), floored
   at 0.1 ms. A frame over the target, or no timed frame yet, gives the floor.
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
-  default. A kind's cost a unit is its span's ms over its units: the first
-  measurement replaces the guess, later ones move it by a quarter. (Charged
+  default. A kind's cost a unit is learned from its span's ms over its
+  units: the first measurement replaces the guess, and each later one pulls
+  it toward itself by a power of their ratio, 0.25 x 0.9 when it is dearer
+  and 0.25 x 0.1 when cheaper. A steady cost is converged on; one that
+  varies is priced near its dear end, so a frame's grants of it fit when
+  they come in dear. (Followed at the mean, biomes' plant pages, 0.02 to
+  0.1 ms apiece at a low sun, were granted fourteen to a frame at 0.018: on
+  the golden-hour walk 8-9 of 150 frames ran past 2.78 ms, to 3.5-4.1 ms,
+  with up to 28 pages drawn in a frame; priced near the dear end, 6-7, to
+  3.0-3.25, at most 7-11 pages, and the afternoon walk's 4-5 became 2.) (Charged
   by the job, the probe traces' kind learned the average box: a frame
   granted three wide cascade-0 slices on a budget of 1.5 ms spent 2.1 ms on
   them, and a 16 km biomes flyover at 40 m/s ran 8 of 150 frames past

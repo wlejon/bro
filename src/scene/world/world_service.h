@@ -15,7 +15,15 @@
 // they do not), and its cost is the kind's cost a unit times them. The guess
 // stands until the kind's jobs are measured: each frame the executor times
 // a kind's jobs as one span, and the span over the units it held is a sample
-// of one unit's cost, which the kind's cost follows (observe()).
+// of one unit's cost (observe()). The kind's cost is not their mean but
+// leans to the dear ones: a sample moves it toward itself by a power of
+// their ratio, costRate times costQuantile when the sample is dearer and
+// times the rest when cheaper, so it settles where the dear samples' log
+// ratios, so weighted, balance the cheap ones'. A kind whose jobs vary is
+// priced near its dear end, and a frame's grants of it fit the budget when
+// they come in dear; one whose jobs cost alike is priced at what they cost. (At the mean, a frame granted fourteen of biomes' plant
+// pages at 0.018 ms that took 0.04-0.1 each, its golden walk 6-8 of 150
+// frames past 2.78 ms.)
 //
 // Jobs. Each frame a producer offers what it would make (offer()): a job is
 // keyed by the producer (`key`, `producer`: a cell key, a probe's place, a
@@ -40,8 +48,8 @@
 // frames' surprise (a frame's own work and the jobs' costs both vary from
 // what was expected of them): it rises a step on each frame read over the
 // target and falls overRate / (1 - overRate) of a step on each under it, so
-// it settles where overRate of the frames run over. A frame read over the target takes the
-// budget to the floor until one comes in under it. Before any frame is read
+// it settles where overRate of the frames run over. A frame read over the
+// target takes the budget to the floor until one comes in under it. Before any frame is read
 // (or on a device that cannot time its frames) the budget is the floor, and
 // so it is again after the view jumps (forgetSlack()), until a frame of the
 // new view is read: a frame's cost is its view's, and the slack the old view
@@ -82,7 +90,8 @@ struct WorldServiceConfig {
     float targetMs = 2.78f;   // the frame's GPU target (the 4090 at 360 fps)
     float floorMs = 0.1f;     // the least budget a frame
     int window = 4;           // frames whose need sets the slack
-    float costRate = 0.25f;   // how far one measurement moves a kind's cost
+    float costRate = 0.25f;      // how far one measurement moves a kind's cost (the power of its ratio)
+    float costQuantile = 0.9f;   // the weight of a dearer measurement's pull, the rest a cheaper one's
     float overRate = 0.02f;   // the share of frames the headroom lets run over the target
     float headroomStep = 0.01f;   // how far one frame read moves the headroom (ms)
 };

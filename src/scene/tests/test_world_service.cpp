@@ -281,10 +281,22 @@ void testCostLearning() {
     s.observe(frameOf(1.0, k, 10, 0.2));
     check(s.measured(k) && near(s.cost(k), 0.02), "the first measurement replaces the guess (0.2 ms / 10)");
     s.observe(frameOf(1.0, k, 10, 0.6));
-    check(near(s.cost(k), 0.02 + 0.25 * (0.06 - 0.02)), "later ones are followed at the rate");
+    check(near(s.cost(k), 0.02 * std::pow(3.0, 0.25 * 0.9), 1e-5),
+          "a dearer one pulls by its ratio to the power of the rate times the quantile");
     for (int i = 0; i < 60; ++i) s.observe(frameOf(1.0, k, 4, 0.16));
     check(near(s.cost(k), 0.04, 1e-3), "a steady cost is converged on");
     check(near(s.cost(q), 0.2) && !s.measured(q), "another kind's cost is its own");
+    // Jobs that vary are priced near their dear end: 0.02 and 0.08 a unit
+    // in turn settle at 0.08^0.9 0.02^0.1, not at their mean.
+    {
+        WorldService v;
+        v.configure(c);
+        const int a = v.addKind({"pages", WorldSchedule::Raster, 0.05f});
+        for (int i = 0; i < 400; ++i) v.observe(frameOf(1.0, a, 1, i % 2 ? 0.08 : 0.02));
+        const double settle = std::pow(0.08, 0.9) * std::pow(0.02, 0.1);
+        check(v.cost(a) > 0.065 && std::fabs(v.cost(a) - settle) < 0.006,
+              "a varying cost settles near its dear end (got " + std::to_string(v.cost(a)) + ")");
+    }
     // The budget is spent in the learned costs.
     for (int i = 0; i < 4; ++i) s.observe(frameOf(2.37));   // (0.41 ms of slack)
     s.beginFrame();
