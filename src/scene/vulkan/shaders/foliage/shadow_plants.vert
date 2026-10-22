@@ -24,7 +24,7 @@ void main() {
         pos = o.pos;
     } else {
         int e = gl_VertexIndex / perElement;
-        if (chunk.w > 1.5) {
+        if (chunk.w > 1.5 && chunk.w < 2.5) {
             // A chunk of crown discs (chunk.x its first disc record, chunk.y
             // how many): a far tree's shadow is its crown's outline, a
             // hexagon square to the light about its centre.

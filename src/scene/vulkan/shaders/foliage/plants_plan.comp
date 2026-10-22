@@ -105,14 +105,19 @@ PlantInfo plantInfo(uint i) {
 }
 
 // A view's pick of a plant: whether it is drawn there, in which slot, with
-// how many elements (0: a caster's crown disc), and its chunks.
+// how many elements (0: a caster's crown disc), and its chunks; a plant of
+// few elements packed (pack: its class + 1) with others in shared chunks.
 struct Pick {
     bool on;
     uint slot;
     float elements;
     bool disc;
+    uint pack;
     uint leafChunks, woodChunks, limbs;
 };
+
+// The pack class of a plant of `n` elements: 2^c slots hold it.
+uint packClass(uint n) { return n <= 1u ? 0u : uint(findMSB(n - 1u)) + 1u; }
 
 // Its elements at `across` pixels (or texels) a metre, each kept to `kept`
 // of them, never under `least`.
@@ -128,6 +133,7 @@ Pick pick(PlantInfo pl, uint v) {
     k.on = false;
     k.slot = 0u;
     k.disc = false;
+    k.pack = 0u;
     k.elements = 0.0;
     k.leafChunks = k.woodChunks = k.limbs = 0u;
     vec3 eye = vec3(pf(PP_P_EYE), pf(PP_P_EYE + 1u), pf(PP_P_EYE + 2u));
@@ -169,7 +175,13 @@ Pick pick(PlantInfo pl, uint v) {
         k.limbs = d < 0.15 * woodRange ? pl.limbs + 1u : 1u;
     }
     k.on = true;
-    k.leafChunks = (uint(ceil(k.elements)) + uint(PP_LEAVES_PER_CHUNK) - 1u) / uint(PP_LEAVES_PER_CHUNK);
+    uint n = max(uint(ceil(k.elements)), 1u);
+    if (n <= uint(PP_PACK_MOST)) {
+        k.pack = packClass(n) + 1u;
+        k.leafChunks = 0u;
+    } else {
+        k.leafChunks = (n + uint(PP_LEAVES_PER_CHUNK) - 1u) / uint(PP_LEAVES_PER_CHUNK);
+    }
     if (!wood) k.limbs = 0u;
     k.woodChunks = (k.limbs + uint(PP_LIMBS_PER_CHUNK) - 1u) / uint(PP_LIMBS_PER_CHUNK);
     return k;
@@ -177,7 +189,7 @@ Pick pick(PlantInfo pl, uint v) {
 #endif
 
 #if defined(PLANTS_COUNT)
-shared uint sLeaf[PP_SLOTS], sWood[PP_SLOTS], sDisc[PP_MAX_TILES];
+shared uint sLeaf[PP_SLOTS], sWood[PP_SLOTS], sDisc[PP_MAX_TILES], sPack[PP_PACK_WORDS];
 shared uint sStats[4];
 
 void main() {
@@ -187,6 +199,7 @@ void main() {
         sWood[i] = 0u;
         if (i < uint(PP_MAX_TILES)) sDisc[i] = 0u;
     }
+    for (uint i = lid; i < uint(PP_PACK_WORDS); i += uint(PP_GROUP_SIZE)) sPack[i] = 0u;
     if (lid < 4u) sStats[lid] = 0u;
     barrier();
     uint place = gl_GlobalInvocationID.x;
@@ -203,6 +216,7 @@ void main() {
                 atomicAdd(sStats[3], 1u);
                 continue;
             }
+            if (k.pack > 0u) atomicAdd(sPack[k.slot * uint(PP_PACK_CLASSES) + k.pack - 1u], 1u);
             if (k.leafChunks > 0u) atomicAdd(sLeaf[k.slot], k.leafChunks);
             if (k.woodChunks > 0u) atomicAdd(sWood[k.slot], k.woodChunks);
             uint n = uint(ceil(k.elements));
@@ -222,6 +236,8 @@ void main() {
         if (i >= uint(PP_BANDS) && sDisc[i - uint(PP_BANDS)] > 0u)
             atomicAdd(work.w[PP_N_DISC + i], sDisc[i - uint(PP_BANDS)]);
     }
+    for (uint i = lid; i < uint(PP_PACK_WORDS); i += uint(PP_GROUP_SIZE))
+        if (sPack[i] > 0u) atomicAdd(work.w[PP_N_PACK + i], sPack[i]);
     if (lid < 4u && sStats[lid] > 0u) atomicAdd(work.w[PP_N_STATS + lid], sStats[lid]);
 }
 
@@ -245,23 +261,36 @@ void putDraw(uint command, uint first, uint count) {
     args.w[a + 3u] = first;
 }
 
+// Slot s's packed chunks from `at`, class by class; past them.
+uint layPacks(uint s, uint at) {
+    for (uint c = 0u; c < uint(PP_PACK_CLASSES); ++c) {
+        uint i = s * uint(PP_PACK_CLASSES) + c;
+        uint per = uint(PP_LEAVES_PER_CHUNK) >> c;
+        work.w[PP_N_PACK_CHUNK + i] = at;
+        at += (work.w[PP_N_PACK + i] + per - 1u) / per;
+    }
+    return at;
+}
+
 void main() {
     if (gl_LocalInvocationID.x != 0u) return;
     uint chunkCap = params.w[PP_P_CHUNK_CAP];
     uint leafCap = min(params.w[PP_P_LEAF_CAP], chunkCap);
     uint nt = tiles();
-    // The leaf chunks: the camera's bands, then each tile's leaves and its
-    // discs' chunks.
+    // The leaf chunks: the camera's bands (each its own then its packed),
+    // then each tile's leaves, its packed and its discs' chunks.
     uint at = 0u;
     for (uint b = 0u; b < uint(PP_BANDS); ++b) {
         work.w[PP_N_LEAF_START + b] = at;
         at += work.w[PP_N_LEAF + b];
+        at = layPacks(cameraSlot(b), at);
     }
     uint cameraLeaves = at;
     for (uint t = 0u; t < nt; ++t) {
         uint s = tileSlot(t);
         work.w[PP_N_LEAF_START + s] = at;
         at += work.w[PP_N_LEAF + s];
+        at = layPacks(s, at);
         work.w[PP_N_DISC_CHUNK + s] = at;
         at += (work.w[PP_N_DISC + s] + uint(PP_LEAVES_PER_CHUNK) - 1u) / uint(PP_LEAVES_PER_CHUNK);
     }
@@ -283,6 +312,13 @@ void main() {
         work.w[PP_N_DISC_START + s] = at;
         work.w[PP_N_DISC_FIT + s] = fits(at, work.w[PP_N_DISC + s], chunkCap);
         at += work.w[PP_N_DISC + s];
+    }
+    // The packed plants' records, each slot's classes' those that fit.
+    for (uint i = 0u; i < uint(PP_PACK_WORDS); ++i) {
+        if (i / uint(PP_PACK_CLASSES) >= uint(PP_BANDS) + nt) break;
+        work.w[PP_N_PACK_START + i] = at;
+        work.w[PP_N_PACK_FIT + i] = fits(at, work.w[PP_N_PACK + i], chunkCap);
+        at += work.w[PP_N_PACK + i];
     }
     work.w[PP_N_STATS + PP_S_RECORDS] = at;
     work.w[PP_N_STATS + PP_S_LEAF_CHUNKS] = leafArea;
@@ -314,6 +350,7 @@ void main() {
 // A view's counts in this workgroup, then (in place) its share's first
 // place in each slot: the camera's bands, or a tile's one (index 0).
 shared uint sLeaf[PP_BANDS], sWood[PP_BANDS], sDisc;
+shared uint sPack[PP_BANDS * PP_PACK_CLASSES];   // a band's (a tile's: band 0's) classes
 
 // Write chunk record `index` if it lies in its slot's run [start, end) and
 // under `cap` (a pick a bit apart from the count's never spills into the
@@ -342,17 +379,21 @@ void main() {
             sWood[lid] = 0u;
         }
         if (lid == 0u) sDisc = 0u;
+        uint packs = (v == 0u ? uint(PP_BANDS) : 1u) * uint(PP_PACK_CLASSES);
+        for (uint i = lid; i < packs; i += uint(PP_GROUP_SIZE)) sPack[i] = 0u;
         barrier();
         Pick k;
         k.on = false;
         k.slot = 0u;
+        k.pack = 0u;
         if (any && seenBy(mask, v)) k = pick(pl, v);
         uint band = v == 0u ? k.slot : 0u;
-        uint myLeaf = 0u, myWood = 0u, myDisc = 0u;
+        uint myLeaf = 0u, myWood = 0u, myDisc = 0u, myPack = 0u;
         if (k.on) {
             if (k.disc) {
                 myDisc = atomicAdd(sDisc, 1u);
             } else {
+                if (k.pack > 0u) myPack = atomicAdd(sPack[band * uint(PP_PACK_CLASSES) + k.pack - 1u], 1u);
                 myLeaf = atomicAdd(sLeaf[band], k.leafChunks);
                 myWood = atomicAdd(sWood[band], k.woodChunks);
             }
@@ -365,10 +406,31 @@ void main() {
             if (sWood[lid] > 0u) sWood[lid] = atomicAdd(work.w[PP_N_CURSOR + PP_SLOTS + s], sWood[lid]);
             if (lid == 0u && v > 0u && sDisc > 0u) sDisc = atomicAdd(work.w[PP_N_CURSOR + 2 * PP_SLOTS + s], sDisc);
         }
+        for (uint i = lid; i < packs; i += uint(PP_GROUP_SIZE)) {
+            uint s = v == 0u ? cameraSlot(i / uint(PP_PACK_CLASSES)) : tileSlot(v - 1u);
+            uint g = s * uint(PP_PACK_CLASSES) + i % uint(PP_PACK_CLASSES);
+            if (sPack[i] > 0u) sPack[i] = atomicAdd(work.w[PP_N_PACK_CURSOR + g], sPack[i]);
+        }
         barrier();
         if (k.on) {
             uint s = k.slot;
             float caster = v == 0u ? 0.0 : 1.0;
+            if (k.pack > 0u) {
+                // Its record in its class's list, and the shared chunk it
+                // begins (every chunk written, as the discs' are).
+                uint c = k.pack - 1u;
+                uint g = s * uint(PP_PACK_CLASSES) + c;
+                uint d = sPack[band * uint(PP_PACK_CLASSES) + c] + myPack;
+                uint fit = work.w[PP_N_PACK_FIT + g];
+                uint first = work.w[PP_N_PACK_START + g];
+                uint per = uint(PP_LEAVES_PER_CHUNK) >> c;
+                if (d < fit) chunks.c[first + d] = vec4(float(plant), k.elements, 0.0, 0.0);
+                if (d % per == 0u && d < work.w[PP_N_PACK + g]) {
+                    uint at = work.w[PP_N_PACK_CHUNK + g] + d / per;
+                    uint n = d < fit ? min(fit - d, per) : 0u;
+                    if (at < leafCap) chunks.c[at] = vec4(float(first + d), float(n), float(1u << c), 3.0 + caster);
+                }
+            }
             if (k.disc) {
                 // Its record in the tile's disc list, and the chunk of the
                 // discs it begins (every chunk written, those past the room

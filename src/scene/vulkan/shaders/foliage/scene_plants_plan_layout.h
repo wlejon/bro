@@ -30,6 +30,12 @@
 #define PP_LEAF_INDICES         12    // indices an element (the drawer's leafIndices)
 #define PP_TUBE_VERTS           36    // vertices a tube (PLANT_TUBE_VERTS)
 #define PP_MAX_LIMBS            48    // a species' tubes besides its trunk (PLANT_MAX_LIMBS)
+// A plant of at most PP_PACK_MOST elements (a far one) shares a leaf chunk:
+// class c gives each plant 2^c of its slots, PP_LEAVES_PER_CHUNK >> c plants
+// a chunk, so a tree at the horizon poses and draws one element, not a chunk.
+#define PP_PACK_CLASSES         5
+#define PP_PACK_MOST            16
+#define PP_PACK_WORDS           (PP_SLOTS * PP_PACK_CLASSES)   // a slot's classes, slot-major
 
 // --- PARAMS ---
 #define PP_P_TILES              0     // uint: the shadow views drawn (0: the node casts none)
@@ -62,7 +68,12 @@
 #define PP_N_DISC_START         (8 * PP_SLOTS)       // its first disc record
 #define PP_N_DISC_CHUNK         (9 * PP_SLOTS)       // its first disc chunk (after its leaf chunks)
 #define PP_N_DISC_FIT           (10 * PP_SLOTS)      // its discs that fit in CHUNKS
-#define PP_N_STATS              (11 * PP_SLOTS)      // PP_S_WORDS, read back
+#define PP_N_PACK               (11 * PP_SLOTS)                     // packed plants a slot's class
+#define PP_N_PACK_CURSOR        (PP_N_PACK + PP_PACK_WORDS)         // the place stage's cursors
+#define PP_N_PACK_START         (PP_N_PACK + 2 * PP_PACK_WORDS)     // a class's first packed record
+#define PP_N_PACK_CHUNK         (PP_N_PACK + 3 * PP_PACK_WORDS)     // its first chunk (after the slot's leaf chunks)
+#define PP_N_PACK_FIT           (PP_N_PACK + 4 * PP_PACK_WORDS)     // its records that fit in CHUNKS
+#define PP_N_STATS              (PP_N_PACK + 5 * PP_PACK_WORDS)     // PP_S_WORDS, read back
 #define PP_N_WORDS              (PP_N_STATS + PP_S_WORDS)
 // The stats (PlantsNode::Stats, and the room asked for).
 #define PP_S_PLANTS             0

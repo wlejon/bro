@@ -16,7 +16,10 @@
 // each: plant, first element, the plant's element count N (a wood chunk:
 // its tubes), 1 for a shadow view's caster else 0; a chunk of crown discs
 // (shadow_plants.vert): its first disc record, how many, 0, 2. A disc
-// record (in the same buffer): plant, 0, 0, 0.
+// record (in the same buffer): plant, 0, 0, 0. A packed chunk, plants of
+// few elements sharing its slots: its first packed record, how many, the
+// slots each, 3 (4 a caster's); a packed record: plant, its element count,
+// 0, 0.
 //
 // A shader including this includes its module last (foliage/plant_module.glsl,
 // a world's in its place), after everything the module may use.
