@@ -19,8 +19,12 @@
 // order walks the items in view in its own order. A box is tested as the
 // provider tests an item in it (the same planes, the same arithmetic, a box
 // round the items' boxes): an item a view sees is in a cell that view sees.
+// The camera (view 0) also loses the tops and leaves the land hides
+// (landHides: the land's horizon about the eye, binding 4); the shadow views
+// keep them, as the light sees past the land.
 
 #include "world/world_cells_layout.h"
+#include "world/world_horizon_layout.h"
 
 #if defined(CELLS_LEAF)
 layout(local_size_x = WC_TOP_LEAVES) in;
@@ -32,6 +36,7 @@ layout(std430, set = 0, binding = 0) readonly buffer Cells { uint w[]; } cells;
 layout(std430, set = 0, binding = 1) readonly buffer Params { uint w[]; } params;
 layout(std430, set = 0, binding = 2) buffer Out { uint w[]; } outs;
 layout(std430, set = 0, binding = 3) readonly buffer Origins { float w[]; } origins;
+layout(std430, set = 0, binding = 4) readonly buffer Horizon { float w[]; } horizon;
 
 float pf(uint i) { return uintBitsToFloat(params.w[i]); }
 vec3 cellV3(uint i) {
@@ -52,7 +57,42 @@ bool intersects(uint view, vec3 bmin, vec3 bmax) {
     return true;
 }
 
-// The views among `within` that see the box.
+float wrapAngle(float a) { return a - 6.28318531 * floor(a / 6.28318531 + 0.5); }
+int azimuthBin(float a) { return int(floor((a / 6.28318531 + 0.5) * float(WH_AZIMUTHS))); }
+
+// Whether the land hides the box from the horizon's eye: the steepest slope
+// of any of its points from the eye (its top at its nearest distance, or at
+// its farthest when the top is below the eye) under the land's at that
+// nearest distance in every direction it spans, and one more either side.
+bool landHides(vec3 bmin, vec3 bmax) {
+    if (horizon.w[WH_H_VALID] < 0.5) return false;
+    vec3 eye = vec3(horizon.w[WH_H_EYE], horizon.w[WH_H_EYE + 1], horizon.w[WH_H_EYE + 2]);
+    vec2 lo = bmin.xz - eye.xz, hi = bmax.xz - eye.xz;
+    float dNear = length(clamp(vec2(0.0), lo, hi));
+    float k = floor(WH_PER_OCTAVE * log2(max(dNear, 1e-3) / WH_NEAREST));
+    if (k < 0.0) return false;
+    float top = bmax.y - eye.y;
+    float slope = top / (top > 0.0 ? dNear : length(max(abs(lo), abs(hi))));
+    // The directions it spans: its corners about its centre's (the eye is
+    // WH_NEAREST or more outside it, so they span under half a turn).
+    vec2 c = 0.5 * (lo + hi);
+    float mid = atan(c.x, c.y), a0 = 0.0, a1 = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec2 p = vec2((i & 1) != 0 ? hi.x : lo.x, (i & 2) != 0 ? hi.y : lo.y);
+        float d = wrapAngle(atan(p.x, p.y) - mid);
+        a0 = min(a0, d);
+        a1 = max(a1, d);
+    }
+    int b0 = azimuthBin(mid + a0) - 1, b1 = azimuthBin(mid + a1) + 1;
+    if (b1 - b0 >= WH_SPAN_MOST) return false;
+    uint row = WH_HEADER + uint(min(k, float(WH_STEPS - 1))) * WH_AZIMUTHS;
+    for (int b = b0; b <= b1; ++b)
+        if (horizon.w[row + uint((b % WH_AZIMUTHS + WH_AZIMUTHS) % WH_AZIMUTHS)] <= slope) return false;
+    return true;
+}
+
+// The views among `within` that see the box (the camera not where the land
+// hides it).
 uvec2 viewsSeeing(vec3 bmin, vec3 bmax, uvec2 within) {
     uvec2 m = uvec2(0u);
     uint views = min(params.w[WC_P_VIEWS], uint(WC_MAX_VIEWS));
@@ -62,6 +102,7 @@ uvec2 viewsSeeing(vec3 bmin, vec3 bmax, uvec2 within) {
         if (!in_ || !intersects(v, bmin, bmax)) continue;
         if (v < 32u) m.x |= bit; else m.y |= bit;
     }
+    if ((m.x & 1u) != 0u && landHides(bmin, bmax)) m.x &= ~1u;
     return m;
 }
 

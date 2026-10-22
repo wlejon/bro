@@ -87,6 +87,15 @@ A small GPU pass walks the tree top-down. It tests each cell against:
 - the frustum;
 - the hierarchical depth from the visibility pass (§3);
 - each shadow tile's frustum;
+- the land's horizon about the eye (done: `world/scene_world_horizon.h`),
+  for the camera only: for 1,024 directions and 128 distances, the steepest
+  slope of the land out to there, made from the land's tiles on the graphics
+  queue when the eye moves half a metre, read by the cell pass a frame or two
+  later on the compute queue (the land lowered 2.5 m for that drift). A cell
+  whose top is under the land's slope in every direction it spans is not
+  planned for the camera; the shadow views keep it. At eye level in a 16 km
+  biomes most of the forest past a kilometre is behind hills: the glade's
+  plants in view fell from 526k to 60k, its frame from 3.03 to 2.76 ms;
 - on a planet, the horizon: a cell below it is hidden behind the curve of
   the ground, which from orbit is most of the planet.
 
@@ -1194,10 +1203,9 @@ the motion oracle for anything temporal. Each step removes what it replaces.
 | 11 | Volumetric light and clouds (§7) | shafts, mist, weather from every altitude | ~5k |
 | 12 | Night and many lights (§7) | moon, stars, cities from orbit, fires | ~2k |
 
-The horizons were step 5b. They need the terrain's height tiles, which no
-step before 9 makes, and biomes has nothing past the pages to show them on
-(its ground is a 1.4 km mesh, the pages' window 262 km), so they land with
-step 9. The canopy's density landed with the probes that read it (step 7).
+The horizons were step 5b. The land's horizon for culling came with the
+land's height tiles (§13); the per-tile horizons that shadow and occlude
+the sky past the pages land with step 9. The canopy's density landed with the probes that read it (step 7).
 
 The visibility pass (§3) joins when a measurement shows foliage shading, not
 its count, is what the frame is spent on.

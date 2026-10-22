@@ -226,7 +226,8 @@ bool GpuPlanner::ensure(SceneFrame& frame, SceneVkBuffer& buf, VkDeviceSize size
 // --- A node's frame ---
 
 bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const SceneVkBuffer& store,
-                     const std::vector<int>& tiles, const PlantShaders& shaders) {
+                     const std::vector<int>& tiles, const PlantShaders& shaders,
+                     const WorldHorizon::Read* horizon) {
     if (tiles.size() > PP_MAX_TILES || node.cells().empty()) return false;
     // Its poses, by its module's pose stage.
     if (shaders.index >= posePipelines_.size()) posePipelines_.resize(shaders.index + 1, VK_NULL_HANDLE);
@@ -336,6 +337,7 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
     views.planes = planes.data();
     views.scales = scales.data();
     views.itemGroup = PP_GROUP_SIZE;   // (no bands: every cell is planned plant by plant)
+    views.horizon = horizon;
     if (!cellsPass_.begin(frame, n.cellTarget_, views, n.cells_, n.provider_)) return false;
 
     const VkDeviceSize bytes = PP_P_WORDS * 4;

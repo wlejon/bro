@@ -112,8 +112,10 @@ public:
     /// it draws nothing this frame (its cells, buffers or sets could not be
     /// had).
     /// Its poses are built by `shaders`' pose stage (its world's module).
+    /// `horizon`: the land's about the eye, whose hidden cells the camera
+    /// does not plan (null: none).
     bool add(SceneFrame& frame, Node& state, const PlantsNode& node, const SceneVkBuffer& store,
-             const std::vector<int>& tiles, const PlantShaders& shaders);
+             const std::vector<int>& tiles, const PlantShaders& shaders, const WorldHorizon::Read* horizon);
     /// Record the queued plans and their poses into the frame's compute stream.
     void record(SceneFrame& frame);
     /// The plans just recorded went to the GPU as `ticket` on `queue`.

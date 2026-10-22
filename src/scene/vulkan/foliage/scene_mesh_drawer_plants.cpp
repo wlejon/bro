@@ -62,6 +62,7 @@ void SceneMeshDrawer::recordPlans(SceneFrame& frame) {
 
 void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue) {
     plantPlanner_->submitted(ticket, queue);
+    horizon_.submitted(ticket);
 }
 
 const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
@@ -114,7 +115,7 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
 
     // Planned on the GPU: each view's draws indirect, their counts the plan's.
     std::shared_ptr<plants::GpuPlanner::Node> state = plantPlanner_->node(node);
-    if (!plantPlanner_->add(frame, *state, node, *store, tiles, *shaders)) return;
+    if (!plantPlanner_->add(frame, *state, node, *store, tiles, *shaders, landHorizon(frame))) return;
     node.setStatsSource(state);
 
     uint32_t flags = 0;

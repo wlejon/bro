@@ -171,6 +171,7 @@ void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
 uint32_t SceneMeshDrawer::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted,
                                  WorldStream& stream) {
     if (kind == landKind_) return recordLand(frame, granted, stream);
+    if (kind == horizonKind_) return recordLandHorizon(frame, granted, stream);
     if (kind == turfKind_) return recordTurf(frame, granted, stream);
     return 0;
 }

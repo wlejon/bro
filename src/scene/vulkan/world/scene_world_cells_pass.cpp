@@ -6,6 +6,7 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/shaders/world/world_cells_layout.h"
+#include "scene/vulkan/shaders/world/world_horizon_layout.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -39,7 +40,7 @@ bool WorldCellsPass::setup(SceneGpu& gpu) {
     device_ = gpu.device.device();
     uploadAlign_ = std::max<VkDeviceSize>(gpu.device.context().deviceProperties().limits.minStorageBufferOffsetAlignment, 16);
     SceneVkDescriptorLayoutBuilder builder;
-    for (uint32_t b = 0; b < 4; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (uint32_t b = 0; b < 5; ++b) builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = builder.build(device_);
     VkPipelineLayoutCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -76,7 +77,8 @@ bool WorldCellsPass::setup(SceneGpu& gpu) {
     return true;
 }
 
-void WorldCellsPass::cleanup(SceneGpu&) {
+void WorldCellsPass::cleanup(SceneGpu& gpu) {
+    if (noHorizon_.isValid()) gpu.allocator.destroyBuffer(noHorizon_);
     for (int s = 0; s < kSteps; ++s) {
         if (pipelines_[s]) vkDestroyPipeline(device_, pipelines_[s], nullptr);
         SceneVkShaderModule::destroy(device_, modules_[s]);
@@ -167,6 +169,28 @@ bool WorldCellsPass::begin(SceneFrame& frame, Target& t, const Views& views, con
     std::memcpy(slice.mapped, p, bytes);
     // Every leaf's origin relative to the eye, taken in double.
     cells.eyeRelativeOrigins(provider, views.eye, static_cast<float*>(originSlice.mapped));
+    // The land's horizon, which the graphics queue made (the compute waits
+    // for the frame that did, long finished), else one never made.
+    VkBuffer horizon = VK_NULL_HANDLE;
+    VkDeviceSize horizonBytes = 0;
+    if (views.horizon) {
+        horizon = views.horizon->buffer;
+        horizonBytes = views.horizon->size;
+        frame.gpu.device.computeWaitsFor(views.horizon->ticket);
+    } else {
+        if (!noHorizon_.isValid()) {
+            const uint32_t none[WH_HEADER] = {};
+            if (!allocator.createBuffer(sizeof(none), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, noHorizon_, /*shared=*/true) ||
+                !allocator.stageAndUploadBuffer(noHorizon_.buffer, none, sizeof(none))) {
+                if (noHorizon_.isValid()) allocator.destroyBuffer(noHorizon_);
+                return false;
+            }
+            frame.gpu.device.computeReadsGraphics();
+        }
+        horizon = noHorizon_.buffer;
+        horizonBytes = noHorizon_.size;
+    }
     t.set = frame.gpu.device.frameSet(setLayout_);
     if (t.set == VK_NULL_HANDLE) return false;
     SceneVkDescriptorWriter writer;
@@ -175,6 +199,7 @@ bool WorldCellsPass::begin(SceneFrame& frame, Target& t, const Views& views, con
     writer.writeBuffer(1, slice.buffer, bytes, slice.offset, kStorage);
     writer.writeBuffer(2, t.out.buffer, t.out.size, 0, kStorage);
     writer.writeBuffer(3, originSlice.buffer, originBytes, originSlice.offset, kStorage);
+    writer.writeBuffer(4, horizon, horizonBytes, 0, kStorage);
     writer.updateSet(device_, t.set);
     return true;
 }

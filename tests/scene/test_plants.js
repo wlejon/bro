@@ -263,4 +263,30 @@ if (!scn) {
     assert(about(p.cells, home.cells) && about(st.plants, home.plants), `back home, the plants again (${st.plants})`);
     plants.setPlants({ rules: null });
     assert(drawn().plants === 0, 'rules cleared, no plants');
+
+    // The land's horizon: a grove 600-1000 m off behind a hill 80 m high,
+    // seen from 2 m up, is not planned for the camera; on level land, or
+    // from above the hill, it is.
+    const N = (type, props = {}) => {
+        const n = FastNoise.create(type);
+        for (const k in props) n.set(k, props[k]);
+        return n;
+    };
+    const cone = N('Max', { LHS: N('Add', { LHS: N('Multiply', { LHS: N('DistanceToPoint', { 'Distance Function': 'Euclidean', 'Point X': 0, 'Point Y': -300 }), RHS: -0.4 }), RHS: 80 }), RHS: 0 });
+    const ground = scn.createLand({ height: N('Constant', { Value: 0 }), extent: 2048 });
+    const grove = [];
+    for (let x = -150; x <= 150; x += 20) for (let z = -600; z >= -1000; z -= 20) grove.push({ x, z, seed: grove.length });
+    plants.setPlants({ plants: grove, range: 6000 });
+    const view = (y) => {
+        scn.setCamera({ fov: 50, near: 0.1, far: 5000, position: [0, y, 0], target: [0, y, -100] });
+        flush();
+        for (let i = 0; i < 8; i++) advanceTime(16);
+        return drawn().visible;
+    };
+    const level = view(2);
+    ground.setLand({ height: cone });
+    const behind = view(2), over = view(200);
+    assert(level > grove.length / 2, `on level land the grove is in view (${level} of ${grove.length})`);
+    assert(behind === 0, `behind the hill none is planned for the camera (${behind})`);
+    assert(over > grove.length / 2, `from above the hill it is again (${over})`);
 }

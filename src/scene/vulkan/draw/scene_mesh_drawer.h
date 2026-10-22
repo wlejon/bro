@@ -21,6 +21,7 @@
 #include "scene/world/surface_layers.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/world/scene_surface_layers.h"
+#include "scene/vulkan/world/scene_world_horizon.h"
 #include "scene/vulkan/world/scene_world_service.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
@@ -237,13 +238,16 @@ public:
     /// passes that draw them.
     void recordPlans(SceneFrame& frame);
     /// The plans recorded since the last call went to the GPU as `ticket` on
-    /// `queue`: the GPU planner's read-backs of them are read once it completes.
+    /// `queue`: the GPU planner's read-backs of them are read once it
+    /// completes, and the land's horizon made since then.
     void plansSubmitted(uint64_t ticket, render::VulkanQueue& queue);
-    /// The world service's jobs of two kinds, the land's tiles first (so the
-    /// turf's fills draw the land as it now is):
+    /// The world service's jobs of three kinds, the land's tiles first (so
+    /// the horizon and the turf's fills read the land as it now is):
     ///  - the land's tiles (scene_mesh_drawer_land.cpp): for each land node
     ///    drawn, the tiles the camera needs and has not got, offered as
     ///    fills, and those granted made by its module in a compute pass;
+    ///  - the land's horizon about the eye (scene_world_horizon.h), from the
+    ///    first land drawn's tiles, when the eye has moved or they changed;
     ///  - the turf's surface layers (docs/scene-world-architecture.md §5;
     ///    scene_mesh_drawer_ground.cpp): for each grass node whose turf this
     ///    frame draws, likewise, its turf meshes drawn straight down into
@@ -430,6 +434,20 @@ private:
     int landKind_ = -1;   // the land's fills, a world service job kind
     std::vector<uint32_t> landDrawn_;     // the land nodes prepared this frame
     std::vector<uint32_t> landOffered_;   // those whose tiles offer() updated this frame
+    /// The land's horizon (scene_world_horizon.h): made from the first land
+    /// offered's tiles by land_horizon.comp, a world service job kind of its
+    /// own; landHorizon is the newest the frame's compute may read.
+    bool setupLandHorizon(SceneGpu& gpu);
+    void cleanupLandHorizon(SceneGpu& gpu);
+    const WorldHorizon::Read* landHorizon(SceneFrame& frame);
+    uint32_t recordLandHorizon(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+    WorldHorizon horizon_;
+    int horizonKind_ = -1;
+    bool landChanged_ = false;   // tiles filled since the horizon was last made
+    VkShaderModule horizonModule_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout horizonSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout horizonLayout_ = VK_NULL_HANDLE;
+    VkPipeline horizonPipeline_ = VK_NULL_HANDLE;
     /// This frame's turf draws by grass node (offer's, for record).
     std::unordered_map<uint32_t, std::vector<const MeshDraw*>> turfDraws_;
     std::vector<uint32_t> turfOffered_;   // the grass nodes whose tiles offer() updated this frame

@@ -11,6 +11,8 @@
 //   binding 3  ORIGINS: this frame's eye-relative origin of every leaf
 //              (WC_ORIGIN_WORDS a leaf, in the leaves' order), computed in
 //              double on the CPU
+//   binding 4  HORIZON: the land's horizon about the eye
+//              (world_horizon_layout.h), or one never made
 
 #ifndef BRO_SCENE_WORLD_CELLS_LAYOUT_H
 #define BRO_SCENE_WORLD_CELLS_LAYOUT_H

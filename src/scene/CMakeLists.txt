@@ -175,6 +175,7 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_vk_bridge.cpp
     vulkan/world/scene_surface_layers.cpp
     vulkan/world/scene_world_cells_pass.cpp
+    vulkan/world/scene_world_horizon.cpp
     vulkan/world/scene_world_service.cpp
     vulkan/world/pass_world_service.cpp
     vulkan/draw/scene_vk_custom_shader.cpp

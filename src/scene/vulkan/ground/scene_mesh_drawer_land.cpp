@@ -15,7 +15,9 @@
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/shaders/ground/scene_land_layout.h"
+#include "scene/vulkan/shaders/world/world_horizon_layout.h"
 
 #include "util/log.h"
 
@@ -67,10 +69,59 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's fills");
         return false;
     }
+    return setupLandHorizon(gpu);
+}
+
+bool SceneMeshDrawer::setupLandHorizon(SceneGpu& gpu) {
+    // Its set: the LandDraw words, the tiles' heights, surface and page
+    // table, and the horizon; the eye pushed.
+    SceneVkDescriptorLayoutBuilder set;
+    set.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (uint32_t b = 1; b <= 3; ++b)
+        set.addBinding(b, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    set.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    horizonSetLayout_ = set.build(device_);
+    const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(float)};
+    VkPipelineLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = 1;
+    info.pSetLayouts = &horizonSetLayout_;
+    info.pushConstantRangeCount = 1;
+    info.pPushConstantRanges = &push;
+    if (!horizonSetLayout_ || vkCreatePipelineLayout(device_, &info, nullptr, &horizonLayout_) != VK_SUCCESS) {
+        LOG_ERROR("SceneMeshDrawer: failed creating the land horizon's layout");
+        return false;
+    }
+    horizonModule_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::LandHorizonComp);
+    horizonPipeline_ = horizonModule_ ? createComputePipeline(device_, horizonModule_, horizonLayout_, "land horizon")
+                                      : VK_NULL_HANDLE;
+    if (!horizonPipeline_) {
+        LOG_ERROR("SceneMeshDrawer: failed creating the land horizon's pipeline");
+        return false;
+    }
+    // Recorded after the land's fills, which it reads.
+    if (horizonKind_ < 0) horizonKind_ = gpu.world.addKind(this, {"land horizon", WorldSchedule::Raster, 0.03f});
+    if (horizonKind_ < 0) {
+        LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's horizon");
+        return false;
+    }
     return true;
 }
 
+void SceneMeshDrawer::cleanupLandHorizon(SceneGpu& gpu) {
+    horizon_.destroy(gpu.allocator);
+    if (horizonPipeline_) vkDestroyPipeline(device_, horizonPipeline_, nullptr);
+    SceneVkShaderModule::destroy(device_, horizonModule_);
+    if (horizonLayout_) vkDestroyPipelineLayout(device_, horizonLayout_, nullptr);
+    if (horizonSetLayout_) vkDestroyDescriptorSetLayout(device_, horizonSetLayout_, nullptr);
+    horizonPipeline_ = VK_NULL_HANDLE;
+    horizonModule_ = VK_NULL_HANDLE;
+    horizonLayout_ = VK_NULL_HANDLE;
+    horizonSetLayout_ = VK_NULL_HANDLE;
+}
+
 void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
+    cleanupLandHorizon(gpu);
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
     for (VkPipeline p : landFillPipelines_)
@@ -269,6 +320,56 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         landOffered_.push_back(id);
     }
     landDrawn_.clear();
+    // The horizon about the eye, from the first land's tiles; with no land,
+    // none.
+    if (landOffered_.empty())
+        horizon_.forget();
+    else if (horizon_.stale(view.eye, landChanged_))
+        service.offer({0, landOffered_.front(), horizonKind_, 0.0f, 0.0, /*required=*/true});
+}
+
+const WorldHorizon::Read* SceneMeshDrawer::landHorizon(SceneFrame& frame) {
+    return horizon_.read(frame.gpu.device.context().queue(), frame.view.eye);
+}
+
+uint32_t SceneMeshDrawer::recordLandHorizon(SceneFrame& frame, std::span<const WorldJob> granted,
+                                            WorldStream& stream) {
+    if (granted.empty()) return 0;
+    const auto found = lands_.find(granted.front().producer);
+    if (found == lands_.end() || found->second->failed) return 0;
+    const LandTiles& lt = *found->second;
+    SceneNode* n = frame.graph.findById(found->first);
+    LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
+    if (!land || lt.tiles.stats().resident == 0) return 0;
+
+    float words[LD_WORDS];
+    landWords(frame, *land, lt, words);
+    const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(words, sizeof(words));
+    VkDescriptorSet set = frame.gpu.device.frameSet(horizonSetLayout_);
+    const SceneVkBuffer* out = set != VK_NULL_HANDLE ? horizon_.write(frame.gpu.allocator, frame.view.eye) : nullptr;
+    if (!out) return 0;
+    landChanged_ = false;
+    SceneVkDescriptorWriter writer;
+    writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
+    writer.writeImage(1, lt.atlas.layerView(0), lt.atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
+    writer.writeImage(2, lt.atlas.layerView(1), lt.atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
+    writer.writeImage(3, lt.atlas.pageView(), lt.atlas.pageSampler());
+    writer.writeBuffer(4, out->buffer, out->size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    writer.updateSet(device_, set);
+
+    VkCommandBuffer cmd = stream.cmd();
+    // The tiles and page entries this frame's fills wrote.
+    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonLayout_, 0, 1, &set, 0, nullptr);
+    const float eye[4] = {frame.view.eye.x, frame.view.eye.y, frame.view.eye.z, 0.0f};
+    vkCmdPushConstants(cmd, horizonLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(eye), eye);
+    vkCmdDispatch(cmd, WH_AZIMUTHS, 1, 1);
+    return 1;
 }
 
 uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
@@ -295,6 +396,7 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
         stats.compiled = true;
         land->setStats(stats);
         frame.stats.landFills += static_cast<int>(fills.size());
+        if (!fills.empty() || !lt.tiles.pageWrites().empty()) landChanged_ = true;
         recorded += static_cast<uint32_t>(fills.size());
 
         const VkPipeline pipeline = fills.empty() ? VK_NULL_HANDLE : landFillPipeline(*lt.shaders);

@@ -12,12 +12,15 @@
 // instead of all their items (world_cells.h has the provider contract). Recorded on the frame's compute stream, ahead
 // of what reads it.
 //
-// Frustum only for now: the hierarchical depth of a visibility pass (§3)
-// joins the same test later. A target's output is one copy, as the plants
+// The camera's view also loses what the land hides, by the land's horizon
+// about the eye when the frame has one (scene_world_horizon.h); the
+// hierarchical depth of a visibility pass (§3) joins the same test later.
+// A target's output is one copy, as the plants
 // plan's work is: the compute queue orders a frame's pass after the last
 // frame's reads.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/world/scene_world_horizon.h"
 #include "scene/world/world_cells.h"
 
 #include <vulkan/vulkan.h>
@@ -60,6 +63,7 @@ public:
         const Scale* scales = nullptr;
         float nearPixels = 0.0f, farPixels = 0.0f;
         uint32_t itemGroup = 256;   // items a workgroup of the provider's dispatch
+        const WorldHorizon::Read* horizon = nullptr;   // the land's about the eye (none: nothing hidden)
     };
 
     bool setup(SceneGpu& gpu);
@@ -88,6 +92,7 @@ private:
     VkShaderModule modules_[3] = {};
     VkPipeline pipelines_[3] = {};
     VkDeviceSize uploadAlign_ = 16;
+    SceneVkBuffer noHorizon_;   // bound when a frame has no horizon: one never made (WH_H_VALID 0)
 };
 
 }  // namespace bro::scene::vk

@@ -79,9 +79,10 @@ bool SceneVkDevice::submitFrame(VkCommandBuffer cmd) {
         // slot's results.
         std::vector<render::SemaphoreWait> waits;
         render::VulkanQueue& graphics = context_.queue();
+        uint64_t after = computeAfterTicket_;
         if (computeAfterGraphics_ || lastFrameSerial_ == frames.frameSerial())
-            if (const uint64_t t = graphics.lastSubmittedTicket())
-                waits.push_back({graphics.timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, t});
+            after = std::max(after, graphics.lastSubmittedTicket());
+        if (after) waits.push_back({graphics.timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, after});
         computeTicket = frames.submitCompute(computeCmd_, std::move(waits));
         if (computeTicket == 0) LOG_ERROR("SceneVkDevice: Failed to submit the frame's compute");
     }
@@ -93,6 +94,7 @@ bool SceneVkDevice::submitFrame(VkCommandBuffer cmd) {
     const uint64_t ticket = frames.submit(cmd, std::move(waits));
     computeCmd_ = headCmd_ = VK_NULL_HANDLE;
     computeAfterGraphics_ = false;
+    computeAfterTicket_ = 0;
     lastFrameSerial_ = frames.frameSerial();
     lastComputeTicket_ = computeTicket;
     if (ticket == 0) {

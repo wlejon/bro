@@ -3,6 +3,7 @@
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 
@@ -65,6 +66,9 @@ public:
     /// queue's work so far. That orders it behind the previous frame's
     /// graphics, so only for a frame whose inputs changed.
     void computeReadsGraphics() { computeAfterGraphics_ = true; }
+    /// The compute stream reads what graphics submission `ticket` (an
+    /// earlier frame's) wrote: its submission waits for that ticket alone.
+    void computeWaitsFor(uint64_t ticket) { computeAfterTicket_ = std::max(computeAfterTicket_, ticket); }
     /// The frame's graphics reaches its first consumer of the compute
     /// results: `cmd`, left open, will be submitted ahead without a wait, and
     /// the returned command buffer (the rest of the frame) waits for the
@@ -116,6 +120,7 @@ private:
     VkCommandBuffer computeCmd_ = VK_NULL_HANDLE;   // this frame's compute stream (async)
     VkCommandBuffer headCmd_ = VK_NULL_HANDLE;      // the graphics before the join
     bool computeAfterGraphics_ = false;
+    uint64_t computeAfterTicket_ = 0;
     uint64_t lastComputeTicket_ = 0;
     uint64_t lastFrameSerial_ = 0;   // the frame-ring serial of the last submitFrame
     render::VulkanFrames::HookId frameEndHook_ = 0;
