@@ -27,11 +27,9 @@
 // grid (odd index; the parity rides in uv.y) to the mean of its neighbours
 // a cell either way. By the overlap the two coincide everywhere.
 
+// (Of the packed vertex, only these: the caster's vertex input has no more.)
 layout(location = 0) in vec3 inPos;      // cells from the ring's centre
-layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;       // x the ring, y the morph parity
-layout(location = 3) in vec4 inColor;
-layout(location = 4) in vec4 inTangent;
 
 #ifndef LAND_CASTER
 layout(location = 0) out vec3 outWorldPos;
