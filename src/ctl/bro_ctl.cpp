@@ -405,6 +405,10 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
     bool ok = false;
     std::string payload, file;
     if (!c.call(argv, outArg, ok, payload, file)) {
+        if (plan.toStdout && !c.remote_ && !plan.path.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(plan.path, ec);
+        }
         std::fprintf(stderr, "bro-ctl: the connection closed before a reply%s%s\n", payload.empty() ? "" : ": ",
                      payload.c_str());
         return 2;
@@ -447,16 +451,24 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
         }
         if (plan.toStdout) {
             const bool sent = catFile(dir + "/video.mp4") || catFile(dir + "/contact.png");
+            std::error_code ec;
+            if (!dir.empty()) std::filesystem::remove_all(dir, ec);
+            if (!plan.path.empty() && plan.path != dir) std::filesystem::remove_all(plan.path, ec);
             return sent ? 0 : 1;
         }
     }
     if (ok && plan.toStdout && !plan.path.empty()) {
         const bool sent = catFile(plan.path);
-        std::remove(plan.path.c_str());
+        std::error_code ec;
+        std::filesystem::remove_all(plan.path, ec);
         return sent ? 0 : 1;
     }
     // With -o - stdout carries only the file's bytes: text goes to stderr.
     if (plan.toStdout) {
+        if (!c.remote_ && !plan.path.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(plan.path, ec);
+        }
         std::fwrite(payload.data(), 1, payload.size(), stderr);
         if (!payload.empty() && payload.back() != '\n') std::fputc('\n', stderr);
         if (!ok) return 1;

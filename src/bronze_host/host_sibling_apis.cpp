@@ -323,12 +323,22 @@ void installGameAiApi() {
 }  // namespace
 
 void installSiblingApis(engine::Engine& engine) {
+    static engine::Engine* s_activeEngine = nullptr;
+    const bool installHooks = (s_activeEngine != &engine);
+    s_activeEngine = &engine;
+    if (installHooks) {
+        engine.addShutdownHook([eng = &engine] {
+            if (s_activeEngine == eng) s_activeEngine = nullptr;
+        });
+    }
 #if BRO_WITH_AUDIO
     // AudioContext and the node classes need no root; bro.mic mounts onto
     // the `bro` root and re-sets the global to the object it found.
     // The engine's audio is opened on a script's first use of it, so a page
     // that never plays a sound never opens the audio device.
-    broaudio::api::setAudioEngineProvider([&engine] { return engine.audioEngine(); });
+    broaudio::api::setAudioEngineProvider([]() -> broaudio::Engine* {
+        return s_activeEngine ? s_activeEngine->audioEngine() : nullptr;
+    });
     // Its file loaders, savers and preset IO take paths the way fs.* does.
     broaudio::api::setPathResolver(&brokit::api::resolveAssetPath);
     broaudio::api::installAudio();
@@ -363,7 +373,7 @@ void installSiblingApis(engine::Engine& engine) {
                              "ClipModel", "T5Model", "LayaModel", "ModernBertModel", "Grammar"}) {
         adoptGlobalProperty(name);
     }
-    {
+    if (installHooks) {
         // The LM tick fires generate() callbacks and settles LayaModel
         // promises (predictAsync / loadLayaAsync). Their reactions run right
         // after, in this frame, before it renders: a result the device
@@ -371,24 +381,18 @@ void installSiblingApis(engine::Engine& engine) {
         // for the next frame's microtask checkpoint. The shutdown hook stops
         // every Laya scheduler's device threads before the runtime and
         // brotensor go away.
-        static bool lmHooksInstalled = false;
-        if (!lmHooksInstalled) {
-            lmHooksInstalled = true;
-            engine.addFramePump([] {
-                brolm::api::tickLMAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brolm::api::shutdownLM(); });
-        }
+        engine.addFramePump([] {
+            brolm::api::tickLMAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brolm::api::shutdownLM(); });
     }
 #endif
 #if BRO_WITH_SOUNDML
     // One installer covers stt, tts, diar, rave, wake, kws, sense, gesture
     // and listen. Its async jobs (background loads / inferences) deliver
     // their JS callbacks from the engine's frame pump, and are cancelled +
-    // joined at shutdown before the runtime and brotensor go away. The
-    // engine is one per process, so the hooks register once even though a
-    // reload re-runs the installers for the new realm.
+    // joined at shutdown before the runtime and brotensor go away.
     //
     // The listen host (bro.listen and the wake / kws / sense / gesture
     // tenants) taps the engine's broaudio for its mic streams and runs each
@@ -399,40 +403,38 @@ void installSiblingApis(engine::Engine& engine) {
     // the host relies on to mutate a stream's models after a detach.
     brosoundml::api::setPathResolver(&brokit::api::resolveAssetPath);
     brosoundml::api::setLogHook([](const std::string& line) { LOG_INFO("%s", line.c_str()); });
-    brosoundml::api::setAudioEngineProvider([&engine] { return engine.audioEngine(); });
+    brosoundml::api::setAudioEngineProvider([]() -> broaudio::Engine* {
+        return s_activeEngine ? s_activeEngine->audioEngine() : nullptr;
+    });
     {
         // The AudioInference worker is made when the first stream asks for
         // a pump, not for every page.
-        engine::Engine* eng = &engine;
         brosoundml::api::InferenceScheduler sched;
-        sched.addPump = [eng](std::function<void()> pump) -> std::uint32_t {
-            engine::AudioInference* inference = eng->audioInference();
+        sched.addPump = [](std::function<void()> pump) -> std::uint32_t {
+            engine::AudioInference* inference = s_activeEngine ? s_activeEngine->audioInference() : nullptr;
             return inference ? inference->addPump(std::move(pump)) : 0;
         };
-        sched.removePump = [eng](std::uint32_t id) {
-            if (auto* inference = eng->existingAudioInference()) inference->removeTask(id);
+        sched.removePump = [](std::uint32_t id) {
+            if (auto* inference = s_activeEngine ? s_activeEngine->existingAudioInference() : nullptr)
+                inference->removeTask(id);
         };
-        sched.threaded = [eng] {
-            engine::AudioInference* inference = eng->audioInference();
+        sched.threaded = [] {
+            engine::AudioInference* inference = s_activeEngine ? s_activeEngine->audioInference() : nullptr;
             return inference && inference->threaded();
         };
         brosoundml::api::setInferenceScheduler(std::move(sched));
     }
     brosoundml::api::installSoundML();
-    {
-        static bool soundmlHooksInstalled = false;
-        if (!soundmlHooksInstalled) {
-            soundmlHooksInstalled = true;
-            engine.addFramePump([] { brosoundml::api::tickSoundML(); });
-            engine.addShutdownHook([] { brosoundml::api::shutdownSoundML(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] { brosoundml::api::tickSoundML(); });
+        engine.addShutdownHook([] { brosoundml::api::shutdownSoundML(); });
     }
 #endif
 #if BRO_WITH_DIFFUSION
     // bro.diffusion and bro.triposplat together.
     brodiffusion::api::setPathResolver(&brokit::api::resolveAssetPath);
     brodiffusion::api::installDiffusion();
-    {
+    if (installHooks) {
         // A background generate (generateAsync, or generate/imageToImage/
         // inpaint with onDone or async: true) delivers its onDone from this
         // tick; without it the result waits for a script that calls
@@ -440,15 +442,11 @@ void installSiblingApis(engine::Engine& engine) {
         // frame, as the LM tick's do. Ungated by bro.time pause, like every
         // frame pump. The shutdown hook cancels and joins the jobs still
         // running before the runtime and brotensor go away.
-        static bool diffusionHooksInstalled = false;
-        if (!diffusionHooksInstalled) {
-            diffusionHooksInstalled = true;
-            engine.addFramePump([] {
-                brodiffusion::api::tickDiffusionAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brodiffusion::api::shutdownDiffusionAsync(); });
-        }
+        engine.addFramePump([] {
+            brodiffusion::api::tickDiffusionAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brodiffusion::api::shutdownDiffusionAsync(); });
     }
 #endif
 #if BRO_WITH_VISION
@@ -457,8 +455,7 @@ void installSiblingApis(engine::Engine& engine) {
     // ...then bro's half: the `image` / `matte` ImageBitmaps a standalone
     // sibling cannot mint, and the worker-thread `onDone` form of every
     // heavy op. host_vision.h says why the ops are re-driven here instead of
-    // wrapped. It also registers the per-frame drain and the shutdown hook,
-    // once per process.
+    // wrapped. It also registers the per-frame drain and the shutdown hook.
     installVisionHostOps(&engine);
 #endif
 #if BRO_WITH_FLORA
@@ -472,7 +469,7 @@ void installSiblingApis(engine::Engine& engine) {
         // after installBroRoots returns. brokit carries a copy of the
         // kernels too; broimage's are the ones installed.
         broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
-        // WebP and SVG read by broimage — bro.image, bro.thumb — as by <img>.
+        // WebP and SVG read by broimage — bro.thumb — as by <img>.
         render::registerImageCodecs();
         broimage::api::installImage();
     }
@@ -492,16 +489,12 @@ void installSiblingApis(engine::Engine& engine) {
         confStoreChosen = true;
     }
     broconf::api::installConf();
-    {
-        static bool confHooksInstalled = false;
-        if (!confHooksInstalled) {
-            confHooksInstalled = true;
-            engine.addFramePump([] {
-                broconf::api::tickConfAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broconf::api::shutdownConfAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            broconf::api::tickConfAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broconf::api::shutdownConfAsync(); });
     }
 #endif
 #if BRO_WITH_THEMES
@@ -513,44 +506,32 @@ void installSiblingApis(engine::Engine& engine) {
 #endif
 #if BRO_WITH_SEARCH
     brosearch::api::installSearch();
-    {
-        static bool searchHooksInstalled = false;
-        if (!searchHooksInstalled) {
-            searchHooksInstalled = true;
-            engine.addFramePump([] {
-                brosearch::api::tickSearchAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brosearch::api::shutdownSearchAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brosearch::api::tickSearchAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brosearch::api::shutdownSearchAsync(); });
     }
 #endif
 #if BRO_WITH_APPS
     broapps::api::installApps();
-    {
-        static bool appsHooksInstalled = false;
-        if (!appsHooksInstalled) {
-            appsHooksInstalled = true;
-            engine.addFramePump([] {
-                broapps::api::tickAppsAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broapps::api::shutdownAppsAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            broapps::api::tickAppsAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broapps::api::shutdownAppsAsync(); });
     }
 #endif
 #if BRO_WITH_VFS
     brovfs::api::installVfs();
-    {
-        static bool vfsHooksInstalled = false;
-        if (!vfsHooksInstalled) {
-            vfsHooksInstalled = true;
-            engine.addFramePump([] {
-                brovfs::api::tickVfsAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brovfs::api::shutdownVfsAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brovfs::api::tickVfsAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brovfs::api::shutdownVfsAsync(); });
     }
 #endif
 #if BRO_WITH_THUMB
@@ -575,279 +556,292 @@ void installSiblingApis(engine::Engine& engine) {
         thumbServiceChosen = true;
     }
     brothumb::api::installThumb();
-    {
-        static bool thumbHooksInstalled = false;
-        if (!thumbHooksInstalled) {
-            thumbHooksInstalled = true;
-            engine.addFramePump([] {
-                brothumb::api::tickThumbAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brothumb::api::shutdownThumbAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brothumb::api::tickThumbAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brothumb::api::shutdownThumbAsync(); });
     }
 #endif
 #if BRO_WITH_SEAT
     broseat::api::installSeat();
-    {
-        static bool seatHooksInstalled = false;
-        if (!seatHooksInstalled) {
-            seatHooksInstalled = true;
-            // The idle timer (bro.seat.setIdleTimeout) runs on the engine's
-            // record of user input: under DRM the engine reads the devices
-            // itself, and a compositor client's idle-inhibit holds it off.
-            engine.addFramePump([&engine] {
-                broseat::api::tickIdle(engine.activityClockMs(), engine.lastUserActivityMs(),
-                                       engine.hostIdleInhibited());
-                broseat::api::tickSeatAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broseat::api::shutdownSeatAsync(); });
-        }
+    if (installHooks) {
+        // The idle timer (bro.seat.setIdleTimeout) runs on the engine's
+        // record of user input: under DRM the engine reads the devices
+        // itself, and a compositor client's idle-inhibit holds it off.
+        engine.addFramePump([eng = &engine] {
+            if (s_activeEngine == eng) {
+                broseat::api::tickIdle(eng->activityClockMs(), eng->lastUserActivityMs(),
+                                       eng->hostIdleInhibited());
+            }
+            broseat::api::tickSeatAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broseat::api::shutdownSeatAsync(); });
     }
 #endif
 #if BRO_WITH_CRED
     brocred::api::installCred();
-    {
-        static bool credHooksInstalled = false;
-        if (!credHooksInstalled) {
-            credHooksInstalled = true;
-            engine.addFramePump([] {
-                brocred::api::tickCredAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brocred::api::shutdownCredAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brocred::api::tickCredAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brocred::api::shutdownCredAsync(); });
     }
 #endif
 #if BRO_WITH_SYS
     brosys::api::installSys();
-    {
-        static bool sysHooksInstalled = false;
-        if (!sysHooksInstalled) {
-            sysHooksInstalled = true;
-            engine.addFramePump([] {
-                brosys::api::tickSysAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brosys::api::shutdownSysAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brosys::api::tickSysAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brosys::api::shutdownSysAsync(); });
     }
 #endif
 #if BRO_WITH_DISPLAYS
     brodisplays::api::installDisplays();
-    {
-        static bool displaysHooksInstalled = false;
-        if (!displaysHooksInstalled) {
-            displaysHooksInstalled = true;
-            engine.addFramePump([] {
-                brodisplays::api::tickDisplaysAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brodisplays::api::shutdownDisplaysAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brodisplays::api::tickDisplaysAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brodisplays::api::shutdownDisplaysAsync(); });
     }
 #endif
 #if BRO_WITH_PORTAL
     broportal::api::installPortal();
-    {
-        static bool portalHooksInstalled = false;
-        if (!portalHooksInstalled) {
-            portalHooksInstalled = true;
-            engine.addFramePump([] {
-                broportal::api::tickPortalAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broportal::api::shutdownPortalAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            broportal::api::tickPortalAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broportal::api::shutdownPortalAsync(); });
     }
 #endif
 #if BRO_WITH_COMPOSITOR
     brocompositor::api::installCompositor();
-    {
-        static bool compositorHooksInstalled = false;
-        if (!compositorHooksInstalled) {
-            compositorHooksInstalled = true;
+    if (installHooks) {
 #if defined(_WIN32)
-            static std::unique_ptr<brocompositor::win::ShellBackend> s_winShellBackend;
-            if (engine.displayMode() != engine::DisplayMode::Headless) {
-                brocompositor::win::ShellConfig sCfg;
-                sCfg.recover = true;
-                sCfg.report_existing = true;
-                std::string sErr;
-                s_winShellBackend = brocompositor::win::ShellBackend::create(sCfg, &sErr);
-                if (!s_winShellBackend) {
-                    LOG_WARN("brocompositor: win::ShellBackend::create failed: %s", sErr.c_str());
-                } else {
-                    auto eqPtr = std::shared_ptr<brocompositor::EventQueue>(
-                        &s_winShellBackend->events(), [](brocompositor::EventQueue*) {});
-                    brocompositor::api::setEventQueue(eqPtr);
-                    brocompositor::api::setCommandSink(
-                        [](const std::vector<brocompositor::Command>& cmds) -> size_t {
-                            if (s_winShellBackend) return s_winShellBackend->execute(cmds);
-                            return cmds.size();
-                        });
-                    brocompositor::api::setWindowIconSource(
-                        [](brocompositor::WindowId id, int32_t size) -> std::optional<brocompositor::WindowIcon> {
-                            if (s_winShellBackend) return s_winShellBackend->window_icon(id, size);
-                            return std::nullopt;
-                        });
-                    // The session's shell in place of Explorer (helm as the
-                    // Winlogon shell): its window is the shell window, kept
-                    // beneath the applications until an overlay raises it,
-                    // and its panels reserve the work area every application
-                    // sees (bro.compositor.setShellOverlay / reserveEdge).
-                    if (engine.isDesktopShell()) {
-                        brocompositor::api::ShellRole role;
-                        role.is_desktop_shell = [] { return s_winShellBackend && s_winShellBackend->is_desktop_shell(); };
-                        role.set_overlay = [](bool on) {
-                            return s_winShellBackend && s_winShellBackend->set_shell_raised(on);
-                        };
-                        role.reserve_edge = [](brocompositor::MonitorId monitor, brocompositor::Edge edge,
-                                               int32_t thickness) {
-                            return s_winShellBackend ? s_winShellBackend->reserve_edge(monitor, edge, thickness)
-                                                     : brocompositor::kNoReservation;
-                        };
-                        role.release_edge = [](brocompositor::ReservationId id) {
-                            return s_winShellBackend && s_winShellBackend->release_edge(id);
-                        };
-                        brocompositor::api::setShellRole(std::move(role));
-                    }
+        static std::unique_ptr<brocompositor::win::ShellBackend> s_winShellBackend;
+        if (engine.displayMode() != engine::DisplayMode::Headless) {
+            brocompositor::win::ShellConfig sCfg;
+            sCfg.recover = true;
+            sCfg.report_existing = true;
+            std::string sErr;
+            s_winShellBackend = brocompositor::win::ShellBackend::create(sCfg, &sErr);
+            if (!s_winShellBackend) {
+                LOG_WARN("brocompositor: win::ShellBackend::create failed: %s", sErr.c_str());
+            } else {
+                auto eqPtr = std::shared_ptr<brocompositor::EventQueue>(
+                    &s_winShellBackend->events(), [](brocompositor::EventQueue*) {});
+                brocompositor::api::setEventQueue(eqPtr);
+                brocompositor::api::setCommandSink(
+                    [](const std::vector<brocompositor::Command>& cmds) -> size_t {
+                        if (s_winShellBackend) return s_winShellBackend->execute(cmds);
+                        return cmds.size();
+                    });
+                brocompositor::api::setWindowIconSource(
+                    [](brocompositor::WindowId id, int32_t size) -> std::optional<brocompositor::WindowIcon> {
+                        if (s_winShellBackend) return s_winShellBackend->window_icon(id, size);
+                        return std::nullopt;
+                    });
+                // The session's shell in place of Explorer (helm as the
+                // Winlogon shell): its window is the shell window, kept
+                // beneath the applications until an overlay raises it,
+                // and its panels reserve the work area every application
+                // sees (bro.compositor.setShellOverlay / reserveEdge).
+                if (engine.isDesktopShell()) {
+                    brocompositor::api::ShellRole role;
+                    role.is_desktop_shell = [] { return s_winShellBackend && s_winShellBackend->is_desktop_shell(); };
+                    role.set_overlay = [](bool on) {
+                        return s_winShellBackend && s_winShellBackend->set_shell_raised(on);
+                    };
+                    role.reserve_edge = [](brocompositor::MonitorId monitor, brocompositor::Edge edge,
+                                           int32_t thickness) {
+                        return s_winShellBackend ? s_winShellBackend->reserve_edge(monitor, edge, thickness)
+                                                 : brocompositor::kNoReservation;
+                    };
+                    role.release_edge = [](brocompositor::ReservationId id) {
+                        return s_winShellBackend && s_winShellBackend->release_edge(id);
+                    };
+                    brocompositor::api::setShellRole(std::move(role));
                 }
             }
-#endif
-            engine.addFramePump([&engine] {
-#if defined(_WIN32)
-                // Attached on the window's own thread (this one), once it exists.
-                static bool s_shellAttached = false;
-                if (!s_shellAttached && s_winShellBackend && engine.isDesktopShell() && engine.window()) {
-                    if (void* hwnd = engine.window()->nativeHandle().hwnd) {
-                        s_shellAttached = true;
-                        const bool ok = s_winShellBackend->attach_desktop_shell(
-                            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd)));
-                        LOG_INFO("brocompositor: desktop shell window %p attached=%d registered=%d", hwnd, ok ? 1 : 0,
-                                 s_winShellBackend->is_desktop_shell() ? 1 : 0);
-                    }
-                }
-#else
-                (void)engine;
-#endif
-                brocompositor::api::tickCompositorAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] {
-                brocompositor::api::shutdownCompositorAsync();
-#if defined(_WIN32)
-                brocompositor::api::setShellRole({});
-                brocompositor::api::setWindowIconSource({});
-                s_winShellBackend.reset();
-#endif
-            });
         }
+#endif
+        engine.addFramePump([eng = &engine] {
+#if defined(_WIN32)
+            // Attached on the window's own thread (this one), once it exists.
+            static bool s_shellAttached = false;
+            if (!s_shellAttached && s_winShellBackend && s_activeEngine == eng &&
+                eng->isDesktopShell() && eng->window()) {
+                if (void* hwnd = eng->window()->nativeHandle().hwnd) {
+                    s_shellAttached = true;
+                    const bool ok = s_winShellBackend->attach_desktop_shell(
+                        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd)));
+                    LOG_INFO("brocompositor: desktop shell window %p attached=%d registered=%d", hwnd, ok ? 1 : 0,
+                             s_winShellBackend->is_desktop_shell() ? 1 : 0);
+                }
+            }
+#else
+            (void)eng;
+#endif
+            brocompositor::api::tickCompositorAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] {
+            brocompositor::api::shutdownCompositorAsync();
+#if defined(_WIN32)
+            brocompositor::api::setShellRole({});
+            brocompositor::api::setWindowIconSource({});
+            s_winShellBackend.reset();
+#endif
+        });
     }
 #endif
 #if BRO_WITH_WL
     browl::api::setAutoConnect(engine.displayMode() != engine::DisplayMode::Headless);
     browl::api::installWl();
-    {
-        static bool wlHooksInstalled = false;
-        if (!wlHooksInstalled) {
-            wlHooksInstalled = true;
-            engine.addFramePump([] {
-                browl::api::tickWlAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { browl::api::shutdownWlAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            browl::api::tickWlAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { browl::api::shutdownWlAsync(); });
     }
 #endif
 #if BRO_WITH_A11Y
     broa11y::api::installA11y();
-    {
-        static bool a11yHooksInstalled = false;
-        if (!a11yHooksInstalled) {
-            a11yHooksInstalled = true;
-            engine.addFramePump([] {
-                broa11y::api::tickA11yAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broa11y::api::shutdownA11yAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            broa11y::api::tickA11yAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broa11y::api::shutdownA11yAsync(); });
     }
 #endif
 #if BRO_WITH_DECOR
     brodecor::api::installDecor();
-    {
-        static bool decorHooksInstalled = false;
-        if (!decorHooksInstalled) {
-            decorHooksInstalled = true;
-            engine.addFramePump([] {
-                brodecor::api::tickDecorAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brodecor::api::shutdownDecorAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brodecor::api::tickDecorAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brodecor::api::shutdownDecorAsync(); });
     }
 #endif
 #if BRO_WITH_CLIP
     broclip::api::installClip();
-    {
-        static bool clipHooksInstalled = false;
-        if (!clipHooksInstalled) {
-            clipHooksInstalled = true;
-            engine.addFramePump([] {
-                broclip::api::tickClipAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { broclip::api::shutdownClipAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            broclip::api::tickClipAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { broclip::api::shutdownClipAsync(); });
     }
 #endif
 #if BRO_WITH_MPRIS
     brompris::api::installMpris();
-    {
-        static bool mprisHooksInstalled = false;
-        if (!mprisHooksInstalled) {
-            mprisHooksInstalled = true;
-            engine.addFramePump([] {
-                brompris::api::tickMprisAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { brompris::api::shutdownMprisAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            brompris::api::tickMprisAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { brompris::api::shutdownMprisAsync(); });
     }
 #endif
 #if BRO_WITH_PULSE
     bropulse::api::installPulse();
-    {
-        static bool pulseHooksInstalled = false;
-        if (!pulseHooksInstalled) {
-            pulseHooksInstalled = true;
-            engine.addFramePump([] {
-                bropulse::api::tickPulseAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { bropulse::api::shutdownPulseAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            bropulse::api::tickPulseAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { bropulse::api::shutdownPulseAsync(); });
     }
 #endif
 #if BRO_WITH_IME
     bro::ime::api::installIme();
-    {
-        static bool imeHooksInstalled = false;
-        if (!imeHooksInstalled) {
-            imeHooksInstalled = true;
-            engine.addFramePump([] {
-                bro::ime::api::tickImeAsync();
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-            });
-            engine.addShutdownHook([] { bro::ime::api::shutdownImeAsync(); });
-        }
+    if (installHooks) {
+        engine.addFramePump([] {
+            bro::ime::api::tickImeAsync();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        });
+        engine.addShutdownHook([] { bro::ime::api::shutdownImeAsync(); });
     }
 #endif
 #if BRO_WITH_REMOTE
     // bro.remote, with its frame pump and shutdown hook (host_remote.cpp).
     installRemoteHost(engine);
+#endif
+}
+
+void shutdownSiblingApisForReload() {
+#if BRO_WITH_LM
+    brolm::api::shutdownLM();
+#endif
+#if BRO_WITH_SOUNDML
+    brosoundml::api::shutdownSoundML();
+#endif
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::shutdownDiffusionAsync();
+#endif
+#if BRO_WITH_VISION
+    shutdownVisionJobs();
+#endif
+#if BRO_WITH_CONF
+    broconf::api::shutdownConfAsync();
+#endif
+#if BRO_WITH_SEARCH
+    brosearch::api::shutdownSearchAsync();
+#endif
+#if BRO_WITH_APPS
+    broapps::api::shutdownAppsAsync();
+#endif
+#if BRO_WITH_VFS
+    brovfs::api::shutdownVfsAsync();
+#endif
+#if BRO_WITH_THUMB
+    brothumb::api::shutdownThumbAsync();
+#endif
+#if BRO_WITH_SEAT
+    broseat::api::shutdownSeatAsync();
+#endif
+#if BRO_WITH_CRED
+    brocred::api::shutdownCredAsync();
+#endif
+#if BRO_WITH_SYS
+    brosys::api::shutdownSysAsync();
+#endif
+#if BRO_WITH_DISPLAYS
+    brodisplays::api::shutdownDisplaysAsync();
+#endif
+#if BRO_WITH_PORTAL
+    broportal::api::shutdownPortalAsync();
+#endif
+#if BRO_WITH_WL
+    browl::api::shutdownWlAsync();
+#endif
+#if BRO_WITH_A11Y
+    broa11y::api::shutdownA11yAsync();
+#endif
+#if BRO_WITH_DECOR
+    brodecor::api::shutdownDecorAsync();
+#endif
+#if BRO_WITH_CLIP
+    broclip::api::shutdownClipAsync();
+#endif
+#if BRO_WITH_MPRIS
+    brompris::api::shutdownMprisAsync();
+#endif
+#if BRO_WITH_PULSE
+    bropulse::api::shutdownPulseAsync();
+#endif
+#if BRO_WITH_IME
+    bro::ime::api::shutdownImeAsync();
 #endif
 }
 

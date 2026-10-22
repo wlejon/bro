@@ -327,15 +327,19 @@ void serverChanged(broremote::Server* server, const broremote::ServerConfig& con
 }  // namespace
 
 void installRemoteHost(engine::Engine& engine) {
-    static bool hooksInstalled = false;
-    if (!hooksInstalled) {
-        hooksInstalled = true;
-        g_host.engine = &engine;
+    static engine::Engine* s_hookedEngine = nullptr;
+    g_host.engine = &engine;
+    if (s_hookedEngine != &engine) {
+        s_hookedEngine = &engine;
         broremote::api::HostHooks hooks;
         hooks.serverChanged = &serverChanged;
         broremote::api::setHostHooks(std::move(hooks));
         engine.addFramePump(&pump);
-        engine.addShutdownHook([] { broremote::api::shutdownRemote(); });
+        engine.addShutdownHook([eng = &engine] {
+            broremote::api::shutdownRemote();
+            if (s_hookedEngine == eng) s_hookedEngine = nullptr;
+            if (g_host.engine == eng) g_host.engine = nullptr;
+        });
         // The viewer side: <remoteview> and bro.remote.connect()'s sessions.
         installRemoteViewHost(engine);
     }

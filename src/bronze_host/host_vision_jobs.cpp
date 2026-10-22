@@ -387,11 +387,14 @@ void installVisionHostOps(engine::Engine* engine) {
     // drain onto the engine. (A Worker realm passes no engine; its drain is
     // tickWorkerSiblingApis.)
     if (!engine) return;
-    static bool pumpInstalled = false;
-    if (pumpInstalled) return;
-    pumpInstalled = true;
+    static engine::Engine* s_hookedEngine = nullptr;
+    if (s_hookedEngine == engine) return;
+    s_hookedEngine = engine;
     engine->addFramePump([] { tickVisionJobs(); });
-    engine->addShutdownHook([] { shutdownVisionJobs(); });
+    engine->addShutdownHook([engine] {
+        shutdownVisionJobs();
+        if (s_hookedEngine == engine) s_hookedEngine = nullptr;
+    });
 }
 
 }  // namespace bro::bronze_host

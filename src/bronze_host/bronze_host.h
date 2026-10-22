@@ -127,6 +127,9 @@ void clearHostMediaQueries();
 /// Clear persistent menu callbacks on app reload.
 void clearMenuHandlers();
 
+/// Cancel and drain in-flight async sibling jobs and per-realm listeners on app reload.
+void shutdownSiblingApisForReload();
+
 /// Terminate and join all active worker threads on shutdown.
 void terminateAllWorkers();
 

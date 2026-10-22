@@ -304,6 +304,7 @@ void Engine::performAppReload() {
     bro::bronze_host::clearParsedDocuments();
     bro::bronze_host::clearDynamicModules();
     bro::bronze_host::clearMenuHandlers();
+    bro::bronze_host::shutdownSiblingApisForReload();
 #if BRO_WITH_COMPOSITOR
     // The compositor outlives the page (a shell host reloading its shell):
     // the old page's listeners and edge reservations go with it, or the new
