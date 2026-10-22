@@ -19,6 +19,8 @@ layout(location = 4) out vec3 outTangent;
 layout(location = 5) out vec3 outBitangent;
 layout(location = 6) out vec4 outInstColor;
 layout(location = 7) out vec4 outVegShade;
+// The cover's depth prepass and its shading must meet at the same depth.
+invariant gl_Position;
 
 #define SWARD_BUILD 1
 #include "common/scene_camera.glsl"

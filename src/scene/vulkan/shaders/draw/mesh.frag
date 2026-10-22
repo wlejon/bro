@@ -14,6 +14,13 @@
 // its discards built in, as a stage that can discard is depth-tested after it
 // shades (SceneMeshDrawer's raster::kCuts).
 layout(constant_id = 1) const bool MESH_CUTS = true;
+// The cover's two passes in the opaque pass (SceneMeshDrawer::CoverPass): a
+// blade's or herb's cut decides its depth alone (MESH_COVER_DEPTH: nothing
+// lit, nothing written but the depth), then each visible pixel is lit once
+// against that depth (MESH_COVER_SHADE: no cut, so it is depth-tested
+// before it shades).
+layout(constant_id = 3) const bool MESH_COVER_DEPTH = false;
+layout(constant_id = 4) const bool MESH_COVER_SHADE = false;
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
@@ -126,8 +133,8 @@ void main() {
     float herbPx = 1.0 / max(min(fwidth(inUV.x), fwidth(inUV.y)), 1e-5);
     HerbShade herb = herbShade(HerbFragment(worldPos, inNormal, inTangent, inBitangent, inUV, inInstColor.rgb,
                                             inVegShade, inHerbInfo.xyz, inColor, inHerbSize, inHerbStand));
-    if (herb.cover < 1.0 / 255.0) discard;
-    {
+    if (!MESH_COVER_SHADE) {
+        if (herb.cover < 1.0 / 255.0) discard;
         int mask = coverSampleMask(herb.cover, (flags & MESH_MSAA) != 0u, uint(inHerbInfo.w * 16777216.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
@@ -154,7 +161,7 @@ void main() {
         sward.albedo = mix(sward.albedo, push.baseColor.rgb * grassUnpackColor(inInstColor.a), speck);
         sward.cover = max(sward.cover, speck);
     }
-    if (sward.cover < 1.0) {
+    if (!MESH_COVER_SHADE && sward.cover < 1.0) {
         int mask = coverSampleMask(sward.cover, (flags & MESH_MSAA) != 0u, uint(sward.seed * 131072.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
@@ -164,6 +171,7 @@ void main() {
 #endif
     float camDist = length(worldPos);
     if (MESH_CUTS && push.extra.x > 0.0 && camDist < push.extra.x) discard;
+    if (MESH_COVER_DEPTH) return;
 
     // Base colour: the texture composes with the colour and the vertex tint
     // (white when off); without one the vertex colour replaces or tints it.

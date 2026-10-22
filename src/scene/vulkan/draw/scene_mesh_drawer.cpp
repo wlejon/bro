@@ -235,11 +235,26 @@ constexpr uint32_t kCuts = 32;
 // The frame has the atmosphere on: the lit stages are built with its code
 // (scene_lighting.glsl's SCENE_ATMOSPHERE), and without it when it is off.
 constexpr uint32_t kAtmosphere = 64;
-constexpr uint32_t kCount = 128;
+// The cover's two passes (CoverPass): its depth alone, then lit where its
+// depth is the nearest.
+constexpr uint32_t kCoverDepth = 128;
+constexpr uint32_t kCoverShade = 256;
+constexpr uint32_t kCount = 512;
 // mesh.frag's MESH_CUTS.
 constexpr uint32_t kCutsConstantId = 1;
 // scene_lighting.glsl's SCENE_ATMOSPHERE.
 constexpr uint32_t kAtmosphereConstantId = 2;
+// mesh.frag's MESH_COVER_DEPTH and MESH_COVER_SHADE.
+constexpr uint32_t kCoverDepthConstantId = 3;
+constexpr uint32_t kCoverShadeConstantId = 4;
+}
+
+bool SceneMeshDrawer::coverPrepassed(const MeshDraw& draw) const {
+    // The blades and herb plants (not the far tier's tufts) of an opaque
+    // draw that cuts nothing else.
+    return draw.kind == MeshKind::Grass &&
+           (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) == 0u &&
+           (rasterVariant(draw) & (raster::kTranslucent | raster::kLines | raster::kNoDepth | raster::kCuts)) == 0u;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
@@ -273,8 +288,20 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
      .setDepthBias(true)
      .setDynamicStates(dynamic)
      .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0)
-     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0);
-    if (rasterBits & raster::kTranslucent) {
+     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0)
+     .setSpecialization(raster::kCoverDepthConstantId, (rasterBits & raster::kCoverDepth) != 0)
+     .setSpecialization(raster::kCoverShadeConstantId, (rasterBits & raster::kCoverShade) != 0);
+    if (rasterBits & raster::kCoverDepth) {
+        // The depth alone.
+        b.disableBlending(target.colorCount).enableDepthTest(true);
+        for (uint32_t i = 0; i < target.colorCount; ++i) {
+            VkPipelineColorBlendAttachmentState none{};
+            b.setColorBlendAttachment(i, none);
+        }
+    } else if (rasterBits & raster::kCoverShade) {
+        // Lit where the prepass left its depth: depth-tested before shading.
+        b.disableBlending(target.colorCount).enableDepthTest(false, VK_COMPARE_OP_EQUAL);
+    } else if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {
             b.disableDepthTest();
@@ -290,8 +317,10 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
     return b.build(device_, layout_);
 }
 
-VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
-    const uint32_t rasterBits = rasterVariant(draw);
+VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target, CoverPass pass) {
+    const uint32_t rasterBits = rasterVariant(draw) | (pass == CoverPass::Depth   ? raster::kCoverDepth
+                                                       : pass == CoverPass::Shade ? raster::kCoverShade
+                                                                                  : 0u);
     // Turf has its own build of mesh.frag (a static mesh's or a land's:
     // SCENE_GROUND), so the other meshes' carries none of its work.
     const bool ground = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Land) &&
@@ -803,10 +832,13 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
 }
 
 void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                             VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull) {
+                             VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull,
+                             CoverPass pass) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool custom = false;
-    if (draw.custom && draw.customSet) {
+    if (pass != CoverPass::None) {
+        pipeline = builtinPipeline(draw, target, pass);
+    } else if (draw.custom && draw.customSet) {
         if (CustomProgram* prog = program(*draw.custom, draw.kind)) {
             pipeline = customPipeline(*prog, draw, target);
             custom = pipeline != VK_NULL_HANDLE;

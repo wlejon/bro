@@ -25,6 +25,8 @@ layout(location = 7) out vec4 outVegShade;
 layout(location = 8) flat out vec4 outHerbInfo;   // the module's HerbVertex.id, w the card's dither seed
 layout(location = 9) out vec4 outHerbSize;        // the module's HerbVertex.b
 layout(location = 10) out vec2 outHerbStand;      // the module's HerbVertex.c
+// The cover's depth prepass and its shading must meet at the same depth.
+invariant gl_Position;
 
 #include "common/scene_camera.glsl"
 #include "common/scene_mesh_push.glsl"

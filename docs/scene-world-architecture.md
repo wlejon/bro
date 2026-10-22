@@ -219,6 +219,27 @@ move at once.
 **First step:** measure how much of each foliage pass is trace and how much
 is shading, with shading stubbed. That split is the size of the win.
 
+### As built: the cover's depth prepass
+
+Measured in a 16 km biomes, the meadow's grass rings were 1.4 ms with
+lighting and 0.3 ms with it stubbed (ring 2, 20-55 m, 0.78 against 0.14):
+nearly all of it the lighting of blade fragments a nearer blade then hid,
+since a stage that cuts (the dithered cover) is depth-tested after it
+shades. Thinning ring 2's blades changed nothing, so vertices were not the
+cost. The grass needs no ID buffer for that: its vertex work is cheap, so
+it is drawn twice in the opaque pass (`SceneMeshDrawer::CoverPass`). First
+its blades' and herb plants' depth alone, their cut deciding it
+(mesh.frag's `MESH_COVER_DEPTH`: nothing lit, no colour written). Then the
+same draws lit with the depth test EQUAL and no cut (`MESH_COVER_SHADE`),
+so each visible pixel is lit once. Both use one vertex stage
+(`invariant gl_Position`), and under MSAA the prepass's per-sample depth
+carries the dither. The prepass is 0.21-0.26 ms. Frames: meadow 2.69 →
+2.05 ms, glade 2.77 → 2.42, edge 2.55 → 1.85, with the stills the same and
+the glade's shadow pages now converging (none left wanted, 286 before).
+The far tier, the probes' and the turf's fills draw the cover in one pass
+as before. The plants keep their single pass: their leaves' vertex work is
+the heavy part, which an ID buffer and resolve (above) would not repeat.
+
 ## 4. Async compute
 
 A capability of the frame graph, not of any one pass.

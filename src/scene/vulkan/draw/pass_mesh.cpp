@@ -34,9 +34,21 @@ void PassOpaque::record(SceneFrame& frame) {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
         "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:plants", "opaque:land"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
+    using CoverPass = SceneMeshDrawer::CoverPass;
+    SceneMeshDrawer& meshes = frame.gpu.meshes;
+    // The cover's depth first, so its blades and herbs are lit once a pixel.
+    bool prepassed = false;
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
-        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
+        if (!meshes.coverPrepassed(draw)) continue;
+        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull, CoverPass::Depth);
+        prepassed = true;
+    }
+    if (prepassed && frame.timer) frame.timer->mark(frame.cmd, "cover:depth");
+    for (uint32_t i : frame.lists.opaque) {
+        const MeshDraw& draw = frame.lists.meshes[i];
+        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull,
+                      meshes.coverPrepassed(draw) ? CoverPass::Shade : CoverPass::None);
         if (frame.timer)
             frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }

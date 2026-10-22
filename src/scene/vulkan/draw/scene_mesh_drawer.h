@@ -269,8 +269,17 @@ public:
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`;
     /// a chunked draw cut to `cull` when given.
+    /// The cover's two passes in the opaque pass (docs/scene-world-architecture.md
+    /// §3): its blades' and herbs' depth alone (their cut decides it, nothing
+    /// lit), then each lit where its depth is the nearest, so a fragment
+    /// another blade hides is never lit. Elsewhere the cover draws in one
+    /// pass, cutting as it shades.
+    enum class CoverPass { None, Depth, Shade };
+    /// Whether `draw` is drawn in the cover's two passes in the opaque pass.
+    bool coverPrepassed(const MeshDraw& draw) const;
     void record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull = nullptr);
+                VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull = nullptr,
+                CoverPass pass = CoverPass::None);
 
     VkPipelineLayout layout() const { return layout_; }
 
@@ -359,7 +368,7 @@ private:
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.
     uint32_t rasterVariant(const MeshDraw& draw) const;
-    VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
+    VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target, CoverPass pass = CoverPass::None);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
     VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
                              const TargetFormat& target);
