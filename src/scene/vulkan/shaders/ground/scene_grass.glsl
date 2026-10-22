@@ -49,13 +49,16 @@ layout(set = 4, binding = 0) uniform GrassUBO {
 layout(set = 4, binding = 2) uniform sampler2D grassPush;
 
 // The land's tiles (scene_land.glsl): what grows where is its surface
-// module's (scene_land_layer.glsl's LandSurface: the cover and the herbs).
+// module's (scene_land_layer.glsl's LandSurface: the cover and the herbs),
+// and past the plants' range its canopy (the turf's fragments, mesh.frag).
 layout(set = 4, binding = LG_HEIGHTS) uniform sampler2DArray landHeights;
 layout(set = 4, binding = LG_COVERS) uniform sampler2DArray landCovers;
 layout(set = 4, binding = LG_SURFACES) uniform sampler2DArray landSurfaces;
 layout(set = 4, binding = LG_PAGE) uniform usampler2DArray landPage;
+layout(set = 4, binding = LG_CANOPY) uniform sampler2DArray landCanopies;
 #define LAND_W(i) grass.land[i]
 #define LAND_COVERS
+#define LAND_CANOPY
 #include "ground/scene_land.glsl"
 
 // Sward density under which nothing grows (a few blades in a closed wood's

@@ -88,6 +88,9 @@ layout(location = 2) out vec4 outIndirect;
 #ifdef SCENE_GRASS
 #include "ground/scene_grass.glsl"
 #endif
+#ifdef SCENE_LAND
+#include "ground/scene_land.glsl"
+#endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -115,7 +118,25 @@ vec2 albedoUV() {
 // gathered and before the lights, so standard lighting applies to its result.
 //__USER_CHUNK__
 
-// A land's canopy (mesh_land.vert's landRise): its leaves' albedo `albedo`
+#if defined(SCENE_LAND) || defined(SCENE_GROUND)
+// A land's canopy at `worldPos` (camera-relative), read a fragment at a
+// time from its tiles (set 3's, or the turf's grass node's set 4) at the
+// level its rings read there, so a forest's patches past the plants' range
+// are the tiles' texels, not the rings' cells: rgb its leaves' albedo, a
+// how much of it is shown (scene_land.glsl's landCanopyShown, as the
+// rings rise by it, mesh_land.vert's landRise).
+vec4 landCanopyAt(vec3 worldPos) {
+    vec3 p = worldPos + camera.eyeWorld.xyz;
+    if (!landHasCanopy()) return vec4(0.0);
+    float shown = landCanopyShown(length(p - landEye3()), landCanopyRange());
+    if (shown <= 0.0) return vec4(0.0);
+    float top;
+    vec4 c = landSampleCanopy(p.xz, landLevel(p.xz), top);
+    return vec4(c.rgb, c.a * shown);
+}
+#endif
+
+// A land's canopy (landCanopyAt): its leaves' albedo `albedo`
 // shown by `shown` over the surface, as the far plants are drawn (lit as a
 // sward, below): crowns in their own shade (CANOPY_SHADE: a crown's leaves
 // shade each other, as the trees' far daubs do), the more of it seen the
@@ -220,8 +241,7 @@ void main() {
         baseColor = push.baseColor.rgb;
         alpha = push.baseColor.a;
     }
-    // (A land's instance colour is its canopy, below.)
-    if ((flags & MESH_CANOPY) == 0u) baseColor *= inInstColor.rgb;
+    baseColor *= inInstColor.rgb;
     if (MESH_CUTS && push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_GRASS
     baseColor = sward.albedo;
@@ -341,9 +361,13 @@ void main() {
 #endif
     // A land's plants past their range (mesh_land.vert): their canopy over
     // the ground as far as they cover it, in place of the ground's own.
-    float canopyShown = (flags & MESH_CANOPY) != 0u ? inInstColor.a : 0.0;
+    vec4 canopy = vec4(0.0);
+#if defined(SCENE_LAND) || defined(SCENE_GROUND)
+    if ((flags & MESH_CANOPY) != 0u) canopy = landCanopyAt(worldPos);
+#endif
+    float canopyShown = canopy.a;
     if (canopyShown > 0.0) {
-        canopySurface(worldPos, inInstColor.rgb, canopyShown, baseColor, N, roughness);
+        canopySurface(worldPos, canopy.rgb, canopyShown, baseColor, N, roughness);
 #ifdef SCENE_GROUND
         groundAO = mix(groundAO, 1.0, canopyShown);
         groundThin.w *= 1.0 - canopyShown;

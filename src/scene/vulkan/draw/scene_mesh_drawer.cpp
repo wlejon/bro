@@ -127,6 +127,8 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
     fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
+    fsLand_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandFrag);
+    fsLandIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandIndirectFrag);
     fsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarFrag);
     fsCoverFarIndirect_ =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
@@ -135,7 +137,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     for (int k = 0; k < kMeshKindCount; ++k)
         vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass) || k == static_cast<int>(MeshKind::Plants));
     if (!fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
-        !covers_[0]->createBuiltin(device_)) {
+        !fsLand_ || !fsLandIndirect_ || !covers_[0]->createBuiltin(device_)) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -211,7 +213,9 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
     SceneVkShaderModule::destroy(device_, fsCoverFar_);
     SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
-    fsCoverFar_ = fsCoverFarIndirect_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(device_, fsLand_);
+    SceneVkShaderModule::destroy(device_, fsLandIndirect_);
+    fsCoverFar_ = fsCoverFarIndirect_ = fsLand_ = fsLandIndirect_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -367,6 +371,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         VkShaderModule vs = vs_[static_cast<int>(draw.kind)];
         VkShaderModule fs = indirect ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
+        if (draw.kind == MeshKind::Land) fs = indirect ? fsLandIndirect_ : fsLand_;
         if (ground) fs = cover[indirect ? CoverShaders::GroundIndirectFrag : CoverShaders::GroundFrag];
         // (A surface layer tile's fill draws the turf into its four layers.)
         if (ground && target.colorCount == 4) fs = cover[CoverShaders::GroundFill];
@@ -516,7 +521,8 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     writer.writeImage(CustomShaderInterface::kMaxSamplers + 1, defaults_->zeroArray.view, defaults_->sampler);
     writer.writeImage(CustomShaderInterface::kMaxSamplers + 2, defaults_->zeroUintArray.view,
                       defaults_->nearestSampler);
-    static_assert(CustomShaderInterface::kMaxSamplers + 2 == SceneDefaults::kCustomBindings);
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 3, defaults_->zeroArray.view, defaults_->sampler);
+    static_assert(CustomShaderInterface::kMaxSamplers + 3 == SceneDefaults::kCustomBindings);
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);
     return set;

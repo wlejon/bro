@@ -87,7 +87,7 @@ constexpr uint32_t kMsaa = 32768;           // a draw into a 4x MSAA target: a c
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 constexpr uint32_t kHerb = 2097152;         // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
 constexpr uint32_t kCoverFar = 4194304;     // the cover's far tier (a Grass draw): mesh_cover_far.vert, cover_far.frag
-constexpr uint32_t kCanopy = 8388608;       // a land carrying its plants' canopy: inInstColor is it (mesh_land.vert)
+constexpr uint32_t kCanopy = 8388608;       // a land carrying its plants' canopy (mesh.frag's landCanopyAt)
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -313,7 +313,7 @@ public:
     /// (scene_grass.glsl; scene_land_layout.h's LG_*).
     struct GrassGround {
         LandNode* land = nullptr;
-        VkImageView layers[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};   // heights, surface, cover
+        VkImageView layers[4] = {};   // heights, surface, cover, canopy
         VkSampler sampler = VK_NULL_HANDLE;
         VkImageView page = VK_NULL_HANDLE;
         VkSampler pageSampler = VK_NULL_HANDLE;
@@ -396,6 +396,8 @@ private:
     VkShaderModule fsCoverFarIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule fsLand_ = VK_NULL_HANDLE;           // Land, not turf: mesh.frag's SCENE_LAND build
+    VkShaderModule fsLandIndirect_ = VK_NULL_HANDLE;
     /// The shaders a grass node's cover is planned and drawn with (the
     /// blades, their shadows, the herbs, the far tier's vertex stage, the
     /// turf and its fill): [0] the built-in set, then one per pair of a

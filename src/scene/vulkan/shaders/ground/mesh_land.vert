@@ -56,14 +56,12 @@ const float LAND_MORPH_RAMP = 9.0;   // cells it ramps over before that
 // Past the plants' range the land is their canopy (world/plant_canopy.h):
 // it rises by their top as far as they cover it, and its fragments are
 // their leaves, coming in over the range's last tenth as the plants go.
-// What it rises by at `xz` (read at `lambda`, its ground `h`), and the
-// canopy there (rgb its leaves' albedo, a how much of it is shown; white
-// and none where it is not). The caster does not rise: the shade of a
-// canopy past the plants' cast range is the land's sun's (land_sun.comp),
-// as a low sun runs along its top and the shadow pages' depth offsets
-// would swallow it.
-float landRise(vec2 xz, float lambda, float h, out vec4 canopy) {
-    canopy = vec4(1.0, 1.0, 1.0, 0.0);
+// What it rises by at `xz` (read at `lambda`, its ground `h`); its
+// fragments read the canopy's colour themselves (mesh.frag's
+// landCanopyAt). The caster does not rise: the shade of a canopy past the
+// plants' cast range is the land's sun's (land_sun.comp), as a low sun
+// runs along its top and the shadow pages' depth offsets would swallow it.
+float landRise(vec2 xz, float lambda, float h) {
 #ifdef LAND_CASTER
     return 0.0;
 #else
@@ -72,8 +70,7 @@ float landRise(vec2 xz, float lambda, float h, out vec4 canopy) {
     if (shown <= 0.0) return 0.0;
     float top;
     vec4 c = landSampleCanopy(xz, lambda, top);
-    canopy = vec4(c.rgb, c.a * shown);
-    return top * canopy.a;
+    return top * c.a * shown;
 #endif
 }
 
@@ -99,8 +96,7 @@ void main() {
     vec3 N;
     landSampleNormal(xz, lambda, h, N, surface);
 #endif
-    vec4 canopy;
-    h += landRise(xz, lambda, h, canopy);
+    h += landRise(xz, lambda, h);
 
     // The morph over the ring's outer cells (of the land as it rises).
     float g = max(abs(inPos.x), abs(inPos.z));
@@ -119,8 +115,7 @@ void main() {
             }
             vec2 q = landClamp(xz + o);
             float hq = landHeightAt(q);
-            vec4 cq;
-            hc += hq + landRise(q, landLevel(q), hq, cq);
+            hc += hq + landRise(q, landLevel(q), hq);
         }
         h = mix(h, hc / float(n), a);
     }
@@ -138,6 +133,6 @@ void main() {
     outBitangent = cross(N, T);
     outUV = xz;
     outColor = vec4(surface.rgb, 1.0);
-    outInstColor = canopy;
+    outInstColor = vec4(1.0);
 #endif
 }

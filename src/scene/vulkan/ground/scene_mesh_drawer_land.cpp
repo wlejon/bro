@@ -219,7 +219,7 @@ bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, Gra
     const LandTiles& lt = *found->second;
     if (lt.tiles.stats().resident == 0 || lt.generation != land->generation()) return false;
     out.land = land;
-    for (int i = 0; i < 3; ++i) out.layers[i] = lt.atlas.layerView(i);
+    for (int i = 0; i < 4; ++i) out.layers[i] = lt.atlas.layerView(i);
     out.sampler = lt.atlas.layerSampler();
     out.page = lt.atlas.pageView();
     out.pageSampler = lt.atlas.pageSampler();
@@ -274,8 +274,8 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     writer.writeImage(7, lt->atlas.layerView(3), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
     writer.updateSet(device_, set);
     out.vertexSet = set;
-    // Past the plants' range its fragments are their canopy (mesh_land.vert
-    // hands it on in the instance colour).
+    // Past the plants' range its fragments are their canopy, read from the
+    // tiles a fragment at a time (mesh.frag's landCanopyAt).
     if (node.canopySourceHash() != 0)
         out.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(out.push.pbrParams[3]) | mesh_flags::kCanopy);
     return true;

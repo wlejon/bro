@@ -25,6 +25,7 @@
 #define LG_COVERS           3
 #define LG_SURFACES         9
 #define LG_PAGE             10
+#define LG_CANOPY           11
 
 // --- LandDraw ---
 #define LD_LAND             0     // x the land's extent (half-size, m), yz the frame's eye's world x and z

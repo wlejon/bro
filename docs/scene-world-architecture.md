@@ -420,11 +420,17 @@ at all.
   canopy on and off: the land's pass 0.30 ms either way, every shot
   within noise. The fill evaluates the module once a texel when a tile is
   made.
-- **Where it falls short.** The canopy is read per vertex, a ring cell
-  1/64 of the distance (60–120 m at 4–8 km), so past the range a forest's
-  patches blur: biomes' high view shows the far band's forest tone but not
-  its patches. Reading it per fragment at the tiles' texel would halve
-  that.
+- **Read a fragment at a time.** The rings rise by the canopy per vertex;
+  its colour and cover are read per fragment from the tiles
+  (mesh.frag's landCanopyAt: set 3 in the land's own build, SCENE_LAND,
+  and the turf's grass node's set 4, LG_CANOPY), at the tiles' texel,
+  half a ring cell.
+- **Where it falls short.** Past the range in biomes' high view the cover
+  has the forest's patches (drawn as cover alone, they are the plants'
+  stands), but the canopy's colour through 10 km of haze is a dark olive
+  near the meadow's, where the plants drawn there read as lighter
+  blue-green crowns on the meadow: the band's mean matches theirs, its
+  patches barely show.
 
 ### As built: the land's sun
 

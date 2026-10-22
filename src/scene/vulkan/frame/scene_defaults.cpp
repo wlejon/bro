@@ -57,7 +57,9 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     materialLayout = SceneVkDescriptorLayoutBuilder::createMaterialLayout(dev);
 
     SceneVkDescriptorLayoutBuilder bone;
-    bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    // (A land's LandDraw, which its fragments read too: mesh.frag's
+    // SCENE_LAND build.)
+    bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
     // A procedural draw's segment records, or the plants' records; the
     // plants' leaf pose pass (plants_pose.comp) reads them too, and their
     // fragments (a species' crown and its module's data).
@@ -68,9 +70,10 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     // The plants' leaf poses this frame, written by the pose pass.
     bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     // The land's tiles, heights, surface, page table and canopy (binding 0
-    // its LandDraw; ground/scene_land.glsl).
+    // its LandDraw; ground/scene_land.glsl), read by its rings and its
+    // fragments.
     for (uint32_t b = 4; b <= 7; ++b)
-        bone.addBinding(b, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+        bone.addBinding(b, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFs);
     boneLayout = bone.build(dev);
 
     // (A grass node's set is read by the cover's plan too, cover_plan.comp.)
@@ -79,9 +82,11 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFsCs);
     for (uint32_t i = 1; i <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFsCs);
-    // Past them, the land's tiles a grass node stands on (its surface and
-    // page table; its heights and cover take two of the node's own slots).
-    static_assert(LG_SURFACES == MeshNode::kMaxUserTextures + 1 && LG_PAGE == kCustomBindings);
+    // Past them, the land's tiles a grass node stands on (its surface, page
+    // table and canopy; its heights and cover take two of the node's own
+    // slots).
+    static_assert(LG_SURFACES == MeshNode::kMaxUserTextures + 1 && LG_PAGE == LG_SURFACES + 1 &&
+                  LG_CANOPY == kCustomBindings);
     for (uint32_t i = LG_SURFACES; i <= kCustomBindings; ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFsCs);
     customLayout = custom.build(dev);

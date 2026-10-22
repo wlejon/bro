@@ -25,10 +25,10 @@ public:
     // records (binding 1, storage), and the plants' chunks and leaf poses this frame
     // (bindings 2 and 3, storage);
     // set 4: custom shader UBO + MeshNode::kMaxUserTextures samplers, then
-    // the land's surface and page table for a grass node standing on it
-    // (scene_land_layout.h's LG_*), through binding kCustomBindings. A set
-    // written for this layout fills every binding.
-    static constexpr uint32_t kCustomBindings = 10;
+    // the land's surface, page table and canopy for a grass node standing
+    // on it (scene_land_layout.h's LG_*), through binding kCustomBindings. A
+    // set written for this layout fills every binding.
+    static constexpr uint32_t kCustomBindings = 11;
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;

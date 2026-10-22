@@ -17,6 +17,9 @@ BRO_SCENE_SHADER(MeshSkinnedVert,          "mesh_skinned.vert",           "draw/
 BRO_SCENE_SHADER(MeshFrag,                 "mesh.frag",                   "draw/mesh.frag",                     "frag", "")
 // mesh.frag that also writes the indirect light, for the SSAO opaque pass.
 BRO_SCENE_SHADER(MeshIndirectFrag,         "mesh_indirect.frag",          "draw/mesh.frag",                     "frag", "SCENE_INDIRECT_OUTPUT")
+// mesh.frag for a land not covered by turf: it reads the land's tiles (set 3).
+BRO_SCENE_SHADER(MeshLandFrag,             "mesh_land.frag",              "draw/mesh.frag",                     "frag", "SCENE_LAND")
+BRO_SCENE_SHADER(MeshLandIndirectFrag,     "mesh_land_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_LAND SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shadow/shadow.vert",                 "vert", "")
 BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow/shadow_instanced.vert",       "vert", "")
 BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow/shadow_skinned.vert",         "vert", "")

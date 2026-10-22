@@ -289,6 +289,7 @@ VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults
     writer.writeImage(LG_SURFACES, land.layers[1], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
     writer.writeImage(LG_COVERS, land.layers[2], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
     writer.writeImage(LG_PAGE, land.page, land.pageSampler);
+    writer.writeImage(LG_CANOPY, land.layers[3], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
     for (uint32_t b = 4; b <= 8; ++b) {
         const int i = static_cast<int>(b) - 4;
         if (ground && i < 4)
@@ -300,8 +301,8 @@ VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults
         else
             writer.writeImage(b, defaults.white.view, defaults.sampler);
     }
-    static_assert(LG_HEIGHTS == 1 && LG_COVERS == 3 && LG_SURFACES == 9 &&
-                  LG_PAGE == static_cast<int>(SceneDefaults::kCustomBindings));
+    static_assert(LG_HEIGHTS == 1 && LG_COVERS == 3 && LG_SURFACES == 9 && LG_PAGE == 10 &&
+                  LG_CANOPY == static_cast<int>(SceneDefaults::kCustomBindings));
     writer.updateSet(device, set);
     return set;
 }
