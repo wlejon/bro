@@ -86,7 +86,8 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
 | Vulkan SDK | `Vulkan::Vulkan` | Vulkan 1.3 Core graphics & compute loader |
-| stb_image / FastNoise2 / libjpeg-turbo | `stb_image` / `FastNoise` / `turbojpeg-static` | image IO / SIMD noise / JPEG codec |
+| FastNoise2 | `FastNoise` | wlejon's fork of Auburn's SIMD noise, tracked like a sibling: positions about a double origin, exact at a planet's radius (brokit's `noise_glsl` matches it on the GPU) |
+| stb_image / libjpeg-turbo | `stb_image` / `turbojpeg-static` | image IO / JPEG codec |
 
 ## JS API Documentation (docs/)
 

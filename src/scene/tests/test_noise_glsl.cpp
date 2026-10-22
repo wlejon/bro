@@ -3,7 +3,10 @@
 // compute shader at the same positions, and the two must agree to float
 // rounding. FastNoise2 runs relaxed SIMD (fused multiply-adds, approximate
 // reciprocals), so a point may land on the other side of a cell's edge from
-// the GPU's; such points are counted, and must stay rare.
+// the GPU's; such points are counted, and must stay rare. Then again about
+// an origin at Earth's radius, positions relative to it: FastNoise2's double
+// offsets and the GLSL's double-float origin against FastNoise2 at each
+// absolute position.
 
 #include "render/glsl_compiler.h"
 #include "render/vulkan_context.h"
@@ -30,6 +33,9 @@ using FastNoise::NodeData;
 namespace {
 
 int failures = 0;
+// The origin the points are relative to.
+double origin[3] = {0.0, 0.0, 0.0};
+bool far() { return origin[0] != 0.0 || origin[1] != 0.0 || origin[2] != 0.0; }
 
 // A tree built as FastNoise2's own data, its members set by name.
 struct Tree {
@@ -114,14 +120,19 @@ struct Gpu {
     }
 
     /// `field` (a function float field(vecD p, int seed)) at `points` (xyz
-    /// a vec4), into out; false when the shader does not compile.
+    /// a vec4, relative to the origin), into out; false when the shader does
+    /// not compile.
     bool run(const std::string& field, int dim, const std::vector<float>& points, int seed, std::vector<float>& out) {
         const uint32_t count = static_cast<uint32_t>(points.size() / 4);
-        std::string src = "#version 450\nlayout(local_size_x = 64) in;\n" + field +
-                          "layout(set = 0, binding = 0) readonly buffer In { vec4 p[]; } i;\n"
-                          "layout(set = 0, binding = 1) writeonly buffer Out { float v[]; } o;\n"
-                          "layout(push_constant) uniform P { int seed; uint count; } pc;\n"
-                          "void main() {\n"
+        std::string src = "#version 450\nlayout(local_size_x = 64) in;\n"
+                          "layout(push_constant) uniform P { int seed; uint count; vec2 ox; vec2 oy; vec2 oz; } pc;\n";
+        if (far())
+            src += "#define FN_ORIGIN2 FnO2(pc.ox, pc.oy)\n"
+                   "#define FN_ORIGIN3 FnO3(pc.ox, pc.oy, pc.oz)\n";
+        src += field +
+               "layout(set = 0, binding = 0) readonly buffer In { vec4 p[]; } i;\n"
+               "layout(set = 0, binding = 1) writeonly buffer Out { float v[]; } o;\n"
+               "void main() {\n"
                           "    uint k = gl_GlobalInvocationID.x;\n"
                           "    if (k >= pc.count) return;\n";
         src += dim == 2 ? "    o.v[k] = field(i.p[k].xy, pc.seed);\n" : "    o.v[k] = field(i.p[k].xyz, pc.seed);\n";
@@ -146,7 +157,7 @@ struct Gpu {
         li.pBindings = bindings;
         VkDescriptorSetLayout setLayout;
         vkCreateDescriptorSetLayout(d, &li, nullptr, &setLayout);
-        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pli.setLayoutCount = 1;
         pli.pSetLayouts = &setLayout;
@@ -191,8 +202,17 @@ struct Gpu {
         VkCommandBuffer cmd = context.beginSingleTimeCommands();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
-        const int32_t push[2] = {seed, static_cast<int32_t>(count)};
-        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, push);
+        struct {
+            int32_t seed;
+            uint32_t count;
+            float o[6];
+        } push{seed, count, {}};
+        for (int a = 0; a < 3; ++a) {
+            // A double-float: the float nearest, and the rest.
+            push.o[a * 2] = static_cast<float>(origin[a]);
+            push.o[a * 2 + 1] = static_cast<float>(origin[a] - static_cast<double>(push.o[a * 2]));
+        }
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
         vkCmdDispatch(cmd, (count + 63) / 64, 1, 1);
         render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                                  VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
@@ -259,10 +279,16 @@ void check(Gpu& gpu, const char* name, Tree& tree, NodeData* root, float extent,
             // every lane, the first kept), and its batch (GenPositionArray,
             // a point a lane), which should be the same.
             std::vector<float> want(count), batch(count), got;
-            for (int k = 0; k < count; ++k)
-                want[k] = dim == 2 ? cpu->GenSingle2D(xs[k], ys[k], seed) : cpu->GenSingle3D(xs[k], ys[k], zs[k], seed);
-            if (dim == 2) cpu->GenPositionArray2D(batch.data(), count, xs.data(), ys.data(), 0, 0, seed);
-            else cpu->GenPositionArray3D(batch.data(), count, xs.data(), ys.data(), zs.data(), 0, 0, 0, seed);
+            // About a far origin the single value is at the absolute point
+            // (a double), the batch at the origin plus each float point.
+            for (int k = 0; k < count; ++k) {
+                const double x = origin[0] + xs[k], y = origin[1] + ys[k], z = origin[2] + zs[k];
+                want[k] = dim == 2 ? cpu->GenSingle2D(x, y, seed) : cpu->GenSingle3D(x, y, z, seed);
+            }
+            if (dim == 2) cpu->GenPositionArray2D(batch.data(), count, xs.data(), ys.data(), origin[0], origin[1], seed);
+            else
+                cpu->GenPositionArray3D(batch.data(), count, xs.data(), ys.data(), zs.data(), origin[0], origin[1],
+                                        origin[2], seed);
             if (!gpu.run(glsl, dim, points, seed, got)) {
                 ++failures;
                 return;
@@ -289,29 +315,17 @@ void check(Gpu& gpu, const char* name, Tree& tree, NodeData* root, float extent,
                 std::printf("note %s %dD: FastNoise2's batch differs from its single values at %d of %d points\n",
                             name, dim, batchApart, count);
             const bool ok = over <= strays * count;
-            std::printf("%s %s %dD seed %d: range [%.4g, %.4g], mean |err| %.3g, worst %.3g at (%g, %g, %g) "
+            std::printf("%s %s%s %dD seed %d: range [%.4g, %.4g], mean |err| %.3g, worst %.3g at (%g, %g, %g) "
                         "(cpu %.6g gpu %.6g), %d of %d over %.3g\n",
-                        ok ? "ok  " : "FAIL", name, dim, seed, lo, hi, sum / count, worst, xs[worstAt], ys[worstAt],
+                        ok ? "ok  " : "FAIL", name, far() ? " far" : "", dim, seed, lo, hi, sum / count, worst, xs[worstAt], ys[worstAt],
                         dim == 3 ? zs[worstAt] : 0.0f, want[worstAt], got[worstAt], over, count, tol);
             if (!ok) ++failures;
         }
     }
 }
 
-}  // namespace
-
-int main() {
-    std::printf("=== bro_noise_glsl_test: FastNoise2 trees as GLSL against FastNoise2 ===\n");
-    render::VulkanContextConfig cfg;
-    cfg.headless = true;
-    cfg.enableValidation = false;
-    render::VulkanContext context(cfg);
-    if (!context.init()) {
-        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
-        return 1;
-    }
-    Gpu gpu(context);
-
+// Every node, about the origin set.
+void suite(Gpu& gpu) {
     // The coherent noises alone, at their default scale and at others.
     for (const char* type : {"Value", "Perlin", "Simplex"}) {
         Tree t;
@@ -325,7 +339,9 @@ int main() {
         u.var(m, "Seed Offset", 5);
         check(gpu, (std::string(type) + " ranged").c_str(), u, m, 5000.0f);
     }
-    {
+    // (A function of the position itself, not a lattice, is exact only near
+    // zero: White, Gradient and DistanceToPoint are not checked far off.)
+    if (!far()) {
         Tree t;
         NodeData* n = t.node("White");
         check(gpu, "White", t, n, 500.0f);
@@ -410,7 +426,7 @@ int main() {
         check(gpu, "Fade", t, n, 1000.0f);
     }
     // The generators of position.
-    {
+    if (!far()) {
         Tree t;
         NodeData* n = t.node("Gradient");
         t.var(n, "Multiplier", 0.5f, 0);
@@ -420,7 +436,7 @@ int main() {
         t.hyb(n, "Offset", nullptr, 30.0f, 1);
         check(gpu, "Gradient", t, n, 400.0f);
     }
-    for (int fn = 0; fn < 6; ++fn) {
+    for (int fn = 0; fn < 6 && !far(); ++fn) {
         Tree t;
         NodeData* n = t.node("DistanceToPoint");
         t.var(n, "Distance Function", static_cast<float>(fn));
@@ -474,6 +490,27 @@ int main() {
     over("Abs", [](Tree&, NodeData*) {});
     over("DomainRotatePlane", [](Tree&, NodeData*) {});
     over("DomainRotatePlane", [](Tree& t, NodeData* n) { t.var(n, "Rotation Type", 1); });
+}
+
+}  // namespace
+
+int main() {
+    std::printf("=== bro_noise_glsl_test: FastNoise2 trees as GLSL against FastNoise2 ===\n");
+    render::VulkanContextConfig cfg;
+    cfg.headless = true;
+    cfg.enableValidation = false;
+    render::VulkanContext context(cfg);
+    if (!context.init()) {
+        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
+        return 1;
+    }
+    Gpu gpu(context);
+    suite(gpu);
+    // A point on Earth's surface (off the axes, its fractions not round).
+    origin[0] = 4123456.789;
+    origin[1] = -3712345.6789;
+    origin[2] = 2876543.21;
+    suite(gpu);
 
     // One not ported is refused by name.
     {

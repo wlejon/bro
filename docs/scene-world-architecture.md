@@ -1332,7 +1332,7 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet (design; decisions taken, 9a built)
+## 11. The planet (design; decisions taken, 9a and 9b built)
 
 A body of Earth's radius (6371 km) seen from a person in its grass to
 geostationary orbit as one place: the land's rings, its tiles, the plants
@@ -1428,8 +1428,8 @@ every other gap is a map from the plane to the sphere.
   (9c); the legacy `createTerrain` and the tile world's shade maps are keyed
   on the place; navmesh worlds and tweens holding absolute positions are not
   moved (a script moves them with the event); the body's eye is a float on
-  the GPU, good to centimetres a few hundred kilometres out, until the split
-  positions (9b). The sphere's walk and flight at speed are 9c's oracle.
+  the GPU, good to centimetres a few hundred kilometres out, until 9c hands
+  the shaders the split origin (9b). The sphere's walk and flight at speed are 9c's oracle.
 
 ### Fields at the body's scale
 
@@ -1450,6 +1450,38 @@ field is evaluated at is **split**: an integer part and a float fraction.
   coordinates as they agree at the origin now.
 - Domain warps add a small float displacement to the remainder, so they
   keep working.
+
+### As built: split positions (9b)
+
+- **FastNoise2** (wlejon's fork, now tracked like any sibling: bro and
+  brokit resolve `../FastNoise2`, else its default branch's head) carries a
+  position as `PosV`: the lanes' float offsets and an origin, a double
+  shared by every lane. Scaling scales both, a per-lane displacement goes to
+  the lanes, a rotation turns the origin in double; each lattice noise
+  splits the origin at its own frequency into the cell it lies in (mod 2^32,
+  added to its cells before the primes) and the fraction (added to the
+  lanes), and the simplex family does so in its skewed coordinates. The
+  grid and position-array entry points take double offsets as that origin,
+  `GenSingle*` takes a double point as one. An origin of zero is the old
+  arithmetic, bit for bit; a nonzero `GenSingle` point now takes the split
+  path, so a placement decision on a threshold may fall the other way (biomes'
+  meadow: the same look, a few flowers moved).
+- **noise_glsl** threads the same origin through every node function as a
+  double-float an axis (`FnO2` / `FnO3`, each axis `vec2(hi, lo)`), scaled
+  and turned with the positions (Dekker's products and Knuth's sums, every
+  step `precise`), split at each lattice noise as the CPU splits it. The
+  host turns it on by defining `FN_ORIGIN2` / `FN_ORIGIN3` before the
+  source; without them every helper passes the position through and costs
+  nothing. Functions of the position itself (White, Gradient,
+  DistanceToPoint) take it flattened to a float, exact only near zero.
+- **The oracle:** `bro_noise_glsl_test` runs every node again about an
+  origin on Earth's surface (4.1, -3.7, 2.9 thousand km): FastNoise2's
+  batch with double offsets, its single value at the absolute point and
+  the GLSL agree as at the origin (the land tree's worst 1.6e-4 in a range
+  of 130 m; before the split the GPU's simplex was off by 3% everywhere).
+- **Not yet in bro:** the scene's shaders still evaluate fields at a float
+  `eyeWorld`-relative position about zero; 9c gives them the field origin
+  (the place's, in double, as a uniform) and defines the macros.
 
 ### The land on the body
 

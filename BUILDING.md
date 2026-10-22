@@ -194,7 +194,7 @@ class of problem.
 
 There are no git submodules; a plain `git clone` is the whole checkout.
 `cmake/bro_pins.cmake` declares every dependency: each ecosystem sibling with
-no commit, so it tracks its main, and SDL, Jolt, FastNoise2 and libjpeg-turbo pinned to exact
+no commit, so it tracks its main (FastNoise2, wlejon's fork, among them), and SDL, Jolt and libjpeg-turbo pinned to exact
 commits. `cmake/bro_deps.cmake`'s `bro_dependency()` resolves each one at
 configure time, in order:
 

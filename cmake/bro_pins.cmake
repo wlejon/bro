@@ -5,7 +5,6 @@
 # Third-party code is pinned to one commit each. Move one by editing its REF.
 bro_dependency(SDL GITHUB libsdl-org/SDL REF 1df279a04f604bc50b6f36c9e903b5e64c4fe2a3 THIRD_PARTY PIN_ONLY)
 bro_dependency(jolt GITHUB jrouwe/JoltPhysics REF 945d1d5ce29a8ccc8fa78c74059b187c2b67e7d9 THIRD_PARTY PIN_ONLY)
-bro_dependency(FastNoise2 GITHUB Auburn/FastNoise2 REF bf7a921b6d172c001ee1597a1dc1d0ae5fc36fcc THIRD_PARTY PIN_ONLY)
 # broimage's JPEG decoder, built from this source only where no installed one
 # (system package, Homebrew, vcpkg) is found: 3.2.0, as broimage's
 # cmake/jpeg_turbo.cmake pins it.
@@ -19,9 +18,10 @@ bro_dependency(libjpeg-turbo GITHUB libjpeg-turbo/libjpeg-turbo REF c85e6b905bf2
 bro_dependencies(
     # The JavaScript toolchain.
     bronze brass
-    # Engine libraries.
+    # Engine libraries (FastNoise2 is the fork of Auburn's, its positions far
+    # from the origin exact).
     bromath htmlayout brokit broimage broaudio bromesh broflora brotensor
-    brogameagent brolm brovisionml brodiffusion brosoundml
+    brogameagent brolm brovisionml brodiffusion brosoundml FastNoise2
     # The <terminal> element and remote sessions.
     brosearch brothemes bropty brolink bromux brovideo broremote
     # Desktop substrate.
