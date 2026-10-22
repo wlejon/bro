@@ -69,7 +69,7 @@ double bro_scene_SceneNode_landHeight(void* self, double x, double z) {
     placeOriginOfNode(self, o);   // (x, z) is the place frame's; the land the body's
     x += o[0];
     z += o[2];
-    if (!land || std::fabs(x) > land->extent() || std::fabs(z) > land->extent())
+    if (!land || (!land->round() && (std::fabs(x) > land->extent() || std::fabs(z) > land->extent())))
         return std::numeric_limits<double>::quiet_NaN();
     return land->heightAt(static_cast<float>(x), static_cast<float>(z));
 }

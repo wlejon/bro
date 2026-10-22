@@ -49,7 +49,7 @@ float landStanding(vec2 xz, float step, float texel0, float castRange, bool cano
         if (canopy) cover = mix(cover, textureLod(landCanopies, vec3(uv1, float(s1)), 0.0).a, f);
     }
     if (!canopy) return h.x;
-    float shown = landCanopyShown(length(vec3(xz.x, h.x, xz.y) - landEye3()), castRange);
+    float shown = landCanopyShown(length(landPoint(xz, h.x) - landEye3()), castRange);
     return h.x + h.y * cover * shown;
 }
 
@@ -78,9 +78,12 @@ void main() {
     for (int n = 0; n < LS_STEPS; ++n) {
         // Nothing past here stands high enough to shade a point the best
         // so far does not.
-        if (ceiling - s * rise <= best) break;
+        // (A round body's ground falls away from here as the square of the
+        // distance over twice its radius.)
+        float drop = landRound() ? s * s / (2.0 * landRadius()) : 0.0;
+        if (ceiling - s * rise - drop <= best) break;
         float step = max(texel, LS_GROWTH * s);
-        float h = landStanding(xz + dir * s, step, texel0, castRange, canopy) - s * rise;
+        float h = landStanding(xz + dir * s, step, texel0, castRange, canopy) - s * rise - drop;
         if (h > best) {
             best = h;
             bestAt = s;

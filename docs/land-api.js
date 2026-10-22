@@ -27,8 +27,14 @@
  *     by it and is drawn as their leaves, past their shadow range it shades
  *     the land as they would, and a forest reaches the horizon.
  *
- * The land is square: `extent` metres from the origin each way. Its
- * transform is ignored. It casts shadows (a hill's on the slope behind it,
+ * On a flat body the land is square: `extent` metres from the origin each
+ * way. On a round body (`scene.setBody`, docs/scene-world-architecture.md
+ * §11) it is the whole body: its tiles are keyed on the cube faces of the
+ * body's chart, its rings laid out about the eye in the map round it to the
+ * antipode (more rings are added as it takes; the ones finer than a pixel
+ * from the eye's height are not drawn), its height a 3D tree at the body's
+ * points, and its CPU heights answer in the place frame, the body's curve
+ * included. Its transform is ignored. It casts shadows (a hill's on the slope behind it,
  * on the grass and the plants) and receives them. A low sun's long shade,
  * a hill's across a valley or a far forest's across a meadow, comes from
  * the land's sun: the height a point must clear to see the sun, marched
@@ -41,7 +47,10 @@
  *     LandSurface landSurface(LandPoint q)
  *
  * where `q.p` is world (x, z), `q.height` the land's height there and
- * `q.normal` its normal (from the heights), returning
+ * `q.normal` its normal (from the heights); on a round body `q.at` is the
+ * datum's point under it (relative to the tile's origin, which a tree's GLSL
+ * adds back in double) and `q.up` the body's up there, so a world's belts
+ * and snow lines are its own GLSL of them. It returns
  *
  *     struct LandSurface {
  *         vec3 albedo;   // linear: the ground where no turf covers it
@@ -55,7 +64,8 @@
  *
  * Start from `landSurfaceOf(albedo)`: bare ground, nothing growing (cover
  * (0, 0, 1, 0), herbs 0). It may call `landHeight(vec2 p)` and
- * `landNoise(vec2 p, int seed)` (the height tree), `landData(int i)` (the
+ * `landNoise(vec2 p, int seed)` (the height tree; on a round body
+ * `landHeight(vec3 at)` and `landNoise(vec3 at, int seed)`), `landData(int i)` (the
  * node's `data`, vec4 i of at most 64), its own functions and any other
  * tree's GLSL it carries (`someNode.glsl({ name: 'cover' })`). It runs
  * once a texel of a tile as the tile is made, not every frame, so it may
@@ -88,8 +98,9 @@
 
 /**
  * @typedef {Object} LandOptions
- * @property {FastNoise} height - the land's height (m) at world (x, z): the
- *   tree run as `landNoise(p, seed)` on the GPU and by FastNoise2 on the CPU.
+ * @property {FastNoise} height - the land's height (m) at world (x, z) (on a
+ *   round body at the datum's point (x, y, z), over the datum): the tree run
+ *   as `landNoise(p, seed)` on the GPU and by FastNoise2 on the CPU.
  *   Its nodes must be ones `glsl()` emits (docs/noise-api.js).
  * @property {number} [seed=0] - the seed the height runs with
  *   (`LAND_SEED` in the module).
@@ -97,12 +108,14 @@
  *   `landSurface` (see above); default bare earth.
  * @property {ArrayLike<number>} [data] - what `landData(i)` reads: at most
  *   256 floats (64 vec4s).
- * @property {number} [extent=4096] - the land's half-size (m).
+ * @property {number} [extent=4096] - the land's half-size (m); a round
+ *   body's land is the whole body.
  * @property {number} [cellSize=0.5] - the finest ring's cell (m).
  * @property {number} [resolution=256] - a ring's cells a side (a multiple
  *   of 4): a cell is about 2 / resolution of the view's height on screen.
  * @property {number} [levels=10] - rings: they reach cellSize *
- *   resolution / 2 * 2^(levels - 1) metres.
+ *   resolution / 2 * 2^(levels - 1) metres. On a round body at least as many
+ *   as reach the antipode (up to 20).
  * @property {string} [name]
  * @property {boolean} [receivesShadow=true]
  * @property {boolean} [castsShadow=true]
@@ -142,7 +155,9 @@ class SceneNode {
   setLand(opts) {}
 
   /**
-   * The land's height at world (x, z), metres; NaN off the land.
+   * The land's height at world (x, z), metres; NaN off the land. On a round
+   * body (x, z) and the answer are the place frame's: the y of the ground
+   * under (x, z), the body's curve included.
    * @param {number} x
    * @param {number} z
    * @returns {number}

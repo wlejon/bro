@@ -23,8 +23,13 @@
 //     emitted from (brokit's noise_glsl), run by FastNoise2 itself, so they
 //     are exact and need no read-back.
 //
-// The land is square, `extent` metres from the origin each way; past it
-// nothing is drawn. A LandNode is a MeshNode so the material setters
+// On a flat body the land is square, `extent` metres from the origin each
+// way; past it nothing is drawn. On a round body (world/place.h) it is the
+// whole body (docs/scene-world-architecture.md §11, "The land on the
+// body"): its tiles are keyed on the cube faces of the body's chart, its
+// rings laid out in the land's map about the anchor, its height a 3D field
+// at the body's points, and its CPU calls take the land's frame (the place
+// frame there; SceneView::world everywhere). A LandNode is a MeshNode so the material setters
 // (roughness, receivesShadow, visible) apply; its own mesh is the rings,
 // its transform is ignored, and raycasts, heights and bounds read the land
 // (raycast, sampleHeights, bounds), not the rings. It casts into the shadow
@@ -32,7 +37,9 @@
 // view) and receives them.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/body_surface_map.h"
 #include "scene/world/fields.h"
+#include "scene/world/place.h"
 #include "scene/world/surface_layers.h"
 
 #include <cstdint>
@@ -47,8 +54,9 @@ public:
         float cellSize = 0.5f;   // the finest ring's cell (m)
         int resolution = 256;    // cells a side a ring (a multiple of 4): a cell is
                                  // about (view height) * 2 / resolution pixels across
-        int levels = 10;         // rings
+        int levels = 10;         // rings (on a round body at least as many as reach round it)
     };
+    static constexpr int kMaxRings = 20;
 
     explicit LandNode(const std::string& name = "");
     ~LandNode() override;
@@ -82,12 +90,28 @@ public:
     float canopyRange() const { return canopyRange_; }
     float canopyCastRange() const { return canopyCastRange_; }
 
-    /// The land's half-size (m): it covers [-extent, extent] in x and z.
+    /// The land's half-size (m): on a flat body it covers [-extent, extent]
+    /// in x and z. (A round body's land is the whole body.)
     void setExtent(float extent);
     float extent() const { return extent_; }
 
+    /// The body it lies on, its graph's (SceneGraph keeps it set; null or a
+    /// flat body: the plane). A new body is a new land (its generation).
+    void setPlace(const Place* place);
+    const Place* place() const { return place_; }
+    /// On a round body.
+    bool round() const { return place_ && !place_->body().flat(); }
+    /// What the tiles are keyed on and how far the map reaches: the chart's
+    /// map (null on the plane) and the map's half-size (the extent; on a
+    /// round body to the antipode, πR).
+    const SurfaceMap* tileMap() const { return round() ? &map_ : nullptr; }
+    double mapReach() const;
+
     void setRings(const Rings& rings);
     const Rings& rings() const { return rings_; }
+    /// The rings drawn: rings().levels, on a round body more if it takes
+    /// more to reach round it.
+    int ringLevels() const { return ringLevels_; }
 
     /// The rings' mesh in blocks of kBlockCells x kBlockCells cells (fewer
     /// where a ring's hole cuts one), its indices block by block, so a pass
@@ -100,13 +124,28 @@ public:
         uint32_t firstIndex = 0, indexCount = 0;
     };
     const std::vector<Block>& blocks() const { return blocks_; }
-    /// Where block `b` lies while the rings are centred on `eye` (each
-    /// ring's centre snapped to twice its cell, mesh_land.vert), over the
-    /// land's height range.
-    bromath::AABB3 blockBounds(const Block& b, const bromath::Vec3& eye) const;
+    /// Where block `b` lies (the land's frame) while the rings are centred
+    /// on `eye` (each ring's centre snapped to twice its cell on the map,
+    /// mesh_land.vert), over the land's height range, ring 0 drawn as ring
+    /// `first` (firstRing); `hidden` set when the body's curve hides all of
+    /// it from the eye.
+    bromath::AABB3 blockBounds(const Block& b, const bromath::Vec3& eye, int first = 0,
+                               bool* hidden = nullptr) const;
+    /// The finest ring drawn from `eye` (a view of `focalPixels`): the rings
+    /// whose cells are under a pixel of ground from its height are not, as
+    /// a geometry clipmap drops its fine levels as it climbs, and ring 0's
+    /// full grid is drawn as that ring (its blocks' ring the ones between
+    /// are left out).
+    int firstRing(const bromath::Vec3& eye, float focalPixels) const;
+    /// How high land's-frame `eye` stands over the ground under it (on a
+    /// round body along its up).
+    float eyeAbove(const bromath::Vec3& eye) const;
+    /// Whether the block `b` is drawn when ring 0 is drawn as `first`.
+    static bool blockDrawn(const Block& b, int first) { return b.ring == 0 || b.ring > first; }
 
-    /// The height at world (x, z), metres: FastNoise2 on the module's tree
-    /// (0 with none).
+    /// The ground's height at land's-frame (x, z), metres: FastNoise2 on the
+    /// module's tree (0 with none); on a round body the y of the ground
+    /// under (x, z) in the place frame (its curve included).
     float heightAt(float x, float z) const;
     /// Heights on a grid: (x0 + i * cell, z0 + j * cell), row by row; NaN
     /// off the land.
@@ -118,9 +157,17 @@ public:
                  bromath::Vec3& normal) const;
 
     /// What the tiles are chosen over: the land's boxes (its height range in
-    /// cells of its extent), and its generation (a new module or extent).
+    /// cells of its chart: of its extent, or of each cube face), every
+    /// root's chart bounds with its height range, and its generation (a new
+    /// module, extent or body).
     const std::vector<SurfaceItem>& items() const { return items_; }
-    const bromath::AABB3& bounds() const { return bounds_; }
+    const bromath::AABB3& chartBounds() const { return chartBounds_; }
+    /// The land's box in its frame (on a round body the body's, about the
+    /// place frame as it is now).
+    bromath::AABB3 bounds() const;
+    /// Its lowest and highest ground.
+    float lowest() const { return chartBounds_.min.y; }
+    float highest() const { return chartBounds_.max.y; }
     /// The land's height range over world rect [x0, x1] x [z0, z1], from its
     /// items (conservative); false off the land.
     bool heightRange(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
@@ -142,8 +189,15 @@ public:
 
 private:
     void buildRings();
+    int wantedRings() const;
     void rebuildItems();
+    void rebuildFaceItems();
+    /// A round body's ground height (over the datum) at body direction `dir`.
+    float heightOver(const double dir[3]) const;
 
+    const Place* place_ = nullptr;
+    double radius_ = 0.0;   // the body's the items were made for (0 the plane)
+    BodySurfaceMap map_;
     std::string source_;
     uint64_t sourceHash_ = 0;
     std::vector<float> data_;
@@ -154,10 +208,11 @@ private:
     FieldRef height_;
     float extent_ = 4096.0f;
     Rings rings_;
+    int ringLevels_ = 0, builtResolution_ = 0;   // the mesh's
     std::vector<Block> blocks_;
     std::vector<SurfaceItem> items_;
-    int itemCells_ = 0;   // items_ is itemCells_ x itemCells_, row by row from (-extent, -extent)
-    bromath::AABB3 bounds_ = bromath::aempty3();
+    int itemCells_ = 0;   // items_ is itemCells_ x itemCells_ a root, row by row from the chart's corner
+    bromath::AABB3 chartBounds_ = bromath::aempty3();
     uint64_t generation_ = 1;
     Stats stats_;
 };

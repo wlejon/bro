@@ -9,6 +9,7 @@
 // (i + 0.5, j + 0.5) texels (world/surface_layers.h: the border lies
 // outside the tile's own square).
 
+#include "ground/land_body.glsl"
 #include "ground/scene_land_layout.h"
 
 layout(local_size_x = LF_GROUP, local_size_y = LF_GROUP) in;
@@ -28,21 +29,85 @@ vec4 landData(int i) { return landDataBuffer.words[clamp(i, 0, 63)]; }
 #include "ground/land_module.glsl"
 #include "ground/land_canopy.glsl"
 
+#ifdef LAND_ROUND
+// A round body's tile (LF_TILE_WORDS): its texels on its cube face, each
+// relative to the tile's middle, whose datum point is the noise's origin.
+struct RoundTile {
+    vec4 mid;          // tan(x / R), tan(z / R), cos(x / R), cos(z / R) of the middle
+    vec3 n, u, v;      // the face's axes (body frame)
+    float R;
+};
+
+// The datum's point at chart offset `o` (m) from the tile's middle, less
+// the middle's (R n_c): R (d - d_c) from the differences of the tangents
+// and of the norms, so that it keeps its precision near the middle.
+vec3 roundDatum(RoundTile T, vec2 o, out vec3 d) {
+    vec2 a = o / T.R;
+    // tan(x_c + a) - tan(x_c) = sin(a) / (cos(x_c + a) cos(x_c))
+    vec2 c = vec2(cos(atan(T.mid.x) + a.x), cos(atan(T.mid.y) + a.y));
+    vec2 dt = sin(a) / (c * T.mid.zw);
+    vec3 wc = T.n + T.mid.x * T.u + T.mid.y * T.v;
+    vec3 dw = dt.x * T.u + dt.y * T.v;
+    float lc = length(wc);
+    float l = length(wc + dw);
+    // 1/l - 1/lc = (lc^2 - l^2) / (l lc (l + lc)), lc^2 - l^2 = -(2 wc.dw + dw.dw)
+    float k = -(2.0 * dot(wc, dw) + dot(dw, dw)) / (l * lc * (l + lc));
+    d = (wc + dw) / l;
+    return T.R * (dw / l + wc * k);
+}
+
+// The ground at chart offset `o`: its height over the datum and the point
+// of it (relative to the middle's datum point).
+vec3 roundGround(RoundTile T, vec2 o, out float h, out vec3 d) {
+    vec3 at = roundDatum(T, o, d);
+    h = landHeight(at);
+    return at + h * d;
+}
+#endif
+
 void main() {
     uint stride = pc.words[LF_P_STRIDE];
     uint tile = gl_WorkGroupID.z;
     uvec2 texel = gl_GlobalInvocationID.xy;
     if (tile >= pc.words[LF_P_TILES] || texel.x >= stride || texel.y >= stride) return;
-    vec4 f = fills[tile];
+    vec4 f = fills[tile * (LF_TILE_WORDS / 4)];
     float t = f.z;
     vec2 p = f.xy + (vec2(texel) + 0.5) * t;
 
+#ifdef LAND_ROUND
+    uint b = tile * (LF_TILE_WORDS / 4);
+    RoundTile T;
+    T.mid = fills[b + 1];
+    T.n = fills[b + 2].xyz;
+    T.R = fills[b + 2].w;
+    T.u = fills[b + 3].xyz;
+    T.v = fills[b + 4].xyz;
+    landOx = fills[b + 5].xy;
+    landOy = fills[b + 5].zw;
+    landOz = fills[b + 6].xy;
+    float h, hx0, hx1, hz0, hz1;
+    vec3 up, dn;
+    vec3 datum = roundDatum(T, p, up);
+    h = landHeight(datum);
+    // The normal from the ground's points a texel either way (outward: half
+    // the faces' u, n, v are left-handed), in the frame of the up there: x
+    // along the face's u, z its v.
+    vec3 px0 = roundGround(T, p - vec2(t, 0.0), hx0, dn), px1 = roundGround(T, p + vec2(t, 0.0), hx1, dn);
+    vec3 pz0 = roundGround(T, p - vec2(0.0, t), hz0, dn), pz1 = roundGround(T, p + vec2(0.0, t), hz1, dn);
+    vec3 nb = normalize(cross(pz1 - pz0, px1 - px0)) * sign(dot(cross(T.v, T.u), T.n));
+    vec3 east = normalize(T.u - dot(T.u, up) * up), north = normalize(T.v - dot(T.v, up) * up);
+    vec3 n = vec3(dot(nb, east), dot(nb, up), dot(nb, north));
+    // (The chart's point: the middle's plus the offset.)
+    p += fills[b + 6].zw;
+    LandSurface s = landSurface(LandPoint(p, h, n, datum, up));
+#else
     float h = landHeight(p);
     // The normal from central differences a texel apart.
     float hx0 = landHeight(p - vec2(t, 0.0)), hx1 = landHeight(p + vec2(t, 0.0));
     float hz0 = landHeight(p - vec2(0.0, t)), hz1 = landHeight(p + vec2(0.0, t));
     vec3 n = normalize(vec3(hx0 - hx1, 2.0 * t, hz0 - hz1));
-    LandSurface s = landSurface(LandPoint(p, h, n));
+    LandSurface s = landSurface(LandPoint(p, h, n, vec3(p.x, 0.0, p.y), vec3(0.0, 1.0, 0.0)));
+#endif
     vec3 leaves;
     vec2 canopy = plantsCanopy(p, leaves);
 

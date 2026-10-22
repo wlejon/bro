@@ -28,21 +28,44 @@
 #define LG_CANOPY           11
 
 // --- LandDraw ---
-#define LD_LAND             0     // x the land's extent (half-size, m), yz the frame's eye's world x and z
-                                  // (the rings' centre in every pass, a probe's and a tile fill's too); w its y
+// The land's MAP (world/place.h): a flat body's x and z; on a round body
+// the azimuthal map about the place's anchor, whose (x, z) is a point that
+// far round the body from the anchor in that direction. The rings are laid
+// out on it about the eye's map point. Its CHART is what the tiles are keyed
+// on: a flat body's map, or a round body's six cube faces, each in face
+// metres (place.h's chartOf); a face's LD_FACE words give its axes in the
+// place frame and where the anchor lies on it, so a map point's chart is the
+// anchor's plus a difference that keeps its precision near the eye
+// (scene_land.glsl's landPosOf).
+#define LD_LAND             0     // x how far the map reaches (m; the extent a flat land's half-size, a round
+                                  // body's πR), yz the frame's eye's map x and z (the rings' centre in every
+                                  // pass, a probe's and a tile fill's too), w unused
 #define LD_RINGS            4     // x the finest ring's cell (m), y 4 / resolution (the rings' K, mesh_land.vert),
                                   // z the rings, w resolution / 2
 #define LD_TILES            8     // x a level-0 tile's side (m), y its texels inside its border, z the border,
                                   // w the tile levels
 #define LD_PAGE             12    // x the page shift (log2 of the entries a side), y the entries a side,
-                                  // z unused, w 1 when any tile is resident
+                                  // z the page table's layers a root (its levels' most), w 1 when any tile is
+                                  // resident
 #define LD_CANOPY           16    // the plants standing on it: x how far from the eye they are drawn (m),
                                   // y how far they cast, z 1 when the land carries their canopy, w unused
-#define LD_WORDS            20
+#define LD_BODY             20    // x the body's radius (m; 0 flat), y the ring ring 0 is drawn as (LandNode::
+                                  // firstRing), zw unused
+#define LD_EYE              24    // xyz the frame's eye in the land's frame (SceneView::world), w unused
+#define LD_FACE             28    // a round body's six cube faces, LD_FACE_WORDS each: its n, u and v in the
+                                  // place frame (xyz), then the anchor's chart on it (x, z) in level-0 tiles,
+                                  // whole (xy) and fraction (zw)
+#define LD_FACE_WORDS       16
+#define LD_WORDS            124
 
 // --- the fills ---
 #define LF_GROUP            8     // a workgroup is LF_GROUP x LF_GROUP texels of one tile
-#define LF_TILE_WORDS       4     // x0, z0 (the corner of its border: its own corner less the border), its texel (m), its slot
+#define LF_TILE_WORDS       28    // vec4 0: x0, z0 (the corner of its border: its own corner less the border;
+                                  // on a round body from the tile's middle), its texel (m), its slot.
+                                  // A round body's (land_fill.comp): vec4 1: the tile middle's tan(x / R),
+                                  // tan(z / R), cos(x / R), cos(z / R); 2: its face's n (body frame), R;
+                                  // 3: u, its root; 4: v; 5: the middle's datum point R n_c (body frame),
+                                  // x and y as double-floats; 6: its z (xy), the middle's chart point (zw)
 #define LF_P_STRIDE         0     // uint: a tile's texels a side with its border
 #define LF_P_BORDER         1     // uint
 #define LF_P_TILES          2     // uint: the fills this dispatch

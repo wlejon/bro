@@ -104,11 +104,15 @@ public:
     /// The view jumped between two renders: the view turned by more than half
     /// its vertical field of view (what lay at the centre of the screen,
     /// however far, has gone past its edge), or the eye moved more than
-    /// kCutMetres, past what a camera travels in a frame. A wrong cut costs a
-    /// frame or two at the floor; a missed one, a frame over the target.
+    /// kCutMetres, past what a camera travels in a frame, and more than its
+    /// height over the ground (`above`, 0 with none) times the tangent of
+    /// that half (the ground looked down on from there, gone past the
+    /// screen's edge: from orbit a frame's hundred kilometres is a flight,
+    /// not a jump). A wrong cut costs a frame or two at the floor; a missed
+    /// one, a frame over the target.
     static constexpr float kCutMetres = 10.0f;
     static bool viewCut(const bromath::Vec3& eye, const bromath::Vec3& forward, const bromath::Vec3& wasEye,
-                        const bromath::Vec3& wasForward, float halfFov);
+                        const bromath::Vec3& wasForward, float halfFov, float above = 0.0f);
     /// Kind `kind`'s granted jobs, recorded by `record` into the stream the
     /// kind's schedule names and stamped as the kind's span; the units it
     /// recorded.

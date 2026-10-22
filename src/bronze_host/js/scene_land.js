@@ -32,12 +32,14 @@ LandSurface landSurface(LandPoint q) {
 `;
 
     // The module: the height's GLSL as landNoise, landHeight over it at the
-    // seed, then the surface (which may call either).
+    // seed (in 2D for a flat body, in 3D at the datum's points for a round
+    // one), then the surface (which may call either).
     function moduleOf(height, seed, surface) {
-        const noise = height.glsl({ name: 'landNoise', dims: 2 });
+        const noise = height.glsl({ name: 'landNoise', dims: [2, 3] });
         const src = typeof surface === 'string' ? surface : (surface && surface.source) || BARE;
         return noise + '\nconst int LAND_SEED = ' + (seed | 0) + ';\n' +
-            'float landHeight(vec2 p) { return landNoise(p, LAND_SEED); }\n' + src;
+            'float landHeight(vec2 p) { return landNoise(p, LAND_SEED); }\n' +
+            'float landHeight(vec3 p) { return landNoise(p, LAND_SEED); }\n' + src;
     }
 
     const isLand = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_landParams(n).length > 0;

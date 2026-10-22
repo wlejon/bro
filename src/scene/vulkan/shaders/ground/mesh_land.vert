@@ -56,8 +56,8 @@ const float LAND_MORPH_RAMP = 9.0;   // cells it ramps over before that
 // Past the plants' range the land is their canopy (world/plant_canopy.h):
 // it rises by their top as far as they cover it, and its fragments are
 // their leaves, coming in over the range's last tenth as the plants go.
-// What it rises by at `xz` (read at `lambda`, its ground `h`); its
-// fragments read the canopy's colour themselves (mesh.frag's
+// What it rises by at map point `xz` (read at `lambda`, its ground `h`);
+// its fragments read the canopy's colour themselves (mesh.frag's
 // landCanopyAt). The caster does not rise: the shade of a canopy past the
 // plants' cast range is the land's sun's (land_sun.comp), as a low sun
 // runs along its top and the shadow pages' depth offsets would swallow it.
@@ -66,7 +66,7 @@ float landRise(vec2 xz, float lambda, float h) {
     return 0.0;
 #else
     if (!landHasCanopy()) return 0.0;
-    float shown = landCanopyShown(length(vec3(xz.x, h, xz.y) - landEye3()), landCanopyRange());
+    float shown = landCanopyShown(length(landPoint(xz, h) - landEye3()), landCanopyRange());
     if (shown <= 0.0) return 0.0;
     float top;
     vec4 c = landSampleCanopy(xz, lambda, top);
@@ -75,11 +75,13 @@ float landRise(vec2 xz, float lambda, float h) {
 }
 
 void main() {
-    float ring = inUV.x;
+    // Ring 0's full grid is drawn as the first ring drawn, the finer ones
+    // under a pixel from the eye's height (their blocks are not drawn).
+    float ring = inUV.x < 0.5 ? landFirstRing() : inUV.x;
     float cl = landCell0() * exp2(ring);
-    // Each ring snaps its centre to its own grid, twice its cell (so a
-    // ring's grid is the next coarser one's too): a vertex stays over the
-    // same ground until its ring jumps a whole step.
+    // Each ring snaps its centre to its own grid on the land's map, twice
+    // its cell (so a ring's grid is the next coarser one's too): a vertex
+    // stays over the same ground until its ring jumps a whole step.
     // (LandNode::blockBounds places the blocks the same way.)
     float snap = 2.0 * cl;
     vec2 centre = floor(landEye() / snap) * snap;
@@ -120,12 +122,15 @@ void main() {
         h = mix(h, hc / float(n), a);
     }
 
+    // On the body, the ground at that height (on a round one, as far round
+    // it as the map point is).
+    vec3 P = landPoint(xz, h);
 #ifdef LAND_CASTER
-    gl_Position = push.lightViewProj * (casterModel() * vec4(xz.x, h, xz.y, 1.0));
+    gl_Position = push.lightViewProj * (casterModel() * vec4(P, 1.0));
 #else
     vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
 
-    vec3 rel = vec3(xz.x - eye.x, h - eye.y, xz.y - eye.z);
+    vec3 rel = P - eye;
     outWorldPos = rel;
     gl_Position = camera.viewProj * vec4(rel, 1.0);
     outNormal = N;

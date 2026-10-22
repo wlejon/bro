@@ -1332,7 +1332,7 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet (design; decisions taken, 9a and 9b built)
+## 11. The planet (design; decisions taken, 9a to 9c built)
 
 A body of Earth's radius (6371 km) seen from a person in its grass to
 geostationary orbit as one place: the land's rings, its tiles, the plants
@@ -1518,6 +1518,69 @@ field is evaluated at is **split**: an integer part and a float fraction.
 - **Horizon culling** (§1) folds the curve into the land's horizon: the
   body's drop d²/2R joins each distance's slope, so from orbit most of the
   body is culled by its own curve and at eye level the far hills still are.
+
+### As built: the land on the body (9c)
+
+- **The chart and the map** are `scene/world/place.h`'s: `chartOf` gives a
+  body direction's face and its face metres (R·atan of the tan-warped
+  coordinate, continued past the face's edge), `dirOf` the way back;
+  `Place::mapToLand` / `landToMap` are the azimuthal-equidistant map about
+  the anchor in the place frame, a point at map ρ and height h standing at
+  (R+h)·sinθ along the map's direction and h·cosθ − 2R·sin²(θ/2) up.
+  `bro_place_test` checks both round trips over every face, edge and corner.
+- **The tiles** are keyed (face, level, x, z): the surface layers take a
+  `SurfaceMap` (`world/body_surface_map.h`) with six roots, a grid of page
+  tables for each, the page image's layer root·20 + level. A tile's patch is
+  hidden when the body's limb hides it from the eye (`beyondLimb`, its
+  height range included). The fill (`land_fill.comp` with
+  `ground/land_body.glsl`'s `LAND_ROUND`) takes each tile's face axes, its
+  middle's chart point and the double-float origin R·n of its middle, and
+  works out each texel's body point as the origin plus a difference made
+  in float (R(d − d_c), no number at 6371 km), so the module's
+  `landHeight(vec3 p)` runs with `FN_ORIGIN3` set to it: split positions
+  (9b) in the scene's shaders. Normals come from the chart's slopes, signed
+  by each face's handedness.
+- **The module** is a 3D tree on a body: `scene_land.js` emits
+  `landHeight(vec3)` beside the plane's `landHeight(vec2)` from the one
+  FastNoise2 tree, and `LandPoint` gains `at` (the body point) and `up`
+  (its radial). The CPU's heights (`heightAt`, `sampleHeights`, the JS
+  `land.height`) answer in the place frame, the curve included, from
+  FastNoise2 at the body point in double (brokit's `genSingle3D` passes
+  doubles now); `tests/scene/test_land_body.js` holds them to a centimetre
+  of the GPU's tree.
+- **The rings** are laid out in the map about the eye's map point. A vertex
+  finds its face and texel from the anchor's chart on each face (the CPU's
+  doubles, in the land's block as `LD_FACE`) and atan's difference rule, so
+  the GPU never takes the atan of a number at 6371 km; the place point is
+  the map's closed form in a precise order. On a body the land adds rings
+  until the coarsest reaches the antipode (`ringLevels`, up to 20), and the
+  finest drawn is the first whose cells are a pixel of ground from the eye's
+  height (`firstRing`): ring 0's grid is drawn as that ring, the ones
+  between left out. A block wholly past the limb is not drawn.
+- **The horizon and the sun** take the curve: the land's horizon reads the
+  ground's place points (its drop included) and the land's sun subtracts
+  the drop s²/2R from what stands at s, and stops climbing once the
+  ceiling less the climb and the drop is under the best.
+- **The world service's cut** grew with the eye's height: a move larger
+  than the eye's height over the ground times the tangent of half the field
+  of view is a cut, not one over 10 m, so a descent from orbit is a flight
+  (the fixed 10 m called every frame from 100 km a cut, and each one spent
+  the settle budget: 8–18 ms spikes every 15 frames).
+- **The oracle:** `test_land_body.js` (heights against the tree, a constant
+  ground seen from above and not from below, the body mid-frame from 10 km,
+  400 km and 36,000 km, a cube corner on a level land without a hole, the
+  horizon's dip at 20 km within 2.5 px). A descent over 900 frames from
+  36,000 km to 2 m at 1280×682: median 2.38 ms, worst 3.8 ms (one frame at
+  9,300 km, no world jobs in it), the ground's change a frame no more than
+  2.5 times its neighbours'. Still frames at 2560×1364: 0.16 ms at 1.7 m,
+  0.26 ms at 10 km, 0.36 ms at 400 km. Biomes (no body) unchanged but for
+  9b's moved flowers and the fronds' wind phase.
+- **Not yet on the body:** the cover, the turf, the grass and the plants
+  (still on the anchor's tangent plane, so on a sphere they belong near the
+  eye only); the land's sun is one level about the eye (its ladder to
+  kilometre texels comes with the plants' canopy on the body); the module
+  gets no latitude or longitude (a spin axis is the world's: `at` is enough
+  to compute them).
 
 ### Processes
 

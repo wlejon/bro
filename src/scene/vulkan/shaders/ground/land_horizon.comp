@@ -35,14 +35,21 @@ void main() {
     int last = int(k) * WH_SAMPLES;
     for (int j = max(last - WH_SAMPLES + 1, 0); j <= last; ++j) {
         float d = WH_NEAREST * exp2(float(j) / (WH_PER_OCTAVE * float(WH_SAMPLES)));
-        vec2 xz = eye.xz + dir * d;
+        // (On the land's map about the eye's map point: on a round body the
+        // ground falls away with the distance round it.)
+        vec2 xz = landEye() + dir * d;
         int s0, s1;
         vec2 uv0, uv1;
         float f;
         if (!landTexels(xz, landLevel(xz), s0, uv0, s1, uv1, f)) continue;
         float h = textureLod(landHeights, vec3(uv0, float(s0)), 0.0).r;
         if (s1 >= 0) h = mix(h, textureLod(landHeights, vec3(uv1, float(s1)), 0.0).r, f);
-        best = max(best, (h - WH_MARGIN - eye.y) / d);
+        if (landRound()) {
+            vec3 P = landPoint(xz, h);
+            best = max(best, (P.y - WH_MARGIN - eye.y) / max(length(P.xz - eye.xz), 1e-3));
+        } else {
+            best = max(best, (h - WH_MARGIN - eye.y) / d);
+        }
     }
     // The running maximum outward (Hillis-Steele).
     sMax[k] = best;

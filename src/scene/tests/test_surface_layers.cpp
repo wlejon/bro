@@ -50,7 +50,7 @@ SurfaceLayers::View makeView(bromath::Vec3 eye, bromath::Vec3 dir) {
 struct Pages {
     std::map<std::tuple<int, int, int>, uint32_t> entries;
     void apply(const std::vector<SurfacePageWrite>& writes) {
-        for (const SurfacePageWrite& w : writes) entries[{w.level, w.ex, w.ez}] = w.value;
+        for (const SurfacePageWrite& w : writes) entries[{w.layer, w.ex, w.ez}] = w.value;
     }
     /// The slot holding tile `k` per the table, -1 when none.
     int lookup(const CellKey& k, int pageSize, int shift) const {

@@ -12,9 +12,7 @@ constexpr double kPi = 3.14159265358979323846;
 // The cube's faces: normal n, then the axes u and v a cell's x and z run
 // along. +Y's u and v are the flat body's x and z, so a frame at that
 // face's centre has a flat world's axes.
-struct Face {
-    double n[3], u[3], v[3];
-};
+using Face = CubeFace;
 constexpr Face kFaces[6] = {
     {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}},
     {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}},
@@ -42,6 +40,33 @@ bool normalize(double v[3]) {
 }
 
 }  // namespace
+
+const CubeFace& cubeFace(int f) { return kFaces[std::clamp(f, 0, 5)]; }
+
+double faceHalf(const Body& body) { return body.flat() ? 0.0 : 0.25 * kPi * body.radius; }
+
+ChartPoint chartOf(const Body& body, const double dir[3], int root) {
+    const Face& F = kFaces[std::clamp(root, 0, 5)];
+    const double n = dot(dir, F.n);
+    return {root, body.radius * std::atan2(dot(dir, F.u), n), body.radius * std::atan2(dot(dir, F.v), n)};
+}
+
+ChartPoint chartOf(const Body& body, const double dir[3]) {
+    int face = 0;
+    double best = -2.0;
+    for (int f = 0; f < 6; ++f) {
+        const double c = dot(dir, kFaces[f].n);
+        if (c > best) best = c, face = f;
+    }
+    return chartOf(body, dir, face);
+}
+
+void dirOf(const Body& body, const ChartPoint& c, double dir[3]) {
+    const Face& F = kFaces[std::clamp(c.root, 0, 5)];
+    const double tx = std::tan(c.x / body.radius), tz = std::tan(c.z / body.radius);
+    for (int i = 0; i < 3; ++i) dir[i] = F.n[i] + tx * F.u[i] + tz * F.v[i];
+    normalize(dir);
+}
 
 bool PlaceMove::tilts() const {
     for (int i = 0; i < 9; ++i)
@@ -180,6 +205,51 @@ void Place::latLong(const bromath::Vec3& place, double& lat, double& lon) const 
     cross(s, e1, e2);
     lat = std::asin(std::clamp(dot(r, s), -1.0, 1.0));
     lon = std::atan2(dot(r, e2), dot(r, e1));
+}
+
+void Place::mapToLand(double mx, double mz, double h, double out[3]) const {
+    if (body_.flat()) {
+        out[0] = mx;
+        out[1] = h;
+        out[2] = mz;
+        return;
+    }
+    const double R = body_.radius;
+    const double r = std::sqrt(mx * mx + mz * mz);
+    const double theta = r / R;
+    const double s = r > 0.0 ? std::sin(theta) / r : 1.0 / R;   // sin θ over |m|
+    const double half = std::sin(0.5 * theta);
+    out[0] = (R + h) * s * mx;
+    out[1] = h * std::cos(theta) - 2.0 * R * half * half;
+    out[2] = (R + h) * s * mz;
+}
+
+void Place::landToMap(const double p[3], double& mx, double& mz, double& h) const {
+    if (body_.flat()) {
+        mx = p[0];
+        mz = p[2];
+        h = p[1];
+        return;
+    }
+    const double R = body_.radius;
+    const double y = R + p[1];
+    const double rho = std::sqrt(p[0] * p[0] + p[2] * p[2]);
+    const double theta = std::atan2(rho, y);
+    const double k = rho > 0.0 ? R * theta / rho : 1.0;
+    mx = k * p[0];
+    mz = k * p[2];
+    h = std::sqrt(rho * rho + y * y) - R;
+}
+
+ChartPoint Place::chartOfMap(double mx, double mz) const {
+    if (body_.flat()) return {0, mx, mz};
+    const double r = std::sqrt(mx * mx + mz * mz);
+    const double theta = r / body_.radius;
+    const double s = r > 0.0 ? std::sin(theta) / r : 0.0;
+    const double local[3] = {s * mx, std::cos(theta), s * mz};
+    double d[3];
+    for (int i = 0; i < 3; ++i) d[i] = basis_[i * 3] * local[0] + basis_[i * 3 + 1] * local[1] + basis_[i * 3 + 2] * local[2];
+    return chartOf(body_, d);
 }
 
 bool Place::follow(const bromath::Vec3& eye, PlaceMove& move) {

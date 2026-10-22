@@ -8,6 +8,7 @@
 
 #include "scene/world/place.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -164,11 +165,99 @@ void walk(const double startDir[3], const double headingDir[3], double km, const
     check(drift < 30.0f, std::string(what) + ": the shell's height in the place frame stays small");
 }
 
+// The chart and the land's map: a direction's chart point and back; a face
+// extended past its edge agreeing with the face it lies on; the map at the
+// anchor the place frame's x and z, its distances great-circle distances,
+// round trips through the land's frame at a height, near and to the
+// antipode; a flat body's the plane's.
+void chartAndMap() {
+    Body earth;
+    earth.radius = kEarth;
+    for (int f = 0; f < 6; ++f)
+        for (double a : {-0.7, -0.2, 0.0, 0.33, 0.78})
+            for (double b : {-0.6, 0.0, 0.41}) {
+                const ChartPoint c{f, a * kEarth, b * kEarth};
+                double d[3];
+                dirOf(earth, c, d);
+                const ChartPoint back = chartOf(earth, d, f);
+                check(std::fabs(back.x - c.x) < 1e-6 && std::fabs(back.z - c.z) < 1e-6,
+                      "chart: a chart point's direction comes back to it");
+            }
+    {
+        // Just past +X's edge with +Y, in +Y's chart extended: the same
+        // direction as +X's chart point there.
+        const double d0[3] = {0.70710678, 0.70710679, 0.1};
+        double d[3] = {d0[0], d0[1], d0[2]};
+        const double l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        for (double& v : d) v /= l;
+        const ChartPoint own = chartOf(earth, d);
+        const ChartPoint ext = chartOf(earth, d, own.root == 0 ? 2 : 0);
+        double a[3], b[3];
+        dirOf(earth, own, a);
+        dirOf(earth, ext, b);
+        check(dist(a, b) < 1e-12 &&
+                  std::fabs(std::max(std::fabs(ext.x), std::fabs(ext.z)) - 0.25 * kPi * kEarth) < 2000.0,
+              "chart: a face extended past its edge meets the next");
+    }
+
+    Place p;
+    const double start[3] = {0.3, 0.8, -0.5};
+    p.setBody(earth, start);
+    // Near the anchor the map is the place frame's x and z.
+    double q[3];
+    p.mapToLand(120.0, -340.0, 0.0, q);
+    check(std::fabs(q[0] - 120.0) < 1e-3 && std::fabs(q[2] + 340.0) < 1e-3 && std::fabs(q[1] + 0.0102) < 1e-3,
+          "map: near the anchor the place frame's x and z, the ground falling away as d^2 / 2R");
+    for (double r : {0.0, 3.0, 2500.0, 40000.0, 900000.0, 9.0e6, 1.99e7}) {
+        const double mx = r * 0.6, mz = -r * 0.8;
+        for (double h : {0.0, 812.5, -40.0}) {
+            p.mapToLand(mx, mz, h, q);
+            double bx, bz, bh;
+            p.landToMap(q, bx, bz, bh);
+            check(std::fabs(bx - mx) < 1e-6 * std::max(1.0, r) && std::fabs(bz - mz) < 1e-6 * std::max(1.0, r) &&
+                      std::fabs(bh - h) < 1e-5,
+                  "map: a map point at a height comes back from the land's frame (" + std::to_string(r) + " m)");
+            // Its distance along the ground from the anchor is |m|.
+            double b[3];
+            p.toBody(q, b);
+            const double* o = p.origin();
+            const double lb = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+            const double c[3] = {b[1] * o[2] - b[2] * o[1], b[2] * o[0] - b[0] * o[2], b[0] * o[1] - b[1] * o[0]};
+            const double angle = std::atan2(std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]),
+                                            b[0] * o[0] + b[1] * o[1] + b[2] * o[2]);
+            check(std::fabs(kEarth * angle - r) < 1e-3 * std::max(1.0, r * 1e-3) &&
+                      std::fabs(lb - kEarth - h) < 1e-4,
+                  "map: |m| is the great-circle distance from the anchor");
+        }
+        // The chart point of a map point is its direction's.
+        p.mapToLand(mx, mz, 0.0, q);
+        double b[3];
+        p.toBody(q, b);
+        const double lb = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+        for (double& v : b) v /= lb;
+        const ChartPoint want = chartOf(earth, b), got = p.chartOfMap(mx, mz);
+        check(want.root == got.root && std::fabs(want.x - got.x) < 1e-4 && std::fabs(want.z - got.z) < 1e-4,
+              "map: a map point's chart point is its direction's");
+    }
+
+    Place f;
+    const double zero[3] = {0, 0, 0};
+    f.setBody(Body{}, zero);
+    f.mapToLand(10.5, -3.25, 7.0, q);
+    double mx, mz, h;
+    f.landToMap(q, mx, mz, h);
+    const ChartPoint c = f.chartOfMap(10.5, -3.25);
+    check(q[0] == 10.5 && q[1] == 7.0 && q[2] == -3.25 && mx == 10.5 && mz == -3.25 && h == 7.0 && c.root == 0 &&
+              c.x == 10.5 && c.z == -3.25,
+          "map: a flat body's is its plane's x and z");
+}
+
 }  // namespace
 
 int main() {
     flat();
     sphere();
+    chartAndMap();
     const double xEdge[3] = {0.7071067811865476, 0.7071067811865476, 0.0};   // on +X/+Y's edge
     const double toward[3] = {1.0, -1.0, 0.0};
     walk(xEdge, toward, 100.0, "walk over a face's edge");

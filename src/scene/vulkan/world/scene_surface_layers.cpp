@@ -198,7 +198,7 @@ void SceneSurfaceLayerAtlas::writePages(SceneVkDevice& device, VkCommandBuffer c
         words[i] = w.value;
         VkBufferImageCopy r{};
         r.bufferOffset = slice.offset + i * sizeof(uint32_t);
-        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(w.level), 1};
+        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(w.layer), 1};
         r.imageOffset = {w.ex, w.ez, 0};
         r.imageExtent = {1, 1, 1};
         regions.push_back(r);

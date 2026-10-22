@@ -2,7 +2,13 @@
 // land"; scene/nodes/land_node.h). A world's land is GLSL that defines
 //
 //   float landHeight(vec2 p)
-//       the ground's height (m) at world (x, z) = p;
+//       the ground's height (m) at world (x, z) = p, on a flat body;
+//   float landHeight(vec3 p)
+//       on a round one (docs/scene-world-architecture.md §11): its height
+//       over the datum at the datum's point p, relative to the fill's origin
+//       (a double point the fill sets per tile: a FastNoise2 tree's GLSL
+//       reads it as FN_ORIGIN3, so its fine octaves hold 6371 km out, and
+//       the module's own trees may too);
 //   LandSurface landSurface(LandPoint q)
 //       what the ground is there: its albedo (linear), for the ground's
 //       shading where no turf covers it (its roughness is the node's), and
@@ -21,10 +27,20 @@
 // built-in fill is compiled with.
 
 struct LandPoint {
-    vec2 p;          // world x, z (m)
-    float height;    // landHeight(p)
-    vec3 normal;     // the ground's, from its heights
+    vec2 p;          // world x, z (m); on a round body its chart's (a cube face's metres, coarse)
+    float height;    // landHeight(p) (on a round body landHeight(at))
+    vec3 normal;     // the ground's, from its heights: y up (on a round body in the frame of its
+                     // up, x along its face's u, z its v)
+    vec3 at;         // on a round body the datum's point under it, relative to the origin; else (p.x, 0, p.y)
+    vec3 up;         // the body's up there (the body's frame; (0, 1, 0) flat)
 };
+
+// A round body's land (the fill defines LAND_ROUND): each tile's texels
+// relative to an origin near them, a double-float a body axis.
+#ifdef LAND_ROUND
+vec2 landOx, landOy, landOz;
+#define FN_ORIGIN3 FnO3(landOx, landOy, landOz)
+#endif
 
 struct LandSurface {
     vec3 albedo;     // linear

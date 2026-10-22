@@ -37,6 +37,34 @@ struct Body {
     bool flat() const { return !(radius < std::numeric_limits<double>::infinity()); }
 };
 
+/// The cube's face `f` (0-5): its normal n, and the axes u and v its chart's
+/// x and z run along. +Y (2) has a flat body's axes.
+struct CubeFace {
+    double n[3], u[3], v[3];
+};
+const CubeFace& cubeFace(int f);
+
+/// The body's CHART (docs/scene-world-architecture.md §11, "The land on the
+/// body"): where what is keyed on the ground is keyed. A flat body's is one
+/// root, its plane's x and z. A sphere's is the cube's six faces, each a
+/// square of face metres: a direction d on face f is at x = R atan(d.u /
+/// d.n), z = R atan(d.v / d.n), [-πR/4, πR/4] each way (tan-warped: equal
+/// angles, so a face metre is a metre of ground to within a factor of 1.4
+/// in area). A face's chart goes on past its edges (the same formula), so a
+/// tile's border reads past them.
+struct ChartPoint {
+    int root = 0;
+    double x = 0.0, z = 0.0;
+};
+/// A sphere's chart point of direction `dir` (unit, the body's frame), on
+/// the face it lies on, or on face `root` (extended past its edges; d.n > 0).
+ChartPoint chartOf(const Body& body, const double dir[3]);
+ChartPoint chartOf(const Body& body, const double dir[3], int root);
+/// The direction (unit, the body's frame) of a sphere's chart point.
+void dirOf(const Body& body, const ChartPoint& c, double dir[3]);
+/// A face's half-width in face metres (πR/4).
+double faceHalf(const Body& body);
+
 /// Where a frame is anchored: a lattice cell. A flat body's (0, x, z) is the
 /// square [x - 1/2, x + 1/2] x [z - 1/2, z + 1/2] lattice steps about
 /// (x, z) * kLattice; a sphere's (face, x, z) is a cell of a cube face, x
@@ -98,6 +126,23 @@ public:
     /// Re-anchor on the cell holding `bodyPoint` whether or not the eye
     /// left its cell; false when that is the anchor already.
     bool anchorAt(const double bodyPoint[3], PlaceMove& move);
+
+    /// The LAND'S FRAME and its MAP (docs/scene-world-architecture.md §11):
+    /// the ground is drawn in the land's frame (SceneView::world: the body's
+    /// frame on a flat body, the place frame on a sphere), and reached by
+    /// 2D map coordinates there. A flat body's map is the plane's x and z. A
+    /// sphere's is azimuthal-equidistant about the anchor (the place
+    /// origin): a point m of the map is the ground |m| metres from the
+    /// anchor along the great circle setting off along (m.x, 0, m.z), so it
+    /// covers the body to the antipode, and near the anchor it is the place
+    /// frame's x and z. Heights are along the ground's up.
+    /// The land's-frame point of map point (mx, mz) at height h.
+    void mapToLand(double mx, double mz, double h, double out[3]) const;
+    /// The map point under land's-frame point p (along its up) and p's
+    /// height there.
+    void landToMap(const double p[3], double& mx, double& mz, double& h) const;
+    /// The chart point of map point (mx, mz).
+    ChartPoint chartOfMap(double mx, double mz) const;
 
     /// The anchor of the cell holding `bodyPoint`.
     Anchor anchorOf(const double bodyPoint[3]) const;

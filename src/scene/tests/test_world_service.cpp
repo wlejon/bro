@@ -292,6 +292,11 @@ void testViewCut() {
     check(!SceneWorldService::viewCut(eye, {0.2f, 0.0f, -1.0f}, eye, fwd, half), "a turn of 11 degrees is not a cut");
     check(SceneWorldService::viewCut(eye, {1.0f, 0.0f, -1.0f}, eye, fwd, half), "a turn of 45 degrees is a cut");
     check(SceneWorldService::viewCut({-300.0f, 420.0f, -300.0f}, fwd, eye, fwd, half), "a jump to the sky is a cut");
+    // From 1000 km up a frame's 100 km is a flight; from 2 m up it is a jump.
+    check(!SceneWorldService::viewCut({1e5f, 1e6f, 0.0f}, fwd, {0.0f, 1e6f, 0.0f}, fwd, half, 1e6f),
+          "a flight at altitude is not a cut");
+    check(SceneWorldService::viewCut({1e5f, 2.0f, 0.0f}, fwd, {0.0f, 2.0f, 0.0f}, fwd, half, 2.0f),
+          "the same move at eye level is a cut");
 }
 
 void testFloorOverTarget() {

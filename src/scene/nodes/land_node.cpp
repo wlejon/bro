@@ -19,6 +19,25 @@ constexpr float kItemMetres = 32.0f;
 constexpr int kItemCells = 256;
 constexpr int kItemSamples = 5;   // a side, a cell
 constexpr float kItemMargin = 0.15f;
+// A round body's: kFaceCells a side a cube face.
+constexpr int kFaceCells = 128;
+
+double dot3(const double a[3], const double b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+void normalize3(double v[3]) {
+    const double l = std::sqrt(dot3(v, v));
+    for (int i = 0; i < 3; ++i) v[i] /= l;
+}
+
+/// The y of the ground of height `h` under place (x, z) on a body of radius
+/// `R` whose place origin is on its datum: |(x, R + y, z)| = R + h, written
+/// so that it does not take R from R.
+double groundY(double R, double h, double x, double z) {
+    const double rho2 = x * x + z * z;
+    const double a = (R + h) * (R + h) - rho2;
+    if (!(a >= 0.0)) return std::numeric_limits<double>::quiet_NaN();
+    return (h * (2.0 * R + h) - rho2) / (std::sqrt(a) + R);
+}
 
 }  // namespace
 
@@ -76,20 +95,76 @@ void LandNode::setExtent(float extent) {
     rebuildItems();
 }
 
+void LandNode::setPlace(const Place* place) {
+    place_ = place;
+    map_.set(place_, lowest());
+    // (A re-anchor moves the place, not the land: only a new body is new.)
+    const double radius = round() ? place_->body().radius : 0.0;
+    if (radius == radius_) return;
+    radius_ = radius;
+    ++generation_;
+    buildRings();
+    rebuildItems();
+}
+
+double LandNode::mapReach() const {
+    return round() ? 3.14159265358979323846 * place_->body().radius : static_cast<double>(extent_);
+}
+
+bromath::AABB3 LandNode::bounds() const {
+    if (!round()) return chartBounds_;
+    // The body about its centre, (0, -R, 0) in the place frame (place.h: the
+    // place origin is on its datum, its y up there); the place may tilt, the
+    // ball does not care.
+    const double r = place_->body().radius + std::max(static_cast<double>(highest()), 0.0);
+    const float R = static_cast<float>(place_->body().radius), rf = static_cast<float>(r);
+    return {{-rf, -R - rf, -rf}, {rf, -R + rf, rf}};
+}
+
+float LandNode::heightOver(const double dir[3]) const {
+    if (!height_) return 0.0f;
+    const double R = place_->body().radius;
+    return height_->at(R * dir[0], R * dir[1], R * dir[2]);
+}
+
 void LandNode::setRings(const Rings& rings) {
     Rings r = rings;
     // The rings tile exactly only when a ring's hole is a whole number of
     // cells inset (buildRings), so the resolution is a multiple of 4.
     r.resolution = std::clamp(r.resolution / 4 * 4, 8, 1024);
-    r.levels = std::clamp(r.levels, 1, 20);
+    r.levels = std::clamp(r.levels, 1, kMaxRings);
     if (!(r.cellSize > 0.0f)) r.cellSize = rings_.cellSize;
-    const bool geometry = r.resolution != rings_.resolution || r.levels != rings_.levels;
     rings_ = r;
-    if (geometry) buildRings();
+    buildRings();
     ++generation_;
 }
 
-float LandNode::heightAt(float x, float z) const { return height_ ? height_->at(x, z) : 0.0f; }
+int LandNode::wantedRings() const {
+    if (!round()) return rings_.levels;
+    // On a round body, as many as reach round it: the coarsest ring's
+    // half-side (half its cells of 2^(L-1) finest cells) at least πR.
+    int L = rings_.levels;
+    while (L < kMaxRings && static_cast<double>(rings_.cellSize) * std::exp2(L - 1) * 0.5 * rings_.resolution < mapReach())
+        ++L;
+    return L;
+}
+
+float LandNode::heightAt(float x, float z) const {
+    if (!round()) return height_ ? height_->at(x, z) : 0.0f;
+    // The ground's height is the body direction's, which is the ground's
+    // own: guess the datum, take the height there, and again from where
+    // that puts the ground (the direction barely turns with the height).
+    const double R = place_->body().radius;
+    double y = 0.0;
+    for (int it = 0; it < 2; ++it) {
+        const double p[3] = {x, y, z};
+        double d[3];
+        place_->toBody(p, d);
+        normalize3(d);
+        y = groundY(R, heightOver(d), x, z);
+    }
+    return static_cast<float>(y);
+}
 
 void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows, float* out) const {
     const size_t n = static_cast<size_t>(cols) * static_cast<size_t>(rows);
@@ -99,6 +174,33 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
             xs[static_cast<size_t>(j) * cols + i] = x0 + static_cast<float>(i) * cell;
             zs[static_cast<size_t>(j) * cols + i] = z0 + static_cast<float>(j) * cell;
         }
+    if (round()) {
+        // heightAt's two steps, the grid's every point at once: the
+        // body's points relative to the place origin.
+        const double R = place_->body().radius;
+        std::vector<double> y(n, 0.0);
+        std::vector<float> bx(n), by(n), bz(n);
+        const double* o = place_->origin();
+        for (int it = 0; it < 2; ++it) {
+            std::vector<double> dirs(n * 3);
+            for (size_t k = 0; k < n; ++k) {
+                const double p[3] = {xs[k], y[k], zs[k]};
+                double* d = &dirs[k * 3];
+                place_->toBody(p, d);
+                normalize3(d);
+                bx[k] = static_cast<float>(R * d[0] - o[0]);
+                by[k] = static_cast<float>(R * d[1] - o[1]);
+                bz[k] = static_cast<float>(R * d[2] - o[2]);
+            }
+            if (height_)
+                height_->sample(bx.data(), by.data(), bz.data(), static_cast<int>(n), o, out);
+            else
+                std::fill(out, out + n, 0.0f);
+            for (size_t k = 0; k < n; ++k) y[k] = groundY(R, out[k], xs[k], zs[k]);
+        }
+        for (size_t k = 0; k < n; ++k) out[k] = static_cast<float>(y[k]);
+        return;
+    }
     if (height_) {
         height_->sample(xs.data(), zs.data(), static_cast<int>(n), out);
     } else {
@@ -113,7 +215,8 @@ bool LandNode::raycast(const bromath::Vec3& origin, const bromath::Vec3& dir, fl
     // The span of the ray over the land's box.
     float t0 = 0.0f, t1 = maxDist;
     const float o[3] = {origin.x, origin.y, origin.z}, d[3] = {dir.x, dir.y, dir.z};
-    const float lo[3] = {bounds_.min.x, bounds_.min.y, bounds_.min.z}, hi[3] = {bounds_.max.x, bounds_.max.y, bounds_.max.z};
+    const bromath::AABB3 box = bounds();
+    const float lo[3] = {box.min.x, box.min.y, box.min.z}, hi[3] = {box.max.x, box.max.y, box.max.z};
     if (lo[0] > hi[0]) return false;
     for (int k = 0; k < 3; ++k) {
         if (std::fabs(d[k]) < 1e-12f) {
@@ -176,7 +279,10 @@ SurfaceLayerConfig LandNode::tileConfig() const {
 
 void LandNode::buildRings() {
     const int N = rings_.resolution;
-    const int L = rings_.levels;
+    const int L = wantedRings();
+    if (L == ringLevels_ && N == builtResolution_) return;
+    ringLevels_ = L;
+    builtResolution_ = N;
     const int row = N + 1;
     // Ring 0 is a full N x N grid of cells; ring l > 0 leaves out a central
     // block the ring inside it covers. The block is inset kHoleInset of
@@ -231,6 +337,16 @@ void LandNode::buildRings() {
 }
 
 bool LandNode::heightRange(float x0, float z0, float x1, float z1, float& lo, float& hi) const {
+    if (round()) {
+        // The body's whole range, and as far as the ground falls away from
+        // the place origin to the rect's farthest corner.
+        const double R = place_->body().radius;
+        const double fx = std::max(std::fabs(x0), std::fabs(x1)), fz = std::max(std::fabs(z0), std::fabs(z1));
+        const double rho = std::min(std::sqrt(fx * fx + fz * fz), R);
+        lo = lowest() - static_cast<float>(R - std::sqrt(R * R - rho * rho));
+        hi = highest();
+        return !items_.empty();
+    }
     const float e = extent_;
     if (items_.empty() || x1 < -e || z1 < -e || x0 > e || z0 > e) return false;
     const int n = itemCells_;
@@ -248,18 +364,83 @@ bool LandNode::heightRange(float x0, float z0, float x1, float z1, float& lo, fl
     return true;
 }
 
-bromath::AABB3 LandNode::blockBounds(const Block& b, const bromath::Vec3& eye) const {
-    const float cl = rings_.cellSize * std::exp2(static_cast<float>(b.ring));
-    const float snap = 2.0f * cl;
-    const float cx = std::floor(eye.x / snap) * snap, cz = std::floor(eye.z / snap) * snap;
-    const float half = 0.5f * static_cast<float>(rings_.resolution);
-    const auto at = [&](float c, int i) {
-        return std::clamp(c + (static_cast<float>(i) - half) * cl, -extent_, extent_);
-    };
-    return {{at(cx, b.i0), bounds_.min.y, at(cz, b.j0)}, {at(cx, b.i1), bounds_.max.y, at(cz, b.j1)}};
+bromath::AABB3 LandNode::blockBounds(const Block& b, const bromath::Vec3& eye, int first, bool* hidden) const {
+    if (hidden) *hidden = false;
+    const int ring = b.ring == 0 ? first : b.ring;
+    const double cl = static_cast<double>(rings_.cellSize) * std::exp2(static_cast<double>(ring));
+    const double snap = 2.0 * cl;
+    // The eye on the land's map, its ring's centre snapped to the map's grid.
+    const double e[3] = {eye.x, eye.y, eye.z};
+    double ex, ez, eh;
+    if (place_)
+        place_->landToMap(e, ex, ez, eh);
+    else
+        ex = eye.x, ez = eye.z;
+    const double cx = std::floor(ex / snap) * snap, cz = std::floor(ez / snap) * snap;
+    const double half = 0.5 * static_cast<double>(rings_.resolution);
+    const double reach = mapReach();
+    const auto at = [&](double c, int i) { return std::clamp(c + (static_cast<double>(i) - half) * cl, -reach, reach); };
+    const double x0 = at(cx, b.i0), x1 = at(cx, b.i1), z0 = at(cz, b.j0), z1 = at(cz, b.j1);
+    if (!round())
+        return {{static_cast<float>(x0), chartBounds_.min.y, static_cast<float>(z0)},
+                {static_cast<float>(x1), chartBounds_.max.y, static_cast<float>(z1)}};
+
+    // On a body: the map rect's corners and middle at both heights, widened
+    // by the ground's bulge past a chord across it (body_surface_map.cpp's).
+    const double R = place_->body().radius;
+    const double lo = lowest(), hi = highest();
+    const double mx = 0.5 * (x0 + x1), mz = 0.5 * (z0 + z1);
+    const double radius = 0.5 * std::hypot(x1 - x0, z1 - z0) / R;
+    if (radius >= 0.5 * 3.14159265358979323846) return bounds();   // a hemisphere or more: the ball
+    bromath::Vec3 mn{1e30f, 1e30f, 1e30f}, mxv{-1e30f, -1e30f, -1e30f};
+    for (int c = 0; c < 5; ++c) {
+        const double px = c < 4 ? ((c & 1) ? x1 : x0) : mx, pz = c < 4 ? ((c & 2) ? z1 : z0) : mz;
+        for (const double h : {lo, hi}) {
+            double p[3];
+            place_->mapToLand(px, pz, h, p);
+            const bromath::Vec3 v{static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+            mn = bromath::vmin(mn, v);
+            mxv = bromath::vmax(mxv, v);
+        }
+    }
+    const float bulge = static_cast<float>((R + hi) * (1.0 - std::cos(radius))) + 1.0f;
+    if (hidden) {
+        double p[3], c[3], eb[3];
+        place_->mapToLand(mx, mz, 0.0, p);
+        place_->toBody(p, c);
+        normalize3(c);
+        place_->toBody(e, eb);
+        *hidden = beyondLimb(place_->body(), eb, c, radius, lo, hi);
+    }
+    return {mn - bromath::Vec3{bulge, bulge, bulge}, mxv + bromath::Vec3{bulge, bulge, bulge}};
+}
+
+float LandNode::eyeAbove(const bromath::Vec3& eye) const {
+    if (!round()) return eye.y - heightAt(eye.x, eye.z);
+    double b[3];
+    place_->toBody(eye, b);
+    const double r = std::sqrt(dot3(b, b));
+    for (double& v : b) v /= r;
+    return static_cast<float>(r - place_->body().radius - heightOver(b));
+}
+
+int LandNode::firstRing(const bromath::Vec3& eye, float focalPixels) const {
+    // The eye's height over the ground under it: every cell is at least
+    // that far, so a ring whose cell is under a pixel there is under a
+    // pixel everywhere.
+    const double above = eyeAbove(eye);
+    int first = 0;
+    while (first + 1 < ringLevels_ &&
+           static_cast<double>(rings_.cellSize) * std::exp2(static_cast<double>(first)) * focalPixels < above)
+        ++first;
+    return first;
 }
 
 void LandNode::rebuildItems() {
+    if (round()) {
+        rebuildFaceItems();
+        return;
+    }
     items_.clear();
     const float e = extent_;
     const int cells = std::clamp(static_cast<int>(std::ceil(2.0f * e / kItemMetres)), 1, kItemCells);
@@ -279,7 +460,7 @@ void LandNode::rebuildItems() {
             }
         height_->sample(xs.data(), zs.data(), static_cast<int>(h.size()), h.data());
     }
-    bounds_ = bromath::aempty3();
+    chartBounds_ = bromath::aempty3();
     items_.reserve(static_cast<size_t>(cells) * cells);
     for (int cz = 0; cz < cells; ++cz)
         for (int cx = 0; cx < cells; ++cx) {
@@ -294,11 +475,65 @@ void LandNode::rebuildItems() {
             const bromath::AABB3 box{{-e + cx * side, lo - pad, -e + cz * side},
                                      {-e + (cx + 1) * side, hi + pad, -e + (cz + 1) * side}};
             items_.push_back({box, generation_});
-            bounds_.min = bromath::vmin(bounds_.min, box.min);
-            bounds_.max = bromath::vmax(bounds_.max, box.max);
+            chartBounds_.min = bromath::vmin(chartBounds_.min, box.min);
+            chartBounds_.max = bromath::vmax(chartBounds_.max, box.max);
         }
     // (Where the canopy stands for the plants, the land rises by it.)
-    if (!bromath::aisEmpty(bounds_)) bounds_.max.y += canopyTop_;
+    if (!bromath::aisEmpty(chartBounds_)) chartBounds_.max.y += canopyTop_;
+    map_.set(place_, lowest());
+}
+
+void LandNode::rebuildFaceItems() {
+    items_.clear();
+    const Body& body = place_->body();
+    const double R = body.radius;
+    const double e = faceHalf(body);
+    const int cells = kFaceCells;
+    itemCells_ = cells;
+    const double side = 2.0 * e / cells;
+    const int per = kItemSamples;
+    const int cols = cells * (per - 1) + 1;
+    const double step = side / (per - 1);
+    const size_t n = static_cast<size_t>(cols) * cols;
+    std::vector<float> h(n, 0.0f), xs(n), ys(n), zs(n);
+    chartBounds_ = bromath::aempty3();
+    items_.reserve(static_cast<size_t>(cells) * cells * 6);
+    for (int f = 0; f < 6; ++f) {
+        // The face's samples on its datum, relative to the face's centre.
+        if (height_) {
+            const CubeFace& F = cubeFace(f);
+            const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
+            for (int j = 0; j < cols; ++j)
+                for (int i = 0; i < cols; ++i) {
+                    double d[3];
+                    dirOf(body, {f, -e + i * step, -e + j * step}, d);
+                    const size_t k = static_cast<size_t>(j) * cols + i;
+                    xs[k] = static_cast<float>(R * d[0] - o[0]);
+                    ys[k] = static_cast<float>(R * d[1] - o[1]);
+                    zs[k] = static_cast<float>(R * d[2] - o[2]);
+                }
+            height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+        }
+        for (int cz = 0; cz < cells; ++cz)
+            for (int cx = 0; cx < cells; ++cx) {
+                float lo = std::numeric_limits<float>::max(), hi = -lo;
+                for (int j = 0; j < per; ++j)
+                    for (int i = 0; i < per; ++i) {
+                        const float v = h[static_cast<size_t>(cz * (per - 1) + j) * cols + cx * (per - 1) + i];
+                        lo = std::min(lo, v);
+                        hi = std::max(hi, v);
+                    }
+                const float pad = (hi - lo) * kItemMargin + 1.0f;
+                const bromath::AABB3 box{
+                    {static_cast<float>(-e + cx * side), lo - pad, static_cast<float>(-e + cz * side)},
+                    {static_cast<float>(-e + (cx + 1) * side), hi + pad, static_cast<float>(-e + (cz + 1) * side)}};
+                items_.push_back({box, generation_, static_cast<uint8_t>(f)});
+                chartBounds_.min = bromath::vmin(chartBounds_.min, box.min);
+                chartBounds_.max = bromath::vmax(chartBounds_.max, box.max);
+            }
+    }
+    chartBounds_.max.y += canopyTop_;
+    map_.set(place_, lowest());
 }
 
 }  // namespace bro::scene

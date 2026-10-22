@@ -168,7 +168,7 @@ uint32_t SceneMeshDrawer::recordLandSun(SceneFrame& frame, std::span<const World
 
     // The highest anything shading a level stands: the land's top (its
     // canopy's included).
-    const float ceiling = land->bounds().max.y;
+    const float ceiling = land->highest();
     const float* d = frame.lighting.sunDirection;
     VkCommandBuffer cmd = stream.cmd();
     // The tiles and page entries this frame's fills wrote.

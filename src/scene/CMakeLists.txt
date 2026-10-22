@@ -111,6 +111,7 @@ embed_vk_shader(ground/scene_land.glsl         kVkSceneLandSrc)
 embed_vk_shader(ground/scene_land_layer.glsl   kVkSceneLandLayerSrc)
 embed_vk_shader(ground/land_module.glsl        kVkLandModuleSrc)
 embed_vk_shader(ground/land_canopy.glsl        kVkLandCanopySrc)
+embed_vk_shader(ground/land_body.glsl          kVkLandBodySrc)
 embed_vk_shader(ground/land_fill.comp          kVkLandFillCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
@@ -163,6 +164,7 @@ add_library(bro_scene STATIC
     world/plant_canopy.cpp
     world/land_sun.cpp
     world/place.cpp
+    world/body_surface_map.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp

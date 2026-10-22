@@ -38,8 +38,16 @@
 // encodePage below, ground/scene_ground_layers.glsl's lookup. Two tiles that would
 // share an entry are never paged at once (the further one goes).
 //
+// Roots and the map. A tile is a square of a root's chart (place.h): a flat
+// world's one root is its plane's x and z, and with no map that square is
+// the ground's own box in the views' frame. A round body's six cube faces
+// are six roots, and its map (SurfaceMap) gives each square's box in the
+// views' frame, how high the eye stands over it and whether the body hides
+// it; everything below is the same for both.
+//
 // Items. The provider describes its data by where it lies: items, each a box
-// (absolute world) and a generation. A tile's box takes its heights from the
+// (in its root's chart: x and z the chart's, y the ground's heights) and a
+// generation. A tile's box takes its heights from the
 // items under it (so the footprint above sees how steeply the view meets
 // that ground, and the frustum test the ground's real extent), a tile with
 // no item under it is never needed, and a tile's generation is the
@@ -108,17 +116,36 @@ struct SurfaceFill {
     double x0 = 0.0, z0 = 0.0, side = 1.0;
 };
 
-/// One page-table entry to write: layer `level`, entry (ex, ez).
+/// One page-table entry to write: array layer `layer` (a root's levels
+/// together: root * maxLevels + level), entry (ex, ez).
 struct SurfacePageWrite {
-    int level = 0, ex = 0, ez = 0;
+    int layer = 0, ex = 0, ez = 0;
     uint32_t value = 0;
 };
 
-/// A piece of the provider's data: where it lies (absolute world) and its
-/// generation (anything that changes what a fill over it would write).
+/// A piece of the provider's data: where it lies (its root's chart, its
+/// heights) and its generation (anything that changes what a fill over it
+/// would write).
 struct SurfaceItem {
     bromath::AABB3 bounds;
     uint64_t generation = 0;
+    uint8_t root = 0;
+};
+
+/// Where a root's chart squares lie in the views' frame (Roots above).
+class SurfaceMap {
+public:
+    struct Patch {
+        bromath::AABB3 box;    // the square's ground between its heights
+        float above = 0.0f;    // the eye's height over its ground (at the heights' middle)
+        bool hidden = false;   // the body hides all of it from the eye
+    };
+    virtual ~SurfaceMap() = default;
+    virtual int roots() const = 0;
+    /// Root `root`'s square [x0, x1] x [z0, z1] with its ground between
+    /// heights lo and hi, seen from `eye`.
+    virtual Patch patch(int root, double x0, double z0, double x1, double z1, float lo, float hi,
+                        const bromath::Vec3& eye) const = 0;
 };
 
 struct SurfaceLayerStats {
@@ -136,7 +163,7 @@ class SurfaceLayers {
 public:
     static constexpr int kMaxSlots = 4095;
 
-    /// What a view gives the selection: its eye, frustum (absolute world)
+    /// What a view gives the selection: its eye, frustum (the views' frame)
     /// and how many metres a pixel covers a metre away (1 / focal length in
     /// pixels); an orthographic view has `orthoMetresPerPixel` instead.
     struct View {
@@ -147,10 +174,12 @@ public:
         float orthoMetresPerPixel = 0.01f;
     };
 
-    /// (Re)start with `config` over the provider's `bounds` (absolute world:
-    /// its x/z extent decides the levels, its y range bounds every tile's
-    /// box). Drops every tile.
-    void configure(const SurfaceLayerConfig& config, const bromath::AABB3& bounds);
+    /// (Re)start with `config` over the provider's `bounds` (every root's
+    /// chart: its x/z extent decides the levels, its y range bounds every
+    /// tile's box) and `map` (none: the plane's, one root; it must outlive
+    /// its use). Drops every tile.
+    void configure(const SurfaceLayerConfig& config, const bromath::AABB3& bounds, const SurfaceMap* map = nullptr);
+    int roots() const { return map_ ? map_->roots() : 1; }
     /// The provider's bounds now: kept tiles stay unless the extent needs
     /// more levels than configured, which starts over (true: every tile went).
     bool setBounds(const bromath::AABB3& bounds);
@@ -193,6 +222,9 @@ public:
     /// The page-table word for a tile in `slot` (ground/scene_ground_layers.glsl's).
     static uint32_t encodePage(const CellKey& key, int slot, int pageShift);
     int pageShift() const { return pageShift_; }
+    /// The page table's array layer of a tile: its root's levels together
+    /// (root * maxLevels + level), so the table has maxLevels * roots layers.
+    int pageLayer(const CellKey& key) const { return key.root * config_.maxLevels + key.level; }
 
 private:
     struct Tile {
@@ -215,6 +247,11 @@ private:
         uint64_t sum;     // its items' generations, mixed
         float span = 0.0f;   // (under's) the cells' width, metres
     };
+    /// A root's pyramid of cells (buildGrid).
+    struct Grid {
+        std::vector<int> side;   // cells a side, each pyramid level
+        std::vector<std::vector<Cell>> cells;
+    };
     void buildGrid();
     /// The ground under tile `key` with `pad` metres past its edges.
     Cell under(const CellKey& key, double pad) const;
@@ -228,6 +265,7 @@ private:
 
     SurfaceLayerConfig config_;
     bromath::AABB3 bounds_ = bromath::aempty3();
+    const SurfaceMap* map_ = nullptr;
     int levels_ = 0;
     int pageShift_ = 8;
     uint64_t generation_ = 0;
@@ -235,8 +273,7 @@ private:
     bool gridDirty_ = true;
     int gridShift_ = 0;            // a base cell is a level-gridShift_ tile
     int gridX0_ = 0, gridZ0_ = 0;  // the base cells' first (in base cells)
-    std::vector<int> gridSide_;    // cells a side, each pyramid level
-    std::vector<std::vector<Cell>> grid_;
+    std::vector<Grid> grids_;      // a root's each
 
     std::unordered_map<uint64_t, Tile> tiles_;   // by CellKey::packed
     std::vector<uint64_t> slotTile_;              // each slot's tile (kFree when none)

@@ -188,6 +188,7 @@ PlantsNode* SceneGraph::createPlants(const std::string& name) {
 LandNode* SceneGraph::createLand(const std::string& name) {
     auto node = std::make_unique<LandNode>(name);
     auto* ptr = node.get();
+    ptr->setPlace(&place_);
     nodes_[ptr->id()] = std::move(node);
     return ptr;
 }
@@ -323,6 +324,10 @@ void SceneGraph::setBody(const Body& body, const double bodyPoint[3]) {
     // built in the frame of the body it is given.
     place_.setBody(body, bodyPoint);
     hasBody_ = true;
+    // (A land on a new body is a new land.)
+    for (auto& [id, node] : nodes_)
+        if (node->type() == SceneNode::Type::Mesh)
+            if (LandNode* land = static_cast<MeshNode*>(node.get())->asLand()) land->setPlace(&place_);
 }
 
 void SceneGraph::placeOrigin(double out[3]) const {

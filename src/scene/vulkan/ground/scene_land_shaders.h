@@ -23,12 +23,15 @@ public:
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::LandFillComp};
 
     /// The set with `module` as land_module.glsl and `canopy` (or none, "")
-    /// as land_canopy.glsl. False, with the compiler's diagnostics in
-    /// `err`, when it does not compile.
-    bool create(VkDevice device, const std::string& module, const std::string& canopy, std::string& err) {
-        if (canopy.empty()) return ModuleShaders::create(device, kBuiltin, {{"ground/land_module.glsl", module}}, err);
-        return ModuleShaders::create(device, kBuiltin,
-                                     {{"ground/land_module.glsl", module}, {"ground/land_canopy.glsl", canopy}}, err);
+    /// as land_canopy.glsl, for a round body's land when `round`
+    /// (land_body.glsl). False, with the compiler's diagnostics in `err`,
+    /// when it does not compile.
+    bool create(VkDevice device, const std::string& module, const std::string& canopy, bool round,
+                std::string& err) {
+        Overrides overrides{{"ground/land_module.glsl", module}};
+        if (!canopy.empty()) overrides.push_back({"ground/land_canopy.glsl", canopy});
+        if (round) overrides.push_back({"ground/land_body.glsl", "#define LAND_ROUND\n"});
+        return ModuleShaders::create(device, kBuiltin, overrides, err);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }

@@ -141,7 +141,8 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
 
 const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
     if (!node.moduleSourceHash()) return nullptr;
-    const uint64_t key = node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull);
+    const uint64_t key =
+        node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull) ^ (node.round() ? 1ull : 0ull);
     auto it = landByModule_.find(key);
     if (it == landByModule_.end()) {
         // Compiled at the first frame that draws it (through the SPIR-V
@@ -149,7 +150,7 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
         auto set = std::make_unique<LandShaders>();
         std::string err;
         int index = -1;
-        if (set->create(device_, node.moduleSource(), node.canopySource(), err)) {
+        if (set->create(device_, node.moduleSource(), node.canopySource(), node.round(), err)) {
             index = static_cast<int>(landSets_.size());
             set->index = static_cast<uint32_t>(index);
             landSets_.push_back(std::move(set));
@@ -170,12 +171,20 @@ VkPipeline SceneMeshDrawer::landFillPipeline(const LandShaders& shaders) {
 
 SceneMeshDrawer::LandTiles* SceneMeshDrawer::landTiles(SceneFrame& frame, LandNode& node) {
     auto& slot = lands_[node.id()];
+    // Its page table holds every level of each of its chart's roots: made
+    // again when its body's roots change.
+    const int roots = node.tileMap() ? node.tileMap()->roots() : 1;
+    if (slot && slot->roots != roots) {
+        slot->atlas.destroy(frame.gpu.device, frame.gpu.allocator);
+        slot.reset();
+    }
     if (!slot) {
         slot = std::make_unique<LandTiles>();
+        slot->roots = roots;
         const SurfaceLayerConfig config = node.tileConfig();
-        slot->tiles.configure(config, bromath::aempty3());
-        if (!slot->atlas.create(frame.gpu.device, frame.gpu.allocator, config, config.maxLevels, kLandFormats,
-                                SceneSurfaceLayerAtlas::Fill::Compute)) {
+        slot->tiles.configure(config, bromath::aempty3(), node.tileMap());
+        if (!slot->atlas.create(frame.gpu.device, frame.gpu.allocator, config, config.maxLevels * roots,
+                                kLandFormats, SceneSurfaceLayerAtlas::Fill::Compute)) {
             LOG_ERROR("Land node %u: its tiles' atlas could not be made, so it draws no land", node.id());
             slot->failed = true;
         }
@@ -187,13 +196,47 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     const LandNode::Rings& r = node.rings();
     const SurfaceLayerConfig& config = lt.tiles.config();
     std::fill(words, words + LD_WORDS, 0.0f);
-    words[LD_LAND + 0] = node.extent();
-    words[LD_LAND + 1] = frame.world.eye.x;   // the rings centre on the eye on the body
-    words[LD_LAND + 2] = frame.world.eye.z;
-    words[LD_LAND + 3] = frame.world.eye.y;
+    // The rings centre on the eye's point on the land's map.
+    const bromath::Vec3 eye = frame.world.eye;
+    const Place* place = node.place();
+    double ex = eye.x, ez = eye.z, eh = eye.y;
+    if (place) {
+        const double e[3] = {eye.x, eye.y, eye.z};
+        place->landToMap(e, ex, ez, eh);
+    }
+    words[LD_LAND + 0] = static_cast<float>(node.mapReach());
+    words[LD_LAND + 1] = static_cast<float>(ex);
+    words[LD_LAND + 2] = static_cast<float>(ez);
+    words[LD_EYE + 0] = eye.x;
+    words[LD_EYE + 1] = eye.y;
+    words[LD_EYE + 2] = eye.z;
+    words[LD_BODY + 1] = static_cast<float>(lt.firstRing);
+    if (node.round()) {
+        // Each cube face's axes in the place frame (its basis' transpose
+        // takes the body's to it) and where the anchor (the place's up) lies
+        // on its chart, in level-0 tiles.
+        const Body& body = place->body();
+        const double* B = place->basis();
+        words[LD_BODY + 0] = static_cast<float>(body.radius);
+        const double a[3] = {B[1], B[4], B[7]};
+        for (int f = 0; f < 6; ++f) {
+            const CubeFace& F = cubeFace(f);
+            float* w = words + LD_FACE + f * LD_FACE_WORDS;
+            const double* axes[3] = {F.n, F.u, F.v};
+            for (int k = 0; k < 3; ++k)
+                for (int j = 0; j < 3; ++j)
+                    w[k * 4 + j] = static_cast<float>(B[j] * axes[k][0] + B[3 + j] * axes[k][1] + B[6 + j] * axes[k][2]);
+            const ChartPoint c = chartOf(body, a, f);
+            const double tx = c.x / config.tileMetres, tz = c.z / config.tileMetres;
+            w[12] = static_cast<float>(std::floor(tx));
+            w[13] = static_cast<float>(std::floor(tz));
+            w[14] = static_cast<float>(tx - std::floor(tx));
+            w[15] = static_cast<float>(tz - std::floor(tz));
+        }
+    }
     words[LD_RINGS + 0] = r.cellSize;
     words[LD_RINGS + 1] = 4.0f / static_cast<float>(r.resolution);
-    words[LD_RINGS + 2] = static_cast<float>(r.levels);
+    words[LD_RINGS + 2] = static_cast<float>(node.ringLevels());
     words[LD_RINGS + 3] = 0.5f * static_cast<float>(r.resolution);
     words[LD_TILES + 0] = config.tileMetres;
     words[LD_TILES + 1] = static_cast<float>(config.tileTexels);
@@ -201,6 +244,7 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_TILES + 3] = static_cast<float>(lt.tiles.levels());
     words[LD_PAGE + 0] = static_cast<float>(lt.tiles.pageShift());
     words[LD_PAGE + 1] = static_cast<float>(config.pageSize);
+    words[LD_PAGE + 2] = static_cast<float>(config.maxLevels);
     words[LD_PAGE + 3] = lt.tiles.stats().resident > 0 ? 1.0f : 0.0f;
     const bool canopy = node.canopySourceHash() != 0;
     words[LD_CANOPY + 0] = canopy ? node.canopyRange() : 1e30f;
@@ -253,10 +297,20 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     // order (LandNode::buildRings), so they are the chunks' own.
     // The rings centre on the eye on the body. (A chunk's bounds are in the
     // draw's own space, its model below taking them to the camera's.)
+    // Ring 0 drawn as the first ring whose cells are a pixel from the eye's
+    // height, the rings between left out, and the blocks the body's curve
+    // hides.
     const bromath::Vec3 eye = frame.world.eye;
+    const SceneView& view = frame.world;
+    lt->firstRing = node.firstRing(eye, 0.5f * static_cast<float>(std::max(view.height, 1u)) *
+                                            std::fabs(view.proj.at(1, 1)));
     lt->chunks.clear();
-    for (const LandNode::Block& b : node.blocks())
-        lt->chunks.push_back({b.firstIndex, b.indexCount, node.blockBounds(b, eye)});
+    for (const LandNode::Block& b : node.blocks()) {
+        if (!LandNode::blockDrawn(b, lt->firstRing)) continue;
+        bool hidden = false;
+        const bromath::AABB3 box = node.blockBounds(b, eye, lt->firstRing, &hidden);
+        if (!hidden) lt->chunks.push_back({b.firstIndex, b.indexCount, box});
+    }
     out.chunks = &lt->chunks;
     out.chunkIndices = out.indices;
     // Below the plants, grass and herbs that stand on it.
@@ -311,11 +365,11 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // A new module, extent or rings: every tile again, over its items.
         if (lt.generation != land->generation()) {
             lt.generation = land->generation();
-            lt.tiles.configure(land->tileConfig(), bromath::aempty3());
+            lt.tiles.configure(land->tileConfig(), bromath::aempty3(), land->tileMap());
             lt.tiles.setItems(land->items());
             lt.cleared = false;
         }
-        bromath::AABB3 bounds = land->bounds();
+        bromath::AABB3 bounds = land->chartBounds();
         bounds.min.y -= kDepthMargin;
         bounds.max.y += kDepthMargin;
         if (lt.tiles.setBounds(bounds)) lt.cleared = false;
@@ -432,12 +486,48 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
             VkDescriptorSet set = frame.gpu.device.frameSet(landFillSetLayout_);
             if (fillSlice && dataSlice && set != VK_NULL_HANDLE) {
                 auto* f = static_cast<float*>(fillSlice.mapped);
+                std::memset(f, 0, fillBytes);
                 for (const SurfaceFill& fill : fills) {
+                    float* w = f;
+                    f += LF_TILE_WORDS;
                     const double texel = fill.side / config.tileTexels;
-                    *f++ = static_cast<float>(fill.x0 - texel * config.border);
-                    *f++ = static_cast<float>(fill.z0 - texel * config.border);
-                    *f++ = static_cast<float>(texel);
-                    *f++ = static_cast<float>(fill.slot);
+                    w[2] = static_cast<float>(texel);
+                    w[3] = static_cast<float>(fill.slot);
+                    if (!land->round()) {
+                        w[0] = static_cast<float>(fill.x0 - texel * config.border);
+                        w[1] = static_cast<float>(fill.z0 - texel * config.border);
+                        continue;
+                    }
+                    // On a round body from the tile's middle, whose datum
+                    // point is the noise's origin (land_fill.comp).
+                    const Body& body = land->place()->body();
+                    const double R = body.radius;
+                    const double half = 0.5 * fill.side;
+                    const double mx = fill.x0 + half, mz = fill.z0 + half;
+                    w[0] = static_cast<float>(-half - texel * config.border);
+                    w[1] = static_cast<float>(-half - texel * config.border);
+                    w[4] = static_cast<float>(std::tan(mx / R));
+                    w[5] = static_cast<float>(std::tan(mz / R));
+                    w[6] = static_cast<float>(std::cos(mx / R));
+                    w[7] = static_cast<float>(std::cos(mz / R));
+                    const CubeFace& F = cubeFace(fill.key.root);
+                    for (int i = 0; i < 3; ++i) {
+                        w[8 + i] = static_cast<float>(F.n[i]);
+                        w[12 + i] = static_cast<float>(F.u[i]);
+                        w[16 + i] = static_cast<float>(F.v[i]);
+                    }
+                    w[11] = static_cast<float>(R);
+                    w[15] = static_cast<float>(fill.key.root);
+                    double c[3];
+                    dirOf(body, {fill.key.root, mx, mz}, c);
+                    for (int i = 0; i < 3; ++i) {
+                        const double o = R * c[i];
+                        const float hi = static_cast<float>(o);
+                        w[20 + 2 * i] = hi;
+                        w[21 + 2 * i] = static_cast<float>(o - static_cast<double>(hi));
+                    }
+                    w[26] = static_cast<float>(mx);
+                    w[27] = static_cast<float>(mz);
                 }
                 std::memset(dataSlice.mapped, 0, dataBytes);
                 if (!data.empty()) std::memcpy(dataSlice.mapped, data.data(), data.size() * sizeof(float));

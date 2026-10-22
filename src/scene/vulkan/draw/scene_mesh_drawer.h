@@ -29,6 +29,7 @@
 #include "scene/vulkan/ground/scene_cover_shaders.h"
 #include "scene/vulkan/foliage/scene_plant_shaders.h"
 #include "scene/vulkan/ground/scene_land_shaders.h"
+#include "scene/vulkan/shaders/ground/scene_land_layout.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 
@@ -317,7 +318,7 @@ public:
         VkSampler sampler = VK_NULL_HANDLE;
         VkImageView page = VK_NULL_HANDLE;
         VkSampler pageSampler = VK_NULL_HANDLE;
-        float words[20] = {};   // its LandDraw (LD_WORDS) this frame
+        float words[LD_WORDS] = {};   // its LandDraw (LD_WORDS) this frame
     };
 
 private:
@@ -426,6 +427,8 @@ private:
         SceneSurfaceLayerAtlas atlas;
         uint64_t frame = 0;
         uint64_t generation = 0;   // the node's its tiles were configured at
+        int roots = 1;             // its chart's roots (its page table's layers are maxLevels a root)
+        int firstRing = 0;         // this frame's (LandNode::firstRing)
         bool cleared = false;      // its page table cleared (once made or reconfigured)
         bool failed = false;       // its atlas could not be made
         const LandShaders* shaders = nullptr;   // this frame's

@@ -41,8 +41,9 @@ void cellRange(double a, double b, double cs, int origin, int n, int& lo, int& h
 
 }  // namespace
 
-void SurfaceLayers::configure(const SurfaceLayerConfig& config, const bromath::AABB3& bounds) {
+void SurfaceLayers::configure(const SurfaceLayerConfig& config, const bromath::AABB3& bounds, const SurfaceMap* map) {
     config_ = config;
+    map_ = map;
     config_.slots = std::clamp(config_.slots, 1, kMaxSlots);
     config_.tileTexels = std::max(config_.tileTexels, 4);
     config_.border = std::max(config_.border, 0);
@@ -63,7 +64,7 @@ void SurfaceLayers::configure(const SurfaceLayerConfig& config, const bromath::A
     slotTile_.assign(static_cast<size_t>(config_.slots), kFree);
     freeSlots_.clear();
     for (int s = config_.slots - 1; s >= 0; --s) freeSlots_.push_back(s);
-    pageTile_.assign(static_cast<size_t>(levels_) * config_.pageSize * config_.pageSize, kFree);
+    pageTile_.assign(static_cast<size_t>(roots()) * levels_ * config_.pageSize * config_.pageSize, kFree);
     fills_.clear();
     pageWrites_.clear();
     stats_ = {};
@@ -75,7 +76,7 @@ bool SurfaceLayers::setBounds(const bromath::AABB3& bounds) {
     int levels = 1;
     while (levels < config_.maxLevels && config_.tileMetres * static_cast<float>(1u << (levels - 1)) < extent) ++levels;
     if (!configured() || levels > levels_) {
-        configure(config_, bounds);
+        configure(config_, bounds, map_);
         return true;
     }
     if (std::memcmp(&bounds_, &bounds, sizeof(bounds)) != 0) gridDirty_ = true;
@@ -94,7 +95,8 @@ uint32_t SurfaceLayers::encodePage(const CellKey& key, int slot, int pageShift) 
 
 uint32_t SurfaceLayers::pageIndex(const CellKey& key) const {
     const int n = config_.pageSize;
-    return static_cast<uint32_t>((key.level * n + (key.z & (n - 1))) * n + (key.x & (n - 1)));
+    const int layer = key.root * levels_ + key.level;
+    return static_cast<uint32_t>((layer * n + (key.z & (n - 1))) * n + (key.x & (n - 1)));
 }
 
 float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
@@ -115,11 +117,18 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         // items' generations.
         const Cell g = under(k, side / config_.tileTexels * config_.border);
         if (g.lo > g.hi) return;   // no ground here
-        bromath::AABB3 box;
-        box.min = {static_cast<float>(k.x * side), g.lo, static_cast<float>(k.z * side)};
-        box.max = {static_cast<float>((k.x + 1) * side), g.hi, static_cast<float>((k.z + 1) * side)};
+        const double x0 = k.x * side, z0 = k.z * side, x1 = (k.x + 1) * side, z1 = (k.z + 1) * side;
+        SurfaceMap::Patch patch;
+        if (map_) {
+            patch = map_->patch(k.root, x0, z0, x1, z1, g.lo, g.hi, view.eye);
+        } else {
+            patch.box.min = {static_cast<float>(x0), g.lo, static_cast<float>(z0)};
+            patch.box.max = {static_cast<float>(x1), g.hi, static_cast<float>(z1)};
+            patch.above = std::fabs(view.eye.y - 0.5f * (g.lo + g.hi));
+        }
+        const bromath::AABB3& box = patch.box;
         // (The coarsest tiles are kept whatever the view sees.)
-        const bool seen = bromath::fintersects(view.frustum, box);
+        const bool seen = !patch.hidden && bromath::fintersects(view.frustum, box);
         if (k.level != top && !seen) return;
         const float dist = boxDistance(view.eye, box);
         float metresPerPixel = view.orthoMetresPerPixel;
@@ -128,7 +137,7 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
             // ground's slope (its heights over the cells' width): a slope
             // facing the view meets it the steeper.
             const float d = std::max(dist, 1e-3f);
-            const float vert = std::fabs(view.eye.y - 0.5f * (g.lo + g.hi));
+            const float vert = patch.above;
             const float slope = (g.hi - g.lo) / std::max(g.span, 1e-3f);
             const float sine = std::min(1.0f, vert / d + std::max(slope, kSlopeSine));
             metresPerPixel = d / (std::max(view.focalPixels, 1.0f) * sine);
@@ -139,11 +148,12 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         const float error = texelMetres(k.level) / (config_.texelPixels * std::max(metresPerPixel, 1e-9f));
         if (error > 1.0f) open.push({error, k});
     };
-    for (int z = static_cast<int>(std::floor(bounds_.min.z / topSide));
-         z <= static_cast<int>(std::floor(bounds_.max.z / topSide)); ++z)
-        for (int x = static_cast<int>(std::floor(bounds_.min.x / topSide));
-             x <= static_cast<int>(std::floor(bounds_.max.x / topSide)); ++x)
-            visit({x, z, static_cast<uint8_t>(top), 0});
+    for (int r = 0; r < roots(); ++r)
+        for (int z = static_cast<int>(std::floor(bounds_.min.z / topSide));
+             z <= static_cast<int>(std::floor(bounds_.max.z / topSide)); ++z)
+            for (int x = static_cast<int>(std::floor(bounds_.min.x / topSide));
+                 x <= static_cast<int>(std::floor(bounds_.max.x / topSide)); ++x)
+                visit({x, z, static_cast<uint8_t>(top), static_cast<uint8_t>(r)});
     // Refine the most too coarse while the atlas has room for its children:
     // what is left past it is drawn from its parents, as far from right as
     // the view allows.
@@ -159,8 +169,7 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
 
 void SurfaceLayers::buildGrid() {
     gridDirty_ = false;
-    grid_.clear();
-    gridSide_.clear();
+    grids_.clear();
     if (!configured()) return;
     // Base cells a level-gridShift_ tile, about kGridCells across the
     // coarsest tile, starting where the coarsest tiles do (so a level's
@@ -179,19 +188,23 @@ void SurfaceLayers::buildGrid() {
     const int n = std::max(nx, nz);
 
     const Cell empty{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
-    grid_.emplace_back(static_cast<size_t>(n) * n, empty);
-    gridSide_.push_back(n);
-    const SurfaceItem whole{bounds_, 0};
-    const SurfaceItem* items = items_.empty() ? &whole : items_.data();
-    const size_t count = items_.empty() ? 1 : items_.size();
-    std::vector<Cell>& base = grid_[0];
-    for (size_t i = 0; i < count; ++i) {
-        const bromath::AABB3& b = items[i].bounds;
-        if (b.min.x > b.max.x) continue;
+    grids_.resize(static_cast<size_t>(roots()));
+    for (Grid& grid : grids_) {
+        grid.cells.emplace_back(static_cast<size_t>(n) * n, empty);
+        grid.side.push_back(n);
+    }
+    // (With no items, every root's chart is one item of generation 0.)
+    std::vector<SurfaceItem> whole;
+    if (items_.empty())
+        for (int r = 0; r < roots(); ++r) whole.push_back({bounds_, 0, static_cast<uint8_t>(r)});
+    for (const SurfaceItem& item : items_.empty() ? whole : items_) {
+        const bromath::AABB3& b = item.bounds;
+        if (b.min.x > b.max.x || item.root >= grids_.size()) continue;
         int i0, i1, j0, j1;
         cellRange(b.min.x, b.max.x, cs, gridX0_, n, i0, i1);
         cellRange(b.min.z, b.max.z, cs, gridZ0_, n, j0, j1);
-        const uint64_t g = mix64(items[i].generation);
+        const uint64_t g = mix64(item.generation);
+        std::vector<Cell>& base = grids_[item.root].cells[0];
         for (int j = j0; j <= j1; ++j)
             for (int x = i0; x <= i1; ++x) {
                 Cell& c = base[static_cast<size_t>(j) * n + x];
@@ -201,38 +214,40 @@ void SurfaceLayers::buildGrid() {
             }
     }
     // Each coarser level's cell gathers its four.
-    while (gridSide_.back() > 1) {
-        const int s = gridSide_.back(), h = (s + 1) / 2;
-        const std::vector<Cell>& fine = grid_.back();
-        std::vector<Cell> coarse(static_cast<size_t>(h) * h, empty);
-        for (int j = 0; j < s; ++j)
-            for (int x = 0; x < s; ++x) {
-                const Cell& f = fine[static_cast<size_t>(j) * s + x];
-                Cell& c = coarse[static_cast<size_t>(j / 2) * h + x / 2];
-                c.lo = std::min(c.lo, f.lo);
-                c.hi = std::max(c.hi, f.hi);
-                c.sum += f.sum;
-            }
-        grid_.push_back(std::move(coarse));
-        gridSide_.push_back(h);
-    }
+    for (Grid& grid : grids_)
+        while (grid.side.back() > 1) {
+            const int s = grid.side.back(), h = (s + 1) / 2;
+            std::vector<Cell> coarse(static_cast<size_t>(h) * h, empty);
+            const std::vector<Cell>& fine = grid.cells.back();
+            for (int j = 0; j < s; ++j)
+                for (int x = 0; x < s; ++x) {
+                    const Cell& f = fine[static_cast<size_t>(j) * s + x];
+                    Cell& c = coarse[static_cast<size_t>(j / 2) * h + x / 2];
+                    c.lo = std::min(c.lo, f.lo);
+                    c.hi = std::max(c.hi, f.hi);
+                    c.sum += f.sum;
+                }
+            grid.cells.push_back(std::move(coarse));
+            grid.side.push_back(h);
+        }
 }
 
 SurfaceLayers::Cell SurfaceLayers::under(const CellKey& key, double pad) const {
     Cell out{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
-    if (grid_.empty()) return out;
+    if (key.root >= grids_.size()) return out;
+    const Grid& grid = grids_[key.root];
     // The level whose cells are this tile's size (the base for finer tiles).
-    const int p = std::clamp(static_cast<int>(key.level) - gridShift_, 0, static_cast<int>(grid_.size()) - 1);
+    const int p = std::clamp(static_cast<int>(key.level) - gridShift_, 0, static_cast<int>(grid.cells.size()) - 1);
     const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << key.level);
     const double cs = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << (gridShift_ + p));
-    const int n = gridSide_[static_cast<size_t>(p)];
+    const int n = grid.side[static_cast<size_t>(p)];
     const int ox = gridX0_ >> p, oz = gridZ0_ >> p;
     const double x0 = key.x * side - pad, x1 = (key.x + 1) * side + pad;
     const double z0 = key.z * side - pad, z1 = (key.z + 1) * side + pad;
     int i0, i1, j0, j1;
     cellRange(x0, x1, cs, ox, n, i0, i1);
     cellRange(z0, z1, cs, oz, n, j0, j1);
-    const std::vector<Cell>& g = grid_[static_cast<size_t>(p)];
+    const std::vector<Cell>& g = grid.cells[static_cast<size_t>(p)];
     out.span = static_cast<float>(cs * std::max(1, std::min(i1 - i0, j1 - j0) + 1));
     for (int j = j0; j <= j1; ++j)
         for (int i = i0; i <= i1; ++i) {
@@ -273,7 +288,7 @@ void SurfaceLayers::evict(uint64_t packed) {
     if (pageTile_[idx] == packed) {
         pageTile_[idx] = kFree;
         const int n = config_.pageSize;
-        pageWrites_.push_back({t.key.level, t.key.x & (n - 1), t.key.z & (n - 1), 0u});
+        pageWrites_.push_back({pageLayer(t.key), t.key.x & (n - 1), t.key.z & (n - 1), 0u});
     }
     if (t.slot >= 0) {
         slotTile_[static_cast<size_t>(t.slot)] = kFree;
@@ -292,7 +307,7 @@ void SurfaceLayers::page(const Tile& tile) {
     pageTile_[idx] = packed;
     const int n = config_.pageSize;
     pageWrites_.push_back(
-        {tile.key.level, tile.key.x & (n - 1), tile.key.z & (n - 1), encodePage(tile.key, tile.slot, pageShift_)});
+        {pageLayer(tile.key), tile.key.x & (n - 1), tile.key.z & (n - 1), encodePage(tile.key, tile.slot, pageShift_)});
 }
 
 void SurfaceLayers::update(const View& view, uint64_t frame) {

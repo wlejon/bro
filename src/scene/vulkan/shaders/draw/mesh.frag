@@ -131,7 +131,8 @@ vec4 landCanopyAt(vec3 worldPos) {
     float shown = landCanopyShown(length(p - landEye3()), landCanopyRange());
     if (shown <= 0.0) return vec4(0.0);
     float top;
-    vec4 c = landSampleCanopy(p.xz, landLevel(p.xz), top);
+    vec2 m = landMapOf(p);
+    vec4 c = landSampleCanopy(m, landLevel(m), top);
     return vec4(c.rgb, c.a * shown);
 }
 #endif

@@ -106,7 +106,7 @@ float grassHash(ivec2 c, int k) {
 #include "ground/scene_herb_layer.glsl"
 
 // On the land, inside its extent.
-bool grassInField(vec2 xz) { return all(lessThanEqual(abs(xz), vec2(landExtent()))); }
+bool grassInField(vec2 xz) { return all(lessThanEqual(abs(xz), vec2(landReach()))); }
 
 // How far `xz` is inside the land: 0 off it and at its edge, 1 from
 // GRASS_FIELD_FADE m in. The blades and the herbs thin out over that margin
@@ -115,7 +115,7 @@ bool grassInField(vec2 xz) { return all(lessThanEqual(abs(xz), vec2(landExtent()
 // end shows no line in its cover.
 const float GRASS_FIELD_FADE = 12.0;
 float grassFieldInside(vec2 xz) {
-    vec2 toEdge = landExtent() - abs(xz);
+    vec2 toEdge = landReach() - abs(xz);
     return smoothstep(0.0, GRASS_FIELD_FADE, min(toEdge.x, toEdge.y));
 }
 
