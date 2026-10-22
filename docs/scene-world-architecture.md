@@ -1053,7 +1053,122 @@ src/scene/
 A folder is made when something lands in it; the planned ones above have
 nothing yet.
 
-## Build order
+## 13. Worlds as code (design, for review)
+
+Who builds a world on bro is a coding agent, not a person at a tool. Code
+is cheap for the author; what is expensive is getting the shared rules
+right again in every world. So the split is: **the engine owns the
+invariants every world needs; a world is code, written freely, behind a
+few stable interfaces.** It is not data filled into a schema. A table of
+species parameters, a list of presets, or an enum of kinds can only make
+the worlds its designer imagined. An ocean world, a low-gravity world, or
+plants shaped by buoyancy instead of wind need new code, not new numbers.
+When something new crosses every world (light under water, say), the
+engine changes. The line is where a shared rule lives, not "no engine
+code".
+
+Today's worlds are the data kind. In demos/biomes, the trees are a table
+of shape numbers (`createPlants({ species })`). The herbs are named
+presets (`'daisy'`, `'poppy'`). The grass is a few JS callbacks for its
+density, dryness and height, evaluated on the CPU. The ground is a CPU
+mesh coloured vertex by vertex. Only the fields are already code: the
+placement rules are FastNoise node trees.
+
+### What the engine owns
+
+Every world gets these and none rewrites them:
+- Detail from pixels (the one measure).
+- Visibility and culling.
+- Cells and eye-relative coordinates (§1).
+- The world service and its async compute (§4, §6).
+- Surface layers (§5).
+- Lighting: the probe grid, the atmosphere, exposure, shadow pages (§7, §8).
+- The cover's plan, rings and handovers, its far tier and its thinning, and the sub-pixel resolve (§9).
+- Placement's machinery (§10).
+- Streaming.
+- Per-pass cost accounting.
+- **The observability**, which for an agent is the real tooling (below).
+
+### What a world writes
+
+Each interface is code: GLSL compiled at run time, as custom shader
+chunks already are (`scene_vk_custom_shader.cpp` splices them into
+mesh.frag). It is called by the engine where its machinery needs the
+world's answer. A module has full freedom inside its functions: its own
+noise, its own structs, any maths.
+
+1. **The land.** A height (and later overhang) kernel: the surface at a
+   point, in the world's own frame (a plane now, a sphere's direction on
+   the planet).
+   - The world service runs it into tiles (§6), the surface layers and the clipmap draw from them, and placement and the cover read them.
+   - The CPU (physics, gameplay) reads the same tiles back a frame or more later, asking ahead around what moves. One source, no CPU twin to keep in step (decision 2).
+2. **The surface.** What the ground is at a point: its albedo, roughness, normal detail, wetness. Also what it looks like from afar with nothing standing on it: the colour the turf and the far summary fold to.
+   - Called by the ground's shading and by the surface layers' fill.
+3. **Kinds of things that stand on it.** A grass sward, a herb, a tree, a pebble field, kelp. A module per kind, with these functions:
+   - **`stand`**: what stands in a cell of its grid, read in the cover's plan and in placement's compute. Its chance, which variety, its size, its own record (any struct the module declares, decision 3).
+   - **`build`**: its geometry at a detail the engine asks for, in pixels. Blades, cards, branches, whatever it is.
+   - **`shade`**: what a fragment of it is: the surface it hands the lighting, and its cover of the pixel. The engine keeps a part cover by its dither and marks it for the sub-pixel resolve from the cover and the size the module reports.
+   - **`far`**: what it is as one element of the far tier, and what it folds into the surface layer as.
+   - **`respond`**: how it moves under the world's forces (wind, current, gravity), for the sway and for what touches it.
+   - The engine decides everything around those calls: which rings exist, how many draws, the handovers, the thinning, shadows, the plan.
+4. **Volumes.** Water, cloud, fog, dust: a density and surface function (waves, a cloud deck). The engine owns their marching, their lighting (consistent with the land's: the sun's transmittance through them, the probe grid under them), and their far form.
+5. **The world's rules.** The gravity field (radial on a planet, any strength), the media (air and water: density, drag, buoyancy), the wind and current fields.
+   - The engine hands these to the sway, particles, characters and vehicles (Jolt), and to every kind's `build` and `respond`.
+   - So a tree's morphology can read gravity, and a frond can stand up in water.
+6. **The sky's physics.** The atmosphere's scattering and absorption, its sun or suns. These are physical coefficients the model takes, not presets: an alien sky is different numbers through the same light.
+
+### Observability, in the engine
+
+The oracles that steered the cover live in demos/biomes/capture.js today:
+- cost by pass;
+- the ground's change by distance as the eye walks;
+- grain and mottle by band;
+- stills at fixed shots.
+
+They move into the engine (a `scene.measure` surface), so any world gets
+them without copying a script. An agent building a world then sees the
+same things this work has been tuned on:
+- a pass over budget;
+- flicker at a distance;
+- a bald band or a hard handover;
+- a still before and after.
+
+### How today's code moves onto it
+
+A refactor, not a layer on top. Each existing node becomes the first
+implementation of its interface, and its data form goes:
+- **Grass** (grass_node.cpp's rings, scene_grass.glsl's blades, fans and culms): the sward kind. Its ring table becomes the engine's rings, asked for by pixel size.
+- **Herbs** (`herbPreset` / `herbRecords`, scene_herb*.glsl): the herb kind. Each preset (daisy, poppy, bracken, wood sorrel) becomes an example module in broworkshop's library, not an engine name.
+- **Plants** (the plants node's species table and its GPU plan): the tree kind, whose `build` is the current crown and branch generator. The species table becomes that module's own constants.
+- **The far tier and the turf**: engine. They call each kind's `far` and the surface's far colour.
+- **Biomes' ground**: a land kernel (its FastNoise height, compiled to the GPU, decision 2) and a surface function. It is no longer a CPU mesh.
+
+A second, very different world proves the interfaces: one of the two below,
+built with no engine change beyond what it shows to be shared.
+
+**An ocean world.**
+- The land kernel lies mostly under the sea level, and the water is a volume with its waves and absorption.
+- Kelp is a kind whose `build` stands it up by buoyancy and whose `respond` follows the current, not the wind.
+- The light under the surface is the engine's (it would be the shared change this world brings in).
+
+**A low-gravity world.**
+- The world's gravity is 0.3 g.
+- The tree kind's `build` reads it and grows taller and thinner crowns.
+- The sway's period lengthens, particles and characters fall slowly, and dust hangs in the air volume.
+- None of it is a flag the engine knows about.
+
+### Decisions for review
+
+1. **The modules' language.** GLSL compiled at run time, as custom shader
+   chunks are now (recommended: the engine already compiles it, and every
+   function runs where the engine needs it).
+   - The alternative is a JS-hosted language compiled to SPIR-V. It is more work for no gain an agent needs.
+2. **The land on the CPU.** GPU tiles read back (recommended: one source).
+   - The alternative is a CPU twin of every kernel, which drifts.
+   - FastNoise node trees, which biomes' fields are, would then need a GLSL emitter (FastNoise2 has none), or the fields become GLSL like everything else.
+3. **A kind's record.** A module declares its per-instance struct in GLSL, and the engine reflects its layout (glslang gives it), sizing the plan's buffers.
+   - The alternative is a fixed slot of N vec4s. It is simpler, but it is a schema again.
+4. **Size.** Grass, herbs, plants, the ground and the observability onto these interfaces is roughly 6–9k lines changed. A second world on them is a few thousand of its own.
 
 Each step lands as a measured win on its own: interleaved binaries on
 demos/biomes (and, once it exists, the planet), the stills' numeric diff,
