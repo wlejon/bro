@@ -1,5 +1,6 @@
 #include "net/net_service.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
@@ -265,6 +266,7 @@ void NetService::postEventTo(uint32_t subscriberId, NetEvent* ev) {
                      subscriberId, n);
         }
     }
+    util::wakeMainLoop();
 }
 
 // Re-push spilled events, in order, as the consumer frees ring slots. Called at

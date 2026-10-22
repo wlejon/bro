@@ -41,11 +41,11 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
             "An app's page (index.html and its scripts) is not run.\n"
             "\n"
             "Options:\n"
-            "  --tickrate N          Server tick rate in Hz (default: 60)\n"
+            "  --tickrate N          Fixed server tick rate in Hz (default: 0, event-driven)\n"
             "  -h, --help            Show this help text\n"
             "\n"
             "Server JS globals:\n"
-            "  bro.server.tickrate   Get/set tick rate (Hz)\n"
+            "  bro.server.tickrate   Get/set tick rate in Hz (0 = event-driven)\n"
             "  bro.server.uptime     Seconds since server started\n"
             "  bro.server.stop()     Request graceful shutdown\n"
             "\n"
@@ -54,7 +54,7 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
         return 0;
     }
 
-    double tickrate = 60.0;
+    double tickrate = 0.0;
     std::string target;
     std::string scriptPath;
     std::vector<std::string> scriptArgs;
@@ -67,7 +67,6 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
             passThrough = true;
         } else if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
             tickrate = atof(argv[++i]);
-            if (tickrate < 1.0) tickrate = 1.0;
             if (tickrate > 1000.0) tickrate = 1000.0;
         } else if (target.empty() && argv[i][0] != '-') {
             target = argv[i];

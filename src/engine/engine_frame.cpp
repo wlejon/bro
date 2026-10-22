@@ -27,6 +27,7 @@
 #include "platform/desktop_platform.h"
 #include "platform/event_loop.h"
 #include "platform/window.h"
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/native_window.h"
 #include "render/skia_backend.h"
 
@@ -37,6 +38,7 @@
 #include "webgl/webgl2_context.h"
 #include "util/interrupt.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 #include "util/time.h"
 
 #include <algorithm>
@@ -129,11 +131,15 @@ void Engine::run() {
 
     if (displayMode_ == DisplayMode::Server) {
         running_ = true;
-        LOG_INFO("[server] Running at %.0f ticks/sec", serverTickRate_);
+        util::setMainLoopWaker(&bronze_host::wakeHostServerWait);
+        if (serverTickRateExplicit_) {
+            LOG_INFO("[server] Running at %.0f ticks/sec", serverTickRate_);
+        } else {
+            LOG_INFO("[server] Running (event-driven)");
+        }
 
         while (running_ && !serverStopRequested_ && !bro::util::interrupted()) {
             double tickStart = util::currentTimeMs();
-            double tickIntervalMs = 1000.0 / serverTickRate_;
 
             double scaledTickDtMs = 0.0;
             if (lastWallTickMs_ > 0.0 && tickStart > lastWallTickMs_)
@@ -151,29 +157,63 @@ void Engine::run() {
             if (physicsWorld_) {
                 physicsWorld_->consumeStep();
                 if (physicsWorld_->isIdle()) {
-                    double stepMs = physicsWorld_->timeStep() * 1000.0;
-                    double nowPhys = util::currentTimeMs();
-                    if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-                    physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) *
-                                       effectiveTimeScale();
-                    lastPhysicsTimeMs_ = nowPhys;
-                    if (physicsAccumMs_ >= stepMs) {
-                        physicsAccumMs_ -= stepMs;
-                        if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
-                        physicsWorld_->signalStep();
+                    if (!physicsWorld_->hasActiveBodies()) {
+                        lastPhysicsTimeMs_ = util::currentTimeMs();
+                        physicsAccumMs_ = 0.0;
+                    } else {
+                        double stepMs = physicsWorld_->timeStep() * 1000.0;
+                        double nowPhys = util::currentTimeMs();
+                        if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
+                        physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) *
+                                           effectiveTimeScale();
+                        lastPhysicsTimeMs_ = nowPhys;
+                        if (physicsAccumMs_ >= stepMs) {
+                            physicsAccumMs_ -= stepMs;
+                            if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
+                            physicsWorld_->signalStep();
+                        }
                     }
                 }
             }
 #endif
 
+            if (!running_ || serverStopRequested_ || bro::util::interrupted()) break;
+
             double elapsed = util::currentTimeMs() - tickStart;
-            double sleepMs = tickIntervalMs - elapsed;
-            if (sleepMs > 0.5) {
-                std::this_thread::sleep_for(
-                    std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000.0)));
+            bool fixedTick = serverTickRateExplicit_;
+#if BRO_WITH_PHYSICS
+            if (physicsWorld_ && physicsWorld_->hasActiveBodies()) fixedTick = true;
+#endif
+            if (fixedTick) {
+                double tickIntervalMs = 1000.0 / serverTickRate_;
+                double sleepMs = tickIntervalMs - elapsed;
+                if (sleepMs > 0.5) {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000.0)));
+                }
+            } else {
+                double waitMs = 60000.0;
+                if (!timePaused_) {
+                    const double scale = effectiveTimeScale();
+                    if (scale > 0.0) {
+                        const double timerWaitMs = bronze_host::hostTimerDueInMs() / scale;
+                        waitMs = std::min(waitMs, timerWaitMs);
+                        if (timerWaitMs > 0.0 && bronze_host::hostFrameDueInMs() <= 0.0) {
+                            const double rafWaitMs = std::max(0.0, (1000.0 / serverTickRate_) - elapsed);
+                            waitMs = std::min(waitMs, rafWaitMs);
+                        }
+                    }
+                }
+                if (bronze_host::brokitHasWorkInFlight()) {
+                    waitMs = std::min(waitMs, 5.0);
+                }
+                if (waitMs > 0.0) {
+                    bronze_host::waitHostServerEvents(waitMs);
+                }
             }
         }
 
+        util::setMainLoopWaker(nullptr);
         LOG_INFO("[server] Stopped (uptime: %.1fs)", serverUptime());
         return;
     }

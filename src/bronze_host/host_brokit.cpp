@@ -288,4 +288,12 @@ bool brokitHasWorkInFlight() {
            askPending(g_pumps->fsAsyncHasPending);
 }
 
+bool waitHostServerEvents(double timeoutMs) {
+    return brokit::api::waitForNetEvents(timeoutMs);
+}
+
+void wakeHostServerWait() {
+    brokit::api::wakeNetWait();
+}
+
 }  // namespace bro::bronze_host

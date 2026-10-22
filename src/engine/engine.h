@@ -717,7 +717,16 @@ public:
 
     void requestServerStop() { serverStopRequested_ = true; }
     double serverTickRate() const { return serverTickRate_; }
-    void setServerTickRate(double hz) { serverTickRate_ = hz; }
+    bool hasExplicitServerTickRate() const { return serverTickRateExplicit_; }
+    void setServerTickRate(double hz) {
+        if (hz <= 0.0) {
+            serverTickRateExplicit_ = false;
+            serverTickRate_ = 60.0;
+        } else {
+            serverTickRateExplicit_ = true;
+            serverTickRate_ = hz;
+        }
+    }
     double serverUptime() const;
 
     layout::SkiaTextMetrics* textMetrics() const { return textMetrics_.get(); }
@@ -1337,6 +1346,7 @@ private:
     double audioFrameCarry_ = 0.0;
 
     double serverTickRate_ = 60.0;
+    bool serverTickRateExplicit_ = false;
     double serverStartTime_ = 0.0;
     bool serverStopRequested_ = false;
 

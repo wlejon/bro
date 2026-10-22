@@ -7,6 +7,7 @@
 // (host_worker.cpp) — the launcher hosts a game's server.js in a Worker and
 // that script calls bro.server.stop() to end itself.
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
@@ -19,7 +20,8 @@ namespace {
 thread_local const bro::bronze_host::WorkerServerControl* t_workerControl = nullptr;
 
 double clampTickRate(double hz) {
-    if (!(hz >= 1.0)) hz = 1.0;
+    if (!(hz > 0.0)) return 0.0;
+    if (hz < 1.0) hz = 1.0;
     if (hz > 1000.0) hz = 1000.0;
     return hz;
 }
@@ -38,12 +40,21 @@ void bro_server_tickrate_set(double v) {
     const double hz = clampTickRate(v);
     if (t_workerControl && t_workerControl->setTickRate) {
         t_workerControl->setTickRate(hz);
-        LOG_INFO("[server] Tick rate set to %.0f Hz (worker)", hz);
+        if (hz > 0.0) {
+            LOG_INFO("[server] Tick rate set to %.0f Hz (worker)", hz);
+        } else {
+            LOG_INFO("[server] Tick mode set to event-driven (worker)");
+        }
         return;
     }
     if (auto* eng = bro::bronze_host::hostEngine()) {
         eng->setServerTickRate(hz);
-        LOG_INFO("[server] Tick rate set to %.0f Hz", hz);
+        bro::bronze_host::wakeHostServerWait();
+        if (hz > 0.0) {
+            LOG_INFO("[server] Tick rate set to %.0f Hz", hz);
+        } else {
+            LOG_INFO("[server] Tick mode set to event-driven");
+        }
     }
 }
 
@@ -61,6 +72,7 @@ void bro_server_stop(void) {
     }
     if (auto* eng = bro::bronze_host::hostEngine()) {
         eng->requestServerStop();
+        bro::bronze_host::wakeHostServerWait();
         LOG_INFO("[server] Stop requested");
     }
 }

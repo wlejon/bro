@@ -1,5 +1,6 @@
 #include "util/interrupt.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -44,11 +45,13 @@ void requestInterrupt() {
         LOG_ERROR("Second interrupt received — forcing exit.");
         std::_Exit(130);
     }
+    wakeMainLoop();
     LOG_INFO("Interrupt requested — stopping.");
 }
 
 void beginShutdown() {
     g_interrupted.store(true, std::memory_order_relaxed);
+    wakeMainLoop();
 }
 
 void installSignalHandler() {

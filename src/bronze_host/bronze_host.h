@@ -77,6 +77,16 @@ double hostFrameDueInMs();
 /// say anything about.
 double hostTimerDueInMs();
 
+/// Whether brokit has an outbound fetch or async fs call in flight.
+bool brokitHasWorkInFlight();
+
+/// Block the calling thread up to `timeoutMs` milliseconds until any brokit
+/// socket is ready for I/O or wakeHostServerWait() is called.
+bool waitHostServerEvents(double timeoutMs);
+
+/// Wake a thread blocked in waitHostServerEvents() (safe from any thread or signal handler).
+void wakeHostServerWait();
+
 /// Clear active setTimeout and setInterval timers and tasks on reload.
 void clearHostTimers();
 
