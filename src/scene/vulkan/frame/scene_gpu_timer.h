@@ -12,7 +12,8 @@
 // A frame's compute stream on the async compute queue (SceneFrame::
 // computeStream) is stamped in a query pool of its own: its start and end,
 // and its marks (a mark recorded into that command buffer goes there), kept
-// as the render's compute passes. The frame's time is then wall time on the
+// as the render's compute passes, led by "start": the stream's start after
+// the graphics' (negative: before it). The frame's time is then wall time on the
 // GPU: from the earlier of the two starts to the later end. A frame whose
 // start overlaps the previous frame's GPU work (the previous end read)
 // counts from that end instead, so overlapped frames do not count the

@@ -296,6 +296,9 @@ double SceneGpuTimer::harvest(uint32_t pair) {
                        1.0e6;
             };
             uint64_t at = cstamps[0];
+            // When it began, after the graphics' start (negative: before).
+            const uint64_t g0 = stamps[0] & validMask_, c0 = cstamps[0] & computeMask_;
+            addPass(lastCompute_, "start", c0 >= g0 ? cms(g0, c0) : -cms(c0, g0));
             for (uint32_t i = 0; i < cmarks; ++i) {
                 addPass(lastCompute_, computeMarkNames_[pair][i], cms(at, cstamps[2 + i]));
                 at = cstamps[2 + i];
