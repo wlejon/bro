@@ -148,6 +148,30 @@ void testNextFrame() {
     check(s.granted(traces).size() == 2, "the next frame the traces go");
     check(s.granted(pages).size() == 2, "and the pages after them fit what they leave");
     check(near(s.stats().carriedMs + s.cost(traces) * 2.0f, 0.5), "the frame draws its budget, no more");
+
+    // A dear job the carry keeps out is not starved by cheap ones under it:
+    // what it holds back they do not take either, and the frame after, it goes.
+    WorldService d;
+    d.configure(c);
+    const int dpages = d.addKind({"pages", WorldSchedule::Raster, 0.125f, true});
+    const int world = d.addKind({"world", WorldSchedule::Raster, 0.375f});
+    const int refresh = d.addKind({"refresh", WorldSchedule::Raster, 0.0625f});
+    d.beginFrame();
+    d.offer({0, 0, dpages, 4.0f, 1.0, false});
+    d.offer({1, 0, dpages, 4.0f, 1.0, false});
+    d.schedule();   // carries 0.25 ms
+    d.beginFrame();
+    d.offer({10, 0, world, 1.0f, 1.0, false});
+    d.offer({20, 0, refresh, 0.5f, 1.0, false});
+    d.offer({0, 0, dpages, 0.25f, 1.0, false});
+    d.schedule();
+    check(d.granted(world).empty() && d.granted(refresh).empty() && d.granted(dpages).empty(),
+          "the carry keeps the dear job out, and what it holds back keeps the cheaper ones under it out");
+    d.beginFrame();
+    d.offer({10, 0, world, 1.0f, 1.0, false});
+    d.offer({20, 0, refresh, 0.5f, 1.0, false});
+    d.schedule();
+    check(d.granted(world).size() == 1 && d.granted(refresh).size() == 1, "the frame after, it goes, and the cheap one beside it");
 }
 
 void testCoarserTieBreak() {

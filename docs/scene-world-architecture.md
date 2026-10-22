@@ -570,10 +570,24 @@ tiles it wants) and gives up its own budget.
   planned before the service runs) spends that frame's budget: its grants
   are carried, the next frame's jobs drawn at once fit what the carry leaves,
   its own next-frame grants fit the budget less its jobs drawn at once, and a
-  job drawn at once that the carry keeps out holds its cost back from them so
-  it goes the frame after. (Charged to the frame that granted them, a frame
-  drew last frame's pages and spent its whole budget again: on the walk a
-  frame drew 0.86 ms of pages beside 0.39 ms of its own probe traces.)
+  job drawn at once that the carry keeps out holds its cost back from them,
+  and from the jobs drawn at once ranked under it, so it goes the frame
+  after. (Charged to the frame that granted them, a frame drew last frame's
+  pages and spent its whole budget again: on the walk a frame drew 0.86 ms
+  of pages beside 0.39 ms of its own probe traces. Held back from the next
+  frame's grants only, a dear job was starved by the cheap ones under it:
+  the probe grid's world for an unseen strip, 0.26 ms, waited ten frames of
+  the walk behind refresh traces taking the slack it needed, until the
+  strip was seen and it was required, with that strip's fresh traces, in
+  one frame: 0.86-0.88 ms of world on a 0.45 ms budget, frame 80 over in
+  every walk.) The probe grid's world is charged by the plants it splats,
+  plus a pass's fixed work (85,000 plant-equivalents) and each box's
+  (38,000): a strip of a few hundred plants costs 0.16 ms, four boxes
+  0.30, a cascade's rebuild while placement streams in 0.4-0.85 ms. Charged
+  as one job, its cost learned from the rebuilds priced every strip dear.
+  Golden walk, three rounds interleaved: 2, 3 and 3 of 150 frames over
+  against 2, 1 and 5, frame 80 over in one walk of three against all
+  three; the flyover none over against one each.
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
   default. A kind's cost a unit is learned from its span's ms over its
   units: the first measurement replaces the guess, and each later one pulls

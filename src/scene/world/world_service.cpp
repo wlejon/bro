@@ -69,7 +69,7 @@ void WorldService::schedule() {
     for (const WorldJob& j : offers_) {
         const Kind& kind = kinds_[static_cast<size_t>(j.kind)];
         const float c = kind.cost * static_cast<float>(std::max(j.units, 0.0));
-        const bool fits = kind.desc.nextFrame ? now + held + next + c <= budget_ : carried_ + now + c <= budget_;
+        const bool fits = kind.desc.nextFrame ? now + held + next + c <= budget_ : carried_ + now + held + c <= budget_;
         if (!j.required && !fits) {
             if (!kind.desc.nextFrame && now + held + c <= budget_) held += c;
             ++stats_.queued;

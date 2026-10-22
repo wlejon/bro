@@ -63,9 +63,11 @@
 // the next one, whose jobs drawn at once fit what the carry leaves of its
 // budget; its grants drawn the next frame fit the budget less its own jobs
 // drawn at once (the next frame's, as far as it can tell). A job drawn at
-// once that ranks among them but finds the carry in its way holds its cost
-// back from them, so the next frame has room for it: a kind drawn later is
-// never starved by one drawn sooner, nor the reverse. (Charged to the frame
+// once that finds the carry in its way holds its cost back from them and
+// from the jobs drawn at once ranked under it, so the next frame has room
+// for it: a kind drawn later is never starved by one drawn sooner, nor the
+// reverse, nor a dear job by the cheap ones under it that would take the
+// slack it waits for. (Charged to the frame
 // that grants them, the next frame's grants came on top of its own budget:
 // a frame drew the pages granted it last frame and spent its budget again.)
 

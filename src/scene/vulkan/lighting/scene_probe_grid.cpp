@@ -51,6 +51,13 @@ double probeRays(const ProbeBox& b) {
 // quarter of a degree, as cosine): a voxel's shade does not move a texel.
 constexpr float kSunTurnCos = 0.99999048f;
 
+// A world pass's fixed work in plants splatted, and each box's: on the
+// 4090 about 0.11 ms a pass and 0.05 ms a box whatever they splat (one
+// strip of a few hundred plants 0.16 ms, four 0.30 ms; a cascade's rebuild
+// under streaming placement 0.4-0.85 ms).
+constexpr double kWorldPassPlants = 85000.0;
+constexpr double kWorldBoxPlants = 38000.0;
+
 constexpr uint32_t kVoxelsPerCascade = PG_VOXELS * PG_VOXELS * PG_LAYERS_Y;
 constexpr VkDeviceSize kSumBytesPerCascade = VkDeviceSize{kVoxelsPerCascade} * 16u;
 
@@ -144,10 +151,11 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
             LOG_ERROR("SceneProbeGrid: failed creating the probes' images");
             return false;
         }
-    // A cascade's world is its volumes: the CPU half's error is what it
-    // costs, so the guess is a whole cascade's. A trace is a box of columns,
-    // charged by its probe-rays (a 4090 traces about 200 a microsecond).
-    kind_ = gpu.world.addKind(this, {"probe grid world", WorldSchedule::Raster, 0.2f});
+    // A cascade's world is its volumes, charged by the plants splatted into
+    // them and its passes' fixed work (kWorldPassPlants; a 4090 splats about
+    // 0.8 a nanosecond). A trace is a box of columns, charged by its
+    // probe-rays (a 4090 traces about 200 a microsecond).
+    kind_ = gpu.world.addKind(this, {"probe grid world", WorldSchedule::Raster, 1.3e-6f});
     traceKind_ = gpu.world.addKind(this, {"probe traces", WorldSchedule::Raster, 5.0e-6f});
     return kind_ >= 0 && traceKind_ >= 0;
 }
@@ -315,12 +323,34 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         seen = seen || grid_.staleSeen(c);
     }
     if (stale > 0) {
+        // Its units: the plants its boxes splat, and its passes' fixed work
+        // (counted again only when the boxes or the canopy change).
+        std::vector<ProbeBox> boxes, of;
+        std::vector<double> rects;
+        for (int c = 0; c < config.cascades && c < PG_MAX_CASCADES; ++c) {
+            grid_.staleBoxes(c, of);
+            for (const ProbeBox& b : of) {
+                double rect[4];
+                boxRect(b, rect);
+                rects.insert(rects.end(), rect, rect + 4);
+            }
+            boxes.insert(boxes.end(), of.begin(), of.end());
+        }
+        uint64_t canopy = 0;
+        for (const auto& [id, generation] : canopySeen_) canopy += generation;
+        if (canopy != unitsCanopy_ || rects != unitsRects_) {
+            worldUnits_ = kWorldPassPlants;
+            for (const ProbeBox& b : boxes) worldUnits_ += kWorldBoxPlants + static_cast<double>(plantsOver(b));
+            unitsRects_ = std::move(rects);
+            unitsCanopy_ = canopy;
+        }
         WorldJob job;
         job.key = 0;
         job.kind = kind_;
         job.error = config.unseenPixels;
         job.size = static_cast<double>(stale);
         job.required = seen;
+        job.units = worldUnits_;
         service.offer(job);
     }
 
@@ -521,7 +551,33 @@ double SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJob>
     return units;
 }
 
-uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
+void SceneProbeGrid::boxRect(const ProbeBox& b, double rect[4]) const {
+    const double s = grid_.spacing(b.cascade);
+    rect[0] = (static_cast<double>(grid_.cornerX(b.cascade) + b.x0) - 0.5) * s;
+    rect[1] = (static_cast<double>(grid_.cornerZ(b.cascade) + b.z0) - 0.5) * s;
+    rect[2] = rect[0] + (b.x1 - b.x0) * s;
+    rect[3] = rect[1] + (b.z1 - b.z0) * s;
+}
+
+namespace {
+
+bool cellOver(const bromath::AABB3& cb, const double rect[4]) {
+    return !(cb.max.x < rect[0] || cb.min.x > rect[2] || cb.max.z < rect[1] || cb.min.z > rect[3]);
+}
+
+}  // namespace
+
+size_t SceneProbeGrid::plantsOver(const ProbeBox& b) const {
+    double rect[4];
+    boxRect(b, rect);
+    size_t n = 0;
+    for (const Canopy& node : canopy_)
+        for (const CellContent& cell : node.node->cells())
+            if (cellOver(cell.bounds, rect)) n += cell.count;
+    return n;
+}
+
+double SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
     // The stale boxes of every cascade (a cascade's never overlap, so each
     // voxel's sums are splatted and resolved once).
     std::vector<ProbeBox> boxes, stale;
@@ -553,19 +609,18 @@ uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
     // Each box's plants: each node's in its cells over the box, a workgroup
     // a plant.
     std::vector<uint32_t> list;
+    double units = kWorldPassPlants + kWorldBoxPlants * static_cast<double>(boxes.size());
     for (const ProbeBox& b : boxes) {
-        const double s = grid_.spacing(b.cascade);
-        const double lo[2] = {(static_cast<double>(grid_.cornerX(b.cascade) + b.x0) - 0.5) * s,
-                              (static_cast<double>(grid_.cornerZ(b.cascade) + b.z0) - 0.5) * s};
-        const double hi[2] = {lo[0] + (b.x1 - b.x0) * s, lo[1] + (b.z1 - b.z0) * s};
+        double rect[4];
+        boxRect(b, rect);
         for (const Canopy& node : canopy_) {
             list.clear();
             for (const CellContent& cell : node.node->cells()) {
-                const bromath::AABB3& cb = cell.bounds;
-                if (cb.max.x < lo[0] || cb.min.x > hi[0] || cb.max.z < lo[1] || cb.min.z > hi[1]) continue;
+                if (!cellOver(cell.bounds, rect)) continue;
                 for (uint32_t i = cell.first; i < cell.first + cell.count; ++i) list.push_back(i);
             }
             if (list.empty()) continue;
+            units += static_cast<double>(list.size());
             const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
             const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
             if (!slice) continue;
@@ -597,7 +652,7 @@ uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
     for (int c = 0; c < cascades; ++c) grid_.volumesMade(c);
-    return 1;
+    return units;
 }
 
 bool SceneProbeGrid::read(SceneGpu& gpu, ProbeGridTables& out) {

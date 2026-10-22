@@ -120,7 +120,11 @@ private:
         VkDescriptorBufferInfo list{};
     };
 
-    uint32_t recordWorld(SceneFrame& frame, WorldStream& stream);
+    double recordWorld(SceneFrame& frame, WorldStream& stream);
+    /// Box `b`'s ground, world (x0, z0, x1, z1) m.
+    void boxRect(const ProbeBox& b, double rect[4]) const;
+    /// The plants of the canopy's nodes' cells over `b`.
+    size_t plantsOver(const ProbeBox& b) const;
     double recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
 
     /// The canopy this frame: its plants nodes, the cascades their changes
@@ -160,6 +164,11 @@ private:
     };
     std::vector<Canopy> canopy_;
     std::unordered_map<uint32_t, uint64_t> canopySeen_;
+    // The world job's units, and the stale boxes' rects and the canopy
+    // they were counted for (counted again only when those change).
+    double worldUnits_ = 0.0;
+    std::vector<double> unitsRects_;
+    uint64_t unitsCanopy_ = 0;
     float top_ = 0.0f;
     bromath::Vec3 sunRef_{0.0f, 1.0f, 0.0f};
     uint64_t sunGeneration_ = 1;
