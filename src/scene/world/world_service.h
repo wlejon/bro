@@ -21,9 +21,9 @@
 // times the rest when cheaper, so it settles where the dear samples' log
 // ratios, so weighted, balance the cheap ones'. A kind whose jobs vary is
 // priced near its dear end, and a frame's grants of it fit the budget when
-// they come in dear; one whose jobs cost alike is priced at what they cost. (At the mean, a frame granted fourteen of biomes' plant
-// pages at 0.018 ms that took 0.04-0.1 each, its golden walk 6-8 of 150
-// frames past 2.78 ms.)
+// they come in dear; one whose jobs cost alike is priced at what they cost.
+// (At the mean, a frame was granted fourteen of biomes' plant pages at
+// 0.018 ms that took several times that each.)
 //
 // Jobs. Each frame a producer offers what it would make (offer()): a job is
 // keyed by the producer (`key`, `producer`: a cell key, a probe's place, a
