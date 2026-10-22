@@ -49,13 +49,19 @@
 #define PP_P_RANGE              11
 #define PP_P_SHADOW_TEXELS      12
 #define PP_P_SHADOW_RANGE       13
+#define PP_P_STILL_PENUMBRA     14    // ShadowPlan::stillPenumbra
 #define PP_P_FRUSTUM            16    // the camera's six planes (normal xyz, d)
 #define PP_P_TILE               40    // per tile, PP_TILE_WORDS
-#define PP_TILE_WORDS           28
+#define PP_TILE_WORDS           29
 #define PP_TILE_FRUSTUM         0     // six planes
 #define PP_TILE_TEXEL_CONST     24    // an ortho tile's texel (m)
 #define PP_TILE_TEXEL_PER_METRE 25    // a perspective tile's, a metre from the eye
 #define PP_TILE_ORTHO           26    // uint
+#define PP_TILE_PLANTS          27    // uint: which crowns it takes (PP_PLANTS_*)
+#define PP_TILE_PENUMBRA        28    // the sun's penumbra a metre above the receiver (m)
+#define PP_PLANTS_ALL           0u
+#define PP_PLANTS_SWAYING       1u    // those whose penumbra at the crown's middle is at most stillPenumbra
+#define PP_PLANTS_STILL         2u    // the rest
 #define PP_P_WORDS              (PP_P_TILE + PP_TILE_WORDS * PP_MAX_TILES)
 
 // --- WORK: runs of PP_SLOTS ---

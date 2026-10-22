@@ -5,7 +5,8 @@
 // request bit of every page the lit shaders' lookup of that point wants
 // (common/scene_lighting.glsl's lightShadow): the sun's clipmap level its
 // footprint picks (or the first coarser one whose window holds it) and the
-// guard SP_GUARD_LEVELS coarser; a local light's mip and its one-page top. A
+// guard SP_GUARD_LEVELS coarser, and the search level and the two finer (a
+// wide penumbra's); a local light's mip and its one-page top. A
 // point near its page's edge marks the neighbour the filter and the normal
 // offset may reach.
 
@@ -17,7 +18,8 @@ layout(std140, set = 0, binding = 0) uniform ShadowMarkUBO {
     mat4 invViewProj;   // Vulkan clip (reversed depth) -> camera-relative
     vec4 grid;          // target width, height, pixels a block, lights
     vec4 view;          // metres a pixel a metre (perspective), metres a pixel (ortho), finest texel, levels
-    vec4 lights[32];    // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
+    vec4 soft;          // x the sun's search level (-1: none)
+    vec4 lights[32];   // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
     vec4 lightPos[32];  // camera-relative position, range
     ShadowMapGpu maps[SP_MARK_MAPS];
 } u;
@@ -75,6 +77,11 @@ void main() {
             while (level < count && !markClipmap(first + level, pos)) ++level;
             if (level >= count) continue;
             markClipmap(first + min(level + SP_GUARD_LEVELS, count - 1), pos);
+            // The search level, and the two finer a wide penumbra lifts the
+            // lookup to (its filter, four texels, spans the penumbra there).
+            int search = int(u.soft.x);
+            if (search >= 0 && level < search)
+                for (int s = max(search - 2, level + 1); s <= min(search, count - 1); ++s) markClipmap(first + s, pos);
             continue;
         }
         vec3 toFrag = pos - u.lightPos[k].xyz;

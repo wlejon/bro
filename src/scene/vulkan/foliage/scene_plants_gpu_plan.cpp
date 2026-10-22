@@ -310,7 +310,8 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
     const float focal = std::fabs(view.proj.at(1, 1)) * 0.5f * static_cast<float>(view.height);
     w[PP_P_FOCAL] = bitsOf(focal);
     const float detail[] = {p.pixels, p.minElements, p.woodRange, p.range, p.shadowTexels, p.shadowRange};
-    for (int i = 0; i < 6; ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
+    for (int i = 0; i < PlantsNode::kParamCount; ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
+    w[PP_P_STILL_PENUMBRA] = bitsOf(plan.stillPenumbra);
     putPlanes(w.data() + PP_P_FRUSTUM, view.frustum);
     // The cell pass's views, the plan's own: the camera, then each tile,
     // each with its pixel scale.
@@ -325,6 +326,10 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
         at[PP_TILE_TEXEL_CONST] = bitsOf(tile.texel);
         at[PP_TILE_TEXEL_PER_METRE] = bitsOf(tile.texelPerMetre);
         at[PP_TILE_ORTHO] = tile.ortho ? 1u : 0u;
+        at[PP_TILE_PLANTS] = tile.plants == ShadowPlants::Swaying ? PP_PLANTS_SWAYING
+                             : tile.plants == ShadowPlants::Still ? PP_PLANTS_STILL
+                                                                  : PP_PLANTS_ALL;
+        at[PP_TILE_PENUMBRA] = bitsOf(tile.penumbra);
         putPlanes(planes.data() + 24 * (1 + t), tile.frustum);
         scales[1 + t].texel = tile.texel;
         scales[1 + t].texelPerMetre = tile.ortho ? 0.0f : tile.texelPerMetre;

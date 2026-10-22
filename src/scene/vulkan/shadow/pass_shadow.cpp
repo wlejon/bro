@@ -136,7 +136,7 @@ void PassShadow::record(SceneFrame& frame) {
             const bool stamped =
                 frame.timer && kind >= 0 && frame.timer->beginSpan(cmd, static_cast<uint32_t>(kind), false);
             for (int v = 0; v < plan.viewCount; ++v) {
-                if (plan.views[v].dynamic || plan.views[v].plants != plants) continue;
+                if (plan.views[v].dynamic || (plan.views[v].plants == ShadowPlants::All) != plants) continue;
                 clearView(v);
                 drawView(frame, v, true, true);
             }

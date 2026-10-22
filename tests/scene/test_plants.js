@@ -136,9 +136,10 @@ if (!scn) {
     plants.castsShadow = true;
     scn.setCamera({ fov: 50, near: 0.1, far: 500, position: [0, 40, 0], target: [0, 0, 0], up: [0, 0, -1] });
     // (Pages are cached and the world service builds them within its
-    // budget, so the casters are drawn on the frames that build one: under
-    // a loaded machine not necessarily the last of three.)
-    let casters = drawn().shadowElements;
+    // budget, so the casters are drawn on the frames that build one: read
+    // from the first frame, as a frame with slack builds them all at once.)
+    flush();
+    let casters = 0;
     for (let i = 0; i < 30 && !(casters > 0); i++) { advanceTime(16); casters = plants.plantStats().shadowElements; }
     assert(casters > 0, `the shadow tiles' casters are counted (${casters})`);
     st = plants.plantStats();

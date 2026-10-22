@@ -37,6 +37,7 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 ambientColor;  // rgb flat ambient
     vec4 params;        // x light count, y PCF grid side (1/3/5), z 1/the pool's side (texels), w pool columns
     vec4 shadowView;    // x metres a pixel a metre (perspective), y metres a pixel (ortho), z finest texel, w the sway level (-1: no overlays this frame)
+    vec4 shadowSoft;    // x the sun's penumbra a metre along the light, y the still penumbra (m), z the search level (-1: none)
     SceneLight lights[SCENE_MAX_LIGHTS];
     ShadowMapGpu shadowMaps[SP_MAX_MAPS];
     mat4 probeWorldToLocal;
@@ -372,13 +373,25 @@ bool shadowProbe(int m, int mip, float texelW, vec3 pos, vec3 N, float NdotL, ou
 // this frame (when its overlay word is). The overlay's filter is the four
 // hardware-filtered taps over the same span: what it holds sways, and its
 // edges are soft anyway.
-float shadowPageAt(ShadowHit hit, float ref, float spread) {
+vec2 shadowPageFirst(ShadowHit hit) {
     // The pool's row and column in float: exact for its few thousand pages,
     // and no integer divide.
     float phys = float(hit.page & SP_PHYSICAL_MASK);
     float row = floor((phys + 0.5) / lighting.params.w);
-    vec2 first = vec2(phys - row * lighting.params.w, row) * float(SP_STRIDE) + float(SP_BORDER);
+    return vec2(phys - row * lighting.params.w, row) * float(SP_STRIDE) + float(SP_BORDER);
+}
+float shadowPageAt(ShadowHit hit, float ref, float spread) {
+    vec2 first = shadowPageFirst(hit);
     return shadowFilterPage(first, first + hit.inPage, lighting.params.z, ref, spread);
+}
+// The share of the four texels about a probe's cached page point holding a
+// caster nearer the light than `ref`.
+float shadowBlockedAt(ShadowHit hit, float ref) {
+    vec2 first = shadowPageFirst(hit);
+    float inv = lighting.params.z;
+    vec2 uv = clamp((first + hit.inPage) * inv, (first - float(SP_BORDER) + 1.0) * inv,
+                    (first + float(SP_PAGE + SP_BORDER) - 1.0) * inv);
+    return 1.0 - dot(textureGather(shadowPool, uv, ref), vec4(0.25));
 }
 float shadowOverlayAt(ShadowHit hit, float ref, float spread) {
     if ((hit.overlay & SP_RESIDENT) == 0u) return 1.0;
@@ -442,7 +455,17 @@ bool sunLocate(int first, int level, SunProbe sp, out ShadowHit hit, out float r
 // A sun's level is filtered as wide in metres as the footprint asks: across
 // a level its filter widens by the footprint's share of the way to the next
 // (up to twice its texel, the next level's own), so the shadow's softness is
-// continuous where the texels double, and a pixel filters one page. Its
+// continuous where the texels double, and a pixel filters one page. A
+// shadow cast from far up the light is filtered as wide as the sun's
+// penumbra there, where that is wider than the still penumbra: the search
+// level (its texel about that penumbra, so its gather looks as far about
+// the point as the penumbra reaches; every plant in its pages) is asked
+// whether a caster lies as far up as the
+// still penumbra's distance, twice it, four times it (a gather of compares
+// each), and the share of its texels that do lifts the level toward the
+// one whose filter spans the penumbra, so the softening is continuous (a
+// point whose footprint is the search level's or coarser is filtered as
+// wide already). Its
 // shadow fades out over the last tenth of its reach. `spread` widens the
 // filter (1: a 4-texel tent at pcf 3; 0: one hardware-filtered tap).
 float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float NdotL, float spread) {
@@ -455,8 +478,20 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
     float ref = 0.0;
     if (int(light.position.w) == 0) {
         float lf = log2(max(footprint / lighting.shadowView.z, 1e-9));
-        int want = clamp(int(floor(lf)), 0, count - 1);
         SunProbe sp = sunProbe(first, pos, N, NdotL);
+        int search = int(lighting.shadowSoft.z);
+        if (search >= 0 && search < count && lf < float(search) && sunLocate(first, search, sp, hit, ref) &&
+            (hit.page & SP_RESIDENT) != 0u) {
+            ShadowMapGpu map0 = lighting.shadowMaps[first];
+            float still = lighting.shadowSoft.y / (lighting.shadowSoft.x * max(map0.depth.y - map0.depth.x, 1e-6));
+            float f0 = shadowBlockedAt(hit, ref - still);
+            if (f0 > 0.0) {
+                float lp = log2(lighting.shadowSoft.y / (4.0 * lighting.shadowView.z)) +
+                           shadowBlockedAt(hit, ref - 2.0 * still) + shadowBlockedAt(hit, ref - 4.0 * still);
+                lf = max(lf, mix(lf, lp, f0));
+            }
+        }
+        int want = clamp(int(floor(lf)), 0, count - 1);
         int level = want;
         for (; level < count; ++level)
             if (sunLocate(first, level, sp, hit, ref) && (hit.page & SP_RESIDENT) != 0u) break;

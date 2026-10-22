@@ -774,6 +774,22 @@ planet's relief (step 9), not haze.
   the finest resident one. It filters inside that page's border, the filter
   widening across a level with the footprint (up to twice the texel, the
   next level's own), so no band blends two levels.
+- **Penumbra.** A shadow cast from far up the light is as soft as the
+  sun's disc makes it there (2 × its angular radius a metre along the
+  light). Where that's wider than the still penumbra (0.5 m), the lookup
+  reads it at the level whose filter spans it. The search level is the one
+  whose texel is about the still penumbra (level 9), past the sway level,
+  every plant in its pages. A gather of compares there asks whether a
+  caster lies as far up the light as the still penumbra's distance (53 m),
+  twice it, four times it. The share of its texels that do lifts the
+  wanted level from the footprint's toward the penumbra's (two levels
+  finer than the search level, plus one for each doubling), so the
+  softening is continuous. A point whose footprint already reaches the
+  search level doesn't search. The marking pass asks for the search level
+  and the two finer ones. Under a 6° sun a tree 8 m up casts its shadow
+  76 m along the light, 0.7 m soft: the glade's long tree shadows are
+  soft bands, the ferns' beside them sharp. It costs about 0.08 ms on
+  eye-level frames, in the near rings' lit passes.
 - **Drawing pages.** A needed page that isn't drawn, or is stale, is a job
   for the world service (§6). Its error is what shows meanwhile: 2^k px for
   a drawn ancestor k levels up, 1 px when stale. The top of a needed chain
@@ -786,7 +802,31 @@ planet's relief (step 9), not haze.
 - **What moves** is drawn each frame into overlays of the needed pages it
   touches, sampled in the scratch target. Plants and grass sway in the sway
   level's overlays (8 mm texels), which the finer levels read; past it their
-  sway is under a texel and they sit in the cached depth.
+  sway is under a texel and they sit in the cached depth. A crown whose
+  penumbra at its middle (the clipmap's sun, fixed while it's shown, so
+  its cached pages and its overlays part the crowns alike) is wider than
+  the still penumbra hides its sway too. The overlays leave it out and the
+  cached pages of every level take it (`ShadowPlants`: Swaying, Still,
+  All), cast no finer than its penumbra: an element about as wide. The
+  lookup reads its shadow at the penumbra's level. The fine pages' coarse
+  copy serves only where a receiver lies nearer its caster than the crown's
+  height (up a slope from it). Under biomes' golden-hour sun (6°) every
+  tree within about 140 m sunward fell in the near overlays: the glade cast
+  2.72M elements into 207 overlay pages each frame, 1.08 ms, and no frame
+  had slack to draw pages in. Now:
+
+  | golden hour | before | after |
+  |---|---|---|
+  | glade | 3.07 | 2.20 |
+  | edge | 2.14 | 1.80 |
+  | walk (1.4 m/s) | 3.00, 150 of 150 over | 2.45, 15 of 150 over |
+
+  The afternoon is the same within 0.1 ms (the search's cost). Holding
+  still, the ground's frame-to-frame change is the build before's. A sun
+  turning 0.02° a frame rebuilds the clipmap faster than its near pages,
+  now with the still crowns in them, can be drawn. The ground's change
+  doubles (0.18 a point a frame against 0.08). At a real sun's speed a
+  build is about 60 frames every 24 s.
 - **The sun turning.** A turn past 0.1° (or casters outgrowing the depth
   range) begins the next clipmap in the sun as it is now, while the shown
   one is still sampled. Its pages are jobs under every shown page (0.5 px).

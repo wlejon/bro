@@ -294,7 +294,10 @@
  * level's thousands of trees cost a disc each. The pages are cached: a
  * still forest draws no casters, and swaying plants redraw only the sway
  * level near the eye each frame (finer levels read it; coarser ones keep
- * the plants still, where the sway is under a texel).
+ * the plants still, where the sway is under a texel). A crown whose
+ * shadow the sun's penumbra blurs wider than half a metre (a tall tree
+ * under a low sun) hides its sway too: it is cached at every level, cast
+ * as coarse as its penumbra.
  *
  * Where they stand: given as records (`plants`), or placed by `rules` over
  * a world with no edge. Rules are layers of candidates on a grid fixed in

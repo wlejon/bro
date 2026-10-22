@@ -181,6 +181,37 @@ void testRequestsWantsAndGrants() {
     check(!p.entry(fine).needed, "a page the newest requests do not name is not needed");
 }
 
+void testStillCrowns() {
+    // A low sun's penumbra hides a tall crown's sway: the cached pages at
+    // the sway level and finer take those crowns, the overlay the rest,
+    // parted by the clipmap's own penumbra; past the sway level, all.
+    ShadowPages p;
+    ShadowPlan plan;
+    const Vec3 eye{3.3f, 1.0f, -2.1f};
+    ShadowSun sun = downSun(bromath::vnorm(Vec3{std::sqrt(3.0f), -1.0f, 0.0f}));   // 30 degrees up
+    sun.angularRadius = 0.005f;
+    const int s = p.swayLevel();
+    const int fine = entryAt(p, eye, s - 1), coarse = entryAt(p, eye, s + 1);
+    frame(p, plan, eye, {fine, coarse}, sun);
+    frame(p, plan, eye, {fine, coarse}, sun);
+    int still = 0, all = 0;
+    for (int v = 0; v < plan.viewCount; ++v) {
+        const ShadowViewPlan& view = plan.views[v];
+        if (view.dynamic) continue;
+        const int level = plan.maps[view.map].level;
+        if (level <= s) still += view.plants == ShadowPlants::Still;
+        else all += view.plants == ShadowPlants::All;
+        check(std::fabs(view.penumbra - 0.02f) < 1e-5f, "a view's penumbra is the disc's over the sun's height");
+        check(!shadowCastsInto(view, ShadowMotion::Swaying) || level > s,
+              "only the plants part their crowns: what else sways stays off the near pages");
+    }
+    check(still > 0 && all > 0, "the near pages take the still crowns, the coarse ones every plant");
+    uint32_t copies = 0;
+    for (const ShadowPageCopy& c : plan.copyOut) copies += c.plants;
+    check(copies == plan.plantPages && plan.plantPages > 0 && plan.plantPages < plan.staticPages,
+          "only the pages every plant draws into are the plants' kind");
+}
+
 void testWindowMoveAndLateRequests() {
     ShadowPages p;
     ShadowPlan plan;
@@ -397,13 +428,16 @@ void testOverlays() {
               ((os >> SP_OVERLAY_BITS) & SP_OVERLAY_MASK) == static_cast<uint32_t>(plan.views[0].scratchY + SP_BORDER),
           "the sway level's overlay word names its page's first texel in the scratch target");
     check(plan.table[i6 + 1] == 0u, "what sways has no overlay past the sway level");
-    check(plan.views[0].plants && plan.views[0].grass, "the sway level's overlay takes the plants and the grass");
+    check(plan.views[0].plants == ShadowPlants::Swaying && plan.views[0].grass,
+          "the sway level's overlay takes the swaying plants and the grass");
+    check(shadowCastsInto(plan.views[0], ShadowMotion::Swaying), "and whatever else sways");
     // What moves (not sways) also overlays the coarser needed pages.
     moving(false, {l0, l6});
     check((plan.table[is + 1] & SP_RESIDENT) && (plan.table[i6 + 1] & SP_RESIDENT) && plan.table[i0 + 1] == 0u,
           "what moves overlays the sway level and the coarser levels");
     for (int v = 0; v < plan.viewCount; ++v)
-        if (plan.views[v].map == 6) check(!plan.views[v].plants && !plan.views[v].grass, "a coarser overlay takes no sway");
+        if (plan.views[v].map == 6)
+            check(plan.views[v].plants == ShadowPlants::None && !plan.views[v].grass, "a coarser overlay takes no sway");
     // The requests come back a frame or two late: a page needed one plan
     // ago is still needed.
     moving(true, {});
@@ -587,6 +621,7 @@ void testCasters() {
 int main() {
     testAddressingAndSnapping();
     testRequestsWantsAndGrants();
+    testStillCrowns();
     testWindowMoveAndLateRequests();
     testLruReuse();
     testInvalidation();

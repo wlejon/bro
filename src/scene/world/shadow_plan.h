@@ -45,6 +45,19 @@ struct ShadowMapPlan {
     float normalBias = 0.0f;     // the light's normal offset (m)
 };
 
+/// Which of the plants a shadow view draws. A crown sways in its shadow only
+/// where the sun's penumbra under it is narrower than its sway shows
+/// through: the sun's clipmap draws the plants into the sway level's
+/// overlays (Swaying: the crowns whose penumbra is under
+/// ShadowPlan::stillPenumbra), the rest (Still) into the cached pages of
+/// the sway level and finer, and all of them (All) into the cached pages
+/// past it, where sway hides under the filter. The lit shaders read a wide
+/// penumbra's shadow from the level it spans, past the sway level, so the
+/// Still crowns of the finer pages, drawn as coarse as their penumbra,
+/// serve only where a receiver lies nearer its caster than the crown's
+/// height. A local light's overlays take them all.
+enum class ShadowPlants : uint8_t { None, Swaying, Still, All };
+
 /// A rect of a map's pages drawn this frame into the scratch target, its
 /// pages and their border.
 struct ShadowViewPlan {
@@ -52,7 +65,8 @@ struct ShadowViewPlan {
     int mip = 0;                 // a local map's mip
     int x = 0, y = 0, w = 0, h = 0;   // pages, in the map's (mip's) grid of (u, v)
     bool dynamic = false;        // an overlay: what moves alone, sampled in place over the pages' cached depth
-    bool plants = false;         // the plants' casters go in (sway: static past the near levels)
+    ShadowPlants plants = ShadowPlants::None;   // the plants' casters that go in
+    float penumbra = 0.0f;       // a sun view's penumbra a metre above the receiver (m): parts Swaying from Still
     bool grass = false;          // the grass's casters go in (the near levels only)
     int scratchX = 0, scratchY = 0;   // the bordered rect's first texel in the scratch target
     int texelsW = 0, texelsH = 0;     // its size
@@ -64,10 +78,11 @@ struct ShadowViewPlan {
 };
 
 /// How a caster casts: still (in the pages' cached depth), moving (drawn
-/// each frame into the overlays over it), swaying (as the plants: in the
-/// sway level's overlays, which it and the finer levels read, and the
-/// cached depth of the coarser levels, where its sway hides under the
-/// filter), or as the grass (the sway level's overlays alone).
+/// each frame into the overlays over it), swaying (in the sway level's
+/// overlays, which it and the finer levels read, and the cached depth of
+/// the coarser levels, where its sway hides under the filter; the plants
+/// part their crowns by penumbra themselves, ShadowPlants), or as the grass
+/// (the sway level's overlays alone).
 enum class ShadowMotion : uint8_t { Still, Moving, Swaying, Grass };
 
 /// Whether a caster of `motion` draws into view `v`.
@@ -75,7 +90,7 @@ inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
     switch (motion) {
     case ShadowMotion::Still: return !v.dynamic;
     case ShadowMotion::Moving: return v.dynamic;
-    case ShadowMotion::Swaying: return v.plants;
+    case ShadowMotion::Swaying: return v.plants == ShadowPlants::Swaying || v.plants == ShadowPlants::All;
     case ShadowMotion::Grass: return v.grass;
     }
     return false;
@@ -86,7 +101,7 @@ inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
 struct ShadowPageCopy {
     int scratchX = 0, scratchY = 0;   // the bordered page's first texel in the scratch target
     int physical = 0;                 // its page in the pool
-    bool plants = false;              // drawn in a view the plants draw into (its job's kind)
+    bool plants = false;              // drawn in a view every plant draws into (its job's kind)
 };
 
 struct ShadowPlan {
@@ -111,6 +126,8 @@ struct ShadowPlan {
     float finestTexel = 0.0f;    // the sun's level 0 texel (m)
     int levels = 0;              // the sun's clipmap levels
     int swayLevel = 0;           // the level whose overlays the finer ones read (ShadowPages::swayLevel)
+    int searchLevel = 0;         // where the lit shaders look for wide penumbrae (ShadowPages::searchLevel)
+    float stillPenumbra = 0.0f;  // ShadowPagesConfig's: a shadow blurred wider hides its caster's sway
     // A screen pixel's footprint, which picks the level (or mip) a surface
     // samples and the marking pass marks: metres a pixel a metre from the
     // eye (a perspective camera), or metres a pixel (an orthographic one).
@@ -132,7 +149,7 @@ struct ShadowPlan {
     ShadowViewPlan views[SP_MAX_VIEWS];
     std::vector<ShadowPageCopy> copyOut;
     uint32_t staticPages = 0;    // pages the static views redraw (the world service's jobs)
-    uint32_t plantPages = 0;     // of them, in views the plants draw into
+    uint32_t plantPages = 0;     // of them, in views every plant draws into (ShadowPlants::All)
 
     bool any() const { return mapCount > 0; }
 };

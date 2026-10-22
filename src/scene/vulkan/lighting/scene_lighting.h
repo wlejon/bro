@@ -34,6 +34,11 @@ namespace bro::scene::vk {
 /// every position is relative to it (camera-relative rendering, scene_view.h).
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye);
 
+/// The sun's penumbra as the lit shaders read it (SceneLightingUniforms::
+/// shadowSoft): its width a metre along the light, the still penumbra, the
+/// search level (-1: none).
+void shadowSoftUniform(const SceneRenderer& renderer, float out[4]);
+
 /// Shadow map `map` of `plan`, for positions relative to `eye`.
 void shadowMapUniform(const ShadowPlan& plan, const ShadowMapPlan& map, const bromath::Vec3& eye,
                       SceneShadowMapUniform& out);

@@ -194,7 +194,7 @@ void ShadowPages::moveWindows(Sun& sun, int first) {
     sun.haveWindows = true;
 }
 
-void ShadowPages::beginBasis(Sun& sun, const double d[3], const Sun* from) const {
+void ShadowPages::beginBasis(Sun& sun, const double d[3], float angularRadius, const Sun* from) const {
     // mlookAt's: across = normalize(d x up), up' = across x d.
     const double up[3] = {0.0, std::fabs(d[1]) > 0.99 ? 0.0 : 1.0, std::fabs(d[1]) > 0.99 ? 1.0 : 0.0};
     double s[3] = {d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0]};
@@ -207,6 +207,10 @@ void ShadowPages::beginBasis(Sun& sun, const double d[3], const Sun* from) const
     std::memcpy(sun.s, s, sizeof(s));
     std::memcpy(sun.u, u, sizeof(u));
     std::memcpy(sun.d, d, sizeof(sun.d));
+    // A caster h above its receiver blurs over the disc's width at the
+    // light's distance to it, h / sin(elevation) (the sun at the horizon
+    // kept off it).
+    sun.penumbra = static_cast<float>(2.0 * angularRadius / std::max(-d[1], 0.02));
     std::memcpy(sun.anchor, eye, sizeof(eye));
     std::memcpy(sun.offset, offset, sizeof(offset));
 }
@@ -321,7 +325,7 @@ void ShadowPages::setSun(const ShadowSun& sun) {
         sun_ = Sun{};
         next_ = Sun{};
         building_ = ready_ = false;
-        beginBasis(sun_, d, nullptr);
+        beginBasis(sun_, d, sun.angularRadius, nullptr);
         sun_.had = true;
         sun_.lightId = sun.lightId;
     } else if (building_ && (ready_ || serial_ - begun_ >= static_cast<uint64_t>(config_.buildFrames))) {
@@ -347,7 +351,7 @@ void ShadowPages::setSun(const ShadowSun& sun) {
         next_.bias = sun.bias;
         next_.normalBias = sun.normalBias;
         next_.reach = sun.reach;
-        beginBasis(next_, d, &sun_);
+        beginBasis(next_, d, sun.angularRadius, &sun_);
         building_ = true;
         ready_ = false;
         begun_ = serial_;
@@ -559,6 +563,11 @@ void ShadowPages::invalidateAll() {
 int ShadowPages::swayLevel() const {
     const int l = static_cast<int>(std::lround(std::log2(config_.swayTexel / config_.finestTexel)));
     return std::clamp(l, 0, config_.levels - 1);
+}
+
+int ShadowPages::searchLevel() const {
+    const int l = static_cast<int>(std::lround(std::log2(config_.stillPenumbra / config_.finestTexel)));
+    return std::clamp(l, std::min(swayLevel() + 1, config_.levels - 1), config_.levels - 1);
 }
 
 void ShadowPages::addDynamic(const bromath::AABB3& box, bool sways) { dynamic_.push_back({box, sways}); }

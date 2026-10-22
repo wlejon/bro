@@ -89,6 +89,11 @@ struct ShadowPagesConfig {
     // The sway level's texel (m): the overlays of what moves start at the
     // level with about this texel, and the finer levels read them.
     float swayTexel = 0.008f;
+    // A shadow the sun's penumbra blurs wider than this (m) hides its
+    // caster's sway: the plants whose crowns cast it are cached at every
+    // level (ShadowPlants), and the lit shaders filter it at the level of
+    // its penumbra (ShadowPlan::searchLevel).
+    float stillPenumbra = 0.5f;
 };
 
 /// The sun this frame.
@@ -99,6 +104,7 @@ struct ShadowSun {
     bromath::AABB3 casters;               // every caster's bounds: the depth range
     float bias = 0.0f, normalBias = 0.0f;
     float reach = 0.0f;                   // how far from the eye it shadows (m; 0 none)
+    float angularRadius = 0.0f;           // the sun disc's (radians): its penumbra
 };
 
 /// A local light this frame: a spot (one face) or a point light (six).
@@ -169,6 +175,10 @@ public:
     /// The sun's level whose texel is about ShadowPagesConfig::swayTexel:
     /// its overlays carry what moves for it and every finer level.
     int swayLevel() const;
+    /// The sun's level whose texel is about ShadowPagesConfig::stillPenumbra,
+    /// past the sway level: where the lit shaders look for blockers whose
+    /// penumbra is wider (a gather there spans about that penumbra).
+    int searchLevel() const;
 
     /// The marking pass's requests for the plan `serial` named: a bit an
     /// entry (SP_LEVEL_ENTRIES a clipmap level, then the local maps', then
@@ -241,6 +251,7 @@ private:
         uint32_t lightId = 0;
         int lightIndex = 0;
         double s[3] = {}, u[3] = {}, d[3] = {};   // the basis: across (a), up (-b), along (c)
+        float penumbra = 0.0f;                    // its penumbra a metre above the receiver (ShadowViewPlan's)
         double anchor[3] = {};
         double offset[3] = {};                    // (a, b, c) at the anchor
         double zLo = 0.0, zHi = 0.0;              // the depth range (c)
@@ -290,8 +301,10 @@ private:
     static void sunPlane(const Sun& sun, const double p[3], double& a, double& b, double& c);
     void moveWindows(Sun& sun, int first);
     /// Begin `sun`'s light space along `d` about the eye, its plane
-    /// coordinates there kept from `from`'s.
-    void beginBasis(Sun& sun, const double d[3], const Sun* from) const;
+    /// coordinates there kept from `from`'s, its penumbra the sun's of
+    /// `angularRadius` along `d` (both fixed for the clipmap's life, so its
+    /// cached pages and its overlays part the plants alike).
+    void beginBasis(Sun& sun, const double d[3], float angularRadius, const Sun* from) const;
     /// Fit `sun`'s depth range to the casters' `box` (and its casters'
     /// plane rect); true when a range it had must grow (grown only with
     /// `grow`).

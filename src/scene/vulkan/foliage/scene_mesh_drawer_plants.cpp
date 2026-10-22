@@ -106,12 +106,13 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     // (Copied on the graphics queue, read by the plan on the compute queue.)
     if (changed) frame.gpu.device.computeReadsGraphics();
     // The shadow views its casters go to: the overlays of the levels where
-    // its sway shows, the redrawn pages of the rest.
+    // its sway shows, the redrawn pages of the rest (the plan parts the
+    // crowns by penumbra).
     std::vector<int> tiles;
     const ShadowPlan& shadows = frame.renderer.shadowPlan();
     if (node.castsShadow() && frame.gpu.shadows.ready())
         for (int v = 0; v < shadows.viewCount && v < PP_MAX_TILES; ++v)
-            if (shadows.views[v].plants) tiles.push_back(v);
+            if (shadows.views[v].plants != ShadowPlants::None) tiles.push_back(v);
 
     // Planned on the GPU: each view's draws indirect, their counts the plan's.
     std::shared_ptr<plants::GpuPlanner::Node> state = plantPlanner_->node(node);

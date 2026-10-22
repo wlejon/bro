@@ -62,6 +62,7 @@ struct alignas(16) SceneShadowMarkUniforms {
     alignas(16) float invViewProj[16];  // Vulkan clip (the camera's reversed depth) -> camera-relative
     alignas(16) float grid[4];          // x, y = the depth target's size, z = pixels a side an invocation marks for, w = lights
     alignas(16) float view[4];          // x = metres a pixel a metre (perspective), y = metres a pixel (ortho), z = finest texel, w = levels
+    alignas(16) float soft[4];          // x = the sun's search level (-1: none), its lighting's shadowSoft.z
     alignas(16) float lights[kSceneMaxLights][4];    // first map, maps, kind (0 sun, 1 spot, 2 point), reach (0: none)
     alignas(16) float lightPos[kSceneMaxLights][4];  // camera-relative position, range
     // The sampled maps, then the sun's next clipmap's levels while it is built.
@@ -106,6 +107,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float ambientColor[4];  // rgb = flat ambient
     alignas(16) float params[4];        // light count, PCF taps, 1 / the shadow pool's side (texels), pool columns
     alignas(16) float shadowView[4];    // x = metres a pixel a metre (perspective), y = metres a pixel (ortho), z = finest texel, w = the sway level (-1: no overlays this frame)
+    alignas(16) float shadowSoft[4];    // x = the sun's penumbra a metre along the light, y = the still penumbra (m), z = the search level (-1: none)
     SceneLightUniform lights[kSceneMaxLights];
     SceneShadowMapUniform shadowMaps[kSceneMaxShadowMaps];
     // The probe and shade map, like every position here, camera-relative.

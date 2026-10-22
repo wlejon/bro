@@ -202,6 +202,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             sun.bias = L->shadowBias();
             sun.normalBias = L->shadowNormalBias();
             sun.reach = L->shadowDistance();
+            sun.angularRadius = atmosphere_.sunAngularRadius;
             sunReach = sun.reach;
             pages.setSun(sun);
             continue;

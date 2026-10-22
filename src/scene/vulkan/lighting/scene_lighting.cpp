@@ -76,6 +76,15 @@ void shadowMapUniform(const ShadowPlan& plan, const ShadowMapPlan& map, const br
     out.depth[3] = static_cast<float>(map.level);
 }
 
+void shadowSoftUniform(const SceneRenderer& renderer, float out[4]) {
+    const ShadowPlan& plan = renderer.shadowPlan();
+    const float disc = 2.0f * renderer.atmosphere().sunAngularRadius;
+    out[0] = disc;
+    out[1] = plan.stillPenumbra;
+    out[2] = disc > 0.0f && plan.stillPenumbra > 0.0f && plan.levels > 0 ? static_cast<float>(plan.searchLevel) : -1.0f;
+    out[3] = 0.0f;
+}
+
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye) {
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
@@ -133,6 +142,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     bool overlays = false;
     for (int v = 0; v < plan.viewCount; ++v) overlays = overlays || plan.views[v].dynamic;
     light.shadowView[3] = overlays ? static_cast<float>(plan.swayLevel) : -1.0f;
+    shadowSoftUniform(renderer, light.shadowSoft);
     for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
         shadowMapUniform(plan, plan.maps[m], eye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);

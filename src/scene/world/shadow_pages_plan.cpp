@@ -110,6 +110,8 @@ void ShadowPages::plan(ShadowPlan& out) {
     out.finestTexel = config_.finestTexel;
     out.levels = config_.levels;
     out.swayLevel = swayLevel();
+    out.searchLevel = searchLevel();
+    out.stillPenumbra = config_.stillPenumbra;
     out.poolColumns = config_.poolColumns;
     out.poolRows = config_.poolRows;
     out.scratchSize = config_.scratchSize;
@@ -326,12 +328,17 @@ void ShadowPages::plan(ShadowPlan& out) {
         v.scratchY = shelfY;
         viewMatrix(m, r, v);
         if (m.kind == SP_KIND_CLIPMAP) {
-            // What sways: the sway level's overlays, the cached depth past it.
+            // What sways: the sway level's overlays, the cached depth past
+            // it; at the sway level and finer the cached depth holds the
+            // crowns whose penumbra hides their sway.
             const int s = swayLevel();
-            v.plants = r.dynamic ? m.level == s : m.level > s;
+            if (r.dynamic) v.plants = m.level == s ? ShadowPlants::Swaying : ShadowPlants::None;
+            else v.plants = m.level > s ? ShadowPlants::All : ShadowPlants::Still;
+            v.penumbra = sunOf(m.next).penumbra;
             v.grass = r.dynamic && m.level == s;
         } else {
-            v.plants = v.grass = r.dynamic;
+            v.plants = r.dynamic ? ShadowPlants::All : ShadowPlants::None;
+            v.grass = r.dynamic;
         }
         shelfX += tw;
         shelfH = std::max(shelfH, th);
@@ -361,9 +368,9 @@ void ShadowPages::plan(ShadowPlan& out) {
                     continue;
                 }
                 c.physical = e.physical;
-                c.plants = v.plants;
+                c.plants = v.plants == ShadowPlants::All;
                 ++out.staticPages;
-                out.plantPages += v.plants;
+                out.plantPages += c.plants;
                 out.copyOut.push_back(c);
             }
     }

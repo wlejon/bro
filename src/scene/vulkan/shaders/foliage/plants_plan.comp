@@ -76,11 +76,11 @@ bool seenBy(uvec2 mask, uint v) { return v < 32u ? (mask.x & (1u << v)) != 0u : 
 // What the plan needs of a plant: its sphere (PlantsNode's), and of its
 // species (the engine's share of its record, scene_plant_records.glsl's
 // PlantSpecies) the full count, its element's length and crown's radius at
-// its scale, its limbs.
+// its scale, its crown's middle above its foot, its limbs.
 struct PlantInfo {
     vec3 centre;
     float radius;
-    float full, leaf, crown;
+    float full, leaf, crown, mid;
     uint limbs;
 };
 
@@ -100,6 +100,7 @@ PlantInfo plantInfo(uint i) {
     o.full = max(s0.w, 1.0);
     o.leaf = s1.x * scale;
     o.crown = s0.z * scale;
+    o.mid = 0.5 * (1.0 + s0.y) * height;
     o.limbs = uint(clamp(int(s1.y), 0, PP_MAX_LIMBS));
     return o;
 }
@@ -158,11 +159,19 @@ Pick pick(PlantInfo pl, uint v) {
         uint t = v - 1u;
         uint at = PP_P_TILE + t * PP_TILE_WORDS;
         if (d - pl.radius > pf(PP_P_SHADOW_RANGE) || !intersects(at + PP_TILE_FRUSTUM, bmin, bmax)) return k;
+        // The sun's views part the crowns: one whose penumbra on the ground
+        // under it is wider than stillPenumbra hides its sway, cast still.
+        uint part = params.w[at + PP_TILE_PLANTS];
+        bool still = pf(at + PP_TILE_PENUMBRA) * pl.mid > pf(PP_P_STILL_PENUMBRA);
+        if ((part == PP_PLANTS_SWAYING && still) || (part == PP_PLANTS_STILL && !still)) return k;
         // Texels across a metre (a perspective tile's at about the eye's
-        // distance); a crown a few daubs across casts its outline, a disc.
+        // distance); a still crown's no finer than the lit shaders blur
+        // its shadow, an element about as wide as its penumbra. A crown a
+        // few daubs across casts its outline, a disc.
         precise float texel = max(params.w[at + PP_TILE_ORTHO] != 0u ? pf(at + PP_TILE_TEXEL_CONST)
                                                                       : pf(at + PP_TILE_TEXEL_PER_METRE) * max(d, 1.0),
                                   1e-4);
+        if (still) texel = max(texel, pf(at + PP_TILE_PENUMBRA) * pl.mid / pf(PP_P_SHADOW_TEXELS));
         precise float crown = pl.radius / (texel * pf(PP_P_SHADOW_TEXELS));
         k.slot = tileSlot(t);
         if (crown < 1.5) {
