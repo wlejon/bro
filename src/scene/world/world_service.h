@@ -56,6 +56,18 @@
 // left says nothing of the new one's.
 // A compute span on its own queue runs beside the frame, so only the
 // graphics' spans are taken off the frame's time.
+//
+// A kind drawn the next frame (WorldJobKind::nextFrame: the shadow pages,
+// whose frame plans its pages before the service runs) spends the budget of
+// the frame that draws it. A frame's grants of such kinds are carried into
+// the next one, whose jobs drawn at once fit what the carry leaves of its
+// budget; its grants drawn the next frame fit the budget less its own jobs
+// drawn at once (the next frame's, as far as it can tell). A job drawn at
+// once that ranks among them but finds the carry in its way holds its cost
+// back from them, so the next frame has room for it: a kind drawn later is
+// never starved by one drawn sooner, nor the reverse. (Charged to the frame
+// that grants them, the next frame's grants came on top of its own budget:
+// a frame drew the pages granted it last frame and spent its budget again.)
 
 #include <cstdint>
 #include <span>
@@ -73,6 +85,7 @@ struct WorldJobKind {
     std::string name;
     WorldSchedule schedule = WorldSchedule::Raster;
     float costMs = 0.05f;   // one unit's GPU ms until measured
+    bool nextFrame = false;   // its grants are drawn the next frame (see Budget)
 };
 
 /// A job a producer offers this frame.
@@ -92,7 +105,7 @@ struct WorldServiceConfig {
     int window = 4;           // frames whose need sets the slack
     float costRate = 0.25f;      // how far one measurement moves a kind's cost (the power of its ratio)
     float costQuantile = 0.9f;   // the weight of a dearer measurement's pull, the rest a cheaper one's
-    float overRate = 0.02f;   // the share of frames the headroom lets run over the target
+    float overRate = 0.005f;   // the share of frames the headroom lets run over the target
     float headroomStep = 0.01f;   // how far one frame read moves the headroom (ms)
 };
 
@@ -111,6 +124,7 @@ struct WorldFrameTiming {
 struct WorldServiceStats {
     float budgetMs = 0.0f;    // this frame's
     float spentMs = 0.0f;     // the granted jobs' cost, by their kinds' measured costs
+    float carriedMs = 0.0f;   // last frame's grants of kinds drawn the next frame, drawn in this one
     uint32_t offered = 0;
     uint32_t granted = 0;
     uint32_t queued = 0;      // offered and left for a later frame
@@ -165,6 +179,7 @@ private:
     bool over_ = false;          // the last frame read ran over the target
     float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate
     float budget_ = 0.0f;
+    float carried_ = 0.0f;       // the last frame's grants of kinds drawn the next frame (ms)
     std::vector<WorldJob> offers_;
     std::vector<std::vector<WorldJob>> granted_;
     WorldServiceStats stats_;

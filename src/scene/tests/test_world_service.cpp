@@ -112,6 +112,44 @@ void testUnits() {
     check(near(s.cost(k), 0.125), "the cost a unit is the span's over its units");
 }
 
+// A kind drawn the next frame spends that frame's budget: its grants are
+// carried, the next frame's jobs drawn at once fit what the carry leaves,
+// and one the carry keeps out holds its cost back from the next grants.
+void testNextFrame() {
+    WorldService s;
+    WorldServiceConfig c;
+    c.floorMs = 0.5f;
+    s.configure(c);
+    const int pages = s.addKind({"pages", WorldSchedule::Raster, 0.125f, true});
+    const int traces = s.addKind({"traces", WorldSchedule::Raster, 0.125f});
+    // Pages alone: the whole budget each frame, as without the carry.
+    for (int f = 0; f < 3; ++f) {
+        s.beginFrame();
+        for (uint64_t j = 0; j < 8; ++j) s.offer({j, 0, pages, 4.0f, 1.0, false});
+        s.schedule();
+        check(s.granted(pages).size() == 4, "pages alone take the whole budget a frame (frame " + std::to_string(f) + ")");
+    }
+    // A trace ranking over them: the carry (four pages) keeps it out this
+    // frame, so the pages leave its room, and the next frame it goes.
+    s.beginFrame();
+    for (uint64_t j = 0; j < 8; ++j) s.offer({j, 0, pages, 4.0f, 1.0, false});
+    s.offer({100, 0, traces, 9.0f, 1.0, false});
+    s.offer({101, 0, traces, 8.0f, 1.0, false});
+    s.schedule();
+    check(near(s.stats().carriedMs, 0.5), "last frame's pages are carried into this one");
+    check(s.granted(traces).empty(), "the carry fills this frame: no trace goes");
+    check(s.granted(pages).size() == 2, "the pages leave the two traces' room (got " +
+                                            std::to_string(s.granted(pages).size()) + ")");
+    s.beginFrame();
+    for (uint64_t j = 0; j < 8; ++j) s.offer({j, 0, pages, 4.0f, 1.0, false});
+    s.offer({100, 0, traces, 9.0f, 1.0, false});
+    s.offer({101, 0, traces, 8.0f, 1.0, false});
+    s.schedule();
+    check(s.granted(traces).size() == 2, "the next frame the traces go");
+    check(s.granted(pages).size() == 2, "and the pages after them fit what they leave");
+    check(near(s.stats().carriedMs + s.cost(traces) * 2.0f, 0.5), "the frame draws its budget, no more");
+}
+
 void testCoarserTieBreak() {
     WorldService s;
     WorldServiceConfig c;
@@ -228,11 +266,11 @@ void testFloorOverTarget() {
     s.schedule();
     check(s.granted(k).size() == 2, "the floor still grants what fits it (two at 0.05)");
     // Back under it, the slack again (the window's heaviest need: 3.1 - 0.5),
-    // less the headroom the frame over raised (a step, 0.98 of it left after
-    // a frame under: 0.01 * (0.98 - 0.02)).
+    // less the headroom the frame over raised (a step, 0.995 of it left after
+    // a frame under: 0.01 * (0.995 - 0.005)).
     s.observe(frameOf(1.0));
     s.beginFrame();
-    check(near(s.budgetMs(), 2.78 - 2.6 - 0.0096), "back under target, the slack returns, less the headroom");
+    check(near(s.budgetMs(), 2.78 - 2.6 - 0.0099), "back under target, the slack returns, less the headroom");
     // Need past the target, though the frame read was under it: the floor.
     WorldService t;
     t.configure(c);
@@ -267,7 +305,8 @@ void testHeadroom() {
         s.observe(frameOf(frame, k, spent / 0.01, spent));
     }
     const double rate = static_cast<double>(over) / frames;
-    check(rate > 0.005 && rate < 0.06, "the headroom leaves about overRate of the frames over");
+    check(rate > 0.001 && rate < 0.015,
+          "the headroom leaves about overRate of the frames over (got " + std::to_string(rate) + ")");
 }
 
 void testCostLearning() {
@@ -317,6 +356,7 @@ int main() {
     testRankingAcrossProducers();
     testCoarserTieBreak();
     testUnits();
+    testNextFrame();
     testBudgetFollowsSlack();
     testFloorOverTarget();
     testHeadroom();

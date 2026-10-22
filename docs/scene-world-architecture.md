@@ -522,9 +522,11 @@ by its own rules.
   Less a headroom: a frame's own work and a job's cost each vary from what was
   expected of them, so a budget spent to the target runs about half its
   frames over. The headroom is learned as the quantile of that surprise that
-  leaves 2% of frames over (a step up on each frame over, a fiftieth of one
-  down on each under). On biomes' golden-hour walk it took the frames over
-  from 16 of 150 to 3-8, the mean unchanged.
+  leaves 0.5% of frames over (a step up on each frame over, a two-hundredth
+  of one down on each under). At 2% it took biomes' golden-hour walk from 16
+  of 150 frames over to 3-8, the mean unchanged; at 0.5%, with the next
+  frame's work charged to it (below), from 7 to 3-4 (four rounds
+  interleaved), the pages drawn a frame and the backlog the same.
 - **Nothing waits.** The coarsest level of every producer is always resident.
   A missing tile shows its coarser parent; a stale one keeps drawing until its
   replacement lands; a replacement is written to a free slot and swapped in by
@@ -557,8 +559,16 @@ tiles it wants) and gives up its own budget.
 - **The budget** is the target less the most the last four timed frames
   needed outside the service (each frame's GPU ms less its service spans on
   the graphics queue; spans on the async queue are not subtracted), less
-  the headroom (above: the surprise's 98th percentile, learned), floored
+  the headroom (above: the surprise's 99.5th percentile, learned), floored
   at 0.1 ms. A frame over the target, or no timed frame yet, gives the floor.
+  A kind drawn the next frame (`WorldJobKind::nextFrame`: the shadow pages,
+  planned before the service runs) spends that frame's budget: its grants
+  are carried, the next frame's jobs drawn at once fit what the carry leaves,
+  its own next-frame grants fit the budget less its jobs drawn at once, and a
+  job drawn at once that the carry keeps out holds its cost back from them so
+  it goes the frame after. (Charged to the frame that granted them, a frame
+  drew last frame's pages and spent its whole budget again: on the walk a
+  frame drew 0.86 ms of pages beside 0.39 ms of its own probe traces.)
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
   default. A kind's cost a unit is learned from its span's ms over its
   units: the first measurement replaces the guess, and each later one pulls

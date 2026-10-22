@@ -63,19 +63,26 @@ void WorldService::schedule() {
         if (a.producer != b.producer) return a.producer < b.producer;
         return a.key < b.key;
     });
-    float spent = 0.0f;
+    // What is drawn at once (after the carry), what is drawn next frame, and
+    // what the jobs drawn at once that the carry kept out hold back for it.
+    float now = 0.0f, next = 0.0f, held = 0.0f;
     for (const WorldJob& j : offers_) {
-        const float c = kinds_[static_cast<size_t>(j.kind)].cost * static_cast<float>(std::max(j.units, 0.0));
-        if (!j.required && spent + c > budget_) {
+        const Kind& kind = kinds_[static_cast<size_t>(j.kind)];
+        const float c = kind.cost * static_cast<float>(std::max(j.units, 0.0));
+        const bool fits = kind.desc.nextFrame ? now + held + next + c <= budget_ : carried_ + now + c <= budget_;
+        if (!j.required && !fits) {
+            if (!kind.desc.nextFrame && now + held + c <= budget_) held += c;
             ++stats_.queued;
             stats_.worstError = std::max(stats_.worstError, j.error);
             continue;
         }
-        spent += c;
+        (kind.desc.nextFrame ? next : now) += c;
         granted_[static_cast<size_t>(j.kind)].push_back(j);
         ++stats_.granted;
     }
-    stats_.spentMs = spent;
+    stats_.spentMs = now + next;
+    stats_.carriedMs = carried_;
+    carried_ = next;
 }
 
 std::span<const WorldJob> WorldService::granted(int k) const {

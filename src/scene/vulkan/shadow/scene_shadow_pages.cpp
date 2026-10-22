@@ -16,8 +16,10 @@ namespace bro::scene::vk {
 bool SceneShadowPages::setup(SceneGpu& gpu) {
     allocator_ = &gpu.allocator;
     // A page's first guess: about what one of biomes' redrawn pages costs.
-    kind_ = gpu.world.addKind(this, {"shadow pages", WorldSchedule::Raster, 0.007f});
-    stillKind_ = gpu.world.addKind(this, {"shadow pages, still", WorldSchedule::Raster, 0.0001f});
+    // Both are drawn the next frame (the frame's plan is made before the
+    // service runs), so that frame's budget pays for them.
+    kind_ = gpu.world.addKind(this, {"shadow pages", WorldSchedule::Raster, 0.007f, true});
+    stillKind_ = gpu.world.addKind(this, {"shadow pages, still", WorldSchedule::Raster, 0.0001f, true});
     // 1x1 until a light casts a shadow: the lighting set always has a pool
     // and a scratch target.
     return kind_ >= 0 && stillKind_ >= 0 && ensureImage(gpu, pool, 1, kPoolUsage, "pool") &&
