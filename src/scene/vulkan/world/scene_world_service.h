@@ -98,7 +98,7 @@ public:
     /// The render begins: the renders `timer` read since the last call go to
     /// the policy, then its frame begins with `targetMs` as the target.
     /// `cut`: the view jumped this render, so the slack the renders before it
-    /// left is forgotten (WorldService::forgetSlack), and those still to be
+    /// left is forgotten and the new view settles (WorldService::cut), and those still to be
     /// read count for the kinds' costs only.
     void beginFrame(SceneGpuTimer* timer, float targetMs, bool cut = false);
     /// The view jumped between two renders: the view turned by more than half

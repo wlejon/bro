@@ -49,7 +49,7 @@ bool SceneWorldService::viewCut(const bromath::Vec3& eye, const bromath::Vec3& f
 
 void SceneWorldService::beginFrame(SceneGpuTimer* timer, float targetMs, bool cut) {
     if (cut) {
-        policy_.forgetSlack();
+        policy_.cut();
         if (timer) staleThrough_ = timer->submittedRenders();
     }
     if (timer) {

@@ -50,10 +50,20 @@
 // target and falls overRate / (1 - overRate) of a step on each under it, so
 // it settles where overRate of the frames run over. A frame read over the
 // target takes the budget to the floor until one comes in under it. Before any frame is read
-// (or on a device that cannot time its frames) the budget is the floor, and
-// so it is again after the view jumps (forgetSlack()), until a frame of the
-// new view is read: a frame's cost is its view's, and the slack the old view
-// left says nothing of the new one's.
+// (or on a device that cannot time its frames) the budget is the floor.
+//
+// A cut (cut(): the view jumped) forgets the slack, since a frame's cost is
+// its view's and the old view's says nothing of the new one's, and lets the
+// new view settle: its budget is at least settleMs until it has left
+// nothing worse than settleError queued for settleQuiet frames running, or
+// settleFrames have passed. A cut shows a new place whose world is all
+// wanted at once (biomes' glade from the meadow: 1,655 jobs, its turf, its
+// still and plants shadow pages, three land's sun levels), and the frame
+// after it is a hitch whatever is spent; on the running budget the new
+// place took 64 frames to settle, the shade of the place left behind on it
+// for 20 of them, and a still taken a second in showed a straight-edged lit
+// field where, settled, the trees shade it. At 8 ms it settles in five
+// frames.
 // A compute span on its own queue runs beside the frame, so only the
 // graphics' spans are taken off the frame's time.
 //
@@ -109,6 +119,10 @@ struct WorldServiceConfig {
     float costQuantile = 0.9f;   // the weight of a dearer measurement's pull, the rest a cheaper one's
     float overRate = 0.005f;   // the share of frames the headroom lets run over the target
     float headroomStep = 0.01f;   // how far one frame read moves the headroom (ms)
+    float settleMs = 8.0f;      // the least budget a frame while a cut settles
+    float settleError = 1.0f;   // a cut has settled when nothing worse than this (pixels) is left queued
+    int settleQuiet = 4;        // for this many frames running (what the frames in flight read back)
+    int settleFrames = 30;      // and has settled, whatever is left, after this many frames
 };
 
 /// A frame the GPU timer read, as the service sees it.
@@ -152,12 +166,15 @@ public:
     /// A frame the GPU timer read (oldest first, each once).
     void observe(const WorldFrameTiming& timing);
     /// The view jumped: what the last frames left was measured in a view no
-    /// longer shown, so it is forgotten, and the budget is the floor until a
-    /// frame of the new view is read. (Kinds keep their costs.)
-    void forgetSlack() {
+    /// longer shown, so it is forgotten, and the new view settles (its
+    /// budget at least settleMs until it has). (Kinds keep their costs.)
+    void cut() {
         need_.clear();
         over_ = false;
+        settle_ = config_.settleFrames;
+        quiet_ = 0;
     }
+    bool settling() const { return settle_ > 0; }
     /// Start a frame: drop the last one's offers and set this one's budget.
     void beginFrame();
     void offer(const WorldJob& job) { offers_.push_back(job); }
@@ -179,6 +196,8 @@ private:
     WorldServiceConfig config_;
     std::vector<double> need_;   // the last frames' ms apart from the service, newest last
     bool over_ = false;          // the last frame read ran over the target
+    int settle_ = 0;             // frames a cut has left to settle in
+    int quiet_ = 0;              // frames running it has left nothing worse than settleError queued
     float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate
     float budget_ = 0.0f;
     float carried_ = 0.0f;       // the last frame's grants of kinds drawn the next frame (ms)

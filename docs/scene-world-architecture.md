@@ -614,9 +614,17 @@ tiles it wants) and gives up its own budget.
 - **A cut.** The slack a view left says nothing of the next view after a
   jump, and a frame or two of timings is read late. So when the eye moves
   more than 10 m or the view turns more than half its vertical field of view
-  between two renders, the service forgets its slack (the floor until the
-  new view is measured), and the frames rendered before the cut count only
-  for the kinds' costs.
+  between two renders, the service forgets its slack, and the frames
+  rendered before the cut count only for the kinds' costs. The new view
+  then settles: its budget is at least 8 ms until nothing worse than a
+  pixel is left queued four frames running (what the frames in flight read
+  back), or 30 frames have passed. A cut wants a whole place at once (the
+  glade from the meadow: 1,655 jobs of turf, still and plants shadow pages
+  and land's sun levels), and its first frame is a hitch whatever is spent.
+  On the running budget (0.5-0.7 ms) the glade took 64 frames to settle,
+  the land's sun levels made about the meadow shading it for 20 of them,
+  and a still a second in caught a straight-edged lit field where, settled,
+  the trees shade it; settling, it is five frames.
 - **The executor** (`vulkan/world/scene_world_service.h`, run by the
   `world-service` pass at the frame's head) feeds the policy the GPU
   timer's frames, collects the producers' offers, and runs each kind's

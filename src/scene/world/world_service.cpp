@@ -47,6 +47,10 @@ void WorldService::beginFrame() {
         const double need = *std::max_element(need_.begin(), need_.end());
         budget = std::max(budget, static_cast<float>(config_.targetMs - headroom_ - need));
     }
+    if (settle_ > 0) {
+        budget = std::max(budget, config_.settleMs);
+        --settle_;
+    }
     budget_ = budget;
     stats_.budgetMs = budget;
 }
@@ -79,6 +83,10 @@ void WorldService::schedule() {
         (kind.desc.nextFrame ? next : now) += c;
         granted_[static_cast<size_t>(j.kind)].push_back(j);
         ++stats_.granted;
+    }
+    if (settle_ > 0) {
+        quiet_ = stats_.worstError <= config_.settleError ? quiet_ + 1 : 0;
+        if (quiet_ >= config_.settleQuiet) settle_ = 0;
     }
     stats_.spentMs = now + next;
     stats_.carriedMs = carried_;

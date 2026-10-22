@@ -247,17 +247,41 @@ void testBudgetFollowsSlack() {
     s.observe(frameOf(-1.0));
     s.beginFrame();
     check(near(s.budgetMs(), 16.7 - 1.5), "an untimed frame leaves the budget where it was");
-    // The view jumped: the old view's slack is forgotten, the floor until a
-    // frame of the new one is read, and then that frame's slack.
-    s.forgetSlack();
+    // The view jumped: the old view's slack is forgotten, and the new view
+    // settles at settleMs until nothing worse than settleError is left
+    // queued for settleQuiet frames running.
+    WorldServiceConfig cfg;
+    cfg.settleMs = 5.0f;
+    cfg.settleQuiet = 2;
+    cfg.settleFrames = 6;
+    s.configure(cfg);
+    s.setTarget(2.78f);
+    s.cut();
     s.beginFrame();
-    check(near(s.budgetMs(), 0.1), "after a cut the budget is the floor");
+    check(near(s.budgetMs(), 5.0) && s.settling(), "after a cut the budget is the settle budget");
+    s.offer({1, 0, k, 4.0f, 1.0, false, 1e6});   // (too dear for any budget: left queued, 4 pixels)
+    s.schedule();
     s.observe(frameOf(-1.0, k, 4, 0.08));   // (a frame of the old view, read late: its costs only)
     s.beginFrame();
-    check(near(s.budgetMs(), 0.1), "a frame from before the cut does not bring the slack back");
+    check(near(s.budgetMs(), 5.0), "a frame from before the cut does not bring the slack back");
+    s.schedule();   // nothing queued: one quiet frame
+    s.beginFrame();
+    s.schedule();   // two
+    check(!s.settling(), "settled after settleQuiet quiet frames");
+    s.beginFrame();
+    check(near(s.budgetMs(), 0.1), "settled, and no frame of the new view read: the floor");
+    s.setTarget(16.7f);
     s.observe(frameOf(9.0, k, 4, 0.2));
     s.beginFrame();
     check(near(s.budgetMs(), 16.7 - 8.8), "the new view's first frame read sets it");
+    // A view that never quiets settles after settleFrames all the same.
+    s.cut();
+    for (int i = 0; i < 6; ++i) {
+        s.beginFrame();
+        s.offer({1, 0, k, 4.0f, 1.0, false, 1e6});
+        s.schedule();
+    }
+    check(!s.settling(), "settled after settleFrames whatever is left");
 }
 
 void testViewCut() {
