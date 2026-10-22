@@ -14,8 +14,10 @@
 //   - the RINGS it is drawn with: concentric squares of fixed topology
 //     parked on the camera, each level's cells twice the last's, so a
 //     cell is about the same size on screen near and far; the vertex stage
-//     (shaders/ground/mesh_land.vert) reads its height, normal and colour
-//     from the tiles. Crack-free by construction: a vertex's height is a
+//     (shaders/ground/mesh_land.vert) reads its height from the tiles, and
+//     the fragments (draw/mesh.frag's SCENE_LAND build) its albedo and
+//     normal at their own footprint, so the ground's detail is its tiles'
+//     texels, not the rings' cells. Crack-free by construction: a vertex's height is a
 //     function of its world position and its distance alone, so two rings
 //     meet on the same surface (the derivation is mesh_land.vert's);
 //   - the CPU's heights (heightAt, sampleHeights), for placement, physics

@@ -314,7 +314,9 @@ sun, shadows and air stay current.
   so the texels near the eye are centimetres and far off are kilometres.
 - **Which tiles are needed** is decided by the same projected-size rule as
   everything else (§1): a cell is tiled at the level where a texel covers
-  about a pixel (`texelPixels`, 1.5 for the turf), with every ancestor of
+  about a pixel (`texelPixels`, 1.5 for the turf, 4 for the land, whose
+  fragments read its albedo and normal at their footprint while its
+  vertices read only its height), with every ancestor of
   a needed tile needed too. The CPU picks them from the camera
   (`SurfaceLayers`, `scene/world/surface_layers.h`); nothing is read back from
   the GPU, unlike feedback-driven virtual texturing. A tile's heights, the

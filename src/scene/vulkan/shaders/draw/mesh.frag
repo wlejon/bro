@@ -293,6 +293,23 @@ void main() {
     // Two-sided thin surfaces shade the face the camera sees.
     vec3 N = geomN;
     if ((flags & MESH_TWO_SIDED) != 0u && !frontFacing) N = -N;
+#ifdef SCENE_LAND
+    // The land's albedo and normal a fragment at a time, from its tiles at
+    // the level whose texel is the fragment's footprint: the vertex's are a
+    // ring cell's, several pixels across. inUV is the map point
+    // (mesh_land.vert), small about the eye where a body point is not.
+    {
+        vec2 dm = max(abs(dFdx(inUV)), abs(dFdy(inUV)));
+        float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
+        float lh;
+        vec3 ln;
+        vec4 ls;
+        if (landSampleNormal(inUV, lambda, lh, ln, ls)) {
+            baseColor = push.baseColor.rgb * ls.rgb;
+            N = ln;
+        }
+    }
+#endif
     if ((flags & (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) == (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
         N = normalize(mat3(normalize(inTangent), normalize(inBitangent), N) * nTS);

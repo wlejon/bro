@@ -86,7 +86,7 @@
  * PROCESSES (land_process_layer.glsl is the contract; docs/scene-world-
  * architecture.md §11, "Processes"). GLSL that defines
  *
- *     void procInit(inout vec4 v[PROC_CHANNELS])    // a cell's first values (v starts at 0)
+ *     void procInit(inout vec4 v[PROC_CHANNELS])    // a cell's first values (v starts at 0, v[0].y at 1)
  *     void <pass>(inout vec4 v[PROC_CHANNELS])      // each pass's kernel: v starts as the cell's last
  *
  * run over the land's GRID: `resolution` cells a side over the land (on a

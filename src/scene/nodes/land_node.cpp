@@ -330,12 +330,13 @@ SurfaceLayerConfig LandNode::tileConfig() const {
     // Two texels of border: a normal's central differences at a tile's edge
     // read one past it, and the bilinear filter one more.
     c.border = 2;
-    c.slots = 1024;
+    c.slots = 2048;
     c.pageSize = 256;
     c.maxLevels = 20;
-    // A ring cell is about 2 / resolution of the view's height across, two
-    // texels to it: refine a tile while its texel covers more than that.
-    c.texelPixels = 8.0f;
+    // The land's fragments read its albedo and normal at their own
+    // footprint (mesh.frag): refine a tile while its texel covers more than
+    // four pixels.
+    c.texelPixels = 4.0f;
     return c;
 }
 
