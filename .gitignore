@@ -74,6 +74,8 @@ app.dylib
 app.lib
 app.exp
 app.pdb
+app.host-globals
+app.natives.json
 
 # Screenshots the render checks take to compare frames (run_wild_test.sh and
 # its neighbours). Regenerated on every run, and meaningful only against the

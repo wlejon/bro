@@ -135,11 +135,6 @@ bh_ensure_module() {
         return 77
     fi
 
-    if [[ -f "$module" && "$module" -nt "$probe" && "$module" -nt "$bronze" ]]; then
-        echo "$module"
-        return 0
-    fi
-
     rtlib="$(bh_find_shared_rt_lib "$project_dir")" || {
         [[ -f "$module" ]] && { echo "$module"; return 0; }
         return 77
@@ -156,22 +151,38 @@ bh_ensure_module() {
     # entry points the same install registered, written to a file beside the
     # globals list. It is what turns the probe's `bro.time.scale` into the
     # direct call bro's own bro_core.js makes.
-    local bin manifest natives
+    #
+    # Both are kept beside the module (app.host-globals, app.natives.json):
+    # a module is current only while it is newer than the probe and the
+    # compiler AND the binary still prints the lists it was compiled against.
+    # A global removed from the runtime otherwise leaves every fixture's
+    # module refusing to load ("host globals missing from runtime").
+    local bin manifest natives fresh fresh_natives
     bin="$(bh_find_bro_headless "$project_dir")" || {
         [[ -f "$module" ]] && { echo "$module"; return 0; }
         return 77
     }
-    manifest="${TMPDIR:-/tmp}/bh_host_globals.$$"
-    natives="$manifest.natives.json"
+    manifest="$appdir/app.host-globals"
+    natives="$appdir/app.natives.json"
+    fresh="${TMPDIR:-/tmp}/bh_host_globals.$$"
+    fresh_natives="$fresh.natives.json"
     if ! "$bin" "$(bh_to_win_path "$appdir")" --print-host-globals \
-            --print-native-manifest "$(bh_to_win_path "$natives")" \
-            > "$manifest" 2> "$manifest.err"; then
+            --print-native-manifest "$(bh_to_win_path "$fresh_natives")" \
+            > "$fresh" 2> "$fresh.err"; then
         echo "HOST GLOBALS FAILED ($bin --print-host-globals --print-native-manifest)" >&2
-        tail -20 "$manifest.err" >&2
-        rm -f "$manifest" "$manifest.err" "$natives"
+        tail -20 "$fresh.err" >&2
+        rm -f "$fresh" "$fresh.err" "$fresh_natives"
         return 1
     fi
-    rm -f "$manifest.err"
+    rm -f "$fresh.err"
+    if [[ -f "$module" && "$module" -nt "$probe" && "$module" -nt "$bronze" ]] \
+            && cmp -s "$fresh" "$manifest" && cmp -s "$fresh_natives" "$natives"; then
+        rm -f "$fresh" "$fresh_natives"
+        echo "$module"
+        return 0
+    fi
+    mv -f "$fresh" "$manifest"
+    mv -f "$fresh_natives" "$natives"
 
     local -a pin_args=()
     if [[ "${BRO_CENSUS:-}" == "1" ]]; then
@@ -195,8 +206,8 @@ bh_ensure_module() {
                 --host-globals "$(bh_to_win_path "$manifest")" \
                 --native-manifest "$(bh_to_win_path "$natives")" \
                 ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || status=$?
-    rm -f "$manifest" "$natives"
     if [[ $status -ne 0 ]]; then
+        rm -f "$manifest" "$natives"
         echo "COMPILE FAILED" >&2
         printf '%s\n' "$log" | tail -20 >&2
         return 1
