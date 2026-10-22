@@ -610,6 +610,7 @@ private:
     int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
     ShadowPages shadowPages_;
     ShadowCasters shadowCasterStates_;
+    std::vector<uint64_t> shortSerials_;   // (a plants node's plans out of room, reused)
     ShadowPlan shadowPlan_;
     // This frame's casters that are not still (ShadowMotion), by node id.
     std::unordered_map<uint32_t, ShadowMotion> shadowMotion_;

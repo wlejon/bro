@@ -642,6 +642,34 @@ void testCasters() {
     check(p.entry(e).dirty && !casters.moving(5), "a still caster gone redraws its pages");
 }
 
+void testRedrawPlantsOf() {
+    // The plants drawn in one frame came up short (their plan out of room):
+    // the pages that frame drew are missing again, and only those.
+    ShadowPagesConfig c;
+    c.staleNow = 0;
+    ShadowPages p;
+    p.configure(c);
+    ShadowPlan plan;
+    const Vec3 eye{0.0625f, 1.0f, 0.0625f};
+    const int s = p.swayLevel();
+    const int first = entryAt(p, eye, s + 1), second = entryAt(p, eye, s + 2);
+    frame(p, plan, eye, {first});
+    frame(p, plan, eye, {first});   // drawn (granted last frame)
+    const uint64_t drewFirst = p.serial();
+    frame(p, plan, eye, {first, second});
+    frame(p, plan, eye, {first, second});
+    const uint64_t drewSecond = p.serial();
+    check(p.entry(first).drawn && p.entry(second).drawn && drewFirst != drewSecond, "each drawn in its own frame");
+    p.redrawPlantsOf(drewSecond + 7);
+    check(p.entry(first).drawn && p.entry(second).drawn, "a frame that drew no page leaves them all");
+    p.redrawPlantsOf(drewFirst);
+    check(!p.entry(first).drawn && p.entry(first).physical < 0 && p.entry(second).drawn,
+          "a short frame's page is missing again, another frame's is kept");
+    frame(p, plan, eye, {first, second});
+    ShadowPageWant w;
+    check(hasWant(p, first, &w) && w.error > 1.0f, "and waits as a missing page, not a stale one");
+}
+
 }  // namespace
 
 int main() {
@@ -660,6 +688,7 @@ int main() {
     testCoverRects();
     testLocalMaps();
     testCasters();
+    testRedrawPlantsOf();
     std::printf("bro_shadow_pages_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

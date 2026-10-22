@@ -170,6 +170,16 @@ public:
         if (auto source = statsSource_.lock()) source->latest(stats_);
         return stats_;
     }
+    /// The frames whose plan ran out of room (its records or leaves, sized
+    /// from the frames before: a jump into denser plants), by their shadow
+    /// plan's serial, as their read-back comes in. What such a frame drew
+    /// was short of plants, and a shadow page keeps what it was drawn with:
+    /// the renderer takes them and redraws the pages those frames drew.
+    void notePlanShort(uint64_t shadowSerial) const { planShort_.push_back(shadowSerial); }
+    void takePlanShort(std::vector<uint64_t>& out) const {
+        out.clear();
+        out.swap(planShort_);
+    }
 
 private:
     // A leaf's plants: those set by hand and how many placed follow them in
@@ -223,6 +233,7 @@ private:
     mutable bool cellsDirty_ = false;
     mutable Stats stats_;
     std::weak_ptr<StatsSource> statsSource_;
+    mutable std::vector<uint64_t> planShort_;
 };
 
 }  // namespace bro::scene

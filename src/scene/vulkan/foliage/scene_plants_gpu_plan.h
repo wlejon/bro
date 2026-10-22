@@ -84,11 +84,18 @@ public:
         VkDescriptorSet planSet_ = VK_NULL_HANDLE;
         VkPipeline pose_ = VK_NULL_HANDLE;   // this frame's pose stage (its module's)
         uint32_t askedRecords_ = 0, askedLeaves_ = 0;
-        // The read-back ring: a slot a frame, stamped with its submission.
+        uint64_t roomRecords_ = 0, roomLeaves_ = 0;   // this frame's
+        uint64_t shadowSerial_ = 0;                   // this frame's shadow plan's
+        // The frames read back that asked for more than their room, by
+        // their shadow plan's serial, not yet told the node.
+        std::vector<uint64_t> short_;
+        // The read-back ring: a slot a frame, stamped with its submission,
+        // the room it had and its shadow plan.
         static constexpr int kRing = 4;
         struct Slot {
             enum State : uint8_t { Free, Recorded, Submitted } state = Free;
             uint64_t ticket = 0, serial = 0;
+            uint64_t roomRecords = 0, roomLeaves = 0, shadowSerial = 0;
             render::VulkanQueue* queue = nullptr;
         };
         Slot ring_[kRing];

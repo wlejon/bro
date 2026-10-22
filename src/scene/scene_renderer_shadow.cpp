@@ -118,6 +118,9 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                                                   });
                                                   return true;
                                               });
+                    // The frames whose plan ran out of room drew short.
+                    p->takePlanShort(shortSerials_);
+                    for (const uint64_t serial : shortSerials_) pages.redrawPlantsOf(serial);
                     casterBounds = bromath::amerge(casterBounds, all);
                 }
                 shadowMotion_[m->id()] = ShadowMotion::Swaying;

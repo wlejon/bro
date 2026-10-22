@@ -586,6 +586,14 @@ void ShadowPages::invalidateAll() {
         if (e.drawn) e.dirty = true;
 }
 
+void ShadowPages::redrawPlantsOf(uint64_t serial) {
+    // Missing, not stale: a page short of its plants is a lit hole where
+    // their shadow is, so the lookup reads its drawn ancestor meanwhile and
+    // it waits as a missing page does.
+    for (size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].drawn && entries_[i].plantsDrawn == serial) release(static_cast<int>(i));
+}
+
 int ShadowPages::swayLevel() const {
     const int l = static_cast<int>(std::lround(std::log2(config_.swayTexel / config_.finestTexel)));
     return std::clamp(l, 0, config_.levels - 1);

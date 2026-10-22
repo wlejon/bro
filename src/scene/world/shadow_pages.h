@@ -163,6 +163,10 @@ public:
     /// for them).
     void invalidate(const bromath::AABB3& box);
     void invalidateAll();
+    /// The plants drawn into the pages of plan `serial` came up short (their
+    /// GPU plan ran out of room that frame): those pages still holding that
+    /// draw are missing again (their ancestors sampled until redrawn).
+    void redrawPlantsOf(uint64_t serial);
     /// Something moves inside `box` this frame: drawn into the overlays of
     /// the needed pages it touches, in every local map and the sun's levels
     /// from swayLevel() up (`sways`: that level alone).
@@ -242,6 +246,7 @@ private:
         bool dirty = false;
         bool fresh = false;      // first drawn this frame
         bool dynamic = false;    // overlaid this frame
+        uint64_t plantsDrawn = 0;   // the plan serial the plants were last drawn into it at (0: never)
     };
     struct Map {
         int kind = SP_KIND_CLIPMAP;

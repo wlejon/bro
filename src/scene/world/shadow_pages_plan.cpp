@@ -306,7 +306,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         if (a.dynamic != b.dynamic) return a.dynamic;
         return a.h > b.h;
     });
-    std::vector<uint8_t> inView(entries_.size(), 0);
+    std::vector<uint8_t> inView(entries_.size(), 0), plantPage(entries_.size(), 0);
     int shelfX = 0, shelfY = 0, shelfH = 0;
     const int scratch = config_.scratchSize;
     for (const Rect& r : rects) {
@@ -372,6 +372,7 @@ void ShadowPages::plan(ShadowPlan& out) {
                 }
                 c.physical = e.physical;
                 c.plants = v.plants == ShadowPlants::All;
+                plantPage[static_cast<size_t>(i)] = v.plants != ShadowPlants::None;
                 ++out.staticPages;
                 out.plantPages += c.plants;
                 if (c.plants) out.plantUnits += plantUnits(i);
@@ -398,6 +399,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         e.fresh = !e.drawn;
         e.drawn = true;
         e.dirty = false;
+        e.plantsDrawn = plantPage[static_cast<size_t>(i)] ? serial_ : 0;
         ++stats_.drawn;
     }
     for (const Map& m : maps_) {

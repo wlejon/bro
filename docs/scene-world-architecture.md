@@ -1022,6 +1022,16 @@ planet's relief (step 9), not haze.
   it cost the flyover 0.2 ms a frame, with the GPU idle between the
   frame's submissions. A kind's GPU timer span runs in segments, its draw
   and its copy, so its price is what it costs.
+- **A plan out of room.** The plants' GPU plan sizes its records and leaves
+  from what the frames before asked, so a frame that asks for more (a jump
+  into denser plants) draws short, and a page keeps what it was drawn with.
+  Each page holds the shadow plan's serial its plants were drawn at; when a
+  frame's read-back says it asked past its room, the node is told
+  (`PlantsNode::notePlanShort`) and the pages that frame drew are missing
+  again (`ShadowPages::redrawPlantsOf`), their ancestors read until they are
+  redrawn. Biomes' glade from the meadow ran out of room in two frames, whose
+  175 and 123 pages would otherwise have kept their missing plants until
+  something else redrew them.
 - **What moves** is drawn each frame into overlays of the needed pages it
   touches, sampled in the scratch target. Plants and grass sway in the sway
   level's overlays (8 mm texels), which the finer levels read; past it their

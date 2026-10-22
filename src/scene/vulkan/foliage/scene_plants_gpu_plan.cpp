@@ -116,9 +116,17 @@ void GpuPlanner::Node::poll() {
     askedLeaves_ = w[PP_S_LEAF_CHUNKS];
     have_ = true;
     readSerial_ = ring_[best].serial;
-    for (Slot& slot : ring_)
-        if (slot.state == Slot::Submitted && slot.serial <= readSerial_ && slot.queue->isComplete(slot.ticket))
-            slot.state = Slot::Free;
+    // Each frame read back, the newest and those before it: one that asked
+    // for more than its room drew short.
+    for (int i = 0; i < kRing; ++i) {
+        Slot& slot = ring_[i];
+        if (slot.state != Slot::Submitted || slot.serial > readSerial_ || !slot.queue->isComplete(slot.ticket))
+            continue;
+        const auto* r = static_cast<const uint32_t*>(readback_.mappedData) + i * PP_S_WORDS;
+        if (r[PP_S_RECORDS] > slot.roomRecords || r[PP_S_LEAF_CHUNKS] > slot.roomLeaves)
+            short_.push_back(slot.shadowSerial);
+        slot.state = Slot::Free;
+    }
 }
 
 bool GpuPlanner::Node::latest(PlantsNode::Stats& out) {
@@ -246,6 +254,10 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
             }
         }
     n.poll();
+    // (A frame that ran out of room drew short of plants: the node is told,
+    // and the shadow pages it cast into are redrawn.)
+    for (const uint64_t serial : n.short_) node.notePlanShort(serial);
+    n.short_.clear();
     // A frame recorded but never submitted reads back nothing.
     for (Node::Slot& s : n.ring_)
         if (s.state == Node::Slot::Recorded) s.state = Node::Slot::Free;
@@ -280,6 +292,9 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 kLocal))
         return false;
+    n.roomRecords_ = records;
+    n.roomLeaves_ = leaves;
+    n.shadowSerial_ = frame.renderer.shadowPlan().serial;
     n.chunks = n.slotChunks_[f];
     n.poses = n.slotPoses_[f];
     n.args = n.slotArgs_[f];
@@ -445,6 +460,9 @@ void GpuPlanner::record(SceneFrame& frame) {
         n->ring_[slot].state = Node::Slot::Recorded;
         n->ring_[slot].serial = ++n->serial_;
         n->ring_[slot].ticket = 0;
+        n->ring_[slot].roomRecords = n->roomRecords_;
+        n->ring_[slot].roomLeaves = n->roomLeaves_;
+        n->ring_[slot].shadowSerial = n->shadowSerial_;
         VkBufferCopy copy{VkDeviceSize{PP_N_STATS} * 4, VkDeviceSize(slot) * PP_S_WORDS * 4, VkDeviceSize{PP_S_WORDS} * 4};
         vkCmdCopyBuffer(cmd, n->work_.buffer, n->readback_.buffer, 1, &copy);
     }
