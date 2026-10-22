@@ -57,6 +57,13 @@ atmosphere):
 - **At a million plants** (8.4 km) the plants alone take 3 ms, most of it
   plants too far to be more than a few pixels. Fixed by the far field (§2).
 
+The low end is about a 3060 at 60 fps (16.7 ms, `target=16.7`). Measured
+on halo's Radeon 8060S (Strix Halo, RADV), a GPU of that class, at golden
+hour (the dearest sun, 2026-10-22): at 1920×1080 the shots' means are
+2.9–5.0 ms (max 6.5), at 2560×1364 4.4–7.3 ms (max 8.8), and the golden
+walk at 1080p 5.46 ms, no frame of 150 over 16.7 ms. About half the frame
+is spare there.
+
 ## 1. World cells
 
 A quadtree over the ground that every system's content hangs off.
