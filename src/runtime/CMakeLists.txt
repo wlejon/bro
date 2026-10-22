@@ -77,6 +77,21 @@ else()
 endif()
 bro_bronze_stage_runtime(libbro)
 
+# system/ (the menu bar, perf, settings, inspector and splash panels, the
+# project manager) beside the library, as a package has it: bro run from any
+# directory but the source root finds its panels in the build tree too. A
+# mirror, remade whenever a file under system/ changes.
+file(GLOB_RECURSE _bro_system_files CONFIGURE_DEPENDS "${bro_SOURCE_DIR}/system/*")
+set(_bro_system_stamp "${CMAKE_CURRENT_BINARY_DIR}/system-$<CONFIG>.stamp")
+add_custom_command(OUTPUT "${_bro_system_stamp}"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:libbro>/system"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${bro_SOURCE_DIR}/system" "$<TARGET_FILE_DIR:libbro>/system"
+    COMMAND ${CMAKE_COMMAND} -E touch "${_bro_system_stamp}"
+    DEPENDS ${_bro_system_files}
+    COMMENT "Mirroring system/ beside libbro")
+add_custom_target(bro_system_dir DEPENDS "${_bro_system_stamp}")
+add_dependencies(libbro bro_system_dir)
+
 # The executables and the library find libbro and bronze's runtime beside
 # themselves, so a packaged copy runs from wherever it is unpacked (the build
 # tree's absolute rpath stays for running in place).
