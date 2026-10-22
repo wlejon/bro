@@ -425,12 +425,16 @@ at all.
   (mesh.frag's landCanopyAt: set 3 in the land's own build, SCENE_LAND,
   and the turf's grass node's set 4, LG_CANOPY), at the tiles' texel,
   half a ring cell.
-- **Where it falls short.** Past the range in biomes' high view the cover
-  has the forest's patches (drawn as cover alone, they are the plants'
-  stands), but the canopy's colour through 10 km of haze is a dark olive
-  near the meadow's, where the plants drawn there read as lighter
-  blue-green crowns on the meadow: the band's mean matches theirs, its
-  patches barely show.
+- **Where it falls short.** The far tiles' texels are coarse (60–90 m at
+  8–12 km, where biomes' high view has pixels of 3–20 m), so a field as
+  crisp as a forest's edge is smeared across them: with the canopy past
+  6 km, the forest's pixels there (as the plants drawn to 12 km mark them)
+  were 5 levels of red darker than the meadow's, against 25 with the
+  plants, its mean the same, so the stands faded into a tone at a line.
+  Far plants cost next to nothing (to 12 km, 0.01–0.02 ms more on the high
+  views), so biomes draws them past its edge; the canopy is for worlds
+  larger than the plants' range, where a finer far tier for it is still
+  to do.
 
 ### As built: the land's sun
 
