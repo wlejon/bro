@@ -231,7 +231,7 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
         bounds.max.y += kDepthMargin;
         if (gl.tiles.setBounds(bounds)) gl.atlas.clearPages(cmd);
         if (!gl.tiles.configured()) continue;
-        gl.tiles.setGeneration(groundGeneration(*grass));
+        gl.tiles.setGeneration(groundGeneration(frame.graph, *grass));
 
         SurfaceLayers::View sv;
         sv.eye = view.eye;

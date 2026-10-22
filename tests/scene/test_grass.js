@@ -1,10 +1,10 @@
-// scene.createGrass: procedural blades over a baked field (scene/nodes/grass_node.h,
-// vulkan/shaders/ground/scene_grass.glsl), as a sward module (SWARD below)
-// builds them. Verifies:
-//   - the node, its params round trip and the field bake (sampleHeights of a
-//     ground mesh, grassHeightAt, a density function)
-//   - blades are drawn: ring instances in grassStats, a grassy floor greener
-//     than the bare one; a density of 0 grows nothing
+// scene.createGrass: procedural blades over the land they stand on
+// (scene/nodes/grass_node.h, vulkan/shaders/ground/scene_grass.glsl), as a
+// sward module (SWARD below) builds them where the land's surface module
+// (GROUND below) grows them. Verifies:
+//   - the node and its params round trip; its ground must be a land
+//   - blades are drawn: ring instances in grassStats, a grassy land greener
+//     than the bare one, dry where the land says; a density of 0 grows nothing
 //   - grass is left out of raycasts
 //   - a calm wind keeps the frame still; a wind moves it
 //   - movers attach and detach; a push bends the blades it covers
@@ -32,9 +32,26 @@ function freshScene(size) {
     return { canvas: cv, scene: cv.getContext('scene') };
 }
 
+const N = (type, props = {}) => {
+    const n = FastNoise.create(type);
+    for (const k in props) n.set(k, props[k]);
+    return n;
+};
+
+// The land's surface module (shaders/ground/scene_land_layer.glsl): grey
+// ground, the sward's density landData(0).x, lush west of x = 0 and dry
+// east of it.
+const GROUND = `
+LandSurface landSurface(LandPoint q) {
+    LandSurface s = landSurfaceOf(vec3(0.2));
+    s.cover = vec4(landData(0).x, q.p.x > 0.0 ? 1.0 : 0.0, 1.0, 0.0);
+    return s;
+}
+`;
+
 // A sward module (shaders/ground/scene_sward_layer.glsl): a blade a
-// candidate as the field's density says, a strip bent by the wind and the
-// movers' push, green where the field is lush and straw where it is dry.
+// candidate as the land's density says, a strip bent by the wind and the
+// movers' push, green where the land is lush and straw where it is dry.
 const SWARD = {
     height: 0.35,
     data: new Float32Array([0.12, 0.4, 0.05, 0, 0.55, 0.42, 0.2, 0]),
@@ -92,34 +109,38 @@ if (!s.scene) {
     const scn = s.scene;
     scn.setToneMap({ mode: 'linear', gamma: 1.0 });
     scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 3 });
-    const floor = scn.createMesh({ mesh: 'plane', halfW: 20, halfD: 20, color: [0.45, 0.45, 0.45] });
-    floor.position = [0, 0.5, 0];
+    const floor = scn.createLand({ height: N('Constant', { Value: 0.5 }), extent: 40, surface: GROUND,
+                                   data: [1, 0, 0, 0] });
     scn.setCamera({ fov: 55, near: 0.05, far: 200, position: [0, 2.2, 6], target: [0, 0.5, -2] });
     scn.setWind({ speed: 0, gust: 0 });
+    // The land's first tiles.
+    const frames = (n = 3) => { flush(); for (let i = 0; i < n; i++) advanceTime(16); };
+    frames(4);
 
     const bare = scn.captureFrame();
 
-    // ---- The bake ----
-    const hs = floor.sampleHeights(-25, 0, 1, 51, 1);
-    assert(hs.length === 51, `sampleHeights returns cols x rows (${hs.length})`);
-    assert(Number.isNaN(hs[0]) && Math.abs(hs[25] - 0.5) < 1e-4,
-        `sampleHeights: NaN off the mesh, its top inside (${hs[0]}, ${hs[25]})`);
+    // ---- The node ----
+    let threw = false;
+    const mesh = scn.createMesh({ mesh: 'plane', halfW: 1, halfD: 1 });
+    mesh.visible = false;
+    try { scn.createGrass({ ground: mesh, sward: SWARD }); } catch (e) { threw = e instanceof TypeError; }
+    assert(threw, 'createGrass on a ground that is not a land throws');
 
-    const grass = scn.createGrass({ ground: floor, cell: 0.5, sward: SWARD, dry: (x) => x > 0 ? 1 : 0 });
+    const grass = scn.createGrass({ ground: floor, sward: SWARD });
     assert(grass && typeof grass.grassParams === 'function', 'createGrass returns a node');
     const p = grass.grassParams();
     assert(p.width > 0 && p.bladeDensity > 0 && p.range > 0, `params read back (${JSON.stringify(p)})`);
     grass.setGrass({ width: 0.005 });
     assert(Math.abs(grass.grassParams().width - 0.005) < 1e-5 && grass.grassParams().range === p.range,
         'setGrass changes what it names and keeps the rest');
-    assert(Math.abs(grass.grassHeightAt(3.2, -4.1) - 0.5) < 1e-4, 'grassHeightAt reads the baked ground');
-    assert(floor.grassParams() === undefined, 'grass members answer undefined on a plain mesh');
+    assert(floor.grassParams() === undefined, 'grass members answer undefined on a land');
 
     // ---- Drawn ----
+    frames(2);
     const lush = scn.captureFrame();
     const st = grass.grassStats();
-    assert(st && st.instances.length === 4 && st.instances[0] > 1000 && st.fieldCols === 81,
-        `rings issue instances (${st && st.instances.join('/')}), field ${st && st.fieldCols}`);
+    assert(st && st.instances.length === 4 && st.instances[0] > 1000,
+        `rings issue instances (${st && st.instances.join('/')})`);
     // Only cells the view can see are issued: looking up at the sky, next to
     // none (the box test is conservative at the frustum's corners).
     scn.setCamera({ position: [0, 2.2, 6], target: [0, 40, -2] });
@@ -138,7 +159,8 @@ if (!s.scene) {
 
     // Not hit by rays.
     const hit = scn.raycast([0, 5, 2], [0, -1, 0]);
-    assert(hit && Math.abs(hit.point[1] - 0.5) < 0.01, `raycasts pass through grass to the floor (${hit && hit.point[1]})`);
+    assert(hit && hit.node === floor && Math.abs(hit.point[1] - 0.5) < 0.01,
+        `raycasts pass through grass to the land (${hit && hit.point[1]})`);
 
     // ---- Still in a calm, moving in a wind ----
     advanceTime(200);
@@ -167,7 +189,8 @@ if (!s.scene) {
     assert(diffCount(before, after) > 100, `a push bends the blades (${diffCount(before, after)} px)`);
 
     // ---- No density, no grass ----
-    grass.setGround({ ground: floor, cell: 0.5, density: 0 });
+    floor.setLand({ data: [0, 0, 0, 0] });
+    frames(4);
     const none = scn.captureFrame();
     assert(diffCount(none, bare) < 40, `density 0 grows nothing (${diffCount(none, bare)} px differ from bare)`);
 

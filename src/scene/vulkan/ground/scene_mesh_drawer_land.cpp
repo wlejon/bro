@@ -7,6 +7,7 @@
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
+#include "scene/nodes/grass_node.h"
 #include "scene/nodes/land_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -26,8 +27,11 @@ namespace bro::scene::vk {
 
 namespace {
 
-// The tiles' layers: the heights and the surface (albedo, roughness).
-constexpr VkFormat kLandFormats[2] = {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
+// The tiles' layers: the heights, the surface (albedo, herbs) and what
+// covers it (LandSurface::cover; a grass node on the land reads all three,
+// scene_mesh_drawer_grass.cpp).
+constexpr VkFormat kLandFormats[3] = {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                      VK_FORMAT_R16G16B16A16_SFLOAT};
 // A storage buffer's offset alignment no device exceeds.
 constexpr VkDeviceSize kStorageAlign = 256;
 // How far above and below the land's heights a tile's box reaches.
@@ -43,6 +47,7 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     fill.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    fill.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     landFillSetLayout_ = fill.build(device_);
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, LF_P_WORDS * 4};
     VkPipelineLayoutCreateInfo info{};
@@ -124,6 +129,45 @@ SceneMeshDrawer::LandTiles* SceneMeshDrawer::landTiles(SceneFrame& frame, LandNo
     return slot->failed ? nullptr : slot.get();
 }
 
+void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, const LandTiles& lt, float* words) {
+    const LandNode::Rings& r = node.rings();
+    const SurfaceLayerConfig& config = lt.tiles.config();
+    std::fill(words, words + LD_WORDS, 0.0f);
+    words[LD_LAND + 0] = node.extent();
+    words[LD_LAND + 1] = frame.view.eye.x;
+    words[LD_LAND + 2] = frame.view.eye.z;
+    words[LD_RINGS + 0] = r.cellSize;
+    words[LD_RINGS + 1] = 4.0f / static_cast<float>(r.resolution);
+    words[LD_RINGS + 2] = static_cast<float>(r.levels);
+    words[LD_RINGS + 3] = 0.5f * static_cast<float>(r.resolution);
+    words[LD_TILES + 0] = config.tileMetres;
+    words[LD_TILES + 1] = static_cast<float>(config.tileTexels);
+    words[LD_TILES + 2] = static_cast<float>(config.border);
+    words[LD_TILES + 3] = static_cast<float>(lt.tiles.levels());
+    words[LD_PAGE + 0] = static_cast<float>(lt.tiles.pageShift());
+    words[LD_PAGE + 1] = static_cast<float>(config.pageSize);
+    words[LD_PAGE + 3] = lt.tiles.stats().resident > 0 ? 1.0f : 0.0f;
+}
+
+bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, GrassGround& out) {
+    static_assert(sizeof(out.words) == LD_WORDS * sizeof(float));
+    out = {};
+    SceneNode* n = grass.ground() ? frame.graph.findById(grass.ground()) : nullptr;
+    LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
+    if (!land) return false;
+    const auto found = lands_.find(land->id());
+    if (found == lands_.end() || found->second->failed) return false;
+    const LandTiles& lt = *found->second;
+    if (lt.tiles.stats().resident == 0 || lt.generation != land->generation()) return false;
+    out.land = land;
+    for (int i = 0; i < 3; ++i) out.layers[i] = lt.atlas.layerView(i);
+    out.sampler = lt.atlas.layerSampler();
+    out.page = lt.atlas.pageView();
+    out.pageSampler = lt.atlas.pageSampler();
+    landWords(frame, *land, lt, out.words);
+    return true;
+}
+
 bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& out) {
     const LandShaders* shaders = landShaders(node);
     LandTiles* lt = shaders && !node.effectiveUnlit() ? landTiles(frame, node) : nullptr;
@@ -158,23 +202,8 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     out.push.pbrParams[3] = static_cast<float>(flags);
 
     // Set 3: its LandDraw and its tiles.
-    const LandNode::Rings& r = node.rings();
-    const SurfaceLayerConfig& config = lt->tiles.config();
-    float words[LD_WORDS] = {};
-    words[LD_LAND + 0] = node.extent();
-    words[LD_LAND + 1] = eye.x;
-    words[LD_LAND + 2] = eye.z;
-    words[LD_RINGS + 0] = r.cellSize;
-    words[LD_RINGS + 1] = 4.0f / static_cast<float>(r.resolution);
-    words[LD_RINGS + 2] = static_cast<float>(r.levels);
-    words[LD_RINGS + 3] = 0.5f * static_cast<float>(r.resolution);
-    words[LD_TILES + 0] = config.tileMetres;
-    words[LD_TILES + 1] = static_cast<float>(config.tileTexels);
-    words[LD_TILES + 2] = static_cast<float>(config.border);
-    words[LD_TILES + 3] = static_cast<float>(lt->tiles.levels());
-    words[LD_PAGE + 0] = static_cast<float>(lt->tiles.pageShift());
-    words[LD_PAGE + 1] = static_cast<float>(config.pageSize);
-    words[LD_PAGE + 3] = 1.0f;
+    float words[LD_WORDS];
+    landWords(frame, node, *lt, words);
     const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(words, sizeof(words));
     VkDescriptorSet set = frame.gpu.device.frameSet(frame.gpu.defaults.boneLayout);
     if (set == VK_NULL_HANDLE) return false;
@@ -298,6 +327,8 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.writeBuffer(2, fillSlice.buffer, fillBytes, fillSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                 writer.writeBuffer(3, dataSlice.buffer, dataBytes, dataSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                writer.writeImage(4, lt.atlas.layerView(2), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.updateSet(device_, set);
 
                 lt.atlas.beginFills(cmd, fills);

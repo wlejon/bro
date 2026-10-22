@@ -108,6 +108,9 @@ public:
     /// cells of its extent), and its generation (a new module or extent).
     const std::vector<SurfaceItem>& items() const { return items_; }
     const bromath::AABB3& bounds() const { return bounds_; }
+    /// The land's height range over world rect [x0, x1] x [z0, z1], from its
+    /// items (conservative); false off the land.
+    bool heightRange(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
     uint64_t generation() const { return generation_; }
 
     /// The tiles' layout (world/surface_layers.h): a level-0 tile's side is
@@ -136,6 +139,7 @@ private:
     Rings rings_;
     std::vector<Block> blocks_;
     std::vector<SurfaceItem> items_;
+    int itemCells_ = 0;   // items_ is itemCells_ x itemCells_, row by row from (-extent, -extent)
     bromath::AABB3 bounds_ = bromath::aempty3();
     uint64_t generation_ = 1;
     Stats stats_;

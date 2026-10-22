@@ -153,11 +153,13 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     // that fine is past it, before the field is read.)
     if (int(coverLevel(e.d, 1.0)) > level) return false;
     if (!grassInField(e.root) || e.h.w > grassFieldInside(e.root)) return false;
-    e.f = grassFieldAt(e.root);
+    vec2 under;
+    vec3 ground;
+    grassGround(e.root, e.f, under, ground);
     vec4 cp = camera.viewProj * vec4(e.root.x - eye.x, e.f.r + 0.5 - eye.y, e.root.y - eye.z, 1.0);
     float m = cp.w * 0.15 + 4.0;
     if (cp.w < -4.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
-    e.gn = grassGroundNormal(e.root);
+    e.gn = ground;
     vec3 toEye = normalize(vec3(eye.x - e.root.x, eye.y - e.f.r, eye.z - e.root.y));
     float sinE = dot(e.gn, toEye);
     if (sinE <= 0.0) return false;
@@ -173,7 +175,7 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     if (known >= 0) {
         e.kind = known;
     } else {
-        int v = grass.herbInfo.x > 0.5 ? herbStand(c, e.root, grassFloorHerbsAt(e.root)) : -1;
+        int v = grass.herbInfo.x > 0.5 ? herbStand(c, e.root, under) : -1;
         e.kind = v >= 0 && v < HERB_VARIETIES ? v + 1 : 0;
     }
     if (e.kind == 0) {

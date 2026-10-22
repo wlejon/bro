@@ -216,6 +216,24 @@ void LandNode::buildRings() {
     setMesh(std::move(m));
 }
 
+bool LandNode::heightRange(float x0, float z0, float x1, float z1, float& lo, float& hi) const {
+    const float e = extent_;
+    if (items_.empty() || x1 < -e || z1 < -e || x0 > e || z0 > e) return false;
+    const int n = itemCells_;
+    const float side = 2.0f * e / static_cast<float>(n);
+    const auto cellOf = [&](float v) { return std::clamp(static_cast<int>(std::floor((v + e) / side)), 0, n - 1); };
+    const int i0 = cellOf(x0), i1 = cellOf(x1), j0 = cellOf(z0), j1 = cellOf(z1);
+    lo = std::numeric_limits<float>::max();
+    hi = -lo;
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            const bromath::AABB3& b = items_[static_cast<size_t>(j) * n + i].bounds;
+            lo = std::min(lo, b.min.y);
+            hi = std::max(hi, b.max.y);
+        }
+    return true;
+}
+
 bromath::AABB3 LandNode::blockBounds(const Block& b, const bromath::Vec3& eye) const {
     const float cl = rings_.cellSize * std::exp2(static_cast<float>(b.ring));
     const float snap = 2.0f * cl;
@@ -231,6 +249,7 @@ void LandNode::rebuildItems() {
     items_.clear();
     const float e = extent_;
     const int cells = std::clamp(static_cast<int>(std::ceil(2.0f * e / kItemMetres)), 1, kItemCells);
+    itemCells_ = cells;
     const float side = 2.0f * e / static_cast<float>(cells);
     // Every cell's samples at once (FastNoise2's batch over a grid).
     const int per = kItemSamples;

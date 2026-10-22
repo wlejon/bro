@@ -14,10 +14,9 @@
 #include "ground/scene_cover_far.glsl"
 
 // The plant of cell `c` of the herbs' grid, if the draw draws one: inside
-// its ring, kept by the far ring's thinning, on the field, roughly on
+// its ring, kept by the far ring's thinning, on the land, roughly on
 // screen, and the module standing one there. The cover's plan
-// (cover_plan.comp) runs it once a cell. Sets all of `p` but its root and
-// ground (herbVertex's).
+// (cover_plan.comp) runs it once a cell; herbVertex at each vertex.
 bool herbPlantLive(ivec2 c, out HerbPlant p) {
     p.cell = c;
     p.h = vec4(grassHash(c, 101), grassHash(c, 102), grassHash(c, 103), grassHash(c, 104));
@@ -43,18 +42,20 @@ bool herbPlantLive(ivec2 c, out HerbPlant p) {
     if (!grassInField(p.rootXZ) || p.h.w > grassFieldInside(p.rootXZ)) return false;
 
     // Off screen: a box round the cell as tall as the tallest herb.
-    float groundY = grassFieldAt(p.rootXZ).r;
+    vec4 field;
+    grassGround(p.rootXZ, field, p.floorAt, p.ground);
+    float groundY = field.x;
+    p.root = vec3(p.rootXZ.x - eye.x, groundY - eye.y, p.rootXZ.y - eye.z);
     vec4 cp = camera.viewProj * vec4(p.rootXZ.x - eye.x, groundY + 0.5 - eye.y, p.rootXZ.y - eye.z, 1.0);
     float m = cp.w * 0.15 + 2.2;
     if (cp.w < -2.5 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
     if (far) {
         vec3 toEye = normalize(vec3(eye.x - p.rootXZ.x, eye.y - groundY, eye.z - p.rootXZ.y));
-        float lam = coverLevel(p.d, dot(grassGroundNormal(p.rootXZ), toEye));
+        float lam = coverLevel(p.d, dot(p.ground, toEye));
         if (coverKept(c, lam) <= 0.0) return false;
         p.farWiden = coverWiden(lam);
     }
 
-    p.floorAt = grassFloorHerbsAt(p.rootXZ);
     p.variety = herbStand(c, p.rootXZ, p.floorAt);
     return p.variety >= 0 && p.variety < HERB_VARIETIES;
 }
@@ -80,9 +81,6 @@ bool herbVertex(ivec2 c, int vid, vec3 v, out HerbVertex o) {
 
     HerbPlant p;
     if (!herbPlantLive(c, p)) return false;
-    vec3 eye = camera.eyeWorld.xyz;
-    p.root = vec3(p.rootXZ.x - eye.x, grassFieldAt(p.rootXZ).r - eye.y, p.rootXZ.y - eye.z);
-    p.ground = grassGroundNormal(p.rootXZ);
     o.ground = p.ground;
     int cards = int(grass.herbShape.x + 0.5);
     int verts = max(int(grass.herbShape.y + 0.5), 1);

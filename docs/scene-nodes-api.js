@@ -928,7 +928,7 @@ class SceneNode {
   /**
    * Mesh: the node's top surface (world y) on a grid, NaN where it has none:
    * texel (i, j) at world (x0 + i * cell, z0 + j * cell), row-major
-   * (`cols` per row). What createGrass bakes a mesh ground with.
+   * (`cols` per row). A land's are its heights (docs/land-api.js).
    * @param {number} x0
    * @param {number} z0
    * @param {number} cell

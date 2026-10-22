@@ -1,8 +1,8 @@
 #version 450
 // The land's tiles (scene_mesh_drawer_land.cpp): the world's land module
 // run over each texel of the tiles the world service granted this frame,
-// its heights into one array, its surface into the other, a slot an array
-// layer. A tile's texel (i, j), its border included, is centred at its
+// its heights into one array, its surface (albedo, herbs) into another and
+// what covers it into the third, a slot an array layer. A tile's texel (i, j), its border included, is centred at its
 // corner plus (i + 0.5, j + 0.5) texels (world/surface_layers.h: the
 // border lies outside the tile's own square).
 
@@ -12,6 +12,7 @@ layout(local_size_x = LF_GROUP, local_size_y = LF_GROUP) in;
 
 layout(set = 0, binding = 0, r32f) uniform writeonly image2DArray landHeights;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray landSurfaces;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2DArray landCovers;
 layout(std430, set = 0, binding = 2) readonly buffer LandFills { vec4 fills[]; };
 layout(std430, set = 0, binding = 3) readonly buffer LandData { vec4 words[]; } landDataBuffer;
 layout(push_constant) uniform LandFillPush { uint words[LF_P_WORDS]; } pc;
@@ -40,5 +41,7 @@ void main() {
 
     ivec3 at = ivec3(texel, int(f.w));
     imageStore(landHeights, at, vec4(h));
-    imageStore(landSurfaces, at, vec4(max(s.albedo, vec3(0.0)), 1.0));
+    imageStore(landSurfaces, at, vec4(max(s.albedo, vec3(0.0)), clamp(s.herbs, 0.0, 1.0)));
+    vec4 c = vec4(clamp(s.cover.xy, 0.0, 1.0), clamp(s.cover.z, 0.0, 2.0), clamp(s.cover.w, 0.0, 1.0));
+    imageStore(landCovers, at, c);
 }

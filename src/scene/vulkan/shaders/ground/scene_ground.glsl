@@ -99,8 +99,8 @@ float groundTwigs(vec2 xz, float size, float fp) {
     return on;
 }
 
-// The ground's data at `xz`: the grass node's field where it reaches (faded
-// out over its last few metres, as the blades and herbs are), the mesh's own
+// The ground's data at `xz`: the land's cover where it reaches (faded out
+// over its last few metres, as the blades and herbs are), the mesh's own
 // (`vdata`, its vertex colour: density, dryness, floor, herbs) beyond.
 struct GroundData {
     float density, dry, under, herbs, inside;
@@ -109,10 +109,11 @@ GroundData groundData(vec2 xz, vec4 vdata) {
     vec4 data = clamp(vdata, 0.0, 1.0);
     float inside = grassFieldInside(xz);
     if (grassInField(xz)) {
-        vec4 f = grassFieldAt(xz);
-        vec2 fl = grassFloorHerbsAt(xz);
-        vec4 fd = vec4(f.g, f.b, fl.x, grass.pushRate.z > 0.5 ? fl.y : 0.0);
-        data = mix(data, fd, inside);
+        vec4 f;
+        vec2 fl;
+        vec3 n;
+        grassGround(xz, f, fl, n);
+        data = mix(data, vec4(f.g, f.b, fl.x, fl.y), inside);
     }
     GroundData g;
     g.density = data.r;

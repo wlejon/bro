@@ -1,6 +1,7 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/vulkan/shaders/ground/scene_land_layout.h"
 
 #include "util/log.h"
 
@@ -77,6 +78,11 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     constexpr VkShaderStageFlags kVsFsCs = kVsFs | VK_SHADER_STAGE_COMPUTE_BIT;
     custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFsCs);
     for (uint32_t i = 1; i <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++i)
+        custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFsCs);
+    // Past them, the land's tiles a grass node stands on (its surface and
+    // page table; its heights and cover take two of the node's own slots).
+    static_assert(LG_SURFACES == MeshNode::kMaxUserTextures + 1 && LG_PAGE == kCustomBindings);
+    for (uint32_t i = LG_SURFACES; i <= kCustomBindings; ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kVsFsCs);
     customLayout = custom.build(dev);
 

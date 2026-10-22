@@ -1,16 +1,18 @@
 #pragma once
 
-// Grass: the cover over a ground the node is given, a meadow of procedural
-// blades bending in the scene's wind field and parted by movers. The GPU
-// half is vulkan/shaders/ground/scene_grass.glsl.
+// Grass: the cover over the land it stands on (land_node.h), a meadow of
+// procedural blades bending in the scene's wind field and parted by movers.
+// The GPU half is vulkan/shaders/ground/scene_grass.glsl.
 //
-// What the blades are is the world's: a sward MODULE, GLSL compiled into the
-// cover's shaders at run time (setSward, scene_sward_layer.glsl). No blade
-// carries data. The node holds:
-//   - the FIELD: a grid over the ground, four floats a texel (height,
-//     density 0..1, dryness 0 lush .. 1 sun-dried, height multiplier),
-//     set whole from a script (bro.scene's createGrass bakes it from a land,
-//     a mesh, a terrain or callbacks);
+// Where it grows is the world's land: its surface module says, at every
+// point, how thickly the sward stands, how dry and how tall it is, the
+// canopy over it and how thickly herbs grow (scene_land_layer.glsl's
+// LandSurface::cover and herbs), read from the land's tiles as the view
+// needs them, so the grass reaches as far as the land does. What the blades
+// are is the world's too: a sward MODULE, GLSL compiled into the cover's
+// shaders at run time (setSward, scene_sward_layer.glsl). No blade carries
+// data. The node holds:
+//   - its GROUND: the land node it stands on (setGround);
 //   - the PARAMS: the near blade width, the rings' density and range;
 //   - the INFLUENCE MAP: a window of cells around the camera into which
 //     movers (tracked nodes) and one-off pushes stamp a bend and a trample,
@@ -18,8 +20,8 @@
 //     (blades spring back in a fraction of a second, flattened grass rises
 //     over tens of seconds) with no per-frame pass over the map.
 //
-// With a world's herb module and a floor giving their density, it also
-// draws the low plants among the grass (setHerbs, scene_herb_layer.glsl).
+// With a world's herb module it also draws the low plants among the grass
+// where the land grows them (setHerbs, scene_herb_layer.glsl).
 //
 // Drawn as four rings around the camera, each one instanced draw over only
 // the cells the view can see (vulkan/ground/scene_mesh_drawer_grass.cpp). An
@@ -32,7 +34,7 @@
 //
 // A GrassNode is a MeshNode so the material setters (colour, roughness,
 // subsurface, receivesShadow, castsShadow) apply; its own mesh is the blade
-// and its transform is ignored (the blades stand on the field). It is left
+// and its transform is ignored (the blades stand on the land). It is left
 // out of raycasts and bounds.
 
 #include "scene/nodes/mesh_node.h"
@@ -65,31 +67,13 @@ public:
     /// From the flat list; a NaN keeps the current value.
     void paramsFromArray(const double* v, size_t n);
 
-    /// The field: `cols` x `rows` texels of 4 floats, texel (i, j) centred
-    /// at world (x0 + i * cell, z0 + j * cell). Replaces the whole field.
-    void setField(const float* rgba, int cols, int rows, float x0, float z0, float cell);
-    bool hasField() const { return fieldCols_ > 1 && fieldRows_ > 1; }
-    int fieldCols() const { return fieldCols_; }
-    int fieldRows() const { return fieldRows_; }
-    float fieldX0() const { return fieldX0_; }
-    float fieldZ0() const { return fieldZ0_; }
-    float fieldCell() const { return fieldCell_; }
-    /// The field's ground height at world (x, z) (bilinear, as the GPU
-    /// samples it); `fallback` outside it.
-    float fieldHeight(float x, float z, float fallback = 0.0f) const;
-    /// The ground's height range over world rect [x0, x1] x [z0, z1] and the
-    /// largest height multiplier there, from coarse blocks of the field
-    /// (conservative). False when nothing grows there (off the field, or
-    /// density or height 0 throughout): the drawer skips the cells.
-    bool fieldRange(float x0, float z0, float x1, float z1, float& lo, float& hi, float& tall) const;
-    /// The floor on the field's grid, `channels` floats a texel (1 or 2):
-    /// how closed the canopy overhead is (0 open .. 1 closed: litter on the
-    /// turf, scene_ground.glsl, and the light the herbs choose their places
-    /// by) and, with 2, how thickly herbs grow there (0 none .. 1 as their
-    /// abundance has it; they grow there whether the grass does or not).
-    /// Null clears it. A floor of another size than the field is ignored.
-    void setFloor(const float* floor, int cols, int rows, int channels = 1);
-    bool hasFloor() const { return !floor_.empty(); }
+    /// The land node the grass stands on (0: none, and nothing is drawn).
+    void setGround(uint32_t landId);
+    uint32_t ground() const { return ground_; }
+    /// The most a land's cover multiplies a blade's height by
+    /// (LandSurface::cover.z, land_fill.comp's clamp): the rings' culling
+    /// boxes reach that high.
+    static constexpr float kMaxTall = 2.0f;
 
     // --- Sward ---
     // The blades: a MODULE of the world's, GLSL compiled into the cover's
@@ -138,8 +122,8 @@ public:
     /// A hash of herbSource() (0: none), which keys its compiled shaders.
     uint64_t herbSourceHash() const { return herbSourceHash_; }
     const std::vector<float>& herbData() const { return herbData_; }
-    /// Herbs are drawn: a module, and a floor with their density.
-    bool hasHerbs() const { return !herbSource_.empty() && herbFloor_; }
+    /// Herbs are drawn (where the land grows them): a module.
+    bool hasHerbs() const { return !herbSource_.empty(); }
     /// The tallest the module's plants stand (m).
     float herbHeight() const { return herbHeight_; }
     /// The herbs' grid: one plant at most a cell.
@@ -160,9 +144,6 @@ public:
     /// Ring `i`'s mesh: `herbRing(i).cards` strips end to end.
     const bromesh::MeshData& herbRingMesh(int i) const { return herbMeshes_[i < 0 ? 0 : i >= kHerbRings ? kHerbRings - 1 : i]; }
     static int cardVertices(int segments) { return (segments + 1) * 2; }
-    /// The ground's height range over a world rect where herbs grow (false:
-    /// none there), from the field's blocks.
-    bool herbRangeAt(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
     void setDrawnHerbs(int ring, uint32_t n) { if (ring >= 0 && ring < kHerbRings) herbDrawn_[ring] = n; }
     uint32_t drawnHerbs(int ring) const { return ring >= 0 && ring < kHerbRings ? herbDrawn_[ring] : 0; }
 
@@ -211,10 +192,8 @@ public:
     /// The share of a stamped trample left `age` s after its stamp.
     static float trampleRelease(float age);
 
-    // User-texture slot names (MeshNode::setCustomShaderTexture).
-    static constexpr const char* kFieldTexture = "u_grassField";
+    // User-texture slot name (MeshNode::setCustomShaderTexture).
     static constexpr const char* kPushTexture = "u_grassPush";
-    static constexpr const char* kFloorTexture = "u_grassFloor";
 
     // --- Rings ---
     static constexpr int kRings = 4;
@@ -264,15 +243,10 @@ private:
     void stampDisc(float x, float z, float radius, float vx, float vz, float strength, float trample, float dt,
                    float now, int& minI, int& minJ, int& maxI, int& maxJ);
     void recentre(float eyeX, float eyeZ);
-    void rebuildBlocks();
-    void uploadField();
 
     Params params_;
     bromesh::MeshData ringMeshes_[kRings];
-    std::vector<float> field_;
-    std::vector<float> floor_;     // 2 a texel: canopy, herb density
-    std::vector<float> fieldGpu_;  // the field as uploaded, the grass giving the herbs room (empty: field_ as is)
-    bool herbFloor_ = false;       // the floor was given a herb density
+    uint32_t ground_ = 0;
     std::string swardSource_;
     uint64_t swardSourceHash_ = 0;
     std::vector<float> swardData_;
@@ -287,17 +261,6 @@ private:
     float herbFar_ = 90.0f;
     bromesh::MeshData herbMeshes_[kHerbRings];
     uint32_t herbDrawn_[kHerbRings] = {};
-    int fieldCols_ = 0, fieldRows_ = 0;
-    // Blocks of kFieldBlock x kFieldBlock texels: min height, max height,
-    // the largest height multiplier where anything grows (0: nothing does)
-    // and the largest herb density.
-    static constexpr int kFieldBlock = 8;
-    static constexpr int kBlockFloats = 4;
-    // Field density under which nothing grows (setField).
-    static constexpr float kDensityFloor = 0.06f;
-    std::vector<float> blocks_;
-    int blockCols_ = 0, blockRows_ = 0;
-    float fieldX0_ = 0.0f, fieldZ0_ = 0.0f, fieldCell_ = 1.0f;
 
     std::vector<Mover> movers_;
     std::vector<Push> pushes_;

@@ -1,8 +1,10 @@
-// Grass: the cover a grass node grows over its field, the GPU half of
-// scene/nodes/grass_node.h. Needs scene_camera.glsl (the camera, the wind
-// field, the hashes and noise).
+// Grass: the cover a grass node grows over the land it stands on, the GPU
+// half of scene/nodes/grass_node.h. Needs scene_camera.glsl (the camera, the
+// wind field, the hashes and noise).
 //
-// This is the engine's half. What grows is the world's: its sward module
+// This is the engine's half. What grows is the world's: where, how thickly
+// and how dry, the land's surface module (scene_land_layer.glsl's
+// LandSurface, read from the land's tiles here); its sward module
 // (scene_sward_layer.glsl) says what the blades are, its herb module
 // (scene_herb_layer.glsl) what low plants stand among them. Here are the
 // node's data and the rings: no blade has any data of its own. A ring of
@@ -19,13 +21,14 @@
 // caster, drawn over the ring's cells, culls it at every vertex by the same
 // test.
 
+#include "ground/scene_land_layout.h"
+
 layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 cells;      // x: the sward's blades' mean height (m), y: the ring's blade width (m), z: its growth a metre of distance, w: cell size (m) (the draw's cells are grassRect())
     vec4 ring;       // x: inner radius, y: outer radius, z: the cross-fade band at the inner edge, w: at the outer (m)
-    vec4 field;      // xy: world x, z of texel (0, 0)'s centre; z: texel spacing (m); w: the node's blade width (m; cells.y over it is the ring's coarseness)
-    vec4 fieldSize;  // cols, rows, 1 / cols, 1 / rows
+    vec4 blade;      // x: the node's blade width (m; cells.y over it is the ring's coarseness); yzw unused
     vec4 push;       // xy: world x, z of the influence map's corner; z: its cell (m); w: cells across
-    vec4 pushRate;   // x: the bend's spring (Hz), y: its damping ratio, z: 1 with a floor texture, w: the trample's relax time (s)
+    vec4 pushRate;   // x: the bend's spring (Hz), y: its damping ratio, z unused, w: the trample's relax time (s)
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: > 0 for a ring of tufts
     vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
     // The herbs (scene_herb_layer.glsl): the low plants among the grass.
@@ -35,33 +38,53 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     // The turf's surface layer (scene_ground_layers.glsl; SurfaceLayers):
     vec4 layer;      // x: a level-0 tile's side (m), y: its texels a side, z: its border (texels), w: levels (0: none)
     vec4 layer2;     // x: a texel's most pixels, y: the page shift, z: page entries a side, w: a level-0 texel (m)
+    // The land the node stands on (scene_land_layout.h's LandDraw, its eye
+    // the frame's): where its tiles are read.
+    vec4 land[LD_WORDS / 4];
     vec4 swardData[64];   // the sward module's data (GRASS_SWARD_DATA, scene_sward_layer.glsl's swardData)
     vec4 herbData[256];   // the herb module's data (GRASS_HERB_DATA, scene_herb_layer.glsl's herbData)
 } grass;
 
-// r: ground height, g: density (0..1), b: dryness (0 lush .. 1 dry), a: height multiplier.
-layout(set = 4, binding = 1) uniform sampler2D grassField;
 // rg: the bend (x, z) at stamp time, b: the trample then, a: the stamp time.
 layout(set = 4, binding = 2) uniform sampler2D grassPush;
-// The forest floor on the field's grid: r how closed the canopy overhead is,
-// 0 open .. 1 closed (litter; the herbs' light); g how thickly herbs grow
-// there (0 none .. 1 as their abundance has it).
-layout(set = 4, binding = 3) uniform sampler2D grassFloor;
 
-vec4 grassFieldAt(vec2 xz) {
-    vec2 uv = ((xz - grass.field.xy) / grass.field.z + 0.5) * grass.fieldSize.zw;
-    return textureLod(grassField, uv, 0.0);
-}
+// The land's tiles (scene_land.glsl): what grows where is its surface
+// module's (scene_land_layer.glsl's LandSurface: the cover and the herbs).
+layout(set = 4, binding = LG_HEIGHTS) uniform sampler2DArray landHeights;
+layout(set = 4, binding = LG_COVERS) uniform sampler2DArray landCovers;
+layout(set = 4, binding = LG_SURFACES) uniform sampler2DArray landSurfaces;
+layout(set = 4, binding = LG_PAGE) uniform usampler2DArray landPage;
+#define LAND_W(i) grass.land[i]
+#define LAND_COVERS
+#include "ground/scene_land.glsl"
 
-float grassFloorAt(vec2 xz) {
-    vec2 uv = ((xz - grass.field.xy) / grass.field.z + 0.5) * grass.fieldSize.zw;
-    return textureLod(grassFloor, uv, 0.0).r;
+// Sward density under which nothing grows (a few blades in a closed wood's
+// shade are not seen).
+const float GRASS_DENSITY_FLOOR = 0.06;
+
+// The ground at `xz` as the grass takes it: in `field` its height, the
+// sward's density, its dryness and its height multiplier, and in `under`
+// the canopy over it and how thickly herbs grow (0 none .. 1 as their
+// abundance has it), and in `normal` the ground's normal. Where herbs grow
+// thick the grass gives them room, sparser and shorter (a meadow's forbs
+// stand clear of it).
+void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
+    float h;
+    vec4 surface, cover;
+    landSampleCover(xz, landLevel(xz), h, normal, surface, cover);
+    float herbs = grass.herbInfo.x > 0.5 ? surface.a : 0.0;
+    float density = cover.x < GRASS_DENSITY_FLOOR ? 0.0 : cover.x * (1.0 - 0.5 * herbs);
+    field = vec4(h, density, cover.y, cover.z * (1.0 - 0.45 * herbs));
+    under = vec2(cover.w, surface.a);
 }
 
 // The floor's two channels: the canopy and the herbs' density.
 vec2 grassFloorHerbsAt(vec2 xz) {
-    vec2 uv = ((xz - grass.field.xy) / grass.field.z + 0.5) * grass.fieldSize.zw;
-    return textureLod(grassFloor, uv, 0.0).rg;
+    vec4 f;
+    vec2 fl;
+    vec3 n;
+    grassGround(xz, f, fl, n);
+    return fl;
 }
 
 // The sward's blades' mean height (m), as the rings and the herbs take it.
@@ -79,29 +102,20 @@ float grassHash(ivec2 c, int k) {
 #include "ground/scene_ground_noise.glsl"
 #include "ground/scene_herb_layer.glsl"
 
-bool grassInField(vec2 xz) {
-    vec2 q = (xz - grass.field.xy) / grass.field.z;
-    return q.x >= 0.0 && q.y >= 0.0 && q.x <= grass.fieldSize.x - 1.0 && q.y <= grass.fieldSize.y - 1.0;
-}
+// On the land, inside its extent.
+bool grassInField(vec2 xz) { return all(lessThanEqual(abs(xz), vec2(landExtent()))); }
 
-// How far `xz` is inside the field: 0 off it and at its edge, 1 from
+// How far `xz` is inside the land: 0 off it and at its edge, 1 from
 // GRASS_FIELD_FADE m in. The blades and the herbs thin out over that margin
 // (a whole instance at a time, as a ring hands over) and the turf
-// (scene_ground.glsl) takes them as it does past their range, so the field's
-// end shows no line where the ground goes on past it.
+// (scene_ground.glsl) takes them as it does past their range, so the land's
+// end shows no line in its cover.
 const float GRASS_FIELD_FADE = 12.0;
 float grassFieldInside(vec2 xz) {
-    vec2 q = (xz - grass.field.xy) / grass.field.z;
-    vec2 toEdge = min(q, grass.fieldSize.xy - 1.0 - q) * grass.field.z;
+    vec2 toEdge = landExtent() - abs(xz);
     return smoothstep(0.0, GRASS_FIELD_FADE, min(toEdge.x, toEdge.y));
 }
 
-vec3 grassGroundNormal(vec2 xz) {
-    float e = grass.field.z;
-    float hx = grassFieldAt(xz + vec2(e, 0.0)).r - grassFieldAt(xz - vec2(e, 0.0)).r;
-    float hz = grassFieldAt(xz + vec2(0.0, e)).r - grassFieldAt(xz - vec2(0.0, e)).r;
-    return normalize(vec3(-hx, 2.0 * e, -hz));
-}
 
 // The movers' push at xz: the bend now, released since it was stamped; in
 // `trample`, how flat the grass there is, and in `lie`, the way flattened
@@ -198,7 +212,9 @@ bool grassBladeLive(ivec2 c, int j, out SwardCell s) {
     float fout = 1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, s.d);
     if (s.h.w > fin || s.h.w > fout) return false;
     if (!grassInField(s.root) || s.h.w > grassFieldInside(s.root)) return false;
-    s.f = grassFieldAt(s.root);
+    vec2 under;
+    vec3 ground;
+    grassGround(s.root, s.f, under, ground);
 
     // Off screen: a generous box around the cell's middle.
     float H = grass.cells.x;
@@ -207,7 +223,7 @@ bool grassBladeLive(ivec2 c, int j, out SwardCell s) {
     if (cp.w < -2.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
 
     if (s.f.g <= 0.0 || s.f.a <= 0.0) return false;
-    s.ground = grassGroundNormal(s.root);
+    s.ground = ground;
     return grassHash(c, j * 4 + 3) <= swardDensity(s);
 }
 
@@ -236,7 +252,7 @@ bool grassBlade(ivec2 c, int j, vec3 v, out SwardVertex o) {
     r.spread = grass.shape.z;
     r.width = grass.cells.y * (1.0 + s.d * grass.cells.z) * (grass.shape.x / s.kept);
     r.pixel = 2.0 / max(abs(camera.proj[1][1]) * camera.viewport.y, 1.0);
-    r.coarse = grass.cells.y / max(grass.field.w, 1e-6);
+    r.coarse = grass.cells.y / max(grass.blade.x, 1e-6);
     r.verts = max(int(grass.shape.y + 0.5), 1);
     if (!swardBuild(s, j, r, v, o)) return false;
 

@@ -15,7 +15,7 @@
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
- * The grass node's herbs (createGrass / setGround `herbs`, `node.setHerbs`):
+ * The grass node's herbs (createGrass `herbs`, `node.setHerbs`):
  * the low plants among its blades (ferns and wildflowers, pebbles, coral,
  * whatever a world grows), built where they stand, nothing stored per
  * plant. What they are is the world's HERB MODULE, GLSL compiled at run
@@ -31,14 +31,15 @@
  * plant's variety as a mound of its leaves and blooms) and the turf, which
  * take the module's far look. Each card fragment's cover is kept as that
  * share of the pixel's samples and marked for the sub-pixel resolve; the
- * lighting is the scene's. Where herbs grow thick the grass gives them
- * room, sparser and shorter with the floor's herb density.
+ * lighting is the scene's. How thickly they grow is the land's (its
+ * surface's `herbs`, docs/land-api.js); where they grow thick the grass
+ * gives them room, sparser and shorter.
  *
  * The module defines, against what the engine declares
  * (src/scene/vulkan/shaders/ground/scene_herb_layer.glsl: HerbPlant,
  * HerbVertex, HerbFragment, HerbShade, HerbMix, HerbFarLook, herbData(i)):
  *   - `int herbStand(ivec2 cell, vec2 xz, vec2 floorAt)`: the variety
- *     (0..14) standing in a cell, or -1; floorAt the canopy and the herb
+ *     (0..14) standing in a cell, or -1; floorAt the land's canopy and herb
  *     density there;
  *   - `HerbMix herbFarMean(float canopy, float density, float tanView)`:
  *     the layer from afar, by the canopy, the density and the view's
@@ -53,8 +54,9 @@
  *     (false leaves the card out);
  *   - under `HERB_SHADE` (mesh.frag, with scene_lighting.glsl): `HerbShade
  *     herbShade(HerbFragment f)`, what a fragment of a card is.
- * It may use anything of scene_camera.glsl and scene_grass.glsl (the field,
- * the floor, grassHash, the wind's noise). A module compiles once a
+ * It may use anything of scene_camera.glsl and scene_grass.glsl (the land
+ * under it, grassGround / landHeightAt, grassHash, the wind's noise). A
+ * module compiles once a
  * process, its SPIR-V cached on disk (docs/code-cache.md); one that does
  * not compile is logged and the node draws no herbs.
  *
@@ -64,9 +66,8 @@
  * cantilevers, the stand shading itself.
  * @example
  *   import { herbModule } from "/lib/herbs/index.js";
- *   scene.createGrass({ ground, floor: canopy, turf: true, herbs: {
+ *   scene.createGrass({ ground: land, turf: true, herbs: {
  *     ...herbModule({ species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }] }),
- *     density: (x, z, y, canopy) => 0.8 * patchy(x, z),
  *     range: 24,
  *   } });
  * @typedef {Object} GrassHerbOptions
@@ -75,8 +76,6 @@
  *   reads, vec4 i at floats 4i..4i+3 (at most 1024 floats).
  * @property {number} [height=0.4] - its tallest plant (m): how high the
  *   grass's bounds and the far tier reach for them.
- * @property {number|Function} [density=1] - how thickly herbs grow, 0..1: a
- *   number or `(x, z, y, canopy) => value`, baked into the field with it.
  * @property {number} [range=30] - how far the whole plants are drawn (m, 4..200).
  * @property {number} [far=3*range] - where the far plants end and the turf
  *   alone stands in (m, 1.4 x range .. 800).
@@ -110,8 +109,9 @@
  *   - `void swardRoot(inout SwardCell s)`: where a cell's blades rise (it may
  *     gather them toward a tussock), and its own share of the cell (s.own);
  *   - `float swardDensity(inout SwardCell s)`: the chance a candidate (a
- *     cell's blade, a far tuft) stands there: clumps, slope, the field's
- *     density;
+ *     cell's blade, a far tuft) stands there: clumps, slope, the land's
+ *     density (s.f: the ground's height, the land's cover density, dryness
+ *     and height multiplier);
  *   - `SwardFarLook swardFarLook(SwardCell s, vec4 h)`: a far tuft's height,
  *     width and colour;
  *   - `vec3 swardBake(vec2 xz, float fp)`: the turf's surface layer's three
@@ -126,8 +126,8 @@
  *     (false leaves the blade out);
  *   - under `SWARD_SHADE` (mesh.frag): `SwardShade swardShade(SwardFragment
  *     f)`, what a fragment of a blade is.
- * It may use anything of scene_camera.glsl and scene_grass.glsl (the field,
- * the movers' push `grassInfluence`, grassHash, the wind, the band-limited
+ * It may use anything of scene_camera.glsl and scene_grass.glsl (the land
+ * under it, grassGround / landHeightAt, the movers' push `grassInfluence`, grassHash, the wind, the band-limited
  * ground noise). It compiles and caches as a herb module does; one that
  * does not compile is logged and the node draws neither blades nor herbs.
  *
@@ -151,68 +151,43 @@
  */
 
 /**
- * Grass: a sward of blades over a ground, its herbs and its turf, from
+ * Grass: a sward of blades over a land, its herbs and its turf, from
  * `scene.createGrass(opts)`. What the blades are is its sward module
  * (GrassSwardOptions), what the herbs are its herb module
- * (GrassHerbOptions); the node owns the field they grow over, the rings,
- * the far tier and the turf, the wind (`setWind`) and the movers that part
- * and flatten them (`addMover`, `push`). The node is left out of raycasts
- * and bounds; its transform is ignored.
+ * (GrassHerbOptions); the node owns the rings, the far tier and the turf,
+ * the wind (`setWind`) and the movers that part and flatten them
+ * (`addMover`, `push`). The node is left out of raycasts and bounds; its
+ * transform is ignored.
  *
- * What the node draws over is a FIELD baked once from these options: a grid
- * over `area` every `cell` metres of (ground height, density, dryness, height
- * multiplier). `density`, `dry` and `tall` are numbers or functions
- * `(x, z, y) => value`, called once per field texel at bake time, so they can
- * read the same noise an app colours its ground with. For a large field
- * (a few million texels, where a call a texel takes tens of seconds) any of
- * them, `floor` and `herbs.density` may instead come a grid at once: a
- * Float32Array of cols x rows, texel (i, j) at (x0 + i * cell, z0 + j *
- * cell) with cols = floor((x1 - x0) / cell) + 1 and rows likewise, or a
- * function carrying `grid(x0, z0, cell, cols, rows, ys, canopy)` that
- * returns one (`ys` the field's heights, `canopy` the clamped floor, for
- * the herbs' density); so may a `ground` function (its `grid` returns the
- * heights). Re-bake with `node.setGround(opts)` (a moved or edited ground,
- * a new season).
+ * The grass stands on a LAND (docs/land-api.js) and reads it on the GPU
+ * from the land's tiles: its heights, and what its surface module says grows
+ * there (`LandSurface.cover`: the sward's density, dryness, height
+ * multiplier and the canopy over it; `LandSurface.herbs`). Nothing is baked
+ * on the CPU and nothing is stored per place: the grass reaches as far as
+ * the land does, the land's data (`land.setLand({ data })`) or module
+ * changes it everywhere at once, and a world's cover is the same GLSL that
+ * colours its ground. It fades out over the land's last 12 m.
  *
  * @example
- *   const ground = scene.createMesh({ data: Mesh.heightmapGrid(h, N, N, cell) });
+ *   const land = scene.createLand({ height: hills, surface: MEADOW });   // MEADOW sets s.cover, s.herbs
  *   const grass = scene.createGrass({
- *     ground,                                  // the blades stand on it
+ *     ground: land,                            // the blades stand on it, where it grows them
  *     sward: swardModule(),                    // broworkshop's lib/sward
- *     dry: (x, z) => patches(x, z),            // 0 lush .. 1 straw
- *     density: (x, z) => nearTrunk(x, z) ? 0.3 : 1,
- *     tall: (x, z) => 1.2 - 0.4 * patches(x, z),
+ *     herbs: herbModule({ species: ['daisy', 'poppy'] }),
+ *     turf: true,                              // shade the land as the grass's ground
  *   });
  *   grass.addMover(player, { radius: 0.5, trample: 1 });   // parts it, leaves a lane
  *
  * @typedef {Object} GrassNodeOptions
- * @property {SceneNode|Object|Function} [ground] - what the blades stand on:
- *   a land (its heights, docs/land-api.js), a mesh node (its top surface on
- *   the field's grid, `sampleHeights`; texels off the mesh grow nothing), a
- *   terrain (`heightAt`), or a function `(x, z) => y`. Default: flat ground
- *   at y = 0.
- * @property {Array<number>} [area] - `[x0, z0, x1, z1]` the field covers;
- *   default the node's world bounds (a land's whole extent), else
- *   `[-50, -50, 50, 50]`.
- * @property {number} [cell=0.5] - field texel spacing (m): the detail of
- *   the ground's shape and of the masks.
- * @property {number|Function} [density=1] - where grass grows, 0..1.
- * @property {number|Function} [dry=0] - 0 lush .. 1 sun-dried (what the
- *   sward module makes of it).
- * @property {number|Function} [tall=1] - height multiplier (likewise).
+ * @property {SceneNode} ground - the land the blades stand on
+ *   (scene.createLand; anything else throws a TypeError).
  * @property {GrassSwardOptions} [sward] - the blades (see
  *   GrassSwardOptions). Default: none.
- * @property {number|Function} [floor] - the woodland floor, 0 open .. 1
- *   under a closed canopy (the crowns' shade over a point, an app's
- *   function of its plants), on the same grid. A turf ground (`turf`) lays
- *   leaf litter, twigs, damp soil and moss where it closes, and the herbs
- *   (`herbs`) choose their places by the light it leaves. Default: no floor
- *   (open everywhere).
  * @property {GrassHerbOptions} [herbs] - low plants among (and without) the
  *   grass: ferns, wildflowers, forbs, ground cover, from broflora's species
  *   (see GrassHerbOptions).
- * @property {boolean|SceneNode|Array<SceneNode>} [turf] - mesh nodes to shade
- *   as this grass's ground (`true`: the `ground` node), see `shadeGround`.
+ * @property {boolean|SceneNode|Array<SceneNode>} [turf] - nodes to shade
+ *   as this grass's ground (`true`: the land), see `shadeGround`.
  * @property {number} [width=0.004] - the width the near ring asks of a
  *   blade (m); the outer rings' are 4, 19 and 25 times it, and it grows with
  *   distance.
@@ -595,8 +570,8 @@ class SceneNode {
 
   /**
    * Grass: change the rings (`width`, `bladeDensity`, `range`), the sward
-   * module (`sward`) or the material (`color`, `roughness`, shadows); what
-   * it leaves out keeps its value. The field is not re-baked.
+   * or herb module (`sward`, `herbs`) or the material (`color`,
+   * `roughness`, shadows); what it leaves out keeps its value.
    * @example grass.setGrass({ range: 220, bladeDensity: 0.8 });
    * @param {GrassNodeOptions} opts
    * @returns {SceneNode}
@@ -604,17 +579,17 @@ class SceneNode {
   setGrass(opts) {}
 
   /**
-   * Grass: re-bake the field (`ground`, `area`, `cell`, `density`, `dry`,
-   * `tall`, `floor`, `herbs`) and replace it whole; `turf` as in createGrass.
-   * @param {GrassNodeOptions} opts
+   * Grass: stand it on another land (what grows where is then that land's).
+   * @param {SceneNode} land
    * @returns {SceneNode}
+   * @throws {TypeError} when `land` is not a land node.
    */
-  setGround(opts) {}
+  setGround(land) {}
 
   /**
    * Grass: replace the herb module and its data (and with `range` and
-   * `far`, how far the herbs are drawn) without re-baking the field; their
-   * density stays as baked. `source: ''` draws none.
+   * `far`, how far the herbs are drawn); how thickly they grow stays the
+   * land's. `source: ''` draws none.
    * @example grass.setHerbs(herbModule({ species: ['poppy', 'daisy'] }));
    * @param {GrassHerbOptions} herbs
    * @returns {SceneNode}
@@ -623,8 +598,7 @@ class SceneNode {
 
   /**
    * Grass: replace the sward module and its data (its blades, their far
-   * look and the turf's look of them) without re-baking the field.
-   * `source: ''` grows no blades.
+   * look and the turf's look of them). `source: ''` grows no blades.
    * @example grass.setSward(swardModule({ tufts: 0.8, dead: 0.3 }));
    * @param {GrassSwardOptions} sward
    * @returns {SceneNode}
@@ -632,19 +606,18 @@ class SceneNode {
   setSward(sward) {}
 
   /**
-   * Grass: shade mesh node `mesh` as this grass's ground (turf), or with
-   * `on` false as itself again. Turf is shaded from the grass's field where
-   * it reaches: the sward the blades stand for (as its module's swardTurf
-   * says: near the eye the roots and soil between the blades, rising to
-   * the blade tops with distance), bare soil where nothing
-   * grows, and under a closed `floor` the leaf litter, twigs, damp soil and
-   * moss. Past the field it takes the same data from the mesh's vertex
-   * colour: r the grass density, g the dryness, b the floor. Every pattern
-   * is band-limited (finer than about two pixels fades to its mean), so it
-   * reads from standing height to far above. Nothing is baked: it works on
-   * any ground the field covers, streamed in or not.
+   * Grass: shade node `mesh` (the land, or a mesh over it) as this grass's
+   * ground (turf), or with `on` false as itself again. Turf is shaded from
+   * the land's cover where the land reaches: the sward the blades stand for
+   * (as its module's swardTurf says: near the eye the roots and soil
+   * between the blades, rising to the blade tops with distance), bare soil
+   * where nothing grows, and under a closed canopy (`cover.w`) the leaf
+   * litter, twigs, damp soil and moss. Past the land it takes the same data
+   * from a mesh's vertex colour: r the grass density, g the dryness, b the
+   * canopy. Every pattern is band-limited (finer than about two pixels
+   * fades to its mean), so it reads from standing height to far above.
    * @example
-   *   scene.createGrass({ ground, density: cover, floor: canopy, turf: [ground, farGround] });
+   *   scene.createGrass({ ground: land, sward, turf: true });
    * @param {SceneNode} mesh
    * @param {boolean} [on=true]
    * @returns {SceneNode}
@@ -692,24 +665,15 @@ class SceneNode {
 
   /**
    * Grass: what the last frame drew: `{instances: [r0, r1, r2, r3], movers,
-   * fieldCols, fieldRows, herbInstances: [h0, h1, h2]}`, near ring first
-   * (h2 the far plants).
-   * `instances` counts the cells issued in each ring (the tiles in view, in
-   * the ring, where grass grows); each cell draws several blades, of which
-   * the culling keeps fewer. `herbInstances` the herb cells issued in each
-   * herb ring (most hold no plant).
-   * @returns {{instances: Array<number>, movers: number, fieldCols: number, fieldRows: number, herbInstances: Array<number>}|undefined}
+   * herbInstances: [h0, h1, h2]}`, near ring first (h2 the far plants).
+   * `instances` counts the cells issued in each ring (the tiles in view and
+   * in the ring); each cell draws several blades, of which the land's cover
+   * and the culling keep fewer. `herbInstances` the herb cells issued in
+   * each herb ring (most hold no plant). (The ground's height under a mover
+   * is the land's: `land.landHeight(x, z)`.)
+   * @returns {{instances: Array<number>, movers: number, herbInstances: Array<number>}|undefined}
    */
   grassStats() {}
-
-  /**
-   * Grass: the baked ground height at world (x, z), bilinear as the GPU
-   * samples it (so a mover set on it sits where the blades root).
-   * @param {number} x
-   * @param {number} z
-   * @returns {number|undefined}
-   */
-  grassHeightAt(x, z) {}
 
   // ── Plants (scene.createPlants) ──
 

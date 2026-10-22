@@ -497,22 +497,6 @@ class FloraWorld {
   sampleShadow(pos) {}
 
   /**
-   * Where ground cover grows among the plants, as the `density` function
-   * bro.scene's `createGrass` takes: `(x, z, y) => 0..1` in world metres.
-   * Grass thins in the crowns' shade (the shadow grid's light `above` m over
-   * the ground at y) and clears at each trunk (within `trunkClear` m, fading
-   * out by 3.5 times that); `floor` is what is left at the darkest. `scale`
-   * is the node scale the plants are drawn at. The plants are read when it
-   * is called, so call it again after more growth.
-   * @example
-   *   scene.createGrass({ ground, density: world.groundCover({ scale: 1.5 }) });
-   * @param {{scale?: number, floor?: number, shade?: number, trunkClear?: number, above?: number}} [opts]
-   *   defaults: scale 1, floor 0.3, shade 0.6, trunkClear 0.7, above 0.5
-   * @returns {function(number, number, number=): number}
-   */
-  groundCover(opts) {}
-
-  /**
    * Check the world's structural invariants.
    * @returns {string|null} null when valid, else the first error.
    */

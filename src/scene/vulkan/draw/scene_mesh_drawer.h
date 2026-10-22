@@ -287,6 +287,17 @@ public:
     static void vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                             std::vector<VkVertexInputAttributeDescription>& attributes);
 
+    /// The land a grass node stands on, as the grass's set 4 binds it
+    /// (scene_grass.glsl; scene_land_layout.h's LG_*).
+    struct GrassGround {
+        LandNode* land = nullptr;
+        VkImageView layers[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};   // heights, surface, cover
+        VkSampler sampler = VK_NULL_HANDLE;
+        VkImageView page = VK_NULL_HANDLE;
+        VkSampler pageSampler = VK_NULL_HANDLE;
+        float words[16] = {};   // its LandDraw (LD_WORDS) this frame
+    };
+
 private:
     struct CustomProgram {
         bool failed = false;
@@ -307,9 +318,9 @@ private:
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
-    /// Set 4 for a turf mesh: grass node `grass`'s field, influence map and
-    /// floor, with its outermost ring (scene_mesh_drawer_grass.cpp). Null
-    /// when the node has no field.
+    /// Set 4 for a turf mesh: grass node `grass`'s land and influence map,
+    /// with its outermost ring (scene_mesh_drawer_grass.cpp). Null while the
+    /// node has no land with tiles to stand on.
     VkDescriptorSet groundSet(SceneFrame& frame, GrassNode& grass);
     /// A grass node's turf surface layers: the tiles' CPU state and atlas.
     struct GroundLayers {
@@ -333,9 +344,9 @@ private:
     static const std::vector<SurfaceItem>& turfItems(GroundLayers& gl, const MeshNode& node,
                                                      const bromath::AABB3& bounds);
     /// What every tile of a grass node's turf layer reads changes with this
-    /// (its field, floor, herbs and the patterns' parameters; each turf
-    /// mesh is an item of its own, offer()'s).
-    static uint64_t groundGeneration(GrassNode& grass);
+    /// (its land, herbs and the patterns' parameters; each turf mesh is an
+    /// item of its own, offer()'s).
+    static uint64_t groundGeneration(SceneGraph& graph, GrassNode& grass);
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (4 vec4s a segment; header[10] says where); null
     /// when the frame's upload memory runs out.
@@ -396,6 +407,12 @@ private:
         std::vector<MeshChunk> chunks;          // its ring blocks where this frame's eye puts them
     };
     LandTiles* landTiles(SceneFrame& frame, LandNode& node);
+    /// Its LandDraw words (scene_land_layout.h, LD_WORDS of them) for this
+    /// frame: the rings and tiles about the frame's eye.
+    static void landWords(const SceneFrame& frame, const LandNode& node, const LandTiles& lt, float* words);
+    /// The land grass node `grass` stands on, as the grass's set binds it;
+    /// false while it has no tiles resident (nothing to stand on yet).
+    bool grassGround(SceneFrame& frame, const GrassNode& grass, GrassGround& out);
     /// A land node's set; null for a node with no module or one that did
     /// not compile.
     const LandShaders* landShaders(const LandNode& node);

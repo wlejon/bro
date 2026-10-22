@@ -706,11 +706,10 @@ void bro_scene_SceneGraph_detachAIWorld(void* self);
 //   registered at __bro_native.scene.SceneGraph_createGrass
 void* bro_scene_SceneGraph_createGrass(void* self);
 
-// grass.setField: cols x rows texels of (height, density, dry, height multiplier),
-// texel (i, j) centred at world (x0 + i * cell, z0 + j * cell)
-//   registered at __bro_native.scene.SceneNode_setGrassField
-void bro_scene_SceneNode_setGrassField(void* self, const float* data, uint32_t data_len, int32_t cols, int32_t rows,
-                                       double x0, double z0, double cell);
+// grass.setGround: the land node the grass stands on; 0 (and no change) when
+// `land` is not a land node
+//   registered at __bro_native.scene.SceneNode_setGrassGround
+int32_t bro_scene_SceneNode_setGrassGround(void* self, void* land);
 
 // grass params: width, density, range (GrassNode::paramsFromArray; a NaN keeps a value)
 //   registered at __bro_native.scene.SceneNode_setGrassParams
@@ -731,7 +730,7 @@ void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, 
 void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,
                                    double strength, double trample);
 
-// grass.stats: [blade rings n, ring 0 instances .. ring n-1, movers, field cols, field rows,
+// grass.stats: [blade rings n, ring 0 instances .. ring n-1, movers,
 //               herb ring 0 instances, herb ring 1, ...]
 //   registered at __bro_native.scene.SceneNode_grassStats
 //   result: f64[] in *out; out->release == NULL, the runtime copies
@@ -808,11 +807,6 @@ void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out);
 
-// grass floor: one float a field texel (0 open .. 1 a closed canopy), or two
-// (that, and the herbs' density 0..1); fewer than the field's texels clears it
-//   registered at __bro_native.scene.SceneNode_setGrassFloor
-void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len);
-
 // grass herbs: a herb module's GLSL ("" clears them), the data its
 // herbData(i) reads (at most 1024 floats), its tallest plant (m), the range
 // the whole plants are drawn to and the far plants' (m; 0 keeps it)
@@ -837,11 +831,6 @@ void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on);
 //   result: f32[] in *out; out->release set, the array is a view over it
 void bro_scene_SceneNode_sampleHeights(void* self, double x0, double z0, double cell, int32_t cols, int32_t rows,
                                        bronze_native_buffer* out);
-
-// node.worldBounds for a mesh node: [minX, minY, minZ, maxX, maxY, maxZ], empty when none
-//   registered at __bro_native.scene.SceneNode_meshWorldBounds
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_meshWorldBounds(void* self, bronze_native_buffer* out);
 
 // Registered in native_scene_register.cpp as well; the bodies are in the native_*.cpp files.
 void bro_scene_SceneGraph_attachTo(uint64_t sceneBits, uint64_t canvasBits);

@@ -46,6 +46,7 @@
 #include "shadow_plants.vert.src.h"
 #include "plants_pose.comp.src.h"
 #include "scene_land_layout.h.src.h"
+#include "scene_land.glsl.src.h"
 #include "scene_land_layer.glsl.src.h"
 #include "land_module.glsl.src.h"
 #include "land_fill.comp.src.h"
@@ -159,6 +160,7 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/scene_plant_layer.glsl", kVkScenePlantLayerSrc},
         {"foliage/plant_module.glsl", kVkPlantModuleSrc},
         {"ground/scene_land_layout.h", kVkSceneLandLayoutSrc},
+        {"ground/scene_land.glsl", kVkSceneLandSrc},
         {"ground/scene_land_layer.glsl", kVkSceneLandLayerSrc},
         {"ground/land_module.glsl", kVkLandModuleSrc},
         // The built-in shaders compileBuiltinWith builds.

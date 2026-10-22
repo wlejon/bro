@@ -482,6 +482,10 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
         }
         writer.writeImage(i, view, sampler);
     }
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 1, defaults_->zeroArray.view, defaults_->sampler);
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 2, defaults_->zeroUintArray.view,
+                      defaults_->nearestSampler);
+    static_assert(CustomShaderInterface::kMaxSamplers + 2 == SceneDefaults::kCustomBindings);
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);
     return set;

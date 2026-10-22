@@ -1,4 +1,4 @@
-// The sward: the blades a grass node grows over its field, as a world writes
+// The sward: the blades a grass node grows over its land, as a world writes
 // them (docs/scene-world-architecture.md §13, "worlds as code"). Included by
 // scene_grass.glsl; needs scene_camera.glsl.
 //
@@ -6,7 +6,7 @@
 // MODULE, GLSL compiled into the cover's shaders at run time (GrassNode::
 // setSward; scene_cover_shaders.h). It defines the functions declared at the
 // end of this file, and may use anything of scene_camera.glsl and
-// scene_grass.glsl (the field, the movers' push, the hashes): its own
+// scene_grass.glsl (the land's cover, the movers' push, the hashes): its own
 // structs, constants, noise and maths are its business. Its data, if it has
 // any, is swardData(i) (the node's, up to GRASS_SWARD_DATA vec4s).
 //
@@ -14,7 +14,7 @@
 // cells around the eye (finer near, coarser further), each cell's candidate
 // blades, the thinning that keeps fewer of them with distance (asking the
 // module for wider ones, so the cover holds), the dithered hand-overs
-// between rings, the field's edge and the screen test, the plan; the far
+// between rings, the land's edge and the screen test, the plan; the far
 // tier's tufts past the rings and the turf past those, which take the
 // module's far look; the herbs' blooms carried by far blades; the lighting,
 // the dither of a part-covered pixel and its sub-pixel mark.
@@ -23,7 +23,7 @@
 //   swardRoot    where a cell's blades rise (it may gather them toward a
 //                tussock), and anything of its own the cell's blades share.
 //   swardDensity the chance a candidate stands there (a cell's blade, a far
-//                tuft): its clumps, its slope limit, the field's density.
+//                tuft): its clumps, its slope limit, the land's density.
 //   swardBuild   (SWARD_BUILD) a vertex of one of the cell's blades, at the
 //                width the ring asks for: its kind, shape, bend, colour.
 //   swardShade   (SWARD_SHADE) what a fragment of a blade is: its cover of
@@ -46,7 +46,7 @@ struct SwardCell {
     ivec2 cell;    // its cell of the ring's grid (cells.w m a side)
     vec4 h;        // the cell's four hashes (h.xy placed its spot in the cell)
     vec2 root;     // absolute x, z: the hashed spot, then where swardRoot puts its blades' foot
-    vec4 f;        // the field at the root (ground height, density, dryness, height multiplier)
+    vec4 f;        // the land at the root (ground height, and its cover's density, dryness, height multiplier: grassGround)
     vec3 ground;   // the ground's normal there
     float d;       // its distance from the eye (with the eye's lift, as the rings measure it)
     float kept;    // the blades of the cell the ring keeps there (its thinning)

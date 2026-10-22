@@ -25,7 +25,7 @@ const N = (type, props = {}) => {
     for (const k in props) n.set(k, props[k]);
     return n;
 };
-const RED = 'LandSurface landSurface(LandPoint q) { LandSurface s; s.albedo = vec3(0.8, 0.05, 0.05); return s; }';
+const RED = 'LandSurface landSurface(LandPoint q) { return landSurfaceOf(vec3(0.8, 0.05, 0.05)); }';
 
 const S = 128;
 const canvas = document.createElement('canvas');

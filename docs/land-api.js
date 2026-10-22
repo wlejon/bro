@@ -16,8 +16,12 @@
  *     by construction: a vertex's height is a function of where it is and
  *     how far from the eye, never of which ring it belongs to.
  *   - THE CPU'S HEIGHTS. `landHeight`, `sampleHeights`, raycasts, a grass
- *     node's `ground` and placement read the same tree, run by FastNoise2
+ *     node's bounds and placement read the same tree, run by FastNoise2
  *     itself: exact, with nothing read back from the GPU.
+ *   - WHAT GROWS. A grass node stands on a land (`createGrass({ ground:
+ *     land })`) and reads the land's tiles on the GPU: its heights and the
+ *     surface's `cover` and `herbs`, so the grass reaches as far as the
+ *     land does, with nothing baked on the CPU.
  *
  * The land is square: `extent` metres from the origin each way. Its
  * transform is ignored. It casts shadows (a hill's on the slope behind it,
@@ -29,8 +33,20 @@
  *     LandSurface landSurface(LandPoint q)
  *
  * where `q.p` is world (x, z), `q.height` the land's height there and
- * `q.normal` its normal (from the heights), returning `LandSurface { vec3
- * albedo; }` (linear). It may call `landHeight(vec2 p)` and
+ * `q.normal` its normal (from the heights), returning
+ *
+ *     struct LandSurface {
+ *         vec3 albedo;   // linear: the ground where no turf covers it
+ *         vec4 cover;    // what a grass node on the land grows here: x its
+ *                        // sward's density (0 none .. 1), y dryness (0 lush
+ *                        // .. 1 sun-dried), z height multiplier (0 .. 2),
+ *                        // w the canopy overhead (0 open .. 1 closed: leaf
+ *                        // litter on the turf, the herbs' light)
+ *         float herbs;   // how thickly its herbs grow (0 none .. 1)
+ *     };
+ *
+ * Start from `landSurfaceOf(albedo)`: bare ground, nothing growing (cover
+ * (0, 0, 1, 0), herbs 0). It may call `landHeight(vec2 p)` and
  * `landNoise(vec2 p, int seed)` (the height tree), `landData(int i)` (the
  * node's `data`, vec4 i of at most 64), its own functions and any other
  * tree's GLSL it carries (`someNode.glsl({ name: 'cover' })`). It runs
@@ -51,14 +67,15 @@
  *       LandSurface landSurface(LandPoint q) {
  *         float c = coverNoise(q.p, 1337) * 0.5 + 0.5;
  *         float rock = smoothstep(0.75, 0.6, q.normal.y);
- *         LandSurface s;
- *         s.albedo = mix(mix(vec3(0.12, 0.16, 0.05), vec3(0.20, 0.17, 0.08), c), vec3(0.3, 0.28, 0.26), rock);
+ *         LandSurface s = landSurfaceOf(mix(mix(vec3(0.12, 0.16, 0.05), vec3(0.20, 0.17, 0.08), c),
+ *                                           vec3(0.3, 0.28, 0.26), rock));
+ *         s.cover = vec4(1.0 - rock, c, 1.0, 0.0);   // grass off the rock, drier where c is high
+ *         s.herbs = 0.5 * (1.0 - rock);
  *         return s;
  *       }`,
  *   });
  *   land.landHeight(10, 20);                       // FastNoise2 on `hills`
- *   const grass = scene.createGrass({ ground: land, area: [-200, -200, 200, 200], sward });
- *   grass.shadeGround(land);
+ *   const grass = scene.createGrass({ ground: land, turf: true, sward, herbs });
  */
 
 /**

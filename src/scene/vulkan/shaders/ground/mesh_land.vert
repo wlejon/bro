@@ -8,7 +8,7 @@
 //
 // CRACK-FREE BY CONSTRUCTION. A vertex at world xz is drawn at
 // landSurface(xz): the tiles read at a level from xz's distance to the eye
-// alone (landCell), never from the ring it belongs to, so two rings meeting
+// alone (scene_land.glsl's landCell), never from the ring it belongs to, so two rings meeting
 // at a boundary evaluate the same function at the same point. The level is
 // continuous in distance and the tiles' levels are blended across it, so
 // nothing pops as the eye moves.
@@ -55,26 +55,6 @@ layout(location = 6) out vec4 outInstColor;
 const float LAND_MORPH_FULL = 7.0;   // cells from the outer edge by which the morph is complete
 const float LAND_MORPH_RAMP = 9.0;   // cells it ramps over before that
 
-// The ring cell wanted at `xz`. (From the frame's eye, landEye, in every
-// pass: a probe's or a turf tile's view reads the land the frame does.)
-float landCell(vec2 xz) {
-    vec2 d = abs(xz - landEye());
-    return max(landCell0(), max(d.x, d.y) * landInvK());
-}
-
-// The level whose texel is half the cell wanted (a level-0 texel is half
-// the finest cell, LandNode::tileConfig).
-float landLevel(vec2 xz) { return log2(landCell(xz) / landCell0()); }
-
-vec2 landClamp(vec2 xz) { return clamp(xz, vec2(-landExtent()), vec2(landExtent())); }
-
-float landHeightAt(vec2 xz) {
-    float h;
-    vec4 s;
-    landSample(xz, landLevel(xz), h, s);
-    return h;
-}
-
 void main() {
     float ring = inUV.x;
     float cl = landCell0() * exp2(ring);
@@ -90,7 +70,13 @@ void main() {
     float lambda = landLevel(xz);
     float h;
     vec4 surface;
+#ifdef LAND_CASTER
     landSample(xz, lambda, h, surface);
+#else
+    // The normal from the heights a texel of the level read either way.
+    vec3 N;
+    landSampleNormal(xz, lambda, h, N, surface);
+#endif
 
     // The morph over the ring's outer cells.
     float g = max(abs(inPos.x), abs(inPos.z));
@@ -115,12 +101,6 @@ void main() {
 #ifdef LAND_CASTER
     gl_Position = push.lightViewProj * (casterModel() * vec4(xz.x, h, xz.y, 1.0));
 #else
-    // The normal from the heights half a cell either way (a texel of the
-    // level read).
-    float e = 0.5 * landCell(xz);
-    float hx0 = landHeightAt(landClamp(xz - vec2(e, 0.0))), hx1 = landHeightAt(landClamp(xz + vec2(e, 0.0)));
-    float hz0 = landHeightAt(landClamp(xz - vec2(0.0, e))), hz1 = landHeightAt(landClamp(xz + vec2(0.0, e)));
-    vec3 N = normalize(vec3(hx0 - hx1, 2.0 * e, hz0 - hz1));
     vec3 T = normalize(vec3(1.0, 0.0, 0.0) - N * N.x);
 
     vec3 rel = vec3(xz.x - eye.x, h - eye.y, xz.y - eye.z);

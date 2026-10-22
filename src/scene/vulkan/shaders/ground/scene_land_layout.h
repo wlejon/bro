@@ -6,11 +6,22 @@
 //   set 3, bindings 4..6: the tiles' heights, their surface, the page table
 //
 //   land_fill.comp's set 0: binding 0 the heights (r32f, an array layer a
-//            slot), 1 the surface (rgba16f), 2 the fills (LF_TILE_WORDS a
-//            tile), 3 the module's data (vec4s); push constants LF_P_*
+//            slot), 1 the surface (rgba16f: albedo, herbs), 2 the fills
+//            (LF_TILE_WORDS a tile), 3 the module's data (vec4s), 4 the
+//            cover (rgba16f); push constants LF_P_*
+//
+//   a grass node standing on the land (scene_grass.glsl) reads its tiles
+//            through its own set 4: its GrassUBO carries the LandDraw
+//            words, and the bindings are LG_*
 
 #ifndef BRO_SCENE_LAND_LAYOUT_H
 #define BRO_SCENE_LAND_LAYOUT_H
+
+// --- a grass node's set 4 (scene_mesh_drawer_grass.cpp's writeSet) ---
+#define LG_HEIGHTS          1
+#define LG_COVERS           3
+#define LG_SURFACES         9
+#define LG_PAGE             10
 
 // --- LandDraw ---
 #define LD_LAND             0     // x the land's extent (half-size, m), yz the frame's eye's world x and z

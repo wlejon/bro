@@ -3,8 +3,4 @@
 
 float landHeight(vec2 p) { return 0.0; }
 
-LandSurface landSurface(LandPoint q) {
-    LandSurface s;
-    s.albedo = vec3(0.18);
-    return s;
-}
+LandSurface landSurface(LandPoint q) { return landSurfaceOf(vec3(0.18)); }
