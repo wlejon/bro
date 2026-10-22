@@ -263,7 +263,13 @@ A capability of the frame graph, not of any one pass.
   compute or the wait shows: in biomes' golden-hour glade walk the plants'
   compute is about 0.4 ms and the graphics ahead of it was 0.2, so the
   first planned pass waited 0.1-0.2 ms a frame; with the cover's depth
-  (0.25 ms) moved ahead of the join it waits none.
+  (0.25 ms) moved ahead of the join it waits none. Open: on Windows (the
+  4090), in about one walk of two, one frame's first planned pass reads
+  1.3-1.8 ms with its usual casters and the compute done 0.3 ms into the
+  frame: a gap between the head's submission and the rest's, not work.
+  Submitting the head (and the compute) at the join instead of at the
+  frame's end made it every walk, the GPU idling there until the rest was
+  recorded and submitted, so the submissions stay together at the end.
 - **Versioning:** anything compute writes for frame N lives in the slot for
   N's frame in flight. Frame N−1's draws still read their own slot, so compute
   never waits for graphics to finish with a buffer.
