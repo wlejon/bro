@@ -155,8 +155,8 @@ void SceneShadowPages::offer(SceneFrame& frame, WorldService& service) {
     }
 }
 
-uint32_t SceneShadowPages::record(SceneFrame& frame, int /*kind*/, std::span<const WorldJob> granted,
-                                  WorldStream& /*stream*/) {
+double SceneShadowPages::record(SceneFrame& frame, int /*kind*/, std::span<const WorldJob> granted,
+                                WorldStream& /*stream*/) {
     // Drawn next frame (the shadow pass stamps this kind's span there); each
     // kind's grants are added to the frame's.
     std::vector<uint64_t> keys;

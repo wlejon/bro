@@ -42,6 +42,11 @@ uint32_t packProbe(int cascade, bool fresh, int x, int z, int layer) {
            (static_cast<uint32_t>(z) << 8) | (static_cast<uint32_t>(layer) << 13);
 }
 
+// A trace box's work: its probes' rays (probe_trace.comp).
+double probeRays(const ProbeBox& b) {
+    return static_cast<double>(b.columnCount()) * PG_LAYERS * (b.fresh ? PG_RAYS_FRESH : PG_RAYS);
+}
+
 // The sun turns the canopy's light when it moves by more than this (a
 // quarter of a degree, as cosine): a voxel's shade does not move a texel.
 constexpr float kSunTurnCos = 0.99999048f;
@@ -140,9 +145,10 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
             return false;
         }
     // A cascade's world is its volumes: the CPU half's error is what it
-    // costs, so the guess is a whole cascade's. A trace is a box of columns.
+    // costs, so the guess is a whole cascade's. A trace is a box of columns,
+    // charged by its probe-rays (a 4090 traces about 200 a microsecond).
     kind_ = gpu.world.addKind(this, {"probe grid world", WorldSchedule::Raster, 0.2f});
-    traceKind_ = gpu.world.addKind(this, {"probe traces", WorldSchedule::Raster, 0.05f});
+    traceKind_ = gpu.world.addKind(this, {"probe traces", WorldSchedule::Raster, 5.0e-6f});
     return kind_ >= 0 && traceKind_ >= 0;
 }
 
@@ -313,7 +319,8 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         service.offer(job);
     }
 
-    // The probes' traces, of the cascades whose worlds are made: a job a box.
+    // The probes' traces, of the cascades whose worlds are made: a job a box,
+    // its units its probe-rays (a fresh box's probes trace twice the rays).
     const std::vector<ProbeGrid::TraceJob>& traces = grid_.traceJobs();
     for (size_t i = 0; i < traces.size(); ++i) {
         const ProbeGrid::TraceJob& t = traces[i];
@@ -323,6 +330,7 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         job.error = t.error;
         job.size = static_cast<double>(t.box.columnCount()) * grid_.spacing(t.box.cascade);
         job.required = t.required;
+        job.units = probeRays(t.box);
         service.offer(job);
     }
 }
@@ -451,12 +459,12 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     }
 }
 
-uint32_t SceneProbeGrid::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) {
+double SceneProbeGrid::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) {
     if (!on_ || granted.empty()) return 0;
     return kind == kind_ ? recordWorld(frame, stream) : recordTraces(frame, granted, stream);
 }
 
-uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
+double SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
     // The atmosphere's tables remade on the compute queue this frame are not
     // the graphics stream's to read until it joins: the traces wait a frame.
     if (frame.gpu.atmosphere.tablesOnCompute()) return 0;
@@ -500,8 +508,12 @@ uint32_t SceneProbeGrid::recordTraces(SceneFrame& frame, std::span<const WorldJo
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
-    for (const WorldJob& job : granted) grid_.traced(static_cast<int>(job.key));
-    return static_cast<uint32_t>(granted.size());
+    double units = 0.0;
+    for (const WorldJob& job : granted) {
+        grid_.traced(static_cast<int>(job.key));
+        units += job.units;
+    }
+    return units;
 }
 
 uint32_t SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {

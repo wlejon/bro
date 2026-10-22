@@ -18,8 +18,8 @@
 //    reading a compute producer's results declares PassIO::readsCompute),
 //    else the graphics stream itself at the same point, in the same order.
 // A kind's jobs are stamped as one span of the GPU timer (SceneGpuTimer::
-// beginSpan) around what its producer recorded, with the number of jobs
-// it held, so the kind's cost per job is learned from the device.
+// beginSpan) around what its producer recorded, with the units of work it
+// held, so the kind's cost a unit is learned from the device.
 //
 // The compute queue at low priority (§6) is not made: the frame's compute
 // stream is the async queue the plants' plan runs on, and a world job there
@@ -31,9 +31,11 @@
 #include <bromath/vec.h>
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -77,9 +79,9 @@ public:
     /// This frame's jobs, offered to `service` under the kinds it registered.
     virtual void offer(SceneFrame& frame, WorldService& service) = 0;
     /// Kind `kind`'s granted jobs (rank order) recorded into `stream`; the
-    /// jobs it recorded. Called every frame for each kind it registered,
-    /// whatever was granted (so its bookkeeping settles each frame).
-    virtual uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) = 0;
+    /// units of the jobs it recorded. Called every frame for each kind it
+    /// registered, whatever was granted (so its bookkeeping settles each frame).
+    virtual double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) = 0;
 };
 
 class SceneWorldService {
@@ -108,9 +110,9 @@ public:
     static bool viewCut(const bromath::Vec3& eye, const bromath::Vec3& forward, const bromath::Vec3& wasEye,
                         const bromath::Vec3& wasForward, float halfFov);
     /// Kind `kind`'s granted jobs, recorded by `record` into the stream the
-    /// kind's schedule names and stamped as the kind's span; the jobs it
+    /// kind's schedule names and stamped as the kind's span; the units it
     /// recorded.
-    uint32_t run(WorldStreams& streams, int kind, const std::function<uint32_t(WorldStream&)>& record);
+    double run(WorldStreams& streams, int kind, const std::function<double(WorldStream&)>& record);
 
     /// A whole frame for the registered producers: beginFrame, their offers,
     /// the policy's grants, each kind run; the frame's stats.
@@ -119,6 +121,7 @@ public:
 private:
     WorldService policy_;
     std::vector<WorldProducer*> producers_;   // by kind
+    std::array<std::string, WorldService::kMaxKinds> markNames_;   // "world:<kind>", a timed pass's name
     uint64_t staleThrough_ = 0;   // renders up to this order were of a view before the last cut
     bool haveView_ = false;
     bromath::Vec3 eye_{0.0f, 0.0f, 0.0f}, forward_{0.0f, 0.0f, -1.0f};   // the last render's

@@ -387,7 +387,7 @@ void SceneAtmosphere::offer(SceneFrame&, WorldService& service) {
     }
 }
 
-uint32_t SceneAtmosphere::record(SceneFrame& frame, int, std::span<const WorldJob> granted, WorldStream& stream) {
+double SceneAtmosphere::record(SceneFrame& frame, int, std::span<const WorldJob> granted, WorldStream& stream) {
     if (granted.empty()) return 0;
     VkCommandBuffer cmd = stream.cmd();
     const bool apart = stream.apart();

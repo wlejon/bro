@@ -82,7 +82,7 @@ public:
 
     // WorldProducer: the paging's wants, and its grants back.
     void offer(SceneFrame& frame, WorldService& service) override;
-    uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
+    double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
     SceneVkImage pool;
     SceneVkImage scratch;

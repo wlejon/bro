@@ -255,7 +255,7 @@ public:
     /// With the page tables' changes. Recorded outside any rendering, after
     /// the frame's uniforms and before anything draws the land or the turf.
     void offer(SceneFrame& frame, WorldService& service) override;
-    uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
+    double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to

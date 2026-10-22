@@ -565,7 +565,7 @@ int main() {
                                  },
                                  &timer};
             const uint32_t base = f * 1000;
-            const uint32_t jobs = world.run(streams, kind, [&](WorldStream& s) {
+            const double jobs = world.run(streams, kind, [&](WorldStream& s) {
                 const auto granted = world.policy().granted(kind);
                 VkCommandBuffer c = s.cmd();
                 apart = s.apart();
@@ -589,9 +589,9 @@ int main() {
                 }
                 render::cmdMemoryBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                                          VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-                return static_cast<uint32_t>(granted.size());
+                return static_cast<double>(granted.size());
             });
-            assert(jobs == 4);
+            assert(jobs == 4.0);
             lastBase = base;
             // The frame's graphics waits for its compute from here on.
             cmd = device.joinCompute(cmd);

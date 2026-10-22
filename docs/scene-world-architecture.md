@@ -393,19 +393,27 @@ tiles it wants) and gives up its own budget.
 
 - **The policy** (`world/world_service.h`, CPU only, unit-tested by
   `bro_world_service_test`) holds the kinds (a name, raster or compute, a
-  first guess at a job's cost), takes each frame's offers (key, producer,
-  error in pixels, size, required) and grants them: required jobs first,
-  then by error, ties to the larger tile, then by kind, producer and key, so
-  the order never depends on who offered first. A job is granted while the
-  frame's spending plus its kind's cost fits the budget; a kind that does
-  not fit leaves the rest of its jobs, and a cheaper kind's may still fit.
+  first guess at a unit's cost), takes each frame's offers (key, producer,
+  error in pixels, size, required, units) and grants them: required jobs
+  first, then by error, ties to the larger tile, then by kind, producer and
+  key, so the order never depends on who offered first. A job's units are
+  its work in its kind's measure: 1 where a kind's jobs cost alike, a probe
+  box's probe-rays where they do not (a fresh strip of the probe grid traces
+  twice the rays of a refresh slice, and the boxes differ in columns). A job
+  is granted while the frame's spending plus its cost (its kind's a unit
+  times its units) fits the budget; one that does not fit is left, and a
+  cheaper one may still fit.
 - **The budget** is the target less the most the last four timed frames
   needed outside the service (each frame's GPU ms less its service spans on
   the graphics queue; spans on the async queue are not subtracted), floored
   at 0.1 ms. A frame over the target, or no timed frame yet, gives the floor.
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
-  default. A kind's cost per job is its span's ms over its jobs: the first
-  measurement replaces the guess, later ones move it by a quarter.
+  default. A kind's cost a unit is its span's ms over its units: the first
+  measurement replaces the guess, later ones move it by a quarter. (Charged
+  by the job, the probe traces' kind learned the average box: a frame
+  granted three wide cascade-0 slices on a budget of 1.5 ms spent 2.1 ms on
+  them, and a 16 km biomes flyover at 40 m/s ran 8 of 150 frames past
+  2.78 ms, to 4.3; charged by probe-rays, none, its worst 2.66 ms.)
 - **A cut.** The slack a view left says nothing of the next view after a
   jump, and a frame or two of timings is read late. So when the eye moves
   more than 10 m or the view turns more than half its vertical field of view
@@ -416,7 +424,9 @@ tiles it wants) and gives up its own budget.
   `world-service` pass at the frame's head) feeds the policy the GPU
   timer's frames, collects the producers' offers, and runs each kind's
   granted jobs inside one span of the timer (`SceneGpuTimer::beginSpan`,
-  stamped always, with the jobs it held). A raster kind records into the
+  stamped always, with the units it held), and marks each graphics kind as
+  a timed pass of its own (`world:<kind>` in `perf.gpuPasses()`). A raster
+  kind records into the
   frame's graphics stream; a compute kind into the frame's compute stream,
   the async compute queue where there is one, else the graphics stream at
   the same point. The compute path has no shipping producer yet; it is

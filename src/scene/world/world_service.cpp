@@ -6,7 +6,7 @@ namespace bro::scene {
 
 int WorldService::addKind(const WorldJobKind& kind) {
     if (static_cast<int>(kinds_.size()) >= kMaxKinds) return -1;
-    kinds_.push_back({kind, std::max(kind.costMs, 1e-4f), false});
+    kinds_.push_back({kind, std::max(kind.costMs, 1e-9f), false});
     granted_.emplace_back();
     return static_cast<int>(kinds_.size()) - 1;
 }
@@ -16,12 +16,12 @@ void WorldService::observe(const WorldFrameTiming& timing) {
     for (const WorldFrameTiming::Span& s : timing.spans) {
         if (s.kind < 0 || s.kind >= kindCount()) continue;
         if (!s.apart) service += s.ms;
-        if (s.jobs == 0 || s.ms <= 0.0) continue;
+        if (s.units <= 0.0 || s.ms <= 0.0) continue;
         Kind& k = kinds_[static_cast<size_t>(s.kind)];
-        const float sample = static_cast<float>(s.ms / s.jobs);
+        const float sample = static_cast<float>(s.ms / s.units);
         // The first measurement replaces the guess; later ones are followed.
         k.cost = k.measured ? k.cost + config_.costRate * (sample - k.cost) : sample;
-        k.cost = std::max(k.cost, 1e-4f);
+        k.cost = std::max(k.cost, 1e-9f);
         k.measured = true;
     }
     if (timing.frameMs < 0.0) return;
@@ -58,7 +58,7 @@ void WorldService::schedule() {
     });
     float spent = 0.0f;
     for (const WorldJob& j : offers_) {
-        const float c = kinds_[static_cast<size_t>(j.kind)].cost;
+        const float c = kinds_[static_cast<size_t>(j.kind)].cost * static_cast<float>(std::max(j.units, 0.0));
         if (!j.required && spent + c > budget_) {
             ++stats_.queued;
             stats_.worstError = std::max(stats_.worstError, j.error);

@@ -28,11 +28,11 @@ void check(bool ok, const std::string& what) {
 
 bool near(double a, double b, double eps = 1e-4) { return std::fabs(a - b) <= eps; }
 
-/// A frame the timer read: `frameMs` in all, kind `kind`'s `jobs` taking `ms`.
-WorldFrameTiming frameOf(double frameMs, int kind = 0, uint32_t jobs = 0, double ms = 0.0, bool apart = false) {
+/// A frame the timer read: `frameMs` in all, kind `kind`'s `units` taking `ms`.
+WorldFrameTiming frameOf(double frameMs, int kind = 0, double units = 0.0, double ms = 0.0, bool apart = false) {
     WorldFrameTiming t;
     t.frameMs = frameMs;
-    if (jobs > 0) t.spans.push_back({kind, jobs, ms, apart});
+    if (units > 0.0) t.spans.push_back({kind, units, ms, apart});
     return t;
 }
 
@@ -85,6 +85,31 @@ void testRankingAcrossProducers() {
     m.schedule();
     check(m.granted(big).size() == 1 && m.granted(small).size() == 2,
           "past a kind that does not fit, a cheaper kind's jobs still do");
+}
+
+// A kind whose jobs differ in work: each is charged its units, and its cost
+// a unit is learned from spans of mixed jobs.
+void testUnits() {
+    WorldService s;
+    WorldServiceConfig c;
+    c.floorMs = 0.5f;
+    c.costRate = 1.0f;
+    s.configure(c);
+    const int k = s.addKind({"traces", WorldSchedule::Raster, 0.0625f});
+    s.beginFrame();
+    WorldJob wide{1, 0, k, 9.0f, 1.0, false, 4.0};   // 0.25 ms
+    WorldJob narrow{2, 0, k, 8.0f, 1.0, false, 2.0};   // 0.125 ms
+    WorldJob next{3, 0, k, 7.0f, 1.0, false, 4.0};   // 0.25 ms: past the budget
+    WorldJob last{4, 0, k, 6.0f, 1.0, false, 1.0};   // 0.0625 ms: fits after it
+    for (const WorldJob& j : {wide, narrow, next, last}) s.offer(j);
+    s.schedule();
+    const auto g = s.granted(k);
+    check(g.size() == 3 && g[0].key == 1 && g[1].key == 2 && g[2].key == 4,
+          "jobs are charged their units: a wide one left, a narrower one after it granted");
+    check(near(s.stats().spentMs, 0.4375), "spent is the granted units' cost");
+    // A span of 6 units in 0.75 ms: 0.125 ms a unit.
+    s.observe(frameOf(-1.0, k, 6.0, 0.75));
+    check(near(s.cost(k), 0.125), "the cost a unit is the span's over its units");
 }
 
 void testCoarserTieBreak() {
@@ -249,6 +274,7 @@ void testCostLearning() {
 int main() {
     testRankingAcrossProducers();
     testCoarserTieBreak();
+    testUnits();
     testBudgetFollowsSlack();
     testFloorOverTarget();
     testCostLearning();

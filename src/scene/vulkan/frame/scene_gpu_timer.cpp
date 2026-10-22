@@ -123,7 +123,7 @@ bool SceneGpuTimer::beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart) {
         spanMask_[pair] |= bit;
         if (apart) spanApart_[pair] |= bit;
         spanSegments_[pair][id] = 0;
-        spanJobs_[pair][id] = 0;
+        spanUnits_[pair][id] = 0.0;
     }
     const uint32_t seg = spanSegments_[pair][id]++;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, apart ? computePool_ : pool_,
@@ -132,13 +132,13 @@ bool SceneGpuTimer::beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart) {
     return true;
 }
 
-void SceneGpuTimer::endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs) {
+void SceneGpuTimer::endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, double units) {
     if (recordingPair_ == UINT32_MAX || id >= kMaxSpans || !((spanOpen_[recordingPair_] >> id) & 1u)) return;
     const uint32_t pair = recordingPair_, seg = spanSegments_[pair][id] - 1;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, apart ? computePool_ : pool_,
                         kPerSlot * pair + kSpanBase + 2 * (id * kSpanSegments + seg) + 1);
     spanOpen_[pair] &= ~(1u << id);
-    spanJobs_[pair][id] += jobs;
+    spanUnits_[pair][id] += units;
 }
 
 void SceneGpuTimer::takeFrames(std::vector<Frame>& out) {
@@ -273,7 +273,7 @@ double SceneGpuTimer::harvest(uint32_t pair) {
         uint64_t ticks = 0;
         for (uint32_t k = 0; k < segs; ++k) ticks += ((s[2 * k + 1] & mask) - (s[2 * k] & mask)) & mask;
         const double ms = static_cast<double>(ticks) * periodNs_ / 1.0e6;
-        frame.spans.push_back({id, spanJobs_[pair][id], ms, apart});
+        frame.spans.push_back({id, spanUnits_[pair][id], ms, apart});
     }
     if (frames_.size() >= 16) frames_.erase(frames_.begin());
     frames_.push_back(std::move(frame));

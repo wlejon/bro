@@ -91,7 +91,7 @@ public:
 
     // WorldProducer: the cascades' worlds, and their probes' traces.
     void offer(SceneFrame& frame, WorldService& service) override;
-    uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
+    double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
     /// The capture's depth reaches this far above and below the eye (m).
     static constexpr float kCaptureRange = 20000.0f;
@@ -121,7 +121,7 @@ private:
     };
 
     uint32_t recordWorld(SceneFrame& frame, WorldStream& stream);
-    uint32_t recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+    double recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
 
     /// The canopy this frame: its plants nodes, the cascades their changes
     /// since the last frame fall in told, and the layers' top (above the

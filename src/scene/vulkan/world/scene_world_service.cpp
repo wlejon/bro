@@ -30,6 +30,7 @@ int SceneWorldService::addKind(WorldProducer* producer, const WorldJobKind& kind
     if (k < 0) return -1;
     producers_.resize(static_cast<size_t>(k) + 1, nullptr);
     producers_[static_cast<size_t>(k)] = producer;
+    markNames_[static_cast<size_t>(k)] = "world:" + kind.name;
     return k;
 }
 
@@ -53,7 +54,7 @@ void SceneWorldService::beginFrame(SceneGpuTimer* timer, float targetMs, bool cu
             WorldFrameTiming t;
             t.frameMs = f.order > staleThrough_ ? f.ms : -1.0;   // (a view before the cut: its costs only)
             for (const SceneGpuTimer::Frame::Span& s : f.spans)
-                t.spans.push_back({static_cast<int>(s.id), s.jobs, s.ms, s.apart});
+                t.spans.push_back({static_cast<int>(s.id), s.units, s.ms, s.apart});
             policy_.observe(t);
         }
     }
@@ -61,16 +62,18 @@ void SceneWorldService::beginFrame(SceneGpuTimer* timer, float targetMs, bool cu
     policy_.beginFrame();
 }
 
-uint32_t SceneWorldService::run(WorldStreams& streams, int kind,
-                                const std::function<uint32_t(WorldStream&)>& record) {
-    if (kind < 0 || kind >= policy_.kindCount()) return 0;
+double SceneWorldService::run(WorldStreams& streams, int kind, const std::function<double(WorldStream&)>& record) {
+    if (kind < 0 || kind >= policy_.kindCount()) return 0.0;
     WorldStream stream;
     stream.streams_ = &streams;
     stream.kind_ = kind;
     stream.schedule_ = policy_.kind(kind).schedule;
-    const uint32_t jobs = record(stream);
-    if (stream.stamped_) streams.timer->endSpan(stream.cmd_, static_cast<uint32_t>(kind), stream.apart_, jobs);
-    return jobs;
+    const double units = record(stream);
+    if (stream.stamped_) streams.timer->endSpan(stream.cmd_, static_cast<uint32_t>(kind), stream.apart_, units);
+    // Each kind on the graphics queue its own part of the timed passes.
+    if (streams.timer && stream.cmd_ != VK_NULL_HANDLE && !stream.apart_)
+        streams.timer->mark(stream.cmd_, markNames_[static_cast<size_t>(kind)].c_str());
+    return units;
 }
 
 void SceneWorldService::runFrame(SceneFrame& frame) {

@@ -20,10 +20,10 @@
 //
 // Spans are stamped always, timed passes or not: a numbered stretch of a
 // render (the world service's jobs of one kind, scene/vulkan/world/
-// scene_world_service.h) with the jobs it held, on the graphics queue or on
-// the async compute stream. A span may run in a few segments (a kind's jobs
-// drawn in one pass and copied in another): its time is theirs summed, its
-// jobs theirs. Every render read, oldest first, is kept with
+// scene_world_service.h) with the work it held (its jobs' units), on the
+// graphics queue or on the async compute stream. A span may run in a few
+// segments (a kind's jobs drawn in one pass and copied in another): its time
+// is theirs summed, its units theirs. Every render read, oldest first, is kept with
 // its spans for takeFrames(), apart from takeMs(): the world service reads
 // its frames there whatever perf.gpuFrameMs reads.
 #include "render/vulkan_context.h"
@@ -50,7 +50,7 @@ public:
         double ms = 0.0;
         struct Span {
             uint32_t id = 0;
-            uint32_t jobs = 0;
+            double units = 0.0;   // the work it held (its jobs' units)
             double ms = 0.0;
             bool apart = false;   // on the async compute queue
         };
@@ -83,10 +83,10 @@ public:
     /// A segment of span `id` (below kMaxSpans; up to kSpanSegments a
     /// render, all on one queue) begins and ends in `cmd`: the render's
     /// graphics, or (`apart`) its compute stream on the async compute queue,
-    /// holding `jobs` of the span's. False, and nothing written, when the
-    /// render or that stream is untimed or the span has no segment left.
+    /// holding `units` of the span's work. False, and nothing written, when
+    /// the render or that stream is untimed or the span has no segment left.
     bool beginSpan(VkCommandBuffer cmd, uint32_t id, bool apart);
-    void endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, uint32_t jobs);
+    void endSpan(VkCommandBuffer cmd, uint32_t id, bool apart, double units);
     /// `ticket` is the render's last graphics submission, which waits for its
     /// compute: once it completes, both are done.
     void submitted(uint64_t ticket);
@@ -138,12 +138,12 @@ private:
     uint32_t readyCount_ = 0;
     // Each slot's spans: those written (on the graphics queue, on the
     // compute stream), the one with a segment open, and each one's segments
-    // and jobs.
+    // and units.
     uint32_t spanMask_[8] = {};
     uint32_t spanApart_[8] = {};
     uint32_t spanOpen_[8] = {};
     uint32_t spanSegments_[8][kMaxSpans] = {};
-    uint32_t spanJobs_[8][kMaxSpans] = {};
+    double spanUnits_[8][kMaxSpans] = {};
     // The renders read for takeFrames, oldest first.
     std::vector<Frame> frames_;
     // Each slot's marks: how many, and their names.

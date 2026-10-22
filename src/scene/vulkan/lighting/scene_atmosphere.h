@@ -103,7 +103,7 @@ public:
 
     // WorldProducer: the view-independent tables.
     void offer(SceneFrame& frame, WorldService& service) override;
-    uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
+    double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
 private:
     enum Job : uint32_t { kTransmittance, kMultiScatter, kSkyLight, kSkyView, kAerial, kJobs };
