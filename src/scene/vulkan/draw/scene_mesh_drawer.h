@@ -18,6 +18,7 @@
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
 #include "render/vulkan_frames.h"
+#include "scene/world/land_sun.h"
 #include "scene/world/surface_layers.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/world/scene_surface_layers.h"
@@ -51,6 +52,7 @@ namespace bro::scene::vk {
 
 struct SceneFrame;
 struct SceneGpu;
+struct LandSunGpu;
 class SceneDefaults;
 class CoverPlan;
 namespace plants {
@@ -249,6 +251,8 @@ public:
     ///    fills, and those granted made by its module in a compute pass;
     ///  - the land's horizon about the eye (scene_world_horizon.h), from the
     ///    first land drawn's tiles, when the eye has moved or they changed;
+    ///  - the land's sun (scene/world/land_sun.h), its levels about the eye
+    ///    from the same tiles, as the eye, the sun or the land move them;
     ///  - the turf's surface layers (docs/scene-world-architecture.md §5;
     ///    scene_mesh_drawer_ground.cpp): for each grass node whose turf this
     ///    frame draws, likewise, its turf meshes drawn straight down into
@@ -257,6 +261,10 @@ public:
     /// the frame's uniforms and before anything draws the land or the turf.
     void offer(SceneFrame& frame, WorldService& service) override;
     double record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
+    /// The land's sun as every lit shader reads it (the lighting block's
+    /// LandSunGpu, about `eye`, and the lighting set's binding 23).
+    void fillLandSun(LandSunGpu& out, const bromath::Vec3& eye) const;
+    VkImageView landSunView() const;
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to
@@ -458,6 +466,23 @@ private:
     VkDescriptorSetLayout horizonSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout horizonLayout_ = VK_NULL_HANDLE;
     VkPipeline horizonPipeline_ = VK_NULL_HANDLE;
+    /// The land's sun (scene/world/land_sun.h; scene_mesh_drawer_land_sun.cpp):
+    /// its levels made from the first land offered's tiles by land_sun.comp,
+    /// a world service job kind of its own, into landSunImage_ (made with
+    /// the first land; until then the 1x1 landSunNone_ is bound).
+    bool setupLandSun(SceneGpu& gpu);
+    void cleanupLandSun(SceneGpu& gpu);
+    void offerLandSun(SceneFrame& frame, WorldService& service);
+    uint32_t recordLandSun(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+    LandSun landSun_;
+    SceneVkImage landSunImage_;
+    SceneVkImage landSunNone_;
+    int landSunKind_ = -1;
+    bool landSunTiles_ = false;   // tiles filled since the land's sun was last offered
+    VkShaderModule landSunModule_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout landSunSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout landSunLayout_ = VK_NULL_HANDLE;
+    VkPipeline landSunPipeline_ = VK_NULL_HANDLE;
     /// This frame's turf draws by grass node (offer's, for record).
     std::unordered_map<uint32_t, std::vector<const MeshDraw*>> turfDraws_;
     std::vector<uint32_t> turfOffered_;   // the grass nodes whose tiles offer() updated this frame

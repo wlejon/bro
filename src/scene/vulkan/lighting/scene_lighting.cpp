@@ -7,6 +7,7 @@
 #include "scene/nodes/reflection_probe_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_mesh_drawer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
@@ -148,6 +149,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     gpu.environment.fillLighting(light, renderer);
     gpu.atmosphere.fill(light.atm, eye);
     gpu.probes.fill(light.probeGrid, eye);
+    gpu.meshes.fillLandSun(light.landSun, eye);
     return light;
 }
 
@@ -179,6 +181,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     gpu.environment.writeBindings(writer, d);
     gpu.atmosphere.writeBindings(writer);
     gpu.probes.writeBindings(writer);
+    writer.writeImage(23, gpu.meshes.landSunView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);

@@ -24,12 +24,16 @@
  *     land does, with nothing baked on the CPU. A plants node standing on
  *     it (`createPlants({ land })`, vegetation-api.js) puts the canopy its
  *     rules make in the land's tiles: past the plants' range the land rises
- *     by it and is drawn as their leaves, past their shadow range it casts
- *     so, and a forest reaches the horizon.
+ *     by it and is drawn as their leaves, past their shadow range it shades
+ *     the land as they would, and a forest reaches the horizon.
  *
  * The land is square: `extent` metres from the origin each way. Its
  * transform is ignored. It casts shadows (a hill's on the slope behind it,
- * on the grass and the plants) and receives them.
+ * on the grass and the plants) and receives them. A low sun's long shade,
+ * a hill's across a valley or a far forest's across a meadow, comes from
+ * the land's sun: the height a point must clear to see the sun, marched
+ * over the land's tiles about the eye to 16 km (the first land offered;
+ * docs/scene-world-architecture.md §5).
  *
  * THE SURFACE MODULE (scene_land_layer.glsl is the contract). GLSL that
  * defines

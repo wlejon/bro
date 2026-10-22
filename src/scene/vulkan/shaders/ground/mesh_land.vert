@@ -55,24 +55,26 @@ const float LAND_MORPH_RAMP = 9.0;   // cells it ramps over before that
 
 // Past the plants' range the land is their canopy (world/plant_canopy.h):
 // it rises by their top as far as they cover it, and its fragments are
-// their leaves; past their cast range it casts so. Both come in over the
-// range's last tenth as the plants go. What it rises by at `xz` (read at
-// `lambda`, its ground `h`), and the canopy there (rgb its leaves' albedo,
-// a how much of it is shown; white and none where it is not).
+// their leaves, coming in over the range's last tenth as the plants go.
+// What it rises by at `xz` (read at `lambda`, its ground `h`), and the
+// canopy there (rgb its leaves' albedo, a how much of it is shown; white
+// and none where it is not). The caster does not rise: the shade of a
+// canopy past the plants' cast range is the land's sun's (land_sun.comp),
+// as a low sun runs along its top and the shadow pages' depth offsets
+// would swallow it.
 float landRise(vec2 xz, float lambda, float h, out vec4 canopy) {
     canopy = vec4(1.0, 1.0, 1.0, 0.0);
-    if (!landHasCanopy()) return 0.0;
 #ifdef LAND_CASTER
-    float range = landCanopyCastRange();
+    return 0.0;
 #else
-    float range = landCanopyRange();
-#endif
-    float shown = landCanopyShown(length(vec3(xz.x, h, xz.y) - landEye3()), range);
+    if (!landHasCanopy()) return 0.0;
+    float shown = landCanopyShown(length(vec3(xz.x, h, xz.y) - landEye3()), landCanopyRange());
     if (shown <= 0.0) return 0.0;
     float top;
     vec4 c = landSampleCanopy(xz, lambda, top);
     canopy = vec4(c.rgb, c.a * shown);
     return top * canopy.a;
+#endif
 }
 
 void main() {

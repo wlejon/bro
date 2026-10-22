@@ -30,6 +30,14 @@ struct SceneLight {
 #include "common/scene_shadow_pages.glsl"
 #include "common/scene_atmosphere_params.glsl"
 #include "lighting/scene_probe_grid.glsl"
+#include "ground/land_sun_layout.h"
+
+// The land's sun (scene/world/land_sun.h): where each level lies, relative
+// to the eye, and the copy shown.
+struct LandSunGpu {
+    vec4 params;               // x 1 when any level is shown, y the eye's world height
+    vec4 level[LS_LEVELS];     // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
+};
 
 layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 sunDirection;  // the dominant directional light (decals, the probe grid's sun), w its index + 1 (0: none)
@@ -51,6 +59,7 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 groundBounce;  // rgb = the ground's bounce, as irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
     ProbeGridGpu probeGrid;   // the probe grid (scene/vulkan/lighting/scene_probe_grid.h), params.x = on
+    LandSunGpu landSun;       // the land's sun, params.x = shown
 } lighting;
 
 // The pool of shadow pages and the frame's overlays (the scratch target the
@@ -119,6 +128,11 @@ layout(set = 1, binding = 22) uniform texture3D probeSunImage;
 #define PG lighting.probeGrid
 #define PG_HEIGHT_LOAD(texel) texelFetch(sampler2D(probeHeightImage, lightingSampler), texel, 0).r
 #include "lighting/scene_probe_grid.glsl"
+
+// The land's sun (scene/world/land_sun.h; land_sun.comp's): each level's
+// two copies, a texel the world height a point must clear to see the sun
+// and how far off what shades it stands.
+layout(set = 1, binding = 23) uniform texture2DArray landSunImage;
 
 // Whether the pipeline was built for a frame with the atmosphere on (the
 // mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
@@ -199,12 +213,39 @@ bool sceneProbeSh(vec3 pos, out vec4 r, out vec4 g, out vec4 b) {
     return true;
 }
 
-// What the land leaves of the probe grid's sun at camera-relative `pos`: the
-// hills' shade, however far off they stand and however low the sun (the
-// shadow pages' depth offsets swallow a slope that runs along a low sun's
-// rays, and end at their reach). Blended over the cascades as the SH are;
-// 1 where the grid is off or ends.
-float sceneLandSun(vec3 pos) {
+// The land's sun at camera-relative `pos`: how much of the sun the land
+// (and the canopy past the plants' cast range) leaves there, from the
+// finest level whose square holds it, blended into the next over its last
+// LS_BLEND texels; 1 past them all. A point clears what shades it over a
+// height that widens with how far off that stands (the sun's disc,
+// widened as the probe grid's is), and its own ground clears the level's
+// heights by a share of a texel (a level's heights are bilinear between
+// its texels; the ground between them is not).
+const float LS_BLEND = 24.0;
+float landSunLevels(vec3 pos) {
+    if (lighting.landSun.params.x < 0.5) return 1.0;
+    float y = pos.y + lighting.landSun.params.y;
+    float sun = 0.0, left = 1.0;
+    for (int l = 0; l < LS_LEVELS; ++l) {
+        vec4 lv = lighting.landSun.level[l];
+        if (lv.w < 0.0) continue;
+        vec2 g = (pos.xz - lv.xy) / lv.z;
+        float edge = min(min(g.x, g.y), min(float(LS_SIDE) - g.x, float(LS_SIDE) - g.y));
+        if (edge < 1.0) continue;
+        float w = left * clamp((edge - 1.0) / LS_BLEND, 0.0, 1.0);
+        vec2 s = textureLod(sampler2DArray(landSunImage, lightingSampler), vec3(g / float(LS_SIDE), lv.w), 0.0).rg;
+        float soft = 0.25 * lv.z + 0.02 * s.y;
+        sun += w * smoothstep(s.x - soft, s.x + soft, y + 0.1 * lv.z);
+        left -= w;
+        if (left <= 0.0) break;
+    }
+    return sun + left;
+}
+
+// The probe grid's land shade at camera-relative `pos` (its sun volume's g,
+// blended over the cascades as the SH are); 1 where the grid is off or
+// ends.
+float probeLandSun(vec3 pos) {
     if (PG.params.x < 0.5) return 1.0;
     int c = pgCascadeAt(pos.xz, 0);
     if (c < 0) return 1.0;
@@ -222,6 +263,15 @@ float sceneLandSun(vec3 pos) {
     }
     return land + left;
 }
+
+// What the land leaves of the sun at camera-relative `pos`: the hills'
+// shade (and a canopy's past the plants' cast range), however far off they
+// stand and however low the sun (the shadow pages' depth offsets swallow a
+// slope that runs along a low sun's rays, and end at their reach). The
+// lesser of the land's sun and the probe grid's, which see the same hills:
+// the grid's ground is every mesh's that grounds it, the land's sun the
+// land node's alone.
+float sceneLandSun(vec3 pos) { return min(landSunLevels(pos), probeLandSun(pos)); }
 
 // The spacing (m) of the probes lighting camera-relative `pos` (its finest
 // cascade's): what is much larger than it, they resolve. 0 where the grid is
@@ -749,7 +799,8 @@ vec3 sceneDirectLight(SceneSurface s) {
         // The atmosphere's sun is that light above the air: what reaches the
         // surface is what the air and the planet's shadow leave of it.
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
-        // The sun's shade of the land (the probe grid's), over its shadow pages'.
+        // The sun's shade of the land (the land's sun and the probe grid's),
+        // over its shadow pages'.
         float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1 ? sceneLandSun(s.position) : 1.0;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.

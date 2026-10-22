@@ -117,8 +117,10 @@ public:
     /// sampled in GENERAL), so nothing transitions it again. `shared`: the
     /// async compute queue writes it while the graphics queue reads it
     /// (concurrent sharing across the two families where they differ).
+    /// `layers` > 0 makes it a 2D array of that many layers (`depth` 1),
+    /// viewed whole as one.
     bool createStorageImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format,
-                            SceneVkImage& outImage, bool shared);
+                            SceneVkImage& outImage, bool shared, uint32_t layers = 0);
 
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
     bool createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage);

@@ -265,18 +265,19 @@ bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc&
 }
 
 bool SceneVkAllocator::createStorageImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format,
-                                          SceneVkImage& outImage, bool shared) {
-    if (width == 0 || height == 0 || depth == 0) return false;
+                                          SceneVkImage& outImage, bool shared, uint32_t layers) {
+    if (width == 0 || height == 0 || depth == 0 || (layers > 0 && depth > 1)) return false;
     VkDevice dev = device_.device();
     render::VulkanContext& ctx = device_.context();
     const bool volume = depth > 1;
+    const uint32_t arrayLayers = layers > 0 ? layers : 1;
 
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     info.imageType = volume ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     info.extent = {width, height, depth};
     info.mipLevels = 1;
-    info.arrayLayers = 1;
+    info.arrayLayers = arrayLayers;
     info.format = format;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -313,15 +314,15 @@ bool SceneVkAllocator::createStorageImage(uint32_t width, uint32_t height, uint3
     VkImageViewCreateInfo view{};
     view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view.image = outImage.image;
-    view.viewType = volume ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D;
+    view.viewType = volume ? VK_IMAGE_VIEW_TYPE_3D : layers > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     view.format = format;
-    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, arrayLayers};
     outImage.format = format;
     outImage.width = width;
     outImage.height = height;
     outImage.depth = depth;
     outImage.mipLevels = 1;
-    outImage.arrayLayers = 1;
+    outImage.arrayLayers = arrayLayers;
     outImage.sampler = VK_NULL_HANDLE;
     if (vkCreateImageView(dev, &view, nullptr, &outImage.view) != VK_SUCCESS) {
         LOG_ERROR("SceneVkAllocator: Failed to create a storage image's view");
@@ -330,7 +331,7 @@ bool SceneVkAllocator::createStorageImage(uint32_t width, uint32_t height, uint3
         return false;
     }
     VkCommandBuffer cmd = device_.uploadCommands();
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, arrayLayers};
     render::cmdTransitionImage(cmd, outImage.image, range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     VkClearColorValue zero{};
     vkCmdClearColorImage(cmd, outImage.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);

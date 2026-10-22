@@ -404,11 +404,11 @@ at all.
   there: biomes' high view (1.5 km up) with the canopy past 3 km is
   within 2–10 levels of the plants at 3–4 km, forests and meadows, and
   past 6 km within 2–9 of the plants drawn to 12 km.
-- **Past the plants' cast range, the land casts as the canopy.** The
-  land's caster rises the same way where the plants no longer cast, and
-  a plant past its range casts nothing. The plants' own crowns past the
-  cast range receive that shadow: inside the raised surface a crown is
-  shaded, its top lit.
+- **Past the plants' cast range, the canopy shades through the land's
+  sun** (below). A plant past its range casts nothing; the canopy stands
+  in its place in the land's sun's march, so the plants' own crowns past
+  the cast range are shaded by the canopy toward the sun of them, their
+  tops lit.
 - **What it costs: nothing measured.** Biomes' shots, interleaved, the
   canopy on and off: the land's pass 0.30 ms either way, every shot
   within noise. The fill evaluates the module once a texel when a tile is
@@ -417,11 +417,68 @@ at all.
   1/64 of the distance (60–120 m at 4–8 km), so past the range a forest's
   patches blur: biomes' high view shows the far band's forest tone but not
   its patches. Reading it per fragment at the tiles' texel would halve
-  that. At altitude neither the canopy nor the plants shade the ground:
-  from 1.5 km up the receivers' page offsets swallow a 15 m rise (on and
-  off are the same to a pixel at golden hour), and the probe grid's land
-  shade ends at its last cascade, 2 km out. Forests' shadows seen from
-  high need a far shade of their own (the horizon terms above).
+  that.
+
+### As built: the land's sun
+
+The shadow pages cannot hold a shadow cast along the light. Their depth
+offsets (a constant and a slope term, §8) are sized for casters that face
+the sun; at a low sun a raised canopy top or a long hillside lies nearly
+along the light, and a 20 m rise is two metres of light-space depth at 6°.
+Raising the land's caster by the canopy changed nothing at golden hour,
+and the probe grid's land shade ends at its last cascade, 2 km out. The
+land's sun is the shade the land and its canopy throw, made from the land's
+tiles in world space:
+
+- **Levels about the eye** (`scene/world/land_sun.h`,
+  `ground/land_sun_layout.h`): six square levels of 512² texels, level
+  l's texel 2·2^l m (±512 m to ±16 km), each texel two floats: the world
+  height a point there must clear to see the sun, and how far off what
+  shades it stands. A level is centred on the eye, snapped to 32 of its
+  texels.
+- **A march toward the sun** (`ground/land_sun.comp`, a texel an
+  invocation): from the texel's ground the ray climbs toward the sun in
+  steps of the larger of a texel and 0.12 of the way come (at most 64),
+  reading the tiles a step's length fine. At each step what stands there
+  (the ground, and past the plants' cast range the canopy's top times its
+  cover) less the ray's climb is a height to clear; the texel keeps the
+  highest and stops once the ray is over the land's top. It starts a texel
+  below its own ground, so open ground clears it by more than a receiver's
+  soft band however low the sun.
+- **Every lit shader reads it** (`scene_lighting.glsl`'s sceneLandSun, the
+  lowest of it and the probe grid's land shade): the finest level holding
+  the point, blended into the next over its last 24 texels, the sun seen
+  over a band a quarter texel and 2% of the shader's distance to the
+  shading wide. A leaf or a far crown the land shades skips its page
+  lookup.
+- **A world service job a level** (the `land sun` kind, Raster, after the
+  land's fills). A level is made when it was never made (required), when
+  the eye moves it a snap, the land's module, canopy or cast range
+  changes, the sun turns a quarter degree, or (30 frames on) the tiles
+  under it refined, at an error of 8, 8, 4 or 1 pixels. A want's error
+  doubles every 30 frames it waits, up to 64: a level made over a view's
+  first coarse tiles, outranked by the probes' traces frame after frame,
+  stood the coarse heights over the glade's slope and shaded it for good.
+  A level has two copies; it is made into the one not shown and shown
+  from then on, since the frame's lighting block is written before the
+  world service records. The image (12 layers of rg32f, 25 MB) is made
+  with the first land and stays in GENERAL.
+- **What it costs.** A level is 0.04–0.06 ms; six in one frame were
+  0.21 ms in the afternoon and 0.35 ms at golden hour. Biomes' golden
+  shots, interleaved, on and off, two rounds: no shot dearer (edge 1.70
+  against 1.82 ms, meadow and above cheaper too, the rest within noise),
+  the walk 5 and 5 frames over 2.78 ms against 4 and 7, the flyover the
+  same to 0.01 ms.
+- **What it shows.** From the flyover and the high view at golden hour
+  the forests' edges throw long shade across the meadows past the plants'
+  cast range and the hills shade the valleys behind them, where before the
+  far land was lit flat; the afternoon's glade slope stays lit (a CPU
+  march over the land's heights agrees). test_land: a ridge 40 m high at a
+  4° sun shades flat ground 350 m behind it (red 6.1 against 18.2 before
+  it; with the land's sun not read, 19.4 and 19.4).
+- **Where it falls short.** The canopy's cover is a mean; it shades as a
+  soft slab, not as crowns. Its penumbra is a texel at least, so a level's
+  coarse texels (32 m at level 4) blur a hill's shade line far off.
 
 ## 6. The world service
 

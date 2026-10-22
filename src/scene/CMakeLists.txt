@@ -106,6 +106,7 @@ embed_vk_shader(foliage/plants.frag            kVkPlantsFragSrc)
 embed_vk_shader(foliage/shadow_plants.vert     kVkShadowPlantsVertSrc)
 embed_vk_shader(foliage/plants_pose.comp       kVkPlantsPoseCompSrc)
 embed_vk_shader(ground/scene_land_layout.h     kVkSceneLandLayoutSrc)
+embed_vk_shader(ground/land_sun_layout.h       kVkLandSunLayoutSrc)
 embed_vk_shader(ground/scene_land.glsl         kVkSceneLandSrc)
 embed_vk_shader(ground/scene_land_layer.glsl   kVkSceneLandLayerSrc)
 embed_vk_shader(ground/land_module.glsl        kVkLandModuleSrc)
@@ -160,6 +161,7 @@ add_library(bro_scene STATIC
     world/cell_store.cpp
     world/plant_placement.cpp
     world/plant_canopy.cpp
+    world/land_sun.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -192,6 +194,7 @@ add_library(bro_scene STATIC
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/ground/scene_mesh_drawer_land.cpp
+    vulkan/ground/scene_mesh_drawer_land_sun.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
     vulkan/foliage/scene_plants_gpu_plan.cpp
     vulkan/lighting/scene_lighting.cpp

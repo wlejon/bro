@@ -71,7 +71,7 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's fills");
         return false;
     }
-    return setupLandHorizon(gpu);
+    return setupLandHorizon(gpu) && setupLandSun(gpu);
 }
 
 bool SceneMeshDrawer::setupLandHorizon(SceneGpu& gpu) {
@@ -124,6 +124,7 @@ void SceneMeshDrawer::cleanupLandHorizon(SceneGpu& gpu) {
 
 void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
     cleanupLandHorizon(gpu);
+    cleanupLandSun(gpu);
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
     for (VkPipeline p : landFillPipelines_)
@@ -408,7 +409,7 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
         stats.compiled = true;
         land->setStats(stats);
         frame.stats.landFills += static_cast<int>(fills.size());
-        if (!fills.empty() || !lt.tiles.pageWrites().empty()) landChanged_ = true;
+        if (!fills.empty() || !lt.tiles.pageWrites().empty()) landChanged_ = landSunTiles_ = true;
         recorded += static_cast<uint32_t>(fills.size());
 
         const VkPipeline pipeline = fills.empty() ? VK_NULL_HANDLE : landFillPipeline(*lt.shaders);

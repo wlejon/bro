@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/vulkan/shaders/ground/land_sun_layout.h"
 #include "scene/vulkan/shaders/lighting/probe_grid_layout.h"
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
 
@@ -100,6 +101,15 @@ struct alignas(16) ProbeGridGpu {
 };
 static_assert(sizeof(ProbeGridGpu) == 176);
 
+/// The land's sun's block (std140) — LandSunGpu in
+/// shaders/common/scene_lighting.glsl; filled by SceneMeshDrawer::fillLandSun
+/// (scene/world/land_sun.h). Positions relative to the eye.
+struct alignas(16) LandSunGpu {
+    alignas(16) float params[4];                 // x 1 when any level is shown, y the eye's world height
+    alignas(16) float level[LS_LEVELS][4];       // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
+};
+static_assert(sizeof(LandSunGpu) == 16 * (1 + LS_LEVELS));
+
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = its index + 1 (0: none)
@@ -122,6 +132,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
     ProbeGridGpu probeGrid;             // the probe grid (params[0] = 1 when on)
+    LandSunGpu landSun;                 // the land's sun (params[0] = 1 when shown)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);
 
@@ -146,7 +157,8 @@ public:
     /// the environment's irradiance and prefiltered cubes, the BRDF LUT and
     /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13)
     /// and the shadow pages' page table (14), and the probe grid's (17 its
-    /// sampler, repeating across; 18-20 its SH, 21 the ground's height).
+    /// sampler, repeating across; 18-20 its SH, 21 the ground's height, 22
+    /// the sun's volume), and the land's sun's levels (23).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
                                                       VkSampler linearSampler, VkSampler repeatSampler);
 

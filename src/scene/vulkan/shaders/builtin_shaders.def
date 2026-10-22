@@ -84,6 +84,8 @@ BRO_SCENE_SHADER(ShadowLandVert,           "shadow_land.vert",            "groun
 BRO_SCENE_SHADER(LandFillComp,             "land_fill.comp",              "ground/land_fill.comp",              "comp", "")
 // The land's horizon about the eye (scene_world_horizon.h), from its tiles.
 BRO_SCENE_SHADER(LandHorizonComp,          "land_horizon.comp",           "ground/land_horizon.comp",           "comp", "")
+// The land's sun about the eye (scene/world/land_sun.h), a level from its tiles.
+BRO_SCENE_SHADER(LandSunComp,              "land_sun.comp",               "ground/land_sun.comp",               "comp", "")
 // The GPU cell pass (scene_world_cells_pass.cpp), its three steps.
 BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world/world_cells_cull.comp",        "comp", "CELLS_TOP")
 BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world/world_cells_cull.comp",        "comp", "CELLS_LEAF")

@@ -15,6 +15,8 @@
 //   - a plants node standing on it (createPlants' `land`): past their range
 //     the land is drawn as their canopy, within it and once they leave it
 //     as its own surface
+//   - the land's sun: a ridge at a low sun shades flat ground far behind it
+//     and not the same ground before it
 
 function patchAvg(img, x0, y0, x1, y1, ch) {
     let sum = 0, n = 0;
@@ -42,7 +44,7 @@ if (!scn) {
     missingGpuContext('scene');
 } else {
     scn.setToneMap({ mode: 'linear', gamma: 1.0 });
-    scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 3 });
+    const sun = scn.createLight({ type: 'directional', direction: [0.3, -1, 0.2], color: [1, 1, 1], intensity: 3 });
     const frames = (n = 3) => { flush(); for (let i = 0; i < n; i++) advanceTime(16); };
     const down = (x, y, z) => scn.setCamera({ fov: 50, near: 0.1, far: 5000, position: [x, y, z],
                                               target: [x, y - 10, z], up: [0, 0, -1] });
@@ -141,6 +143,32 @@ if (!scn) {
     frames(6);
     const [lr, lg] = colour();
     assert(lr > 40 && lr > 4 * lg, `without the land, the land's own (r ${lr.toFixed(1)} g ${lg.toFixed(1)})`);
+
+    // --- the land's sun: a ridge's long shade at a low sun ------------------------
+    // A ridge along z, 40 m high, its flanks falling 1 in 5 to flat ground
+    // 200 m either side; the sun 4 degrees up in the +x. Flat ground 350 m
+    // behind it (-x) lies under the ridge's line to the sun (it must clear
+    // 40 - 0.07 x 350 = 15.5 m), flat ground 350 m before it does not: the
+    // land's sun shades the one and not the other, and the shadow pages
+    // could not (their offsets swallow a caster along the light).
+    scn.destroyNode(plants);
+    const ridge = N('Max', { LHS: N('Add', { LHS: N('Multiply', { LHS: N('Abs', { Source: N('Gradient', { 'Multiplier X': 1 }) }),
+                                                                  RHS: -0.2 }),
+                                             RHS: 40 }),
+                             RHS: 0 });
+    land.setLand({ height: ridge, surface: RED });
+    assert(Math.abs(land.landHeight(0, 30) - 40) < 1e-3 && Math.abs(land.landHeight(-350, 0)) < 1e-3,
+           `the ridge (${land.landHeight(0, 30)} at its top, ${land.landHeight(-350, 0)} 350 m off)`);
+    const el = 4 * Math.PI / 180;
+    sun.direction = [-Math.cos(el), -Math.sin(el), 0];
+    const groundRed = (x) => {
+        down(x, 60, 0);
+        frames(8);
+        return colour()[0];
+    };
+    const behind = groundRed(-350), before = groundRed(350);
+    assert(before > 10 && behind < 0.5 * before,
+           `behind the ridge its shade, before it the sun (red ${behind.toFixed(1)} / ${before.toFixed(1)})`);
 
     console.log('test_land: OK');
 }

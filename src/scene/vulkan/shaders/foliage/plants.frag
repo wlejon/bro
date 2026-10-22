@@ -81,7 +81,8 @@ void main() {
         exitT = disc > 0.0 ? max((-b + sqrt(disc)) / a, 0.0) : 0.0;
         vis = exp(-density * exitT);
         if ((floatBitsToUint(push.pbrParams.w) & MESH_RECEIVES_SHADOW) != 0u) {
-            // (And the land's shade, the probe grid's, for the sun it traced.)
+            // (And the land's shade, the land's sun's and the probe grid's,
+            // for the sun they traced.)
             if (sun == int(lighting.sunDirection.w) - 1) vis *= sceneLandSun(pos);
             if (vis > 0.0) vis *= lightShadow(sun, pos + L * exitT, camDist, 0.0, L, 1.0, -2.0);
         }
