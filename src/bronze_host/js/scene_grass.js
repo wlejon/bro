@@ -209,20 +209,14 @@
         if (herbs) setHerbs(node, herbs);
     }
 
-    // The herb species: broflora's records (a Float32Array of
-    // bro.flora.herbRecords), or preset names / species objects turned into
-    // them by bro.flora when it is there.
-    function herbRecords(species) {
-        if (species instanceof Float32Array) return species;
-        const list = Array.isArray(species) ? species : species ? [species] : [];
-        const flora = globalThis.bro && globalThis.bro.flora;
-        if (list.length && flora && typeof flora.herbRecords === 'function') return flora.herbRecords(list);
-        return new Float32Array(0);
-    }
+    // The herbs: a world's herb module (GLSL, docs/vegetation-api.js
+    // "Herbs"), the data its herbData(i) reads, and its tallest plant.
     function setHerbs(node, herbs) {
-        const rec = herbRecords(herbs.species);
-        __bro_native.scene.SceneNode_setGrassHerbs(node, rec, typeof herbs.range === 'number' ? herbs.range : 0,
-            typeof herbs.far === 'number' ? herbs.far : 0);
+        const data = herbs.data instanceof Float32Array ? herbs.data
+            : new Float32Array(Array.isArray(herbs.data) ? herbs.data : 0);
+        __bro_native.scene.SceneNode_setGrassHerbs(node, typeof herbs.source === 'string' ? herbs.source : '', data,
+            typeof herbs.height === 'number' ? herbs.height : 0.4,
+            typeof herbs.range === 'number' ? herbs.range : 0, typeof herbs.far === 'number' ? herbs.far : 0);
     }
 
     // The meshes shaded as the grass's ground (turf: true is the ground
@@ -274,7 +268,8 @@
         if (isGrass(this) && opts) applyOpts(this, opts);
         return this;
     });
-    // Swap the herb species (and their range) without rebaking the floor.
+    // Swap the herb module (and its data and range) without rebaking the
+    // floor.
     fn(P, 'setHerbs', function setHerbsMember(herbs) {
         if (isGrass(this) && herbs) setHerbs(this, herbs);
         return this;
@@ -316,15 +311,6 @@
             instances: Array.from(s.slice(1, n)), movers: s[n], fieldCols: s[n + 1], fieldRows: s[n + 2],
             herbInstances: Array.from(s.slice(n + 3)),
         };
-    });
-    // The herb plants whose roots lie within `radius` m of (x, z), nearest
-    // first: [{ x, y, z, species }] (species: its index in the herbs given).
-    fn(P, 'herbPlants', function herbPlants(x, z, radius) {
-        if (!isGrass(this)) return [];
-        const s = __bro_native.scene.SceneNode_grassHerbPlants(this, +x, +z, radius > 0 ? +radius : 1);
-        const out = [];
-        for (let i = 0; i + 3 < s.length; i += 4) out.push({ x: s[i], y: s[i + 1], z: s[i + 2], species: s[i + 3] });
-        return out;
     });
     // The ground height the grass stands on at (x, z): the field, bilinear.
     fn(P, 'grassHeightAt', function grassHeightAt(x, z) {

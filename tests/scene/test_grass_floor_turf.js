@@ -1,8 +1,10 @@
 // The grass node's forest floor and turf (scene/nodes/grass_node.h setFloor,
 // vulkan/shaders/ground/scene_ground.glsl). Verifies:
-//   - createGrass's `herbs` grow low plants among (and without) the grass:
-//     with no grass anywhere, a closed floor's wood sorrel still issues herb
-//     cells and draws green leaves; a herb density of 0 grows nothing
+//   - createGrass's `herbs` grow low plants among (and without) the grass,
+//     as a herb module says (shaders/ground/scene_herb_layer.glsl; HERBS
+//     below, a green leaf a cell): with no grass anywhere, a closed floor
+//     still issues herb cells and draws green leaves; a herb density of 0
+//     grows nothing; a module that does not compile draws no herbs
 //   - `turf` / shadeGround shade a ground mesh as the grass's ground: the
 //     sward where the grass grows (green, textured), the litter where the
 //     floor is closed (brown, textured), and shadeGround(mesh, false) gives
@@ -28,6 +30,46 @@ function diffCount(a, b) {
     return n;
 }
 
+// A herb module: in a cell as the floor's density says, one upright leaf a
+// plant (a card of the ring's), green; from afar a green cover.
+const HERBS = {
+    height: 0.2,
+    data: new Float32Array([0.2, 0.55, 0.12, 0]),
+    source: `
+int herbStand(ivec2 cell, vec2 xz, vec2 floorAt) { return grassHash(cell, 105) < floorAt.y ? 0 : -1; }
+HerbMix herbFarMean(float canopy, float density, float tanView) {
+    return HerbMix(0.6 * density, herbData(0).rgb, vec3(0.0), 0.0);
+}
+float herbFarLocal(vec2 xz, float canopy, float u, float fp, out vec3 bloom, out vec3 pick) {
+    bloom = vec3(0.0);
+    pick = vec3(0.0);
+    return 0.0;
+}
+HerbFarLook herbFarLook(int variety, vec4 h) {
+    return HerbFarLook(0.2, 0.15, 1.0, herbData(0).rgb, vec3(0.0), 0.0);
+}
+#ifdef HERB_BUILD
+bool herbBuild(HerbPlant p, int card, int cards, int verts, vec3 v, inout HerbVertex o) {
+    if (card != 0) return false;
+    vec3 side = normalize(cross(vec3(0.0, 1.0, 0.0), -p.root) + vec3(1e-4, 0.0, 0.0));
+    o.pos = p.root + side * (v.x * 0.12) + vec3(0.0, v.y * 0.2, 0.0);
+    o.side = side;
+    o.normal = normalize(cross(side, vec3(0.0, 1.0, 0.0)));
+    o.uv = vec2(v.x * 2.0, v.y);
+    o.seed = p.h.z;
+    return true;
+}
+#endif
+#ifdef HERB_SHADE
+HerbShade herbShade(HerbFragment f) {
+    vec3 n = normalize(f.normal);
+    if (dot(n, -f.pos) < 0.0) n = -n;
+    return HerbShade(1.0, herbData(0).rgb, n, 0.6, 1.0, 1.0, -1.0, vec4(0.0));
+}
+#endif
+`,
+};
+
 const S = 192;
 const cv = document.createElement('canvas');
 cv.setAttribute('width', String(S));
@@ -47,7 +89,7 @@ if (!scn) {
 
     // ---- Low plants on the floor, no grass ----
     const grass = scn.createGrass({ ground: floor, cell: 0.5, density: 0, floor: 1,
-                                    herbs: { species: ['woodsorrel'], density: 1 } });
+                                    herbs: { ...HERBS, density: 1 } });
     const plants = scn.captureFrame();
     const st = grass.grassStats();
     const herbCells = (st.herbInstances || []).reduce((a, b) => a + b, 0);
@@ -64,9 +106,16 @@ if (!scn) {
     }
     assert(covered > 200, `low plants are drawn (${covered} px)`);
     assert(gb / covered > gbBare / covered + 3, `they are green (g-b ${(gb / covered).toFixed(1)} vs ${(gbBare / covered).toFixed(1)})`);
-    grass.setGround({ ground: floor, cell: 0.5, density: 0, floor: 0, herbs: { species: ['woodsorrel'], density: 0 } });
+    grass.setGround({ ground: floor, cell: 0.5, density: 0, floor: 0, herbs: { ...HERBS, density: 0 } });
     const none = scn.captureFrame();
     assert(diffCount(none, bare) < 40, `no herb density and no grass grows nothing (${diffCount(none, bare)} px)`);
+    // A module that does not compile: logged, and the node draws no herbs.
+    grass.setGround({ ground: floor, cell: 0.5, density: 0, floor: 1,
+                      herbs: { ...HERBS, source: HERBS.source + '\nint herbBroken() { return undefinedThing; }\n', density: 1 } });
+    const broken = scn.captureFrame();
+    const bst = grass.grassStats();
+    assert((bst.herbInstances || []).every((c) => c === 0), `a module that does not compile draws no herbs (${(bst.herbInstances || []).join('/')})`);
+    assert(diffCount(broken, bare) < 40, `nor any pixel of them (${diffCount(broken, bare)} px)`);
 
     // ---- Turf ----
     // Grass to the left, a closed canopy's floor to the right, shaded on the

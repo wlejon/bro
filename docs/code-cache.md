@@ -27,6 +27,10 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 | `BRO_CODE_CACHE_DIR=<dir>` | another directory |
 | `BRO_CODE_CACHE_MAX_MB=<n>` | the trim limit |
 
+## SPIR-V cache
+
+GLSL compiled at run time (a world's modules spliced into the scene's shaders, custom shader chunks, the clipmap terrain) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
+
 ## Vulkan pipeline cache
 
 `<user cache dir>/pipeline-cache/`, one file per GPU and driver, dropped past 128 MB. `BRO_PIPELINE_CACHE=0` keeps it in memory only, `BRO_PIPELINE_CACHE_DIR=<dir>` moves it. Deleting it is always safe.

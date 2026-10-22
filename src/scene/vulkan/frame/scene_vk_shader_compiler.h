@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -41,9 +42,23 @@ public:
     /// and its common/scene_atmosphere.glsl, common/scene_mesh_push.glsl,
     /// common/scene_shadow_push.glsl, ...).
     /// Returns an empty vector (and the diagnostics in *errOut) on failure.
+    ///
+    /// `overrides` replaces named includes with other text (a world's module
+    /// in the place of the built-in stub). The SPIR-V is kept on disk by its
+    /// source (docs/code-cache.md "SPIR-V cache"), so a second run compiles
+    /// nothing.
+    using IncludeOverrides = std::vector<std::pair<std::string, std::string>>;
     static std::vector<uint32_t> compileGlsl(const std::string& glslSource,
                                              VkShaderStageFlagBits stage,
-                                             std::string* errOut = nullptr);
+                                             std::string* errOut = nullptr,
+                                             const IncludeOverrides& overrides = {});
+
+    /// A built-in shader compiled at run time from its embedded source (or
+    /// BRO_SCENE_SHADER_SOURCE's) with its DEFINES and `overrides`: the
+    /// cover's shaders with a world's module (ground/scene_cover_shaders.h).
+    static std::vector<uint32_t> compileBuiltinWith(BuiltinSceneShader shader,
+                                                    const IncludeOverrides& overrides,
+                                                    std::string* errOut = nullptr);
 
     /// The SPIR-V of a built-in shader: the embedded words, or under
     /// BRO_SCENE_SHADER_SOURCE the words compiled from source.

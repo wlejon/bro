@@ -18,8 +18,7 @@ layout(location = 4) flat out vec4 outGround; // xyz the ground's normal, w the 
 #include "common/scene_camera.glsl"
 #include "common/scene_mesh_push.glsl"
 #include "ground/scene_grass.glsl"
-#include "common/scene_vegetation.glsl"
-#include "ground/scene_herb.glsl"
+#include "ground/scene_cover_far.glsl"
 #include "ground/scene_cover_plan.glsl"
 
 // How far below its root a quad starts, as a share of its height (so a
@@ -52,14 +51,13 @@ void main() {
         body = mix(grass.dry.rgb, green, clamp(lush * 1.3 - 0.15 + e.clump * 0.2, 0.0, 1.0)) *
                grassMeanShade() * mix(0.88, 1.12, h2.x);
     } else {
-        int sp = e.kind - 1;
-        vec4 r0 = herbRec(sp, 0);
-        float sz = mix(0.55, 1.35, h2.y);
-        ht = max(r0.y, 0.05) * sz;
-        wd = max(2.0 * r0.z, cell) * sz;
-        body = herbRec(sp, 4).rgb * mix(0.85, 1.15, h2.x);
-        bloom = herbRec(sp, 7).rgb;
-        bloomShare = clamp(herbRec(sp, 10).y, 0.0, 1.0);
+        // A herb: the module's (scene_herb_layer.glsl's herbFarLook).
+        HerbFarLook look = herbFarLook(e.kind - 1, h2);
+        ht = look.height * look.size;
+        wd = max(look.width, cell) * look.size;
+        body = look.body;
+        bloom = look.bloom;
+        bloomShare = clamp(look.bloomShare, 0.0, 1.0);
     }
     // Widened to keep the cover it stands for, shrinking as it is let go.
     wd *= coverWiden(e.lam) * e.size;
@@ -92,3 +90,6 @@ void main() {
     outBloom = vec4(bloom, bloomShare);
     outGround = vec4(e.gn, h2.x);
 }
+
+// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#include "ground/herb_module.glsl"

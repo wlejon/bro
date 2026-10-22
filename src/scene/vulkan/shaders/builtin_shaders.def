@@ -92,8 +92,10 @@ BRO_SCENE_SHADER(PlantsPlanCountComp,      "plants_plan_count.comp",      "folia
 BRO_SCENE_SHADER(PlantsPlanLayoutComp,     "plants_plan_layout.comp",     "foliage/plants_plan.comp",           "comp", "PLANTS_LAYOUT")
 BRO_SCENE_SHADER(PlantsPlanPlaceComp,      "plants_plan_place.comp",      "foliage/plants_plan.comp",           "comp", "PLANTS_PLACE")
 // Herb plants (scene_herb.glsl): a grass node's ferns, wildflowers and forbs,
-// a card strip a leaf, stem or bloom, cut by mesh.frag's SCENE_HERB build
-// (scene_herb_surface.glsl). A Grass draw flagged mesh_flags::kHerb.
+// a card strip a leaf, stem or bloom, cut by mesh.frag's SCENE_HERB build,
+// all of it the world's herb module (scene_herb_layer.glsl); built here with
+// the stub of none, a world's module at run time (scene_cover_shaders.h). A
+// Grass draw flagged mesh_flags::kHerb.
 BRO_SCENE_SHADER(MeshHerbVert,             "mesh_herb.vert",              "ground/mesh_herb.vert",              "vert", "")
 BRO_SCENE_SHADER(MeshHerbFrag,             "mesh_herb.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB")
 BRO_SCENE_SHADER(MeshHerbIndirectFrag,     "mesh_herb_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB SCENE_INDIRECT_OUTPUT")

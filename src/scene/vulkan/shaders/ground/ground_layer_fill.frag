@@ -32,3 +32,6 @@ void main() {
     outC = b.c;
     outD = b.d;
 }
+
+// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#include "ground/herb_module.glsl"

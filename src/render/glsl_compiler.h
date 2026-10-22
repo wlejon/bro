@@ -20,7 +20,8 @@ enum class ShaderStage { Vertex, Fragment, Compute };
 /// Returns the SPIR-V words, or an empty vector with glslang's diagnostics in
 /// `*log` (when given) if the source does not compile. Successful results are
 /// memoised by (stage, source), since the same variant is often requested
-/// again (a material rebuilt, a terrain recreated). Thread-safe.
+/// again (a material rebuilt, a terrain recreated). Thread-safe, and compiles
+/// on several threads at once run in parallel.
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log = nullptr);
 

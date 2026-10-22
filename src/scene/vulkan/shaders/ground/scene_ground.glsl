@@ -202,7 +202,7 @@ GroundData groundData(vec2 xz, vec4 vdata) {
 //      the big mottling;
 //   b: the tussocks, the tufts, the grain, the soil's drift;
 //   c: the forest floor's leaf heaps, damp hollows, moss, twigs;
-//   d: the herbs' blooms here (herbBloomLocal): rgb their colour, a how
+//   d: the herbs' blooms here (herbFarLocal): rgb their colour, a how
 //      many more of them than their mean, m as m / (1 + m).
 struct GroundBake {
     vec4 a, b, c, d;
@@ -232,7 +232,7 @@ GroundBake groundBake(vec2 xz, GroundData g, float fp) {
     b.d = vec4(0.0);
     if (grass.herbInfo.x > 0.5 && g.herbs > 0.0) {
         vec3 bloom, pick;
-        float more = herbBloomLocal(xz, g.under, -1.0, fp, bloom, pick);
+        float more = herbFarLocal(xz, g.under, -1.0, fp, bloom, pick);
         b.d = vec4(bloom, more / (1.0 + more));
     }
     return b;
@@ -412,19 +412,19 @@ void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout f
     vec3 faceEye = normalize(vec3(-rel.x, 0.3 * length(rel.xz), -rel.z));
     thin = vec4(faceEye * sqrt(GRASS_TURF_GLOW_SHARE), GRASS_TURF_TRANSLUCENCY * cover * topSeen);
 
-    // The herbs past their plants (scene_herb_mix.glsl): their leaves' and
-    // blooms' mean over the share of the ground they cover as the eye sees
-    // it (more of them seen across than from above), so the turf carries a
-    // meadow's flowers and a forest floor's ferns to the horizon.
-    // (Their mean over the colonies, from the node's table by the canopy:
-    // weighing every species here per pixel cost the turf's whole pass a
-    // tenth of a millisecond, even where no herbs grow.)
+    // The herbs past their plants (the module's herbFarMean): their leaves'
+    // and blooms' mean over the share of the ground they cover as the eye
+    // sees it (more of them seen across than from above), so the turf
+    // carries a meadow's flowers and a forest floor's ferns to the horizon.
+    // (A module's mean is cheap, a table by the canopy: weighing every
+    // species here per pixel cost the turf's whole pass a tenth of a
+    // millisecond, even where no herbs grow.)
     if (grass.herbInfo.x > 0.5 && herbs > 0.0) {
         float tanView = -rel.y / max(length(rel.xz), 1e-3);
         float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3)) * inside;
         if (stand > 0.0) {
-            HerbMix hm = herbMixMean(under, herbs, tanView);
-            // The blooms patch by patch (herbBloomLocal): a colony's colour
+            HerbMix hm = herbFarMean(under, herbs, tanView);
+            // The blooms patch by patch (herbFarLocal): a colony's colour
             // where it grows, more of them inside it, none between. As much
             // of them as of the far blades (scene_grass.glsl), between and
             // past them; their leaves mostly down among the grass, as the

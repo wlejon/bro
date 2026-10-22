@@ -49,3 +49,6 @@ void main() {
     // translucent blade with no paler underside; and the ground's normal.
     outVegShade = vec4(b.ground * b.bulk, -(2.0 + b.ao + 2.0 * floor(b.far * 15.0 + 0.5)));
 }
+
+// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#include "ground/herb_module.glsl"

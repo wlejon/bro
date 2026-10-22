@@ -53,12 +53,14 @@ bool CoverPlan::setup(SceneGpu& gpu) {
         LOG_ERROR("cover plan: failed creating its layout");
         return false;
     }
-    pipeline_ = createComputePipeline(device_, BuiltinSceneShader::CoverPlanComp, layout_, "cover plan");
-    if (!pipeline_) {
-        LOG_ERROR("cover plan: failed creating its pipeline");
-        return false;
-    }
     return true;
+}
+
+VkPipeline CoverPlan::pipeline(const CoverShaders& shaders) {
+    if (shaders.index >= pipelines_.size()) pipelines_.resize(shaders.index + 1, VK_NULL_HANDLE);
+    VkPipeline& p = pipelines_[shaders.index];
+    if (!p) p = createComputePipeline(device_, shaders[CoverShaders::Plan], layout_, "cover plan");
+    return p;
 }
 
 void CoverPlan::destroy(SceneVkAllocator& allocator, NodeState& n) {
@@ -72,15 +74,18 @@ void CoverPlan::cleanup(SceneGpu& gpu) {
     nodes_.clear();
     jobs_.clear();
     commands_.clear();
-    if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
+    for (VkPipeline p : pipelines_)
+        if (p) vkDestroyPipeline(device_, p, nullptr);
+    pipelines_.clear();
     if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
-    pipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
 }
 
-bool CoverPlan::add(SceneFrame& frame, uint32_t nodeId, std::span<const Ring> rings, std::vector<Draw>& out) {
+bool CoverPlan::add(SceneFrame& frame, uint32_t nodeId, const CoverShaders& shaders, std::span<const Ring> rings,
+                    std::vector<Draw>& out) {
     out.clear();
-    if (rings.empty() || !pipeline_) return false;
+    const VkPipeline planPipeline = pipeline(shaders);
+    if (rings.empty() || !planPipeline) return false;
     // Nodes gone (or long undrawn) give their buffers back.
     if ((++use_ & 1023) == 0)
         for (auto it = nodes_.begin(); it != nodes_.end();) {
@@ -146,6 +151,7 @@ bool CoverPlan::add(SceneFrame& frame, uint32_t nodeId, std::span<const Ring> ri
     for (size_t i = 0; i < rings.size(); ++i) {
         const Ring& r = rings[i];
         Job job;
+        job.pipeline = planPipeline;
         job.listSet = listSet;
         job.set = r.set;
         job.firstRun = run;
@@ -187,10 +193,14 @@ void CoverPlan::record(SceneFrame& frame) {
     render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
     VkDescriptorSet bound = VK_NULL_HANDLE;
+    VkPipeline boundPipeline = VK_NULL_HANDLE;
     for (const Job& j : jobs_) {
+        if (j.pipeline != boundPipeline) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, j.pipeline);
+            boundPipeline = j.pipeline;
+        }
         if (j.listSet != bound) {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 3, 1, &j.listSet, 0, nullptr);
             bound = j.listSet;

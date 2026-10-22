@@ -84,8 +84,16 @@ embed_vk_shader(ground/scene_grass.glsl         kVkSceneGrassSrc)
 embed_vk_shader(ground/scene_grass_surface.glsl kVkSceneGrassSurfaceSrc)
 embed_vk_shader(ground/scene_ground.glsl        kVkSceneGroundSrc)
 embed_vk_shader(ground/scene_ground_layers.glsl kVkSceneGroundLayersSrc)
-embed_vk_shader(ground/scene_herb_mix.glsl      kVkSceneHerbMixSrc)
-embed_vk_shader(ground/scene_herb_surface.glsl  kVkSceneHerbSurfaceSrc)
+embed_vk_shader(ground/scene_cover_plan.glsl   kVkSceneCoverPlanSrc)
+embed_vk_shader(ground/scene_cover_far.glsl    kVkSceneCoverFarSrc)
+embed_vk_shader(ground/scene_herb.glsl         kVkSceneHerbSrc)
+embed_vk_shader(ground/scene_herb_layer.glsl   kVkSceneHerbLayerSrc)
+embed_vk_shader(ground/herb_module.glsl        kVkHerbModuleSrc)
+embed_vk_shader(ground/cover_plan.comp         kVkCoverPlanCompSrc)
+embed_vk_shader(ground/mesh_grass.vert         kVkMeshGrassVertSrc)
+embed_vk_shader(ground/mesh_herb.vert          kVkMeshHerbVertSrc)
+embed_vk_shader(ground/mesh_cover_far.vert     kVkMeshCoverFarVertSrc)
+embed_vk_shader(ground/ground_layer_fill.frag  kVkGroundLayerFillFragSrc)
 embed_vk_shader(terrain/clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(terrain/clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(terrain/clipmap_material.glsl     kClipmapMaterialSrc)
@@ -169,6 +177,7 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_billboard.cpp
     vulkan/draw/pass_gaussian_splat.cpp
     vulkan/ground/scene_cover_plan.cpp
+    vulkan/ground/scene_cover_shaders.cpp
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp

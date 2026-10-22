@@ -12,7 +12,6 @@ layout(local_size_x = 64) in;
 #define COVER_PLAN 1
 #include "common/scene_camera.glsl"
 #include "ground/scene_grass.glsl"
-#include "common/scene_vegetation.glsl"
 #include "ground/scene_herb.glsl"
 #include "ground/scene_cover_plan.glsl"
 
@@ -72,8 +71,8 @@ void main() {
             live = coverFarLive(c, int(grass.herbShape.x + 0.5), -1, e);
             j = max(e.kind, 0);
         } else if (plan.kind == 1u) {
-            HerbSeed s;
-            live = herbPlantLive(c, s);
+            HerbPlant p;
+            live = herbPlantLive(c, p);
         } else {
             GrassSeed s;
             live = grassBladeLive(c, j, s);
@@ -89,3 +88,6 @@ void main() {
     barrier();
     if (live) coverList.entries[plan.first + sBase + slot] = entry;
 }
+
+// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#include "ground/herb_module.glsl"

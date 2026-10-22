@@ -233,8 +233,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneNode_grassPush", BRO_NATIVE_FN(bro_scene_SceneNode_grassPush), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneNode_grassStats", BRO_NATIVE_FN(bro_scene_SceneNode_grassStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneNode_setGrassFloor", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassFloor), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassHerbs", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassHerbs), "void", {"__bro_native.scene.SceneNode", "f32[]", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_grassHerbPlants", BRO_NATIVE_FN(bro_scene_SceneNode_grassHerbPlants), "f64[]", {"__bro_native.scene.SceneNode", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_setGrassHerbs", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassHerbs), "void", {"__bro_native.scene.SceneNode", "str", "f32[]", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneNode_setTurfGrass", BRO_NATIVE_FN(bro_scene_SceneNode_setTurfGrass), "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode", "i32"}, error) &&
         fn("__bro_native.scene.SceneNode_sampleHeights", BRO_NATIVE_FN(bro_scene_SceneNode_sampleHeights), "f32[]", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "i32", "i32"}, error) &&
         fn("__bro_native.scene.SceneNode_meshWorldBounds", BRO_NATIVE_FN(bro_scene_SceneNode_meshWorldBounds), "f64[]", {"__bro_native.scene.SceneNode"}, error);

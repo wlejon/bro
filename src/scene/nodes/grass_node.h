@@ -17,8 +17,8 @@
 //     (blades spring back in a fraction of a second, flattened grass rises
 //     over tens of seconds) with no per-frame pass over the map.
 //
-// With a table of herb species and a floor giving their density, it also
-// draws the low plants among the grass (setHerbs, scene_herb.glsl).
+// With a world's herb module and a floor giving their density, it also
+// draws the low plants among the grass (setHerbs, scene_herb_layer.glsl).
 //
 // Drawn as four rings around the camera, each one instanced draw over only
 // the cells the view can see (vulkan/ground/scene_mesh_drawer_grass.cpp). An
@@ -37,6 +37,7 @@
 #include "scene/nodes/mesh_node.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace bro::scene {
@@ -106,37 +107,31 @@ public:
 
     // --- Herbs ---
     // The low plants among the grass (ferns, wildflowers, forbs, ground
-    // cover), built where they stand from a table of species (broflora's
-    // herbRecord, kHerbRecordFloats floats each): scene_herb_mix.glsl picks
-    // one plant a cell of their own grid (the floor's canopy against each
-    // species' shade, its colonies, the floor's herb density), scene_herb.glsl
-    // builds it near the eye in two rings to `range`, then each plant as a
-    // few of its largest cards, thinned and widened, to `far`; past that the
-    // turf takes its colours.
-    static constexpr int kHerbMax = 12;
-    static constexpr int kHerbRecordFloats = 56;
-    /// `count` species' records end to end (more than kHerbMax are dropped);
-    /// the whole plants drawn to `range` m, their far form to `far` m (0
-    /// keeps the current; a new range with no far puts it at 4 x the range),
-    /// handing over to the turf through the last quarter of it.
-    void setHerbs(const float* records, int count, float range = 0.0f, float far = 0.0f);
-    int herbCount() const { return static_cast<int>(herbs_.size() / kHerbRecordFloats); }
-    const std::vector<float>& herbRecords() const { return herbs_; }
-    /// Herbs are drawn: species, and a floor with their density.
-    bool hasHerbs() const { return herbCount() > 0 && herbFloor_; }
-    /// The tallest species' height (m).
+    // cover, or whatever a world grows there): a MODULE of the world's,
+    // GLSL compiled into the cover's shaders at run time
+    // (shaders/ground/scene_herb_layer.glsl says what it defines;
+    // vulkan/ground/scene_cover_shaders.h compiles it). It says which plant
+    // stands in each cell of the herbs' own grid, builds it near the eye in
+    // two rings to `range`, then each plant as a few of its largest cards,
+    // thinned and widened, to `far`, and how the far tier and the turf past
+    // that show it.
+    static constexpr int kHerbDataVec4s = 256;   // scene_herb_layer.glsl's GRASS_HERB_DATA
+    /// The module's GLSL and its data (at most kHerbDataVec4s vec4s; read as
+    /// herbData(i)); `height` the tallest its plants stand (m), which the
+    /// rings' culling boxes take. The whole plants are drawn to `range` m,
+    /// their far form to `far` m (0 keeps the current; a new range with no
+    /// far puts it at 3 x the range), handing over to the turf through the
+    /// last quarter of it. An empty source: no herbs.
+    void setHerbs(std::string source, const float* data, size_t floats, float height, float range = 0.0f,
+                  float far = 0.0f);
+    const std::string& herbSource() const { return herbSource_; }
+    /// A hash of herbSource() (0: none), which keys its compiled shaders.
+    uint64_t herbSourceHash() const { return herbSourceHash_; }
+    const std::vector<float>& herbData() const { return herbData_; }
+    /// Herbs are drawn: a module, and a floor with their density.
+    bool hasHerbs() const { return !herbSource_.empty() && herbFloor_; }
+    /// The tallest the module's plants stand (m).
     float herbHeight() const { return herbHeight_; }
-    /// What the turf takes from the herbs far off: their look averaged over
-    /// the species' colonies (each in or out of one, by its patchCover), at
-    /// a canopy of 0, 1/4 .. 1. kHerbMeanFloats a step: the cover exponent
-    /// from above at full density (cover = 1 - exp(-density x it)), the
-    /// leaves' mean rgb; the blooms' share of that cover, the blooms' mean
-    /// rgb; the exponent seen from the side (a grazing view adds it over the
-    /// tangent of its elevation), the blooms' share of that, the mean leaf
-    /// top and bloom height (m).
-    static constexpr int kHerbMeanSteps = 5;
-    static constexpr int kHerbMeanFloats = 12;
-    const float* herbMean() const { return herbMean_; }
     /// The herbs' grid: one plant at most a cell.
     static constexpr float kHerbCell = 0.35f;
     /// Near (every card), mid (fewer), far (a plant's few largest cards,
@@ -158,14 +153,6 @@ public:
     /// The ground's height range over a world rect where herbs grow (false:
     /// none there), from the field's blocks.
     bool herbRangeAt(float x0, float z0, float x1, float z1, float& lo, float& hi) const;
-    /// The plants whose roots lie within `radius` of world (x, z), nearest
-    /// first (at most `max`): where scene_herb.glsl stands them and which
-    /// species each is (scene_herb_mix.glsl's herbPick, on the CPU).
-    struct HerbPlant {
-        float x = 0.0f, y = 0.0f, z = 0.0f;
-        int species = 0;
-    };
-    std::vector<HerbPlant> herbPlants(float x, float z, float radius, size_t max) const;
     void setDrawnHerbs(int ring, uint32_t n) { if (ring >= 0 && ring < kHerbRings) herbDrawn_[ring] = n; }
     uint32_t drawnHerbs(int ring) const { return ring >= 0 && ring < kHerbRings ? herbDrawn_[ring] : 0; }
 
@@ -276,10 +263,10 @@ private:
     std::vector<float> floor_;     // 2 a texel: canopy, herb density
     std::vector<float> fieldGpu_;  // the field as uploaded, the grass giving the herbs room (empty: field_ as is)
     bool herbFloor_ = false;       // the floor was given a herb density
-    std::vector<float> herbs_;
+    std::string herbSource_;
+    uint64_t herbSourceHash_ = 0;
+    std::vector<float> herbData_;
     float herbHeight_ = 0.0f;
-    float herbMean_[kHerbMeanSteps * kHerbMeanFloats] = {};
-    void computeHerbMean();
     float herbRange_ = 30.0f;
     float herbFar_ = 90.0f;
     bromesh::MeshData herbMeshes_[kHerbRings];

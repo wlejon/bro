@@ -17,6 +17,7 @@
 // candidates, so nothing is read back.
 
 #include "render/vulkan_frames.h"
+#include "scene/vulkan/ground/scene_cover_shaders.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 
 #include <vulkan/vulkan.h>
@@ -59,7 +60,9 @@ public:
     /// Plan node `nodeId`'s `rings` this frame: `out[i]` is ring i's draw.
     /// False: it draws none of them this frame (its buffers or sets could
     /// not be had).
-    bool add(SceneFrame& frame, uint32_t nodeId, std::span<const Ring> rings, std::vector<Draw>& out);
+    /// `shaders`: the node's (its world's herb module's) plan shader.
+    bool add(SceneFrame& frame, uint32_t nodeId, const CoverShaders& shaders, std::span<const Ring> rings,
+             std::vector<Draw>& out);
     /// Record the frame's plans into its graphics stream, outside any
     /// rendering and before the passes that draw them.
     void record(SceneFrame& frame);
@@ -72,6 +75,7 @@ private:
     };
     /// A ring's dispatch.
     struct Job {
+        VkPipeline pipeline = VK_NULL_HANDLE;
         VkDescriptorSet listSet = VK_NULL_HANDLE, set = VK_NULL_HANDLE;
         uint32_t firstRun = 0, runCount = 0, perCell = 1, candidates = 0, count = 0, first = 0, kind = 0;
     };
@@ -81,10 +85,12 @@ private:
         std::vector<uint32_t> words;
     };
     static void destroy(SceneVkAllocator& allocator, NodeState& n);
+    /// The plan's pipeline with a set's shader, made at its first use.
+    VkPipeline pipeline(const CoverShaders& shaders);
 
     VkDevice device_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    std::vector<VkPipeline> pipelines_;   // by CoverShaders::index
     VkDeviceSize storageAlign_ = 16;
 
     std::unordered_map<uint32_t, NodeState> nodes_;

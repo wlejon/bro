@@ -776,16 +776,12 @@ void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneNode_setGrassFloor
 void bro_scene_SceneNode_setGrassFloor(void* self, const float* data, uint32_t data_len);
 
-// grass herbs: broflora herbRecords (52 floats a species, at most 12), the
-// range the whole plants are drawn to and the far plants' (m; 0 keeps it)
+// grass herbs: a herb module's GLSL ("" clears them), the data its
+// herbData(i) reads (at most 1024 floats), its tallest plant (m), the range
+// the whole plants are drawn to and the far plants' (m; 0 keeps it)
 //   registered at __bro_native.scene.SceneNode_setGrassHerbs
-void bro_scene_SceneNode_setGrassHerbs(void* self, const float* data, uint32_t data_len, double range, double far);
-
-// grass herbs at a place: the plants (x, y, z, species index) whose roots
-// lie within `radius` of world (x, z), nearest first (at most 256)
-//   registered at __bro_native.scene.SceneNode_grassHerbPlants
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_grassHerbPlants(void* self, double x, double z, double radius, bronze_native_buffer* out);
+void bro_scene_SceneNode_setGrassHerbs(void* self, const char* source, const float* data, uint32_t data_len,
+                                       double height, double range, double far);
 
 // mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
 //   registered at __bro_native.scene.SceneNode_setTurfGrass

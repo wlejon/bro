@@ -15,7 +15,7 @@ layout(std430, set = 3, binding = 1) COVER_LIST_ACCESS buffer CoverList {
 } coverList;
 
 // A slot under 16 (GrassNode's rings have at most 14 blades a cell; a far
-// element's slot is its kind, at most GrassNode::kHerbMax).
+// element's slot is its kind, at most HERB_VARIETIES, scene_herb_layer.glsl).
 uvec2 coverPack(ivec2 c, int j) {
     return uvec2(uint(c.x), (uint(c.y) << 4) | uint(j));
 }

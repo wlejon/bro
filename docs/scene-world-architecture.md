@@ -851,7 +851,8 @@ pixel. So the cover goes on past them as a tier of its own
 (`ground/scene_cover_far.glsl`, `mesh_cover_far.vert`, `cover_far.frag`):
 
 - **An element a quad.** A cell of the herbs' grid (0.35 m) is the herb
-  `herbPick` puts there, or a tuft of the sward where the grass grows; it
+  the world's module stands there (`herbStand`, §13), or a tuft of the
+  sward where the grass grows; it
   is drawn as one quad at its root facing the eye, upright seen across
   the ground and a blob seen from above, cut to a tuft's blade tips or a
   herb's lobes with its blooms, lit as the sward it stands in.
@@ -1138,7 +1139,7 @@ same things this work has been tuned on:
 A refactor, not a layer on top. Each existing node becomes the first
 implementation of its interface, and its data form goes:
 - **Grass** (grass_node.cpp's rings, scene_grass.glsl's blades, fans and culms): the sward kind. Its ring table becomes the engine's rings, asked for by pixel size.
-- **Herbs** (`herbPreset` / `herbRecords`, scene_herb*.glsl): the herb kind. Each preset (daisy, poppy, bracken, wood sorrel) becomes an example module in broworkshop's library, not an engine name.
+- **Herbs**: done, the first module. The engine's half is `ground/scene_herb_layer.glsl` (the contract: herbStand, herbBuild, herbShade, herbFarMean, herbFarLocal, herbFarLook, the structs they pass, herbData) and `ground/scene_herb.glsl` (the cells, rings and hand-overs); the built-in shaders compile with `ground/herb_module.glsl`, a module of no herbs. A grass node's module (`herbs.source`, `herbs.data`) is spliced in for that file into the nine cover shaders that call it (`ground/scene_cover_shaders.h`: the plan, the blades' and herbs' vertex stages, the herbs' and the turf's fragment stages, the far tier's vertex stage, the turf layer's fill), compiled on as many threads, once a process, through the SPIR-V cache (docs/code-cache.md); one that does not compile is logged and draws no herbs. broflora's species (daisy, poppy, bracken, wood sorrel, ...) are broworkshop's `lib/herbs` module. Biomes with it: the same plants, the same look, the same cost (meadow 2.74 ms against 2.75).
 - **Plants** (the plants node's species table and its GPU plan): the tree kind, whose `build` is the current crown and branch generator. The species table becomes that module's own constants.
 - **The far tier and the turf**: engine. They call each kind's `far` and the surface's far colour.
 - **Biomes' ground**: a land kernel (its FastNoise height, compiled to the GPU, decision 2) and a surface function. It is no longer a CPU mesh.

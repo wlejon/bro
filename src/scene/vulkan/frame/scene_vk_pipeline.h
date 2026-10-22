@@ -119,5 +119,7 @@ enum class BuiltinSceneShader;
 /// under `name`. Null on failure.
 VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
                                  const char* name);
+/// The same of a shader module the caller keeps.
+VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name);
 
 } // namespace bro::scene::vk

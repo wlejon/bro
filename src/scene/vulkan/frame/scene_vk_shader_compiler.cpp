@@ -23,16 +23,31 @@
 #include "scene_grass_surface.glsl.src.h"
 #include "scene_ground.glsl.src.h"
 #include "scene_ground_layers.glsl.src.h"
-#include "scene_herb_mix.glsl.src.h"
-#include "scene_herb_surface.glsl.src.h"
+#include "scene_cover_plan.glsl.src.h"
+#include "scene_cover_far.glsl.src.h"
+#include "scene_herb.glsl.src.h"
+#include "scene_herb_layer.glsl.src.h"
+#include "herb_module.glsl.src.h"
+#include "mesh.frag.src.h"
+#include "cover_plan.comp.src.h"
+#include "mesh_grass.vert.src.h"
+#include "mesh_herb.vert.src.h"
+#include "mesh_cover_far.vert.src.h"
+#include "ground_layer_fill.frag.src.h"
+#include "util/user_dirs.h"
 
 #include <array>
+#include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <functional>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <thread>
 
 #ifndef BRO_SCENE_SHADER_SOURCE_DIR
 #define BRO_SCENE_SHADER_SOURCE_DIR ""
@@ -117,8 +132,18 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/scene_grass_surface.glsl", kVkSceneGrassSurfaceSrc},
         {"ground/scene_ground.glsl", kVkSceneGroundSrc},
         {"ground/scene_ground_layers.glsl", kVkSceneGroundLayersSrc},
-        {"ground/scene_herb_mix.glsl", kVkSceneHerbMixSrc},
-        {"ground/scene_herb_surface.glsl", kVkSceneHerbSurfaceSrc},
+        {"ground/scene_cover_plan.glsl", kVkSceneCoverPlanSrc},
+        {"ground/scene_cover_far.glsl", kVkSceneCoverFarSrc},
+        {"ground/scene_herb.glsl", kVkSceneHerbSrc},
+        {"ground/scene_herb_layer.glsl", kVkSceneHerbLayerSrc},
+        {"ground/herb_module.glsl", kVkHerbModuleSrc},
+        // The built-in shaders compileBuiltinWith builds.
+        {"draw/mesh.frag", kVkMeshFragSrc},
+        {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
+        {"ground/mesh_grass.vert", kVkMeshGrassVertSrc},
+        {"ground/mesh_herb.vert", kVkMeshHerbVertSrc},
+        {"ground/mesh_cover_far.vert", kVkMeshCoverFarVertSrc},
+        {"ground/ground_layer_fill.frag", kVkGroundLayerFillFragSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;
@@ -128,7 +153,9 @@ const char* embeddedInclude(const std::string& name) {
 
 // Replace each `#include "name"` line with the named source (recursively), as
 // bro_spirv_embed does for the build-time compiles. False on an unknown name.
-bool expandIncludes(const std::string& source, std::string& out, std::string* errOut, int depth = 0) {
+// An override names its include in place of the embedded file.
+bool expandIncludes(const std::string& source, std::string& out, std::string* errOut,
+                    const SceneVkShaderCompiler::IncludeOverrides& overrides, int depth = 0) {
     std::istringstream lines(source);
     std::string line;
     while (std::getline(lines, line)) {
@@ -137,9 +164,14 @@ bool expandIncludes(const std::string& source, std::string& out, std::string* er
             const size_t open = line.find('"', hash);
             const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
             const std::string name = close == std::string::npos ? std::string() : line.substr(open + 1, close - open - 1);
-            const char* embedded = name.empty() ? nullptr : embeddedInclude(name);
-            const std::string included = embedded ? SceneVkShaderCompiler::shaderSource(name.c_str(), embedded) : std::string();
-            if (!embedded || depth > 8 || !expandIncludes(included, out, errOut, depth + 1)) {
+            const std::string* replaced = nullptr;
+            for (const auto& o : overrides)
+                if (o.first == name) replaced = &o.second;
+            const char* embedded = name.empty() || replaced ? nullptr : embeddedInclude(name);
+            const std::string included = replaced ? *replaced
+                                       : embedded ? SceneVkShaderCompiler::shaderSource(name.c_str(), embedded)
+                                                  : std::string();
+            if ((!embedded && !replaced) || depth > 8 || !expandIncludes(included, out, errOut, overrides, depth + 1)) {
                 if (errOut && errOut->empty()) *errOut = "unknown or recursive include: " + line;
                 return false;
             }
@@ -151,11 +183,68 @@ bool expandIncludes(const std::string& source, std::string& out, std::string* er
     return true;
 }
 
+// The SPIR-V cache (docs/code-cache.md): a file a source under
+// <user cache dir>/spirv-cache, named by two 64-bit FNV-1a hashes of the
+// stage and the expanded source (different offsets, so 128 bits).
+const std::string& spirvCacheDir() {
+    static const std::string s_dir = [] {
+        if (const char* off = std::getenv("BRO_SPIRV_CACHE"); off && std::strcmp(off, "0") == 0) return std::string();
+        const std::string base = util::userCacheDir();
+        return base.empty() ? std::string() : base + "/spirv-cache/";
+    }();
+    return s_dir;
+}
+
+std::string spirvCachePath(const std::string& source, VkShaderStageFlagBits stage) {
+    const std::string& dir = spirvCacheDir();
+    if (dir.empty()) return {};
+    uint64_t a = 1469598103934665603ull ^ uint64_t(stage), b = 0x9e3779b97f4a7c15ull ^ uint64_t(stage);
+    for (unsigned char c : source) {
+        a = (a ^ c) * 1099511628211ull;
+        b = (b ^ c) * 0x100000001b3ull + 0x51ed27ull;
+    }
+    char name[40];
+    std::snprintf(name, sizeof name, "%016llx%016llx.spv", (unsigned long long)a, (unsigned long long)b);
+    return dir + name;
+}
+
+std::vector<uint32_t> readSpirvCache(const std::string& path) {
+    std::vector<uint32_t> words;
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return words;
+    const std::streamsize size = in.tellg();
+    if (size < 20 || size % 4 != 0) return words;
+    words.resize(size_t(size) / 4);
+    in.seekg(0);
+    if (!in.read(reinterpret_cast<char*>(words.data()), size) || words[0] != 0x07230203u) words.clear();
+    return words;
+}
+
+// Written to a file of its own and renamed into place, so a reader (another
+// process, another thread) sees the whole of it or nothing.
+void writeSpirvCache(const std::string& path, const std::vector<uint32_t>& words) {
+    namespace fs = std::filesystem;
+    static std::atomic<unsigned> s_serial{0};
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
+    const std::string tmp = path + ".tmp." + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()))
+                          + "." + std::to_string(s_serial++);
+    bool written = false;
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(words.data()), std::streamsize(words.size() * 4));
+        written = static_cast<bool>(out);
+    }
+    if (written) fs::rename(tmp, path, ec);
+    if (!written || ec) fs::remove(tmp, ec);
+}
+
 } // namespace
 
 std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glslSource,
                                                         VkShaderStageFlagBits stage,
-                                                        std::string* errOut) {
+                                                        std::string* errOut,
+                                                        const IncludeOverrides& overrides) {
     render::ShaderStage glStage;
     switch (stage) {
         case VK_SHADER_STAGE_VERTEX_BIT:   glStage = render::ShaderStage::Vertex; break;
@@ -168,15 +257,50 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glsl
     }
     std::string log;
     std::string source;
-    if (!expandIncludes(glslSource, source, &log)) {
+    if (!expandIncludes(glslSource, source, &log, overrides)) {
         LOG_ERROR("SceneVkShaderCompiler: %s", log.c_str());
         if (errOut) *errOut = std::move(log);
         return {};
     }
+    const std::string cachePath = spirvCachePath(source, stage);
+    if (!cachePath.empty()) {
+        std::vector<uint32_t> cached = readSpirvCache(cachePath);
+        if (!cached.empty()) {
+            if (errOut) errOut->clear();
+            return cached;
+        }
+    }
     std::vector<uint32_t> spirv = render::compileGlslToSpirv(source, glStage, &log);
     if (spirv.empty()) LOG_ERROR("SceneVkShaderCompiler: GLSL compilation failed:\n%s", log.c_str());
+    else if (!cachePath.empty()) writeSpirvCache(cachePath, spirv);
     if (errOut) *errOut = std::move(log);
     return spirv;
+}
+
+std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinWith(BuiltinSceneShader shader,
+                                                               const IncludeOverrides& overrides,
+                                                               std::string* errOut) {
+    const BuiltinInfo* info = infoOf(shader);
+    const char* embedded = info ? embeddedInclude(info->source) : nullptr;
+    if (!embedded) {
+        if (errOut) *errOut = std::string("no embedded source for ") + builtinName(shader);
+        return {};
+    }
+    std::string text = shaderSource(info->source, embedded);
+    std::string defines;
+    std::istringstream words(info->defines);
+    for (std::string d; words >> d;) defines += "#define " + d + " 1\n";
+    const size_t version = text.find("#version");
+    const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
+    if (lineEnd == std::string::npos) {
+        if (errOut) *errOut = std::string(info->source) + " has no #version line";
+        return {};
+    }
+    text.insert(lineEnd + 1, defines);
+    const VkShaderStageFlagBits stage = std::strcmp(info->stage, "vert") == 0   ? VK_SHADER_STAGE_VERTEX_BIT
+                                        : std::strcmp(info->stage, "frag") == 0 ? VK_SHADER_STAGE_FRAGMENT_BIT
+                                                                                : VK_SHADER_STAGE_COMPUTE_BIT;
+    return compileGlsl(text, stage, errOut, overrides);
 }
 
 const std::string& SceneVkShaderCompiler::shaderSourceDir() {

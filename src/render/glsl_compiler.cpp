@@ -13,11 +13,12 @@ namespace bro::render {
 
 namespace {
 
-// glslang keeps process-wide state (its symbol tables and pool allocators),
-// initialised once and never finalised: a shader can be compiled at any point
-// in the process's life, teardown included. The same mutex serialises the
-// compiles themselves, which keeps glslang's per-thread pools out of the
-// picture and guards the memo.
+// glslang keeps process-wide state (its symbol tables), initialised once and
+// never finalised: a shader can be compiled at any point in the process's
+// life, teardown included. Past that, a compile's state is its own thread's
+// (its pool allocator is thread-local), so compiles run in parallel; the
+// mutex guards the initialisation and the memo, and is what acquireGlslang
+// hands WebGL's linker.
 std::mutex s_mutex;
 bool s_initialized = false;
 std::unordered_map<std::string, std::vector<uint32_t>> s_memo;
@@ -133,18 +134,18 @@ std::unique_lock<std::mutex> acquireGlslang() {
 
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-
     std::string key;
     key.reserve(source.size() + 2);
     key.push_back(static_cast<char>('0' + static_cast<int>(stage)));
     key.push_back('|');
     key.append(source);
-    if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
-
-    if (!initializeOnce()) {
-        appendLog(log, "glslang: process initialisation failed", nullptr);
-        return {};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
+        if (!initializeOnce()) {
+            appendLog(log, "glslang: process initialisation failed", nullptr);
+            return {};
+        }
     }
 
     const std::string code(source);  // glslang wants a NUL-terminated string
@@ -193,6 +194,7 @@ std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage st
     glslang_shader_delete(shader);
 
     if (spirv.empty() || spirv[0] != 0x07230203u) return {};
+    std::lock_guard<std::mutex> lock(s_mutex);
     s_memo.emplace(std::move(key), spirv);
     return spirv;
 }

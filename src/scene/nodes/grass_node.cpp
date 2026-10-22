@@ -149,7 +149,6 @@ void GrassNode::setParams(const Params& p) {
     params_.tufts = std::clamp(p.tufts, 0.0f, 1.0f);
     params_.flowering = std::clamp(p.flowering, 0.0f, 1.0f);
     params_.dead = std::clamp(p.dead, 0.0f, 1.0f);
-    computeHerbMean();   // (what of the herbs shows over the grass: its height)
     bumpChangeGeneration();
 }
 
@@ -228,236 +227,29 @@ GrassNode::HerbRing GrassNode::herbRing(int i) const {
     return r;
 }
 
-void GrassNode::setHerbs(const float* records, int count, float range, float far) {
-    herbs_.clear();
-    herbHeight_ = 0.0f;
-    count = std::clamp(count, 0, kHerbMax);
-    if (records && count > 0) {
-        herbs_.assign(records, records + static_cast<size_t>(count) * kHerbRecordFloats);
-        for (float& v : herbs_)
-            if (!std::isfinite(v)) v = 0.0f;
-        for (int s = 0; s < count; ++s) herbHeight_ = std::max(herbHeight_, herbs_[s * kHerbRecordFloats + 1]);
+void GrassNode::setHerbs(std::string source, const float* data, size_t floats, float height, float range,
+                         float far) {
+    herbSource_ = std::move(source);
+    herbSourceHash_ = 0;
+    if (!herbSource_.empty()) {
+        // FNV-1a, never 0 for a source.
+        uint64_t h = 1469598103934665603ull;
+        for (unsigned char c : herbSource_) h = (h ^ c) * 1099511628211ull;
+        herbSourceHash_ = h ? h : 1;
     }
-    computeHerbMean();
+    herbData_.assign(data && !herbSource_.empty() ? data : nullptr,
+                     data && !herbSource_.empty() ? data + std::min(floats, size_t(kHerbDataVec4s) * 4) : nullptr);
+    for (float& v : herbData_)
+        if (!std::isfinite(v)) v = 0.0f;
+    herbHeight_ = std::isfinite(height) ? std::clamp(height, 0.0f, 20.0f) : 0.0f;
     // (The grass gives the herbs room only while there are some.)
-    if ((herbCount() > 0) != !fieldGpu_.empty()) uploadField();
+    if (!herbSource_.empty() != !fieldGpu_.empty()) uploadField();
     if (range > 0.0f) herbRange_ = std::clamp(range, 4.0f, 200.0f);
     if (far > 0.0f) herbFar_ = far;
     else if (range > 0.0f) herbFar_ = 3.0f * herbRange_;
     // The far ring is at least as wide as its hand-over band at either end.
     herbFar_ = std::clamp(herbFar_, herbRange_ * 1.4f, 800.0f);
     bumpChangeGeneration();
-}
-
-// scene_herb_mix.glsl's herbMixAt, averaged over every combination of the
-// species' colonies (each species inside one with its patchCover's chance)
-// rather than read from the noise at a point.
-void GrassNode::computeHerbMean() {
-    std::fill(std::begin(herbMean_), std::end(herbMean_), 0.0f);
-    const int n = herbCount();
-    if (n <= 0) return;
-    const float cellArea = kHerbCell * kHerbCell;
-    // Seen across, the grass hides what of the herbs stands lower than its
-    // top (its blades arch: about 0.7 of their length up): a leaf's side as
-    // far as its leaves' top rises over it, a bloom as it stands over it,
-    // as the plants drawn among the blades are hidden.
-    const float sward = 0.7f * params_.height;
-    for (int step = 0; step < kHerbMeanSteps; ++step) {
-        const float canopy = static_cast<float>(step) / (kHerbMeanSteps - 1);
-        // A species' weight inside a colony, its ground per plant, its
-        // chance of being inside one.
-        // Its side silhouette per cell and its blooms' share of that, and
-        // its leaves' top.
-        float w[kHerbMax], a[kHerbMax], bs[kHerbMax], p[kHerbMax], sa[kHerbMax], sbs[kHerbMax];
-        for (int i = 0; i < n; ++i) {
-            const float* r = &herbs_[static_cast<size_t>(i) * kHerbRecordFloats];
-            const float dl = (canopy - r[36]) / std::max(r[37], 0.05f);
-            float light = std::exp(-dl * dl);
-            if (light < 0.03f) light = 0.0f;
-            const float spacing = r[48] > 0.0f ? r[48] : 1.6f * std::max(r[2], 0.02f);
-            const float occupy = std::min(1.0f, (kHerbCell / spacing) * (kHerbCell / spacing));
-            w[i] = r[38] > 0.0f ? r[38] * light * occupy : 0.0f;
-            const float foot = 3.14159265f * r[2] * r[2] / cellArea;
-            a[i] = w[i] * r[42] * foot;
-            const float side = w[i] * std::max(r[49], 0.0f) * foot;
-            const float sideBloom = side * std::clamp(r[50], 0.0f, 1.0f);
-            const float leafOver = std::clamp(1.0f - sward / std::max(r[51], 0.01f), 0.0f, 1.0f);
-            const float bloomOver = std::clamp((r[1] - 0.6f * sward) / (0.8f * sward), 0.0f, 1.0f);
-            sa[i] = (side - sideBloom) * leafOver + sideBloom * bloomOver;
-            bs[i] = std::clamp(r[41], 0.0f, 1.0f);
-            sbs[i] = sa[i] > 0.0f ? sideBloom * bloomOver / sa[i] : 0.0f;
-            p[i] = std::clamp(r[40], 0.0f, 1.0f);
-        }
-        double expo = 0.0, coverW = 0.0, bloomW = 0.0, present = 0.0, sideX = 0.0, sideBloom = 0.0, top = 0.0;
-        double leaf[3] = {}, bloom[3] = {}, leafW = 0.0;
-        for (uint32_t set = 0; set < (1u << n); ++set) {
-            double prob = 1.0;
-            float sum = 0.0f, area = 0.0f, leafA = 0.0f, bloomA = 0.0f, side = 0.0f, sideB = 0.0f, hgt = 0.0f;
-            float lc[3] = {}, bc[3] = {};
-            for (int i = 0; i < n; ++i) {
-                const bool in = (set >> i) & 1u;
-                prob *= in ? p[i] : 1.0f - p[i];
-                if (!in || w[i] <= 0.0f) continue;
-                const float* r = &herbs_[static_cast<size_t>(i) * kHerbRecordFloats];
-                sum += w[i];
-                area += a[i];
-                side += sa[i];
-                sideB += sa[i] * sbs[i];
-                hgt += w[i] * r[51];
-                leafA += a[i] * (1.0f - bs[i]);
-                bloomA += a[i] * bs[i];
-                for (int c = 0; c < 3; ++c) {
-                    lc[c] += a[i] * (1.0f - bs[i]) * r[16 + c];
-                    bc[c] += a[i] * bs[i] * r[28 + c];
-                }
-            }
-            if (prob <= 0.0) continue;
-            if (sum <= 0.0f) { expo += prob; continue; }
-            // The cover at full density (exp of minus it, averaged: the
-            // exponent stands for the mean cover, not the mean exponent).
-            const float k = std::min(sum, 1.0f) / sum;
-            const float x = k * area;
-            const double cover = 1.0 - std::exp(-static_cast<double>(x));
-            expo += prob * std::exp(-static_cast<double>(x));
-            coverW += prob * cover;
-            // Seen from the side, where any herbs grow (the colonies' share
-            // of the ground caps what a grazing view can see of them).
-            present += prob;
-            sideX += prob * k * side;
-            sideBloom += prob * k * sideB;
-            top += prob * hgt / sum;
-            if (area <= 0.0f) continue;
-            const double share = bloomA / area;
-            bloomW += prob * cover * share;
-            leafW += prob * cover * (1.0 - share);
-            for (int c = 0; c < 3; ++c) {
-                if (leafA > 0.0f) leaf[c] += prob * cover * (1.0 - share) * lc[c] / leafA;
-                if (bloomA > 0.0f) bloom[c] += prob * cover * share * bc[c] / bloomA;
-            }
-        }
-        float* o = &herbMean_[step * kHerbMeanFloats];
-        // From above: the effective exponent where they grow, so that
-        // present x (1 - exp(-it)) is the mean cover.
-        const double inside = present > 1e-6 ? std::min((1.0 - expo) / present, 0.999) : 0.0;
-        o[0] = static_cast<float>(-std::log(1.0 - inside));
-        for (int c = 0; c < 3; ++c) {
-            o[1 + c] = leafW > 0.0 ? static_cast<float>(leaf[c] / leafW) : 0.0f;
-            o[5 + c] = bloomW > 0.0 ? static_cast<float>(bloom[c] / bloomW) : 0.0f;
-        }
-        o[4] = coverW > 0.0 ? static_cast<float>(bloomW / coverW) : 0.0f;
-        o[8] = present > 1e-6 ? static_cast<float>(sideX / present) : 0.0f;
-        o[9] = sideX > 1e-9 ? static_cast<float>(sideBloom / sideX) : 0.0f;
-        o[10] = static_cast<float>(present);
-        o[11] = present > 1e-6 ? static_cast<float>(top / present) : 0.0f;
-    }
-}
-
-namespace {
-
-// scene_grass.glsl's grassHash and scene_camera.glsl's sceneWindHash /
-// sceneWindNoise, on the CPU (the same unsigned wrap-around).
-float grassHashCpu(int cx, int cy, int k) {
-    uint32_t h = static_cast<uint32_t>(cx) * 374761393u + static_cast<uint32_t>(cy) * 668265263u +
-                 static_cast<uint32_t>(k) * 2246822519u;
-    h = (h ^ (h >> 15)) * 2654435761u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    h = h ^ (h >> 16);
-    return static_cast<float>(h) / 4294967296.0f;
-}
-float windHashCpu(int x, int y) {
-    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    h = h ^ (h >> 16);
-    return static_cast<float>(h) / 4294967296.0f;
-}
-float windNoiseCpu(float px, float py) {
-    const float ix = std::floor(px), iy = std::floor(py);
-    const float fx = px - ix, fy = py - iy;
-    const float ux = fx * fx * (3.0f - 2.0f * fx), uy = fy * fy * (3.0f - 2.0f * fy);
-    const int x = static_cast<int>(ix), y = static_cast<int>(iy);
-    const float a = windHashCpu(x, y), b = windHashCpu(x + 1, y), c = windHashCpu(x, y + 1), d = windHashCpu(x + 1, y + 1);
-    const float ab = a + (b - a) * ux, cd = c + (d - c) * ux;
-    return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
-}
-float smoothstepCpu(float e0, float e1, float x) {
-    const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
-}  // namespace
-
-std::vector<GrassNode::HerbPlant> GrassNode::herbPlants(float x, float z, float radius, size_t max) const {
-    std::vector<HerbPlant> out;
-    if (!hasField() || !hasHerbs() || !(radius > 0.0f)) return out;
-    const int n = herbCount();
-    // The floor's two channels at world (px, pz), bilinear as the GPU samples.
-    const auto floorAt = [&](float px, float pz, float& canopy, float& density) {
-        const float fx = std::clamp((px - fieldX0_) / fieldCell_, 0.0f, static_cast<float>(fieldCols_ - 1));
-        const float fz = std::clamp((pz - fieldZ0_) / fieldCell_, 0.0f, static_cast<float>(fieldRows_ - 1));
-        const int i = std::min(static_cast<int>(fx), fieldCols_ - 2), j = std::min(static_cast<int>(fz), fieldRows_ - 2);
-        const float u = fx - static_cast<float>(i), v = fz - static_cast<float>(j);
-        float r[2];
-        for (int c = 0; c < 2; ++c) {
-            const auto t = [&](int a, int b) { return floor_[(static_cast<size_t>(b) * fieldCols_ + a) * 2 + c]; };
-            const float h0 = t(i, j) + (t(i + 1, j) - t(i, j)) * u;
-            const float h1 = t(i, j + 1) + (t(i + 1, j + 1) - t(i, j + 1)) * u;
-            r[c] = h0 + (h1 - h0) * v;
-        }
-        canopy = r[0];
-        density = r[1];
-    };
-    // scene_herb_mix.glsl's herbWeight.
-    const auto weight = [&](int i, float px, float pz, float canopy) {
-        const float* r = &herbs_[static_cast<size_t>(i) * kHerbRecordFloats];
-        if (r[38] <= 0.0f) return 0.0f;
-        const float dl = (canopy - r[36]) / std::max(r[37], 0.05f);
-        const float light = std::exp(-dl * dl);
-        if (light < 0.03f) return 0.0f;
-        const float per = std::max(r[39], 0.5f);
-        const float qx = px / per + static_cast<float>(i) * 37.13f + 11.0f;
-        const float qz = pz / per + static_cast<float>(i) * -19.71f + 3.0f;
-        const float nz = 0.5f + 0.33f * windNoiseCpu(qx, qz) + 0.17f * windNoiseCpu(qx * 2.7f + 5.1f, qz * 2.7f + 5.1f);
-        const float t = 0.7f + (0.3f - 0.7f) * std::clamp(r[40], 0.0f, 1.0f);
-        const float colony = smoothstepCpu(t - 0.07f, t + 0.07f, nz);
-        const float spacing = r[48] > 0.0f ? r[48] : 1.6f * std::max(r[2], 0.02f);
-        const float occupy = std::min(1.0f, (kHerbCell / spacing) * (kHerbCell / spacing));
-        return r[38] * light * colony * occupy;
-    };
-    const int c0 = static_cast<int>(std::floor((x - radius) / kHerbCell)) - 1;
-    const int c1 = static_cast<int>(std::floor((x + radius) / kHerbCell)) + 1;
-    const int r0 = static_cast<int>(std::floor((z - radius) / kHerbCell)) - 1;
-    const int r1 = static_cast<int>(std::floor((z + radius) / kHerbCell)) + 1;
-    std::vector<std::pair<float, HerbPlant>> found;
-    for (int cy = r0; cy <= r1; ++cy) {
-        for (int cx = c0; cx <= c1; ++cx) {
-            const float px = (static_cast<float>(cx) + grassHashCpu(cx, cy, 101)) * kHerbCell;
-            const float pz = (static_cast<float>(cy) + grassHashCpu(cx, cy, 102)) * kHerbCell;
-            const float d2 = (px - x) * (px - x) + (pz - z) * (pz - z);
-            if (d2 > radius * radius) continue;
-            const float fx = (px - fieldX0_) / fieldCell_, fz = (pz - fieldZ0_) / fieldCell_;
-            if (fx < 0.0f || fz < 0.0f || fx > static_cast<float>(fieldCols_ - 1) || fz > static_cast<float>(fieldRows_ - 1))
-                continue;
-            float canopy = 0.0f, density = 0.0f;
-            floorAt(px, pz, canopy, density);
-            // herbPick.
-            const float u0 = grassHashCpu(cx, cy, 105), u1 = grassHashCpu(cx, cy, 106);
-            if (u0 >= density) continue;
-            float w[kHerbMax] = {};
-            float sum = 0.0f;
-            for (int i = 0; i < n; ++i) sum += (w[i] = weight(i, px, pz, canopy));
-            if (sum <= 0.0f || u0 >= density * std::min(sum, 1.0f)) continue;
-            float pick = u1 * sum;
-            int sp = n - 1;
-            for (int i = 0; i < n; ++i) {
-                pick -= w[i];
-                if (pick < 0.0f) { sp = i; break; }
-            }
-            found.push_back({d2, HerbPlant{px, fieldHeight(px, pz), pz, sp}});
-        }
-    }
-    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    for (size_t k = 0; k < found.size() && k < max; ++k) out.push_back(found[k].second);
-    return out;
 }
 
 bool GrassNode::herbRangeAt(float x0, float z0, float x1, float z1, float& lo, float& hi) const {
@@ -518,7 +310,7 @@ void GrassNode::uploadField() {
     const int cols = fieldCols_, rows = fieldRows_;
     if (cols < 2 || rows < 2) return;
     const size_t n = static_cast<size_t>(cols) * rows;
-    const bool room = herbFloor_ && floor_.size() == n * 2 && herbCount() > 0;
+    const bool room = herbFloor_ && floor_.size() == n * 2 && !herbSource_.empty();
     if (!room) {
         fieldGpu_.clear();
         setCustomShaderTexture(kFieldTexture, cols, rows, field_.data(), false, false, false, 4);

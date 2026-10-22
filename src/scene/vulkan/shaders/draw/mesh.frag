@@ -27,14 +27,12 @@ layout(location = 6) in vec4 inInstColor;  // rgb tint, a atlas cell / 256 (whit
 layout(location = 7) in vec4 inVegShade;
 #endif
 #ifdef SCENE_HERB
-// A herb plant's card (mesh_herb.vert): its role (leaf, stem, bloom),
-// species and seed, and its size (scene_herb.glsl's HerbVertex); inColor.x
-// a stem's cover of its card or a leaf's stalk share.
+// A herb plant's card (mesh_herb.vert): the world's module's own (its
+// HerbVertex id, b, c; inColor its a), w the card's dither seed.
 layout(location = 8) flat in vec4 inHerbInfo;
 layout(location = 9) in vec4 inHerbSize;
-// The stand it grows in (HerbVertex.stand): its leaf area index and the
-// share of the stand's leaves above this point.
 layout(location = 10) in vec2 inHerbStand;
+#define HERB_SHADE 1
 #endif
 
 layout(location = 0) out vec4 outColor;
@@ -69,7 +67,6 @@ layout(location = 2) out vec4 outIndirect;
 #endif
 #ifdef SCENE_HERB
 #include "ground/scene_grass.glsl"
-#include "ground/scene_herb_surface.glsl"
 #endif
 #ifdef SCENE_GROUND
 #include "ground/scene_grass.glsl"
@@ -115,16 +112,17 @@ void main() {
 #endif
     float subpixel = 0.0;
 #ifdef SCENE_HERB
-    // A herb's card cut to its leaf, stem or bloom (scene_herb_surface.glsl),
-    // its cover kept as that share of the samples, each card its own dither.
-    // A card (a leaf, a bloom) a few pixels long has parts a pixel or less
-    // (by its length: a stem is a thin card, but a line, not a speck).
+    // A herb's card as the world's module cuts and shades it
+    // (scene_herb_layer.glsl's herbShade), its cover kept as that share of
+    // the samples, each card its own dither. A card (a leaf, a bloom) a few
+    // pixels long has parts a pixel or less (by its length: a stem is a thin
+    // card, but a line, not a speck).
     float herbPx = 1.0 / max(min(fwidth(inUV.x), fwidth(inUV.y)), 1e-5);
-    HerbSurface herb = herbSurface(inHerbInfo, inUV, inHerbSize, inColor.x, inColor.zw,
-                                   dot(inNormal, -worldPos) < 0.0);
+    HerbShade herb = herbShade(HerbFragment(worldPos, inNormal, inTangent, inBitangent, inUV, inInstColor.rgb,
+                                            inVegShade, inHerbInfo.xyz, inColor, inHerbSize, inHerbStand));
     if (herb.cover < 1.0 / 255.0) discard;
     {
-        int mask = coverSampleMask(herb.cover, (flags & MESH_MSAA) != 0u, uint(inHerbInfo.z * 16777216.0));
+        int mask = coverSampleMask(herb.cover, (flags & MESH_MSAA) != 0u, uint(inHerbInfo.w * 16777216.0));
         if (mask == 0) discard;
         gl_SampleMask[0] = mask;
     }
@@ -165,9 +163,7 @@ void main() {
     subpixel = grass.subpixel;
 #endif
 #ifdef SCENE_HERB
-    // A herb's colours are its species' (and the plant's own tone), its
-    // veins paler and yellower than the blade between.
-    baseColor = herbAlbedo(herb);
+    baseColor = herb.albedo;
     alpha = 1.0;
 #endif
 #ifdef SCENE_VEGETATION
@@ -248,10 +244,8 @@ void main() {
     }
 #endif
 #ifdef SCENE_HERB
-    // The card's face leaned as its surface says, then toward the ground's
-    // normal; and the stand's shade of itself (scene_herb_surface.glsl).
-    N = herbNormal(herb, vegAO);
-    float standSun = herbStandSun(vegAO);
+    N = herb.normal;
+    vegAO *= herb.ao;
 #endif
 
     float metallic = push.pbrParams.x;
@@ -263,7 +257,7 @@ void main() {
     }
     if ((flags & MESH_EMISSIVE_MAP) != 0u) emissive *= texture(texEmissive, inUV).rgb;
 #ifdef SCENE_HERB
-    roughness = mix(roughness, 0.3, herb.gloss);
+    roughness = herb.roughness;
 #endif
 #ifdef SCENE_GRASS
     roughness = grassRoughness(grass, roughness, camDist);
@@ -305,7 +299,8 @@ void main() {
     s.thinNormal = vec3(0.0);
     s.sward = vec4(0.0);
 #ifdef SCENE_HERB
-    herbSurfaceLight(s, herb, camDist);
+    s.translucency = herb.translucency >= 0.0 ? herb.translucency : s.translucency * -herb.translucency;
+    s.sward = herb.sward;
 #endif
 #ifdef SCENE_GRASS
     grassSurfaceLight(s, grass, geomN, worldPos, vegFade, camDist);
@@ -329,7 +324,7 @@ void main() {
     indirect *= groundAO;
 #endif
 #ifdef SCENE_HERB
-    vec3 color = sceneDirectLight(s) * standSun + indirect + emissive;
+    vec3 color = sceneDirectLight(s) * herb.sun + indirect + emissive;
 #else
     vec3 color = sceneDirectLight(s) + indirect + emissive;
 #endif
@@ -358,3 +353,8 @@ void main() {
     outIndirect = vec4(min(indirect, vec3(SCENE_HDR_MAX)), 0.0);
 #endif
 }
+
+#if defined(SCENE_HERB) || defined(SCENE_GROUND)
+// The world's herb module (scene_herb_layer.glsl), after all it may use.
+#include "ground/herb_module.glsl"
+#endif

@@ -2,8 +2,9 @@
 //
 // What grows in a scene: the plants node (`scene.createPlants`: trees and
 // shrubs built on the GPU from a species table), the grass node
-// (`scene.createGrass`: a meadow of procedural blades, its herbs and its
-// turf, and bro.flora's herb species it draws them from), and the vegetation
+// (`scene.createGrass`: a meadow of procedural blades, its herbs (a world's
+// herb module) and its turf; bro.flora's herb species, which broworkshop's
+// lib/herbs module grows), and the vegetation
 // records that make any mesh sway in the scene's wind field
 // (`setVegetation`, flora-api.js "Vegetation records").
 //
@@ -15,40 +16,65 @@
 
 /**
  * The grass node's herbs (createGrass / setGround `herbs`, `node.setHerbs`):
- * low plants built where they stand, nothing stored per plant. The node
- * keeps a table of up to 12 species (bro.flora.herbRecords) and a grid of
- * 0.35 m cells, each holding at most one plant: which (if any) is picked
- * per cell from each species' abundance, how well the light there suits it
- * (the `floor` canopy against its shade preference), its colonies (noise of
- * its own period, a cell holding one of its plants as often as its
- * `spacing` allows) and the floor's herb density. Near the eye (two rings,
- * to `range`) each plant is a few cards built in the vertex shader (its
- * leaves or fronds, stems, blooms) and cut per pixel to its leaf outline,
- * pinnae, petals, cups seen at their angle, spikes or bells; they sway as
- * cantilevers worked out from their build (broflora herbSway) and cast no
- * shadows. A stand shades itself: the leaves above a point (its species'
- * leaf area at this density) take the sun on its slant path and part of
- * the sky, so a fern stand is dark within and lit at its top. Past `range`
- * to `far` the same plants are drawn with fewer cards, fewer of them with
- * distance (each widened to keep the cover); seen from well above (the
- * eye's lift over a third of the distance across the ground) they are left
- * to the turf. Past them the far blades and the turf stand in for them:
- * the share of the ground they cover as the eye sees it (more seen across
- * than from above: their sides, as far as they rise over the grass), their
- * leaves mostly hidden among the blades, their blooms coloured patch by
- * patch by each species' colonies there, so a meadow's poppies and daisies
- * go on to the horizon as specks of their colour. Where herbs grow thick the grass gives
- * them room, sparser and shorter with the floor's herb density.
+ * the low plants among its blades (ferns and wildflowers, pebbles, coral,
+ * whatever a world grows), built where they stand, nothing stored per
+ * plant. What they are is the world's HERB MODULE, GLSL compiled at run
+ * time into the node's cover shaders (docs/scene-world-architecture.md §13,
+ * "worlds as code"); the engine owns where and how they are drawn.
+ *
+ * The engine: a grid of 0.35 m cells, each holding at most one plant; near
+ * the eye (two rings, to `range`) each plant is a few cards, an instance a
+ * plant the cover's plan lists, dithered through the rings' hand-overs;
+ * past `range` to `far` the same plants with fewer cards, fewer of them
+ * with distance (each widened to keep the cover), and seen from well above
+ * left to the turf; past them the far tier's elements (one a cell, the
+ * plant's variety as a mound of its leaves and blooms) and the turf, which
+ * take the module's far look. Each card fragment's cover is kept as that
+ * share of the pixel's samples and marked for the sub-pixel resolve; the
+ * lighting is the scene's. Where herbs grow thick the grass gives them
+ * room, sparser and shorter with the floor's herb density.
+ *
+ * The module defines, against what the engine declares
+ * (src/scene/vulkan/shaders/ground/scene_herb_layer.glsl: HerbPlant,
+ * HerbVertex, HerbFragment, HerbShade, HerbMix, HerbFarLook, herbData(i)):
+ *   - `int herbStand(ivec2 cell, vec2 xz, vec2 floorAt)`: the variety
+ *     (0..14) standing in a cell, or -1; floorAt the canopy and the herb
+ *     density there;
+ *   - `HerbMix herbFarMean(float canopy, float density, float tanView)`:
+ *     the layer from afar, by the canopy, the density and the view's
+ *     elevation;
+ *   - `float herbFarLocal(vec2 xz, float canopy, float u, float fp, out
+ *     vec3 bloom, out vec3 pick)`: its blooms patch by patch over that mean;
+ *   - `HerbFarLook herbFarLook(int variety, vec4 h)`: a variety as one far
+ *     element;
+ *   - under `HERB_BUILD` (the vertex stage, with scene_vegetation.glsl's
+ *     wind): `bool herbBuild(HerbPlant p, int card, int cards, int verts,
+ *     vec3 v, inout HerbVertex o)`, a vertex of one of the plant's cards
+ *     (false leaves the card out);
+ *   - under `HERB_SHADE` (mesh.frag, with scene_lighting.glsl): `HerbShade
+ *     herbShade(HerbFragment f)`, what a fragment of a card is.
+ * It may use anything of scene_camera.glsl and scene_grass.glsl (the field,
+ * the floor, grassHash, the wind's noise). A module compiles once a
+ * process, its SPIR-V cached on disk (docs/code-cache.md); one that does
+ * not compile is logged and the node draws no herbs.
+ *
+ * broworkshop's lib/herbs is such a module: broflora's herb species
+ * (bracken, daisy, poppy, ...) grown from their records, cut per pixel to
+ * their leaf outlines, pinnae, petals, cups, spikes and bells, swaying as
+ * cantilevers, the stand shading itself.
  * @example
+ *   import { herbModule } from "/lib/herbs/index.js";
  *   scene.createGrass({ ground, floor: canopy, turf: true, herbs: {
- *     species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }],
+ *     ...herbModule({ species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }] }),
  *     density: (x, z, y, canopy) => 0.8 * patchy(x, z),
  *     range: 24,
  *   } });
  * @typedef {Object} GrassHerbOptions
- * @property {Array<string|Object>|Float32Array} species - preset names,
- *   `{preset, ...HerbSpecies fields}` specs (bro.flora.herbPreset), or a
- *   table from bro.flora.herbRecords; more than 12 are dropped.
+ * @property {string} source - the module's GLSL ('' draws no herbs).
+ * @property {Float32Array|Array<number>} [data] - what its herbData(i)
+ *   reads, vec4 i at floats 4i..4i+3 (at most 1024 floats).
+ * @property {number} [height=0.4] - its tallest plant (m): how high the
+ *   grass's bounds and the far tier reach for them.
  * @property {number|Function} [density=1] - how thickly herbs grow, 0..1: a
  *   number or `(x, z, y, canopy) => value`, baked into the field with it.
  * @property {number} [range=30] - how far the whole plants are drawn (m, 4..200).
@@ -354,8 +380,8 @@
 
 /**
  * Herbs (broflora/herbs.h): ferns, wildflowers, forbs and ground cover,
- * nothing grown — a species table the grass node builds every plant from
- * where it stands (scene.createGrass({herbs}), GrassHerbOptions). The
+ * nothing grown — a species table a herb module builds every plant from
+ * where it stands (broworkshop's lib/herbs; GrassHerbOptions). The
  * presets:
  *   - ferns: bracken (tall fronds, deltoid, deeply lobed pinnae), ladyfern
  *     (a shuttlecock of lanceolate fronds; shade);
@@ -395,13 +421,11 @@ bro.flora.herbPresets = function() {};
 bro.flora.herbPreset = function(spec) {};
 
 /**
- * The table the grass node reads (56 floats a species: the build, then its
- * spacing, its side cover and its blooms' share of it, its leaves' top, its
- * stem leaves),
- * from names or
- * specs as herbPreset takes them (unknown ones are skipped). createGrass's
- * `herbs.species` takes the names and specs directly; this is for building
- * the table once and sharing it.
+ * The records a herb module reads (56 floats a species: the build, then
+ * its spacing, its side cover and its blooms' share of it, its leaves' top,
+ * its stem leaves), from names or specs as herbPreset takes them (unknown
+ * ones are skipped). broworkshop's lib/herbs packs them as its module's
+ * data.
  * @param {Array<string|Object>} list
  * @returns {Float32Array}
  */
@@ -526,31 +550,14 @@ class SceneNode {
   setGround(opts) {}
 
   /**
-   * Grass: replace the herbs' species (and with `range` and `far`, how far
-   * they are drawn) without re-baking the field; their density stays as
-   * baked.
-   * `species: []` draws none.
-   * @example grass.setHerbs({ species: ['poppy', 'daisy'] });
+   * Grass: replace the herb module and its data (and with `range` and
+   * `far`, how far the herbs are drawn) without re-baking the field; their
+   * density stays as baked. `source: ''` draws none.
+   * @example grass.setHerbs(herbModule({ species: ['poppy', 'daisy'] }));
    * @param {GrassHerbOptions} herbs
    * @returns {SceneNode}
    */
   setHerbs(herbs) {}
-
-  /**
-   * Grass: the herb plants whose roots lie within `radius` m (at most 20) of
-   * world (x, z), nearest first, worked out on the CPU as the shaders pick
-   * them (nothing is stored): `[{x, y, z, species}]`, `y` the ground under
-   * the root, `species` its index in the herbs given. At most 256. To frame a
-   * plant, to place something beside one, to answer what grows here.
-   * @example
-   *   const [p] = grass.herbPlants(x, z, 5);
-   *   if (p) vp.reframe([p.x, p.y + 0.3, p.z], 1);
-   * @param {number} x
-   * @param {number} z
-   * @param {number} [radius=1]
-   * @returns {Array<{x: number, y: number, z: number, species: number}>}
-   */
-  herbPlants(x, z, radius) {}
 
   /**
    * Grass: shade mesh node `mesh` as this grass's ground (turf), or with

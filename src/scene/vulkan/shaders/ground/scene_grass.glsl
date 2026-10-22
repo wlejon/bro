@@ -35,10 +35,6 @@
 // the density) is left out of the plan's list (grassBladeLive); a caster,
 // drawn over the ring's cells, culls it at every vertex by the same test.
 
-#define GRASS_HERB_MAX 12      // GrassNode::kHerbMax
-#define GRASS_HERB_RECORD 14   // vec4s a species (broflora::kHerbRecordFloats / 4)
-#define GRASS_HERB_MEAN 5      // GrassNode::kHerbMeanSteps (kHerbMeanFloats / 4 vec4s each)
-
 layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 cells;      // x: tufts (0 sward .. 1 bunch grass), y: flowering share, z: dead share; w: cell size (m) (the draw's cells are grassRect())
     vec4 ring;       // x: inner radius, y: outer radius, z: the cross-fade band at the inner edge, w: at the outer (m)
@@ -52,19 +48,14 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     vec4 pushRate;   // x: the bend's spring (Hz), y: its damping ratio, z: 1 with a floor texture, w: the trample's relax time (s)
     vec4 shape;      // x: blades an instance, y: vertices a blade, z: spread from the root (m), w: > 0 for a ring of tufts
     vec4 lod;        // x: thinning starts (m), y: the fewest blades kept (share), z: the share shadow casters keep, w: the eye's lift (m)
-    // The herbs (scene_herb_mix.glsl): the low plants among the grass.
-    vec4 herbInfo;   // x: species, y: the herbs' cell (m), z: where the far plants end (m: the turf stands in past it), w: that hand-over's band (m)
+    // The herbs (scene_herb_layer.glsl): the low plants among the grass.
+    vec4 herbInfo;   // x: 1 with a module, y: the herbs' cell (m), z: where the far plants end (m: the turf stands in past it), w: that hand-over's band (m)
     vec4 herbRing;   // a herb draw's ring: inner, outer, the band at the inner edge, at the outer
     vec4 herbShape;  // x: cards an instance, y: vertices a card, z: the ring (0 near, 1 mid, 2 far), w: where the whole plants end (m)
     // The turf's surface layer (scene_ground_layers.glsl; SurfaceLayers):
     vec4 layer;      // x: a level-0 tile's side (m), y: its texels a side, z: its border (texels), w: levels (0: none)
     vec4 layer2;     // x: a texel's most pixels, y: the page shift, z: page entries a side, w: a level-0 texel (m)
-    vec4 herbs[GRASS_HERB_MAX * GRASS_HERB_RECORD];   // GrassNode::kHerbMax species of broflora's herbRecord
-    // The herbs' mean over their colonies under a canopy of 0, 1/4 .. 1
-    // (GrassNode::herbMean): (cover exponent from above, leaf rgb), (the
-    // blooms' share, bloom rgb), (exponent from the side, the blooms' share
-    // of that, the colonies' share of the ground, the leaves' top).
-    vec4 herbMean[GRASS_HERB_MEAN * 3];
+    vec4 herbData[256];   // the herb module's data (GRASS_HERB_DATA, scene_herb_layer.glsl's herbData)
 } grass;
 
 const float GRASS_REFERENCE_SPEED = 2.5;   // m/s: the steady wind blades flutter in as authored
@@ -94,7 +85,7 @@ vec2 grassFloorHerbsAt(vec2 xz) {
     return textureLod(grassFloor, uv, 0.0).rg;
 }
 
-#include "ground/scene_herb_mix.glsl"
+#include "ground/scene_herb_layer.glsl"
 
 bool grassInField(vec2 xz) {
     vec2 q = (xz - grass.field.xy) / grass.field.z;
@@ -206,7 +197,7 @@ const float GRASS_CANOPY_UP = 0.5;   // mesh.frag's SCENE_GRASS (keep in step)
 vec3 grassSwardUp(vec3 gn, vec2 lean) { return normalize(gn + vec3(lean.x, 0.0, lean.y)); }
 vec3 grassCanopyNormal(vec3 up, vec3 toEye) { return normalize(toEye + GRASS_CANOPY_UP * up); }
 // How much of the herbs' leaves and blooms past their plants shows among
-// the grass (scene_herb_mix.glsl's herbMixMean counts them as if nothing
+// the grass (the module's herbFarMean counts them as if nothing
 // stood round them; among the blades most leaves are hidden, as the
 // plants' are, and some blooms): as much as the plants drawn up to their
 // range show, so they hand over to the far blades and the turf unseen.
@@ -653,10 +644,10 @@ bool grassBlade(ivec2 c, int j, vec3 v, vec3 vn, out GrassBlade b) {
     col *= 1.0 + grass.look.y * (gu * sh * 1.2 + grassGustFar(gu) * smoothstep(4.0, 20.0, d));
     col *= 1.0 + 0.4 * flattened;   // a flattened lane shows the blades' paler length
     // Past the herbs' plants a far fan stands for the herbs among the grass
-    // as often as their cover seen from here has them (herbMixMean; the
+    // as often as their cover seen from here has them (herbFarMean; the
     // turf, between the fans and past them, does the same): their leaves'
-    // mean colour, or one of their blooms by the colonies there
-    // (herbBloomLocal), so the flowers the plants drew up to their range go
+    // mean colour, or one of their blooms by the patches there
+    // (herbFarLocal), so the flowers the plants drew up to their range go
     // on as specks of their colour, patch by patch.
 #ifndef GRASS_SHADOW
     if (fan && grass.herbInfo.x > 0.5) {
@@ -665,11 +656,11 @@ bool grassBlade(ivec2 c, int j, vec3 v, vec3 vn, out GrassBlade b) {
         float u = grassHash(c, 6144 + j);
         if (u < stand) {
             vec2 fh = grassFloorHerbsAt(root);
-            HerbMix hm = herbMixMean(fh.x, fh.y, tanView);
+            HerbMix hm = herbFarMean(fh.x, fh.y, tanView);
             if (fh.y > 0.0 && u < stand * hm.cover) {
                 vec3 bloom, pick;
                 float u2 = fract(u * 61.7 + hb.x);
-                float more = herbBloomLocal(root, fh.x, fract(u2 * 37.3), 0.0, bloom, pick);
+                float more = herbFarLocal(root, fh.x, fract(u2 * 37.3), 0.0, bloom, pick);
                 float share = min(hm.bloomShare * more, 0.95);
                 // A bloom is a dot over the fan's top (scene_grass_surface.glsl's
                 // grassFanBloom), not the whole fan: a share of it about

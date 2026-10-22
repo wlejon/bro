@@ -293,10 +293,13 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
 VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
                                  const char* name) {
     VkShaderModule module = SceneVkShaderCompiler::createBuiltinModule(device, shader);
-    if (!module || !layout) {
-        SceneVkShaderModule::destroy(device, module);
-        return VK_NULL_HANDLE;
-    }
+    VkPipeline pipeline = createComputePipeline(device, module, layout, name);
+    SceneVkShaderModule::destroy(device, module);
+    return pipeline;
+}
+
+VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
+    if (!module || !layout) return VK_NULL_HANDLE;
     VkComputePipelineCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -314,7 +317,6 @@ VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkP
         render::setPipelineStatsLabel(name);
         render::logPipelineStats(device, pipeline);
     }
-    SceneVkShaderModule::destroy(device, module);
     return pipeline;
 }
 

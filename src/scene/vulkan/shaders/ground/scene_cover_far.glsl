@@ -4,7 +4,7 @@
 // holds. Needs scene_camera.glsl and scene_grass.glsl.
 //
 // An element is a cell of the herbs' grid (grass.herbInfo.y m): the herb
-// plant herbPick puts there, or else a tuft of the sward where the grass
+// plant the module's herbStand puts there, or else a tuft of the sward where the grass
 // grows. Its thinning is nested (stochastic simplification): cells of
 // level k are 2^k herb cells a side, and each stands for its four children
 // by one of them, chosen by a hash, down to a herb cell. A level-0 cell's
@@ -90,7 +90,7 @@ float coverKept(ivec2 c, float lam) {
 // The widening of an element kept at lambda `lam`.
 float coverWiden(float lam) { return min(exp2(lam), COVER_FAR_WIDEN); }
 
-// A far element: a herb cell's plant (kind > 0: herb species kind - 1) or
+// A far element: a herb cell's plant (kind > 0: the module's variety kind - 1) or
 // a tuft of the sward (kind 0).
 struct CoverFar {
     vec4 h;        // the herb cell's hashes (scene_herb.glsl's herbPlantLive's)
@@ -117,7 +117,7 @@ bool coverFarHanded(CoverFar e, ivec2 c) {
 // its lambda falls in the level (the last level takes every lambda past
 // it), it is kept, past the rings, on the field and roughly on screen, and
 // something grows there. `kind` -1 for none. With `known` >= 0 the kind is
-// taken as known (the plan listed it): the vertices skip herbPick.
+// taken as known (the plan listed it): the vertices skip herbStand.
 bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     ivec2 c = coverRep(C, level);
     e.h =vec4(grassHash(c, 101), grassHash(c, 102), grassHash(c, 103), grassHash(c, 104));
@@ -158,9 +158,8 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     if (known >= 0) {
         e.kind = known;
     } else {
-        vec2 fh = grassFloorHerbsAt(e.root);
-        int sp = herbPick(e.root, fh.x, fh.y, grassHash(c, 105), grassHash(c, 106));
-        e.kind = sp + 1;
+        int v = grass.herbInfo.x > 0.5 ? herbStand(c, e.root, grassFloorHerbsAt(e.root)) : -1;
+        e.kind = v >= 0 && v < HERB_VARIETIES ? v + 1 : 0;
     }
     if (e.kind == 0) {
         // The sward's tufts, as thick as its blades grow there.
