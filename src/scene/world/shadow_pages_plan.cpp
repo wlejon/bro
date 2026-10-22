@@ -119,6 +119,7 @@ void ShadowPages::plan(ShadowPlan& out) {
     out.copyOut.clear();
     out.staticPages = 0;
     out.plantPages = 0;
+    out.plantUnits = 0.0;
     out.nextCount = 0;
     out.entryCount = entryCount();
     // (The table ends before the clipmap built: nothing samples it.)
@@ -158,6 +159,8 @@ void ShadowPages::plan(ShadowPlan& out) {
         granted_.clear();
         return;
     }
+
+    spreadLoads();
 
     // The overlays: the pages what moves touches that want one, the finest
     // first while overlayPages allows.
@@ -371,6 +374,7 @@ void ShadowPages::plan(ShadowPlan& out) {
                 c.plants = v.plants == ShadowPlants::All;
                 ++out.staticPages;
                 out.plantPages += c.plants;
+                if (c.plants) out.plantUnits += plantUnits(i);
                 out.copyOut.push_back(c);
             }
     }
@@ -449,6 +453,7 @@ void ShadowPages::plan(ShadowPlan& out) {
             w.size = std::ldexp(1.0, level);
             w.required = !e.drawn && !neededAbove;
             w.plants = clip && level > sway;
+            if (w.plants) w.units = plantUnits(i);
             if (m.next) {
                 w.error = std::min(w.error, kNextError);
                 w.required = false;

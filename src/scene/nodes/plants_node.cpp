@@ -52,7 +52,7 @@ void PlantsNode::setSpecies(const float* data, int count) {
     tallest_ = 0.0f;
     for (auto& [key, leaf] : leaves_) {
         const auto run = store_.runs().find(key.packed());
-        if (run != store_.runs().end()) leaf.bounds = boundsOf(run->second.first, run->second.count);
+        if (run != store_.runs().end()) measure(leaf, run->second.first, run->second.count);
     }
     changedAll();
 }
@@ -132,7 +132,7 @@ void PlantsNode::putLeaf(Leaves::iterator it, const std::vector<float>* placed) 
     if (store_.capacity() != capacity) writeHeader();
     if (count > 0) {
         const CellStore::Run& run = store_.runs().at(key.packed());
-        leaf.bounds = boundsOf(run.first, run.count);
+        measure(leaf, run.first, run.count);
     } else {
         leaves_.erase(it);
     }
@@ -149,14 +149,19 @@ void PlantsNode::putLeaf(Leaves::iterator it, const std::vector<float>* placed) 
     cellsDirty_ = true;
 }
 
-bromath::AABB3 PlantsNode::boundsOf(uint32_t first, uint32_t count) {
+void PlantsNode::measure(Leaf& leaf, uint32_t first, uint32_t count) {
     // Each plant's sphere: the crown's reach and the leaves past its skin,
     // and the sway.
     bromath::AABB3 b = bromath::aempty3();
+    leaf.kinds.clear();
     for (uint32_t k = first; k < first + count; ++k) {
         const float* p = store_.record(k);
         int s = static_cast<int>(p[5]);
         if (s < 0 || s >= speciesCount_) s = 0;
+        auto kind = std::find_if(leaf.kinds.begin(), leaf.kinds.end(), [s](const Kind& o) { return o.species == s; });
+        if (kind == leaf.kinds.end()) kind = leaf.kinds.insert(leaf.kinds.end(), Kind{s, 0, 0.0f});
+        ++kind->count;
+        kind->scale += p[4];
         float height = 10.0f, radius = 4.0f;
         if (speciesCount_ > 0) {
             height = species(s)[0];
@@ -170,7 +175,48 @@ bromath::AABB3 PlantsNode::boundsOf(uint32_t first, uint32_t count) {
         b.min = bromath::vmin(b.min, bromath::Vec3{p[0] - r, cy - r, p[2] - r});
         b.max = bromath::vmax(b.max, bromath::Vec3{p[0] + r, cy + r, p[2] + r});
     }
-    return b;
+    for (Kind& kind : leaf.kinds) kind.scale /= static_cast<float>(kind.count);
+    leaf.bounds = b;
+    leaf.cast.clear();
+}
+
+void PlantsNode::setParams(const Params& p) {
+    params_ = p;
+    for (const auto& [key, leaf] : leaves_) leaf.cast.clear();
+}
+
+void PlantsNode::castElements(const CellKey& key, float finestTexel, int from, int to, float* out) const {
+    std::fill(out + from, out + to, 0.0f);
+    const auto it = leaves_.find(key);
+    if (it == leaves_.end() || speciesCount_ <= 0 || from >= to) return;
+    const Leaf& leaf = it->second;
+    const size_t levels = static_cast<size_t>(to - from);
+    if (leaf.cast.size() == levels && leaf.castFinest == finestTexel && leaf.castFrom == from) {
+        std::copy(leaf.cast.begin(), leaf.cast.end(), out + from);
+        return;
+    }
+    // plants_plan.comp's caster pick: a crown under 1.5 elements of
+    // shadowTexels across is a disc; else elementCount at 1/texel.
+    const float kept = params_.shadowTexels;
+    for (const Kind& kind : leaf.kinds) {
+        const float* s = species(kind.species);
+        const float radius = (std::sqrt(0.25f * s[0] * s[0] + s[2] * s[2]) + 0.15f * s[2]) * kind.scale + 0.3f;
+        const float full = std::max(s[3], 1.0f);
+        for (int level = from; level < to; ++level) {
+            const float texel = std::ldexp(finestTexel, level);
+            const float crown = radius / (texel * kept);
+            float each = 1.0f;
+            if (crown >= 1.5f) {
+                const float length = s[4] * kind.scale / texel;
+                const float least = std::clamp(3.14159f * crown * crown, 2.0f, params_.minElements);
+                each = std::clamp(full * std::min(1.0f, length * length / (kept * kept)), std::min(least, full), full);
+            }
+            out[level] += each * static_cast<float>(kind.count);
+        }
+    }
+    leaf.cast.assign(out + from, out + to);
+    leaf.castFinest = finestTexel;
+    leaf.castFrom = from;
 }
 
 void PlantsNode::changedAll() {

@@ -129,9 +129,10 @@ void PassShadow::record(SceneFrame& frame) {
 
     // The pages redrawn into the cache, all their casters at once (after
     // the join when there is one): the world service's jobs, each kind's
-    // views timed as its span with the pages they hold.
+    // views timed as its span with their pages' units (a page; a plants
+    // page's ShadowPageWant::units).
     if (planned && plan.staticPages > 0) {
-        const auto drawKind = [&](int kind, bool plants, uint32_t pages) {
+        const auto drawKind = [&](int kind, bool plants, uint32_t pages, double units) {
             if (pages == 0) return;
             const bool stamped =
                 frame.timer && kind >= 0 && frame.timer->beginSpan(cmd, static_cast<uint32_t>(kind), false);
@@ -140,10 +141,11 @@ void PassShadow::record(SceneFrame& frame) {
                 clearView(v);
                 drawView(frame, v, true, true);
             }
-            if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, pages);
+            if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, units);
         };
-        drawKind(frame.gpu.shadows.stillKind(), false, plan.staticPages - plan.plantPages);
-        drawKind(frame.gpu.shadows.kind(), true, plan.plantPages);
+        const uint32_t stillPages = plan.staticPages - plan.plantPages;
+        drawKind(frame.gpu.shadows.stillKind(), false, stillPages, stillPages);
+        drawKind(frame.gpu.shadows.kind(), true, plan.plantPages, plan.plantUnits);
         if (frame.timer) frame.timer->mark(cmd, "shadow:pages");
     }
 

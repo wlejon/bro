@@ -8,7 +8,7 @@
 // under the shown one's wants, shown when drawn or after buildFrames,
 // requests read late across the show), the overlays of what moves (from the sway level up,
 // the finer levels reading the sway level's), the rect covers, and the
-// casters' still and moving states.
+// casters' still and moving states, and the loads that price a plants page.
 
 #include "scene/world/shadow_casters.h"
 #include "scene/world/shadow_pages.h"
@@ -210,6 +210,32 @@ void testStillCrowns() {
     for (const ShadowPageCopy& c : plan.copyOut) copies += c.plants;
     check(copies == plan.plantPages && plan.plantPages > 0 && plan.plantPages < plan.staticPages,
           "only the pages every plant draws into are the plants' kind");
+}
+
+void testLoads() {
+    // A plants page is priced by its texels and the elements cast into it;
+    // a still page is a page.
+    ShadowPages p;
+    ShadowPlan plan;
+    const Vec3 eye{0.0625f, 1.0f, 0.0625f};
+    const int s = p.swayLevel(), level = s + 1;
+    const Vec3 far = eye + Vec3{3.0f * static_cast<float>(p.pageSize(level)), 0.0f, 0.0f};
+    float elements[SP_MAX_LEVELS] = {};
+    elements[s] = 7000.0f;   // (no level the plants' pages are not)
+    elements[level] = 1000.0f;
+    p.beginFrame(eye);
+    p.setSun(downSun());
+    p.endLights();
+    const int loaded = entryAt(p, eye, level), empty = entryAt(p, far, level), still = entryAt(p, eye, s);
+    p.addLoad({eye - Vec3{0.5f, 0.5f, 0.5f}, eye + Vec3{0.5f, 0.5f, 0.5f}}, elements);
+    p.request(p.serial(), bitsOf(p, {loaded, empty, still}));
+    p.plan(plan);
+    const double page = static_cast<double>(SP_PAGE) * SP_PAGE;
+    ShadowPageWant a, b, c;
+    check(hasWant(p, loaded, &a) && hasWant(p, empty, &b) && hasWant(p, still, &c), "each page is wanted");
+    check(a.plants && a.units > page && a.units <= page + 1000.0, "a page a load falls on costs its share");
+    check(loaded != empty && b.plants && b.units == page, "one none does its texels");
+    check(!c.plants && c.units == 1.0, "a still page is one page");
 }
 
 void testWindowMoveAndLateRequests() {
@@ -622,6 +648,7 @@ int main() {
     testAddressingAndSnapping();
     testRequestsWantsAndGrants();
     testStillCrowns();
+    testLoads();
     testWindowMoveAndLateRequests();
     testLruReuse();
     testInvalidation();

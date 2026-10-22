@@ -87,15 +87,23 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             } else if (casts && m->asPlants()) {
                 // In the cached depth, but for the sway level's overlays
                 // (which the finer levels read): those its cells near the
-                // eye touch.
+                // eye touch. Those in its shadow range price the pages they
+                // cast into (addLoad).
                 const PlantsNode* p = m->asPlants();
+                const float castRange = std::min(p->params().shadowRange, p->params().range);
+                const int castFrom = pages.swayLevel() + 1;
+                float elements[SP_MAX_LEVELS] = {};
                 bromath::AABB3 all = bromath::aempty3();
                 for (const CellContent& c : p->cells()) {
                     if (bromath::aisEmpty(c.bounds)) continue;
                     const bromath::AABB3 b = padded(c.bounds, 1.0f);
                     all = bromath::amerge(all, b);
-                    const Vec3 near = bromath::vmin(bromath::vmax(eye, b.min), b.max);
-                    if (bromath::vlen(near - eye) < swayReach) pages.addDynamic(b, true);
+                    const float d = bromath::vlen(bromath::vmin(bromath::vmax(eye, b.min), b.max) - eye);
+                    if (d < swayReach) pages.addDynamic(b, true);
+                    if (d < castRange && castFrom < config.levels) {
+                        p->castElements(c.key, config.finestTexel, castFrom, config.levels, elements);
+                        pages.addLoad(b, elements);
+                    }
                 }
                 if (!bromath::aisEmpty(all)) {
                     // (A cell past the plants' shadow range casts nothing:

@@ -982,10 +982,24 @@ planet's relief (step 9), not haze.
   a drawn ancestor k levels up, 1 px when stale. The top of a needed chain
   is required, and the base pages covering the view are drawn at once.
   There are two kinds of job: pages the plants draw into (a sun page past
-  the sway level) and pages only what stands still draws into. In biomes
-  the first costs about 0.012 ms a page and the second 0.007, mostly its
-  copy. A kind's GPU timer span runs in segments, its draw and its copy,
-  so its price is what it costs.
+  the sway level) and pages only what stands still draws into. A still
+  page is one unit; in biomes it costs about 0.007 ms, mostly its copy. A
+  plants page's cost follows the leaf elements drawn into it, not the page
+  (about 0.4 ms a million elements on the 4090; one page 0.007 to 0.2 ms),
+  so its units are its texels plus the elements its plants cast into it.
+  Each plants cell within the plants' shadow range gives `ShadowPages::addLoad`
+  its elements at every level past the sway level (`PlantsNode::castElements`,
+  the plan's count for its species at their scales, kept with the cell
+  until it changes), spread evenly over the pages its plane rect touches
+  there. (Priced by the page, three interleaved golden-hour walks ran 1, 0
+  and 2 of 150 frames past 2.78 ms, to 3.8 ms, with up to 61 pages drawn in
+  a frame; priced by the elements, 1, 0 and 0, the one at frame 147 the
+  submission gap (§4), with at most 20-43. The flyover is unchanged.) The
+  load is worked out on the CPU each frame, and per-frame CPU work shows up
+  in the GPU's frame time: worked out per level per cell rather than kept,
+  it cost the flyover 0.2 ms a frame, with the GPU idle between the
+  frame's submissions. A kind's GPU timer span runs in segments, its draw
+  and its copy, so its price is what it costs.
 - **What moves** is drawn each frame into overlays of the needed pages it
   touches, sampled in the scratch target. Plants and grass sway in the sway
   level's overlays (8 mm texels), which the finer levels read; past it their

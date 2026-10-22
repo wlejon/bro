@@ -134,6 +134,7 @@ void ShadowPages::beginFrame(const bromath::Vec3& eye) {
     eye_ = eye;
     maps_.clear();
     dynamic_.clear();
+    loads_.clear();
     lightsSet_ = false;
     invalid_.clear();
     sun_.on = false;
@@ -491,6 +492,31 @@ void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
     const int64_t y0 = clampPage(rect[2] - border, oy), y1 = clampPage(rect[3] + border, oy);
     for (int64_t y = y0; y <= y1; ++y)
         for (int64_t x = x0; x <= x1; ++x) f(m.first + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x)));
+}
+
+void ShadowPages::addLoad(const bromath::AABB3& box, const float (&elements)[SP_MAX_LEVELS]) {
+    Load& l = loads_.emplace_back();
+    l.box = box;
+    std::copy(elements, elements + SP_MAX_LEVELS, l.elements);
+}
+
+void ShadowPages::spreadLoads() {
+    load_.assign(entries_.size(), 0.0f);
+    if (!sun_.on) return;
+    const int sway = swayLevel();
+    for (const Load& l : loads_) {
+        double rect[4], nextRect[4];
+        planeRect(sun_, l.box, rect);
+        if (building_) planeRect(next_, l.box, nextRect);
+        for (const Map& m : maps_) {
+            if (m.kind != SP_KIND_CLIPMAP || m.level <= sway || l.elements[m.level] <= 0.0f) continue;
+            const double* r = m.next ? nextRect : rect;
+            int n = 0;
+            forLevelRect(m, r, [&](int) { ++n; });
+            const float each = l.elements[m.level] / static_cast<float>(std::max(n, 1));
+            forLevelRect(m, r, [&](int i) { load_[static_cast<size_t>(i)] += each; });
+        }
+    }
 }
 
 template <class F>

@@ -119,7 +119,7 @@ public:
         float shadowRange = 1500.0f; // past this (m), or `range`, no plant casts (the shadow views cut nearer)
     };
     static constexpr int kParamCount = 6;
-    void setParams(const Params& p) { params_ = p; }
+    void setParams(const Params& p);
     const Params& params() const { return params_; }
 
     /// The plants' cells (world_cells.h): each leaf's run of the pool,
@@ -137,6 +137,13 @@ public:
     /// far, or a change touched everything (the species): take all of it
     /// as changed.
     bool changesSince(uint64_t generation, std::vector<bromath::AABB3>& out) const;
+
+    /// About how many leaf elements leaf `key`'s plants cast into shadow
+    /// views of finestTexel * 2^level metres, levels [from, to), into
+    /// `out[level]` (the plan's count, scene_plants_gpu_plan.cpp, a crown a
+    /// disc counted one): what drawing them there costs. Kept with the leaf
+    /// until it changes.
+    void castElements(const CellKey& key, float finestTexel, int from, int to, float* out) const;
 
     // What a frame drew.
     struct Stats {
@@ -166,11 +173,22 @@ public:
 
 private:
     // A leaf's plants: those set by hand and how many placed follow them in
-    // its run, and the run's bounds.
+    // its run, the run's bounds, and how many of each species (at their
+    // mean scale) it holds.
+    struct Kind {
+        int species = 0;
+        uint32_t count = 0;
+        float scale = 0.0f;
+    };
     struct Leaf {
         std::vector<float> fixed;
         uint32_t placed = 0;
         bromath::AABB3 bounds = bromath::aempty3();
+        std::vector<Kind> kinds;
+        // castElements' last answer, and what it was asked.
+        mutable std::vector<float> cast;
+        mutable float castFinest = 0.0f;
+        mutable int castFrom = 0;
     };
     struct Before {
         const CellGrid* grid;
@@ -180,7 +198,8 @@ private:
     /// Leaf `it`'s run made again from its fixed plants and `placed` (null:
     /// keep the placed it has; an empty leaf goes).
     void putLeaf(Leaves::iterator it, const std::vector<float>* placed);
-    bromath::AABB3 boundsOf(uint32_t first, uint32_t count);
+    /// Leaf's bounds and kinds from its run.
+    void measure(Leaf& leaf, uint32_t first, uint32_t count);
     void writeHeader();
     void changedAll();
 

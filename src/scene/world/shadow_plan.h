@@ -150,6 +150,7 @@ struct ShadowPlan {
     std::vector<ShadowPageCopy> copyOut;
     uint32_t staticPages = 0;    // pages the static views redraw (the world service's jobs)
     uint32_t plantPages = 0;     // of them, in views every plant draws into (ShadowPlants::All)
+    double plantUnits = 0.0;     // those pages' cost (ShadowPageWant::units, summed)
 
     bool any() const { return mapCount > 0; }
 };

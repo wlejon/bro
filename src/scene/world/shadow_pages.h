@@ -126,6 +126,9 @@ struct ShadowPageWant {
     double size = 0.0;
     bool required = false;
     bool plants = false;   // the plants' casters draw into it (a sun page past the sway level): the dearer kind
+    /// Its cost in its kind's units: a page; a plants page its texels and
+    /// the elements cast into it (addLoad), which cost about alike.
+    double units = 1.0;
 };
 
 struct ShadowPagesStats {
@@ -164,6 +167,13 @@ public:
     /// the needed pages it touches, in every local map and the sun's levels
     /// from swayLevel() up (`sways`: that level alone).
     void addDynamic(const bromath::AABB3& box, bool sways = false);
+    /// Casters inside `box` that draw into the sun's plants pages (the
+    /// levels past swayLevel()), `elements[level]` of their elements at
+    /// each: spread evenly over the pages of each level its plane rect
+    /// touches, they price those pages (ShadowPageWant::units). A plants
+    /// page's cost follows the elements drawn into it, not its count: one a
+    /// forest's shadow falls on costs many a meadow's.
+    void addLoad(const bromath::AABB3& box, const float (&elements)[SP_MAX_LEVELS]);
     /// What the camera sees this frame (its frustum's bounds). Its base
     /// pages, which cover where a caster's shadow can fall in it (across the
     /// light, it and the casters overlap) at the sun's finest level spanning
@@ -324,6 +334,9 @@ private:
     /// Calls f(entry) for each page of clipmap level map `m` the plane rect
     /// (padded by the border) touches.
     template <class F> void forLevelRect(const Map& m, const double rect[4], F&& f);
+    /// Each plants page's load (load_): the elements each addLoad casts at
+    /// its level, spread over the pages there its plane rect touches.
+    void spreadLoads();
     /// Flag the pages the frame's moving bounds touch that want an overlay:
     /// needed ones, and the sway level's over a needed finer page.
     void markDynamic();
@@ -347,6 +360,16 @@ private:
     std::vector<Map> maps_;           // this frame's: the sun's levels, then local faces
     std::vector<Dynamic> dynamic_;
     std::vector<bromath::AABB3> invalid_;   // invalidate()s met before endLights(), applied there
+    struct Load {
+        bromath::AABB3 box;
+        float elements[SP_MAX_LEVELS];
+    };
+    std::vector<Load> loads_;
+    std::vector<float> load_;         // each entry's elements this frame (plan())
+    /// A plants page's units: its texels and the elements cast into it.
+    double plantUnits(int entry) const {
+        return static_cast<double>(SP_PAGE) * SP_PAGE + static_cast<double>(load_[static_cast<size_t>(entry)]);
+    }
     bool lightsSet_ = false;
     bromath::AABB3 seen_ = bromath::aempty3();
     History history_[8];
