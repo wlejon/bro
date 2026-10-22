@@ -567,9 +567,15 @@ constexpr double kUp[3] = {0.0, 1.0, 0.0}, kDown[3] = {0.0, -1.0, 0.0};
 constexpr double kSide[3] = {1.0, 0.0, 0.0};
 
 /// Renders `frames` frames a tenth of a second apart (the refreshes age by
-/// the scene's clock), then reads the grid back.
+/// the scene's clock), then reads the grid back. Each frame begins as the
+/// engine's do (Engine::beginGpuFrame), its slot of the frame ring waited
+/// for: unpaced, the renders outrun the GPU, a render whose slot is still
+/// busy goes untimed, and the world service, whose budget the first
+/// frame's fresh traces (tens of ms) took to the floor, may read no frame
+/// under the target again and leave the refreshes queued.
 bool settle(scene::SceneGraph& graph, int frames, ProbeGridTables& t) {
     for (int f = 0; f < frames; ++f) {
+        scene::SceneRenderer::defaultVulkanContext()->frames().beginFrame();
         graph.tickAnimations(0.1f);
         graph.render();
     }
