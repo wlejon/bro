@@ -43,7 +43,7 @@ public:
     /// mark before it (a name marked more than once, summed), then "rest"
     /// (the last mark to the end).
     using Passes = std::vector<std::pair<std::string, double>>;
-    static constexpr uint32_t kMaxSpans = 8;
+    static constexpr uint32_t kMaxSpans = 12;
     static constexpr uint32_t kSpanSegments = 4;   // a span's segments a render
     /// A render read: its milliseconds (as takeMs reports them) and its spans.
     struct Frame {

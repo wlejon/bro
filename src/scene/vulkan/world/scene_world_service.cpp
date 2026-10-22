@@ -2,6 +2,7 @@
 
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_timer.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +28,11 @@ SceneWorldService::SceneWorldService() = default;
 
 int SceneWorldService::addKind(WorldProducer* producer, const WorldJobKind& kind) {
     const int k = policy_.addKind(kind);
-    if (k < 0) return -1;
+    if (k < 0) {
+        LOG_ERROR("SceneWorldService: no room for the job kind '%s' (WorldService::kMaxKinds is %d)",
+                  kind.name.c_str(), WorldService::kMaxKinds);
+        return -1;
+    }
     producers_.resize(static_cast<size_t>(k) + 1, nullptr);
     producers_[static_cast<size_t>(k)] = producer;
     markNames_[static_cast<size_t>(k)] = "world:" + kind.name;

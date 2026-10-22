@@ -119,7 +119,7 @@ struct WorldServiceStats {
 
 class WorldService {
 public:
-    static constexpr int kMaxKinds = 8;
+    static constexpr int kMaxKinds = 12;
 
     void configure(const WorldServiceConfig& config) { config_ = config; }
     const WorldServiceConfig& config() const { return config_; }
