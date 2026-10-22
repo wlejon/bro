@@ -69,9 +69,12 @@ void PlantsNode::setPlants(const float* data, int count) {
         putLeaf(it, nullptr);
         it = next;
     }
+    // (On a round body the plants set by hand are kept apart from the
+    // faces' leaves, by where they stand in the place frame.)
+    const uint8_t root = radius_ > 0.0 ? kHandRoot : 0;
     for (int i = 0; i < std::max(count, 0); ++i) {
         const float* p = data + static_cast<size_t>(i) * kPlantFloats;
-        const CellKey key = grid_.leafAt(p[0], p[2]);
+        const CellKey key = grid_.leafAt(p[0], p[2], root);
         auto it = leaves_.try_emplace(key).first;
         it->second.fixed.insert(it->second.fixed.end(), p, p + kPlantFloats);
     }
@@ -91,25 +94,79 @@ void PlantsNode::setRules(std::shared_ptr<const PlacementRules> rules) {
         if (it->second.placed > 0) putLeaf(it, &none);
         it = next;
     }
-    if (rules) placement_ = std::make_unique<PlantPlacement>(std::move(rules), grid_, WorldWorkers::shared());
+    rulesRef_ = rules;
+    if (rules)
+        placement_ = std::make_unique<PlantPlacement>(std::move(rules), grid_, WorldWorkers::shared(),
+                                                      radius_ > 0.0 ? &place_->body() : nullptr);
 }
 
 const PlacementRules* PlantsNode::rules() const { return placement_ ? &placement_->rules() : nullptr; }
 
 size_t PlantsNode::placementPending() const { return placement_ ? placement_->pending() : 0; }
 
-void PlantsNode::follow(double eyeX, double eyeZ) {
+void PlantsNode::setPlace(const Place* place) {
+    place_ = place;
+    const double radius = place && !place->body().flat() ? place->body().radius : 0.0;
+    if (radius == radius_) return;
+    radius_ = radius;
+    setRules(rulesRef_);
+}
+
+void PlantsNode::follow(const bromath::Vec3& eye) {
     store_.tick();
     if (!placement_) return;
+    double at[3] = {eye.x, eye.y, eye.z};
+    if (radius_ > 0.0) place_->toBody(eye, at);
     std::vector<PlantPlacement::Placed> placed;
     std::vector<CellKey> dropped;
-    placement_->update(eyeX, eyeZ, placed, dropped);
+    placement_->update(at, placed, dropped);
     const std::vector<float> none;
     for (const CellKey& key : dropped) {
         const auto it = leaves_.find(key);
         if (it != leaves_.end()) putLeaf(it, &none);
     }
-    for (const PlantPlacement::Placed& p : placed) putLeaf(leaves_.try_emplace(p.key).first, &p.records);
+    for (PlantPlacement::Placed& p : placed) {
+        // (On a round body a leaf's plants come relative to its origin on
+        // the body: where they stand in the place frame now.)
+        if (radius_ > 0.0) {
+            double origin[3];
+            placementOrigin(place_->body(), grid_, p.key, origin);
+            for (size_t r = 0; r + kPlantFloats <= p.records.size(); r += kPlantFloats) {
+                float* rec = p.records.data() + r;
+                const double b[3] = {origin[0] + rec[0], origin[1] + rec[1], origin[2] + rec[2]};
+                double q[3];
+                place_->toPlace(b, q);
+                for (int i = 0; i < 3; ++i) rec[i] = static_cast<float>(q[i]);
+            }
+        }
+        putLeaf(leaves_.try_emplace(p.key).first, &p.records);
+    }
+}
+
+void PlantsNode::placeMoved(const PlaceMove& move) {
+    if (radius_ <= 0.0) return;
+    const auto moved = [&](float* rec) {
+        const double p[3] = {rec[0], rec[1], rec[2]};
+        double q[3];
+        move.apply(p, q);
+        for (int i = 0; i < 3; ++i) rec[i] = static_cast<float>(q[i]);
+    };
+    for (auto it = leaves_.begin(); it != leaves_.end();) {
+        auto next = std::next(it);
+        Leaf& leaf = it->second;
+        for (size_t r = 0; r + kPlantFloats <= leaf.fixed.size(); r += kPlantFloats) moved(leaf.fixed.data() + r);
+        std::vector<float> placed;
+        if (leaf.placed > 0) {
+            const CellStore::Run& run = store_.runs().at(it->first.packed());
+            const float* from = store_.record(run.first + run.count - leaf.placed);
+            placed.assign(from, from + size_t{leaf.placed} * kPlantFloats);
+            for (size_t r = 0; r < placed.size(); r += kPlantFloats) moved(placed.data() + r);
+        }
+        putLeaf(it, &placed);
+        it = next;
+    }
+    // (Every leaf moved: the views take it all as changed.)
+    changedAll();
 }
 
 void PlantsNode::putLeaf(Leaves::iterator it, const std::vector<float>* placed) {

@@ -35,6 +35,7 @@
 
 #include "scene/nodes/mesh_node.h"
 #include "scene/world/cell_store.h"
+#include "scene/world/place.h"
 #include "scene/world/world_cells.h"
 
 #include <cstdint>
@@ -92,10 +93,20 @@ public:
     /// The rules the plants about the eye are placed by (null: none).
     void setRules(std::shared_ptr<const PlacementRules> rules);
     const PlacementRules* rules() const;
-    /// The eye this frame (the camera's, world metres): the leaves placed by
-    /// the rules come in about it and go behind it. Never waits for a
-    /// placement; a cell not placed yet is not drawn yet.
-    void follow(double eyeX, double eyeZ);
+    /// The eye this frame (the camera's, in the frame the plants stand in:
+    /// SceneView::world): the leaves placed by the rules come in about it
+    /// and go behind it. Never waits for a placement; a cell not placed yet
+    /// is not drawn yet.
+    void follow(const bromath::Vec3& eye);
+    /// The body it stands on, its graph's (SceneGraph keeps it set; null or
+    /// a flat body: the plane). On a round body the rules place on its
+    /// chart (world/plant_placement.h) and the plants stand in the place
+    /// frame; a new body places them again.
+    void setPlace(const Place* place);
+    /// The place frame moved (a re-anchor, SceneGraph::applyPlaceMove): on
+    /// a round body every plant takes the move, so it stands where it stood
+    /// on the body.
+    void placeMoved(const PlaceMove& move);
     /// Placement's leaves wanted and not yet placed.
     size_t placementPending() const;
 
@@ -212,6 +223,7 @@ private:
     void measure(Leaf& leaf, uint32_t first, uint32_t count);
     void writeHeader();
     void changedAll();
+    static constexpr uint8_t kHandRoot = 7;   // the plants set by hand on a round body
 
     std::string moduleSource_;
     uint64_t moduleSourceHash_ = 0;
@@ -221,6 +233,9 @@ private:
     int speciesCount_ = 0;
     float tallest_ = 0.0f;
     std::unique_ptr<PlantPlacement> placement_;
+    std::shared_ptr<const PlacementRules> rulesRef_;
+    const Place* place_ = nullptr;
+    double radius_ = 0.0;   // the body's the plants were placed on (0 the plane)
     Params params_;
     uint64_t generation_ = 0;
     struct Change {

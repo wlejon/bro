@@ -92,7 +92,7 @@ const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
     // The cells placed about the camera's eye.
-    node.follow(frame.world.eye.x, frame.world.eye.z);   // (placement is keyed on the body)
+    node.follow(frame.world.eye);   // (placement is keyed on the body)
     const PlantShaders* shaders = plantShaders(node);
     if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {
         node.setStats({});

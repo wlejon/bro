@@ -36,6 +36,7 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
             const std::string name = "plantsCanopyField" + std::to_string(names.size());
             brokit::noise::GlslOptions o;
             o.name = name;
+            o.dims3 = true;
             std::string glsl;
             if (!brokit::noise::treeToGlsl(f->encoded(), o, glsl, err)) return false;
             fields += glsl;
@@ -84,13 +85,16 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
 
     out = "// The plants' canopy (world/plant_canopy.h), written from their rules.\n";
     out += fields;
-    out += "vec2 plantsCanopy(vec2 p, out vec3 albedo) {\n";
-    out += "    float tau = 0.0, tops = 0.0;\n";
-    out += "    vec3 albs = vec3(0.0);\n";
-    out += body;
-    out += "    albedo = tau > 0.0 ? albs / tau : vec3(0.0);\n";
-    out += "    return vec2(1.0 - exp(-tau), tau > 0.0 ? tops / tau : 0.0);\n";
-    out += "}\n";
+    // (At a point of the plane, and of a round body's datum.)
+    for (const char* point : {"vec2", "vec3"}) {
+        out += std::string("vec2 plantsCanopy(") + point + " p, out vec3 albedo) {\n";
+        out += "    float tau = 0.0, tops = 0.0;\n";
+        out += "    vec3 albs = vec3(0.0);\n";
+        out += body;
+        out += "    albedo = tau > 0.0 ? albs / tau : vec3(0.0);\n";
+        out += "    return vec2(1.0 - exp(-tau), tau > 0.0 ? tops / tau : 0.0);\n";
+        out += "}\n";
+    }
     return true;
 }
 

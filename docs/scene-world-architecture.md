@@ -1575,9 +1575,25 @@ field is evaluated at is **split**: an integer part and a float fraction.
   2.5 times its neighbours'. Still frames at 2560×1364: 0.16 ms at 1.7 m,
   0.26 ms at 10 km, 0.36 ms at 400 km. Biomes (no body) unchanged but for
   9b's moved flowers and the fronds' wind phase.
-- **Not yet on the body:** the cover, the turf, the grass and the plants
-  (still on the anchor's tangent plane, so on a sphere they belong near the
-  eye only); the land's sun is one level about the eye (its ladder to
+- **The plants on the body** (`world/plant_placement.h`): placement's
+  leaves and candidates are the chart's, a face's, a candidate kept by the
+  face its point lies on and thinned by the chart's area there ((1+a²)(1+b²)
+  / (1+a²+b²)^1.5 of a chart square metre is ground, a and b the tangents),
+  its fields and ground read in 3D at its datum point split about its
+  leaf's origin, its record relative to that origin; `PlantsNode` turns a
+  leaf into the place frame as it arrives and moves every plant at a
+  re-anchor (a rigid move of the store, every shadow page over them
+  redrawn). Which leaves are in range is measured through the chart's
+  metric at the eye (a chart metre across a face's edge is 0.71 of the
+  ground's). The canopy module has a `vec3` overload the round fill calls
+  at the datum point. `bro_plant_placement_test`: on an Earth-radius body
+  across a face's edge, every plant on its ground, both faces' leaves,
+  as many a square metre on the edge as either side, the range reached
+  every way, the same plants with the frame anchored 30 km off, and each
+  where it stood on the body after a re-anchor.
+- **Not yet on the body:** the cover, the turf and the grass (still on the
+  anchor's tangent plane: their hashes are the place frame's, so a
+  re-anchor reshuffles them); the land's sun is one level about the eye (its ladder to
   kilometre texels comes with the plants' canopy on the body); the module
   gets no latitude or longitude (a spin axis is the world's: `at` is enough
   to compute them).

@@ -17,6 +17,10 @@
 //
 // The module defines
 //   vec2 plantsCanopy(vec2 p, out vec3 albedo)   x the cover, y the top (m)
+//   vec2 plantsCanopy(vec3 p, out vec3 albedo)   the same on a round body, p
+//                                                the datum's point (its
+//                                                fields' 3D trees, split
+//                                                about the fill's origin)
 // (shaders/ground/land_canopy.glsl is the module of no plants).
 
 #include <string>

@@ -100,6 +100,8 @@ void main() {
     // (The chart's point: the middle's plus the offset.)
     p += fills[b + 6].zw;
     LandSurface s = landSurface(LandPoint(p, h, n, datum, up));
+    vec3 leaves;
+    vec2 canopy = plantsCanopy(datum, leaves);
 #else
     float h = landHeight(p);
     // The normal from central differences a texel apart.
@@ -107,9 +109,9 @@ void main() {
     float hz0 = landHeight(p - vec2(0.0, t)), hz1 = landHeight(p + vec2(0.0, t));
     vec3 n = normalize(vec3(hx0 - hx1, 2.0 * t, hz0 - hz1));
     LandSurface s = landSurface(LandPoint(p, h, n, vec3(p.x, 0.0, p.y), vec3(0.0, 1.0, 0.0)));
-#endif
     vec3 leaves;
     vec2 canopy = plantsCanopy(p, leaves);
+#endif
 
     ivec3 at = ivec3(texel, int(f.w));
     imageStore(landHeights, at, vec4(h, max(canopy.y, 0.0), 0.0, 0.0));

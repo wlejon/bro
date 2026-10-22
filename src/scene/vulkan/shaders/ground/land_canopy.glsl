@@ -5,3 +5,7 @@ vec2 plantsCanopy(vec2 p, out vec3 albedo) {
     albedo = vec3(0.0);
     return vec2(0.0);
 }
+vec2 plantsCanopy(vec3 p, out vec3 albedo) {
+    albedo = vec3(0.0);
+    return vec2(0.0);
+}

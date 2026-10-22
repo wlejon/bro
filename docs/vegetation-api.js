@@ -326,6 +326,19 @@
  * script sampling the same trees (`genSingle2D`) reads the fields the
  * engine placed by. Hand-placed `plants` stay beside the placed ones.
  *
+ * On a round body (`scene.setBody`) the grids are the body's chart's: each
+ * cube face's leaves and candidates, a candidate kept by the face its point
+ * lies on (so a face's edge has neither a gap nor a double row) and thinned
+ * by the chart's stretch there (the plants as dense on the ground across a
+ * face as `spacing` says). Every field is read in 3D at the candidate's
+ * point on the body's datum (`genSingle3D` at that point, in the body's
+ * frame, reads them), so a rule written for a plane's x and z (an edge at
+ * a distance from the origin, a disc about a point) means something else
+ * there; `ground` is the land's own height tree, so the plants stand on
+ * the land. A plant stands in the place frame where its point on the body
+ * is, and the frame's re-anchors move it with everything else; hand-placed
+ * `plants` are given in the place frame.
+ *
  * What each view draws is planned on the GPU (scene_plants_gpu_plan.cpp):
  * the plants live in a store of runs a cell each (scene/world/cell_store.h),
  * uploaded where they change (a cell placed or dropped copies its run and

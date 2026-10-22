@@ -181,6 +181,7 @@ GrassNode* SceneGraph::createGrass(const std::string& name) {
 PlantsNode* SceneGraph::createPlants(const std::string& name) {
     auto node = std::make_unique<PlantsNode>(name);
     auto* ptr = node.get();
+    ptr->setPlace(&place_);
     nodes_[ptr->id()] = std::move(node);
     return ptr;
 }
@@ -324,10 +325,13 @@ void SceneGraph::setBody(const Body& body, const double bodyPoint[3]) {
     // built in the frame of the body it is given.
     place_.setBody(body, bodyPoint);
     hasBody_ = true;
-    // (A land on a new body is a new land.)
+    // (A land on a new body is a new land; the plants are placed again.)
     for (auto& [id, node] : nodes_)
-        if (node->type() == SceneNode::Type::Mesh)
-            if (LandNode* land = static_cast<MeshNode*>(node.get())->asLand()) land->setPlace(&place_);
+        if (node->type() == SceneNode::Type::Mesh) {
+            auto* mesh = static_cast<MeshNode*>(node.get());
+            if (LandNode* land = mesh->asLand()) land->setPlace(&place_);
+            if (PlantsNode* plants = mesh->asPlants()) plants->setPlace(&place_);
+        }
 }
 
 void SceneGraph::placeOrigin(double out[3]) const {
@@ -396,9 +400,12 @@ void SceneGraph::applyPlaceMove(const PlaceMove& m) {
         inv.at(i, 3) = static_cast<float>(-(r[i] * m.t[0] + r[3 + i] * m.t[1] + r[6 + i] * m.t[2]));
     }
     viewMatrix_ = bromath::mmul(viewMatrix_, inv);
-    for (const auto& [id, node] : nodes_)
+    for (const auto& [id, node] : nodes_) {
         if (node && node->type() == SceneNode::Type::Particles3D)
             static_cast<Particles3DNode*>(node.get())->placeMoved(m);
+        if (node && node->type() == SceneNode::Type::Mesh)
+            if (PlantsNode* plants = static_cast<MeshNode*>(node.get())->asPlants()) plants->placeMoved(m);
+    }
     if (physicsWorld_)
         physicsWorld_->move(JPH::Quat(static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]),
                                       static_cast<float>(q[3])).Normalized(),

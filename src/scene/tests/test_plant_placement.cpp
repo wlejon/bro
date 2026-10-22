@@ -16,6 +16,7 @@
 #include <FastNoise/Metadata.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -113,12 +114,15 @@ void testFields() {
     const float xs[5] = {0.0f, 10.0f, 20.5f, -33.0f, 7.0f}, zs[5] = {1.0f, -3.0f, 8.0f, 2.0f, 900.0f};
     float out[5];
     s->sample(xs, zs, 5, out);
-    bool same = true, varies = false;
+    float worst = 0.0f;
+    bool varies = false;
+    // (A single value splits its point about a double origin, the batch's
+    // floats do not: FastNoise2's simplex differs by ~1e-4 between them.)
     for (int i = 0; i < 5; ++i) {
-        same = same && std::abs(out[i] - s->at(xs[i], zs[i])) < 1e-5f;
+        worst = std::max(worst, std::abs(out[i] - s->at(xs[i], zs[i])));
         varies = varies || std::abs(out[i] - out[0]) > 1e-3f;
     }
-    check(same && varies, "a field sampled at points is its value at each");
+    check(worst < 5e-4f && varies, "a field sampled at points is its value at each (worst " + std::to_string(worst) + ")");
     const FieldRef other = field(simplex(0.05f), 8);
     check(std::abs(other->at(10.0f, -3.0f) - s->at(10.0f, -3.0f)) > 1e-4f, "another seed, another field");
     const FieldRef w = field(westOf(100.0f));
@@ -227,7 +231,8 @@ void testStream() {
     const auto run = [&](double x, double z) {
         last = -1.0;
         for (int i = 0; i < 10000; ++i) {
-            placement.update(x, z, placed, dropped);
+            const double eye[3] = {x, 0.0, z};
+            placement.update(eye, placed, dropped);
             for (const CellKey& k : dropped) resident.erase(k.packed());
             for (const auto& p : placed) {
                 placedTwice += resident.insert(p.key.packed()).second ? 0 : 1;
@@ -311,10 +316,10 @@ void testNode() {
     const uint64_t before = node.generation();
     node.setRules(rules);
     for (int i = 0; i < 1000 && (i == 0 || node.placementPending() > 0); ++i) {
-        node.follow(0.0, 0.0);
+        node.follow({0.0f, 0.0f, 0.0f});
         WorldWorkers::shared().drain();
     }
-    node.follow(0.0, 0.0);
+    node.follow({0.0f, 0.0f, 0.0f});
     size_t leaves = 0;
     for (int z = -3; z <= 3; ++z)
         for (int x = -3; x <= 3; ++x) leaves += leafDistance(node.cellGrid(), CellKey{x, z, 0, 0}, 0.0, 0.0) <= 100.0;
@@ -336,15 +341,138 @@ void testNode() {
 
     // Far off (on a leaf corner again): the placed leaves go, the hand's stay.
     for (int i = 0; i < 1000 && (i == 0 || node.placementPending() > 0); ++i) {
-        node.follow(10240.0, 0.0);
+        node.follow({10240.0f, 0.0f, 0.0f});
         WorldWorkers::shared().drain();
     }
-    node.follow(10240.0, 0.0);
+    node.follow({10240.0f, 0.0f, 0.0f});
     bool handKept = false;
     for (const CellContent& c : node.cells()) handKept = handKept || (c.key.x == 0 && c.key.z == 0 && c.count == 2);
     check(handKept && node.cells().size() == leaves + 1, "the hand's plants stay as the eye leaves");
     node.setRules(nullptr);
     check(node.plantCount() == 2 && node.cells().size() == 1, "rules cleared: the placed plants go");
+}
+
+// Every plant of `node` where it stands on the body (through `place`).
+std::vector<std::array<double, 3>> standing(const PlantsNode& node, const Place& place) {
+    std::vector<std::array<double, 3>> out;
+    for (const CellContent& c : node.cells())
+        for (uint32_t i = c.first; i < c.first + c.count; ++i) {
+            const float* p = node.store().record(i);
+            std::array<double, 3> b;
+            place.toBody(bromath::Vec3{p[0], p[1], p[2]}, b.data());
+            out.push_back(b);
+        }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// On an Earth-radius body, the plants placed on its chart: on the datum
+// (no ground), across a cube face's edge with neither a gap nor a double
+// row, the same wherever the place frame is anchored, and kept where they
+// stand on the body when it re-anchors.
+void testRound() {
+    const double R = 6371000.0;
+    Body body;
+    body.radius = R;
+    const double s = std::sqrt(0.5);
+    // On the edge between +X and +Y, a little way along it.
+    double at[3] = {R * s, R * s, 0.0};
+    const auto settle = [](PlantsNode& node, const bromath::Vec3& eye) {
+        for (int i = 0; i < 1000 && (i == 0 || node.placementPending() > 0); ++i) {
+            node.follow(eye);
+            WorldWorkers::shared().drain();
+        }
+        node.follow(eye);
+    };
+    const auto rules = std::make_shared<PlacementRules>(oneLayer(16.0f, nullptr));
+    float species[PlantsNode::kSpeciesFloats] = {10.0f, 0.0f, 3.0f};
+    const auto made = [&](Place& place, const double eyeOnBody[3]) {
+        auto node = std::make_unique<PlantsNode>();
+        node->setSpecies(species, 1);
+        node->setPlace(&place);
+        auto r = std::make_shared<PlacementRules>(*rules);
+        r->range = 400.0f;
+        node->setRules(r);
+        settle(*node, place.toPlace(eyeOnBody));
+        return node;
+    };
+
+    Place place;
+    place.setBody(body, at);
+    auto node = made(place, at);
+    const auto a = standing(*node, place);
+    bool onDatum = !a.empty();
+    std::set<int> roots;
+    for (const CellContent& c : node->cells()) roots.insert(c.key.root);
+    // (The rules' ground is 3 m everywhere.)
+    for (const auto& b : a)
+        onDatum = onDatum && std::abs(std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]) - (R + 3.0)) < 0.01;
+    check(onDatum, "on a round body every plant stands on its ground");
+    check(roots.size() == 2, "the plants about an edge are both faces'");
+    // As many a square metre on the ground near the edge, and either side
+    // of it, as the spacing says: the plants within 150 m of the eye's
+    // ground and of two points 120 m off the edge, one a 16 m square (~276
+    // in each; the chart's metres are 1.4 times as many there).
+    const auto within = [&](const double c[3], double r) {
+        size_t n = 0;
+        for (const auto& b : a) n += std::hypot(b[0] - c[0], b[1] - c[1], b[2] - c[2]) < r ? 1 : 0;
+        return n;
+    };
+    const double off = 120.0 / R;
+    const double pX[3] = {R * std::cos(0.7853981634 - off), R * std::sin(0.7853981634 - off), 0.0};
+    const double pY[3] = {R * std::cos(0.7853981634 + off), R * std::sin(0.7853981634 + off), 0.0};
+    const size_t nEdge = within(at, 150.0), nX = within(pX, 150.0), nY = within(pY, 150.0);
+    const double expect = 3.14159265 * 150.0 * 150.0 / 256.0;
+    check(std::abs(double(nEdge) - expect) < 0.12 * expect && std::abs(double(nX) - expect) < 0.12 * expect &&
+              std::abs(double(nY) - expect) < 0.12 * expect,
+          "as many plants on the edge as either side of it (" + std::to_string(nEdge) + ", " + std::to_string(nX) +
+              ", " + std::to_string(nY) + ")");
+
+    // Placed as far as the range on the ground in every direction, across
+    // the edge (where the chart's metre is 0.71 of the ground's) as along
+    // it, and not much past it: the farthest plant in each of 16 sectors
+    // about the eye.
+    {
+        // (The ground's tangents at the eye: along the edge, and across it.)
+        const double e1[3] = {0.0, 0.0, 1.0}, e2[3] = {s, -s, 0.0};
+        double far[16] = {};
+        double farthest = 0.0;
+        for (const auto& b : a) {
+            const double d[3] = {b[0] - at[0], b[1] - at[1], b[2] - at[2]};
+            const double x = d[0] * e1[0] + d[1] * e1[1] + d[2] * e1[2], y = d[0] * e2[0] + d[1] * e2[1] + d[2] * e2[2];
+            const double r = std::hypot(x, y);
+            const int sector = static_cast<int>(std::floor((std::atan2(y, x) + 3.14159265) / 6.2831853 * 16.0)) & 15;
+            far[sector] = std::max(far[sector], r);
+            farthest = std::max(farthest, r);
+        }
+        double nearest = 1e30;
+        for (double f : far) nearest = std::min(nearest, f);
+        check(nearest > 0.93 * 400.0 && farthest < 400.0 + 64.0 * 1.5 * 1.42,
+              "placed to the range on the ground every way (" + std::to_string(nearest) + " .. " +
+                  std::to_string(farthest) + " m)");
+    }
+
+    // The same plants with the place frame anchored 30 km away.
+    Place far;
+    const double fa = 30000.0 / R;
+    const double farPoint[3] = {R * s * std::cos(fa), R * s * std::cos(fa), R * std::sin(fa)};
+    far.setBody(body, farPoint);
+    auto other = made(far, at);
+    const auto b = standing(*other, far);
+    bool same = a.size() == b.size();
+    for (size_t i = 0; same && i < a.size(); ++i)
+        same = std::hypot(a[i][0] - b[i][0], a[i][1] - b[i][1], a[i][2] - b[i][2]) < 0.02;
+    check(same, "the same plants wherever the place frame is anchored");
+
+    // A re-anchor: each plant where it stood on the body.
+    PlaceMove move;
+    check(place.anchorAt(farPoint, move), "the place re-anchors");
+    node->placeMoved(move);
+    const auto c = standing(*node, place);
+    bool kept = a.size() == c.size();
+    for (size_t i = 0; kept && i < a.size(); ++i)
+        kept = std::hypot(a[i][0] - c[i][0], a[i][1] - c[i][1], a[i][2] - c[i][2]) < 0.02;
+    check(kept, "a re-anchor keeps every plant where it stood on the body");
 }
 
 }  // namespace
@@ -356,6 +484,7 @@ int main() {
     testStream();
     testStore();
     testNode();
+    testRound();
     std::printf("plant placement: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
