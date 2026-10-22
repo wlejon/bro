@@ -163,11 +163,15 @@ void SceneEnvironment::release(SceneVkAllocator& allocator) {
 // --- Bake -------------------------------------------------------------------
 
 void SceneEnvironment::update(SceneGpu& gpu, VkCommandBuffer cmd, SceneRenderer& renderer) {
+    // The split sum's BRDF table serves every specular sky, the atmosphere's
+    // and the reflection probes' as well as an environment's: it is made
+    // whether or not one is loaded.
+    ensureBrdfLut(gpu, cmd);
     if (renderer.environmentGeneration() == generation_) return;
     generation_ = renderer.environmentGeneration();
     release(gpu.allocator);
     if (!renderer.hasEnvironment()) return;
-    if (!ensureBrdfLut(gpu, cmd) || !bake(gpu, cmd, renderer)) {
+    if (!brdfLut_.isValid() || !bake(gpu, cmd, renderer)) {
         LOG_ERROR("SceneEnvironment: baking '%s' failed; the scene keeps its flat ambient",
                   renderer.environmentPath().c_str());
         release(gpu.allocator);

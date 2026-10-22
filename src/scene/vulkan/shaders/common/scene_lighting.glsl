@@ -896,6 +896,22 @@ vec3 probeRadiance(vec3 pos, vec3 R, float rough, out float w) {
     return textureLod(texReflectionProbe, dir, rough * lighting.probeParams.z).rgb;
 }
 
+// The sky's radiance along `dir` as the eye sees it (the sky-view table, the
+// sky drawn behind the scene): what a smooth surface near the eye mirrors.
+// The table is the eye's sky, so the sky over a surface only while the eye
+// is low in the air (the froxels' share, skyView.w).
+vec3 sceneSkyAlong(vec3 dir) {
+    vec3 ro = atmOrigin(vec3(0.0));
+    vec3 up = normalize(ro), xAxis, yAxis;
+    float muS;
+    atmSunFrame(up, xAxis, yAxis, muS);
+    vec2 h = vec2(dot(dir, xAxis), dot(dir, yAxis));
+    float hl = length(h);
+    float cosAz = hl > 1e-5 ? h.x / hl : 1.0;
+    vec2 uv = atmSkyViewUv(lighting.atm.skyView.x, dot(dir, up), cosAz);
+    return textureLod(texAtmSkyView, uv, 0.0).rgb * (lighting.atm.sunIlluminance.rgb / ATM_TABLE_SCALE);
+}
+
 // Ambient (indirect) light on `s`, Karis' split sum: with the atmosphere its
 // sky light (SH irradiance on the diffuse part, SH radiance on the specular),
 // which takes precedence over an environment; with an environment the
@@ -941,7 +957,11 @@ vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
         mat3 frame;
         atmSkyLightSh(s.position, c, frame);   // once, for both
         vec3 irradiance = atmShIrradiance(c, frame, nI);
-        vec3 specular = atmShRadiance(c, frame, R) * (F * brdf.x + brdf.y);
+        vec3 sky = atmShRadiance(c, frame, R);
+        // A smooth surface (water, glass) mirrors the sky itself, not the
+        // SH's smooth mean of it: the sky-view table's, low in the air.
+        float sharp = (1.0 - smoothstep(0.12, 0.4, s.roughness)) * lighting.atm.skyView.w;
+        if (sharp > 0.0) sky = mix(sky, sceneSkyAlong(R), sharp);        vec3 specular = sky * (F * brdf.x + brdf.y);
         if (probed) {
             irradiance = pgShIrradiance(pr, pg, pb, nI);
             specular *= sceneSkySeen(pgShIrradiance(pr, pg, pb, R), atmShIrradiance(c, frame, R));
