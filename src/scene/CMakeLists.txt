@@ -277,6 +277,11 @@ if(BRO_BUILD_TESTS)
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_atmosphere_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 
+    # FastNoise2 trees as GLSL (brokit's noise_glsl) against FastNoise2.
+    add_executable(bro_noise_glsl_test tests/test_noise_glsl.cpp)
+    target_link_libraries(bro_noise_glsl_test PRIVATE brokit_noise_glsl bro_render bro_util Vulkan::Vulkan)
+    target_include_directories(bro_noise_glsl_test PRIVATE ${bro_SOURCE_DIR}/src)
+
     # The probe grid's world (the ground's height, the canopy, the sun
     # through it) against the scene it was made from.
     add_executable(bro_probe_grid_gpu_test tests/test_probe_grid_gpu.cpp)
