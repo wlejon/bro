@@ -123,8 +123,9 @@ private:
     double recordWorld(SceneFrame& frame, WorldStream& stream);
     /// Box `b`'s ground, world (x0, z0, x1, z1) m.
     void boxRect(const ProbeBox& b, double rect[4]) const;
-    /// The plants of the canopy's nodes' cells over `b`.
-    size_t plantsOver(const ProbeBox& b) const;
+    /// A world box's work, in plants splatted into the coarsest cascade
+    /// (kWorldBoxPlants).
+    double boxUnits(const ProbeBox& b) const;
     double recordTraces(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
 
     /// The canopy this frame: its plants nodes, the cascades their changes

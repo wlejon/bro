@@ -9,13 +9,20 @@
 // points spread evenly through it (an R3 sequence, rotated by the plant's
 // seed), each carrying its share of the crown's volume into the voxel it
 // falls in, so the sum a voxel holds is the extinction times the share of
-// it the crowns fill, and the canopy's total is exact at any voxel size.
+// it the crowns fill.
 //
-// The points are drawn uniform through the cylinder about the crown (its
-// widest radius, its height), and those outside the crown (the disc of
-// radius plantCrownWidth(v) at its height v, -1 the foot .. 1 the top)
-// dropped; the crown's volume (integrated over v) is shared among the points
-// kept, so a crown carries all of it however few points it has.
+// The points are drawn uniform through the crown's block (its widest
+// radius about its axis, its height) cut to the job's box, and those outside
+// the crown (the disc of radius plantCrownWidth(v) at its height v, -1 the
+// foot .. 1 the top) dropped: a box that is a strip of a cascade (what a
+// step of the eye leaves stale) spends its points on the slice of the crown
+// it holds, not on the whole crown for the slice. (Drawn through the whole
+// crown, a strip of the finest cascade spent 0.2 ms on 400 plants.) A crown
+// wholly in the box shares its volume (integrated over v) among the points
+// kept, so it carries all of it however few points it has, and the
+// canopy's total is exact at any voxel size; a crown the box cuts carries
+// what its slice holds of it, the slice's volume times the share of its
+// points kept.
 
 layout(local_size_x = 64) in;
 
@@ -36,15 +43,13 @@ void deposit(int idx, vec4 v) {
 
 shared uint kept;
 
-// Point q of K in the crown: its place relative to the crown's middle, or
-// false when it falls outside the crown.
-bool crownPoint(PlantCrown cr, vec3 turn, int q, float reach, out vec3 at) {
+// Point q of K in the block from lo to hi (xz, relative to the crown's
+// middle): its place, or false when it falls outside the crown.
+bool crownPoint(PlantCrown cr, vec3 turn, int q, vec2 lo, vec2 hi, out vec3 at) {
     vec3 u = fract(turn + float(q + 1) * vec3(0.8191725134, 0.6710436067, 0.5497004779));
-    float v = 2.0 * u.x - 1.0;
-    float r = sqrt(u.y) * reach;
-    float a = 2.0 * PI * u.z;
-    at = vec3(cos(a) * r, v * cr.radii.y, sin(a) * r);
-    return r <= plantCrownWidth(cr, v) * cr.radii.x;
+    float v = 2.0 * u.y - 1.0;
+    at = vec3(mix(lo.x, hi.x, u.x), v * cr.radii.y, mix(lo.y, hi.y, u.z));
+    return length(at.xz) <= plantCrownWidth(cr, v) * cr.radii.x;
 }
 
 void main() {
@@ -60,7 +65,6 @@ void main() {
     float top = pgTop();
     float voxY = top / float(PG_LAYERS_Y);
     vec3 turn = vec3(plantRand(p.seed, 101u), plantRand(p.seed, 102u), plantRand(p.seed, 103u));
-    float cylinder = PI * reach * reach * 2.0 * ry;
     // The crown's volume: pi rx^2 ry times the integral of its width squared
     // over v (32 midpoints).
     float w2 = 0.0;
@@ -77,21 +81,36 @@ void main() {
     vec2 lo = cas.xy + vec2(box.xy) * vox, hi = cas.xy + vec2(box.zw) * vox;
     if (center.x + reach < lo.x || center.x - reach > hi.x || center.z + reach < lo.y || center.z - reach > hi.y)
         return;
+    // The crown's block cut to the box, about the crown's middle.
+    vec2 from = max(vec2(-reach), lo - center.xz), to = min(vec2(reach), hi - center.xz);
+    bool whole = all(equal(from, vec2(-reach))) && all(equal(to, vec2(reach)));
+    // Its points: the whole block's (PG_SAMPLES_PER_VOXEL a voxel, within
+    // PG_MIN_SAMPLES .. PG_MAX_SAMPLES) times the share of it the slice is,
+    // so a crown is sampled as finely whichever box splats it.
+    float block = 4.0 * reach * reach * 2.0 * ry;
+    float slice = (to.x - from.x) * (to.y - from.y) * 2.0 * ry;
     float voxVol = vox * vox * voxY;
-    int K = clamp(int(cylinder / voxVol * PG_SAMPLES_PER_VOXEL), PG_MIN_SAMPLES, PG_MAX_SAMPLES);
-    // The points the crown keeps, then each one's share of its
-    // extinction-volume over the voxel's.
-    if (gl_LocalInvocationIndex == 0u) kept = 0u;
-    barrier();
-    uint mine = 0u;
+    float full = clamp(block / voxVol * PG_SAMPLES_PER_VOXEL, float(PG_MIN_SAMPLES), float(PG_MAX_SAMPLES));
+    int K = max(int(full * slice / block), PG_MIN_SAMPLES);
+    // Each point's share of the extinction-volume over the voxel's: of a
+    // whole crown, its volume over the points it keeps (counted first; the
+    // branch is the workgroup's, so its barriers are uniform); of a slice,
+    // the slice's over its points.
     vec3 at;
-    for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
-        if (crownPoint(cr, turn, q, reach, at)) ++mine;
-    atomicAdd(kept, mine);
-    barrier();
-    float share = s.density * volume / (float(max(kept, 1u)) * voxVol);
+    float share = slice / float(K);
+    if (whole) {
+        if (gl_LocalInvocationIndex == 0u) kept = 0u;
+        barrier();
+        uint mine = 0u;
+        for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
+            if (crownPoint(cr, turn, q, from, to, at)) ++mine;
+        atomicAdd(kept, mine);
+        barrier();
+        share = volume / float(max(kept, 1u));
+    }
+    share *= s.density / voxVol;
     for (int q = int(gl_LocalInvocationIndex); q < K; q += 64) {
-        if (!crownPoint(cr, turn, q, reach, at)) continue;
+        if (!crownPoint(cr, turn, q, from, to, at)) continue;
         vec3 pt = center + at;
         float ground = pgBase(pgGround(c, pt.xz));
         float h = pt.y - ground;

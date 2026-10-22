@@ -580,14 +580,21 @@ tiles it wants) and gives up its own budget.
   the walk behind refresh traces taking the slack it needed, until the
   strip was seen and it was required, with that strip's fresh traces, in
   one frame: 0.86-0.88 ms of world on a 0.45 ms budget, frame 80 over in
-  every walk.) The probe grid's world is charged by the plants it splats,
-  plus a pass's fixed work (85,000 plant-equivalents) and each box's
-  (38,000): a strip of a few hundred plants costs 0.16 ms, four boxes
-  0.30, a cascade's rebuild while placement streams in 0.4-0.85 ms. Charged
-  as one job, its cost learned from the rebuilds priced every strip dear.
-  Golden walk, three rounds interleaved: 2, 3 and 3 of 150 frames over
-  against 2, 1 and 5, frame 80 over in one walk of three against all
-  three; the flyover none over against one each.
+  every walk.) The probe grid's world is charged in plants splatted into
+  the coarsest cascade: each box's stages (16,000), its sun's march out
+  through its cascade and each coarser one (16,000 a cascade: the march is
+  latency-bound, so a strip costs about what a cascade does), and the
+  plants of the cells over it, each by the share of the cell the box
+  covers and dearer in a finer cascade (at most 64 times). The splat
+  samples only the slice of a crown that falls in its box, at the whole
+  crown's points a voxel: drawn through whole crowns, a strip of the
+  finest cascade cost 0.21 ms, almost all of it points outside the strip,
+  and its world waited unseen behind the shadow pages' carry until it was
+  required (biomes' golden walk, frame 80: 0.37 ms granted on a 0.43 ms
+  budget). Sliced, the strip costs 0.09 ms, a coarsest cascade's 0.025 ms,
+  the four remade at once 1.0 ms; the walk's frame 80 ran 2.75-2.83 ms
+  against 2.82-3.08 over six walks each, and the stills are as alike as two
+  runs of either.
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
   default. A kind's cost a unit is learned from its span's ms over its
   units: the first measurement replaces the guess, and each later one pulls

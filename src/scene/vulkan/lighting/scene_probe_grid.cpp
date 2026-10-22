@@ -51,12 +51,21 @@ double probeRays(const ProbeBox& b) {
 // quarter of a degree, as cosine): a voxel's shade does not move a texel.
 constexpr float kSunTurnCos = 0.99999048f;
 
-// A world pass's fixed work in plants splatted, and each box's: on the
-// 4090 about 0.11 ms a pass and 0.05 ms a box whatever they splat (one
-// strip of a few hundred plants 0.16 ms, four 0.30 ms; a cascade's rebuild
-// under streaming placement 0.4-0.85 ms).
-constexpr double kWorldPassPlants = 85000.0;
-constexpr double kWorldBoxPlants = 38000.0;
+// A world box's work is counted in plants splatted into the coarsest
+// cascade (about 1.2 ns each on the 4090): its stages' fixed work, about
+// 0.02 ms whatever they splat; its sun's, whose rays march out through its
+// cascade and each coarser one, about 0.02 ms a cascade crossed however few
+// voxels start them (the march is latency-bound); and its plants, each a
+// finer cascade's dearer by the voxels its crown fills there (the splat
+// samples a crown PG_SAMPLES_PER_VOXEL points a voxel), to at most
+// kWorldPlantWeight (it samples a whole crown with PG_MIN_SAMPLES to
+// PG_MAX_SAMPLES points, and a strip a slice of that: a plant of a strip of
+// the finest cascade costs about 50 of the coarsest's). A strip of the
+// finest cascade costs about 0.1 ms, of the coarsest 0.025 ms, and the four
+// cascades remade at once 1.0 ms.
+constexpr double kWorldBoxPlants = 16000.0;
+constexpr double kWorldCascadePlants = 16000.0;
+constexpr double kWorldPlantWeight = 64.0;
 
 constexpr uint32_t kVoxelsPerCascade = PG_VOXELS * PG_VOXELS * PG_LAYERS_Y;
 constexpr VkDeviceSize kSumBytesPerCascade = VkDeviceSize{kVoxelsPerCascade} * 16u;
@@ -339,8 +348,8 @@ void SceneProbeGrid::offer(SceneFrame& frame, WorldService& service) {
         uint64_t canopy = 0;
         for (const auto& [id, generation] : canopySeen_) canopy += generation;
         if (canopy != unitsCanopy_ || rects != unitsRects_) {
-            worldUnits_ = kWorldPassPlants;
-            for (const ProbeBox& b : boxes) worldUnits_ += kWorldBoxPlants + static_cast<double>(plantsOver(b));
+            worldUnits_ = 0.0;
+            for (const ProbeBox& b : boxes) worldUnits_ += boxUnits(b);
             unitsRects_ = std::move(rects);
             unitsCanopy_ = canopy;
         }
@@ -567,14 +576,26 @@ bool cellOver(const bromath::AABB3& cb, const double rect[4]) {
 
 }  // namespace
 
-size_t SceneProbeGrid::plantsOver(const ProbeBox& b) const {
+double SceneProbeGrid::boxUnits(const ProbeBox& b) const {
+    const int cascades = std::min(grid_.config().cascades, PG_MAX_CASCADES);
+    const double r = grid_.spacing(cascades - 1) / grid_.spacing(b.cascade);
+    // Its plants: each cell's by the share of it over the box (a cell is
+    // wider than a strip, whose splat finds most of the cell's crowns
+    // outside it and is done with them at once).
     double rect[4];
     boxRect(b, rect);
-    size_t n = 0;
+    double plants = 0.0;
     for (const Canopy& node : canopy_)
-        for (const CellContent& cell : node.node->cells())
-            if (cellOver(cell.bounds, rect)) n += cell.count;
-    return n;
+        for (const CellContent& cell : node.node->cells()) {
+            const bromath::AABB3& cb = cell.bounds;
+            const double w = std::min<double>(cb.max.x, rect[2]) - std::max<double>(cb.min.x, rect[0]);
+            const double d = std::min<double>(cb.max.z, rect[3]) - std::max<double>(cb.min.z, rect[1]);
+            if (w <= 0.0 || d <= 0.0) continue;
+            const double area = std::max(static_cast<double>(cb.max.x - cb.min.x) * (cb.max.z - cb.min.z), 1e-6);
+            plants += cell.count * std::min(w * d / area, 1.0);
+        }
+    return kWorldBoxPlants + kWorldCascadePlants * static_cast<double>(cascades - b.cascade) +
+           std::min(r * r, kWorldPlantWeight) * plants;
 }
 
 double SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
@@ -609,8 +630,9 @@ double SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
     // Each box's plants: each node's in its cells over the box, a workgroup
     // a plant.
     std::vector<uint32_t> list;
-    double units = kWorldPassPlants + kWorldBoxPlants * static_cast<double>(boxes.size());
+    double units = 0.0;
     for (const ProbeBox& b : boxes) {
+        units += boxUnits(b);
         double rect[4];
         boxRect(b, rect);
         for (const Canopy& node : canopy_) {
@@ -620,7 +642,6 @@ double SceneProbeGrid::recordWorld(SceneFrame& frame, WorldStream& stream) {
                 for (uint32_t i = cell.first; i < cell.first + cell.count; ++i) list.push_back(i);
             }
             if (list.empty()) continue;
-            units += static_cast<double>(list.size());
             const VkDeviceSize bytes = list.size() * sizeof(uint32_t);
             const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes);
             if (!slice) continue;
