@@ -85,6 +85,29 @@ LandSurface landSurface(LandPoint q) {
     assert(n.rows > 100 && n.width < 4.8 && n.rms < 0.5,
            `the light's edge on its height is narrow and straight (${n.rows} rows, ${n.width.toFixed(2)} px wide, ${n.rms.toFixed(2)} px off its line)`);
 
+    // Detail finer than a texel (a 2 m Simplex, from 1 km a texel ~7 m): a
+    // texel holds its mean (the fill samples the tree a texel apart,
+    // FN_FOOTPRINT), not a point of it each, which flecks the view.
+    land.setLand({
+        height: N('Simplex', { 'Feature Scale': 2 }),
+        surface: 'LandSurface landSurface(LandPoint q) { return landSurfaceOf(vec3(clamp(0.4 + 0.35 * q.height, 0.0, 1.0))); }',
+    });
+    light.direction = [0, -1, 0];
+    frames(20);
+    let fleck = 0;
+    {
+        const img = scn.captureFrame();
+        let sum = 0, sum2 = 0, k = 0;
+        for (let y = S / 4; y < 3 * S / 4; y++)
+            for (let x = S / 4; x < 3 * S / 4; x++) {
+                const v = img.data[(y * img.width + x) * 4 + 1];
+                sum += v; sum2 += v * v; k++;
+            }
+        const mean = sum / k;
+        fleck = Math.sqrt(Math.max(sum2 / k - mean * mean, 0));
+        assert(mean > 20 && fleck < 3, `detail finer than a texel is its mean (mean ${mean.toFixed(1)}, sd ${fleck.toFixed(2)})`);
+    }
+
     console.log(`test_land_fragment: OK (surface ${a.width.toFixed(2)} px wide, ${a.rms.toFixed(2)} off; ` +
-                `light ${n.width.toFixed(2)} px wide, ${n.rms.toFixed(2)} off)`);
+                `light ${n.width.toFixed(2)} px wide, ${n.rms.toFixed(2)} off; fine detail sd ${fleck.toFixed(2)})`);
 }

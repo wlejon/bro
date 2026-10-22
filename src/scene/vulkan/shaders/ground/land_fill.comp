@@ -29,6 +29,12 @@ layout(set = 0, binding = 6, rgba32f) uniform readonly image2DArray landGridImag
 vec4 landGridLoad(ivec3 t) { return imageLoad(landGridImage, t); }
 #include "ground/land_grid.glsl"
 
+// The module's noise sampled a texel apart (brokit's noise_glsl): a coarse
+// tile's texel holds the detail it can carry, its finer octaves at their
+// mean, not a point of them each (a far mountain's snow and a coast from
+// orbit flecked texel by texel).
+float landFootprint = 0.0;
+#define FN_FOOTPRINT landFootprint
 #include "ground/scene_land_layer.glsl"
 
 vec4 landData(int i) { return landDataBuffer.words[clamp(i, 0, 63)]; }
@@ -80,6 +86,7 @@ void main() {
     vec4 f = fills[tile * (LF_TILE_WORDS / 4)];
     float t = f.z;
     vec2 p = f.xy + (vec2(texel) + 0.5) * t;
+    landFootprint = t;
 
 #ifdef LAND_ROUND
     uint b = tile * (LF_TILE_WORDS / 4);

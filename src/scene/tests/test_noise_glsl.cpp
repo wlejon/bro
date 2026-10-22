@@ -36,6 +36,8 @@ int failures = 0;
 // The origin the points are relative to.
 double origin[3] = {0.0, 0.0, 0.0};
 bool far() { return origin[0] != 0.0 || origin[1] != 0.0 || origin[2] != 0.0; }
+// The spacing the GLSL samples at (FN_FOOTPRINT; 0: not defined).
+float footprint = 0.0f;
 
 // A tree built as FastNoise2's own data, its members set by name.
 struct Tree {
@@ -129,6 +131,7 @@ struct Gpu {
         if (far())
             src += "#define FN_ORIGIN2 FnO2(pc.ox, pc.oy)\n"
                    "#define FN_ORIGIN3 FnO3(pc.ox, pc.oy, pc.oz)\n";
+        if (footprint > 0.0f) src += "#define FN_FOOTPRINT " + std::to_string(footprint) + "\n";
         src += field +
                "layout(set = 0, binding = 0) readonly buffer In { vec4 p[]; } i;\n"
                "layout(set = 0, binding = 1) writeonly buffer Out { float v[]; } o;\n"
@@ -494,6 +497,106 @@ void suite(Gpu& gpu) {
 
 }  // namespace
 
+// FN_FOOTPRINT: a tree sampled far apart fades its lattice noises to their
+// means, its fine octaves first (a ridged octave to its mean ridge); sampled
+// close it is the tree, to float rounding.
+void bandLimits(Gpu& gpu) {
+    std::vector<float> points(512 * 4, 0.0f);
+    uint32_t rng = 777;
+    for (float& v : points) {
+        rng = rng * 1664525u + 1013904223u;
+        v = (static_cast<float>(rng >> 8) / 16777216.0f * 2.0f - 1.0f) * 3000.0f;
+    }
+    auto run = [&](NodeData* root, int dim, float fp, std::vector<float>& out) {
+        brokit::noise::GlslOptions options;
+        options.dims2 = dim == 2;
+        options.dims3 = dim == 3;
+        std::string glsl, error;
+        if (!brokit::noise::treeToGlsl(Metadata::SerialiseNodeData(root), options, glsl, error)) {
+            std::printf("FAIL band limits: %s\n", error.c_str());
+            ++failures;
+            return false;
+        }
+        footprint = fp;
+        const bool ok = gpu.run(glsl, dim, points, 1337, out);
+        footprint = 0.0f;
+        if (!ok) ++failures;
+        return ok;
+    };
+    auto expect = [&](bool ok, const std::string& what) {
+        std::printf("%s band limits: %s\n", ok ? "ok  " : "FAIL", what.c_str());
+        if (!ok) ++failures;
+    };
+    auto worstOff = [](const std::vector<float>& v, float want) {
+        float w = 0.0f;
+        for (float x : v) w = std::max(w, std::abs(x - want));
+        return w;
+    };
+    auto variance = [](const std::vector<float>& v) {
+        double m = 0.0, m2 = 0.0;
+        for (float x : v) m += x, m2 += static_cast<double>(x) * x;
+        m /= static_cast<double>(v.size());
+        return m2 / static_cast<double>(v.size()) - m * m;
+    };
+
+    for (int dim : {2, 3}) {
+        // A lattice noise of a range: its middle from far apart.
+        {
+            Tree t;
+            NodeData* n = t.node("Simplex");
+            t.var(n, "Output Min", 0.0f);
+            t.var(n, "Output Max", 90.0f);
+            std::vector<float> v;
+            if (run(n, dim, 1e9f, v)) {
+                const float off = worstOff(v, 45.0f);
+                expect(off < 1e-4f, std::to_string(dim) + "D a ranged Simplex far apart is its middle (worst " +
+                                        std::to_string(off) + " off 45)");
+            }
+        }
+        for (const char* type : {"FractalFBm", "FractalRidged"}) {
+            const bool ridged = std::strcmp(type, "FractalRidged") == 0;
+            Tree t;
+            NodeData* f = t.node(type);
+            NodeData* s = t.node("Simplex");
+            t.src(f, "Source", s);
+            t.var(f, "Octaves", 7);
+            t.var(f, "Lacunarity", 2.0f);
+            t.hyb(f, "Gain", nullptr, 0.5f);
+            t.hyb(f, "Weighted Strength", nullptr, 0.0f);
+            std::vector<float> exact, close, wide;
+            if (!run(f, dim, 0.0f, exact) || !run(f, dim, 1e-3f, close) || !run(f, dim, 1e9f, wide)) continue;
+            const std::string name = std::to_string(dim) + "D " + type;
+            float apart = 0.0f;
+            for (size_t k = 0; k < exact.size(); ++k) apart = std::max(apart, std::abs(exact[k] - close[k]));
+            // (To float rounding: in 2D the compiler fuses the tree's
+            // products differently with a footprint, 6e-5 at worst.)
+            expect(apart < 2e-4f, name + " sampled a millimetre apart is the tree (worst " + std::to_string(apart) +
+                                      " off)");
+            // Every octave at its mean: 0 for fBm, (1 - 2 E|n|) a unit of
+            // amplitude for ridged (E|n| of Simplex: 0.4761 in 2D, 0.3635 in 3D).
+            double want = 0.0;
+            if (ridged)
+                for (int i = 0; i < 7; ++i) want += (1.0 - 2.0 * (dim == 2 ? 0.4761 : 0.3635)) * std::pow(0.5, i);
+            const float off = worstOff(wide, static_cast<float>(want));
+            expect(off < 1e-4f, name + " far apart is its octaves' means (worst " + std::to_string(off) + " off " +
+                                    std::to_string(want) + ")");
+            // Sampled further apart, less of its detail: its variance falls.
+            double last = variance(exact);
+            std::string seen = std::to_string(last);
+            bool falls = true;
+            for (float fp : {5.0f, 20.0f, 80.0f}) {
+                std::vector<float> v;
+                if (!run(f, dim, fp, v)) break;
+                const double var = variance(v);
+                falls = falls && var < last;
+                seen += " " + std::to_string(var);
+                last = var;
+            }
+            expect(falls, name + " sampled 0, 5, 20, 80 apart (a cell 100): variance " + seen);
+        }
+    }
+}
+
 int main() {
     std::printf("=== bro_noise_glsl_test: FastNoise2 trees as GLSL against FastNoise2 ===\n");
     render::VulkanContextConfig cfg;
@@ -511,6 +614,8 @@ int main() {
     origin[1] = -3712345.6789;
     origin[2] = 2876543.21;
     suite(gpu);
+    origin[0] = origin[1] = origin[2] = 0.0;
+    bandLimits(gpu);
 
     // One not ported is refused by name.
     {
