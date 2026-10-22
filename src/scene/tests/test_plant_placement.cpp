@@ -505,6 +505,21 @@ void testBase() {
     }
     check(!a.empty() && worst < 1e-2f, "flat: a plant stands on the ground plus the base (worst " + std::to_string(worst) + ")");
 
+    // The base's scale on the ground (the tree's): half of it, the ground's
+    // 3 m stands 1.5 m over the base.
+    {
+        LandBase half = *flat.base;
+        half.scales.assign(half.grid.texels(), 0.5f);
+        flat.base = std::make_shared<const LandBase>(std::move(half));
+    }
+    const std::vector<float> s = placeCell(flat, grid, CellKey{3, -2, 0, 0});
+    worst = 0.0f;
+    for (size_t i = 0; i < s.size(); i += PlantsNode::kPlantFloats) {
+        const float want = 1.5f - 0.1f + 0.5f * s[i] - 0.25f * s[i + 2] + 20.0f;
+        worst = std::max(worst, std::abs(s[i + 1] - want));
+    }
+    check(!s.empty() && worst < 1e-2f, "flat: the base scales the ground under it (worst " + std::to_string(worst) + ")");
+
     const double R = 6371000.0;
     Body body;
     body.radius = R;
@@ -525,7 +540,7 @@ void testBase() {
         double p[3] = {origin[0] + b[i], origin[1] + b[i + 1], origin[2] + b[i + 2]};
         const double r = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
         for (double& v : p) v /= r;
-        worstR = std::max(worstR, std::abs(r - R - 3.0 - round.base->atDir(p)));
+        worstR = std::max(worstR, std::abs(r - R - 3.0 - round.base->overDir(0.0f, p)));
     }
     check(!b.empty() && worstR < 0.05, "round: a plant stands on the ground plus the base (worst " + std::to_string(worstR) + ")");
 }

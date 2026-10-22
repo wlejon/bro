@@ -250,16 +250,19 @@ VkImageView SceneLandProcesses::update(SceneFrame& frame, LandNode& node, VkComm
         return run.state == Run::State::Running ? VK_NULL_HANDLE : run.grids[run.current].view;
     case Run::State::Reading:
         if (frame.gpu.device.context().queue().isComplete(run.ticket)) {
-            // Channel 0's x, texel by texel.
+            // Channel 0's x and y, texel by texel.
             const LandGrid& grid = node.grid();
-            std::vector<float> base(grid.texels());
+            std::vector<float> base(grid.texels()), scales(grid.texels());
             const auto* texels = static_cast<const float*>(run.readback.mappedData);
-            for (size_t i = 0; i < base.size(); ++i) base[i] = texels[i * 4];
+            for (size_t i = 0; i < base.size(); ++i) {
+                base[i] = texels[i * 4];
+                scales[i] = texels[i * 4 + 1];
+            }
             frame.gpu.allocator.destroyBuffer(run.readback);
             // The grid it did not end in is no longer read.
             frame.gpu.allocator.destroyImage(run.grids[run.current ^ 1]);
             run.state = Run::State::Done;
-            node.setGridBase(run.serial, std::move(base));
+            node.setGridBase(run.serial, std::move(base), std::move(scales));
         }
         return run.grids[run.current].view;
     case Run::State::Copied:

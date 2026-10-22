@@ -3,7 +3,7 @@
 // defines
 //
 //   void procInit(inout vec4 v[PROC_CHANNELS])
-//       a cell's first values (v starts at zero);
+//       a cell's first values (v starts at zero, but v[0].y at 1);
 //   void <pass>(inout vec4 v[PROC_CHANNELS])
 //       each pass's kernel, named by the process's passes: the cell's next
 //       values from its last (v starts as them) and its neighbours'
@@ -12,10 +12,12 @@
 //
 // and runs over the land's grid: PROC_CHANNELS vec4s a cell, a cell
 // procCellSize() chart metres across, on a flat body one root over the
-// land's extent, on a round one the six cube faces. Channel 0's x is the
-// height the land adds to its tree (landGrid(0, p).x, in the land's module
-// and the CPU's heights alike); the rest is the world's, and the land's
-// module reads every channel (landGrid(c, p)). It runs once, when the land
+// land's extent, on a round one the six cube faces. Channel 0 is the
+// land's height over its tree's: x added, y the tree's scale (its detail
+// conditioned on the coarse state: none in the sea, more on a range), the
+// height x + y * tree in the land's module and the CPU's heights alike; the
+// rest is the world's, and the land's module reads every channel
+// (landGrid(c, p)). It runs once, when the land
 // is made (its module, extent, body or processes changed), and is read back
 // for the CPU once (land_node.h): the land is drawn and its heights answer
 // once that is in.

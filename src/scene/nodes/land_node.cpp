@@ -112,17 +112,17 @@ std::string LandNode::processDispatch() const {
     return s;
 }
 
-void LandNode::setGridBase(uint64_t serial, std::vector<float> base) {
-    if (serial != gridSerial_ || base.size() != grid_.texels()) return;
-    base_ = std::make_shared<const LandBase>(LandBase{grid_, std::move(base)});
+void LandNode::setGridBase(uint64_t serial, std::vector<float> base, std::vector<float> scales) {
+    if (serial != gridSerial_ || base.size() != grid_.texels() || scales.size() != grid_.texels()) return;
+    base_ = std::make_shared<const LandBase>(LandBase{grid_, std::move(base), std::move(scales)});
     baseSerial_ = serial;
-    // Its heights (and so its tiles' boxes) are the tree's and the base's.
+    // Its heights (and so its tiles' boxes) are the tree's over the base.
     ++generation_;
     rebuildItems();
 }
 
-float LandNode::baseAt(int root, double x, double z) const {
-    return base_ ? base_->at(root, x, z) : 0.0f;
+float LandNode::overTree(float tree, int root, double x, double z) const {
+    return base_ ? base_->over(tree, root, x, z) : tree;
 }
 
 void LandNode::setCanopy(std::string source, float top, float range, float castRange) {
@@ -176,8 +176,8 @@ bromath::AABB3 LandNode::bounds() const {
 
 float LandNode::heightOver(const double dir[3]) const {
     const double R = place_->body().radius;
-    const float base = base_ ? base_->atDir(dir) : 0.0f;
-    return base + (height_ ? height_->at(R * dir[0], R * dir[1], R * dir[2]) : 0.0f);
+    const float tree = height_ ? height_->at(R * dir[0], R * dir[1], R * dir[2]) : 0.0f;
+    return base_ ? base_->overDir(tree, dir) : tree;
 }
 
 void LandNode::setRings(const Rings& rings) {
@@ -204,7 +204,7 @@ int LandNode::wantedRings() const {
 
 float LandNode::heightAt(float x, float z) const {
     if (!ready()) return std::numeric_limits<float>::quiet_NaN();
-    if (!round()) return (height_ ? height_->at(x, z) : 0.0f) + baseAt(0, x, z);
+    if (!round()) return overTree(height_ ? height_->at(x, z) : 0.0f, 0, x, z);
     // The ground's height is the body direction's, which is the ground's
     // own: guess the datum, take the height there, and again from where
     // that puts the ground (the direction barely turns with the height).
@@ -255,7 +255,7 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
             else
                 std::fill(out, out + n, 0.0f);
             if (base_)
-                for (size_t k = 0; k < n; ++k) out[k] += base_->atDir(&dirs[k * 3]);
+                for (size_t k = 0; k < n; ++k) out[k] = base_->overDir(out[k], &dirs[k * 3]);
             for (size_t k = 0; k < n; ++k) y[k] = groundY(R, out[k], xs[k], zs[k]);
         }
         for (size_t k = 0; k < n; ++k) out[k] = static_cast<float>(y[k]);
@@ -267,7 +267,7 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
         std::fill(out, out + n, 0.0f);
     }
     for (size_t k = 0; k < n; ++k) {
-        out[k] += baseAt(0, xs[k], zs[k]);
+        out[k] = overTree(out[k], 0, xs[k], zs[k]);
         if (std::fabs(xs[k]) > extent_ || std::fabs(zs[k]) > extent_) out[k] = std::numeric_limits<float>::quiet_NaN();
     }
 }
@@ -521,7 +521,7 @@ void LandNode::rebuildItems() {
         }
     if (height_) height_->sample(xs.data(), zs.data(), static_cast<int>(h.size()), h.data());
     if (base_)
-        for (size_t k = 0; k < h.size(); ++k) h[k] += baseAt(0, xs[k], zs[k]);
+        for (size_t k = 0; k < h.size(); ++k) h[k] = overTree(h[k], 0, xs[k], zs[k]);
     chartBounds_ = bromath::aempty3();
     items_.reserve(static_cast<size_t>(cells) * cells);
     for (int cz = 0; cz < cells; ++cz)
@@ -579,7 +579,10 @@ void LandNode::rebuildFaceItems() {
         }
         if (base_)
             for (int j = 0; j < cols; ++j)
-                for (int i = 0; i < cols; ++i) h[static_cast<size_t>(j) * cols + i] += baseAt(f, -e + i * step, -e + j * step);
+                for (int i = 0; i < cols; ++i) {
+                    float& v = h[static_cast<size_t>(j) * cols + i];
+                    v = overTree(v, f, -e + i * step, -e + j * step);
+                }
         for (int cz = 0; cz < cells; ++cz)
             for (int cx = 0; cx < cells; ++cx) {
                 float lo = std::numeric_limits<float>::max(), hi = -lo;

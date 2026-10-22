@@ -65,7 +65,7 @@ struct PlacementLayer {
 
 struct PlacementRules {
     FieldRef ground;        // the ground's height (none: 0)
-    std::shared_ptr<const LandBase> base;   // and what a land's processes add to it (none: 0)
+    std::shared_ptr<const LandBase> base;   // and a land's processes' height over it (none: the ground's)
     std::vector<PlacementLayer> layers;
     float range = 1000.0f;  // the leaves within this of the eye (on the ground) are placed
     float hysteresis = 128.0f;   // and kept until this farther

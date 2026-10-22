@@ -2,8 +2,8 @@
 // A land's PROCESSES and the grid they run on (docs/scene-world-architecture.md
 // §11, "Processes"): GLSL compute kernels a world writes, iterated by the
 // engine over a grid of the body, whose result the land's height and
-// surface read (its first channel's x is the height the land adds to its
-// tree). What runs them is vulkan/ground/scene_land_process.h; what a
+// surface read (its first channel is the land's height over its tree: x
+// added, y the tree's scale). What runs them is vulkan/ground/scene_land_process.h; what a
 // kernel may call is shaders/ground/land_process_layer.glsl.
 //
 // The GRID is the land's chart in cells: a flat body's one root, a square
@@ -64,6 +64,7 @@ public:
     void configure(const Body& body, double extent, int resolution);
     bool configured() const { return cells_ > 0; }
 
+    const Body& body() const { return body_; }
     bool round() const { return radius_ > 0.0; }
     int roots() const { return round() ? 6 : 1; }
     /// Cells a root side, and with its halo.
@@ -100,17 +101,26 @@ private:
     std::vector<HaloCopy> halo_;
 };
 
-/// The height a land's processes add to its tree, as read back: shared,
-/// never changed once made, by the land's CPU heights and the plants that
-/// stand on it (world/plant_placement.h).
+/// A land's processes' height over its tree's, as read back (their channel
+/// 0: x added, y the tree's scale): shared, never changed once made, by the
+/// land's CPU heights and the plants that stand on it
+/// (world/plant_placement.h).
 struct LandBase {
     LandGrid grid;
-    std::vector<float> values;   // grid.texels()
+    std::vector<float> values;   // the height added, grid.texels()
+    std::vector<float> scales;   // the tree's scale, grid.texels() (none: 1)
 
-    /// At a flat body's (x, z), at a round body's direction (unit).
-    float at(double x, double z) const { return grid.sample(values.data(), 0, x, z); }
-    float atDir(const double dir[3]) const { return grid.sampleDir(values.data(), dir); }
-    float at(int root, double x, double z) const { return grid.sample(values.data(), root, x, z); }
+    /// The land's height over the tree's `tree` at a flat body's (x, z),
+    /// at a round body's root and chart point, at its direction (unit).
+    float over(float tree, double x, double z) const { return over(tree, 0, x, z); }
+    float over(float tree, int root, double x, double z) const {
+        const float s = scales.empty() ? 1.0f : grid.sample(scales.data(), root, x, z);
+        return grid.sample(values.data(), root, x, z) + s * tree;
+    }
+    float overDir(float tree, const double dir[3]) const {
+        const ChartPoint p = chartOf(grid.body(), dir);
+        return over(tree, p.root, p.x, p.z);
+    }
 };
 
 }  // namespace bro::scene

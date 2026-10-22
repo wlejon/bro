@@ -61,8 +61,9 @@ void main() {
     procCell_ = cell + 1;
     procRoot_ = int(gl_WorkGroupID.z);
     vec4 v[PROC_CHANNELS];
+    // (procInit's start: zero, but the tree's whole height in channel 0's y.)
     for (int ch = 0; ch < PROC_CHANNELS; ++ch)
-        v[ch] = mode == LP_MODE_INIT ? vec4(0.0) : procHere(ch);
+        v[ch] = mode == LP_MODE_INIT ? vec4(0.0, ch == 0 ? 1.0 : 0.0, 0.0, 0.0) : procHere(ch);
     if (mode == LP_MODE_INIT)
         procInit(v);
     else

@@ -233,11 +233,11 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
         if (rules.base)
             for (size_t c = 0; c < kept; ++c) {
                 if (!round) {
-                    ground[c] += rules.base->at(xs[c], zs[c]);
+                    ground[c] = rules.base->over(ground[c], xs[c], zs[c]);
                     continue;
                 }
                 const double d[3] = {us[c * 3], us[c * 3 + 1], us[c * 3 + 2]};
-                ground[c] += rules.base->atDir(d);
+                ground[c] = rules.base->overDir(ground[c], d);
             }
         for (size_t c = 0; c < kept; ++c) {
             const uint32_t* h = hashes.data() + c * kDraws;

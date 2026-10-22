@@ -21,8 +21,9 @@
  *   - PROCESSES. Shape a point at a time cannot make (drainage that
  *     connects, ridges between basins, erosion) comes from the world's
  *     `processes`: GLSL kernels the engine runs over a grid of the land when
- *     it is made (below). Their first channel's x is added to the tree's
- *     height, on the GPU and, read back once, on the CPU.
+ *     it is made (below). Their first channel is the height over the tree's
+ *     (x added, y the tree's scale), on the GPU and, read back once, on
+ *     the CPU.
  *   - WHAT GROWS. A grass node stands on a land (`createGrass({ ground:
  *     land })`) and reads the land's tiles on the GPU: its heights and the
  *     surface's `cover` and `herbs`, so the grass reaches as far as the
@@ -97,7 +98,10 @@
  * cell's centre: (x, 0, z) flat, the datum point on a round body),
  * `procPointAt(offset)`, `procUp()`, `procChart()`, `procRoot()`,
  * `procCellSize()`, `procIteration()`, `procData(i)` (the processes' `data`)
- * and `landTree(p)`. Channel 0's x is the height added to the tree; every
+ * and `landTree(p)`. Channel 0 is the land's height over its tree: the
+ * height is `x + y * landTree(p)`, and a cell starts at x 0, y 1 (the tree
+ * alone), so a process can lay down the coarse form in x and say how much
+ * of the tree's detail rides on it in y (none in a sea, more on a range); every
  * channel is the surface module's through `landGrid(c, p)` (moisture, flow,
  * rock: whatever the world computes). They run on the GPU when the land is
  * made (a new height, seed, extent, body or processes runs them again),

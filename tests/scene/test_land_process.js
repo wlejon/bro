@@ -1,7 +1,7 @@
 // A land's processes (docs/scene-world-architecture.md §11, "Processes";
 // scene/world/land_grid.h, vulkan/ground/scene_land_process.h): kernels the
 // world writes, run over a grid of the land when it is made, whose first
-// channel's x the land's height adds to its tree.
+// channel is the land's height over its tree (x added, y the tree's scale).
 // Verifies:
 //   - until they have run and been read back the land is not ready: its
 //     heights are NaN, landStats().ready false; then it is
@@ -12,6 +12,8 @@
 //   - a pass runs its iterations over procInit's values (a 3 x 3 smoothing
 //     lowers the hills), and setLand with new processes runs them again
 //   - the land's module reads every channel: channel 1 colours the surface
+//   - channel 0's y scales the tree, on the CPU and the GPU, and is 1 where
+//     procInit leaves it
 //   - on a round body the grid is the six cube faces: across a face's edge
 //     the heights are procInit's smooth field to within its bilinear error,
 //     with no step, and the GPU stands on them there too
@@ -161,6 +163,30 @@ void procInit(inout vec4 v[PROC_CHANNELS]) {
     assert(Math.abs(land.landHeight(100, 100) - 3) < 1e-4, `channel 0 is the height (${land.landHeight(100, 100)})`);
     const east = redFrom(land, 300, 0, 20), west = redFrom(land, -300, 0, 20);
     assert(east > 40 && west < east / 4, `channel 1 colours the surface (east ${east.toFixed(1)}, west ${west.toFixed(1)})`);
+
+    // --- the tree's scale ----------------------------------------------------------
+    // Channel 0's y scales the tree: a tree of 10 m under y = 0.5 + x / 2000
+    // (linear, so exact between centres) and x = 2 is 7 + x / 200 m, on the
+    // CPU and the GPU; a cell left alone keeps the tree whole (y starts at 1).
+    land.setLand({
+        height: N('Constant', { Value: 10 }), surface: RED,
+        processes: { resolution: CELLS, source: `
+void procInit(inout vec4 v[PROC_CHANNELS]) {
+    v[0].x = 2.0;
+    v[0].y = 0.5 + procPoint().x / 2000.0;
+}` },
+    });
+    assert(untilReady(land), 'the tree\'s scale: ready');
+    let worstScale = 0;
+    for (const [x, z] of [[-700, 120], [0, 0], [333, -450], [810, 600]])
+        worstScale = Math.max(worstScale, Math.abs(land.landHeight(x, z) - (7 + x / 200)));
+    assert(worstScale < 2e-3, `channel 0's y scales the tree on the CPU (worst ${worstScale.toExponential(2)} m)`);
+    standsOn(land, -600, 200, 'the tree scaled by 0.2');
+    standsOn(land, 700, -300, 'the tree scaled by 0.85');
+    land.setLand({ processes: { resolution: CELLS, source: 'void procInit(inout vec4 v[PROC_CHANNELS]) { v[0].x = 1.0; }' } });
+    assert(untilReady(land) && Math.abs(land.landHeight(250, -90) - 11) < 1e-4,
+           `a cell left alone keeps the tree whole (${land.landHeight(250, -90)})`);
+    land.setLand({ height: N('Constant', { Value: 0 }) });
 
     // --- processes that do not compile -----------------------------------------
     land.setLand({ surface: RED, processes: { source: 'void procInit(inout vec4 v[PROC_CHANNELS]) { nonsense; }' } });

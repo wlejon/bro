@@ -1617,15 +1617,17 @@ field is evaluated at is **split**: an integer part and a float fraction.
 - **The run** (`vulkan/ground/scene_land_process.cpp`): rgba32f 2D-array
   images (layer root·C + channel) ping-ponged, `land_process.comp` in
   three modes (init, a pass, the halo), up to 128 passes a frame; then
-  channel 0 is copied to a host buffer and, once its ticket is done, handed
+  channel 0 (x and y) is copied to a host buffer and, once its ticket is done, handed
   to the land as a shared, immutable `LandBase`. The pipeline is cached by
   the hash of the source, its dispatch switch and the grid.
 - **One height, two readers:** the land's module is `landHeight(p) =
-  landTree(p) + landGrid(0, p).x`, and the CPU's heights add `LandBase`'s
-  sample to FastNoise2's tree. Until the base arrives the land is not
+  g.x + g.y * landTree(p)` with `g = landGrid(0, p)` (a cell starts at
+  x 0, y 1: the fine scale conditioned on the coarse state, PLANET-LESSONS
+  6), and the CPU's heights put FastNoise2's tree through `LandBase::over`
+  (both channels sampled). Until the base arrives the land is not
   ready: its heights are NaN, it offers no tiles and draws nothing, and the
   plants standing on it (`createPlants`' `land`) place nothing; placement's
-  rules add the base to their ground. Every channel is the module's to read
+  rules put their ground through the base. Every channel is the module's to read
   (`landGrid(c, p)`), so a process can colour the surface too.
 - **Not yet:** regional grids under the eye streamed by the world service,
   with the global grid's flow at their edges; a process run again while

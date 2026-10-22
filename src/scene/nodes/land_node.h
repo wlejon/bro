@@ -95,9 +95,10 @@ public:
     /// switch over its passes (land_process_dispatch.glsl's place).
     std::string gridConfig() const;
     std::string processDispatch() const;
-    /// The processes' first channel's x, every texel of the grid (texels()
-    /// floats), read back for grid serial `serial`.
-    void setGridBase(uint64_t serial, std::vector<float> base);
+    /// The processes' first channel's x and y (the height added, the tree's
+    /// scale), every texel of the grid (texels() floats each), read back for
+    /// grid serial `serial`.
+    void setGridBase(uint64_t serial, std::vector<float> base, std::vector<float> scales);
     /// It has no processes, or theirs is in.
     bool ready() const { return !process_.active() || baseSerial_ == gridSerial_; }
     /// What its processes add to its tree (null with none, or until ready):
@@ -222,8 +223,9 @@ private:
     void rebuildFaceItems();
     /// A round body's ground height (over the datum) at body direction `dir`.
     float heightOver(const double dir[3]) const;
-    /// The processes' height at chart point (x, z) of `root` (0 with none).
-    float baseAt(int root, double x, double z) const;
+    /// The height over the tree's `tree` at chart point (x, z) of `root`
+    /// (the tree's with no processes).
+    float overTree(float tree, int root, double x, double z) const;
     void configureGrid();
 
     const Place* place_ = nullptr;

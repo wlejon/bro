@@ -41,14 +41,21 @@ LandSurface landSurface(LandPoint q) {
             'float landTree(vec3 p) { return landNoise(p, LAND_SEED); }\n';
     }
 
-    // The module: the tree, landHeight the tree plus the processes' height
-    // (landGrid's channel 0, zero with none), then the surface (which may
-    // call any of them).
+    // The module: the tree, landHeight the processes' height over it
+    // (landGrid's channel 0: x added, y the tree's scale; the tree alone
+    // with none), then the surface (which may call any of them).
+    const HEIGHT = (p) =>
+        `float landHeight(${p} p) {\n` +
+        '#ifdef LAND_GRID\n' +
+        '    vec4 g = landGrid(0, p);\n' +
+        '    return g.x + g.y * landTree(p);\n' +
+        '#else\n' +
+        '    return landTree(p);\n' +
+        '#endif\n' +
+        '}\n';
     function moduleOf(height, seed, surface) {
         const src = typeof surface === 'string' ? surface : (surface && surface.source) || BARE;
-        return treeOf(height, seed) +
-            'float landHeight(vec2 p) { return landTree(p) + landGrid(0, p).x; }\n' +
-            'float landHeight(vec3 p) { return landTree(p) + landGrid(0, p).x; }\n' + src;
+        return treeOf(height, seed) + HEIGHT('vec2') + HEIGHT('vec3') + src;
     }
 
     const isLand = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_landParams(n).length > 0;
