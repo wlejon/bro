@@ -37,10 +37,11 @@ assertArrayEqual(pix(W-1, 0), [(W-1)*16, 0, 0, 255], 'TR row');
 assertArrayEqual(pix(0, H-1), [0, (H-1)*16, 0, 255], 'BL col');
 assertArrayEqual(pix(W-1, H-1), [(W-1)*16, (H-1)*16, 0, 255], 'BR');
 
-// ----- Coalesced: two putImageData calls in one frame; only last wins -----
-// First call writes red; second writes blue. With the fast path keeping only
-// the last call, the surface ends up blue. The regular Skia replay would
-// produce the same result since putImageData uses kSrc blend mode.
+// ----- Coalesced: two putImageData calls in one frame; the last wins -----
+// First call writes red; second writes blue over the same rectangle. The
+// fast path skips the covered one, so the surface ends up blue. The regular
+// Skia replay would produce the same result since putImageData uses kSrc
+// blend mode.
 const red  = ctx.createImageData(W, H);
 const blue = ctx.createImageData(W, H);
 for (let i = 0; i < W * H; i++) {
@@ -80,6 +81,38 @@ assertArrayEqual(pix(8, 8), [0, 255, 255, 255], 'partial: cyan tile at (8,8)');
 assertArrayEqual(pix(0, 0), [0, 0, 0, 0],       'partial: untouched stays cleared');
 
 document.getElementById('root').innerHTML = '';
+
+// ----- Side by side: puts into different rectangles in one frame -----
+// A canvas made off the page, two strips put side by side and a tile over
+// part of the first, then snapshotted (screenshotCanvas runs the puts
+// together, through the fast path): each is written. Taking only the last
+// put lost the strips.
+{
+    const os = require('os'), path = require('path'), fs = require('fs');
+    const sb = document.createElement('canvas');
+    sb.width = W; sb.height = H;
+    const sctx = sb.getContext('2d');
+    const half = (r, g, b) => {
+        const d = sctx.createImageData(W / 2, H);
+        for (let i = 0; i < (W / 2) * H; i++) { d.data[i*4] = r; d.data[i*4 + 1] = g; d.data[i*4 + 2] = b; d.data[i*4 + 3] = 255; }
+        return d;
+    };
+    sctx.putImageData(half(255, 0, 0), 0, 0);
+    sctx.putImageData(half(0, 0, 255), W / 2, 0);
+    sctx.putImageData(cyan, 2, 2);
+    sb.id = 'sb';
+    sb.style.display = 'none';
+    document.getElementById('root').appendChild(sb);
+    const file = path.join(os.tmpdir(), 'bro_test_putimagedata_' + Date.now() + '.png');
+    screenshotCanvas(file, '#sb');
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+    const s = sctx.getImageData(0, 0, W, H).data;
+    const at = (x, y) => { const i = (y * W + x) * 4; return [s[i], s[i+1], s[i+2], s[i+3]]; };
+    assertArrayEqual(at(0, H - 1), [255, 0, 0, 255], 'side by side: left strip kept');
+    assertArrayEqual(at(W - 1, H - 1), [0, 0, 255, 255], 'side by side: right strip');
+    assertArrayEqual(at(3, 3), [0, 255, 255, 255], 'side by side: the tile over the left strip');
+    document.getElementById('root').innerHTML = '';
+}
 
 function assertArrayEqual(a, b, msg) {
     if (a.length !== b.length) throw new Error(msg + ': len mismatch ' + a + ' vs ' + b);

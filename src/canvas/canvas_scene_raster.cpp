@@ -31,16 +31,19 @@ void CanvasScene::stageCommandsForRaster() {
 
 // Streaming-buffer canvas fast path. When a frame's command buffer consists
 // only of putImageData calls, the SkCanvas replay (paint setup, transform
-// save/restore, draw-image submission) is pure overhead — the final state of
-// the surface is just the bytes from the *last* putImageData. We can skip
-// directly to a bulk pixel copy via SkSurface::writePixels, with no draw
-// pipeline activity. This is the dominant pattern for streaming visualizations
-// (noise fields, audio waveforms, spectrograms, voxel mini-maps).
+// save/restore, draw-image submission) is pure overhead: each put replaces
+// its rectangle's pixels, so they go straight to the surface as bulk pixel
+// copies via SkSurface::writePixels, in order, with no draw pipeline
+// activity. A put a later one covers whole is skipped, so the dominant
+// pattern (one buffer put over the same rectangle each frame: noise fields,
+// audio waveforms, spectrograms, voxel mini-maps) is one copy. Puts into
+// different rectangles (strips side by side) are each written: taking only
+// the last lost the others.
 //
-// Conservative check: every command must be kPutImageData. If any other op
-// is present (paths, text, transforms, clears, etc.) we fall back to the
-// regular replay. The last putImageData must also fit within the surface;
-// partial-region writes are handled correctly by writePixels' offset args.
+// Conservative check: every command must be kPutImageData with readable
+// pixels and on the surface. If any other op is present (paths, text,
+// transforms, clears, etc.) we fall back to the regular replay; partial-region
+// writes are handled correctly by writePixels' offset args.
 //
 // Returns true if the fast path consumed the commands; the caller should
 // then clear the buffer and return without running the normal replay.
@@ -48,29 +51,26 @@ static bool tryStreamingPutImageDataFastPath(SkSurface* surface,
                                              std::vector<CanvasCmd>& cmds)
 {
     if (!surface || cmds.empty()) return false;
-    int lastPut = -1;
-    for (size_t i = 0; i < cmds.size(); ++i) {
-        if (cmds[i].type != CanvasCmd::kPutImageData) return false;
-        if (!cmds[i].src.isEmpty()) return false;
-        lastPut = static_cast<int>(i);
-    }
-    if (lastPut < 0) return false;
-
-    const CanvasCmd& cmd = cmds[lastPut];
-    if (!cmd.img) return false;
-    SkPixmap pm;
-    if (!cmd.img->peekPixels(&pm)) return false;
-
-    const int dx = static_cast<int>(cmd.p[0]);
-    const int dy = static_cast<int>(cmd.p[1]);
     const int sw = surface->width();
     const int sh = surface->height();
-    // writePixels will clip silently to the surface, but reject obviously bad
-    // offsets so we do not mask an engine bug with an empty write.
-    if (dx + pm.width() <= 0 || dy + pm.height() <= 0 || dx >= sw || dy >= sh) {
-        return false;
+    std::vector<SkPixmap> pms(cmds.size());
+    std::vector<SkIRect> rects(cmds.size());
+    for (size_t i = 0; i < cmds.size(); ++i) {
+        const CanvasCmd& cmd = cmds[i];
+        if (cmd.type != CanvasCmd::kPutImageData || !cmd.src.isEmpty() || !cmd.img) return false;
+        if (!cmd.img->peekPixels(&pms[i])) return false;
+        const int dx = static_cast<int>(cmd.p[0]);
+        const int dy = static_cast<int>(cmd.p[1]);
+        // writePixels will clip silently to the surface, but reject obviously
+        // bad offsets so we do not mask an engine bug with an empty write.
+        if (dx + pms[i].width() <= 0 || dy + pms[i].height() <= 0 || dx >= sw || dy >= sh) return false;
+        rects[i] = SkIRect::MakeXYWH(dx, dy, pms[i].width(), pms[i].height());
     }
-    surface->writePixels(pm, dx, dy);
+    for (size_t i = 0; i < cmds.size(); ++i) {
+        bool covered = false;
+        for (size_t j = i + 1; j < cmds.size() && !covered; ++j) covered = rects[j].contains(rects[i]);
+        if (!covered) surface->writePixels(pms[i], rects[i].x(), rects[i].y());
+    }
     return true;
 }
 
