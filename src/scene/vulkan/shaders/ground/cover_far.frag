@@ -107,8 +107,14 @@ void main() {
 
     // The stand's own shade: dark at its root, lit at its top. Blooms by
     // their share of what is seen.
-    vec3 baseColor = mix(inBody.rgb * mix(0.7, 1.05, height) * lobeShade, inBloom.rgb, bloomShare);
-    float ao = mix(mix(0.45, 1.0, smoothstep(0.0, 0.9, height)), 1.0, bloomShare);
+    // An element under a dozen pixels tall is the sward's tone where it
+    // stands, as the turf under it is: its root's dark and its top's light
+    // are a gradient every element repeats alike, so a field of them is a
+    // field of stamped marks darker than the turf between (biomes' glade's
+    // far hillside, elements 4 to 10 pixels tall, at golden hour).
+    float tall = smoothstep(4.0, 16.0, 1.0 / fw.y);
+    vec3 baseColor = mix(inBody.rgb * mix(1.0, mix(0.7, 1.05, height) * lobeShade, tall), inBloom.rgb, bloomShare);
+    float ao = mix(mix(1.0, mix(0.45, 1.0, smoothstep(0.0, 0.9, height)), tall), 1.0, bloomShare);
 
     SceneSurface s;
     s.position = worldPos;
@@ -129,7 +135,7 @@ void main() {
 
     SceneProbe probe = sceneProbe(worldPos);
     vec3 indirect = sceneAmbient(s, probe) * ao;
-    vec3 color = sceneDirectLight(s, probe) * mix(0.6, 1.0, height) + indirect;
+    vec3 color = sceneDirectLight(s, probe) * mix(1.0, mix(0.6, 1.0, height), tall) + indirect;
 
     float alpha = 1.0;
     if ((flags & MESH_REFLECTANCE) != 0u) {
@@ -141,8 +147,7 @@ void main() {
     indirect *= air.transmittance;
     alpha = mix(alpha, 0.0, air.fade);
 
-    outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);
-    // Each element stands for a few pixels (its tips, lobes and blooms fade
+    outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);    // Each element stands for a few pixels (its tips, lobes and blooms fade
     // to their means as they near one): its part-covered edge pixels are
     // the dither's all-or-nothing ones, for the sub-pixel resolve to blend.
     outMark = subpixelMark(subpixelDecided(cover));
