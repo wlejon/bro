@@ -1002,16 +1002,21 @@ struct SceneAir {
 // perspective volume (froxels over the frustum, slices squared in depth,
 // a point nearer than the first slice taking the share of it its distance
 // is), the lookup dithered by a fraction of a slice so no slice's edge bands.
-// Outside it (a reflection probe's faces): the transmittance from the
-// transmittance table (the ratio of the two points' to the top) and the
-// in-scatter as the sky-view table's radiance along the ray, by the share of
-// the ray's air that lies before the point.
+// Outside it (a reflection probe's faces), and from high in the air or above
+// it, where a slice is deeper than the air under the eye and its dither
+// would be noise (the froxels' share, skyView.w, 1 low in the air and 0
+// above, scene_atmosphere.cpp): the transmittance from the transmittance
+// table (the ratio of the two points' to the top) and the in-scatter as the
+// sky-view table's radiance along the ray, by the share of the ray's air
+// that lies before the point.
 void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
     vec3 E = lighting.atm.sunIlluminance.rgb / ATM_TABLE_SCALE;   // both tables read here are scaled
     vec3 p = pos + lighting.atm.froxel.xyz;   // relative to the froxel camera
     vec4 clip = lighting.atm.froxelViewProj * vec4(p, 1.0);
     vec2 ndc = clip.w > 0.0 ? clip.xy / clip.w : vec2(2.0);
-    if (all(lessThanEqual(abs(ndc), vec2(1.02)))) {
+    float froxels = lighting.atm.skyView.w;
+    vec3 fT = vec3(1.0), fL = vec3(0.0);
+    if (froxels > 0.0 && all(lessThanEqual(abs(ndc), vec2(1.02)))) {
         float d = length(p);
         float nearWeight;
         float w = atmFroxelW(lighting.atm.froxel.w, d, nearWeight);
@@ -1019,9 +1024,15 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
         vec3 uvw = vec3(ndc * 0.5 + 0.5, clamp(w, 0.5 / ATM_FROXEL_SLICES, 1.0 - 0.5 / ATM_FROXEL_SLICES));
         vec3 L = textureLod(texAtmInscatter, uvw, 0.0).rgb;
         vec3 T = textureLod(texAtmAirTransmittance, uvw, 0.0).rgb;
-        inscatter = L * nearWeight * E;
-        transmittance = mix(vec3(1.0), T, nearWeight);
-        return;
+        fL = L * nearWeight * E;
+        fT = mix(vec3(1.0), T, nearWeight);
+        if (froxels >= 1.0) {
+            inscatter = fL;
+            transmittance = fT;
+            return;
+        }
+    } else {
+        froxels = 0.0;
     }
     float d = length(pos);
     vec3 ro = atmOrigin(vec3(0.0));
@@ -1052,8 +1063,8 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
     float cosAz = hl > 1e-5 ? h.x / hl : 1.0;
     vec3 sky = textureLod(texAtmSkyView, atmSkyViewUv(lighting.atm.skyView.x, dot(rd, up), cosAz), 0.0).rgb;
     vec3 share = (1.0 - tRay) / max(1.0 - tFull, vec3(1e-4));
-    transmittance = tRay;
-    inscatter = sky * clamp(share, 0.0, 1.0) * E;
+    transmittance = mix(tRay, fT, froxels);
+    inscatter = mix(sky * clamp(share, 0.0, 1.0) * E, fL, froxels);
 }
 
 SceneAir sceneAir(vec3 pos, float camDist) {

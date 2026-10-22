@@ -5,6 +5,8 @@
 //   - from 2000 km up looking at the limb, the land's limb is the air's:
 //     a band of blue glow just over the land's limb, black space above it,
 //     the lit land below
+//   - from 20,000 km a land of one albedo is smooth pixel to pixel (the
+//     air read from its tables there, not the froxels)
 //   - from 2 m on the ground the day sky over the horizon is blue
 //   - round a 100 km moon the air is the moon's: from 300 km up the view
 //     under the level is space (an Earth-sized air's lit disc fills it)
@@ -66,6 +68,29 @@ if (!scn) {
     assert(Math.max(...space) < 8, `space over the air is black ${fmt(space)}`);
     assert(glow[2] > 40 && glow[2] > glow[0] + 10, `just over the land's limb the air glows blue ${fmt(glow)}`);
     assert(below[1] > 20, `under it the land, lit ${fmt(below)}`);
+
+    // --- from 20,000 km, the disc ----------------------------------------------------
+    // A land of one albedo seen whole: smooth pixel to pixel. (The froxels'
+    // slices, squared in depth out to the air's horizon, are deeper there
+    // than the air under the eye, and their dither was noise: 9.4 levels
+    // pixel to pixel; read from the tables, 0.03.)
+    scn.setDither(false);
+    scn.setCamera({ fov: 40, near: 1000, far: 1e8, position: [0, 2e7, 0], target: [0, -R, 0], up: [0, 0, -1] });
+    frames(10);
+    {
+        const disc = scn.captureFrame();
+        let diff = 0, n = 0;
+        for (let y = 112; y < 144; y++)
+            for (let x = 112; x < 143; x++) {
+                const i = (y * disc.width + x) * 4;
+                for (let c = 0; c < 3; c++) diff += Math.abs(disc.data[i + 4 + c] - disc.data[i + c]);
+                n += 3;
+            }
+        const lit = boxRGB(disc, 112, 112, 144, 144);
+        console.log(`disc ${fmt(lit)}, ${(diff / n).toFixed(2)} levels pixel to pixel`);
+        assert(lit[1] > 20 && diff / n < 2, `from 20,000 km the lit land is smooth (${fmt(lit)}, ${(diff / n).toFixed(2)} levels pixel to pixel)`);
+    }
+    scn.setDither(true);
 
     // --- from the ground -------------------------------------------------------------
     scn.setCamera({ fov: 60, near: 0.1, far: 1e5, position: [0, 2, 0], target: [0, 4, -5], up: [0, 1, 0] });

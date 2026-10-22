@@ -34,6 +34,10 @@ constexpr const char* kNames[] = {"atmosphere transmittance", "atmosphere multis
 // than kSkyViewMuS: well under what a table texel spans there.
 constexpr float kSkyViewHeightShare = 0.01f;
 constexpr float kSkyViewMuS = 1e-4f;
+// The eye's heights (m) the air's lookups are all the froxels' under and
+// none of them over (between, a smoothstep).
+constexpr double kFroxelsFull = 15000.0;
+constexpr double kFroxelsNone = 40000.0;
 
 float halfToFloat(uint16_t h) {
     const uint32_t sign = (h >> 15) & 1u, exp = (h >> 10) & 31u, man = h & 1023u;
@@ -265,6 +269,14 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     g.skyView[0] = slot.r;
     g.skyView[1] = slot.muS;
     g.skyView[2] = 1.0f;   // dither the lookups
+    // The froxels' share of the air's lookups (scene_lighting.glsl's
+    // sceneAtmosphereAir): all of it low in the air; none from high in it
+    // or above, where a slice (squared in depth out to the air's horizon)
+    // is deeper than the air under the eye and its dither would be noise.
+    {
+        const double t = std::clamp((static_cast<double>(height) - kFroxelsFull) / (kFroxelsNone - kFroxelsFull), 0.0, 1.0);
+        g.skyView[3] = static_cast<float>(1.0 - t * t * (3.0 - 2.0 * t));
+    }
 
     // The froxels over the main camera's frustum, out to its far plane or
     // the air's horizon, whichever is nearer.

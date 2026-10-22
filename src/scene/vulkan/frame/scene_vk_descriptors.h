@@ -83,7 +83,8 @@ struct alignas(16) AtmosphereGpu {
     alignas(16) float shell[4];           // x = planet radius, y = top radius, z = ozone half width, w = spherical
     alignas(16) float origin[4];          // xyz = the eye about the planet's centre
     alignas(16) float ground[4];          // rgb = ground albedo, w = lights[] index of the sun (-1: none)
-    alignas(16) float skyView[4];         // x = r, y = mu_s the sky-view table was made at, z = jitter
+    alignas(16) float skyView[4];         // x = r, y = mu_s the sky-view table was made at, z = jitter,
+                                          // w = the froxels' share of the air's lookups
     alignas(16) float froxel[4];          // xyz = this eye minus the froxel eye, w = the volume's depth
     alignas(16) float froxelViewProj[16]; // relative to the froxel eye -> its clip space
 };

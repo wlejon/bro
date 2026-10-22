@@ -16,7 +16,8 @@ struct AtmosphereGpu {
     vec4 shell;           // x = planet radius, y = top of the air's radius, z = ozone half width, w = spherical
     vec4 origin;          // xyz = the eye about the planet's centre, w = 0
     vec4 ground;          // rgb = ground albedo, w = the lights[] index of the sun (-1: none)
-    vec4 skyView;         // x = r the sky-view table was made at, y = its mu_s, z = jitter on, w = 0
+    vec4 skyView;         // x = r the sky-view table was made at, y = its mu_s, z = jitter on,
+                          // w = the froxels' share of the air's lookups (sceneAtmosphereAir)
     vec4 froxel;          // xyz = this block's eye minus the froxel eye, w = the volume's depth (m)
     mat4 froxelViewProj;  // a position relative to the froxel eye -> its clip space
 };
