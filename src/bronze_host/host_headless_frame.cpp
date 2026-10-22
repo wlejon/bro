@@ -779,6 +779,7 @@ void installHeadlessFrame(engine::Engine& engine) {
                 snum("groundLayerMissing", s.groundLayerMissing);
                 snum("groundLayerFills", s.groundLayerFills);
                 snum("groundLayerShortfall", s.groundLayerShortfall);
+                snum("landFills", s.landFills);
                 snum("worldBudgetMs", s.worldBudgetMs);
                 snum("worldSpentMs", s.worldSpentMs);
                 snum("worldJobs", s.worldJobs);

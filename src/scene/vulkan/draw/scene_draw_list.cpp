@@ -1,6 +1,7 @@
 #include "scene/vulkan/draw/scene_draw_list.h"
 
 #include "scene/nodes/grass_node.h"
+#include "scene/nodes/land_node.h"
 #include "scene/nodes/plants_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/mesh_node.h"
@@ -88,6 +89,17 @@ void buildDrawLists(SceneFrame& frame) {
                     stats.meshDrawn++;
                     lists.opaque.push_back(index);
                 }
+                continue;
+            }
+            if (LandNode* land = static_cast<MeshNode*>(node)->asLand()) {
+                // Land: its rings about the eye, over the whole land (never culled).
+                MeshDraw draw;
+                if (!drawer.prepareLand(frame, *land, draw)) continue;
+                placeDraw(frame, node, land->bounds(), draw);
+                const auto index = static_cast<uint32_t>(lists.meshes.size());
+                lists.meshes.push_back(draw);
+                stats.meshDrawn++;
+                lists.opaque.push_back(index);
                 continue;
             }
             if (PlantsNode* plants = static_cast<MeshNode*>(node)->asPlants()) {

@@ -275,7 +275,7 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
         auto* mn = static_cast<scene::MeshNode*>(n);
         // The slot copies width * height * channels floats out of `data`: one
         // channel for a new slot, the slot's own count for a sub-rect write
-        // (an engine-made slot, a clipmap surface say, is RGBA). A shorter
+        // (an engine-made slot may be RGBA). A shorter
         // array is refused rather than read past. A zero or negative extent
         // is the documented release, which reads nothing.
         uint64_t channels = 1;

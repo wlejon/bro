@@ -27,7 +27,6 @@ __bro
 __bro_native
 Physics
 Terrain
-ClipmapTerrain
 TileWorld
 Tween
 AnimationPlayer

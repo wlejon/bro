@@ -174,7 +174,7 @@
     var gl = tryMake('inst.webgl2', function () { var c = document.createElement('canvas'); document.body.appendChild(c); return c.getContext('webgl2'); });
     var scene = tryMake('inst.scene', function () { var c = document.createElement('canvas'); document.body.appendChild(c); return c.getContext('scene'); });
     if (scene) {
-      var mk = ['createBox', 'createSphere', 'createNode', 'createGroup', 'createSprite', 'createLight', 'createTerrain', 'createTileWorld', 'createAnimationPlayer', 'createGaussianSplat', 'createMesh', 'createParticleSystem', 'createCamera', 'createClipmapTerrain', 'createText', 'createLine', 'createInstancedMesh', 'createPlane', 'createCylinder', 'createCapsule', 'createCone', 'createTorus', 'createSkybox', 'createWater', 'createVehicle', 'createCharacter', 'createDecal', 'createTrail', 'createBillboard'];
+      var mk = ['createBox', 'createSphere', 'createNode', 'createGroup', 'createSprite', 'createLight', 'createTerrain', 'createTileWorld', 'createAnimationPlayer', 'createGaussianSplat', 'createMesh', 'createParticleSystem', 'createCamera', 'createLand', 'createText', 'createLine', 'createInstancedMesh', 'createPlane', 'createCylinder', 'createCapsule', 'createCone', 'createTorus', 'createSkybox', 'createWater', 'createVehicle', 'createCharacter', 'createDecal', 'createTrail', 'createBillboard'];
       for (var m = 0; m < mk.length; m++) (function (name) {
         if (typeof scene[name] !== 'function') return;
         tryMake('inst.scene.' + name + '()', function () { return scene[name]({}); });

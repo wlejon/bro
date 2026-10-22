@@ -19,7 +19,6 @@
 #include "scene/nodes/decal_node.h"
 #include "scene/nodes/reflection_probe_node.h"
 #include "scene/nodes/terrain_manager.h"
-#include "scene/nodes/clipmap_terrain.h"
 #include "scene/nodes/tile_world.h"
 #include "scene/tween.h"
 #include "scene/clip_player.h"
@@ -48,7 +47,6 @@ inline constexpr uint32_t kHostTerrainTag      = 0x54455252u;  // 'TERR'
 inline constexpr uint32_t kHostTweenTag        = 0x5457454Eu;  // 'TWEN'
 inline constexpr uint32_t kHostClipPlayerTag   = 0x434C4950u;  // 'CLIP'
 inline constexpr uint32_t kHostTileWorldTag    = 0x54494C45u;  // 'TILE'
-inline constexpr uint32_t kHostClipmapTag      = 0x434C494Du;  // 'CLIM'
 
 struct HostSceneGraphCell {
     uint32_t tag = kHostSceneGraphTag;
@@ -96,19 +94,6 @@ struct HostTerrainCell {
     }
 
     scene::TerrainManager* mgr() const { return manager.get(); }
-};
-
-struct HostClipmapCell {
-    uint32_t tag = kHostClipmapTag;
-    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
-    std::unique_ptr<scene::ClipmapTerrain> terrain;
-
-    scene::SceneGraph* graph() const {
-        auto t = token.lock();
-        return t ? t->graph : nullptr;
-    }
-
-    scene::ClipmapTerrain* clipmap() const { return terrain.get(); }
 };
 
 struct HostTileWorldCell {
@@ -184,16 +169,6 @@ inline scene::TerrainManager* terrainOf(void* self) {
 inline HostTerrainCell* terrainCellOf(void* self) {
     auto* c = static_cast<HostTerrainCell*>(self);
     return (c && c->tag == kHostTerrainTag) ? c : nullptr;
-}
-
-inline scene::ClipmapTerrain* clipmapOf(void* self) {
-    auto* c = static_cast<HostClipmapCell*>(self);
-    return (c && c->tag == kHostClipmapTag) ? c->terrain.get() : nullptr;
-}
-
-inline HostClipmapCell* clipmapCellOf(void* self) {
-    auto* c = static_cast<HostClipmapCell*>(self);
-    return (c && c->tag == kHostClipmapTag) ? c : nullptr;
 }
 
 inline scene::TileWorld* tileWorldOf(void* self) {

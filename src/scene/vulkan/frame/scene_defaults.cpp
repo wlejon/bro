@@ -66,6 +66,10 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
     // The plants' leaf poses this frame, written by the pose pass.
     bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
+    // The land's tiles, heights, surface and page table (binding 0 its
+    // LandDraw; ground/scene_land.glsl).
+    for (uint32_t b = 4; b <= 6; ++b)
+        bone.addBinding(b, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT);
     boneLayout = bone.build(dev);
 
     // (A grass node's set is read by the cover's plan too, cover_plan.comp.)

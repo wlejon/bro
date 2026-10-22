@@ -9,6 +9,7 @@
 #include "natives/scene/native_scene_decl.h"
 
 #include "scene/nodes/grass_node.h"
+#include "scene/nodes/land_node.h"
 
 #include <bromesh/mesh_data.h>
 
@@ -140,6 +141,12 @@ void bro_scene_SceneNode_sampleHeights(void* self, double x0d, double z0d, doubl
     }
     const float x0 = static_cast<float>(x0d), z0 = static_cast<float>(z0d), cell = static_cast<float>(celld);
     std::vector<float> h(static_cast<size_t>(cols) * rows, std::numeric_limits<float>::quiet_NaN());
+    // The land's heights are its field's, not its rings'.
+    if (const scene::LandNode* land = m->asLand()) {
+        land->sampleHeights(x0, z0, cell, cols, rows, h.data());
+        transferBuffer(std::move(h), out);
+        return;
+    }
     const bromesh::MeshData& md = m->mesh();
     const bromath::Mat4& wm = m->worldMatrix();
     const size_t nv = md.positions.size() / 3;
@@ -185,6 +192,11 @@ void bro_scene_SceneNode_sampleHeights(void* self, double x0d, double z0d, doubl
 void bro_scene_SceneNode_meshWorldBounds(void* self, bronze_native_buffer* out) {
     auto* m = meshOf(self);
     if (!m || m->asGrass() || m->mesh().positions.size() < 3) { transferBuffer(std::vector<double>{}, out); return; }
+    if (const scene::LandNode* land = m->asLand()) {
+        const bromath::AABB3& b = land->bounds();
+        transferBuffer(std::vector<double>{b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z}, out);
+        return;
+    }
     const auto& pos = m->mesh().positions;
     const bromath::Mat4& wm = m->worldMatrix();
     double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};

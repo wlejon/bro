@@ -111,9 +111,10 @@ and each view. Systems consume those lists instead of their whole content:
   change (§10). The plants plan (count, lay out, place) walks the
   cells in view and writes the draws' chunks and indirect commands; nothing
   on the CPU walks the plants.
-- **Terrain:** the clipmap already costs the same whatever the world's size,
-  so it keeps its rings. It joins the cells as the source of their heights and
-  as a provider for far-field captures.
+- **Land:** its rings already cost the same whatever the world's size, and
+  its tiles are a surface layer set the world service makes (§13). It joins
+  the cells as the source of their heights and as a provider for far-field
+  captures.
 - **Grass:** already ring cells around the eye. Its tiles map onto leaf
   cells, so the cell pass's occlusion result can reject them.
 
@@ -231,7 +232,7 @@ A capability of the frame graph, not of any one pass.
 - **Ownership:** buffers shared between queues are created CONCURRENT.
   Images move with explicit release and acquire, as the upload queue already
   does.
-- **Other users:** clipmap height-pyramid updates, cell residency generation,
+- **Other users:** the land's tiles, cell residency generation,
   terrain streaming, and the cell pass itself.
 
 ## 5. Surface layers
@@ -1034,19 +1035,17 @@ src/scene/
                     particles, billboards, splats; custom mesh shaders
     world/          the cell pass, the surface layers' atlas, the world
                     service's executor and its pass
-    ground/         the ground and its cover: turf, grass, herbs
+    ground/         the ground and its cover: the land, turf, grass, herbs
     foliage/        the plants node's plan, poses and draws; the far field
     lighting/       scene lighting, environment and sky, the atmosphere's
                     tables, reflection probes, the probe grid; later
                     volumetrics, clustered lights
     shadow/         the shadow pages: marked, drawn, copied into the pool
     post/           post-fx, exposure, SSAO, SSR, DOF
-    terrain/        (planned) planet terrain tiles, the clipmap drawn from
-                    them, horizons
+    terrain/        (planned) planet terrain tiles, horizons
     sky/            (planned) clouds, weather, stars, the moon
-    shaders/        the same folders (terrain/ holds the clipmap's GLSL, which
-                    nodes/clipmap_terrain compiles at run time), and common/
-                    for what every area includes (camera, lighting,
+    shaders/        the same folders, and common/ for what every area
+                    includes (camera, lighting,
                     atmosphere, push blocks, vegetation sway); every
                     #include is a path from shaders/
 ```
@@ -1073,8 +1072,8 @@ trees were a table of shape numbers (`createPlants({ species })`), the
 herbs named presets (`'daisy'`, `'poppy'`), the grass a few JS callbacks
 for its density, dryness and height evaluated on the CPU (the trees, the
 herbs and the blades are modules now, below; the grass's field is still
-those callbacks). The ground is still a CPU
-mesh coloured vertex by vertex. Only the fields are already code: the
+those callbacks). The ground was a CPU mesh coloured vertex by vertex
+(it is the land now, below). Only the fields were already code: the
 placement rules are FastNoise node trees.
 
 ### What the engine owns
@@ -1103,10 +1102,10 @@ noise, its own structs, any maths.
 1. **The land.** A height (and later overhang) kernel: the surface at a
    point, in the world's own frame (a plane now, a sphere's direction on
    the planet).
-   - The world service runs it into tiles (§6), the surface layers and the clipmap draw from them, and placement and the cover read them.
-   - The CPU (physics, gameplay) reads the same tiles back a frame or more later, asking ahead around what moves. One source, no CPU twin to keep in step (decision 2).
-2. **The surface.** What the ground is at a point: its albedo, roughness, normal detail, wetness. Also what it looks like from afar with nothing standing on it: the colour the turf and the far summary fold to.
-   - Called by the ground's shading and by the surface layers' fill.
+   - The world service runs it into tiles (§6), the land's rings draw from them, and placement and the cover read them.
+   - The CPU (physics, gameplay) runs the same FastNoise tree with FastNoise2 (decision 2). Free GLSL heights with no tree would read tiles back instead.
+2. **The surface.** What the ground is at a point: its albedo now; later its normal detail and wetness. Also what it looks like from afar with nothing standing on it: the colour the turf and the far summary fold to.
+   - Called by the land's tile fill.
 3. **Kinds of things that stand on it.** A grass sward, a herb, a tree, a pebble field, kelp. A module per kind, with these functions:
    - **`stand`**: what stands in a cell of its grid, read in the cover's plan and in placement's compute. Its chance, which variety, its size, its own record (any struct the module declares, decision 3).
    - **`build`**: its geometry at a detail the engine asks for, in pixels. Blades, cards, branches, whatever it is.
@@ -1144,7 +1143,7 @@ implementation of its interface, and its data form goes:
 - **Herbs**: done, the first module. The engine's half is `ground/scene_herb_layer.glsl` (the contract: herbStand, herbBuild, herbShade, herbFarMean, herbFarLocal, herbFarLook, the structs they pass, herbData) and `ground/scene_herb.glsl` (the cells, rings and hand-overs); the built-in shaders compile with `ground/herb_module.glsl`, a module of no herbs. A grass node's module (`herbs.source`, `herbs.data`) is spliced in for that file into the nine cover shaders that call it (`ground/scene_cover_shaders.h`: the plan, the blades' and herbs' vertex stages, the herbs' and the turf's fragment stages, the far tier's vertex stage, the turf layer's fill), compiled on as many threads, once a process, through the SPIR-V cache (docs/code-cache.md); one that does not compile is logged and draws no herbs. broflora's species (daisy, poppy, bracken, wood sorrel, ...) are broworkshop's `lib/herbs` module. Biomes with it: the same plants, the same look, the same cost (meadow 2.74 ms against 2.75).
 - **Plants**: done, the tree kind. The contract is `foliage/scene_plant_layer.glsl` (plantElement under PLANT_BUILD, plantLeafPoint, plantLimb, plantSway, plantSurface under PLANT_SHADE; PlantElementIn, PlantElement, PlantLimb, PlantFragment, PlantSurface; plantData(s, i) over a species' 20 floats). The engine keeps a species' size, detail and crown as the light sees it (height, base, radius, full elements, element length, limbs, shape, density, mean albedo: the plan, the bounds, the crown's medium in plants.frag, the far casters' discs and the probe grid read these), and the placement, the GPU plan, the poses, the element polygon and tube, and the light. The module is spliced into the plants' five stages (`foliage/scene_plant_shaders.h`: the pose pass, the vertex stage, both fragment stages, the shadow casters' vertex stage); the cover's and the plants' sets are one generic `frame/scene_module_shaders.h`. A node with no module draws nothing; there is no built-in tree. The lobed crowns, limbs, needle tiers, a leaf's face and the sway are broworkshop's `lib/trees` (`treeModule`, `treeSpecies`). Biomes with it: the same forest (the near trees within a level of step 2's), the same cost (meadow 2.71 ms against 2.72, plants:leaves unchanged).
 - **The far tier and the turf**: engine. They call each kind's `far` and the surface's far colour.
-- **Biomes' ground**: a land kernel (its FastNoise height, compiled to the GPU, decision 2) and a surface function. It is no longer a CPU mesh.
+- **The land**: done, replacing the CPU mesh and the clipmap terrain. The contract is `ground/scene_land_layer.glsl` (`landHeight`, `landSurface`, LandPoint, LandSurface, `landData(i)` over 64 vec4s). `createLand` writes the module from the height's FastNoise tree, emitted as GLSL by brokit's `noise_glsl` (`node.glsl()`: FastNoise2's nodes to float rounding, `bro_noise_glsl_test`), and the world's surface GLSL. The engine's half: a land node's tiles are a surface layer set (heights R32F, albedo RGBA16F) made by `ground/land_fill.comp` with the module (`ground/scene_land_shaders.h`), offered to the world service as the `land` kind ahead of the turf; its rings (camera-centred, fixed topology, the clipmap's crack-free maths) are placed on the tiles in `ground/mesh_land.vert`, a vertex's height a function of its position and its distance from the frame's eye, and shaded by mesh.frag, or by a grass node's turf where it is turf. The rings are drawn in blocks of 32 x 32 cells placed about the frame's eye each frame, so every pass (the camera's, a probe's, a turf tile's fill, a shadow page's) draws the blocks its view reaches; the land casts into the shadow pages with them (`ShadowLandVert`, the same stage built as a caster). The CPU's heights, raycasts and a grass field's ground run the tree with FastNoise2.
 
 A second, very different world proves the interfaces: one of the two below,
 built with no engine change beyond what it shows to be shared.
@@ -1166,9 +1165,11 @@ built with no engine change beyond what it shows to be shared.
    chunks are now (recommended: the engine already compiles it, and every
    function runs where the engine needs it).
    - The alternative is a JS-hosted language compiled to SPIR-V. It is more work for no gain an agent needs.
-2. **The land on the CPU.** GPU tiles read back (recommended: one source).
-   - The alternative is a CPU twin of every kernel, which drifts.
-   - FastNoise node trees, which biomes' fields are, would then need a GLSL emitter (FastNoise2 has none), or the fields become GLSL like everything else.
+2. **The land on the CPU.** Decided: the height is a FastNoise node tree,
+   emitted as GLSL for the GPU (brokit's `noise_glsl`, no node FastNoise2
+   has not got, checked against FastNoise2 itself) and run by FastNoise2 on
+   the CPU. One source, exact on both sides, nothing read back.
+   - Free GLSL heights (no tree) would read the GPU's tiles back a frame later, asking ahead around what moves.
 3. **A kind's record.** A module declares its per-instance struct in GLSL, and the engine reflects its layout (glslang gives it), sizing the plan's buffers.
    - The alternative is a fixed slot of N vec4s. It is simpler, but it is a schema again.
 4. **Size.** Grass, herbs, plants, the ground and the observability onto these interfaces is roughly 6–9k lines changed. A second world on them is a few thousand of its own.

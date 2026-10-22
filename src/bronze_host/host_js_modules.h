@@ -56,7 +56,7 @@ void installVisionWildlifeModule();
 // under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
-// The 3D family (js/physics.js, terrain, clipmap, tile_world, lighting,
+// The 3D family (js/physics.js, terrain, tile_world, lighting,
 // gizmo, animation, scene) and js/net.js / js/motion.js /
 // js/server.js: each enters its module after installBroRoots and lifts the
 // classes it defined. The sibling libraries' own APIs (bro.mesh, bro.lm,
@@ -66,7 +66,6 @@ void installNetModule();
 void installServerModule();
 void installPhysicsModule();
 void installTerrainModule();
-void installClipmapModule();
 void installTileWorldModule();
 void installLightingModule();
 void installGizmoModule();

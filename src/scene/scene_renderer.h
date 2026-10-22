@@ -65,6 +65,8 @@ struct CullStats {
     // atlas's shortfall (SurfaceLayerStats::worstError: 1 when none).
     int groundLayerNeeded = 0, groundLayerMissing = 0, groundLayerFills = 0;
     float groundLayerShortfall = 1.0f;
+    // The land's tiles made this frame (land.stats() has the rest).
+    int landFills = 0;
     // The world service (world/world_service.h): this frame's budget (GPU
     // ms from the measured slack under frameTargetMs), the cost of the jobs
     // it granted, how many it granted and left queued, and the largest

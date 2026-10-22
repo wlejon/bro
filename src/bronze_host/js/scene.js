@@ -52,7 +52,7 @@
         return node;
     };
     // For the sibling wrappers that also hand out nodes (scene_graph.js,
-    // tile_world.js, clipmap.js).
+    // tile_world.js, scene_land.js).
     Object.defineProperty(__bro_native.scene, "canonNode", { value: canon });
     accessor(SceneNode.prototype, "id", function () { return __bro_native.scene.SceneNode_id_get(this); }, undefined);
     accessor(SceneNode.prototype, "name", function () { return __bro_native.scene.SceneNode_name_get(this); }, function (v) { __bro_native.scene.SceneNode_name_set(this, v); });

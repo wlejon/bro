@@ -170,7 +170,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `brokit-api.js` | brokit runtime: Node modules (fs, path, os, child_process) + web globals |
 | `physics-api.js` | `Physics`: Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
-| `clipmap-api.js` | `scene.createClipmapTerrain`: camera-centred clipmap, fixed ring geometry, GPU displacement from a streamed height pyramid |
+| `land-api.js` | `scene.createLand`: a world's ground to the horizon: height a FastNoise tree (GLSL on the GPU, FastNoise2 for the CPU's heights), surface GLSL, rings about the eye over tiles the world service makes |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |
 | `dialogs-api.js` | native file/folder dialogs + alert/confirm/prompt; headless answers them from `setPickedFiles` / `setDialogAnswer` |
 | `menu-api.js` | `bro.menu`: native menu bar |

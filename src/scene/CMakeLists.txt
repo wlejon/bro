@@ -37,7 +37,7 @@ set_source_files_properties(vulkan/frame/scene_vk_shader_compiler.cpp PROPERTIES
     COMPILE_DEFINITIONS "BRO_SCENE_SHADER_SOURCE_DIR=\"${VK_SHADER_DIR}\"")
 
 # A shader source embedded as text, for the shaders compiled at run time
-# (custom mesh shaders, the clipmap terrain). SHADER_FILE is its path under
+# (custom mesh shaders, the world modules' sets). SHADER_FILE is its path under
 # vulkan/shaders; the header is named by the file alone (<file>.src.h).
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     get_filename_component(_name "${SHADER_FILE}" NAME)
@@ -105,13 +105,10 @@ embed_vk_shader(foliage/plants.vert            kVkPlantsVertSrc)
 embed_vk_shader(foliage/plants.frag            kVkPlantsFragSrc)
 embed_vk_shader(foliage/shadow_plants.vert     kVkShadowPlantsVertSrc)
 embed_vk_shader(foliage/plants_pose.comp       kVkPlantsPoseCompSrc)
-embed_vk_shader(terrain/clipmap_common.glsl       kClipmapCommonSrc)
-embed_vk_shader(terrain/clipmap_detail.glsl       kClipmapDetailSrc)
-embed_vk_shader(terrain/clipmap_material.glsl     kClipmapMaterialSrc)
-embed_vk_shader(terrain/clipmap_cubic.glsl        kClipmapCubicSrc)
-embed_vk_shader(terrain/clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
-embed_vk_shader(terrain/clipmap.vert.glsl         kClipmapVertSrc)
-embed_vk_shader(terrain/clipmap.frag.glsl         kClipmapFragSrc)
+embed_vk_shader(ground/scene_land_layout.h     kVkSceneLandLayoutSrc)
+embed_vk_shader(ground/scene_land_layer.glsl   kVkSceneLandLayerSrc)
+embed_vk_shader(ground/land_module.glsl        kVkLandModuleSrc)
+embed_vk_shader(ground/land_fill.comp          kVkLandFillCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -146,8 +143,7 @@ add_library(bro_scene STATIC
     nodes/terrain_manager.cpp
     nodes/terrain_manager_mesh.cpp
     nodes/terrain_manager_raycast.cpp
-    nodes/clipmap_terrain.cpp
-    nodes/clipmap_terrain_elevation.cpp
+    nodes/land_node.cpp
     nodes/tile_world.cpp
     nodes/tile_world_mesh.cpp
     nodes/tile_world_objects.cpp
@@ -191,6 +187,7 @@ add_library(bro_scene STATIC
     vulkan/ground/scene_cover_plan.cpp
     vulkan/ground/scene_mesh_drawer_grass.cpp
     vulkan/ground/scene_mesh_drawer_ground.cpp
+    vulkan/ground/scene_mesh_drawer_land.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
     vulkan/foliage/scene_plants_gpu_plan.cpp
     vulkan/lighting/scene_lighting.cpp

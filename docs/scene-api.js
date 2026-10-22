@@ -555,7 +555,7 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
-   * A sward of blades over a ground (a mesh node, a terrain, a clipmap or a
+   * A sward of blades over a ground (a land, a mesh node, a terrain or a
    * height function), the blades a world's sward module, with density,
    * dryness and height from numbers or functions of (x, z, y); swaying in
    * the wind field, parted by movers. See GrassNodeOptions and the grass
@@ -601,10 +601,14 @@ class SceneGraph {
   createTerrain(opts) {}
 
   /**
-   * @param {ClipmapTerrainConfig} [opts]
-   * @returns {ClipmapTerrain}
+   * A world's ground to the horizon: its height a FastNoise tree, its
+   * surface GLSL, drawn as rings about the eye over tiles made as the view
+   * needs them. See LandOptions and the land members in docs/land-api.js.
+   * @example scene.createLand({ height: hills, seed: 1337, extent: 2048, surface: meadowSurface });
+   * @param {LandOptions} opts
+   * @returns {SceneNode}
    */
-  createClipmapTerrain(opts) {}
+  createLand(opts) {}
 
   /**
    * @param {TileWorldConfig} [opts]

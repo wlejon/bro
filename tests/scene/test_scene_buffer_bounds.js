@@ -1,9 +1,8 @@
 // Scene natives that copy a script's pixel or splat buffer check its length
 // against the extent they were given, rather than reading past its end:
 // setBaseColorTexture / setEmissionTexture (RGBA8, width*height*4 bytes),
-// setShaderTexture (width*height floats), setCloud (every stream sized for
-// the same N splats; the splat pass indexes each one per splat), and the
-// clipmap layer natives (sides multiplied in 64 bits).
+// setShaderTexture (width*height floats) and setCloud (every stream sized
+// for the same N splats; the splat pass indexes each one per splat).
 
 function throwsKind(fn, Kind) {
     try { fn(); } catch (e) { return e instanceof Kind; }
@@ -73,19 +72,6 @@ if (!scene) {
     splat.setCloud(highDeg);
     assert(splat.splatCount === N, 'shDegree above 3 clamps to 3');
     scene.captureFrame();
-
-    // ---- Clipmap layers ----------------------------------------------------
-    const cm = scene.createClipmapTerrain({ levels: 2, resolution: 16, cellSize: 1.0, detailOctaves: 99 });
-    // 65536 * 65537 wraps to 65536 in 32-bit int; the layer must not take
-    // a 1-float array for it.
-    cm.setHeightLayer(0, { data: new Float32Array(65536), width: 65536, height: 65537 });
-    assert(cm.layerCount === 0, 'setHeightLayer: an overflowing extent is refused');
-    cm.setHeightLayer(0, { data: new Float32Array(16), width: 4, height: 4 });
-    assert(cm.layerCount === 1, 'a height layer that fits loads');
-    cm.setDetail({ octaves: -5 });
-    cm.update(0, 10, 0);
-    scene.captureFrame();
-    cm.destroy();
 }
 
 console.log('scene buffer bounds test done');

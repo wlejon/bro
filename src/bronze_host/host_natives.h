@@ -135,7 +135,6 @@ inline bool registerPhysicsNatives(std::string*) { return true; }
 #endif
 bool registerAnimationNatives(std::string* error);
 bool registerTerrainNatives(std::string* error);
-bool registerClipmapNatives(std::string* error);
 bool registerTileWorldNatives(std::string* error);
 bool registerLightingNatives(std::string* error);
 bool registerGizmoNatives(std::string* error);

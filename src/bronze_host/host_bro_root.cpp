@@ -114,7 +114,7 @@ void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_class.h, HostClass).
     auto* bro = new ev::Persistent(makeRoot({"time", "server", "window", "settings", "mesh", "net", "rigging", "gizmo",
-                                             "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
+                                             "scene", "terrain", "tile_world", "lighting", "animation", "lm",
                                              "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                                              "flora", "tensor", "profiler", "apps", "vfs", "models"}));
@@ -123,7 +123,7 @@ void installBroRoots(engine::Engine& engine) {
     auto* native = new ev::Persistent(
         makeRoot({"time", "server", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
                    "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
-                   "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
+                   "animation", "terrain", "tile_world", "lighting", "gizmo", "scene", "lm",
                    "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                    "flora", "tensor", "profiler", "models"}));
@@ -219,7 +219,6 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("rigging", "BRO_WITH_3D");
     setUnavailable("scene", "BRO_WITH_3D");
     setUnavailable("terrain", "BRO_WITH_3D");
-    setUnavailable("clipmap", "BRO_WITH_3D");
     setUnavailable("tile_world", "BRO_WITH_3D");
     setUnavailable("lighting", "BRO_WITH_3D");
     setUnavailable("animation", "BRO_WITH_3D");
@@ -373,7 +372,7 @@ void markAvailableNamespaces() {
     static const char* const kGated[] = {
         "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "kws",
         "listen", "motion", "rave", "music", "sense", "triposplat", "vision", "wake", "diffusion",
-        "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
+        "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain",
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
         "apps", "vfs", "thumb", "a11y",
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl",

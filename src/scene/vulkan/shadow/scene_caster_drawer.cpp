@@ -86,12 +86,16 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
+    vs_[static_cast<int>(MeshKind::Land)] =
+        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowLandVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     vsCutout_[0] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutVert);
     vsCutout_[1] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedCutoutVert);
     fsCutout_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutFrag);
+    // (The blades and plants cast with their node's module set.)
     for (int k = 0; k < kMeshKindCount; ++k) {
-        if (!vs_[k] && k != static_cast<int>(MeshKind::Grass) && k != static_cast<int>(MeshKind::Plants)) return false;
+        if (!vs_[k] && k != static_cast<int>(MeshKind::Grass) && k != static_cast<int>(MeshKind::Plants))
+            return false;
     }
     return fs_ != VK_NULL_HANDLE && vsCutout_[0] != VK_NULL_HANDLE && vsCutout_[1] != VK_NULL_HANDLE && fsCutout_ != VK_NULL_HANDLE;
 }

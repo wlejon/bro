@@ -76,6 +76,12 @@ BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "groun
 // The cover's plan (scene_cover_plan.cpp): the blades and herb plants a
 // grass node's rings draw.
 BRO_SCENE_SHADER(CoverPlanComp,            "cover_plan.comp",             "ground/cover_plan.comp",             "comp", "")
+// The land (scene_mesh_drawer_land.cpp): its rings placed from its tiles,
+// and its tiles' fill, built in with ground/land_module.glsl (no land); a
+// node fills with its own module's (ground/scene_land_shaders.h).
+BRO_SCENE_SHADER(MeshLandVert,             "mesh_land.vert",              "ground/mesh_land.vert",              "vert", "")
+BRO_SCENE_SHADER(ShadowLandVert,           "shadow_land.vert",            "ground/mesh_land.vert",              "vert", "LAND_CASTER")
+BRO_SCENE_SHADER(LandFillComp,             "land_fill.comp",              "ground/land_fill.comp",              "comp", "")
 // The GPU cell pass (scene_world_cells_pass.cpp), its three steps.
 BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world/world_cells_cull.comp",        "comp", "CELLS_TOP")
 BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world/world_cells_cull.comp",        "comp", "CELLS_LEAF")

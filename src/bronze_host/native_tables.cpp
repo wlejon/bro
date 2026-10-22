@@ -88,7 +88,6 @@ bool registerBroNativeTables(std::string* error) {
          registerAnimationNatives(error) &&
          registerTerrainNatives(error) &&
          registerSceneNatives(error) &&
-         registerClipmapNatives(error) &&
          registerTileWorldNatives(error) &&
          registerGizmoNatives(error) &&
          registerLightingNatives(error);

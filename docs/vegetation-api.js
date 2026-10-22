@@ -187,12 +187,13 @@
  *
  * @typedef {Object} GrassNodeOptions
  * @property {SceneNode|Object|Function} [ground] - what the blades stand on:
- *   a mesh node (its top surface on the field's grid, `sampleHeights`;
- *   texels off the mesh grow nothing), a terrain
- *   (`heightAt`), a clipmap terrain (`renderedElevationAt`), or a function
- *   `(x, z) => y`. Default: flat ground at y = 0.
+ *   a land (its heights, docs/land-api.js), a mesh node (its top surface on
+ *   the field's grid, `sampleHeights`; texels off the mesh grow nothing), a
+ *   terrain (`heightAt`), or a function `(x, z) => y`. Default: flat ground
+ *   at y = 0.
  * @property {Array<number>} [area] - `[x0, z0, x1, z1]` the field covers;
- *   default the mesh's world bounds, else `[-50, -50, 50, 50]`.
+ *   default the node's world bounds (a land's whole extent), else
+ *   `[-50, -50, 50, 50]`.
  * @property {number} [cell=0.5] - field texel spacing (m): the detail of
  *   the ground's shape and of the masks.
  * @property {number|Function} [density=1] - where grass grows, 0..1.

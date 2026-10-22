@@ -218,6 +218,12 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_projectLocal", BRO_NATIVE_FN(bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_detachAIWorld", BRO_NATIVE_FN(bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneGraph_createLand", BRO_NATIVE_FN(bro_scene_SceneGraph_createLand), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneNode_setLandModule", BRO_NATIVE_FN(bro_scene_SceneNode_setLandModule), "str", {"__bro_native.scene.SceneNode", "str", "f32[]", "str", "i32"}, error) &&
+        fn("__bro_native.scene.SceneNode_setLandParams", BRO_NATIVE_FN(bro_scene_SceneNode_setLandParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneNode_landParams", BRO_NATIVE_FN(bro_scene_SceneNode_landParams), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+        fn("__bro_native.scene.SceneNode_landHeight", BRO_NATIVE_FN(bro_scene_SceneNode_landHeight), "f64", {"__bro_native.scene.SceneNode", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneNode_landStats", BRO_NATIVE_FN(bro_scene_SceneNode_landStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneGraph_createPlants", BRO_NATIVE_FN(bro_scene_SceneGraph_createPlants), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlantModule", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantModule), "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
         fn("__bro_native.scene.SceneNode_setPlantSpecies", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantSpecies), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&

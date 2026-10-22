@@ -4,6 +4,7 @@
 #include "bronze_host/host_natives.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
+#include "scene/nodes/land_node.h"
 #include "engine/scene_audio_sync.h"
 #include "util/asset_path.h"
 #include <bromesh/analysis/raycast.h>
@@ -316,6 +317,7 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["groundLayerMissing"] = s.groundLayerMissing;
     j["groundLayerFills"] = s.groundLayerFills;
     j["groundLayerShortfall"] = s.groundLayerShortfall;
+    j["landFills"] = s.landFills;
     j["worldBudgetMs"] = s.worldBudgetMs;
     j["worldSpentMs"] = s.worldSpentMs;
     j["worldJobs"] = s.worldJobs;
@@ -392,6 +394,19 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
         if (node->type() == scene::SceneNode::Type::Mesh) {
             auto* mn = static_cast<scene::MeshNode*>(node);
             if (mn->asGrass()) return;   // its mesh is one blade, not where the grass is
+            if (const scene::LandNode* land = mn->asLand()) {
+                // Its mesh is the rings, not where the land is: its heights.
+                float t = 0.0f;
+                bromath::Vec3 n;
+                if (land->raycast(o, d, closestDist, t, n) && t < closestDist) {
+                    closestDist = t;
+                    closestWorldPoint = o + d * t;
+                    closestWorldNormal = n;
+                    closestNode = mn;
+                    closestInstance = -1;
+                }
+                return;
+            }
             const bromesh::MeshData& md = mn->mesh();
             if (md.positions.empty() || md.indices.empty()) return;
             auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };

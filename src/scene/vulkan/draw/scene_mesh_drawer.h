@@ -26,6 +26,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/ground/scene_cover_shaders.h"
 #include "scene/vulkan/foliage/scene_plant_shaders.h"
+#include "scene/vulkan/ground/scene_land_shaders.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 
@@ -42,6 +43,7 @@ namespace bro::scene {
 class InstancedMeshNode;
 class GrassNode;
 class PlantsNode;
+class LandNode;
 }
 
 namespace bro::scene::vk {
@@ -95,11 +97,13 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 /// Grass is a blade mesh drawn once per cell of a ring around the camera,
 /// placed and bent by the vertex shader from the node's field and influence
 /// map (set 4, scene_grass.glsl). Plants are a PlantsNode's chunks of
-/// elements (no streams), planned on the GPU (scene_plants.glsl).
+/// elements (no streams), planned on the GPU (scene_plants.glsl). Land is a
+/// LandNode's rings, placed on the land by the vertex stage from its tiles
+/// (set 3, scene_land.glsl).
 enum class MeshKind : uint8_t {
-    Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass, Plants,
+    Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation, Grass, Plants, Land,
 };
-constexpr int kMeshKindCount = 9;
+constexpr int kMeshKindCount = 10;
 
 /// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
 constexpr bool vegetationShading(MeshKind k) {
@@ -222,6 +226,10 @@ public:
     /// A plants node's draws, its leaves and its wood for the camera and
     /// each shadow view, planned on the GPU (scene_mesh_drawer_plants.cpp).
     void preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out);
+    /// A land node's draw: its rings, placed from its tiles
+    /// (scene_mesh_drawer_land.cpp). False while it has no module that
+    /// compiles or no tile yet.
+    bool prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& out);
     /// The plants' plans and the leaf poses their draws read (queued by
     /// preparePlants) into the frame's compute stream (SceneFrame::
     /// computeStream), and the grass rings' (queued by prepareGrass) into
@@ -231,13 +239,17 @@ public:
     /// The plans recorded since the last call went to the GPU as `ticket` on
     /// `queue`: the GPU planner's read-backs of them are read once it completes.
     void plansSubmitted(uint64_t ticket, render::VulkanQueue& queue);
-    /// The turf's surface layers (docs/scene-world-architecture.md §5;
-    /// scene_mesh_drawer_ground.cpp), the world service's first producer:
-    /// for each grass node whose turf this frame draws, the tiles the camera
-    /// needs and has not got, offered as fills (offer), and the fills the
-    /// service granted (its turf meshes drawn straight down into them) with
-    /// the page table's changes (record). Recorded outside any rendering,
-    /// after the frame's uniforms and before anything draws the turf.
+    /// The world service's jobs of two kinds, the land's tiles first (so the
+    /// turf's fills draw the land as it now is):
+    ///  - the land's tiles (scene_mesh_drawer_land.cpp): for each land node
+    ///    drawn, the tiles the camera needs and has not got, offered as
+    ///    fills, and those granted made by its module in a compute pass;
+    ///  - the turf's surface layers (docs/scene-world-architecture.md §5;
+    ///    scene_mesh_drawer_ground.cpp): for each grass node whose turf this
+    ///    frame draws, likewise, its turf meshes drawn straight down into
+    ///    the fills granted.
+    /// With the page tables' changes. Recorded outside any rendering, after
+    /// the frame's uniforms and before anything draws the land or the turf.
     void offer(SceneFrame& frame, WorldService& service) override;
     uint32_t record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) override;
 
@@ -368,6 +380,39 @@ private:
     const PlantShaders* plantShaders(const PlantsNode& node);
     std::unordered_map<uint32_t, std::unique_ptr<GroundLayers>> groundLayers_;   // by grass node id
     int turfKind_ = -1;   // the turf's fills, a world service job kind
+    void offerTurf(SceneFrame& frame, WorldService& service);
+    uint32_t recordTurf(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+
+    // --- the land (scene_mesh_drawer_land.cpp) ---
+    /// A land node's tiles: their CPU state and atlas (heights, surface).
+    struct LandTiles {
+        SurfaceLayers tiles;
+        SceneSurfaceLayerAtlas atlas;
+        uint64_t frame = 0;
+        uint64_t generation = 0;   // the node's its tiles were configured at
+        bool cleared = false;      // its page table cleared (once made or reconfigured)
+        bool failed = false;       // its atlas could not be made
+        const LandShaders* shaders = nullptr;   // this frame's
+        std::vector<MeshChunk> chunks;          // its ring blocks where this frame's eye puts them
+    };
+    LandTiles* landTiles(SceneFrame& frame, LandNode& node);
+    /// A land node's set; null for a node with no module or one that did
+    /// not compile.
+    const LandShaders* landShaders(const LandNode& node);
+    VkPipeline landFillPipeline(const LandShaders& shaders);
+    bool setupLand(SceneGpu& gpu);
+    void cleanupLand(SceneGpu& gpu);
+    void offerLand(SceneFrame& frame, WorldService& service);
+    uint32_t recordLand(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+    std::unordered_map<uint32_t, std::unique_ptr<LandTiles>> lands_;   // by land node id
+    std::vector<std::unique_ptr<LandShaders>> landSets_;
+    std::unordered_map<uint64_t, int> landByModule_;   // the module's source hash -> index (-1: failed)
+    std::vector<VkPipeline> landFillPipelines_;         // by set index
+    VkDescriptorSetLayout landFillSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout landFillLayout_ = VK_NULL_HANDLE;
+    int landKind_ = -1;   // the land's fills, a world service job kind
+    std::vector<uint32_t> landDrawn_;     // the land nodes prepared this frame
+    std::vector<uint32_t> landOffered_;   // those whose tiles offer() updated this frame
     /// This frame's turf draws by grass node (offer's, for record).
     std::unordered_map<uint32_t, std::vector<const MeshDraw*>> turfDraws_;
     std::vector<uint32_t> turfOffered_;   // the grass nodes whose tiles offer() updated this frame

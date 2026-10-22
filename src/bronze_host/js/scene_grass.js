@@ -3,7 +3,7 @@
 //
 // The node (scene/nodes/grass_node.h) draws blades over a FIELD: a grid of (ground
 // height, density, dryness, height multiplier). This file bakes that field
-// from whatever the app's ground is (a mesh node, a terrain, a clipmap, a
+// from whatever the app's ground is (a land, a mesh node, a terrain, a
 // height function) and from the app's density / dryness / height inputs
 // (numbers or functions of x, z, y), then hands it over whole.
 //
@@ -41,8 +41,6 @@
     // A height source: (x, z) => y, or a whole grid at once for a mesh node.
     function heightSource(ground) {
         if (typeof ground === 'function') return { at: ground };
-        if (ground && typeof ground.renderedElevationAt === 'function')
-            return { at: (x, z) => ground.renderedElevationAt(x, z) };
         if (ground && typeof ground.heightAt === 'function' && !(ground instanceof SceneNode))
             return { at: (x, z) => ground.heightAt(x, z) };
         if (ground instanceof SceneNode) return { node: ground };

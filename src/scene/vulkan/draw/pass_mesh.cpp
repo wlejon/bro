@@ -32,7 +32,7 @@ void PassOpaque::record(SceneFrame& frame) {
     // Each draw's own time when the passes are timed (SceneGpuTimer), by kind.
     static constexpr const char* kKind[kMeshKindCount] = {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
-        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:plants"};
+        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:plants", "opaque:land"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];

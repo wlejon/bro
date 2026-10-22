@@ -737,6 +737,39 @@ void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
 
+// ---- Land (native_scene_land.cpp, js/scene_land.js) ----
+
+// bro.scene.SceneGraph.prototype.createLand
+//   registered at __bro_native.scene.SceneGraph_createLand
+void* bro_scene_SceneGraph_createLand(void* self);
+
+// land module: its GLSL ("" none: nothing drawn), the data its landData(i)
+// reads (at most 256 floats), its height's FastNoise2 encoded node tree and
+// seed (the CPU's heights). Returns "" or what was wrong.
+//   registered at __bro_native.scene.SceneNode_setLandModule
+const char* bro_scene_SceneNode_setLandModule(void* self, const char* source, const float* data, uint32_t data_len,
+                                              const char* heightTree, int32_t seed);
+
+// land params: extent, cellSize, resolution, levels (a NaN keeps a value)
+//   registered at __bro_native.scene.SceneNode_setLandParams
+void bro_scene_SceneNode_setLandParams(void* self, const double* params, uint32_t params_len);
+
+// land params: [extent, cellSize, resolution, levels]; empty for a node
+// that is not a land
+//   registered at __bro_native.scene.SceneNode_landParams
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_landParams(void* self, bronze_native_buffer* out);
+
+// land height at (x, z): NaN off the land (or not a land)
+//   registered at __bro_native.scene.SceneNode_landHeight
+double bro_scene_SceneNode_landHeight(void* self, double x, double z);
+
+// land stats: [tiles needed, resident, missing, filled this frame, levels,
+// shortfall, module compiled]; empty for a node that is not a land
+//   registered at __bro_native.scene.SceneNode_landStats
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_landStats(void* self, bronze_native_buffer* out);
+
 // ---- Plants (native_scene_plants.cpp, js/scene_plants.js) ----
 
 // bro.scene.SceneGraph.prototype.createPlants

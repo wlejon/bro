@@ -13,7 +13,7 @@ enum class ShaderStage { Vertex, Fragment, Compute };
 /// Compile Vulkan-flavoured GLSL (`#version 450` with explicit layouts) to
 /// SPIR-V 1.0 for a Vulkan 1.0 client, in process, with glslang — the one
 /// shader compiler bro has. The scene's built-in shaders go through it at
-/// build time (bro_spirv_embed), and the clipmap terrain and custom scene
+/// build time (bro_spirv_embed), and the worlds' modules and custom scene
 /// shaders at run time; WebGL programs use glslang directly (acquireGlslang)
 /// because linking them needs its reflection.
 ///

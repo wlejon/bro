@@ -45,6 +45,10 @@
 #include "plants.frag.src.h"
 #include "shadow_plants.vert.src.h"
 #include "plants_pose.comp.src.h"
+#include "scene_land_layout.h.src.h"
+#include "scene_land_layer.glsl.src.h"
+#include "land_module.glsl.src.h"
+#include "land_fill.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -154,6 +158,9 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/scene_plant_records.glsl", kVkScenePlantRecordsSrc},
         {"foliage/scene_plant_layer.glsl", kVkScenePlantLayerSrc},
         {"foliage/plant_module.glsl", kVkPlantModuleSrc},
+        {"ground/scene_land_layout.h", kVkSceneLandLayoutSrc},
+        {"ground/scene_land_layer.glsl", kVkSceneLandLayerSrc},
+        {"ground/land_module.glsl", kVkLandModuleSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
         {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
@@ -166,6 +173,7 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/plants.frag", kVkPlantsFragSrc},
         {"foliage/shadow_plants.vert", kVkShadowPlantsVertSrc},
         {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
+        {"ground/land_fill.comp", kVkLandFillCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

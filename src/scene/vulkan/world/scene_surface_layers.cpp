@@ -30,16 +30,19 @@ VkSampler makeSampler(VkDevice dev, VkFilter filter) {
 }  // namespace
 
 bool SceneSurfaceLayerAtlas::create(SceneVkDevice& device, SceneVkAllocator& allocator,
-                                    const SurfaceLayerConfig& config, int levels, std::span<const VkFormat> formats) {
+                                    const SurfaceLayerConfig& config, int levels, std::span<const VkFormat> formats,
+                                    Fill fill) {
     destroy(device, allocator);
     const int count = std::min(static_cast<int>(formats.size()), kMaxLayers);
+    fill_ = fill;
     stride_ = static_cast<uint32_t>(config.stride());
     slots_ = config.slots;
     levels_ = levels;
     pageSize_ = config.pageSize;
+    const VkImageUsageFlags written =
+        fill == Fill::Compute ? VK_IMAGE_USAGE_STORAGE_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     for (int i = 0; i < count; ++i) {
-        if (!allocator.createImage(stride_, stride_, formats[i],
-                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        if (!allocator.createImage(stride_, stride_, formats[i], VK_IMAGE_USAGE_SAMPLED_BIT | written,
                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, layers_[i], 1, VK_SAMPLE_COUNT_1_BIT,
                                    VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(slots_), 0,
                                    VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
@@ -53,9 +56,10 @@ bool SceneSurfaceLayerAtlas::create(SceneVkDevice& device, SceneVkAllocator& all
                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, page_, 1, VK_SAMPLE_COUNT_1_BIT,
                                VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(std::max(levels_, 1)), 0,
                                VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
-        !allocator.createImage(stride_, stride_, SceneTargets::kDepthFormat,
-                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                               depth_, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        (fill == Fill::Render &&
+         !allocator.createImage(stride_, stride_, SceneTargets::kDepthFormat,
+                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                depth_, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT))) {
         destroy(device, allocator);
         return false;
     }
@@ -130,7 +134,11 @@ void SceneSurfaceLayerAtlas::slotBarrier(VkCommandBuffer cmd, std::span<const Su
             b.image = layers_[i].image;
             b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, static_cast<uint32_t>(f.slot), 1};
             b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            if (toTarget) {
+            if (fill_ == Fill::Compute) {
+                b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcAccessMask = toTarget ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_SHADER_WRITE_BIT;
+                b.dstAccessMask = toTarget ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+            } else if (toTarget) {
                 // (Its old contents go: the fill clears it.)
                 b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                 b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -146,12 +154,12 @@ void SceneSurfaceLayerAtlas::slotBarrier(VkCommandBuffer cmd, std::span<const Su
         }
     }
     if (barriers.empty()) return;
-    // Into a target: after every earlier read of the slot (a fragment
-    // shader's, in an earlier frame). Back: before this frame's reads.
-    const VkPipelineStageFlags src = toTarget ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                              : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    const VkPipelineStageFlags dst = toTarget ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                              : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    // Into a target: after every earlier read of the slot (in an earlier
+    // frame). Back: before this frame's reads.
+    const VkPipelineStageFlags writer = fill_ == Fill::Compute ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                                               : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkPipelineStageFlags src = toTarget ? kReaders : writer;
+    const VkPipelineStageFlags dst = toTarget ? writer : kReaders;
     vkCmdPipelineBarrier(cmd, src, dst, 0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(barriers.size()),
                          barriers.data());
 }
@@ -201,7 +209,7 @@ void SceneSurfaceLayerAtlas::writePages(SceneVkDevice& device, VkCommandBuffer c
     in.range = all;
     in.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     in.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    in.srcStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    in.srcStages = kReaders;
     in.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
     in.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
     render::cmdImageBarrier(cmd, in);
@@ -214,7 +222,7 @@ void SceneSurfaceLayerAtlas::writePages(SceneVkDevice& device, VkCommandBuffer c
     out.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     out.srcStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
     out.srcAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
-    out.dstStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    out.dstStages = kReaders;
     out.dstAccess = VK_ACCESS_SHADER_READ_BIT;
     render::cmdImageBarrier(cmd, out);
 }
@@ -222,12 +230,14 @@ void SceneSurfaceLayerAtlas::writePages(SceneVkDevice& device, VkCommandBuffer c
 void SceneSurfaceLayerAtlas::clearPages(VkCommandBuffer cmd) {
     if (!page_.isValid()) return;
     const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, static_cast<uint32_t>(std::max(levels_, 1))};
+    // (From UNDEFINED: the table is cleared whatever it held, and a new one
+    // has never been in any other layout.)
     render::ImageBarrier in;
     in.image = page_.image;
     in.range = all;
-    in.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    in.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     in.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    in.srcStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    in.srcStages = kReaders;
     in.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
     in.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
     render::cmdImageBarrier(cmd, in);
@@ -238,9 +248,23 @@ void SceneSurfaceLayerAtlas::clearPages(VkCommandBuffer cmd) {
     out.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     out.srcStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
     out.srcAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
-    out.dstStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    out.dstStages = kReaders;
     out.dstAccess = VK_ACCESS_SHADER_READ_BIT;
     render::cmdImageBarrier(cmd, out);
+    // A compute-filled atlas's layers into GENERAL, where they stay.
+    if (fill_ == Fill::Compute) {
+        for (int i = 0; i < layerCount_; ++i) {
+            render::ImageBarrier b;
+            b.image = layers_[i].image;
+            b.range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, static_cast<uint32_t>(slots_)};
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcStages = kReaders;
+            b.dstStages = kReaders | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            b.dstAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            render::cmdImageBarrier(cmd, b);
+        }
+    }
 }
 
 }  // namespace bro::scene::vk

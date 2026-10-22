@@ -39,7 +39,8 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Scatter:
     case MeshKind::Tube:
     case MeshKind::Grass:
-    case MeshKind::Plants: break;
+    case MeshKind::Plants:
+    case MeshKind::Land: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -117,6 +118,8 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
+    vs_[static_cast<int>(MeshKind::Land)] =
+        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandVert);
     // (The blades' and the plants' stages are their node's module set's.)
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
@@ -148,8 +151,10 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: Failed setting up the cover's plan");
         return false;
     }
-    // The turf's surface layer fills are the world service's jobs (a draw:
-    // raster), a first guess at a fill's cost until the service measures one.
+    // The land's tiles and then the turf's surface layer fills are the world
+    // service's jobs (recorded in that order), a first guess at a fill's
+    // cost until the service measures one.
+    if (!setupLand(gpu)) return false;
     if (turfKind_ < 0) turfKind_ = gpu.world.addKind(this, {"turf", WorldSchedule::Raster, 0.03f});
     if (turfKind_ < 0) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the turf's fills");
@@ -158,7 +163,20 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     return true;
 }
 
+void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
+    offerLand(frame, service);
+    offerTurf(frame, service);
+}
+
+uint32_t SceneMeshDrawer::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted,
+                                 WorldStream& stream) {
+    if (kind == landKind_) return recordLand(frame, granted, stream);
+    if (kind == turfKind_) return recordTurf(frame, granted, stream);
+    return 0;
+}
+
 void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
+    cleanupLand(gpu);
     builtin_.destroy(gpu.device);
     for (auto& [id, layers] : groundLayers_) layers->atlas.destroy(gpu.device, gpu.allocator);
     groundLayers_.clear();
@@ -273,9 +291,9 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
 
 VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
     const uint32_t rasterBits = rasterVariant(draw);
-    // Turf has its own build of mesh.frag (a static mesh's: SCENE_GROUND),
-    // so the other meshes' carries none of its work.
-    const bool ground = draw.kind == MeshKind::Static &&
+    // Turf has its own build of mesh.frag (a static mesh's or a land's:
+    // SCENE_GROUND), so the other meshes' carries none of its work.
+    const bool ground = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Land) &&
                         (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
     // And a grass node's herb plants, a grass draw with its own stages.
     const bool herb = draw.kind == MeshKind::Grass &&
@@ -614,7 +632,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
             out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
-    } else if (node.turfGrass() != 0u && out.kind == MeshKind::Static && !out.lines) {
+    } else if (node.turfGrass() != 0u && (out.kind == MeshKind::Static || out.kind == MeshKind::Land) && !out.lines) {
         // Turf: shaded as its grass node's ground, from that node's field.
         SceneNode* g = frame.graph.findById(node.turfGrass());
         MeshNode* gm = g && g->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(g) : nullptr;
@@ -856,7 +874,8 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
     case MeshKind::Scatter:
     case MeshKind::Tube:
     case MeshKind::Grass:
-    case MeshKind::Plants: break;
+    case MeshKind::Plants:
+    case MeshKind::Land: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     if (draw.chunks && draw.chunkIndices != VK_NULL_HANDLE && cull && cull->frustum) {

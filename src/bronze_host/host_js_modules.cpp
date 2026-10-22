@@ -40,7 +40,6 @@ extern "C" void bro_core_main();
 extern "C" void bro_net_main();
 extern "C" void bro_physics_main();
 extern "C" void bro_terrain_main();
-extern "C" void bro_clipmap_main();
 extern "C" void bro_tile_world_main();
 extern "C" void bro_lighting_main();
 extern "C" void bro_gizmo_main();
@@ -50,6 +49,7 @@ extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
 extern "C" void bro_scene_grass_main();
 extern "C" void bro_scene_plants_main();
+extern "C" void bro_scene_land_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_profiler_main();
@@ -177,11 +177,6 @@ void installTerrainModule() {
     adoptGlobalProperty("Terrain");
 }
 
-void installClipmapModule() {
-    bronze::embed::runEntry(bro_clipmap_main);
-    adoptGlobalProperty("ClipmapTerrain");
-}
-
 void installTileWorldModule() {
     bronze::embed::runEntry(bro_tile_world_main);
     adoptGlobalProperty("TileWorld");
@@ -218,6 +213,8 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_grass_main);
     // js/scene_plants.js: createPlants and the plants node's members.
     bronze::embed::runEntry(bro_scene_plants_main);
+    // js/scene_land.js: createLand and the land node's members.
+    bronze::embed::runEntry(bro_scene_land_main);
 }
 
 void installMotionModule() {
@@ -427,7 +424,6 @@ void installDeferredModules() {
         ModuleGroup& g = newGroup("3d", [] {
             installPhysicsModule();
             installTerrainModule();
-            installClipmapModule();
             installTileWorldModule();
             installLightingModule();
             installGizmoModule();
@@ -436,13 +432,11 @@ void installDeferredModules() {
         });
         g3d = &g;
         for (const char* name : {"Physics", "PhysicsCharacter", "PhysicsSoftBody", "PhysicsVehicle",
-                                 "PhysicsRagdoll", "PhysicsWorldHandle", "Terrain", "ClipmapTerrain",
-                                 "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
+                                 "PhysicsRagdoll", "PhysicsWorldHandle", "Terrain", "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
             deferGlobal(g, name);
         }
         const ev::Persistent bro(ev::globalValue("bro").value);
-        for (const char* ns : {"scene", "terrain", "clipmap", "tile_world", "lighting", "animation",
-                               "gizmo"}) {
+        for (const char* ns : {"scene", "terrain", "tile_world", "lighting", "animation", "gizmo"}) {
             deferMember(g, bro.get(), ns);
         }
     }

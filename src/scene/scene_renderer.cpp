@@ -6,6 +6,7 @@
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
+#include "scene/nodes/land_node.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "render/vulkan_context.h"
@@ -62,6 +63,8 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         auto* m = static_cast<MeshNode*>(n);
         // Grass stands around the camera wherever its field is: never culled.
         if (!m->hasDrawableMesh() || m->asGrass()) return std::nullopt;
+        // The land's rings follow the eye over the land: its box is the land's.
+        if (const LandNode* land = m->asLand()) return land->bounds();
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();

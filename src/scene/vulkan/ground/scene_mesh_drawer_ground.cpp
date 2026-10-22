@@ -8,6 +8,7 @@
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 
 #include "scene/nodes/grass_node.h"
+#include "scene/nodes/land_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -156,12 +157,12 @@ SceneMeshDrawer::GroundLayers* SceneMeshDrawer::groundLayers(SceneFrame& frame, 
     return slot->failed ? nullptr : slot.get();
 }
 
-void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
-    // Each grass node's turf draws this frame.
+void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
+    // Each grass node's turf draws this frame (static meshes and lands).
     turfDraws_.clear();
     turfOffered_.clear();
     for (const MeshDraw& d : frame.lists.meshes) {
-        if (d.kind != MeshKind::Static || !d.customSet || !d.hasBounds) continue;
+        if ((d.kind != MeshKind::Static && d.kind != MeshKind::Land) || !d.customSet || !d.hasBounds) continue;
         if (!(static_cast<uint32_t>(d.push.pbrParams[3]) & mesh_flags::kGround)) continue;
         const SceneNode* n = frame.graph.findById(d.nodeId);
         if (!n || n->type() != SceneNode::Type::Mesh) continue;
@@ -200,8 +201,9 @@ void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
         };
         std::sort(draws.begin(), draws.end(), [](const MeshDraw* a, const MeshDraw* b) { return a->nodeId < b->nodeId; });
         for (const MeshDraw* d : draws) {
-            const auto* n = static_cast<const MeshNode*>(frame.graph.findById(d->nodeId));
-            const uint64_t g = n->geometryGeneration();
+            auto* n = static_cast<MeshNode*>(frame.graph.findById(d->nodeId));
+            const LandNode* land = n->asLand();
+            const uint64_t g = land ? land->generation() : n->geometryGeneration();
             mixKey(&d->nodeId, sizeof(d->nodeId));
             mixKey(&g, sizeof(g));
             mixKey(&d->bounds, sizeof(d->bounds));
@@ -211,8 +213,10 @@ void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
             std::vector<SurfaceItem> items;
             gl.bounds = bromath::aempty3();
             for (const MeshDraw* d : draws) {
-                const auto* n = static_cast<const MeshNode*>(frame.graph.findById(d->nodeId));
-                const std::vector<SurfaceItem>& mine = turfItems(gl, *n, d->bounds);
+                auto* n = static_cast<MeshNode*>(frame.graph.findById(d->nodeId));
+                // (A land's are its own: its mesh is the rings.)
+                const LandNode* land = n->asLand();
+                const std::vector<SurfaceItem>& mine = land ? land->items() : turfItems(gl, *n, d->bounds);
                 items.insert(items.end(), mine.begin(), mine.end());
                 gl.bounds.min = bromath::vmin(gl.bounds.min, d->bounds.min);
                 gl.bounds.max = bromath::vmax(gl.bounds.max, d->bounds.max);
@@ -246,9 +250,7 @@ void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
     }
 }
 
-uint32_t SceneMeshDrawer::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted,
-                                 WorldStream& stream) {
-    if (kind != turfKind_) return 0;
+uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
     // The fills granted, by grass node, in rank order.
     std::unordered_map<uint32_t, std::vector<uint64_t>> grantedKeys;
     for (const WorldJob& j : granted) grantedKeys[j.producer].push_back(j.key);

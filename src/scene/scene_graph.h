@@ -34,6 +34,7 @@ class Particles3DNode;
 class DecalNode;
 class GrassNode;
 class PlantsNode;
+class LandNode;
 class ReflectionProbeNode;
 class AgentBinding;
 class AIWorldTicker;
@@ -69,6 +70,7 @@ public:
     DecalNode* createDecal(const std::string& name = "");
     GrassNode* createGrass(const std::string& name = "");
     PlantsNode* createPlants(const std::string& name = "");
+    LandNode* createLand(const std::string& name = "");
     ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
@@ -95,7 +97,7 @@ public:
     /// JS-wrapper lifetimes stay independently documented. Created in the
     /// constructor; `graph` is nulled first thing in ~SceneGraph.
     /// Defined in scene/graph_liveness.h so that headers which cannot include
-    /// this one (tile_world.h, clipmap_terrain.h, terrain_manager.h — all
+    /// this one (tile_world.h, terrain_manager.h — both
     /// included by scene_graph.h's own dependents) can hold a weak_ptr to it.
     using LivenessToken = GraphLivenessToken;
     const std::shared_ptr<LivenessToken>& livenessToken() const { return liveToken_; }

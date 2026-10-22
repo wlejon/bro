@@ -5,7 +5,7 @@
 //     capture would show the walls' white base colour either way);
 //   - overlapping probes: a mesh takes the highest-priority probe whose box
 //     holds it, ties going to the smaller box;
-//   - terrain is captured: a clipmap floor under a lone sphere shows in the
+//   - the land is captured: a flat land under a lone sphere shows in the
 //     sphere's lower half once the probe captures it.
 // The mirror sphere is metallic with no IBL environment and no ambient, so
 // without a probe it is black and any colour it shows comes from a probe.
@@ -118,7 +118,7 @@ if (!probe.scene) {
     }
 
     // =====================================================================
-    // Terrain in the capture: a lit clipmap floor and nothing else.
+    // The land in the capture: a lit flat land and nothing else.
     // =====================================================================
     {
         const s = freshScene(SIZE);
@@ -140,14 +140,16 @@ if (!probe.scene) {
         p.capture();
         const bare = lower(sc.captureFrame());
 
-        const cm = sc.createClipmapTerrain({ levels: 4, resolution: 16, cellSize: 1, seaLevel: -2, detailRelief: 0 });
-        cm.setHeightLayer(0, { data: new Float32Array(16 * 16), width: 16, height: 16,
-                               originX: -64, originZ: -64, metresPerCell: 8 });
+        const flat = FastNoise.create('Constant');
+        flat.set('Value', -2);
+        sc.createLand({ height: flat, extent: 64,
+                        surface: 'LandSurface landSurface(LandPoint q) { LandSurface s; s.albedo = vec3(0.6); return s; }' });
+        sc.captureFrame();   // (its first tiles)
         p.capture();
         const floor = lower(sc.captureFrame());
         const sum = (c) => c.r + c.g + c.b;
-        assert(sum(bare) < 30, `no terrain: the sphere's lower half reflects nothing ${fmt(bare)}`);
-        assert(sum(floor) > sum(bare) + 60, `the probe captures the clipmap floor: ${fmt(bare)} -> ${fmt(floor)}`);
+        assert(sum(bare) < 30, `no land: the sphere's lower half reflects nothing ${fmt(bare)}`);
+        assert(sum(floor) > sum(bare) + 60, `the probe captures the land: ${fmt(bare)} -> ${fmt(floor)}`);
         dropScene(s);
     }
 

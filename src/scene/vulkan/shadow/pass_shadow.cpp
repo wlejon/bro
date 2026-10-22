@@ -63,11 +63,11 @@ void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unpla
     static constexpr const char* kOverlay[kMeshKindCount] = {
         "shadow:moving:static", "shadow:moving:instanced", "shadow:moving:skinned", "shadow:moving:scatter",
         "shadow:moving:tube",   "shadow:moving:veg",       "shadow:moving:instancedVeg", "shadow:moving:grass",
-        "shadow:moving:plants"};
+        "shadow:moving:plants", "shadow:moving:land"};
     static constexpr const char* kPages[kMeshKindCount] = {
         "shadow:pages:static", "shadow:pages:instanced", "shadow:pages:skinned", "shadow:pages:scatter",
         "shadow:pages:tube",   "shadow:pages:veg",       "shadow:pages:instancedVeg", "shadow:pages:grass",
-        "shadow:pages:plants"};
+        "shadow:pages:plants", "shadow:pages:land"};
     const char* run = nullptr;
     for (const MeshDraw& draw : frame.lists.meshes) {
         if (!draw.castsShadow) continue;

@@ -29,7 +29,7 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 
 ## SPIR-V cache
 
-GLSL compiled at run time (a world's modules spliced into the scene's shaders, custom shader chunks, the clipmap terrain) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
+GLSL compiled at run time (a world's modules spliced into the scene's shaders, custom shader chunks) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
 
 ## Vulkan pipeline cache
 

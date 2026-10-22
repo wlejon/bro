@@ -9,8 +9,8 @@
 // carries data. The node holds:
 //   - the FIELD: a grid over the ground, four floats a texel (height,
 //     density 0..1, dryness 0 lush .. 1 sun-dried, height multiplier),
-//     set whole from a script (bro.scene's createGrass bakes it from a mesh,
-//     a terrain, a clipmap or callbacks);
+//     set whole from a script (bro.scene's createGrass bakes it from a land,
+//     a mesh, a terrain or callbacks);
 //   - the PARAMS: the near blade width, the rings' density and range;
 //   - the INFLUENCE MAP: a window of cells around the camera into which
 //     movers (tracked nodes) and one-off pushes stamp a bend and a trample,

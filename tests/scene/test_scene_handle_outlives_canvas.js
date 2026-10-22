@@ -4,8 +4,8 @@
 // The engine destroys a SceneGraph the instant its canvas leaves the DOM
 // (Engine::pruneDetachedSceneGraphs). SceneNode wrappers already survive that —
 // they hold {weak liveness token, node id} and re-resolve on every call, see
-// the design note at the top of scene graph. The three
-// scene-side helper objects did NOT: TileWorld, ClipmapTerrain and
+// the design note at the top of scene graph. The
+// scene-side helper objects did NOT: TileWorld and
 // TerrainManager each held a `SceneGraph&`, so a JS handle that outlived its
 // canvas by one frame left them pointing at freed memory, and their own
 // destructors then called graph.destroyNode() through it — a hard segfault at
@@ -13,7 +13,7 @@
 //
 // That is what "removing a live scene canvas from the DOM without destroying
 // its scene nodes segfaults the engine" actually was: not the removal, the
-// surviving handle. All three now hold the same weak liveness token.
+// surviving handle. Both now hold the same weak liveness token.
 //
 // A crash test — the process dying before the final console.log is the failure.
 
@@ -69,28 +69,6 @@ if (!probeScene) {
         assert(tw.getTile(4, 4, 0) === 3, 'and the fill landed too');
 
         survivors.push(tw, s);
-        holder.remove();
-        flush();
-    }
-
-    // --- ClipmapTerrain --------------------------------------------------
-    {
-        const { holder, cv } = makeCanvas('cm');
-        const s = cv.getContext('scene');
-        s.setCamera({ fov: 50, near: 0.1, far: 5000, position: [0, 200, 0], target: [0, 0, 0] });
-        const cm = typeof s.createClipmapTerrain === 'function'
-            ? s.createClipmapTerrain({ levels: 4, resolution: 32, cellSize: 1.0 })
-            : null;
-        flush();
-        if (cm) {
-            holder.innerHTML = '';
-            flush();
-            tick(4);
-            if (typeof cm.update === 'function') cm.update(0, 200, 0);
-            flush();
-            tick(4);
-            survivors.push(cm, s);
-        }
         holder.remove();
         flush();
     }

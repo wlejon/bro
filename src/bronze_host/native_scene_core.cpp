@@ -2,7 +2,6 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "natives/tile_world/native_tile_world_decl.h"
-#include "natives/clipmap/native_clipmap_decl.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_js_modules.h"
 #include "natives/scene/native_scene_decl.h"
@@ -363,48 +362,6 @@ void* bro_scene_SceneGraph_createTerrain(void* self, const int32_t* opts_chunkSi
     cell->token = g->livenessToken();
     cell->manager = std::make_unique<scene::TerrainManager>(*g);
     cell->manager->configure(cfg);
-    return cell;
-}
-
-void* bro_scene_SceneGraph_createClipmapTerrain(void* self, bool opts_levels_given, int32_t opts_levels,
-                                                bool opts_resolution_given, int32_t opts_resolution,
-                                                bool opts_cellSize_given, double opts_cellSize,
-                                                bool opts_heightScale_given, double opts_heightScale,
-                                                bool opts_seaLevel_given, double opts_seaLevel,
-                                                bool opts_snowLine_given, double opts_snowLine,
-                                                bool opts_maxCellScale_given, double opts_maxCellScale,
-                                                bool opts_planetRadius_given, double opts_planetRadius,
-                                                bool opts_layerFade_given, bool opts_layerFade,
-                                                bool opts_coverageFloor_given, bool opts_coverageFloor,
-                                                bool opts_cubicSurface_given, bool opts_cubicSurface,
-                                                bool opts_cubicHeight_given, bool opts_cubicHeight,
-                                                bool opts_detailWavelength_given, double opts_detailWavelength,
-                                                bool opts_detailRelief_given, double opts_detailRelief,
-                                                bool opts_detailGain_given, double opts_detailGain,
-                                                bool opts_detailOctaves_given, int32_t opts_detailOctaves) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    scene::ClipmapConfig cfg;
-    if (opts_levels_given) cfg.levels = opts_levels;
-    if (opts_resolution_given) cfg.resolution = opts_resolution;
-    if (opts_cellSize_given) cfg.cellSize = static_cast<float>(opts_cellSize);
-    if (opts_heightScale_given) cfg.heightScale = static_cast<float>(opts_heightScale);
-    if (opts_seaLevel_given) cfg.seaLevel = static_cast<float>(opts_seaLevel);
-    if (opts_snowLine_given) cfg.snowLine = static_cast<float>(opts_snowLine);
-    if (opts_maxCellScale_given) cfg.maxCellScale = static_cast<float>(opts_maxCellScale);
-    if (opts_planetRadius_given) cfg.planetRadius = static_cast<float>(opts_planetRadius);
-    if (opts_layerFade_given) cfg.layerFade = opts_layerFade;
-    if (opts_coverageFloor_given) cfg.coverageFloor = opts_coverageFloor;
-    if (opts_cubicSurface_given) cfg.cubicSurface = opts_cubicSurface;
-    if (opts_cubicHeight_given) cfg.cubicHeight = opts_cubicHeight;
-    if (opts_detailWavelength_given) cfg.detailWavelength = static_cast<float>(opts_detailWavelength);
-    if (opts_detailRelief_given) cfg.detailRelief = static_cast<float>(opts_detailRelief);
-    if (opts_detailGain_given) cfg.detailGain = static_cast<float>(opts_detailGain);
-    if (opts_detailOctaves_given) cfg.detailOctaves = opts_detailOctaves;
-
-    auto* cell = new HostClipmapCell();
-    cell->token = g->livenessToken();
-    cell->terrain = std::make_unique<scene::ClipmapTerrain>(*g, cfg);
     return cell;
 }
 

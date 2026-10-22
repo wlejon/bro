@@ -190,7 +190,7 @@ if(BRO_WITH_3D)
         native_scene_factories.cpp
         native_scene_particles.cpp
         native_scene_terrain.cpp
-        native_scene_clipmap.cpp
+        native_scene_land.cpp
         native_scene_tile.cpp
         native_scene_tile_ops.cpp
         native_scene_tile_objects.cpp
@@ -200,7 +200,6 @@ if(BRO_WITH_3D)
         native_scene_gizmo.cpp
         natives/scene/native_scene_register.cpp
         natives/terrain/native_terrain_register.cpp
-        natives/clipmap/native_clipmap_register.cpp
         natives/tile_world/native_tile_world_register.cpp
         natives/lighting/native_lighting_register.cpp
         natives/animation/native_animation_register.cpp
@@ -238,7 +237,6 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/scene
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/terrain
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/clipmap
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/tile_world
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
@@ -618,7 +616,6 @@ else()
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(terrain    bro_terrain_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(clipmap    bro_clipmap_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tile_world bro_tile_world_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(lighting   bro_lighting_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
@@ -628,6 +625,7 @@ else()
     bro_compile_js(scene_extras bro_scene_extras_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene_grass bro_scene_grass_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene_plants bro_scene_plants_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(scene_land bro_scene_land_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(server     bro_server_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(profiler   bro_profiler_main   NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

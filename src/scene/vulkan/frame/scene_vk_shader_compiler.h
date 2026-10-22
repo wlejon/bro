@@ -20,7 +20,7 @@ enum class BuiltinSceneShader {
 };
 
 /// The scene's shader modules: the built-in shaders (compiled at build time)
-/// and run-time GLSL (clipmap terrain, custom shaders) through the engine's
+/// and run-time GLSL (worlds' modules, custom shaders) through the engine's
 /// one in-process compiler, render/glsl_compiler.h.
 ///
 /// BRO_SCENE_SHADER_SOURCE is the developer's switch for editing shaders
