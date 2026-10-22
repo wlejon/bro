@@ -227,10 +227,12 @@ void testFloorOverTarget() {
     s.offer({3, 0, k, 1.0f, 1.0, false});
     s.schedule();
     check(s.granted(k).size() == 2, "the floor still grants what fits it (two at 0.05)");
-    // Back under it, the slack again (the window's heaviest need: 3.1 - 0.5).
+    // Back under it, the slack again (the window's heaviest need: 3.1 - 0.5),
+    // less the headroom the frame over raised (a step, 0.98 of it left after
+    // a frame under: 0.01 * (0.98 - 0.02)).
     s.observe(frameOf(1.0));
     s.beginFrame();
-    check(near(s.budgetMs(), 2.78 - 2.6), "back under target, the slack returns");
+    check(near(s.budgetMs(), 2.78 - 2.6 - 0.0096), "back under target, the slack returns, less the headroom");
     // Need past the target, though the frame read was under it: the floor.
     WorldService t;
     t.configure(c);
@@ -238,6 +240,34 @@ void testFloorOverTarget() {
     t.observe(frameOf(2.7));
     t.beginFrame();
     check(near(t.budgetMs(), 0.12), "slack under the floor is the floor");
+}
+
+void testHeadroom() {
+    WorldService s;
+    WorldServiceConfig c;
+    c.targetMs = 2.78f;
+    c.floorMs = 0.1f;
+    c.window = 1;
+    s.configure(c);
+    // Frames whose need varies about 2.0 by up to 0.3 ms, the service
+    // spending the slack the last one left: without headroom about half of
+    // them run over; with it overRate of them, at the quantile's level.
+    const int k = s.addKind({"turf", WorldSchedule::Raster, 0.01f});
+    uint32_t seed = 12345u, over = 0, frames = 0;
+    for (int i = 0; i < 4000; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        const double need = 2.0 + 0.3 * (static_cast<double>(seed >> 8) / 16777216.0);
+        s.beginFrame();
+        const double spent = s.budgetMs();
+        const double frame = need + spent;
+        if (i >= 2000) {
+            ++frames;
+            over += frame > c.targetMs ? 1u : 0u;
+        }
+        s.observe(frameOf(frame, k, spent / 0.01, spent));
+    }
+    const double rate = static_cast<double>(over) / frames;
+    check(rate > 0.005 && rate < 0.06, "the headroom leaves about overRate of the frames over");
 }
 
 void testCostLearning() {
@@ -277,6 +307,7 @@ int main() {
     testUnits();
     testBudgetFollowsSlack();
     testFloorOverTarget();
+    testHeadroom();
     testCostLearning();
     testViewCut();
     std::printf("world service: %d checks, %d failures\n", g_checks, g_failures);

@@ -36,7 +36,11 @@
 // its GPU milliseconds and the service's own share of them. What the frame
 // spent apart from the service, the largest over the last `window` frames
 // read, is what the frame needs; the budget is what that leaves under the
-// target, never less than the floor. A frame read over the target takes the
+// target less a headroom, never less than the floor. The headroom is the
+// frames' surprise (a frame's own work and the jobs' costs both vary from
+// what was expected of them): it rises a step on each frame read over the
+// target and falls overRate / (1 - overRate) of a step on each under it, so
+// it settles where overRate of the frames run over. A frame read over the target takes the
 // budget to the floor until one comes in under it. Before any frame is read
 // (or on a device that cannot time its frames) the budget is the floor, and
 // so it is again after the view jumps (forgetSlack()), until a frame of the
@@ -79,6 +83,8 @@ struct WorldServiceConfig {
     float floorMs = 0.1f;     // the least budget a frame
     int window = 4;           // frames whose need sets the slack
     float costRate = 0.25f;   // how far one measurement moves a kind's cost
+    float overRate = 0.02f;   // the share of frames the headroom lets run over the target
+    float headroomStep = 0.01f;   // how far one frame read moves the headroom (ms)
 };
 
 /// A frame the GPU timer read, as the service sees it.
@@ -148,6 +154,7 @@ private:
     WorldServiceConfig config_;
     std::vector<double> need_;   // the last frames' ms apart from the service, newest last
     bool over_ = false;          // the last frame read ran over the target
+    float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate
     float budget_ = 0.0f;
     std::vector<WorldJob> offers_;
     std::vector<std::vector<WorldJob>> granted_;

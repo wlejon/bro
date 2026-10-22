@@ -26,6 +26,8 @@ void WorldService::observe(const WorldFrameTiming& timing) {
     }
     if (timing.frameMs < 0.0) return;
     over_ = timing.frameMs > config_.targetMs;
+    const float q = config_.overRate;
+    headroom_ = std::clamp(headroom_ + config_.headroomStep * (over_ ? 1.0f - q : -q), 0.0f, config_.targetMs);
     need_.push_back(std::max(timing.frameMs - service, 0.0));
     const size_t window = static_cast<size_t>(std::max(config_.window, 1));
     if (need_.size() > window) need_.erase(need_.begin(), need_.end() - static_cast<std::ptrdiff_t>(window));
@@ -38,7 +40,7 @@ void WorldService::beginFrame() {
     float budget = config_.floorMs;
     if (!need_.empty() && !over_) {
         const double need = *std::max_element(need_.begin(), need_.end());
-        budget = std::max(budget, static_cast<float>(config_.targetMs - need));
+        budget = std::max(budget, static_cast<float>(config_.targetMs - headroom_ - need));
     }
     budget_ = budget;
     stats_.budgetMs = budget;

@@ -227,9 +227,12 @@ nearly all of it the lighting of blade fragments a nearer blade then hid,
 since a stage that cuts (the dithered cover) is depth-tested after it
 shades. Thinning ring 2's blades changed nothing, so vertices were not the
 cost. The grass needs no ID buffer for that: its vertex work is cheap, so
-it is drawn twice in the opaque pass (`SceneMeshDrawer::CoverPass`). First
-its blades' and herb plants' depth alone, their cut deciding it
-(mesh.frag's `MESH_COVER_DEPTH`: nothing lit, no colour written). Then the
+it is drawn twice (`SceneMeshDrawer::CoverPass`). First its blades' and
+herb plants' depth alone, their cut deciding it (mesh.frag's
+`MESH_COVER_DEPTH`: nothing lit, no colour written), in a pass of its own
+(`PassCoverDepth`) that reads nothing of the frame's compute, so it runs
+in the scope the sky opens, before the join, beside the plants' plan
+(§4). Then, in the opaque pass, the
 same draws lit with the depth test EQUAL and no cut (`MESH_COVER_SHADE`),
 so each visible pixel is lit once. Both use one vertex stage
 (`invariant gl_Position`), and under MSAA the prepass's per-sample depth
@@ -254,8 +257,13 @@ A capability of the frame graph, not of any one pass.
 - **Overlap:** a frame's compute work, such as the plants plan and the cell
   pass, is submitted ahead of its graphics work. It runs beside the previous
   frame's tail (post-processing, translucents) and the current frame's work
-  that doesn't need it (sky, probe, static and grass shadows). The graphics
-  stream waits on the compute timeline only right before its first consumer.
+  that doesn't need it (sky, static and grass shadows, the cover's depth
+  prepass). The graphics stream waits on the compute timeline only right
+  before its first consumer. What runs ahead of the join has to outlast the
+  compute or the wait shows: in biomes' golden-hour glade walk the plants'
+  compute is about 0.4 ms and the graphics ahead of it was 0.2, so the
+  first planned pass waited 0.1-0.2 ms a frame; with the cover's depth
+  (0.25 ms) moved ahead of the join it waits none.
 - **Versioning:** anything compute writes for frame N lives in the slot for
   N's frame in flight. Frame N−1's draws still read their own slot, so compute
   never waits for graphics to finish with a buffer.
@@ -374,6 +382,12 @@ by its own rules.
   the 4090, 16.7 ms on a 3060 at 60 fps), and a small floor so it never
   starves. A frame that runs over takes the service down to its floor. Each
   job's cost is measured too, so the budget is spent in jobs, not guessed.
+  Less a headroom: a frame's own work and a job's cost each vary from what was
+  expected of them, so a budget spent to the target runs about half its
+  frames over. The headroom is learned as the quantile of that surprise that
+  leaves 2% of frames over (a step up on each frame over, a fiftieth of one
+  down on each under). On biomes' golden-hour walk it took the frames over
+  from 16 of 150 to 3-8, the mean unchanged.
 - **Nothing waits.** The coarsest level of every producer is always resident.
   A missing tile shows its coarser parent; a stale one keeps drawing until its
   replacement lands; a replacement is written to a free slot and swapped in by
@@ -405,7 +419,8 @@ tiles it wants) and gives up its own budget.
   cheaper one may still fit.
 - **The budget** is the target less the most the last four timed frames
   needed outside the service (each frame's GPU ms less its service spans on
-  the graphics queue; spans on the async queue are not subtracted), floored
+  the graphics queue; spans on the async queue are not subtracted), less
+  the headroom (above: the surprise's 98th percentile, learned), floored
   at 0.1 ms. A frame over the target, or no timed frame yet, gives the floor.
   The target is a scene setting, `scene.setFrameTarget(ms)`, 2.78 ms by
   default. A kind's cost a unit is its span's ms over its units: the first
@@ -413,7 +428,15 @@ tiles it wants) and gives up its own budget.
   by the job, the probe traces' kind learned the average box: a frame
   granted three wide cascade-0 slices on a budget of 1.5 ms spent 2.1 ms on
   them, and a 16 km biomes flyover at 40 m/s ran 8 of 150 frames past
-  2.78 ms, to 4.3; charged by probe-rays, none, its worst 2.66 ms.)
+  2.78 ms, to 4.3; charged by probe-rays, none, its worst 2.66 ms.) Units
+  hold only while a job's time grows with its work: a trace that marched a
+  probe's rays a workgroup, each invocation two to four rays in turn, ran
+  as long as its slowest probe's marches, 0.6-0.75 ms whether 6k or 49k
+  probe-rays. A ray an invocation (a probe's rays over PG_TRACE_PARTS
+  workgroups, the blend summing their SH) took it to 0.2-0.37 ms. Costs by
+  a job's class within a kind (a shadow page's level: near ones draw every
+  leaf, far ones discs) were tried and dropped: on the golden-hour walk the
+  frames over and the mean were the same with them as without.
 - **A cut.** The slack a view left says nothing of the next view after a
   jump, and a frame or two of timings is read late. So when the eye moves
   more than 10 m or the view turns more than half its vertical field of view
