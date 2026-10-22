@@ -3,6 +3,7 @@
 #include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include "scene/scene_renderer.h"
+#include "scene/world/place.h"
 
 #include <functional>
 #include <memory>
@@ -200,8 +201,36 @@ public:
     /// node table and calls SceneNode::onTick(dt) on each entry, including the
     /// root and invisible nodes — invisible particles still need to expire.
     /// Headless drives this with the virtual-time step so screenshot tests
-    /// of effects are deterministic.
+    /// of effects are deterministic. It begins by following the camera with
+    /// the place frame (followPlace).
     void tickAnimations(float dtSec);
+
+    // --- The body and its place frame (world/place.h) ---
+    //
+    // What the graph holds (its nodes, its camera, its physics world) is in
+    // the place frame; what is keyed on the world (the land, the cover, the
+    // plants, the shadow pages, the probe grid) is on the body, and the
+    // renderer meets the two camera-relative (vulkan/frame/scene_view.h).
+    // A graph with no body set is a flat body's anchored at the origin
+    // that never re-anchors: its place frame is its world.
+
+    /// The body the scene stands on, the frame anchored on the cell holding
+    /// `bodyPoint`, and from then on re-anchoring as the camera goes. What
+    /// the graph holds is taken to be in that frame already (nothing moves).
+    void setBody(const Body& body, const double bodyPoint[3]);
+    bool hasBody() const { return hasBody_; }
+    const Place& place() const { return place_; }
+    /// The place frame's origin on the body: a flat body's translation. (A
+    /// sphere's frame also turns, and the world it keys on is its own from
+    /// step 9c, docs/scene-world-architecture.md §11: until then a sphere's
+    /// keyed systems lie on its anchor's tangent plane, origin 0.)
+    void placeOrigin(double out[3]) const;
+    /// Re-anchor now on the cell holding `bodyPoint` (a jump far off);
+    /// false when that is the anchor already.
+    bool reanchorAt(const double bodyPoint[3]);
+    /// Called with each re-anchor's move once the graph has applied it, for
+    /// what a script keeps in its own variables (the reanchor event).
+    void setOnReanchor(std::function<void(const PlaceMove&)> fn) { onReanchor_ = std::move(fn); }
 
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     /// 3D nodes render through SceneRenderer's Vulkan passes; 2D nodes via CanvasScene.
@@ -633,6 +662,17 @@ private:
     /// Feed the grass nodes' movers, where they are now, to the renderer's
     /// plant movers (plant_movers.h). Each tick, after the wind clock.
     void updatePlantMovers();
+
+    /// Re-anchor when the camera's nadir has left its anchor's cell.
+    void followPlace();
+    /// Move what the graph holds in the place frame by `m`: the root's
+    /// children, the imperative camera, the physics world; then tell the
+    /// script.
+    void applyPlaceMove(const PlaceMove& m);
+
+    Place place_;
+    bool hasBody_ = false;
+    std::function<void(const PlaceMove&)> onReanchor_;
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;

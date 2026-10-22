@@ -377,6 +377,11 @@ void GrassNode::stamp(SceneGraph& graph, float now, float eyeX, float eyeZ) {
         pushes_.clear();
         return;
     }
+    // The map is keyed on the body; the movers and pushes are in the place
+    // frame (a node's position, a script's point).
+    double origin[3];
+    graph.placeOrigin(origin);
+    const float ox = static_cast<float>(origin[0]), oz = static_cast<float>(origin[2]);
     int minI = kPushCells, minJ = kPushCells, maxI = -1, maxJ = -1;
     for (auto it = movers_.begin(); it != movers_.end();) {
         SceneNode* n = graph.resolveNode(it->nodeId);
@@ -385,7 +390,7 @@ void GrassNode::stamp(SceneGraph& graph, float now, float eyeX, float eyeZ) {
             continue;
         }
         const bromath::Mat4& w = n->worldMatrix();
-        const float x = w.at(0, 3), z = w.at(2, 3);
+        const float x = w.at(0, 3) + ox, z = w.at(2, 3) + oz;
         Mover& m = *it++;
         if (!m.seen) {
             m.seen = true;
@@ -414,7 +419,7 @@ void GrassNode::stamp(SceneGraph& graph, float now, float eyeX, float eyeZ) {
         m.lastZ = z;
     }
     for (const Push& p : pushes_)
-        stampDisc(p.x, p.z, p.radius, p.vx, p.vz, p.strength, p.trample, dt, now, minI, minJ, maxI, maxJ);
+        stampDisc(p.x + ox, p.z + oz, p.radius, p.vx, p.vz, p.strength, p.trample, dt, now, minI, minJ, maxI, maxJ);
     pushes_.clear();
     if (maxI < minI || maxJ < minJ) return;
 

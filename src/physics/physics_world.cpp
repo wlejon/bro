@@ -1070,6 +1070,31 @@ void PhysicsWorld::setPosition(BodyID id, RVec3 pos) {
     prevTransforms_.erase(id.GetIndexAndSequenceNumber());
 }
 
+void PhysicsWorld::move(Quat rot, Vec3 t) {
+    if (!initialized_) return;
+    BodyInterface& bi = getBodyInterface();
+    BodyIDVector ids;
+    physicsSystem_.GetBodies(ids);
+    for (const BodyID id : ids) {
+        // As placed, not woken: a body asleep stays asleep where it lies.
+        bi.SetPositionRotationAndVelocity(id, rot * bi.GetPosition(id) + t, (rot * bi.GetRotation(id)).Normalized(),
+                                          rot * bi.GetLinearVelocity(id), rot * bi.GetAngularVelocity(id));
+    }
+    for (auto& [handle, e] : characters_) {
+        CharacterVirtual& c = *e.character;
+        c.SetPosition(rot * c.GetPosition() + t);
+        c.SetRotation((rot * c.GetRotation()).Normalized());
+        c.SetLinearVelocity(rot * c.GetLinearVelocity());
+        e.desiredVelocity = rot * e.desiredVelocity;
+    }
+    for (auto& [key, area] : areas_) area.gravity = rot * area.gravity;
+    physicsSystem_.SetGravity(rot * physicsSystem_.GetGravity());
+    for (auto& [key, p] : prevTransforms_) {
+        p.pos = rot * p.pos + t;
+        p.rot = (rot * p.rot).Normalized();
+    }
+}
+
 void PhysicsWorld::setRotation(BodyID id, Quat rot) {
     physicsSystem_.GetBodyInterface().SetRotation(id, rot, EActivation::Activate);
     prevTransforms_.erase(id.GetIndexAndSequenceNumber());  // teleport: snap

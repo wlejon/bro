@@ -14,6 +14,7 @@
 
 #include "scene/vulkan/frame/scene_pass.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
+#include "scene/vulkan/frame/scene_view.h"
 
 #include <bromath/vec.h>
 
@@ -30,9 +31,11 @@ namespace bro::scene::vk {
 /// The lights, ambient and shadow maps of `renderer`'s current frame
 /// (SceneRenderer::frameLights / shadowPlan), with the environment's IBL, the
 /// atmosphere and the probe grid (gpu.environment, gpu.atmosphere,
-/// gpu.probes, as they began the frame), for a view whose eye is `eye`:
-/// every position is relative to it (camera-relative rendering, scene_view.h).
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye);
+/// gpu.probes, as they began the frame), for `view`: every position is
+/// relative to its eye (camera-relative rendering, scene_view.h), the
+/// lights' from the place frame's, what is keyed on the world (the shadow
+/// pages, the atmosphere, the probe grid, the land's sun) from the body's.
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const SceneView& view);
 
 /// The sun's penumbra as the lit shaders read it (SceneLightingUniforms::
 /// shadowSoft): its width a metre along the light, the still penumbra, the

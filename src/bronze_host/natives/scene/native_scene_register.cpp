@@ -184,6 +184,14 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setWindField", BRO_NATIVE_FN(bro_scene_SceneGraph_setWindField), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_windAt", BRO_NATIVE_FN(bro_scene_SceneGraph_windAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_windState", BRO_NATIVE_FN(bro_scene_SceneGraph_windState), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setBody", BRO_NATIVE_FN(bro_scene_SceneGraph_setBody), "void", {"__bro_native.scene.SceneGraph", "f64", "f64[]", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_place", BRO_NATIVE_FN(bro_scene_SceneGraph_place), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
+        fn("__bro_native.scene.SceneGraph_toBody", BRO_NATIVE_FN(bro_scene_SceneGraph_toBody), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_toPlace", BRO_NATIVE_FN(bro_scene_SceneGraph_toPlace), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_upAt", BRO_NATIVE_FN(bro_scene_SceneGraph_upAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_latLongAt", BRO_NATIVE_FN(bro_scene_SceneGraph_latLongAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_reanchorAt", BRO_NATIVE_FN(bro_scene_SceneGraph_reanchorAt), "bool", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_onReanchor_set", BRO_NATIVE_FN(bro_scene_SceneGraph_onReanchor_set), "void", {"__bro_native.scene.SceneGraph", "dynamic"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", BRO_NATIVE_FN(bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&

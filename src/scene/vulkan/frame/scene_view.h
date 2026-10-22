@@ -19,6 +19,7 @@
 
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 
+#include <bromath/aabb.h>
 #include <bromath/frustum.h>
 #include <bromath/mat.h>
 #include <bromath/vec.h>
@@ -56,6 +57,11 @@ struct SceneView {
     bromath::Mat4 invRelView;
     bromath::Mat4 invProj;
     bromath::Vec3 eye{0.0f, 0.0f, 0.0f};
+    // The place frame's origin on the body (scene/world/place.h): what the
+    // scene graph holds is in the place frame, and eye + origin is the eye
+    // on the body. A view of the place frame (the camera's, a probe face's)
+    // carries its frame's origin; its world() twin carries none.
+    double origin[3] = {0.0, 0.0, 0.0};
     float nearZ = 0.1f;
     float farZ = 100.0f;
     bool perspective = true;
@@ -74,6 +80,16 @@ struct SceneView {
     /// matrices and the absolute eye. Fog and wind come from the renderer's
     /// settings; a view that should have neither passes none.
     SceneCameraUniforms uniforms(const SceneRenderer* fog) const;
+
+    /// The same camera in the body's frame: what is keyed on the world (the
+    /// land's tiles and rings, the cover, placement, the probe grid, the
+    /// shadow pages, the land's sun) reads it, so a re-anchor moves none of
+    /// it. Its camera-relative matrices are this view's: the GPU sees one
+    /// space.
+    SceneView world() const;
+    /// A box of the body's frame in this view's frame, and back.
+    bromath::AABB3 toPlace(const bromath::AABB3& body) const;
+    bromath::AABB3 toBody(const bromath::AABB3& place) const;
 
     /// `world` relative to this view's eye.
     bromath::Mat4 relative(const bromath::Mat4& world) const { return eyeRelative(world, eye); }

@@ -31,7 +31,7 @@ public:
 
     struct Body {
         uint32_t id = 0;
-        float x = 0.0f, z = 0.0f;   // absolute world, now
+        float x = 0.0f, z = 0.0f;   // on the body (world/place.h), now
         float radius = 0.5f;        // its push's radius (m)
         float height = 1.8f;        // what it reaches: points this far above their plant's root (m)
         float strength = 1.0f;

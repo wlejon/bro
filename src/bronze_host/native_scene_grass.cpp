@@ -132,9 +132,11 @@ void bro_scene_SceneNode_sampleHeights(void* self, double x0d, double z0d, doubl
     }
     const float x0 = static_cast<float>(x0d), z0 = static_cast<float>(z0d), cell = static_cast<float>(celld);
     std::vector<float> h(static_cast<size_t>(cols) * rows, std::numeric_limits<float>::quiet_NaN());
-    // The land's heights are its field's, not its rings'.
+    // The land's heights are its field's, not its rings', on the body.
     if (const scene::LandNode* land = m->asLand()) {
-        land->sampleHeights(x0, z0, cell, cols, rows, h.data());
+        double o[3];
+        placeOriginOfNode(self, o);
+        land->sampleHeights(static_cast<float>(x0d + o[0]), static_cast<float>(z0d + o[2]), cell, cols, rows, h.data());
         transferBuffer(std::move(h), out);
         return;
     }

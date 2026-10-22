@@ -318,11 +318,11 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     const bool compiled = coverShaders(node).index != 0;
     fillShared(node, ground, compiled && node.hasSward(), compiled && node.hasHerbs(), u);
     // The ring the turf continues: the far ring as this view draws it.
-    const GrassNode::Ring outer = ringInView(node, frame.view, GrassNode::kRings - 1);
+    const GrassNode::Ring outer = ringInView(node, frame.world, GrassNode::kRings - 1);
     u.ring[0] = 0.0f;
     u.ring[1] = outer.outer;
     u.ring[3] = outer.bandOut;
-    u.lod[3] = eyeLift(*ground.land, frame.view);
+    u.lod[3] = eyeLift(*ground.land, frame.world);
     // The turf's surface layer, once its tiles are configured (its first
     // frame works everything out where it draws).
     GroundLayerBinding layers;
@@ -395,7 +395,8 @@ const CoverShaders& SceneMeshDrawer::coverShaders(const GrassNode& node) {
 
 void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {
     out.clear();
-    const SceneView& view = frame.view;
+    // The cover is keyed on the body: its cells, its tiles and its pushes.
+    const SceneView& view = frame.world;
     node.stamp(frame.graph, frame.renderer.windTime(), view.eye.x, view.eye.z);
     for (int i = 0; i < GrassNode::kRings; ++i) node.setDrawnInstances(i, 0);
     for (int i = 0; i < GrassNode::kHerbRings; ++i) node.setDrawnHerbs(i, 0);

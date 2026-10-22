@@ -456,6 +456,13 @@ public:
     /// the node has no valid bounds — such nodes draw unconditionally.
     std::optional<bromath::AABB3> nodeWorldBounds(SceneNode* n) const;
 
+    /// The place frame's origin on the body (SceneGraph::placeOrigin), and a
+    /// box of the place frame moved onto the body: what is keyed on the
+    /// world (the shadow pages) takes the nodes' bounds that way.
+    bromath::Vec3 placeOriginF() const;
+    bromath::AABB3 bodyBox(const bromath::AABB3& b) const;
+    std::optional<bromath::AABB3> bodyBox(const std::optional<bromath::AABB3>& b) const;
+
     /// Camera-frustum test for the forward passes: true when the node is
     /// provably outside this frame's view and safe to skip. Never true while
     /// culling is disabled or when the node has no valid bounds.

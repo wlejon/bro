@@ -83,8 +83,8 @@ double SceneWorldService::run(WorldStreams& streams, int kind, const std::functi
 
 void SceneWorldService::runFrame(SceneFrame& frame) {
     // The view's eye and forward (the camera looks down its -z), and whether
-    // it jumped since the last render.
-    const SceneView& view = frame.view;
+    // it jumped since the last render (on the body: a re-anchor is no cut).
+    const SceneView& view = frame.world;
     const bromath::Vec3 forward{-view.invRelView.at(0, 2), -view.invRelView.at(1, 2), -view.invRelView.at(2, 2)};
     const float halfFov = view.perspective ? std::atan(1.0f / std::max(std::fabs(view.proj.at(1, 1)), 1e-6f))
                                            : 0.5235988f;   // (an orthographic view: 30 degrees)

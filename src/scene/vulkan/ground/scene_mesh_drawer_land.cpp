@@ -188,9 +188,9 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     const SurfaceLayerConfig& config = lt.tiles.config();
     std::fill(words, words + LD_WORDS, 0.0f);
     words[LD_LAND + 0] = node.extent();
-    words[LD_LAND + 1] = frame.view.eye.x;
-    words[LD_LAND + 2] = frame.view.eye.z;
-    words[LD_LAND + 3] = frame.view.eye.y;
+    words[LD_LAND + 1] = frame.world.eye.x;   // the rings centre on the eye on the body
+    words[LD_LAND + 2] = frame.world.eye.z;
+    words[LD_LAND + 3] = frame.world.eye.y;
     words[LD_RINGS + 0] = r.cellSize;
     words[LD_RINGS + 1] = 4.0f / static_cast<float>(r.resolution);
     words[LD_RINGS + 2] = static_cast<float>(r.levels);
@@ -243,12 +243,17 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     // The static path's material, turf and lighting, then the land's own.
     if (!prepare(frame, node, out)) return false;
     out.kind = MeshKind::Land;
+    // Its vertices are the body's (its transform is ignored): as a caster
+    // they are taken relative to the eye on the body.
+    std::memcpy(out.push.model, frame.world.relative(bromath::midentity()).data, sizeof(out.push.model));
     // Its ring blocks, placed where this frame's eye centres the rings (in
     // every pass: a probe's or a turf tile's view reads the rings about
     // the frame's eye, whose tiles are the resident ones), so each pass
     // draws the blocks its view reaches. The rings' indices are in block
     // order (LandNode::buildRings), so they are the chunks' own.
-    const bromath::Vec3 eye = frame.view.eye;
+    // The rings centre on the eye on the body. (A chunk's bounds are in the
+    // draw's own space, its model below taking them to the camera's.)
+    const bromath::Vec3 eye = frame.world.eye;
     lt->chunks.clear();
     for (const LandNode::Block& b : node.blocks())
         lt->chunks.push_back({b.firstIndex, b.indexCount, node.blockBounds(b, eye)});
@@ -293,7 +298,8 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         }
     }
 
-    const SceneView& view = frame.view;
+    // The tiles and the horizon are keyed on the world.
+    const SceneView& view = frame.world;
     for (const uint32_t id : landDrawn_) {
         const auto found = lands_.find(id);
         if (found == lands_.end() || found->second->failed) continue;
@@ -342,7 +348,7 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
 }
 
 const WorldHorizon::Read* SceneMeshDrawer::landHorizon(SceneFrame& frame) {
-    return horizon_.read(frame.gpu.device.context().queue(), frame.view.eye);
+    return horizon_.read(frame.gpu.device.context().queue(), frame.world.eye);
 }
 
 uint32_t SceneMeshDrawer::recordLandHorizon(SceneFrame& frame, std::span<const WorldJob> granted,
@@ -359,7 +365,7 @@ uint32_t SceneMeshDrawer::recordLandHorizon(SceneFrame& frame, std::span<const W
     landWords(frame, *land, lt, words);
     const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(words, sizeof(words));
     VkDescriptorSet set = frame.gpu.device.frameSet(horizonSetLayout_);
-    const SceneVkBuffer* out = set != VK_NULL_HANDLE ? horizon_.write(frame.gpu.allocator, frame.view.eye) : nullptr;
+    const SceneVkBuffer* out = set != VK_NULL_HANDLE ? horizon_.write(frame.gpu.allocator, frame.world.eye) : nullptr;
     if (!out) return 0;
     landChanged_ = false;
     SceneVkDescriptorWriter writer;
@@ -379,7 +385,7 @@ uint32_t SceneMeshDrawer::recordLandHorizon(SceneFrame& frame, std::span<const W
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonLayout_, 0, 1, &set, 0, nullptr);
-    const float eye[4] = {frame.view.eye.x, frame.view.eye.y, frame.view.eye.z, 0.0f};
+    const float eye[4] = {frame.world.eye.x, frame.world.eye.y, frame.world.eye.z, 0.0f};
     vkCmdPushConstants(cmd, horizonLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(eye), eye);
     vkCmdDispatch(cmd, WH_AZIMUTHS, 1, 1);
     return 1;

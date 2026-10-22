@@ -506,7 +506,10 @@ void bro_scene_SceneGraph_windAt(void* self, double x, double z, bronze_native_b
     auto* g = graphOf(self);
     if (!out) return;
     if (!g || !std::isfinite(x) || !std::isfinite(z)) { copyBuffer<double>(nullptr, 0, out); return; }
-    const scene::WindSample w = scene::windAt(g->windField(), static_cast<float>(x), static_cast<float>(z));
+    double o[3];
+    g->placeOrigin(o);   // the field is the body's, (x, z) the place frame's
+    const scene::WindSample w =
+        scene::windAt(g->windField(), static_cast<float>(x + o[0]), static_cast<float>(z + o[2]));
     tl_windBuf[0] = w.velocity[0];
     tl_windBuf[1] = w.velocity[1];
     tl_windBuf[2] = w.velocity[2];

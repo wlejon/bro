@@ -191,6 +191,7 @@ if(BRO_WITH_3D)
         native_scene_particles.cpp
         native_scene_terrain.cpp
         native_scene_land.cpp
+        native_scene_place.cpp
         native_scene_tile.cpp
         native_scene_tile_ops.cpp
         native_scene_tile_objects.cpp

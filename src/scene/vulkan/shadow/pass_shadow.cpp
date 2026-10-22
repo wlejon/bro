@@ -55,8 +55,9 @@ void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unpla
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &rect);
     // The draws are relative to the frame's eye, the view to the plan's
-    // (the same eye unless a caller re-planned in between).
-    const bromath::Mat4 lightViewProj = toVulkanClip(rebased(view.relViewProj, frame.view.eye - plan.origin));
+    // (the same eye unless a caller re-planned in between), both on the
+    // body, as the view's frustum is.
+    const bromath::Mat4 lightViewProj = toVulkanClip(rebased(view.relViewProj, frame.world.eye - plan.origin));
     const bool culling = frame.renderer.cullingFrustum() != nullptr;
     // The timed passes' names: the overlays' casters by kind and the pages'
     // by kind, a run of draws under one name marked once as it ends.
@@ -76,7 +77,8 @@ void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unpla
         // A plants node's planned casters are its view's alone; any other
         // goes where its motion does.
         if (isPlanned ? draw.shadowView != index : !shadowCastsInto(view, draw.shadowMotion)) continue;
-        if (culling && draw.hasBounds && !isPlanned && !bromath::fintersects(view.frustum, draw.bounds)) {
+        if (culling && draw.hasBounds && !isPlanned &&
+            !bromath::fintersects(view.frustum, frame.view.toBody(draw.bounds))) {
             frame.stats.shadowCulled++;
             continue;
         }

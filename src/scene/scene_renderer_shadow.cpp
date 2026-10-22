@@ -32,6 +32,23 @@ ShadowMotion SceneRenderer::shadowMotion(uint32_t nodeId) const {
     return it == shadowMotion_.end() ? ShadowMotion::Still : it->second;
 }
 
+bromath::Vec3 SceneRenderer::placeOriginF() const {
+    double o[3];
+    graph_.placeOrigin(o);
+    return {static_cast<float>(o[0]), static_cast<float>(o[1]), static_cast<float>(o[2])};
+}
+
+bromath::AABB3 SceneRenderer::bodyBox(const bromath::AABB3& b) const {
+    if (bromath::aisEmpty(b)) return b;
+    const Vec3 o = placeOriginF();
+    return {b.min + o, b.max + o};
+}
+
+std::optional<bromath::AABB3> SceneRenderer::bodyBox(const std::optional<bromath::AABB3>& b) const {
+    if (!b) return b;
+    return bodyBox(*b);
+}
+
 bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
     // The view frustum's corners (out to the shadow's reach), in world space.
     const float zNear = graph_.cameraNearZ_;
@@ -61,7 +78,8 @@ bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
 void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
     ShadowPages& pages = shadowPages_;
     const ShadowPagesConfig& config = pages.config();
-    const Vec3 eye = graph_.cameraEye_;
+    // On the body, as the pages are (a node's bounds convert, bodyBox).
+    const Vec3 eye = graph_.cameraEye_ + placeOriginF();
     // Vegetation sways whenever the wind field moves at all; a wind-masked
     // mesh bends under the wind.
     const bool swaying = !windFieldCalm(windField());
@@ -125,7 +143,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                 }
                 shadowMotion_[m->id()] = ShadowMotion::Swaying;
             } else if (casts && m->hasDrawableMesh() && !m->asGrass() && !m->asPlants()) {
-                if (const auto wb = nodeWorldBounds(m)) {
+                if (const auto wb = bodyBox(nodeWorldBounds(m))) {
                     auto* sm = m->asSkinnedMesh();
                     const bool skinned = sm && sm->skinReady();
                     // A custom vertex chunk displaces with no generation signal.
@@ -147,7 +165,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             const bool casts = m->castsShadow() &&
                                (procedural || (!m->effectiveUnlit() && !m->mesh().empty() && m->instanceCount() > 0));
             if (casts) {
-                if (const auto wb = nodeWorldBounds(m)) {
+                if (const auto wb = bodyBox(nodeWorldBounds(m))) {
                     const CustomShaderState* cs = m->customShader();
                     const bool chunk = cs && !cs->vertexChunk.empty();
                     const bool sways = swaying && m->hasVegetation();
@@ -174,8 +192,11 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     plan.pixelAngle = graph_.cameraIsPerspective_ ? 2.0f * std::tan(graph_.cameraFovY_ * 0.5f) / rows : 0.0f;
     plan.orthoPixel = graph_.cameraIsPerspective_ ? 0.0f : (graph_.cameraOrthoT_ - graph_.cameraOrthoB_) / rows;
     shadowMotion_.clear();
+    // The pages are the body's (a re-anchor redraws none of them): their
+    // eye, casters and lights convert from the place frame the graph holds.
     const Vec3 eye = graph_.cameraEye_;
-    pages.beginFrame(eye);
+    const Vec3 origin = placeOriginF();
+    pages.beginFrame(eye + origin);
 
     bool anyLight = false;
     for (auto* L : lights) anyLight = anyLight || (L && L->castsShadow());
@@ -219,8 +240,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             continue;
         }
         const Mat4& M = L->worldMatrix();
-        const Vec3 pos{M.at(0, 3), M.at(1, 3), M.at(2, 3)};
-        const Vec3 rel = pos - eye;
+        const Vec3 rel = Vec3{M.at(0, 3), M.at(1, 3), M.at(2, 3)} - eye;
+        const Vec3 pos = rel + eye + origin;   // on the body
         const float far = std::max(L->range(), 0.5f);
         ShadowLocal local;
         local.lightId = L->id();
@@ -257,7 +278,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         pages.addLocal(local);
     }
     pages.endLights();
-    pages.setSeen(anyLight ? seenBounds(sunReach) : bromath::aempty3());
+    pages.setSeen(anyLight ? bodyBox(seenBounds(sunReach)) : bromath::aempty3());
 
     // What the marking passes read back since the last frame, then the plan.
     if (vkBridge_) vkBridge_->shadowRequests(pages);

@@ -1332,7 +1332,7 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet (design, for review)
+## 11. The planet (design; decisions taken, 9a built)
 
 A body of Earth's radius (6371 km) seen from a person in its grass to
 geostationary orbit as one place: the land's rings, its tiles, the plants
@@ -1395,6 +1395,41 @@ every other gap is a map from the plane to the sphere.
   the plants' range a tree's radial is up to 0.3° off the frame's y, so
   each stands on its own radial, a direction, which a float carries
   exactly enough.
+
+### As built: the body and its place frame (9a)
+
+- **The CPU half** is `scene/world/place.h`: a `Body`, the lattice
+  (`Place::kLattice` 16384 m, re-anchoring 2048 m past a cell's half), the
+  cube's tan-warped faces (611 cells a side at Earth's radius), the place's
+  origin and basis in double, `toBody` / `toPlace`, and the `PlaceMove` a
+  re-anchor makes. `bro_place_test` walks 100 km on a flat body and over a
+  face's edge and a cube's corner on Earth's (every frame orthonormal and on
+  the datum, every tilt under 0.2°).
+- **Two frames in the renderer.** `SceneView` carries the place's origin and
+  `world()` gives the same camera in the body's frame: the same
+  camera-relative matrices, its eye, view and frustum shifted. A frame holds
+  both (`SceneFrame::view`, `::world`). Draws' bounds and lights are the
+  place's; what is keyed on the world takes `frame.world`: the land's tiles,
+  rings, horizon and sun, the cover's and the turf's tiles and the grass's
+  push map, the plants' placement and GPU plan, the probe grid, the shadow
+  pages, the atmosphere, the world service and the wind. The GPU sees one
+  space, positions less the eye, and the camera block's `eyeWorld` is the
+  body's eye, so a field or a hash a shader takes from it is the body's.
+- **The re-anchor** runs first in `SceneGraph::tickAnimations`, before the
+  frame's scripts, while physics is idle: the root nodes, the imperative
+  camera, world-space particles and the physics world (`PhysicsWorld::move`:
+  bodies, characters, area and world gravity, the interpolation snapshots)
+  take the move, then the `reanchor` event fires. A flat body's origin is a
+  whole number of cells, exact in float, so the frame after a re-anchor is
+  bit for bit the frame before (`tests/scene/test_place_reanchor.js`, its
+  shadow pages not redrawn), and biomes, with no body, is unchanged.
+- **Not yet on the body:** on a sphere the keyed systems lie on the anchor's
+  tangent plane (`placeOrigin` is zero there) until the land is on the body
+  (9c); the legacy `createTerrain` and the tile world's shade maps are keyed
+  on the place; navmesh worlds and tweens holding absolute positions are not
+  moved (a script moves them with the event); the body's eye is a float on
+  the GPU, good to centimetres a few hundred kilometres out, until the split
+  positions (9b). The sphere's walk and flight at speed are 9c's oracle.
 
 ### Fields at the body's scale
 
@@ -1521,7 +1556,7 @@ every eye-level cost and must not move.
 | 9d | Processes: global and regional grids, read back for the CPU | a world's erosion over the global grid under a second; drainage continuous across regions | ~1.5k |
 | 9e | demos/planet (broworkshop): continents by hypsometry, belts, climate, biomes as plant and cover modules chosen by climate | planet-bro's legibility targets: from orbit a range, a river system, a desert basin and a shelf; from eye level the same place; reference renders at every scale | world code |
 
-### Decisions for review
+### Decisions (taken: the recommended side of each)
 
 1. **The place frame on a 16 km anchor lattice** (recommended: every
    cache already scrolls, and a re-anchor's tilt is under a voxel; at

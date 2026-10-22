@@ -729,6 +729,83 @@ class SceneGraph {
   wind() {}
 
   /**
+   * The body the scene stands on: a flat world (`radius` Infinity, the
+   * default) or a sphere of `radius` metres about its axis `spin` (the poles;
+   * +y by default). Its surface is cut into a lattice of 16 km cells
+   * (`place.lattice`; on a sphere, a tan-warped cube's faces) and the scene
+   * lives in a *place frame* anchored on the cell under the eye: every
+   * position the scene holds (nodes, the camera, physics) is the place
+   * frame's, small however far the world goes, while what is keyed on the
+   * world itself (the land, cover and grass, plants, shadow pages, the probe
+   * grid, wind) stays on the body. `at` is the body point the place anchors
+   * on first. Nothing moves when it is set.
+   *
+   * When the eye walks more than 2 km past its cell, the scene re-anchors on
+   * the eye's cell before the frame's scripts run: its root nodes, its camera,
+   * world-space particles and the physics world move into the new frame (a
+   * translation by whole cells on a flat body; a translation and a small
+   * rotation on a sphere, so the new place's up is the body's), the
+   * `reanchor` event fires, and the frame draws exactly as it would have.
+   * Positions a script keeps in its own variables it moves with the event.
+   *
+   * @example
+   *   scene.setBody({});                                    // a flat world
+   *   scene.setBody({ radius: 6371000, at: [0, 6371000, 0] });   // Earth, at the pole
+   *   scene.addEventListener('reanchor', (e) => {
+   *     target = e.apply(target);     // a point: rotate and translate
+   *     heading = e.turn(heading);    // a direction: rotate
+   *   });
+   * @param {{radius?: number, spin?: number[], at?: number[]}} opts
+   */
+  setBody(opts) {}
+
+  /**
+   * The place frame: `{hasBody, body: {radius, spin}, anchor: {face, x, z},
+   * origin, basis, serial, faceCells, lattice}`. `origin` is the place's
+   * origin on the body and `basis` its axes (9 numbers, row-major: column j
+   * is axis j); `serial` counts re-anchors; `anchor` names the lattice cell
+   * (face 0-5 of the cube and its cell, `faceCells` to a face's side).
+   * Without a body, `hasBody` is false and the place is the body's own frame.
+   * @type {Object}
+   */
+  place;
+
+  /**
+   * A place point on the body (`toBody`) and back (`toPlace`), in double.
+   * @param {number[]} p
+   * @returns {number[]}
+   */
+  toBody(p) {}
+  toPlace(b) {}
+
+  /**
+   * The body's up at a place point (the radial direction on a sphere), and
+   * the latitude and longitude there in radians about the spin axis
+   * (`{lat, lon}`; 0 on a flat body).
+   * @param {number[]} p
+   */
+  upAt(p) {}
+  latLongAt(p) {}
+
+  /**
+   * Re-anchors on the lattice cell holding body point `b` now (as the eye
+   * crossing a margin does on its own). Returns whether the place moved.
+   * @param {number[]} b
+   * @returns {boolean}
+   */
+  reanchorAt(b) {}
+
+  /**
+   * `'reanchor'`: the move a re-anchor made, `{rotation (9, row-major),
+   * translation, tilts, turn(d), apply(p)}`, new = rotation * old +
+   * translation.
+   * @param {'reanchor'} type
+   * @param {function(Object)} listener
+   */
+  addEventListener(type, listener) {}
+  removeEventListener(type, listener) {}
+
+  /**
    * The receivers' shadow filter (see ShadowQualityConfig in
    * docs/lighting-api.js for how shadows are cached).
    *

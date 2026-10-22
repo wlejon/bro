@@ -162,6 +162,7 @@ add_library(bro_scene STATIC
     world/plant_placement.cpp
     world/plant_canopy.cpp
     world/land_sun.cpp
+    world/place.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -282,6 +283,12 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_atmosphere_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_atmosphere_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    # The body and its place frame (anchors, frames, re-anchoring, walks
+    # over a face's edge), CPU only: its source and bromath.
+    add_executable(bro_place_test tests/test_place.cpp world/place.cpp)
+    target_link_libraries(bro_place_test PRIVATE bromath)
+    target_include_directories(bro_place_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # FastNoise2 trees as GLSL (brokit's noise_glsl) against FastNoise2.
     add_executable(bro_noise_glsl_test tests/test_noise_glsl.cpp)

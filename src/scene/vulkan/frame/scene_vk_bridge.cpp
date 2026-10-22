@@ -148,11 +148,12 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.stats = stats;
     frame.timer = &timer_;
     frame.view = SceneView::fromCamera(graph, width, height);
+    frame.world = frame.view.world();
     shadows_.beginFrame(gpu_, renderer);
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
     meshes_.setAtmosphere(atmosphere_.active());
-    frame.lighting = sceneLighting(renderer, gpu_, frame.view.eye);
+    frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
@@ -167,7 +168,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     // The probe grid places itself once the draw lists hold its canopy; the
     // frame's lighting (filled before) takes its block.
     probes_.beginFrame(frame);
-    probes_.fill(frame.lighting.probeGrid, frame.view.eye);
+    probes_.fill(frame.lighting.probeGrid, frame.world.eye);
     timer_.mark(cmd, "setup");
     meshes_.recordPlans(frame);
 

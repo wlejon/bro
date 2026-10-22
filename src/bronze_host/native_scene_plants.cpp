@@ -48,7 +48,20 @@ void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t
 }
 
 void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_len) {
-    if (auto* pl = plantsOf(self)) pl->setPlants(data, static_cast<int>(data_len / scene::PlantsNode::kPlantFloats));
+    auto* pl = plantsOf(self);
+    if (!pl) return;
+    const int count = static_cast<int>(data_len / scene::PlantsNode::kPlantFloats);
+    // The script's feet are the place frame's; the plants are the body's.
+    double o[3];
+    placeOriginOfNode(self, o);
+    if (o[0] == 0.0 && o[1] == 0.0 && o[2] == 0.0) {
+        pl->setPlants(data, count);
+        return;
+    }
+    std::vector<float> body(data, data + static_cast<size_t>(count) * scene::PlantsNode::kPlantFloats);
+    for (int i = 0; i < count; ++i)
+        for (int k = 0; k < 3; ++k) body[static_cast<size_t>(i) * scene::PlantsNode::kPlantFloats + k] += static_cast<float>(o[k]);
+    pl->setPlants(body.data(), count);
 }
 
 const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json) {

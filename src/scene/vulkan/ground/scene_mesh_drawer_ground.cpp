@@ -82,13 +82,16 @@ constexpr int kItemCellsMax = 128;   // a side, for a mesh past 4 km
 }  // namespace
 
 const std::vector<SurfaceItem>& SceneMeshDrawer::turfItems(GroundLayers& gl, const MeshNode& node,
-                                                          const bromath::AABB3& bounds) {
-    // Its key: its geometry and where it is.
+                                                          const bromath::AABB3& bounds,
+                                                          const bromath::Vec3& origin) {
+    // Its key: its geometry and where it is on the body (so a re-anchor,
+    // which moves it in the place frame alone, refills nothing).
     uint64_t key = (1469598103934665603ull ^ node.id()) * 1099511628211ull;
     key = (key ^ node.geometryGeneration()) * 1099511628211ull;
     {
+        const bromath::AABB3 body{bounds.min + origin, bounds.max + origin};
         uint32_t bits[6];
-        std::memcpy(bits, &bounds, sizeof(bits));
+        std::memcpy(bits, &body, sizeof(bits));
         for (uint32_t b : bits) key = (key ^ b) * 1099511628211ull;
     }
     GroundLayers::TurfItems& t = gl.turf[node.id()];
@@ -137,7 +140,7 @@ const std::vector<SurfaceItem>& SceneMeshDrawer::turfItems(GroundLayers& gl, con
             const bromath::AABB3 box{{bounds.min.x + x * cell, lo[k], bounds.min.z + j * cell},
                                      {std::min(bounds.max.x, bounds.min.x + (x + 1) * cell), hi[k],
                                       std::min(bounds.max.z, bounds.min.z + (j + 1) * cell)}};
-            t.items.push_back({box, (key ^ k) * 0x9e3779b97f4a7c15ull});
+            t.items.push_back({{box.min + origin, box.max + origin}, (key ^ k) * 0x9e3779b97f4a7c15ull});
         }
     return t.items;
 }
@@ -179,7 +182,11 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
     }
 
     VkCommandBuffer cmd = frame.cmd;
-    const SceneView& view = frame.view;
+    // The turf's tiles are keyed on the body; its meshes' draws are in the
+    // place frame and convert.
+    const SceneView& view = frame.world;
+    const bromath::Vec3 origin{static_cast<float>(frame.view.origin[0]), static_cast<float>(frame.view.origin[1]),
+                               static_cast<float>(frame.view.origin[2])};
     for (auto& [grassId, draws] : turfDraws_) {
         const auto found = groundLayers_.find(grassId);
         if (found == groundLayers_.end() || found->second->failed) continue;
@@ -204,9 +211,10 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
             auto* n = static_cast<MeshNode*>(frame.graph.findById(d->nodeId));
             const LandNode* land = n->asLand();
             const uint64_t g = land ? land->generation() : n->geometryGeneration();
+            const bromath::AABB3 db = frame.view.toBody(d->bounds);
             mixKey(&d->nodeId, sizeof(d->nodeId));
             mixKey(&g, sizeof(g));
-            mixKey(&d->bounds, sizeof(d->bounds));
+            mixKey(&db, sizeof(db));
         }
         if (turfKey != gl.turfKey) {
             gl.turfKey = turfKey;
@@ -216,10 +224,11 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
                 auto* n = static_cast<MeshNode*>(frame.graph.findById(d->nodeId));
                 // (A land's are its own: its mesh is the rings.)
                 const LandNode* land = n->asLand();
-                const std::vector<SurfaceItem>& mine = land ? land->items() : turfItems(gl, *n, d->bounds);
+                const std::vector<SurfaceItem>& mine = land ? land->items() : turfItems(gl, *n, d->bounds, origin);
                 items.insert(items.end(), mine.begin(), mine.end());
-                gl.bounds.min = bromath::vmin(gl.bounds.min, d->bounds.min);
-                gl.bounds.max = bromath::vmax(gl.bounds.max, d->bounds.max);
+                const bromath::AABB3 db = frame.view.toBody(d->bounds);
+                gl.bounds.min = bromath::vmin(gl.bounds.min, db.min);
+                gl.bounds.max = bromath::vmax(gl.bounds.max, db.max);
             }
             // The meshes gone from the graph take their items with them.
             for (auto it = gl.turf.begin(); it != gl.turf.end();)
@@ -255,7 +264,8 @@ uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob
     std::unordered_map<uint32_t, std::vector<uint64_t>> grantedKeys;
     for (const WorldJob& j : granted) grantedKeys[j.producer].push_back(j.key);
 
-    const SceneView& view = frame.view;
+    // A tile's camera and box are the body's (its meshes' bounds convert).
+    const SceneView& view = frame.world;
     uint32_t recorded = 0;
     for (const uint32_t grassId : turfOffered_) {
         GroundLayers& gl = *groundLayers_.at(grassId);
@@ -312,7 +322,7 @@ uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob
                 // The tile's camera: the frame's, its projection straight
                 // down onto the tile.
                 const double texel = f.side / config.tileTexels;
-                SceneCameraUniforms cam = view.uniforms(&frame.renderer);
+                SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
                 const bromath::Mat4 rel = fillViewProj(f, texel, config.border, view.eye, bounds.min.y, bounds.max.y);
                 std::memcpy(cam.viewProj, rel.data, sizeof(cam.viewProj));
                 const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
@@ -339,8 +349,8 @@ uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob
                 }
                 const ChunkCull cull{&tileFrustum, view.eye, false};
                 for (const MeshDraw* d : draws) {
-                    if (d->bounds.max.x < box.min.x || d->bounds.min.x > box.max.x || d->bounds.max.z < box.min.z ||
-                        d->bounds.min.z > box.max.z)
+                    const bromath::AABB3 db = frame.view.toBody(d->bounds);
+                    if (db.max.x < box.min.x || db.min.x > box.max.x || db.max.z < box.min.z || db.min.z > box.max.z)
                         continue;
                     MeshDraw c = *d;
                     c.twoSided = true;   // (seen from above, whichever way its faces wind)

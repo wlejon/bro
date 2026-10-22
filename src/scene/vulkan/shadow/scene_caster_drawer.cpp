@@ -264,8 +264,9 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     }
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
-    // A chunked caster draws the chunks inside the view.
-    const SceneMeshDrawer::ChunkCull cull{frustum, frame.view.eye};
+    // A chunked caster draws the chunks inside the view (a caster's view,
+    // a shadow page's or a probe capture's, is the body's).
+    const SceneMeshDrawer::ChunkCull cull{frustum, frame.world.eye};
     if (draw.shadowIndexCount != 0 && draw.shadowIndexCount < draw.indexCount) {
         MeshDraw cut = draw;
         cut.indexCount = draw.shadowIndexCount;

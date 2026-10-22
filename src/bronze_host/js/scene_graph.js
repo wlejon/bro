@@ -270,6 +270,82 @@
             time: r[10], now: { direction: [r[11], 0, r[12]], speed: r[13] },
         };
     });
+    // ---- The body and its place frame (scene/world/place.h) ----------------
+    // Positions a scene holds (its nodes, its camera, its physics) are the
+    // place frame's; a body point is in double, in the body's frame.
+    const point3 = (p, what) => {
+        if (!p || p.length < 3) throw new TypeError("bro.scene.SceneGraph.prototype." + what + ": a point [x, y, z] is required");
+        return toF64([+p[0], +p[1], +p[2]]);
+    };
+    fn(SceneGraph.prototype, "setBody", function setBody(opts) {
+        const o = opts || {};
+        const radius = o.radius === undefined || o.radius === Infinity ? 0 : +o.radius;
+        __bro_native.scene.SceneGraph_setBody(this, radius, toF64(o.spin ? [+o.spin[0], +o.spin[1], +o.spin[2]] : []),
+                                             toF64(o.at ? [+o.at[0], +o.at[1], +o.at[2]] : []));
+    });
+    accessor(SceneGraph.prototype, "place", function () {
+        const r = __bro_native.scene.SceneGraph_place(this);
+        if (r.length < 23) return null;
+        return {
+            hasBody: r[0] !== 0,
+            body: { radius: r[1] === 0 ? Infinity : r[1], spin: [r[2], r[3], r[4]] },
+            anchor: { face: r[5], x: r[6], z: r[7] },
+            origin: [r[8], r[9], r[10]],
+            basis: Array.from(r.subarray ? r.subarray(11, 20) : r.slice(11, 20)),
+            serial: r[20], faceCells: r[21], lattice: r[22],
+        };
+    }, undefined);
+    fn(SceneGraph.prototype, "toBody", function toBody(p) {
+        return Array.from(__bro_native.scene.SceneGraph_toBody(this, point3(p, "toBody")));
+    });
+    fn(SceneGraph.prototype, "toPlace", function toPlace(b) {
+        return Array.from(__bro_native.scene.SceneGraph_toPlace(this, point3(b, "toPlace")));
+    });
+    fn(SceneGraph.prototype, "upAt", function upAt(p) {
+        return Array.from(__bro_native.scene.SceneGraph_upAt(this, point3(p, "upAt")));
+    });
+    fn(SceneGraph.prototype, "latLongAt", function latLongAt(p) {
+        const r = __bro_native.scene.SceneGraph_latLongAt(this, point3(p, "latLongAt"));
+        return r.length < 2 ? null : { lat: r[0], lon: r[1] };
+    });
+    fn(SceneGraph.prototype, "reanchorAt", function reanchorAt(b) {
+        return __bro_native.scene.SceneGraph_reanchorAt(this, point3(b, "reanchorAt"));
+    });
+    // The reanchor event: the move the graph made (new = rotation * old +
+    // translation), for what a script keeps in its own variables.
+    const reanchorListeners = new WeakMap();
+    const reanchorEvent = (m) => {
+        const rot = Array.from(m.subarray(0, 9)), t = [m[9], m[10], m[11]];
+        const turn = (d) => [rot[0] * d[0] + rot[1] * d[1] + rot[2] * d[2],
+                             rot[3] * d[0] + rot[4] * d[1] + rot[5] * d[2],
+                             rot[6] * d[0] + rot[7] * d[1] + rot[8] * d[2]];
+        return {
+            type: 'reanchor', rotation: rot, translation: t,
+            tilts: rot[0] !== 1 || rot[4] !== 1 || rot[8] !== 1,
+            turn,
+            apply: (p) => { const r = turn(p); return [r[0] + t[0], r[1] + t[1], r[2] + t[2]]; },
+        };
+    };
+    fn(SceneGraph.prototype, "addEventListener", function addEventListener(type, listener) {
+        if (type !== 'reanchor' || typeof listener !== 'function') return;
+        let set = reanchorListeners.get(this);
+        if (!set) {
+            set = new Set();
+            reanchorListeners.set(this, set);
+            const listeners = set;
+            __bro_native.scene.SceneGraph_onReanchor_set(this, (m) => {
+                const e = reanchorEvent(m);
+                for (const l of Array.from(listeners)) l(e);
+            });
+        }
+        set.add(listener);
+    });
+    fn(SceneGraph.prototype, "removeEventListener", function removeEventListener(type, listener) {
+        if (type !== 'reanchor') return;
+        const set = reanchorListeners.get(this);
+        if (set) set.delete(listener);
+    });
+
     fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts) {
         const d_opts = opts === undefined || opts === null ? {} : opts;
         __bro_native.scene.SceneGraph_setShadowQuality(this, d_opts.pcfTaps !== undefined, d_opts.pcfTaps === undefined ? 0 : d_opts.pcfTaps);

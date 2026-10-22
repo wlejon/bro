@@ -161,6 +161,15 @@ inline HostSceneNodeCell* nodeCellOf(void* self) {
     return (c && c->tag == kHostSceneNodeTag) ? c : nullptr;
 }
 
+/// The place frame's origin on the body of the graph node `self` is in
+/// (scene/world/place.h; zeros without one): a script's points are the
+/// place frame's, what is keyed on the world (the land's heights) the body's.
+inline void placeOriginOfNode(void* self, double out[3]) {
+    out[0] = out[1] = out[2] = 0.0;
+    if (HostSceneNodeCell* c = nodeCellOf(self))
+        if (scene::SceneGraph* g = c->graph()) g->placeOrigin(out);
+}
+
 inline scene::TerrainManager* terrainOf(void* self) {
     auto* c = static_cast<HostTerrainCell*>(self);
     return (c && c->tag == kHostTerrainTag) ? c->manager.get() : nullptr;

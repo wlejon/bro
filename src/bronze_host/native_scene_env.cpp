@@ -395,10 +395,15 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
             auto* mn = static_cast<scene::MeshNode*>(node);
             if (mn->asGrass()) return;   // its mesh is one blade, not where the grass is
             if (const scene::LandNode* land = mn->asLand()) {
-                // Its mesh is the rings, not where the land is: its heights.
+                // Its mesh is the rings, not where the land is: its heights,
+                // on the body (the ray is the place frame's).
+                double po[3];
+                g->placeOrigin(po);
+                const bromath::Vec3 bo{static_cast<float>(o.x + po[0]), static_cast<float>(o.y + po[1]),
+                                       static_cast<float>(o.z + po[2])};
                 float t = 0.0f;
                 bromath::Vec3 n;
-                if (land->raycast(o, d, closestDist, t, n) && t < closestDist) {
+                if (land->raycast(bo, d, closestDist, t, n) && t < closestDist) {
                     closestDist = t;
                     closestWorldPoint = o + d * t;
                     closestWorldNormal = n;

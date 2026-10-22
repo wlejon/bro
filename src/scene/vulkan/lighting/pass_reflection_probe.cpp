@@ -173,10 +173,11 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     const bromath::Vec3 eye{world.at(0, 3), world.at(1, 3), world.at(2, 3)};
     const float farZ = std::max(frame.view.farZ, kMinFaceFar);
     // toVulkanClip twice is no flip at all: the face keeps y up in clip space.
-    const SceneView view =
+    SceneView view =
         SceneView::make(bromath::mlookAt(eye, eye + kFaceDirs[face], kFaceUps[face]),
                         toVulkanClip(makePerspective(3.14159265358979f * 0.5f, 1.0f, kFaceNear, farZ)), eye,
                         kFaceNear, farZ, true, res, res);
+    std::copy(std::begin(frame.view.origin), std::end(frame.view.origin), view.origin);   // the probe is in the place frame
     const SceneCameraUniforms cam = view.uniforms(&frame.renderer);
     const VkDescriptorBufferInfo camInfo = gpu.device.frameUniform(&cam, sizeof(cam));
     VkDescriptorSet cameraSet = gpu.device.frameSet(gpu.defaults.cameraLayout);
@@ -185,7 +186,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     camWriter.updateSet(gpu.device.device(), cameraSet);
     // The face draws relative to the probe: its own lighting, and every draw
     // (prepared relative to the frame's eye) re-based onto it.
-    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu, eye);
+    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu, view);
     const VkDescriptorSet lightingSet = writeLightingSet(gpu, lighting, VK_NULL_HANDLE, nullptr);
     const bromath::Vec3 rebase = frame.view.eye - eye;
     std::map<const uint8_t*, VkDescriptorSet> shadedSets;

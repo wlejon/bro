@@ -549,6 +549,19 @@ void bro_scene_SceneGraph_windAt(void* self, double x, double z, bronze_native_b
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out);
 
+// bro.scene.SceneGraph.prototype.setBody / place / toBody / toPlace / upAt /
+// latLongAt / reanchorAt and the reanchor event (native_scene_place.cpp)
+//   registered at __bro_native.scene.SceneGraph_<name>
+void bro_scene_SceneGraph_setBody(void* self, double radius, const double* spin, uint32_t spin_len, const double* at,
+                                  uint32_t at_len);
+void bro_scene_SceneGraph_place(void* self, bronze_native_buffer* out);
+void bro_scene_SceneGraph_toBody(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
+void bro_scene_SceneGraph_toPlace(void* self, const double* b, uint32_t b_len, bronze_native_buffer* out);
+void bro_scene_SceneGraph_upAt(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
+void bro_scene_SceneGraph_latLongAt(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
+bool bro_scene_SceneGraph_reanchorAt(void* self, const double* b, uint32_t b_len);
+void bro_scene_SceneGraph_onReanchor_set(void* self, uint64_t cbBits);
+
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
 //   opts_pcfTaps_given: false when the value was not passed (no declared default)

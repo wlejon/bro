@@ -130,7 +130,7 @@ void SceneMeshDrawer::offerLandSun(SceneFrame& frame, WorldService& service) {
     generation = mixBits(generation, land->canopySourceHash());
     generation = mixBits(generation, floatBits(land->canopyCastRange()));
     generation = mixBits(generation, land->id());
-    landSun_.update(frame.view.eye, {-d[0], -d[1], -d[2]}, generation, tiles);
+    landSun_.update(frame.world.eye, {-d[0], -d[1], -d[2]}, generation, tiles);
     for (const LandSun::Want& w : landSun_.wants()) {
         const double side = static_cast<double>(LS_SIDE) * LandSun::kTexel0 * std::ldexp(1.0, w.level);
         service.offer({static_cast<uint64_t>(w.level), land->id(), landSunKind_, w.error, side, w.required});

@@ -837,6 +837,12 @@ public:
     void setLinearVelocity(JPH::BodyID id, JPH::Vec3 vel);
     void setAngularVelocity(JPH::BodyID id, JPH::Vec3 vel);
 
+    /// Move the whole world rigidly: every body (its position, rotation and
+    /// velocities), every character, the areas' directional fields, the
+    /// render interpolation's snapshots. A scene's re-anchor
+    /// (scene/world/place.h): new = rot * old + t. Call only when idle.
+    void move(JPH::Quat rot, JPH::Vec3 t);
+
     void addForce(JPH::BodyID id, JPH::Vec3 force);
     void addImpulse(JPH::BodyID id, JPH::Vec3 impulse);
     void addTorque(JPH::BodyID id, JPH::Vec3 torque);

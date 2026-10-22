@@ -217,7 +217,7 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     g.ground[3] = static_cast<float>(sunLight);
     seaLevel_ = a.seaLevel;
     for (int k = 0; k < 3; ++k) center_[k] = a.center[k];
-    eye_ = frame.view.eye;
+    eye_ = frame.world.eye;   // its centre and sea level are the body's
     originFor(eye_, g.origin);
 
     // The tables' inputs: a change remakes them (the world-service jobs).

@@ -86,7 +86,9 @@ void shadowSoftUniform(const SceneRenderer& renderer, float out[4]) {
     out[3] = 0.0f;
 }
 
-SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const bromath::Vec3& eye) {
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const SceneView& view) {
+    const bromath::Vec3 eye = view.eye;
+    const bromath::Vec3 worldEye = view.world().eye;
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
     const std::vector<LightNode*>& lights = renderer.frameLights();
@@ -145,11 +147,11 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     light.shadowView[3] = overlays ? static_cast<float>(plan.swayLevel) : -1.0f;
     shadowSoftUniform(renderer, light.shadowSoft);
     for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
-        shadowMapUniform(plan, plan.maps[m], eye, light.shadowMaps[m]);
+        shadowMapUniform(plan, plan.maps[m], worldEye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);
-    gpu.atmosphere.fill(light.atm, eye);
-    gpu.probes.fill(light.probeGrid, eye);
-    gpu.meshes.fillLandSun(light.landSun, eye);
+    gpu.atmosphere.fill(light.atm, worldEye);
+    gpu.probes.fill(light.probeGrid, worldEye);
+    gpu.meshes.fillLandSun(light.landSun, worldEye);
     return light;
 }
 

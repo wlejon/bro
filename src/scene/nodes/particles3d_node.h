@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
+#include "scene/world/place.h"
 #include <bromath/aabb.h>
 #include <bromath/color.h>
 #include "scene/texture_source.h"
@@ -88,6 +89,10 @@ public:
 
     void setSpace(SimSpace s) { space_ = s; }
     SimSpace space() const { return space_; }
+
+    /// A re-anchor (scene/world/place.h): world-space particles move with
+    /// the world. (Local ones ride their emitter, a node that moves.)
+    void placeMoved(const PlaceMove& m);
 
     // --- Emission ---
 

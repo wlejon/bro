@@ -15,7 +15,8 @@ namespace bro::scene::vk {
 namespace {
 
 // The node's world bounds (the shadow pass and probe faces cull by them),
-// their centre (probe selection) and its view depth (translucent sorting).
+// their centre (probe selection) and its view depth (translucent sorting),
+// all in the place frame (a node keyed on the world converts its own).
 void placeDraw(const SceneFrame& frame, SceneNode* node,
                const std::optional<bromath::AABB3>& bounds, MeshDraw& draw) {
     if (bounds) {
@@ -95,7 +96,7 @@ void buildDrawLists(SceneFrame& frame) {
                 // Land: its rings about the eye, over the whole land (never culled).
                 MeshDraw draw;
                 if (!drawer.prepareLand(frame, *land, draw)) continue;
-                placeDraw(frame, node, land->bounds(), draw);
+                placeDraw(frame, node, frame.view.toPlace(land->bounds()), draw);
                 const auto index = static_cast<uint32_t>(lists.meshes.size());
                 lists.meshes.push_back(draw);
                 stats.meshDrawn++;

@@ -361,10 +361,11 @@ private:
     };
     /// Grass node `grass`'s, made on first use (its atlas included).
     GroundLayers* groundLayers(SceneFrame& frame, const GrassNode& grass);
-    /// Turf mesh `node`'s items (its world box `bounds`): its ground's
-    /// heights in cells, retaken when its geometry or placement changes.
+    /// Turf mesh `node`'s items (its world box `bounds`, in the place frame):
+    /// its ground's heights in cells, on the body (`origin` the place
+    /// frame's), retaken when its geometry or placement changes.
     static const std::vector<SurfaceItem>& turfItems(GroundLayers& gl, const MeshNode& node,
-                                                     const bromath::AABB3& bounds);
+                                                     const bromath::AABB3& bounds, const bromath::Vec3& origin);
     /// What every tile of a grass node's turf layer reads changes with this
     /// (its land, herbs and the patterns' parameters; each turf mesh is an
     /// item of its own, offer()'s).

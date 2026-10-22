@@ -240,7 +240,8 @@ void SceneProbeGrid::beginFrame(SceneFrame& frame) {
     }
     grid_.setSun(sunRef_.x, sunRef_.y, sunRef_.z, sunGeneration_);
 
-    const bromath::Vec3 eye = frame.view.eye;
+    // Keyed on the world: the eye on the body (a re-anchor scrolls nothing).
+    const bromath::Vec3 eye = frame.world.eye;
     grid_.place(eye.x, eye.z);
     // The refreshes age by the scene's clock.
     const double now = frame.renderer.windTimeExact();
@@ -403,7 +404,7 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, const std::
     frame.gpu.device.cmdBeginRendering(cmd, &info);
     vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
 
-    const bromath::Vec3 eye = frame.view.eye;
+    const bromath::Vec3 eye = frame.world.eye;
     const float R = kCaptureRange;
     constexpr int kTexels = PG_HEIGHT / PG_COLUMNS;
     for (const ProbeBox& b : boxes) {
@@ -440,9 +441,11 @@ void SceneProbeGrid::capture(SceneFrame& frame, VkCommandBuffer cmd, const std::
         for (int p = 0; p < 6; ++p) frustum.planes[p] = {n[p], d[p]};
         for (const MeshDraw& draw : frame.lists.meshes) {
             if (!groundCaster(draw)) continue;
-            if (draw.hasBounds && (draw.bounds.max.x < box.min.x || draw.bounds.min.x > box.max.x ||
-                                   draw.bounds.max.z < box.min.z || draw.bounds.min.z > box.max.z))
-                continue;
+            if (draw.hasBounds) {
+                const bromath::AABB3 db = frame.view.toBody(draw.bounds);
+                if (db.max.x < box.min.x || db.min.x > box.max.x || db.max.z < box.min.z || db.min.z > box.max.z)
+                    continue;
+            }
             frame.gpu.casters.draw(frame, cmd, vp, draw, &frustum, SceneCasterDrawer::Mode::Capture);
         }
     }

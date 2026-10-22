@@ -309,8 +309,9 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
         for (Node::Slot& s : n.ring_) s = {};
     }
 
-    // The frame's params: the camera, the tiles, the node's detail.
-    const SceneView& view = frame.view;
+    // The frame's params: the camera, the tiles, the node's detail (all of
+    // it the body's: the plants and the shadow pages are keyed on it).
+    const SceneView& view = frame.world;
     const ShadowPlan& plan = frame.renderer.shadowPlan();
     const PlantsNode::Params& p = node.params();
     std::vector<uint32_t> w(PP_P_WORDS, 0u);

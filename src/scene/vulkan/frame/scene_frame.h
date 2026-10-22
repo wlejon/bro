@@ -87,7 +87,11 @@ struct SceneFrame {
     VkCommandBuffer computeCmd = VK_NULL_HANDLE;   // computeStream's (null until used)
     bool computeJoined = false;
 
+    /// The camera: `view` in the place frame, what the scene graph's nodes
+    /// are drawn and culled in; `world` the same camera in the body's frame,
+    /// what is keyed on the world reads (SceneView::world).
     SceneView view;
+    SceneView world;
     SceneDrawLists lists;
     CullStats stats;
     /// Anything visible was drawn (the compositor shows the layer).
