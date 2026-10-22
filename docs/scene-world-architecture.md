@@ -366,6 +366,63 @@ near ground's crumbs, blades and leaves). Everything else is a sample.
   layer, and shadowing past the sun's last cascade into the layer's horizon
   and occlusion terms.
 
+### Design: the canopy layer
+
+The plants are drawn to their `range` (biomes: 6 km) and cast into the
+shadow pages to their `shadowRange` (1.5 km). Past these, a forest is
+nothing: from 1.5 km up the far hills are bare, and the plants past the
+cast range shade nothing. Drawing them further does not scale: a coarse
+page over a square kilometre of forest is tens of thousands of crowns,
+and with the cast range at 6 km biomes' golden walk left 750 pages
+wanted, against 200–400. The planet cannot place plants to the horizon
+at all.
+
+- **What the canopy is comes from the plants' rules.** The rules are
+  fields, so the plants' expected canopy at any point is a function, not a
+  sum over placed plants. For each layer, its candidates' density (its
+  chance over its spacing squared), each species' share (its weight over
+  the sum), and the size field give the crowns' projected area per square
+  metre τ. The cover is 1 − e^(−τ), a Poisson overlap. The mean top height
+  and the leaves' albedo (the species' `albedo`, the same one the probes'
+  medium uses) are weighted by crown area. This is written as GLSL from
+  the rules and species (`plantCanopyModule`, scene/world/plant_canopy.h,
+  its fields through brokit's noise_glsl), so it is the placement's own
+  maths and reaches as far as the land does.
+- **The land keeps it.** A land on which plants stand
+  (`createPlants({ land })`) splices that module into its fill: a fourth
+  tile layer (the canopy's albedo and cover), and the top height beside
+  the ground's in the heights layer. It is made with the land's tiles, by
+  the same jobs.
+- **Past the plants' range, the land is the canopy.** In the plants'
+  last tenth of range they dither out as the canopy comes in. The land's
+  vertices rise by the top height times the cover, and the cover blends
+  the canopy over the ground's own surface (mesh.frag's canopySurface).
+  It is lit as a sward is, a layer of leaves too fine to resolve, facing
+  up whatever the slope. Its albedo is the leaves' in their own shade,
+  more of it seen the lower the eye's line (crown sides and the shade
+  between them). Both shades are measured against the plants drawn
+  there: biomes' high view (1.5 km up) with the canopy past 3 km is
+  within 2–10 levels of the plants at 3–4 km, forests and meadows, and
+  past 6 km within 2–9 of the plants drawn to 12 km.
+- **Past the plants' cast range, the land casts as the canopy.** The
+  land's caster rises the same way where the plants no longer cast, and
+  a plant past its range casts nothing. The plants' own crowns past the
+  cast range receive that shadow: inside the raised surface a crown is
+  shaded, its top lit.
+- **What it costs: nothing measured.** Biomes' shots, interleaved, the
+  canopy on and off: the land's pass 0.30 ms either way, every shot
+  within noise. The fill evaluates the module once a texel when a tile is
+  made.
+- **Where it falls short.** The canopy is read per vertex, a ring cell
+  1/64 of the distance (60–120 m at 4–8 km), so past the range a forest's
+  patches blur: biomes' high view shows the far band's forest tone but not
+  its patches. Reading it per fragment at the tiles' texel would halve
+  that. At altitude neither the canopy nor the plants shade the ground:
+  from 1.5 km up the receivers' page offsets swallow a 15 m rise (on and
+  off are the same to a pixel at golden hour), and the probe grid's land
+  shade ends at its last cascade, 2 km out. Forests' shadows seen from
+  high need a far shade of their own (the horizon terms above).
+
 ## 6. The world service
 
 Everything about the world that does not depend on the view is made once,

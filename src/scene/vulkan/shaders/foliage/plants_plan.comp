@@ -129,6 +129,19 @@ float elementCount(PlantInfo pl, float across, float kept, float least) {
     return clamp(n, min(least, pl.full), pl.full);
 }
 
+// Whether a plant `d` m from the eye is let go at the edge of `range`: over
+// its last tenth, a growing share of the plants, picked by where they stand,
+// as the land's canopy comes in for them (scene_land.glsl's
+// landCanopyShown).
+bool beyondRange(PlantInfo pl, float d, float range) {
+    uvec2 p = floatBitsToUint(pl.centre.xz);
+    uint h = p.x * 0x9e3779b1u ^ p.y * 0x85ebca77u;
+    h ^= h >> 15u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12u;
+    return float(h >> 8u) * (1.0 / 16777216.0) < smoothstep(0.9 * range, range, d);
+}
+
 Pick pick(PlantInfo pl, uint v) {
     Pick k;
     k.on = false;
@@ -145,7 +158,9 @@ Pick pick(PlantInfo pl, uint v) {
     float minElements = pf(PP_P_MIN_ELEMENTS);
     bool wood = d - pl.radius < woodRange;
     if (v == 0u) {
-        if (d - pl.radius > pf(PP_P_RANGE) || !intersects(PP_P_FRUSTUM, bmin, bmax)) return k;
+        if (d - pl.radius > pf(PP_P_RANGE) || beyondRange(pl, d, pf(PP_P_RANGE)) ||
+            !intersects(PP_P_FRUSTUM, bmin, bmax))
+            return k;
         // Pixels across a metre at the plant's near side; never fewer than
         // minElements, nor than it takes elements `pixels` across to cover
         // its crown on screen (a tree at the horizon: one).
@@ -158,7 +173,9 @@ Pick pick(PlantInfo pl, uint v) {
     } else {
         uint t = v - 1u;
         uint at = PP_P_TILE + t * PP_TILE_WORDS;
-        if (d - pl.radius > pf(PP_P_SHADOW_RANGE) || !intersects(at + PP_TILE_FRUSTUM, bmin, bmax)) return k;
+        if (d - pl.radius > pf(PP_P_SHADOW_RANGE) || beyondRange(pl, d, pf(PP_P_SHADOW_RANGE)) ||
+            !intersects(at + PP_TILE_FRUSTUM, bmin, bmax))
+            return k;
         // The sun's views part the crowns: one whose penumbra on the ground
         // under it is wider than stillPenumbra hides its sway, cast still.
         uint part = params.w[at + PP_TILE_PLANTS];

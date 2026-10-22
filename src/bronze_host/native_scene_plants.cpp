@@ -7,9 +7,12 @@
 #include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 
+#include "scene/nodes/land_node.h"
 #include "scene/nodes/plants_node.h"
+#include "scene/world/plant_canopy.h"
 #include "scene/world/plant_placement.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -60,6 +63,32 @@ const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json) {
     auto rules = std::make_shared<scene::PlacementRules>();
     if (!scene::parsePlacementRules(json, *rules, &tl_error)) return tl_error.c_str();
     pl->setRules(std::move(rules));
+    return tl_error.c_str();
+}
+
+const char* bro_scene_SceneNode_setPlantLand(void* self, void* landSelf, bool on) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* pl = plantsOf(self);
+    auto* n = nodeOf(landSelf);
+    auto* land = n && n->type() == scene::SceneNode::Type::Mesh ? static_cast<scene::MeshNode*>(n)->asLand() : nullptr;
+    if (!pl || !land) return tl_error.c_str();
+    if (!on) {
+        land->setCanopy({}, 0.0f, 0.0f, 0.0f);
+        return tl_error.c_str();
+    }
+    std::string module;
+    float top = 0.0f;
+    if (const scene::PlacementRules* rules = pl->rules()) {
+        if (!scene::plantCanopyModule(*rules, pl->species(0), pl->speciesCount(), scene::PlantsNode::kSpeciesFloats,
+                                      module, tl_error))
+            return tl_error.c_str();
+        // (The land's bounds: twice the tallest species, for a size field
+        // past 1.)
+        for (int s = 0; s < pl->speciesCount(); ++s) top = std::max(top, 2.0f * pl->species(s)[0]);
+    }
+    const auto& p = pl->params();
+    land->setCanopy(std::move(module), top, p.range, std::min(p.shadowRange, p.range));
     return tl_error.c_str();
 }
 

@@ -116,7 +116,7 @@ public:
         float woodRange = 220.0f;  // past this (m) no trunks or limbs are drawn
         float range = 6000.0f;     // past this (m) no plant is drawn
         float shadowTexels = 12.0f; // as `pixels`, in a shadow page's texels, for its casters
-        float shadowRange = 1500.0f; // past this (m) no plant casts (the shadow views cut nearer)
+        float shadowRange = 1500.0f; // past this (m), or `range`, no plant casts (the shadow views cut nearer)
     };
     static constexpr int kParamCount = 6;
     void setParams(const Params& p) { params_ = p; }

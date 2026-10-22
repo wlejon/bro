@@ -109,6 +109,7 @@ embed_vk_shader(ground/scene_land_layout.h     kVkSceneLandLayoutSrc)
 embed_vk_shader(ground/scene_land.glsl         kVkSceneLandSrc)
 embed_vk_shader(ground/scene_land_layer.glsl   kVkSceneLandLayerSrc)
 embed_vk_shader(ground/land_module.glsl        kVkLandModuleSrc)
+embed_vk_shader(ground/land_canopy.glsl        kVkLandCanopySrc)
 embed_vk_shader(ground/land_fill.comp          kVkLandFillCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
@@ -158,6 +159,7 @@ add_library(bro_scene STATIC
     world/fields.cpp
     world/cell_store.cpp
     world/plant_placement.cpp
+    world/plant_canopy.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
@@ -219,6 +221,8 @@ target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
+# (The plants' canopy as GLSL, world/plant_canopy.cpp.)
+target_link_libraries(bro_scene PRIVATE brokit_noise_glsl)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 

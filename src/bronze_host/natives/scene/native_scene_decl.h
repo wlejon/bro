@@ -792,6 +792,13 @@ void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_
 //   registered at __bro_native.scene.SceneNode_setPlantRules
 const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json);
 
+// plants land: the land node the plants stand on takes their canopy (their
+// rules', species' and ranges' as they are now: world/plant_canopy.h), kept
+// and drawn as the land past the plants' ranges. Returns "" or what was
+// wrong (a rule's field with no GLSL).
+//   registered at __bro_native.scene.SceneNode_setPlantLand
+const char* bro_scene_SceneNode_setPlantLand(void* self, void* land, bool on);
+
 // plants placement: [leaves placed, leaves wanted and not yet placed]
 //   registered at __bro_native.scene.SceneNode_plantPlacement
 //   result: f64[] in *out; out->release == NULL, the runtime copies

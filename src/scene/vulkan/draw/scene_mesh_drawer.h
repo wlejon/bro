@@ -85,6 +85,7 @@ constexpr uint32_t kMsaa = 32768;           // a draw into a 4x MSAA target: a c
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
 constexpr uint32_t kHerb = 2097152;         // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
 constexpr uint32_t kCoverFar = 4194304;     // the cover's far tier (a Grass draw): mesh_cover_far.vert, cover_far.frag
+constexpr uint32_t kCanopy = 8388608;       // a land carrying its plants' canopy: inInstColor is it (mesh_land.vert)
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -308,7 +309,7 @@ public:
         VkSampler sampler = VK_NULL_HANDLE;
         VkImageView page = VK_NULL_HANDLE;
         VkSampler pageSampler = VK_NULL_HANDLE;
-        float words[16] = {};   // its LandDraw (LD_WORDS) this frame
+        float words[20] = {};   // its LandDraw (LD_WORDS) this frame
     };
 
 private:

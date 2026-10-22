@@ -119,6 +119,10 @@
 
     const isPlants = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_plantStats(n).length > 0;
 
+    // The land each plants node stands on: it takes their canopy (its
+    // rules', species' and ranges') whenever one of them changes.
+    const lands = new WeakMap();
+
     function apply(node, o) {
         if (o.module !== undefined) {
             const source = typeof o.module === 'string' ? o.module : (o.module && o.module.source) || '';
@@ -134,6 +138,17 @@
         if (params.some((v) => !Number.isNaN(v)))
             __bro_native.scene.SceneNode_setPlantParams(node, new Float64Array(params));
         for (const k of ['name', 'castsShadow', 'receivesShadow', 'visible']) if (o[k] !== undefined) node[k] = o[k];
+        if (o.land !== undefined) {
+            if (!(o.land instanceof SceneNode) && o.land !== null) throw new TypeError('plants: `land` is a land node');
+            const was = lands.get(node);
+            if (was && was !== o.land) __bro_native.scene.SceneNode_setPlantLand(node, was, false);
+            if (o.land) lands.set(node, o.land); else lands.delete(node);
+        }
+        const land = lands.get(node);
+        if (land && (o.land !== undefined || o.rules !== undefined || o.species || params.some((v) => !Number.isNaN(v)))) {
+            const err = __bro_native.scene.SceneNode_setPlantLand(node, land, true);
+            if (err) throw new TypeError('plants: ' + err);
+        }
     }
 
     fn(SceneGraph.prototype, 'createPlants', function createPlants(opts) {

@@ -49,6 +49,7 @@
 #include "scene_land.glsl.src.h"
 #include "scene_land_layer.glsl.src.h"
 #include "land_module.glsl.src.h"
+#include "land_canopy.glsl.src.h"
 #include "land_fill.comp.src.h"
 #include "util/user_dirs.h"
 
@@ -163,6 +164,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/scene_land.glsl", kVkSceneLandSrc},
         {"ground/scene_land_layer.glsl", kVkSceneLandLayerSrc},
         {"ground/land_module.glsl", kVkLandModuleSrc},
+        {"ground/land_canopy.glsl", kVkLandCanopySrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
         {"ground/cover_plan.comp", kVkCoverPlanCompSrc},

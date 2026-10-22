@@ -299,6 +299,18 @@
  * under a low sun) hides its sway too: it is cached at every level, cast
  * as coarse as its penumbra.
  *
+ * The land (`land`, a scene.createLand node they stand on): past `range`
+ * the plants are its canopy. From the rules (each layer's chance, scale and
+ * species weights, the species' height, radius and albedo) the land's tiles
+ * take the cover the plants would make there (1 - e^-(crowns' area a square
+ * metre)), their leaves' albedo and their top; past `range` the land rises
+ * by that top as far as they cover it and is drawn as their leaves (lit as
+ * a sward is: a layer of leaves too fine to resolve), and past
+ * `shadowRange` it casts so. Both come in over the range's last tenth as
+ * the plants there go, a growing share of them picked by where they stand.
+ * So a forest reaches the horizon at no cost past the land's own. A plant
+ * past `range` casts nothing (`shadowRange` is at most `range`).
+ *
  * Where they stand: given as records (`plants`), or placed by `rules` over
  * a world with no edge. Rules are layers of candidates on a grid fixed in
  * the world (`spacing` apart, `jitter`ed), each kept by a `chance` field,
@@ -410,7 +422,8 @@
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
  * @property {number} [range=6000] - past this (m) no plant is drawn.
  * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
- * @property {number} [shadowRange=1500] - past this (m) no plant casts.
+ * @property {number} [shadowRange=1500] - past this (m), or `range`, no plant casts.
+ * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `range` (above); null none.
  * @property {boolean} [castsShadow=false]
  * @property {boolean} [receivesShadow=false]
  */

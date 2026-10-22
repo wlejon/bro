@@ -12,6 +12,9 @@
 //   - the GPU's heights are the tree's: a land at a constant 50 m is seen
 //     from 52 m looking down and not from 48 m
 //   - far from the origin (the rings follow the eye) it still draws
+//   - a plants node standing on it (createPlants' `land`): past their range
+//     the land is drawn as their canopy, within it and once they leave it
+//     as its own surface
 
 function patchAvg(img, x0, y0, x1, y1, ch) {
     let sum = 0, n = 0;
@@ -111,6 +114,33 @@ if (!scn) {
     img = scn.captureFrame();
     const far = patchAvg(img, 16, 16, S - 16, S - 16, 0);
     assert(far > 40, `far from the origin it still draws (r ${far.toFixed(1)})`);
+
+    // --- the plants' canopy past their range ------------------------------------
+    // A wood of green crowns 20 m tall on the 50 m land, closed (each 4 m
+    // across on a 4 m grid: 1 - e^-pi of it covered). Seen from 300 m up,
+    // past a 30 m range the land is their canopy; within it (a range of 10
+    // km), or without the land, the land's own red.
+    const plants = scn.createPlants({
+        species: [{ height: 20, radius: 2, albedo: [0.02, 0.5, 0.02] }],
+        rules: { ground: N('Constant', { Value: 50 }), range: 200, layers: [{ spacing: 2, chance: 1, species: [0] }] },
+        range: 30, land,
+    });
+    down(10, 350, 10);
+    frames(6);
+    const colour = () => {
+        const im = scn.captureFrame();
+        return [patchAvg(im, 16, 16, S - 16, S - 16, 0), patchAvg(im, 16, 16, S - 16, S - 16, 1)];
+    };
+    const [cr, cg] = colour();
+    assert(cg > 8 && cg > 3 * cr, `past the plants' range, their canopy's green (r ${cr.toFixed(1)} g ${cg.toFixed(1)})`);
+    plants.setPlants({ range: 10000 });
+    frames(6);
+    const [nr, ng] = colour();
+    assert(nr > 40 && nr > 4 * ng, `within it, the land's own (r ${nr.toFixed(1)} g ${ng.toFixed(1)})`);
+    plants.setPlants({ range: 30, land: null });
+    frames(6);
+    const [lr, lg] = colour();
+    assert(lr > 40 && lr > 4 * lg, `without the land, the land's own (r ${lr.toFixed(1)} g ${lg.toFixed(1)})`);
 
     console.log('test_land: OK');
 }

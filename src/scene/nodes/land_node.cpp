@@ -55,6 +55,20 @@ bool LandNode::setModule(std::string source, const float* data, size_t floats, c
     return true;
 }
 
+void LandNode::setCanopy(std::string source, float top, float range, float castRange) {
+    const uint64_t hash = source.empty() ? 0 : scene::moduleSourceHash(source);
+    top = source.empty() ? 0.0f : std::max(top, 0.0f);
+    // (The ranges are the draw's alone: the tiles stay.)
+    canopyRange_ = range;
+    canopyCastRange_ = castRange;
+    if (hash == canopyHash_ && top == canopyTop_) return;
+    canopy_ = std::move(source);
+    canopyHash_ = hash;
+    canopyTop_ = top;
+    ++generation_;
+    rebuildItems();
+}
+
 void LandNode::setExtent(float extent) {
     if (!(extent > 0.0f)) return;
     extent_ = extent;
@@ -283,6 +297,8 @@ void LandNode::rebuildItems() {
             bounds_.min = bromath::vmin(bounds_.min, box.min);
             bounds_.max = bromath::vmax(bounds_.max, box.max);
         }
+    // (Where the canopy stands for the plants, the land rises by it.)
+    if (!bromath::aisEmpty(bounds_)) bounds_.max.y += canopyTop_;
 }
 
 }  // namespace bro::scene

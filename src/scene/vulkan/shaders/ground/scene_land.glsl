@@ -13,11 +13,14 @@ layout(set = 3, binding = 0) uniform LandDrawUBO { vec4 w[LD_WORDS / 4]; } landD
 layout(set = 3, binding = 4) uniform sampler2DArray landHeights;
 layout(set = 3, binding = 5) uniform sampler2DArray landSurfaces;
 layout(set = 3, binding = 6) uniform usampler2DArray landPage;
+layout(set = 3, binding = 7) uniform sampler2DArray landCanopies;
 #define LAND_W(i) landDraw.w[i]
+#define LAND_CANOPY
 #endif
 
 float landExtent() { return LAND_W(LD_LAND / 4).x; }
 vec2 landEye() { return LAND_W(LD_LAND / 4).yz; }
+vec3 landEye3() { return LAND_W(LD_LAND / 4).ywz; }
 float landCell0() { return LAND_W(LD_RINGS / 4).x; }
 float landInvK() { return LAND_W(LD_RINGS / 4).y; }
 float landRingHalf() { return LAND_W(LD_RINGS / 4).w; }
@@ -168,6 +171,37 @@ bool landSampleCover(vec2 xz, float lambda, out float height, out vec3 normal, o
     }
     normal = normalize(vec3(-g.x, 1.0, -g.y));
     return true;
+}
+#endif
+
+#ifdef LAND_CANOPY
+// The plants' canopy (world/plant_canopy.h): how far from the eye they are
+// drawn and cast, and whether the land carries their canopy at all.
+float landCanopyRange() { return LAND_W(LD_CANOPY / 4).x; }
+float landCanopyCastRange() { return LAND_W(LD_CANOPY / 4).y; }
+bool landHasCanopy() { return LAND_W(LD_CANOPY / 4).z > 0.5; }
+
+// How much of the plants the canopy stands for at `d` m from the eye past
+// `range`: none inside its last tenth, all of it at the range (as the
+// plants dither out over that tenth, plants_plan.comp).
+float landCanopyShown(float d, float range) { return smoothstep(0.9 * range, range, d); }
+
+// The canopy at `xz` from the tiles of level `lambda`: rgb its leaves'
+// albedo, a its cover; `top` its top over the ground. None where no level
+// is resident.
+vec4 landSampleCanopy(vec2 xz, float lambda, out float top) {
+    top = 0.0;
+    int s0, s1;
+    vec2 uv0, uv1;
+    float f;
+    if (!landTexels(xz, lambda, s0, uv0, s1, uv1, f)) return vec4(0.0);
+    vec4 c = textureLod(landCanopies, vec3(uv0, float(s0)), 0.0);
+    top = textureLod(landHeights, vec3(uv0, float(s0)), 0.0).g;
+    if (s1 >= 0) {
+        c = mix(c, textureLod(landCanopies, vec3(uv1, float(s1)), 0.0), f);
+        top = mix(top, textureLod(landHeights, vec3(uv1, float(s1)), 0.0).g, f);
+    }
+    return c;
 }
 #endif
 

@@ -69,6 +69,18 @@ public:
     bool hasModule() const { return sourceHash_ != 0; }
     static constexpr size_t kMaxData = 64;   // vec4s
 
+    /// The canopy of the plants standing on the land (world/plant_canopy.h's
+    /// module, "" none), the tallest they stand (m) and how far from the eye
+    /// they are drawn and cast: kept in the tiles beside the ground, and
+    /// drawn and cast as the land past the plants' own ranges
+    /// (docs/scene-world-architecture.md §5, "the canopy layer").
+    void setCanopy(std::string source, float top, float range, float castRange);
+    const std::string& canopySource() const { return canopy_; }
+    uint64_t canopySourceHash() const { return canopyHash_; }
+    float canopyTop() const { return canopyTop_; }
+    float canopyRange() const { return canopyRange_; }
+    float canopyCastRange() const { return canopyCastRange_; }
+
     /// The land's half-size (m): it covers [-extent, extent] in x and z.
     void setExtent(float extent);
     float extent() const { return extent_; }
@@ -134,6 +146,10 @@ private:
     std::string source_;
     uint64_t sourceHash_ = 0;
     std::vector<float> data_;
+    std::string canopy_;
+    uint64_t canopyHash_ = 0;
+    float canopyTop_ = 0.0f;
+    float canopyRange_ = 0.0f, canopyCastRange_ = 0.0f;
     FieldRef height_;
     float extent_ = 4096.0f;
     Rings rings_;

@@ -115,6 +115,34 @@ vec2 albedoUV() {
 // gathered and before the lights, so standard lighting applies to its result.
 //__USER_CHUNK__
 
+// A land's canopy (mesh_land.vert's landRise): its leaves' albedo `albedo`
+// shown by `shown` over the surface, as the far plants are drawn (lit as a
+// sward, below): crowns in their own shade (CANOPY_SHADE: a crown's leaves
+// shade each other, as the trees' far daubs do), the more of it seen the
+// lower the eye's line to them (CANOPY_GRAZING where the line is under a
+// tenth of the vertical: their shaded sides and the shade between them),
+// facing up whatever the ground's slope, matte, and mottled a crown at a
+// time (CANOPY_CELL m) while a crown spans a few pixels, its mean beyond.
+// (Both shades measured against the plants drawn there, biomes' high view:
+// the canopy past 3 km against the plants at 3-4 km, past 6 km against
+// them at 6-9 km.)
+const float CANOPY_SHADE = 0.6;
+const float CANOPY_GRAZING = 0.32;
+const float CANOPY_CELL = 6.0;
+const float CANOPY_MOTTLE = 0.15;
+void canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor, inout vec3 N,
+                   inout float roughness) {
+    vec2 p = (worldPos.xz + camera.eyeWorld.xz) / CANOPY_CELL;
+    vec2 c = floor(p);
+    float h = fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+    float footprint = max(length(dFdx(p)), length(dFdy(p)));
+    float mottle = 1.0 + CANOPY_MOTTLE * (2.0 * h - 1.0) * (1.0 - smoothstep(0.25, 0.5, footprint));
+    float down = -worldPos.y / max(length(worldPos), 1e-3);
+    float shade = CANOPY_SHADE * mix(CANOPY_GRAZING, 1.0, smoothstep(0.1, 0.4, down));
+    baseColor = mix(baseColor, albedo * shade * mottle, shown);
+    N = normalize(mix(N, normalize(N + vec3(0.0, 1.0, 0.0)), shown));
+    roughness = mix(roughness, 1.0, shown);
+}
 
 void main() {
     uint flags = meshFlags();
@@ -192,7 +220,8 @@ void main() {
         baseColor = push.baseColor.rgb;
         alpha = push.baseColor.a;
     }
-    baseColor *= inInstColor.rgb;
+    // (A land's instance colour is its canopy, below.)
+    if ((flags & MESH_CANOPY) == 0u) baseColor *= inInstColor.rgb;
     if (MESH_CUTS && push.pbrParams.z > 0.0 && alpha < push.pbrParams.z) discard;
 #ifdef SCENE_GRASS
     baseColor = sward.albedo;
@@ -310,6 +339,16 @@ void main() {
     groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
     baseColor *= push.baseColor.rgb;
 #endif
+    // A land's plants past their range (mesh_land.vert): their canopy over
+    // the ground as far as they cover it, in place of the ground's own.
+    float canopyShown = (flags & MESH_CANOPY) != 0u ? inInstColor.a : 0.0;
+    if (canopyShown > 0.0) {
+        canopySurface(worldPos, inInstColor.rgb, canopyShown, baseColor, N, roughness);
+#ifdef SCENE_GROUND
+        groundAO = mix(groundAO, 1.0, canopyShown);
+        groundThin.w *= 1.0 - canopyShown;
+#endif
+    }
 
 #ifdef CUSTOM_FRAGMENT
     userFragment(baseColor, N, metallic, roughness, emissive, alpha);
@@ -354,6 +393,12 @@ void main() {
         s.thinNormal = groundThin.xyz;
     }
 #endif
+    // A canopy seen from afar is lit as a sward is: a layer of leaves too
+    // fine to resolve, the eye seeing the nearest along its line and of
+    // those the ones the light reaches, standing up whatever the slope.
+    if (canopyShown > 0.0)
+        s.sward = vec4(normalize(mix(s.sward.w > 0.0 ? s.sward.xyz : N, vec3(0.0, 1.0, 0.0), canopyShown)),
+                       mix(s.sward.w, 1.0, canopyShown));
 
     vec3 indirect = sceneAmbient(s);
     if ((flags & MESH_OCCLUSION_MAP) != 0u) indirect *= texture(texOcclusion, inUV).r;

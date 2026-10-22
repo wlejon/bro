@@ -33,6 +33,9 @@ const uint MESH_MSAA                = 32768u;
 const uint MESH_HERB                = 2097152u;
 // The cover's far tier (mesh_cover_far.vert, cover_far.frag).
 const uint MESH_COVER_FAR           = 4194304u;
+// A land carrying its plants' canopy: the instance colour is the canopy
+// there, its leaves' albedo and how much of it is shown (mesh_land.vert).
+const uint MESH_CANOPY              = 8388608u;
 // Bits 10-11: the vertex colour mode — 0 none, 1 replaces the albedo, 2 tints it.
 const uint MESH_VERTEX_COLOR_SHIFT  = 10u;
 

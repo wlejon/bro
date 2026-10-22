@@ -21,7 +21,11 @@
  *   - WHAT GROWS. A grass node stands on a land (`createGrass({ ground:
  *     land })`) and reads the land's tiles on the GPU: its heights and the
  *     surface's `cover` and `herbs`, so the grass reaches as far as the
- *     land does, with nothing baked on the CPU.
+ *     land does, with nothing baked on the CPU. A plants node standing on
+ *     it (`createPlants({ land })`, vegetation-api.js) puts the canopy its
+ *     rules make in the land's tiles: past the plants' range the land rises
+ *     by it and is drawn as their leaves, past their shadow range it casts
+ *     so, and a forest reaches the horizon.
  *
  * The land is square: `extent` metres from the origin each way. Its
  * transform is ignored. It casts shadows (a hill's on the slope behind it,

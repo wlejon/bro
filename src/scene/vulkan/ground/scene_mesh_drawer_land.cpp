@@ -29,11 +29,12 @@ namespace bro::scene::vk {
 
 namespace {
 
-// The tiles' layers: the heights, the surface (albedo, herbs) and what
-// covers it (LandSurface::cover; a grass node on the land reads all three,
-// scene_mesh_drawer_grass.cpp).
-constexpr VkFormat kLandFormats[3] = {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                      VK_FORMAT_R16G16B16A16_SFLOAT};
+// The tiles' layers: the heights (and the canopy's top), the surface
+// (albedo, herbs), what covers it (LandSurface::cover; a grass node on the
+// land reads these three, scene_mesh_drawer_grass.cpp) and the canopy of
+// the plants standing on it (their leaves' albedo, their cover).
+constexpr VkFormat kLandFormats[4] = {VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                      VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
 // A storage buffer's offset alignment no device exceeds.
 constexpr VkDeviceSize kStorageAlign = 256;
 // How far above and below the land's heights a tile's box reaches.
@@ -50,6 +51,7 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     fill.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    fill.addBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     landFillSetLayout_ = fill.build(device_);
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, LF_P_WORDS * 4};
     VkPipelineLayoutCreateInfo info{};
@@ -137,8 +139,8 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
 }
 
 const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
-    const uint64_t key = node.moduleSourceHash();
-    if (!key) return nullptr;
+    if (!node.moduleSourceHash()) return nullptr;
+    const uint64_t key = node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull);
     auto it = landByModule_.find(key);
     if (it == landByModule_.end()) {
         // Compiled at the first frame that draws it (through the SPIR-V
@@ -146,7 +148,7 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
         auto set = std::make_unique<LandShaders>();
         std::string err;
         int index = -1;
-        if (set->create(device_, node.moduleSource(), err)) {
+        if (set->create(device_, node.moduleSource(), node.canopySource(), err)) {
             index = static_cast<int>(landSets_.size());
             set->index = static_cast<uint32_t>(index);
             landSets_.push_back(std::move(set));
@@ -187,6 +189,7 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_LAND + 0] = node.extent();
     words[LD_LAND + 1] = frame.view.eye.x;
     words[LD_LAND + 2] = frame.view.eye.z;
+    words[LD_LAND + 3] = frame.view.eye.y;
     words[LD_RINGS + 0] = r.cellSize;
     words[LD_RINGS + 1] = 4.0f / static_cast<float>(r.resolution);
     words[LD_RINGS + 2] = static_cast<float>(r.levels);
@@ -198,6 +201,10 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_PAGE + 0] = static_cast<float>(lt.tiles.pageShift());
     words[LD_PAGE + 1] = static_cast<float>(config.pageSize);
     words[LD_PAGE + 3] = lt.tiles.stats().resident > 0 ? 1.0f : 0.0f;
+    const bool canopy = node.canopySourceHash() != 0;
+    words[LD_CANOPY + 0] = canopy ? node.canopyRange() : 1e30f;
+    words[LD_CANOPY + 1] = canopy ? node.canopyCastRange() : 1e30f;
+    words[LD_CANOPY + 2] = canopy ? 1.0f : 0.0f;
 }
 
 bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, GrassGround& out) {
@@ -263,8 +270,13 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     writer.writeImage(4, lt->atlas.layerView(0), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
     writer.writeImage(5, lt->atlas.layerView(1), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
     writer.writeImage(6, lt->atlas.pageView(), lt->atlas.pageSampler());
+    writer.writeImage(7, lt->atlas.layerView(3), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
     writer.updateSet(device_, set);
     out.vertexSet = set;
+    // Past the plants' range its fragments are their canopy (mesh_land.vert
+    // hands it on in the instance colour).
+    if (node.canopySourceHash() != 0)
+        out.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(out.push.pbrParams[3]) | mesh_flags::kCanopy);
     return true;
 }
 
@@ -430,6 +442,8 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                 writer.writeBuffer(2, fillSlice.buffer, fillBytes, fillSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                 writer.writeBuffer(3, dataSlice.buffer, dataBytes, dataSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                 writer.writeImage(4, lt.atlas.layerView(2), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+                writer.writeImage(5, lt.atlas.layerView(3), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.updateSet(device_, set);
 

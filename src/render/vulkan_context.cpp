@@ -432,6 +432,12 @@ bool VulkanContext::deviceMeetsRequirements(VkPhysicalDevice dev,
         LOG_INFO("Vulkan: skipping %s (no drawIndirectFirstInstance)", props.deviceName);
         return false;
     }
+    // The land's fill stores its heights and the canopy's top as rg32f
+    // (scene_mesh_drawer_land.cpp).
+    if (!core.shaderStorageImageExtendedFormats) {
+        LOG_INFO("Vulkan: skipping %s (no shaderStorageImageExtendedFormats)", props.deviceName);
+        return false;
+    }
     if (!config_.headless) {
         const auto exts = deviceExtensions(dev);
         for (const char* req : kRequiredDeviceExtensions) {
@@ -693,8 +699,10 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.independentBlend = available.independentBlend;
     deviceFeatures.shaderClipDistance = available.shaderClipDistance;
     deviceFeatures.pipelineStatisticsQuery = available.pipelineStatisticsQuery;
-    // Required (deviceMeetsRequirements): the plants' indirect draws.
+    // Required (deviceMeetsRequirements): the plants' indirect draws, the
+    // land's rg32f fill.
     deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
+    deviceFeatures.shaderStorageImageExtendedFormats = VK_TRUE;
     deviceFeatures_ = deviceFeatures;
 
     // Instanced-attribute divisors other than 0 and 1, and primitive restart

@@ -3,12 +3,15 @@
 //
 //   LandDraw (set 3, binding 0, std140): what mesh_land.vert reads,
 //            LD_WORDS words
-//   set 3, bindings 4..6: the tiles' heights, their surface, the page table
+//   set 3, bindings 4..7: the tiles' heights, their surface, the page table,
+//            the canopy
 //
-//   land_fill.comp's set 0: binding 0 the heights (r32f, an array layer a
-//            slot), 1 the surface (rgba16f: albedo, herbs), 2 the fills
-//            (LF_TILE_WORDS a tile), 3 the module's data (vec4s), 4 the
-//            cover (rgba16f); push constants LF_P_*
+//   land_fill.comp's set 0: binding 0 the heights (rg32f, an array layer a
+//            slot: the ground's, the canopy's top over it), 1 the surface
+//            (rgba16f: albedo, herbs), 2 the fills (LF_TILE_WORDS a tile),
+//            3 the module's data (vec4s), 4 the cover (rgba16f), 5 the
+//            canopy (rgba16f: its leaves' albedo, its cover); push
+//            constants LF_P_*
 //
 //   a grass node standing on the land (scene_grass.glsl) reads its tiles
 //            through its own set 4: its GrassUBO carries the LandDraw
@@ -25,14 +28,16 @@
 
 // --- LandDraw ---
 #define LD_LAND             0     // x the land's extent (half-size, m), yz the frame's eye's world x and z
-                                  // (the rings' centre in every pass, a probe's and a tile fill's too); w unused
+                                  // (the rings' centre in every pass, a probe's and a tile fill's too); w its y
 #define LD_RINGS            4     // x the finest ring's cell (m), y 4 / resolution (the rings' K, mesh_land.vert),
                                   // z the rings, w resolution / 2
 #define LD_TILES            8     // x a level-0 tile's side (m), y its texels inside its border, z the border,
                                   // w the tile levels
 #define LD_PAGE             12    // x the page shift (log2 of the entries a side), y the entries a side,
                                   // z unused, w 1 when any tile is resident
-#define LD_WORDS            16
+#define LD_CANOPY           16    // the plants standing on it: x how far from the eye they are drawn (m),
+                                  // y how far they cast, z 1 when the land carries their canopy, w unused
+#define LD_WORDS            20
 
 // --- the fills ---
 #define LF_GROUP            8     // a workgroup is LF_GROUP x LF_GROUP texels of one tile
