@@ -14,7 +14,12 @@ void main() {
     PgProbe probe = pgProbe(pgProbes.list[index]);
     ivec3 texel = pgProbeTexel(probe);
     float a = probe.fresh ? 1.0 : PG_REFRESH_BLEND;
-    imageStore(pgShRImage, texel, mix(imageLoad(pgShRImage, texel), pgTraces.sh[index * 3u + 0u], a));
-    imageStore(pgShGImage, texel, mix(imageLoad(pgShGImage, texel), pgTraces.sh[index * 3u + 1u], a));
-    imageStore(pgShBImage, texel, mix(imageLoad(pgShBImage, texel), pgTraces.sh[index * 3u + 2u], a));
+    // Its trace's parts summed (a refresh's rays fill fewer of them).
+    uint parts = uint((probe.fresh ? PG_RAYS_FRESH : PG_RAYS) / 64);
+    vec4 sh[3] = vec4[3](vec4(0.0), vec4(0.0), vec4(0.0));
+    for (uint part = 0u; part < parts; ++part)
+        for (uint k = 0u; k < 3u; ++k) sh[k] += pgTraces.sh[(index * PG_TRACE_PARTS + part) * 3u + k];
+    imageStore(pgShRImage, texel, mix(imageLoad(pgShRImage, texel), sh[0], a));
+    imageStore(pgShGImage, texel, mix(imageLoad(pgShGImage, texel), sh[1], a));
+    imageStore(pgShBImage, texel, mix(imageLoad(pgShBImage, texel), sh[2], a));
 }

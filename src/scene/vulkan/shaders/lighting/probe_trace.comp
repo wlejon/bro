@@ -1,10 +1,13 @@
 #version 450
-// The probe grid's traces (scene_probe_grid.cpp): a probe a workgroup, its
-// rays (PG_RAYS_FRESH for a probe fresh to its square, else PG_RAYS) spread
-// evenly over the sphere (a Fibonacci set, turned at random each trace)
-// and marched through the world made for them, then projected to l <= 1 SH
-// and written to the traces' buffer for the blend (probe_blend.comp), so
-// what this dispatch reads of the probes is what they held before it.
+// The probe grid's traces (scene_probe_grid.cpp): a ray an invocation, a
+// probe's rays (PG_RAYS_FRESH for a probe fresh to its square, else
+// PG_RAYS) 64 to a workgroup (its parts, gl_WorkGroupID.y), spread evenly
+// over the sphere (a Fibonacci set, turned at random each trace) and
+// marched through the world made for them, then each part's projected to
+// l <= 1 SH and written to the traces' buffer for the blend
+// (probe_blend.comp) to sum, so what this dispatch reads of the probes is
+// what they held before it. (A ray a thread: the marches are long and
+// serial, so a box's time is one ray's latency, not its rays' count.)
 //
 // A ray marches the finest cascade's world it is in at each step, from the
 // probe's own (so a finer cascade's rays leave its square through the
@@ -124,9 +127,11 @@ float rand(uint x) { return float(hash(x) >> 8) * (1.0 / 16777216.0); }
 shared vec3 partial[64][4];
 
 void main() {
-    uint index = gl_WorkGroupID.x;
+    uint index = gl_WorkGroupID.x, part = gl_WorkGroupID.y;
     if (index >= push.job.y) return;
     PgProbe probe = pgProbe(pgProbes.list[index]);
+    int rays = probe.fresh ? PG_RAYS_FRESH : PG_RAYS;
+    if (int(part) * 64 >= rays) return;
     int c = probe.cascade;
     vec4 cas = PG.cascade[c];
     vec2 xz = cas.xy + (vec2(probe.column) + 0.5) * cas.z;
@@ -150,21 +155,17 @@ void main() {
     mat3 spin = mat3(cos(th), sin(th), 0.0, -sin(th), cos(th), 0.0, 0.0, 0.0, 1.0);
     mat3 turn = (2.0 * outerProduct(v, v) - mat3(1.0)) * spin;
 
-    int rays = probe.fresh ? PG_RAYS_FRESH : PG_RAYS;
-    vec3 acc[4] = vec3[4](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
-    for (int i = int(gl_LocalInvocationIndex); i < rays; i += 64) {
-        float z = 1.0 - (2.0 * float(i) + 1.0) / float(rays);
-        float a = float(i) * 2.39996323;
-        float s = sqrt(max(1.0 - z * z, 0.0));
-        vec3 d = turn * vec3(cos(a) * s, z, sin(a) * s);
-        vec3 radiance = trace(c, p, d, sunE, L);
-        acc[0] += radiance * PG_SH_Y00;
-        acc[1] += radiance * (PG_SH_Y1 * d.x);
-        acc[2] += radiance * (PG_SH_Y1 * d.y);
-        acc[3] += radiance * (PG_SH_Y1 * d.z);
-    }
+    int i = int(part) * 64 + int(gl_LocalInvocationIndex);
+    float z = 1.0 - (2.0 * float(i) + 1.0) / float(rays);
+    float a = float(i) * 2.39996323;
+    float s = sqrt(max(1.0 - z * z, 0.0));
+    vec3 d = turn * vec3(cos(a) * s, z, sin(a) * s);
+    vec3 radiance = trace(c, p, d, sunE, L);
     uint t = gl_LocalInvocationIndex;
-    for (int k = 0; k < 4; ++k) partial[t][k] = acc[k];
+    partial[t][0] = radiance * PG_SH_Y00;
+    partial[t][1] = radiance * (PG_SH_Y1 * d.x);
+    partial[t][2] = radiance * (PG_SH_Y1 * d.y);
+    partial[t][3] = radiance * (PG_SH_Y1 * d.z);
     barrier();
     for (uint stride = 32u; stride > 0u; stride >>= 1) {
         if (t < stride)
@@ -174,8 +175,9 @@ void main() {
     if (t == 0u) {
         float w = 4.0 * PI / float(rays);
         vec3 c0 = partial[0][0] * w, cx = partial[0][1] * w, cy = partial[0][2] * w, cz = partial[0][3] * w;
-        pgTraces.sh[index * 3u + 0u] = vec4(c0.r, cx.r, cy.r, cz.r);
-        pgTraces.sh[index * 3u + 1u] = vec4(c0.g, cx.g, cy.g, cz.g);
-        pgTraces.sh[index * 3u + 2u] = vec4(c0.b, cx.b, cy.b, cz.b);
+        uint at = (index * PG_TRACE_PARTS + part) * 3u;
+        pgTraces.sh[at + 0u] = vec4(c0.r, cx.r, cy.r, cz.r);
+        pgTraces.sh[at + 1u] = vec4(c0.g, cx.g, cy.g, cz.g);
+        pgTraces.sh[at + 2u] = vec4(c0.b, cx.b, cy.b, cz.b);
     }
 }

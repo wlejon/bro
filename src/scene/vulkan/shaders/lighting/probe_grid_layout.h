@@ -26,7 +26,8 @@
 // depth c * PG_LAYERS + k), each texel (c0, cx, cy, cz): the radiance along
 // d is c0 Y00 + PG_SH_Y1 (cx, cy, cz) . d. A probe fresh to its square is
 // traced with PG_RAYS_FRESH rays and stored as traced; a refresh with
-// PG_RAYS, blended into what it held by PG_REFRESH_BLEND.
+// PG_RAYS, blended into what it held by PG_REFRESH_BLEND. A trace writes a
+// probe's SH in PG_TRACE_PARTS parts (its rays' 64s), the blend sums them.
 
 #ifndef BRO_SCENE_PROBE_GRID_LAYOUT_H
 #define BRO_SCENE_PROBE_GRID_LAYOUT_H
@@ -56,5 +57,8 @@
 #define PG_RAYS_FRESH      256
 #define PG_RAYS            128
 #define PG_REFRESH_BLEND   0.5
+// A trace's workgroups a probe: a ray an invocation, 64 a workgroup, each
+// part's SH summed by the blend.
+#define PG_TRACE_PARTS     (PG_RAYS_FRESH / 64)
 
 #endif

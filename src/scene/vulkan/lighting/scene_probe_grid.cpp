@@ -133,7 +133,7 @@ bool SceneProbeGrid::setup(SceneGpu& gpu) {
         !a.createBuffer(kSumBytesPerCascade * PG_MAX_CASCADES,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sums_) ||
-        !a.createBuffer(VkDeviceSize{PG_PROBES} * 3u * 16u, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        !a.createBuffer(VkDeviceSize{PG_PROBES} * PG_TRACE_PARTS * 3u * 16u, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, traces_)) {
         LOG_ERROR("SceneProbeGrid: failed creating the probe grid's images");
         return false;
@@ -458,7 +458,7 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     case kSplat: vkCmdDispatch(cmd, in.groups, 1, 1); break;
     case kResolve:
     case kSun: vkCmdDispatch(cmd, groups(kVoxels), rows(kVoxels), PG_LAYERS_Y); break;
-    case kTrace: vkCmdDispatch(cmd, in.probes, 1, 1); break;
+    case kTrace: vkCmdDispatch(cmd, in.probes, PG_TRACE_PARTS, 1); break;
     case kBlend: vkCmdDispatch(cmd, (in.probes + 63) / 64, 1, 1); break;
     case kStages: break;
     }
