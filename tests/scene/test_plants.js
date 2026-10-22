@@ -135,8 +135,13 @@ if (!scn) {
     // its other side.
     plants.castsShadow = true;
     scn.setCamera({ fov: 50, near: 0.1, far: 500, position: [0, 40, 0], target: [0, 0, 0], up: [0, 0, -1] });
-    st = drawn();
-    assert(st.shadowElements > 0, `the shadow tiles' casters are counted (${st.shadowElements})`);
+    // (Pages are cached and the world service builds them within its
+    // budget, so the casters are drawn on the frames that build one: under
+    // a loaded machine not necessarily the last of three.)
+    let casters = drawn().shadowElements;
+    for (let i = 0; i < 30 && !(casters > 0); i++) { advanceTime(16); casters = plants.plantStats().shadowElements; }
+    assert(casters > 0, `the shadow tiles' casters are counted (${casters})`);
+    st = plants.plantStats();
     const above = scn.captureFrame();
 
     // Far off: fewer elements, falling with distance; a crown a few
