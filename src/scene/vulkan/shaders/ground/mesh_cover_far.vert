@@ -72,7 +72,10 @@ void main() {
     side = dot(side, side) > 1e-6 ? normalize(side) : vec3(1.0, 0.0, 0.0);
     vec3 up = cross(toEye, side);
     float across = clamp(up.y, 0.0, 1.0);
-    float len = mix(wd * 0.8, ht, across);
+    // (Never under 0.4 of its width: widened far off to keep the cover, it
+    // would be a flat bar, the ground in slivers between, where the sward
+    // it stands for is a patch.)
+    float len = mix(wd * 0.8, max(ht, 0.4 * wd), across);
     float x = inPos.x > 0.0 ? 1.0 : -1.0;
     float y = float(gl_VertexIndex >> 1);
     float along = mix(-COVER_FAR_SINK, 1.0, y) - (1.0 - across) * 0.5;

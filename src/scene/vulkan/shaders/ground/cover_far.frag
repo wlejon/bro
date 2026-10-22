@@ -95,6 +95,11 @@ void main() {
     if (mask == 0) discard;
     gl_SampleMask[0] = mask;
 
+    // Its shade up its height likewise: an element a pixel or two tall (a
+    // tuft widened to keep the cover far off) is its mean tone, or each is
+    // a dark bar at its root.
+    height = mix(0.5, height, smoothstep(1.5, 4.0, 1.0 / fw.y));
+
     vec3 worldPos = inWorldPos;
     float camDist = length(worldPos);
     vec3 view = normalize(-worldPos);

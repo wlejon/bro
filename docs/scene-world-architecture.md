@@ -1174,7 +1174,15 @@ pixel. So the cover goes on past them as a tier of its own
   are a pixel or less: drawn as they are, they crawl as it moves over the
   pixels. Each fades to its mean as it nears that size (the tips to their
   mean height, the lobes to their mean shade, the blooms to their share
-  of the pixel, lit in proportion).
+  of the pixel, lit in proportion), and its shade up its height, dark at
+  the root, to its mean as it nears two pixels tall.
+- **A patch, not a bar.** Widened to keep the cover, a tuft far off was
+  ten pixels wide and one or two tall, its root dark: a slope seen across
+  (the glade's far hillside, 150-250 m) was rows of dark dashes with the
+  ground in slivers between. Its length up the screen is never under 0.4
+  of its width, so the elements overlap into a mottled sward. The far
+  ground's change a point a frame on the far pan is the same (9.83 against
+  9.93), and so are the passes' costs.
 
 Biomes (4090, 2560×1364): meadow 2.50 → 2.61 ms, edge 2.41 → 2.48,
 above 0.85 → 1.17, flyover 1.03 → 1.26; the meadow's grain at 90–130 m
