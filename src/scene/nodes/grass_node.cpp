@@ -294,6 +294,41 @@ void GrassNode::recentre(float eyeX, float eyeZ) {
     setCustomShaderTexture(kPushTexture, kPushCells, kPushCells, pushMap_.data(), false, false, false, 4);
 }
 
+void GrassNode::placeMoved(const PlaceMove& m) {
+    if (!pushPlaced_) return;
+    // The window about its middle where the move takes it; each cell then
+    // reads the old map where the move brought it from (the move's inverse:
+    // its rotation's transpose), its bend turned with it.
+    const double c[3] = {(pushOx_ + kPushCells / 2) * static_cast<double>(kPushCell), 0.0,
+                         (pushOz_ + kPushCells / 2) * static_cast<double>(kPushCell)};
+    double moved[3];
+    m.apply(c, moved);
+    const int oldOx = pushOx_, oldOz = pushOz_;
+    pushOx_ = static_cast<int>(std::floor(moved[0] / kPushCell)) - kPushCells / 2;
+    pushOz_ = static_cast<int>(std::floor(moved[2] / kPushCell)) - kPushCells / 2;
+    if (!pushUsed_) return;
+    const double* r = m.rot;
+    std::vector<float> next(pushMap_.size(), 0.0f);
+    for (int j = 0; j < kPushCells; ++j)
+        for (int i = 0; i < kPushCells; ++i) {
+            const double p[3] = {(pushOx_ + i + 0.5) * kPushCell - m.t[0], -m.t[1],
+                                 (pushOz_ + j + 0.5) * kPushCell - m.t[2]};
+            const double ox = r[0] * p[0] + r[3] * p[1] + r[6] * p[2];
+            const double oz = r[2] * p[0] + r[5] * p[1] + r[8] * p[2];
+            const int si = static_cast<int>(std::floor(ox / kPushCell)) - oldOx;
+            const int sj = static_cast<int>(std::floor(oz / kPushCell)) - oldOz;
+            if (si < 0 || sj < 0 || si >= kPushCells || sj >= kPushCells) continue;
+            const float* s = &pushMap_[(static_cast<size_t>(sj) * kPushCells + si) * 4];
+            float* d = &next[(static_cast<size_t>(j) * kPushCells + i) * 4];
+            d[0] = static_cast<float>(r[0] * s[0] + r[2] * s[1]);
+            d[1] = static_cast<float>(r[6] * s[0] + r[8] * s[1]);
+            d[2] = s[2];
+            d[3] = s[3];
+        }
+    pushMap_.swap(next);
+    setCustomShaderTexture(kPushTexture, kPushCells, kPushCells, pushMap_.data(), false, false, false, 4);
+}
+
 float GrassNode::bendRelease(float age) {
     const float w = 2.0f * 3.14159265f * kBendSpringHz, z = kBendSpringDamping;
     const float wd = w * std::sqrt(1.0f - z * z);

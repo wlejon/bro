@@ -1591,9 +1591,9 @@ field is evaluated at is **split**: an integer part and a float fraction.
   as many a square metre on the edge as either side, the range reached
   every way, the same plants with the frame anchored 30 km off, and each
   where it stood on the body after a re-anchor.
-- **Not yet on the body:** the cover, the turf and the grass (still on the
-  anchor's tangent plane: their hashes are the place frame's, so a
-  re-anchor reshuffles them); the land's sun is one level about the eye (its ladder to
+- **Not yet on the body:** the turf (still on the anchor's tangent plane;
+  the cover's blades, herbs and far tier are on the body since, below);
+  the land's sun is one level about the eye (its ladder to
   kilometre texels comes with the plants' canopy on the body); the module
   gets no latitude or longitude (a spin axis is the world's: `at` is enough
   to compute them).
@@ -1700,6 +1700,40 @@ of the body, whose results its height and surface read.
   about 300 m, the view's ground 400–850 tiles of 64² (a texel 1.5 to 1
   pixel), inside the 1024 slots with little room; the slots grow, or the tiles grow to 128², with
   that measurement.
+
+### As built: the cover on the body
+
+- **Regions** (`world/cover_regions.h`): the cover is laid out on the cells
+  of the place's lattice about the eye, each a REGION with its own flat
+  frame, the place frame that would be anchored on it (its azimuthal map's
+  x and z, the height over the datum). A flat body is one region, the
+  identity. Every cover draw (a blade or herb ring, a far-tier level, the
+  casters) belongs to one region: its cells are the region's, so a cell's
+  hash and its blades are the same whichever cell the place is anchored on,
+  and a re-anchor changes none of them.
+- **The module's frame:** a sward or herb module works in its region's
+  frame (`coverEye()`, `coverHeightAt(xz)`, `grassGround`), as on a flat
+  world; the engine stands what it builds on the body (`coverToEye`: the
+  curve's drop as a series in the distance over the radius, then the
+  region's turn into the place frame; `coverTurn` for directions).
+- **Who owns a point:** the region whose chart cell holds it
+  (`coverOwns`, judged by `landChartOff`'s offset from the anchor's
+  chart), in a 48 m band about the edge jittered per blade so no line
+  shows; a region's cells stop at its reach, the cell plus the band.
+- **The push map** keeps place coordinates and is moved with the place
+  (`GrassNode::placeMoved`: each cell resampled through the move, its bend
+  turned).
+- **Not yet:** the turf (`groundSurface`'s layers are keyed on place xz:
+  it takes the regions as its surface roots next); the wind's gusts are in
+  region coordinates, a little off the trees' far from the anchor; a round
+  land's `heightRange` is the whole body's, so tiles cull loosely.
+- **The oracle:** `tests/scene/test_cover_body.js` on an Earth-radius
+  body: the blades seen standing 9.5 km from the anchor (the ground 7 m
+  under its tangent plane) as at it (0.851 against 0.853 of the view's
+  lower half), a re-anchor moving 11 px of 25,600, and either side of a
+  region's edge as thick as a region's middle (0.494 and 0.490 against
+  0.528). On the plane biomes is unchanged: with the wind still, HEAD
+  against this 60.8 dB at the glade, two runs of this 64.4 dB.
 
 ### Build order
 

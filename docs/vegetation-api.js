@@ -55,7 +55,10 @@
  *   - under `HERB_SHADE` (mesh.frag, with scene_lighting.glsl): `HerbShade
  *     herbShade(HerbFragment f)`, what a fragment of a card is.
  * It may use anything of scene_camera.glsl and scene_grass.glsl (the land
- * under it, grassGround / landHeightAt, grassHash, the wind's noise). A
+ * under it, grassGround / coverHeightAt, grassHash, the wind's noise). Its
+ * points are the cover's frame's: the eye is `coverEye()`, never the
+ * camera's, and what it builds is relative to it (on a round body a region
+ * of the body's lattice, flat, which the engine stands on the body). A
  * module compiles once a
  * process, its SPIR-V cached on disk (docs/code-cache.md); one that does
  * not compile is logged and the node draws no herbs.
@@ -127,8 +130,8 @@
  *   - under `SWARD_SHADE` (mesh.frag): `SwardShade swardShade(SwardFragment
  *     f)`, what a fragment of a blade is.
  * It may use anything of scene_camera.glsl and scene_grass.glsl (the land
- * under it, grassGround / landHeightAt, the movers' push `grassInfluence`, grassHash, the wind, the band-limited
- * ground noise). It compiles and caches as a herb module does; one that
+ * under it, grassGround / coverHeightAt, the movers' push `grassInfluence`, grassHash, the wind, the band-limited
+ * ground noise), its points the cover's frame's as a herb module's are (`coverEye()`). It compiles and caches as a herb module does; one that
  * does not compile is logged and the node draws neither blades nor herbs.
  *
  * broworkshop's lib/sward is such a module: a meadow of fine leaves from

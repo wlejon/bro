@@ -38,6 +38,7 @@
 // out of raycasts and bounds.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/place.h"
 
 #include <cstdint>
 #include <string>
@@ -165,6 +166,9 @@ public:
     /// time `now`, recentring the map's window on the eye when it has
     /// wandered. Called once per frame by the renderer.
     void stamp(SceneGraph& graph, float now, float eyeX, float eyeZ);
+    /// The land's frame moved (a re-anchor on a round body): the influence
+    /// map takes the move, so a trampled lane stays where it lies.
+    void placeMoved(const PlaceMove& move);
 
     // The influence map's window: cell (0, 0)'s corner and the cell size.
     static constexpr int kPushCells = 512;

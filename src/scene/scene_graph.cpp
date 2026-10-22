@@ -403,8 +403,13 @@ void SceneGraph::applyPlaceMove(const PlaceMove& m) {
     for (const auto& [id, node] : nodes_) {
         if (node && node->type() == SceneNode::Type::Particles3D)
             static_cast<Particles3DNode*>(node.get())->placeMoved(m);
-        if (node && node->type() == SceneNode::Type::Mesh)
+        if (node && node->type() == SceneNode::Type::Mesh) {
             if (PlantsNode* plants = static_cast<MeshNode*>(node.get())->asPlants()) plants->placeMoved(m);
+            // (The movers' pushes are in the land's frame: the place frame
+            // on a sphere, the body's on a flat body, which a move leaves.)
+            if (GrassNode* grass = static_cast<MeshNode*>(node.get())->asGrass(); grass && !place_.body().flat())
+                grass->placeMoved(m);
+        }
     }
     if (physicsWorld_)
         physicsWorld_->move(JPH::Quat(static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]),

@@ -8,7 +8,9 @@
 // end of this file, and may use anything of scene_camera.glsl and
 // scene_grass.glsl (and, under HERB_BUILD, scene_vegetation.glsl): its own
 // structs, constants, noise and maths are its business. Its data, if it has
-// any, is herbData(i) (the node's, up to GRASS_HERB_DATA vec4s).
+// any, is herbData(i) (the node's, up to GRASS_HERB_DATA vec4s). Its points
+// are the cover's frame's, as the sward's are (scene_sward_layer.glsl):
+// coverEye(), coverHeightAt(xz), what it builds relative to coverEye.
 //
 // The engine owns everything around the module's answers: a grid of cells
 // (grass.herbInfo.y m), each holding at most one plant; the rings it is

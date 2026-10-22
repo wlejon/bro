@@ -74,7 +74,7 @@ bool swardBuild(SwardCell s, int j, SwardRing r, vec3 v, inout SwardVertex o) {
     vec2 lie;
     vec2 bend = grassInfluence(xz, trample, lie) +
                 camera.windField.xy * (0.02 * camera.windField.z + 0.5 * sceneWindGustAt(xz));
-    vec3 eye = camera.eyeWorld.xyz;
+    vec3 eye = coverEye();
     float y0 = s.f.x;
     vec3 base = vec3(xz.x - eye.x, y0 - eye.y, xz.y - eye.z);
     vec3 side = normalize(cross(vec3(0.0, 1.0, 0.0), base) + vec3(1e-4, 0.0, 0.0));

@@ -123,6 +123,35 @@ int landFaceOf(vec3 d) {
     return f;
 }
 
+// A round body's map point `m`: the face it lies on, and in `off` where it
+// is on that face's chart from the anchor's point there (face metres), or,
+// on a face round the body from the anchor (false), where it is from the
+// face's middle (far, and coarse there).
+bool landChartOff(vec2 m, out int f, out vec2 off) {
+    float R = landRadius();
+    float r = length(m);
+    float th = r / R;
+    vec2 dir = r > 0.0 ? m / r : vec2(1.0, 0.0);
+    float s = sin(th), hs = sin(0.5 * th);
+    vec3 d = vec3(s * dir.x, cos(th), s * dir.y);
+    // d less the anchor's direction (0, 1, 0), kept small near it.
+    vec3 dd = vec3(s * dir.x, -2.0 * hs * hs, s * dir.y);
+    f = landFaceOf(d);
+    vec3 n = landFaceN(f), u = landFaceU(f), v = landFaceV(f);
+    float an = n.y;   // the anchor's d.n
+    float dn = dot(d, n);
+    if (an > 0.1) {
+        // x = R atan(d.u / d.n): the anchor's x plus R atan of the tangent
+        // of the difference, whose numerator is the difference's own.
+        float ddn = dot(dd, n);
+        off = R * vec2(atan(dot(dd, u) * an - u.y * ddn, dn * an + dot(d, u) * u.y),
+                       atan(dot(dd, v) * an - v.y * ddn, dn * an + dot(d, v) * v.y));
+        return true;
+    }
+    off = R * vec2(atan(dot(d, u), dn), atan(dot(d, v), dn));
+    return false;
+}
+
 LandPos landPosOf(vec2 m) {
     LandPos q;
     float tile0 = LAND_W(LD_TILES / 4).x;
@@ -134,33 +163,18 @@ LandPos landPosOf(vec2 m) {
         q.frac = t - floor(t);
         return q;
     }
-    float R = landRadius();
-    float r = length(m);
-    float th = r / R;
-    vec2 dir = r > 0.0 ? m / r : vec2(1.0, 0.0);
-    float s = sin(th), hs = sin(0.5 * th);
-    vec3 d = vec3(s * dir.x, cos(th), s * dir.y);
-    // d less the anchor's direction (0, 1, 0), kept small near it.
-    vec3 dd = vec3(s * dir.x, -2.0 * hs * hs, s * dir.y);
-    int f = landFaceOf(d);
-    vec3 n = landFaceN(f), u = landFaceU(f), v = landFaceV(f);
+    int f;
+    vec2 off;
+    bool near = landChartOff(m, f, off);
     q.root = f;
-    float an = n.y;   // the anchor's d.n
-    if (an > 0.1) {
-        // x = R atan(d.u / d.n): the anchor's x plus R atan of the tangent
-        // of the difference, whose numerator is the difference's own.
-        float dn = dot(d, n), ddn = dot(dd, n);
-        vec2 off = R * vec2(atan(dot(dd, u) * an - u.y * ddn, dn * an + dot(d, u) * u.y),
-                            atan(dot(dd, v) * an - v.y * ddn, dn * an + dot(d, v) * v.y));
+    if (near) {
         vec4 a = landFaceAnchor(f);
         t = a.zw + off / tile0;
         vec2 w = floor(t);
         q.cell = ivec2(a.xy) + ivec2(w);
         q.frac = t - w;
     } else {
-        // A face round the body from the anchor: far, and coarse there.
-        float dn = dot(d, n);
-        t = R * vec2(atan(dot(d, u), dn), atan(dot(d, v), dn)) / tile0;
+        t = off / tile0;
         q.cell = ivec2(floor(t));
         q.frac = t - floor(t);
     }

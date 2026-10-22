@@ -173,6 +173,7 @@ add_library(bro_scene STATIC
     world/place.cpp
     world/body_surface_map.cpp
     world/land_grid.cpp
+    world/cover_regions.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp

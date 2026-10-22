@@ -143,7 +143,7 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     e.own = vec4(0.0);
     e.kind = -1;
     e.root = (vec2(c) + e.h.xy) * grass.herbInfo.y;
-    vec3 eye = camera.eyeWorld.xyz;
+    vec3 eye = coverEye();
     e.d = length(vec2(length(e.root - eye.xz), grass.lod.w));
     bool last = level == COVER_FAR_LEVELS - 1;
     // Its reach (grass.ring: x how far, z its last stretch, where it hands
@@ -153,10 +153,11 @@ bool coverFarLive(ivec2 C, int level, int known, out CoverFar e) {
     // that fine is past it, before the field is read.)
     if (int(coverLevel(e.d, 1.0)) > level) return false;
     if (!grassInField(e.root) || e.h.w > grassFieldInside(e.root)) return false;
+    if (!coverOwns(e.root, grassHash(c, 8191))) return false;
     vec2 under;
     vec3 ground;
     grassGround(e.root, e.f, under, ground);
-    vec4 cp = camera.viewProj * vec4(e.root.x - eye.x, e.f.r + 0.5 - eye.y, e.root.y - eye.z, 1.0);
+    vec4 cp = camera.viewProj * vec4(coverToEye(vec3(e.root.x - eye.x, e.f.r + 0.5 - eye.y, e.root.y - eye.z)), 1.0);
     float m = cp.w * 0.15 + 4.0;
     if (cp.w < -4.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
     e.gn = ground;

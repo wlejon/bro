@@ -8,7 +8,11 @@
 // end of this file, and may use anything of scene_camera.glsl and
 // scene_grass.glsl (the land's cover, the movers' push, the hashes): its own
 // structs, constants, noise and maths are its business. Its data, if it has
-// any, is swardData(i) (the node's, up to GRASS_SWARD_DATA vec4s).
+// any, is swardData(i) (the node's, up to GRASS_SWARD_DATA vec4s). Its
+// points are the cover's frame's (scene_grass.glsl, "the cover's frame"):
+// the eye is coverEye() and the ground's height coverHeightAt(xz), never
+// the camera's eye or the land's map, and what it builds is relative to
+// coverEye; on a round body the engine stands it on the body.
 //
 // The engine owns everything around the module's answers: the rings of
 // cells around the eye (finer near, coarser further), each cell's candidate

@@ -26,7 +26,7 @@ bool herbPlantLive(ivec2 c, out HerbPlant p) {
     p.farWiden = 1.0;
     p.variety = -1;
     p.rootXZ = (vec2(c) + p.h.xy) * grass.herbInfo.y;
-    vec3 eye = camera.eyeWorld.xyz;
+    vec3 eye = coverEye();
     p.d = length(vec2(length(p.rootXZ - eye.xz), grass.lod.w));
 
     // The ring, handing over through a dithered band, a plant at a time.
@@ -40,13 +40,14 @@ bool herbPlantLive(ivec2 c, out HerbPlant p) {
     bool far = grass.herbShape.z > 1.5;
     if (far && coverKept(c, coverLevel(p.d, 1.0)) <= 0.0) return false;
     if (!grassInField(p.rootXZ) || p.h.w > grassFieldInside(p.rootXZ)) return false;
+    if (!coverOwns(p.rootXZ, grassHash(c, 8191))) return false;
 
     // Off screen: a box round the cell as tall as the tallest herb.
     vec4 field;
     grassGround(p.rootXZ, field, p.floorAt, p.ground);
     float groundY = field.x;
     p.root = vec3(p.rootXZ.x - eye.x, groundY - eye.y, p.rootXZ.y - eye.z);
-    vec4 cp = camera.viewProj * vec4(p.rootXZ.x - eye.x, groundY + 0.5 - eye.y, p.rootXZ.y - eye.z, 1.0);
+    vec4 cp = camera.viewProj * vec4(coverToEye(vec3(p.rootXZ.x - eye.x, groundY + 0.5 - eye.y, p.rootXZ.y - eye.z)), 1.0);
     float m = cp.w * 0.15 + 2.2;
     if (cp.w < -2.5 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
     if (far) {
@@ -84,6 +85,12 @@ bool herbVertex(ivec2 c, int vid, vec3 v, out HerbVertex o) {
     o.ground = p.ground;
     int cards = int(grass.herbShape.x + 0.5);
     int verts = max(int(grass.herbShape.y + 0.5), 1);
-    return herbBuild(p, vid / verts, cards, verts, v, o);
+    if (!herbBuild(p, vid / verts, cards, verts, v, o)) return false;
+    // Stood on the body: the module's flat frame turned into the land's.
+    o.pos = coverToEye(o.pos);
+    o.normal = coverTurn(o.normal);
+    o.side = coverTurn(o.side);
+    o.ground = coverTurn(o.ground);
+    return true;
 }
 #endif

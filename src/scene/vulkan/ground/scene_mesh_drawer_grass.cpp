@@ -21,6 +21,7 @@
 #include "scene/vulkan/ground/scene_cover_plan.h"
 #include "scene/vulkan/shaders/ground/scene_land_layout.h"
 #include "scene/nodes/land_node.h"
+#include "scene/world/cover_regions.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -46,23 +47,38 @@ struct GrassUBO {
     float herbShape[4];
     float layer[4];    // the turf's surface layer (scene_ground_layers.glsl): tile side, texels, border, levels (0: none)
     float layer2[4];   // its texel's most pixels, page shift, page entries a side, level-0 texel
+    float frame[16];   // the cover's frame (CoverRegion: its region's)
+    float own[4];
+    float own2[4];
     float land[LD_WORDS];   // the land it stands on (LandDraw)
     float swardData[GrassNode::kSwardDataVec4s * 4];   // the sward module's
     float herbData[GrassNode::kHerbDataVec4s * 4];     // the herb module's
 };
-static_assert(sizeof(GrassUBO) == (12 + LD_WORDS / 4 + GrassNode::kSwardDataVec4s + GrassNode::kHerbDataVec4s) * 16);
+static_assert(sizeof(GrassUBO) == (18 + LD_WORDS / 4 + GrassNode::kSwardDataVec4s + GrassNode::kHerbDataVec4s) * 16);
+
+// How wide the band is where the cover's regions hand over (m), and how far
+// from the eye any of its draws reaches (the far tier's range and an
+// element's spread).
+constexpr double kRegionBand = 48.0;
+constexpr double kRegionReach = 3400.0;
+
+void setRegion(const CoverRegion& r, GrassUBO& u) {
+    std::copy(std::begin(r.frame), std::end(r.frame), u.frame);
+    std::copy(std::begin(r.own), std::end(r.own), u.own);
+    std::copy(std::begin(r.own2), std::end(r.own2), u.own2);
+}
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWidthGrowth = 0.03f;            // a far blade is wider, so a ring keeps its cover
 constexpr uint32_t kMaxRingInstances = 1u << 22;  // a guard, far above any view's need
 constexpr int kTile = 16;                         // cells a side of the tiles the view culls
 
-/// The x/z box around the eye holding everything of a disc of `radius` the
-/// view can see (the view's cone flattened onto the ground), padded by
-/// `margin`. The whole disc when the camera looks steeply down or is
-/// orthographic.
-void visibleBox(const SceneView& view, float radius, float margin, float (&box)[4]) {
-    const float ex = view.eye.x, ez = view.eye.z;
+/// The x/z box of region `region`'s flat frame around the eye holding
+/// everything of a disc of `radius` the view can see (the view's cone
+/// flattened onto the ground), padded by `margin`. The whole disc when the
+/// camera looks steeply down or is orthographic.
+void visibleBox(const SceneView& view, const CoverRegion& region, float radius, float margin, float (&box)[4]) {
+    const float ex = region.eye.x, ez = region.eye.z;
     box[0] = ex - radius - margin;
     box[1] = ez - radius - margin;
     box[2] = ex + radius + margin;
@@ -80,8 +96,13 @@ void visibleBox(const SceneView& view, float radius, float margin, float (&box)[
         if (std::fabs(p[3]) < 1e-12f) return;
         const float vx = p[0] / p[3], vy = p[1] / p[3], vz = p[2] / p[3];
         const bromath::Mat4& iv = view.invRelView;
-        const float dx = iv.at(0, 0) * vx + iv.at(0, 1) * vy + iv.at(0, 2) * vz;
-        const float dz = iv.at(2, 0) * vx + iv.at(2, 1) * vy + iv.at(2, 2) * vz;
+        float dx = iv.at(0, 0) * vx + iv.at(0, 1) * vy + iv.at(0, 2) * vz;
+        float dz = iv.at(2, 0) * vx + iv.at(2, 1) * vy + iv.at(2, 2) * vz;
+        if (!region.flat) {
+            const bromath::Vec3 d = region.fromLand({dx, iv.at(1, 0) * vx + iv.at(1, 1) * vy + iv.at(1, 2) * vz, dz});
+            dx = d.x;
+            dz = d.z;
+        }
         if (dx * dx + dz * dz < 1e-8f) return;
         ang[k] = std::atan2(dz, dx);
     }
@@ -435,6 +456,26 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
     const uint32_t msaa = frame.gpu.targets.samples() == VK_SAMPLE_COUNT_4_BIT ? mesh_flags::kMsaa : 0u;
 
     const float lift = eyeLift(land, view);
+    // The regions the cover is keyed on (world/cover_regions.h): every draw
+    // is a region's, its cells, eye and boxes in its flat frame.
+    const Place& place = frame.graph.place();
+    std::vector<CoverRegion> regions;
+    coverRegions(place, view.eye, kRegionReach, kRegionBand, regions);
+    // A tile of region `r`'s cells [x0, x1] x [z0, z1] padded by `pad`: its
+    // ground's height range, false when it is off the region or the land.
+    const auto tileRange = [&](const CoverRegion& r, float x0, float z0, float x1, float z1, float pad, float& lo,
+                               float& hi) {
+        if (x1 + pad < -r.reach || x0 - pad > r.reach || z1 + pad < -r.reach || z0 - pad > r.reach) return false;
+        double m[4];
+        r.landMapBox(place, x0 - pad, z0 - pad, x1 + pad, z1 + pad, m);
+        return land.heightRange(static_cast<float>(m[0]), static_cast<float>(m[1]), static_cast<float>(m[2]),
+                                static_cast<float>(m[3]), lo, hi);
+    };
+    // Whether the view sees that tile's box, from its ground up to `top`.
+    const auto tileSeen = [&](const CoverRegion& r, float x0, float z0, float x1, float z1, float pad, float lo,
+                              float top) {
+        return bromath::fintersects(view.frustum, r.landBox(place, x0 - pad, z0 - pad, x1 + pad, z1 + pad, lo, top));
+    };
     TileRuns runs;
     // Each ring's camera draw and its cells, for the cover's plan.
     struct Planned {
@@ -492,7 +533,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             start = std::min(start, hr.outer - hr.bandOut);
         }
         const float tallest = std::max(sward ? node.swardTallest() : 0.0f, herbs ? node.herbHeight() * 1.4f : 0.0f);
-        const float ex = view.eye.x, ez = view.eye.z;
         u.ring[0] = kCoverFarRange;
         u.ring[1] = fan.outer;
         u.ring[2] = kCoverFarBand;
@@ -508,92 +548,96 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
             // An element stands within its cell, widened up to
             // COVER_FAR_WIDEN times its plant's spread.
             const float reach = cell + 8.0f * 1.5f;
-            float box[4];
-            visibleBox(view, reachK, reach, box);
-            const auto keep = [&](float x0, float z0, float x1, float z1) {
-                const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
-                const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
-                const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
-                const float nearH = std::sqrt(nx * nx + nz * nz);
-                const float dNear = std::sqrt(nearH * nearH + lift * lift);
-                const float dFar = std::sqrt(fx * fx + fz * fz + lift * lift);
-                if (dFar < start || dNear > kCoverFarRange) return false;
-                float lo = 0.0f, hi = 0.0f;
-                if (!land.heightRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi)) return false;
-                // The eye's elevation over the tile's lowest ground, tipped
-                // by a slope as steep as twice its rise across the tile and
-                // a quarter more (the ground between its coarse blocks).
-                const float rise = std::max(view.eye.y - lo, 0.0f);
-                const float elev = std::atan2(rise, std::max(nearH, 1e-3f));
-                const float tilt = std::atan(2.0f * (hi - lo) / std::max(x1 - x0, 1e-3f) + 0.25f);
-                const float sinMax = std::sin(std::min(elev + tilt, 0.5f * kPi));
-                const float lamLo = lambda(dNear, sinMax), lamHi = lambda(dFar, kCoverFarMinSin);
-                if (lamHi < static_cast<float>(k) || (!last && lamLo >= static_cast<float>(k + 1))) return false;
-                return bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
-                                                                         {x1 + reach, hi + tallest, z1 + reach}});
-            };
-            TileRuns levelRuns;
-            if (!tileRuns(box, cell, keep, levelRuns)) continue;
+            for (const CoverRegion& rg : regions) {
+                const float ex = rg.eye.x, ez = rg.eye.z;
+                float box[4];
+                visibleBox(view, rg, reachK, reach, box);
+                const auto keep = [&](float x0, float z0, float x1, float z1) {
+                    const float nx = std::clamp(ex, x0, x1) - ex, nz = std::clamp(ez, z0, z1) - ez;
+                    const float fx = std::max(std::fabs(x0 - ex), std::fabs(x1 - ex));
+                    const float fz = std::max(std::fabs(z0 - ez), std::fabs(z1 - ez));
+                    const float nearH = std::sqrt(nx * nx + nz * nz);
+                    const float dNear = std::sqrt(nearH * nearH + lift * lift);
+                    const float dFar = std::sqrt(fx * fx + fz * fz + lift * lift);
+                    if (dFar < start || dNear > kCoverFarRange) return false;
+                    float lo = 0.0f, hi = 0.0f;
+                    if (!tileRange(rg, x0, z0, x1, z1, reach, lo, hi)) return false;
+                    // The eye's elevation over the tile's lowest ground,
+                    // tipped by a slope as steep as twice its rise across the
+                    // tile and a quarter more (the ground between its coarse
+                    // blocks).
+                    const float rise = std::max(rg.eye.y - lo, 0.0f);
+                    const float elev = std::atan2(rise, std::max(nearH, 1e-3f));
+                    const float tilt = std::atan(2.0f * (hi - lo) / std::max(x1 - x0, 1e-3f) + 0.25f);
+                    const float sinMax = std::sin(std::min(elev + tilt, 0.5f * kPi));
+                    const float lamLo = lambda(dNear, sinMax), lamHi = lambda(dFar, kCoverFarMinSin);
+                    if (lamHi < static_cast<float>(k) || (!last && lamLo >= static_cast<float>(k + 1))) return false;
+                    return tileSeen(rg, x0, z0, x1, z1, reach, lo, hi + tallest);
+                };
+                TileRuns levelRuns;
+                if (!tileRuns(box, cell, keep, levelRuns)) continue;
 
-            u.cells[3] = cell;
-            u.herbShape[0] = static_cast<float>(k);
-            VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
-            if (set == VK_NULL_HANDLE) return;
+                u.cells[3] = cell;
+                u.herbShape[0] = static_cast<float>(k);
+                setRegion(rg, u);
+                VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
+                if (set == VK_NULL_HANDLE) return;
 
-            MeshDraw draw;
-            draw.kind = MeshKind::Grass;
-            draw.nodeId = node.id();
-            draw.vertices = quad->vertices.buffer;
-            draw.indices = quad->indices.buffer;
-            draw.indexCount = 6;   // the first card's quad
-            draw.customSet = set;
-            std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
-            draw.push.baseColor[3] = 1.0f;
-            draw.push.pbrParams[1] = 0.85f;
-            draw.push.pbrParams[3] = static_cast<float>(flags | mesh_flags::kCoverFar | msaa);
-            draw.push.extra[1] = node.subsurface();
-            draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
-            draw.twoSided = true;
-            draw.castsShadow = false;
-            static constexpr const char* kLevelLabels[kCoverLevels] = {
-                "cover:far0", "cover:far1", "cover:far2", "cover:far3", "cover:far4",
-                "cover:far5", "cover:far6", "cover:far7", "cover:far8", "cover:far9"};
-            draw.timerLabel = kLevelLabels[k];
-            planned.push_back({draw, std::move(levelRuns), 1u, CoverPlan::Ring::Kind::Far});
+                MeshDraw draw;
+                draw.kind = MeshKind::Grass;
+                draw.nodeId = node.id();
+                draw.vertices = quad->vertices.buffer;
+                draw.indices = quad->indices.buffer;
+                draw.indexCount = 6;   // the first card's quad
+                draw.customSet = set;
+                std::memcpy(draw.push.baseColor, node.color(), sizeof(draw.push.baseColor));
+                draw.push.baseColor[3] = 1.0f;
+                draw.push.pbrParams[1] = 0.85f;
+                draw.push.pbrParams[3] = static_cast<float>(flags | mesh_flags::kCoverFar | msaa);
+                draw.push.extra[1] = node.subsurface();
+                draw.push.extra[3] = 1.0f + 256.0f;   // no atlas
+                draw.twoSided = true;
+                draw.castsShadow = false;
+                static constexpr const char* kLevelLabels[kCoverLevels] = {
+                    "cover:far0", "cover:far1", "cover:far2", "cover:far3", "cover:far4",
+                    "cover:far5", "cover:far6", "cover:far7", "cover:far8", "cover:far9"};
+                draw.timerLabel = kLevelLabels[k];
+                planned.push_back({draw, std::move(levelRuns), 1u, CoverPlan::Ring::Kind::Far});
+            }
         }
     };
 
-    // The blades: a draw in each of their rings, an instance a blade the plan
-    // lists, the world's sward module building it (mesh_grass.vert).
-    for (int r = 0; sward && r < GrassNode::kRings; ++r) {
+    // The blades: a draw in each of their rings and regions, an instance a
+    // blade the plan lists, the world's sward module building it
+    // (mesh_grass.vert). Returns the cells it drew over.
+    const auto planBlades = [&](int r, const CoverRegion& rg) -> uint32_t {
         const GrassNode::Ring ring = ringInView(node, view, r);
         // Blades lean and stand up to ~2x the mean height: pad the box by
         // that, a cell and a margin.
         float box[4];
-        visibleBox(view, ring.outer, ring.cell * 2.0f + H * 3.0f + 1.0f, box);
+        visibleBox(view, rg, ring.outer, ring.cell * 2.0f + H * 3.0f + 1.0f, box);
 
         // The box in tiles of kTile x kTile cells, each kept only when it can
         // hold a drawn blade: it reaches the ring (its dithered bands
-        // included), it is on the land, and its box (ground to the tallest
-        // blade at the land's largest height multiplier, padded by a blade's
-        // lean, its spread and how far the module moves a cell's root) is in
-        // the view. The plan tests every blade of every cell kept (what
-        // grows where is the land's GLSL, read on the GPU).
+        // included), it is on the region and the land, and its box (ground
+        // to the tallest blade at the land's largest height multiplier,
+        // padded by a blade's lean, its spread and how far the module moves
+        // a cell's root) is in the view. The plan tests every blade of every
+        // cell kept (what grows where is the land's GLSL, read on the GPU).
         const float reach = ring.cell + ring.spread + H * 1.5f + node.swardReach();
         const float top = node.swardTallest();
-        const float ex = view.eye.x, ez = view.eye.z;
+        const float ex = rg.eye.x, ez = rg.eye.z;
         const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
         const auto keep = [&](float x0, float z0, float x1, float z1) {
             float lo = 0.0f, hi = 0.0f;
             return tileInRing(ex, ez, lift, rIn, rOut, x0, z0, x1, z1) &&
-                   land.heightRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi) &&
-                   bromath::fintersects(view.frustum,
-                                        bromath::AABB3{{x0 - reach, lo, z0 - reach},
-                                                       {x1 + reach, hi + top * GrassNode::kMaxTall, z1 + reach}});
+                   tileRange(rg, x0, z0, x1, z1, reach, lo, hi) &&
+                   tileSeen(rg, x0, z0, x1, z1, reach, lo, hi + top * GrassNode::kMaxTall);
         };
-        if (!tileRuns(box, ring.cell, keep, runs)) continue;
+        if (!tileRuns(box, ring.cell, keep, runs)) return 0u;
 
         u.cells[3] = ring.cell;
+        setRegion(rg, u);
         u.ring[0] = ring.inner;
         u.ring[1] = ring.outer;
         u.ring[2] = ring.bandIn;
@@ -609,7 +653,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.lod[3] = lift;
 
         VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
-        if (set == VK_NULL_HANDLE) break;
+        if (set == VK_NULL_HANDLE) return 0u;
 
         const GpuMesh* blade = ringMeshes[r];
         MeshDraw draw;
@@ -635,7 +679,6 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         const uint32_t perBlade = 3u * (2u * static_cast<uint32_t>(ring.segments) - 1u);   // grass_node.cpp's bladeMesh
         uint32_t drawn = 0;
         for (const auto& run : runs) drawn += static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
-        node.setDrawnInstances(r, drawn);
         // Only the near ring casts: its blades are the ones whose shadows read.
         // And only into the overlays of the sun's finest levels and of
         // local lights (ShadowViewPlan::grass): a blade is narrower than a
@@ -671,6 +714,12 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         // mesh's first blade its vertices.
         draw.indexCount = std::min(blade->indexCount, perBlade);
         planned.push_back({draw, runs, static_cast<uint32_t>(ring.blades), CoverPlan::Ring::Kind::Grass});
+        return drawn;
+    };
+    for (int r = 0; sward && r < GrassNode::kRings; ++r) {
+        uint32_t drawn = 0;
+        for (const CoverRegion& rg : regions) drawn += planBlades(r, rg);
+        node.setDrawnInstances(r, drawn);
     }
 
     // The herbs: a draw in each of their rings, an instance a plant the plan
@@ -683,32 +732,26 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         return;
     }
     const float herbTop = node.herbHeight() * 1.4f + 0.2f;
-    for (int r = 0; r < GrassNode::kHerbRings; ++r) {
+    // A herb ring's draw in a region: the cells it drew over.
+    const auto planHerbs = [&](int r, const GpuMesh* cards, const CoverRegion& rg) -> uint32_t {
         const GrassNode::HerbRing ring = node.herbRing(r);
-        // Seen from this high, all of the far ring is left to the turf
-        // (scene_herb_layer.glsl's herbFarSteep): not issued at all.
-        if (r == GrassNode::kHerbRings - 1 && lift > 0.5f * ring.outer) continue;
-        const GpuMesh* cards = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + r),
-                                        node.geometryGeneration(), node.herbRingMesh(r));
-        if (!cards) break;
         const float cell = GrassNode::kHerbCell;
         // A plant reaches out about its spread and leans with the wind (a far
         // plant widened up to twice).
         const float reach = cell + (0.8f + node.herbHeight() * 0.5f) * (r == GrassNode::kHerbRings - 1 ? 2.0f : 1.0f);
         float box[4];
-        visibleBox(view, ring.outer, reach + 1.0f, box);
-        const float ex = view.eye.x, ez = view.eye.z;
+        visibleBox(view, rg, ring.outer, reach + 1.0f, box);
+        const float ex = rg.eye.x, ez = rg.eye.z;
         const float rIn = std::max(ring.inner - ring.bandIn - reach, 0.0f), rOut = ring.outer + reach;
         const auto keep = [&](float x0, float z0, float x1, float z1) {
             float lo = 0.0f, hi = 0.0f;
             return tileInRing(ex, ez, lift, rIn, rOut, x0, z0, x1, z1) &&
-                   land.heightRange(x0 - reach, z0 - reach, x1 + reach, z1 + reach, lo, hi) &&
-                   bromath::fintersects(view.frustum, bromath::AABB3{{x0 - reach, lo, z0 - reach},
-                                                                     {x1 + reach, hi + herbTop, z1 + reach}});
+                   tileRange(rg, x0, z0, x1, z1, reach, lo, hi) && tileSeen(rg, x0, z0, x1, z1, reach, lo, hi + herbTop);
         };
-        if (!tileRuns(box, cell, keep, runs)) continue;
+        if (!tileRuns(box, cell, keep, runs)) return 0u;
 
         u.cells[3] = cell;
+        setRegion(rg, u);
         u.herbRing[0] = ring.inner;
         u.herbRing[1] = ring.outer;
         u.herbRing[2] = ring.bandIn;
@@ -720,7 +763,7 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         u.herbShape[3] = node.herbRange();
         u.lod[3] = lift;
         VkDescriptorSet set = writeSet(frame, device_, *defaults_, u, img);
-        if (set == VK_NULL_HANDLE) break;
+        if (set == VK_NULL_HANDLE) return 0u;
 
         MeshDraw draw;
         draw.kind = MeshKind::Grass;
@@ -742,8 +785,19 @@ void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vect
         draw.castsShadow = false;
         uint32_t drawn = 0;
         for (const auto& run : runs) drawn += static_cast<uint32_t>(run[2]) * static_cast<uint32_t>(run[3]);
-        node.setDrawnHerbs(r, drawn);
         planned.push_back({draw, runs, 1u, CoverPlan::Ring::Kind::Herbs});
+        return drawn;
+    };
+    for (int r = 0; r < GrassNode::kHerbRings; ++r) {
+        // Seen from this high, all of the far ring is left to the turf
+        // (scene_herb_layer.glsl's herbFarSteep): not issued at all.
+        if (r == GrassNode::kHerbRings - 1 && lift > 0.5f * node.herbRing(r).outer) continue;
+        const GpuMesh* cards = res.mesh(node.id(), static_cast<uint32_t>(GrassNode::kRings + r),
+                                        node.geometryGeneration(), node.herbRingMesh(r));
+        if (!cards) break;
+        uint32_t drawn = 0;
+        for (const CoverRegion& rg : regions) drawn += planHerbs(r, cards, rg);
+        node.setDrawnHerbs(r, drawn);
     }
     planCoverFar();
     emitPlanned();

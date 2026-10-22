@@ -64,7 +64,7 @@ void main() {
     // Upright where the eye looks across the ground, a blob as wide as it is
     // long where it looks down on it: its length along the screen's up runs
     // from the width (from above) to the height (seen across).
-    vec3 eye = camera.eyeWorld.xyz;
+    vec3 eye = coverEye();
     vec3 root = vec3(e.root.x - eye.x, e.f.r - eye.y, e.root.y - eye.z);
     float dist = max(length(root), 1e-3);
     vec3 toEye = -root / dist;
@@ -79,7 +79,8 @@ void main() {
     float x = inPos.x > 0.0 ? 1.0 : -1.0;
     float y = float(gl_VertexIndex >> 1);
     float along = mix(-COVER_FAR_SINK, 1.0, y) - (1.0 - across) * 0.5;
-    vec3 p = root + side * (x * 0.5 * wd) + up * (along * len);
+    // (Stood on the body: the cover's flat frame turned into the land's.)
+    vec3 p = coverToEye(root + side * (x * 0.5 * wd) + up * (along * len));
     // Drawn a little toward the eye (along its own line, so it stays where
     // it is on screen): the ground it stands on does not cut it.
     p *= 1.0 - min((0.5 * ht + 0.003 * dist) / max(length(p), 1e-3), 0.5);
@@ -89,7 +90,7 @@ void main() {
     outUV = vec2(x, mix(-COVER_FAR_SINK, 1.0, y));
     outBody = vec4(body, float(e.kind));
     outBloom = vec4(bloom, bloomShare);
-    outGround = vec4(e.gn, h2.x);
+    outGround = vec4(coverTurn(e.gn), h2.x);
 }
 
 // The world's modules (scene_sward_layer.glsl, scene_herb_layer.glsl), after

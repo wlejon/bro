@@ -38,6 +38,13 @@ layout(set = 4, binding = 0) uniform GrassUBO {
     // The turf's surface layer (scene_ground_layers.glsl; SurfaceLayers):
     vec4 layer;      // x: a level-0 tile's side (m), y: its texels a side, z: its border (texels), w: levels (0: none)
     vec4 layer2;     // x: a texel's most pixels, y: the page shift, z: page entries a side, w: a level-0 texel (m)
+    // The cover's frame (coverRound and below): rows 0-2 its rotation into
+    // the land's frame (xyz) and where its middle is there (w); row 3 the
+    // eye in it (its map's x, its height over the datum, its map's z) and w
+    // 1 on a round body (0: the land's own frame, the rest unused).
+    vec4 frame[4];
+    vec4 own;        // the region's bounds on its face's chart from the anchor's point there (face metres): lo x, lo z, hi x, hi z
+    vec4 own2;       // x: its face, y: the hand-over band (m), z: the half side of the square about its middle wholly its own (m)
     // The land the node stands on (scene_land_layout.h's LandDraw, its eye
     // the frame's): where its tiles are read.
     vec4 land[LD_WORDS / 4];
@@ -61,11 +68,86 @@ layout(set = 4, binding = LG_CANOPY) uniform sampler2DArray landCanopies;
 #define LAND_CANOPY
 #include "ground/scene_land.glsl"
 
+// --- the cover's frame ---
+//
+// What the cover is keyed on (docs/scene-world-architecture.md §11, "The
+// cover on the body"). On a flat body the land's frame: the cells, the eye
+// and every point are its x, z and height. A round body has no flat chart,
+// so the cover is laid out on REGIONS, the cells of the place frame's
+// lattice: each region's own flat frame (its azimuthal map's x and z about
+// its middle, and the height over the datum), the frame the place would
+// have anchored there. A draw is a region's: its cells, its eye
+// (coverEye), the roots and every position a module works out are that
+// flat frame's, and the engine stands them on the body (coverToEye,
+// coverMap). What stands at a point is the region's whose chart cell holds
+// it (coverOwns), so a place's cover is the same wherever the place frame
+// is anchored, and a re-anchor changes none of it.
+
+bool coverRound() { return grass.frame[3].w > 0.5; }
+
+// The eye in the cover's frame.
+vec3 coverEye() { return coverRound() ? grass.frame[3].xyz : camera.eyeWorld.xyz; }
+
+// What the body's curve adds to the region's flat point P (map x, z, its
+// height y) in its frame (place.h's mapToLand less (x, y, z)), in series:
+// P is within tens of kilometres of the region's middle, where a float's
+// sin and cos of the angle would lose centimetres.
+vec3 coverCurve(vec3 P) {
+    float R = landRadius();
+    float t2 = dot(P.xz, P.xz) / (R * R);            // the angle from the middle, squared
+    float sincLess1 = t2 * (t2 / 120.0 - 1.0 / 6.0);  // sin t / t - 1
+    float sinPerR = (1.0 + sincLess1) / R;            // sin t / r
+    vec2 xz = P.xz * (sincLess1 + P.y * sinPerR);
+    float hs2 = 0.25 * t2 * (1.0 - t2 / 12.0);        // sin^2(t / 2)
+    return vec3(xz.x, -2.0 * hs2 * (P.y + R), xz.y);
+}
+
+vec3 coverTurn(vec3 d) {
+    if (!coverRound()) return d;
+    return vec3(dot(grass.frame[0].xyz, d), dot(grass.frame[1].xyz, d), dot(grass.frame[2].xyz, d));
+}
+
+// The land's map point under the cover's flat point `xz`.
+vec2 coverMap(vec2 xz) {
+    if (!coverRound()) return xz;
+    vec3 p = vec3(xz.x, 0.0, xz.y);
+    vec3 q = coverTurn(p + coverCurve(p)) + vec3(grass.frame[0].w, grass.frame[1].w, grass.frame[2].w);
+    return landMapOf(q);
+}
+
+// An offset `v` from the cover's eye (camera-relative in its flat frame)
+// as the land's frame has it (camera-relative there): the curve's share
+// of each end taken in series, so near the eye nothing is lost.
+vec3 coverToEye(vec3 v) {
+    if (!coverRound()) return v;
+    vec3 E = coverEye();
+    return coverTurn(v + (coverCurve(E + v) - coverCurve(E)));
+}
+
+// The ground's height over the datum at the cover's flat point `xz`.
+float coverHeightAt(vec2 xz) { return landHeightAt(coverMap(xz)); }
+
+// Whether the draw's region holds what stands at its flat point `xz`: on a
+// round body the region whose chart cell holds it, its edges handed over
+// through a band where each instance (its own `u`, 0..1) is taken a little
+// way off, so the regions' patterns meet in a mingled band, not a line.
+bool coverOwns(vec2 xz, float u) {
+    if (!coverRound()) return true;
+    float band = grass.own2.y;
+    if (max(abs(xz.x), abs(xz.y)) < grass.own2.z - band) return true;
+    vec2 j = (vec2(u, fract(u * 61.37 + 0.31)) - 0.5) * band;
+    int f;
+    vec2 off;
+    if (!landChartOff(coverMap(xz + j), f, off)) return false;
+    return f == int(grass.own2.x + 0.5) && all(greaterThanEqual(off, grass.own.xy)) && all(lessThan(off, grass.own.zw));
+}
+
 // Sward density under which nothing grows (a few blades in a closed wood's
 // shade are not seen).
 const float GRASS_DENSITY_FLOOR = 0.06;
 
-// The ground at `xz` as the grass takes it: in `field` its height, the
+// The ground at `xz` (the cover's frame) as the grass takes it: in `field`
+// its height, the
 // sward's density, its dryness and its height multiplier, and in `under`
 // the canopy over it and how thickly herbs grow (0 none .. 1 as their
 // abundance has it), and in `normal` the ground's normal. Where herbs grow
@@ -74,7 +156,13 @@ const float GRASS_DENSITY_FLOOR = 0.06;
 void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
     float h;
     vec4 surface, cover;
-    landSampleCover(xz, landLevel(xz), h, normal, surface, cover);
+    vec2 m = coverMap(xz);
+    landSampleCover(m, landLevel(m), h, normal, surface, cover);
+    // (The ground's normal in the cover's frame: its rotation's inverse.)
+    if (coverRound())
+        normal = vec3(dot(vec3(grass.frame[0].x, grass.frame[1].x, grass.frame[2].x), normal),
+                      dot(vec3(grass.frame[0].y, grass.frame[1].y, grass.frame[2].y), normal),
+                      dot(vec3(grass.frame[0].z, grass.frame[1].z, grass.frame[2].z), normal));
     float herbs = grass.herbInfo.x > 0.5 ? surface.a : 0.0;
     float density = cover.x < GRASS_DENSITY_FLOOR ? 0.0 : cover.x * (1.0 - 0.5 * herbs);
     field = vec4(h, density, cover.y, cover.z * (1.0 - 0.45 * herbs));
@@ -131,9 +219,15 @@ const float GRASS_TRAMPLE_RESIDUE_RELAX = 2.0;   // GrassNode::kTrampleResidueRe
 vec2 grassInfluence(vec2 xz, out float trample, out vec2 lie) {
     trample = 0.0;
     lie = vec2(0.0);
-    vec2 q = (xz - grass.push.xy) / (grass.push.z * grass.push.w);
+    // (The map is the land's frame's, as the movers are.)
+    vec2 q = (coverMap(xz) - grass.push.xy) / (grass.push.z * grass.push.w);
     if (q.x <= 0.0 || q.y <= 0.0 || q.x >= 1.0 || q.y >= 1.0) return vec2(0.0);
     vec4 p = textureLod(grassPush, q, 0.0);
+    if (coverRound()) {
+        vec3 b = vec3(p.r, 0.0, p.g);
+        p.rg = vec2(dot(vec3(grass.frame[0].x, grass.frame[1].x, grass.frame[2].x), b),
+                    dot(vec3(grass.frame[0].z, grass.frame[1].z, grass.frame[2].z), b));
+    }
     float age = camera.windParams.x - p.a;   // the stamps are on the wind clock
     if (p.a <= 0.0 || age < 0.0) return vec2(0.0);
     float ra = age / grass.pushRate.w, rb = age / GRASS_TRAMPLE_RESIDUE_RELAX;
@@ -194,7 +288,7 @@ bool grassBladeLive(ivec2 c, int j, out SwardCell s) {
     s.own = vec4(0.0);
     s.root = (vec2(c) + s.h.xy) * grass.cells.w;
     swardRoot(s);
-    vec3 eye = camera.eyeWorld.xyz;
+    vec3 eye = coverEye();
     // Across the ground and the eye's lift over it (lod.w): the rings scale
     // with the eye's height.
     s.d = length(vec2(length(s.root - eye.xz), grass.lod.w));
@@ -215,13 +309,14 @@ bool grassBladeLive(ivec2 c, int j, out SwardCell s) {
     float fout = 1.0 - smoothstep(grass.ring.y - grass.ring.w, grass.ring.y, s.d);
     if (s.h.w > fin || s.h.w > fout) return false;
     if (!grassInField(s.root) || s.h.w > grassFieldInside(s.root)) return false;
+    if (!coverOwns(s.root, grassHash(c, 8191))) return false;
     vec2 under;
     vec3 ground;
     grassGround(s.root, s.f, under, ground);
 
     // Off screen: a generous box around the cell's middle.
     float H = grass.cells.x;
-    vec4 cp = camera.viewProj * vec4(s.root.x - eye.x, s.f.r + 0.6 * H - eye.y, s.root.y - eye.z, 1.0);
+    vec4 cp = camera.viewProj * vec4(coverToEye(vec3(s.root.x - eye.x, s.f.r + 0.6 * H - eye.y, s.root.y - eye.z)), 1.0);
     float m = cp.w * 0.15 + 2.5 * H + 0.5 + grass.shape.z;
     if (cp.w < -2.0 || cp.x < -cp.w - m || cp.x > cp.w + m || cp.y < -cp.w - m || cp.y > cp.w + m) return false;
 
@@ -258,6 +353,11 @@ bool grassBlade(ivec2 c, int j, vec3 v, out SwardVertex o) {
     r.coarse = grass.cells.y / max(grass.blade.x, 1e-6);
     r.verts = max(int(grass.shape.y + 0.5), 1);
     if (!swardBuild(s, j, r, v, o)) return false;
+    // Stood on the body: the module's flat frame turned into the land's.
+    o.pos = coverToEye(o.pos);
+    o.normal = coverTurn(o.normal);
+    o.side = coverTurn(o.side);
+    o.up = coverTurn(o.up);
 
     // Past the herbs' plants a far blade stands for the herbs among the
     // grass as often as their cover seen from here has them (herbFarMean;
@@ -267,7 +367,7 @@ bool grassBlade(ivec2 c, int j, vec3 v, out SwardVertex o) {
     // on as specks of their colour, patch by patch.
 #ifndef GRASS_SHADOW
     if (o.carries && grass.herbInfo.x > 0.5) {
-        vec3 eye = camera.eyeWorld.xyz;
+        vec3 eye = coverEye();
         float tanView = grass.lod.w / max(length(s.root - eye.xz), 1e-3);
         float stand = 1.0 - herbPlantsDrawn(s.d, tanView);
         float u = grassHash(c, 6144 + j);
