@@ -104,7 +104,9 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     }
     node.follow(frame.world.eye);   // (placement is keyed on the body)
     const PlantShaders* shaders = plantShaders(node);
-    if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit()) {
+    // (Nor planned when every plant is past its range: a planet's from orbit.)
+    if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit() ||
+        node.nearest(frame.world.eye) > node.params().range) {
         node.setStats({});
         return;
     }

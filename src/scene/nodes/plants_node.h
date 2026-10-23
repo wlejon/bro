@@ -147,6 +147,9 @@ public:
     /// plantsSphere), in quadtree order.
     const CellGrid& cellGrid() const { return grid_; }
     const std::vector<CellContent>& cells() const;
+    /// How far `eye` is from the nearest leaf's bounds (0 inside one; huge
+    /// with no plants): past `params().range` nothing is drawn or cast.
+    float nearest(const bromath::Vec3& eye) const;
 
     /// Moves when the cells change (a leaf placed, dropped or set, the
     /// species).

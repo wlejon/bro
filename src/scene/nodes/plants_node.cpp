@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace bro::scene {
 
@@ -306,6 +307,16 @@ bool PlantsNode::changesSince(uint64_t generation, std::vector<bromath::AABB3>& 
                                        [](uint64_t g, const Change& c) { return g < c.generation; });
     for (auto it = from; it != changes_.end(); ++it) out.push_back(it->bounds);
     return true;
+}
+
+float PlantsNode::nearest(const bromath::Vec3& eye) const {
+    float d2 = std::numeric_limits<float>::max();
+    for (const auto& [key, leaf] : leaves_) {
+        const bromath::Vec3 c = bromath::vmax(leaf.bounds.min, bromath::vmin(eye, leaf.bounds.max));
+        const float dx = c.x - eye.x, dy = c.y - eye.y, dz = c.z - eye.z;
+        d2 = std::min(d2, dx * dx + dy * dy + dz * dz);
+    }
+    return std::sqrt(d2);
 }
 
 const std::vector<CellContent>& PlantsNode::cells() const {

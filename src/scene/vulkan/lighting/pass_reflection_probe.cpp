@@ -113,6 +113,14 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 }
 
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
+    // Only a capture reads anything: a frame with none waits on nothing
+    // here (so the frame's compute runs on under what follows).
+    bool capturing = false;
+    for (const SceneNode* shown : frame.lists.nodes)
+        if (shown->type() == SceneNode::Type::ReflectionProbe &&
+            static_cast<const ReflectionProbeNode*>(shown)->captureRequested())
+            capturing = true;
+    if (!capturing) return;
     // The faces bind the frame's lighting set, whose shadow bindings must be readable.
     io.sample(frame.gpu.shadows.pool);
     io.sample(frame.gpu.shadows.scratch);
