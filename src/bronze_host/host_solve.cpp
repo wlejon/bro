@@ -262,9 +262,18 @@ Value jsBroSolveAll(Value, std::span<const Value> args) {
         }
     }
 
+    bronze::check::SolveResult meta = bronze::check::solveJsFunction(fnSrc, opts);
     auto tuples = bronze::check::solveAllJsFunction(fnSrc, maxSolutions, opts);
     return hostArrayOf(tuples.size(), [&](size_t i) -> Value {
-        return makeInt64JsArray(tuples[i]);
+        ev::Persistent row(makeInt64JsArray(tuples[i]));
+        for (size_t j = 0; j < meta.paramNames.size() && j < tuples[i].size(); ++j) {
+            const std::string& pname = meta.paramNames[j];
+            if (pname != "length") {
+                row.set(ev::setProperty(row.get(), pname,
+                                        ev::fromDouble(static_cast<double>(tuples[i][j]))));
+            }
+        }
+        return row.get();
     });
 }
 
@@ -407,6 +416,18 @@ Value jsBroOptimize(Value, std::span<const Value> args) {
     }
     callableFn.set(ev::setProperty(callableFn.get(), "evalNative", callableFn.get()));
     callableFn.set(ev::setProperty(callableFn.get(), "fn", callableFn.get()));
+    {
+        ObjectBuilder certObj;
+        certObj.set("verified", ev::fromBool(optRes.verified));
+        certObj.set("provenEquivalent", ev::fromBool(optRes.verified));
+        certObj.set("optimized", ev::fromBool(optRes.optimized));
+        certObj.set("roundsUsed", ev::fromDouble(optRes.roundsUsed));
+        ev::Persistent optSrcVal(ev::fromUtf8(optRes.optimizedSource));
+        certObj.set("optimizedSource", optSrcVal.get());
+        ev::Persistent sumVal(ev::fromUtf8(optRes.summary));
+        certObj.set("summary", sumVal.get());
+        callableFn.set(ev::setProperty(callableFn.get(), "certificate", certObj.get()));
+    }
 
     return callableFn.get();
 }
@@ -447,6 +468,7 @@ Value jsBroFuzz(Value, std::span<const Value> args) {
     out.set("branchCoverage", ev::fromDouble(rep.branchCoverage));
     out.set("totalBranches", ev::fromDouble(rep.totalBranches));
     out.set("coveredBranches", ev::fromDouble(rep.coveredBranches));
+    out.set("feasiblePaths", ev::fromDouble(static_cast<double>(rep.testVectors.size())));
     out.set("safe", ev::fromBool(rep.safe));
 
     {
@@ -465,6 +487,7 @@ Value jsBroFuzz(Value, std::span<const Value> args) {
             return b.get();
         }));
         out.set("testVectors", tvArr.get());
+        out.set("tests", tvArr.get());
     }
     {
         ev::Persistent hzArr(hostArrayOf(rep.hazards.size(), [&](size_t i) -> Value {
@@ -483,6 +506,7 @@ Value jsBroFuzz(Value, std::span<const Value> args) {
             return b.get();
         }));
         out.set("hazards", hzArr.get());
+        out.set("bugs", hzArr.get());
     }
     {
         ev::Persistent jsonStr(ev::fromUtf8(rep.renderJson()));
@@ -521,6 +545,13 @@ Value jsBroProve(Value, std::span<const Value> args) {
         if (!eqV.isUndefined() && !eqV.isNull()) {
             std::string eqSrc, eqErr;
             if (extractJsFunctionSource(eqV, eqSrc, eqErr)) {
+                size_t fnPos = eqSrc.find("function");
+                if (fnPos != std::string::npos) {
+                    size_t parenPos = eqSrc.find('(', fnPos + 8);
+                    if (parenPos != std::string::npos) {
+                        eqSrc = eqSrc.substr(0, fnPos) + "function " + eqSrc.substr(parenPos);
+                    }
+                }
                 opts.equivalentToSource = std::move(eqSrc);
             }
         }
@@ -544,7 +575,12 @@ Value jsBroProve(Value, std::span<const Value> args) {
     }
 
     ObjectBuilder out;
+    {
+        ev::Persistent statusStr(ev::fromUtf8(rep.verified ? "VERIFIED" : "UNVERIFIED"));
+        out.set("status", statusStr.get());
+    }
     out.set("verified", ev::fromBool(rep.verified));
+    out.set("safe", ev::fromBool(rep.hazardFree));
     out.set("hazardFree", ev::fromBool(rep.hazardFree));
     out.set("deterministic", ev::fromBool(rep.deterministic));
     out.set("proofsValid", ev::fromBool(rep.proofsValid));
@@ -596,6 +632,7 @@ Value jsBroProve(Value, std::span<const Value> args) {
     {
         ev::Persistent shaVal(ev::fromUtf8(rep.sha256));
         out.set("sha256", shaVal.get());
+        out.set("proofHash", shaVal.get());
     }
     {
         ev::Persistent certVal(ev::fromUtf8(rep.certificateJson));
