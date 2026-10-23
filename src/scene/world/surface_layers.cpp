@@ -343,6 +343,14 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
     std::stable_sort(needs.begin(), needs.end(),
                      [](const Need& a, const Need& b) { return a.key.level > b.key.level; });
     const int top = levels_ - 1;
+    // More coarsest tiles in view than the atlas could keep with their
+    // children: the layer cannot hold even its base, so it offers nothing
+    // and its fragments work everything out themselves. (Else they were
+    // granted every frame and never stayed: a planet's turf, 2,400 of them
+    // in 1,024 slots, ahead of every other producer's work.)
+    size_t topNeeded = 0;
+    for (const Need& n : needs) topNeeded += n.key.level == top;
+    if (topNeeded > static_cast<size_t>(config_.slots / 2)) return;
     std::unordered_map<uint64_t, float> jobError;   // this frame's jobs, by key
     for (const Need& n : needs) {
         const uint64_t packed = n.key.packed();

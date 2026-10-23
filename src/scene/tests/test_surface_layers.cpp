@@ -130,6 +130,21 @@ void testSelection() {
     check(L.jobs().empty() && L.fills().empty() && L.pageWrites().empty(), "a still view fills nothing more");
 }
 
+void testCoarsestPastSlots() {
+    // Coarsest tiles in view beyond what the atlas could keep (three levels
+    // of 1 m tiles over 10 km: 4 m tiles at the top): the layer offers
+    // nothing, or its tiles would be granted every frame and never stay.
+    SurfaceLayerConfig c;
+    c.slots = 64;
+    c.maxLevels = 3;
+    SurfaceLayers L;
+    L.configure(c, world());
+    L.update(makeView({0.0f, 150.0f, 0.0f}, {0.0f, -0.6f, 1.0f}), 1);
+    check(L.stats().needed > static_cast<uint32_t>(c.slots),
+          "more tiles in view than slots (" + std::to_string(L.stats().needed) + ")");
+    check(L.jobs().empty(), "no jobs (" + std::to_string(L.jobs().size()) + ")");
+}
+
 void testBudgetAndCoarsest() {
     SurfaceLayerConfig c;
     c.slots = 2048;
@@ -300,6 +315,7 @@ void testItems() {
 int main() {
     testSelection();
     testBudgetAndCoarsest();
+    testCoarsestPastSlots();
     testEvictionAndGenerations();
     testAliases();
     testItems();

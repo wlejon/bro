@@ -187,8 +187,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     ShadowPages& pages = shadowPages_;
     ShadowPlan& plan = shadowPlan_;
     plan.pcfTaps = shadowPCFTaps_;
-    // A pixel's footprint on the target the frame renders at.
-    const float rows = static_cast<float>(std::max(targetHeight(), 1));
+    // A pixel's footprint on the target the frame renders at (as the paging
+    // takes it: coarser while the pool is short).
+    const float rows = static_cast<float>(std::max(targetHeight(), 1)) / pages.footprintScale();
     plan.pixelAngle = graph_.cameraIsPerspective_ ? 2.0f * std::tan(graph_.cameraFovY_ * 0.5f) / rows : 0.0f;
     plan.orthoPixel = graph_.cameraIsPerspective_ ? 0.0f : (graph_.cameraOrthoT_ - graph_.cameraOrthoB_) / rows;
     shadowMotion_.clear();

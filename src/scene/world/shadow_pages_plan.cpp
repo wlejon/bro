@@ -422,6 +422,11 @@ void ShadowPages::plan(ShadowPlan& out) {
     wants_.clear();
     uint32_t building = 0;
     const int sway = swayLevel();
+    // (Required only while the pool can hold what is needed: past it a
+    // required page would be granted every frame and find no page to draw
+    // into, holding back every other producer's work.)
+    const uint32_t pool = static_cast<uint32_t>(config_.poolColumns * config_.poolRows);
+    const bool canRequire = stats_.needed <= pool;
     for (size_t mi = 0; mi < maps_.size(); ++mi) {
         const Map& m = maps_[mi];
         const bool clip = m.kind == SP_KIND_CLIPMAP;
@@ -453,7 +458,7 @@ void ShadowPages::plan(ShadowPlan& out) {
             w.key = static_cast<uint64_t>(i);
             w.error = e.drawn ? 1.0f : shown > 0 ? std::min(std::ldexp(1.0f, shown), 64.0f) : 64.0f;
             w.size = std::ldexp(1.0, level);
-            w.required = !e.drawn && !neededAbove;
+            w.required = canRequire && !e.drawn && !neededAbove;
             w.plants = clip && level > sway;
             if (w.plants) w.units = plantUnits(i);
             if (m.next) {
@@ -466,6 +471,20 @@ void ShadowPages::plan(ShadowPlan& out) {
     }
     stats_.wanted = static_cast<uint32_t>(wants_.size()) - building;
     stats_.building = building;
+
+    // More pages needed than the pool holds: the levels are taken a level
+    // coarser for a pixel, and finer again once a level finer would fit
+    // (a level finer about quadruples the near pages). Held a few frames
+    // after each step, while the requests that read it come back.
+    if (biasHeld_ > 0) {
+        --biasHeld_;
+    } else if (stats_.needed > pool * 9 / 10 && bias_ < kMaxBias) {
+        ++bias_;
+        biasHeld_ = kBiasHold;
+    } else if (stats_.needed < pool / 5 && bias_ > 0) {
+        --bias_;
+        biasHeld_ = kBiasHold;
+    }
     // The clipmap built is ready once requests have named its pages and
     // every one needed is drawn.
     ready_ = building_ && newestRequest_ >= begun_ && building == 0;

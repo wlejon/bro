@@ -41,6 +41,11 @@
 // A page the plants draw into (a sun page past the sway level) is a job of
 // another kind than one they do not: biomes' cost a hundred times one of
 // the near levels', where only what stands still casts.
+// A view that needs more pages than the pool holds (a planet's land seen
+// across its hundreds of kilometres) takes its levels a level coarser for a
+// pixel (footprintScale()), and again while still short; finer once it
+// needs few. (Else what found no physical page waited forever, its grants
+// spent and undrawn every frame and every other producer's held back.)
 // The world service's grants (grant()) are drawn the next frame, into
 // physical pages from the free list, else the least recently needed, and
 // sampled the frame they are drawn (copied into the pool ahead of the lit
@@ -71,6 +76,7 @@
 #include <bromath/mat.h>
 #include <bromath/vec.h>
 
+#include <cmath>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -209,6 +215,11 @@ public:
     void grant(std::span<const uint64_t> keys);
 
     const ShadowPagesStats& stats() const { return stats_; }
+    /// What a pixel's footprint is taken as, picking a level (the marking
+    /// pass's and the lit shaders'): 1, or a power of two more while the
+    /// view needs more pages than the pool holds, so it falls short a level
+    /// coarser everywhere rather than its grants going undrawn.
+    float footprintScale() const { return std::ldexp(1.0f, bias_); }
     int entryCount() const { return static_cast<int>(entries_.size()); }
     uint64_t serial() const { return serial_; }
 
@@ -379,6 +390,10 @@ private:
     bromath::AABB3 seen_ = bromath::aempty3();
     History history_[8];
     uint64_t serial_ = 0;
+    static constexpr int kMaxBias = 4;
+    static constexpr int kBiasHold = 8;   // frames
+    int bias_ = 0;
+    int biasHeld_ = 0;
     uint64_t newestRequest_ = 0;      // the newest plan serial requests came back for
     bromath::Vec3 eye_{0.0f, 0.0f, 0.0f};
     std::vector<uint64_t> granted_;

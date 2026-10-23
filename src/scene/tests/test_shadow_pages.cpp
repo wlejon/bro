@@ -285,6 +285,50 @@ void testLruReuse() {
     check(drawn == 3, "a pool of three holds three needed pages, the fourth waits");
 }
 
+void testPoolShort() {
+    // More needed than the pool holds: the levels are taken coarser for a
+    // pixel (a planet's view across its land wanted 6,626 pages of 3,600,
+    // and the grants that found no page went undrawn every frame), held a
+    // few frames, and finer again when the view needs few.
+    ShadowPagesConfig c;
+    c.poolColumns = 10;
+    c.poolRows = 1;
+    ShadowPages p;
+    p.configure(c);
+    ShadowPlan plan;
+    const Vec3 eye{0.5f, 1.0f, 0.5f};
+    frame(p, plan, eye, {});
+    check(p.footprintScale() == 1.0f, "a pixel's footprint as it is while the pool holds what is needed");
+    std::vector<int> many;
+    for (int i = 0; i < 10; ++i) many.push_back(entryAt(p, eye + Vec3{-0.13f * i, 0.0f, 0.0f}, 0));
+    frame(p, plan, eye, many);
+    check(p.footprintScale() == 2.0f, "ten needed of ten: a level coarser");
+    for (int f = 0; f < 4; ++f) frame(p, plan, eye, many);
+    check(p.footprintScale() == 2.0f, "held while its requests come back");
+    for (int f = 0; f < 8; ++f) frame(p, plan, eye, many);
+    check(p.footprintScale() == 4.0f, "still short: another level");
+    for (int f = 0; f < 10; ++f) frame(p, plan, eye, {many[0]});
+    check(p.footprintScale() == 2.0f, "one needed: a level finer again");
+    for (int f = 0; f < 10; ++f) frame(p, plan, eye, {many[0]});
+    check(p.footprintScale() == 1.0f, "and back to a pixel");
+
+    // Needed past the pool: no page is required (each would be granted
+    // every frame and find no page); within it the tops of chains are.
+    ShadowPages q;
+    q.configure(c);
+    frame(q, plan, eye, {});
+    std::vector<int> over;
+    for (int i = 0; i < 12; ++i) over.push_back(entryAt(q, eye + Vec3{-0.13f * i, 0.0f, 0.0f}, 0));
+    frame(q, plan, eye, over, downSun(), false);
+    int required = 0;
+    for (const ShadowPageWant& w : q.wants()) required += w.required;
+    check(required == 0, "twelve needed of ten: none required (" + std::to_string(required) + ")");
+    for (int f = 0; f < 4; ++f) frame(q, plan, eye, {over[0], over[1]}, downSun(), false);
+    required = 0;
+    for (const ShadowPageWant& w : q.wants()) required += w.required;
+    check(required == 2, "two needed of ten: both required (" + std::to_string(required) + ")");
+}
+
 void testInvalidation() {
     // With no stale page redrawn the frame it goes stale (staleNow 0), what
     // the world service is left: testStaleNow has the default.
@@ -679,6 +723,7 @@ int main() {
     testLoads();
     testWindowMoveAndLateRequests();
     testLruReuse();
+    testPoolShort();
     testInvalidation();
     testSunTurnBuildsTheNext();
     testBuildAcrossShowAndRange();
