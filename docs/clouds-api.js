@@ -20,7 +20,8 @@
  *     deck, the finest cell 62.5 m and each level's twice the last's. With
  *     each texel: the base the march reads (where the cell is about as
  *     wide as a cloud or wider, a share the engine cuts into clouds by its
- *     own noise), the forms' mean extinction over the cell, whether any of
+ *     own noise), how much of the skin's move shows there (none under a
+ *     flat base), the forms' mean extinction over the cell, whether any of
  *     the cell may hold cloud as a view however near sees it, the deck's
  *     depth from it toward the sun and up, the distance to the nearest cell
  *     that may; with each column its band (the heights about it that may
@@ -36,12 +37,19 @@
  *     Worley billows (`forms.billowScale` a tile) for its lobes, and near
  *     the eye finer Worley erosion (`forms.detailScale`): wisps under a
  *     cloud's base, cauliflower over its middle. It never opens a hole
- *     through a cloud, nor makes one in clear air. The skin shows what is a
- *     few pixels wide or more (its noise read over two pixels, and over as
- *     much more as a view from over the deck meets it aslant); finer, the
- *     surface is blurred over the footprint by how much the skin varies
- *     there (soft edges from afar, never grain), and the detail fades out;
- *     everything drifts with `wind`.
+ *     through a cloud, nor makes one in clear air. Where the base rises
+ *     steeply up (a flat underside) the skin moves it not at all, so a
+ *     cumulus' base stays a flat grey plane and its lobes are on its walls
+ *     and top. The skin shows over a pixel's footprint: as its lobes come
+ *     under four pixels across its move fades out (none at two) into a
+ *     softer edge, so a heap seen small is the world's smooth dome, lit on
+ *     its sun side and shaded in its lee, never grain; the detail fades out
+ *     the same way. Where the cache holds a share, the engine carves it
+ *     into lumps a few edges across (only lowering the base), so a far
+ *     field seen from over the deck is distinct heaps with ground between;
+ *     seen nearly edge-on (from under the deck, to its horizon) a field's
+ *     heaps stand behind one another and the lumps are left out.
+ *     Everything drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, with no jitter (the
  *     same picture every frame). A cumulus is a soft solid with a skin, so

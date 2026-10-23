@@ -16,8 +16,10 @@
 //                     base and the depths toward the sun and up
 //     CL_B_CACHE_OUT  the same, written by its light's bake (rgba16f storage)
 //     CL_B_SIGMA      the cache's extinction (x, the forms' mean over a
-//                     cell) and base (y), sampled (the light's bake, the shadow)
-//     CL_B_SIGMA_OUT  the same, written by the module's bake (rg16f storage)
+//                     cell), base (y) and how much of the skin's move shows
+//                     (z: none at a flat base), sampled (the march, the
+//                     light's bake, the shadow)
+//     CL_B_SIGMA_OUT  the same, written by the module's bake (rgba16f storage)
 //     CL_B_BAND       the cache's columns' bands, sampled: a level a layer,
 //                     x the lowest height (0 .. 1 up the deck) that may hold
 //                     cloud about the column (its own and its neighbours':

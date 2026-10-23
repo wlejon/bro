@@ -19,7 +19,7 @@
 
 layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
 
-layout(set = 0, binding = CL_B_SIGMA_OUT, rg16f) uniform writeonly image3D sigmaOut;
+layout(set = 0, binding = CL_B_SIGMA_OUT, rgba16f) uniform writeonly image3D sigmaOut;
 layout(set = 0, binding = CL_B_HOLDS, r16f) uniform writeonly image3D holdsOut;
 
 layout(push_constant) uniform Push {
@@ -32,12 +32,10 @@ vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 // Whether the forms of base at most `base` may hold cloud read over a
 // footprint of at most `foot` (the skin's most out, the surface's blur at
-// its widest or none: the field is linear in the blur). (The march's
-// footprint at a level of the cache is at most its cell, and the skin's
-// as much as CL_ANISO_MOST, 4, wider where the view is aslant.)
+// its widest or none: the field is linear in the blur).
 bool cloudMayHold(float base, float foot) {
     if (base <= 0.0) return false;
-    float w = cloudBlurMost(4.0 * foot);
+    float w = cloudSurfaceBlurMost(foot);
     float out0 = base + 0.55 * CLOUD_SKIN - 0.5;
     float outW = base + 0.55 * CLOUD_SKIN * (1.0 - w) - 0.5 + 0.5 * w;
     return max(out0, outW) > 0.0;
@@ -66,19 +64,28 @@ void main() {
     float baseRaw = cloudCutBase(share, pd, cell);
     float sigma = cloudForms(pd, max(share, 0.0), 0.5, cell, false);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
-    imageStore(sigmaOut, at, vec4(sigma, baseRaw, 0.0, 0.0));
     // The base the march may read in the cell: it mixes the bins' about it
     // (and quickly changes up, as at a cloud's flat base), so the most of
     // this bin's and the next ones' up and down, with a margin.
     float binH = clouds.cacheE1.w, most = baseRaw;
+    float gLo = baseRaw, gHi = baseRaw, hLo = r, hHi = r;
     for (int j = -1; j <= 1; j += 2) {
         float rj = r + float(j) * binH;
         float hj = (rj - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
         if (hj <= 0.0 || hj >= 1.0) continue;
         CloudPoint qj = CloudPoint(up * rj, up, hj, rj - clouds.shell.z, cover, cell, clouds.shell.w);
-        most = max(most, cloudCutBase(min(cloudDensity(qj), 1.0), cloudDrift(qj.p), cell));
+        float gj = cloudCutBase(min(cloudDensity(qj), 1.0), cloudDrift(qj.p), cell);
+        most = max(most, gj);
+        if (j < 0) { gLo = gj; hLo = rj; } else { gHi = gj; hHi = rj; }
     }
     most = min(most + 0.1 * abs(most) + 0.01, 1.0);
+    // How much of the skin's move the march shows here (z): none where the
+    // base rises up steeply (a cloud's flat underside, rising up to
+    // CLOUD_EDGE_STEEPEST times an edge's rate under it), so a cumulus' base
+    // stays a flat grey plane and its lobes are on its walls and its top.
+    float rise = (gHi - gLo) / max(hHi - hLo, 1.0) * clouds.forms.w;
+    float shows = 1.0 - smoothstep(0.5, 0.8, rise / CLOUD_EDGE_STEEPEST);
+    imageStore(sigmaOut, at, vec4(sigma, baseRaw, shows, 0.0));
     // (What lies between texels, across the chart, the distance's margin of
     // a cell about each that may takes in.)
     imageStore(holdsOut, at, vec4(cloudMayHold(most, cell) ? 1.0 : 0.0));

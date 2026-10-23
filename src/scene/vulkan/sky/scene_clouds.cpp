@@ -29,7 +29,7 @@ static_assert(CL_CACHE_LEVELS == 13 && CL_CACHE_SIDE % (CL_CACHE_GROUP * CL_CACH
 namespace {
 
 constexpr VkFormat kCacheFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kSigmaFormat = VK_FORMAT_R16G16_SFLOAT;
+constexpr VkFormat kSigmaFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kDistFormat = VK_FORMAT_R16_SFLOAT;
 constexpr VkFormat kCoverFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;

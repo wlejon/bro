@@ -141,16 +141,18 @@ vec4 clCache(ClAt w, float lod) {
     if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
     return mix(a, textureLod(cloudCacheMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0), f);
 }
-// The base alone, from the cache's narrower image (its texels half the
-// bytes: what every sample reads; the depths only what is lit does).
-float clBase(ClAt w, float lod) {
+// The base (x) and how much of the skin's move shows (y), from the cache's
+// extinction's image (what every sample reads; the depths only what is lit
+// does).
+vec2 clBaseShows(ClAt w, float lod) {
     int k = int(lod);
-    if (k >= CL_CACHE_LEVELS) return 0.0;
-    float a = textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k), 0.0).g;
+    if (k >= CL_CACHE_LEVELS) return vec2(0.0, 1.0);
+    vec2 a = textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k), 0.0).gb;
     float f = fract(lod);
     if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
-    return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).g, f);
+    return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).gb, f);
 }
+float clBase(ClAt w, float lod) { return clBaseShows(w, lod).x; }
 
 // How far (m) the view at `w` is sure to meet no cloud, from the cache's
 // level `k`: its cell's own (the gap between the cell's box and the nearest
@@ -162,13 +164,6 @@ float clFree(ClAt w, int k) {
     return 0.98 * texelFetch(cloudCacheMap, ivec3(c, k * B + b), 0).w;
 }
 
-// How much wider than the pixel the skin's footprint is: a view from over
-// the deck meets its tops aslant, and a slanted pixel spans as much more of
-// a top as the view is flat (to CL_ANISO_MOST, which the cache's CL_B_HOLDS
-// allows for), so the skin it crosses is its mean there, not grain.
-const float CL_ANISO_MOST = 4.0;
-float clAniso = 1.0;
-
 // How far (m) on the view at a point whose base reads `base` (with the
 // margin of the base's change across a step) is sure to meet no cloud over
 // footprint `foot`: where even the skin's most out leaves the surface
@@ -179,13 +174,22 @@ float clAniso = 1.0;
 // cloudSurfaceBase, `q` of it, CLOUD_CUT_STEEPEST across), along a view
 // `vs` (the sine of its slope) from the horizontal. Under 0 the world's
 // base says how far the clear air is from cloud, so between heaps and
-// over them this is most of the way there.
+// over them this is most of the way there. (The base as the cache holds
+// it: the lumps only carve it, cloudLumpsOf.)
 float clBaseClear(float base, float foot, float q, float vs) {
-    float w = cloudBlurMost(foot * clAniso);
-    float most = base + (CL_BASE_MARGIN - 1.0) * abs(base) + CL_BASE_PAD + 0.55 * CLOUD_SKIN * (1.0 - w) - 0.5 + 0.5 * w;
+    float w = cloudSurfaceBlur(foot);
+    float most = base + (CL_BASE_MARGIN - 1.0) * abs(base) + CL_BASE_PAD + 0.55 * CLOUD_SKIN * cloudSkinAt(foot) * (1.0 - w) - 0.5 + 0.5 * w;
     float rate = max(1.0, vs * CLOUD_EDGE_STEEPEST + 0.2 * sqrt(max(1.0 - vs * vs, 0.0))) * mix(1.0, CLOUD_CUT_STEEPEST, q);
     return most < 0.0 ? -most * clouds.forms.w / rate : 0.0;
 }
+
+// How much of the lumps a share is carved into this view shows
+// (cloudLumpsOf): all from over the deck, none along a view that meets it
+// at a slope under CL_LUMPS_FROM (its sine; the view's where it enters the
+// deck), so flat that a field's heaps stand one behind another and their
+// gaps close (and a view through it would find each heap's faces in turn).
+const float CL_LUMPS_FROM = 0.08, CL_LUMPS_TO = 0.2;
+float clLumps = 1.0;
 
 // How much the cache's base at level `lod` is a share cut into clouds
 // (cloudCutBase), not the world's surface.
@@ -198,14 +202,16 @@ struct ClForms {
 };
 
 // The forms at `w` (`lod` the cache's level there) over footprint `foot`,
-// with the detail or without.
-ClForms clFormsAt(ClAt w, float lod, float foot, bool detail) {
+// with the detail or without, as a pixel of footprint `seen` shows them
+// (how much of the skin's move shows is the pixel's, not the length a
+// piece's mean is taken over: cloudSkinAt).
+ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     ClForms f = ClForms(0.0, -1.0);
     if (w.h <= 0.0 || w.h >= 1.0) return f;
-    foot *= clAniso;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
-    float base = max(clBase(w, lod), 0.0);
+    vec2 bs = clBaseShows(w, lod);
+    float base = max(bs.x + cloudLumpsOf(pd, foot, clShareLike(lod) * clLumps), 0.0);
     float wD = detail ? cloudDetailAt(foot) : 0.0;
     vec4 e = vec4(0.0);
     float inCloud = 0.5;
@@ -216,8 +222,10 @@ ClForms clFormsAt(ClAt w, float lod, float foot, bool detail) {
         inCloud = clamp((w.h - b.x) / max(b.y - b.x, 1e-3), 0.0, 1.0);
         e = cloudDetail(pd, foot);
     }
-    float skin = cloudSkinOf(n, e, wD, inCloud);
-    float wB = cloudBlurOf(n, foot);
+    // (The skin's move none under a flat base.)
+    float shows = cloudSkinAt(seen);
+    float skin = cloudSkinOf(n, e, wD, inCloud, shows * bs.y);
+    float wB = min(cloudBlur(foot) + CLOUD_SKIN_BLUR * (1.0 - shows), 1.0);
     f.sigma = cloudSigmaOf(base, skin, wB, foot);
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
@@ -239,7 +247,7 @@ float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
         ClAt w = clAt(a + s * (at + 0.5 * len));
         if (w.h >= 1.0) return tau;   // (out through the deck's top)
         float f = max(foot, 3.0 * len);
-        tau += clFormsAt(w, clLod(w, f), f, detail && i == 0).sigma * len;
+        tau += clFormsAt(w, clLod(w, f), f, foot, detail && i == 0).sigma * len;
         at += len;
         len *= 2.2;
     }
@@ -356,11 +364,8 @@ void main() {
     // the mean depth of what it sends; the march blended out over
     // CL_LAYER_FROM .. CL_LAYER_TO of the deck's thickness a pixel.
     float thick = clouds.shell.y - clouds.shell.x;
-    if (length(ro) > clouds.shell.y) {
-        vec3 a0 = ro + rd * sp.x;
-        clAniso = clamp(1.0 / max(abs(dot(rd, normalize(a0))), 1e-3), 1.0, CL_ANISO_MOST);
-    }
-    float wl = length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
+    clLumps = smoothstep(CL_LUMPS_FROM, CL_LUMPS_TO, abs(dot(rd, normalize(ro + rd * sp.x))));
+    float wl =length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
     for (int i = 0; i < 2 && wl > 0.0; ++i) {
         vec2 q = i == 0 ? spanA : spanB;
@@ -504,7 +509,7 @@ void main() {
             }
             // In a cloud's skin: the forms here, crossed a few pixels at a
             // time while they hold none.
-            ClForms f = clFormsAt(w, lod, foot, m.T > CL_DETAIL_SEEN);
+            ClForms f = clFormsAt(w, lod, foot, foot, m.T > CL_DETAIL_SEEN);
             if (f.sigma <= 0.0) ++dbgSkin; else ++dbgIn;
             if (f.sigma <= 0.0) {
                 clearAt = xPrev = t;
@@ -540,7 +545,7 @@ void main() {
             float x = mix(hLo, hHi, s);
             ClAt w = clAt(ro + rd * x);
             float foot = pixel * x;
-            ClForms f = clFormsAt(w, clLod(w, foot), foot, m.T > CL_DETAIL_SEEN);
+            ClForms f = clFormsAt(w, clLod(w, foot), foot, foot, m.T > CL_DETAIL_SEEN);
             if (f.sigma > 0.0) {
                 hHi = x;
                 fHi = f.face;
@@ -575,7 +580,7 @@ void main() {
         // (The forms' mean over the piece: it is taken as one, so what is
         // finer than it along the view is its mean, not a point of it that
         // the next pixel's piece misses.)
-        ClForms f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), m.T > CL_DETAIL_SEEN);
+        ClForms f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), foot, m.T > CL_DETAIL_SEEN);
         float sigma = f.sigma;
         if (sigma <= 0.0) {
             // Out of the cloud: traced on from here.
