@@ -52,6 +52,7 @@ double bro_scene_SceneNode_x_get(void* self) {
 }
 
 void bro_scene_SceneNode_x_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto p = n->position();
@@ -66,6 +67,7 @@ double bro_scene_SceneNode_y_get(void* self) {
 }
 
 void bro_scene_SceneNode_y_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto p = n->position();
@@ -80,6 +82,7 @@ double bro_scene_SceneNode_z_get(void* self) {
 }
 
 void bro_scene_SceneNode_z_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto p = n->position();
@@ -103,7 +106,7 @@ void bro_scene_SceneNode_position_get(void* self, bronze_native_buffer* out) {
 
 void bro_scene_SceneNode_position_set(void* self, const double* v, uint32_t v_len) {
     auto* n = nodeOf(self);
-    if (n && v && v_len >= 3) {
+    if (n && v && v_len >= 3 && std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2])) {
         n->setPosition(static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]));
     }
 }
@@ -124,7 +127,8 @@ void bro_scene_SceneNode_rotation_get(void* self, bronze_native_buffer* out) {
 
 void bro_scene_SceneNode_rotation_set(void* self, const double* v, uint32_t v_len) {
     auto* n = nodeOf(self);
-    if (n && v && v_len >= 4) {
+    if (n && v && v_len >= 4 &&
+        std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]) && std::isfinite(v[3])) {
         n->setRotation(bromath::Quat(static_cast<float>(v[0]), static_cast<float>(v[1]),
                                      static_cast<float>(v[2]), static_cast<float>(v[3])));
     }
@@ -136,6 +140,7 @@ double bro_scene_SceneNode_rotationX_get(void* self) {
 }
 
 void bro_scene_SceneNode_rotationX_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto e = n->rotationEuler();
@@ -149,6 +154,7 @@ double bro_scene_SceneNode_rotationY_get(void* self) {
 }
 
 void bro_scene_SceneNode_rotationY_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto e = n->rotationEuler();
@@ -162,6 +168,7 @@ double bro_scene_SceneNode_rotationZ_get(void* self) {
 }
 
 void bro_scene_SceneNode_rotationZ_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto e = n->rotationEuler();
@@ -184,7 +191,7 @@ void bro_scene_SceneNode_scale_get(void* self, bronze_native_buffer* out) {
 
 void bro_scene_SceneNode_scale_set(void* self, const double* v, uint32_t v_len) {
     auto* n = nodeOf(self);
-    if (n && v && v_len >= 3) {
+    if (n && v && v_len >= 3 && std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2])) {
         n->setScale(static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]));
     }
 }
@@ -195,6 +202,7 @@ double bro_scene_SceneNode_scaleX_get(void* self) {
 }
 
 void bro_scene_SceneNode_scaleX_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto s = n->scale();
@@ -209,6 +217,7 @@ double bro_scene_SceneNode_scaleY_get(void* self) {
 }
 
 void bro_scene_SceneNode_scaleY_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto s = n->scale();
@@ -223,6 +232,7 @@ double bro_scene_SceneNode_scaleZ_get(void* self) {
 }
 
 void bro_scene_SceneNode_scaleZ_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* n = nodeOf(self);
     if (n) {
         auto s = n->scale();
@@ -325,15 +335,18 @@ void bro_scene_SceneNode_destroy(void* self) {
 }
 
 void* bro_scene_SceneNode_setPosition(void* self, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return nullptr;
     auto* n = nodeOf(self);
     if (n) n->setPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
     return nullptr;
 }
 
 void* bro_scene_SceneNode_setRotation(void* self, double x, double y, double z, bool w_given, double w) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return nullptr;
     auto* n = nodeOf(self);
     if (n) {
         if (w_given) {
+            if (!std::isfinite(w)) return nullptr;
             n->setRotation(bromath::Quat(static_cast<float>(x), static_cast<float>(y),
                                          static_cast<float>(z), static_cast<float>(w)));
         } else {
@@ -348,6 +361,7 @@ void* bro_scene_SceneNode_setRotation(void* self, double x, double y, double z, 
 }
 
 void* bro_scene_SceneNode_setScale(void* self, double x, bool y_given, double y, bool z_given, double z) {
+    if (!std::isfinite(x) || (y_given && !std::isfinite(y)) || (z_given && !std::isfinite(z))) return nullptr;
     auto* n = nodeOf(self);
     if (n) {
         float fx = static_cast<float>(x);
@@ -360,10 +374,11 @@ void* bro_scene_SceneNode_setScale(void* self, double x, bool y_given, double y,
 
 void* bro_scene_SceneNode_lookAt(void* self, const double* target, uint32_t target_len, const double* up, uint32_t up_len) {
     auto* n = nodeOf(self);
-    if (n && target && target_len >= 3) {
+    if (n && target && target_len >= 3 &&
+        std::isfinite(target[0]) && std::isfinite(target[1]) && std::isfinite(target[2])) {
         bromath::Vec3 tgt{static_cast<float>(target[0]), static_cast<float>(target[1]), static_cast<float>(target[2])};
         bromath::Vec3 upVec{0.0f, 1.0f, 0.0f};
-        if (up && up_len >= 3) {
+        if (up && up_len >= 3 && std::isfinite(up[0]) && std::isfinite(up[1]) && std::isfinite(up[2])) {
             upVec = {static_cast<float>(up[0]), static_cast<float>(up[1]), static_cast<float>(up[2])};
         }
         n->lookAt(tgt, upVec);

@@ -47,9 +47,10 @@ static bromath::Vec3 callPositionHandler() {
     if (ev::isFunction(fn)) {
         auto r = ev::call(fn, ev::undefined(), {});
         if (!r.thrown && ev::isObject(r.value)) {
-            Value e0 = ev::getElement(r.value, 0);
-            Value e1 = ev::getElement(r.value, 1);
-            Value e2 = ev::getElement(r.value, 2);
+            const Rooted res(r.value);
+            Value e0 = ev::getElement(res, 0);
+            Value e1 = ev::getElement(res, 1);
+            Value e2 = ev::getElement(res, 2);
             if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2)) {
                 return {static_cast<float>(ev::toDouble(e0)),
                         static_cast<float>(ev::toDouble(e1)),
@@ -65,10 +66,11 @@ static bromath::Quat callOrientationHandler() {
     if (ev::isFunction(fn)) {
         auto r = ev::call(fn, ev::undefined(), {});
         if (!r.thrown && ev::isObject(r.value)) {
-            Value e0 = ev::getElement(r.value, 0);
-            Value e1 = ev::getElement(r.value, 1);
-            Value e2 = ev::getElement(r.value, 2);
-            Value e3 = ev::getElement(r.value, 3);
+            const Rooted res(r.value);
+            Value e0 = ev::getElement(res, 0);
+            Value e1 = ev::getElement(res, 1);
+            Value e2 = ev::getElement(res, 2);
+            Value e3 = ev::getElement(res, 3);
             if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2) && ev::isNumber(e3)) {
                 return {static_cast<float>(ev::toDouble(e0)),
                         static_cast<float>(ev::toDouble(e1)),

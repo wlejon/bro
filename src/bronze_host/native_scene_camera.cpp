@@ -32,6 +32,7 @@ double bro_scene_SceneGraph_cameraX_get(void* self) {
 }
 
 void bro_scene_SceneGraph_cameraX_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* g = graphOf(self);
     if (g) g->setCameraPosition(static_cast<float>(v), g->cameraY());
 }
@@ -42,6 +43,7 @@ double bro_scene_SceneGraph_cameraY_get(void* self) {
 }
 
 void bro_scene_SceneGraph_cameraY_set(void* self, double v) {
+    if (!std::isfinite(v)) return;
     auto* g = graphOf(self);
     if (g) g->setCameraPosition(g->cameraX(), static_cast<float>(v));
 }
@@ -52,6 +54,7 @@ double bro_scene_SceneGraph_cameraZoom_get(void* self) {
 }
 
 void bro_scene_SceneGraph_cameraZoom_set(void* self, double v) {
+    if (!std::isfinite(v) || v <= 0.0) return;
     auto* g = graphOf(self);
     if (g) g->setCameraZoom(static_cast<float>(v));
 }

@@ -86,7 +86,7 @@ void bro_physics_PhysicsWorldHandle_step(void* self, double dt) {
     auto* pw = static_cast<HostPhysicsWorld*>(self);
     if (pw && pw->getWorld()) {
         pushActiveWorld(pw);
-        if (dt > 0.0) pw->getWorld()->setTimeStep(static_cast<float>(dt));
+        if (std::isfinite(dt) && dt > 0.0) pw->getWorld()->setTimeStep(static_cast<float>(dt));
         pw->getWorld()->stepInline();
         popActiveWorld();
     }
@@ -154,6 +154,7 @@ void bro_physics_createWorld(const char* opts) {
 // --- Simulation Timing & Gravity --------------------------------------------
 
 void bro_physics_setTimeStep(double dt) {
+    if (!std::isfinite(dt) || dt <= 0.0) return;
     auto* pw = getActiveWorld();
     if (auto* w = pw ? pw->getWorld() : nullptr) w->setTimeStep(static_cast<float>(dt));
 }
@@ -167,7 +168,7 @@ double bro_physics_getTimeStep(void) {
 void bro_physics_step(double dt) {
     auto* pw = getActiveWorld();
     if (auto* w = pw ? pw->getWorld() : nullptr) {
-        if (dt > 0.0) w->setTimeStep(static_cast<float>(dt));
+        if (std::isfinite(dt) && dt > 0.0) w->setTimeStep(static_cast<float>(dt));
         w->stepInline();
     }
 }
@@ -184,6 +185,7 @@ bool bro_physics_getInterpolation(void) {
 }
 
 void bro_physics_setGravity(double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     if (auto* w = pw ? pw->getWorld() : nullptr) w->setGravity((float)x, (float)y, (float)z);
 }
@@ -328,6 +330,7 @@ const char* bro_physics_getVelocity(int32_t tag) {
 }
 
 void bro_physics_setPosition(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -336,14 +339,19 @@ void bro_physics_setPosition(int32_t tag, double x, double y, double z) {
 }
 
 void bro_physics_setRotation(int32_t tag, double x, double y, double z, double w) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(w)) return;
     auto* pw = getActiveWorld();
     auto* world = pw ? pw->getWorld() : nullptr;
     if (!world) return;
     JPH::BodyID id = pw->bodyIdForTag(tag);
-    if (!id.IsInvalid()) world->setRotation(id, JPH::Quat((float)x, (float)y, (float)z, (float)w));
+    if (!id.IsInvalid()) {
+        JPH::Quat q((float)x, (float)y, (float)z, (float)w);
+        if (q.LengthSq() > 1e-12f) world->setRotation(id, q.Normalized());
+    }
 }
 
 void bro_physics_setLinearVelocity(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -352,6 +360,7 @@ void bro_physics_setLinearVelocity(int32_t tag, double x, double y, double z) {
 }
 
 void bro_physics_setAngularVelocity(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -360,6 +369,7 @@ void bro_physics_setAngularVelocity(int32_t tag, double x, double y, double z) {
 }
 
 void bro_physics_addForce(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -368,6 +378,7 @@ void bro_physics_addForce(int32_t tag, double x, double y, double z) {
 }
 
 void bro_physics_addImpulse(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -376,6 +387,7 @@ void bro_physics_addImpulse(int32_t tag, double x, double y, double z) {
 }
 
 void bro_physics_addTorque(int32_t tag, double x, double y, double z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -434,6 +446,7 @@ void bro_physics_setMotionType(int32_t tag, bool isStatic) {
 }
 
 void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(dt) || dt <= 0.0) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -446,6 +459,9 @@ void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double
 
 void bro_physics_moveKinematicRot(int32_t tag, double x, double y, double z,
                                   double qx, double qy, double qz, double qw, double dt) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+        !std::isfinite(qx) || !std::isfinite(qy) || !std::isfinite(qz) || !std::isfinite(qw) ||
+        !std::isfinite(dt) || dt <= 0.0) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -484,6 +500,7 @@ double bro_physics_getMass(int32_t tag) {
 }
 
 void bro_physics_setMass(int32_t tag, double mass) {
+    if (!std::isfinite(mass) || mass < 0.0) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -492,6 +509,7 @@ void bro_physics_setMass(int32_t tag, double mass) {
 }
 
 void bro_physics_setLinearDamping(int32_t tag, double damping) {
+    if (!std::isfinite(damping)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -500,6 +518,7 @@ void bro_physics_setLinearDamping(int32_t tag, double damping) {
 }
 
 void bro_physics_setAngularDamping(int32_t tag, double damping) {
+    if (!std::isfinite(damping)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -508,6 +527,7 @@ void bro_physics_setAngularDamping(int32_t tag, double damping) {
 }
 
 void bro_physics_setGravityFactor(int32_t tag, double factor) {
+    if (!std::isfinite(factor)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -516,6 +536,7 @@ void bro_physics_setGravityFactor(int32_t tag, double factor) {
 }
 
 void bro_physics_setFriction(int32_t tag, double friction) {
+    if (!std::isfinite(friction)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -524,6 +545,7 @@ void bro_physics_setFriction(int32_t tag, double friction) {
 }
 
 void bro_physics_setRestitution(int32_t tag, double restitution) {
+    if (!std::isfinite(restitution)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;

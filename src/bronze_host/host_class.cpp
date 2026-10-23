@@ -77,7 +77,8 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
     ev::registerGlobal(name, ctor_->get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, name, ctor_->get());
+        ev::Persistent gtP(gt.value);
+        ev::setProperty(gtP.get(), name, ctor_->get());
     }
 }
 
@@ -86,7 +87,8 @@ void HostClass::alias(const char* name) const {
     ev::registerGlobal(name, ctor_->get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, name, ctor_->get());
+        ev::Persistent gtP(gt.value);
+        ev::setProperty(gtP.get(), name, ctor_->get());
     }
 }
 
@@ -95,7 +97,8 @@ void HostClass::bind(const char* name) {
     if (!g.found || !ev::isFunction(g.value)) {
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-            Value c = ev::getProperty(gt.value, name);
+            ev::Persistent gtP(gt.value);
+            Value c = ev::getProperty(gtP.get(), name);
             if (ev::isFunction(c)) {
                 g.found = true;
                 g.value = c;
@@ -104,7 +107,7 @@ void HostClass::bind(const char* name) {
     }
     if (g.found && ev::isFunction(g.value)) {
         ctor_ = new ev::Persistent(g.value);
-        Value proto = ev::getProperty(g.value, "prototype");
+        Value proto = ev::getProperty(ctor_->get(), "prototype");
         if (ev::isObject(proto)) {
             proto_ = new ev::Persistent(proto);
         }
@@ -151,7 +154,8 @@ void HostClass::setStatic(const char* name, Value v) const {
     if (!ctor_) return;
     // setProperty may move the function object and answers its new address;
     // the registered global is a ROOT, so the registry follows the move too.
-    ctor_->set(ev::setProperty(ctor_->get(), name, v));
+    ev::Persistent valP(v);
+    ctor_->set(ev::setProperty(ctor_->get(), name, valP.get()));
 }
 
 Value HostClass::prototype() const {

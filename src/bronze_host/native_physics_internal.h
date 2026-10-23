@@ -187,7 +187,9 @@ inline HostPhysicsWorld::~HostPhysicsWorld() {
 inline double getPropNumber(Value obj, const char* name, double def) {
     if (!ev::isObject(obj)) return def;
     Value v = ev::getProperty(obj, name);
-    return (!ev::isUndefined(v) && !ev::isNull(v) && !ev::isObject(v)) ? ev::toDouble(v) : def;
+    if (ev::isUndefined(v) || ev::isNull(v) || ev::isObject(v)) return def;
+    double d = ev::toDouble(v);
+    return std::isfinite(d) ? d : def;
 }
 
 inline bool getPropBool(Value obj, const char* name, bool def) {
@@ -212,7 +214,9 @@ inline uint64_t getPropU64(Value obj, const char* name, uint64_t def) {
 // One vector component, converted the moment it is read: a component may be a
 // string ("1.5"), a heap value the next read is free to move.
 inline float vecComponent(Value c, float def) {
-    return (!ev::isUndefined(c) && !ev::isObject(c)) ? static_cast<float>(ev::toDouble(c)) : def;
+    if (ev::isUndefined(c) || ev::isObject(c)) return def;
+    float f = static_cast<float>(ev::toDouble(c));
+    return std::isfinite(f) ? f : def;
 }
 
 inline JPH::Vec3 readVec3(Value v, JPH::Vec3 def = JPH::Vec3::sZero()) {
@@ -252,22 +256,31 @@ inline JPH::Quat readQuat(Value v, JPH::Quat def = JPH::Quat::sIdentity()) {
     if (!ev::isObject(v)) return def;
     const ev::Persistent o(v);
     // Each component converts before the next read can move it.
-    auto num = [](Value c) { return static_cast<float>(ev::toDouble(c)); };
+    auto num = [](Value c, float fallback) {
+        if (ev::isUndefined(c) || ev::isObject(c)) return fallback;
+        float f = static_cast<float>(ev::toDouble(c));
+        return std::isfinite(f) ? f : fallback;
+    };
+    auto sanitizeQuat = [&](float x, float y, float z, float w) -> JPH::Quat {
+        float lenSq = x * x + y * y + z * z + w * w;
+        if (!std::isfinite(lenSq) || lenSq < 1e-12f) return def;
+        return JPH::Quat(x, y, z, w).Normalized();
+    };
     Value wV = ev::getProperty(o.get(), "w");
     if (!ev::isUndefined(wV)) {
-        const float w = num(wV);
-        const float x = num(ev::getProperty(o.get(), "x"));
-        const float y = num(ev::getProperty(o.get(), "y"));
-        const float z = num(ev::getProperty(o.get(), "z"));
-        return JPH::Quat(x, y, z, w);
+        const float w = num(wV, def.GetW());
+        const float x = num(ev::getProperty(o.get(), "x"), def.GetX());
+        const float y = num(ev::getProperty(o.get(), "y"), def.GetY());
+        const float z = num(ev::getProperty(o.get(), "z"), def.GetZ());
+        return sanitizeQuat(x, y, z, w);
     }
     Value e3 = ev::getElement(o.get(), 3);
     if (!ev::isUndefined(e3)) {
-        const float w = num(e3);
-        const float x = num(ev::getElement(o.get(), 0));
-        const float y = num(ev::getElement(o.get(), 1));
-        const float z = num(ev::getElement(o.get(), 2));
-        return JPH::Quat(x, y, z, w);
+        const float w = num(e3, def.GetW());
+        const float x = num(ev::getElement(o.get(), 0), def.GetX());
+        const float y = num(ev::getElement(o.get(), 1), def.GetY());
+        const float z = num(ev::getElement(o.get(), 2), def.GetZ());
+        return sanitizeQuat(x, y, z, w);
     }
     return def;
 }
@@ -282,8 +295,10 @@ inline bool readBoundPair(Value objIn, const char* loKey, const char* hiKey, flo
     const float l = static_cast<float>(ev::toDouble(b));
     b = ev::getProperty(obj, hiKey);
     if (ev::isUndefined(b) || ev::isObject(b)) return false;
+    const float h = static_cast<float>(ev::toDouble(b));
+    if (!std::isfinite(l) || !std::isfinite(h)) return false;
     lo = l;
-    hi = static_cast<float>(ev::toDouble(b));
+    hi = h;
     return true;
 }
 
