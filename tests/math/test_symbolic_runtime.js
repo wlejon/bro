@@ -194,3 +194,86 @@ assert(typeof bro.layout === 'object' && typeof bro.layout.solve === 'function',
     assert(badLoop.hazards.length >= 1 && badLoop.hazards[0].hazardKind === 'RAW',
            'reports concrete RAW hazard witness');
 }
+
+// ---- #148: bro.live (Self-Healing Proof-Gated Live-Reload Supervisor) -------
+
+{
+    assert(typeof bro.live === 'object' && typeof bro.live.healAndVerify === 'function',
+           'bro.live.healAndVerify is a function');
+    assert(typeof bro.live.createSupervisor === 'function',
+           'bro.live.createSupervisor is a function');
+
+    const healed = bro.live.healAndVerify(`
+        function riskyDsp(x, y, sh) {
+            let s = Math.sqrt(x - y);
+            let a = Math.acos(x);
+            let l = Math.log(y);
+            let d = 100 / y;
+            let m = 1 << sh;
+            return s + a + l + d + m;
+        }
+    `);
+    assert(healed.accepted === true && healed.selfHealed === true,
+           'bro.live.healAndVerify automatically repairs domain/division/shift hazards');
+    assert(healed.originalHazardCount >= 4 && healed.remainingHazardCount === 0,
+           'all detected hazards healed to 0 remaining');
+    assert(typeof healed.fn === 'function', 'healed.fn is callable');
+
+    const sup = bro.live.createSupervisor('function step(x) { return x + x; }');
+    assert(sup.call(21) === 42, 'initial supervisor call(21) === 42');
+
+    const r1 = sup.reload('function step(x) { return x * 2; }');
+    assert(r1.accepted === true && r1.behaviorallyIdentical === true,
+           'pure refactor proven behaviorally identical');
+    assert(r1.divergenceWitness === null, 'no divergence witness on pure refactor');
+
+    const r2 = sup.reload('function step(x) { return x * 2 + 1; }');
+    assert(r2.accepted === true && r2.behaviorallyIdentical === false,
+           'semantic change detected by SMT equivalence prover');
+    assert(r2.divergenceWitness !== null && r2.divergenceWitness.oldOutput !== r2.divergenceWitness.newOutput,
+           'divergence witness reports concrete input where outputs differ');
+    assert(sup.call(21) === 43, 'reloaded supervisor call(21) === 43');
+}
+
+// ---- #149: bro.evolve & bro.daemon.createEvolutionEngine --------------------
+
+{
+    assert(typeof bro.evolve === 'function', 'bro.evolve is a function');
+    assert(typeof bro.daemon === 'object' && typeof bro.daemon.createEvolutionEngine === 'function',
+           'bro.daemon.createEvolutionEngine is a function');
+
+    const evolvedAbs = bro.evolve(`
+        function branchyAbs(x) {
+            if (x < 0) return -x;
+            return x;
+        }
+    `);
+    assert(typeof evolvedAbs === 'function', 'bro.evolve returns a callable function');
+    assert(evolvedAbs.provenEquivalent === true, 'evolvedAbs is proven equivalent');
+    assert(Array.isArray(evolvedAbs.generations) && evolvedAbs.generations.length >= 2,
+           'evolvedAbs tracks multi-generation lineage');
+    assert(evolvedAbs.bestTier === 'cegis-superopt',
+           'evolvedAbs reaches cegis-superopt tier; got ' + evolvedAbs.bestTier);
+    assert(evolvedAbs.speedup > 1.0, 'evolvedAbs achieves >1.0x speedup');
+    assert(evolvedAbs(-42) === 42 && evolvedAbs(19) === 19,
+           'evolvedAbs executes accurately');
+
+    const eng = bro.daemon.createEvolutionEngine();
+    eng.register('absKernel', `
+        function absKernel(x) {
+            if (x < 0) return -x;
+            return x;
+        }
+    `);
+    eng.register('saxpyLoop', `
+        function saxpyLoop(out, x, y, a, n) {
+            for (let i = 0; i < n; i++) {
+                out[i] = a * x[i] + y[i];
+            }
+        }
+    `);
+    const engRep = eng.tick();
+    assert(engRep.totalFunctions === 2 && engRep.evolvedCount === 2,
+           'evolution engine evolved both registered functions');
+    assert(engRep.averageSpeedup > 1.0, 'evolution engine averageSpeedup > 1.0');
+}
