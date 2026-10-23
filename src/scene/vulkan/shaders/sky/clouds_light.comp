@@ -16,6 +16,7 @@ layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
 
 layout(set = 0, binding = CL_B_CACHE_OUT, rgba16f) uniform writeonly image3D cacheOut;
 layout(set = 0, binding = CL_B_BAND_OUT, rgba16f) uniform writeonly image2DArray bandOut;
+layout(set = 0, binding = CL_B_HOLDS, r16f) uniform readonly image3D holds;
 
 layout(push_constant) uniform Push {
     ivec4 rows;    // x the first level, y the first row, z the step between rows
@@ -69,27 +70,29 @@ void main() {
     float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell);
     imageStore(cacheOut, at, vec4(base, toSun, toUp, 0.0));
     if (bin != 0) return;
-    // The column's band (the march's probe): the heights that hold cloud in
-    // it and the columns about it (so a lookup between texels holds every
-    // column it may stand for), and the most any of them holds.
+    // The column's band (the march's probe): the heights where it and the
+    // columns about it may hold cloud (CL_B_HOLDS; so a lookup between
+    // texels holds every column it may stand for), and the most any of them
+    // holds (their optical depth up the deck; none only where none may).
     float lo = 1.0, hi = 0.0, most = 0.0, own = 0.0;
     for (int j = -1; j <= 1; ++j) {
         for (int i = -1; i <= 1; ++i) {
             ivec2 n = ivec2(x + i, y + j) & (CL_CACHE_SIDE - 1);
             float column = 0.0;
             for (int b = 0; b < CL_CACHE_BINS; ++b) {
-                float s = texelFetch(cloudSigmaMap, ivec3(n, k * CL_CACHE_BINS + b), 0).r;
-                if (s > 2e-5) {
+                ivec3 nb = ivec3(n, k * CL_CACHE_BINS + b);
+                if (imageLoad(holds, nb).r > 0.5) {
                     lo = min(lo, float(b) / float(CL_CACHE_BINS));
                     hi = max(hi, float(b + 1) / float(CL_CACHE_BINS));
                 }
-                column += s;
+                column += texelFetch(cloudSigmaMap, nb, 0).r;
             }
             most = max(most, column * clouds.cacheE1.w);
             if (i == 0 && j == 0) own = column * clouds.cacheE1.w;
         }
     }
-    imageStore(bandOut, ivec3(x, y, k), vec4(lo, hi, most, own));
+    if (hi > lo) most = max(most, 1e-3);
+    imageStore(bandOut, ivec3(x, y, k), vec4(lo, hi, most, 0.0));
     // The column as a layer (the march's, where the deck is a few pixels
     // thick or less): seen from above, what each bin sends weighs as much
     // as it takes of the view; the mean of the depth over those (the light's

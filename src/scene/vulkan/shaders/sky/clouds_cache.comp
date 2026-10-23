@@ -2,11 +2,17 @@
 // The cache's base (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h): the
 // world's cloudDensity at each texel's centre, its footprint the cell, and
 // the extinction the engine's forms make of it there at that footprint
-// (the deck's mean over the cell: what the light, the distance to cloud
-// and the shadow read). A dispatch bakes rows `y0`, `y0 + yStep`, ... of
-// the levels from `first` on (z: a level's bins one after another), each
-// texel's cell the one of its level's window that its storage index holds
-// (toroidally).
+// (the deck's mean over the cell: what the light and the shadow read). A
+// dispatch bakes rows `y0`, `y0 + yStep`, ... of the levels from `first`
+// on (z: a level's bins one after another), each texel's cell the one of
+// its level's window that its storage index holds (toroidally).
+//
+// With it, whether the cell may hold any cloud as the march sees it,
+// however near (CL_B_HOLDS: what the band and the distance to cloud are
+// made from). The forms' mean over the cell will not do: it leaves out a
+// wisp too small to lift the cell's mean over its threshold, and near the
+// eye it holds cloud wherever the detail erodes the billows only in part,
+// which is much of the clear air between them.
 
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
@@ -14,6 +20,7 @@
 layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
 
 layout(set = 0, binding = CL_B_SIGMA_OUT, rg16f) uniform writeonly image3D sigmaOut;
+layout(set = 0, binding = CL_B_HOLDS, r16f) uniform writeonly image3D holdsOut;
 
 layout(push_constant) uniform Push {
     ivec4 rows;    // x the first level, y the first row, z the step between rows
@@ -22,6 +29,23 @@ layout(push_constant) uniform Push {
 vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 #include "sky/cloud_module.glsl"
+
+// Whether the forms of base `base` may hold cloud about drifted body point
+// `pd`, read over `foot` (the noise's most there taken as three spreads
+// over its mean): the billows over their threshold (and its soft edge),
+// and, with `detail`, over what the detail erodes at the least (its wisps
+// under a cloud or its cauliflower over one, whichever leaves more).
+bool cloudMayHold(vec3 pd, float base, float foot, bool detail) {
+    vec4 n = cloudBillows(pd, foot);
+    float most = n.x + 3.0 * sqrt(max(n.w - n.x * n.x, 0.0)) + 0.025;
+    float thr = cloudFormsThreshold(n, base);
+    if (thr >= 1.0 || most <= thr) return false;
+    float wD = detail ? cloudDetailAt(foot) : 0.0;
+    if (wD <= 0.0) return true;
+    vec4 e = cloudDetail(pd, foot);
+    float fine = e.y * 0.6 + e.z * 0.4;
+    return (most - thr) / (1.0 - thr) > min(fine, 1.0 - fine) * wD;
+}
 
 void main() {
     int x = int(gl_GlobalInvocationID.x);
@@ -35,8 +59,37 @@ void main() {
     vec3 up = cloudChartDir(xy);
     float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
     float r = mix(clouds.shell.x, clouds.shell.y, h);
-    CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cloudCoverAt(up), cell, clouds.shell.w);
+    vec4 cover = cloudCoverAt(up);
+    CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, cell, clouds.shell.w);
     float base = clamp(cloudDensity(q), 0.0, 1.0);
     float sigma = cloudForms(cloudDrift(q.p), base, 0.5, cell, false);
-    imageStore(sigmaOut, ivec3(x, y, k * CL_CACHE_BINS + bin), vec4(sigma, base, 0.0, 0.0));
+    ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
+    imageStore(sigmaOut, at, vec4(sigma, base, 0.0, 0.0));
+    // The base the march may read in the cell: it mixes the bins' about it
+    // (and quickly changes up, as at a cloud's flat base), so the most of
+    // this bin's and the next ones' up and down, with a margin.
+    float binH = clouds.cacheE1.w, most = base;
+    for (int j = -1; j <= 1; j += 2) {
+        float rj = r + float(j) * binH;
+        float hj = (rj - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
+        if (hj <= 0.0 || hj >= 1.0) continue;
+        most = max(most, cloudDensity(CloudPoint(up * rj, up, hj, rj - clouds.shell.z, cover, cell, clouds.shell.w)));
+    }
+    most = min(most * 1.1 + 0.01, 1.0);
+    // At points through the cell (a third of it and of the bin about its
+    // centre, each read over a sixth of the cell, less what the detail
+    // erodes, at the finest CL_CACHE_FINE_LEVELS levels; coarser, a quarter
+    // about it, each over half the cell, the billows alone): what lies
+    // between them the distance's margin of a cell about each that may
+    // takes in.
+    bool fine = k < CL_CACHE_FINE_LEVELS;
+    int n = fine ? 3 : 2;
+    float spread = fine ? 1.0 / 3.0 : 0.25;
+    bool holds = false;
+    for (int i = 0; i < n * n * n && !holds && most > 0.01; ++i) {
+        vec3 o = (vec3(i % n, (i / n) % n, i / (n * n)) - 0.5 * float(n - 1)) * (fine ? 1.0 : 2.0);
+        vec3 p = cloudChartDir(xy + o.xy * (cell * spread)) * (r + o.z * spread * binH);
+        holds = cloudMayHold(cloudDrift(p), most, cell * (fine ? 1.0 / 6.0 : 0.5), fine);
+    }
+    imageStore(holdsOut, at, vec4(holds ? 1.0 : 0.0));
 }

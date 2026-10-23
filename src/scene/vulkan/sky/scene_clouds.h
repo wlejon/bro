@@ -138,6 +138,8 @@ private:
     PipelineVariants marchPipelines_;
     VkShaderModule noiseCs_ = VK_NULL_HANDLE;
     VkPipeline noisePipeline_ = VK_NULL_HANDLE;
+    VkShaderModule sdfCs_ = VK_NULL_HANDLE;
+    VkPipeline sdfPipeline_ = VK_NULL_HANDLE;
     VkSampler coverSampler_ = VK_NULL_HANDLE;
     VkSampler noiseSampler_ = VK_NULL_HANDLE;
     VkSampler cacheSampler_ = VK_NULL_HANDLE;
@@ -163,9 +165,12 @@ private:
         VkImageView mips[16] = {};
         bool made = false;
     } noise_;
+    // The billows' distance field (B its lower four bases, C its upper: what
+    // the march reads) and its scratch (A).
+    SceneVkImage sdfA_, sdfB_, sdfC_;
     SceneVkImage cover_, shadow_;
     SceneVkImage coverNone_, shadowNone_, gridNone_;
-    SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_;
+    SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_, cacheHolds_;
 
     // The cache's chart (the body's frame) and its levels' windows, as
     // baked; a bake this frame: levels from `first`, its rows from `y0`

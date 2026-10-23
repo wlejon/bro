@@ -56,6 +56,8 @@ layout(set = CLOUD_SET, binding = CL_B_NOISE) uniform sampler3D cloudNoiseMap;
 layout(set = CLOUD_SET, binding = CL_B_CACHE) uniform sampler3D cloudCacheMap;
 layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
 layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
+layout(set = CLOUD_SET, binding = CL_B_NOISE_SDF) uniform sampler3D cloudBillowSdf;
+layout(set = CLOUD_SET, binding = CL_B_NOISE_SDF_HI) uniform sampler3D cloudBillowSdfHi;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -317,6 +319,28 @@ vec3 cloudCacheCoord(vec2 xy, float h, int k) {
 // The band of the columns about chart point `xy` at level `k`.
 vec4 cloudCacheBand(vec2 xy, int k) {
     return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(k)), 0.0);
+}
+// How far (m) drifted body point `pd` is from any billow the forms may hold
+// at a base of at most `base` (all of them: the detail only erodes), with
+// what is finer than `footprint` metres at its mean; at most
+// CL_SDF_REACH cells of the noise, 0 when it may be in one.
+float cloudBillowsClear(vec3 pd, float base, float footprint) {
+    const vec4 lo = CL_SDF_BASES, hi = CL_SDF_BASES_HI;
+    if (base > hi.w) return 0.0;
+    float S = clouds.forms.y, texel = S / float(CL_NOISE_SIDE);
+    // (The cell holding the point: the cube between texel centres.)
+    ivec3 c = ivec3(floor(fract(pd / S) * float(CL_NOISE_SIDE) - 0.5)) & (CL_NOISE_SIDE - 1);
+    float cells;
+    if (base <= lo.w) {
+        vec4 d = texelFetch(cloudBillowSdf, c, 0);
+        cells = base <= lo.x ? d.x : base <= lo.y ? d.y : base <= lo.z ? d.z : d.w;
+    } else {
+        vec4 d = texelFetch(cloudBillowSdfHi, c, 0);
+        cells = base <= hi.x ? d.x : base <= hi.y ? d.y : base <= hi.z ? d.z : d.w;
+    }
+    // (The gap between the point's cell and the cloud's holds for any
+    // point of either; a footprint's mean reaches its width further.)
+    return max(cells * texel - 2.0 * footprint, 0.0);
 }
 // The column at chart point `xy` as a layer, at level `k` (sky/clouds_layout.h's
 // CL_B_BAND): x its optical depth up the deck, y the mean depth from its top

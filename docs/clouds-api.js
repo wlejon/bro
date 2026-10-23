@@ -18,9 +18,11 @@
  *   - THE CACHE. cloudDensity is baked about the eye's nadir on a chart
  *     fixed to the body: 13 levels of 128 x 128 columns, 32 bins up the
  *     deck, the finest cell 62.5 m and each level's twice the last's. With
- *     each texel: the forms' mean extinction over the cell, the deck's depth
- *     from it toward the sun and up, the distance to the nearest cloud; with
- *     each column its band (the heights about it that hold cloud) and the
+ *     each texel: the forms' mean extinction over the cell, whether any of
+ *     the cell may hold cloud as a view however near sees it, the deck's
+ *     depth from it toward the sun and up, the distance to the nearest cell
+ *     that may; with each column its band (the heights about it that may
+ *     hold cloud) and the
  *     column as a layer (its depth, and the mean depth and height of what it
  *     sends up). A level is baked whole when its window moves, all of them
  *     when the deck, the time or the sun jumps, and a sixteenth of every
@@ -35,19 +37,23 @@
  *     views read the billows alone; everything drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, with no jitter (the
- *     same picture every frame). The air is crossed on the cache (its bands
- *     a cell at a time, its distance to cloud, the billows' share over a
- *     step), so a clear sky and the gaps between clouds cost a few samples;
- *     a step that holds cloud is cut into leaves a few pixels long, and a
- *     cloud's face is found by halving, so it moves with the cloud and not
- *     with the steps. From above, where the deck is a few pixels thick or
+ *     same picture every frame). A cumulus is a soft solid with a skin, so
+ *     the view is traced: through clear air it steps by distances sure to
+ *     hold no cloud (the cache's bands and distance to cloud, made from
+ *     where each cell may hold any however near, and the billows' own
+ *     distance field: the detail only erodes them), so no cloud is skipped
+ *     and no gap's edge torn; on a billow's skin it steps a few pixels at a
+ *     time, finds a cloud's face by false position on the forms' signed
+ *     field (so it moves with the cloud and not with the steps), and inside
+ *     crosses pieces growing from the face until the view is spent or out
+ *     of the cloud. From above, where the deck is a few pixels thick or
  *     less (orbit, the far deck from the limb), each pixel reads the
  *     column's layer instead, cut to the pixel by the billows: soft-edged
  *     cloud from orbit for a few texture reads.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
- *     and through the deck toward it (the forms themselves for the first few
- *     hundred metres, so a billow shades the one behind it; the cache's
- *     depth for kilometres past that), a dual-lobe phase with a forward
+ *     and through the deck toward it (the cache's depth, out to hundreds
+ *     of kilometres; never a march toward the sun per pixel), a dual-lobe
+ *     phase with a forward
  *     lobe, multiple scattering as Wrenninge's octaves (dimmed at a cloud's
  *     thin edge), the sky's light from above (less what the cloud over the
  *     point hides) and the ground's from below, and the air before the deck

@@ -15,21 +15,29 @@
 // about the finest whose window holds the point), so no level gives way to
 // the next along a line.
 //
-// One loop, one evaluation of the forms an iteration, whatever the march is
-// doing (a step's probe, a leaf, a face's halving, the way toward the sun),
-// so the pixels of a group run the same costly part together whichever of
-// these each is at. The view crosses the deck in at most two spans. A step:
-// a cell across (CL_BASE_CELL at least) and a bin up, crossed at once where
-// the band of the columns about it holds no cloud over the view's heights,
-// where the cache's distance to cloud reaches past it, or where the billows
-// read over the whole of it fill next to none. Else it is cut into leaves
-// CL_LEAF_PIXELS pixels long (CL_LEAVES at most), each sampled once; a leaf
-// that holds next to nothing is lit at once from the cache (a wisp). Where
-// the view enters cloud, its face is found by halving to CL_FACE_PIXELS
-// footprints, so a face moves with the cloud and not with the leaves' grid
-// (which would show as contours on a deck's top and streaks along a base).
-// No jitter: the picture is the same every frame. At most CL_VIEW_STEPS
-// iterations a pixel.
+// A cumulus is a soft solid with a skin, so the view is traced, not
+// sampled. Through clear air it steps by a distance it knows holds no
+// cloud: the most of the cache's distance to cloud and the band of the
+// columns about it (the heights that may hold any; both made from where
+// the cache's cells may hold cloud however near, CL_B_HOLDS), and the
+// billows' own distance field (cloudBillowsClear) at the greatest base
+// about the point (the forms only ever take from the billows, so no cloud
+// is passed over and no gap's edge torn). Where that distance falls under
+// CL_SKIN_PIXELS pixels the view is on a billow's skin: the forms are read
+// there, and crossed in steps of that length growing by CL_SKIN_GROWTH to
+// CL_SKIN_MOST times it while they hold none; where a billow holds none
+// because the detail erodes it (a hole), it is crossed as the inside is.
+// Where the view meets cloud, its face is found back toward the last clear
+// point by false position on the forms' signed field (sky/scene_cloud_
+// layer.glsl's billows less the detail's erosion) to CL_FACE_PIXELS
+// footprints, so the face moves with the cloud and not with the steps (and
+// so for up to CL_FACES faces beyond holes); inside, pieces from the face
+// each CL_IN_GROWTH times the last (fine at the skin, where the detail and
+// the powder show; long deeper in) until the view is spent, or until a
+// piece is out of the billow, where it traces on to the next cloud. No
+// jitter: the
+// picture is the same every frame. At most CL_VIEW_STEPS iterations a
+// pixel, each one lookup of the forms or of the bounds.
 //
 // From above, where the deck is a few pixels thick or less (orbit, the far
 // deck from the limb), no march: each span is the column's layer from the
@@ -37,18 +45,17 @@
 // lit as one piece; the march blends into it over CL_LAYER_FROM ..
 // CL_LAYER_TO.
 //
-// The light, as the land's: the sun above the air (lighting.atm's
-// illuminance) through the air to the sample (the transmittance table, the
-// planet's shadow included) and through the deck toward the sun (its first
-// few hundred metres through the forms themselves, the rest the cache's
-// depth from there), with a two-lobed phase and multiple scattering's six
-// octaves (Wrenninge 2013), the deeper ones dimmed at a cloud's thin edge
-// (the powder); and the sky's light at the deck (the atmosphere's SH:
-// above, less what the cloud over the sample hides, and the lit ground
-// below, by the height in the deck). The scattering integrated over each
-// piece (Hillaire 2016), and the air between the eye and the deck from the
-// same tables the land's is (sceneAtmosphereAir), at the deck's mean depth
-// along the view, so a far deck hazes into the limb.
+// The light, as the land's, from the cache alone: the sun above the air
+// (lighting.atm's illuminance) through the air to the sample (the
+// transmittance table, the planet's shadow included) and through the deck
+// toward the sun (the cache's depth), with a two-lobed phase and multiple
+// scattering's six octaves (Wrenninge 2013), the deeper ones dimmed at a
+// cloud's thin edge (the powder); and the sky's light at the deck (the
+// atmosphere's SH: above, less what the cloud over the sample hides, and
+// the lit ground below, by the height in the deck). The scattering
+// integrated over each piece (Hillaire 2016), and the air between the eye
+// and the deck from the same tables the land's is (sceneAtmosphereAir), at
+// the deck's mean depth along the view, so a far deck hazes into the limb.
 
 layout(location = 0) in vec3 inWorldDir;
 layout(location = 0) out vec4 outColor;
@@ -60,28 +67,37 @@ layout(location = 0) out vec4 outColor;
 #include "sky/scene_cloud_layer.glsl"
 layout(set = 2, binding = CL_B_DEPTH) uniform sampler2D cloudDepth;
 
-// (Define CL_DEBUG_STEPS to see the iterations each pixel takes as hues.)
-const int CL_VIEW_STEPS = 256;
-const int CL_PROBE_LEVELS = 1;    // how much coarser the band probed is than the step's level
-const int CL_FREE_LEVELS = 3;     // how much coarser the second distance to cloud read is
-const int CL_LEAVES = 8;          // a step's leaves, at most
-const float CL_LEAF_PIXELS = 4.0; // a leaf's length, in pixels up the screen
-const float CL_OPAQUE = 0.02;     // what is left of a view that ends it
-const float CL_DETAIL_SEEN = 0.3; // what must be left of a view for the detail to show in it
-const float CL_BASE_CELL = 400.0; // the shortest stretch (m) a step crosses of the base
-const float CL_SHARE_CLEAR = 0.01;// the most of a step's air its billows may fill for it to be crossed as clear
-const float CL_FACE_PIXELS = 1.5; // how closely (pixels) a face is found
-const int CL_SUN_STEPS = 3;       // the forms' samples toward the sun from a lit point
-const float CL_SUN_FIRST = 40.0;  // the first's length (m)
-const float CL_SUN_GROWTH = 3.0;  // each the last's times this
-const float CL_LAYER_FROM = 0.06; // a pixel's footprint (of the deck's thickness) where the layer begins
-const float CL_LAYER_TO = 0.12; // and where it is all
+// (Define CL_DEBUG_STEPS to see the iterations each pixel takes: three bits
+// of red, green and blue, the bins 0, 1-11, 12-23, 24-35, 36-47, 48-71,
+// 72-127 and 128 on.)
+//#define CL_DEBUG_STEPS
+const int CL_VIEW_STEPS = 160;
+const int CL_PROBE_LEVELS = 1;     // how much coarser the band probed is than the point's level
+const int CL_PROBE_UP = 6;         // how many levels coarser still it may be
+const int CL_FREE_LEVELS = 3;      // how much coarser the second distance to cloud read is
+const float CL_BASE_MARGIN = 1.04; // the base's at a step's ends times this, plus CL_BASE_PAD,
+const float CL_BASE_PAD = 0.004;   // bounds it along the step
+const float CL_SKIN_PIXELS = 4.0;  // a step across a billow's skin, in pixels
+const float CL_SKIN_GROWTH = 1.5;  // each clear one along a run the last's times this
+const float CL_SKIN_MOST = 2.0;    // to at most this many times the first
+const float CL_LIP_BILLOWS = 0.3;  // the most the billows' field changes a texel of its noise
+const float CL_LIP_BASE = 0.0015;  // the base's, a metre
+const float CL_FACE_PIXELS = 1.5;  // how closely (pixels) a face is found
+const int CL_FACE_HALVINGS = 5;    // at most
+const int CL_FACES = 3;            // faces a view halves for at most
+const float CL_IN_PIXELS = 2.0;    // the first piece inside, in pixels
+const float CL_IN_FIRST = 12.0;    // and in metres, at least
+const float CL_IN_GROWTH = 2.0;    // each the last's times this
+const float CL_IN_LONGEST = 400.0; // at most (m)
+const float CL_OPAQUE = 0.02;      // what is left of a view that ends it
+const float CL_DETAIL_SEEN = 0.3;  // what must be left of a view for the detail to show in it
+const float CL_LAYER_FROM = 0.06;  // a pixel's footprint (of the deck's thickness) where the layer begins
+const float CL_LAYER_TO = 0.12;    // and where it is all
 
 // What the march is doing.
-const int CL_STEP = 0;    // a step's probe
-const int CL_LEAF = 1;    // a leaf
-const int CL_HALVE = 2;   // halving toward a face
-const int CL_SUN = 3;     // toward the sun from a lit point
+const int CL_TRACE = 0;   // through clear air, or across a skin
+const int CL_HALVE = 1;   // halving toward a face
+const int CL_INSIDE = 2;  // through a cloud
 
 float clHg(float nu, float g) {
     float g2 = g * g;
@@ -134,16 +150,41 @@ float clBase(ClAt w, float lod) {
     return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).g, f);
 }
 
-// The forms at `w` (`lod` the cache's level there) over footprint `foot`:
-// their extinction, with the detail or without, and `share`, the share of
-// the footprint the billows fill.
-float clForms(ClAt w, float lod, float foot, bool detail, out float share) {
-    share = 0.0;
-    if (w.h <= 0.0 || w.h >= 1.0) return 0.0;
-    float base = clBase(w, lod);
-    if (base <= 0.0) return 0.0;
+// How far (m) the view at `w` is sure to meet no cloud, from the cache's
+// level `k`: its cell's own (the gap between the cell's box and the nearest
+// that holds any), a little less for the chart's stretch.
+float clFree(ClAt w, int k) {
+    const int B = CL_CACHE_BINS;
+    ivec2 c = ivec2(floor(w.xy / cloudCacheCell(k))) & (CL_CACHE_SIDE - 1);
+    int b = clamp(int(floor(w.h * float(B))), 0, B - 1);
+    return 0.98 * texelFetch(cloudCacheMap, ivec3(c, k * B + b), 0).w;
+}
+
+// The forms at a point of the view.
+struct ClForms {
+    float sigma;    // their extinction
+    float face;     // how far over their face (the noise's units): > 0 in cloud, < 0 out
+    float billow;   // how far into a billow, before the detail erodes it: < 0 out of one
+    float gap;      // how far (m) on they are sure to hold none (0 if not known)
+};
+
+// The forms at `w` (`lod` the cache's level there) over footprint `foot`,
+// with the detail or without. The gap from how far the billows' noise is
+// under its threshold over how fast it (and the base) can change
+// (Lipschitz: CL_LIP_BILLOWS a texel, the base CL_LIP_BASE a metre); none
+// where the noise is read wider than a texel (its mips' spread then says
+// where cloud may be, not how far).
+ClForms clFormsAt(ClAt w, float lod, float foot, bool detail) {
+    ClForms f = ClForms(0.0, -1.0, -1.0, 0.0);
+    if (w.h <= 0.0 || w.h >= 1.0) return f;
+    float base = max(clBase(w, lod), 0.0);
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
+    // (Under a texel of the billows x does not vary at all, but eight bits
+    // a channel leave w - x squared a spread of up to 0.08 there, which
+    // blurs a near edge: none at the noise's finest level, all of the next.)
+    float texB = clouds.forms.y / float(CL_NOISE_SIDE);
+    n.w = mix(n.x * n.x, n.w, clamp(log2(max(foot / texB, 1.0)), 0.0, 1.0));
     float wD = detail ? cloudDetailAt(foot) : 0.0;
     vec4 e = vec4(0.0);
     float inCloud = 0.5;
@@ -154,8 +195,19 @@ float clForms(ClAt w, float lod, float foot, bool detail, out float share) {
         inCloud = clamp((w.h - b.x) / max(b.y - b.x, 1e-3), 0.0, 1.0);
         e = cloudDetail(pd, foot);
     }
-    share = cloudFormsShare(n, base);
-    return cloudFormsOf(n, e, wD, base, inCloud, foot);
+    f.sigma = base > 0.0 ? cloudFormsOf(n, e, wD, base, inCloud, foot) : 0.0;
+    float thr = cloudFormsThreshold(n, base);
+    // (The share's soft edge holds cloud a little under the threshold.)
+    float g = n.x + 0.025 - thr;
+    f.billow = f.sigma > 0.0 ? max(g, 0.0) : g;
+    // (What the detail erodes, as cloudFormsOf: the billow's depth over
+    // the detail's share of it.)
+    float fine = e.y * 0.6 + e.z * 0.4;
+    fine = mix(1.0 - fine, fine, smoothstep(0.0, 0.2, inCloud));
+    float face = n.x - thr - fine * wD * max(1.0 - thr, 0.0);
+    f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
+    if (g < 0.0 && foot < texB) f.gap = -g / (CL_LIP_BILLOWS / texB + 1.5 * CL_LIP_BASE);
+    return f;
 }
 
 // What the march carries along a view.
@@ -225,7 +277,7 @@ void main() {
     float depth = texelFetch(cloudDepth, px, 0).r;
     float tMax = 1e30;
     if (depth > 0.0) {
-        vec2 ndc = gl_FragCoord.xy / camera.viewport.xy * 2.0 - 1.0;
+        vec2 ndc = (vec2(px) + 0.5) / camera.viewport.xy * 2.0 - 1.0;
         vec4 v = camera.invProj * vec4(ndc, depth, 1.0);
         tMax = length(v.xyz / v.w);
     }
@@ -234,15 +286,19 @@ void main() {
     if (g >= 0.0) tMax = min(tMax, g);
     vec2 spanA, spanB;
     cloudSpans(ro, rd, tMax, spanA, spanB);
-    if (spanA.x >= spanA.y && spanB.x >= spanB.y) discard;
+    if (spanA.x >= spanA.y && spanB.x >= spanB.y) {
+#ifdef CL_DEBUG_STEPS
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+#endif
+        discard;
+    }
 
     vec3 s = lighting.atm.sunDir.xyz;
     vec3 E = lighting.atm.sunIlluminance.rgb;
     float nu = dot(rd, s);
     float albedo = clouds.params.x;
     float pixel = clouds.params.y;
-    float binH = clouds.cacheE1.w;
-    float heart = clouds.forms.x;
     float ph[6];
     for (int o = 0; o < 6; ++o) ph[o] = clPhase(nu, exp2(-float(o)));
 
@@ -296,246 +352,236 @@ void main() {
         clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.x, s, nu, ph, albedo, E,
                     skyAbove, groundBelow);
     }
-    int mode = CL_STEP;
-    float t = sp.x;            // where the next step starts
-    float probeEnd = t;        // the band says nothing more before here
-    bool clear = true;         // the last piece held next to no cloud
-    // The step: its level, end and length; its leaves' length and where the
-    // next starts; the furthest the view is known clear to (the last sample
-    // in no cloud, or the end of what was crossed as clear).
-    int stepK = 0;
-    float dt = 0.0, stepEnd = t, d0 = 0.0, a0 = t, xPrev = t;
-    // The piece in cloud: its leaf (from l0, dLeaf long), the face's bounds
-    // while it is halved, its extinction; where it begins, its length and
-    // where it is lit; the depth toward the sun gathered so far.
-    float l0 = 0.0, dLeaf = 0.0, hLo = 0.0, hHi = 0.0, pSigma = 0.0, pLo = 0.0, pLen = 0.0, litAt = 0.0;
-    float tn = 0.0, sunAt = 0.0, sunL = 0.0;
-    int halvings = 0, sunI = 0;
+
+    int mode = CL_TRACE;
+    float t = sp.x;          // where the view is
+    float probeEnd = t;      // the band says nothing more before here
+    float xPrev = t;         // the furthest the view is known clear to
+    float hLo = 0.0, hHi = 0.0;   // the face's bounds while it is halved
+    int halvings = 0;
+    float len = 0.0;         // inside: the next piece's length
+    float hole = -1.0;       // inside: the last clear sample, while the pieces cross a hole
+    float clearAt = -1.0, clearFace = 0.0;   // the last clear sample, and the forms' field there
+    float fLo = 0.0, fHi = 0.0;             // the field at the face's bounds (fLo 0: not known)
+    int side = 0;                            // which bound the last halving moved
+    float skinRun = 1.0;                     // the skin's step grows along a run of clear skin samples
+    int faces = 0;           // faces halved for
     int steps = 0;
     while (wl < 1.0 && steps < CL_VIEW_STEPS && m.T > CL_OPAQUE) {
         ++steps;
-        // 1. The sample this iteration takes.
-        float x;
-        vec3 pa;
-        float pf;
-        bool pDetail = false;
-        if (mode == CL_STEP) {
+        if (mode == CL_TRACE) {
             if (t >= sp.y) {
                 if (span == 1 || spanB.x >= spanB.y) break;
                 span = 1;
                 sp = spanB;
                 t = probeEnd = xPrev = sp.x;
-                clear = true;
             }
             vec3 a = ro + rd * t;
-            float r = length(a);
-            vec3 up = a / r;
-            vec2 xy = cloudChartAt(cloudToBody(up));
-            stepK = cloudCacheLevel(xy, pixel * t);
-            if (stepK >= CL_CACHE_LEVELS) {   // (past the cache: nothing held)
+            ClAt w = clAt(a);
+            int k = cloudCacheLevel(w.xy, pixel * t);
+            if (k >= CL_CACHE_LEVELS) {   // (past the cache: nothing held)
                 t = xPrev = sp.y;
                 continue;
             }
-            float vs = abs(dot(rd, up));
-            float hs = sqrt(max(1.0 - vs * vs, 0.0));
             // The probe: the band of the columns about the view's crossing
-            // of the next coarser cell; where the view crosses it outside
-            // the band, it is crossed at once, and where it is below or
-            // above the band, the view goes on from where it meets it.
+            // of a coarser cell; where the view crosses it outside the band,
+            // it is crossed at once (the coarsest of up to CL_PROBE_UP
+            // levels up that says so), and where it is below or above the
+            // band, the view goes on from where it meets it.
+            float skip = 0.0;
             if (t >= probeEnd) {
-                int kb = min(stepK + CL_PROBE_LEVELS, CL_CACHE_LEVELS - 1);
-                float dth = min(0.5 * cloudCacheCell(kb) / max(hs, 1e-4), sp.y - t);
-                vec4 band = cloudCacheBand(xy, kb);
+                float r = length(a);
+                vec3 up = a / r;
+                float vs = abs(dot(rd, up));
+                float hs = sqrt(max(1.0 - vs * vs, 0.0));
+                float tp = -dot(ro, rd);
+                float dth = 0.0;
+                vec4 band = vec4(0.0);
+                for (int j = 0; j < CL_PROBE_UP; ++j) {
+                    int kb = k + CL_PROBE_LEVELS + j;
+                    if (kb >= CL_CACHE_LEVELS) break;
+                    float dj = min(0.5 * cloudCacheCell(kb) / max(hs, 1e-4), sp.y - t);
+                    vec4 bj = cloudCacheBand(w.xy, kb);
+                    if (j == 0) {
+                        dth = dj;
+                        band = bj;
+                    }
+                    float Rlo = mix(clouds.shell.x, clouds.shell.y, bj.x);
+                    float Rhi = mix(clouds.shell.x, clouds.shell.y, bj.y);
+                    float r1 = length(ro + rd * (t + dj));
+                    float rmin = tp > t && tp < t + dj ? length(ro + rd * tp) : min(r, r1);
+                    if (!(bj.z < 1e-4 || max(r, r1) < Rlo || rmin > Rhi)) break;
+                    skip = dj;
+                    if (dj >= sp.y - t) break;
+                }
                 float Rlo = mix(clouds.shell.x, clouds.shell.y, band.x);
                 float Rhi = mix(clouds.shell.x, clouds.shell.y, band.y);
-                float r1 = length(ro + rd * (t + dth));
-                float tp = -dot(ro, rd);
-                float rmin = tp > t && tp < t + dth ? length(ro + rd * tp) : min(r, r1);
-                if (band.z < 1e-4 || max(r, r1) < Rlo || rmin > Rhi) {
-                    t += dth;
-                    xPrev = t;
-                    clear = true;
-                    continue;
-                }
-                probeEnd = t + dth;
-                if (r < Rlo || r > Rhi) {
+                if (skip <= 0.0) probeEnd = t + dth;
+                if (skip <= 0.0 && (r < Rlo || r > Rhi)) {
                     float R = r < Rlo ? Rlo : Rhi;
                     float b = dot(ro, rd), dd = b * b - (dot(ro, ro) - R * R);
                     float tin = r < Rlo ? -b + sqrt(max(dd, 0.0)) : -b - sqrt(max(dd, 0.0));
-                    if (dd > 0.0 && tin > t && tin < t + dth) t = xPrev = tin;
+                    if (dd > 0.0 && tin > t && tin < t + dth) {
+                        t = xPrev = tin;
+                        a = ro + rd * t;
+                        w = clAt(a);
+                    }
                 }
             }
-            // A step three quarters of a cell across (of CL_BASE_CELL at
-            // least: the base is smooth, its forms are the leaves') and of a
-            // bin up, its billows read over all of it.
-            float cell = max(cloudCacheCell(stepK), CL_BASE_CELL);
-            dt = min(0.75 * min(cell / max(hs, 1e-4), binH / max(vs, 1e-4)), sp.y - t);
-            if (dt <= 0.0) {
-                t = sp.y;
-                continue;
+            float foot = pixel * t;
+            float lod = clLod(w, foot);
+            // How far the view is sure to meet no cloud: the cache's distance
+            // (this level's, or a coarser one's where that says more, less a
+            // texel's reach: a lookup blends its texels'), and the billows'
+            // own at the greatest base about the point.
+            float dFree = clFree(w, k);
+            int kc = min(k + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
+            if (kc > k) dFree = max(dFree, clFree(w, kc));
+            // (The base is smooth over a step, so the greater of its values
+            // at the step's ends, with a margin, bounds it along the step.)
+            vec3 pd = cloudDrift(w.p);
+            float b0 = clBase(w, lod) * CL_BASE_MARGIN + CL_BASE_PAD;
+            float dB = cloudBillowsClear(pd, b0, foot);
+            float skin = max(CL_SKIN_PIXELS * foot, 1.0);
+            float skinStep = skin * skinRun;
+            if (dB > skin) {
+                ClAt we = clAt(ro + rd * (t + dB));
+                float b1 = clBase(we, clLod(we, pixel * (t + dB))) * CL_BASE_MARGIN + CL_BASE_PAD;
+                if (b1 > b0) dB = cloudBillowsClear(pd, b1, foot);
             }
-            x = t + 0.5 * dt;
-            pf = max(0.5 * dt, pixel * x);
-            pa = ro + rd * x;
-        } else if (mode == CL_LEAF) {
-            dLeaf = min(d0, stepEnd - a0);
-            x = a0 + 0.5 * dLeaf;
-            pf = pixel * x;
-            pDetail = m.T > CL_DETAIL_SEEN;
-            pa = ro + rd * x;
-        } else if (mode == CL_HALVE) {
-            x = 0.5 * (hLo + hHi);
-            pf = pixel * x;
-            pDetail = m.T > CL_DETAIL_SEEN;
-            pa = ro + rd * x;
-        } else {
-            x = litAt;
-            pf = max(pixel * litAt, 0.5 * sunL);
-            pa = ro + rd * litAt + s * (sunAt + 0.5 * sunL);
-        }
-
-        // 2. The forms there.
-        ClAt w = clAt(pa);
-        float lod = clLod(w, pf);
-        float share;
-        float sigma = clForms(w, lod, pf, pDetail, share);
-
-        // 3. What they say.
-        bool lit = false;     // a piece in cloud is found: light it
-        bool done = false;    // its light is known: add it
-        bool after = false;   // on past the piece
-        vec2 tau = vec2(0.0);
-        if (mode == CL_STEP) {
-            // The distance to cloud: this level's (CL_CACHE_REACH cells at
-            // most), or a coarser one's where that says more (its cells
-            // hold cloud wherever this one's do, so its distance is as
-            // safe), less a texel's reach (a lookup blends its texels').
-            vec4 c = clCache(w, lod);
-            float reachK = max(cloudCacheCell(stepK), binH);
-            float dFree = c.w - reachK;
-            int kc = min(stepK + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
-            if (kc > stepK)
-                dFree = max(dFree, textureLod(cloudCacheMap, cloudCacheCoord(w.xy, w.h, kc), 0.0).w -
-                                       cloudCacheCell(kc) - binH);
-            if (c.x <= 1e-3 || dFree > reachK) {
-                t += max(dt, 0.5 * dt + dFree);
+            float d = max(dFree, dB);
+            if (max(d, skip) > skin) {
+                t += max(d, skip);
                 xPrev = t;
-                clear = true;
+                skinRun = 1.0;
                 continue;
             }
-            if (share < CL_SHARE_CLEAR) {
-                t += dt;
-                xPrev = t;
-                clear = true;
+            // On a billow's skin: the forms here, and how far on they are
+            // sure to hold none (the step growing along a run of clear ones).
+            ClForms f = clFormsAt(w, lod, foot, m.T > CL_DETAIL_SEEN);
+            if (f.sigma <= 0.0 && f.billow < 0.0) {
+                float sure = max(d, f.gap);
+                clearAt = t;
+                clearFace = f.face;
+                xPrev = sure >= skinStep ? t + sure : t;
+                t += max(sure, skinStep);
+                skinRun = min(skinRun * CL_SKIN_GROWTH, CL_SKIN_MOST);
                 continue;
             }
-            stepEnd = t + dt;
-            int n = clamp(int(ceil(dt / max(CL_LEAF_PIXELS * pixel * x, 1.0))), 1, CL_LEAVES);
-            d0 = dt / float(n);
-            a0 = t;
-            mode = CL_LEAF;
-        } else if (mode == CL_LEAF) {
-            bool entered = clear;
-            clear = sigma * dLeaf < 0.01;
-            l0 = a0;
-            a0 += dLeaf;
-            float xLast = xPrev;
-            xPrev = x;
-            // (Every leaf as short as the step's: a longer one where the
-            // last held next to nothing, sampled once at its middle, would
-            // pass over the edge of a cloud in some pixels and not in their
-            // neighbours, which shows as streaks along the gaps.)
-            if (sigma <= 0.0) {
-                after = true;
-            } else if (clear) {
-                // (A wisp: its light at once, from the cache's depths, with
-                // no face to find.)
-                pSigma = sigma;
-                pLo = l0;
-                pLen = dLeaf;
-                litAt = x;
-                tau = clCache(w, lod).yz;
-                done = true;
-            } else if (entered) {
-                // The view enters cloud: where, by halving the forms
-                // between the last sample (which held next to none) and
-                // this one.
-                pSigma = sigma;
-                hHi = x;
-                hLo = max(xLast, sp.x);
-                halvings = clamp(int(ceil(log2(max((hHi - hLo) / (CL_FACE_PIXELS * pixel * x), 1.0)))), 2, 6);
+            if (f.sigma <= 0.0) {
+                // In a billow the detail has eroded: through it as through
+                // the cloud, its face found where the pieces meet some.
+                hole = t;
+                clearAt = t;
+                clearFace = f.face;
+                mode = CL_INSIDE;
+                len = max(CL_IN_PIXELS * foot, CL_IN_FIRST);
+                continue;
+            }
+            // The view meets cloud: its face lies between the last clear
+            // point and here.
+            hLo = max(xPrev, sp.x);
+            hHi = t;
+            fLo = hLo == clearAt ? clearFace : 0.0;
+            fHi = f.face;
+            halvings = clamp(int(ceil(log2(max((hHi - hLo) / (CL_FACE_PIXELS * foot), 1.0)))), 0, CL_FACE_HALVINGS);
+            if (halvings > 0) {
                 mode = CL_HALVE;
             } else {
-                pSigma = sigma;
-                pLo = l0;
-                pLen = dLeaf;
-                lit = true;
+                mode = CL_INSIDE;
+                len = max(CL_IN_PIXELS * foot, CL_IN_FIRST);
             }
-        } else if (mode == CL_HALVE) {
-            if (sigma >= 0.5 * pSigma) hHi = x;
-            else hLo = x;
-            if (--halvings <= 0) {
-                pLo = 0.5 * (hLo + hHi);
-                pLen = l0 + dLeaf - pLo;
-                lit = true;
-            }
-        } else {
-            tn += sigma * sunL;
-            sunAt += sunL;
-            sunL *= CL_SUN_GROWTH;
-            if (++sunI >= CL_SUN_STEPS) {
-                // The rest of the way the cache's, from there; up, the
-                // cache's a bin over the lit point.
-                vec3 pl = ro + rd * litAt;
-                float fl = pixel * litAt;
-                ClAt ws = clAt(pl + s * sunAt), wu = clAt(pl + normalize(pl) * binH);
-                tau = vec2(tn + clCache(ws, clLod(ws, max(fl, sunAt))).y, clCache(wu, clLod(wu, fl)).z + 1.0);
-                done = true;
-            }
+            continue;
         }
-        if (lit) {
-            // (A piece's light a free path in when it is thicker than that,
-            // else at its middle: what an opaque piece sends comes from its
-            // near edge, not from wherever its middle fell.)
-            litAt = pSigma * pLen > 1.0 ? pLo + 1.0 / pSigma : pLo + 0.5 * pLen;
-            if (m.T > CL_DETAIL_SEEN) {
-                // The depth toward the sun from what is seen of the piece:
-                // its first few hundred metres through the forms themselves
-                // (a billow shades the one behind it, and a face is lit by
-                // its own shape, not by the cache's bins, whose layers it
-                // would show as stripes).
-                tn = 0.0;
-                sunAt = 0.0;
-                sunL = CL_SUN_FIRST;
-                sunI = 0;
-                mode = CL_SUN;
+        if (mode == CL_HALVE) {
+            // The face by false position on the forms' signed field (where
+            // its value at the near end is known; halving else), each end
+            // that stays put twice halved in weight (Illinois), to
+            // CL_FACE_PIXELS footprints.
+            float s = fLo < 0.0 ? clamp(fLo / (fLo - fHi), 0.1, 0.9) : 0.5;
+            float x = mix(hLo, hHi, s);
+            ClAt w = clAt(ro + rd * x);
+            float foot = pixel * x;
+            ClForms f = clFormsAt(w, clLod(w, foot), foot, m.T > CL_DETAIL_SEEN);
+            if (f.sigma > 0.0) {
+                hHi = x;
+                fHi = f.face;
+                if (side == 1) fLo *= 0.5;
+                side = 1;
             } else {
-                // (Deep in what is seen: the cache's depths there.)
-                ClAt wl = clAt(ro + rd * litAt);
-                tau = clCache(wl, clLod(wl, pixel * litAt)).yz;
-                done = true;
+                hLo = x;
+                fLo = f.face;
+                if (side == -1) fHi *= 0.5;
+                side = -1;
+            }
+            if (--halvings <= 0 || hHi - hLo < CL_FACE_PIXELS * foot) {
+                t = fLo < 0.0 ? mix(hLo, hHi, clamp(fLo / (fLo - fHi), 0.0, 1.0)) : 0.5 * (hLo + hHi);
+                side = 0;
+                mode = CL_INSIDE;
+                len = max(CL_IN_PIXELS * pixel * t, CL_IN_FIRST);
+            }
+            continue;
+        }
+        // Inside: the next piece, sampled at its middle.
+        if (t >= sp.y) {
+            mode = CL_TRACE;
+            continue;
+        }
+        float L = min(len, sp.y - t);
+        float x = t + 0.5 * L;
+        ClAt w = clAt(ro + rd * x);
+        float foot = pixel * x;
+        float lod = clLod(w, foot);
+        ClForms f = clFormsAt(w, lod, foot, m.T > CL_DETAIL_SEEN);
+        float sigma = f.sigma;
+        if (sigma <= 0.0) {
+            clearAt = x;
+            clearFace = f.face;
+            if (f.billow < 0.0) {
+                // Out of the billow: traced on from here.
+                t = xPrev = x;
+                mode = CL_TRACE;
+                continue;
+            }
+            // A hole the detail eroded: crossed (at once as far as the
+            // cache's distance to cloud says), the face beyond it found when
+            // the pieces meet cloud again.
+            hole = x;
+            int kh = cloudCacheLevel(w.xy, foot);
+            float dh = kh < CL_CACHE_LEVELS ? clFree(w, kh) : 0.0;
+            if (dh > L) {
+                t = hole = x + dh;
+                continue;
+            }
+            t += L;
+            len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
+            continue;
+        }
+        if (hole >= 0.0 && m.T > CL_DETAIL_SEEN && faces < CL_FACES) {
+            // Out of a hole into cloud the eye sees: its face halved for.
+            hLo = hole;
+            hHi = x;
+            fLo = hole == clearAt ? clearFace : 0.0;
+            fHi = f.face;
+            hole = -1.0;
+            ++faces;
+            halvings = clamp(int(ceil(log2(max((hHi - hLo) / (CL_FACE_PIXELS * foot), 1.0)))), 0, CL_FACE_HALVINGS);
+            if (halvings > 0) {
+                mode = CL_HALVE;
+                continue;
             }
         }
-        if (done) {
-            if (!sky) {
-                clSkyAt(ro, rd * litAt, skyAbove, groundBelow);
-                sky = true;
-            }
-            // (The powder's depth over the pixel's footprint, not the
-            // piece's length, which differs from pixel to pixel where a face
-            // is found by halving and would show as ripples on thin cloud.)
-            clIntegrate(m, ro + rd * litAt, litAt, pLen, pSigma, tau, pSigma * max(120.0, pixel * litAt), s, nu, ph,
-                        albedo, E, skyAbove, groundBelow);
-            after = true;
+        hole = -1.0;
+        if (!sky) {
+            clSkyAt(ro, rd * x, skyAbove, groundBelow);
+            sky = true;
         }
-        if (after) {
-            if (a0 >= stepEnd - 1e-3 * d0) {
-                t = stepEnd;
-                mode = CL_STEP;
-            } else {
-                mode = CL_LEAF;
-            }
-        }
+        // (The powder's depth over the pixel's footprint, not the piece's
+        // length, which grows from the face.)
+        clIntegrate(m, ro + rd * x, x, L, sigma, clCache(w, lod).yz, sigma * max(120.0, foot), s, nu, ph, albedo, E,
+                    skyAbove, groundBelow);
+        t += L;
+        len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
     }
     if (wl > 0.0) {
         m.L = mix(m.L, ml.L, wl);
@@ -545,12 +591,10 @@ void main() {
     }
     float alpha = 1.0 - m.T;
 #ifdef CL_DEBUG_STEPS
-    // (The iterations a pixel takes as hues: < 4 blue, < 8 cyan, < 16
-    // green, < 32 yellow, < 64 red, < 128 magenta, more white.)
-    const vec3 hue[7] = vec3[7](vec3(0, 0, 1), vec3(0, 1, 1), vec3(0, 1, 0), vec3(1, 1, 0), vec3(1, 0, 0),
-                                vec3(1, 0, 1), vec3(1, 1, 1));
-    int bDbg = steps < 4 ? 0 : steps < 8 ? 1 : steps < 16 ? 2 : steps < 32 ? 3 : steps < 64 ? 4 : steps < 128 ? 5 : 6;
-    outColor = vec4(hue[bDbg] * 1e6, 1.0);
+    int bin = steps == 0 ? 0 : steps < 12 ? 1 : steps < 24 ? 2 : steps < 36 ? 3 : steps < 48 ? 4 : steps < 72 ? 5
+            : steps < 128 ? 6 : 7;
+    // (The HDR target is in physical units: a bin's colour scaled up to show.)
+    outColor = vec4(vec3(bin & 1, (bin >> 1) & 1, bin >> 2) * 1e6, 1.0);
     return;
 #endif
     if (alpha < 1.0 / 1024.0) discard;
