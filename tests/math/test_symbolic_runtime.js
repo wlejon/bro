@@ -277,3 +277,32 @@ assert(typeof bro.layout === 'object' && typeof bro.layout.solve === 'function',
            'evolution engine evolved both registered functions');
     assert(engRep.averageSpeedup > 1.0, 'evolution engine averageSpeedup > 1.0');
 }
+
+// ---- #152: Proof-to-Codegen Unlock (TypedArray integral-index & in-bounds) --
+
+{
+    const cert = bro.prove(`
+        function typedLoopKernel() {
+            const arr = new Float64Array(8);
+            let acc = 0;
+            for (let i = 0; i < arr.length; i++) {
+                arr[i] = i * 2 + 1;
+                acc += arr[i];
+            }
+            return acc;
+        }
+    `);
+    assert(cert.verified === true && cert.proofsValid === true,
+           'bro.prove verifies TypedArray loop with integral-index and in-bounds proofs');
+    assert(cert.provenGuards >= 6,
+           'bro.prove reflects receiver + integral-index + in-bounds proven guards; got ' + cert.provenGuards);
+
+    const a = new Float64Array(8);
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) {
+        a[i] = i * 2 + 1;
+        sum += a[i];
+    }
+    assert(sum === 64, 'zero-check TypedArray loop executes accurately; got ' + sum);
+}
+
