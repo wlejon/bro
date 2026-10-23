@@ -311,13 +311,16 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     // order (LandNode::buildRings), so they are the chunks' own.
     // The rings centre on the eye on the body. (A chunk's bounds are in the
     // draw's own space, its model below taking them to the camera's.)
-    // Ring 0 drawn as the first ring whose cells are a pixel from the eye's
-    // height, the rings between left out, and the blocks the body's curve
-    // hides.
+    // Ring 0 drawn as the first ring whose cells are four pixels from the
+    // eye's height, the rings between left out, and the blocks the body's
+    // curve hides. (A pixel's cells drew a planet from orbit in triangles
+    // far under a pixel, for the same image: what a fragment shows is read
+    // from the tiles. Ten pixels starts to move the coasts.)
     const bromath::Vec3 eye = frame.world.eye;
     const SceneView& view = frame.world;
+    constexpr float kFirstRingPixels = 4.0f;
     lt->firstRing = node.firstRing(eye, 0.5f * static_cast<float>(std::max(view.height, 1u)) *
-                                            std::fabs(view.proj.at(1, 1)));
+                                            std::fabs(view.proj.at(1, 1)) / kFirstRingPixels);
     lt->chunks.clear();
     for (const LandNode::Block& b : node.blocks()) {
         if (!LandNode::blockDrawn(b, lt->firstRing)) continue;
