@@ -413,6 +413,21 @@ void suite(Gpu& gpu) {
     }
     {
         Tree t;
+        NodeData* n = t.node("Constant");
+        t.var(n, "Value", 3.25f);
+        check(gpu, "Constant", t, n, 1000.0f);
+    }
+    {
+        Tree t;
+        NodeData* n = t.node("PowFloat");
+        NodeData* z = t.node("Constant");
+        t.var(z, "Value", 0.0f);
+        t.hyb(n, "Value", z);
+        t.hyb(n, "Pow", nullptr, 0.0f);
+        check(gpu, "PowFloat zero^0", t, n, 1000.0f);
+    }
+    {
+        Tree t;
         NodeData* n = t.node("PowInt");
         NodeData* a = t.node("Simplex");
         t.src(n, "Value", a);
@@ -427,6 +442,17 @@ void suite(Gpu& gpu) {
         t.hyb(n, "Fade", t.node("Simplex"));
         t.var(n, "Interpolation", 2);
         check(gpu, "Fade", t, n, 1000.0f);
+    }
+    {
+        Tree t;
+        NodeData* n = t.node("Fade");
+        t.src(n, "A", t.node("Perlin"));
+        t.src(n, "B", t.node("Value"));
+        t.hyb(n, "Fade", t.node("Simplex"));
+        t.hyb(n, "Fade Min", nullptr, 0.25f);
+        t.hyb(n, "Fade Max", nullptr, 0.25f);
+        t.var(n, "Interpolation", 1);
+        check(gpu, "Fade zero-range", t, n, 1000.0f);
     }
     // The generators of position.
     if (!far()) {
@@ -485,9 +511,18 @@ void suite(Gpu& gpu) {
         t.var(n, "Step Count", 6.0f);
         t.hyb(n, "Smoothness", nullptr, 0.3f);
     });
+    over("Terrace", [](Tree& t, NodeData* n) {
+        t.var(n, "Step Count", 5.0f);
+        NodeData* sm = t.node("Value");
+        t.var(sm, "Output Min", 0.1f);
+        t.var(sm, "Output Max", 0.9f);
+        t.hyb(n, "Smoothness", sm);
+    });
     over("PingPong",[](Tree& t, NodeData* n) { t.hyb(n, "Ping Pong Strength", nullptr, 2.5f); });
     over("AddDimension", [](Tree& t, NodeData* n) { t.hyb(n, "New Dimension Position", nullptr, 7.5f); }, false);
+    over("RemoveDimension", [](Tree& t, NodeData* n) { t.var(n, "Remove Dimension", 0); });
     over("RemoveDimension", [](Tree& t, NodeData* n) { t.var(n, "Remove Dimension", 1); });
+    over("RemoveDimension", [](Tree& t, NodeData* n) { t.var(n, "Remove Dimension", 2); });
     over("GeneratorCache", [](Tree&, NodeData*) {});
     over("SignedSquareRoot", [](Tree&, NodeData*) {});
     over("Abs", [](Tree&, NodeData*) {});
