@@ -293,7 +293,7 @@ const float GRASS_DENSITY_FLOOR = 0.06;
 // abundance has it), and in `normal` the ground's normal. Where herbs grow
 // thick the grass gives them room, sparser and shorter (a meadow's forbs
 // stand clear of it).
-void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
+void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal, out vec3 albedo) {
     float h;
     vec4 surface, cover;
     vec2 m = coverMap(xz);
@@ -303,6 +303,11 @@ void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
     float density = cover.x < GRASS_DENSITY_FLOOR ? 0.0 : cover.x * (1.0 - 0.5 * herbs);
     field = vec4(h, density, cover.y, cover.z * (1.0 - 0.45 * herbs));
     under = vec2(cover.w, surface.a);
+    albedo = surface.rgb;
+}
+void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal) {
+    vec3 albedo;
+    grassGround(xz, field, under, normal, albedo);
 }
 
 // The floor's two channels: the canopy and the herbs' density.

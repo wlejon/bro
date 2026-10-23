@@ -104,15 +104,17 @@ float groundTwigs(vec2 xz, float size, float fp) {
 // (`vdata`, its vertex colour: density, dryness, floor, herbs) beyond.
 struct GroundData {
     float density, dry, under, herbs, inside;
+    vec3 surface;   // the land's surface's albedo (on the land: where `inside`)
 };
 GroundData groundData(vec2 xz, vec4 vdata) {
     vec4 data = clamp(vdata, 0.0, 1.0);
     float inside = grassFieldInside(xz);
+    vec3 albedo = vec3(0.0);
     if (grassInField(xz)) {
         vec4 f;
         vec2 fl;
         vec3 n;
-        grassGround(xz, f, fl, n);
+        grassGround(xz, f, fl, n, albedo);
         data = mix(data, vec4(f.g, f.b, fl.x, fl.y), inside);
     }
     GroundData g;
@@ -121,6 +123,7 @@ GroundData groundData(vec2 xz, vec4 vdata) {
     g.under = data.b;
     g.herbs = data.a;
     g.inside = inside;
+    g.surface = albedo;
     return g;
 }
 
@@ -217,6 +220,10 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
     // world all of it).
     float drift = b.b.w;
     vec3 bare = soil * (0.75 + 0.5 * drift) * (0.85 + 0.3 * grain);
+    // Where the land grows nothing (its surface's cover none) its surface
+    // shows as the surface has it (its snow, rock, sand); soil is what lies
+    // between blades.
+    bare = mix(bare, g.surface, (1.0 - smoothstep(0.0, 0.15, density)) * inside);
     vec3 floorC = bare;
     float litterAo = 1.0;
     if (under > 0.0) {
