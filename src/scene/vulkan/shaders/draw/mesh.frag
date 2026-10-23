@@ -329,19 +329,32 @@ void main() {
     // Turf over a land stands on the sea where the land does (its vertices
     // lifted to the water by landTop): the same water a fragment at a time,
     // over the land's own seabed, so the sea is not a flat shelf of turf.
-    float landWet = 0.0;
+    //
+    // And where a pixel is tens of metres of ground every pattern the turf
+    // works out (its blades' tops, tussocks, mottling, flowers) is far under
+    // it: there the ground is what the land says it is, its surface's albedo
+    // and normal lit as ground, handed over by the pixel's footprint. (The
+    // sward lit as its blades seen from far above is their shaded depth, a
+    // quarter as bright as the ground the land's albedo means.)
+    float landWet = 0.0, landFar = 0.0;
+    float groundFp = max(length(fwidth(worldPos)), 1e-4);
     vec2 landM = landMapOf(worldPos + landEye3());
-    vec3 landWater = vec3(0.0);
+    vec3 landWater = vec3(0.0), landAlbedo = vec3(0.0), landN = N;
     {
         vec2 dm = max(abs(dFdx(landM)), abs(dFdy(landM)));
         float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
         float lh;
         vec4 ls;
-        bool landIn = landSample(landM, lambda, lh, ls);
+        bool landIn = landSampleNormal(landM, lambda, lh, landN, ls);
         float lhStep = fwidth(lh);   // (in uniform control flow)
+        // (The pixel's angle at the eye's distance: smooth, where a
+        // triangle's own footprint would hand over a ring's facets.)
+        float fp = camDist * length(fwidth(worldPos / max(camDist, 1e-6)));
         if (landIn) {
+            landAlbedo = push.baseColor.rgb * ls.rgb;
+            landFar = smoothstep(TURF_FAR_FROM, TURF_FAR_TO, fp);
             landWet = landSeaWet(lh, lhStep);
-            if (landWet > 0.0) landWater = landSeaWater(landM, lh, worldPos, push.baseColor.rgb * ls.rgb);
+            if (landWet > 0.0) landWater = landSeaWater(landM, lh, worldPos, landAlbedo);
         }
     }
 #endif
@@ -407,10 +420,22 @@ void main() {
 #ifdef SCENE_GROUND
     // Turf (scene_ground.glsl): the vertex colour is the ground's data
     // (density, dryness, floor) where the grass node's field does not reach.
+    // Where the land has it all (landFar 1) none of it is worked out.
     float groundAO = 1.0;
-    vec4 groundThin, groundSward;
-    groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
-    baseColor *= push.baseColor.rgb;
+    vec4 groundThin = vec4(0.0), groundSward = vec4(0.0);
+    float landRoughness = roughness;
+    if (landFar < 1.0) {
+        groundSurface(worldPos, groundFp, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
+        baseColor *= push.baseColor.rgb;
+    }
+    if (landFar > 0.0) {
+        baseColor = mix(baseColor, landAlbedo, landFar);
+        N = normalize(mix(N, landN, landFar));
+        roughness = mix(roughness, landRoughness, landFar);
+        groundAO = mix(groundAO, 1.0, landFar);
+        groundThin.w *= 1.0 - landFar;
+        groundSward.w *= 1.0 - landFar;
+    }
     if (landWet > 0.0) {
         baseColor = mix(baseColor, landWater, landWet);
         N = normalize(mix(N, landUp(landM), landWet));

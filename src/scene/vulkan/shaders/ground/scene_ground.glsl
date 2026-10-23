@@ -99,6 +99,12 @@ float groundTwigs(vec2 xz, float size, float fp) {
     return on;
 }
 
+// The pixel footprints (m) over which turf on a land hands over to the
+// land's own surface (mesh.frag): its mottling's largest patches are tens of
+// metres.
+const float TURF_FAR_FROM = 6.0;
+const float TURF_FAR_TO = 24.0;
+
 // The ground's data at `xz`: the land's cover where it reaches (faded out
 // over its last few metres, as the blades and herbs are), the mesh's own
 // (`vdata`, its vertex colour: density, dryness, floor, herbs) beyond.
@@ -314,14 +320,15 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
     }
 }
 
-// The ground at a fragment: `rel` its camera-relative position, `vdata` the
-// vertex colour (density, dryness, floor) for where the field does not
-// reach. Sets the colour, the roughness and the occlusion. On a round body
+// The ground at a fragment: `rel` its camera-relative position, `fp` its
+// footprint (the length of fwidth(rel), taken by the caller in uniform
+// control flow: no derivative is taken here, so a caller may skip it),
+// `vdata` the vertex colour (density, dryness, floor) for where the field
+// does not reach. Sets the colour, the roughness and the occlusion. On a round body
 // in the frame of the lattice cell holding it, across a cell's edge the
 // cells either side blended (scene_grass.glsl's coverTurfCells).
-void groundSurface(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
+void groundSurface(vec3 rel, float fp, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
                    out vec4 thin, out vec4 swardLight) {
-    float fp = max(length(fwidth(rel)), 1e-4);
     GroundBake b;
     if (!landRound()) {
         vec2 xz = rel.xz + camera.eyeWorld.xz;
