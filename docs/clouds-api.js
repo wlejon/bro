@@ -15,14 +15,17 @@
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, on a grid of steps
  *     anchored at the eye (the same for every pixel, so nothing crawls);
- *     a step that meets cloud is resampled finer and the first opaque one
- *     is bisected. Orbit, the limb, the deck from above, inside it and from
- *     the ground looking up are one path.
+ *     a step that holds cloud is halved, piece by piece, down to leaves a
+ *     few pixels long (so a gap between clouds costs a few samples), and
+ *     the first opaque leaf is bisected. Orbit, the limb, the deck from
+ *     above, inside it and from the ground looking up are one path.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
- *     and through the deck toward it, a dual-lobe phase with a forward
- *     lobe, multiple scattering as Wrenninge's octaves, the sky's light
- *     from above and the ground's from below, and the air before the deck
- *     applied as the land gets it.
+ *     and through the deck toward it (kilometres of it, so a tower's body
+ *     shades its far side and its base), a dual-lobe phase with a forward
+ *     lobe, multiple scattering as Wrenninge's octaves (dimmed at a
+ *     cloud's thin edge), the sky's light from above (less what the cloud
+ *     over the point hides) and the ground's from below, and the air
+ *     before the deck applied as the land gets it.
  *   - THE SHADOW. The deck's shadow on the land, plants, grass and every
  *     lit mesh, through the shared sun term (common/scene_lighting.glsl):
  *     levels of a map on a plane at the eye's nadir, each twice the last.
