@@ -35,6 +35,10 @@
 //                     as the march sees it, however near (r16f storage, as
 //                     the cache: sky/clouds_cache.comp; the band and the
 //                     distance to cloud are made from it)
+//     CL_B_GLOBE      the globe's columns, sampled: a cube about the body
+//                     as the cover's (below), each texel its column as a
+//                     layer (sky/clouds_globe.comp)
+//     CL_B_GLOBE_OUT  the same, written by its bake (rgba16f storage)
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -58,6 +62,8 @@
 #define CL_B_DIST_A         13
 #define CL_B_DIST_B         14
 #define CL_B_HOLDS          15
+#define CL_B_GLOBE          16
+#define CL_B_GLOBE_OUT      17
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 
@@ -110,5 +116,22 @@
 #define CL_CACHE_SLICES     16
 #define CL_CACHE_REACH      8        // cells across the distance to cloud is sought over
 #define CL_CACHE_GROUP      8
+
+// The globe: the deck's columns over the whole body, for the layer the
+// march reads from far over the deck where the cache's cells are coarser
+// than the globe's (its windows are about the eye's nadir, so most of a
+// planet seen from orbit lies in its coarsest, cells some hundreds of
+// kilometres wide). A cube as the cover's, CL_GLOBE_SIDE texels a face
+// with a border, each texel the world's cloudDensity at the texel's
+// footprint over CL_GLOBE_BINS heights, the engine's forms' mean of it,
+// and the column as a layer of that (x its optical depth up the deck, y
+// the mean depth from its top of what it sends up, z the mean height of
+// that, as the cache's columns). Baked whole when first read and when the
+// deck or the time jumps, every CL_GLOBE_SLICES-th row a frame while the
+// eye is over the deck.
+#define CL_GLOBE_SIDE       1024
+#define CL_GLOBE_BINS       24
+#define CL_GLOBE_SLICES     128
+#define CL_GLOBE_GROUP      8
 
 #endif

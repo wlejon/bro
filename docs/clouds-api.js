@@ -31,6 +31,16 @@
  *     when the deck, the time or the sun jumps, and a sixteenth of every
  *     level's rows each frame (the wind, the sun's motion). The world's
  *     function never runs per pixel.
+ *   - THE GLOBE. While the eye is over the deck, the whole deck as columns
+ *     on a cube about the body (1024 texels a face, some 10 km each): the
+ *     world's base at the texel's footprint (the share its clouds fill,
+ *     never cut into the engine's), each column a layer seen from above.
+ *     A layer's depth is the clouds' cover over the column, not the sum of
+ *     its heights' (a cloud stands over many: they overlap), so a field of
+ *     heaps that fill a third of the air at each height is a veil a third
+ *     as opaque from above however deep it is; the cache's columns are
+ *     made the same way. Baked whole when the deck or the time jumps, a
+ *     128th of its rows each frame.
  *   - THE SKIN. The engine's tiling noise moves the world's surface by a
  *     bounded depth only (a fifth of the base's rise from clear to cloud,
  *     at most `0.11 * forms.edge` out and `0.2 * forms.edge` in): Perlin-
@@ -62,10 +72,15 @@
  *     time, finds a cloud's face by false position on the forms' signed
  *     field (so it moves with the cloud and not with the steps), and inside
  *     crosses pieces growing from the face until the view is spent or out
- *     of the cloud. From above, where the deck is a few pixels thick or
- *     less (orbit, the far deck from the limb), each pixel reads the
- *     column's layer instead, cut to the pixel by the billows: soft-edged
- *     cloud from orbit for a few texture reads.
+ *     of the cloud. From above, where a pixel spans a fortieth of the
+ *     deck's thickness or more (orbit, the limb's, a climb from a region's
+ *     height), each pixel reads a column's layer instead: the cache's,
+ *     cut to the pixel by the billows, where its cells are finer than the
+ *     globe's and the pixel finer than the clouds; else the globe's, the
+ *     footprint's mean of what the march would show (a field of heaps
+ *     under a pixel a soft veil at its cover, an overcast's edge soft over
+ *     the footprint). A few texture reads a pixel, and the same clouds at
+ *     every height on the way up.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
  *     and through the deck toward it: where the view meets a cloud, its
  *     own forms over the first few hundred metres toward the sun (four
@@ -166,9 +181,12 @@ SceneGraph.prototype.cloudStats = function () {};
  *       in a few steps; a module that clamps it at 0 is still right, only
  *       slower. Where q.footprint is as wide as the clouds or wider, give
  *       the share of the footprint they fill (0..1) instead: the engine
- *       cuts a share into clouds of its own at the cache's coarse levels.
- *       Baked into the cache only (q.footprint 62.5 m at least), never per
- *       pixel. Zero outside the shell is the engine's.
+ *       cuts a share into clouds of its own at the cache's coarse levels,
+ *       and the globe reads it as it is, so it must be the footprint's
+ *       mean (a share that thresholds a noise finer than the footprint
+ *       reads from orbit as hard-edged patches). Baked into the cache
+ *       (q.footprint 62.5 m at least) and the globe (some 10 km), never
+ *       per pixel. Zero outside the shell is the engine's.
  *
  *   struct CloudPoint {
  *       vec3 p;          // the point in the body's frame (m from its centre)

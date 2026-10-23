@@ -1,0 +1,50 @@
+#version 450
+// The globe's columns (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h's
+// CL_GLOBE_SIDE): for rows `y0`, `y0 + yStep`, ... of each face (a face a z
+// of the dispatch), the world's cloudDensity at the texel's footprint over
+// CL_GLOBE_BINS heights up the deck, the engine's forms' mean extinction of
+// it there (a field of clouds finer than the texel a veil as opaque as they
+// cover: cloudSigmaOf), and the column as a layer of that, as the cache's
+// columns are (sky/clouds_light.comp; cloudColumnAdd): its depth seen from
+// above, and the mean depth from its top and the mean height of what it
+// sends. The share is the world's own, never cut into the engine's clouds:
+// from as far as the globe is read, they are finer than a pixel.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_GLOBE_GROUP, local_size_y = CL_GLOBE_GROUP) in;
+
+layout(set = 0, binding = CL_B_GLOBE_OUT, rgba16f) uniform writeonly image2DArray globeOut;
+
+layout(push_constant) uniform Push {
+    ivec4 rows;    // y the first row, z the step between rows
+} push;
+
+vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
+
+#include "sky/cloud_module.glsl"
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z;
+    int f = int(gl_GlobalInvocationID.z);
+    if (x >= CL_GLOBE_SIDE || y >= CL_GLOBE_SIDE) return;
+    const float S = float(CL_GLOBE_SIDE);
+    vec2 e = ((vec2(x, y) + 0.5 - 1.0) / (S - 2.0)) * 2.0 - 1.0;
+    vec3 up = cloudFaceDir(f, e);
+    vec4 cover = cloudCoverAt(up);
+    float foot = cloudGlobeTexel();
+    float thick = clouds.shell.y - clouds.shell.x;
+    float binH = thick / float(CL_GLOBE_BINS);
+    CloudColumn col = cloudColumnNone();
+    for (int b = CL_GLOBE_BINS - 1; b >= 0; --b) {
+        float h = (float(b) + 0.5) / float(CL_GLOBE_BINS);
+        float r = mix(clouds.shell.x, clouds.shell.y, h);
+        CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, foot, clouds.shell.w);
+        float share = min(cloudDensity(q), 1.0);
+        if (share <= 0.0) continue;
+        cloudColumnAdd(col, cloudForms(cloudDrift(q.p), share, 0.5, foot, false) * binH, h, binH);
+    }
+    imageStore(globeOut, ivec3(x, y, f), vec4(cloudColumnLayer(col), 0.0));
+}

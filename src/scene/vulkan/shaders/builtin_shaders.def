@@ -51,13 +51,14 @@ BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "light
 BRO_SCENE_SHADER(SkyAtmosphereFrag,        "sky_atmosphere.frag",         "lighting/sky_atmosphere.frag",       "frag", "")
 BRO_SCENE_SHADER(SkyboxFrag,               "skybox.frag",                 "lighting/skybox.frag",               "frag", "")
 BRO_SCENE_SHADER(StarfieldFrag,            "starfield.frag",              "lighting/starfield.frag",            "frag", "")
-// The cloud deck (vulkan/sky/scene_clouds.h): the march, the cover's bake and
-// the cache's extinction with the module of no clouds (a world's set
+// The cloud deck (vulkan/sky/scene_clouds.h): the march, the cover's bake,
+// the cache's extinction and the globe's columns with the module of no clouds (a world's set
 // compiles them with its own); the cache's distance to cloud and light, the
 // shadow's levels and the engine's noise.
 BRO_SCENE_SHADER(CloudsFrag,               "clouds.frag",                 "sky/clouds.frag",                    "frag", "")
 BRO_SCENE_SHADER(CloudsCoverComp,          "clouds_cover.comp",           "sky/clouds_cover.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsCacheComp,          "clouds_cache.comp",           "sky/clouds_cache.comp",              "comp", "")
+BRO_SCENE_SHADER(CloudsGlobeComp,          "clouds_globe.comp",           "sky/clouds_globe.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsDistComp,           "clouds_dist.comp",            "sky/clouds_dist.comp",               "comp", "")
 BRO_SCENE_SHADER(CloudsLightComp,         "clouds_light.comp",           "sky/clouds_light.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsShadowComp,         "clouds_shadow.comp",          "sky/clouds_shadow.comp",             "comp", "")

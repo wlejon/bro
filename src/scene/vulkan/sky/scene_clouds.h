@@ -5,8 +5,8 @@
 // cover, the engine's noise, the march and the shadow.
 //
 //   - The module's set (CloudShaders, a ModuleShaders set): the cover's
-//     bake (sky/clouds_cover.comp) and the cache's base (sky/clouds_cache.comp),
-//     each with the world's module in sky/cloud_module.glsl's place and,
+//     bake (sky/clouds_cover.comp), the cache's base (sky/clouds_cache.comp)
+//     and the globe's (sky/clouds_globe.comp), each with the world's module in sky/cloud_module.glsl's place and,
 //     for a deck set over a land with processes, its grid's layout in
 //     ground/land_grid_config.glsl's. Nothing else runs the module.
 //   - The noise (sky/clouds_noise.comp): one tile of tiling noise and its
@@ -18,6 +18,12 @@
 //     on a chart fixed to the body, and the depths from each texel toward
 //     the sun and up (sky/clouds_light.comp); a level baked whole when its
 //     window moves, a share of every level's rows each frame.
+//   - The globe (sky/clouds_globe.comp): the whole deck's columns as layers
+//     seen from above, on a cube about the body (CL_GLOBE_SIDE), what the
+//     march reads from above where the cache's cells are coarse or the
+//     pixel wider than the clouds; baked whole when the deck or the time
+//     jumps, a slice of its rows each frame, only while the eye is over
+//     the deck.
 //   - The shadow (sky/clouds_shadow.comp): what the deck leaves of the sun
 //     over CL_SHADOW_LEVELS levels about the body's point under the eye,
 //     read from the cache every frame the deck is drawn, read by every lit
@@ -54,10 +60,12 @@ public:
     enum Stage : int {
         Cover,    // clouds_cover.comp
         Cache,    // clouds_cache.comp
+        Globe,    // clouds_globe.comp
         kStages
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::CloudsCoverComp,
-                                                              BuiltinSceneShader::CloudsCacheComp};
+                                                              BuiltinSceneShader::CloudsCacheComp,
+                                                              BuiltinSceneShader::CloudsGlobeComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl.
@@ -70,6 +78,7 @@ public:
     VkShaderModule operator[](Stage s) const { return module(s); }
     VkPipeline cover = VK_NULL_HANDLE;
     VkPipeline cache = VK_NULL_HANDLE;
+    VkPipeline globe = VK_NULL_HANDLE;
 };
 
 class SceneClouds {
@@ -126,6 +135,9 @@ private:
     /// The cache's bakes: its extinction, then its light, over the levels
     /// and rows `bakes_` lists.
     void recordCache(SceneFrame& frame);
+    /// The globe's bake: all of it when it is not current, else a slice of
+    /// its rows, while the eye is over the deck (sky/clouds_layout.h).
+    void recordGlobe(SceneFrame& frame);
 
     SceneVkDevice* device_ = nullptr;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
@@ -166,6 +178,13 @@ private:
     SceneVkImage cover_, shadow_;
     SceneVkImage coverNone_, shadowNone_, gridNone_;
     SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_, cacheHolds_;
+    SceneVkImage globe_;
+    // The deck the globe holds (its module, generation; 0 none), the wind's
+    // time it was last baked at, and its next slice.
+    uint64_t globeKey_ = 0;
+    float globeTime_ = 0.0f;
+    uint32_t globeFrame_ = 0;
+    float eyeRadius_ = 0.0f;     // the eye's distance from the body's centre (m)
 
     // The cache's chart (the body's frame) and its levels' windows, as
     // baked; a bake this frame: levels from `first`, its rows from `y0`

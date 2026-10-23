@@ -66,6 +66,7 @@ layout(set = CLOUD_SET, binding = CL_B_NOISE) uniform sampler3D cloudNoiseMap;
 layout(set = CLOUD_SET, binding = CL_B_CACHE) uniform sampler3D cloudCacheMap;
 layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
 layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
+layout(set = CLOUD_SET, binding = CL_B_GLOBE) uniform sampler2DArray cloudGlobeMap;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -122,10 +123,12 @@ vec3 cloudFaceDir(int f, vec2 e) {
     return normalize(kCloudFaceN[f] + a.x * kCloudFaceU[f] + a.y * kCloudFaceV[f]);
 }
 
-// The cover at body direction `up`, bilinear. (The face's axes by branch,
-// not from the tables: a table indexed by a value the shader works out is
-// read from memory on some GPUs, and this runs for every sample.)
-vec4 cloudCoverAt(vec3 up) {
+// Where body direction `up` lies in a cube of `S` texels a face with a
+// border (the cover's, the globe's): xy its texture coordinates, z its
+// face. (The face's axes by branch, not from the tables: a table indexed
+// by a value the shader works out is read from memory on some GPUs, and
+// this runs for every sample.)
+vec3 cloudCubeCoord(vec3 up, float S) {
     vec3 a = abs(up);
     int f;
     vec3 uvn;
@@ -140,9 +143,50 @@ vec4 cloudCoverAt(vec3 up) {
         uvn = up.z >= 0.0 ? vec3(up.x, up.y, a.z) : vec3(-up.x, up.y, a.z);
     }
     vec2 e = atan(uvn.xy / uvn.z) / CLOUD_QUARTER_PI;
-    const float S = float(CL_COVER_SIDE);
-    vec2 uv = ((e * 0.5 + 0.5) * (S - 2.0) + 1.0) / S;
-    return textureLod(cloudCoverMap, vec3(uv, float(f)), 0.0);
+    return vec3(((e * 0.5 + 0.5) * (S - 2.0) + 1.0) / S, float(f));
+}
+// The cover at body direction `up`, bilinear.
+vec4 cloudCoverAt(vec3 up) {
+    return textureLod(cloudCoverMap, cloudCubeCoord(up, float(CL_COVER_SIDE)), 0.0);
+}
+// The globe's column at body direction `up` (sky/clouds_layout.h's
+// CL_GLOBE_SIDE), bilinear, as cloudCacheColumn's; and its texel's width
+// (m, at a face's middle).
+vec4 cloudGlobeColumn(vec3 up) {
+    return textureLod(cloudGlobeMap, cloudCubeCoord(up, float(CL_GLOBE_SIDE)), 0.0);
+}
+float cloudGlobeTexel() { return clouds.shell.x * 2.0 * CLOUD_QUARTER_PI / float(CL_GLOBE_SIDE - 2); }
+
+// A column as a layer seen from above (the cache's, sky/clouds_light.comp,
+// and the globe's, sky/clouds_globe.comp), its bins added top down: `d`
+// a bin's optical depth up it, `h` its height in the deck (0 .. 1). What
+// each bin sends weighs as much as it takes of the view; the layer's depth
+// is the clouds' cover over the column, not the bins' sum: a cloud stands
+// over many bins (they overlap most), so a field of heaps whose share of
+// each height is a third covers a third of the view from above however
+// deep it is, a veil as grey as they cover. A bin's cover is the share an
+// edge of it takes (cloudSigmaOf's clumped extinction over the edge: the
+// share where the clouds are opaque over an edge); the column's the most
+// of its bins', the bins' sum over it the depth within its clouds.
+struct CloudColumn {
+    float tau, took, depth, height, cover;
+};
+CloudColumn cloudColumnNone() { return CloudColumn(0.0, 0.0, 0.0, 0.0, 0.0); }
+void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH) {
+    if (d <= 0.0) return;
+    float wgt = exp(-c.tau) * (1.0 - exp(-d));
+    c.took += wgt;
+    c.depth += wgt * (c.tau + 0.5 * min(d, 1.0));
+    c.height += wgt * h;
+    c.tau += d;
+    c.cover = max(c.cover, 1.0 - exp(-d / binH * clouds.forms.w));
+}
+// The layer: x its optical depth (the view's, straight down), y the mean
+// depth from its top of what it sends, z the mean height of that.
+vec3 cloudColumnLayer(CloudColumn c) {
+    float cover = max(c.cover, 1e-4);
+    float tau = -log(max(1.0 - cover * (1.0 - exp(-c.tau / cover)), 0.005));
+    return c.took > 0.0 ? vec3(tau, c.depth / c.took, c.height / c.took) : vec3(0.0, 0.0, 0.5);
 }
 
 // --- The deck --------------------------------------------------------------------

@@ -37,11 +37,16 @@
 // is the same every frame. At most CL_VIEW_STEPS iterations a pixel, each
 // one lookup of the forms or of the bounds.
 //
-// From above, where the deck is a few pixels thick or less (orbit, the far
-// deck from the limb), no march: each span is the column's layer from the
-// cache (sky/clouds_light.comp), its mean cut to the pixel by the billows,
-// lit as one piece; the march blends into it over CL_LAYER_FROM ..
-// CL_LAYER_TO.
+// From above, where a pixel spans CL_LAYER_TO of the deck's thickness or
+// more (orbit, the limb, a climb from a region's height), no march: each
+// span is a column's layer (scene_cloud_layer.glsl's cloudColumnLayer: the
+// clouds' cover over it, not its heights' sum), lit as one piece. The
+// cache's (sky/clouds_light.comp), its mean cut to the pixel by the
+// billows, where its cells are as fine as the globe's or finer and the
+// pixel finer than the clouds; else the globe's (sky/clouds_globe.comp),
+// the footprint's mean of the world's share, so the cache's cut of a share
+// into clouds a few of its cells wide never shows from above. The march
+// blends into it over CL_LAYER_FROM .. CL_LAYER_TO.
 //
 // The light, as the land's, from the cache alone: the sun above the air
 // (lighting.atm's illuminance) through the air to the sample (the
@@ -86,11 +91,15 @@ const float CL_IN_PIXELS = 2.0;    // the first piece inside, in pixels
 const float CL_IN_FIRST = 20.0; // and in metres, at least
 const float CL_IN_GROWTH = 2.0;    // each the last's times this
 const float CL_IN_LONGEST = 400.0;
-const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least// at most (m)
+const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least
 const float CL_OPAQUE = 0.02;      // what is left of a view that ends it
 const float CL_DETAIL_SEEN = 0.3;  // what must be left of a view for the detail to show in it
-const float CL_LAYER_FROM = 0.06;  // a pixel's footprint (of the deck's thickness) where the layer begins
-const float CL_LAYER_TO = 0.12;    // and where it is all
+const float CL_LAYER_FROM = 0.025; // a pixel's footprint (of the deck's thickness) where the layer begins
+const float CL_LAYER_TO = 0.05;    // and where it is all
+const float CL_GLOBE_FROM = 1.0;   // the cache's cell (of the globe's texel) where the layer begins to read the globe
+const float CL_GLOBE_TO = 2.0;     // and where it reads the globe alone
+const float CL_GLOBE_CLOUDS_FROM = 0.3;   // a pixel's footprint (edges) where the layer begins to read the globe
+const float CL_GLOBE_CLOUDS_TO = 1.0;     // and where it reads it alone
 
 // What the march is doing.
 // The sky's and the ground's light a cloud scatters, of their irradiance:
@@ -373,22 +382,42 @@ void main() {
         ClAt w = clAt(ro + rd * q.x);
         float lod = clLod(w, pixel * q.x);
         int k = int(lod);
-        if (k >= CL_CACHE_LEVELS) continue;
-        vec4 col = cloudCacheColumn(w.xy, k);
-        if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
+        // (The cache's column where its cell is about as fine as the
+        // globe's or finer, CL_GLOBE_FROM .. CL_GLOBE_TO of its texel; the
+        // globe's where it is coarser, or where the pixel spans many of
+        // the clouds, CL_GLOBE_CLOUDS_FROM .. TO edges, so it is the share
+        // they cover, never the cache's cut of a share into clouds a few
+        // of its cells wide.)
+        float footCell = cloudCacheCell(min(k, CL_CACHE_LEVELS - 1)) * exp2(k < CL_CACHE_LEVELS ? fract(lod) : 1.0);
+        float globe = max(smoothstep(CL_GLOBE_FROM, CL_GLOBE_TO, footCell / cloudGlobeTexel()),
+                          smoothstep(CL_GLOBE_CLOUDS_FROM, CL_GLOBE_CLOUDS_TO, pixel * q.x / clouds.forms.w));
+        vec4 col = vec4(0.0);
+        if (globe < 1.0) {
+            col = cloudCacheColumn(w.xy, k);
+            if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
+        }
+        if (globe > 0.0) {
+            col = mix(col, cloudGlobeColumn(normalize(w.p)), globe);
+            footCell = mix(footCell, cloudGlobeTexel(), globe);
+        }
         float len = q.y - q.x;
         // (The cell's mean cut to the pixel: as much more or less as the
         // billows fill of the pixel's footprint than of the cell's, at the
-        // base where the column sends its light from.)
-        ClAt wm = clAt(ro + rd * (q.x + len * (1.0 - col.z)));
-        wm.h = col.z;
-        float base = clBase(wm, lod);
-        vec3 pd = cloudDrift(wm.p);
-        float footCell = cloudCacheCell(k) * exp2(fract(lod));
-        float footPixel = pixel * q.x;
-        float shareCell = cloudFormsShare(cloudBillows(pd, footCell), base, footCell);
-        float sharePixel = cloudFormsShare(cloudBillows(pd, footPixel), base, footPixel);
-        float tauView = col.x * len / thick * clamp(sharePixel / max(shareCell, 1e-3), 0.0, 4.0);
+        // base where the column sends its light from. Not the globe's: its
+        // texel is as wide as the pixel or more, the billows' mean over
+        // both the same.)
+        float cut = 1.0;
+        if (globe < 1.0) {
+            ClAt wm = clAt(ro + rd * (q.x + len * (1.0 - col.z)));
+            wm.h = col.z;
+            float base = clBase(wm, lod);
+            vec3 pd = cloudDrift(wm.p);
+            float footPixel = pixel * q.x;
+            float shareCell = cloudFormsShare(cloudBillows(pd, footCell), base, footCell);
+            float sharePixel = cloudFormsShare(cloudBillows(pd, footPixel), base, footPixel);
+            cut = mix(clamp(sharePixel / max(shareCell, 1e-3), 0.0, 4.0), 1.0, globe);
+        }
+        float tauView = col.x * len / thick * cut;
         if (tauView < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
         vec3 pl = ro + rd * at;

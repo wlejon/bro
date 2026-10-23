@@ -66,6 +66,7 @@
 #include "cloud_module.glsl.src.h"
 #include "clouds_cover.comp.src.h"
 #include "clouds_cache.comp.src.h"
+#include "clouds_globe.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -208,6 +209,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_process.comp", kVkLandProcessCompSrc},
         {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
         {"sky/clouds_cache.comp", kVkCloudsCacheCompSrc},
+        {"sky/clouds_globe.comp", kVkCloudsGlobeCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;
