@@ -262,7 +262,7 @@ void installWebGLBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
     b.def("vertexAttribI4iv", 2, [c](Value, std::span<const Value> a) {
-        std::vector<int32_t> storage;
+        SmallBuffer<int32_t, 16> storage;
         const int32_t* data = nullptr;
         size_t count = 0;
         if (int32Data(argAt(a, 1), storage, &data, &count) && count >= 4) {
@@ -271,7 +271,7 @@ void installWebGLBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
     b.def("vertexAttribI4uiv", 2, [c](Value, std::span<const Value> a) {
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 16> storage;
         const uint32_t* data = nullptr;
         size_t count = 0;
         if (uint32Data(argAt(a, 1), storage, &data, &count) && count >= 4) {
@@ -304,7 +304,7 @@ void installWebGLBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     auto defAttribFv = [&](const char* name, size_t comps, void (WebGLBackend::*fn)(GLuint, const GLfloat*)) {
         b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
-            std::vector<float> storage;
+            SmallBuffer<float, 16> storage;
             const float* p = nullptr;
             size_t n = 0;
             if (floatData(argAt(a, 1), storage, &p, &n)) {

@@ -239,7 +239,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("getActiveUniforms", 3, [c](Value, std::span<const Value> a) {
         const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         uint32_t pname = u32At(a, 2);
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 64> storage;
         const uint32_t* data = nullptr;
         size_t count = 0;
         if (!uint32Data(argAt(a, 1), storage, &data, &count)) return ev::null();
@@ -347,7 +347,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     auto defFv = [&](const char* name, int comps,
                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLfloat*)) {
         b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
-            std::vector<float> storage;
+            SmallBuffer<float, 64> storage;
             const float* p = nullptr;
             size_t n = 0;
             if (floatData(argAt(a, 1), storage, &p, &n)) {
@@ -368,7 +368,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     auto defIv = [&](const char* name, int comps,
                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLint*)) {
         b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
-            std::vector<int32_t> storage;
+            SmallBuffer<int32_t, 64> storage;
             const int32_t* p = nullptr;
             size_t n = 0;
             if (int32Data(argAt(a, 1), storage, &p, &n)) {
@@ -389,7 +389,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     auto defUiv = [&](const char* name, int comps,
                       void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLuint*)) {
         b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
-            std::vector<uint32_t> storage;
+            SmallBuffer<uint32_t, 64> storage;
             const uint32_t* p = nullptr;
             size_t n = 0;
             if (uint32Data(argAt(a, 1), storage, &p, &n)) {
@@ -425,7 +425,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                       void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, GLboolean,
                                       const GLfloat*)) {
         b.def(name, 3, [c, comps, fn](Value, std::span<const Value> a) {
-            std::vector<float> storage;
+            SmallBuffer<float, 64> storage;
             const float* p = nullptr;
             size_t n = 0;
             if (floatData(argAt(a, 2), storage, &p, &n)) {

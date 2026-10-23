@@ -17,6 +17,7 @@
 #include "bronze_host/host_rooted.h"
 
 #include "embed/embed.h"
+#include "runtime/array.h"
 
 #include <cmath>
 #include <cstddef>
@@ -42,7 +43,11 @@ using Value = bronze::Value;
 inline double numAt(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0.0;
     Value v = args[i];
-    if (ev::isObject(v)) return 0.0;
+    if (v.isNumber()) {
+        double d = v.asNumber();
+        return std::isnan(d) ? 0.0 : d;
+    }
+    if (v.isObject()) return 0.0;
     double d = ev::toDouble(v);
     return std::isnan(d) ? 0.0 : d;
 }
@@ -70,7 +75,9 @@ inline uint64_t u64At(std::span<const Value> args, size_t i) {
 
 inline bool boolAt(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return false;
-    return ev::toBool(args[i]);
+    Value v = args[i];
+    if (v.isBool()) return v.asBool();
+    return ev::toBool(v);
 }
 
 inline Value argAt(std::span<const Value> args, size_t i) {
@@ -87,64 +94,128 @@ inline Value argAt(std::span<const Value> args, size_t i) {
 // `undefined` as if the app had passed it: numAt() answers 0, and an optional
 // layer mask silently becomes "match nothing". Ask about the VALUE instead.
 inline bool hasArg(std::span<const Value> args, size_t i) {
-    return i < args.size() && !ev::isUndefined(args[i]);
+    return i < args.size() && !args[i].isUndefined();
 }
 
 // ---------------------------------------------------------------------------
 // Bulk-data readers (uniform*v, bufferData, texImage2D, ...)
 // ---------------------------------------------------------------------------
 
+// Stack-inline scratch storage for small uniform/attribute uploads (up to 64
+// elements, covering Matrix4, Matrix3, and 4-component vectors without touching
+// the heap), falling back to a std::vector for larger arrays.
+template <typename T, size_t InlineCap = 64>
+struct SmallBuffer {
+    T inlineBuf[InlineCap];
+    std::vector<T> overflow;
+
+    T* resize(size_t n) {
+        if (n <= InlineCap) return inlineBuf;
+        overflow.resize(n);
+        return overflow.data();
+    }
+};
+
+template <typename T>
+inline T* resizeHostStorage(std::vector<T>& s, size_t n) {
+    s.resize(n);
+    return s.data();
+}
+
+template <typename T, size_t Cap>
+inline T* resizeHostStorage(SmallBuffer<T, Cap>& s, size_t n) {
+    return s.resize(n);
+}
+
 // A typed array answers its heap bytes directly — VALID ONLY UNTIL THE NEXT
 // BRONZE ALLOCATION, so the call consuming it must be the very next thing that
 // happens. A plain JS array (three.js hands those to uniform*fv and
-// drawBuffers) is copied element by element into `storage` via embed reads;
+// drawBuffers) is copied element by element into `storage` via a direct
+// elementsData() walk when dense and primitive, or via embed reads otherwise;
 // the copy is host memory and stable. False when the value is neither.
 // Shared plain-array walk behind the three element flavours below. The
-// receiver rides in a Persistent for the whole loop because every
+// receiver rides in a Persistent on the slow path because every
 // getProperty/getElement read ALLOCATES (the key string) and would leave a
 // raw Value copy pointing into dead from-space — the exact stale-pointer bug
 // the GC contract at the top of this header exists to prevent.
-template <typename T, typename Convert>
-inline bool plainArrayData(Value v, std::vector<T>& storage, Convert convert,
+template <typename T, typename Storage, typename Convert>
+inline bool plainArrayData(Value v, Storage& storage, Convert convert,
                            const T** outData, size_t* outCount) {
-    if (!ev::isObject(v)) return false;
+    if (!v.isObject()) return false;
+    if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array) {
+        const auto* arr = v.asObject<bronze::ArrayHeader>();
+        const uint32_t n = arr->length;
+        if (static_cast<uint64_t>(n) * sizeof(T) >= kMaxHostBufferBytes) return false;
+        const Value* elems = arr->elementsData();
+        if (n == 0 || (elems && arr->head_offset + n <= arr->capacity)) {
+            T* dst = resizeHostStorage(storage, n);
+            bool allFast = true;
+            for (uint32_t i = 0; i < n; ++i) {
+                const Value e = elems[i];
+                if (e.isNumber()) [[likely]] {
+                    const double d = e.asNumber();
+                    dst[i] = std::isnan(d) ? T{} : convert(d);
+                } else if (e.isHole() || e.isUndefined() || e.isNull()) {
+                    dst[i] = T{};
+                } else if (e.isBool()) {
+                    dst[i] = convert(e.asBool() ? 1.0 : 0.0);
+                } else {
+                    allFast = false;
+                    break;
+                }
+            }
+            if (allFast) {
+                *outData = dst;
+                *outCount = n;
+                return true;
+            }
+        }
+    }
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    if (lenV.isUndefined() || lenV.isObject()) return false;
     // `length` is whatever the object says: bounded like any buffer a script
     // sizes, so `{length: 4e9}` is refused rather than a 16 GB resize.
     uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
     if (static_cast<uint64_t>(n) * sizeof(T) >= kMaxHostBufferBytes) return false;
-    storage.resize(n);
+    T* dst = resizeHostStorage(storage, n);
     for (uint32_t i = 0; i < n; ++i) {
         Value e = ev::getElement(root.get(), i);
         // NaN (a hole, an undefined pad) converts as 0 for the integer
         // flavours — casting NaN to an integer is UB, not 0.
-        double d = ev::isObject(e) ? 0.0 : ev::toDouble(e);
-        storage[i] = std::isnan(d) ? T{} : convert(d);
+        double d = e.isObject() ? 0.0 : ev::toDouble(e);
+        dst[i] = std::isnan(d) ? T{} : convert(d);
     }
-    *outData = storage.data();
+    *outData = dst;
     *outCount = n;
     return true;
 }
 
-inline bool floatData(Value v, std::vector<float>& storage,
+template <typename Storage>
+inline bool floatData(Value v, Storage& storage,
                       const float** outData, size_t* outCount) {
-    if (auto info = ev::typedArrayInfo(v)) {
-        *outData = reinterpret_cast<const float*>(info.data);
-        *outCount = info.byteLength / sizeof(float);
-        return true;
+    if (!v.isObject()) return false;
+    if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
+        if (auto info = ev::typedArrayInfo(v)) {
+            *outData = reinterpret_cast<const float*>(info.data);
+            *outCount = info.byteLength / sizeof(float);
+            return true;
+        }
     }
     return plainArrayData<float>(
         v, storage, [](double d) { return static_cast<float>(d); }, outData, outCount);
 }
 
-inline bool int32Data(Value v, std::vector<int32_t>& storage,
+template <typename Storage>
+inline bool int32Data(Value v, Storage& storage,
                       const int32_t** outData, size_t* outCount) {
-    if (auto info = ev::typedArrayInfo(v)) {
-        *outData = reinterpret_cast<const int32_t*>(info.data);
-        *outCount = info.byteLength / sizeof(int32_t);
-        return true;
+    if (!v.isObject()) return false;
+    if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
+        if (auto info = ev::typedArrayInfo(v)) {
+            *outData = reinterpret_cast<const int32_t*>(info.data);
+            *outCount = info.byteLength / sizeof(int32_t);
+            return true;
+        }
     }
     return plainArrayData<int32_t>(
         v, storage,
@@ -152,12 +223,16 @@ inline bool int32Data(Value v, std::vector<int32_t>& storage,
         outData, outCount);
 }
 
-inline bool uint32Data(Value v, std::vector<uint32_t>& storage,
+template <typename Storage>
+inline bool uint32Data(Value v, Storage& storage,
                        const uint32_t** outData, size_t* outCount) {
-    if (auto info = ev::typedArrayInfo(v)) {
-        *outData = reinterpret_cast<const uint32_t*>(info.data);
-        *outCount = info.byteLength / sizeof(uint32_t);
-        return true;
+    if (!v.isObject()) return false;
+    if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
+        if (auto info = ev::typedArrayInfo(v)) {
+            *outData = reinterpret_cast<const uint32_t*>(info.data);
+            *outCount = info.byteLength / sizeof(uint32_t);
+            return true;
+        }
     }
     return plainArrayData<uint32_t>(
         v, storage,

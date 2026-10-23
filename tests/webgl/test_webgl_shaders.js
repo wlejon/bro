@@ -200,6 +200,15 @@ if (!gl) {
     gl.uniformMatrix4fv(gl.getUniformLocation(progM, 'uM4'), false,
                         new Float32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.75, 0, 0, 0, 0, 1]));
     assertPx(drawAndRead(), 64, 128, 191, 255, 'mat2/mat3/mat4 uniforms');
+
+    // Plain JS Array uploads (Three.js Matrix3.elements / Matrix4.elements)
+    gl.uniformMatrix2fv(gl.getUniformLocation(progM, 'uM2'), false,
+                        [0.5, 0, 0, 0]);
+    gl.uniformMatrix3fv(gl.getUniformLocation(progM, 'uM3'), false,
+                        [0, 0, 0, 0, 0.75, 0, 0, 0, 0]);
+    gl.uniformMatrix4fv(gl.getUniformLocation(progM, 'uM4'), false,
+                        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 1]);
+    assertPx(drawAndRead(), 128, 191, 64, 255, 'mat2/mat3/mat4 plain JS Array uniforms');
     gl.deleteProgram(progM);
 
     const progM23 = makeProgram(vsPass,

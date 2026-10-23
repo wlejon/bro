@@ -5,6 +5,7 @@
 // nullable-string conversion.
 
 #include "embed/embed.h"
+#include "runtime/array.h"
 #include "runtime/heap.h"
 #include "bronze_host/host_numeric.h"
 
@@ -127,62 +128,116 @@ inline bool hostIsArray(Value v) {
 }
 
 inline bool readFloatVector(Value v, std::vector<float>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(float) || info.bytesPerElement == 0)) {
-            const float* fp = reinterpret_cast<const float*>(info.data);
-            out.assign(fp, fp + info.elementCount);
-            return true;
+    if (v.isUndefined() || v.isNull()) return false;
+    if (!v.isObject()) return false;
+    const uint16_t kind = v.asObject<bronze::HeapObjectHeader>()->flags;
+    if (kind == bronze::HeapKind::TypedArray) {
+        if (auto info = ev::typedArrayInfo(v)) {
+            if (info.data && (info.bytesPerElement == sizeof(float) || info.bytesPerElement == 0)) {
+                const float* fp = reinterpret_cast<const float*>(info.data);
+                out.assign(fp, fp + info.elementCount);
+                return true;
+            }
+            if (info.data && info.bytesPerElement == sizeof(double)) {
+                const double* dp = reinterpret_cast<const double*>(info.data);
+                out.assign(dp, dp + info.elementCount);
+                return true;
+            }
         }
-        if (info.data && info.bytesPerElement == sizeof(double)) {
-            const double* dp = reinterpret_cast<const double*>(info.data);
-            out.assign(dp, dp + info.elementCount);
-            return true;
+    } else if (kind == bronze::HeapKind::Array) {
+        const auto* arr = v.asObject<bronze::ArrayHeader>();
+        const uint32_t len = arr->length;
+        if (len > kMaxHostListLength) return false;
+        const Value* elems = arr->elementsData();
+        if (len == 0 || (elems && arr->head_offset + len <= arr->capacity)) {
+            out.resize(len);
+            float* dst = out.data();
+            bool allFast = true;
+            for (uint32_t i = 0; i < len; ++i) {
+                const Value e = elems[i];
+                if (e.isNumber()) [[likely]] {
+                    dst[i] = static_cast<float>(e.asNumber());
+                } else if (e.isHole() || e.isUndefined() || e.isNull()) {
+                    dst[i] = 0.0f;
+                } else if (e.isBool()) {
+                    dst[i] = e.asBool() ? 1.0f : 0.0f;
+                } else {
+                    allFast = false;
+                    break;
+                }
+            }
+            if (allFast) return true;
         }
     }
-    if (!ev::isObject(v)) return false;
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    if (lenV.isUndefined() || lenV.isObject()) return false;
     uint32_t len = 0;
     if (!lengthWithin(ev::toDouble(lenV), kMaxHostListLength, len)) return false;
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        double d =(!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        double d = (!e.isUndefined() && !e.isObject()) ? ev::toDouble(e) : 0.0;
         out.push_back(static_cast<float>(d));
     }
     return true;
 }
 
 inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(uint32_t) || info.bytesPerElement == 0)) {
-            const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
-            out.assign(up, up + info.elementCount);
-            return true;
+    if (v.isUndefined() || v.isNull()) return false;
+    if (!v.isObject()) return false;
+    const uint16_t kind = v.asObject<bronze::HeapObjectHeader>()->flags;
+    if (kind == bronze::HeapKind::TypedArray) {
+        if (auto info = ev::typedArrayInfo(v)) {
+            if (info.data && (info.bytesPerElement == sizeof(uint32_t) || info.bytesPerElement == 0)) {
+                const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
+                out.assign(up, up + info.elementCount);
+                return true;
+            }
+            if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
+                const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
+                out.clear();
+                out.reserve(info.elementCount);
+                for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
+                return true;
+            }
         }
-        if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
-            const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
-            out.clear();
-            out.reserve(info.elementCount);
-            for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
-            return true;
+    } else if (kind == bronze::HeapKind::Array) {
+        const auto* arr = v.asObject<bronze::ArrayHeader>();
+        const uint32_t len = arr->length;
+        if (len > kMaxHostListLength) return false;
+        const Value* elems = arr->elementsData();
+        if (len == 0 || (elems && arr->head_offset + len <= arr->capacity)) {
+            out.resize(len);
+            uint32_t* dst = out.data();
+            bool allFast = true;
+            for (uint32_t i = 0; i < len; ++i) {
+                const Value e = elems[i];
+                if (e.isNumber()) [[likely]] {
+                    dst[i] = satCast<uint32_t>(e.asNumber());
+                } else if (e.isHole() || e.isUndefined() || e.isNull()) {
+                    dst[i] = 0u;
+                } else if (e.isBool()) {
+                    dst[i] = e.asBool() ? 1u : 0u;
+                } else {
+                    allFast = false;
+                    break;
+                }
+            }
+            if (allFast) return true;
         }
     }
-    if (!ev::isObject(v)) return false;
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    if (lenV.isUndefined() || lenV.isObject()) return false;
     uint32_t len = 0;
     if (!lengthWithin(ev::toDouble(lenV), kMaxHostListLength, len)) return false;
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        uint32_t u =(!ev::isUndefined(e) && !ev::isObject(e)) ? satCast<uint32_t>(ev::toDouble(e)) : 0u;
+        uint32_t u = (!e.isUndefined() && !e.isObject()) ? satCast<uint32_t>(ev::toDouble(e)) : 0u;
         out.push_back(u);
     }
     return true;

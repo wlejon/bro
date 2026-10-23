@@ -86,7 +86,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     // the copy is what the backend consumes, so the reads' allocations are
     // harmless.
     b.def("drawBuffers", 1, [c](Value, std::span<const Value> a) {
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
         if (uint32Data(argAt(a, 0), storage, &p, &n) && n > 0) {
@@ -102,7 +102,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     // 1; short is INVALID_VALUE and no call. Same host-copy note as
     // drawBuffers above.
     b.def("clearBufferfv", 3, [c](Value, std::span<const Value> a) {
-        std::vector<float> storage;
+        SmallBuffer<float, 16> storage;
         const float* p = nullptr;
         size_t n = 0;
         const GLenum buffer = u32At(a, 0);
@@ -117,7 +117,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         return ev::undefined();
     });
     b.def("clearBufferiv", 3, [c](Value, std::span<const Value> a) {
-        std::vector<int32_t> storage;
+        SmallBuffer<int32_t, 16> storage;
         const int32_t* p = nullptr;
         size_t n = 0;
         const GLenum buffer = u32At(a, 0);
@@ -132,7 +132,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         return ev::undefined();
     });
     b.def("clearBufferuiv", 3, [c](Value, std::span<const Value> a) {
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
         const GLenum buffer = u32At(a, 0);
@@ -163,7 +163,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
 
     // invalidate{Sub}Framebuffer(target, attachments[, x, y, width, height]).
     b.def("invalidateFramebuffer", 2, [c](Value, std::span<const Value> a) {
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
         if (!uint32Data(argAt(a, 1), storage, &p, &n)) p = nullptr, n = 0;
@@ -171,7 +171,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         return ev::undefined();
     });
     b.def("invalidateSubFramebuffer", 6, [c](Value, std::span<const Value> a) {
-        std::vector<uint32_t> storage;
+        SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
         if (!uint32Data(argAt(a, 1), storage, &p, &n)) p = nullptr, n = 0;
