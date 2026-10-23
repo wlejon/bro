@@ -74,6 +74,7 @@ enum class AppModuleStatus {
     AbiMismatch,         ///< a bronze module, compiled against a different ABI
     NoEntryPoint,        ///< stamped, but exports no `bronze_main`
     MissingHostGlobals,  ///< stamped, but requires host globals missing from this runtime
+    UntrustedApplet,     ///< failed eBPF-style applet certificate or capability manifest verification
 };
 
 struct AppModuleResult {
@@ -108,6 +109,15 @@ struct AppModuleResult {
 /// `"host globals missing from runtime: <names>"` if any are missing.
 bool verifyHostGlobals(ModuleHandle handle, std::string& errorOut,
                        std::string* describedOut = nullptr);
+
+/// Compute the 64-bit FNV-1a hex digest of `filePath` (used by `.cert.json` moduleHash).
+std::string computeModuleFileHash(const std::string& filePath, bool* okOut = nullptr);
+
+/// Verify the `<appDir>/app.cert.json` (or `<module_stem>.cert.json`) proof certificate
+/// and `<appDir>/bro.json` capability manifest against `modulePath` and `handle`
+/// BEFORE `bronze_main` is allowed to execute.
+bool verifyAppletCertificate(const std::string& modulePath, ModuleHandle handle,
+                             std::string& errorOut);
 
 AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePath);
 

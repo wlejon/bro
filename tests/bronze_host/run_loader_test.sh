@@ -300,6 +300,72 @@ check "loads and runs" "$OUT/good$EXT" 'LOADER: bronze_main called'
 # make this check fail every time that list is worded differently.
 check "success is logged" "$OUT/good$EXT" "(bronze ABI $FP,"
 
+# --- eBPF-style verified applet gate (app.cert.json + capability manifest) --
+GOOD_HASH="$(python3 -c '
+import sys
+data = open(sys.argv[1], "rb").read()
+h = 0xcbf29ce484222325
+for b in data:
+    h = ((h ^ b) * 0x100000001b3) & 0xffffffffffffffff
+print(f"{h:016x}")
+' "$OUT/good$EXT")"
+
+cat > "$APP/bro.json" <<'EOF'
+{ "title": "loader check", "compiled": true, "verifiedApplet": true, "capabilities": ["bro.ui"], "width": 320, "height": 240, "splash": false }
+EOF
+
+# 1. Missing app.cert.json when verifiedApplet: true -> refused before bronze_main runs
+rm -f "$APP/app.cert.json"
+check "verified applet missing cert" "$OUT/good$EXT" \
+      'missing applet verification certificate' \
+      'LOADER: bronze_main called'
+
+# 2. Tampered / mismatched moduleHash in app.cert.json -> refused before bronze_main runs
+cat > "$APP/app.cert.json" <<'EOF'
+{
+  "verified": true,
+  "hazards": 0,
+  "proofsValid": true,
+  "moduleHash": "0000000000000000",
+  "capabilities": ["bro.ui.setTitle"]
+}
+EOF
+check "verified applet tampered hash" "$OUT/good$EXT" \
+      'applet certificate hash mismatch' \
+      'LOADER: bronze_main called'
+
+# 3. Unauthorized capability (child_process) in app.cert.json -> refused before bronze_main runs
+cat > "$APP/app.cert.json" <<EOF
+{
+  "verified": true,
+  "hazards": 0,
+  "proofsValid": true,
+  "moduleHash": "$GOOD_HASH",
+  "capabilities": ["bro.ui.setTitle", "child_process"]
+}
+EOF
+check "verified applet unauthorized capability" "$OUT/good$EXT" \
+      "applet certificate requests unauthorized capability 'child_process'" \
+      'LOADER: bronze_main called'
+
+# 4. Valid app.cert.json + permitted capability -> loads and runs bronze_main
+cat > "$APP/app.cert.json" <<EOF
+{
+  "verified": true,
+  "hazards": 0,
+  "proofsValid": true,
+  "moduleHash": "$GOOD_HASH",
+  "capabilities": ["bro.ui.setTitle"]
+}
+EOF
+check "verified applet valid cert runs" "$OUT/good$EXT" \
+      'LOADER: bronze_main called'
+
+rm -f "$APP/app.cert.json"
+cat > "$APP/bro.json" <<'EOF'
+{ "title": "loader check", "compiled": true, "width": 320, "height": 240, "splash": false }
+EOF
+
 # --- Lexical scanner checks (hasAwaitStmt / hasImportStmt) ------------------
 SCAN_APP="$WORK/scan_app"; mkdir -p "$SCAN_APP"
 cat > "$SCAN_APP/index.html" <<'EOF'

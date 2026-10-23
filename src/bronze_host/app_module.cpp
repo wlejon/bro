@@ -13,8 +13,14 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <set>
+#include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -149,6 +155,220 @@ bool verifyHostGlobals(ModuleHandle handle, std::string& errorOut, std::string* 
 
 namespace {
 
+bool readTextFile(const std::filesystem::path& p, std::string& out) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) return false;
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    return true;
+}
+
+std::string extractJsonStringField(const std::string& json, const std::string& key) {
+    std::string pat = "\"" + key + "\"";
+    size_t pos = json.find(pat);
+    if (pos == std::string::npos) return {};
+    size_t colon = json.find(':', pos + pat.size());
+    if (colon == std::string::npos) return {};
+    size_t q1 = json.find('"', colon + 1);
+    if (q1 == std::string::npos) return {};
+    size_t q2 = json.find('"', q1 + 1);
+    if (q2 == std::string::npos) return {};
+    return json.substr(q1 + 1, q2 - q1 - 1);
+}
+
+bool extractJsonStringArray(const std::string& json, const std::string& key,
+                            std::vector<std::string>& out) {
+    std::string pat = "\"" + key + "\"";
+    size_t pos = json.find(pat);
+    if (pos == std::string::npos) return false;
+    size_t colon = json.find(':', pos + pat.size());
+    if (colon == std::string::npos) return false;
+    size_t openBr = json.find('[', colon + 1);
+    if (openBr == std::string::npos) return false;
+    size_t closeBr = json.find(']', openBr + 1);
+    if (closeBr == std::string::npos) return false;
+
+    size_t cur = openBr + 1;
+    while (cur < closeBr) {
+        size_t q1 = json.find('"', cur);
+        if (q1 == std::string::npos || q1 >= closeBr) break;
+        size_t q2 = json.find('"', q1 + 1);
+        if (q2 == std::string::npos || q2 >= closeBr) break;
+        out.push_back(json.substr(q1 + 1, q2 - q1 - 1));
+        cur = q2 + 1;
+    }
+    return true;
+}
+
+bool jsonHasLiteralField(const std::string& json, const std::string& key, const std::string& lit) {
+    std::string pat = "\"" + key + "\"";
+    size_t pos = json.find(pat);
+    if (pos == std::string::npos) return false;
+    size_t colon = json.find(':', pos + pat.size());
+    if (colon == std::string::npos) return false;
+    size_t cur = colon + 1;
+    while (cur < json.size() && (json[cur] == ' ' || json[cur] == '\t' || json[cur] == '\r' || json[cur] == '\n')) {
+        ++cur;
+    }
+    return json.compare(cur, lit.size(), lit) == 0;
+}
+
+bool isPrivilegedHostGlobal(std::string_view cap) {
+    return cap == "child_process" || cap == "fs" || cap == "process" ||
+           cap == "require" || cap == "eval" || cap == "Function" ||
+           cap == "bro.sys" || cap == "bro.cred" || cap == "bro.seat" ||
+           cap == "bro.portal" || cap == "bro.displays" ||
+           cap == "bro.compositor" || cap == "bro.wl" ||
+           cap == "bro.fs" || cap == "bro.process" ||
+           cap.rfind("__bro_native", 0) == 0;
+}
+
+bool isCapabilityAllowed(const std::string& cap, const std::set<std::string>& allowedCaps) {
+    if (allowedCaps.count(cap) != 0) return true;
+    for (const auto& ac : allowedCaps) {
+        if (cap.size() > ac.size() && cap.compare(0, ac.size(), ac) == 0 && cap[ac.size()] == '.') {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool shouldRequireAppletCertificate(const std::filesystem::path& appDir,
+                                    const std::filesystem::path& moduleFile) {
+    if (const char* env = std::getenv("BRO_REQUIRE_VERIFIED_APPLET"); env && std::strcmp(env, "1") == 0) {
+        return true;
+    }
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(appDir / "app.cert.json", ec) ||
+        std::filesystem::is_regular_file(appDir / (moduleFile.stem().string() + ".cert.json"), ec)) {
+        return true;
+    }
+    std::string broJson;
+    if (readTextFile(appDir / "bro.json", broJson) &&
+        jsonHasLiteralField(broJson, "verifiedApplet", "true")) {
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+std::string computeModuleFileHash(const std::string& filePath, bool* okOut) {
+    std::string bytes;
+    if (!readTextFile(filePath, bytes)) {
+        if (okOut) *okOut = false;
+        return {};
+    }
+    if (okOut) *okOut = true;
+    const auto* data = reinterpret_cast<const uint8_t*>(bytes.data());
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        hash ^= static_cast<uint64_t>(data[i]);
+        hash *= 0x100000001b3ULL;
+    }
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return oss.str();
+}
+
+bool verifyAppletCertificate(const std::string& modulePath, ModuleHandle handle,
+                             std::string& errorOut) {
+    errorOut.clear();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path modPath(modulePath);
+    fs::path appDir = modPath.parent_path();
+    if (appDir.empty()) appDir = ".";
+
+    fs::path certPath = appDir / "app.cert.json";
+    if (!fs::is_regular_file(certPath, ec)) {
+        fs::path stemCert = appDir / (modPath.stem().string() + ".cert.json");
+        if (fs::is_regular_file(stemCert, ec)) certPath = stemCert;
+    }
+
+    std::string certJson;
+    if (!readTextFile(certPath, certJson)) {
+        errorOut = "missing applet verification certificate (" + certPath.string() + ")";
+        return false;
+    }
+
+    if (!jsonHasLiteralField(certJson, "verified", "true")) {
+        errorOut = "applet certificate '" + certPath.string() + "' does not have \"verified\": true";
+        return false;
+    }
+    if (!jsonHasLiteralField(certJson, "hazards", "0")) {
+        errorOut = "applet certificate '" + certPath.string() + "' reports non-zero static hazards";
+        return false;
+    }
+    if (!jsonHasLiteralField(certJson, "proofsValid", "true")) {
+        errorOut = "applet certificate '" + certPath.string() + "' reports invalid IL proofs";
+        return false;
+    }
+
+    std::string expectedHash = extractJsonStringField(certJson, "moduleHash");
+    bool hashOk = false;
+    std::string actualHash = computeModuleFileHash(modulePath, &hashOk);
+    if (!hashOk || expectedHash.empty() || expectedHash != actualHash) {
+        errorOut = "applet certificate hash mismatch for " + modulePath +
+                   " (cert has '" + expectedHash + "', actual is '" + actualHash + "')";
+        return false;
+    }
+
+    std::vector<std::string> certCaps;
+    extractJsonStringArray(certJson, "capabilities", certCaps);
+    std::set<std::string> certCapSet(certCaps.begin(), certCaps.end());
+
+    // Enforce bro.json capability manifest if present
+    bool hasManifestCaps = false;
+    std::set<std::string> allowedCaps;
+    std::string broJson;
+    if (readTextFile(appDir / "bro.json", broJson)) {
+        std::vector<std::string> caps;
+        if (extractJsonStringArray(broJson, "capabilities", caps)) {
+            hasManifestCaps = true;
+            allowedCaps.insert(caps.begin(), caps.end());
+        }
+        std::vector<std::string> perms;
+        if (extractJsonStringArray(broJson, "permissions", perms)) {
+            hasManifestCaps = true;
+            allowedCaps.insert(perms.begin(), perms.end());
+        }
+    }
+
+    for (const auto& cap : certCaps) {
+        if (!isCapabilityAllowed(cap, allowedCaps) &&
+            (isPrivilegedHostGlobal(cap) || hasManifestCaps)) {
+            errorOut = "applet certificate requests unauthorized capability '" + cap + "'";
+            return false;
+        }
+    }
+
+    // Also inspect the compiled module's exported `bronze_main_host_globals` symbol
+    if (handle) {
+        const auto* base = static_cast<const unsigned char*>(moduleSymbol(handle, kGlobalsSymbol));
+        if (base) {
+            uint32_t count = 0;
+            std::memcpy(&count, base, sizeof(count));
+            const char* cursor = reinterpret_cast<const char*>(base + sizeof(count));
+            for (uint32_t i = 0; i < count; ++i) {
+                std::string gname(cursor);
+                cursor += gname.size() + 1;
+                if (isPrivilegedHostGlobal(gname) &&
+                    (!isCapabilityAllowed(gname, certCapSet) ||
+                     (!isCapabilityAllowed(gname, allowedCaps) && hasManifestCaps))) {
+                    errorOut = "compiled module imports unauthorized host global '" + gname + "'";
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+namespace {
+
 // --- Reporting ------------------------------------------------------------
 
 // Every refusal path logs and returns the same sentence, so the log and the
@@ -222,6 +442,23 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
                       modulePath + " carries a bronze ABI stamp but exports no " +
                           kEntrySymbol + ". It was compiled as a library rather "
                           "than as an app entry point.");
+    }
+
+    // eBPF-style verified applet gate: when `app.cert.json` is present,
+    // `bro.json` sets `"verifiedApplet": true`, or `BRO_REQUIRE_VERIFIED_APPLET=1`,
+    // verify the proof certificate and capability manifest BEFORE any host
+    // globals are installed or `bronze_main` executes.
+    {
+        std::filesystem::path modFile(modulePath);
+        std::filesystem::path appDir = modFile.parent_path();
+        if (appDir.empty()) appDir = ".";
+        if (shouldRequireAppletCertificate(appDir, modFile)) {
+            std::string certError;
+            if (!verifyAppletCertificate(modulePath, handle, certError)) {
+                return refuse(&engine, AppModuleStatus::UntrustedApplet,
+                              modulePath + ": " + certError);
+            }
+        }
     }
 
     // Globals BEFORE the manifest check and the program: its top level reads
