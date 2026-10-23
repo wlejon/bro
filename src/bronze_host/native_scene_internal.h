@@ -353,6 +353,10 @@ bool registerSceneCameraNatives(std::string* error);
 // native_scene_extras.cpp: the per-type accessors and instanced-mesh
 // operations js/scene_extras.js wraps.
 bool registerSceneExtraNatives(std::string* error);
+// native_scene_sdf.cpp: GPU SDF sphere-tracing, cone-traced soft shadows,
+// ambient occlusion, and SPIR-V compilation + formal verification.
+void installSdfGraphGpuExtensions();
+void installSceneSdfExtensions();
 }
 
 namespace scene = bro::scene;

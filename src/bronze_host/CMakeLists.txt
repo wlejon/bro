@@ -199,6 +199,7 @@ if(BRO_WITH_3D)
         native_scene_anim.cpp
         native_scene_clip.cpp
         native_scene_gizmo.cpp
+        native_scene_sdf.cpp
         natives/scene/native_scene_register.cpp
         natives/terrain/native_terrain_register.cpp
         natives/tile_world/native_tile_world_register.cpp

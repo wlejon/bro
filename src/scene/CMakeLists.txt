@@ -141,6 +141,7 @@ add_library(bro_scene STATIC
     animation_player_root_motion.cpp
     tween.cpp
     clip_player.cpp
+    sdf_gpu_tracer.cpp
     agent_binding.cpp
     ai_world_ticker.cpp
     nodes/shape_node.cpp
@@ -328,6 +329,12 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_probe_grid_gpu_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_probe_grid_gpu_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    # Live GPU SDF sphere-tracing, cone-traced soft shadows, ambient occlusion,
+    # and SPIR-V 1.5 compute shader formal verification.
+    add_executable(bro_sdf_gpu_tracer_test tests/test_sdf_gpu_tracer.cpp sdf_gpu_tracer.cpp)
+    target_link_libraries(bro_sdf_gpu_tracer_test PRIVATE bromesh bromath)
+    target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()
 
 

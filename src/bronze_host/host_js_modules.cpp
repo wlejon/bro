@@ -23,6 +23,9 @@
 
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
+#if BRO_WITH_3D
+#include "bronze_host/native_scene_internal.h"
+#endif
 #include "embed/embed.h"
 
 #include <span>
@@ -215,6 +218,9 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_plants_main);
     // js/scene_land.js: createLand and the land node's members.
     bronze::embed::runEntry(bro_scene_land_main);
+#if BRO_WITH_3D
+    installSceneSdfExtensions();
+#endif
 }
 
 void installMotionModule() {

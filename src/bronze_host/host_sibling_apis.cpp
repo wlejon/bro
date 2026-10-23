@@ -360,6 +360,7 @@ void installSiblingApis(engine::Engine& engine) {
     bromesh::api::setPathResolver(&brokit::api::resolveAssetPath);
     bromesh::api::installMesh();
     bromesh::api::installRigging();
+    installSdfGraphGpuExtensions();
 #endif
 #if BRO_WITH_TENSOR
     brotensor::api::setPathResolver(&brokit::api::resolveAssetPath);
