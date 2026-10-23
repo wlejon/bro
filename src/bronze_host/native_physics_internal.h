@@ -729,4 +729,6 @@ inline bool readQueryShape(Value optsVal, physics::BodyOptions& shape, std::stri
     }
 }
 
+void installPhysicsForceFieldExtensions();
+
 }  // namespace bro::bronze_host

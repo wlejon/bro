@@ -26,6 +26,9 @@
 #if BRO_WITH_NET
 #include "net/bronze_api/net_rollback_api.h"
 #endif
+#if BRO_WITH_PHYSICS
+#include "bronze_host/native_physics_internal.h"
+#endif
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
 #endif
@@ -179,6 +182,9 @@ void installPhysicsModule() {
     adoptGlobalProperty("PhysicsVehicle");
     adoptGlobalProperty("PhysicsRagdoll");
     adoptGlobalProperty("PhysicsWorldHandle");
+#if BRO_WITH_PHYSICS
+    installPhysicsForceFieldExtensions();
+#endif
 }
 
 void installTerrainModule() {
@@ -448,7 +454,7 @@ void installDeferredModules() {
             deferGlobal(g, name);
         }
         const ev::Persistent bro(ev::globalValue("bro").value);
-        for (const char* ns : {"scene", "terrain", "tile_world", "lighting", "animation", "gizmo"}) {
+        for (const char* ns : {"physics", "scene", "terrain", "tile_world", "lighting", "animation", "gizmo"}) {
             deferMember(g, bro.get(), ns);
         }
     }

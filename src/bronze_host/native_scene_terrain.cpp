@@ -321,8 +321,15 @@ double bro_terrain_Terrain_heightAt(void* self, double x, double z) {
 
 void bro_terrain_Terrain_normalAt(void* self, double x, double z, bronze_native_buffer* out) {
     auto* c = terrainCellOf(self);
+    double n[3] = {0.0, 1.0, 0.0};
     if (!c || !c->mgr()) {
         tl_buf3[0] = 0.0; tl_buf3[1] = 1.0; tl_buf3[2] = 0.0;
+    } else if (c->hasHeightSource &&
+               tryEvalCompiledKernelNormalAt(c->heightSource.get(),
+                                             x, z, n)) {
+        tl_buf3[0] = n[0];
+        tl_buf3[1] = n[1];
+        tl_buf3[2] = n[2];
     } else {
         const bromath::Vec3 origin{static_cast<float>(x), 1000.0f, static_cast<float>(z)};
         const bromath::Vec3 dir{0.0f, -1.0f, 0.0f};

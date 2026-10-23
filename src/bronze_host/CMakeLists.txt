@@ -143,6 +143,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_math_funcs.cpp
     host_gpu.cpp
     host_js_gpu.cpp
+    host_js_gpu_autodiff.cpp
     host_solve.cpp
     host_solve_rewrite.cpp
     host_text.cpp
@@ -168,6 +169,7 @@ set(BRO_BRONZE_HOST_SOURCES
 if(BRO_WITH_PHYSICS)
     list(APPEND BRO_BRONZE_HOST_SOURCES
         native_physics_core.cpp
+        native_physics_force_field.cpp
         native_physics_queries.cpp
         native_physics_character.cpp
         native_physics_softbody.cpp

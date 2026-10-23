@@ -412,26 +412,40 @@ Value implEvalGpu(CompiledJsKernelEntry& entry, std::span<const Value> args) {
 
 } // namespace
 
+std::string normalizeJsKernelSourceString(const std::string& raw, const std::string& fallbackName) {
+    return normalizeJsKernelSource(raw, fallbackName);
+}
+
+bool extractJsFunctionOrSource(Value v, std::string* outSource, std::string* outName) {
+    if (!outSource) return false;
+    outSource->clear();
+    if (outName) outName->clear();
+    if (v.isString()) {
+        *outSource = ev::toUtf8(v);
+        return !outSource->empty();
+    }
+    if (ev::isFunction(v)) {
+        ev::Persistent fnObj(v);
+        Value nameVal = ev::getProperty(fnObj.get(), "name");
+        if (nameVal.isString() && outName) *outName = ev::toUtf8(nameVal);
+        Value toStrFn = ev::getProperty(fnObj.get(), "toString");
+        if (ev::isFunction(toStrFn)) {
+            auto r = ev::call(toStrFn, fnObj.get(), {});
+            if (!r.thrown && r.value.isString()) {
+                *outSource = ev::toUtf8(r.value);
+            }
+        }
+        return !outSource->empty();
+    }
+    return false;
+}
+
 Value compileJsKernelValue(std::span<const Value> args, bool defaultShaderStage) {
     if (args.empty()) return ev::null();
 
     std::string rawSource;
     std::string inferredName;
-    if (args[0].isString()) {
-        rawSource = ev::toUtf8(args[0]);
-    } else if (ev::isFunction(args[0])) {
-        ev::Persistent fnObj(args[0]);
-        Value nameVal = ev::getProperty(fnObj.get(), "name");
-        if (nameVal.isString()) inferredName = ev::toUtf8(nameVal);
-        Value toStrFn = ev::getProperty(fnObj.get(), "toString");
-        if (ev::isFunction(toStrFn)) {
-            auto r = ev::call(toStrFn, fnObj.get(), {});
-            if (!r.thrown && r.value.isString()) {
-                rawSource = ev::toUtf8(r.value);
-            }
-        }
-    }
-    if (rawSource.empty()) return ev::null();
+    if (!extractJsFunctionOrSource(args[0], &rawSource, &inferredName)) return ev::null();
 
     bronze::GpuCompileOptions gpuOpts;
     gpuOpts.stage = brass::target::SpirvStage::Compute;
@@ -533,13 +547,19 @@ void attachJsGpuKernelFunctions(ObjectBuilder& b) {
     b.def("compileShader", 2, [](Value, std::span<const Value> a) -> Value {
         return compileJsKernelValue(a, true);
     });
+    b.def("differentiate", 2, [](Value, std::span<const Value> a) -> Value {
+        return compileJsAutodiffValue(a);
+    });
+    b.def("compileGradShader", 2, [](Value, std::span<const Value> a) -> Value {
+        return compileJsAutodiffValue(a);
+    });
     b.def("vulkanComputeAvailable", 0, [](Value, std::span<const Value>) -> Value {
         return ev::fromBool(brass::gpu::vulkan_available());
     });
 }
 
 bool isCompiledJsKernelObject(Value val) {
-    return lookupKernelEntry(val) != nullptr;
+    return lookupKernelEntry(val) != nullptr || isCompiledJsAutodiffObject(val);
 }
 
 bool tryEvalCompiledKernelHeightGrid(
@@ -552,7 +572,11 @@ bool tryEvalCompiledKernelHeightGrid(
     float worldZ0) {
     if (!padded || paddedW <= 0 || paddedH <= 0) return false;
     auto entry = lookupKernelEntry(kernelObj);
-    if (!entry || !entry->compiled.ok || !entry->compiled.hasScalarReturn) return false;
+    if (!entry) {
+        return tryEvalCompiledAutodiffHeightGrid(
+            kernelObj, padded, paddedW, paddedH, cellSize, worldX0, worldZ0);
+    }
+    if (!entry->compiled.ok || !entry->compiled.hasScalarReturn) return false;
 
     for (int gz = 0; gz < paddedH; ++gz) {
         const float wz = worldZ0 + static_cast<float>(gz) * cellSize;
