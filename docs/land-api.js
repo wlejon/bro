@@ -196,7 +196,10 @@
  * @property {number[]} [absorb=[0.45, 0.09, 0.05]] - what each metre of water
  *   takes from the light, red, green and blue (1/m).
  * @property {number[]} [scatter=[0.004, 0.016, 0.03]] - deep water's albedo.
- * @property {number} [roughness=0.08] - the surface's roughness.
+ * @property {number} [roughness=0.08] - the surface's roughness where its
+ *   waves are a pixel or more; where they are far under one (a pixel tens
+ *   of metres) it widens to the spread of their slopes (0.5), so the sun's
+ *   glint seen from afar is a broad soft patch.
  * @example
  *   land.setLand({ sea: { level: 0, absorb: [0.6, 0.12, 0.08] } });
  *   land.setLand({ sea: null });   // dry

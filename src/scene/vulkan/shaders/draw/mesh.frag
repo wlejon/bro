@@ -445,7 +445,13 @@ void main() {
     }
 #endif
 #if defined(SCENE_LAND) || defined(SCENE_GROUND)
-    roughness = mix(roughness, landSeaRoughness(), landWet);
+    // Waves under a pixel are slopes it averages: a sea seen from afar
+    // glints over the spread of its waves' slopes (Cox and Munk's, about
+    // 0.2 for a moderate wind: a perceptual roughness near 0.5), a broad soft
+    // glint, not the near ripples' hot spot a few pixels wide.
+    float seaPixel = length(fwidth(worldPos));
+    float seaRough = mix(landSeaRoughness(), max(landSeaRoughness(), 0.5), smoothstep(0.5, 50.0, seaPixel));
+    roughness = mix(roughness, seaRough, landWet);
 #endif
     // A land's plants past their range (mesh_land.vert): their canopy over
     // the ground as far as they cover it, in place of the ground's own.
