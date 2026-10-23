@@ -132,3 +132,65 @@ assert(typeof bro.layout === 'object' && typeof bro.layout.solve === 'function',
     assert(boxLayout.main.x >= 100 && boxLayout.main.x + boxLayout.main.w <= 300,
            'main box placed without overlap inside container; got x=' + boxLayout.main.x);
 }
+
+// ---- #142: bro.superoptimize (Counterexample-Pruned CEGIS Superoptimizer) ---
+
+{
+    assert(typeof bro.superoptimize === 'function', 'bro.superoptimize is a function');
+    const sres = bro.superoptimize(`
+        function branchyAbs(x) {
+            if (x < 0) return -x;
+            return x;
+        }
+    `);
+    assert(sres.verified === true && sres.optimized === true, 'bro.superoptimize synthesizes branchless abs');
+    assert(sres.synthesizedExpression === '((x ^ (x >> 31)) - (x >> 31))',
+           'synthesized Hacker\'s Delight abs; got ' + sres.synthesizedExpression);
+    assert(sres.stats.concretePruned > 0, 'concrete pruning filtered candidates');
+}
+
+// ---- #143: bro.rewriteSource (Source-to-Source Verified JS Rewriter) --------
+
+{
+    assert(typeof bro.rewriteSource === 'function', 'bro.rewriteSource is a function');
+    const rep = bro.rewriteSource(`
+        function polySoup(x) {
+            let u = x & 255;
+            if (u < 0) return -1;
+            let a = Math.max(0, x & 255);
+            let b = Math.floor((x & 255) / 8);
+            let p = Math.pow(u, 3) + 3 * Math.pow(u, 2) + 3 * u + 1;
+            return a + b + p;
+        }
+    `);
+    assert(rep.allProvenEquivalent === true, 'bro.rewriteSource proves equivalence');
+    assert(rep.rewrites.length >= 3, 'bro.rewriteSource applies multiple passes');
+    assert(rep.estimatedOpsAfter < rep.estimatedOpsBefore, 'ops reduced');
+}
+
+// ---- #144: bro.autoKernel (SMT Loop-to-@kernel Parallelizer) ----------------
+
+{
+    assert(typeof bro.autoKernel === 'function', 'bro.autoKernel is a function');
+    const okLoop = bro.autoKernel(`
+        function saxpy(out, x, y, a, n) {
+            for (let i = 0; i < n; i++) {
+                out[i] = a * x[i] + y[i];
+            }
+        }
+    `);
+    assert(okLoop.parallelizable === true, 'saxpy loop proven parallelizable');
+    assert(okLoop.provenNoWaw && okLoop.provenNoRaw && okLoop.provenNoWar, 'no loop-carried hazards');
+    assert(okLoop.kernel !== null && typeof okLoop.kernel === 'object', 'compiled @kernel attached');
+
+    const badLoop = bro.autoKernel(`
+        function prefixSum(a, x, n) {
+            for (let i = 0; i < n; i++) {
+                a[i] = a[i - 1] + x[i];
+            }
+        }
+    `);
+    assert(badLoop.parallelizable === false, 'prefixSum loop rejected due to RAW dependency');
+    assert(badLoop.hazards.length >= 1 && badLoop.hazards[0].hazardKind === 'RAW',
+           'reports concrete RAW hazard witness');
+}

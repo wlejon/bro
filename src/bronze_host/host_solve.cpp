@@ -881,6 +881,8 @@ void attachBroSolveApis(Value broObj) {
     layoutNs.set("available", ev::fromBool(true));
     layoutNs.def("solve", 3, jsBroLayoutSolve);
     bro.set("layout", layoutNs.get());
+
+    attachBroRewriteApis(bro.get());
 }
 
 }  // namespace bro::bronze_host
