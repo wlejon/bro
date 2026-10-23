@@ -567,16 +567,37 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                     }
                     w[11] = static_cast<float>(R);
                     w[15] = static_cast<float>(fill.key.root);
-                    double c[3];
+                    double c[3], oh[3];
                     dirOf(body, {fill.key.root, mx, mz}, c);
                     for (int i = 0; i < 3; ++i) {
                         const double o = R * c[i];
                         const float hi = static_cast<float>(o);
+                        oh[i] = hi;
                         w[20 + 2 * i] = hi;
                         w[21 + 2 * i] = static_cast<float>(o - static_cast<double>(hi));
                     }
                     w[26] = static_cast<float>(mx);
                     w[27] = static_cast<float>(mz);
+                    // The high part's chart point on each face, from the
+                    // face's corner, as double-floats: the grid's regions
+                    // are read from it (land_fill.comp's landChartExact).
+                    const LandGrid& grid = land->grid();
+                    for (int k = 0; k < 6; ++k) {
+                        const CubeFace& G = cubeFace(k);
+                        double n = 0.0, u = 0.0, v = 0.0;
+                        for (int i = 0; i < 3; ++i) {
+                            n += G.n[i] * oh[i];
+                            u += G.u[i] * oh[i];
+                            v += G.v[i] * oh[i];
+                        }
+                        const double s[2] = {grid.radius() * std::atan2(u, n) + grid.half(),
+                                             grid.radius() * std::atan2(v, n) + grid.half()};
+                        for (int a = 0; a < 2; ++a) {
+                            const float hi = static_cast<float>(s[a]);
+                            w[28 + 4 * k + a] = hi;
+                            w[30 + 4 * k + a] = static_cast<float>(s[a] - static_cast<double>(hi));
+                        }
+                    }
                 }
                 std::memset(dataSlice.mapped, 0, dataBytes);
                 if (!data.empty()) std::memcpy(dataSlice.mapped, data.data(), data.size() * sizeof(float));

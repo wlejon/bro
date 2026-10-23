@@ -11,6 +11,7 @@
 // chart's (landPosOf), and landPoint stands it in the land's frame.
 
 #include "ground/scene_land_layout.h"
+#include "ground/land_trig.glsl"
 
 #ifndef LAND_W
 layout(set = 3, binding = 0) uniform LandDrawUBO { vec4 w[LD_WORDS / 4]; } landDraw;
@@ -68,8 +69,8 @@ vec3 landUp(vec2 m) {
     float r = length(m);
     float th = r / landRadius();
     vec2 dir = r > 0.0 ? m / r : vec2(0.0);
-    float s = sin(th);
-    return vec3(s * dir.x, cos(th), s * dir.y);
+    float s = landSin(th);
+    return vec3(s * dir.x, 1.0 - landVersin(th), s * dir.y);
 }
 
 // The water over map point `m`, ground at `lh` under it, seen from the
@@ -93,10 +94,10 @@ vec3 landPoint(vec2 m, float h) {
     float r = length(m);
     float th = r / R;
     vec2 dir = r > 0.0 ? m / r : vec2(0.0);
-    float s = sin(th), hs = sin(0.5 * th);
+    float s = landSin(th), vs = landVersin(th);
     float sinc = th > 0.0 ? s / th : 1.0;
     vec2 xz = m * sinc + (h * s) * dir;
-    return vec3(xz.x, h * cos(th) - 2.0 * R * hs * hs, xz.y);
+    return vec3(xz.x, h * (1.0 - vs) - R * vs, xz.y);
 }
 
 // The map point under land's-frame point `p` (place.h's landToMap).
@@ -162,10 +163,10 @@ bool landChartOff(vec2 m, out int f, out vec2 off) {
     float r = length(m);
     float th = r / R;
     vec2 dir = r > 0.0 ? m / r : vec2(1.0, 0.0);
-    float s = sin(th), hs = sin(0.5 * th);
-    vec3 d = vec3(s * dir.x, cos(th), s * dir.y);
+    float s = landSin(th), vs = landVersin(th);
+    vec3 d = vec3(s * dir.x, 1.0 - vs, s * dir.y);
     // d less the anchor's direction (0, 1, 0), kept small near it.
-    vec3 dd = vec3(s * dir.x, -2.0 * hs * hs, s * dir.y);
+    vec3 dd = vec3(s * dir.x, -vs, s * dir.y);
     f = landFaceOf(d);
     vec3 n = landFaceN(f), u = landFaceU(f), v = landFaceV(f);
     float an = n.y;   // the anchor's d.n
@@ -193,7 +194,7 @@ vec2 landChartMap(int f, vec2 off, bool near) {
     if (near) {
         vec4 a = landFaceAnchor(f);
         vec2 ta = tan((a.xy + a.zw) * (LAND_W(LD_TILES / 4).x / R));
-        vec2 td = tan(off / R);
+        vec2 td = landTan(off / R);
         // n + t u + t' v is the anchor's |w| up plus tan(A + D) - tan A
         // along each axis.
         vec2 dt = td * (1.0 + ta * ta) / (1.0 - ta * td);

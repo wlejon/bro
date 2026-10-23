@@ -493,10 +493,13 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     node.setRegionsSettled(settled);
     if (settled) land.warm = true;
 
+    // Work while a region is being made or one can be begun; then the
+    // table, after begin: a region it dropped for room stales the tiles over
+    // it, made again this frame, and they must not find it in the table
+    // (they would keep its heights after it is gone).
+    const bool working = land.hasJob || begin(node, land, wanted);
     writeTable(frame, node, land, cmd);
-    if (!land.table.buffer) return {};
-    // Work while a region is being made or one can be begun.
-    if (!land.hasJob && !begin(node, land, wanted)) return {};
+    if (!land.table.buffer || !working) return {};
     // (Until the ground under the eye has first been in, all of them made
     // whatever the frame's budget: the land is wrong there, and the plants
     // wait on it. Then kRequiredSteps a frame whatever the budget, so the

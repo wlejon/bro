@@ -53,6 +53,7 @@
 #include "land_module.glsl.src.h"
 #include "land_canopy.glsl.src.h"
 #include "land_body.glsl.src.h"
+#include "land_trig.glsl.src.h"
 #include "land_fill.comp.src.h"
 #include "land_grid.glsl.src.h"
 #include "land_grid_config.glsl.src.h"
@@ -188,6 +189,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_module.glsl", kVkLandModuleSrc},
         {"ground/land_canopy.glsl", kVkLandCanopySrc},
         {"ground/land_body.glsl", kVkLandBodySrc},
+        {"ground/land_trig.glsl", kVkLandTrigSrc},
         {"ground/land_grid.glsl", kVkLandGridSrc},
         {"ground/land_grid_config.glsl", kVkLandGridConfigSrc},
         {"ground/land_process_layout.h", kVkLandProcessLayoutSrc},

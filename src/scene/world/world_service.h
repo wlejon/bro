@@ -47,11 +47,14 @@
 // granted nothing for starveFrames frames running has its first job granted
 // whatever is left of the budget, if it costs no more than four times the
 // budget (one job: a kind priced near the floor, or behind a carry that
-// never clears, still moves, and its cost is measured again; a kind priced
-// at its dear end from a few slow spans was never granted another to learn
-// it cheaper. A land tile's fill alone, its world's whole module run over
-// it, is some 0.1 to 0.2 ms on a 4090 however few texels it has: at the
-// floor it was never granted, and tiles made stale stayed so for good).
+// never clears, still moves, and its cost is measured again); while it is
+// not, its cost falls by starveDecay a frame until it is. A kind priced at
+// its dear end from a few slow spans (a frame the clouds' bake or a pipeline
+// compile shared) was else never granted another to learn it cheaper: a
+// land tile's fill alone, its world's whole module run over it, is some
+// 0.1 to 0.2 ms on a 4090, and once priced past four budgets the tiles made
+// stale under the regions stayed so for good, terraces of a coarser field's
+// heights standing among the new.
 //
 // Budget. The executor reports each frame the GPU timer read (observe()):
 // its GPU milliseconds and the service's own share of them. What the frame
@@ -137,6 +140,7 @@ struct WorldServiceConfig {
     int settleQuiet = 4;        // for this many frames running (what the frames in flight read back)
     int settleFrames = 30;      // and has settled, whatever is left, after this many frames
     int starveFrames = 2;     // a kind granted nothing this many frames running has its first job granted
+    float starveDecay = 0.8f; // and its cost times this each frame more it is not (until one is)
 };
 
 /// A frame the GPU timer read, as the service sees it.

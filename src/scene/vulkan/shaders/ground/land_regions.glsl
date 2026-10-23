@@ -14,7 +14,9 @@
 //
 // and ground/land_grid.glsl before it.
 //
-//   vec4 landFieldDir(int c, vec3 d)      channel c at body direction d (round)
+//   vec4 landFieldDir(int c, vec3 d, vec3 p)
+//                                         channel c at body direction d (round; p for
+//                                         an includer's exact charts, landChartOf)
 //   vec4 landFieldAt(int c, vec2 x)       channel c at chart point x (flat)
 //   ...From(c, p, minLevel)               only the levels from minLevel up
 
@@ -83,11 +85,15 @@ vec4 landRegionTexel(int slot, int c, vec2 t) {
     return lo + (hi - lo) * f.y;
 }
 
-// Level L of one root at chart point x: its regions' weighted values (times
-// wf) added to sum, their weights to cover.
-void landRegionLevel(int c, int L, int root, vec2 x, float wf, inout vec4 sum, inout float cover) {
+// Level L of one root at chart point s: its regions' weighted values (times
+// wf) added to sum, their weights to cover. The point is given from the
+// root's corner (chart + half) as a double-float, s.xy + s.zw: a chart's
+// metres run to millions, where a float's step is half a metre and more, and
+// a region's cells are tens of metres, so a float chart point would read
+// them in steps (the ground terraced in treads and risers).
+void landRegionLevel(int c, int L, int root, vec4 s, float wf, inout vec4 sum, inout float cover) {
     float step = landRegionStep(L), cell = landRegionCell(L);
-    vec2 u = (x + LAND_GRID_HALF) / step;
+    vec2 u = (s.xy + s.zw) / step;
     float a = float(LAND_REGION_APRON) / float(LAND_REGION_CELLS - 2 * LAND_REGION_APRON);
     int lo, hi;
     landRegionRange(L, lo, hi);
@@ -100,8 +106,11 @@ void landRegionLevel(int c, int L, int root, vec2 x, float wf, inout vec4 sum, i
             if (i > h.x) break;
             int slot = landRegionSlot(landRegionKey(L, root, i, j));
             if (slot < 0) continue;
-            vec2 o = -LAND_GRID_HALF + vec2(i, j) * step - float(LAND_REGION_APRON) * cell;
-            vec2 t = (x - o) / cell;
+            // (The region's first texel's corner from the root's is a whole
+            // number of cells; the point's high part less its lattice step
+            // is exact, the low part added after.)
+            precise vec2 r = s.xy - vec2(i, j) * step;
+            precise vec2 t = (r + float(LAND_REGION_APRON) * cell + s.zw) / cell;
             float w = wf * landRegionWeight(t.x) * landRegionWeight(t.y);
             if (w <= 0.0) continue;
             sum += w * landRegionTexel(slot, c, t);
@@ -115,7 +124,22 @@ void landRegionLevel(int c, int L, int root, vec2 x, float wf, inout vec4 sum, i
 // only while some of the value is still theirs: where the finest regions
 // cover a point, they are all that is read.)
 #ifdef LAND_GRID_ROUND
-vec4 landFieldDirFrom(int c, vec3 d, int minLevel) {
+// Face f's chart point from its corner (chart + half) as a double-float
+// (xy + zw) at body direction d, the point p (the includer's: an offset from
+// a point whose charts it knows exactly). An includer that has them defines
+// LAND_CHART_EXACT and this function; else the float chart's.
+#ifdef LAND_CHART_EXACT
+vec4 landChartExact(int f, vec3 d, vec3 p);
+#endif
+vec4 landChartOf(int f, vec3 d, vec3 p) {
+#ifdef LAND_CHART_EXACT
+    return landChartExact(f, d, p);
+#else
+    return vec4(landGridChart(d, f) + LAND_GRID_HALF, 0.0, 0.0);
+#endif
+}
+
+vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) {
     if (c >= LAND_REGION_KEEP) return landGridAtDir(c, d);
     // The face the point is on; the others only within a band of its edge.
     int f0 = landGridFace(d);
@@ -143,7 +167,7 @@ vec4 landFieldDirFrom(int c, vec3 d, int minLevel) {
             if (wf <= 0.0) continue;
             vec4 s = vec4(0.0);
             float cv = 0.0;
-            landRegionLevel(c, L, f, x, wf, s, cv);
+            landRegionLevel(c, L, f, landChartOf(f, d, p), wf, s, cv);
             sum += s;
             cover += cv;
             wsum += wf;
@@ -156,7 +180,7 @@ vec4 landFieldDirFrom(int c, vec3 d, int minLevel) {
     if (rest > 0.0) acc += rest * landGridAt(c, f0, x0);
     return acc;
 }
-vec4 landFieldDir(int c, vec3 d) { return landFieldDirFrom(c, d, 0); }
+vec4 landFieldDir(int c, vec3 d, vec3 p) { return landFieldDirFrom(c, d, p, 0); }
 #else
 vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
     if (c >= LAND_REGION_KEEP) return landGridAt(c, 0, x);
@@ -167,7 +191,7 @@ vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
         if (fade <= 0.0) continue;
         vec4 sum = vec4(0.0);
         float cover = 0.0;
-        landRegionLevel(c, L, 0, x, 1.0, sum, cover);
+        landRegionLevel(c, L, 0, vec4(x + LAND_GRID_HALF, 0.0, 0.0), 1.0, sum, cover);
         acc += rest * fade * sum;
         rest *= 1.0 - cover * fade;
     }
@@ -180,8 +204,8 @@ vec4 landFieldAt(int c, vec2 x) { return landFieldAtFrom(c, x, 0); }
 #else   // no regions: the global grid alone
 
 #ifdef LAND_GRID_ROUND
-vec4 landFieldDirFrom(int c, vec3 d, int minLevel) { return landGridAtDir(c, d); }
-vec4 landFieldDir(int c, vec3 d) { return landGridAtDir(c, d); }
+vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) { return landGridAtDir(c, d); }
+vec4 landFieldDir(int c, vec3 d, vec3 p) { return landGridAtDir(c, d); }
 #else
 vec4 landFieldAtFrom(int c, vec2 x, int minLevel) { return landGridAt(c, 0, x); }
 vec4 landFieldAt(int c, vec2 x) { return landGridAt(c, 0, x); }

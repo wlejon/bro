@@ -245,6 +245,13 @@ void SceneMeshDrawer::offerTurf(SceneFrame& frame, WorldService& service) {
             mixKey(&d->nodeId, sizeof(d->nodeId));
             mixKey(&g, sizeof(g));
             mixKey(&db, sizeof(db));
+            // (A land's items move without its generation, as its regions
+            // come in and out: the turf's tiles over them are stale then,
+            // their heights a coarser field's, terraces under the grass.)
+            if (land) {
+                const uint64_t s = land->itemsSerial();
+                mixKey(&s, sizeof(s));
+            }
         }
         if (const LandNode* land = roundLand(frame.graph, *grass)) {
             // On a round body the tiles are the land's chart's, over its

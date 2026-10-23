@@ -66,7 +66,7 @@ vec4 landGrid(int c, vec2 p) {
 }
 vec4 landGrid(int c, vec3 p) {
 #if defined(LAND_GRID_ROUND) && defined(LAND_ROUND)
-    return landFieldDir(c, normalize(vec3(landOx.x, landOy.x, landOz.x) + p));
+    return landFieldDir(c, normalize(vec3(landOx.x, landOy.x, landOz.x) + p), p);
 #else
     return vec4(0.0);
 #endif

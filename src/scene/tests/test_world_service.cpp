@@ -437,6 +437,19 @@ void testEveryKindProgresses() {
         ++waited;
     }
     check(waited == c.starveFrames, "the dear kind waited starveFrames frames (" + std::to_string(waited) + ")");
+    // ...and one priced past four budgets is granted once its price has
+    // fallen under them (2.0 by 0.8 a frame: under 1.5 the second frame
+    // past starveFrames), never left for good.
+    int dearerWaited = 0;
+    for (int f = 0; f < 40; ++f) {
+        s.beginFrame();
+        s.offer({2, 0, dearer, 1.0f, 1.0, false});
+        s.schedule();
+        if (!s.granted(dearer).empty()) break;
+        ++dearerWaited;
+    }
+    check(dearerWaited < 20, "a kind priced past four budgets is still granted (after " +
+                                 std::to_string(dearerWaited) + " frames)");
 }
 
 }  // namespace

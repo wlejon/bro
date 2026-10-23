@@ -64,12 +64,14 @@
 
 // --- the fills ---
 #define LF_GROUP            8     // a workgroup is LF_GROUP x LF_GROUP texels of one tile
-#define LF_TILE_WORDS       28    // vec4 0: x0, z0 (the corner of its border: its own corner less the border;
+#define LF_TILE_WORDS       52    // vec4 0: x0, z0 (the corner of its border: its own corner less the border;
                                   // on a round body from the tile's middle), its texel (m), its slot.
                                   // A round body's (land_fill.comp): vec4 1: the tile middle's tan(x / R),
                                   // tan(z / R), cos(x / R), cos(z / R); 2: its face's n (body frame), R;
                                   // 3: u, its root; 4: v; 5: the middle's datum point R n_c (body frame),
-                                  // x and y as double-floats; 6: its z (xy), the middle's chart point (zw)
+                                  // x and y as double-floats; 6: its z (xy), the middle's chart point (zw);
+                                  // 7 + k: the datum point's high parts' chart point on the grid's face k
+                                  // from its corner (chart + half), x and z high (xy) and low (zw)
 #define LF_P_STRIDE         0     // uint: a tile's texels a side with its border
 #define LF_P_BORDER         1     // uint
 #define LF_P_TILES          2     // uint: the fills this dispatch

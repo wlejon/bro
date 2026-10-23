@@ -105,8 +105,13 @@ void WorldService::schedule() {
         granted_[static_cast<size_t>(j.kind)].push_back(j);
         ++stats_.granted;
     }
-    for (size_t k = 0; k < kinds_.size(); ++k)
-        kinds_[k].starved = !offered[k] || !granted_[k].empty() ? 0 : kinds_[k].starved + 1;
+    for (size_t k = 0; k < kinds_.size(); ++k) {
+        Kind& kind = kinds_[k];
+        kind.starved = !offered[k] || !granted_[k].empty() ? 0 : kind.starved + 1;
+        // (A starved kind's price falls until its first job is granted and
+        // measured again.)
+        if (kind.starved >= config_.starveFrames) kind.cost = std::max(kind.cost * config_.starveDecay, 1e-9f);
+    }
     if (settle_ > 0) {
         quiet_ = stats_.worstError <= config_.settleError ? quiet_ + 1 : 0;
         if (quiet_ >= config_.settleQuiet) settle_ = 0;

@@ -62,7 +62,7 @@ vec3 procUp() {
 
 vec4 procCoarse(int c) {
 #ifdef LAND_GRID_ROUND
-    return landFieldDirFrom(c, procUp(), procLevel_ + 1);
+    return landFieldDirFrom(c, procUp(), vec3(0.0), procLevel_ + 1);
 #else
     return landFieldAtFrom(c, procChart(), procLevel_ + 1);
 #endif

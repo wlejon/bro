@@ -11,6 +11,7 @@
 
 #include "ground/land_body.glsl"
 #include "ground/scene_land_layout.h"
+#include "ground/land_trig.glsl"
 
 layout(local_size_x = LF_GROUP, local_size_y = LF_GROUP) in;
 
@@ -35,6 +36,9 @@ layout(set = 0, binding = 7, rgba32f) uniform readonly image2DArray landRegionIm
 layout(std430, set = 0, binding = 8) readonly buffer LandRegionTable { uvec4 entries[]; } landRegionTable;
 vec4 landRegionLoad(ivec3 t) { return imageLoad(landRegionImage, t); }
 uvec4 landRegionEntry(uint i) { return landRegionTable.entries[i]; }
+#ifdef LAND_ROUND
+#define LAND_CHART_EXACT   // (landChartExact, below: the tile's charts)
+#endif
 #include "ground/land_regions.glsl"
 
 // The module's noise sampled a texel apart (brokit's noise_glsl): a coarse
@@ -51,6 +55,28 @@ vec4 landData(int i) { return landDataBuffer.words[clamp(i, 0, 63)]; }
 #include "ground/land_canopy.glsl"
 
 #ifdef LAND_ROUND
+uint lfTile;   // the tile's first vec4 in fills
+
+#if defined(LAND_GRID_ROUND) && defined(LAND_CHART_EXACT)
+// Face f's chart point (from its corner, a double-float) of the datum point
+// p (relative to the noise's origin O): O's high part's (the CPU's, in
+// double) plus the chart's difference to it, worked out from p and the
+// difference of the tangents, (a - a0) / (1 + a a0) (tan(x - x0) for the
+// tangents a, a0), so that nothing of O's millions of metres rounds it.
+vec4 landChartExact(int f, vec3 d, vec3 p) {
+    vec3 N = kLandFaceN[f], U = kLandFaceU[f], V = kLandFaceV[f];
+    vec3 oh = vec3(landOx.x, landOy.x, landOz.x);
+    vec3 q = p + vec3(landOx.y, landOy.y, landOz.y);   // from the high part
+    float nO = dot(N, oh), nq = dot(N, q);
+    vec2 a0 = vec2(dot(U, oh), dot(V, oh)) / nO;
+    // a - a0 = (u.q - a0 n.q) / (n.O + n.q)
+    vec2 da = (vec2(dot(U, q), dot(V, q)) - a0 * nq) / (nO + nq);
+    vec2 dx = LAND_GRID_RADIUS * atan(da / (1.0 + a0 * (a0 + da)));
+    vec4 ref = fills[lfTile + 7u + uint(f)];
+    return vec4(ref.xy, ref.zw + dx);
+}
+#endif
+
 // A round body's tile (LF_TILE_WORDS): its texels on its cube face, each
 // relative to the tile's middle, whose datum point is the noise's origin.
 struct RoundTile {
@@ -66,7 +92,7 @@ vec3 roundDatum(RoundTile T, vec2 o, out vec3 d) {
     vec2 a = o / T.R;
     // tan(x_c + a) - tan(x_c) = sin(a) / (cos(x_c + a) cos(x_c))
     vec2 c = vec2(cos(atan(T.mid.x) + a.x), cos(atan(T.mid.y) + a.y));
-    vec2 dt = sin(a) / (c * T.mid.zw);
+    vec2 dt = landSin(a) / (c * T.mid.zw);
     vec3 wc = T.n + T.mid.x * T.u + T.mid.y * T.v;
     vec3 dw = dt.x * T.u + dt.y * T.v;
     float lc = length(wc);
@@ -115,6 +141,7 @@ void main() {
 
 #ifdef LAND_ROUND
     uint b = tile * (LF_TILE_WORDS / 4);
+    lfTile = b;
     RoundTile T;
     T.mid = fills[b + 1];
     T.n = fills[b + 2].xyz;

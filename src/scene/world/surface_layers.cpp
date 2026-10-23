@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <queue>
+#include <unordered_set>
 
 namespace bro::scene {
 
@@ -318,10 +319,29 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
     frame_ = frame;
     if (!configured()) return;
     stats_.levels = static_cast<uint32_t>(levels_);
+    const bool restaled = gridDirty_;
     if (gridDirty_) buildGrid();
 
     std::vector<Need> needs;
     stats_.worstError = select(view, needs);
+    // Items changed: a held tile this frame does not need, made stale by
+    // them, goes. (The draw reads the finest tile held wherever it wants
+    // finer than the needed ones, so such a tile, kept as it was, showed the
+    // ground as it was before: a region's heights standing as terraces
+    // among the new where the eye had looked closer before.)
+    if (restaled) {
+        std::unordered_set<uint64_t> needed;
+        needed.reserve(needs.size());
+        for (const Need& n : needs) needed.insert(n.key.packed());
+        std::vector<uint64_t> stale;
+        for (const auto& [packed, t] : tiles_) {
+            if (!t.filled || needed.count(packed)) continue;
+            const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << t.key.level);
+            const Cell g = under(t.key, side / config_.tileTexels * config_.border);
+            if (mix64(generation_ ^ g.sum) != t.generation) stale.push_back(packed);
+        }
+        for (const uint64_t packed : stale) evict(packed);
+    }
     // Two needed tiles a page apart share an entry: the nearer is kept.
     {
         std::unordered_map<uint32_t, size_t> byEntry;
