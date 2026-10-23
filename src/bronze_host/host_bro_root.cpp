@@ -25,6 +25,7 @@
 #include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_solve.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine.h"
 #include "util/log.h"
@@ -179,6 +180,7 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent app(makeBroAppValue());
         ev::setProperty(bro->get(), "app", app.get());
     }
+    attachBroSolveApis(bro->get());
 
     // Feature-gated unavailable namespace stubs (Proxy throwing on any call)
     auto setUnavailable = [&](const char* name, const char* flag) {
@@ -450,6 +452,7 @@ void installWorkerBroRoot() {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
     }
+    attachBroSolveApis(bro->get());
 
     auto setUnavailable = [&](const char* name, const char* flag) {
         ev::Persistent stub(makeUnavailableNamespace(name, flag));
