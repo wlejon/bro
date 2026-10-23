@@ -4,27 +4,27 @@
 // docs/scene-world-architecture.md §13 "volumes"): the world's module, its
 // cover, the engine's noise, the march and the shadow.
 //
-//   - The module's set (CloudShaders, a ModuleShaders set): the march
-//     (sky/clouds.frag), the cover's bake (sky/clouds_cover.comp) and the
-//     cache's extinction (sky/clouds_cache.comp), each with the world's
-//     module in sky/cloud_module.glsl's place and, for a deck set over a
-//     land with processes, its grid's layout in ground/land_grid_config.glsl's.
+//   - The module's set (CloudShaders, a ModuleShaders set): the cover's
+//     bake (sky/clouds_cover.comp) and the cache's base (sky/clouds_cache.comp),
+//     each with the world's module in sky/cloud_module.glsl's place and,
+//     for a deck set over a land with processes, its grid's layout in
+//     ground/land_grid_config.glsl's. Nothing else runs the module.
 //   - The noise (sky/clouds_noise.comp): one tile of tiling noise and its
 //     mips, made once when a scene first has clouds.
 //   - The cover: the module's cloudCover over a cube about the body, baked
 //     when the clouds are set (and when the land they read is ready).
-//   - The cache (sky/clouds_layout.h): the deck's extinction over levels of
-//     windows about the eye's nadir on a chart fixed to the body, and the
-//     depths from each texel toward the sun and up (sky/clouds_light.comp);
-//     a level baked whole when its window moves, a share of every level's
-//     rows each frame. The march reads it in the module's place but for
-//     the leaves of near clouds.
+//   - The cache (sky/clouds_layout.h): the world's base and the engine's
+//     forms' mean extinction over levels of windows about the eye's nadir
+//     on a chart fixed to the body, and the depths from each texel toward
+//     the sun and up (sky/clouds_light.comp); a level baked whole when its
+//     window moves, a share of every level's rows each frame.
 //   - The shadow (sky/clouds_shadow.comp): what the deck leaves of the sun
 //     over CL_SHADOW_LEVELS levels about the body's point under the eye,
 //     read from the cache every frame the deck is drawn, read by every lit
 //     shader (the lighting set's binding 24; scene_lighting.glsl's
 //     sceneCloudSun).
-//   - The march: drawn over the opaque surfaces in the HDR scope
+//   - The march (sky/clouds.frag, built in): the cache's base cut into the
+//     forms per sample, drawn over the opaque surfaces in the HDR scope
 //     (pass_clouds.h).
 //
 // Nothing of it runs, and nothing is allocated, in a scene without clouds:
@@ -52,13 +52,12 @@ struct SceneGpu;
 class CloudShaders : public ModuleShaders {
 public:
     enum Stage : int {
-        March,    // clouds.frag
         Cover,    // clouds_cover.comp
         Cache,    // clouds_cache.comp
         kStages
     };
-    static constexpr BuiltinSceneShader kBuiltin[kStages] = {
-        BuiltinSceneShader::CloudsFrag, BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsCacheComp};
+    static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::CloudsCoverComp,
+                                                              BuiltinSceneShader::CloudsCacheComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl.
@@ -110,6 +109,8 @@ public:
         float cacheE2[4];
         float cacheNadir[4];
         float cacheLevel[13][4];
+        float forms[4];
+        float wind[4];
         float data[64][4];
     };
 
@@ -133,6 +134,8 @@ private:
     VkDescriptorSetLayout noiseSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout noiseLayout_ = VK_NULL_HANDLE;
     VkShaderModule skyVs_ = VK_NULL_HANDLE;
+    VkShaderModule marchFs_ = VK_NULL_HANDLE;
+    PipelineVariants marchPipelines_;
     VkShaderModule noiseCs_ = VK_NULL_HANDLE;
     VkPipeline noisePipeline_ = VK_NULL_HANDLE;
     VkSampler coverSampler_ = VK_NULL_HANDLE;

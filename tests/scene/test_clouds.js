@@ -77,7 +77,7 @@ if (!scn) {
     assert(differing(clearDown, offDown) === 0, `a clear deck draws the land as no deck does (${differing(clearDown, offDown)} bytes differ)`);
 
     // --- an overcast deck ------------------------------------------------------------
-    scn.setClouds({ module: 'vec4 cloudCover(vec3 up) { return vec4(1.0); }\nfloat cloudDensity(CloudPoint q) { return 0.02; }',
+    scn.setClouds({ module: 'vec4 cloudCover(vec3 up) { return vec4(1.0); }\nfloat cloudDensity(CloudPoint q) { return 1.0; }',
                     bottom: 1500, top: 3000 });
     const overUp = shoot(up), overDown = shoot(down);
     const skyOver = boxRGB(overUp, 32, 16, 160, 96);

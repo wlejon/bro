@@ -22,19 +22,20 @@
 
 namespace bro::scene::vk {
 
-static_assert(sizeof(SceneClouds::Block) == 16 * (3 + 6 + 4 + CL_CACHE_LEVELS + CL_MAX_DATA));
+static_assert(sizeof(SceneClouds::Block) == 16 * (3 + 6 + 4 + CL_CACHE_LEVELS + 2 + CL_MAX_DATA));
 static_assert(CloudSettings::kMaxData == CL_MAX_DATA);
 static_assert(CL_CACHE_LEVELS == 13 && CL_CACHE_SIDE % (CL_CACHE_GROUP * CL_CACHE_SLICES) == 0);
 
 namespace {
 
 constexpr VkFormat kCacheFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kSigmaFormat = VK_FORMAT_R16_SFLOAT;
+constexpr VkFormat kSigmaFormat = VK_FORMAT_R16G16_SFLOAT;
+constexpr VkFormat kDistFormat = VK_FORMAT_R16_SFLOAT;
 constexpr VkFormat kCoverFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;
 constexpr VkFormat kGridFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 // (Half floats: the mips' variance, E[x^2] - E[x]^2, is a small difference.)
-constexpr VkFormat kNoiseFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kNoiseFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
 uint64_t mixBits(uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); }
@@ -94,6 +95,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     computeLayout_ = pipelineLayout(dev, {setLayout_}, 4 * sizeof(int32_t));
     noiseLayout_ = pipelineLayout(dev, {noiseSetLayout_}, 2 * sizeof(int32_t));
     skyVs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::SkyVert);
+    marchFs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsFrag);
     noiseCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsNoiseComp);
     lightCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsLightComp);
     shadowCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsShadowComp);
@@ -118,7 +120,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     s.addressModeU = s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     if (vkCreateSampler(dev, &s, nullptr, &cacheSampler_) != VK_SUCCESS) cacheSampler_ = VK_NULL_HANDLE;
     // What binding 24 of the lighting set holds with no clouds (never read).
-    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !noisePipeline_ || !lightPipeline_ ||
+    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_ || !lightPipeline_ ||
         !distPipeline_ ||
         !shadowPipeline_ || !noiseSampler_ || !coverSampler_ || !cacheSampler_ ||
         !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1)) {
@@ -161,7 +163,10 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(dev, distCs_);
     SceneVkShaderModule::destroy(dev, shadowCs_);
     lightCs_ = distCs_ = shadowCs_ = VK_NULL_HANDLE;
+    marchPipelines_.destroy(gpu.device);
     SceneVkShaderModule::destroy(dev, skyVs_);
+    SceneVkShaderModule::destroy(dev, marchFs_);
+    marchFs_ = VK_NULL_HANDLE;
     for (VkPipelineLayout* l : {&marchLayout_, &computeLayout_, &noiseLayout_})
         if (*l) vkDestroyPipelineLayout(dev, *l, nullptr);
     for (VkDescriptorSetLayout* l : {&setLayout_, &noiseSetLayout_})
@@ -228,9 +233,9 @@ bool SceneClouds::ensureImages(SceneGpu& gpu) {
         !a.createStorageImage(CL_SHADOW_SIDE, CL_SHADOW_SIDE, 1, kShadowFormat, shadow_, false, CL_SHADOW_LEVELS) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kSigmaFormat, cacheSigma_, false) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kCacheFormat, cacheLight_, false) ||
-        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, 1, kCacheFormat, cacheBand_, false, CL_CACHE_LEVELS) ||
-        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kSigmaFormat, distA_, false) ||
-        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kSigmaFormat, distB_, false) ||
+        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, 1, kCacheFormat, cacheBand_, false, 2 * CL_CACHE_LEVELS) ||
+        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kDistFormat, distA_, false) ||
+        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kDistFormat, distB_, false) ||
         !a.createStorageImage(1, 1, 1, kCoverFormat, coverNone_, false, 1) ||
         !a.createStorageImage(1, 1, 1, kGridFormat, gridNone_, false, 1) || !createNoise(gpu)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' images");
@@ -377,6 +382,12 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     block_.params[1] = p11 > 0.0f && frame.view.height ? 2.0f / (p11 * static_cast<float>(frame.view.height)) : 1e-3f;
     block_.params[2] = std::max((top - bottom) / 32.0f, 20.0f);
     block_.params[3] = 0.15f;
+    block_.forms[0] = c.extinction;
+    block_.forms[1] = c.billowScale;
+    block_.forms[2] = c.detailScale;
+    block_.forms[3] = c.detail;
+    for (int i = 0; i < 3; ++i) block_.wind[i] = c.wind[i];
+    block_.wind[3] = 0.0f;
     const size_t vecs = std::min(c.data.size() / 4, static_cast<size_t>(CL_MAX_DATA));
     std::memset(block_.data, 0, sizeof(block_.data));
     std::memcpy(block_.data, c.data.data(), vecs * 4 * sizeof(float));
@@ -595,7 +606,7 @@ void SceneClouds::recordCache(SceneFrame& frame) {
 
 void SceneClouds::recordDraw(SceneFrame& frame) {
     if (!on_ || !current_) return;
-    VkPipeline pipeline = current_->pipelines.get(0, frame.hdrTarget, [&] {
+    VkPipeline pipeline = marchPipelines_.get(0, frame.hdrTarget, [&] {
         // Premultiplied over what is drawn: the deck's light and the air
         // before it added, what is behind it dimmed by what it lets through.
         VkPipelineColorBlendAttachmentState over{};
@@ -609,7 +620,7 @@ void SceneClouds::recordDraw(SceneFrame& frame) {
         over.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                               VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
-        b.setShaderStages(skyVs_, (*current_)[CloudShaders::March])
+        b.setShaderStages(skyVs_, marchFs_)
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(frame.hdrTarget)
          .disableBlending(frame.hdrTarget.colorCount)

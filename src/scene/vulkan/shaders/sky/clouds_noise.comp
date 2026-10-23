@@ -17,8 +17,10 @@
 
 layout(local_size_x = CL_NOISE_GROUP, local_size_y = CL_NOISE_GROUP, local_size_z = CL_NOISE_GROUP) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D dst;
-layout(set = 0, binding = 1, rgba16f) uniform readonly image3D src;
+// (Eight bits a channel: the march reads it many times a pixel, and half
+// the bytes of a texel is the march's cache misses halved.)
+layout(set = 0, binding = 0, rgba8) uniform writeonly image3D dst;
+layout(set = 0, binding = 1, rgba8) uniform readonly image3D src;
 
 layout(push_constant) uniform NoisePush {
     int level;   // 0: make the noise; else the mean of the level before

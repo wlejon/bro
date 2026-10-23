@@ -6,8 +6,8 @@
 // last from half a cell, each read at the level as coarse as the step is
 // long, so the depth toward the sun is a cumulus's own near the texel and
 // its field's mean a few kilometres off, and no small cloud flickers in a
-// shadow afar. Written with the texel's extinction, as the march reads it;
-// and each column's band (sky/clouds_layout.h's CL_B_BAND).
+// shadow afar. Written with the texel's base, which the march cuts into
+// its forms; and each column's band (sky/clouds_layout.h's CL_B_BAND).
 
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
@@ -61,13 +61,13 @@ void main() {
     float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
     vec3 p = up * mix(clouds.shell.x, clouds.shell.y, h);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
-    float sigma = texelFetch(cloudSigmaMap, at, 0).r;
+    float base = texelFetch(cloudSigmaMap, at, 0).g;
     vec3 sun = normalize(cloudToBody(clouds.sun.xyz));
     // (From half a cell, or of a bin straight up: the texel's own.)
     float first = 0.5 * min(cell, clouds.cacheE1.w * 2.0);
     float toSun = cloudDepthToward(p, sun, first, 1.35, 28, cell);
     float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell);
-    imageStore(cacheOut, at, vec4(sigma, toSun, toUp, 0.0));
+    imageStore(cacheOut, at, vec4(base, toSun, toUp, 0.0));
     if (bin != 0) return;
     // The column's band (the march's probe): the heights that hold cloud in
     // it and the columns about it (so a lookup between texels holds every
@@ -90,4 +90,21 @@ void main() {
         }
     }
     imageStore(bandOut, ivec3(x, y, k), vec4(lo, hi, most, own));
+    // The column as a layer (the march's, where the deck is a few pixels
+    // thick or less): seen from above, what each bin sends weighs as much
+    // as it takes of the view; the mean of the depth over those (the light's
+    // way up and, slanted, toward the sun: the column is far wider than it
+    // is deep, so its neighbours are as it is) and of the height.
+    float tauAbove = 0.0, took = 0.0, depth = 0.0, height = 0.0;
+    for (int b = CL_CACHE_BINS - 1; b >= 0; --b) {
+        float d = texelFetch(cloudSigmaMap, ivec3(x, y, k * CL_CACHE_BINS + b), 0).r * clouds.cacheE1.w;
+        if (d <= 0.0) continue;
+        float wgt = exp(-tauAbove) * (1.0 - exp(-d));
+        took += wgt;
+        depth += wgt * (tauAbove + 0.5 * min(d, 1.0));
+        height += wgt * (float(b) + 0.5) / float(CL_CACHE_BINS);
+        tauAbove += d;
+    }
+    vec2 mean = took > 0.0 ? vec2(depth, height) / took : vec2(0.0, 0.5);
+    imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), vec4(own, mean, 0.0));
 }

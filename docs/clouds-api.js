@@ -3,46 +3,62 @@
  *
  * `scene.setClouds(opts)` sets one deck of volumetric cloud: a shell about
  * the body (`scene.setBody`) from `bottom` to `top` metres over its datum.
- * What the clouds ARE belongs to the world: its MODULE, GLSL that says how
- * much of the sky they cover where (cloudCover) and how dense they are at a
- * point of the deck (cloudDensity). The engine owns the rest:
+ * The work is split the Nubis way. The WORLD gives the clouds' BASE SHAPE:
+ * its MODULE, GLSL that says how much of the sky they cover where
+ * (cloudCover) and, at a point of the deck, how much of the air about it is
+ * cloud (cloudDensity, 0..1, low in frequency: its heaps and slabs, how
+ * they rise and thin). The ENGINE cuts that base into the clouds' FORMS and
+ * owns everything after:
  *
  *   - THE COVER. cloudCover is run once over a cube about the body when the
  *     deck is set (1024 a face, about 10 km a texel on an Earth, four
  *     samples a texel), so it may be as costly as it likes: FastNoise2
  *     trees' `.glsl()`, the land's processes' grid (cloudLandGrid), a
  *     world's weather systems from its data.
- *   - THE CACHE. cloudDensity baked about the eye's nadir on a chart fixed
- *     to the body: 13 levels of 128 x 128 columns, 32 bins up the deck,
- *     the finest cell 62.5 m and each level's twice the last's; with each
- *     texel the deck's depth from it toward the sun and up, the distance
- *     to the nearest cloud, and each column's band (the heights about it
- *     that hold cloud). A level is baked whole when its window moves, all
- *     of them when the deck, the time or the sun jumps, and a sixteenth of
- *     every level's rows each frame (the wind, the sun's motion).
+ *   - THE CACHE. cloudDensity is baked about the eye's nadir on a chart
+ *     fixed to the body: 13 levels of 128 x 128 columns, 32 bins up the
+ *     deck, the finest cell 62.5 m and each level's twice the last's. With
+ *     each texel: the forms' mean extinction over the cell, the deck's depth
+ *     from it toward the sun and up, the distance to the nearest cloud; with
+ *     each column its band (the heights about it that hold cloud) and the
+ *     column as a layer (its depth, and the mean depth and height of what it
+ *     sends up). A level is baked whole when its window moves, all of them
+ *     when the deck, the time or the sun jumps, and a sixteenth of every
+ *     level's rows each frame (the wind, the sun's motion). The world's
+ *     function never runs per pixel.
+ *   - THE FORMS. The engine's tiling noise cuts the base: Perlin-Worley
+ *     billows (`forms.billowScale` a tile) over a threshold that falls as
+ *     the base rises, so a base of 0.3 is scattered cumulus and 1 a solid
+ *     slab; eroded near the eye by finer Worley noise (`forms.detailScale`,
+ *     `forms.detail` deep): wisps under a cloud's base, cauliflower over its
+ *     middle. The detail fades out as it gets finer than a pixel, so far
+ *     views read the billows alone; everything drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
- *     against the scene's depth, at native resolution, on a grid of steps
- *     anchored at the eye (the same for every pixel, so nothing crawls).
- *     The air is crossed on the cache (its bands a cell at a time, its
- *     distance to cloud), so a clear sky and the gaps between clouds cost
- *     a few samples. The cloud is the cache's where its cell is as fine as
- *     the pixel, else cloudDensity's at the pixel's footprint, a step cut
- *     into leaves a few pixels long. Orbit, the limb, the deck from above,
- *     inside it and from the ground looking up are one path.
+ *     against the scene's depth, at native resolution, with no jitter (the
+ *     same picture every frame). The air is crossed on the cache (its bands
+ *     a cell at a time, its distance to cloud, the billows' share over a
+ *     step), so a clear sky and the gaps between clouds cost a few samples;
+ *     a step that holds cloud is cut into leaves a few pixels long, and a
+ *     cloud's face is found by halving, so it moves with the cloud and not
+ *     with the steps. From above, where the deck is a few pixels thick or
+ *     less (orbit, the far deck from the limb), each pixel reads the
+ *     column's layer instead, cut to the pixel by the billows: soft-edged
+ *     cloud from orbit for a few texture reads.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
- *     and through the deck toward it (the cache's depth: kilometres of it,
- *     so a tower's body shades its far side and its base), a dual-lobe
- *     phase with a forward lobe, multiple scattering as Wrenninge's
- *     octaves (dimmed at a cloud's thin edge), the sky's light from above
- *     (less what the cloud over the point hides) and the ground's from
- *     below, and the air before the deck applied as the land gets it.
+ *     and through the deck toward it (the forms themselves for the first few
+ *     hundred metres, so a billow shades the one behind it; the cache's
+ *     depth for kilometres past that), a dual-lobe phase with a forward
+ *     lobe, multiple scattering as Wrenninge's octaves (dimmed at a cloud's
+ *     thin edge), the sky's light from above (less what the cloud over the
+ *     point hides) and the ground's from below, and the air before the deck
+ *     applied as the land gets it.
  *   - THE SHADOW. The deck's shadow on the land, plants, grass and every
  *     lit mesh, through the shared sun term (common/scene_lighting.glsl):
  *     levels of a map on a plane at the eye's nadir, each twice the last,
  *     read from the cache's depth toward the sun.
  *
- * Noise-free under a pixel: the module is asked for the density's MEAN over
- * `q.footprint` (below), the engine's noise is mipmapped and carries its own
+ * Noise-free under a pixel: the base is baked as its mean over each cell
+ * (`q.footprint`), the engine's noise is mipmapped and carries its own
  * variance (cloudNoiseAbove), so a cloud seen from orbit, its shadow and the
  * same cloud from a kilometre agree, and nothing sparkles.
  *
@@ -54,12 +70,27 @@
  */
 
 /**
+ * @typedef {Object} CloudForms
+ * @property {number} [extinction=0.06]  a cloud's heart's extinction (1/m):
+ *     what a full billow takes out of the view a metre
+ * @property {number} [billowScale=12000]  the billows' tile (m): how wide the
+ *     engine's Perlin-Worley noise repeats; a cumulus is about a tenth of it
+ * @property {number} [detailScale=1600]  the detail's tile (m)
+ * @property {number} [detail=0.45]  how deep the detail erodes the billows'
+ *     edges (0 .. 1); 0 is smooth billows
+ */
+
+/**
  * @typedef {Object} CloudsOptions
  * @property {string|{source: string}} module  GLSL defining cloudCover and
  *     cloudDensity (the contract below). Required unless `enabled` is false.
  * @property {number} [bottom=1500]  the deck's bottom, metres over the datum
  * @property {number} [top=8000]     its top (must be over `bottom`)
  * @property {number} [albedo=0.98]  the cloud's single-scattering albedo
+ * @property {CloudForms} [forms]    the engine's forms the base is cut into
+ * @property {ArrayLike<number>} [wind=[0,0,0]]  the wind (m/s, the body's
+ *     frame) the forms drift with; a module that moves its base reads
+ *     cloudDrift(p) to move with them
  * @property {boolean} [shadows=true]  the deck shadows what the sun lights
  * @property {LandNode|number} [land]  a round land whose processes' grid the
  *     cover's bake reads (cloudLandGrid); without one it reads zero
@@ -96,13 +127,15 @@ SceneGraph.prototype.cloudStats = function () {};
  *       Each in 0..1 (stored rgba16f). Baked once (see THE COVER).
  *
  *   float cloudDensity(CloudPoint q)
- *       Extinction (1/m) at a point of the deck: cumulus about 0.02..0.1, a
- *       thin veil 0.001. Called for every texel of the cache (q.footprint
- *       its cell) and for the march's samples of cloud nearer than the
- *       cache resolves (q.footprint the pixel's): the costly one. Read q.cover and the
- *       engine's noise, and return the MEAN over q.footprint: detail finer
- *       than the footprint must be at its mean, or what a pixel or a shadow
- *       texel covers will alias. Zero outside the shell is the engine's.
+ *       The deck's BASE at a point of it, 0..1: how much of the air about it
+ *       is cloud. 0 is clear, 1 a solid slab, and between, the share the
+ *       engine's billows fill (so 0.3 is scattered cumulus, 0.7 broken
+ *       cloud). Its shape up the deck is the clouds' shape: rising to a
+ *       cumulus's middle and thinning to its top, flat for a stratus slab.
+ *       Low in frequency (kilometres): the engine adds everything finer.
+ *       Baked into the cache only, each texel's mean over its cell
+ *       (q.footprint, 62.5 m at least), never per pixel. Zero outside the
+ *       shell is the engine's.
  *
  *   struct CloudPoint {
  *       vec3 p;          // the point in the body's frame (m from its centre)
@@ -117,34 +150,34 @@ SceneGraph.prototype.cloudStats = function () {};
  * The engine gives the module:
  *
  *   vec4  cloudData(int i)               the world's data (setClouds' `data`)
+ *   vec3  cloudDrift(vec3 p)             `p` carried back by the wind to where
+ *         the engine's forms are now (p - wind * time): a base read at it
+ *         moves with its clouds
  *   vec4  cloudNoise(vec3 x, float fp)   one tile of tiling noise at `x` in
  *         tiles (a tile is whatever length the world divides by), `fp` the
- *         footprint in tiles (its mips give the mean beyond): x Perlin-Worley
- *         (a cloud's body), y Worley fbm at 4 cells a tile, z at 8 (the
- *         detail that erodes edges), w x squared (x's variance in the
- *         footprint).
+ *         footprint in tiles (its mips give the mean beyond): x Perlin-Worley,
+ *         y Worley fbm at 4 cells a tile, z at 8, w x squared (x's variance
+ *         in the footprint).
  *   float cloudNoiseAbove(vec4 n, float t)  the share of n's footprint where
  *         n.x is over t: all or nothing up close, the covered share from afar.
- *         Cutting clouds out with it (rather than with step/smoothstep on
- *         n.x) keeps a field of cumulus seen from orbit as grey as its
- *         clouds and gaps make it, not a uniform sheet.
  *   float cloudRemap(float v, float lo, float hi, float a, float b)
  *   vec4  cloudLandGrid(int c, vec3 up)  channel c of the land's processes'
  *         grid at `up` (in cloudCover only; zero without `land`)
  *
- * Example (a deck covering a third of the sky in cumulus):
+ * Example (a third of the sky in cumulus, heaped toward the deck's middle):
  *
- *   scene.setClouds({ bottom: 1500, top: 4000, module: `
+ *   scene.setClouds({ bottom: 1500, top: 4000,
+ *       forms: { billowScale: 8000, detailScale: 1200, detail: 0.5 },
+ *       wind: [6, 0, 0],
+ *       module: `
  *       vec4 cloudCover(vec3 up) { return vec4(0.35, 0.0, 0.0, 0.0); }
  *       float cloudDensity(CloudPoint q) {
- *           vec4 n = cloudNoise(q.p / 6000.0, q.footprint / 6000.0);
- *           float grad = smoothstep(0.0, 0.1, q.height) * smoothstep(1.0, 0.4, q.height);
- *           float share = cloudNoiseAbove(n, 1.0 - q.cover.x * grad);
- *           return 0.04 * share;
+ *           float heap = smoothstep(0.0, 0.15, q.height) * smoothstep(1.0, 0.5, q.height);
+ *           return q.cover.x * heap;
  *       }` });
  *
  * The planet demo (broworkshop demos/planet/world.js, "the clouds") is a
  * full module: cover from its climate and the land's wet belts, frontal
- * bands and cyclones from its data, cumulus fields with gaps, and the
- * density's footprint mean taken as a transmittance mean.
+ * bands and cyclones from its data, and a base that heaps cumulus fields
+ * where the cover is broken and lays slabs where it is overcast.
  */

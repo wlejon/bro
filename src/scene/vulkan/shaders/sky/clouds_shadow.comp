@@ -41,10 +41,12 @@ void main() {
         vec2 xy = cloudChartAt(up);
         int k = cloudCacheLevel(xy, texel);
         if (k < CL_CACHE_LEVELS) {
-            vec4 v = textureLod(cloudCacheMap, cloudCacheCoord(xy, 0.0, k), 0.0);
+            vec3 at = cloudCacheCoord(xy, 0.0, k);
+            float tau = textureLod(cloudCacheMap, at, 0.0).y;
+            float sigma = textureLod(cloudSigmaMap, at, 0.0).r;
             // (The texel's depth is from its bin's middle: the half bin below it.)
             float below = 0.5 * clouds.cacheE1.w / max(dot(up, normalize(cloudToBody(s))), 0.05);
-            T = exp(-(v.y + v.x * below));
+            T = exp(-(tau + sigma * below));
         }
     }
     imageStore(shadowOut, ivec3(t, l), vec4(T));

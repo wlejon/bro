@@ -633,7 +633,8 @@ const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const
     tl_error.clear();
     auto* g = graphOf(self);
     if (!g) return tl_error.c_str();
-    // [enabled, bottom, top, albedo, shadows, land id] (js/scene_graph.js's setClouds).
+    // [enabled, bottom, top, albedo, shadows, land id, extinction, billow scale,
+    // detail scale, detail, wind x, y, z] (js/scene_graph.js's setClouds).
     auto at = [&](uint32_t i, double d) { return params && i < params_len && std::isfinite(params[i]) ? params[i] : d; };
     scene::CloudSettings c;
     c.enabled = at(0, 0.0) > 0.5;
@@ -653,6 +654,11 @@ const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const
         c.albedo = static_cast<float>(std::clamp(at(3, 0.98), 0.0, 1.0));
         c.shadows = at(4, 1.0) > 0.5;
         c.land = static_cast<uint32_t>(std::max(at(5, 0.0), 0.0));
+        c.extinction = static_cast<float>(std::clamp(at(6, 0.06), 1e-5, 10.0));
+        c.billowScale = static_cast<float>(std::clamp(at(7, 12000.0), 10.0, 1e7));
+        c.detailScale = static_cast<float>(std::clamp(at(8, 1600.0), 1.0, 1e7));
+        c.detail = static_cast<float>(std::clamp(at(9, 0.45), 0.0, 1.0));
+        for (uint32_t i = 0; i < 3; ++i) c.wind[i] = static_cast<float>(at(10 + i, 0.0));
         const size_t floats = std::min<size_t>(data ? data_len : 0, scene::CloudSettings::kMaxData * 4);
         if (floats) c.data.assign(data, data + floats);
     }

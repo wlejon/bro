@@ -5,7 +5,8 @@
 // `top` metres over its datum, whose clouds are a world's MODULE, GLSL
 // compiled at run time (vulkan/shaders/sky/scene_cloud_layer.glsl says what
 // it defines): the cover over the body (baked once into a cube) and the
-// extinction at a point of the deck. The engine owns the rest
+// base at a point of the deck (baked into the cache about the eye), which
+// the engine cuts into its forms. The engine owns the rest
 // (vulkan/sky/scene_clouds.h): the march through the deck from any
 // altitude against the scene's depth, the light through the air and the
 // deck, the air before it, and its shadow on the land.
@@ -29,6 +30,15 @@ struct CloudSettings {
     float top = 8000.0f;         // its top
     float albedo = 0.98f;        // what a droplet scatters of what it takes out of the beam
     bool shadows = true;         // its shadow on the land
+    /// The engine's forms (docs/clouds-api.js): a cloud's heart's
+    /// extinction (1/m), the billows' tile (m), the detail's tile (m) and
+    /// how deep the detail erodes (0 .. 1); the wind they drift with (m/s,
+    /// the body's frame).
+    float extinction = 0.06f;
+    float billowScale = 12000.0f;
+    float detailScale = 1600.0f;
+    float detail = 0.45f;
+    float wind[3] = {0.0f, 0.0f, 0.0f};
     /// cloudData(i): at most kMaxData vec4s, as floats.
     std::vector<float> data;
     static constexpr size_t kMaxData = 64;

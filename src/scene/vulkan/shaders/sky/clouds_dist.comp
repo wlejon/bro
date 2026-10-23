@@ -3,7 +3,7 @@
 // clouds_layout.h): for the texels clouds_cache.comp baked (the same rows),
 // how far (metres, the most of the distances along the chart's two axes and
 // up) the nearest texel that holds cloud lies, out to CL_CACHE_REACH cells
-// across and CL_CACHE_REACH bins up; the march crosses that much clear air
+// across and the whole column up; the march crosses that much clear air
 // in one step (Nubis 3's empty-space skipping). The usual separable
 // distance transform, an axis a pass (push.rows.w): along the first axis
 // into the first scratch, the second into the second, then up the deck
@@ -56,10 +56,10 @@ void main() {
         imageStore(distB, ivec3(x, y, z), vec4(d));
     } else {
         float binH = clouds.cacheE1.w;
-        float d = float(R + 1) * max(cell, binH);
-        // (Past the bins it reads, up or down within the deck: as far as known.)
-        if (bin - R > 0 || bin + R < CL_CACHE_BINS - 1) d = min(d, float(R + 1) * binH);
-        for (int b = max(bin - R, 0); b <= min(bin + R, CL_CACHE_BINS - 1); ++b)
+        // (Every bin of the column: a column clear over all of the deck is
+        // as far from cloud as the cells across say.)
+        float d = float(R + 1) * cell;
+        for (int b = 0; b < CL_CACHE_BINS; ++b)
             d = min(d, max(float(abs(b - bin)) * binH, imageLoad(distB, ivec3(x, y, k * CL_CACHE_BINS + b)).r));
         vec4 v = imageLoad(cacheOut, ivec3(x, y, z));
         imageStore(cacheOut, ivec3(x, y, z), vec4(v.xyz, d));

@@ -13,15 +13,18 @@
 //     CL_B_SHADOW_OUT the shadow's levels, written (r32f storage, a level a layer)
 //     CL_B_LAND_GRID  the land's processes' grid (the bake's cloudLandGrid)
 //     CL_B_CACHE      the deck's cache about the eye, sampled (below): its
-//                     extinction and the depths toward the sun and up
+//                     base and the depths toward the sun and up
 //     CL_B_CACHE_OUT  the same, written by its light's bake (rgba16f storage)
-//     CL_B_SIGMA      the cache's extinction alone, sampled (the light's bake)
-//     CL_B_SIGMA_OUT  the same, written by the module's bake (r16f storage)
+//     CL_B_SIGMA      the cache's extinction (x, the forms' mean over a
+//                     cell) and base (y), sampled (the light's bake, the shadow)
+//     CL_B_SIGMA_OUT  the same, written by the module's bake (rg16f storage)
 //     CL_B_BAND       the cache's columns' bands, sampled: a level a layer,
 //                     x the lowest height (0 .. 1 up the deck) that holds
 //                     cloud about the column (its own and its neighbours'),
 //                     y the highest, z the most a column about it holds
-//                     (its optical depth up the whole deck), w its own
+//                     (its optical depth up the whole deck), w its own;
+//                     and from layer CL_CACHE_LEVELS on, the column as a
+//                     layer at each level (cloudCacheColumn)
 //     CL_B_BAND_OUT   the same, written by the light's bake (rgba16f storage)
 //     CL_B_DIST_A/B   the distance transform's scratch (r16f storage, as the
 //                     cache: sky/clouds_dist.comp)
@@ -82,13 +85,14 @@
 // column of a cell CL_CACHE_BINS bins up the deck. A cell is stored at its
 // index modulo the side (toroidally: a window that moves keeps what it
 // still covers, and a lookup wraps); the levels lie one above another in z
-// of one 3D image, CL_CACHE_BINS each. A texel of the cache: x the deck's
-// extinction there, its mean over the cell (the module's at the cell's
-// footprint), y the optical depth from there toward the sun out of the
-// deck, z the same straight up, w how far (m) the nearest cloud is, out to
-// CL_CACHE_REACH cells across and bins up (sky/clouds_dist.comp). A level is baked whole when its window
-// moves, every level when the deck, the chart or the time jumps, and
-// otherwise every CL_CACHE_SLICES-th row of each a frame (the wind, the
+// of one 3D image, CL_CACHE_BINS each. A texel of the cache: x the world's
+// base there (its cloudDensity at the cell's footprint, which the march
+// cuts into the engine's forms), y the optical depth from there toward the
+// sun out of the deck (through the forms' mean extinction), z the same
+// straight up, w how far (m) the nearest cloud is, out to CL_CACHE_REACH
+// cells across and the column up (sky/clouds_dist.comp). A level is baked
+// whole when its window moves, every level when the deck, the chart or the
+// time jumps, and otherwise every CL_CACHE_SLICES-th row of each a frame (the wind, the
 // sun's motion).
 #define CL_CACHE_LEVELS     13
 #define CL_CACHE_SIDE       128
@@ -96,7 +100,7 @@
 #define CL_CACHE_TEXEL0     62.5
 #define CL_CACHE_MARGIN     62.0     // cells about the nadir a level's lookups stay within
 #define CL_CACHE_SLICES     16
-#define CL_CACHE_REACH      8        // cells (and bins) the distance to cloud is sought over
+#define CL_CACHE_REACH      8        // cells across the distance to cloud is sought over
 #define CL_CACHE_GROUP      8
 
 #endif

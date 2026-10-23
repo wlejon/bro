@@ -11,20 +11,22 @@
 //       costly as it likes (FastNoise2 trees' .glsl(), the land's processes'
 //       grid through cloudLandGrid). Each of its four values in 0 .. 1.
 //   float cloudDensity(CloudPoint q)
-//       the deck's extinction (1/m) at a point of it: cumulus about 0.02 to
-//       0.1, a thin veil 0.001. Called where the engine marches the deck
-//       (every pixel's view through it, the sun's way out of it from each of
-//       those samples, the shadow's levels), so it is the costly one: read
-//       q.cover (the cover there, bilinear) and the engine's noise
-//       (cloudNoise), and keep detail finer than q.footprint at its mean,
-//       so what is under a pixel blurs softly and the same every frame. Zero
-//       outside the deck is the engine's.
+//       the deck's base at a point of it, 0 .. 1: how much of the air about
+//       it is cloud (0 clear, 1 a solid slab; between, the share of it the
+//       engine's billows fill, so the base's own shape, how it rises and
+//       thins toward the tops, is the clouds' heaps and slabs). Low in
+//       frequency: it is baked into the cache about the eye (each texel's
+//       mean over its cell, q.footprint, at least 62.5 m), never run per
+//       pixel, so it may read q.cover, the engine's noise (cloudNoise) and
+//       the world's data as it likes. Zero outside the deck is the engine's.
 //
 // and may read cloudData(i), the world's data (vec4 i of at most 64). The
-// engine owns the rest: the march against the scene's depth, the light (the
-// sun through the air and through the deck, its forward lobe and its
-// multiple scattering, the sky's light), the air before the deck, and the
-// deck's shadow on the land.
+// engine owns the rest: the forms the base is cut into (cloudForms: its
+// billows and their eroded edges, the cauliflower over a cloud's middle and
+// the wisps under its base, by the world's scales and strength), the march
+// against the scene's depth, the light (the sun through the air and through
+// the deck, its forward lobe and its multiple scattering, the sky's light),
+// the air before the deck, and the deck's shadow on the land.
 //
 // The includer defines CLOUD_SET, the set this block sits in.
 
@@ -44,6 +46,8 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 cacheE2;       // xyz its second axis
     vec4 cacheNadir;    // xy the eye's nadir on the chart (m)
     vec4 cacheLevel[CL_CACHE_LEVELS];   // xy the cell (index) of level k's window that holds the nadir
+    vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w its strength
+    vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with
     vec4 data[CL_MAX_DATA];
 } clouds;
 
@@ -155,16 +159,86 @@ vec3 cloudToBody(vec3 a) {
     return vec3(dot(clouds.toBody[0].xyz, a), dot(clouds.toBody[1].xyz, a), dot(clouds.toBody[2].xyz, a));
 }
 
-// The deck's extinction (1/m) at air-space point `a`, what is finer than
-// `footprint` metres at its mean: zero outside the deck.
-float cloudExtinction(vec3 a, float footprint) {
-    float r = length(a);
-    float h = (r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
-    if (h <= 0.0 || h >= 1.0) return 0.0;
-    vec3 p = cloudToBody(a);
-    vec3 up = p / r;
-    CloudPoint q = CloudPoint(p, up, h, r - clouds.shell.z, cloudCoverAt(up), footprint, clouds.shell.w);
-    return max(cloudDensity(q), 0.0);
+// --- The forms ---------------------------------------------------------------------
+//
+// What the engine cuts the world's base into (Schneider's Nubis): billows
+// of its Perlin-Worley noise over a threshold the base sets (where the base
+// is 1, all of the air; where it is a half, about half, in heaps), each
+// denser inward from its edge, the edge eroded by the finer Worley detail
+// into cauliflower over a cloud's middle and wisps under its base. Each
+// read at the footprint's mips, the billows' share of the footprint taken
+// where a billow is finer than it, so the deck's mean is the same near and
+// far: what the cache bakes at a cell's footprint is what the march's
+// samples at a pixel's average to over that cell.
+
+// Body point `p` as the forms' noise sees it: carried by the wind.
+vec3 cloudDrift(vec3 p) { return p - clouds.wind.xyz * clouds.shell.w; }
+
+// The extinction (1/m) of base `base` (0 .. 1) at drifted body point `pd`,
+// `inCloud` the height within the cloud's column (0 its base .. 1 its top:
+// the detail's wisps under, cauliflower over), what is finer than
+// `footprint` metres at its mean, with the detail or without (the cache's
+// bake: its cells are wider than any of it).
+// The detail's strength at `footprint` (none where it is finer than that).
+float cloudDetailAt(float footprint) {
+    float D = clouds.forms.z;
+    return clouds.forms.w * (1.0 - smoothstep(D / 80.0, D / 10.0, footprint));
+}
+// The noises cloudForms reads at `pd`: the billows' and (where `detail`)
+// the detail's. (Apart from the forms' arithmetic, so a caller that also
+// reads the cache issues every lookup before it waits on any.)
+vec4 cloudBillows(vec3 pd, float footprint) {
+    float S = clouds.forms.y;
+    return cloudNoise(pd / S, footprint / S);
+}
+vec4 cloudDetail(vec3 pd, float footprint) {
+    float D = clouds.forms.z;
+    return cloudNoise(pd * vec3(1.0, 1.3, 1.0) / D, footprint / D);
+}
+// The forms of base `base` from the noises `n` (cloudBillows) and `e`
+// (cloudDetail, read where `wD`, cloudDetailAt, is above zero).
+// The billows' threshold on base `base` where the billows' noise is `n`
+// (lifted where the cells' fbm is high: billows cluster).
+float cloudFormsThreshold(vec4 n, float base) {
+    float lift = (n.y * 0.65 + n.z * 0.35 - 1.0) * 0.5;
+    return lift + (1.0 - lift) * (1.0 - min(base, 1.0));
+}
+// The share of the footprint `n` was read over that the billows fill.
+float cloudFormsShare(vec4 n, float base) {
+    if (base <= 0.0) return 0.0;
+    float thr = cloudFormsThreshold(n, base);
+    return thr >= 1.0 ? 0.0 : cloudNoiseAbove(n, thr);
+}
+float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
+    if (base <= 0.0) return 0.0;
+    float heart = clouds.forms.x, S = clouds.forms.y;
+    float thr = cloudFormsThreshold(n, base);
+    float share = thr >= 1.0 ? 0.0 : cloudNoiseAbove(n, thr);
+    float near = 1.0 - smoothstep(S / 80.0, S / 10.0, footprint);
+    if (share <= 0.0) return 0.0;
+    float sigma = 0.0;
+    if (near > 0.0) {
+        float body = clamp((n.x - thr) / max(1.0 - thr, 1e-3), 0.0, 1.0);
+        if (wD > 0.0) {
+            float fine = e.y * 0.6 + e.z * 0.4;
+            fine = mix(1.0 - fine, fine, smoothstep(0.0, 0.2, inCloud));
+            body = clamp(cloudRemap(body, fine * wD, 1.0, 0.0, 1.0), 0.0, 1.0);
+        }
+        sigma = heart * smoothstep(0.0, 0.25, body);
+    }
+    if (near >= 1.0) return sigma;
+    // From afar: what a footprint's clouds leave of the light over a path L
+    // (opaque at heart where they are, all of it between them), as an
+    // extinction, so a field from orbit lets the sky between its clouds through.
+    float L = clamp(footprint, 20.0, 0.6 * (clouds.shell.y - clouds.shell.x));
+    float through = 1.0 - share * (1.0 - exp(-heart * L));
+    return mix(-log(max(through, 1e-4)) / L, sigma, near);
+}
+float cloudForms(vec3 pd, float base, float inCloud, float footprint, bool detail) {
+    if (base <= 0.0) return 0.0;
+    float wD = detail ? cloudDetailAt(footprint) : 0.0;
+    vec4 e = wD > 0.0 ? cloudDetail(pd, footprint) : vec4(0.0);
+    return cloudFormsOf(cloudBillows(pd, footprint), e, wD, base, inCloud, footprint);
 }
 
 // Where a ray from `ro` (air space) is inside the deck before `tMax`: at
@@ -243,4 +317,11 @@ vec3 cloudCacheCoord(vec2 xy, float h, int k) {
 // The band of the columns about chart point `xy` at level `k`.
 vec4 cloudCacheBand(vec2 xy, int k) {
     return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(k)), 0.0);
+}
+// The column at chart point `xy` as a layer, at level `k` (sky/clouds_layout.h's
+// CL_B_BAND): x its optical depth up the deck, y the mean depth from its top
+// of what it sends up, z the mean height (0 .. 1) of that.
+vec4 cloudCacheColumn(vec2 xy, int k) {
+    return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(CL_CACHE_LEVELS + k)),
+                      0.0);
 }

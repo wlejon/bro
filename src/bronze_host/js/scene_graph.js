@@ -403,8 +403,12 @@
         if (on && !source) throw new TypeError("setClouds: `module` (GLSL defining cloudCover and cloudDensity) is required");
         const num = (v, d) => (v === undefined || v === null) ? d : +v;
         const land = o.land == null ? 0 : (typeof o.land === 'number' ? o.land : o.land.id);
+        const f = o.forms || {};
+        const wind = o.wind || [0, 0, 0];
         const params = [on ? 1 : 0, num(o.bottom, 1500), num(o.top, 8000), num(o.albedo, 0.98),
-                        o.shadows === undefined ? 1 : (o.shadows ? 1 : 0), land | 0];
+                        o.shadows === undefined ? 1 : (o.shadows ? 1 : 0), land | 0,
+                        num(f.extinction, 0.06), num(f.billowScale, 12000), num(f.detailScale, 1600),
+                        num(f.detail, 0.45), num(wind[0], 0), num(wind[1], 0), num(wind[2], 0)];
         const err = __bro_native.scene.SceneGraph_setClouds(this, source, toF64(params),
             o.data ? Float32Array.from(o.data) : new Float32Array(0));
         if (err) throw new TypeError('setClouds: ' + err);

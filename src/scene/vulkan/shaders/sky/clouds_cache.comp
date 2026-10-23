@@ -1,17 +1,19 @@
 #version 450
-// The cache's extinction (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h):
-// the world's cloudDensity at each texel's centre, its footprint the cell,
-// so a texel holds the deck's mean over its cell. A dispatch bakes rows
-// `y0`, `y0 + yStep`, ... of the levels from `first` on (z: a level's bins
-// one after another), each texel's cell the one of its level's window that
-// its storage index holds (toroidally).
+// The cache's base (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h): the
+// world's cloudDensity at each texel's centre, its footprint the cell, and
+// the extinction the engine's forms make of it there at that footprint
+// (the deck's mean over the cell: what the light, the distance to cloud
+// and the shadow read). A dispatch bakes rows `y0`, `y0 + yStep`, ... of
+// the levels from `first` on (z: a level's bins one after another), each
+// texel's cell the one of its level's window that its storage index holds
+// (toroidally).
 
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
 
 layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
 
-layout(set = 0, binding = CL_B_SIGMA_OUT, r16f) uniform writeonly image3D sigmaOut;
+layout(set = 0, binding = CL_B_SIGMA_OUT, rg16f) uniform writeonly image3D sigmaOut;
 
 layout(push_constant) uniform Push {
     ivec4 rows;    // x the first level, y the first row, z the step between rows
@@ -34,5 +36,7 @@ void main() {
     float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
     float r = mix(clouds.shell.x, clouds.shell.y, h);
     CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cloudCoverAt(up), cell, clouds.shell.w);
-    imageStore(sigmaOut, ivec3(x, y, k * CL_CACHE_BINS + bin), vec4(max(cloudDensity(q), 0.0)));
+    float base = clamp(cloudDensity(q), 0.0, 1.0);
+    float sigma = cloudForms(cloudDrift(q.p), base, 0.5, cell, false);
+    imageStore(sigmaOut, ivec3(x, y, k * CL_CACHE_BINS + bin), vec4(sigma, base, 0.0, 0.0));
 }

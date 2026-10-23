@@ -64,7 +64,6 @@
 #include "clouds_layout.h.src.h"
 #include "scene_cloud_layer.glsl.src.h"
 #include "cloud_module.glsl.src.h"
-#include "clouds.frag.src.h"
 #include "clouds_cover.comp.src.h"
 #include "clouds_cache.comp.src.h"
 #include "util/user_dirs.h"
@@ -207,7 +206,6 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
         {"ground/land_fill.comp", kVkLandFillCompSrc},
         {"ground/land_process.comp", kVkLandProcessCompSrc},
-        {"sky/clouds.frag", kVkCloudsFragSrc},
         {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
         {"sky/clouds_cache.comp", kVkCloudsCacheCompSrc},
     };
