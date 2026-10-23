@@ -32,12 +32,13 @@ struct CloudSettings {
     bool shadows = true;         // its shadow on the land
     /// The engine's forms (docs/clouds-api.js): a cloud's heart's
     /// extinction (1/m), the billows' tile (m), the detail's tile (m) and
-    /// how deep the detail erodes (0 .. 1); the wind they drift with (m/s,
-    /// the body's frame).
+    /// the metres over which the world's base rises from none to all at a
+    /// cloud's edge (what sizes the skin the forms move); the wind they
+    /// drift with (m/s, the body's frame).
     float extinction = 0.06f;
-    float billowScale = 12000.0f;
-    float detailScale = 1600.0f;
-    float detail = 0.45f;
+    float billowScale = 4000.0f;
+    float detailScale = 1200.0f;
+    float edge = 600.0f;
     float wind[3] = {0.0f, 0.0f, 0.0f};
     /// cloudData(i): at most kMaxData vec4s, as floats.
     std::vector<float> data;

@@ -11,7 +11,7 @@
 //   y  Worley's cells at 4 a tile, two finer octaves
 //   z  the same at 8 a tile
 //   w  x squared: its mips' mean less x's mean squared is how x varies
-//      within a footprint (cloudNoiseAbove: the share of it over a threshold)
+//      within a footprint
 
 #include "sky/clouds_layout.h"
 

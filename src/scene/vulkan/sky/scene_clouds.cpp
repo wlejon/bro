@@ -36,7 +36,6 @@ constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;
 constexpr VkFormat kGridFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 // (Half floats: the mips' variance, E[x^2] - E[x]^2, is a small difference.)
 constexpr VkFormat kNoiseFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kSdfFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
 uint64_t mixBits(uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); }
@@ -86,15 +85,11 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     set.addBinding(CL_B_BAND_OUT, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
     set.addBinding(CL_B_DIST_A, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
     set.addBinding(CL_B_DIST_B, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
-    set.addBinding(CL_B_NOISE_SDF, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kStages);
-    set.addBinding(CL_B_NOISE_SDF_HI, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kStages);
     set.addBinding(CL_B_HOLDS, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
     setLayout_ = set.build(dev);
-    // The noise's passes and its distance field's (sky/clouds_noise.comp,
-    // sky/clouds_noise_sdf.comp): a level written and the one before read;
-    // the field's pass's source and its result.
     SceneVkDescriptorLayoutBuilder noise;
-    for (uint32_t b = 0; b < 4; ++b) noise.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    noise.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    noise.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     noiseSetLayout_ = noise.build(dev);
     if (!setLayout_ || !noiseSetLayout_) return false;
     marchLayout_ = pipelineLayout(dev, {gpu.defaults.cameraLayout, gpu.defaults.lightingLayout, setLayout_}, 0);
@@ -107,9 +102,6 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     shadowCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsShadowComp);
     noisePipeline_ = noiseCs_ && noiseLayout_ ? createComputePipeline(dev, noiseCs_, noiseLayout_, "clouds noise")
                                               : VK_NULL_HANDLE;
-    sdfCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsNoiseSdfComp);
-    sdfPipeline_ = sdfCs_ && noiseLayout_ ? createComputePipeline(dev, sdfCs_, noiseLayout_, "clouds noise sdf")
-                                          : VK_NULL_HANDLE;
     distCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsDistComp);
     if (lightCs_ && computeLayout_) lightPipeline_ = createComputePipeline(dev, lightCs_, computeLayout_, "clouds light");
     if (distCs_ && computeLayout_) distPipeline_ = createComputePipeline(dev, distCs_, computeLayout_, "clouds dist");
@@ -129,8 +121,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     s.addressModeU = s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     if (vkCreateSampler(dev, &s, nullptr, &cacheSampler_) != VK_SUCCESS) cacheSampler_ = VK_NULL_HANDLE;
     // What binding 24 of the lighting set holds with no clouds (never read).
-    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_ || !sdfPipeline_ ||
-        !lightPipeline_ ||
+    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_ || !lightPipeline_ ||
         !distPipeline_ ||
         !shadowPipeline_ || !noiseSampler_ || !coverSampler_ || !cacheSampler_ ||
         !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1)) {
@@ -155,7 +146,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     chartValid_ = false;
     for (SceneVkImage* i :
          {&cover_, &shadow_, &coverNone_, &shadowNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
-          &distB_, &cacheHolds_, &sdfA_, &sdfB_, &sdfC_})
+          &distB_, &cacheHolds_})
         if (i->isValid()) gpu.allocator.destroyImage(*i);
     if (noise_.image) {
         for (VkImageView v : noise_.mips)
@@ -165,12 +156,10 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
         if (noise_.allocId) gpu.device.context().memoryPool().free(dev, noise_.allocId);
     }
     noise_ = Noise{};
-    for (VkPipeline* p : {&noisePipeline_, &sdfPipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_})
+    for (VkPipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_})
         if (*p) vkDestroyPipeline(dev, *p, nullptr);
-    sdfPipeline_ = lightPipeline_ = distPipeline_ = shadowPipeline_ = VK_NULL_HANDLE;
+    lightPipeline_ = distPipeline_ = shadowPipeline_ = VK_NULL_HANDLE;
     SceneVkShaderModule::destroy(dev, noiseCs_);
-    SceneVkShaderModule::destroy(dev, sdfCs_);
-    sdfCs_ = VK_NULL_HANDLE;
     SceneVkShaderModule::destroy(dev, lightCs_);
     SceneVkShaderModule::destroy(dev, distCs_);
     SceneVkShaderModule::destroy(dev, shadowCs_);
@@ -254,7 +243,7 @@ bool SceneClouds::ensureImages(SceneGpu& gpu) {
         LOG_ERROR("SceneClouds: failed creating the clouds' images");
         for (SceneVkImage* i :
              {&cover_, &shadow_, &coverNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_, &distB_,
-              &cacheHolds_, &sdfA_, &sdfB_, &sdfC_})
+              &cacheHolds_})
             if (i->isValid()) a.destroyImage(*i);
         return false;
     }
@@ -263,11 +252,6 @@ bool SceneClouds::ensureImages(SceneGpu& gpu) {
 
 bool SceneClouds::createNoise(SceneGpu& gpu) {
     if (noise_.image) return true;
-    if (!sdfA_.isValid() &&
-        (!gpu.allocator.createStorageImage(CL_NOISE_SIDE, CL_NOISE_SIDE, CL_NOISE_SIDE, kSdfFormat, sdfA_, false) ||
-         !gpu.allocator.createStorageImage(CL_NOISE_SIDE, CL_NOISE_SIDE, CL_NOISE_SIDE, kSdfFormat, sdfB_, false) ||
-         !gpu.allocator.createStorageImage(CL_NOISE_SIDE, CL_NOISE_SIDE, CL_NOISE_SIDE, kSdfFormat, sdfC_, false)))
-        return false;
     VkDevice dev = gpu.device.device();
     render::VulkanContext& ctx = gpu.device.context();
     VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -323,38 +307,11 @@ void SceneClouds::recordNoise(SceneFrame& frame) {
         w.writeImage(0, noise_.mips[m], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
         w.writeImage(1, noise_.mips[m > 0 ? m - 1 : 0], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.writeImage(2, sdfA_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.writeImage(3, sdfB_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
         w.updateSet(device_->device(), set);
         const int32_t push[2] = {m, CL_NOISE_SIDE >> m};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noiseLayout_, 0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, noiseLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
         const uint32_t groups = std::max(1, (push[1] + CL_NOISE_GROUP - 1) / CL_NOISE_GROUP);
-        vkCmdDispatch(cmd, groups, groups, groups);
-        memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    }
-    // The billows' distance field from level 0, for the lower four bases
-    // and then the upper: each cell's least base into A, then an axis a
-    // pass, A to B, B to A, A to B (the upper's through C: the march reads
-    // B and C).
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sdfPipeline_);
-    for (int pass = 0; pass < 8; ++pass) {
-        const bool toOut = (pass & 1) != 0;
-        const VkImageView out = pass < 4 ? sdfB_.view : sdfC_.view;
-        VkDescriptorSet set = frame.gpu.device.frameSet(noiseSetLayout_);
-        SceneVkDescriptorWriter w;
-        w.writeImage(0, noise_.mips[0], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.writeImage(1, noise_.mips[0], VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.writeImage(2, toOut ? sdfA_.view : out, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
-                     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.writeImage(3, toOut ? out : sdfA_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
-                     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        w.updateSet(device_->device(), set);
-        const int32_t push[2] = {pass, CL_NOISE_SIDE};
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noiseLayout_, 0, 1, &set, 0, nullptr);
-        vkCmdPushConstants(cmd, noiseLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
-        const uint32_t groups = CL_NOISE_SIDE / CL_NOISE_GROUP;
         vkCmdDispatch(cmd, groups, groups, groups);
         memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -431,7 +388,7 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     block_.forms[0] = c.extinction;
     block_.forms[1] = c.billowScale;
     block_.forms[2] = c.detailScale;
-    block_.forms[3] = c.detail;
+    block_.forms[3] = c.edge;
     for (int i = 0; i < 3; ++i) block_.wind[i] = c.wind[i];
     block_.wind[3] = 0.0f;
     const size_t vecs = std::min(c.data.size() / 4, static_cast<size_t>(CL_MAX_DATA));
@@ -549,8 +506,6 @@ VkDescriptorSet SceneClouds::writeSet(SceneFrame& frame, bool march, bool bake) 
     w.writeBuffer(CL_B_UBO, ubo.buffer, ubo.range, ubo.offset);
     w.writeImage(CL_B_COVER, bake ? coverNone_.view : cover_.view, coverSampler_, VK_IMAGE_LAYOUT_GENERAL);
     w.writeImage(CL_B_NOISE, noise_.sampled, noiseSampler_, VK_IMAGE_LAYOUT_GENERAL);
-    w.writeImage(CL_B_NOISE_SDF, sdfB_.view, noiseSampler_, VK_IMAGE_LAYOUT_GENERAL);
-    w.writeImage(CL_B_NOISE_SDF_HI, sdfC_.view, noiseSampler_, VK_IMAGE_LAYOUT_GENERAL);
     if (march)
         w.writeImage(CL_B_DEPTH, t.depthSnapshot.view, t.depthSnapshot.sampler);
     else

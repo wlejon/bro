@@ -62,7 +62,7 @@ void main() {
     float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
     vec3 p = up * mix(clouds.shell.x, clouds.shell.y, h);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
-    float base = texelFetch(cloudSigmaMap, at, 0).g;
+    float base = max(texelFetch(cloudSigmaMap, at, 0).g, 0.0);
     vec3 sun = normalize(cloudToBody(clouds.sun.xyz));
     // (From half a cell, or of a bin straight up: the texel's own.)
     float first = 0.5 * min(cell, clouds.cacheE1.w * 2.0);

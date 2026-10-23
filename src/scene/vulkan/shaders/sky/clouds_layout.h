@@ -29,9 +29,7 @@
 //     CL_B_BAND_OUT   the same, written by the light's bake (rgba16f storage)
 //     CL_B_DIST_A/B   the distance transform's scratch (r16f storage, as the
 //                     cache: sky/clouds_dist.comp)
-//     CL_B_NOISE_SDF  the billows' distance field, sampled (below): its
-//                     lower four bases, CL_B_NOISE_SDF_HI its upper four
-//     CL_B_HOLDS      whether each texel's cell of the cache may hold cloud
+//     CL_B_HOLDS     whether each texel's cell of the cache may hold cloud
 //                     as the march sees it, however near (r16f storage, as
 //                     the cache: sky/clouds_cache.comp; the band and the
 //                     distance to cloud are made from it)
@@ -57,9 +55,7 @@
 #define CL_B_BAND_OUT       12
 #define CL_B_DIST_A         13
 #define CL_B_DIST_B         14
-#define CL_B_NOISE_SDF      15
-#define CL_B_NOISE_SDF_HI   16
-#define CL_B_HOLDS          17
+#define CL_B_HOLDS          15
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 
@@ -73,16 +69,6 @@
 #define CL_NOISE_SIDE       128
 #define CL_NOISE_MIPS       8
 #define CL_NOISE_GROUP      4
-
-// The billows' distance field (sky/clouds_noise_sdf.comp): over the noise's
-// tile, for each of eight bases (CL_SDF_BASES, then CL_SDF_BASES_HI), how
-// far (texels of the noise's level 0) each cell between eight texels lies
-// from the nearest cell where the billows may hold cloud at that base, out
-// to CL_SDF_REACH. A cell is the cube between texel centres: cell c spans
-// texels c .. c + 1.
-#define CL_SDF_BASES        vec4(0.06, 0.1, 0.14, 0.19)
-#define CL_SDF_BASES_HI     vec4(0.24, 0.3, 0.37, 0.45)
-#define CL_SDF_REACH        16
 
 // The clouds' shadow on the land: CL_SHADOW_LEVELS square levels of
 // CL_SHADOW_SIDE texels on the plane tangent to the body under the eye,
@@ -121,7 +107,6 @@
 #define CL_CACHE_MARGIN     62.0     // cells about the nadir a level's lookups stay within
 #define CL_CACHE_SLICES     16
 #define CL_CACHE_REACH      8        // cells across the distance to cloud is sought over
-#define CL_CACHE_FINE_LEVELS 2       // levels whose cells' cloud is the detail's too (clouds_cache.comp)
 #define CL_CACHE_GROUP      8
 
 #endif

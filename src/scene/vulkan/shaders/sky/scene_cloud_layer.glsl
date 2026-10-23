@@ -12,13 +12,23 @@
 //       grid through cloudLandGrid). Each of its four values in 0 .. 1.
 //   float cloudDensity(CloudPoint q)
 //       the deck's base at a point of it, 0 .. 1: how much of the air about
-//       it is cloud (0 clear, 1 a solid slab; between, the share of it the
-//       engine's billows fill, so the base's own shape, how it rises and
-//       thins toward the tops, is the clouds' heaps and slabs). Low in
-//       frequency: it is baked into the cache about the eye (each texel's
-//       mean over its cell, q.footprint, at least 62.5 m), never run per
-//       pixel, so it may read q.cover, the engine's noise (cloudNoise) and
-//       the world's data as it likes. Zero outside the deck is the engine's.
+//       it is cloud, over the footprint q.footprint. Where that is finer
+//       than the clouds, the clouds' own shapes: 0 in the clear air between
+//       them, 1 within, the surface where it crosses a half, rising from 0
+//       to 1 over about the forms' `edge` metres across it, and never
+//       faster any way (the least of that and a flat base's rise, up or
+//       down CLOUD_EDGE_STEEPEST times as fast: the skin moves it less);
+//       under 0 in the clear air, as far below as the nearest cloud is
+//       edges off, so the march steps across it in long strides; all of
+//       which the march's steps through clear air trust (the heaps and
+//       slabs are the world's; the engine
+//       moves that surface a bounded skin in and out, CLOUD_SKIN of the
+//       base either way, and opens no hole deeper). Where the footprint is
+//       wider than the clouds, the share of
+//       it they fill. Baked into the cache about the eye (each texel at its
+//       cell's footprint, at least 62.5 m), never run per pixel, so it may
+//       read q.cover, the engine's noise (cloudNoise) and the world's data
+//       as it likes. Zero outside the deck is the engine's.
 //
 // and may read cloudData(i), the world's data (vec4 i of at most 64). The
 // engine owns the rest: the forms the base is cut into (cloudForms: its
@@ -46,7 +56,7 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 cacheE2;       // xyz its second axis
     vec4 cacheNadir;    // xy the eye's nadir on the chart (m)
     vec4 cacheLevel[CL_CACHE_LEVELS];   // xy the cell (index) of level k's window that holds the nadir
-    vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w its strength
+    vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w the edge (m)
     vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with
     vec4 data[CL_MAX_DATA];
 } clouds;
@@ -56,8 +66,6 @@ layout(set = CLOUD_SET, binding = CL_B_NOISE) uniform sampler3D cloudNoiseMap;
 layout(set = CLOUD_SET, binding = CL_B_CACHE) uniform sampler3D cloudCacheMap;
 layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
 layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
-layout(set = CLOUD_SET, binding = CL_B_NOISE_SDF) uniform sampler3D cloudBillowSdf;
-layout(set = CLOUD_SET, binding = CL_B_NOISE_SDF_HI) uniform sampler3D cloudBillowSdfHi;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -82,30 +90,14 @@ vec4 cloudLandGrid(int c, vec3 up);
 // --- The engine's noise ---------------------------------------------------------
 //
 // One tile of tiling noise (CL_NOISE_SIDE^3): x Perlin-Worley (soft billows
-// with round, cellular edges: a cloud's body), y Worley's cells 1 - F1 at 4
-// a tile with two finer octaves, z the same at 8 (the detail that erodes a
-// cloud's edges), w x squared (its mean, with x's, says how x varies within
-// the footprint: cloudNoiseAbove). `x` is the point in tiles (a tile is
+// with round, cellular edges), y Worley's cells 1 - F1 at 4 a tile with two
+// finer octaves, z the same at 8, w x squared (its mean, with x's, says how
+// x varies within the footprint). `x` is the point in tiles (a tile is
 // whatever length the world divides by), `footprint` how much of a tile is
 // finer than the caller can show: the tile's mips blur it to the mean beyond.
 vec4 cloudNoise(vec3 x, float footprint) {
     float lod = log2(max(footprint * float(CL_NOISE_SIDE), 1.0));
     return textureLod(cloudNoiseMap, fract(x), lod);
-}
-
-// The share of a lookup's footprint where its x is over `threshold`: x's
-// spread there (from w) taken as a normal's. Under a fine footprint it is
-// all or nothing, as x is; under a wide one, the share of the sky a field
-// of clouds cut from x at that threshold covers, which is what a world's
-// deck seen from afar should hold (its mean) so a view or a shadow that
-// reads it wide agrees with one that reads it fine.
-float cloudNoiseAbove(vec4 n, float threshold) {
-    float sd = sqrt(max(n.w - n.x * n.x, 0.0)) + 0.01;
-    float z = clamp((n.x - threshold) / sd, -8.0, 8.0);   // (tanh of a large z is NaN on some GPUs)
-    // (The normal's CDF, near enough, its tails cut at two and a half
-    // spreads: a sky that is clear is clear, not a veil a long view
-    // gathers.)
-    return clamp((0.5 + 0.5 * tanh(1.1 * z) - 0.004) / 0.992, 0.0, 1.0);
 }
 
 // `v` from [lo, hi] onto [a, b], unclamped.
@@ -163,29 +155,45 @@ vec3 cloudToBody(vec3 a) {
 
 // --- The forms ---------------------------------------------------------------------
 //
-// What the engine cuts the world's base into (Schneider's Nubis): billows
-// of its Perlin-Worley noise over a threshold the base sets (where the base
-// is 1, all of the air; where it is a half, about half, in heaps), each
-// denser inward from its edge, the edge eroded by the finer Worley detail
-// into cauliflower over a cloud's middle and wisps under its base. Each
-// read at the footprint's mips, the billows' share of the footprint taken
-// where a billow is finer than it, so the deck's mean is the same near and
-// far: what the cache bakes at a cell's footprint is what the march's
-// samples at a pixel's average to over that cell.
+// The world's base makes the clouds (its heaps and slabs: their surface
+// where it crosses a half); the engine moves that surface a skin in and
+// out: the billows' lobes (its Perlin-Worley noise, `forms.billowScale` a
+// tile) push it out and in, and the finer Worley detail erodes it into
+// cauliflower over a cloud's middle and wisps under its base, by at most
+// CLOUD_SKIN of the base either way, so the skin is about 2 CLOUD_SKIN
+// `forms.edge` metres deep and no hole opens deeper (a point whose base is
+// over a half by more than CLOUD_SKIN is cloud, one under it by more is
+// clear air). Under a pixel the surface blurs: the share of the footprint
+// the cloud fills ramps over the base the footprint spans, the skin fading
+// with it, so a footprint as wide as a cloud's edge or wider reads the base
+// itself as the share (what the world's base is there): the deck's mean is
+// the same near and far, and what the cache bakes at a cell's footprint is
+// what the march's samples at a pixel's average to over that cell.
+
+// How far the skin moves the surface at most, of the base, either way.
+const float CLOUD_SKIN = 0.2;
+// How much faster than 0 to 1 over `forms.edge` metres the world's base
+// may rise at most up or down (cloudDensity's contract: it is the least of
+// a field rising no faster than that any way and one rising no faster than
+// this up or down and a fifth of it across, as under a flat base), and how
+// much faster still the cache's cut of a share into clouds may
+// (cloudCutBase: twice its noise read at a cell's footprint, which changes
+// by under a half a cell, and 1.5 times the share).
+const float CLOUD_EDGE_STEEPEST = 3.0;
+const float CLOUD_CUT_STEEPEST = 2.0;
 
 // Body point `p` as the forms' noise sees it: carried by the wind.
 vec3 cloudDrift(vec3 p) { return p - clouds.wind.xyz * clouds.shell.w; }
 
-// The extinction (1/m) of base `base` (0 .. 1) at drifted body point `pd`,
-// `inCloud` the height within the cloud's column (0 its base .. 1 its top:
-// the detail's wisps under, cauliflower over), what is finer than
-// `footprint` metres at its mean, with the detail or without (the cache's
-// bake: its cells are wider than any of it).
 // The detail's strength at `footprint` (none where it is finer than that).
 float cloudDetailAt(float footprint) {
     float D = clouds.forms.z;
-    return clouds.forms.w * (1.0 - smoothstep(D / 80.0, D / 10.0, footprint));
+    return 1.0 - smoothstep(D / 80.0, D / 10.0, footprint);
 }
+// The base a footprint of `footprint` metres spans across a cloud's edge
+// (how wide the surface's blur is, of the base; all of it from a footprint
+// as wide as the edge).
+float cloudBlur(float footprint) { return clamp(footprint / clouds.forms.w, 2e-3, 1.0); }
 // The noises cloudForms reads at `pd`: the billows' and (where `detail`)
 // the detail's. (Apart from the forms' arithmetic, so a caller that also
 // reads the cache issues every lookup before it waits on any.)
@@ -197,44 +205,97 @@ vec4 cloudDetail(vec3 pd, float footprint) {
     float D = clouds.forms.z;
     return cloudNoise(pd * vec3(1.0, 1.3, 1.0) / D, footprint / D);
 }
-// The forms of base `base` from the noises `n` (cloudBillows) and `e`
-// (cloudDetail, read where `wD`, cloudDetailAt, is above zero).
-// The billows' threshold on base `base` where the billows' noise is `n`
-// (lifted where the cells' fbm is high: billows cluster).
-float cloudFormsThreshold(vec4 n, float base) {
-    float lift = (n.y * 0.65 + n.z * 0.35 - 1.0) * 0.5;
-    return lift + (1.0 - lift) * (1.0 - min(base, 1.0));
+// The skin's move of the surface (of the base, -CLOUD_SKIN .. 0.55
+// CLOUD_SKIN) from the noises `n` (cloudBillows) and `e` (cloudDetail, read
+// where `wD`, cloudDetailAt, is above zero), `inCloud` the height within the
+// cloud's column (0 its base .. 1 its top: the detail's wisps under,
+// cauliflower over).
+float cloudSkinOf(vec4 n, vec4 e, float wD, float inCloud) {
+    float s = 0.55 * clamp(2.5 * (n.x - 0.5), -1.0, 1.0);
+    if (wD > 0.0) {
+        float fine = e.y * 0.6 + e.z * 0.4;
+        s -= 0.45 * wD * mix(1.0 - fine, fine, smoothstep(0.0, 0.2, inCloud));
+    }
+    return CLOUD_SKIN * s;
 }
-// The share of the footprint `n` was read over that the billows fill.
-float cloudFormsShare(vec4 n, float base) {
+// The forms' field at base `base` with the skin's move `skin` over
+// `footprint`: positive in cloud, its surface at -w/2 (w = cloudBlur), the
+// share of the footprint the cloud fills 0.5 + field / w.
+float cloudFieldOf(float base, float skin, float footprint) {
+    float w = cloudBlur(footprint);
+    return base + skin * (1.0 - w) - 0.5;
+}
+// How much the base read from a cell `cell` metres wide is the share of it
+// the clouds fill rather than their surface (cloudDensity's contract: a
+// cell as wide as a cloud's edge, about the least a cloud's size, is all
+// share).
+float cloudShareLike(float cell) { return smoothstep(0.25, 1.0, cell / clouds.forms.w); }
+// The noise a share is cut into clouds by (cloudSurfaceBase): the engine's
+// at CLOUD_CUT_TILE edges a tile, its billows some one and a half edges
+// across, about the least a cloud's size, with the same turned and 0.62 as
+// large (so neither's lattice lines the clouds up in rows), their sum
+// spread back to one's.
+const float CLOUD_CUT_TILE = 13.0;
+const mat3 kCloudCutTurn = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
+vec4 cloudCutNoise(vec3 pd, float footprint) {
+    float S = CLOUD_CUT_TILE * clouds.forms.w;
+    vec4 a = cloudNoise(pd / S, footprint / S);
+    vec4 b = cloudNoise(kCloudCutTurn * pd / (0.62 * S), footprint / (0.62 * S));
+    return vec4(0.6 + (0.5 * (a.x + b.x) - 0.6) * 1.4, a.yzw);
+}
+// The base the cache keeps for a cell `cell` metres wide at `pd` (drifted)
+// where the world's is `base`: as the world gives it where the cell is fine
+// enough that it is the clouds' surface, and where it is wide enough that
+// it is a share of the cell (cloudShareLike), that share cut into clouds by
+// the noise (cloudCutNoise at the cell's footprint: cloud where it is over
+// a threshold that falls as the share rises), so a far field the cache
+// holds only as shares is still clouds and gaps, about as many as the
+// share says, which the march reads as it reads the heaps (under 0 as far
+// as the noise and the share take it: how far the clouds it cuts are).
+float cloudCutBase(float base, vec3 pd, float cell) {
+    float q = cloudShareLike(cell);
+    if (q <= 0.0) return base;
+    // (The noise as a score, about normal: its mean and spread. It is read
+    // at a quarter of the cell, so a cell is a sample of it, not its mean,
+    // and keeps its spread; its clouds a few cells across at the least.
+    // The threshold the score's quantile for the share, logistic; under a
+    // share of 2% steeply higher, out of the score's reach by none.)
+    float z = (cloudCutNoise(pd, 0.25 * cell).x - 0.77) / 0.074;
+    float s = clamp(base, 0.02, 0.98);
+    float t = log((1.0 - s) / s) / 1.7 + max(0.02 - base, 0.0) * 150.0;
+    float cut = min(0.5 + 0.25 * (z - t), 1.0);
+    return mix(base, cut, q);
+}
+// The share of the footprint the cloud fills where the billows' noise is
+// `n` (no detail: the layer's, the cache's), `base` as a surface.
+float cloudFormsShare(vec4 n, float base, float footprint) {
     if (base <= 0.0) return 0.0;
-    float thr = cloudFormsThreshold(n, base);
-    return thr >= 1.0 ? 0.0 : cloudNoiseAbove(n, thr);
+    float w = cloudBlur(footprint);
+    return clamp(0.5 + cloudFieldOf(base, cloudSkinOf(n, vec4(0.0), 0.0, 0.5), footprint) / w, 0.0, 1.0);
+}
+// The extinction (1/m) of base `base` with the skin's move `skin` over
+// `footprint`: a cloud's heart's within (thinner within the skin, so its
+// edge is soft and lit through), and from afar what a footprint's clouds
+// leave of the light over a path (opaque at heart where they are, all of it
+// between them) as an extinction, so a field from orbit lets the sky
+// between its clouds through. (The path a cloud's own: a footprint, or a
+// cloud's edge where that is shorter, the least a cloud's size; a view
+// crosses one cloud or the gap beside it in that length, whatever the
+// footprint, so a field reads as opaque from afar as its clouds cover.)
+float cloudSigmaOf(float base, float skin, float footprint) {
+    if (base <= 0.0) return 0.0;
+    float w = cloudBlur(footprint);
+    float v = cloudFieldOf(base, skin, footprint);
+    float share = clamp(0.5 + v / w, 0.0, 1.0);
+    if (share <= 0.0) return 0.0;
+    float heart = clouds.forms.x;
+    float near = heart * share * mix(0.35, 1.0, smoothstep(0.0, CLOUD_SKIN, v));
+    float L = clamp(footprint, 20.0, clouds.forms.w);
+    float through = 1.0 - share * (1.0 - exp(-heart * L));
+    return mix(near, -log(max(through, 1e-4)) / L, w);
 }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
-    if (base <= 0.0) return 0.0;
-    float heart = clouds.forms.x, S = clouds.forms.y;
-    float thr = cloudFormsThreshold(n, base);
-    float share = thr >= 1.0 ? 0.0 : cloudNoiseAbove(n, thr);
-    float near = 1.0 - smoothstep(S / 80.0, S / 10.0, footprint);
-    if (share <= 0.0) return 0.0;
-    float sigma = 0.0;
-    if (near > 0.0) {
-        float body = clamp((n.x - thr) / max(1.0 - thr, 1e-3), 0.0, 1.0);
-        if (wD > 0.0) {
-            float fine = e.y * 0.6 + e.z * 0.4;
-            fine = mix(1.0 - fine, fine, smoothstep(0.0, 0.2, inCloud));
-            body = clamp(cloudRemap(body, fine * wD, 1.0, 0.0, 1.0), 0.0, 1.0);
-        }
-        sigma = heart * smoothstep(0.0, 0.25, body);
-    }
-    if (near >= 1.0) return sigma;
-    // From afar: what a footprint's clouds leave of the light over a path L
-    // (opaque at heart where they are, all of it between them), as an
-    // extinction, so a field from orbit lets the sky between its clouds through.
-    float L = clamp(footprint, 20.0, 0.6 * (clouds.shell.y - clouds.shell.x));
-    float through = 1.0 - share * (1.0 - exp(-heart * L));
-    return mix(-log(max(through, 1e-4)) / L, sigma, near);
+    return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud), footprint);
 }
 float cloudForms(vec3 pd, float base, float inCloud, float footprint, bool detail) {
     if (base <= 0.0) return 0.0;
@@ -319,28 +380,6 @@ vec3 cloudCacheCoord(vec2 xy, float h, int k) {
 // The band of the columns about chart point `xy` at level `k`.
 vec4 cloudCacheBand(vec2 xy, int k) {
     return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(k)), 0.0);
-}
-// How far (m) drifted body point `pd` is from any billow the forms may hold
-// at a base of at most `base` (all of them: the detail only erodes), with
-// what is finer than `footprint` metres at its mean; at most
-// CL_SDF_REACH cells of the noise, 0 when it may be in one.
-float cloudBillowsClear(vec3 pd, float base, float footprint) {
-    const vec4 lo = CL_SDF_BASES, hi = CL_SDF_BASES_HI;
-    if (base > hi.w) return 0.0;
-    float S = clouds.forms.y, texel = S / float(CL_NOISE_SIDE);
-    // (The cell holding the point: the cube between texel centres.)
-    ivec3 c = ivec3(floor(fract(pd / S) * float(CL_NOISE_SIDE) - 0.5)) & (CL_NOISE_SIDE - 1);
-    float cells;
-    if (base <= lo.w) {
-        vec4 d = texelFetch(cloudBillowSdf, c, 0);
-        cells = base <= lo.x ? d.x : base <= lo.y ? d.y : base <= lo.z ? d.z : d.w;
-    } else {
-        vec4 d = texelFetch(cloudBillowSdfHi, c, 0);
-        cells = base <= hi.x ? d.x : base <= hi.y ? d.y : base <= hi.z ? d.z : d.w;
-    }
-    // (The gap between the point's cell and the cloud's holds for any
-    // point of either; a footprint's mean reaches its width further.)
-    return max(cells * texel - 2.0 * footprint, 0.0);
 }
 // The column at chart point `xy` as a layer, at level `k` (sky/clouds_layout.h's
 // CL_B_BAND): x its optical depth up the deck, y the mean depth from its top

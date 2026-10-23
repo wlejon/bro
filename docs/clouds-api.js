@@ -5,10 +5,10 @@
  * the body (`scene.setBody`) from `bottom` to `top` metres over its datum.
  * The work is split the Nubis way. The WORLD gives the clouds' BASE SHAPE:
  * its MODULE, GLSL that says how much of the sky they cover where
- * (cloudCover) and, at a point of the deck, how much of the air about it is
- * cloud (cloudDensity, 0..1, low in frequency: its heaps and slabs, how
- * they rise and thin). The ENGINE cuts that base into the clouds' FORMS and
- * owns everything after:
+ * (cloudCover) and, at a point of the deck, the clouds themselves as a
+ * level set (cloudDensity: each heap and slab, their surface at 0.5, under
+ * 0 the distance to the nearest). The ENGINE gives that surface its SKIN
+ * and owns everything after:
  *
  *   - THE COVER. cloudCover is run once over a cube about the body when the
  *     deck is set (1024 a face, about 10 km a texel on an Earth, four
@@ -18,7 +18,9 @@
  *   - THE CACHE. cloudDensity is baked about the eye's nadir on a chart
  *     fixed to the body: 13 levels of 128 x 128 columns, 32 bins up the
  *     deck, the finest cell 62.5 m and each level's twice the last's. With
- *     each texel: the forms' mean extinction over the cell, whether any of
+ *     each texel: the base the march reads (where the cell is about as
+ *     wide as a cloud or wider, a share the engine cuts into clouds by its
+ *     own noise), the forms' mean extinction over the cell, whether any of
  *     the cell may hold cloud as a view however near sees it, the deck's
  *     depth from it toward the sun and up, the distance to the nearest cell
  *     that may; with each column its band (the heights about it that may
@@ -28,21 +30,25 @@
  *     when the deck, the time or the sun jumps, and a sixteenth of every
  *     level's rows each frame (the wind, the sun's motion). The world's
  *     function never runs per pixel.
- *   - THE FORMS. The engine's tiling noise cuts the base: Perlin-Worley
- *     billows (`forms.billowScale` a tile) over a threshold that falls as
- *     the base rises, so a base of 0.3 is scattered cumulus and 1 a solid
- *     slab; eroded near the eye by finer Worley noise (`forms.detailScale`,
- *     `forms.detail` deep): wisps under a cloud's base, cauliflower over its
- *     middle. The detail fades out as it gets finer than a pixel, so far
- *     views read the billows alone; everything drifts with `wind`.
+ *   - THE SKIN. The engine's tiling noise moves the world's surface by a
+ *     bounded depth only (a fifth of the base's rise from clear to cloud,
+ *     at most `0.11 * forms.edge` out and `0.2 * forms.edge` in): Perlin-
+ *     Worley billows (`forms.billowScale` a tile) for its lobes, and near
+ *     the eye finer Worley erosion (`forms.detailScale`): wisps under a
+ *     cloud's base, cauliflower over its middle. It never opens a hole
+ *     through a cloud, nor makes one in clear air. Where the skin is under
+ *     a pixel the surface is blurred over the footprint (soft edges from
+ *     afar), and the detail fades out as it gets finer than a pixel;
+ *     everything drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, with no jitter (the
  *     same picture every frame). A cumulus is a soft solid with a skin, so
  *     the view is traced: through clear air it steps by distances sure to
  *     hold no cloud (the cache's bands and distance to cloud, made from
- *     where each cell may hold any however near, and the billows' own
- *     distance field: the detail only erodes them), so no cloud is skipped
- *     and no gap's edge torn; on a billow's skin it steps a few pixels at a
+ *     where each cell may hold any however near, and the base's own: how
+ *     far it must still rise, at the fastest the contract lets it, before
+ *     even the skin's most out reaches the surface), so no cloud is skipped
+ *     and no edge torn; within the skin's depth it steps a few pixels at a
  *     time, finds a cloud's face by false position on the forms' signed
  *     field (so it moves with the cloud and not with the steps), and inside
  *     crosses pieces growing from the face until the view is spent or out
@@ -79,11 +85,15 @@
  * @typedef {Object} CloudForms
  * @property {number} [extinction=0.06]  a cloud's heart's extinction (1/m):
  *     what a full billow takes out of the view a metre
- * @property {number} [billowScale=12000]  the billows' tile (m): how wide the
- *     engine's Perlin-Worley noise repeats; a cumulus is about a tenth of it
- * @property {number} [detailScale=1600]  the detail's tile (m)
- * @property {number} [detail=0.45]  how deep the detail erodes the billows'
- *     edges (0 .. 1); 0 is smooth billows
+ * @property {number} [billowScale=4000]  the billows' tile (m): how wide the
+ *     engine's Perlin-Worley noise repeats; a lobe of the skin is about a
+ *     tenth of it
+ * @property {number} [detailScale=1200]  the erosion's tile (m)
+ * @property {number} [edge=600]  the metres over which the world's base
+ *     rises from clear (0) to cloud (1) at the fastest: the skin's depth is
+ *     a fifth of it, and the march's steps through clear air are as long as
+ *     the base says the cloud is far in these units. About the least a
+ *     cloud's size; a cell as wide as it reads the base as a share
  */
 
 /**
@@ -133,15 +143,19 @@ SceneGraph.prototype.cloudStats = function () {};
  *       Each in 0..1 (stored rgba16f). Baked once (see THE COVER).
  *
  *   float cloudDensity(CloudPoint q)
- *       The deck's BASE at a point of it, 0..1: how much of the air about it
- *       is cloud. 0 is clear, 1 a solid slab, and between, the share the
- *       engine's billows fill (so 0.3 is scattered cumulus, 0.7 broken
- *       cloud). Its shape up the deck is the clouds' shape: rising to a
- *       cumulus's middle and thinning to its top, flat for a stratus slab.
- *       Low in frequency (kilometres): the engine adds everything finer.
- *       Baked into the cache only, each texel's mean over its cell
- *       (q.footprint, 62.5 m at least), never per pixel. Zero outside the
- *       shell is the engine's.
+ *       The deck's BASE at a point of it: the clouds as a level set, their
+ *       surface at 0.5 (before the engine's skin), 1 a cloud's heart. It
+ *       must rise no faster than 1 over `forms.edge` metres any way, or (a
+ *       cloud's flat base or a slab's top) 3 over `edge` up or down and a
+ *       fifth of that across: the march steps through clear air by it. In
+ *       clear air it goes on under 0 as the distance to cloud says
+ *       (0.5 - distance / edge), so a view crosses the gaps between heaps
+ *       in a few steps; a module that clamps it at 0 is still right, only
+ *       slower. Where q.footprint is as wide as the clouds or wider, give
+ *       the share of the footprint they fill (0..1) instead: the engine
+ *       cuts a share into clouds of its own at the cache's coarse levels.
+ *       Baked into the cache only (q.footprint 62.5 m at least), never per
+ *       pixel. Zero outside the shell is the engine's.
  *
  *   struct CloudPoint {
  *       vec3 p;          // the point in the body's frame (m from its centre)
@@ -170,20 +184,24 @@ SceneGraph.prototype.cloudStats = function () {};
  *   vec4  cloudLandGrid(int c, vec3 up)  channel c of the land's processes'
  *         grid at `up` (in cloudCover only; zero without `land`)
  *
- * Example (a third of the sky in cumulus, heaped toward the deck's middle):
+ * Example (one slab 1 km thick, its surface 600 m from clear to cloud):
  *
  *   scene.setClouds({ bottom: 1500, top: 4000,
- *       forms: { billowScale: 8000, detailScale: 1200, detail: 0.5 },
+ *       forms: { billowScale: 4000, detailScale: 1200, edge: 600 },
  *       wind: [6, 0, 0],
  *       module: `
- *       vec4 cloudCover(vec3 up) { return vec4(0.35, 0.0, 0.0, 0.0); }
+ *       vec4 cloudCover(vec3 up) { return vec4(1.0, 0.0, 0.0, 0.0); }
  *       float cloudDensity(CloudPoint q) {
- *           float heap = smoothstep(0.0, 0.15, q.height) * smoothstep(1.0, 0.5, q.height);
- *           return q.cover.x * heap;
+ *           // metres inside the slab (2000 .. 3000 m), at most a third of
+ *           // the edge's rate up and down
+ *           float inside = min(q.altitude - 2000.0, 3000.0 - q.altitude) * 3.0;
+ *           return min(0.5 + inside / 600.0, 1.0);
  *       }` });
  *
  * The planet demo (broworkshop demos/planet/world.js, "the clouds") is a
  * full module: cover from its climate and the land's wet belts, frontal
- * bands and cyclones from its data, and a base that heaps cumulus fields
- * where the cover is broken and lays slabs where it is overcast.
+ * bands and cyclones from its data, discrete cumulus heaps on a cellular
+ * layout a few kilometres apart where the cover is broken (each a dome
+ * with its own flat base and top, clear air between), slabs with their own
+ * relief where it is overcast, and the share of each far off.
  */
