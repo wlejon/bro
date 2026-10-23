@@ -226,7 +226,8 @@
         const num = (v) => (v === undefined || v === null) ? NaN : +v;
         const mode = o.mode === undefined ? NaN : (o.mode === 'auto' ? 1 : 0);
         __bro_native.scene.SceneGraph_setExposure(this, toF64([mode, num(o.ev), num(o.compensation), num(o.speedUp),
-            num(o.speedDown), num(o.minEv), num(o.maxEv), num(o.lowPercent), num(o.highPercent)]));
+            num(o.speedDown), num(o.minEv), num(o.maxEv), num(o.lowPercent), num(o.highPercent),
+            o.meter === undefined ? NaN : (o.meter === 'incident' ? 1 : 0)]));
     });
     fn(SceneGraph.prototype, "setAmbient", function setAmbient(opts, g, b) {
         let col = [0.03, 0.03, 0.03];

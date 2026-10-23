@@ -8,7 +8,8 @@
 // lit in it. The last workgroup to finish meters the histogram (the
 // log-average luminance L of the pixels between the lowPercent and
 // highPercent shares, and the EV100 whose scale puts L at middle grey:
-// log2(L / (1.2 * 0.18))), moves the applied EV toward it exponentially at
+// log2(L / (1.2 * 0.18)); the incident meter instead reads the sun through
+// the air at the eye, kept near that reflected reading), moves the applied EV toward it exponentially at
 // the up or down speed for the frame's time step, writes the scale the
 // tonemap multiplies by, and clears the bins for the next frame. Fixed: one
 // workgroup writes the CPU's scale (an exact 1 at the default EV).
@@ -44,7 +45,23 @@ layout(push_constant) uniform ExposurePush {
     float maxEv;
     float lowPercent;
     float highPercent;
+    float incident;    // 1: the incident meter (scene/exposure.h, ExposureSettings::Meter)
+    float rb, rt;      // the air's shell
+    float r, muS;      // the eye's radius, its sun's mu_s
+    float sunLux;      // the sun's luminous illuminance above the air
+    float sunRadius;   // its angular radius
+    float incidentEvOffset;   // the grey card's EV less log2 E
+    float brighter, darker;   // the incident reading's reach about the reflected one
 } push;
+
+// The incident meter's air: the transmittance table (binding 3) and the
+// shell from the push.
+layout(set = 0, binding = 3) uniform sampler2D texTransmittance;
+#include "common/scene_atmosphere_params.glsl"
+AtmosphereGpu atmAir;
+#define ATM atmAir
+#define ATM_TRANSMITTANCE_TEX texTransmittance
+#include "common/scene_atmosphere.glsl"
 
 shared uint tile[128];
 shared bool last;
@@ -105,7 +122,21 @@ void main() {
             weight += take;
             below += n;
         }
-        if (weight > 0.0) metered = clamp(sum / weight - log2(1.2 * MIDDLE_GREY), push.minEv, push.maxEv);
+        if (weight > 0.0) {
+            float reflected = sum / weight - log2(1.2 * MIDDLE_GREY);
+            metered = reflected;
+            if (push.incident > 0.5) {
+                // The sun's light arriving at the eye, as an incident meter
+                // there reads it: EV100 = log2(E ISO / C).
+                atmAir.shell = vec4(push.rb, push.rt, 1.0, 1.0);
+                atmAir.sunIlluminance = vec4(0.0, 0.0, 0.0, push.sunRadius);
+                vec3 T = atmSunTransmittance(max(push.r, push.rb), push.muS);
+                float E = push.sunLux * dot(T, vec3(0.2126, 0.7152, 0.0722));
+                float ev = E > 0.0 ? log2(E) + push.incidentEvOffset : reflected - push.brighter;
+                metered = clamp(ev, reflected - push.brighter, reflected + push.darker);
+            }
+            metered = clamp(metered, push.minEv, push.maxEv);
+        }
         if (state.adapting == 0u) {
             ev = metered;
         } else {

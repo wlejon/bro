@@ -521,7 +521,7 @@ void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const cha
 
 // bro.scene.SceneGraph.prototype.setExposure
 //   registered at __bro_native.scene.SceneGraph_setExposure
-//   params: [mode (0 fixed, 1 auto), ev, compensation, speedUp, speedDown, minEv, maxEv, lowPercent, highPercent], NaN = default
+//   params: [mode (0 fixed, 1 auto), ev, compensation, speedUp, speedDown, minEv, maxEv, lowPercent, highPercent, meter (0 reflected, 1 incident)], NaN = default
 void bro_scene_SceneGraph_setExposure(void* self, const double* params, uint32_t params_len);
 
 // bro.scene.SceneGraph.prototype.setAmbient

@@ -436,6 +436,8 @@ void bro_scene_SceneGraph_setExposure(void* self, const double* params, uint32_t
     at(6, e.maxEv, -30.0f, 40.0f);
     at(7, e.lowPercent, 0.0f, 1.0f);
     at(8, e.highPercent, 0.0f, 1.0f);
+    if (params && params_len > 9 && std::isfinite(params[9]))
+        e.meter = params[9] > 0.5 ? scene::ExposureSettings::Meter::Incident : scene::ExposureSettings::Meter::Reflected;
     if (e.maxEv < e.minEv) std::swap(e.minEv, e.maxEv);
     if (e.highPercent < e.lowPercent) std::swap(e.lowPercent, e.highPercent);
     g->setExposure(e);

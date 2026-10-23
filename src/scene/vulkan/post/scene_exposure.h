@@ -61,6 +61,13 @@ private:
         float maxEv;
         float lowPercent;
         float highPercent;
+        // The incident meter (0: off): the air's radii, the eye's radius and
+        // its sun's mu_s, the sun's luminous illuminance above the air (lux),
+        // its angular radius, the meter's EV offset and its reach.
+        float incident;
+        float rb, rt, r, muS;
+        float sunLux, sunRadius;
+        float incidentEvOffset, brighter, darker;
     };
     /// A copy of the state for the CPU, and the submission that wrote it.
     struct Readback {
@@ -75,6 +82,7 @@ private:
 
     SceneVkDevice* device_ = nullptr;
     VkSampler sampler_ = VK_NULL_HANDLE;
+    VkSampler tableSampler_ = VK_NULL_HANDLE;   // the transmittance table's (linear)
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

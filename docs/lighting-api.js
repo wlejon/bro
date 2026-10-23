@@ -76,6 +76,15 @@
  *    the first frame in auto takes the metered EV outright, and time is the
  *    scene's (headless advanceTime included). scene.cullStats() reports
  *    meteredEv, exposureEv and exposureScale a few frames late.
+ *    `meter: 'incident'` meters the light instead of the frame: the sun
+ *    through the air at the eye (the atmosphere's transmittance, the
+ *    planet's shadow included), as a hand-held incident meter reads it,
+ *    at the EV the reflected meter gives a grey card in that light,
+ *    log2(E / (1.2 pi)). A dark scene stays dark and a bright one bright
+ *    (a forest, a planet's ocean seen from orbit, a snowfield), where the
+ *    reflected meter takes each to middle grey. It is kept within 1 stop
+ *    brighter and 3 darker than the reflected reading, so shade and night
+ *    are still seen; with the atmosphere off the reflected meter stands.
  *
  * Physical light values, for a scene lit in real units with auto exposure
  * (lux for directional lights, which are illuminance; candela-scale numbers
@@ -101,6 +110,7 @@
  * @property {number} [maxEv]  Auto: its upper clamp (default 20).
  * @property {number} [lowPercent]  Auto: the share of darkest pixels the meter ignores, 0..1 (default 0.1).
  * @property {number} [highPercent]  Auto: the share above which the brightest are ignored, 0..1 (default 0.9).
+ * @property {string} [meter]  Auto: "reflected" (default, the frame's luminance) or "incident" (the sun's light at the eye).
  */
 
 /**

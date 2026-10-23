@@ -37,6 +37,16 @@ struct ExposureSettings {
     // weighs as much as the field and the field lands near middle grey.
     float lowPercent = 0.1f;     // the share of darkest pixels the meter ignores
     float highPercent = 0.9f;    // the share below which it reads (the brightest 10% ignored)
+    // Auto: what the meter reads. Reflected: the frame's luminance at middle
+    // grey, which lifts a dark scene (forest, a planet's ocean) to grey and
+    // washes it out. Incident: the light arriving, as a hand-held incident
+    // meter at the eye reads it: the sun through the air there (the
+    // atmosphere's transmittance; with the atmosphere off, the reflected
+    // meter), at the EV the reflected meter gives a grey card in it, kept within
+    // kIncidentBrighter stops brighter and kIncidentDarker darker than the
+    // reflected reading, so shade and night are still seen.
+    enum class Meter : uint8_t { Reflected, Incident };
+    Meter meter = Meter::Reflected;
 };
 
 namespace exposure {
@@ -48,6 +58,13 @@ constexpr int kBins = 128;
 
 /// The scale an EV100 gives (computed in double, so the default is exactly 1).
 inline float scaleForEv(double ev100) { return static_cast<float>(1.0 / (1.2 * std::exp2(ev100))); }
+/// The incident meter's EV for an illuminance E (lux): the one the reflected
+/// meter gives a grey card (0.18, Lambertian, luminance 0.18 E / pi) in that
+/// light, log2(E / (1.2 pi)), so the two meters agree on a grey world; and
+/// its reach about the reflected reading.
+inline double incidentEvOffset() { return -std::log2(1.2 * 3.14159265358979323846); }
+constexpr float kIncidentBrighter = 1.0f;
+constexpr float kIncidentDarker = 3.0f;
 /// The key the meter puts the log-average luminance on.
 constexpr double kMiddleGrey = 0.18;
 /// The EV100 a log-average luminance meters to: the one whose scale puts it at middle grey.

@@ -8,8 +8,10 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "util/log.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace bro::scene::vk {
@@ -44,11 +46,14 @@ bool SceneExposure::setup(SceneGpu& gpu) {
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxAnisotropy = 1.0f;
     if (vkCreateSampler(dev, &si, nullptr, &sampler_) != VK_SUCCESS) return false;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    if (vkCreateSampler(dev, &si, nullptr, &tableSampler_) != VK_SUCCESS) return false;
 
     SceneVkDescriptorLayoutBuilder b;
     b.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    b.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = b.build(dev);
     if (!setLayout_) return false;
     layout_ = computeLayout(dev, setLayout_, sizeof(Push));
@@ -84,6 +89,8 @@ void SceneExposure::cleanup(SceneGpu& gpu) {
     setLayout_ = VK_NULL_HANDLE;
     if (sampler_) gpu.device.defer([dev, s = sampler_] { vkDestroySampler(dev, s, nullptr); });
     sampler_ = VK_NULL_HANDLE;
+    if (tableSampler_) gpu.device.defer([dev, s = tableSampler_] { vkDestroySampler(dev, s, nullptr); });
+    tableSampler_ = VK_NULL_HANDLE;
 }
 
 void SceneExposure::readStats(SceneFrame& frame) {
@@ -131,11 +138,23 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
                              VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
 
+    // The incident meter reads the sun through the air at the eye: with the
+    // atmosphere off it has nothing to read, and the reflected meter stands.
+    const SceneAtmosphere& air = frame.gpu.atmosphere;
+    const bool incident = metering && e.meter == ExposureSettings::Meter::Incident && air.active() &&
+                          air.transmittanceView() != VK_NULL_HANDLE;
+    AtmosphereGpu atm{};
+    if (incident) air.fill(atm, frame.world.eye);
+
     VkDescriptorSet set = device_->frameSet(setLayout_);
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, hdr.view, sampler_);
     writer.writeBuffer(1, histogram_.buffer, kHistogramBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.writeBuffer(2, state_.buffer, kStateBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    if (incident)
+        writer.writeImage(3, air.transmittanceView(), tableSampler_, VK_IMAGE_LAYOUT_GENERAL);
+    else
+        writer.writeImage(3, hdr.view, sampler_);   // (unread)
     writer.updateSet(dev, set);
 
     Push ap{};
@@ -154,6 +173,20 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     ap.maxEv = e.maxEv;
     ap.lowPercent = e.lowPercent;
     ap.highPercent = e.highPercent;
+    if (incident) {
+        const double ox = atm.origin[0], oy = atm.origin[1], oz = atm.origin[2];
+        const double r = std::sqrt(ox * ox + oy * oy + oz * oz);
+        ap.incident = 1.0f;
+        ap.rb = atm.shell[0];
+        ap.rt = atm.shell[1];
+        ap.r = static_cast<float>(r);
+        ap.muS = r > 0.0 ? static_cast<float>((ox * atm.sunDir[0] + oy * atm.sunDir[1] + oz * atm.sunDir[2]) / r) : 1.0f;
+        ap.sunLux = 0.2126f * atm.sunIlluminance[0] + 0.7152f * atm.sunIlluminance[1] + 0.0722f * atm.sunIlluminance[2];
+        ap.sunRadius = atm.sunIlluminance[3];
+        ap.incidentEvOffset = static_cast<float>(exposure::incidentEvOffset());
+        ap.brighter = exposure::kIncidentBrighter;
+        ap.darker = exposure::kIncidentDarker;
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);
