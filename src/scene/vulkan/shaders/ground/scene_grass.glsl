@@ -283,7 +283,9 @@ void coverUse(vec4 rows[4]) {
 void coverDone() { coverLocal = false; }
 
 // Sward density under which nothing grows (a few blades in a closed wood's
-// shade are not seen).
+// shade are not seen), reached by a ramp from twice it: a cut there drew a
+// hard line where a climate thins the sward (a planet's grass line along
+// the hills seen from its height).
 const float GRASS_DENSITY_FLOOR = 0.06;
 
 // The ground at `xz` (the cover's frame) as the grass takes it: in `field`
@@ -300,7 +302,7 @@ void grassGround(vec2 xz, out vec4 field, out vec2 under, out vec3 normal, out v
     landSampleCover(m, landLevel(m), h, normal, surface, cover);
     normal = coverUnturn(normal);   // (in the cover's frame)
     float herbs = grass.herbInfo.x > 0.5 ? surface.a : 0.0;
-    float density = cover.x < GRASS_DENSITY_FLOOR ? 0.0 : cover.x * (1.0 - 0.5 * herbs);
+    float density = cover.x * smoothstep(GRASS_DENSITY_FLOOR, 2.0 * GRASS_DENSITY_FLOOR, cover.x) * (1.0 - 0.5 * herbs);
     field = vec4(h, density, cover.y, cover.z * (1.0 - 0.45 * herbs));
     under = vec2(cover.w, surface.a);
     albedo = surface.rgb;

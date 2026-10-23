@@ -256,8 +256,7 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
         floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
     }
 
-    color = mix(floorC, turf, cover);
-    // Where it stands for the blades' tops it is lit as they are from afar
+    color = mix(floorC, turf, cover);    // Where it stands for the blades' tops it is lit as they are from afar
     // (the module's swardLay, SceneSurface::sward), not as level ground.
     float asBlades = cover * max(topSeen, deep);
     swardLight = vec4(0.0);
@@ -270,8 +269,10 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
         // Past the blades the sun on it is all the sward's, as on the far
         // blades (their weight 1 from 12 m): the share left to the canopy
         // normal, which faces the eye, lit it by the eye's line, not the
-        // sun's.
-        swardLight = vec4(lay.xyz, mix(asBlades, 1.0, topSeen));
+        // sun's. Where the sward thins out to bare ground the share goes with
+        // it: all of it on any cover drew a hard line where the cover ends
+        // (a planet's grass line along its hills, seen from their height).
+        swardLight = vec4(lay.xyz, mix(asBlades, 1.0, topSeen) * smoothstep(0.0, 0.25, cover));
         color *= 1.0 + lay.w * asBlades;
     }
     ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)
