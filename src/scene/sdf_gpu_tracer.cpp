@@ -587,8 +587,14 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
                     alreadyDone, one, kb.builder().build_select(pastMax, one, zero));
                 Value* active = kb.builder().build_slt(freeze, half);
 
-                Value* nextHit = kb.builder().build_select(isHitNow, one, curHit);
-                Value* stepDelta = kb.builder().build_select(active, kb.max_f32(d, zero), zero);
+                Value* hitOnActive = kb.builder().build_select(
+                    active, kb.builder().build_select(isHitNow, one, zero), zero);
+                Value* nextHit = kb.max_f32(curHit, hitOnActive);
+
+                Value* canMarch = kb.builder().build_select(
+                    isHitNow, zero, kb.builder().build_select(active, one, zero));
+                Value* marchCond = kb.builder().build_sgt(canMarch, half);
+                Value* stepDelta = kb.builder().build_select(marchCond, kb.max_f32(d, zero), zero);
                 Value* nextT = kb.add(curT, stepDelta);
                 Value* nextSteps = kb.add(curSteps, kb.builder().build_select(active, one, zero));
                 return {nextT, nextHit, nextSteps};
@@ -597,6 +603,7 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
         Value* finalT = sphereRes[0];
         Value* hitFlag = sphereRes[1];
         Value* stepsTaken = sphereRes[2];
+        Value* hitCond = kb.builder().build_sgt(hitFlag, half);
 
         // 2. Surface hit point & tetrahedral finite-difference normal
         Value* hx = kb.fma(dx, finalT, ox);
@@ -617,9 +624,9 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
         Value* gy = kb.add(kb.add(kb.sub(negD0, d1), d2), d3);
         Value* gz = kb.add(kb.sub(kb.add(negD0, d1), d2), d3);
         Value* gLen = kb.add(safeLength3(kb, gx, gy, gz), kb.const_f32(1e-12f));
-        Value* nx = kb.div(gx, gLen);
-        Value* ny = kb.div(gy, gLen);
-        Value* nz = kb.div(gz, gLen);
+        Value* nx = kb.builder().build_select(hitCond, kb.div(gx, gLen), zero);
+        Value* ny = kb.builder().build_select(hitCond, kb.div(gy, gLen), one);
+        Value* nz = kb.builder().build_select(hitCond, kb.div(gz, gLen), zero);
 
         // 3. Cone-traced soft shadow loop along lightDir: min(k * d / t)
         const bromath::Vec3 lDir = normalizeSafe(cfg.lightDir);
@@ -628,11 +635,14 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
         Value* lz = kb.const_f32(lDir.z);
         Value* shadowK = kb.const_f32(std::max(cfg.shadowK, 0.1f));
         const int shadowSteps = std::clamp(cfg.shadowSteps, 1, 128);
-        const float shadowStart = std::max(cfg.shadowMinT, 1e-3f);
+        const float shadowStart = std::max(cfg.shadowMinT, 1e-4f);
+        const float shadowBias = std::max(cfg.shadowMinT, hitEps * 4.0f);
+        const float shadowEnd = std::max(cfg.shadowMaxT, shadowStart + 1e-3f);
+        Value* shadowEndVal = kb.const_f32(shadowEnd);
 
-        Value* sox = kb.fma(nx, kb.const_f32(shadowStart), hx);
-        Value* soy = kb.fma(ny, kb.const_f32(shadowStart), hy);
-        Value* soz = kb.fma(nz, kb.const_f32(shadowStart), hz);
+        Value* sox = kb.fma(nx, kb.const_f32(shadowBias), hx);
+        Value* soy = kb.fma(ny, kb.const_f32(shadowBias), hy);
+        Value* soz = kb.fma(nz, kb.const_f32(shadowBias), hz);
 
         std::vector<Value*> initShadow = {kb.const_f32(shadowStart), one};
         auto shadowRes = kb.for_range_reduce_n(
@@ -648,13 +658,24 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
                 Value* sz = kb.fma(lz, st, soz);
                 Value* sd = lowerSdfNodeSpirv(kb, graph, root, sx, sy, sz);
 
+                Value* stActive = kb.builder().build_slt(st, shadowEndVal);
+                Value* hardOccluded = kb.builder().build_slt(sd, kb.const_f32(1e-4f));
                 Value* safeDenom = kb.add(kb.max_f32(st, kb.const_f32(1e-4f)), kb.const_f32(1e-6f));
                 Value* penumbra = kb.div(kb.mul(shadowK, kb.max_f32(sd, zero)), safeDenom);
-                Value* nextMin = kb.clamp_f32(kb.min_f32(sMin, penumbra), zero, one);
-                Value* stepAdv = kb.clamp_f32(sd, kb.const_f32(0.005f), kb.const_f32(0.5f));
+                Value* candMin = kb.builder().build_select(
+                    hardOccluded, zero, kb.clamp_f32(kb.min_f32(sMin, penumbra), zero, one));
+                Value* nextMin = kb.builder().build_select(stActive, candMin, sMin);
+                Value* stepAdv = kb.builder().build_select(
+                    stActive, kb.clamp_f32(sd, kb.const_f32(0.005f), kb.const_f32(0.5f)), zero);
                 return {kb.add(st, stepAdv), nextMin};
             });
-        Value* shadowFactor = shadowRes[1];
+        Value* rawShadow = shadowRes[1];
+        Value* smoothShadow = kb.mul(
+            kb.mul(rawShadow, rawShadow),
+            kb.sub(kb.const_f32(3.0f), kb.mul(kb.const_f32(2.0f), rawShadow)));
+        Value* shadowFactor = cfg.computeShadow
+            ? kb.builder().build_select(hitCond, smoothShadow, one)
+            : one;
 
         // 4. Multi-step normal hemisphere ambient occlusion
         const int aoSteps = std::clamp(cfg.aoSteps, 1, 8);
@@ -672,10 +693,13 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
             aoAcc = kb.fma(delta, kb.const_f32(weight), aoAcc);
             weight *= 0.5f;
         }
-        Value* aoFactor = kb.clamp_f32(
+        Value* rawAoFactor = kb.clamp_f32(
             kb.sub(one, kb.mul(kb.const_f32(cfg.aoIntensity), aoAcc)),
             zero,
             one);
+        Value* aoFactor = cfg.computeAo
+            ? kb.builder().build_select(hitCond, rawAoFactor, one)
+            : one;
 
         // Write 8 output floats per ray
         kb.store_f32_indexed(outHits, baseIdx, finalT, 4, 0);
@@ -794,7 +818,7 @@ SdfTraceHit SdfGpuTracer::traceRay(
         graph, rootNode, compiled.pointFn, compiled.gradFn, ray, cfg);
 }
 
-void SdfGpuTracer::traceRays(
+void SdfGpuTracer::traceRaysCpu(
     const bromesh::SdfGraph& graph,
     std::span<const SdfRay> rays,
     std::vector<SdfTraceHit>& outHits,
@@ -830,6 +854,26 @@ void SdfGpuTracer::traceRays(
         outHits[i] = traceSingleRayWithKernel(
             graph, rootNode, pointFn, gradFn, rays[i], cfg);
     }
+}
+
+void SdfGpuTracer::traceRays(
+    const bromesh::SdfGraph& graph,
+    std::span<const SdfRay> rays,
+    std::vector<SdfTraceHit>& outHits,
+    const SdfTraceConfig& cfg,
+    int rootNode,
+    bool parallel) {
+    if (graph.empty() || rays.empty()) {
+        outHits.assign(rays.size(), SdfTraceHit{});
+        return;
+    }
+    if (vulkanAvailable()) {
+        bool usedGpu = false;
+        if (traceRaysGpu(graph, rays, outHits, cfg, rootNode, &usedGpu) && usedGpu) {
+            return;
+        }
+    }
+    traceRaysCpu(graph, rays, outHits, cfg, rootNode, parallel);
 }
 
 bool SdfGpuTracer::updateNodeParams(

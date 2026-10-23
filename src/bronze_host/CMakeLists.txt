@@ -142,6 +142,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_math_classes.cpp
     host_math_funcs.cpp
     host_gpu.cpp
+    host_js_gpu.cpp
     host_text.cpp
     host_steam.cpp
     host_menu.cpp

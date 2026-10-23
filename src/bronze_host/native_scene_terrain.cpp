@@ -1,6 +1,7 @@
 // native_scene_terrain.cpp — TerrainManager binding and C entry points.
 
 #include "bronze_host/native_scene_internal.h"
+#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
 #include "natives/terrain/native_terrain_decl.h"
@@ -245,7 +246,8 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
     if (!c || !c->mgr()) return;
 
     Value jsFn = ev::fromBits(fn);
-    if (!ev::isFunction(jsFn)) {
+    const bool isKernelObj = isCompiledJsKernelObject(jsFn);
+    if (!ev::isFunction(jsFn) && !isKernelObj) {
         c->heightSource.set(ev::undefined());
         c->hasHeightSource = false;
         c->mgr()->setHeightSource(nullptr);
@@ -259,7 +261,12 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
                                   int paddedW, int paddedH, float cellSize,
                                   float worldX0, float worldZ0) -> bool {
         if (!c->hasHeightSource) return false;
-        if (!ev::isFunction(c->heightSource.get())) return false;
+        Value srcVal = c->heightSource.get();
+        if (isCompiledJsKernelObject(srcVal)) {
+            return tryEvalCompiledKernelHeightGrid(
+                srcVal, padded, paddedW, paddedH, cellSize, worldX0, worldZ0);
+        }
+        if (!ev::isFunction(srcVal)) return false;
 
         const size_t totalFloats = static_cast<size_t>(paddedW) * static_cast<size_t>(paddedH);
         // Rooted: it is read again after the callback, which allocates.

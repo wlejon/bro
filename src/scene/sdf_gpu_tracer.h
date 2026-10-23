@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bromesh/isosurface/jit/sdf_node.h>
+#include <bromath/aabb.h>
 #include <bromath/vec.h>
 
 #include <cstdint>
@@ -68,11 +69,25 @@ struct SdfSpirvAuditSummary {
 };
 
 /// Live GPU SDF sphere-tracer, cone-traced soft-shadow & ambient-occlusion evaluator,
-/// and SPIR-V 1.5 compute shader compiler + formal verifier.
+/// and SPIR-V 1.5 compute shader compiler + formal verifier + Vulkan compute dispatcher.
 class SdfGpuTracer {
 public:
+    /// Returns true if a Vulkan 1.2+ compute queue with PhysicalStorageBufferAddresses is
+    /// available for hardware-accelerated SDF compute dispatch.
+    static bool vulkanAvailable();
+
+    /// Returns the name of the active Vulkan compute device (or empty string if unavailable).
+    static std::string vulkanDeviceName();
+
+    /// Returns true if the most recent traceRays / traceRaysGpu / evaluateGridGpu call
+    /// dispatched on the hardware Vulkan compute queue.
+    static bool lastTraceUsedVulkanGpu();
+
+    /// Returns the number of compiled SPIR-V compute pipelines cached in VulkanModule storage.
+    static uint32_t cachedVulkanPipelineCount();
+
     /// Compile an SdfGraph into a Vulkan SPIR-V 1.5 grid evaluation compute shader
-    /// (`evaluate_sdf_grid`) via `bromesh::JitSdfCompiler::compile_spirv` and verify it.
+    /// (`eval_sdf_gpu`) via `bromesh::JitSdfCompiler::compile_spirv` and verify it.
     static std::vector<uint32_t> compileGridSpirv(
         const bromesh::SdfGraph& graph, int rootNode = -1);
 
@@ -87,6 +102,37 @@ public:
     /// Formally verify a SPIR-V 1.5 binary word stream using both `brass::spirv::verify`
     /// and `brass::spirv::audit_compute_shader_binary`.
     static SdfSpirvAuditSummary auditSpirvBinary(std::span<const uint32_t> words);
+
+    /// Evaluate a 3D SDF distance grid on the Vulkan compute queue using the compiled
+    /// SPIR-V 1.5 `eval_sdf_gpu` kernel (with automatic CPU fallback if Vulkan is unavailable).
+    static bool evaluateGridGpu(
+        const bromesh::SdfGraph& graph,
+        int dimX,
+        int dimY,
+        int dimZ,
+        const bromath::AABB3& bounds,
+        std::vector<float>& outField,
+        int rootNode = -1,
+        bool* usedVulkanOut = nullptr);
+
+    /// Dispatch a batch of SDF sphere-tracing rays on the Vulkan compute queue using the
+    /// compiled SPIR-V 1.5 `trace_sdf_rays` kernel (with automatic CPU fallback).
+    static bool traceRaysGpu(
+        const bromesh::SdfGraph& graph,
+        std::span<const SdfRay> rays,
+        std::vector<SdfTraceHit>& outHits,
+        const SdfTraceConfig& cfg = {},
+        int rootNode = -1,
+        bool* usedVulkanOut = nullptr);
+
+    /// CPU fallback batch sphere-tracer (`parallel_for`).
+    static void traceRaysCpu(
+        const bromesh::SdfGraph& graph,
+        std::span<const SdfRay> rays,
+        std::vector<SdfTraceHit>& outHits,
+        const SdfTraceConfig& cfg = {},
+        int rootNode = -1,
+        bool parallel = true);
 
     /// Evaluate the signed distance at world-space point `p` using JIT-compiled native
     /// code (with scalar fallback).
@@ -132,8 +178,8 @@ public:
         const SdfTraceConfig& cfg = {},
         int rootNode = -1);
 
-    /// Sphere-trace a batch of rays against `graph` in parallel without any CPU Marching
-    /// Cubes triangle rebuild.
+    /// Sphere-trace a batch of rays against `graph` on the Vulkan GPU (when available)
+    /// or CPU `parallel_for` without any Marching Cubes triangle rebuild.
     static void traceRays(
         const bromesh::SdfGraph& graph,
         std::span<const SdfRay> rays,

@@ -22,7 +22,7 @@ endif()
 # tool that compiles bro's built-in shaders links nothing but glslang.
 add_library(bro_glsl STATIC glsl_compiler.cpp)
 target_include_directories(bro_glsl PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_glsl PRIVATE glslang::glslang glslang::glslang-default-resource-limits)
+target_link_libraries(bro_glsl PUBLIC brass PRIVATE glslang::glslang glslang::glslang-default-resource-limits)
 target_compile_features(bro_glsl PUBLIC cxx_std_20)
 
 add_executable(bro_spirv_embed tools/spirv_embed.cpp)

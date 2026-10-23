@@ -1,8 +1,12 @@
 #include "render/glsl_compiler.h"
 
+#include <brass/target/spirv/spirv_binary_reader.hpp>
+#include <brass/target/spirv/spirv_relaxed_precision.hpp>
 #include <glslang/Include/glslang_c_interface.h>
 #include <glslang/Public/resource_limits_c.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -22,6 +26,14 @@ namespace {
 std::mutex s_mutex;
 bool s_initialized = false;
 std::unordered_map<std::string, std::vector<uint32_t>> s_memo;
+
+thread_local GlslRelaxedPrecisionStats tl_lastRelaxedStats{};
+thread_local GlslComputeAuditStats tl_lastAuditStats{};
+
+bool envFlagEnabled(const char* name) {
+    const char* v = std::getenv(name);
+    return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 || std::strcmp(v, "ON") == 0);
+}
 
 glslang_stage_t toGlslangStage(ShaderStage stage) {
     switch (stage) {
@@ -92,56 +104,10 @@ bool expandIncludes(std::string& text, const std::string& dir, int depth,
     return true;
 }
 
-} // namespace
-
-bool preprocessGlslFile(const std::string& path, const std::vector<std::string>& defines,
-                        std::string& out, std::vector<std::string>* deps, std::string* err,
-                        const std::string& includeDir) {
-    std::string text;
-    if (!readTextFile(path, text)) {
-        if (err) *err = "cannot read " + path;
-        return false;
-    }
-    if (deps) deps->push_back(path);
-    std::string dir = includeDir;
-    if (dir.empty()) {
-        const size_t slash = path.find_last_of("/\\");
-        if (slash != std::string::npos) dir = path.substr(0, slash + 1);
-    } else if (dir.back() != '/' && dir.back() != '\\') {
-        dir += '/';
-    }
-    if (!expandIncludes(text, dir, 0, deps, err)) return false;
-    if (!defines.empty()) {
-        std::string lines;
-        for (const auto& d : defines) lines += "#define " + d + " 1\n";
-        const size_t version = text.find("#version");
-        const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
-        if (lineEnd == std::string::npos) {
-            if (err) *err = path + " has no #version line to define after";
-            return false;
-        }
-        text.insert(lineEnd + 1, lines);
-    }
-    out = std::move(text);
-    return true;
-}
-
-std::unique_lock<std::mutex> acquireGlslang() {
-    std::unique_lock<std::mutex> lock(s_mutex);
-    if (!initializeOnce()) return {};
-    return lock;
-}
-
-std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
-                                         std::string* log) {
-    std::string key;
-    key.reserve(source.size() + 2);
-    key.push_back(static_cast<char>('0' + static_cast<int>(stage)));
-    key.push_back('|');
-    key.append(source);
+std::vector<uint32_t> compileRawGlslToSpirv(std::string_view source, ShaderStage stage,
+                                            std::string* log) {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
         if (!initializeOnce()) {
             appendLog(log, "glslang: process initialisation failed", nullptr);
             return {};
@@ -194,9 +160,195 @@ std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage st
     glslang_shader_delete(shader);
 
     if (spirv.empty() || spirv[0] != 0x07230203u) return {};
-    std::lock_guard<std::mutex> lock(s_mutex);
-    s_memo.emplace(std::move(key), spirv);
     return spirv;
+}
+
+} // namespace
+
+bool preprocessGlslFile(const std::string& path, const std::vector<std::string>& defines,
+                        std::string& out, std::vector<std::string>* deps, std::string* err,
+                        const std::string& includeDir) {
+    std::string text;
+    if (!readTextFile(path, text)) {
+        if (err) *err = "cannot read " + path;
+        return false;
+    }
+    if (deps) deps->push_back(path);
+    std::string dir = includeDir;
+    if (dir.empty()) {
+        const size_t slash = path.find_last_of("/\\");
+        if (slash != std::string::npos) dir = path.substr(0, slash + 1);
+    } else if (dir.back() != '/' && dir.back() != '\\') {
+        dir += '/';
+    }
+    if (!expandIncludes(text, dir, 0, deps, err)) return false;
+    if (!defines.empty()) {
+        std::string lines;
+        for (const auto& d : defines) lines += "#define " + d + " 1\n";
+        const size_t version = text.find("#version");
+        const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
+        if (lineEnd == std::string::npos) {
+            if (err) *err = path + " has no #version line to define after";
+            return false;
+        }
+        text.insert(lineEnd + 1, lines);
+    }
+    out = std::move(text);
+    return true;
+}
+
+std::unique_lock<std::mutex> acquireGlslang() {
+    std::unique_lock<std::mutex> lock(s_mutex);
+    if (!initializeOnce()) return {};
+    return lock;
+}
+
+GlslRelaxedPrecisionStats promoteSpirvRelaxedPrecision(
+    std::vector<uint32_t>& spirv,
+    float maxAbsFp16,
+    bool assumeStageInputsUnitRange) {
+    GlslRelaxedPrecisionStats stats;
+    stats.enabled = true;
+    brass::spirv::SpirvRelaxedPrecisionOptions opts;
+    opts.max_abs_fp16 = maxAbsFp16;
+    opts.assume_stage_inputs_unit_range = assumeStageInputsUnitRange;
+    const auto rep = brass::spirv::promote_relaxed_precision(spirv, opts);
+    stats.parseOk = rep.parse_ok;
+    stats.totalFloatDefs = rep.total_float_defs;
+    stats.provenBoundedDefs = rep.proven_bounded_defs;
+    stats.promotedCount = rep.promoted_count;
+    stats.alreadyRelaxedCount = rep.already_relaxed_count;
+    stats.keptFp32Count = rep.kept_fp32_count;
+    stats.error = rep.error;
+    tl_lastRelaxedStats = stats;
+    return stats;
+}
+
+GlslComputeAuditStats auditComputeSpirv(const std::vector<uint32_t>& spirv) {
+    GlslComputeAuditStats stats;
+    stats.audited = true;
+    const auto rep = brass::spirv::audit_compute_shader_binary(spirv);
+    stats.parseOk = rep.parse_ok;
+    stats.structuralOk = rep.structural_ok;
+    stats.dominanceOk = rep.dominance_ok;
+    stats.barriersUniform = rep.barriers_uniform;
+    stats.sharedBoundsOk = rep.shared_bounds_ok;
+    stats.divSqrtOk = rep.div_sqrt_ok;
+    stats.valid = rep.parse_ok && rep.structural_ok && rep.dominance_ok;
+    stats.provenSafe = rep.ok();
+    stats.numFunctions = rep.num_functions;
+    stats.numBlocks = rep.num_blocks;
+    stats.numInstructions = rep.num_instructions;
+    stats.hazardCount = static_cast<uint32_t>(rep.hazards.size());
+    stats.divisionCount = static_cast<uint32_t>(rep.divisions.size());
+    uint32_t safeDivs = 0;
+    for (const auto& d : rep.divisions) {
+        if (d.proven_safe) ++safeDivs;
+    }
+    stats.provenSafeDivisions = safeDivs;
+    stats.barrierCount = static_cast<uint32_t>(rep.barriers.size());
+    stats.localSize = rep.local_size;
+    stats.findings.reserve(rep.hazards.size());
+    for (const auto& h : rep.hazards) {
+        stats.findings.push_back(h.message);
+    }
+    tl_lastAuditStats = stats;
+    return stats;
+}
+
+GlslCompileResult compileGlslToSpirvWithOptions(
+    std::string_view source, ShaderStage stage,
+    const GlslCompileOptions& options) {
+    GlslCompileResult result;
+    result.spirv = compileRawGlslToSpirv(source, stage, &result.errorLog);
+    if (result.spirv.empty()) return result;
+
+    if (options.promoteRelaxedPrecision &&
+        (stage == ShaderStage::Fragment || stage == ShaderStage::Compute)) {
+        result.relaxedPrecision = promoteSpirvRelaxedPrecision(
+            result.spirv,
+            options.maxAbsFp16,
+            options.assumeStageInputsUnitRange);
+    }
+
+    if (options.auditComputeShader && stage == ShaderStage::Compute) {
+        result.computeAudit = auditComputeSpirv(result.spirv);
+        if (options.failOnUnprovenCompute && !result.computeAudit.provenSafe) {
+            appendLog(&result.errorLog,
+                      "compute audit failed: ",
+                      result.computeAudit.findings.empty()
+                          ? "unproven hazard"
+                          : result.computeAudit.findings.front().c_str());
+            result.spirv.clear();
+        }
+    }
+
+    return result;
+}
+
+std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
+                                         std::string* log) {
+    const bool envRelaxed = envFlagEnabled("BRO_SHADER_RELAXED_PRECISION") &&
+                            (stage == ShaderStage::Fragment || stage == ShaderStage::Compute);
+    const bool envAudit = envFlagEnabled("BRO_AUDIT_COMPUTE_SHADERS") &&
+                          stage == ShaderStage::Compute;
+
+    std::string key;
+    key.reserve(source.size() + 6);
+    key.push_back(static_cast<char>('0' + static_cast<int>(stage)));
+    key.push_back(envRelaxed ? 'R' : 'r');
+    key.push_back(envAudit ? 'A' : 'a');
+    key.push_back('|');
+    key.append(source);
+
+    if (!envRelaxed && !envAudit) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
+    }
+
+    std::vector<uint32_t> spirv = compileRawGlslToSpirv(source, stage, log);
+    if (spirv.empty()) return {};
+
+    if (envRelaxed) {
+        promoteSpirvRelaxedPrecision(spirv);
+    }
+    if (envAudit) {
+        const auto audit = auditComputeSpirv(spirv);
+        if (!audit.provenSafe && log) {
+            for (const auto& f : audit.findings) {
+                appendLog(log, "[audit] ", (f + "\n").c_str());
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_memo[key] = spirv;
+    return spirv;
+}
+
+GlslCompileResult GlslCompiler::compileAndOptimize(
+    std::string_view source, ShaderStage stage,
+    const GlslCompileOptions& options) {
+    return compileGlslToSpirvWithOptions(source, stage, options);
+}
+
+GlslRelaxedPrecisionStats GlslCompiler::promoteRelaxedPrecision(
+    std::vector<uint32_t>& spirv,
+    float maxAbsFp16,
+    bool assumeStageInputsUnitRange) {
+    return promoteSpirvRelaxedPrecision(spirv, maxAbsFp16, assumeStageInputsUnitRange);
+}
+
+GlslComputeAuditStats GlslCompiler::auditCompute(const std::vector<uint32_t>& spirv) {
+    return auditComputeSpirv(spirv);
+}
+
+GlslRelaxedPrecisionStats GlslCompiler::lastRelaxedPrecisionStats() {
+    return tl_lastRelaxedStats;
+}
+
+GlslComputeAuditStats GlslCompiler::lastComputeAuditStats() {
+    return tl_lastAuditStats;
 }
 
 } // namespace bro::render

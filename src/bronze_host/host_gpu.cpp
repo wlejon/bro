@@ -16,6 +16,7 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_js_gpu.h"
 
 #if BRO_WITH_TENSOR
 
@@ -320,6 +321,7 @@ Value makeBroGpuValue() {
         return ev::fromBool(ok);
     });
 
+    attachJsGpuKernelFunctions(gpu);
     return gpu.get();
 }
 
@@ -363,6 +365,7 @@ Value makeBroGpuValue() {
     gpu.def("trim", 2, [](Value, std::span<const Value>) {
         return ev::fromBool(false);
     });
+    attachJsGpuKernelFunctions(gpu);
     return gpu.get();
 }
 

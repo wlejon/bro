@@ -1,7 +1,13 @@
 #include "scene/sdf_gpu_tracer.h"
+#include "render/glsl_compiler.h"
+#include "codegen-brass/js_gpu_kernel.h"
+
+#include <brass/gpu/vulkan_driver.hpp>
+#include <bromesh/isosurface/jit/sdf_compiler.h>
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -252,6 +258,277 @@ void testLiveCsgParameterUpdateWithoutMeshing() {
           "recompiled SPIR-V after live CSG parameter update passes formal audit");
 }
 
+void testVulkanGpuComputeExecutionAndParity() {
+    // Build a CSG scene with floor + smooth-union sphere/box
+    bromesh::SdfGraph g;
+    const int floorNode = g.plane({0.0f, 1.0f, 0.0f}, 1.0f);
+    const int sph = g.sphere(1.0f);
+    const int bx = g.box({0.7f, 0.7f, 0.7f});
+    const int tbx = g.translate(bx, {0.5f, 0.2f, 0.0f});
+    const int csgObj = g.opSmoothUnion(sph, tbx, 0.25f);
+    const int root = g.opUnion(floorNode, csgObj);
+    g.setRoot(root);
+
+    const bool vkAvail = SdfGpuTracer::vulkanAvailable();
+    check(vkAvail, "Vulkan compute queue with PhysicalStorageBufferAddresses is available");
+    if (vkAvail) {
+        check(!SdfGpuTracer::vulkanDeviceName().empty(), "Vulkan compute device name is non-empty");
+    }
+
+    // 1. 3D Grid evaluation on Vulkan GPU vs CPU reference
+    const bromath::AABB3 bounds{{-2.0f, -2.0f, -2.0f}, {2.0f, 2.0f, 2.0f}};
+    std::vector<float> gpuField;
+    bool gridUsedVk = false;
+    const bool gridOk = SdfGpuTracer::evaluateGridGpu(g, 16, 16, 16, bounds, gpuField, root, &gridUsedVk);
+    check(gridOk && gpuField.size() == 16 * 16 * 16, "evaluateGridGpu produces 16x16x16 SDF grid");
+    if (vkAvail) {
+        check(gridUsedVk && SdfGpuTracer::lastTraceUsedVulkanGpu(),
+              "evaluateGridGpu executed on hardware Vulkan compute queue");
+    }
+
+    const auto cpuVol = bromesh::JitSdfCompiler::instance().evaluateVolume(g, 16, 16, 16, bounds, root, false);
+    float maxGridDiff = 0.0f;
+    for (size_t i = 0; i < gpuField.size() && i < cpuVol.field.size(); ++i) {
+        maxGridDiff = std::max(maxGridDiff, std::fabs(gpuField[i] - cpuVol.field[i]));
+    }
+    check(maxGridDiff < 1e-4f, "Vulkan GPU grid evaluation matches CPU reference within 1e-4");
+
+    // 2. Raymarching + soft shadows + AO on Vulkan GPU vs CPU reference
+    std::vector<SdfRay> rays(36);
+    for (int i = 0; i < 36; ++i) {
+        const float u = (static_cast<float>(i % 6) - 2.5f) * 0.4f;
+        const float v = (static_cast<float>(i / 6) - 2.5f) * 0.4f;
+        rays[static_cast<size_t>(i)].origin = {u, v + 0.5f, 4.5f};
+        rays[static_cast<size_t>(i)].dir = {0.0f, -0.15f, -1.0f};
+        rays[static_cast<size_t>(i)].tMax = 20.0f;
+    }
+
+    SdfTraceConfig cfg;
+    cfg.maxSteps = 128;
+    cfg.shadowSteps = 48;
+    cfg.aoSteps = 5;
+
+    std::vector<SdfTraceHit> gpuHits;
+    bool raysUsedVk = false;
+    const bool raysOk = SdfGpuTracer::traceRaysGpu(g, rays, gpuHits, cfg, root, &raysUsedVk);
+    check(raysOk && gpuHits.size() == rays.size(), "traceRaysGpu produces 36 hit records");
+    if (vkAvail) {
+        check(raysUsedVk && SdfGpuTracer::lastTraceUsedVulkanGpu(),
+              "traceRaysGpu executed on hardware Vulkan compute queue");
+        check(SdfGpuTracer::cachedVulkanPipelineCount() >= 2,
+              "VulkanModule pipeline cache holds compiled grid + raymarch pipelines");
+    }
+
+    std::vector<SdfTraceHit> cpuHits;
+    SdfGpuTracer::traceRaysCpu(g, rays, cpuHits, cfg, root, false);
+
+    bool parityOk = true;
+    for (size_t i = 0; i < rays.size(); ++i) {
+        if (gpuHits[i].hit != cpuHits[i].hit) {
+            parityOk = false;
+            break;
+        }
+        if (gpuHits[i].hit) {
+            if (std::fabs(gpuHits[i].t - cpuHits[i].t) > 2e-3f ||
+                std::fabs(gpuHits[i].normal.x - cpuHits[i].normal.x) > 5e-3f ||
+                std::fabs(gpuHits[i].normal.y - cpuHits[i].normal.y) > 5e-3f ||
+                std::fabs(gpuHits[i].normal.z - cpuHits[i].normal.z) > 5e-3f ||
+                std::fabs(gpuHits[i].softShadow - cpuHits[i].softShadow) > 1e-2f ||
+                std::fabs(gpuHits[i].ambientOcclusion - cpuHits[i].ambientOcclusion) > 1e-2f) {
+                parityOk = false;
+                break;
+            }
+        }
+    }
+    check(parityOk, "Vulkan GPU traceRaysGpu hit distances, normals, soft shadows & AO match CPU reference");
+}
+
+void testGlslCompilerRelaxedPrecisionAndComputeAudit() {
+    // 1. Fragment shader with bounded math (sin, cos, clamp, mix) + unbounded world position
+    const char* fragSrc = R"(#version 450
+layout(location = 0) in vec3 vWorldPos;
+layout(location = 1) in vec2 vUv;
+layout(location = 0) out vec4 outColor;
+void main() {
+    float wave = sin(vUv.x * 6.2831853) * 0.5 + 0.5;
+    float rim = clamp(cos(vUv.y * 3.1415926), 0.0, 1.0);
+    float tonemapped = mix(wave, rim, 0.35);
+    float worldDist = vWorldPos.x * 4096.0;
+    outColor = vec4(tonemapped, wave * rim, clamp(worldDist, 0.0, 1.0), 1.0);
+}
+)";
+
+    bro::render::GlslCompileOptions fragOpts;
+    fragOpts.promoteRelaxedPrecision = true;
+    fragOpts.maxAbsFp16 = 1024.0f;
+    fragOpts.assumeStageInputsUnitRange = true;
+
+    const auto fragRes = bro::render::GlslCompiler::compileAndOptimize(
+        fragSrc, bro::render::ShaderStage::Fragment, fragOpts);
+    check(fragRes.ok(), "GlslCompiler::compileAndOptimize compiles fragment shader");
+    check(fragRes.relaxedPrecision.enabled && fragRes.relaxedPrecision.parseOk,
+          "GlslCompiler RelaxedPrecision pass parses fragment SPIR-V cleanly");
+    check(fragRes.relaxedPrecision.promotedCount > 0,
+          "GlslCompiler RelaxedPrecision promotes bounded fragment float ops to FP16");
+
+    // 2. Compute shader audited by brass::spirv::audit_compute_shader_binary
+    const char* compSrc = R"(#version 450
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(std430, binding = 0) buffer OutBuf {
+    float data[];
+} outBuf;
+shared float tile[64];
+void main() {
+    uint lid = gl_LocalInvocationID.x & 63u;
+    float s = sin(float(lid) * 0.1) * 0.5 + 0.5;
+    tile[lid] = s;
+    barrier();
+    uint gid = gl_GlobalInvocationID.x;
+    outBuf.data[gid] = tile[lid] / (max(s, 0.01) + 0.001);
+}
+)";
+
+    bro::render::GlslCompileOptions compOpts;
+    compOpts.promoteRelaxedPrecision = true;
+    compOpts.auditComputeShader = true;
+
+    const auto compRes = bro::render::GlslCompiler::compileAndOptimize(
+        compSrc, bro::render::ShaderStage::Compute, compOpts);
+    check(compRes.ok(), "GlslCompiler::compileAndOptimize compiles compute shader");
+    check(compRes.relaxedPrecision.promotedCount > 0,
+          "GlslCompiler RelaxedPrecision promotes bounded compute float ops");
+    check(compRes.computeAudit.audited && compRes.computeAudit.valid,
+          "GlslCompiler static compute audit validates compute SPIR-V");
+    check(compRes.computeAudit.barriersUniform && compRes.computeAudit.sharedBoundsOk &&
+          compRes.computeAudit.divSqrtOk && compRes.computeAudit.provenSafe,
+          "GlslCompiler static compute audit proves uniform barrier, shared bounds & safe division");
+    check(compRes.computeAudit.localSize[0] == 64,
+          "GlslCompiler static compute audit extracts workgroup local_size_x = 64");
+
+    // 3. Environment variable toggles BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1
+    setenv("BRO_SHADER_RELAXED_PRECISION", "1", 1);
+    setenv("BRO_AUDIT_COMPUTE_SHADERS", "1", 1);
+    std::string log;
+    const auto envSpirv = bro::render::compileGlslToSpirv(
+        compSrc, bro::render::ShaderStage::Compute, &log);
+    unsetenv("BRO_SHADER_RELAXED_PRECISION");
+    unsetenv("BRO_AUDIT_COMPUTE_SHADERS");
+
+    check(!envSpirv.empty(), "compileGlslToSpirv succeeds with BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1");
+    check(bro::render::GlslCompiler::lastRelaxedPrecisionStats().promotedCount > 0,
+          "BRO_SHADER_RELAXED_PRECISION=1 records promoted RelaxedPrecision stats");
+    check(bro::render::GlslCompiler::lastComputeAuditStats().provenSafe,
+          "BRO_AUDIT_COMPUTE_SHADERS=1 records proven-safe compute audit stats");
+}
+
+void testJsGpuKernelSingleSourceAndVulkanDispatch() {
+    // 1. Single-source 2D scalar height kernel (#116)
+    const char* heightJs = R"(
+        // @kernel
+        function terrainWave(x, z) {
+            return Math.sin(x * 0.25) * 2.0 + Math.cos(z * 0.25) * 1.5;
+        }
+    )";
+    bronze::GpuCompileOptions opts;
+    opts.stage = brass::target::SpirvStage::Compute;
+    opts.enableRelaxedPrecision = true;
+    opts.localSizeX = 64;
+
+    const auto res = bronze::compileJsGpuKernelSource(heightJs, "terrainWave.js", opts);
+    check(res.ok, "bronze::compileJsGpuKernelSource compiles single-source terrainWave JS function");
+    check(res.hasScalarReturn && res.scalarParamCount == 2,
+          "terrainWave has 2 scalar parameters and scalar return");
+    check(res.cpuGpuProvenEquivalent, "terrainWave CPU MIR == SPIR-V equivalence formally proven");
+    check(res.singleSourceParityVerified && res.maxCpuGpuUlpDiff <= 2.0f,
+          "terrainWave single-source 64-point parity verified within 2 ULPs");
+    check(res.relaxedPrecisionReport.promoted_count > 0,
+          "terrainWave promotes bounded float ops to RelaxedPrecision");
+    check(!res.spirvWords.empty() && !res.ptxAssembly.empty(),
+          "terrainWave emits both SPIR-V 1.5 words and PTX assembly");
+
+    const float cpuVal = res.evalCpu2D(1.5f, -0.75f);
+    const float spvVal = res.evalSpirv2D(1.5f, -0.75f);
+    const float refVal = std::sin(1.5f * 0.25f) * 2.0f + std::cos(-0.75f * 0.25f) * 1.5f;
+    check(std::fabs(cpuVal - refVal) < 1e-5f && std::fabs(spvVal - cpuVal) < 1e-5f,
+          "terrainWave evalCpu2D and evalSpirv2D match reference value");
+
+    if (brass::gpu::vulkan_available()) {
+        brass::target::SpirvKernel k;
+        k.entry = "terrainWave";
+        k.stage = brass::target::SpirvStage::Compute;
+        k.words = res.spirvWords;
+        k.params = {
+            {brass::Type::f32(), 0, 4},
+            {brass::Type::f32(), 4, 4},
+            {brass::Type::ptr(), 8, 8},
+        };
+        k.push_constant_bytes = 16;
+        k.local_size[0] = 64;
+        k.local_size[1] = 1;
+        k.local_size[2] = 1;
+
+        std::string err;
+        auto mod = brass::gpu::VulkanModule::load(k, &err);
+        auto outBuf = brass::gpu::VulkanBuffer::alloc(sizeof(float));
+        float vkVal = 0.0f;
+        const bool launched = mod.valid() && outBuf.valid() &&
+                              mod.launch_1d(1, 64, {1.5f, -0.75f, outBuf}, &err) &&
+                              outBuf.download(&vkVal, sizeof(float));
+        check(launched && std::fabs(vkVal - cpuVal) < 1e-5f,
+              "single-source JS @kernel terrainWave executes on hardware Vulkan queue and matches CPU");
+    }
+
+    // 2. Buffer compute kernel dispatched on Vulkan (#116)
+    const char* saxpyJs = R"(
+        // @kernel
+        function saxpy(out, a, scale, n) {
+            let i = global_tid_x();
+            if (i < n) {
+                out[i] = a[i] * scale + 2.5;
+            }
+        }
+    )";
+    const auto saxpyRes = bronze::compileJsGpuKernelSource(saxpyJs, "saxpy.js", opts);
+    check(saxpyRes.ok && !saxpyRes.spirvWords.empty(),
+          "bronze::compileJsGpuKernelSource compiles buffer compute kernel saxpy");
+
+    if (brass::gpu::vulkan_available()) {
+        brass::target::SpirvKernel k;
+        k.entry = "saxpy";
+        k.stage = brass::target::SpirvStage::Compute;
+        k.words = saxpyRes.spirvWords;
+        k.params = {
+            {brass::Type::ptr(), 0, 8},
+            {brass::Type::ptr(), 8, 8},
+            {brass::Type::f32(), 16, 4},
+            {brass::Type::i32(), 20, 4},
+        };
+        k.push_constant_bytes = 24;
+        k.local_size[0] = 64;
+        k.local_size[1] = 1;
+        k.local_size[2] = 1;
+
+        constexpr int N = 64;
+        std::vector<float> hostA(N), hostOut(N, 0.0f);
+        for (int i = 0; i < N; ++i) hostA[static_cast<size_t>(i)] = static_cast<float>(i) * 0.5f;
+
+        auto bufA = brass::gpu::VulkanBuffer::alloc(N * sizeof(float));
+        auto bufOut = brass::gpu::VulkanBuffer::alloc(N * sizeof(float));
+        std::string err;
+        auto mod = brass::gpu::VulkanModule::load(k, &err);
+        const bool ok = mod.valid() && bufA.valid() && bufOut.valid() &&
+                        bufA.upload(hostA.data(), N * sizeof(float)) &&
+                        mod.launch_1d(1, 64, {bufOut, bufA, 4.0f, static_cast<int32_t>(N)}, &err) &&
+                        bufOut.download(hostOut.data(), N * sizeof(float));
+        bool match = ok;
+        for (int i = 0; i < N && match; ++i) {
+            const float expected = (static_cast<float>(i) * 0.5f) * 4.0f + 2.5f;
+            if (std::fabs(hostOut[static_cast<size_t>(i)] - expected) > 1e-4f) match = false;
+        }
+        check(match, "JS buffer @kernel saxpy dispatches 64 elements on Vulkan queue and matches expected output");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -259,6 +536,9 @@ int main() {
     testSphereTracingAccuracy();
     testConeTracedSoftShadowsAndAmbientOcclusion();
     testLiveCsgParameterUpdateWithoutMeshing();
+    testVulkanGpuComputeExecutionAndParity();
+    testGlslCompilerRelaxedPrecisionAndComputeAudit();
+    testJsGpuKernelSingleSourceAndVulkanDispatch();
 
     std::printf("bro_sdf_gpu_tracer_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
