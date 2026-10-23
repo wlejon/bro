@@ -34,6 +34,11 @@ struct LandPoint {
                      // up, x along its face's u, z its v)
     vec3 at;         // on a round body the datum's point under it, relative to the origin; else (p.x, 0, p.y)
     vec3 up;         // the body's up there (the body's frame; (0, 1, 0) flat)
+    float footprint; // the texel's width (m): the ground it stands for. Its height
+                     // is the noise's mean over it, so what the surface decides from
+                     // the height (a snowline, a tree line) is a share of it there,
+                     // its threshold widened by the relief the texel hides, not all
+                     // or nothing texel by texel
 };
 
 // A round body's land (the fill defines LAND_ROUND): each tile's texels

@@ -56,7 +56,11 @@
  * `q.normal` its normal (from the heights); on a round body `q.at` is the
  * datum's point under it (relative to the tile's origin, which a tree's GLSL
  * adds back in double) and `q.up` the body's up there, so a world's belts
- * and snow lines are its own GLSL of them. It returns
+ * and snow lines are its own GLSL of them. `q.footprint` is the texel's
+ * width (m): its height is the noise's mean over that much ground, so a
+ * line the surface draws from the height (snow, trees, rock) is a share
+ * there, its threshold widened by the relief a texel that wide hides, or
+ * a far range is flecked texel by texel. It returns
  *
  *     struct LandSurface {
  *         vec3 albedo;   // linear: the ground where no turf covers it
