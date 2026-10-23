@@ -288,7 +288,39 @@ void clSkyAt(vec3 ro, vec3 at, out vec3 skyAbove, out vec3 groundBelow) {
 // the deck's depths from the point lit toward the sun and up, `about` the
 // cloud's optical depth about the point (the powder's), `ph` the octaves'
 // phases.
-void clIntegrate(inout ClMarch m, vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
+// How much more or less sun an opaque top seen as a layer takes at `p`
+// (air space) for the sun `s`, seen over `foot` metres: the top's lumps,
+// the engine's noise CL_TOP_TILE edges a tile (its billows some
+// CL_TOP_TILE / 8 edges across) CL_TOP_RELIEF edges high, as a surface
+// whose slope toward the sun turns it to the sun or away (its cosine to the
+// sun over a flat top's: the sunward side bright, the lee grey, lit by the
+// sky alone where the slope hides it). A world that shapes its slabs'
+// tops by the same noise at the same tile is lit as it is shaped; one that
+// does not still has lumps of about the size overcast tops have. Faded out
+// as the lumps come under CL_TOP_PIXELS pixels, where their mean is the
+// flat top's.
+const float CL_TOP_TILE = 16.0;
+const float CL_TOP_RELIEF = 0.8;
+const float CL_TOP_PIXELS = 5.0;
+float clTopShade(vec3 p, vec3 s, float foot) {
+    float T = CL_TOP_TILE * clouds.forms.w;
+    float vis = smoothstep(0.4 * CL_TOP_PIXELS, CL_TOP_PIXELS, 0.125 * T / max(foot, 1.0));
+    if (vis <= 0.0) return 1.0;
+    vec3 up = normalize(p);
+    float sinE = dot(up, s);
+    vec3 st = s - up * sinE;
+    float cosE = length(st);
+    if (cosE < 1e-3) return 1.0;
+    st /= cosE;
+    float ds = max(foot, T / 32.0);
+    float a = cloudNoise(cloudDrift(cloudToBody(p + st * ds)) / T, foot / T).x;
+    float b = cloudNoise(cloudDrift(cloudToBody(p - st * ds)) / T, foot / T).x;
+    float slope = CL_TOP_RELIEF * clouds.forms.w * (a - b) / (2.0 * ds);
+    float lit = (sinE - slope * cosE) / sqrt(1.0 + slope * slope);
+    return mix(1.0, clamp(lit / max(sinE, 0.08), 0.15, 2.5), vis);
+}
+
+void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
                  float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow) {
     float r = length(p);
     vec3 up = p / r;
@@ -427,8 +459,10 @@ void main() {
             sky = true;
         }
         // (The powder's depth the column's own: what it sends comes from
-        // cloud as deep as it is, however thin the view's mean.)
-        clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.x, s, nu, ph, albedo, E,
+        // cloud as deep as it is, however thin the view's mean. An opaque
+        // top's lumps lit from the side, clTopShade.)
+        float shade = mix(1.0, clTopShade(pl, s, pixel * at), smoothstep(1.0, 3.0, tauView));
+        clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.x, s, nu, ph, albedo, E * shade,
                     skyAbove, groundBelow);
     }
 

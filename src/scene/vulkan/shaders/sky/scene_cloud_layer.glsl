@@ -334,8 +334,12 @@ float cloudCutBase(float base, vec3 pd, float cell) {
     // at a quarter of the cell, so a cell is a sample of it, not its mean,
     // and keeps its spread; its clouds a few cells across at the least.
     // The threshold the score's quantile for the share, logistic; under a
-    // share of 2% steeply higher, out of the score's reach by none.)
-    float z = (cloudCutNoise(pd, 0.25 * cell).x - 0.77) / 0.074;
+    // share of 2% steeply higher, out of the score's reach by none. Never
+    // read coarser than an eighth of the noise's tile: its coarse mips are a
+    // few texels a tile, flat and blocky, so cells wider than that cut along
+    // its lattice into rows that run off to the horizon; read finer, a wide
+    // cell is one sample of the clouds, as a narrower one is.)
+    float z = (cloudCutNoise(pd, min(0.25 * cell, 0.125 * CLOUD_CUT_TILE * clouds.forms.w)).x - 0.77) / 0.074;
     float s = clamp(base, 0.02, 0.98);
     float t = log((1.0 - s) / s) / 1.7 + max(0.02 - base, 0.0) * 150.0;
     float cut = min(0.5 + 0.25 * (z - t), 1.0);

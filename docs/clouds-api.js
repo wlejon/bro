@@ -20,7 +20,8 @@
  *     deck, the finest cell 62.5 m and each level's twice the last's. With
  *     each texel: the base the march reads (where the cell is about as
  *     wide as a cloud or wider, a share the engine cuts into clouds by its
- *     own noise), how much of the skin's move shows there (none under a
+ *     own noise, read no coarser than an eighth of its tile so the widest
+ *     cells never cut along its lattice into rows), how much of the skin's move shows there (none under a
  *     flat base), the forms' mean extinction over the cell, whether any of
  *     the cell may hold cloud as a view however near sees it, the deck's
  *     depth from it toward the sun and up, the distance to the nearest cell
@@ -80,7 +81,14 @@
  *     footprint's mean of what the march would show (a field of heaps
  *     under a pixel a soft veil at its cover, an overcast's edge soft over
  *     the footprint). A few texture reads a pixel, and the same clouds at
- *     every height on the way up.
+ *     every height on the way up. An opaque layer's top is lit as a lumpy
+ *     surface, not flat: the billows' noise at 16 edges a tile (its lumps
+ *     some 2 edges across) as a relief 0.8 edges high, its slope toward the
+ *     sun brightening the sun-facing sides and greying the lee, faded out
+ *     as the lumps come under a few pixels. A world that shapes its slabs'
+ *     tops by the same noise at the same tile and height (cloudNoise(p /
+ *     (16 * edge)).x, 0.8 edges down where it is low) is lit as it is
+ *     shaped; one whose tops are flat gets the lumps in the light alone.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
  *     and through the deck toward it: where the view meets a cloud, its
  *     own forms over the first few hundred metres toward the sun (four
