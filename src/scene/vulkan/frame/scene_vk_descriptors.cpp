@@ -89,6 +89,8 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     // The land's sun's levels (SceneMeshDrawer::landSunView), through binding
     // 8's sampler.
     builder.addBinding(23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    // The cloud deck's shadow's levels (SceneClouds::shadowView), the same way.
+    builder.addBinding(24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

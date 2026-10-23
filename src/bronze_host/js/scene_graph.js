@@ -392,6 +392,28 @@
         v[31] = num(o.sunAngularRadius);
         __bro_native.scene.SceneGraph_setAtmosphere(this, toF64(v));
     });
+    // The cloud deck (docs/clouds-api.js): the world's module (GLSL defining
+    // cloudCover and cloudDensity), the deck's bottom and top over the
+    // datum, its data, the land whose processes' grid the cover reads.
+    // Every call replaces the whole deck; null or {enabled: false} removes it.
+    fn(SceneGraph.prototype, "setClouds", function setClouds(opts) {
+        const o = opts == null ? { enabled: false } : opts;
+        const on = o.enabled === undefined ? true : !!o.enabled;
+        const source = on ? (typeof o.module === 'string' ? o.module : (o.module && o.module.source) || '') : '';
+        if (on && !source) throw new TypeError("setClouds: `module` (GLSL defining cloudCover and cloudDensity) is required");
+        const num = (v, d) => (v === undefined || v === null) ? d : +v;
+        const land = o.land == null ? 0 : (typeof o.land === 'number' ? o.land : o.land.id);
+        const params = [on ? 1 : 0, num(o.bottom, 1500), num(o.top, 8000), num(o.albedo, 0.98),
+                        o.shadows === undefined ? 1 : (o.shadows ? 1 : 0), land | 0];
+        const err = __bro_native.scene.SceneGraph_setClouds(this, source, toF64(params),
+            o.data ? Float32Array.from(o.data) : new Float32Array(0));
+        if (err) throw new TypeError('setClouds: ' + err);
+    });
+    fn(SceneGraph.prototype, "cloudStats", function cloudStats() {
+        const a = __bro_native.scene.SceneGraph_cloudStats(this);
+        if (a.length < 5) return undefined;
+        return { enabled: a[0] > 0, compiled: a[1] > 0, failed: a[2] > 0, covered: a[3] > 0, generation: a[4] };
+    });
     fn(SceneGraph.prototype, "setStarfield", function setStarfield(opts) {
         const d_opts = opts === undefined ? {} : opts;
         __bro_native.scene.SceneGraph_setStarfield(this, d_opts.starCount !== undefined, d_opts.starCount === undefined ? 0 : d_opts.starCount, d_opts.starSize !== undefined, d_opts.starSize === undefined ? 0 : d_opts.starSize, d_opts.twinkleSpeed !== undefined, d_opts.twinkleSpeed === undefined ? 0 : d_opts.twinkleSpeed, d_opts.tint === undefined ? EMPTY_F64 : toF64(d_opts.tint));

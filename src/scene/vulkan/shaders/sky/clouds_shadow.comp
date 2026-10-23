@@ -1,0 +1,50 @@
+#version 450
+// The clouds' shadow on the land (vulkan/sky/scene_clouds.cpp; read by
+// common/scene_lighting.glsl's sceneCloudSun): for each texel of each level
+// (a level a z of the dispatch, about the body's point under the eye, on
+// the plane tangent to it there), what the deck leaves of the sun at the
+// datum's point under it: the deck marched from where the sun's ray enters
+// it to where it leaves, its density at the texel's footprint or the step's,
+// whichever is the wider, so a level holds a shadow as sharp as its texels
+// and no sharper.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_SHADOW_GROUP, local_size_y = CL_SHADOW_GROUP) in;
+
+layout(set = 0, binding = CL_B_SHADOW_OUT, r32f) uniform writeonly image2DArray shadowOut;
+
+vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
+
+#include "sky/cloud_module.glsl"
+
+// Where a ray from inside a sphere of radius R about the centre leaves it.
+float cloudSphereOut(vec3 ro, vec3 rd, float R) {
+    float b = dot(ro, rd);
+    float d = b * b - (dot(ro, ro) - R * R);
+    return -b + sqrt(max(d, 0.0));
+}
+
+void main() {
+    uvec2 t = gl_GlobalInvocationID.xy;
+    int l = int(gl_GlobalInvocationID.z);
+    if (t.x >= uint(CL_SHADOW_SIDE) || t.y >= uint(CL_SHADOW_SIDE)) return;
+    float texel = clouds.shadowE1.w * pow(clouds.shadowN.w, float(l));
+    vec2 c = (vec2(t) + 0.5 - 0.5 * float(CL_SHADOW_SIDE)) * texel;
+    float R = clouds.shell.z;
+    vec3 d = normalize(clouds.shadowN.xyz * R + clouds.shadowE1.xyz * c.x + clouds.shadowE2.xyz * c.y);
+    vec3 s = clouds.sun.xyz;
+    float T = 1.0;
+    if (dot(d, s) > -0.05) {
+        vec3 q = d * R;
+        float t0 = cloudSphereOut(q, s, clouds.shell.x);
+        float t1 = cloudSphereOut(q, s, clouds.shell.y);
+        float dt = (t1 - t0) / float(CL_SHADOW_STEPS);
+        float foot = max(texel, dt);
+        float tau = 0.0;
+        for (int k = 0; k < CL_SHADOW_STEPS; ++k) tau += cloudExtinction(q + s * (t0 + (float(k) + 0.5) * dt), foot);
+        T = exp(-tau * dt);
+    }
+    imageStore(shadowOut, ivec3(t, l), vec4(T));
+}

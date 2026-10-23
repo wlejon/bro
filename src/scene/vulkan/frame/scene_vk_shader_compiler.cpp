@@ -61,6 +61,12 @@
 #include "land_process_module.glsl.src.h"
 #include "land_process_dispatch.glsl.src.h"
 #include "land_process.comp.src.h"
+#include "clouds_layout.h.src.h"
+#include "scene_cloud_layer.glsl.src.h"
+#include "cloud_module.glsl.src.h"
+#include "clouds.frag.src.h"
+#include "clouds_cover.comp.src.h"
+#include "clouds_shadow.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -183,6 +189,9 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_process_layer.glsl", kVkLandProcessLayerSrc},
         {"ground/land_process_module.glsl", kVkLandProcessModuleSrc},
         {"ground/land_process_dispatch.glsl", kVkLandProcessDispatchSrc},
+        {"sky/clouds_layout.h", kVkCloudsLayoutSrc},
+        {"sky/scene_cloud_layer.glsl", kVkSceneCloudLayerSrc},
+        {"sky/cloud_module.glsl", kVkCloudModuleSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
         {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
@@ -198,6 +207,9 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
         {"ground/land_fill.comp", kVkLandFillCompSrc},
         {"ground/land_process.comp", kVkLandProcessCompSrc},
+        {"sky/clouds.frag", kVkCloudsFragSrc},
+        {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
+        {"sky/clouds_shadow.comp", kVkCloudsShadowCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

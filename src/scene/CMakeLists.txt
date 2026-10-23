@@ -121,6 +121,12 @@ embed_vk_shader(ground/land_process_layer.glsl kVkLandProcessLayerSrc)
 embed_vk_shader(ground/land_process_module.glsl kVkLandProcessModuleSrc)
 embed_vk_shader(ground/land_process_dispatch.glsl kVkLandProcessDispatchSrc)
 embed_vk_shader(ground/land_process.comp       kVkLandProcessCompSrc)
+embed_vk_shader(sky/clouds_layout.h            kVkCloudsLayoutSrc)
+embed_vk_shader(sky/scene_cloud_layer.glsl     kVkSceneCloudLayerSrc)
+embed_vk_shader(sky/cloud_module.glsl          kVkCloudModuleSrc)
+embed_vk_shader(sky/clouds.frag                kVkCloudsFragSrc)
+embed_vk_shader(sky/clouds_cover.comp          kVkCloudsCoverCompSrc)
+embed_vk_shader(sky/clouds_shadow.comp         kVkCloudsShadowCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -229,6 +235,8 @@ add_library(bro_scene STATIC
     vulkan/post/pass_dof.cpp
     vulkan/post/scene_exposure.cpp
     vulkan/post/pass_postfx.cpp
+    vulkan/sky/scene_clouds.cpp
+    vulkan/sky/pass_clouds.cpp
     ${VK_GENERATED_HEADERS}
 )
 

@@ -1,0 +1,45 @@
+#version 450
+// The clouds' cover (vulkan/sky/scene_clouds.cpp): the world's cloudCover
+// run over a cube about the body, a face a z of the dispatch, the mean of
+// four samples a texel (its quarters' centres), so a cover finer than a
+// texel is its share, not a point of it. The first and last row and column
+// of a face lie a texel past its edge, on the next face's ground
+// (sky/scene_cloud_layer.glsl's cloudCoverAt reads inside them).
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_COVER_GROUP, local_size_y = CL_COVER_GROUP) in;
+
+layout(set = 0, binding = CL_B_COVER_OUT, rgba16f) uniform writeonly image2DArray coverOut;
+
+// The land's processes' grid (its layout the land's, ground/land_grid_config.glsl;
+// with none, never read).
+#include "ground/land_grid_config.glsl"
+layout(set = 0, binding = CL_B_LAND_GRID, rgba32f) uniform readonly image2DArray landGridImage;
+vec4 landGridLoad(ivec3 t) { return imageLoad(landGridImage, t); }
+#include "ground/land_grid.glsl"
+
+vec4 cloudLandGrid(int c, vec3 up) {
+#ifdef LAND_GRID_ROUND
+    return landGridAtDir(c, normalize(up));
+#else
+    return vec4(0.0);
+#endif
+}
+
+#include "sky/cloud_module.glsl"
+
+void main() {
+    uvec2 t = gl_GlobalInvocationID.xy;
+    int f = int(gl_GlobalInvocationID.z);
+    if (t.x >= uint(CL_COVER_SIDE) || t.y >= uint(CL_COVER_SIDE)) return;
+    const float S = float(CL_COVER_SIDE);
+    vec4 sum = vec4(0.0);
+    for (int k = 0; k < 4; ++k) {
+        vec2 o = vec2(float(k & 1), float(k >> 1)) * 0.5 + 0.25;
+        vec2 e = ((vec2(t) + o - 1.0) / (S - 2.0)) * 2.0 - 1.0;
+        sum += clamp(cloudCover(cloudFaceDir(f, e)), 0.0, 1.0);
+    }
+    imageStore(coverOut, ivec3(t, f), sum * 0.25);
+}

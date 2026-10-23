@@ -4,7 +4,8 @@
 // keeps drawing into the originals:
 //
 //   PassDepthSnapshot  the opaque depth -> SceneTargets::depthSnapshot, for
-//                      SSAO, SSR, decals, soft particles and depth of field;
+//                      SSAO, SSR, decals, soft particles, depth of field and
+//                      the cloud deck;
 //                      copied only on a frame where one of them reads it.
 //   PassColorSnapshot  the lit, ambient-occluded opaque colour ->
 //                      SceneTargets::colorSnapshot, which SSR reflects.

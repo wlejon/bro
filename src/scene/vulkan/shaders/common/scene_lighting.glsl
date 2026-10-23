@@ -31,6 +31,7 @@ struct SceneLight {
 #include "common/scene_atmosphere_params.glsl"
 #include "lighting/scene_probe_grid.glsl"
 #include "ground/land_sun_layout.h"
+#include "sky/clouds_layout.h"
 
 // The land's sun (scene/world/land_sun.h): where each level lies, relative
 // to the eye, and the copy shown.
@@ -38,6 +39,15 @@ struct LandSunGpu {
     vec4 params;               // x 1 when any level is shown, y the eye's world height
     vec4 body;                 // a round body's: xy the eye's world x and z, z 1 / (2 R); 0 flat
     vec4 level[LS_LEVELS];     // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
+};
+
+// The cloud deck's shadow (vulkan/sky/scene_clouds.h): its levels' plane, in
+// air space (about the body's centre, the place frame's axes).
+struct CloudShadowGpu {
+    vec4 params;   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w the levels' growth
+    vec4 n;        // xyz the plane's normal (the body's up under the eye)
+    vec4 e1;       // xyz its first axis
+    vec4 e2;       // xyz its second
 };
 
 layout(set = 1, binding = 0) uniform LightingUBO {
@@ -61,6 +71,7 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
     ProbeGridGpu probeGrid;   // the probe grid (scene/vulkan/lighting/scene_probe_grid.h), params.x = on
     LandSunGpu landSun;       // the land's sun, params.x = shown
+    CloudShadowGpu cloudShadow;   // the cloud deck's shadow, params.x = shown
 } lighting;
 
 // The pool of shadow pages and the frame's overlays (the scratch target the
@@ -135,6 +146,10 @@ layout(set = 1, binding = 22) uniform texture3D probeSunImage;
 // and how far off what shades it stands.
 layout(set = 1, binding = 23) uniform texture2DArray landSunImage;
 
+// The cloud deck's shadow's levels (sky/clouds_layout.h; CloudShadowGpu
+// above says where they lie): a level a layer, what the deck leaves of the sun.
+layout(set = 1, binding = 24) uniform texture2DArray cloudShadowImage;
+
 // Whether the pipeline was built for a frame with the atmosphere on (the
 // mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
 // not in the shader at all, so a scene that does not use it pays nothing.
@@ -143,12 +158,43 @@ layout(constant_id = 2) const bool SCENE_ATMOSPHERE = true;
 
 bool sceneAtmosphereOn() { return SCENE_ATMOSPHERE && lighting.atm.sunDir.w > 0.5; }
 
+// What the cloud deck leaves of the sun at camera-relative `pos` (1 with no
+// clouds): its shadow's levels (sky/clouds_shadow.comp) about the body's
+// point under the eye, on the plane tangent to the body there, the finest
+// level holding the point (blended into the next over its last texels).
+// A point is taken at the datum under it: the deck's shadow on a hill is
+// the shadow on the ground under the hill.
+float sceneCloudSun(vec3 pos) {
+    if (lighting.cloudShadow.params.x < 0.5) return 1.0;
+    vec3 d = normalize(atmOrigin(pos));
+    float cn = dot(d, lighting.cloudShadow.n.xyz);
+    if (cn < 0.05) return 1.0;
+    vec2 c = lighting.cloudShadow.params.y * vec2(dot(d, lighting.cloudShadow.e1.xyz), dot(d, lighting.cloudShadow.e2.xyz)) / cn;
+    const float S = float(CL_SHADOW_SIDE);
+    float texel = lighting.cloudShadow.params.z;
+    float sun = 0.0, left = 1.0;
+    for (int l = 0; l < CL_SHADOW_LEVELS; ++l) {
+        vec2 g = c / texel + 0.5 * S;
+        texel *= lighting.cloudShadow.params.w;
+        float edge = min(min(g.x, g.y), min(S - g.x, S - g.y));
+        if (edge < 1.0) continue;
+        // (Blended over the outer 48 texels, a long way: two levels hold
+        // the same shadow at different sharpness, and a seam between them
+        // would be a line across the land.)
+        float w = left * clamp((edge - 1.0) / 48.0, 0.0, 1.0);
+        sun += w * textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3(g / S, float(l)), 0.0).r;
+        left -= w;
+        if (left <= 0.0) break;
+    }
+    return sun + left;
+}
+
 // The sun's light at camera-relative `pos`, for a sun of 1 at the top of
-// the air: what the air and the planet's shadow leave of it.
+// the air: what the air, the planet's shadow and the cloud deck leave of it.
 vec3 sceneSunTransmittance(vec3 pos) {
     vec3 p = atmOrigin(pos);
     float r = length(p);
-    return atmSunTransmittance(r,dot(p, lighting.atm.sunDir.xyz) / r);
+    return atmSunTransmittance(r,dot(p, lighting.atm.sunDir.xyz) / r) * sceneCloudSun(pos);
 }
 
 // The sky's irradiance over pi on a surface at `pos` facing `n` (the

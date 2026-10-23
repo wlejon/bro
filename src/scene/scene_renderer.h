@@ -9,6 +9,7 @@
 #include "render/layer_image.h"
 #include "scene/exposure.h"
 #include "scene/world/atmosphere.h"
+#include "scene/world/clouds.h"
 #include "scene/nodes/light_node.h"
 #include "scene/world/shadow_casters.h"
 #include "scene/world/shadow_pages.h"
@@ -418,6 +419,18 @@ public:
     /// (scene/vulkan/lighting/scene_atmosphere.h).
     void setAtmosphere(const AtmosphereParams& a) { atmosphere_ = a; }
     const AtmosphereParams& atmosphere() const { return atmosphere_; }
+
+    /// The cloud deck (scene/world/clouds.h; vulkan/sky/scene_clouds.h):
+    /// drawn with the atmosphere on. Each call is a new generation (its
+    /// cover baked again).
+    void setClouds(CloudSettings c) {
+        c.generation = clouds_.generation + 1;
+        clouds_ = std::move(c);
+    }
+    const CloudSettings& clouds() const { return clouds_; }
+    /// What the GPU side made of it (written as it renders).
+    const CloudStats& cloudStats() const { return cloudStats_; }
+    void setCloudStats(const CloudStats& s) { cloudStats_ = s; }
     /// Tables of the atmosphere, read back from the GPU (waits for the last
     /// render): bro_atmosphere_test's check of them against a reference.
     /// False when nothing has been rendered with the atmosphere on.
@@ -631,6 +644,8 @@ private:
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
     AtmosphereParams atmosphere_;
+    CloudSettings clouds_;
+    CloudStats cloudStats_;
     StarfieldParams starfield_;
 };
 

@@ -112,6 +112,17 @@ struct alignas(16) LandSunGpu {
 };
 static_assert(sizeof(LandSunGpu) == 16 * (2 + LS_LEVELS));
 
+/// The cloud deck's shadow's block (std140) — CloudShadowGpu in
+/// shaders/common/scene_lighting.glsl; filled by SceneClouds::fill
+/// (vulkan/sky/scene_clouds.h). Directions in air space.
+struct alignas(16) CloudShadowGpu {
+    alignas(16) float params[4];   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w growth
+    alignas(16) float n[4];        // the levels' plane's normal
+    alignas(16) float e1[4];       // its axes
+    alignas(16) float e2[4];
+};
+static_assert(sizeof(CloudShadowGpu) == 64);
+
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = its index + 1 (0: none)
@@ -135,6 +146,7 @@ struct alignas(16) SceneLightingUniforms {
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
     ProbeGridGpu probeGrid;             // the probe grid (params[0] = 1 when on)
     LandSunGpu landSun;                 // the land's sun (params[0] = 1 when shown)
+    CloudShadowGpu cloudShadow;         // the cloud deck's shadow (params[0] = 1 when shown)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);
 
@@ -160,7 +172,8 @@ public:
     /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13)
     /// and the shadow pages' page table (14), and the probe grid's (17 its
     /// sampler, repeating across; 18-20 its SH, 21 the ground's height, 22
-    /// the sun's volume), and the land's sun's levels (23).
+    /// the sun's volume), the land's sun's levels (23) and the cloud
+    /// deck's shadow's levels (24).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
                                                       VkSampler linearSampler, VkSampler repeatSampler);
 

@@ -6,6 +6,7 @@
 #include "bronze_host/host_js_modules.h"
 #include "natives/scene/native_scene_decl.h"
 #include "util/asset_path.h"
+#include "scene/nodes/world_module.h"
 #include <bromesh/analysis/raycast.h>
 #include <bromesh/analysis/bvh.h>
 #include <bromesh/primitives/primitives.h>
@@ -624,6 +625,49 @@ void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32
     }
     at(31, a.sunAngularRadius, 1e-4f, 0.5f);
     g->setAtmosphere(a);
+}
+
+const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const double* params, uint32_t params_len,
+                                           const float* data, uint32_t data_len) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* g = graphOf(self);
+    if (!g) return tl_error.c_str();
+    // [enabled, bottom, top, albedo, shadows, land id] (js/scene_graph.js's setClouds).
+    auto at = [&](uint32_t i, double d) { return params && i < params_len && std::isfinite(params[i]) ? params[i] : d; };
+    scene::CloudSettings c;
+    c.enabled = at(0, 0.0) > 0.5;
+    if (c.enabled) {
+        c.source = source ? std::string(source) : std::string();
+        if (c.source.empty()) {
+            tl_error = "the module (GLSL defining cloudCover and cloudDensity) is required";
+            return tl_error.c_str();
+        }
+        c.sourceHash = scene::moduleSourceHash(c.source);
+        c.bottom = static_cast<float>(at(1, 1500.0));
+        c.top = static_cast<float>(at(2, 8000.0));
+        if (!(c.top > c.bottom) || c.bottom < 0.0f) {
+            tl_error = "the deck's top must lie over its bottom, and its bottom over the datum";
+            return tl_error.c_str();
+        }
+        c.albedo = static_cast<float>(std::clamp(at(3, 0.98), 0.0, 1.0));
+        c.shadows = at(4, 1.0) > 0.5;
+        c.land = static_cast<uint32_t>(std::max(at(5, 0.0), 0.0));
+        const size_t floats = std::min<size_t>(data ? data_len : 0, scene::CloudSettings::kMaxData * 4);
+        if (floats) c.data.assign(data, data + floats);
+    }
+    g->setClouds(std::move(c));
+    return tl_error.c_str();
+}
+
+void bro_scene_SceneGraph_cloudStats(void* self, bronze_native_buffer* out) {
+    auto* g = graphOf(self);
+    if (!g) { transferBuffer(std::vector<double>{}, out); return; }
+    const scene::CloudStats& s = g->cloudStats();
+    transferBuffer(std::vector<double>{g->clouds().enabled ? 1.0 : 0.0, s.compiled ? 1.0 : 0.0, s.failed ? 1.0 : 0.0,
+                                       s.covered && s.generation == g->clouds().generation ? 1.0 : 0.0,
+                                       static_cast<double>(g->clouds().generation)},
+                   out);
 }
 
 void bro_scene_SceneGraph_setStarfield(void* self, bool opts_starCount_given, int32_t opts_starCount,

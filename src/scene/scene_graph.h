@@ -402,6 +402,11 @@ public:
     void setAtmosphere(const AtmosphereParams& a) { renderer_.setAtmosphere(a); }
     const AtmosphereParams& atmosphere() const { return renderer_.atmosphere(); }
 
+    /// The cloud deck (scene/world/clouds.h): drawn with the atmosphere on.
+    void setClouds(CloudSettings c) { renderer_.setClouds(std::move(c)); }
+    const CloudSettings& clouds() const { return renderer_.clouds(); }
+    const CloudStats& cloudStats() const { return renderer_.cloudStats(); }
+
     /// Additive starfield over the sky: invisible by day, stars above the air.
     void setStarfield(const StarfieldParams& s) { renderer_.setStarfield(s); }
     const StarfieldParams& starfield() const { return renderer_.starfield(); }

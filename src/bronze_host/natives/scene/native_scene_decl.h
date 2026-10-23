@@ -577,6 +577,17 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
 //   params: 32 f64, NaN = Earth's default (the layout in js/scene_graph.js's setAtmosphere)
 void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32_t params_len);
 
+// bro.scene.SceneGraph.prototype.setClouds
+//   registered at __bro_native.scene.SceneGraph_setClouds
+//   params: [enabled, bottom, top, albedo, shadows, land id]; returns an error ("" none)
+const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const double* params, uint32_t params_len,
+                                           const float* data, uint32_t data_len);
+
+// bro.scene.SceneGraph.prototype.cloudStats
+//   registered at __bro_native.scene.SceneGraph_cloudStats
+//   [enabled, compiled, failed, covered, generation]
+void bro_scene_SceneGraph_cloudStats(void* self, bronze_native_buffer* out);
+
 // bro.scene.SceneGraph.prototype.setStarfield
 //   registered at __bro_native.scene.SceneGraph_setStarfield
 //   opts_starCount_given, opts_starSize_given, opts_twinkleSpeed_given: false when the value was not passed (no declared default)

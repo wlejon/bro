@@ -6,7 +6,7 @@
 // shared layouts and fallbacks, the frame targets, the per-node resource
 // cache, the mesh drawer, the environment (IBL maps and the sky), the
 // world service, the atmosphere's tables, the shadow pages' pool, the
-// depth-only caster pipelines and the probe grid. SceneFrame is one render: the command buffer,
+// depth-only caster pipelines, the probe grid and the cloud deck. SceneFrame is one render: the command buffer,
 // the graph and its settings, the camera view, what is drawn, the lighting
 // and the counters the passes add to.
 
@@ -43,6 +43,7 @@ class SceneAtmosphere;
 class SceneShadowPages;
 class SceneCasterDrawer;
 class SceneProbeGrid;
+class SceneClouds;
 struct SceneVkImage;
 
 struct SceneGpu {
@@ -58,6 +59,7 @@ struct SceneGpu {
     SceneShadowPages& shadows;
     SceneCasterDrawer& casters;
     SceneProbeGrid& probes;
+    SceneClouds& clouds;
 };
 
 struct SceneFrame {

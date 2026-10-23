@@ -21,6 +21,7 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
+#include "scene/vulkan/sky/scene_clouds.h"
 #include "scene/vulkan/world/scene_world_service.h"
 
 #include <cstdint>
@@ -100,6 +101,7 @@ private:
     SceneShadowPages shadows_;
     SceneCasterDrawer casters_;
     SceneProbeGrid probes_;
+    SceneClouds clouds_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

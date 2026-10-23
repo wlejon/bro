@@ -17,6 +17,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
+#include "scene/vulkan/sky/scene_clouds.h"
 
 #include <algorithm>
 #include <cmath>
@@ -152,6 +153,7 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     gpu.atmosphere.fill(light.atm, worldEye);
     gpu.probes.fill(light.probeGrid, worldEye);
     gpu.meshes.fillLandSun(light.landSun, worldEye);
+    gpu.clouds.fill(light.cloudShadow);
     return light;
 }
 
@@ -184,6 +186,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     gpu.atmosphere.writeBindings(writer);
     gpu.probes.writeBindings(writer);
     writer.writeImage(23, gpu.meshes.landSunView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(24, gpu.clouds.shadowView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);

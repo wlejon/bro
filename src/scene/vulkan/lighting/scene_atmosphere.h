@@ -80,6 +80,10 @@ public:
     void beginFrame(SceneFrame& frame);
     /// On this frame.
     bool active() const { return on_; }
+    /// This frame's planet radius (m) and the eye about its centre (air
+    /// space: the place frame's axes), as the lighting block has them.
+    float planetRadius() const { return block_.shell[0]; }
+    void eyeAbout(const bromath::Vec3& eye, float out[4]) const { originFor(eye, out); }
     /// The block for a view whose eye is `eye` (the frame's own, or a
     /// reflection probe's): the frame's with its origin there. Off: zero,
     /// and no light is the sun.

@@ -51,6 +51,13 @@ BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "light
 BRO_SCENE_SHADER(SkyAtmosphereFrag,        "sky_atmosphere.frag",         "lighting/sky_atmosphere.frag",       "frag", "")
 BRO_SCENE_SHADER(SkyboxFrag,               "skybox.frag",                 "lighting/skybox.frag",               "frag", "")
 BRO_SCENE_SHADER(StarfieldFrag,            "starfield.frag",              "lighting/starfield.frag",            "frag", "")
+// The cloud deck (vulkan/sky/scene_clouds.h): the march, the cover's bake and
+// the shadow's levels with the module of no clouds (a world's set compiles
+// them with its own), and the engine's noise.
+BRO_SCENE_SHADER(CloudsFrag,               "clouds.frag",                 "sky/clouds.frag",                    "frag", "")
+BRO_SCENE_SHADER(CloudsCoverComp,          "clouds_cover.comp",           "sky/clouds_cover.comp",              "comp", "")
+BRO_SCENE_SHADER(CloudsShadowComp,         "clouds_shadow.comp",          "sky/clouds_shadow.comp",             "comp", "")
+BRO_SCENE_SHADER(CloudsNoiseComp,          "clouds_noise.comp",           "sky/clouds_noise.comp",              "comp", "")
 BRO_SCENE_SHADER(EnvConvertFrag,           "env_convert.frag",            "lighting/env_convert.frag",          "frag", "")
 BRO_SCENE_SHADER(IrradianceFrag,           "irradiance.frag",             "lighting/irradiance.frag",           "frag", "")
 BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "lighting/prefilter.frag",            "frag", "")

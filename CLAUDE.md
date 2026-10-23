@@ -172,6 +172,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `physics-api.js` | `Physics`: Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
 | `land-api.js` | `scene.createLand`: a world's ground to the horizon: height a FastNoise tree (GLSL on the GPU, FastNoise2 for the CPU's heights), surface GLSL, rings about the eye over tiles the world service makes |
+| `clouds-api.js` | `scene.setClouds`: one volumetric cloud deck about the body: the world's GLSL cover (baked once to a cube, may read the land's grid) and density (footprint mean, engine noise), engine-owned native-res march, sun/sky lighting, aerial perspective and cloud shadows on everything lit; `cloudStats` |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |
 | `dialogs-api.js` | native file/folder dialogs + alert/confirm/prompt; headless answers them from `setPickedFiles` / `setDialogAnswer` |
 | `menu-api.js` | `bro.menu`: native menu bar |

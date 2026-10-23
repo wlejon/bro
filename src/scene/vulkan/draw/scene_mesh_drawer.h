@@ -267,6 +267,12 @@ public:
     /// LandSunGpu, about `eye`, and the lighting set's binding 23).
     void fillLandSun(LandSunGpu& out, const bromath::Vec3& eye) const;
     VkImageView landSunView() const;
+    /// Land `id`'s processes' grid as its fills last read it (rgba32f, in
+    /// GENERAL; ground/land_grid.glsl), null until they have run.
+    VkImageView landGrid(uint32_t id) const {
+        const auto it = lands_.find(id);
+        return it == lands_.end() ? VK_NULL_HANDLE : it->second->grid;
+    }
 
     /// A pass's view for a chunked draw (MeshDraw::chunks): its frustum
     /// (absolute world) and the origin its draws' push.model is relative to

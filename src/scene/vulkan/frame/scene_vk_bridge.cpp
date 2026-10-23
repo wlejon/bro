@@ -20,6 +20,7 @@
 #include "scene/vulkan/post/pass_ssao.h"
 #include "scene/vulkan/post/pass_ssr.h"
 #include "scene/vulkan/post/pass_subpixel.h"
+#include "scene/vulkan/sky/pass_clouds.h"
 #include "scene/vulkan/world/pass_world_service.h"
 #include "scene/vulkan/draw/scene_draw_list.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -34,7 +35,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_, casters_, probes_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_, casters_, probes_, clouds_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
@@ -55,6 +56,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
+        graph_.add(std::make_unique<PassCloudsPrepare>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassCoverDepth>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
@@ -66,6 +68,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassFrameUniforms>());
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
+        graph_.add(std::make_unique<PassCloudsPrepare>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassCoverDepth>());
@@ -84,6 +87,8 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassDecal>());
     graph_.add(std::make_unique<PassColorSnapshot>());
     graph_.add(std::make_unique<PassSSR>());
+    // The cloud deck over everything opaque, before anything blended.
+    graph_.add(std::make_unique<PassClouds>());
     graph_.add(std::make_unique<PassTranslucent>());
     graph_.add(std::make_unique<PassGaussianSplat>());
     graph_.add(std::make_unique<PassParticles>());
@@ -99,6 +104,7 @@ SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
     graph_.cleanup(gpu_);
+    clouds_.cleanup(gpu_);
     probes_.cleanup(gpu_);
     casters_.cleanup(gpu_);
     shadows_.cleanup(gpu_);
@@ -118,7 +124,7 @@ bool SceneVkBridge::init() {
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
         !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !shadows_.setup(gpu_) ||
-        !casters_.setup(gpu_) || !probes_.setup(gpu_) || !graph_.setup(gpu_)) {
+        !casters_.setup(gpu_) || !probes_.setup(gpu_) || !clouds_.setup(gpu_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
@@ -153,6 +159,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
     meshes_.setAtmosphere(atmosphere_.active());
+    clouds_.beginFrame(frame);
     frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
