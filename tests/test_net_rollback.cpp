@@ -337,6 +337,151 @@ void test_js_rollback_session_api() {
     ev::destroyRealm(realm);
 }
 
+void test_cpp_and_js_verified_capsules() {
+    std::printf("[5/5] C++ & JS Proof-Carrying P2P Code Capsules (Issue #151)...\n");
+
+    // 1. C++ verified capsule creation & verification
+    const char* safeMod = R"JS(
+        (state, inputs, frame) => {
+            state[0] = (state[0] + inputs[0] * 3 + (frame & 7)) | 0;
+            return state[0];
+        }
+    )JS";
+    auto cap = bro::net::createVerifiedCapsule(safeMod, "stepMod", "peer-alpha");
+    ASSERT_TRUE(cap.deterministic);
+    ASSERT_TRUE(cap.hazardFree);
+    ASSERT_EQ(cap.hazardCount, 0u);
+    ASSERT_EQ(cap.sha256.size(), 64u);
+    ASSERT_EQ(cap.certificateHash.size(), 64u);
+
+    auto verOk = bro::net::verifyCapsule(cap);
+    ASSERT_TRUE(verOk.valid);
+    ASSERT_TRUE(!verOk.tampered);
+    ASSERT_EQ(verOk.reason, std::string("verified"));
+
+    // 2. Tampered source in transit must set tampered = true and valid = false
+    auto tamperedSrc = cap;
+    tamperedSrc.source += "\n// injected";
+    auto verTamperedSrc = bro::net::verifyCapsule(tamperedSrc);
+    ASSERT_TRUE(!verTamperedSrc.valid);
+    ASSERT_TRUE(verTamperedSrc.tampered);
+
+    // 3. Forged certificateHash must set tampered = true and valid = false
+    auto forgedCert = cap;
+    forgedCert.certificateHash[0] = (forgedCert.certificateHash[0] == 'a') ? 'b' : 'a';
+    auto verForged = bro::net::verifyCapsule(forgedCert);
+    ASSERT_TRUE(!verForged.valid);
+    ASSERT_TRUE(verForged.tampered);
+
+    // 4. Sandbox escape (`eval`) and division-by-zero (`/ 0`) detection
+    auto evalCap = bro::net::createVerifiedCapsule("(x) => eval('x + 1')", "badEval", "peer-mal");
+    ASSERT_TRUE(!evalCap.deterministic);
+    ASSERT_TRUE(!evalCap.hazardFree);
+    ASSERT_TRUE(!bro::net::verifyCapsule(evalCap).valid);
+
+    auto divZeroCap = bro::net::createVerifiedCapsule("(x) => (x / 0) | 0", "badDiv", "peer-mal");
+    ASSERT_TRUE(!divZeroCap.deterministic);
+    ASSERT_TRUE(!divZeroCap.hazardFree);
+    ASSERT_TRUE(!bro::net::verifyCapsule(divZeroCap).valid);
+
+    // 5. JS API: bro.net.createVerifiedCapsule, bro.net.verifyCapsule, bro.net.loadVerifiedCapsule
+    ev::Realm* realm = ev::createRealm();
+    {
+        ev::RealmScope scope(realm);
+        bro::bronze_host::installNetRollbackExtensions();
+
+        ev::CallResult res = bronze::eval::evalScript(R"JS(
+            (() => {
+                if (typeof bro.net.createVerifiedCapsule !== "function" ||
+                    typeof bro.net.verifyCapsule !== "function" ||
+                    typeof bro.net.loadVerifiedCapsule !== "function") {
+                    throw new Error("missing VerifiedCapsule functions on bro.net");
+                }
+
+                // Package a deterministic P2P physics modifier function
+                const modFn = (state, bonus, frame) => {
+                    state[0] = (state[0] + bonus + (frame & 3)) | 0;
+                    state[1] = (state[1] ^ bonus) | 0;
+                    return state[0];
+                };
+
+                const capsule = bro.net.createVerifiedCapsule(modFn, {
+                    entryName: "applyBonus",
+                    authorId: "peer-1"
+                });
+
+                if (!capsule.deterministic || !capsule.hazardFree || capsule.hazardCount !== 0) {
+                    throw new Error("Expected clean capsule to be deterministic and hazardFree");
+                }
+                if (capsule.sha256.length !== 64 || capsule.certificateHash.length !== 64) {
+                    throw new Error("Expected 64-hex sha256 and certificateHash");
+                }
+
+                // Simulate P2P transmission over JSON wire payload
+                const wireJson = JSON.stringify(capsule);
+                const verifyRes = bro.net.verifyCapsule(wireJson, {
+                    expectedSha256: capsule.sha256,
+                    expectedCertificateHash: capsule.certificateHash
+                });
+                if (!verifyRes.valid || verifyRes.tampered) {
+                    throw new Error("Expected wireJson capsule to verify: " + JSON.stringify(verifyRes));
+                }
+
+                // Load and execute the verified capsule on the receiving peer
+                const loaded = bro.net.loadVerifiedCapsule(wireJson);
+                if (!loaded.valid || typeof loaded.fn !== "function") {
+                    throw new Error("Expected loadVerifiedCapsule to return callable fn");
+                }
+                const st = new Int32Array([10, 5]);
+                const out0 = loaded.fn(st, 7, 2);
+                if (out0 !== 19 || st[0] !== 19 || st[1] !== (5 ^ 7)) {
+                    throw new Error("Unexpected loaded capsule output: " + out0);
+                }
+
+                // Tamper with the capsule source while keeping the old sha256/certificateHash
+                const tampered = JSON.parse(wireJson);
+                tampered.source = "(state, bonus, frame) => { state[0] = 999999; return 999999; }";
+                const tamperedCheck = bro.net.verifyCapsule(tampered);
+                if (tamperedCheck.valid !== false || tamperedCheck.tampered !== true) {
+                    throw new Error("Expected tampered capsule to fail with tampered: true");
+                }
+
+                let threwOnTamperedLoad = false;
+                try {
+                    bro.net.loadVerifiedCapsule(tampered);
+                } catch (e) {
+                    threwOnTamperedLoad = String(e).includes("mismatch") || String(e).includes("tampered");
+                }
+                if (!threwOnTamperedLoad) {
+                    throw new Error("Expected loadVerifiedCapsule to throw on tampered capsule");
+                }
+
+                // Hazardous capsule (Math.random) must be rejected by verifyCapsule & loadVerifiedCapsule
+                const badCapsule = bro.net.createVerifiedCapsule(
+                    (state) => { state[0] = Math.random() > 0.5 ? 1 : 0; },
+                    { entryName: "badMod", authorId: "peer-2" }
+                );
+                if (badCapsule.deterministic !== false || badCapsule.hazardCount < 1) {
+                    throw new Error("Expected Math.random capsule to be flagged non-deterministic");
+                }
+                const badVerify = bro.net.verifyCapsule(badCapsule);
+                if (badVerify.valid !== false) {
+                    throw new Error("Expected verifyCapsule to reject hazardous capsule");
+                }
+
+                return "CAPSULE_OK";
+            })()
+        )JS");
+
+        if (res.thrown) {
+            std::fprintf(stderr, "JS capsule test threw: %s\n", ev::toUtf8(res.value).c_str());
+            std::exit(1);
+        }
+        ASSERT_EQ(ev::toUtf8(res.value), std::string("CAPSULE_OK"));
+    }
+    ev::destroyRealm(realm);
+}
+
 }  // namespace
 
 int main() {
@@ -344,6 +489,7 @@ int main() {
     test_cpp_two_peer_rollback_convergence();
     test_cpp_tampering_detection();
     test_js_rollback_session_api();
-    std::printf("All rollback netcode tests passed!\n");
+    test_cpp_and_js_verified_capsules();
+    std::printf("All rollback netcode & verified capsule tests passed!\n");
     return 0;
 }

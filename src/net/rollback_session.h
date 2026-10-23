@@ -31,6 +31,51 @@ struct DeterminismAuditResult {
 // hex proof certificate hash.
 DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource);
 
+struct VerifiedCapsule {
+    uint32_t version = 1;
+    std::string source;
+    std::string entryName = "capsule";
+    std::string authorId = "peer-0";
+    bool deterministic = false;
+    bool hazardFree = false;
+    uint32_t hazardCount = 0;
+    std::vector<DeterminismHazard> hazards;
+    std::string sha256;
+    std::string certificateHash;
+    std::string errorSummary;
+};
+
+struct CapsulePolicy {
+    bool requireDeterministic = true;
+    bool requireHazardFree = true;
+    std::string expectedSha256;
+    std::string expectedCertificateHash;
+};
+
+struct CapsuleVerifyResult {
+    bool valid = false;
+    bool tampered = false;
+    bool deterministic = false;
+    bool hazardFree = false;
+    uint32_t hazardCount = 0;
+    std::vector<DeterminismHazard> hazards;
+    std::string sha256;
+    std::string certificateHash;
+    std::string reason;
+};
+
+// Packages a JS function/module source into a Proof-Carrying P2P Code Capsule
+// with a SHA-256 source digest, deterministic lockstep + sandbox safety audit,
+// and cryptographic certificate hash (Issue #151).
+VerifiedCapsule createVerifiedCapsule(std::string_view source,
+                                      std::string_view entryName = "capsule",
+                                      std::string_view authorId = "peer-0");
+
+// Re-audits a received P2P Code Capsule from scratch, detects tampering or
+// falsified proof metadata, and enforces the receiver's CapsulePolicy (Issue #151).
+CapsuleVerifyResult verifyCapsule(const VerifiedCapsule& capsule,
+                                  const CapsulePolicy& policy = {});
+
 // Computes the canonical 64-bit FNV-1a checksum of a state byte buffer.
 uint64_t computeStateFnv1a64(std::span<const uint8_t> bytes) noexcept;
 

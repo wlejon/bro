@@ -250,6 +250,214 @@ DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource) {
     return out;
 }
 
+namespace {
+
+void scanCapsuleStaticSafetyHazards(std::string_view src,
+                                    std::vector<DeterminismHazard>& hazards) {
+    auto isIdentChar = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '_' || c == '$';
+    };
+
+    struct ForbiddenToken {
+        std::string_view token;
+        const char* message;
+        const char* remediation;
+    };
+    static constexpr ForbiddenToken kForbidden[] = {
+        {"eval(", "dynamic code evaluation via eval() is forbidden in P2P capsules",
+         "use static pure functions inside verified capsules"},
+        {"Function(", "dynamic code construction via Function() is forbidden in P2P capsules",
+         "use static pure functions inside verified capsules"},
+        {"fetch(", "network I/O via fetch() is forbidden in deterministic P2P capsules",
+         "pass external data explicitly via capsule state/inputs"},
+        {"WebSocket", "WebSocket I/O is forbidden in deterministic P2P capsules",
+         "use bro.net host transport outside the capsule tick"},
+        {"XMLHttpRequest", "network I/O is forbidden in deterministic P2P capsules",
+         "use pure deterministic computation inside capsules"},
+    };
+
+    for (const auto& f : kForbidden) {
+        size_t pos = 0;
+        while ((pos = src.find(f.token, pos)) != std::string_view::npos) {
+            bool leftOk = (pos == 0) || !isIdentChar(src[pos - 1]);
+            if (leftOk) {
+                DeterminismHazard h;
+                h.kind = "sandbox-escape";
+                h.message = f.message;
+                h.remediation = f.remediation;
+                h.functionName = "<capsule>";
+                offsetToLineCol(src, static_cast<uint32_t>(pos), h.line, h.column);
+                hazards.push_back(std::move(h));
+            }
+            pos += f.token.size();
+        }
+    }
+
+    // Check literal division or remainder by zero (`/ 0` or `% 0`)
+    for (size_t i = 0; i + 1 < src.size(); ++i) {
+        if (src[i] == '/' && (src[i + 1] == '/' || src[i + 1] == '*')) {
+            if (src[i + 1] == '/') {
+                while (i < src.size() && src[i] != '\n') ++i;
+            } else {
+                i += 2;
+                while (i + 1 < src.size() && !(src[i] == '*' && src[i + 1] == '/')) ++i;
+            }
+            continue;
+        }
+        if (src[i] == '/' || src[i] == '%') {
+            size_t j = i + 1;
+            while (j < src.size() && (src[j] == ' ' || src[j] == '\t')) ++j;
+            if (j < src.size() && src[j] == '0') {
+                char next = (j + 1 < src.size()) ? src[j + 1] : '\0';
+                if (next != '.' && next != 'x' && next != 'X' && next != 'b' && next != 'B' &&
+                    !(next >= '0' && next <= '9')) {
+                    DeterminismHazard h;
+                    h.kind = "division-by-zero";
+                    h.message = "potential division or modulo by literal zero in capsule";
+                    h.remediation = "guard divisor with `divisor !== 0` before dividing";
+                    h.functionName = "<capsule>";
+                    offsetToLineCol(src, static_cast<uint32_t>(i), h.line, h.column);
+                    hazards.push_back(std::move(h));
+                }
+            }
+        }
+    }
+}
+
+std::string buildCapsuleCertHash(std::string_view entryName,
+                                 std::string_view authorId,
+                                 bool deterministic,
+                                 bool hazardFree,
+                                 std::string_view sha256) {
+    std::string payload = "bro-capsule-cert-v1|";
+    payload.append(entryName);
+    payload.push_back('|');
+    payload.append(authorId);
+    payload.push_back('|');
+    payload.push_back(deterministic ? '1' : '0');
+    payload.push_back('|');
+    payload.push_back(hazardFree ? '1' : '0');
+    payload.push_back('|');
+    payload.append(sha256);
+    return computeSha256Hex(payload);
+}
+
+}  // namespace
+
+VerifiedCapsule createVerifiedCapsule(std::string_view source,
+                                      std::string_view entryName,
+                                      std::string_view authorId) {
+    VerifiedCapsule cap;
+    cap.version = 1;
+    cap.source = std::string(source);
+    cap.entryName = entryName.empty() ? "capsule" : std::string(entryName);
+    cap.authorId = authorId.empty() ? "peer-0" : std::string(authorId);
+    cap.sha256 = computeSha256Hex(source);
+
+    DeterminismAuditResult audit = verifyRollbackTickSource(source);
+    cap.hazards = std::move(audit.hazards);
+    scanCapsuleStaticSafetyHazards(source, cap.hazards);
+
+    cap.hazardCount = static_cast<uint32_t>(cap.hazards.size());
+    cap.hazardFree = cap.hazards.empty();
+    cap.deterministic = audit.deterministic && cap.hazardFree;
+
+    if (cap.deterministic) {
+        cap.certificateHash = buildCapsuleCertHash(
+            cap.entryName, cap.authorId, cap.deterministic, cap.hazardFree, cap.sha256);
+    } else {
+        cap.certificateHash = buildCapsuleCertHash(
+            cap.entryName, cap.authorId, false, false, cap.sha256);
+        if (!audit.errorSummary.empty()) {
+            cap.errorSummary = audit.errorSummary;
+        } else if (!cap.hazards.empty()) {
+            std::ostringstream oss;
+            oss << "Capsule rejected (" << cap.hazards.size() << " safety/determinism hazard"
+                << (cap.hazards.size() == 1 ? "" : "s") << "): ["
+                << cap.hazards[0].kind << "] " << cap.hazards[0].message;
+            cap.errorSummary = oss.str();
+        } else {
+            cap.errorSummary = "Capsule verification failed";
+        }
+    }
+    return cap;
+}
+
+CapsuleVerifyResult verifyCapsule(const VerifiedCapsule& capsule,
+                                  const CapsulePolicy& policy) {
+    CapsuleVerifyResult res;
+    if (capsule.source.empty()) {
+        res.valid = false;
+        res.reason = "Capsule source is empty";
+        return res;
+    }
+
+    VerifiedCapsule recomputed = createVerifiedCapsule(
+        capsule.source, capsule.entryName, capsule.authorId);
+
+    res.deterministic = recomputed.deterministic;
+    res.hazardFree = recomputed.hazardFree;
+    res.hazardCount = recomputed.hazardCount;
+    res.hazards = recomputed.hazards;
+    res.sha256 = recomputed.sha256;
+    res.certificateHash = recomputed.certificateHash;
+
+    if (!capsule.sha256.empty() && capsule.sha256 != recomputed.sha256) {
+        res.valid = false;
+        res.tampered = true;
+        res.reason = "Capsule SHA-256 digest mismatch: source code was tampered with in transit";
+        return res;
+    }
+
+    if (!capsule.certificateHash.empty() && capsule.certificateHash != recomputed.certificateHash) {
+        res.valid = false;
+        res.tampered = true;
+        res.reason = "Capsule certificateHash mismatch: proof certificate forged or source modified";
+        return res;
+    }
+
+    if ((capsule.deterministic && !recomputed.deterministic) ||
+        (capsule.hazardFree && !recomputed.hazardFree)) {
+        res.valid = false;
+        res.tampered = true;
+        res.reason = "Capsule proof metadata falsified: claimed verified on hazardous source";
+        return res;
+    }
+
+    if (!policy.expectedSha256.empty() && policy.expectedSha256 != recomputed.sha256) {
+        res.valid = false;
+        res.tampered = true;
+        res.reason = "Capsule SHA-256 does not match policy.expectedSha256";
+        return res;
+    }
+
+    if (!policy.expectedCertificateHash.empty() &&
+        policy.expectedCertificateHash != recomputed.certificateHash) {
+        res.valid = false;
+        res.tampered = true;
+        res.reason = "Capsule certificateHash does not match policy.expectedCertificateHash";
+        return res;
+    }
+
+    if (policy.requireDeterministic && !recomputed.deterministic) {
+        res.valid = false;
+        res.reason = recomputed.errorSummary;
+        return res;
+    }
+
+    if (policy.requireHazardFree && !recomputed.hazardFree) {
+        res.valid = false;
+        res.reason = recomputed.errorSummary;
+        return res;
+    }
+
+    res.valid = true;
+    res.tampered = false;
+    res.reason = "verified";
+    return res;
+}
+
 RollbackSession::RollbackSession(const RollbackConfig& config, TickFn tickFn)
     : playerCount_(std::max<uint32_t>(1u, config.playerCount)),
       localPlayerId_(std::min<uint32_t>(config.localPlayerId, std::max<uint32_t>(1u, config.playerCount) - 1u)),
