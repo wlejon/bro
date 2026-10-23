@@ -138,10 +138,9 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
 
     // Rooted: the stringify lookup may run a getter and allocate.
     ev::Persistent detailP(ev::getProperty(desc.get(), "detail"));
-    Value detailV = detailP.get();
-    if (!ev::isUndefined(detailV) && !ev::isNull(detailV)) {
+    if (!ev::isUndefined(detailP.get()) && !ev::isNull(detailP.get())) {
         out.hasDetail = true;
-        if (ev::isObject(detailV)) {
+        if (ev::isObject(detailP.get())) {
             ev::GlobalValue g = ev::globalValue("JSON");
             if (g.found && ev::isObject(g.value)) {
                 ev::Persistent json(g.value);
@@ -155,7 +154,7 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
                 }
             }
         } else {
-            out.detail = ev::toUtf8(detailV);
+            out.detail = ev::toUtf8(detailP.get());
         }
     }
     // `key` / `code` on a non-key type are still carried, as they were: a

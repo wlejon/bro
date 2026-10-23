@@ -204,10 +204,8 @@ void populateMouseEvent(ObjectBuilder& b, dom::Event& e) {
 
 void populateKeyboardEvent(ObjectBuilder& b, dom::Event& e) {
     if (auto* k = dynamic_cast<dom::KeyboardEvent*>(&e)) {
-        Value key = ev::fromUtf8(k->key());
-        b.set("key", key);
-        Value code = ev::fromUtf8(k->code());
-        b.set("code", code);
+        b.set("key", ev::fromUtf8(k->key()));
+        b.set("code", ev::fromUtf8(k->code()));
         b.set("repeat", ev::fromBool(k->repeat()));
         b.set("location", ev::fromDouble(k->location()));
         b.set("ctrlKey", ev::fromBool(k->ctrlKey()));

@@ -212,29 +212,30 @@ bool collectNavGeometry(bronze::Value rootVal, std::vector<float>& xyz,
         return false;
     }
     bronze::embed::Persistent boundsRoot(boundsV);
-    bronze::Value minXV = bronze::embed::getProperty(boundsRoot.get(), "minX");
-    bronze::Value minZV = bronze::embed::getProperty(boundsRoot.get(), "minZ");
-    bronze::Value maxXV = bronze::embed::getProperty(boundsRoot.get(), "maxX");
-    bronze::Value maxZV = bronze::embed::getProperty(boundsRoot.get(), "maxZ");
-    if (bronze::embed::isUndefined(minXV) || bronze::embed::isUndefined(minZV) ||
-        bronze::embed::isUndefined(maxXV) || bronze::embed::isUndefined(maxZV)) {
-        err = "bakeNavMesh: terrainBounds requires minX, minZ, maxX, maxZ";
+    auto readBound = [&](const char* key, float& out) -> bool {
+        bronze::Value v = bronze::embed::getProperty(boundsRoot.get(), key);
+        if (!bronze::embed::isNumber(v)) return false;
+        const double d = bronze::embed::toDouble(v);
+        if (!std::isfinite(d)) return false;
+        out = static_cast<float>(d);
+        return true;
+    };
+    float minX = 0.0f, minZ = 0.0f, maxX = 0.0f, maxZ = 0.0f;
+    if (!readBound("minX", minX) || !readBound("minZ", minZ) ||
+        !readBound("maxX", maxX) || !readBound("maxZ", maxZ)) {
+        err = "bakeNavMesh: terrainBounds requires finite minX, minZ, maxX, maxZ";
         return false;
     }
-    float minX = static_cast<float>(bronze::embed::toDouble(minXV));
-    float minZ = static_cast<float>(bronze::embed::toDouble(minZV));
-    float maxX = static_cast<float>(bronze::embed::toDouble(maxXV));
-    float maxZ = static_cast<float>(bronze::embed::toDouble(maxZV));
-    float step = 1.0f;
-    bronze::Value stepV = bronze::embed::getProperty(rootVal, "terrainStep");
-    if (bronze::embed::isNumber(stepV)) step = static_cast<float>(bronze::embed::toDouble(stepV));
+    auto readRootFloat = [&](const char* key, float def) -> float {
+        bronze::Value v = bronze::embed::getProperty(rootVal, key);
+        if (!bronze::embed::isNumber(v)) return def;
+        const double d = bronze::embed::toDouble(v);
+        return std::isfinite(d) ? static_cast<float>(d) : def;
+    };
+    float step = readRootFloat("terrainStep", 1.0f);
     if (step <= 0.0f) step = 1.0f;
-    float rayStart = 100.0f;
-    bronze::Value rsV = bronze::embed::getProperty(rootVal, "terrainRayStart");
-    if (bronze::embed::isNumber(rsV)) rayStart = static_cast<float>(bronze::embed::toDouble(rsV));
-    float rayLength = 200.0f;
-    bronze::Value rlV = bronze::embed::getProperty(rootVal, "terrainRayLength");
-    if (bronze::embed::isNumber(rlV)) rayLength = static_cast<float>(bronze::embed::toDouble(rlV));
+    float rayStart = readRootFloat("terrainRayStart", 100.0f);
+    float rayLength = readRootFloat("terrainRayLength", 200.0f);
 
     int nx = static_cast<int>(std::floor((maxX - minX) / step)) + 1;
     int nz = static_cast<int>(std::floor((maxZ - minZ) / step)) + 1;
