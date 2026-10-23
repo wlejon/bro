@@ -85,7 +85,17 @@ bool LandNode::setProcess(LandProcess process, std::string& err) {
             err = "a pass's function '" + p.fn + "' is not a GLSL name";
             return false;
         }
+    if (!process.regions.init.empty() && !identifier(process.regions.init)) {
+        err = "the regions' init '" + process.regions.init + "' is not a GLSL name";
+        return false;
+    }
+    for (const LandRegionConfig::Pass& p : process.regions.passes)
+        if (!identifier(p.fn)) {
+            err = "a region pass's function '" + p.fn + "' is not a GLSL name";
+            return false;
+        }
     process.channels = std::clamp(process.channels, 1, LandProcess::kMaxChannels);
+    process.regions.sanitize(process.channels);
     process.resolution = std::clamp(process.resolution, 1, LandProcess::kMaxResolution);
     process.data.resize(std::min(process.data.size(), LandProcess::kMaxData * 4));
     process_ = std::move(process);
@@ -100,6 +110,113 @@ void LandNode::configureGrid() {
     if (process_.active()) grid_.configure(round() ? place_->body() : Body{}, extent_, process_.resolution);
     ++gridSerial_;
     base_.reset();
+    // Its regions over the grid as it is now, none of them in.
+    lattice_ = {};
+    if (process_.active() && process_.regions.active()) {
+        lattice_.config = process_.regions;
+        lattice_.half = grid_.half();
+        lattice_.radius = grid_.radius();
+    }
+    regionStore_ = std::make_shared<LandRegionStore>();
+    regionsSettled_ = true;
+}
+
+std::string LandNode::regionDispatch() const {
+    const LandRegionConfig& r = process_.regions;
+    std::string s = "void procRegionInit(inout vec4 v[PROC_CHANNELS]) { " + r.init + "(v); }\n";
+    s += "void procRegionRun(int pass, inout vec4 v[PROC_CHANNELS]) {\n    switch (pass) {\n";
+    for (size_t i = 0; i < r.passes.size(); ++i)
+        s += "    case " + std::to_string(i) + ": " + r.passes[i].fn + "(v); break;\n";
+    s += "    default: break;\n    }\n}\n";
+    return s;
+}
+
+void LandNode::regionChanged(const LandRegionKey& key) {
+    if (!lattice_.config.active() || items_.empty() || itemCells_ <= 0) return;
+    const double cell = lattice_.config.cellOf(key.level);
+    const double side = lattice_.config.cells * cell;
+    const double x0 = lattice_.originX(key), z0 = lattice_.originZ(key);
+    const double half = round() ? faceHalf(place_->body()) : static_cast<double>(extent_);
+    const double item = 2.0 * half / itemCells_;
+    const uint64_t g = generation_ ^ (++itemBumps_ * 0x9e3779b97f4a7c15ull);
+    // The items under the region, a margin of one item round it (a tile's
+    // border and its normals read past its edge): its ground sampled every
+    // half item, each sample's item moved on (on a round body the sample's own
+    // face's, so a region reaching over an edge stales the next face's too).
+    const int steps = static_cast<int>(std::ceil((side + 2.0 * item) / (0.5 * item))) + 1;
+    std::vector<size_t> touched;
+    for (int b = 0; b < steps; ++b)
+        for (int a = 0; a < steps; ++a) {
+            const double x = x0 - item + a * 0.5 * item, z = z0 - item + b * 0.5 * item;
+            int root = 0;
+            double cx = x, cz = z;
+            if (round()) {
+                double d[3];
+                dirOf(place_->body(), {key.root, x, z}, d);
+                const ChartPoint p = chartOf(place_->body(), d);
+                root = p.root;
+                cx = p.x;
+                cz = p.z;
+            }
+            const int i = static_cast<int>(std::floor((cx + half) / item));
+            const int j = static_cast<int>(std::floor((cz + half) / item));
+            if (i < 0 || j < 0 || i >= itemCells_ || j >= itemCells_) continue;
+            const size_t k = (static_cast<size_t>(root) * itemCells_ + j) * itemCells_ + i;
+            if (k < items_.size()) touched.push_back(k);
+        }
+    std::sort(touched.begin(), touched.end());
+    touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
+    for (size_t k : touched) refreshItem(k, g);
+    ++itemsSerial_;
+}
+
+void LandNode::refreshItem(size_t k, uint64_t generation) {
+    const int cells = itemCells_;
+    const int per = kItemSamples;
+    const int root = static_cast<int>(k / (static_cast<size_t>(cells) * cells));
+    const int cz = static_cast<int>(k / cells % cells), cx = static_cast<int>(k % cells);
+    const size_t n = static_cast<size_t>(per) * per;
+    std::vector<float> h(n, 0.0f), xs(n), ys(n), zs(n);
+    const double e = round() ? faceHalf(place_->body()) : static_cast<double>(extent_);
+    const double side = 2.0 * e / cells, step = side / (per - 1);
+    const double ox = -e + cx * side, oz = -e + cz * side;
+    if (round()) {
+        const Body& body = place_->body();
+        const double R = body.radius;
+        const CubeFace& F = cubeFace(root);
+        const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
+        for (int j = 0; j < per; ++j)
+            for (int i = 0; i < per; ++i) {
+                double d[3];
+                dirOf(body, {root, ox + i * step, oz + j * step}, d);
+                const size_t s = static_cast<size_t>(j) * per + i;
+                xs[s] = static_cast<float>(R * d[0] - o[0]);
+                ys[s] = static_cast<float>(R * d[1] - o[1]);
+                zs[s] = static_cast<float>(R * d[2] - o[2]);
+            }
+        if (height_) height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+    } else {
+        for (int j = 0; j < per; ++j)
+            for (int i = 0; i < per; ++i) {
+                xs[static_cast<size_t>(j) * per + i] = static_cast<float>(ox + i * step);
+                zs[static_cast<size_t>(j) * per + i] = static_cast<float>(oz + j * step);
+            }
+        if (height_) height_->sample(xs.data(), zs.data(), static_cast<int>(n), h.data());
+    }
+    float lo = std::numeric_limits<float>::max(), hi = -lo;
+    for (int j = 0; j < per; ++j)
+        for (int i = 0; i < per; ++i) {
+            const float v = overTree(h[static_cast<size_t>(j) * per + i], root, ox + i * step, oz + j * step);
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+    SurfaceItem& it = items_[k];
+    const float pad = (hi - lo) * kItemMargin + 1.0f;
+    it.bounds.min.y = std::min(it.bounds.min.y, lo - pad);
+    it.bounds.max.y = std::max(it.bounds.max.y, hi + pad);
+    it.generation = generation;
+    chartBounds_.min.y = std::min(chartBounds_.min.y, it.bounds.min.y);
+    chartBounds_.max.y = std::max(chartBounds_.max.y, it.bounds.max.y + canopyTop_);
 }
 
 std::string LandNode::gridConfig() const { return process_.active() ? grid_.glslConfig(process_.channels) : std::string(); }
@@ -126,6 +243,8 @@ void LandNode::setGridBase(uint64_t serial, std::vector<float> channel0) {
         b.own[0][i] = channel0[i * 4 + 2];
         b.own[1][i] = channel0[i * 4 + 3];
     }
+    b.lattice = lattice_;
+    b.regions = regionStore_;
     base_ = std::make_shared<const LandBase>(std::move(b));
     baseSerial_ = serial;
     // Its heights (and so its tiles' boxes) are the tree's over the base.

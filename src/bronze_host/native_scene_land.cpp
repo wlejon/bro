@@ -55,14 +55,37 @@ const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, c
     if (params_len > 0) p.resolution = static_cast<int>(params[0]);
     if (params_len > 1) p.channels = static_cast<int>(params[1]);
     // The passes' functions, comma-separated, their iterations after the
-    // resolution and channels.
-    std::string names = passes ? std::string(passes) : std::string();
+    // resolution and channels; then (after a '|') the regions' init and
+    // (after another) their passes, the regions' cells, apron, cell, ratio,
+    // levels, reach and keep after the global passes' iterations, their
+    // passes' iterations after those.
+    const std::string all = passes ? std::string(passes) : std::string();
+    const size_t bar1 = all.find('|');
+    const size_t bar2 = bar1 == std::string::npos ? std::string::npos : all.find('|', bar1 + 1);
+    const auto split = [](const std::string& names, std::vector<std::string>& out) {
+        for (size_t at = 0; !names.empty() && at <= names.size();) {
+            const size_t comma = std::min(names.find(',', at), names.size());
+            out.push_back(names.substr(at, comma - at));
+            at = comma + 1;
+        }
+    };
+    std::vector<std::string> global, region;
+    split(all.substr(0, bar1), global);
     uint32_t k = 2;
-    for (size_t at = 0; !names.empty() && at <= names.size();) {
-        const size_t comma = std::min(names.find(',', at), names.size());
-        p.passes.push_back({names.substr(at, comma - at), k < params_len ? static_cast<int>(params[k]) : 1});
-        ++k;
-        at = comma + 1;
+    const auto next = [&](double fallback) { return k < params_len ? params[k++] : (++k, fallback); };
+    for (const std::string& n : global) p.passes.push_back({n, static_cast<int>(next(1.0))});
+    if (bar2 != std::string::npos) {
+        scene::LandRegionConfig& r = p.regions;
+        r.init = all.substr(bar1 + 1, bar2 - bar1 - 1);
+        split(all.substr(bar2 + 1), region);
+        r.cells = static_cast<int>(next(r.cells));
+        r.apron = static_cast<int>(next(r.apron));
+        r.cell = next(r.cell);
+        r.ratio = static_cast<int>(next(r.ratio));
+        r.levels = static_cast<int>(next(r.levels));
+        r.reach = static_cast<int>(next(r.reach));
+        r.keep = static_cast<int>(next(r.keep));
+        for (const std::string& n : region) r.passes.push_back({n, static_cast<int>(next(1.0))});
     }
     if (data && data_len) p.data.assign(data, data + data_len);
     land->setProcess(std::move(p), tl_error);
@@ -120,6 +143,7 @@ void bro_scene_SceneNode_landStats(void* self, bronze_native_buffer* out) {
     transferBuffer(std::vector<double>{static_cast<double>(s.needed), static_cast<double>(s.resident),
                                        static_cast<double>(s.missing), static_cast<double>(s.filled),
                                        static_cast<double>(s.levels), s.shortfall, s.compiled ? 1.0 : 0.0,
-                                       land->ready() ? 1.0 : 0.0},
+                                       land->ready() ? 1.0 : 0.0, static_cast<double>(s.regions),
+                                       static_cast<double>(s.regionsPending), land->groundReady() ? 1.0 : 0.0},
                    out);
 }

@@ -1334,7 +1334,7 @@ are data, so a biome is a table, not code.
   default measures squared distance (the default its metadata now names,
   pinned at upstream's fix).
 
-## 11. The planet (design; decisions taken, 9a to 9d's global grid built)
+## 11. The planet (design; decisions taken, 9a to 9d built)
 
 A body of Earth's radius (6371 km) seen from a person in its grass to
 geostationary orbit as one place: the land's rings, its tiles, the plants
@@ -1631,9 +1631,9 @@ field is evaluated at is **split**: an integer part and a float fraction.
   plants standing on it (`createPlants`' `land`) place nothing; placement's
   rules put their ground through the base. Every channel is the module's to read
   (`landGrid(c, p)`), so a process can colour the surface too.
-- **Not yet:** regional grids under the eye streamed by the world service,
-  with the global grid's flow at their edges; a process run again while
-  the world plays (128 passes a frame is a hitch, fine at creation only).
+- **Not yet:** a global process run again while the world plays (128
+  passes a frame is a hitch, fine at creation only). The regional grids
+  are below.
 - **The oracle:** `bro_land_grid_test` (halo sources and corners, the field
   through bilinear sampling within 2 m anywhere, no step across a face's
   edge or corner), `bro_plant_placement_test`'s base checks (flat and round),
@@ -1647,6 +1647,79 @@ field is evaluated at is **split**: an integer part and a float fraction.
   2048: the target's "under a second". The test also found the land's sun
   comparing datum heights to place heights on a round body (the ground dark
   8 km from the anchor); it now takes the drop.
+
+### As built: regional grids (9d)
+
+- **The world writes** `processes.regions` (`docs/land-api.js`): an `init`
+  function and `passes` from the same source, and the lattice: `cells` a
+  region's side, an `apron` each side, level 0's `cell`, `ratio` between
+  levels, `levels`, `reach` (regions each way about the eye's) and `keep`
+  (channels kept). Its kernels have the global grid's API over a region's
+  cells plus `procLevel`, `procBorder` and `procCoarse(c)`, the next coarser
+  field at the cell (the coarser levels over the global grid), so a region
+  starts from what is under it and takes its edges from it: the global
+  grid's flow is the boundary of the coarsest level, each level's of the
+  next finer (`ground/land_region_layer.glsl`).
+- **The lattice** (`world/land_regions.h`): per level and root, square
+  regions on a step of `cells - 2 apron` cells, each weighed by a
+  smoothstep across its apron's two widths, so a level's regions are a
+  partition of unity (cross-fades, never seams). On a round body a face's
+  lattice runs past its edges, and the faces about an edge or corner are
+  cross-faded too in an equiangular chart, each read in its own. A point's
+  value goes fine to coarse, the global grid last: each level adds its
+  regions' weighted sum and leaves `1 - cover` of the rest to the coarser,
+  so where a level's regions are still to come the coarser field shows
+  through and a region arriving fades in over its footprint, no pop. The
+  CPU (`LandBase` over a `LandRegionSet` snapshot) and the GPU
+  (`ground/land_regions.glsl`) take the same steps.
+- **The store** (`vulkan/ground/scene_land_regions.cpp`): one rgba32f
+  2D-array image of slots (`keep` layers a slot), an open-addressed hash
+  table of region keys to slots in device memory (rewritten only when its
+  entries change), and the regions' channel 0 read back for the CPU as the
+  global grid's is. A region is a run of steps: its init in 16 bands of
+  rows, each pass one dispatch, and a finish (the copy into its slot and
+  the readback); the fills read the regions through the same table.
+- **Streaming is a world-service kind** ("land regions"): the wanted
+  regions are those within `reach` of the ground under the eye at every
+  level whose cell is at least a pixel from the eye's height, coarser
+  first, nearer first; up to 24 steps are offered a frame (two required
+  once the land is warm, the rest budgeted by error, cell × focal /
+  height), all of them while it warms. A region's steps are a few tens of
+  microseconds each, so a region arriving is spread over frames with no
+  hitch. Two scheduling fixes came with it, general to every kind: each
+  kind's first job ranks ahead of every other kind's rest (one kind's
+  endless cheap offers — shadow pages — no longer starve the rest), and a
+  kind granted nothing for `starveFrames` (2) frames gets its first job
+  even over the budget when it costs at most four budgets (a kind whose
+  single job's measured span sits above the floor otherwise never ran
+  again, its estimate never re-learnt).
+- **The fill** reads the regions in one call site (`landFieldDirFrom`'s
+  single loop over levels): inlined at each of the fill's height reads
+  the fill cost ten times as much. `land_fill.comp` now evaluates each
+  workgroup's (group + 2)² points once into shared memory and takes the
+  normals from neighbours, 1.6 height reads a texel instead of 5.
+- **The planet** (`demos/planet/terrain.js`): four levels of 512² regions
+  at 64 m, 256 m, 1 km and 4 km cells (the global grid 12 km), each
+  adding its own band of relief to `procCoarse` and re-running the global
+  grid's erosion at its scale (fill, multiple-flow routing, implicit
+  stream power, creep), its edge cells outlets at the coarser field's
+  ground, its bed never cut deeper than its band under the coarser
+  field's (so a level carves its own valleys and keeps the coarser
+  field's where they are); the tree's ridged 18 km octave is gone, the
+  ranges' form is the eroded field's and the tree only detail finer than
+  the regional cell.
+- **The oracle:** `bro_land_grid_test` (a flat partition of unity in the
+  interior, a smooth field reproduced through regions with no step, the
+  global grid read where none are in, a round small body's field
+  reproduced across faces, edges and corners, the finest level covering
+  the coarser, the GLSL config), `bro_world_service_test` (every kind
+  progresses: lead per kind, a dear kind granted after `starveFrames`, a
+  dearer one never), `tests/scene/test_land_process.js` (two levels over a
+  flat grid: the CPU's heights the levels' bands under the eye, no step
+  half a metre at a time out through the aprons, the GPU standing on the
+  CPU's heights). The planet's captures and `capture.js -- fly`.
+- **Not yet:** a descent at 6 km/s outruns the streaming (some 30 regions
+  pending by 1.5 km); the regions' readback is channel 0 only.
 
 ### Processes
 

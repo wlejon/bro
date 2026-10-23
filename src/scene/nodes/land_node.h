@@ -108,6 +108,27 @@ public:
     /// what the plants standing on it add to their ground.
     std::shared_ptr<const LandBase> groundBase() const { return base_; }
 
+    /// Its regional grids (world/land_regions.h; config inactive: none):
+    /// their lattice, the GLSL of their layout ("" none), their init and the
+    /// switch over their passes (land_region_dispatch.glsl's place), and the
+    /// regions in, as the CPU reads them (vulkan/ground/scene_land_regions.h
+    /// adds and removes them).
+    const LandRegionLattice& regionLattice() const { return lattice_; }
+    std::string regionConfig() const { return lattice_.glslConfig(); }
+    std::string regionDispatch() const;
+    LandRegionStore& regionStore() { return *regionStore_; }
+    /// A region came in or went: the tiles over it are made again (its
+    /// items' generations move; itemsSerial() with them).
+    void regionChanged(const LandRegionKey& key);
+    uint64_t itemsSerial() const { return itemsSerial_; }
+    /// Whether the regions holding the ground under the eye are in (set by
+    /// the regions' runner each frame; true with none): the plants standing
+    /// on the land wait for them.
+    void setRegionsSettled(bool settled) { regionsSettled_ = settled; }
+    bool groundReady() const { return ready() && regionsSettled_; }
+    /// A round body's ground height (over the datum) at body direction `dir`.
+    float heightOver(const double dir[3]) const;
+
     /// The canopy of the plants standing on the land (world/plant_canopy.h's
     /// module, "" none), the tallest they stand (m) and how far from the eye
     /// they are drawn and cast: kept in the tiles beside the ground, drawn
@@ -233,6 +254,8 @@ public:
         uint32_t needed = 0, resident = 0, missing = 0, filled = 0, levels = 0;
         float shortfall = 1.0f;
         bool compiled = false;   // its module compiled (it draws)
+        uint32_t regions = 0;          // regional grids in
+        uint32_t regionsPending = 0;   // wanted about the eye and not yet in
     };
     void setStats(const Stats& s) { stats_ = s; }
     const Stats& stats() const { return stats_; }
@@ -242,8 +265,9 @@ private:
     int wantedRings() const;
     void rebuildItems();
     void rebuildFaceItems();
-    /// A round body's ground height (over the datum) at body direction `dir`.
-    float heightOver(const double dir[3]) const;
+    /// Item `k`'s box from the land's heights as they are now (a region in
+    /// or out moves its ground), its generation `generation`.
+    void refreshItem(size_t k, uint64_t generation);
     /// The height over the tree's `tree` at chart point (x, z) of `root`
     /// (the tree's with no processes).
     float overTree(float tree, int root, double x, double z) const;
@@ -264,6 +288,10 @@ private:
     LandGrid grid_;
     uint64_t gridSerial_ = 1, baseSerial_ = 0;
     std::shared_ptr<const LandBase> base_;
+    LandRegionLattice lattice_;
+    std::shared_ptr<LandRegionStore> regionStore_ = std::make_shared<LandRegionStore>();
+    uint64_t itemsSerial_ = 0, itemBumps_ = 0;
+    bool regionsSettled_ = true;
     float extent_ = 4096.0f;
     Rings rings_;
     Sea sea_;

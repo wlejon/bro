@@ -28,6 +28,14 @@ layout(push_constant) uniform LandFillPush { uint words[LF_P_WORDS]; } pc;
 layout(set = 0, binding = 6, rgba32f) uniform readonly image2DArray landGridImage;
 vec4 landGridLoad(ivec3 t) { return imageLoad(landGridImage, t); }
 #include "ground/land_grid.glsl"
+// Its regional grids (scene_land_regions.h): their slots and their table;
+// with none, never read.
+#include "ground/land_region_config.glsl"
+layout(set = 0, binding = 7, rgba32f) uniform readonly image2DArray landRegionImage;
+layout(std430, set = 0, binding = 8) readonly buffer LandRegionTable { uvec4 entries[]; } landRegionTable;
+vec4 landRegionLoad(ivec3 t) { return imageLoad(landRegionImage, t); }
+uvec4 landRegionEntry(uint i) { return landRegionTable.entries[i]; }
+#include "ground/land_regions.glsl"
 
 // The module's noise sampled a texel apart (brokit's noise_glsl): a coarse
 // tile's texel holds the detail it can carry, its finer octaves at their
@@ -78,15 +86,32 @@ vec3 roundGround(RoundTile T, vec2 o, out float h, out vec3 d) {
 }
 #endif
 
+// The ground's points (round: relative to the tile's middle's datum point)
+// or heights (flat) over the workgroup's texels and one texel about them:
+// each texel's normal is from its neighbours' (a texel either way), each
+// worked out once for the group, not four times over.
+#define LF_SHARED (LF_GROUP + 2)
+#ifdef LAND_ROUND
+shared vec3 lfGround[LF_SHARED * LF_SHARED];
+shared float lfHeight[LF_SHARED * LF_SHARED];
+#else
+shared float lfGround[LF_SHARED * LF_SHARED];
+#endif
+
 void main() {
     uint stride = pc.words[LF_P_STRIDE];
     uint tile = gl_WorkGroupID.z;
+    if (tile >= pc.words[LF_P_TILES]) return;   // (the whole group)
     uvec2 texel = gl_GlobalInvocationID.xy;
-    if (tile >= pc.words[LF_P_TILES] || texel.x >= stride || texel.y >= stride) return;
     vec4 f = fills[tile * (LF_TILE_WORDS / 4)];
     float t = f.z;
-    vec2 p = f.xy + (vec2(texel) + 0.5) * t;
     landFootprint = t;
+#ifdef LAND_GRID
+    landFieldFootprint = t;
+#endif
+    // The group's texels' corner less one texel: the shared points' first.
+    vec2 corner = f.xy + (vec2(gl_WorkGroupID.xy * uint(LF_GROUP)) - 0.5) * t;
+    uint local = gl_LocalInvocationIndex;
 
 #ifdef LAND_ROUND
     uint b = tile * (LF_TILE_WORDS / 4);
@@ -99,15 +124,30 @@ void main() {
     landOx = fills[b + 5].xy;
     landOy = fills[b + 5].zw;
     landOz = fills[b + 6].xy;
-    float h, hx0, hx1, hz0, hz1;
-    vec3 up, dn;
+    vec3 dn;
+    for (uint s = local; s < uint(LF_SHARED * LF_SHARED); s += uint(LF_GROUP * LF_GROUP)) {
+        float hs;
+        lfGround[s] = roundGround(T, corner + vec2(s % uint(LF_SHARED), s / uint(LF_SHARED)) * t, hs, dn);
+        lfHeight[s] = hs;
+    }
+#else
+    for (uint s = local; s < uint(LF_SHARED * LF_SHARED); s += uint(LF_GROUP * LF_GROUP))
+        lfGround[s] = landHeight(corner + vec2(s % uint(LF_SHARED), s / uint(LF_SHARED)) * t);
+#endif
+    barrier();
+    if (texel.x >= stride || texel.y >= stride) return;
+    vec2 p = f.xy + (vec2(texel) + 0.5) * t;
+    uint ci = (gl_LocalInvocationID.y + 1u) * uint(LF_SHARED) + gl_LocalInvocationID.x + 1u;
+
+#ifdef LAND_ROUND
+    vec3 up;
     vec3 datum = roundDatum(T, p, up);
-    h = landHeight(datum);
+    float h = lfHeight[ci];
     // The normal from the ground's points a texel either way (outward: half
     // the faces' u, n, v are left-handed), in the frame of the up there: x
     // along the face's u, z its v.
-    vec3 px0 = roundGround(T, p - vec2(t, 0.0), hx0, dn), px1 = roundGround(T, p + vec2(t, 0.0), hx1, dn);
-    vec3 pz0 = roundGround(T, p - vec2(0.0, t), hz0, dn), pz1 = roundGround(T, p + vec2(0.0, t), hz1, dn);
+    vec3 px0 = lfGround[ci - 1u], px1 = lfGround[ci + 1u];
+    vec3 pz0 = lfGround[ci - uint(LF_SHARED)], pz1 = lfGround[ci + uint(LF_SHARED)];
     vec3 nb = normalize(cross(pz1 - pz0, px1 - px0)) * sign(dot(cross(T.v, T.u), T.n));
     vec3 east = normalize(T.u - dot(T.u, up) * up), north = normalize(T.v - dot(T.v, up) * up);
     vec3 n = vec3(dot(nb, east), dot(nb, up), dot(nb, north));
@@ -117,10 +157,10 @@ void main() {
     vec3 leaves;
     vec2 canopy = plantsCanopy(datum, leaves);
 #else
-    float h = landHeight(p);
+    float h = lfGround[ci];
     // The normal from central differences a texel apart.
-    float hx0 = landHeight(p - vec2(t, 0.0)), hx1 = landHeight(p + vec2(t, 0.0));
-    float hz0 = landHeight(p - vec2(0.0, t)), hz1 = landHeight(p + vec2(0.0, t));
+    float hx0 = lfGround[ci - 1u], hx1 = lfGround[ci + 1u];
+    float hz0 = lfGround[ci - uint(LF_SHARED)], hz1 = lfGround[ci + uint(LF_SHARED)];
     vec3 n = normalize(vec3(hx0 - hx1, 2.0 * t, hz0 - hz1));
     LandSurface s = landSurface(LandPoint(p, h, n, vec3(p.x, 0.0, p.y), vec3(0.0, 1.0, 0.0), t));
     vec3 leaves;

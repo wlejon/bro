@@ -19,6 +19,7 @@
 // so a sample is continuous across a cube face's edge; the CPU (sample())
 // and the GPU (shaders/ground/land_grid.glsl) take the same steps.
 
+#include "scene/world/land_regions.h"
 #include "scene/world/place.h"
 
 #include <cstdint>
@@ -43,6 +44,7 @@ struct LandProcess {
     int resolution = 256;        // cells a root side
     int channels = 1;            // vec4s a cell
     std::vector<float> data;     // procData(i), vec4s as floats
+    LandRegionConfig regions;    // the regional grids under the eye (land_regions.h; none: init empty)
 
     bool active() const { return !source.empty(); }
     /// Every pass's iterations.
@@ -104,32 +106,53 @@ private:
 /// A land's processes' height over its tree's, as read back (their channel
 /// 0: x added, y the tree's scale), and the world's own two values beside
 /// it (z and w, what its plants' rules may read: world/plant_placement.h's
-/// PlacementTerm): shared, never changed once made, by the land's CPU
-/// heights and the plants that stand on it.
+/// PlacementTerm), with the regional grids' channel 0 blended over it where
+/// they are in (land_regions.h): shared by the land's CPU heights and the
+/// plants that stand on it. The global grid's values never change once made;
+/// the regions come and go (`regions`' snapshots).
 struct LandBase {
     LandGrid grid;
     std::vector<float> values;   // the height added, grid.texels()
     std::vector<float> scales;   // the tree's scale, grid.texels() (none: 1)
     std::vector<float> own[2];   // channel 0's z and w, grid.texels() each (none: 0)
+    LandRegionLattice lattice;                        // the regions' (config.active() false: none)
+    std::shared_ptr<const LandRegionStore> regions;   // the regions in (null: none)
+
+    /// Channel 0 (x the height added, y the tree's scale, z and w the world's
+    /// own) at a root's chart point, at a round body's direction (unit): the
+    /// global grid's, the regions' blended over it.
+    void field(int root, double x, double z, float out[4]) const;
+    void fieldDir(const double dir[3], float out[4]) const;
 
     /// The world's own value k (0 z, 1 w) at a root's chart point, at a
     /// round body's direction (unit).
     float ownAt(int k, int root, double x, double z) const {
-        return own[k].empty() ? 0.0f : grid.sample(own[k].data(), root, x, z);
+        float v[4];
+        field(root, x, z, v);
+        return v[2 + k];
     }
-    float ownDir(int k, const double dir[3]) const { return own[k].empty() ? 0.0f : grid.sampleDir(own[k].data(), dir); }
+    float ownDir(int k, const double dir[3]) const {
+        float v[4];
+        fieldDir(dir, v);
+        return v[2 + k];
+    }
 
     /// The land's height over the tree's `tree` at a flat body's (x, z),
     /// at a round body's root and chart point, at its direction (unit).
     float over(float tree, double x, double z) const { return over(tree, 0, x, z); }
     float over(float tree, int root, double x, double z) const {
-        const float s = scales.empty() ? 1.0f : grid.sample(scales.data(), root, x, z);
-        return grid.sample(values.data(), root, x, z) + s * tree;
+        float v[4];
+        field(root, x, z, v);
+        return v[0] + v[1] * tree;
     }
     float overDir(float tree, const double dir[3]) const {
-        const ChartPoint p = chartOf(grid.body(), dir);
-        return over(tree, p.root, p.x, p.z);
+        float v[4];
+        fieldDir(dir, v);
+        return v[0] + v[1] * tree;
     }
+
+private:
+    void global(int root, double x, double z, float out[4]) const;
 };
 
 }  // namespace bro::scene

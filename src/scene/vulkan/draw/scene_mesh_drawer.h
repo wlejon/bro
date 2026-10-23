@@ -29,6 +29,7 @@
 #include "scene/vulkan/ground/scene_cover_shaders.h"
 #include "scene/vulkan/foliage/scene_plant_shaders.h"
 #include "scene/vulkan/ground/scene_land_process.h"
+#include "scene/vulkan/ground/scene_land_regions.h"
 #include "scene/vulkan/ground/scene_land_shaders.h"
 #include "scene/vulkan/shaders/ground/scene_land_layout.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
@@ -439,6 +440,7 @@ private:
         SceneSurfaceLayerAtlas atlas;
         uint64_t frame = 0;
         uint64_t generation = 0;   // the node's its tiles were configured at
+        uint64_t itemsSerial = 0;  // the node's its items were last taken at (LandNode::itemsSerial)
         int roots = 1;             // its chart's roots (its page table's layers are maxLevels a root)
         int firstRing = 0;         // this frame's (LandNode::firstRing)
         bool cleared = false;      // its page table cleared (once made or reconfigured)
@@ -449,6 +451,8 @@ private:
     };
     /// The lands' processes (scene_land_process.h), run in offerLand.
     SceneLandProcesses landProcesses_;
+    /// Their regional grids (scene_land_regions.h), made in offerLand after them.
+    SceneLandRegions landRegions_;
     LandTiles* landTiles(SceneFrame& frame, LandNode& node);
     /// Its LandDraw words (scene_land_layout.h, LD_WORDS of them) for this
     /// frame: the rings and tiles about the frame's eye.
@@ -471,6 +475,10 @@ private:
     VkDescriptorSetLayout landFillSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout landFillLayout_ = VK_NULL_HANDLE;
     int landKind_ = -1;   // the land's fills, a world service job kind
+    /// The lands' regions' dispatches (a job each, granted as the budget
+    /// holds), recorded into the frame's graphics stream.
+    uint32_t recordLandRegions(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
+    int regionsKind_ = -1;
     std::vector<uint32_t> landDrawn_;     // the land nodes prepared this frame
     std::vector<uint32_t> landOffered_;   // those whose tiles offer() updated this frame
     /// The land's horizon (scene_world_horizon.h): made from the first land

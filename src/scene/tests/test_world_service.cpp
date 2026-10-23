@@ -403,10 +403,47 @@ void testCostLearning() {
     check(near(s.cost(k), before), "an empty span leaves the cost");
 }
 
+// A kind whose jobs never run out, all worse than another kind's: the other
+// still has its first job granted each frame.
+void testEveryKindProgresses() {
+    WorldService s;
+    WorldServiceConfig c;
+    c.floorMs = 0.375f;
+    s.configure(c);
+    const int pages = s.addKind({"pages", WorldSchedule::Raster, 0.125f});
+    const int tiles = s.addKind({"tiles", WorldSchedule::Raster, 0.125f});
+    s.beginFrame();
+    for (int i = 0; i < 8; ++i) s.offer({static_cast<uint64_t>(i), 0, pages, 64.0f, 1.0, false});
+    s.offer({100, 0, tiles, 2.0f, 1.0, false});
+    s.offer({101, 0, tiles, 1.5f, 1.0, false});
+    s.schedule();
+    check(s.granted(tiles).size() == 1 && s.granted(tiles)[0].key == 100,
+          "the less wrong kind's worst job is granted ahead of the other's second");
+    check(s.granted(pages).size() == 2, "the rest of the budget goes by error");
+
+    // A kind priced over what the others leave is granted its first job once
+    // it has waited starveFrames frames, if it costs at most four budgets.
+    const int dear = s.addKind({"dear", WorldSchedule::Raster, 1.0f});
+    const int dearer = s.addKind({"dearer", WorldSchedule::Raster, 2.0f});
+    int waited = 0;
+    for (int f = 0; f < 20; ++f) {
+        s.beginFrame();
+        s.offer({0, 0, pages, 64.0f, 1.0, false});
+        s.offer({1, 0, dear, 1.0f, 1.0, false});
+        s.offer({2, 0, dearer, 1.0f, 1.0, false});
+        s.schedule();
+        check(s.granted(dearer).empty(), "a job dearer than four budgets waits for a larger one");
+        if (!s.granted(dear).empty()) break;
+        ++waited;
+    }
+    check(waited == c.starveFrames, "the dear kind waited starveFrames frames (" + std::to_string(waited) + ")");
+}
+
 }  // namespace
 
 int main() {
     testRankingAcrossProducers();
+    testEveryKindProgresses();
     testCoarserTieBreak();
     testUnits();
     testNextFrame();

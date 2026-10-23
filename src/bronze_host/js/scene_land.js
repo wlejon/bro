@@ -75,8 +75,21 @@ LandSurface landSurface(LandPoint q) {
         const passes = pr.passes || [];
         const params = [pr.resolution !== undefined ? +pr.resolution : 256, pr.channels !== undefined ? +pr.channels : 1];
         for (const s of passes) params.push(s.iterations !== undefined ? +s.iterations : 1);
+        let names = passes.map((s) => String(s.fn)).join(',');
+        // Its regional grids (the same source's kernels, over regions under the eye).
+        const rg = pr.regions;
+        if (rg) {
+            if (typeof rg.init !== 'string' || !rg.init)
+                throw new TypeError('createLand: `processes.regions.init` (the regions\' init kernel) is required');
+            const rp = rg.passes || [];
+            const num = (v, d) => (v !== undefined ? +v : d);
+            params.push(num(rg.cells, 512), num(rg.apron, 32), num(rg.cell, 64), num(rg.ratio, 4), num(rg.levels, 3),
+                num(rg.reach, 1), num(rg.keep, 2));
+            for (const s of rp) params.push(s.iterations !== undefined ? +s.iterations : 1);
+            names += '|' + String(rg.init) + '|' + rp.map((s) => String(s.fn)).join(',');
+        }
         const err = __bro_native.scene.SceneNode_setLandProcess(node, treeOf(p.height, p.seed) + pr.source,
-            passes.map((s) => String(s.fn)).join(','), new Float64Array(params),
+            names, new Float64Array(params),
             pr.data ? Float32Array.from(pr.data) : new Float32Array(0));
         if (err) throw new TypeError('createLand: ' + err);
     }
@@ -140,6 +153,6 @@ LandSurface landSurface(LandPoint q) {
         const a = __bro_native.scene.SceneNode_landStats(this);
         if (a.length < 8) return undefined;
         return { needed: a[0], resident: a[1], missing: a[2], filled: a[3], levels: a[4], shortfall: a[5],
-                 compiled: a[6] > 0, ready: a[7] > 0 };
+                 compiled: a[6] > 0, ready: a[7] > 0, regions: a[8], regionsPending: a[9], groundReady: a[10] > 0 };
     });
 })();

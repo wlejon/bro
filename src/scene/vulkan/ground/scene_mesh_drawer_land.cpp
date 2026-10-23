@@ -54,6 +54,8 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     fill.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     fill.addBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    fill.addBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    fill.addBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     landFillSetLayout_ = fill.build(device_);
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, LF_P_WORDS * 4};
     VkPipelineLayoutCreateInfo info{};
@@ -73,7 +75,16 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's fills");
         return false;
     }
-    return landProcesses_.setup(gpu) && setupLandHorizon(gpu) && setupLandSun(gpu);
+    if (!landProcesses_.setup(gpu) || !landRegions_.setup(gpu) || !setupLandHorizon(gpu) || !setupLandSun(gpu))
+        return false;
+    // The regions' dispatches, recorded after the fills (which read only
+    // regions made in earlier frames) and timed apart from them.
+    if (regionsKind_ < 0) regionsKind_ = gpu.world.addKind(this, {"land regions", WorldSchedule::Raster, 0.05f});
+    if (regionsKind_ < 0) {
+        LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's regions");
+        return false;
+    }
+    return true;
 }
 
 bool SceneMeshDrawer::setupLandHorizon(SceneGpu& gpu) {
@@ -128,6 +139,7 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
     cleanupLandHorizon(gpu);
     cleanupLandSun(gpu);
     landProcesses_.cleanup(gpu);
+    landRegions_.cleanup(gpu);
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
     for (VkPipeline p : landFillPipelines_)
@@ -145,8 +157,10 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
 const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
     if (!node.moduleSourceHash()) return nullptr;
     const std::string grid = node.gridConfig();
+    const std::string regions = node.regionConfig();
     const uint64_t key = node.moduleSourceHash() ^ (node.canopySourceHash() * 0x9e3779b97f4a7c15ull) ^
-                         (scene::moduleSourceHash(grid) * 0xc2b2ae3d27d4eb4full) ^ (node.round() ? 1ull : 0ull);
+                         (scene::moduleSourceHash(grid) * 0xc2b2ae3d27d4eb4full) ^
+                         (scene::moduleSourceHash(regions) * 0x165667b19e3779f9ull) ^ (node.round() ? 1ull : 0ull);
     auto it = landByModule_.find(key);
     if (it == landByModule_.end()) {
         // Compiled at the first frame that draws it (through the SPIR-V
@@ -154,7 +168,7 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
         auto set = std::make_unique<LandShaders>();
         std::string err;
         int index = -1;
-        if (set->create(device_, node.moduleSource(), node.canopySource(), grid, node.round(), err)) {
+        if (set->create(device_, node.moduleSource(), node.canopySource(), grid, regions, node.round(), err)) {
             index = static_cast<int>(landSets_.size());
             set->index = static_cast<uint32_t>(index);
             landSets_.push_back(std::move(set));
@@ -364,6 +378,7 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         if (!frame.graph.findById(it->first)) {
             it->second->atlas.destroy(frame.gpu.device, frame.gpu.allocator);
             landProcesses_.forget(frame.gpu, it->first);
+            landRegions_.forget(frame.gpu, it->first);
             it = lands_.erase(it);
         } else {
             ++it;
@@ -383,14 +398,24 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // Its processes first (their read-back may move its generation):
         // no tiles until they have run and their heights are in.
         lt.grid = landProcesses_.update(frame, *land, frame.cmd);
+        // Then its regions about the eye (a region in moves its items), their
+        // steps a job each.
+        const SceneLandRegions::Offer ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
+        for (int k = 0; k < ro.steps; ++k)
+            service.offer({static_cast<uint64_t>(k), id, regionsKind_, ro.error, 0.0, k < ro.required});
         if (!lt.grid || !land->ready()) continue;
 
-        // A new module, extent or rings: every tile again, over its items.
+        // A new module, extent or rings: every tile again, over its items;
+        // a region in or out: the tiles over it.
         if (lt.generation != land->generation()) {
             lt.generation = land->generation();
+            lt.itemsSerial = land->itemsSerial();
             lt.tiles.configure(land->tileConfig(), bromath::aempty3(), land->tileMap());
             lt.tiles.setItems(land->items());
             lt.cleared = false;
+        } else if (lt.itemsSerial != land->itemsSerial()) {
+            lt.itemsSerial = land->itemsSerial();
+            lt.tiles.setItems(land->items());
         }
         bromath::AABB3 bounds = land->chartBounds();
         bounds.min.y -= kDepthMargin;
@@ -490,6 +515,7 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
         stats.levels = s.levels;
         stats.shortfall = s.worstError;
         stats.compiled = true;
+        landRegions_.counts(id, stats.regions, stats.regionsPending);
         land->setStats(stats);
         frame.stats.landFills += static_cast<int>(fills.size());
         if (!fills.empty() || !lt.tiles.pageWrites().empty()) landChanged_ = landSunTiles_ = true;
@@ -566,6 +592,10 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                 writer.writeImage(5, lt.atlas.layerView(3), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
                 writer.writeImage(6, lt.grid, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+                writer.writeImage(7, landRegions_.slots(id), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+                const VkDescriptorBufferInfo table = landRegions_.table(id);
+                writer.writeBuffer(8, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
                 writer.updateSet(device_, set);
 
                 lt.atlas.beginFills(cmd, fills);
@@ -581,6 +611,20 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
             }
         }
         if (!lt.tiles.pageWrites().empty()) lt.atlas.writePages(frame.gpu.device, stream.cmd(), lt.tiles.pageWrites());
+    }
+    return recorded;
+}
+
+uint32_t SceneMeshDrawer::recordLandRegions(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
+    std::unordered_map<uint32_t, int> budget;
+    for (const WorldJob& j : granted) ++budget[j.producer];
+    uint32_t recorded = 0;
+    for (const auto& [id, n] : budget) {
+        const auto found = lands_.find(id);
+        SceneNode* node = frame.graph.findById(id);
+        LandNode* land = node && node->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(node)->asLand() : nullptr;
+        if (found == lands_.end() || !land) continue;
+        recorded += static_cast<uint32_t>(landRegions_.run(frame, *land, found->second->grid, stream.cmd(), n));
     }
     return recorded;
 }

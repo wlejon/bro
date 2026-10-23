@@ -37,8 +37,21 @@
 // Ranking. Required jobs first; then by error, largest first, whoever the
 // producer; ties to the larger size, so the world fills in from the top
 // down; then by kind, producer and key, so a frame's order never depends on
-// the order of the offers. A job is granted while the budget has room for
-// its cost; one that does not fit is left, while a cheaper one may still fit.
+// the order of the offers. Each kind's first job so ranked goes ahead of the
+// rest, though: a kind whose jobs never run out (a moving sun's shadow pages,
+// hundreds of them at 64 pixels' error a frame) would else take every frame
+// at the floor, and a kind whose jobs are all less wrong would never be
+// granted one (the land's tiles made stale under its regions waited behind
+// them for good). A job is granted while the budget has room for its cost;
+// one that does not fit is left, while a cheaper one may still fit. A kind
+// granted nothing for starveFrames frames running has its first job granted
+// whatever is left of the budget, if it costs no more than four times the
+// budget (one job: a kind priced near the floor, or behind a carry that
+// never clears, still moves, and its cost is measured again; a kind priced
+// at its dear end from a few slow spans was never granted another to learn
+// it cheaper. A land tile's fill alone, its world's whole module run over
+// it, is some 0.1 to 0.2 ms on a 4090 however few texels it has: at the
+// floor it was never granted, and tiles made stale stayed so for good).
 //
 // Budget. The executor reports each frame the GPU timer read (observe()):
 // its GPU milliseconds and the service's own share of them. What the frame
@@ -123,6 +136,7 @@ struct WorldServiceConfig {
     float settleError = 1.0f;   // a cut has settled when nothing worse than this (pixels) is left queued
     int settleQuiet = 4;        // for this many frames running (what the frames in flight read back)
     int settleFrames = 30;      // and has settled, whatever is left, after this many frames
+    int starveFrames = 2;     // a kind granted nothing this many frames running has its first job granted
 };
 
 /// A frame the GPU timer read, as the service sees it.
@@ -191,6 +205,7 @@ private:
         WorldJobKind desc;
         float cost = 0.05f;
         bool measured = false;
+        int starved = 0;   // frames running it offered jobs and was granted none
     };
     std::vector<Kind> kinds_;
     WorldServiceConfig config_;

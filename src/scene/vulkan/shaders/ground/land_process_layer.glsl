@@ -41,6 +41,10 @@
 //                                     procPointAt measures it)
 //   int procIteration()               the pass's iteration, from 0
 //   vec4 procData(int i)              the process's data (vec4 i of at most 64)
+//   int procLevel(), int procBorder(), vec4 procCoarse(int c),
+//   float procCoarseCellSize()        a regional grid's (ground/land_region_layer.glsl):
+//                                     on the global grid -1, 2^20, procHere(c)
+//                                     and procCellSize()
 //
 // and every other function a world writes; the land's tree is landTree(p)
 // (its noise at the land's seed: 2D at a flat body's (x, z), 3D at a round
@@ -76,6 +80,13 @@ vec3 procUp() {
     return vec3(0.0, 1.0, 0.0);
 #endif
 }
+
+// (A regional grid's (ground/land_region_layer.glsl); on the global grid,
+// level -1, no border, and no coarser field: its own.)
+int procLevel() { return -1; }
+int procBorder() { return 1 << 20; }
+vec4 procCoarse(int c) { return procHere(c); }
+float procCoarseCellSize() { return procCellSize(); }
 
 int procIteration() { return int(pc.words[LP_P_ITERATION]); }
 vec4 procData(int i) { return procDataBuffer.words[clamp(i, 0, 63)]; }

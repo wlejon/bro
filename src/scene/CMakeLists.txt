@@ -121,6 +121,11 @@ embed_vk_shader(ground/land_process_layer.glsl kVkLandProcessLayerSrc)
 embed_vk_shader(ground/land_process_module.glsl kVkLandProcessModuleSrc)
 embed_vk_shader(ground/land_process_dispatch.glsl kVkLandProcessDispatchSrc)
 embed_vk_shader(ground/land_process.comp       kVkLandProcessCompSrc)
+embed_vk_shader(ground/land_regions.glsl       kVkLandRegionsSrc)
+embed_vk_shader(ground/land_region_config.glsl kVkLandRegionConfigSrc)
+embed_vk_shader(ground/land_region_layer.glsl  kVkLandRegionLayerSrc)
+embed_vk_shader(ground/land_region_dispatch.glsl kVkLandRegionDispatchSrc)
+embed_vk_shader(ground/land_region.comp        kVkLandRegionCompSrc)
 embed_vk_shader(sky/clouds_layout.h            kVkCloudsLayoutSrc)
 embed_vk_shader(sky/scene_cloud_layer.glsl     kVkSceneCloudLayerSrc)
 embed_vk_shader(sky/cloud_module.glsl          kVkCloudModuleSrc)
@@ -182,6 +187,7 @@ add_library(bro_scene STATIC
     world/place.cpp
     world/body_surface_map.cpp
     world/land_grid.cpp
+    world/land_regions.cpp
     world/cover_regions.cpp
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
@@ -216,6 +222,7 @@ add_library(bro_scene STATIC
     vulkan/ground/scene_mesh_drawer_ground.cpp
     vulkan/ground/scene_mesh_drawer_land.cpp
     vulkan/ground/scene_land_process.cpp
+    vulkan/ground/scene_land_regions.cpp
     vulkan/ground/scene_mesh_drawer_land_sun.cpp
     vulkan/foliage/scene_mesh_drawer_plants.cpp
     vulkan/foliage/scene_plants_gpu_plan.cpp
@@ -314,8 +321,10 @@ if(BRO_BUILD_TESTS)
     target_include_directories(bro_place_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     # The land's processes' grid (roots, halos, sampling across a cube's
-    # edges), CPU only: its source and the place's.
-    add_executable(bro_land_grid_test tests/test_land_grid.cpp world/land_grid.cpp world/place.cpp)
+    # edges) and its regional grids' lattice and blending, CPU only: their
+    # sources and the place's.
+    add_executable(bro_land_grid_test tests/test_land_grid.cpp world/land_grid.cpp world/land_regions.cpp
+                   world/place.cpp)
     target_link_libraries(bro_land_grid_test PRIVATE bromath)
     target_include_directories(bro_land_grid_test PRIVATE ${bro_SOURCE_DIR}/src)
 

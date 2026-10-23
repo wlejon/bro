@@ -24,4 +24,19 @@
 #define LP_P_HALO           3     // uint: the halo's copies
 #define LP_P_WORDS          4
 
+// land_region.comp (a region's run, scene_land_regions.h): set 0 binding 0
+// the region's cells read (rgba32f, a layer a channel), 1 written, 2 the
+// global grid (as land_fill.comp's), 3 the regions' slots, 4 their table
+// (uvec4: key, slot), 5 the process's data; push constants LR_P_*, its
+// modes LP_MODE_INIT and LP_MODE_PASS.
+#define LR_P_MODE           0     // uint: LP_MODE_*
+#define LR_P_PASS           1     // uint: the pass
+#define LR_P_ITERATION      2     // uint: its iteration
+#define LR_P_LEVEL          3     // int: the region's level
+#define LR_P_ROOT           4     // int: its root
+#define LR_P_I              5     // int: its lattice x
+#define LR_P_J              6     // int: its lattice z
+#define LR_P_ROW            7     // uint: the first of the cells' rows this dispatch runs (a band of them)
+#define LR_P_WORDS          8
+
 #endif

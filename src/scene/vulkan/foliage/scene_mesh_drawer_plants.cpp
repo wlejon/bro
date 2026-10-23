@@ -66,6 +66,7 @@ void SceneMeshDrawer::plansSubmitted(uint64_t ticket, render::VulkanQueue& queue
     plantPlanner_->submitted(ticket, queue);
     horizon_.submitted(ticket);
     landProcesses_.submitted(ticket);
+    landRegions_.submitted(ticket);
 }
 
 const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
@@ -100,7 +101,7 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     if (node.land()) {
         SceneNode* n = frame.graph.findById(node.land());
         const LandNode* land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
-        if (land) node.setGround(land->groundBase(), !land->ready());
+        if (land) node.setGround(land->groundBase(), !land->groundReady());
     }
     node.follow(frame.world.eye);   // (placement is keyed on the body)
     const PlantShaders* shaders = plantShaders(node);

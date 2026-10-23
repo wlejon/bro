@@ -117,6 +117,42 @@
  * Processes that do not compile are logged and the land stays unready.
  * Between cell centres both sides read the grid bilinearly, the same way.
  *
+ * REGIONAL GRIDS (`processes.regions`; scene/world/land_regions.h,
+ * ground/land_region_layer.glsl). Finer grids of the same processes made
+ * under the eye as it moves and dropped behind it, so a shape the world's
+ * kernels make (a valley a stream cut, a drained ridgeline) reaches down to
+ * tens of metres. `levels` levels, level 0's cells `cell` chart metres and
+ * each coarser level's `ratio` times its finer's; a level is a lattice of
+ * square regions of `cells` texels a side, overlapping their neighbours by
+ * an `apron` of texels each side (cross-faded over two aprons' widths, so a
+ * level's regions sum to one: no seams), on a round body running on past a
+ * cube face's edge (the faces cross-faded too). The regions within `reach`
+ * lattice steps of the ground under the eye are wanted at every level whose
+ * cell is no finer than a pixel from the eye's height; coarser levels are
+ * made first. Each region runs `init` (the source's function) once over its
+ * cells, then `passes` as the global grid's run, with the same kernel API
+ * (procRead's offsets past the region's edge read its edge cells) and:
+ *
+ *     int procLevel()               the region's level (0 the finest; -1 on the global grid)
+ *     int procBorder()              cells to the region's nearest edge (0 on it; huge on the global grid)
+ *     vec4 procCoarse(int c)        channel c of the next coarser field at the cell: the
+ *                                   coarser levels blended over the global grid (on the
+ *                                   global grid, its own cell)
+ *     float procCoarseCellSize()    that field's cell, chart metres
+ *
+ * so a region starts from the coarser field and takes its boundary from it:
+ * flow entering at its edges is the coarser field's (a kernel holds its
+ * border cells to procCoarse, or routes into them). Where a level's regions
+ * are in, the land reads them, the coarser field making up what they do not
+ * cover (a level's edge, regions still to come), level by level down from
+ * the global grid; the first `keep` channels are the regions' and the rest
+ * the global grid's. The tiles, landGrid and the surface read it; the CPU's
+ * heights read the same regions read back, blended the same way. The engine
+ * streams them a frame's budget of dispatches at a time (a band of init
+ * rows, a whole pass, or a region's finish each), so a region in arrives
+ * over some frames with no hitch, and the tiles under it are made again.
+ * `landStats()` says how many are in and how many wanted are pending.
+ *
  * @example
  *   const N = (type, props = {}) => { const n = FastNoise.create(type); for (const k in props) n.set(k, props[k]); return n; };
  *   const hills = N('Multiply', { LHS: N('FractalFBm', { Source: N('Perlin', { 'Feature Scale': 400 }), Octaves: 5 }), RHS: 60 });
@@ -216,6 +252,31 @@
  * @property {number} [channels=1] - vec4s a cell, 1 to 4.
  * @property {ArrayLike<number>} [data] - what `procData(i)` reads: at most
  *   256 floats.
+ * @property {LandRegions} [regions] - finer grids of these processes under
+ *   the eye (see REGIONAL GRIDS above); none without.
+ */
+
+/**
+ * @typedef {Object} LandRegions
+ * @property {string} init - the source's function making a region's first
+ *   values (`void init(inout vec4 v[PROC_CHANNELS])`; v starts at 0, v[0].y
+ *   at 1, as procInit's), typically from `procCoarse`.
+ * @property {Array<{fn: string, iterations?: number}>} [passes] - run in
+ *   order after init on each region, each `iterations` times (default 1).
+ * @property {number} [cells=512] - texels a region's side (at most 1024).
+ * @property {number} [apron=32] - texels past a region's core each side,
+ *   overlapping its neighbours'.
+ * @property {number} [cell=64] - level 0's cell, chart metres.
+ * @property {number} [ratio=4] - each level's cell over its finer's.
+ * @property {number} [levels=3] - levels, at most 6.
+ * @property {number} [reach=1] - regions wanted each way about the eye's.
+ * @property {number} [keep=2] - channels the regions keep and are read for
+ *   (the first `keep`; the others are the global grid's).
+ * @example
+ *   // The global grid's continents eroded again at 64 m cells under the eye.
+ *   processes: { source, resolution: 512, channels: 4, passes: [...],
+ *     regions: { init: 'regionInit', cells: 512, apron: 32, cell: 64, ratio: 4, levels: 3,
+ *                passes: [{ fn: 'regionRoute', iterations: 320 }, { fn: 'regionErode', iterations: 384 }] } }
  */
 
 /**
@@ -230,6 +291,10 @@
  * @property {boolean} compiled - its module compiled (it draws).
  * @property {boolean} ready - it has no processes, or theirs have run and
  *   been read back (it draws and its heights answer).
+ * @property {number} regions - regional grids in (made and read back).
+ * @property {number} regionsPending - regions wanted and not yet in.
+ * @property {boolean} groundReady - the regions about the ground under the
+ *   eye are in.
  */
 
 class SceneGraph {

@@ -1,0 +1,192 @@
+// A land's regional grids (scene/world/land_regions.h), read the way the
+// CPU's LandRegionLattice::blendDir / blendAt reads them: every level's
+// regions blended over the next coarser field, the global grid's
+// (ground/land_grid.glsl) at the top. Its layout comes from
+// ground/land_region_config.glsl (LandRegionLattice::glslConfig; empty with
+// no regions, when only the global grid is read); the includer defines
+//
+//   vec4 landRegionLoad(ivec3 t)
+//       texel t.xy (from 0) of layer t.z (slot * LAND_REGION_KEEP + channel)
+//       of the regions' slots;
+//   uvec4 landRegionEntry(uint i)
+//       entry i of the regions' table: x the region's key
+//       (LandRegionKey::packed, 0 an empty entry), y its slot;
+//
+// and ground/land_grid.glsl before it.
+//
+//   vec4 landFieldDir(int c, vec3 d)      channel c at body direction d (round)
+//   vec4 landFieldAt(int c, vec2 x)       channel c at chart point x (flat)
+//   ...From(c, p, minLevel)               only the levels from minLevel up
+
+#ifdef LAND_GRID
+
+// The width (m) of what the reader's texel stands for (land_fill.comp sets
+// it a texel; 0, the default, reads every level whole, as the CPU does).
+float landFieldFootprint = 0.0;
+
+#ifdef LAND_REGIONS
+
+float landRegionCell(int L) { return LAND_REGION_CELL0 * pow(LAND_REGION_RATIO, float(L)); }
+float landRegionStep(int L) { return float(LAND_REGION_CELLS - 2 * LAND_REGION_APRON) * landRegionCell(L); }
+
+uint landRegionKey(int L, int root, int i, int j) {
+    return 1u + (uint(L) | (uint(root) << 3) | (uint(i + 1024) << 6) | (uint(j + 1024) << 17));
+}
+
+// The region's slot (-1: not in).
+int landRegionSlot(uint key) {
+    uint h = (key * 2654435761u) >> (32 - LAND_REGION_TABLE_BITS);
+    for (int k = 0; k < 16; ++k) {
+        uvec4 e = landRegionEntry((h + uint(k)) & uint(LAND_REGION_TABLE - 1));
+        if (e.x == key) return int(e.y);
+        if (e.x == 0u) return -1;
+    }
+    return -1;
+}
+
+// The lattice indices a root's regions take at level L.
+void landRegionRange(int L, out int lo, out int hi) {
+    float step = landRegionStep(L);
+#ifdef LAND_GRID_ROUND
+    float band = float(LAND_REGION_APRON) * landRegionCell(L);
+#else
+    float band = 0.0;
+#endif
+    lo = max(int(floor(-band / step)), -1024);
+    hi = min(int(floor((2.0 * LAND_GRID_HALF + band) / step)), 1023);
+}
+
+// How much of level L a texel of landFieldFootprint (m) reads: all of it
+// while its cells are no wider than the texel, none from twice that (the
+// coarser field is the level's mean there), so a coarse tile holds the
+// regions' detail it can carry, as the module's noise does.
+float landRegionFade(int L) {
+    return landFieldFootprint > 0.0 ? 1.0 - smoothstep(1.0, 2.0, landFieldFootprint / landRegionCell(L)) : 1.0;
+}
+
+// A region's weight along one axis at texel coordinate t.
+float landRegionWeight(float t) {
+    float w = 2.0 * float(LAND_REGION_APRON);
+    return smoothstep(0.0, w, t) * smoothstep(0.0, w, float(LAND_REGION_CELLS) - t);
+}
+
+// Channel c of the region in `slot` at texel coordinate t: bilinear, held
+// inside its texels.
+vec4 landRegionTexel(int slot, int c, vec2 t) {
+    t = clamp(t - 0.5, vec2(0.0), vec2(float(LAND_REGION_CELLS - 1)));
+    ivec2 i = min(ivec2(t), ivec2(LAND_REGION_CELLS - 2));
+    vec2 f = t - vec2(i);
+    int layer = slot * LAND_REGION_KEEP + c;
+    vec4 a = landRegionLoad(ivec3(i, layer)), b = landRegionLoad(ivec3(i + ivec2(1, 0), layer));
+    vec4 d = landRegionLoad(ivec3(i + ivec2(0, 1), layer)), e = landRegionLoad(ivec3(i + ivec2(1, 1), layer));
+    vec4 lo = a + (b - a) * f.x, hi = d + (e - d) * f.x;
+    return lo + (hi - lo) * f.y;
+}
+
+// Level L of one root at chart point x: its regions' weighted values (times
+// wf) added to sum, their weights to cover.
+void landRegionLevel(int c, int L, int root, vec2 x, float wf, inout vec4 sum, inout float cover) {
+    float step = landRegionStep(L), cell = landRegionCell(L);
+    vec2 u = (x + LAND_GRID_HALF) / step;
+    float a = float(LAND_REGION_APRON) / float(LAND_REGION_CELLS - 2 * LAND_REGION_APRON);
+    int lo, hi;
+    landRegionRange(L, lo, hi);
+    ivec2 l = max(ivec2(floor(u - a)), ivec2(lo)), h = min(ivec2(floor(u + a)), ivec2(hi));
+    for (int dj = 0; dj < 2; ++dj) {
+        int j = l.y + dj;
+        if (j > h.y) break;
+        for (int di = 0; di < 2; ++di) {
+            int i = l.x + di;
+            if (i > h.x) break;
+            int slot = landRegionSlot(landRegionKey(L, root, i, j));
+            if (slot < 0) continue;
+            vec2 o = -LAND_GRID_HALF + vec2(i, j) * step - float(LAND_REGION_APRON) * cell;
+            vec2 t = (x - o) / cell;
+            float w = wf * landRegionWeight(t.x) * landRegionWeight(t.y);
+            if (w <= 0.0) continue;
+            sum += w * landRegionTexel(slot, c, t);
+            cover += w;
+        }
+    }
+}
+
+// (Each level is blended over the coarser value, value = coarser (1 - cover)
+// + its sum; worked from the finest level out, the coarser ones are read
+// only while some of the value is still theirs: where the finest regions
+// cover a point, they are all that is read.)
+#ifdef LAND_GRID_ROUND
+vec4 landFieldDirFrom(int c, vec3 d, int minLevel) {
+    if (c >= LAND_REGION_KEEP) return landGridAtDir(c, d);
+    // The face the point is on; the others only within a band of its edge.
+    int f0 = landGridFace(d);
+    vec2 x0 = landGridChart(d, f0);
+    float m0 = max(abs(x0.x), abs(x0.y));
+    vec4 acc = vec4(0.0);
+    float rest = 1.0;   // the share still the coarser levels'
+    for (int L = minLevel; L < LAND_REGION_LEVELS && rest > 0.0; ++L) {
+        float fade = landRegionFade(L);
+        if (fade <= 0.0) continue;
+        float band = float(LAND_REGION_APRON) * landRegionCell(L);
+        vec4 sum = vec4(0.0);
+        float cover = 0.0;
+        // The faces about the point, weighed by how far inside each it lies
+        // (its own alone away from its edges). (One loop, one call: the
+        // fill inlines this at every read.)
+        float wsum = 0.0;
+        int first = m0 < LAND_GRID_HALF - band ? 6 : 0;
+        for (int k = first; k < 7; ++k) {
+            int f = k == 6 ? f0 : k;
+            if (k < 6 && (f == f0 || dot(d, kLandFaceN[f]) < 0.2)) continue;
+            vec2 x = f == f0 ? x0 : landGridChart(d, f);
+            float m = max(abs(x.x), abs(x.y));
+            float wf = first == 6 ? 1.0 : 1.0 - smoothstep(LAND_GRID_HALF - band, LAND_GRID_HALF + band, m);
+            if (wf <= 0.0) continue;
+            vec4 s = vec4(0.0);
+            float cv = 0.0;
+            landRegionLevel(c, L, f, x, wf, s, cv);
+            sum += s;
+            cover += cv;
+            wsum += wf;
+        }
+        if (wsum > 0.0) {
+            acc += rest * fade * sum / wsum;
+            rest *= 1.0 - cover * fade / wsum;
+        }
+    }
+    if (rest > 0.0) acc += rest * landGridAt(c, f0, x0);
+    return acc;
+}
+vec4 landFieldDir(int c, vec3 d) { return landFieldDirFrom(c, d, 0); }
+#else
+vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
+    if (c >= LAND_REGION_KEEP) return landGridAt(c, 0, x);
+    vec4 acc = vec4(0.0);
+    float rest = 1.0;
+    for (int L = minLevel; L < LAND_REGION_LEVELS && rest > 0.0; ++L) {
+        float fade = landRegionFade(L);
+        if (fade <= 0.0) continue;
+        vec4 sum = vec4(0.0);
+        float cover = 0.0;
+        landRegionLevel(c, L, 0, x, 1.0, sum, cover);
+        acc += rest * fade * sum;
+        rest *= 1.0 - cover * fade;
+    }
+    if (rest > 0.0) acc += rest * landGridAt(c, 0, x);
+    return acc;
+}
+vec4 landFieldAt(int c, vec2 x) { return landFieldAtFrom(c, x, 0); }
+#endif
+
+#else   // no regions: the global grid alone
+
+#ifdef LAND_GRID_ROUND
+vec4 landFieldDirFrom(int c, vec3 d, int minLevel) { return landGridAtDir(c, d); }
+vec4 landFieldDir(int c, vec3 d) { return landGridAtDir(c, d); }
+#else
+vec4 landFieldAtFrom(int c, vec2 x, int minLevel) { return landGridAt(c, 0, x); }
+vec4 landFieldAt(int c, vec2 x) { return landGridAt(c, 0, x); }
+#endif
+
+#endif
+
+#endif

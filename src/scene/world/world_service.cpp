@@ -67,14 +67,35 @@ void WorldService::schedule() {
         if (a.producer != b.producer) return a.producer < b.producer;
         return a.key < b.key;
     });
+    // Each kind's first (after the required) ahead of the rest.
+    {
+        std::vector<bool> led(kinds_.size(), false);
+        std::vector<WorldJob> lead, rest;
+        lead.reserve(offers_.size());
+        for (const WorldJob& j : offers_) {
+            if (j.required) {
+                lead.push_back(j);
+                continue;
+            }
+            const size_t k = static_cast<size_t>(j.kind);
+            (led[k] ? rest : lead).push_back(j);
+            led[k] = true;
+        }
+        lead.insert(lead.end(), rest.begin(), rest.end());
+        offers_.swap(lead);
+    }
     // What is drawn at once (after the carry), what is drawn next frame, and
     // what the jobs drawn at once that the carry kept out hold back for it.
     float now = 0.0f, next = 0.0f, held = 0.0f;
+    std::vector<bool> offered(kinds_.size(), false);
     for (const WorldJob& j : offers_) {
-        const Kind& kind = kinds_[static_cast<size_t>(j.kind)];
+        Kind& kind = kinds_[static_cast<size_t>(j.kind)];
         const float c = kind.cost * static_cast<float>(std::max(j.units, 0.0));
         const bool fits = kind.desc.nextFrame ? now + held + next + c <= budget_ : carried_ + now + held + c <= budget_;
-        if (!j.required && !fits) {
+        const bool starved =
+            !offered[static_cast<size_t>(j.kind)] && kind.starved >= config_.starveFrames && c <= 4.0f * budget_;
+        offered[static_cast<size_t>(j.kind)] = true;
+        if (!j.required && !fits && !starved) {
             if (!kind.desc.nextFrame && now + held + c <= budget_) held += c;
             ++stats_.queued;
             stats_.worstError = std::max(stats_.worstError, j.error);
@@ -84,6 +105,8 @@ void WorldService::schedule() {
         granted_[static_cast<size_t>(j.kind)].push_back(j);
         ++stats_.granted;
     }
+    for (size_t k = 0; k < kinds_.size(); ++k)
+        kinds_[k].starved = !offered[k] || !granted_[k].empty() ? 0 : kinds_[k].starved + 1;
     if (settle_ > 0) {
         quiet_ = stats_.worstError <= config_.settleError ? quiet_ + 1 : 0;
         if (quiet_ >= config_.settleQuiet) settle_ = 0;

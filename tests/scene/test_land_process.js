@@ -222,6 +222,51 @@ void procInit(inout vec4 v[PROC_CHANNELS]) {
            'processes that do not compile: never ready');
     land.setLand({ processes: null });
     assert(land.landStats().ready && land.landHeight(0, 0) === 0, 'no processes: ready at once, the tree alone');
+
+    // --- regional grids ------------------------------------------------------------
+    // The global grid flat at 5 m; two levels of regions about the eye (4 m
+    // and 16 m cells), each the coarser field plus its own band, a pass
+    // setting each region's edge cells to the coarser field's (its
+    // boundary taken from it).
+    land.setLand({ height: N('Constant', { Value: 0 }), surface: RED, processes: {
+        resolution: CELLS,
+        regions: { init: 'rinit', cells: 64, apron: 8, cell: 4, ratio: 4, levels: 2, reach: 1, keep: 1,
+                   passes: [{ fn: 'redge', iterations: 1 }] },
+        source: `
+void procInit(inout vec4 v[PROC_CHANNELS]) { v[0].x = 5.0; }
+float band(int level, vec3 p) {
+    return level == 0 ? 6.0 * sin(p.x / 37.0) * cos(p.z / 23.0) : 3.0 * sin(p.x / 150.0 + p.z / 210.0);
+}
+void rinit(inout vec4 v[PROC_CHANNELS]) {
+    v[0] = vec4(procCoarse(0).x + band(procLevel(), procPoint()), 1.0, 0.0, 0.0);
+}
+void redge(inout vec4 v[PROC_CHANNELS]) { if (procBorder() == 0) v[0].x = procCoarse(0).x; }
+` } });
+    assert(untilReady(land), `regions: ready (${JSON.stringify(land.landStats())})`);
+    look(0, 40, 0);
+    for (let i = 0; i < 400 && (!land.landStats().regions || land.landStats().regionsPending > 0); i++) frames(1);
+    frames(10);
+    const rs = land.landStats();
+    assert(rs.regions >= 9 && rs.regionsPending === 0, `regions: the ones about the eye are in (${JSON.stringify(rs)})`);
+    // The CPU's heights are the bands over the global grid's, under the eye.
+    const bands = (x, z) => 5 + 6 * Math.sin(x / 37) * Math.cos(z / 23) + 3 * Math.sin(x / 150 + z / 210);
+    let rworst = 0;
+    for (const [x, z] of [[0, 0], [31, -17], [-60, 44], [45, 50]])
+        rworst = Math.max(rworst, Math.abs(land.landHeight(x, z) - bands(x, z)));
+    assert(rworst < 0.25, `regions: the CPU's heights are the levels' bands, to their bilinear error (worst ${rworst.toFixed(3)} m)`);
+    // No step anywhere out from the eye, through the regions' aprons and
+    // their edges into the global grid's field.
+    let rstep = 0, prevH = null;
+    for (let x = 0; x <= 1000; x += 0.5) {
+        const h = land.landHeight(x, 0.37 * x);
+        if (prevH !== null) rstep = Math.max(rstep, Math.abs(h - prevH));
+        prevH = h;
+    }
+    assert(rstep < 0.3, `regions: no step out of them, half a metre at a time (largest ${rstep.toFixed(3)} m)`);
+    // The GPU stands on the CPU's heights over them (within 2 m).
+    standsOn(land, 0, 0, 'regions: under the eye');
+    standsOn(land, 31, -17, 'regions: a level 0 band');
+    standsOn(land, -120, -35, 'regions: further out');
     land.visible = false;
 
     // --- a round body: the six faces ----------------------------------------------

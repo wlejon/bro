@@ -61,6 +61,11 @@
 #include "land_process_module.glsl.src.h"
 #include "land_process_dispatch.glsl.src.h"
 #include "land_process.comp.src.h"
+#include "land_regions.glsl.src.h"
+#include "land_region_config.glsl.src.h"
+#include "land_region_layer.glsl.src.h"
+#include "land_region_dispatch.glsl.src.h"
+#include "land_region.comp.src.h"
 #include "clouds_layout.h.src.h"
 #include "scene_cloud_layer.glsl.src.h"
 #include "cloud_module.glsl.src.h"
@@ -189,6 +194,10 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_process_layer.glsl", kVkLandProcessLayerSrc},
         {"ground/land_process_module.glsl", kVkLandProcessModuleSrc},
         {"ground/land_process_dispatch.glsl", kVkLandProcessDispatchSrc},
+        {"ground/land_regions.glsl", kVkLandRegionsSrc},
+        {"ground/land_region_config.glsl", kVkLandRegionConfigSrc},
+        {"ground/land_region_layer.glsl", kVkLandRegionLayerSrc},
+        {"ground/land_region_dispatch.glsl", kVkLandRegionDispatchSrc},
         {"sky/clouds_layout.h", kVkCloudsLayoutSrc},
         {"sky/scene_cloud_layer.glsl", kVkSceneCloudLayerSrc},
         {"sky/cloud_module.glsl", kVkCloudModuleSrc},
@@ -207,6 +216,7 @@ const char* embeddedInclude(const std::string& name) {
         {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
         {"ground/land_fill.comp", kVkLandFillCompSrc},
         {"ground/land_process.comp", kVkLandProcessCompSrc},
+        {"ground/land_region.comp", kVkLandRegionCompSrc},
         {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
         {"sky/clouds_cache.comp", kVkCloudsCacheCompSrc},
         {"sky/clouds_globe.comp", kVkCloudsGlobeCompSrc},

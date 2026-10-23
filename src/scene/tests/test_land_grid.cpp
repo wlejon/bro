@@ -137,11 +137,135 @@ void round() {
     check(g.glslConfig(1).find("LAND_GRID_ROUND") != std::string::npos, "round: its shaders' layout");
 }
 
+// --- regional grids (scene/world/land_regions.h) ---------------------------
+
+// Every region of `levels` levels on every root of `L`, each texel channel 0
+// `f(dir or chart point, level)` at its centre.
+template <class F>
+LandRegionSet everyRegion(const LandRegionLattice& L, const Body& body, F f) {
+    LandRegionSet set;
+    const int n = L.config.cells;
+    for (int level = 0; level < L.config.levels; ++level) {
+        int lo, hi;
+        L.range(level, lo, hi);
+        const double cell = L.config.cellOf(level);
+        for (int root = 0; root < L.roots(); ++root)
+            for (int j = lo; j <= hi; ++j)
+                for (int i = lo; i <= hi; ++i) {
+                    auto r = std::make_shared<LandRegion>();
+                    r->key = {level, root, i, j};
+                    r->texels.assign(static_cast<size_t>(n) * n * 4, 0.0f);
+                    const double ox = L.originX(r->key), oz = L.originZ(r->key);
+                    for (int b = 0; b < n; ++b)
+                        for (int a = 0; a < n; ++a) {
+                            const double x = ox + (a + 0.5) * cell, z = oz + (b + 0.5) * cell;
+                            double d[3] = {x, 0.0, z};
+                            if (L.round()) dirOf(body, {root, x, z}, d);
+                            r->texels[(static_cast<size_t>(b) * n + a) * 4] = static_cast<float>(f(d, level));
+                        }
+                    set[r->key.packed()] = std::move(r);
+                }
+    }
+    return set;
+}
+
+void regions() {
+    // Flat: one level's regions, each a constant, cover the root whole (their
+    // weights a partition of one), so the global grid's value is not read
+    // inside them, and the blend is continuous across the regions' aprons.
+    LandRegionLattice F;
+    F.config.init = "init";
+    F.config.cells = 64;
+    F.config.apron = 8;
+    F.config.cell = 10.0;
+    F.config.levels = 1;
+    F.half = 1000.0;
+    Body flatBody;
+    const LandRegionSet constant = everyRegion(F, flatBody, [](const double*, int) { return 7.0; });
+    double worst = 0.0;
+    // (Inside the root less an apron: at a flat root's own edge the
+    // outermost regions fade into the global grid.)
+    for (double x = -915.0; x < 915.0; x += 7.3)
+        for (double z = -915.0; z < 915.0; z += 11.1) {
+            float c[4] = {3.0f, 0.0f, 0.0f, 0.0f};
+            F.blendAt(constant, x, z, c);
+            worst = std::max(worst, std::fabs(c[0] - 7.0));
+        }
+    check(worst < 1e-4, "flat regions: their weights sum to one over the root (worst " + std::to_string(worst) + ")");
+    // A smooth field sampled into the regions comes back to within its
+    // bilinear error, with no step where the regions overlap.
+    const auto smooth = [](const double* p, int) { return 40.0 * std::sin(p[0] / 120.0) * std::cos(p[2] / 170.0); };
+    const LandRegionSet field = everyRegion(F, flatBody, smooth);
+    double err = 0.0, step = 0.0;
+    for (double x = -900.0; x < 900.0; x += 3.7) {
+        const double z = 0.37 * x;
+        float a[4] = {0}, b[4] = {0};
+        F.blendAt(field, x, z, a);
+        F.blendAt(field, x + 1e-3, z, b);
+        const double p[3] = {x, 0.0, z};
+        err = std::max(err, std::fabs(a[0] - smooth(p, 0)));
+        step = std::max(step, static_cast<double>(std::fabs(a[0] - b[0])));
+    }
+    check(err < 0.1, "flat regions: a smooth field to within its bilinear error (" + std::to_string(err) + " m)");
+    check(step < 0.01, "flat regions: no step across their aprons (" + std::to_string(step) + " m)");
+    // With none in, the coarser field (the global grid's) is read as it is.
+    float c[4] = {3.0f, 1.0f, 2.0f, 4.0f};
+    F.blendAt({}, 10.0, 20.0, c);
+    check(c[0] == 3.0f, "flat regions: none in, the global grid's");
+
+    // Round: a small body's six faces at two levels, the field a function of
+    // the direction: read back across faces' edges and corners with no step,
+    // the finer level over the coarser one.
+    Body body;
+    body.radius = 20000.0;
+    LandRegionLattice R;
+    R.config.init = "init";
+    R.config.cells = 64;
+    R.config.apron = 8;
+    R.config.cell = 25.0;
+    R.config.ratio = 4;
+    R.config.levels = 2;
+    R.half = faceHalf(body);
+    R.radius = body.radius;
+    const auto dirField = [&](const double* d, int) { return 300.0 * d[0] * d[1] + 200.0 * d[2] * d[2]; };
+    const LandRegionSet roundSet = everyRegion(R, body, dirField);
+    double rerr = 0.0, rstep = 0.0;
+    for (int k = 0; k < 4000; ++k) {
+        const double t = k * 0.0123, s = k * 0.00731;
+        double d[3] = {std::cos(t) * std::cos(s), std::sin(s), std::sin(t) * std::cos(s)};
+        unit(d);
+        float a[4] = {-1e6f, 0, 0, 0};
+        R.blendDir(roundSet, d, a);
+        rerr = std::max(rerr, std::fabs(a[0] - dirField(d, 0)));
+        double e[3] = {d[0] + 2e-9, d[1] - 1e-9, d[2] + 1e-9};
+        unit(e);
+        float b[4] = {-1e6f, 0, 0, 0};
+        R.blendDir(roundSet, e, b);
+        rstep = std::max(rstep, static_cast<double>(std::fabs(a[0] - b[0])));
+    }
+    check(rerr < 0.05, "round regions: the field over every face, edge and corner (" + std::to_string(rerr) + " m)");
+    check(rstep < 0.01, "round regions: no step anywhere (" + std::to_string(rstep) + " m)");
+    // The finer level is what is read where it is in: level 0 a different
+    // value than level 1 reads level 0's.
+    const LandRegionSet byLevel = everyRegion(R, body, [](const double*, int level) { return level == 0 ? 5.0 : 9.0; });
+    double lworst = 0.0;
+    for (int k = 0; k < 500; ++k) {
+        double d[3] = {std::cos(k * 0.1), 0.3 * std::sin(k * 0.37), std::sin(k * 0.1)};
+        unit(d);
+        float a[4] = {1.0f, 0, 0, 0};
+        R.blendDir(byLevel, d, a);
+        lworst = std::max(lworst, std::fabs(a[0] - 5.0));
+    }
+    check(lworst < 1e-4, "round regions: the finest level in covers the coarser (" + std::to_string(lworst) + ")");
+    check(R.glslConfig().find("LAND_REGION") != std::string::npos, "round regions: their shaders' layout");
+}
+
 }  // namespace
 
 int main() {
     flat();
     round();
+    regions();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

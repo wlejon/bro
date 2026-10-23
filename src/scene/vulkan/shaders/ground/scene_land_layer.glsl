@@ -51,20 +51,22 @@ vec2 landOx, landOy, landOz;
 // The land's processes' grid (ground/land_process_layer.glsl): channel c
 // (a vec4) at world (x, z) = p on a flat body, at the datum's point p
 // (relative to the fill's origin, as landHeight's) on a round one; zero
-// with no processes. Channel 0 is the land's height over its tree's: a
-// module's landHeight is landGrid(0, p).x plus landGrid(0, p).y times its
-// tree (its tree alone with no processes), as the CPU's heights are
-// (scene/world/land_grid.h's LandBase).
+// with no processes. Where its regional grids are in (scene/world/
+// land_regions.h), their channel blended over the global grid's
+// (ground/land_regions.glsl). Channel 0 is the land's height over its
+// tree's: a module's landHeight is landGrid(0, p).x plus landGrid(0, p).y
+// times its tree (its tree alone with no processes), as the CPU's heights
+// are (scene/world/land_grid.h's LandBase).
 vec4 landGrid(int c, vec2 p) {
 #if defined(LAND_GRID) && !defined(LAND_GRID_ROUND)
-    return landGridAt(c, 0, p);
+    return landFieldAt(c, p);
 #else
     return vec4(0.0);
 #endif
 }
 vec4 landGrid(int c, vec3 p) {
 #if defined(LAND_GRID_ROUND) && defined(LAND_ROUND)
-    return landGridAtDir(c, normalize(vec3(landOx.x, landOy.x, landOz.x) + p));
+    return landFieldDir(c, normalize(vec3(landOx.x, landOy.x, landOz.x) + p));
 #else
     return vec4(0.0);
 #endif
