@@ -152,6 +152,13 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_agent_view_test tests/test_agent_view.cpp agent_view.cpp)
     target_include_directories(bro_agent_view_test PRIVATE ${bro_SOURCE_DIR}/src)
     target_compile_features(bro_agent_view_test PRIVATE cxx_std_20)
+
+    # State-space model checker for Vulkan ticket/frame deferral & DOM/Layout dirty bits (#79).
+    add_executable(bro_state_model_test ${bro_SOURCE_DIR}/tests/unit/test_state_machines.cpp)
+    target_include_directories(bro_state_model_test PRIVATE ${bro_SOURCE_DIR}/src)
+    target_link_libraries(bro_state_model_test PRIVATE
+        bro_dom bro_layout bro_render bro_platform bro_util htmlayout gumbo skia)
+    target_compile_features(bro_state_model_test PRIVATE cxx_std_20)
 endif()
 
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features

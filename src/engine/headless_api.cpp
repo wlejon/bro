@@ -111,6 +111,7 @@ void Engine::flush() {
 
         document_->clearDirty();
         document_->markPaintDirty();
+        document_->noteLayoutCurrent();
 
         // Deferred scroll-to-bottom, now that layout is fresh — the same pass
         // the windowed loop runs after every layout drain

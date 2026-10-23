@@ -89,6 +89,7 @@ void Engine::pumpCompileFrame(double progress) {
         }
         document_->clearDirty();
         document_->markPaintDirty();
+        document_->noteLayoutCurrent();
     }
 
     const int w = viewportWidth_;
