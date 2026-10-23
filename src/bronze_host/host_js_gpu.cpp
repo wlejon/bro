@@ -553,6 +553,12 @@ void attachJsGpuKernelFunctions(ObjectBuilder& b) {
     b.def("compileGradShader", 2, [](Value, std::span<const Value> a) -> Value {
         return compileJsAutodiffValue(a);
     });
+    b.def("solveProcedural", 3, [](Value, std::span<const Value> a) -> Value {
+        return solveProceduralValue(a, false);
+    });
+    b.def("solveSDF", 3, [](Value, std::span<const Value> a) -> Value {
+        return solveProceduralValue(a, true);
+    });
     b.def("vulkanComputeAvailable", 0, [](Value, std::span<const Value>) -> Value {
         return ev::fromBool(brass::gpu::vulkan_available());
     });

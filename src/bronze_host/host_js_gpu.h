@@ -26,6 +26,10 @@ Value compileJsKernelValue(std::span<const Value> args, bool defaultShaderStage 
 /// `bro.scene.compileGradShader`, #131).
 Value compileJsAutodiffValue(std::span<const Value> args);
 
+/// Inverse procedural generation & SDF parameter solver (`bro.scene.solveProcedural`,
+/// `bro.gpu.solveProcedural`, `bro.mesh.solveSDF`, #146).
+Value solveProceduralValue(std::span<const Value> args, bool defaultSdfMode = false);
+
 /// Attach `compileKernel`, `compileShader`, `differentiate`, and `compileGradShader`
 /// onto `bro.gpu` or `bro.scene`.
 void attachJsGpuKernelFunctions(ObjectBuilder& b);

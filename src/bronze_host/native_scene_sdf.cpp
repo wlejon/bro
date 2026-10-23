@@ -621,6 +621,7 @@ void installSdfGraphGpuExtensions() {
         if (ev::isObject(meshVal)) {
             ObjectBuilder meshBuilder(meshVal);
             attachSdfFunctionsToObject(meshBuilder);
+            attachJsGpuKernelFunctions(meshBuilder);
         }
     }
 }

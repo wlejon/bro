@@ -3,6 +3,7 @@ add_library(bro_physics STATIC
     physics_decomposition.cpp
     physics_penetration.cpp
     physics_world.cpp
+    trajectory_solver.cpp
 )
 
 target_include_directories(bro_physics PUBLIC ${bro_SOURCE_DIR}/src)

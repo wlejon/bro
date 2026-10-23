@@ -1,6 +1,7 @@
 #include "bronze_host/native_physics_internal.h"
 #include "bronze_host/host_js_gpu.h"
 #include "physics/force_field_jit.h"
+#include "physics/trajectory_solver.h"
 
 #include <atomic>
 #include <cmath>
@@ -71,6 +72,10 @@ void parseCoordAndTime(
     if (args.size() >= 3 && args[2].isNumber()) *outZ = static_cast<float>(args[2].asNumber());
     if (args.size() >= 4 && args[3].isNumber()) *outT = static_cast<float>(args[3].asNumber());
 }
+
+Value solveTrajectoryJsImpl(
+    std::span<const Value> args,
+    std::shared_ptr<physics::CompiledForceField> boundField = nullptr);
 
 Value buildForceFieldJsObject(std::shared_ptr<physics::CompiledForceField> field) {
     const uint32_t fieldId = s_nextForceFieldId.fetch_add(1);
@@ -298,6 +303,210 @@ Value buildForceFieldJsObject(std::shared_ptr<physics::CompiledForceField> field
         return res.get();
     });
 
+    out.def("solveTrajectory", 1, [](Value self, std::span<const Value> a) -> Value {
+        auto f = lookupForceField(self);
+        return solveTrajectoryJsImpl(a, f);
+    });
+
+    return out.get();
+}
+
+bool parseVec3Prop(Value obj, const char* key, float outVec[3]) {
+    Value v = ev::getProperty(obj, key);
+    if (ev::isUndefined(v) || ev::isNull(v)) return false;
+    if (hostIsArray(v) || ev::isTypedArray(v)) {
+        ev::Persistent arr(v);
+        Value lenV = ev::getProperty(arr.get(), "length");
+        const uint32_t len = lenV.isNumber() ? static_cast<uint32_t>(lenV.asNumber()) : 0;
+        for (uint32_t i = 0; i < 3; ++i) {
+            outVec[i] = 0.0f;
+            if (i < len) {
+                Value e = ev::getElement(arr.get(), i);
+                if (e.isNumber()) outVec[i] = static_cast<float>(e.asNumber());
+            }
+        }
+        return true;
+    }
+    if (ev::isObject(v)) {
+        ev::Persistent o(v);
+        outVec[0] = static_cast<float>(getPropNumber(o.get(), "x", 0.0));
+        outVec[1] = static_cast<float>(getPropNumber(o.get(), "y", 0.0));
+        outVec[2] = static_cast<float>(getPropNumber(o.get(), "z", 0.0));
+        return true;
+    }
+    return false;
+}
+
+Value solveTrajectoryJsImpl(std::span<const Value> args, std::shared_ptr<physics::CompiledForceField> boundField) {
+    if (args.empty() || !ev::isObject(args[0])) return ev::null();
+    ev::Persistent cfgObj(args[0]);
+
+    physics::TrajectorySolveConfig cfg;
+    std::shared_ptr<physics::CompiledForceField> ownedField = boundField;
+
+    auto tryResolveField = [&](const char* propName, bool potentialDefault) {
+        if (ownedField) return;
+        Value fv = ev::getProperty(cfgObj.get(), propName);
+        if (ev::isUndefined(fv) || ev::isNull(fv)) return;
+        if (ev::isObject(fv)) {
+            if (auto f = lookupForceField(fv)) {
+                ownedField = f;
+                return;
+            }
+        }
+        std::string rawSrc, infName;
+        if (extractJsFunctionOrSource(fv, &rawSrc, &infName) && !rawSrc.empty()) {
+            physics::ForceFieldCompileOptions fOpts;
+            fOpts.isPotential = potentialDefault;
+            fOpts.kernelName = infName;
+            ownedField = std::make_shared<physics::CompiledForceField>(
+                physics::CompiledForceField::compileForceField(rawSrc, fOpts));
+        }
+    };
+
+    tryResolveField("field", true);
+    tryResolveField("potentialField", true);
+    tryResolveField("forceField", false);
+    tryResolveField("potentialFn", true);
+    tryResolveField("potential", true);
+    tryResolveField("forceFn", false);
+
+    if (ownedField && ownedField->ok()) {
+        cfg.field = ownedField.get();
+    }
+
+    if (!parseVec3Prop(cfgObj.get(), "startPos", cfg.startPos)) {
+        if (!parseVec3Prop(cfgObj.get(), "pos0", cfg.startPos)) {
+            parseVec3Prop(cfgObj.get(), "start", cfg.startPos);
+        }
+    }
+    if (!parseVec3Prop(cfgObj.get(), "targetPos", cfg.targetPos)) {
+        if (!parseVec3Prop(cfgObj.get(), "target", cfg.targetPos)) {
+            parseVec3Prop(cfgObj.get(), "goal", cfg.targetPos);
+        }
+    }
+    if (parseVec3Prop(cfgObj.get(), "targetVelocity", cfg.targetVelocity) ||
+        parseVec3Prop(cfgObj.get(), "targetVel", cfg.targetVelocity)) {
+        cfg.hasTargetVelocity = true;
+    }
+    if (parseVec3Prop(cfgObj.get(), "initialVelocityGuess", cfg.initialVelocityGuess) ||
+        parseVec3Prop(cfgObj.get(), "initialVelocity", cfg.initialVelocityGuess) ||
+        parseVec3Prop(cfgObj.get(), "v0", cfg.initialVelocityGuess) ||
+        parseVec3Prop(cfgObj.get(), "vel0", cfg.initialVelocityGuess)) {
+        cfg.hasInitialVelocityGuess = true;
+    }
+    if (parseVec3Prop(cfgObj.get(), "gravity", cfg.gravity)) {
+        cfg.hasGravity = true;
+    }
+    if (!parseVec3Prop(cfgObj.get(), "attractorPos", cfg.attractorPos)) {
+        parseVec3Prop(cfgObj.get(), "harmonicCenter", cfg.attractorPos);
+    }
+
+    cfg.springStiffness = static_cast<float>(getPropNumber(cfgObj.get(), "springStiffness",
+                          getPropNumber(cfgObj.get(), "harmonicK",
+                          getPropNumber(cfgObj.get(), "stiffness", 0.0))));
+    cfg.steps = static_cast<uint32_t>(std::max(1.0, getPropNumber(cfgObj.get(), "steps", 100.0)));
+    const double flightTime = getPropNumber(cfgObj.get(), "flightTime",
+                              getPropNumber(cfgObj.get(), "duration", 0.0));
+    Value dtProp = ev::getProperty(cfgObj.get(), "dt");
+    if (dtProp.isNumber() && dtProp.asNumber() > 0.0) {
+        cfg.dt = static_cast<float>(dtProp.asNumber());
+    } else if (flightTime > 0.0) {
+        cfg.dt = static_cast<float>(flightTime / static_cast<double>(cfg.steps));
+    } else {
+        cfg.dt = 0.01f;
+    }
+    cfg.mass = static_cast<float>(std::max(1e-4, getPropNumber(cfgObj.get(), "mass", 1.0)));
+    cfg.damping = static_cast<float>(std::max(0.0, getPropNumber(cfgObj.get(), "damping",
+                  getPropNumber(cfgObj.get(), "drag", 0.0))));
+    cfg.tolerance = static_cast<float>(std::max(1e-7, getPropNumber(cfgObj.get(), "tolerance",
+                    getPropNumber(cfgObj.get(), "tol", 1e-4))));
+    cfg.maxIterations = static_cast<uint32_t>(std::max(1.0, getPropNumber(cfgObj.get(), "maxIterations", 40.0)));
+
+    Value obsVal = ev::getProperty(cfgObj.get(), "obstacles");
+    if (hostIsArray(obsVal)) {
+        ev::Persistent obsArr(obsVal);
+        Value lenV = ev::getProperty(obsArr.get(), "length");
+        const uint32_t len = lenV.isNumber() ? static_cast<uint32_t>(lenV.asNumber()) : 0;
+        for (uint32_t i = 0; i < len; ++i) {
+            Value item = ev::getElement(obsArr.get(), i);
+            if (!ev::isObject(item)) continue;
+            ev::Persistent o(item);
+            physics::TrajectoryObstacle obs;
+            float pos[3] = {0.0f, 0.0f, 0.0f};
+            if (parseVec3Prop(o.get(), "pos", pos) || parseVec3Prop(o.get(), "position", pos) ||
+                parseVec3Prop(o.get(), "center", pos)) {
+                obs.x = pos[0]; obs.y = pos[1]; obs.z = pos[2];
+            } else {
+                obs.x = static_cast<float>(getPropNumber(o.get(), "x", 0.0));
+                obs.y = static_cast<float>(getPropNumber(o.get(), "y", 0.0));
+                obs.z = static_cast<float>(getPropNumber(o.get(), "z", 0.0));
+            }
+            obs.radius = static_cast<float>(std::max(1e-4, getPropNumber(o.get(), "radius", 0.5)));
+            obs.repulsionWeight = static_cast<float>(getPropNumber(o.get(), "repulsionWeight",
+                                  getPropNumber(o.get(), "weight", 25.0)));
+            obs.margin = static_cast<float>(getPropNumber(o.get(), "margin", std::max(0.6 * obs.radius, 0.5)));
+            cfg.obstacles.push_back(obs);
+        }
+    }
+
+    const physics::TrajectorySolveResult solved = physics::solveTrajectory(cfg);
+
+    double initVel[3] = {
+        static_cast<double>(solved.initialVelocity[0]),
+        static_cast<double>(solved.initialVelocity[1]),
+        static_cast<double>(solved.initialVelocity[2])
+    };
+    double finalPos[3] = {
+        static_cast<double>(solved.finalPosition[0]),
+        static_cast<double>(solved.finalPosition[1]),
+        static_cast<double>(solved.finalPosition[2])
+    };
+    double finalVel[3] = {
+        static_cast<double>(solved.finalVelocity[0]),
+        static_cast<double>(solved.finalVelocity[1]),
+        static_cast<double>(solved.finalVelocity[2])
+    };
+    double jac[9];
+    for (int i = 0; i < 9; ++i) jac[i] = static_cast<double>(solved.jacobian[i]);
+
+    const size_t sampleCount = solved.trajectory.size() / 3;
+    const double dtVal = static_cast<double>(cfg.dt);
+    ev::Persistent trajArr(hostArrayOf(sampleCount, [&](size_t s) -> Value {
+        double p[3] = {
+            static_cast<double>(solved.trajectory[s * 3 + 0]),
+            static_cast<double>(solved.trajectory[s * 3 + 1]),
+            static_cast<double>(solved.trajectory[s * 3 + 2])
+        };
+        ObjectBuilder sampleObj;
+        sampleObj.set("t", ev::fromDouble(static_cast<double>(s) * dtVal));
+        sampleObj.set("pos", hostNumberArray(p, 3));
+        sampleObj.set("x", ev::fromDouble(p[0]));
+        sampleObj.set("y", ev::fromDouble(p[1]));
+        sampleObj.set("z", ev::fromDouble(p[2]));
+        return sampleObj.get();
+    }));
+
+    ObjectBuilder out;
+    out.set("ok", ev::fromBool(true));
+    out.set("converged", ev::fromBool(solved.converged));
+    out.set("initialVelocity", hostNumberArray(initVel, 3));
+    out.set("finalPosition", hostNumberArray(finalPos, 3));
+    out.set("finalVelocity", hostNumberArray(finalVel, 3));
+    out.set("positionError", ev::fromDouble(static_cast<double>(solved.positionError)));
+    out.set("missDistance", ev::fromDouble(static_cast<double>(solved.positionError)));
+    out.set("iterations", ev::fromDouble(static_cast<double>(solved.iterations)));
+    out.set("minObstacleClearance", ev::fromDouble(static_cast<double>(solved.minObstacleClearance)));
+    out.set("obstacleFree", ev::fromBool(cfg.obstacles.empty() || solved.minObstacleClearance > 0.0f));
+    out.set("initialEnergy", ev::fromDouble(solved.initialEnergy));
+    out.set("finalEnergy", ev::fromDouble(solved.finalEnergy));
+    out.set("energyDrift", ev::fromDouble(solved.energyDrift));
+    out.set("maxEnergyDrift", ev::fromDouble(solved.energyDrift));
+    out.set("energyConserved", ev::fromBool(solved.energyConserved));
+    out.set("energyInvariantVerified", ev::fromBool(solved.energyConserved));
+    out.set("jacobian", hostNumberArray(jac, 9));
+    out.set("trajectory", trajArr.get());
+    out.set("trajectoryFlat", makeFloat32Array(solved.trajectory));
     return out.get();
 }
 
@@ -360,6 +569,9 @@ void attachForceFieldFunctions(ObjectBuilder& b) {
     });
     b.def("compilePotentialField", 2, [](Value, std::span<const Value> a) -> Value {
         return compileForceFieldJsImpl(a, true);
+    });
+    b.def("solveTrajectory", 1, [](Value, std::span<const Value> a) -> Value {
+        return solveTrajectoryJsImpl(a, nullptr);
     });
 }
 
