@@ -32,10 +32,12 @@ vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 // Whether the forms of base at most `base` may hold cloud read over a
 // footprint of at most `foot` (the skin's most out, the surface's blur at
-// its widest or none: the field is linear in the blur).
+// its widest or none: the field is linear in the blur). (The march's
+// footprint at a level of the cache is at most its cell, and the skin's
+// as much as CL_ANISO_MOST, 4, wider where the view is aslant.)
 bool cloudMayHold(float base, float foot) {
     if (base <= 0.0) return false;
-    float w = cloudBlur(foot);
+    float w = cloudBlurMost(4.0 * foot);
     float out0 = base + 0.55 * CLOUD_SKIN - 0.5;
     float outW = base + 0.55 * CLOUD_SKIN * (1.0 - w) - 0.5 + 0.5 * w;
     return max(out0, outW) > 0.0;

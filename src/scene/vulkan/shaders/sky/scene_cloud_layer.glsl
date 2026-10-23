@@ -188,22 +188,44 @@ vec3 cloudDrift(vec3 p) { return p - clouds.wind.xyz * clouds.shell.w; }
 // The detail's strength at `footprint` (none where it is finer than that).
 float cloudDetailAt(float footprint) {
     float D = clouds.forms.z;
-    return 1.0 - smoothstep(D / 80.0, D / 10.0, footprint);
+    return 1.0 - smoothstep(D / 64.0, D / 24.0, footprint);
 }
 // The base a footprint of `footprint` metres spans across a cloud's edge
 // (how wide the surface's blur is, of the base; all of it from a footprint
 // as wide as the edge).
 float cloudBlur(float footprint) { return clamp(footprint / clouds.forms.w, 2e-3, 1.0); }
+// And more where the skin varies within the footprint (the billows' noise
+// `n` read over it: its spread, n.w less n.x squared), so a skin finer than
+// a pixel is its mean there, a soft edge, never grain: as much as the skin
+// moves the surface over that spread, at most CLOUD_SPREAD_MOST, from a
+// footprint of a texel of the billows' noise (finer, a lookup is a point of
+// it and spreads by none). cloudBlurMost the most it may be.
+const float CLOUD_SPREAD_MOST = 0.12;
+const float CLOUD_NOISE_PIXELS = 2.0;
+float cloudSpreadAt(float footprint) {
+    float S = clouds.forms.y / float(CL_NOISE_SIDE);
+    return smoothstep(S, 4.0 * S, footprint);
+}
+float cloudBlurOf(vec4 n, float footprint) {
+    float sd = sqrt(max(n.w - n.x * n.x, 0.0));
+    return min(cloudBlur(footprint) + min(0.55 * sd, CLOUD_SPREAD_MOST) * cloudSpreadAt(footprint), 1.0);
+}
+float cloudBlurMost(float footprint) {
+    return min(cloudBlur(footprint) + CLOUD_SPREAD_MOST * cloudSpreadAt(footprint), 1.0);
+}
 // The noises cloudForms reads at `pd`: the billows' and (where `detail`)
-// the detail's. (Apart from the forms' arithmetic, so a caller that also
+// the detail's, at their mean over CLOUD_NOISE_PIXELS footprints (a skin's
+// lobe a pixel or two across, high in contrast at the surface, reads as
+// grain: the skin shows what is a few pixels wide or more, a soft edge
+// below). (Apart from the forms' arithmetic, so a caller that also
 // reads the cache issues every lookup before it waits on any.)
 vec4 cloudBillows(vec3 pd, float footprint) {
     float S = clouds.forms.y;
-    return cloudNoise(pd / S, footprint / S);
+    return cloudNoise(pd / S, CLOUD_NOISE_PIXELS * footprint / S);
 }
 vec4 cloudDetail(vec3 pd, float footprint) {
     float D = clouds.forms.z;
-    return cloudNoise(pd * vec3(1.0, 1.3, 1.0) / D, footprint / D);
+    return cloudNoise(pd * vec3(1.0, 1.3, 1.0) / D, CLOUD_NOISE_PIXELS * footprint / D);
 }
 // The skin's move of the surface (of the base, -CLOUD_SKIN .. 0.55
 // CLOUD_SKIN) from the noises `n` (cloudBillows) and `e` (cloudDetail, read
@@ -218,11 +240,10 @@ float cloudSkinOf(vec4 n, vec4 e, float wD, float inCloud) {
     }
     return CLOUD_SKIN * s;
 }
-// The forms' field at base `base` with the skin's move `skin` over
-// `footprint`: positive in cloud, its surface at -w/2 (w = cloudBlur), the
-// share of the footprint the cloud fills 0.5 + field / w.
-float cloudFieldOf(float base, float skin, float footprint) {
-    float w = cloudBlur(footprint);
+// The forms' field at base `base` with the skin's move `skin`, blurred by
+// `w` (cloudBlurOf): positive in cloud, its surface at -w/2, the share of
+// the footprint the cloud fills 0.5 + field / w.
+float cloudFieldOf(float base, float skin, float w) {
     return base + skin * (1.0 - w) - 0.5;
 }
 // How much the base read from a cell `cell` metres wide is the share of it
@@ -270,11 +291,11 @@ float cloudCutBase(float base, vec3 pd, float cell) {
 // `n` (no detail: the layer's, the cache's), `base` as a surface.
 float cloudFormsShare(vec4 n, float base, float footprint) {
     if (base <= 0.0) return 0.0;
-    float w = cloudBlur(footprint);
-    return clamp(0.5 + cloudFieldOf(base, cloudSkinOf(n, vec4(0.0), 0.0, 0.5), footprint) / w, 0.0, 1.0);
+    float w = cloudBlurOf(n, footprint);
+    return clamp(0.5 + cloudFieldOf(base, cloudSkinOf(n, vec4(0.0), 0.0, 0.5), w) / w, 0.0, 1.0);
 }
 // The extinction (1/m) of base `base` with the skin's move `skin` over
-// `footprint`: a cloud's heart's within (thinner within the skin, so its
+// `footprint`, blurred by `w`: a cloud's heart's within (thinner within the skin, so its
 // edge is soft and lit through), and from afar what a footprint's clouds
 // leave of the light over a path (opaque at heart where they are, all of it
 // between them) as an extinction, so a field from orbit lets the sky
@@ -282,10 +303,9 @@ float cloudFormsShare(vec4 n, float base, float footprint) {
 // cloud's edge where that is shorter, the least a cloud's size; a view
 // crosses one cloud or the gap beside it in that length, whatever the
 // footprint, so a field reads as opaque from afar as its clouds cover.)
-float cloudSigmaOf(float base, float skin, float footprint) {
+float cloudSigmaOf(float base, float skin, float w, float footprint) {
     if (base <= 0.0) return 0.0;
-    float w = cloudBlur(footprint);
-    float v = cloudFieldOf(base, skin, footprint);
+    float v = cloudFieldOf(base, skin, w);
     float share = clamp(0.5 + v / w, 0.0, 1.0);
     if (share <= 0.0) return 0.0;
     float heart = clouds.forms.x;
@@ -295,7 +315,7 @@ float cloudSigmaOf(float base, float skin, float footprint) {
     return mix(near, -log(max(through, 1e-4)) / L, w);
 }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
-    return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud), footprint);
+    return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud), cloudBlurOf(n, footprint), footprint);
 }
 float cloudForms(vec3 pd, float base, float inCloud, float footprint, bool detail) {
     if (base <= 0.0) return 0.0;

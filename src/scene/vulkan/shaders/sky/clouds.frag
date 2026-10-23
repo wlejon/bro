@@ -70,28 +70,34 @@ layout(set = 2, binding = CL_B_DEPTH) uniform sampler2D cloudDepth;
 // 72-127 and 128 on.)
 //#define CL_DEBUG_STEPS
 //#define CL_DEBUG_KINDS
-//#define CL_DEBUG_COUNT dbgB
+//#define CL_DEBUG_TAU
+//#define CL_DEBUG_COUNT dbgSkin
 const int CL_VIEW_STEPS = 160;
 const int CL_PROBE_LEVELS = 1;     // how much coarser the band probed is than the point's level
 const int CL_PROBE_UP = 6;   // how many levels coarser still it may be
 const int CL_FREE_LEVELS = 3;      // how much coarser the second distance to cloud read is
 const float CL_BASE_MARGIN = 1.04; // the base's at a step's ends times this, plus CL_BASE_PAD,
 const float CL_BASE_PAD = 0.004;   // bounds it along the step
-const float CL_SKIN_PIXELS = 4.0;// a step across a cloud's skin, in pixels
+const float CL_SKIN_PIXELS = 6.0;// a step across a cloud's skin, in pixels
 const float CL_FACE_PIXELS = 1.5;  // how closely (pixels) a face is found
 const int CL_FACE_HALVINGS = 5;    // at most
 const int CL_FACES = 4;            // faces a view halves for at most
 const float CL_IN_PIXELS = 2.0;    // the first piece inside, in pixels
-const float CL_IN_FIRST = 12.0;    // and in metres, at least
+const float CL_IN_FIRST = 20.0; // and in metres, at least
 const float CL_IN_GROWTH = 2.0;    // each the last's times this
-const float CL_IN_LONGEST = 400.0; // at most (m)
+const float CL_IN_LONGEST = 400.0;
+const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least// at most (m)
 const float CL_OPAQUE = 0.02;      // what is left of a view that ends it
 const float CL_DETAIL_SEEN = 0.3;  // what must be left of a view for the detail to show in it
 const float CL_LAYER_FROM = 0.06;  // a pixel's footprint (of the deck's thickness) where the layer begins
 const float CL_LAYER_TO = 0.12;    // and where it is all
 
 // What the march is doing.
-const int CL_TRACE = 0;   // through clear air, or across a skin
+// The sky's and the ground's light a cloud scatters, of their irradiance:
+// the radiance a uniform sky gives (1/pi), not the irradiance itself, which
+// lit a heap's shaded side and underside nearly as its sunlit top.
+const float CL_AMBIENT = 1.0 / PI;
+const int CL_TRACE = 0;  // through clear air, or across a skin
 const int CL_HALVE = 1;   // halving toward a face
 const int CL_INSIDE = 2;  // through a cloud
 
@@ -156,6 +162,13 @@ float clFree(ClAt w, int k) {
     return 0.98 * texelFetch(cloudCacheMap, ivec3(c, k * B + b), 0).w;
 }
 
+// How much wider than the pixel the skin's footprint is: a view from over
+// the deck meets its tops aslant, and a slanted pixel spans as much more of
+// a top as the view is flat (to CL_ANISO_MOST, which the cache's CL_B_HOLDS
+// allows for), so the skin it crosses is its mean there, not grain.
+const float CL_ANISO_MOST = 4.0;
+float clAniso = 1.0;
+
 // How far (m) on the view at a point whose base reads `base` (with the
 // margin of the base's change across a step) is sure to meet no cloud over
 // footprint `foot`: where even the skin's most out leaves the surface
@@ -168,7 +181,7 @@ float clFree(ClAt w, int k) {
 // base says how far the clear air is from cloud, so between heaps and
 // over them this is most of the way there.
 float clBaseClear(float base, float foot, float q, float vs) {
-    float w = cloudBlur(foot);
+    float w = cloudBlurMost(foot * clAniso);
     float most = base + (CL_BASE_MARGIN - 1.0) * abs(base) + CL_BASE_PAD + 0.55 * CLOUD_SKIN * (1.0 - w) - 0.5 + 0.5 * w;
     float rate = max(1.0, vs * CLOUD_EDGE_STEEPEST + 0.2 * sqrt(max(1.0 - vs * vs, 0.0))) * mix(1.0, CLOUD_CUT_STEEPEST, q);
     return most < 0.0 ? -most * clouds.forms.w / rate : 0.0;
@@ -189,6 +202,7 @@ struct ClForms {
 ClForms clFormsAt(ClAt w, float lod, float foot, bool detail) {
     ClForms f = ClForms(0.0, -1.0);
     if (w.h <= 0.0 || w.h >= 1.0) return f;
+    foot *= clAniso;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
     float base = max(clBase(w, lod), 0.0);
@@ -203,10 +217,35 @@ ClForms clFormsAt(ClAt w, float lod, float foot, bool detail) {
         e = cloudDetail(pd, foot);
     }
     float skin = cloudSkinOf(n, e, wD, inCloud);
-    f.sigma = cloudSigmaOf(base, skin, foot);
-    float face = cloudFieldOf(base, skin, foot) + 0.5 * cloudBlur(foot);
+    float wB = cloudBlurOf(n, foot);
+    f.sigma = cloudSigmaOf(base, skin, wB, foot);
+    float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
     return f;
+}
+
+// The cloud's optical depth from a point of its face `a` (air space) toward
+// the sun `s`, the view's footprint there `foot`: its own forms over the
+// first few hundred metres (so a heap's sunward side is lit, its far side
+// and underside shaded, and the skin's creases shadowed by the lobes about
+// them, which the cache's cells are too coarse to tell), each piece read
+// over its length; the cache's depth from where they end. Once a face, not
+// marched.
+const int CL_SUN_PIECES = 4;
+float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
+    float sc = max(1.0, foot / 15.0);
+    float tau = 0.0, at = 0.0, len = 25.0 * sc;
+    for (int i = 0; i < CL_SUN_PIECES; ++i) {
+        ClAt w = clAt(a + s * (at + 0.5 * len));
+        if (w.h >= 1.0) return tau;   // (out through the deck's top)
+        float f = max(foot, 3.0 * len);
+        tau += clFormsAt(w, clLod(w, f), f, detail && i == 0).sigma * len;
+        at += len;
+        len *= 2.2;
+    }
+    ClAt w = clAt(a + s * at);
+    if (w.h <= 0.0 || w.h >= 1.0) return tau;
+    return tau + clCache(w, clLod(w, foot)).y;
 }
 
 // What the march carries along a view.
@@ -245,21 +284,22 @@ void clIntegrate(inout ClMarch m, vec3 p, float tm, float dt, float sigma, vec2 
     // has scattered about at a cloud's edge, so seen with the sun behind
     // the eye its edges are darker than its body; toward the sun, the edge
     // is the bright silver lining).
-    // (Six octaves, each's extinction 0.4 of the last's and its light 0.8:
+    // (Six octaves, each's extinction 0.6 of the last's and its light 0.8:
     // a thick cloud seen from the sun's side sends back about what a white
-    // diffuser would, as a deck from orbit does; four at 0.5 and 0.6 left
-    // it grey.)
+    // diffuser would, as a deck from orbit does, while a heap's far side
+    // and underside, deep from the sun, stay grey; at 0.4 the deep octaves
+    // lit them nearly as its top.)
     float powder = mix(1.0 - exp(-about), 1.0, clamp(nu, 0.0, 1.0));
     float ms = 0.0, a = 1.0, b = 1.0;
     for (int o = 0; o < 6; ++o) {
         ms += b * ph[o] * exp(-tau.x * a) * (o == 0 ? mix(1.0, powder, 0.5) : powder);
-        a *= 0.4;
+        a *= 0.6;
         b *= 0.8;
     }
     // The sky's light, less what the cloud above hides (a floor for what
     // its body scatters about), and the ground's from below.
     float sees = mix(0.2, 1.0, exp(-0.15 * tau.y));
-    vec3 ambient = skyAbove * (0.35 + 0.65 * h) * sees + groundBelow * (0.6 - 0.4 * h);
+    vec3 ambient = (skyAbove * (0.35 + 0.65 * h) * sees + groundBelow * (0.6 - 0.4 * h)) * CL_AMBIENT;
     vec3 S = albedo * sigma * (E * sunAir * ms + ambient);
     float Tr = exp(-sigma * dt);
     m.L += m.T * (S - S * Tr) / sigma;
@@ -316,6 +356,10 @@ void main() {
     // the mean depth of what it sends; the march blended out over
     // CL_LAYER_FROM .. CL_LAYER_TO of the deck's thickness a pixel.
     float thick = clouds.shell.y - clouds.shell.x;
+    if (length(ro) > clouds.shell.y) {
+        vec3 a0 = ro + rd * sp.x;
+        clAniso = clamp(1.0 / max(abs(dot(rd, normalize(a0))), 1e-3), 1.0, CL_ANISO_MOST);
+    }
     float wl = length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
     for (int i = 0; i < 2 && wl > 0.0; ++i) {
@@ -365,8 +409,10 @@ void main() {
     float fLo = 0.0, fHi = 0.0;             // the field at the face's bounds (fLo 0: not known)
     int side = 0;                            // which bound the last halving moved
     int faces = 0;           // faces halved for
+    float tFace = -1.0, tauFace = 0.0, tauUp = 0.0;   // inside: where the view entered, its depths toward the sun and up there
     int steps = 0;
     int dbgFree = 0, dbgB = 0, dbgSkip = 0, dbgSkin = 0, dbgIn = 0, dbgHalve = 0, dbgPiece = 0;
+    float dbgTau = -1.0;
     while (wl < 1.0 && steps < CL_VIEW_STEPS && m.T > CL_OPAQUE) {
         ++steps;
         if (mode == CL_TRACE) {
@@ -517,6 +563,7 @@ void main() {
         // Inside: the next piece, sampled at its middle.
         if (t >= sp.y) {
             mode = CL_TRACE;
+            tFace = -1.0;
             continue;
         }
         ++dbgPiece;
@@ -525,22 +572,35 @@ void main() {
         ClAt w = clAt(ro + rd * x);
         float foot = pixel * x;
         float lod = clLod(w, foot);
-        ClForms f = clFormsAt(w, lod, foot, m.T > CL_DETAIL_SEEN);
+        // (The forms' mean over the piece: it is taken as one, so what is
+        // finer than it along the view is its mean, not a point of it that
+        // the next pixel's piece misses.)
+        ClForms f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), m.T > CL_DETAIL_SEEN);
         float sigma = f.sigma;
         if (sigma <= 0.0) {
             // Out of the cloud: traced on from here.
             clearAt = t = xPrev = x;
             clearFace = f.face;
             mode = CL_TRACE;
+            tFace = -1.0;
             continue;
         }
         if (!sky) {
             clSkyAt(ro, rd * x, skyAbove, groundBelow);
             sky = true;
         }
+        if (tFace < 0.0) {
+            tFace = t;
+            tauFace = clSunDepth(ro + rd * t, s, pixel * t, m.T > CL_DETAIL_SEEN);
+            tauUp = clCache(w, lod).z;
+        }
+        // The depth toward the sun: the face's, more (less) as the view goes
+        // on into the cloud away from (toward) the sun; up, the face's.
+        vec2 tau = vec2(max(tauFace - sigma * (x - tFace) * nu, 0.0), tauUp);
+        if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)
-        clIntegrate(m, ro + rd * x, x, L, sigma, clCache(w, lod).yz, sigma * max(120.0, foot), s, nu, ph, albedo, E,
+        clIntegrate(m, ro + rd * x, x, L, sigma, tau, sigma * max(120.0, foot), s, nu, ph, albedo, E,
                     skyAbove, groundBelow);
         t += L;
         len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
@@ -557,6 +617,15 @@ void main() {
         int most = max(max(dbgFree, dbgB), max(dbgSkin, dbgIn));
         vec3 c = most == 0 ? vec3(0.0) : most == dbgFree ? vec3(1, 0, 0) : most == dbgB ? vec3(0, 1, 0)
                : most == dbgSkin ? vec3(0, 0, 1) : vec3(1, 1, 1);
+        outColor = vec4(c * 1e6, 1.0);
+        return;
+    }
+#endif
+#ifdef CL_DEBUG_TAU
+    {
+        // (black none, then red <1, yellow <3, green <10, cyan <30, blue <100, white more)
+        vec3 c = dbgTau < 0.0 ? vec3(0) : dbgTau < 1.0 ? vec3(1, 0, 0) : dbgTau < 3.0 ? vec3(1, 1, 0)
+               : dbgTau < 10.0 ? vec3(0, 1, 0) : dbgTau < 30.0 ? vec3(0, 1, 1) : dbgTau < 100.0 ? vec3(0, 0, 1) : vec3(1);
         outColor = vec4(c * 1e6, 1.0);
         return;
     }

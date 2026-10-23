@@ -36,9 +36,11 @@
  *     Worley billows (`forms.billowScale` a tile) for its lobes, and near
  *     the eye finer Worley erosion (`forms.detailScale`): wisps under a
  *     cloud's base, cauliflower over its middle. It never opens a hole
- *     through a cloud, nor makes one in clear air. Where the skin is under
- *     a pixel the surface is blurred over the footprint (soft edges from
- *     afar), and the detail fades out as it gets finer than a pixel;
+ *     through a cloud, nor makes one in clear air. The skin shows what is a
+ *     few pixels wide or more (its noise read over two pixels, and over as
+ *     much more as a view from over the deck meets it aslant); finer, the
+ *     surface is blurred over the footprint by how much the skin varies
+ *     there (soft edges from afar, never grain), and the detail fades out;
  *     everything drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, with no jitter (the
@@ -57,13 +59,16 @@
  *     column's layer instead, cut to the pixel by the billows: soft-edged
  *     cloud from orbit for a few texture reads.
  *   - THE LIGHT. The sun through the air (the atmosphere's transmittance)
- *     and through the deck toward it (the cache's depth, out to hundreds
- *     of kilometres; never a march toward the sun per pixel), a dual-lobe
- *     phase with a forward
- *     lobe, multiple scattering as Wrenninge's octaves (dimmed at a cloud's
- *     thin edge), the sky's light from above (less what the cloud over the
- *     point hides) and the ground's from below, and the air before the deck
- *     applied as the land gets it.
+ *     and through the deck toward it: where the view meets a cloud, its
+ *     own forms over the first few hundred metres toward the sun (four
+ *     reads, once a face: a heap's sunward side lit, its far side and
+ *     underside grey, the skin's creases shadowed by the lobes about them),
+ *     then the cache's depth out to hundreds of kilometres; a dual-lobe
+ *     phase with a forward lobe (the silver lining), multiple scattering as
+ *     Wrenninge's octaves (dimmed at a cloud's thin edge), the sky's light
+ *     from above (less what the cloud over the point hides) and the
+ *     ground's from below, and the air before the deck applied as the land
+ *     gets it.
  *   - THE SHADOW. The deck's shadow on the land, plants, grass and every
  *     lit mesh, through the shared sun term (common/scene_lighting.glsl):
  *     levels of a map on a plane at the eye's nadir, each twice the last,
