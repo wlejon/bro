@@ -1,0 +1,93 @@
+#version 450
+// The cache's light (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h): for
+// the texels clouds_cache.comp baked (the same rows), the deck's optical
+// depth from the texel's centre toward the sun and straight up, out of the
+// deck, through the cache's extinction: steps each a share longer than the
+// last from half a cell, each read at the level as coarse as the step is
+// long, so the depth toward the sun is a cumulus's own near the texel and
+// its field's mean a few kilometres off, and no small cloud flickers in a
+// shadow afar. Written with the texel's extinction, as the march reads it;
+// and each column's band (sky/clouds_layout.h's CL_B_BAND).
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
+
+layout(set = 0, binding = CL_B_CACHE_OUT, rgba16f) uniform writeonly image3D cacheOut;
+layout(set = 0, binding = CL_B_BAND_OUT, rgba16f) uniform writeonly image2DArray bandOut;
+
+layout(push_constant) uniform Push {
+    ivec4 rows;    // x the first level, y the first row, z the step between rows
+} push;
+
+// The cache's extinction at body point `p`, its mean over `foot` at least
+// (none past the deck or the cache).
+float cloudSigmaAt(vec3 p, float foot) {
+    float r = length(p);
+    float h = (r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
+    if (h <= 0.0 || h >= 1.0) return -1.0;
+    vec2 xy = cloudChartAt(p / r);
+    int k = cloudCacheLevel(xy, foot);
+    if (k >= CL_CACHE_LEVELS) return -1.0;
+    return textureLod(cloudSigmaMap, cloudCacheCoord(xy, h, k), 0.0).r;
+}
+
+// The depth from `p` toward `d` (the body's frame): `n` steps, each `grow`
+// times the last, from `first`, read no finer than `cell`; to where the
+// way leaves the deck.
+float cloudDepthToward(vec3 p, vec3 d, float first, float grow, int n, float cell) {
+    float tau = 0.0, at = 0.0, len = first;
+    for (int i = 0; i < n; ++i) {
+        float s = cloudSigmaAt(p + d * (at + 0.5 * len), max(len, cell));
+        if (s < 0.0) break;
+        tau += s * len;
+        at += len;
+        len *= grow;
+    }
+    return tau;
+}
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z;
+    int k = push.rows.x + int(gl_GlobalInvocationID.z) / CL_CACHE_BINS;
+    int bin = int(gl_GlobalInvocationID.z) % CL_CACHE_BINS;
+    if (x >= CL_CACHE_SIDE || y >= CL_CACHE_SIDE || k >= CL_CACHE_LEVELS) return;
+    vec2 c = clouds.cacheLevel[k].xy;
+    float cell = cloudCacheCell(k);
+    vec2 xy = (vec2(cloudCacheCellOf(x, int(c.x)), cloudCacheCellOf(y, int(c.y))) + 0.5) * cell;
+    vec3 up = cloudChartDir(xy);
+    float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
+    vec3 p = up * mix(clouds.shell.x, clouds.shell.y, h);
+    ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
+    float sigma = texelFetch(cloudSigmaMap, at, 0).r;
+    vec3 sun = normalize(cloudToBody(clouds.sun.xyz));
+    // (From half a cell, or of a bin straight up: the texel's own.)
+    float first = 0.5 * min(cell, clouds.cacheE1.w * 2.0);
+    float toSun = cloudDepthToward(p, sun, first, 1.35, 28, cell);
+    float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell);
+    imageStore(cacheOut, at, vec4(sigma, toSun, toUp, 0.0));
+    if (bin != 0) return;
+    // The column's band (the march's probe): the heights that hold cloud in
+    // it and the columns about it (so a lookup between texels holds every
+    // column it may stand for), and the most any of them holds.
+    float lo = 1.0, hi = 0.0, most = 0.0, own = 0.0;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            ivec2 n = ivec2(x + i, y + j) & (CL_CACHE_SIDE - 1);
+            float column = 0.0;
+            for (int b = 0; b < CL_CACHE_BINS; ++b) {
+                float s = texelFetch(cloudSigmaMap, ivec3(n, k * CL_CACHE_BINS + b), 0).r;
+                if (s > 2e-5) {
+                    lo = min(lo, float(b) / float(CL_CACHE_BINS));
+                    hi = max(hi, float(b + 1) / float(CL_CACHE_BINS));
+                }
+                column += s;
+            }
+            most = max(most, column * clouds.cacheE1.w);
+            if (i == 0 && j == 0) own = column * clouds.cacheE1.w;
+        }
+    }
+    imageStore(bandOut, ivec3(x, y, k), vec4(lo, hi, most, own));
+}

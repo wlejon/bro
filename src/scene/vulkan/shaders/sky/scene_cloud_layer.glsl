@@ -39,11 +39,19 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 shadowN;       // xyz the shadow's nadir (air space), w the levels' growth
     vec4 shadowE1;      // xyz its plane's first axis, w the finest level's texel (m)
     vec4 shadowE2;      // xyz its second axis
+    vec4 cacheC;        // xyz the cache's chart's centre (the body's frame), w the deck's bottom radius
+    vec4 cacheE1;       // xyz its first axis (the body's frame), w a bin's height (m)
+    vec4 cacheE2;       // xyz its second axis
+    vec4 cacheNadir;    // xy the eye's nadir on the chart (m)
+    vec4 cacheLevel[CL_CACHE_LEVELS];   // xy the cell (index) of level k's window that holds the nadir
     vec4 data[CL_MAX_DATA];
 } clouds;
 
 layout(set = CLOUD_SET, binding = CL_B_COVER) uniform sampler2DArray cloudCoverMap;
 layout(set = CLOUD_SET, binding = CL_B_NOISE) uniform sampler3D cloudNoiseMap;
+layout(set = CLOUD_SET, binding = CL_B_CACHE) uniform sampler3D cloudCacheMap;
+layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
+layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -184,4 +192,55 @@ void cloudSpans(vec3 ro, vec3 rd, float tMax, out vec2 a, out vec2 b) {
     // The top's span less the bottom's.
     a = vec2(top.x, min(top.y, bot.x));
     b = vec2(max(top.x, bot.y), top.y);
+}
+
+// --- The cache about the eye (sky/clouds_layout.h) ------------------------------
+
+// Body direction `up` on the cache's chart (m).
+vec2 cloudChartAt(vec3 up) {
+    vec2 v = vec2(dot(up, clouds.cacheE1.xyz), dot(up, clouds.cacheE2.xyz));
+    float s = length(v);
+    float th = atan(s, dot(up, clouds.cacheC.xyz));
+    return s > 1e-7 ? v * (th * clouds.cacheC.w / s) : v * clouds.cacheC.w;
+}
+
+// The chart's point `xy` (m) as a body direction.
+vec3 cloudChartDir(vec2 xy) {
+    float d = length(xy);
+    float th = d / clouds.cacheC.w;
+    vec2 b = d > 0.0 ? xy / d : vec2(1.0, 0.0);
+    return normalize(clouds.cacheC.xyz * cos(th) + (clouds.cacheE1.xyz * b.x + clouds.cacheE2.xyz * b.y) * sin(th));
+}
+
+float cloudCacheCell(int k) { return CL_CACHE_TEXEL0 * exp2(float(k)); }
+
+// Storage index `i` of the window about cell `c`: the cell it holds. (The
+// side a power of two: the mask is the modulus of a negative difference
+// too, as GLSL's % is not.)
+int cloudCacheCellOf(int i, int c) {
+    int lo = c - CL_CACHE_SIDE / 2;
+    return lo + ((i - lo) & (CL_CACHE_SIDE - 1));
+}
+
+// The finest level whose cell is at least `foot` and whose window holds
+// chart point `xy` (CL_CACHE_LEVELS: none does).
+int cloudCacheLevel(vec2 xy, float foot) {
+    vec2 dn = abs(xy - clouds.cacheNadir.xy);
+    float far = max(dn.x, dn.y) / (CL_CACHE_MARGIN * CL_CACHE_TEXEL0);
+    float k = ceil(log2(max(max(foot / CL_CACHE_TEXEL0, far), 1.0)));
+    return int(min(k, float(CL_CACHE_LEVELS)));
+}
+
+// Where chart point `xy` at height `h` in the deck (0 .. 1) lies in the
+// cache's image at level `k`.
+vec3 cloudCacheCoord(vec2 xy, float h, int k) {
+    const float B = float(CL_CACHE_BINS);
+    vec2 uv = xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE));
+    float z = float(k) * B + clamp(h * B, 0.5, B - 0.5);
+    return vec3(uv, z / (B * float(CL_CACHE_LEVELS)));
+}
+
+// The band of the columns about chart point `xy` at level `k`.
+vec4 cloudCacheBand(vec2 xy, int k) {
+    return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(k)), 0.0);
 }

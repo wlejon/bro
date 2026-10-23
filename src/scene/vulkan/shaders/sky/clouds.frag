@@ -5,40 +5,38 @@
 // opaque surfaces' depth (a hill before a cloud hides it, a cloud before a
 // hill hides the hill), and blended over what is drawn.
 //
-// The march. The view crosses the deck in at most two spans (one from below
-// or inside; from above, one or, past the deck's bottom without meeting the
-// ground, two). Its steps lie on one grid of distances from the eye, the
-// same for every pixel (the shortest step out to where a share of the
-// distance is longer, that share beyond), so neighbouring pixels sample a
-// cloud at the same depths and an edge-on cloud is not cut into slabs that
-// stripe from row to row; a crossing shorter than CL_SPAN_STEPS grid steps
-// (the deck seen from above) is cut into that many instead, so its low
-// cumulus are not stepped over. A step a few pixels long (afar) is taken
-// whole, its density straight between its ends; a longer one is halved
-// where it holds a cloud, each piece first sampled at its own length, down
-// to leaves CL_LEAF_PIXELS long (at most CL_SUB_LEVELS halvings), so a gap
-// between clouds costs a few samples and a cloud's edge is where it is; the
-// first thick leaf finds the cloud's front by halving. The march is one
-// loop of one sample each, whatever it is for.
-// No jitter, so the picture is the same every frame, and the density at
-// each sample is the world's at its piece's length or the pixel's,
-// whichever is the wider, so what is finer than either is its mean and no
-// slice of it shows. At most CL_VIEW_STEPS samples a pixel.
+// The march reads the deck's cache about the eye's nadir (sky/clouds_layout.h):
+// its extinction (its mean over a cell), the depths from there toward the
+// sun and up, how far the nearest cloud is, and each column's band. The
+// view crosses the deck in at most two spans (one from below or inside;
+// from above, one or, past the deck's bottom without meeting the ground,
+// two). Each step reads the cache at the level whose cell is as wide as
+// the pixel there, or the finest whose window holds the step, and is at
+// most three quarters of a cell across and of a bin up. The air: the bands
+// of the columns about the view's next cells, from CL_PROBE_LEVELS levels
+// coarser down, cross what holds no cloud (or lies above or below what
+// does) a cell at a time; and a step the cache says is clear goes on by
+// the distance to the nearest cloud. The cloud: where its cell is as fine
+// as the pixel, the cache's; where the pixel is finer (the cells are about
+// a sixtieth of the distance from the nadir, so for any view but straight
+// down that is most of what is near), the world's module's at the pixel's
+// footprint, a step that holds cloud cut into leaves CL_LEAF_PIXELS pixels
+// long, at most CL_MODULE_EVALS a pixel (the cache's past them). Where the
+// view enters cloud, the cache is halved for the face (else a deck's top
+// shows the steps' grid as contours). No jitter: the picture is the same
+// every frame. At most CL_VIEW_STEPS steps a pixel.
 //
 // The light, as the land's: the sun above the air (lighting.atm's
 // illuminance) through the air to the sample (the transmittance table, the
-// planet's shadow included) and through the deck toward the sun (five
-// samples, each three times as long as the last, so a tower's body shades
-// its far side), with a two-lobed phase and multiple scattering's six
+// planet's shadow included) and through the deck toward the sun (the
+// cache's depth), with a two-lobed phase and multiple scattering's six
 // octaves (Wrenninge 2013), the deeper ones dimmed at a cloud's thin edge
 // (the powder); and the sky's light at the deck (the atmosphere's SH:
 // above, less what the cloud over the sample hides, and the lit ground
-// below, by the height in the deck). The deck's depths toward the sun and
-// up are marched for the samples that send much of what the view sees (at
-// most CL_LIGHTS a view), the rest taking the last march's. The scattering
-// integrated over each step (Hillaire 2016), and the air between the eye
-// and the deck from the same tables the land's is (sceneAtmosphereAir), at
-// the deck's mean depth along the view, so a far deck hazes into the limb.
+// below, by the height in the deck). The scattering integrated over each
+// step (Hillaire 2016), and the air between the eye and the deck from the
+// same tables the land's is (sceneAtmosphereAir), at the deck's mean depth
+// along the view, so a far deck hazes into the limb.
 
 layout(location = 0) in vec3 inWorldDir;
 layout(location = 0) out vec4 outColor;
@@ -54,12 +52,12 @@ vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 #include "sky/cloud_module.glsl"
 
-const int CL_VIEW_STEPS = 160;
-const int CL_SPAN_STEPS = 12;
-const int CL_SUB_LEVELS = 4;   // halvings of a step, at most (16 leaves)
+const int CL_VIEW_STEPS = 256;
+const int CL_PROBE_LEVELS = 5;   // how much coarser the coarsest probe's level is
+const int CL_LEAVES = 8;         // a near step's leaves, at most
+const int CL_MODULE_EVALS = 48;  // the module's samples a view, at most
 const float CL_LEAF_PIXELS = 4.0;// a leaf's length, in pixels up the screen
-const int CL_LIGHTS = 3;  // samples a view marches the light for, at most
-const float CL_OPAQUE = 0.02;  // what is left of a view that ends it
+const float CL_OPAQUE = 0.02;    // what is left of a view that ends it
 
 float clHg(float nu, float g) {
     float g2 = g * g;
@@ -69,31 +67,12 @@ float clHg(float nu, float g) {
 // silver lining) and a weak backward one.
 float clPhase(float nu, float k) { return mix(clHg(nu, 0.8 * k), clHg(nu, -0.3 * k), 0.2); }
 
-// The deck's optical depth from air-space `p` toward `s` (the sun, or up):
-// `n` samples, each three times as long as the one before, from `base`, so
-// the light reaches through a towering cumulus (a few kilometres) as well
-// as the wisp at its edge. Each sample is the density's mean over a third
-// of its length (or the pixel's footprint), so the far ones are its
-// cloud's mean and no small cloud flickers in and out of a shadow.
-float clDepthToward(vec3 p, vec3 s, float base, float foot, int n) {
-    float tau = 0.0, at = 0.0, len = base;
-    for (int k = 0; k < n; ++k) {
-        tau += cloudExtinction(p + s * (at + 0.5 * len), max(foot, len * 0.35)) * len;
-        at += len;
-        len *= 3.0;
-    }
-    return tau;
-}
-
-// The step grid's next distance past `t`: every `minStep` out to
-// minStep / share, then each a share farther than the one before.
-float clGridNext(float t, float minStep, float share) {
-    float tc = minStep / share;
-    if (t < tc) return (floor(t / minStep) + 1.0) * minStep;
-    float lk = log(1.0 + share);
-    float k = floor(log(t / tc) / lk) + 1.0;
-    float g = tc * exp(k * lk);
-    return g > t * (1.0 + 1e-4) ? g : tc * exp((k + 1.0) * lk);
+// The cache at air-space point `a`, level `k`.
+vec4 clCache(vec3 a, int k) {
+    float r = length(a);
+    float h = (r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
+    vec2 xy = cloudChartAt(cloudToBody(a) / r);
+    return textureLod(cloudCacheMap, cloudCacheCoord(xy, h, k), 0.0);
 }
 
 // What the march carries along a view.
@@ -102,7 +81,6 @@ struct ClMarch {
     float T;         // what is left of the view
     float depthSum;  // distance weighted by what each step took
     float weightSum;
-    int lights;      // the samples whose light has been marched
 };
 
 // The sky's light at air-space offset `at` from the eye `ro`: from above,
@@ -116,36 +94,17 @@ void clSkyAt(vec3 ro, vec3 at, out vec3 skyAbove, out vec3 groundBelow) {
     groundBelow = atmShIrradiance(shc, shFrame, -atUp);
 }
 
-// One sample's light, integrated over its step (Hillaire 2016).
-void clIntegrate(inout ClMarch m, inout vec2 tau, vec3 p, float tm, float dt, float sigma, vec3 s, float nu,
-                 float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow) {
+// One piece's light, integrated over its length (Hillaire 2016): `tau` the
+// deck's depths from the point lit toward the sun and up, `ph` the octaves'
+// phases.
+void clIntegrate(inout ClMarch m, vec3 p, float tm, float dt, float sigma, vec2 tau, vec3 s, float nu,
+                 float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow) {
     float r = length(p);
     vec3 up = p / r;
     float h = clamp((r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x), 0.0, 1.0);
     // The sun at the sample: through the air (and the planet's shadow),
-    // then through the deck; and the deck above it, what it hides of the
-    // sky: marched while what the sample sends still shows (a third of the
-    // view left), the last march's after.
+    // then through the deck.
     vec3 sunAir = atmSunTransmittance(r, dot(up, s));
-    // (Its first sample as long as a few pixels are wide there, not as the
-    // step: steps differ from pixel to pixel, and the light with them
-    // would stripe.)
-    float lf = clouds.params.y * tm;
-    // (Marched for the samples that send much of what the view sees, at
-    // most CL_LIGHTS of them; a veil's thin samples, and what lies deep
-    // behind a cloud's front, take the last march's.)
-    float sends = m.T * (1.0 - exp(-sigma * dt));
-    if ((sends > 0.03 && m.T > 0.3 && m.lights < CL_LIGHTS) || tau.x < 0.0) {
-        ++m.lights;
-        float base = clamp(2.0 * lf, 25.0, 400.0);
-        tau.x = max(sunAir.r, max(sunAir.g, sunAir.b)) > 1e-5 ? clDepthToward(p, s, base, lf, 5) : 0.0;
-        tau.y = clDepthToward(p, up, 4.0 * base, lf, 2);
-    } else {
-        // (Deeper than what still shows much: the last depths, deepened by
-        // what the view has crossed since, so the light falls on smoothly
-        // and no line shows where the marches stop.)
-        tau += vec2(sigma * dt);
-    }
     // Multiple scattering's octaves (Wrenninge), the deeper ones dimmed
     // where the cloud is thin about the sample (the powder: little light
     // has scattered about at a cloud's edge, so seen with the sun behind
@@ -155,16 +114,15 @@ void clIntegrate(inout ClMarch m, inout vec2 tau, vec3 p, float tm, float dt, fl
     // a thick cloud seen from the sun's side sends back about what a white
     // diffuser would, as a deck from orbit does; four at 0.5 and 0.6 left
     // it grey.)
-    // (Its depth over the step when the step is the longer: a far sample's
-    // extinction is its clouds' mean with the sky between, thin, though
-    // each cloud in it is as thick as near ones.)
-    float powder = mix(1.0 - exp(-sigma * max(120.0, dt)), 1.0, clamp(nu, 0.0, 1.0));
-    float ms = 0.0, a = 1.0, b = 1.0, c = 1.0;
+    // (Its depth over the step or the pixel's footprint, whichever is the
+    // longer: a far sample's extinction is its clouds' mean with the sky
+    // between, thin, though each cloud in it is as thick as near ones.)
+    float powder = mix(1.0 - exp(-sigma * max(max(120.0, dt), clouds.params.y * tm)), 1.0, clamp(nu, 0.0, 1.0));
+    float ms = 0.0, a = 1.0, b = 1.0;
     for (int o = 0; o < 6; ++o) {
-        ms += b * clPhase(nu, c) * exp(-tau.x * a) * (o == 0 ? mix(1.0, powder, 0.5) : powder);
+        ms += b * ph[o] * exp(-tau.x * a) * (o == 0 ? mix(1.0, powder, 0.5) : powder);
         a *= 0.4;
         b *= 0.8;
-        c *= 0.5;
     }
     // The sky's light, less what the cloud above hides (a floor for what
     // its body scatters about), and the ground's from below.
@@ -195,208 +153,181 @@ void main() {
     if (g >= 0.0) tMax = min(tMax, g);
     vec2 spanA, spanB;
     cloudSpans(ro, rd, tMax, spanA, spanB);
-    bool hasA = spanA.x < spanA.y, hasB = spanB.x < spanB.y;
-    if (!hasA && !hasB) discard;
+    if (spanA.x >= spanA.y && spanB.x >= spanB.y) discard;
 
     vec3 s = lighting.atm.sunDir.xyz;
     vec3 E = lighting.atm.sunIlluminance.rgb;
     float nu = dot(rd, s);
     float albedo = clouds.params.x;
     float pixel = clouds.params.y;
-    float minStep = clouds.params.z, share = clouds.params.w;
+    float binH = clouds.cacheE1.w;
+    float ph[6];
+    for (int o = 0; o < 6; ++o) ph[o] = clPhase(nu, exp2(-float(o)));
 
     // The sky's light at the deck, above it and from the ground below:
     // where the view first meets a cloud, once it does.
     vec3 skyAbove = vec3(0.0), groundBelow = vec3(0.0);
     bool sky = false;
 
-    ClMarch m = ClMarch(vec3(0.0), 1.0, 0.0, 0.0, 0);
-    vec2 tau = vec2(-1.0);   // the last sample's depth toward the sun and up (none yet)
-    int dbgProbe = 0, dbgSub = 0, steps = 0;
-
-    // The march as one loop of one density sample each, whatever the
-    // sample is for (a short step's end, a piece of a long one, a halving
-    // of a cloud's front), so the pixels of a group, each at its own part
-    // of its march, sample together rather than in turn.
-    const int M_STEP_A = 1, M_STEP_B = 2, M_PIECE = 3, M_HALVE = 4, M_FRONT = 5;
-    vec2 sp = hasA ? spanA : spanB;
-    bool second = !hasA;     // on the view's last span
-    float cap = (sp.y - sp.x) / float(CL_SPAN_STEPS);
-    float t = sp.x, end = t, dt = 0.0;
-    float edgeT = -1.0, edgeS = 0.0;   // the last short step's end and its density
-    float sA = 0.0;
-    int mode = 0;            // 0: a step to begin at t
-    int levels = 0, level = 0, idx = 0;
-    float d = 0.0;           // a long step's leaves' length
-    float lo = 0.0, hi = 0.0, firm = 0.0, leafSigma = 0.0, leafA = 0.0, leafFoot = 0.0;
-    int halves = 0;
-    for (int it = 0; it < CL_VIEW_STEPS && m.T > CL_OPAQUE; ++it) {
-        if (mode == 0) {
-            if (t >= sp.y) {
-                if (second || !hasB) break;
-                second = true;
-                sp = spanB;
-                cap = (sp.y - sp.x) / float(CL_SPAN_STEPS);
-                t = sp.x;
-                edgeT = -1.0;
-            }
-            end = min(min(clGridNext(t, minStep, share), t + cap), sp.y);
-            dt = end - t;
-            float sub = max(CL_LEAF_PIXELS * pixel * t, 8.0);
-            if (dt <= 2.0 * sub) {
-                // A step as short as a few pixels are wide (afar, and the
-                // deck crossed from above): the density at its ends, taken
-                // as straight between them, so what it holds and where it
-                // begins move smoothly as a cloud's top rises through it
-                // (sampled at its middle, a deck's tops would show the
-                // steps' heights as contours). Its end is the next one's
-                // start.
-                mode = edgeT == t ? M_STEP_B : M_STEP_A;
-                sA = edgeS;
-            } else {
-                // A longer step: halved where it holds a cloud, down to
-                // pieces a few pixels long (its leaves), each piece first
-                // sampled once at its own length; what holds next to
-                // nothing is crossed (its trace, the mean of clouds about it
-                // a piece wide, would gather along a long view into veils).
-                // So a step beside a cloud, or through a gap between clouds,
-                // costs a few samples, and one through a cloud as many
-                // leaves as reach its opaque front. (In order, without a
-                // stack: piece `idx` of level `level`.)
-                levels = min(int(ceil(log2(dt / sub))), CL_SUB_LEVELS);
-                d = dt / float(1 << levels);
-                level = 0;
-                idx = 0;
-                mode = M_PIECE;
-                edgeT = -1.0;
-            }
-        }
-        // The sample.
-        float x, foot, len = 0.0, a = 0.0;
-        if (mode == M_STEP_A) {
-            x = t;
-            foot = max(0.3 * dt, pixel * t);
-        } else if (mode == M_STEP_B) {
-            x = end;
-            foot = max(0.3 * dt, pixel * end);
-        } else if (mode == M_PIECE) {
-            len = dt / float(1 << level);
-            a = t + float(idx) * len;
-            x = a + 0.5 * len;
-            // (A leaf's across the view the pixel's footprint, widened only
-            // by a third of its length, so a cloud's edge is as sharp as the
-            // pixel and still no slice of it shows.)
-            foot = level < levels ? max(len, pixel * x) : max(0.3 * d, pixel * x);
-        } else if (mode == M_HALVE) {
-            x = 0.5 * (lo + hi);
-            foot = leafFoot;
-        } else {
-            x = 0.5 * (lo + leafA + d);
-            foot = leafFoot;
-        }
-        float sigma = cloudExtinction(ro + rd * x, foot);
-        ++steps;
-
-        bool advance = false;   // the piece done: on to the next
-        // What the sample lights, if anything: the view from litT over
-        // litLen at litSigma, lit at litAt.
-        float litSigma = 0.0, litLen = 0.0, litAt = 0.0;
-        if (mode == M_STEP_A) {
-            sA = sigma;
-            mode = M_STEP_B;
-            continue;
-        } else if (mode == M_STEP_B) {
-            float sB = sigma;
-            edgeT = end;
-            edgeS = sB;
-            if (sA + sB > 0.0) {
-                // Lit where the view has crossed half of what it meets in
-                // the step, or half an optical depth when it holds more (its
-                // front then): sigma(x) = sA + (sB - sA) x / dt.
-                float sm = 0.5 * (sA + sB);
-                float goal = 0.5 * min(sm * dt, 1.0);
-                float k = 0.5 * (sB - sA) / dt;
-                float xs = abs(k) * goal < 1e-4 * sA * sA ? goal / max(sA, 1e-9)
-                                                          : (sqrt(max(sA * sA + 4.0 * k * goal, 0.0)) - sA) / (2.0 * k);
-                litSigma = sm;
-                litLen = dt;
-                litAt = t + clamp(xs, 0.0, dt);
-            }
-            t = end;
-            mode = 0;
-        } else if (mode == M_PIECE) {
-            if (level < levels) {
-                ++dbgProbe;
-                if (sigma * len >= 0.005) {
-                    ++level;
-                    idx *= 2;
-                    continue;
+    ClMarch m = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
+    int steps = 0, evals = 0;
+    for (int span = 0; span < 2; ++span) {
+        vec2 sp = span == 0 ? spanA : spanB;
+        float t = sp.x, probeEnd = t;
+        int probeLevel = CL_CACHE_LEVELS;
+        bool clear = true;   // the last piece held next to no cloud
+        while (t < sp.y && steps < CL_VIEW_STEPS && m.T > CL_OPAQUE) {
+            ++steps;
+            vec3 a = ro + rd * t;
+            float r = length(a);
+            vec3 up = a / r;
+            vec2 xy = cloudChartAt(cloudToBody(up));
+            int k = cloudCacheLevel(xy, pixel * t);
+            if (k >= CL_CACHE_LEVELS) break;   // (past the cache: nothing held)
+            float vs = abs(dot(rd, up));
+            float hs = sqrt(max(1.0 - vs * vs, 0.0));
+            // The probes: the band of the columns about the view's crossing
+            // of the next coarse cell (CL_PROBE_LEVELS coarser), then of the
+            // next cell; where the view crosses it outside the band, it is
+            // crossed in one step, and where it is below or above the band,
+            // the view goes on from where it meets it.
+            vec4 band = vec4(0.0);
+            bool skip = false;
+            int top = min(k + CL_PROBE_LEVELS, CL_CACHE_LEVELS - 1);
+            if (t < probeEnd) top = max(min(top, probeLevel - 1), k);
+            for (int kb = top; kb >= k && !skip; --kb) {
+                float dth = min(0.5 * cloudCacheCell(kb) / max(hs, 1e-4), sp.y - t);
+                band = cloudCacheBand(xy, kb);
+                float Rlo = mix(clouds.shell.x, clouds.shell.y, band.x);
+                float Rhi = mix(clouds.shell.x, clouds.shell.y, band.y);
+                float r1 = length(ro + rd * (t + dth));
+                float tp = -dot(ro, rd);
+                float rmin = tp > t && tp < t + dth ? length(ro + rd * tp) : min(r, r1);
+                if (band.z < 1e-4 || max(r, r1) < Rlo || rmin > Rhi) {
+                    t += dth;
+                    skip = true;
+                } else if (kb > k) {
+                    // (Cloud about this coarse cell: the levels under it are
+                    // the probes until the view leaves it.)
+                    if (t >= probeEnd || kb < probeLevel) {
+                        probeLevel = kb;
+                        probeEnd = t + dth;
+                    }
+                } else if (r < Rlo || r > Rhi) {
+                    // (Where the view meets the band.)
+                    float R = r < Rlo ? Rlo : Rhi;
+                    float b = dot(ro, rd), dd = b * b - (dot(ro, ro) - R * R);
+                    float tin = r < Rlo ? -b + sqrt(max(dd, 0.0)) : -b - sqrt(max(dd, 0.0));
+                    if (tin > t && tin < t + dth) {
+                        t = tin;
+                    } else if (!(dd > 0.0 && tin > t)) {
+                        t += dth;
+                        skip = true;
+                    }
                 }
-                advance = true;
-            } else {
-                ++dbgSub;
-                firm = sigma > 0.0 ? smoothstep(0.5, 2.0, sigma * d) * smoothstep(0.5, 0.9, m.T) : 0.0;
-                if (firm > 0.0) {
-                    // The view's first thick leaf: where in it the cloud
-                    // begins, by halving (else a deck seen from above shows
-                    // its top in contours where the leaves cross it), eased
-                    // in by how thick the leaf is and how little the view
-                    // has met before it, so no line shows where it starts.
-                    lo = a;
-                    hi = a + d;
-                    leafA = a;
-                    leafSigma = sigma;
-                    leafFoot = foot;
-                    halves = 0;
-                    mode = M_HALVE;
-                    continue;
+            }
+            if (skip) {
+                clear = true;
+                continue;
+            }
+            // A step at most three quarters of a cell across and of a bin up.
+            float dt = min(0.75 * min(cloudCacheCell(k) / max(hs, 1e-4), binH / max(vs, 1e-4)), sp.y - t);
+            if (dt <= 0.0) break;
+            float xm = t + 0.5 * dt;
+            vec4 c = clCache(ro + rd * xm, k);
+            if (c.x * dt < 1e-5) {
+                // Clear: on past the air the cache says holds no cloud about
+                // here (its distance to cloud, less a texel's reach: the
+                // lookup is a blend of its texels').
+                t += max(dt, 0.5 * dt + c.w - max(cloudCacheCell(k), binH));
+                clear = true;
+                continue;
+            }
+            // Near, the module's share (where the pixel is finer than the
+            // finest cell): a step that holds cloud cut into leaves.
+            float wNear = 1.0 - smoothstep(0.5, 1.0, pixel * xm / cloudCacheCell(k));
+            bool fine = wNear > 0.0 && c.x * dt > 0.003 && evals < CL_MODULE_EVALS;
+            int n = fine ? clamp(int(ceil(dt / max(CL_LEAF_PIXELS * pixel * xm, 2.0))), 1, CL_LEAVES) : 1;
+            if (n > 1) {
+                // (The module over the whole step first, its mean over half
+                // of it: where that holds next to nothing, the step is
+                // crossed as clear, not cut. Not on the cache's mean: a
+                // coarse cell's, drawn along the step, is a smear.)
+                float whole = cloudExtinction(ro + rd * xm, max(0.5 * dt, pixel * xm));
+                ++evals;
+                if (whole * dt < 0.005) {
+                    n = 1;
+                    fine = false;
+                    c.x = 0.0;
                 }
-                litSigma = sigma;
-                litLen = d;
-                litAt = a + min(0.5 * d, 1.0 / max(sigma, 1e-9));
-                advance = true;
             }
-        } else if (mode == M_HALVE) {
-            if (sigma * d > 0.5) hi = x;
-            else lo = x;
-            if (++halves == 4) {
-                lo = mix(leafA, lo, firm);
-                mode = M_FRONT;
+            float d = dt / float(n);
+            for (int i = 0; i < n && m.T > CL_OPAQUE; ++i) {
+                float a0 = t + float(i) * d, x = a0 + 0.5 * d;
+                vec4 cv = n == 1 ? c : clCache(ro + rd * x, k);
+                float sigma = cv.x;
+                if (fine) {
+                    sigma = mix(cv.x, cloudExtinction(ro + rd * x, pixel * x), wNear);
+                    ++evals;
+                }
+                bool entered = clear;
+                clear = sigma * d < 0.01;
+                if (sigma <= 0.0) continue;
+                float lo = a0, len = d;
+                if (entered && cv.x * d > 1e-3) {
+                    // The view enters cloud: where, by halving the cache
+                    // between the last sample (which held next to none, half
+                    // a piece back) and this one, so a cloud's face moves
+                    // with the cloud, not with the steps' grid (whose rings
+                    // it would show where it crosses them: contours on a
+                    // deck's top, streaks along a far base). (The cache's,
+                    // not the module's: four of its samples at each entry
+                    // cost more than the rest of the march.)
+                    float hi = x;
+                    lo = max(a0 - 0.5 * d, sp.x);
+                    for (int b = 0; b < 4; ++b) {
+                        float xb = 0.5 * (lo + hi);
+                        if (clCache(ro + rd * xb, k).x >= 0.5 * cv.x) hi = xb;
+                        else lo = xb;
+                    }
+                    lo = 0.5 * (lo + hi);
+                    len = a0 + d - lo;
+                }
+                // (A piece's light a free path in when it is thicker than
+                // that, else at its middle: what an opaque piece sends comes
+                // from its near edge, not from wherever its middle fell.)
+                float litAt = lo + 0.5 * len;
+                vec2 tau = cv.yz;
+                if (sigma * len > 1.0) {
+                    // (The cache's depth is its bins' centres', blended: a
+                    // free path under a dense top it reads as half a bin of
+                    // the cloud. At most a free path, then what the cache
+                    // holds a bin on toward the sun.)
+                    litAt = lo + 1.0 / sigma;
+                    vec3 pl = ro + rd * litAt;
+                    tau = clCache(pl, k).yz;
+                    vec3 sb = normalize(pl) * binH;
+                    tau = min(tau, vec2(clCache(pl + s * binH, k).y, clCache(pl + sb, k).z) + 1.0);
+                }
+                if (!sky) {
+                    clSkyAt(ro, rd * litAt, skyAbove, groundBelow);
+                    sky = true;
+                }
+                clIntegrate(m, ro + rd * litAt, litAt, len, sigma, tau, s, nu, ph, albedo, E, skyAbove, groundBelow);
             }
-            continue;
-        } else {
-            litSigma = mix(leafSigma, max(sigma, leafSigma), firm);
-            litLen = leafA + d - lo;
-            litAt = lo + min(0.5 * litLen, 1.0 / litSigma);
-            mode = M_PIECE;
-            advance = true;
-        }
-        // (A leaf's light a free path in, or at its middle when thinner:
-        // what an opaque piece sends comes from its near edge, not from
-        // wherever its middle fell, which would light a deck's top darker or
-        // lighter row by row as the pieces cross it.)
-        if (litSigma > 0.0) {
-            if (!sky) {
-                clSkyAt(ro, rd * litAt, skyAbove, groundBelow);
-                sky = true;
-            }
-            clIntegrate(m, tau, ro + rd * litAt, litAt, litLen, litSigma, s, nu, albedo, E, skyAbove, groundBelow);
-        }
-        if (advance) {
-            ++idx;
-            while (level > 0 && (idx & 1) == 0) {
-                idx >>= 1;
-                --level;
-            }
-            if (level == 0 && idx > 0) {
-                t = end;
-                mode = 0;
-            }
+            t += dt;
         }
     }
     float alpha = 1.0 - m.T;
 #ifdef CL_DEBUG_STEPS
-    outColor = vec4(vec3(float(dbgProbe) / 40.0, float(dbgSub) / 40.0, float(steps) / 160.0) * 4e4, 1.0);
+    // (Defined 1, the steps a pixel takes, 2 the module's samples, as hues:
+    // < 4 blue, < 8 cyan, < 16 green, < 32 yellow, < 64 red, < 128 magenta,
+    // more white.)
+    const vec3 hue[7] = vec3[7](vec3(0, 0, 1), vec3(0, 1, 1), vec3(0, 1, 0), vec3(1, 1, 0), vec3(1, 0, 0),
+                                vec3(1, 0, 1), vec3(1, 1, 1));
+    int nDbg = CL_DEBUG_STEPS == 1 ? steps : evals;
+    int bDbg = nDbg < 4 ? 0 : nDbg < 8 ? 1 : nDbg < 16 ? 2 : nDbg < 32 ? 3 : nDbg < 64 ? 4 : nDbg < 128 ? 5 : 6;
+    outColor = vec4(hue[bDbg] * 1e6, 1.0);
     return;
 #endif
     if (alpha < 1.0 / 1024.0) discard;

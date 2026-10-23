@@ -126,7 +126,7 @@ embed_vk_shader(sky/scene_cloud_layer.glsl     kVkSceneCloudLayerSrc)
 embed_vk_shader(sky/cloud_module.glsl          kVkCloudModuleSrc)
 embed_vk_shader(sky/clouds.frag                kVkCloudsFragSrc)
 embed_vk_shader(sky/clouds_cover.comp          kVkCloudsCoverCompSrc)
-embed_vk_shader(sky/clouds_shadow.comp         kVkCloudsShadowCompSrc)
+embed_vk_shader(sky/clouds_cache.comp          kVkCloudsCacheCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)

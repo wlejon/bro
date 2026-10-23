@@ -1,0 +1,67 @@
+#version 450
+// The cache's distance to cloud (vulkan/sky/scene_clouds.cpp; sky/
+// clouds_layout.h): for the texels clouds_cache.comp baked (the same rows),
+// how far (metres, the most of the distances along the chart's two axes and
+// up) the nearest texel that holds cloud lies, out to CL_CACHE_REACH cells
+// across and CL_CACHE_REACH bins up; the march crosses that much clear air
+// in one step (Nubis 3's empty-space skipping). The usual separable
+// distance transform, an axis a pass (push.rows.w): along the first axis
+// into the first scratch, the second into the second, then up the deck
+// into the cache's w. A cell past its level's window counts as cloud (what
+// is there is not held); air above and below the deck as clear.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
+
+layout(set = 0, binding = CL_B_CACHE_OUT, rgba16f) uniform image3D cacheOut;
+layout(set = 0, binding = CL_B_DIST_A, r16f) uniform image3D distA;
+layout(set = 0, binding = CL_B_DIST_B, r16f) uniform image3D distB;
+
+layout(push_constant) uniform Push {
+    ivec4 rows;    // x the first level, y the first row, z the step between rows, w the pass (0 .. 2)
+} push;
+
+const float CL_HOLDS = 2e-5;   // the extinction that counts as cloud
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z;
+    int k = push.rows.x + int(gl_GlobalInvocationID.z) / CL_CACHE_BINS;
+    int bin = int(gl_GlobalInvocationID.z) % CL_CACHE_BINS;
+    if (x >= CL_CACHE_SIDE || y >= CL_CACHE_SIDE || k >= CL_CACHE_LEVELS) return;
+    float cell = cloudCacheCell(k);
+    int z = k * CL_CACHE_BINS + bin;
+    const int R = CL_CACHE_REACH;
+    if (push.rows.w == 0) {
+        int c = int(clouds.cacheLevel[k].x), g = cloudCacheCellOf(x, c);
+        float d = float(R + 1) * cell;
+        for (int i = -R; i <= R; ++i) {
+            int gi = g + i;
+            bool held = gi >= c - CL_CACHE_SIDE / 2 && gi < c + CL_CACHE_SIDE / 2;
+            if (!held || texelFetch(cloudSigmaMap, ivec3((x + i) & (CL_CACHE_SIDE - 1), y, z), 0).r > CL_HOLDS)
+                d = min(d, float(abs(i)) * cell);
+        }
+        imageStore(distA, ivec3(x, y, z), vec4(d));
+    } else if (push.rows.w == 1) {
+        int c = int(clouds.cacheLevel[k].y), g = cloudCacheCellOf(y, c);
+        float d = float(R + 1) * cell;
+        for (int j = -R; j <= R; ++j) {
+            int gj = g + j;
+            bool held = gj >= c - CL_CACHE_SIDE / 2 && gj < c + CL_CACHE_SIDE / 2;
+            float a = held ? imageLoad(distA, ivec3(x, (y + j) & (CL_CACHE_SIDE - 1), z)).r : 0.0;
+            d = min(d, max(float(abs(j)) * cell, a));
+        }
+        imageStore(distB, ivec3(x, y, z), vec4(d));
+    } else {
+        float binH = clouds.cacheE1.w;
+        float d = float(R + 1) * max(cell, binH);
+        // (Past the bins it reads, up or down within the deck: as far as known.)
+        if (bin - R > 0 || bin + R < CL_CACHE_BINS - 1) d = min(d, float(R + 1) * binH);
+        for (int b = max(bin - R, 0); b <= min(bin + R, CL_CACHE_BINS - 1); ++b)
+            d = min(d, max(float(abs(b - bin)) * binH, imageLoad(distB, ivec3(x, y, k * CL_CACHE_BINS + b)).r));
+        vec4 v = imageLoad(cacheOut, ivec3(x, y, z));
+        imageStore(cacheOut, ivec3(x, y, z), vec4(v.xyz, d));
+    }
+}

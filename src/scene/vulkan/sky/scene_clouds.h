@@ -6,17 +6,24 @@
 //
 //   - The module's set (CloudShaders, a ModuleShaders set): the march
 //     (sky/clouds.frag), the cover's bake (sky/clouds_cover.comp) and the
-//     shadow's levels (sky/clouds_shadow.comp), each with the world's
+//     cache's extinction (sky/clouds_cache.comp), each with the world's
 //     module in sky/cloud_module.glsl's place and, for a deck set over a
 //     land with processes, its grid's layout in ground/land_grid_config.glsl's.
 //   - The noise (sky/clouds_noise.comp): one tile of tiling noise and its
 //     mips, made once when a scene first has clouds.
 //   - The cover: the module's cloudCover over a cube about the body, baked
 //     when the clouds are set (and when the land they read is ready).
-//   - The shadow: what the deck leaves of the sun over CL_SHADOW_LEVELS
-//     levels about the body's point under the eye, remade every frame the
-//     deck is drawn, read by every lit shader (the lighting set's binding
-//     24; scene_lighting.glsl's sceneCloudSun).
+//   - The cache (sky/clouds_layout.h): the deck's extinction over levels of
+//     windows about the eye's nadir on a chart fixed to the body, and the
+//     depths from each texel toward the sun and up (sky/clouds_light.comp);
+//     a level baked whole when its window moves, a share of every level's
+//     rows each frame. The march reads it in the module's place but for
+//     the leaves of near clouds.
+//   - The shadow (sky/clouds_shadow.comp): what the deck leaves of the sun
+//     over CL_SHADOW_LEVELS levels about the body's point under the eye,
+//     read from the cache every frame the deck is drawn, read by every lit
+//     shader (the lighting set's binding 24; scene_lighting.glsl's
+//     sceneCloudSun).
 //   - The march: drawn over the opaque surfaces in the HDR scope
 //     (pass_clouds.h).
 //
@@ -47,11 +54,11 @@ public:
     enum Stage : int {
         March,    // clouds.frag
         Cover,    // clouds_cover.comp
-        Shadow,   // clouds_shadow.comp
+        Cache,    // clouds_cache.comp
         kStages
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {
-        BuiltinSceneShader::CloudsFrag, BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsShadowComp};
+        BuiltinSceneShader::CloudsFrag, BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsCacheComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl.
@@ -63,7 +70,7 @@ public:
 
     VkShaderModule operator[](Stage s) const { return module(s); }
     VkPipeline cover = VK_NULL_HANDLE;
-    VkPipeline shadow = VK_NULL_HANDLE;
+    VkPipeline cache = VK_NULL_HANDLE;
 };
 
 class SceneClouds {
@@ -98,6 +105,11 @@ public:
         float shadowN[4];
         float shadowE1[4];
         float shadowE2[4];
+        float cacheC[4];
+        float cacheE1[4];
+        float cacheE2[4];
+        float cacheNadir[4];
+        float cacheLevel[13][4];
         float data[64][4];
     };
 
@@ -107,6 +119,12 @@ private:
     bool createNoise(SceneGpu& gpu);
     void recordNoise(SceneFrame& frame);
     VkDescriptorSet writeSet(SceneFrame& frame, bool march, bool bake);
+    /// Where the cache's chart and windows lie this frame, and what of it
+    /// is baked (beginFrame).
+    void placeCache(SceneFrame& frame);
+    /// The cache's bakes: its extinction, then its light, over the levels
+    /// and rows `bakes_` lists.
+    void recordCache(SceneFrame& frame);
 
     SceneVkDevice* device_ = nullptr;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
@@ -119,6 +137,13 @@ private:
     VkPipeline noisePipeline_ = VK_NULL_HANDLE;
     VkSampler coverSampler_ = VK_NULL_HANDLE;
     VkSampler noiseSampler_ = VK_NULL_HANDLE;
+    VkSampler cacheSampler_ = VK_NULL_HANDLE;
+    VkShaderModule lightCs_ = VK_NULL_HANDLE;
+    VkShaderModule shadowCs_ = VK_NULL_HANDLE;
+    VkPipeline lightPipeline_ = VK_NULL_HANDLE;
+    VkShaderModule distCs_ = VK_NULL_HANDLE;
+    VkPipeline distPipeline_ = VK_NULL_HANDLE;
+    VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
 
     // The module sets, by their sources' hash (-1: did not compile).
     std::vector<std::unique_ptr<CloudShaders>> sets_;
@@ -137,6 +162,22 @@ private:
     } noise_;
     SceneVkImage cover_, shadow_;
     SceneVkImage coverNone_, shadowNone_, gridNone_;
+    SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_;
+
+    // The cache's chart (the body's frame) and its levels' windows, as
+    // baked; a bake this frame: levels from `first`, its rows from `y0`
+    // every `yStep`, `levels` of them.
+    struct CacheBake {
+        int first, levels, y0, yStep;
+    };
+    std::vector<CacheBake> bakes_;
+    double chartC_[3] = {}, chartE1_[3] = {}, chartE2_[3] = {};
+    long long levelCentre_[13][2] = {};
+    bool chartValid_ = false;
+    uint64_t cacheKey_ = 0;      // the deck the cache holds (its module, generation)
+    float cacheTime_ = 0.0f;     // the wind's time it was last baked at
+    float cacheSun_[3] = {};     // and the sun (the body's frame)
+    uint32_t cacheFrame_ = 0;
 
     Block block_{};
     CloudShadowGpu shadowBlock_{};
