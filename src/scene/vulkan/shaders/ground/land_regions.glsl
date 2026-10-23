@@ -19,6 +19,9 @@
 //                                         an includer's exact charts, landChartOf)
 //   vec4 landFieldAt(int c, vec2 x)       channel c at chart point x (flat)
 //   ...From(c, p, minLevel)               only the levels from minLevel up
+//   float landFieldCoverDir(int level, vec3 d, vec3 p) / landFieldCoverAt(level, x)
+//                                         the share of the value from levels 0 to
+//                                         `level` (0 where none is in)
 
 #ifdef LAND_GRID
 
@@ -139,15 +142,13 @@ vec4 landChartOf(int f, vec3 d, vec3 p) {
 #endif
 }
 
-vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) {
-    if (c >= LAND_REGION_KEEP) return landGridAtDir(c, d);
-    // The face the point is on; the others only within a band of its edge.
-    int f0 = landGridFace(d);
-    vec2 x0 = landGridChart(d, f0);
+// Levels minLevel to endLevel - 1 of channel c at d: their share of the
+// value, and in `rest` the share still the coarser field's.
+vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f0, vec2 x0, out float rest) {
     float m0 = max(abs(x0.x), abs(x0.y));
     vec4 acc = vec4(0.0);
-    float rest = 1.0;   // the share still the coarser levels'
-    for (int L = minLevel; L < LAND_REGION_LEVELS && rest > 0.0; ++L) {
+    rest = 1.0;   // the share still the coarser levels'
+    for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
         float fade = landRegionFade(L);
         if (fade <= 0.0) continue;
         float band = float(LAND_REGION_APRON) * landRegionCell(L);
@@ -177,16 +178,30 @@ vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) {
             rest *= 1.0 - cover * fade / wsum;
         }
     }
+    return acc;
+}
+vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) {
+    if (c >= LAND_REGION_KEEP) return landGridAtDir(c, d);
+    // The face the point is on; the others only within a band of its edge.
+    int f0 = landGridFace(d);
+    vec2 x0 = landGridChart(d, f0);
+    float rest;
+    vec4 acc = landFieldDirLevels(c, d, p, minLevel, LAND_REGION_LEVELS, f0, x0, rest);
     if (rest > 0.0) acc += rest * landGridAt(c, f0, x0);
     return acc;
 }
 vec4 landFieldDir(int c, vec3 d, vec3 p) { return landFieldDirFrom(c, d, p, 0); }
+float landFieldCoverDir(int level, vec3 d, vec3 p) {
+    int f0 = landGridFace(d);
+    float rest;
+    landFieldDirLevels(0, d, p, 0, level + 1, f0, landGridChart(d, f0), rest);
+    return 1.0 - rest;
+}
 #else
-vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
-    if (c >= LAND_REGION_KEEP) return landGridAt(c, 0, x);
+vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest) {
     vec4 acc = vec4(0.0);
-    float rest = 1.0;
-    for (int L = minLevel; L < LAND_REGION_LEVELS && rest > 0.0; ++L) {
+    rest = 1.0;
+    for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
         float fade = landRegionFade(L);
         if (fade <= 0.0) continue;
         vec4 sum = vec4(0.0);
@@ -195,10 +210,21 @@ vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
         acc += rest * fade * sum;
         rest *= 1.0 - cover * fade;
     }
+    return acc;
+}
+vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
+    if (c >= LAND_REGION_KEEP) return landGridAt(c, 0, x);
+    float rest;
+    vec4 acc = landFieldAtLevels(c, x, minLevel, LAND_REGION_LEVELS, rest);
     if (rest > 0.0) acc += rest * landGridAt(c, 0, x);
     return acc;
 }
 vec4 landFieldAt(int c, vec2 x) { return landFieldAtFrom(c, x, 0); }
+float landFieldCoverAt(int level, vec2 x) {
+    float rest;
+    landFieldAtLevels(0, x, 0, level + 1, rest);
+    return 1.0 - rest;
+}
 #endif
 
 #else   // no regions: the global grid alone
@@ -206,9 +232,11 @@ vec4 landFieldAt(int c, vec2 x) { return landFieldAtFrom(c, x, 0); }
 #ifdef LAND_GRID_ROUND
 vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) { return landGridAtDir(c, d); }
 vec4 landFieldDir(int c, vec3 d, vec3 p) { return landGridAtDir(c, d); }
+float landFieldCoverDir(int level, vec3 d, vec3 p) { return 0.0; }
 #else
 vec4 landFieldAtFrom(int c, vec2 x, int minLevel) { return landGridAt(c, 0, x); }
 vec4 landFieldAt(int c, vec2 x) { return landGridAt(c, 0, x); }
+float landFieldCoverAt(int level, vec2 x) { return 0.0; }
 #endif
 
 #endif

@@ -71,6 +71,27 @@ vec4 landGrid(int c, vec3 p) {
     return vec4(0.0);
 #endif
 }
+// How much of landGrid's kept channels at p are its regional grids' of
+// `level` or finer (0 .. 1): 0 where none is in, or past the reach of a
+// texel this coarse (a tile reads a level only while its texel is no wider
+// than the level's cells). What the world's relief lacks there, it can know
+// it lacks: a surface shading a band laid down on a level's regions spreads
+// its lines by the band's amplitude where the level is not in, so the land
+// past the regions looks as the land in them does at a distance.
+float landGridCover(int level, vec2 p) {
+#if defined(LAND_GRID) && !defined(LAND_GRID_ROUND)
+    return landFieldCoverAt(level, p);
+#else
+    return 0.0;
+#endif
+}
+float landGridCover(int level, vec3 p) {
+#if defined(LAND_GRID_ROUND) && defined(LAND_ROUND)
+    return landFieldCoverDir(level, normalize(vec3(landOx.x, landOy.x, landOz.x) + p), p);
+#else
+    return 0.0;
+#endif
+}
 
 struct LandSurface {
     vec3 albedo;     // linear

@@ -75,9 +75,14 @@
  * Start from `landSurfaceOf(albedo)`: bare ground, nothing growing (cover
  * (0, 0, 1, 0), herbs 0). It may call `landHeight(vec2 p)` (the land's
  * height: the tree plus the processes'), `landTree(vec2 p)` (the tree alone,
- * at the seed), `landNoise(vec2 p, int seed)` and `landGrid(int c, vec2 p)`
- * (the processes' channel c, zero with none; on a round body each takes the
- * vec3 datum point `q.at` instead), `landData(int i)` (the
+ * at the seed), `landNoise(vec2 p, int seed)`, `landGrid(int c, vec2 p)`
+ * (the processes' channel c, zero with none) and `landGridCover(int level,
+ * vec2 p)` (how much of landGrid's kept channels there are the regional
+ * grids' of `level` or finer, 0 .. 1: 0 past the regions about the eye or
+ * where the texel is wider than the level's cells, so a surface shading a
+ * band of relief laid down on a level can spread its lines by the band
+ * where the band is not there; see REGIONAL GRIDS) (on a round body each
+ * takes the vec3 datum point `q.at` instead), `landData(int i)` (the
  * node's `data`, vec4 i of at most 64), its own functions and any other
  * tree's GLSL it carries (`someNode.glsl({ name: 'cover' })`). It runs
  * once a texel of a tile as the tile is made, not every frame, so it may
