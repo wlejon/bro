@@ -101,7 +101,10 @@
  * and `landTree(p)`. Channel 0 is the land's height over its tree: the
  * height is `x + y * landTree(p)`, and a cell starts at x 0, y 1 (the tree
  * alone), so a process can lay down the coarse form in x and say how much
- * of the tree's detail rides on it in y (none in a sea, more on a range); every
+ * of the tree's detail rides on it in y (none in a sea, more on a range).
+ * Its z and w are the world's own, read back with it: the plants standing on
+ * the land read them in their rules (`{ own: 'z' | 'w' }`, vegetation-api.js),
+ * so a climate worked out here places the forests as it colours the ground. Every
  * channel is the surface module's through `landGrid(c, p)` (moisture, flow,
  * rock: whatever the world computes). They run on the GPU when the land is
  * made (a new height, seed, extent, body or processes runs them again),

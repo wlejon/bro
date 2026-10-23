@@ -45,12 +45,25 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
         expr = it->second + "(p, " + std::to_string(f->seed()) + ")";
         return true;
     };
+    // A term: its field times the land's own value (its grid's channel 0's
+    // z or w at the point, scene_land_layer.glsl's landGrid).
+    const auto term = [&](const PlacementTerm& t, const char* none, std::string& expr) {
+        if (t.none()) {
+            expr = none;
+            return true;
+        }
+        if (!call(t.field, "1.0", expr)) return false;
+        if (t.own >= 0)
+            expr = "(" + expr + ") * (" + num(t.offset) + " + " + num(t.scale) + " * landGrid(0, p)." +
+                   (t.own == 0 ? "z" : "w") + ")";
+        return true;
+    };
 
     std::string body;
     for (const PlacementLayer& layer : rules.layers) {
         if (!(layer.spacing > 0.0f) || layer.species.empty()) continue;
         std::string chance, scale;
-        if (!call(layer.chance, "1.0", chance) || !call(layer.scale, "1.0", scale)) return false;
+        if (!term(layer.chance, "1.0", chance) || !term(layer.scale, "1.0", scale)) return false;
         body += "    {\n";
         body += "        float chance = clamp(" + chance + ", 0.0, 1.0);\n";
         body += "        float s = max(" + scale + ", 0.0);\n";
@@ -63,7 +76,7 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
             const double height = rec[0], radius = rec[2];
             const double crown = 3.14159265358979 * radius * radius;
             std::string w;
-            if (!call(c.weight, "1.0", w)) return false;
+            if (!term(c.weight, "1.0", w)) return false;
             body += "        {\n";
             body += "            float w = max(" + w + ", 0.0);\n";
             body += "            sum += w;\n";

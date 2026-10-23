@@ -148,6 +148,33 @@ void blur(inout vec4 v[PROC_CHANNELS]) {
     assert(untilReady(land), 'ready with plants on it');
     for (let i = 0; i < 60 && plants.plantPlacement().pending > 0; i++) frames(1);
     assert(plants.plantPlacement().cells > 0, `placed once it is (${JSON.stringify(plants.plantPlacement())})`);
+
+    // Channel 0's z and w are the world's own, read by the plants' rules: a
+    // wood of dense crowns where z is 1 (x < 0) and none where it is 0, the
+    // land red under it; seen from 200 m straight down the west half is
+    // the crowns' green, the east the land's red. (Their canopy past the
+    // plants' range reads the same term: the land's module still compiles.)
+    land.setLand({ surface: RED, processes: { resolution: CELLS, source: `
+void procInit(inout vec4 v[PROC_CHANNELS]) {
+    v[0].x = 0.0;
+    v[0].z = procPoint().x < 0.0 ? 1.0 : 0.0;
+}` } });
+    plants.setPlants({
+        species: [{ height: 8, radius: 3, albedo: [0.02, 0.4, 0.02] }],
+        rules: { ground: N('Constant', { Value: 0 }), range: 150, layers: [{ spacing: 5, chance: { own: 'z' }, species: [0] }] },
+    });
+    assert(untilReady(land), 'own values: ready');
+    for (let i = 0; i < 120 && plants.plantPlacement().pending > 0; i++) frames(1);
+    look(0, 200, 0);
+    frames(10);
+    {
+        const img = scn.captureFrame();
+        const westRed = patchAvg(img, 8, S / 4, S / 2 - 16, (3 * S) / 4, 0);
+        const eastRed = patchAvg(img, S / 2 + 16, S / 4, S - 8, (3 * S) / 4, 0);
+        assert(land.landStats().compiled, `the land compiles with the plants' own-value canopy (${JSON.stringify(land.landStats())})`);
+        assert(eastRed > 40 && westRed < eastRed / 2,
+               `the woods grow where the land's own z is 1, not where 0 (red west ${westRed.toFixed(1)}, east ${eastRed.toFixed(1)})`);
+    }
     plants.visible = false;
 
     // --- a second channel the surface reads -------------------------------------

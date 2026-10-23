@@ -106,12 +106,19 @@
             return known.get(key);
         };
         const num = (v) => (typeof v === 'number' ? v : undefined);
+        // A layer's value: a field, or the land's own value ({ own: 'z' | 'w',
+        // scale, offset, times: a field it multiplies }).
+        const term = (t) => {
+            if (!t || typeof t !== 'object' || t.own === undefined) return field(t);
+            if (t.own !== 'z' && t.own !== 'w') throw new TypeError("createPlants: a rule's `own` is 'z' or 'w'");
+            return { own: t.own === 'z' ? 0 : 1, scale: num(t.scale), offset: num(t.offset), field: field(t.times) };
+        };
         const layers = (r.layers || []).map((l, i) => ({
-            spacing: num(l.spacing), jitter: num(l.jitter), chance: field(l.chance),
+            spacing: num(l.spacing), jitter: num(l.jitter), chance: term(l.chance),
             species: (l.species || []).map((s) => (typeof s === 'number' ? { species: s, weight: null }
-                                                                     : { species: s.species | 0, weight: field(s.weight) })),
-            scale: field(l.scale), scaleVariety: num(l.scaleVariety),
-            tint: field(l.tint), tintVariety: num(l.tintVariety),
+                                                                     : { species: s.species | 0, weight: term(s.weight) })),
+            scale: term(l.scale), scaleVariety: num(l.scaleVariety),
+            tint: term(l.tint), tintVariety: num(l.tintVariety),
             sink: num(l.sink), seed: typeof l.seed === 'number' ? l.seed : i + 1,
         }));
         return JSON.stringify({ fields, ground: field(r.ground), range: num(r.range), hysteresis: num(r.hysteresis), layers });

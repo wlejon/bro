@@ -46,18 +46,28 @@ namespace bro::scene {
 
 class WorldWorkers;
 
+/// A layer's value over the ground: a field, the land's own value (its
+/// processes' channel 0's z or w, LandBase::own) as offset + scale * it,
+/// or the two multiplied. Neither: none (the rule's default).
+struct PlacementTerm {
+    FieldRef field;
+    int own = -1;           // 0 z, 1 w (-1: none)
+    float scale = 1.0f, offset = 0.0f;
+    bool none() const { return !field && own < 0; }
+};
+
 struct PlacementLayer {
     float spacing = 5.0f;   // between candidates, metres
     float jitter = 0.9f;    // of the spacing: a candidate moves up to half of it each way
-    FieldRef chance;        // where a candidate grows: its draw under this (none: every one)
+    PlacementTerm chance;   // where a candidate grows: its draw under this (none: every one)
     struct Choice {
         int species = 0;
-        FieldRef weight;    // its share where it is (none: 1)
+        PlacementTerm weight;   // its share where it is (none: 1)
     };
     std::vector<Choice> species;
-    FieldRef scale;         // a plant's size (none: 1) ...
+    PlacementTerm scale;    // a plant's size (none: 1) ...
     float scaleVariety = 0.0f;   // ... times 1 + this of its own, either way
-    FieldRef tint;          // its tint (none: 0) ...
+    PlacementTerm tint;     // its tint (none: 0) ...
     float tintVariety = 0.0f;    // ... plus up to half this of its own, either way
     float sink = 0.0f;      // how far its foot stands into the ground
     uint32_t seed = 1;      // its draws'
@@ -74,12 +84,14 @@ struct PlacementRules {
 /// Rules from their JSON (what js/scene_plants.js sends): its fields a
 /// table, {"tree": encoded, "seed": n}, each rule's field an index into it:
 ///   {"fields": [...], "ground": i, "range": m, "hysteresis": m,
-///    "layers": [{"spacing", "jitter", "chance": i,
-///                "species": [{"species": s, "weight": i}],
-///                "scale": i, "scaleVariety", "tint": i, "tintVariety",
+///    "layers": [{"spacing", "jitter", "chance": t,
+///                "species": [{"species": s, "weight": t}],
+///                "scale": t, "scaleVariety", "tint": t, "tintVariety",
 ///                "sink", "seed"}]}
-/// A field left out or null is none. False, with a message, on JSON that
-/// is not this, or a tree that does not decode.
+/// where a term t is a field's index or {"own": 0 | 1, "scale", "offset",
+/// "field": i} (PlacementTerm). A field or term left out or null is none.
+/// False, with a message, on JSON that is not this, or a tree that does
+/// not decode.
 bool parsePlacementRules(const std::string& json, PlacementRules& out, std::string* error = nullptr);
 
 /// The plants of leaf `key`, PlantsNode's records (kPlantFloats each:

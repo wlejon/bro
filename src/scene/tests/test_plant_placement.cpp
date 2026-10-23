@@ -99,8 +99,8 @@ PlacementRules oneLayer(float spacing, FieldRef chance, float sink = 0.0f) {
     PlacementLayer l;
     l.spacing = spacing;
     l.jitter = 0.9f;
-    l.chance = std::move(chance);
-    l.species.push_back({2, nullptr});
+    l.chance.field = std::move(chance);
+    l.species.push_back({2, {}});
     l.sink = sink;
     r.layers.push_back(l);
     return r;
@@ -174,9 +174,9 @@ void testCell() {
 
     // The species by their weights, 1 : 3.
     PlacementRules mix = oneLayer(2.0f, nullptr);
-    mix.layers[0].species = {{0, field(constant(1.0f))}, {5, field(constant(3.0f))}};
+    mix.layers[0].species = {{0, {field(constant(1.0f))}}, {5, {field(constant(3.0f))}}};
     mix.layers[0].scaleVariety = 0.2f;
-    mix.layers[0].scale = field(constant(2.0f));
+    mix.layers[0].scale.field = field(constant(2.0f));
     std::map<int, int> count;
     bool sized = true;
     for (int x = 0; x < 4; ++x) {
@@ -200,8 +200,8 @@ void testJson() {
                            "{\"species\":1}],\"scaleVariety\":0.3,\"sink\":0.2,\"seed\":11}]}";
     check(parsePlacementRules(ok, r, &err), "rules parse: " + err);
     check(r.range == 500.0f && r.ground && r.ground->seed() == 3 && r.layers.size() == 1 &&
-              r.layers[0].spacing == 6.0f && r.layers[0].chance == r.ground && r.layers[0].species.size() == 2 &&
-              r.layers[0].species[1].weight == nullptr && r.layers[0].seed == 11u && r.layers[0].sink == 0.2f,
+              r.layers[0].spacing == 6.0f && r.layers[0].chance.field == r.ground && r.layers[0].species.size() == 2 &&
+              r.layers[0].species[1].weight.none() && r.layers[0].seed == 11u && r.layers[0].sink == 0.2f,
           "the rules' fields shared by index, their numbers read");
     check(!parsePlacementRules("{\"fields\":[],\"ground\":2}", r, &err), "a field index past the table fails");
     check(!parsePlacementRules("{\"fields\":[{\"tree\":\"zz\"}]}", r, &err), "a tree that does not decode fails");
@@ -545,6 +545,84 @@ void testBase() {
     check(!b.empty() && worstR < 0.05, "round: a plant stands on the ground plus the base (worst " + std::to_string(worstR) + ")");
 }
 
+// The land's own values (LandBase::own, channel 0's z and w) as the rules'
+// terms: on the plane the woods only where z says (1 west of x = 0, 0 east),
+// their species by w (1 north of z = 0, 0 south) and by 1 - w; a term
+// times a field; with no base the own value is 0, so nothing grows; and the
+// JSON's own terms, a bad one refused.
+void testOwn() {
+    const CellGrid grid;
+    LandGrid g;
+    g.configure(Body{}, 1024.0, 64);   // 32 m texels
+    LandBase b{g, {}, {}, {}};
+    const int s = b.grid.side();
+    b.values.assign(b.grid.texels(), 0.0f);
+    b.own[0].assign(b.grid.texels(), 0.0f);
+    b.own[1].assign(b.grid.texels(), 0.0f);
+    for (int j = 0; j < s; ++j)
+        for (int i = 0; i < s; ++i) {
+            const double x = -b.grid.half() + (i - 0.5) * b.grid.cell(), z = -b.grid.half() + (j - 0.5) * b.grid.cell();
+            b.own[0][static_cast<size_t>(j) * s + i] = x < 0.0 ? 1.0f : 0.0f;
+            b.own[1][static_cast<size_t>(j) * s + i] = z < 0.0 ? 1.0f : 0.0f;
+        }
+    PlacementRules r = oneLayer(4.0f, nullptr);
+    r.base = std::make_shared<const LandBase>(std::move(b));
+    r.layers[0].chance.own = 0;
+    r.layers[0].species = {{0, {}}, {5, {}}};
+    r.layers[0].species[0].weight.own = 1;
+    r.layers[0].species[1].weight.own = 1;
+    r.layers[0].species[1].weight.scale = -1.0f;
+    r.layers[0].species[1].weight.offset = 1.0f;
+    int west = 0, east = 0, wrong = 0, total = 0;
+    for (int cz = -3; cz < 3; ++cz)
+        for (int cx = -3; cx < 3; ++cx) {
+            const std::vector<float> p = placeCell(r, grid, CellKey{cx, cz, 0, 0});
+            for (size_t i = 0; i < p.size(); i += PlantsNode::kPlantFloats) {
+                const float x = p[i], z = p[i + 2];
+                const int sp = static_cast<int>(p[i + 5]);
+                ++total;
+                if (x < -40.0f) ++west;
+                if (x > 40.0f) ++east;
+                if ((z < -40.0f && sp != 0) || (z > 40.0f && sp != 5)) ++wrong;
+            }
+        }
+    check(west > 300 && east == 0, "own z: the woods grow where it is 1, not where 0 (" + std::to_string(west) +
+                                       " west, " + std::to_string(east) + " east)");
+    check(wrong == 0, "own w: the species by w and by 1 - w (" + std::to_string(wrong) + " of " +
+                          std::to_string(total) + " the wrong one)");
+
+    // Times a field: a constant 0.5 halves the woods.
+    PlacementRules half = r;
+    half.layers[0].chance.field = field(constant(0.5f));
+    int halfWest = 0;
+    for (int cz = -3; cz < 3; ++cz)
+        for (int cx = -3; cx < 0; ++cx) {
+            const std::vector<float> p = placeCell(half, grid, CellKey{cx, cz, 0, 0});
+            for (size_t i = 0; i < p.size(); i += PlantsNode::kPlantFloats) halfWest += p[i] < -40.0f ? 1 : 0;
+        }
+    check(std::abs(halfWest - 0.5 * west) < 0.12 * west,
+          "own z times a field of 0.5: half the woods (" + std::to_string(halfWest) + " of " + std::to_string(west) + ")");
+
+    PlacementRules bare = r;
+    bare.base = nullptr;
+    size_t none = 0;
+    for (int cx = -3; cx < 3; ++cx) none += placeCell(bare, grid, CellKey{cx, 0, 0, 0}).size();
+    check(none == 0, "with no land the own value is 0: nothing grows");
+
+    PlacementRules parsed;
+    std::string err;
+    const std::string ok = "{\"fields\":[{\"tree\":\"" + constant(0.5f) + "\",\"seed\":3}],\"layers\":[{\"spacing\":4,"
+                           "\"chance\":{\"own\":0,\"scale\":2,\"offset\":-0.5,\"field\":0},"
+                           "\"species\":[{\"species\":1,\"weight\":{\"own\":1}}]}]}";
+    check(parsePlacementRules(ok, parsed, &err), "own terms parse: " + err);
+    const PlacementTerm& c = parsed.layers.empty() ? PlacementTerm{} : parsed.layers[0].chance;
+    check(c.own == 0 && c.scale == 2.0f && c.offset == -0.5f && c.field && !parsed.layers.empty() &&
+              parsed.layers[0].species[0].weight.own == 1 && !parsed.layers[0].species[0].weight.field,
+          "an own term's value, scale, offset and field read");
+    check(!parsePlacementRules("{\"fields\":[],\"layers\":[{\"chance\":{\"own\":2},\"species\":[0]}]}", parsed, &err),
+          "an own value not z or w is refused");
+}
+
 int main() {
     testFields();
     testCell();
@@ -554,6 +632,7 @@ int main() {
     testNode();
     testRound();
     testBase();
+    testOwn();
     std::printf("plant placement: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

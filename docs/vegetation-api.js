@@ -414,15 +414,28 @@
  * A field over the ground (x, z): a FastNoise node, its `encode()`, a
  * constant, or either with its seed (default the rules' `seed`, else 1337).
  *
+ * @typedef {PlantField|{own: 'z'|'w', scale?: number, offset?: number, times?: PlantField}} PlantTerm
+ * A layer's value: a field, or the value the land's processes leave in
+ * channel 0's z or w where the candidate stands (land-api.js: a climate, a
+ * biome's share, whatever the world worked out there) as `offset + scale *`
+ * it (defaults 0 and 1), times the field `times` if given. On a land with no
+ * processes (or none `land`) the own value is 0. The plants' canopy past
+ * their range reads the same terms, so it agrees with them.
+ * @example
+ *   // Woods where the processes put the woods' share in z, conifers where
+ *   // w (cold 1 .. warm 0) says it is cold, broadleaves where warm.
+ *   rules: { layers: [{ spacing: 7, chance: { own: 'z', times: patches },
+ *            species: [{ species: 0, weight: { own: 'w' } }, { species: 1, weight: { own: 'w', scale: -1, offset: 1 } }] }] }
+ *
  * @typedef {Object} PlantLayer
  * @property {number} [spacing=5] - m between candidates.
  * @property {number} [jitter=0.9] - how far each is moved off its grid point: up to half this of the spacing each way.
- * @property {PlantField} [chance] - 0..1, the chance a candidate grows (default 1).
- * @property {Array<number|{species: number, weight: PlantField}>} species - a candidate's species,
+ * @property {PlantTerm} [chance] - 0..1, the chance a candidate grows (default 1).
+ * @property {Array<number|{species: number, weight: PlantTerm}>} species - a candidate's species,
  *   drawn by the weights where it stands (a bare index weighs 1); where every weight is 0, none grows.
- * @property {PlantField} [scale] - its size (default 1); under 0, none grows.
+ * @property {PlantTerm} [scale] - its size (default 1); under 0, none grows.
  * @property {number} [scaleVariety=0] - each plant's own: the size times 1 +- this.
- * @property {PlantField} [tint] - -1..1 (default 0).
+ * @property {PlantTerm} [tint] - -1..1 (default 0).
  * @property {number} [tintVariety=0] - each plant's own, +- half of this.
  * @property {number} [sink=0] - m its foot is set below the ground.
  * @property {number} [seed] - the layer's draws (default its index + 1).

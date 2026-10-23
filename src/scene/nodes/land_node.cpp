@@ -112,9 +112,21 @@ std::string LandNode::processDispatch() const {
     return s;
 }
 
-void LandNode::setGridBase(uint64_t serial, std::vector<float> base, std::vector<float> scales) {
-    if (serial != gridSerial_ || base.size() != grid_.texels() || scales.size() != grid_.texels()) return;
-    base_ = std::make_shared<const LandBase>(LandBase{grid_, std::move(base), std::move(scales)});
+void LandNode::setGridBase(uint64_t serial, std::vector<float> channel0) {
+    const size_t n = grid_.texels();
+    if (serial != gridSerial_ || channel0.size() != n * 4) return;
+    LandBase b{grid_, {}, {}, {}};
+    b.values.resize(n);
+    b.scales.resize(n);
+    b.own[0].resize(n);
+    b.own[1].resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        b.values[i] = channel0[i * 4];
+        b.scales[i] = channel0[i * 4 + 1];
+        b.own[0][i] = channel0[i * 4 + 2];
+        b.own[1][i] = channel0[i * 4 + 3];
+    }
+    base_ = std::make_shared<const LandBase>(std::move(b));
     baseSerial_ = serial;
     // Its heights (and so its tiles' boxes) are the tree's over the base.
     ++generation_;

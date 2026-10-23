@@ -98,10 +98,10 @@ public:
     /// switch over its passes (land_process_dispatch.glsl's place).
     std::string gridConfig() const;
     std::string processDispatch() const;
-    /// The processes' first channel's x and y (the height added, the tree's
-    /// scale), every texel of the grid (texels() floats each), read back for
-    /// grid serial `serial`.
-    void setGridBase(uint64_t serial, std::vector<float> base, std::vector<float> scales);
+    /// The processes' first channel (x the height added, y the tree's scale,
+    /// z and w the world's own: LandBase), 4 floats every texel of the grid,
+    /// read back for grid serial `serial`.
+    void setGridBase(uint64_t serial, std::vector<float> channel0);
     /// It has no processes, or theirs is in.
     bool ready() const { return !process_.active() || baseSerial_ == gridSerial_; }
     /// What its processes add to its tree (null with none, or until ready):

@@ -102,13 +102,22 @@ private:
 };
 
 /// A land's processes' height over its tree's, as read back (their channel
-/// 0: x added, y the tree's scale): shared, never changed once made, by the
-/// land's CPU heights and the plants that stand on it
-/// (world/plant_placement.h).
+/// 0: x added, y the tree's scale), and the world's own two values beside
+/// it (z and w, what its plants' rules may read: world/plant_placement.h's
+/// PlacementTerm): shared, never changed once made, by the land's CPU
+/// heights and the plants that stand on it.
 struct LandBase {
     LandGrid grid;
     std::vector<float> values;   // the height added, grid.texels()
     std::vector<float> scales;   // the tree's scale, grid.texels() (none: 1)
+    std::vector<float> own[2];   // channel 0's z and w, grid.texels() each (none: 0)
+
+    /// The world's own value k (0 z, 1 w) at a root's chart point, at a
+    /// round body's direction (unit).
+    float ownAt(int k, int root, double x, double z) const {
+        return own[k].empty() ? 0.0f : grid.sample(own[k].data(), root, x, z);
+    }
+    float ownDir(int k, const double dir[3]) const { return own[k].empty() ? 0.0f : grid.sampleDir(own[k].data(), dir); }
 
     /// The land's height over the tree's `tree` at a flat body's (x, z),
     /// at a round body's root and chart point, at its direction (unit).

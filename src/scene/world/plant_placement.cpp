@@ -85,6 +85,21 @@ bool parsePlacementRules(const std::string& json, PlacementRules& out, std::stri
         const util::JsonValue& n = o.get(key);
         return n.isNumber() ? static_cast<float>(n.number) : fallback;
     };
+    const auto termAt = [&](const util::JsonValue& o, const char* key) {
+        PlacementTerm t;
+        const util::JsonValue& v = o.get(key);
+        if (v.isNumber()) {
+            t.field = fieldAt(o, key);
+        } else if (v.isObject()) {
+            const util::JsonValue& own = v.get("own");
+            if (!own.isNumber() || (own.number != 0.0 && own.number != 1.0)) bad = true;
+            else t.own = static_cast<int>(own.number);
+            t.scale = number(v, "scale", 1.0f);
+            t.offset = number(v, "offset", 0.0f);
+            t.field = fieldAt(v, "field");
+        }
+        return t;
+    };
     PlacementRules rules;
     rules.ground = fieldAt(v, "ground");
     rules.range = number(v, "range", rules.range);
@@ -93,12 +108,12 @@ bool parsePlacementRules(const std::string& json, PlacementRules& out, std::stri
         PlacementLayer layer;
         layer.spacing = number(l, "spacing", layer.spacing);
         layer.jitter = number(l, "jitter", layer.jitter);
-        layer.chance = fieldAt(l, "chance");
+        layer.chance = termAt(l, "chance");
         for (const util::JsonValue& s : l.get("species").array)
-            layer.species.push_back({static_cast<int>(s.get("species").number), fieldAt(s, "weight")});
-        layer.scale = fieldAt(l, "scale");
+            layer.species.push_back({static_cast<int>(s.get("species").number), termAt(s, "weight")});
+        layer.scale = termAt(l, "scale");
         layer.scaleVariety = number(l, "scaleVariety", layer.scaleVariety);
-        layer.tint = fieldAt(l, "tint");
+        layer.tint = termAt(l, "tint");
         layer.tintVariety = number(l, "tintVariety", layer.tintVariety);
         layer.sink = number(l, "sink", layer.sink);
         const util::JsonValue& seed = l.get("seed");
@@ -106,7 +121,7 @@ bool parsePlacementRules(const std::string& json, PlacementRules& out, std::stri
                                      : static_cast<uint32_t>(rules.layers.size() + 1);
         rules.layers.push_back(std::move(layer));
     }
-    if (bad) return fail("placement rules: a field index past the table");
+    if (bad) return fail("placement rules: a field index past the table, or an own value not 0 or 1");
     if (!(rules.range > 0.0f) || rules.hysteresis < 0.0f) return fail("placement rules: range must be positive");
     out = std::move(rules);
     return true;
@@ -137,6 +152,27 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
         if (!f) std::fill(o.begin(), o.end(), fallback);
         else if (round) f->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(xs.size()), origin, o.data());
         else f->sample(xs.data(), zs.data(), static_cast<int>(xs.size()), o.data());
+    };
+    // A term: its field (none: 1) times the land's own value there (none: 1).
+    const auto sampleTerm = [&](const PlacementTerm& t, float fallback, std::vector<float>& o) {
+        if (t.none()) {
+            sampleOr(nullptr, fallback, o);
+            return;
+        }
+        sampleOr(t.field, 1.0f, o);
+        if (t.own < 0) return;
+        for (size_t c = 0; c < xs.size(); ++c) {
+            float v = 0.0f;
+            if (rules.base) {
+                if (round) {
+                    const double d[3] = {us[c * 3], us[c * 3 + 1], us[c * 3 + 2]};
+                    v = rules.base->ownDir(t.own, d);
+                } else {
+                    v = rules.base->ownAt(t.own, 0, xs[c], zs[c]);
+                }
+            }
+            o[c] *= t.offset + t.scale * v;
+        }
     };
     for (const PlacementLayer& layer : rules.layers) {
         if (!(layer.spacing > 0.0f) || layer.species.empty()) continue;
@@ -185,7 +221,7 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
                 hashes.insert(hashes.end(), h, h + kDraws);
             }
         // Those that grow.
-        sampleOr(layer.chance, 1.0f, values);
+        sampleTerm(layer.chance, 1.0f, values);
         size_t kept = 0;
         for (size_t c = 0; c < xs.size(); ++c) {
             if (!(unit(hashes[c * kDraws + 2]) < (round ? values[c] * thin[c] : values[c]))) continue;
@@ -213,7 +249,7 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
         for (size_t c = 0; c < kept; ++c) pick[c] = unit(hashes[c * kDraws + 3]);
         std::vector<std::vector<float>> weights(layer.species.size());
         for (size_t k = 0; k < layer.species.size(); ++k) {
-            sampleOr(layer.species[k].weight, 1.0f, weights[k]);
+            sampleTerm(layer.species[k].weight, 1.0f, weights[k]);
             for (size_t c = 0; c < kept; ++c) total[c] += std::max(weights[k][c], 0.0f);
         }
         for (size_t c = 0; c < kept; ++c) {
@@ -227,8 +263,8 @@ std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, 
             }
         }
         std::vector<float> scale, tint;
-        sampleOr(layer.scale, 1.0f, scale);
-        sampleOr(layer.tint, 0.0f, tint);
+        sampleTerm(layer.scale, 1.0f, scale);
+        sampleTerm(layer.tint, 0.0f, tint);
         sampleOr(rules.ground, 0.0f, ground);
         if (rules.base)
             for (size_t c = 0; c < kept; ++c) {
