@@ -1,7 +1,13 @@
 add_library(bro_net STATIC
     net_service.cpp
+    rollback_session.cpp
+    bronze_api/net_rollback_api.cpp
 )
-target_include_directories(bro_net PUBLIC ${bro_SOURCE_DIR}/src)
+target_include_directories(bro_net PUBLIC
+    ${bro_SOURCE_DIR}/src
+    ${bronze_SOURCE_DIR}/src
+)
+target_compile_definitions(bro_net PRIVATE BRONZE_EMBED_SHARED)
 
 # GameNetworkingSockets exports its static and shared consumer targets under
 # different names, and any one vcpkg triplet builds only ONE of them:
@@ -13,7 +19,25 @@ target_include_directories(bro_net PUBLIC ${bro_SOURCE_DIR}/src)
 # STEAMNETWORKINGSOCKETS_STATIC_LINK as an INTERFACE define itself (and the
 # shared target must NOT have it, for correct dllimport), so we don't set it here.
 if(TARGET GameNetworkingSockets::GameNetworkingSockets_s)
-    target_link_libraries(bro_net PUBLIC GameNetworkingSockets::GameNetworkingSockets_s bro_util)
+    target_link_libraries(bro_net PUBLIC GameNetworkingSockets::GameNetworkingSockets_s bro_util bronze_check)
 else()
-    target_link_libraries(bro_net PUBLIC GameNetworkingSockets::GameNetworkingSockets bro_util)
+    target_link_libraries(bro_net PUBLIC GameNetworkingSockets::GameNetworkingSockets bro_util bronze_check)
+endif()
+
+if(BRO_BUILD_TESTS)
+    add_executable(bro_net_rollback_test
+        ${bro_SOURCE_DIR}/tests/test_net_rollback.cpp
+    )
+    target_include_directories(bro_net_rollback_test PRIVATE
+        ${bro_SOURCE_DIR}/src
+        ${bro_SOURCE_DIR}/src/bronze_host
+        ${bronze_SOURCE_DIR}/src
+    )
+    target_link_libraries(bro_net_rollback_test PRIVATE
+        bro_net
+        bronze::runtime_shared
+        bronze_check
+    )
+    target_compile_features(bro_net_rollback_test PRIVATE cxx_std_20)
+    add_test(NAME bro_net_rollback_test COMMAND bro_net_rollback_test)
 endif()

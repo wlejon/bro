@@ -1,0 +1,587 @@
+#include "net/rollback_session.h"
+
+#include "check/deterministic_check.h"
+
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <sstream>
+
+namespace bro::net {
+
+namespace {
+
+// Self-contained FIPS 180-4 SHA-256 for deterministic applet/kernel certificates.
+struct Sha256Ctx {
+    uint32_t state[8];
+    uint64_t bitlen = 0;
+    uint8_t data[64];
+    size_t datalen = 0;
+};
+
+constexpr std::array<uint32_t, 64> kSha256K = {
+    0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
+    0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u, 0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u,
+    0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu, 0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau,
+    0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u, 0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u,
+    0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfc,  0x53380d13u, 0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
+    0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u, 0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
+    0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
+    0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffa,  0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u
+};
+
+inline uint32_t rotr32(uint32_t x, uint32_t n) noexcept {
+    return (x >> n) | (x << (32u - n));
+}
+
+void sha256Transform(Sha256Ctx& ctx, const uint8_t data[64]) noexcept {
+    uint32_t m[64];
+    for (int i = 0; i < 16; ++i) {
+        m[i] = (static_cast<uint32_t>(data[i * 4]) << 24) |
+               (static_cast<uint32_t>(data[i * 4 + 1]) << 16) |
+               (static_cast<uint32_t>(data[i * 4 + 2]) << 8) |
+               (static_cast<uint32_t>(data[i * 4 + 3]));
+    }
+    for (int i = 16; i < 64; ++i) {
+        uint32_t s0 = rotr32(m[i - 15], 7) ^ rotr32(m[i - 15], 18) ^ (m[i - 15] >> 3);
+        uint32_t s1 = rotr32(m[i - 2], 17) ^ rotr32(m[i - 2], 19) ^ (m[i - 2] >> 10);
+        m[i] = m[i - 16] + s0 + m[i - 7] + s1;
+    }
+
+    uint32_t a = ctx.state[0], b = ctx.state[1], c = ctx.state[2], d = ctx.state[3];
+    uint32_t e = ctx.state[4], f = ctx.state[5], g = ctx.state[6], h = ctx.state[7];
+
+    for (int i = 0; i < 64; ++i) {
+        uint32_t S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t temp1 = h + S1 + ch + kSha256K[i] + m[i];
+        uint32_t S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t temp2 = S0 + maj;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
+    }
+
+    ctx.state[0] += a;
+    ctx.state[1] += b;
+    ctx.state[2] += c;
+    ctx.state[3] += d;
+    ctx.state[4] += e;
+    ctx.state[5] += f;
+    ctx.state[6] += g;
+    ctx.state[7] += h;
+}
+
+std::string computeSha256Hex(std::string_view input) {
+    Sha256Ctx ctx{};
+    ctx.state[0] = 0x6a09e667u;
+    ctx.state[1] = 0xbb67ae85u;
+    ctx.state[2] = 0x3c6ef372u;
+    ctx.state[3] = 0xa54ff53au;
+    ctx.state[4] = 0x510e527fu;
+    ctx.state[5] = 0x9b05688cu;
+    ctx.state[6] = 0x1f83d9abu;
+    ctx.state[7] = 0x5be0cd19u;
+
+    for (char ch : input) {
+        ctx.data[ctx.datalen++] = static_cast<uint8_t>(ch);
+        if (ctx.datalen == 64) {
+            sha256Transform(ctx, ctx.data);
+            ctx.bitlen += 512;
+            ctx.datalen = 0;
+        }
+    }
+
+    size_t i = ctx.datalen;
+    ctx.bitlen += static_cast<uint64_t>(ctx.datalen) * 8u;
+    ctx.data[i++] = 0x80u;
+    if (i > 56) {
+        while (i < 64) ctx.data[i++] = 0;
+        sha256Transform(ctx, ctx.data);
+        i = 0;
+    }
+    while (i < 56) ctx.data[i++] = 0;
+    for (int b = 7; b >= 0; --b) {
+        ctx.data[i++] = static_cast<uint8_t>((ctx.bitlen >> (b * 8)) & 0xFFu);
+    }
+    sha256Transform(ctx, ctx.data);
+
+    char hex[65];
+    for (int w = 0; w < 8; ++w) {
+        std::snprintf(hex + w * 8, 9, "%08x", ctx.state[w]);
+    }
+    hex[64] = '\0';
+    return std::string(hex, 64);
+}
+
+void offsetToLineCol(std::string_view src, uint32_t offset, uint32_t& outLine, uint32_t& outCol) noexcept {
+    outLine = 1;
+    outCol = 1;
+    const size_t limit = std::min<size_t>(offset, src.size());
+    for (size_t i = 0; i < limit; ++i) {
+        if (src[i] == '\n') {
+            ++outLine;
+            outCol = 1;
+        } else {
+            ++outCol;
+        }
+    }
+}
+
+void appendU32LE(std::vector<uint8_t>& buf, uint32_t v) {
+    buf.push_back(static_cast<uint8_t>(v & 0xFFu));
+    buf.push_back(static_cast<uint8_t>((v >> 8) & 0xFFu));
+    buf.push_back(static_cast<uint8_t>((v >> 16) & 0xFFu));
+    buf.push_back(static_cast<uint8_t>((v >> 24) & 0xFFu));
+}
+
+void appendU64LE(std::vector<uint8_t>& buf, uint64_t v) {
+    appendU32LE(buf, static_cast<uint32_t>(v & 0xFFFFFFFFu));
+    appendU32LE(buf, static_cast<uint32_t>((v >> 32) & 0xFFFFFFFFu));
+}
+
+uint32_t readU32LE(std::span<const uint8_t> buf, size_t offset) noexcept {
+    return static_cast<uint32_t>(buf[offset]) |
+           (static_cast<uint32_t>(buf[offset + 1]) << 8) |
+           (static_cast<uint32_t>(buf[offset + 2]) << 16) |
+           (static_cast<uint32_t>(buf[offset + 3]) << 24);
+}
+
+uint64_t readU64LE(std::span<const uint8_t> buf, size_t offset) noexcept {
+    uint64_t lo = readU32LE(buf, offset);
+    uint64_t hi = readU32LE(buf, offset + 4);
+    return lo | (hi << 32);
+}
+
+}  // namespace
+
+uint64_t computeStateFnv1a64(std::span<const uint8_t> bytes) noexcept {
+    constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+    constexpr uint64_t kFnvPrime = 1099511628211ULL;
+    uint64_t hash = kFnvOffsetBasis;
+    for (uint8_t b : bytes) {
+        hash ^= static_cast<uint64_t>(b);
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+std::string formatChecksumHex(uint64_t checksum) {
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(checksum));
+    return std::string(buf, 16);
+}
+
+DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource) {
+    DeterminismAuditResult out;
+    if (tickSource.empty()) {
+        out.deterministic = false;
+        out.errorSummary = "RollbackSession tick function source is empty";
+        return out;
+    }
+
+    std::vector<bronze::check::CheckDiagnostic> diags;
+    std::string parseErr;
+    std::string effectiveSrc(tickSource);
+    uint32_t prefixBytes = 0;
+
+    bool parsed = bronze::check::checkDeterministicSource(effectiveSrc, diags, &parseErr);
+    if (!parsed) {
+        // Function.prototype.toString() on an anonymous `function (state, inputs) { ... }`
+        // is a function expression rather than a top-level declaration; wrap it in a
+        // variable binding so the module parser accepts it.
+        diags.clear();
+        parseErr.clear();
+        const std::string prefix = "const __bro_rollback_tick = (";
+        const std::string suffix = "\n);";
+        effectiveSrc = prefix + std::string(tickSource) + suffix;
+        prefixBytes = static_cast<uint32_t>(prefix.size());
+        parsed = bronze::check::checkDeterministicSource(effectiveSrc, diags, &parseErr);
+    }
+
+    if (!parsed) {
+        out.deterministic = false;
+        out.errorSummary = "Failed to parse rollback tick function for determinism verification: " + parseErr;
+        DeterminismHazard h;
+        h.kind = "parse-error";
+        h.message = out.errorSummary;
+        h.line = 1;
+        h.column = 1;
+        out.hazards.push_back(std::move(h));
+        return out;
+    }
+
+    for (const auto& d : diags) {
+        DeterminismHazard h;
+        h.kind = bronze::check::deterministicHazardTag(d.kind);
+        h.message = d.message;
+        h.remediation = d.remediation;
+        h.functionName = d.functionName;
+        uint32_t rawOffset = (d.span.begin >= prefixBytes) ? (d.span.begin - prefixBytes) : 0u;
+        offsetToLineCol(tickSource, rawOffset, h.line, h.column);
+        out.hazards.push_back(std::move(h));
+    }
+
+    if (out.hazards.empty()) {
+        out.deterministic = true;
+        out.certificateHash = computeSha256Hex("bronze-lockstep-cert-v1:" + std::string(tickSource));
+    } else {
+        out.deterministic = false;
+        std::ostringstream oss;
+        oss << "RollbackSession rejected non-deterministic tick function ("
+            << out.hazards.size() << " lockstep hazard"
+            << (out.hazards.size() == 1 ? "" : "s") << " detected): ";
+        for (size_t i = 0; i < out.hazards.size(); ++i) {
+            if (i > 0) oss << "; ";
+            oss << "[" << out.hazards[i].kind << "] " << out.hazards[i].message
+                << " (line " << out.hazards[i].line << ")";
+        }
+        out.errorSummary = oss.str();
+    }
+
+    return out;
+}
+
+RollbackSession::RollbackSession(const RollbackConfig& config, TickFn tickFn)
+    : playerCount_(std::max<uint32_t>(1u, config.playerCount)),
+      localPlayerId_(std::min<uint32_t>(config.localPlayerId, std::max<uint32_t>(1u, config.playerCount) - 1u)),
+      maxRollbackFrames_(std::max<uint32_t>(4u, config.maxRollbackFrames)),
+      audit_(verifyRollbackTickSource(config.tickSource)),
+      tickFn_(std::move(tickFn)) {
+
+    if (!config.initialStateBytes.empty()) {
+        initialStateBytes_ = config.initialStateBytes;
+    } else {
+        initialStateBytes_.assign(std::max<uint32_t>(4u, config.stateSize), 0u);
+    }
+    currentStateBytes_ = initialStateBytes_;
+
+    // Allocate ring buffer with extra headroom so snapshots [currentFrame - maxRollbackFrames .. currentFrame]
+    // never alias in the circular table.
+    ring_.resize(static_cast<size_t>(maxRollbackFrames_) + 4u);
+    lastConfirmedInput_.assign(playerCount_, 0);
+    hasConfirmedInput_.assign(playerCount_, false);
+
+    saveStateSnapshot(0u, currentStateBytes_);
+    auto& slot0 = slotFor(0u);
+    slot0.inputs.assign(playerCount_, 0);
+    slot0.inputConfirmed.assign(playerCount_, 1u);
+}
+
+void RollbackSession::setStateBytes(std::span<const uint8_t> bytes) {
+    currentStateBytes_.assign(bytes.begin(), bytes.end());
+    saveStateSnapshot(currentFrame_, currentStateBytes_);
+}
+
+void RollbackSession::saveStateSnapshot(uint32_t frame, const std::vector<uint8_t>& bytes) {
+    uint64_t cs = computeStateFnv1a64(bytes);
+    std::string hex = formatChecksumHex(cs);
+    currentChecksum_ = cs;
+    currentChecksumHex_ = hex;
+
+    RollbackSnapshot& snap = slotFor(frame);
+    snap.frame = frame;
+    snap.stateBytes = bytes;
+    snap.checksum = cs;
+    snap.checksumHex = std::move(hex);
+    if (snap.inputs.size() != playerCount_) {
+        snap.inputs.assign(playerCount_, 0);
+        snap.inputConfirmed.assign(playerCount_, 0u);
+    }
+    snap.valid = true;
+}
+
+int32_t RollbackSession::predictedInputFor(uint32_t frame, uint32_t playerId) const noexcept {
+    if (playerId >= playerCount_) return 0;
+    // Search backward from `frame` for the most recent confirmed input for `playerId`.
+    const size_t maxIdx = std::min<size_t>(frame, inputHistory_.size());
+    for (size_t k = maxIdx; k > 0; --k) {
+        const auto& rec = inputHistory_[k - 1];
+        if (playerId < rec.confirmed.size() && rec.confirmed[playerId]) {
+            return rec.inputs[playerId];
+        }
+    }
+    if (hasConfirmedInput_[playerId]) {
+        return lastConfirmedInput_[playerId];
+    }
+    return 0;
+}
+
+RollbackAdvanceResult RollbackSession::advanceFrameSingle(int32_t localInput) {
+    std::vector<int32_t> inputs(playerCount_, 0);
+    inputs[localPlayerId_] = localInput;
+    const uint32_t mask = (1u << localPlayerId_);
+    return advanceFrame(inputs, mask);
+}
+
+RollbackAdvanceResult RollbackSession::advanceFrame(std::span<const int32_t> providedInputs,
+                                                    uint32_t providedMask) {
+    const uint32_t f = currentFrame_;
+    if (inputHistory_.size() <= f) {
+        inputHistory_.resize(static_cast<size_t>(f) + 1u,
+                             FrameInputRecord{std::vector<int32_t>(playerCount_, 0),
+                                              std::vector<uint8_t>(playerCount_, 0u)});
+    }
+
+    auto& rec = inputHistory_[f];
+    for (uint32_t p = 0; p < playerCount_; ++p) {
+        if (rec.confirmed[p]) {
+            // Already confirmed via an earlier receiveRemoteInput(f, p, ...)
+            continue;
+        }
+        const bool wasProvided = (p < providedInputs.size()) && (((providedMask >> p) & 1u) != 0u);
+        if (wasProvided) {
+            rec.inputs[p] = providedInputs[p];
+            if (p == localPlayerId_) {
+                rec.confirmed[p] = 1u;
+                lastConfirmedInput_[p] = providedInputs[p];
+                hasConfirmedInput_[p] = true;
+            }
+        } else {
+            rec.inputs[p] = predictedInputFor(f, p);
+        }
+    }
+
+    // Store the inputs used to simulate frame `f` on snapshot `f`
+    {
+        auto& preSnap = slotFor(f);
+        preSnap.inputs = rec.inputs;
+        preSnap.inputConfirmed = rec.confirmed;
+    }
+
+    if (tickFn_) {
+        tickFn_(currentStateBytes_, rec.inputs, f);
+    }
+
+    currentFrame_ = f + 1u;
+    saveStateSnapshot(currentFrame_, currentStateBytes_);
+    {
+        auto& postSnap = slotFor(currentFrame_);
+        postSnap.inputs = rec.inputs;
+        postSnap.inputConfirmed = rec.confirmed;
+    }
+
+    RollbackAdvanceResult res;
+    res.frame = currentFrame_;
+    res.checksum = currentChecksum_;
+    res.checksumHex = currentChecksumHex_;
+    res.checksumLow32 = checksumLow32(currentChecksum_);
+    return res;
+}
+
+RollbackRemoteInputResult RollbackSession::receiveRemoteInput(uint32_t frame,
+                                                              uint32_t playerId,
+                                                              int32_t actualInput,
+                                                              std::string_view remoteChecksumHex) {
+    RollbackRemoteInputResult out;
+    out.currentFrame = currentFrame_;
+    out.currentChecksum = currentChecksumHex_;
+    out.desyncDetected = desyncDetected_;
+
+    if (playerId >= playerCount_) {
+        return out;
+    }
+
+    if (inputHistory_.size() <= frame) {
+        inputHistory_.resize(static_cast<size_t>(frame) + 1u,
+                             FrameInputRecord{std::vector<int32_t>(playerCount_, 0),
+                                              std::vector<uint8_t>(playerCount_, 0u)});
+    }
+
+    const bool wasSimulated = (frame < currentFrame_);
+    const int32_t prevSimulatedInput = inputHistory_[frame].inputs[playerId];
+
+    inputHistory_[frame].inputs[playerId] = actualInput;
+    inputHistory_[frame].confirmed[playerId] = 1u;
+    lastConfirmedInput_[playerId] = actualInput;
+    hasConfirmedInput_[playerId] = true;
+
+    // Propagate updated prediction to subsequent unconfirmed frames for `playerId`.
+    bool anySubsequentChanged = false;
+    if (wasSimulated) {
+        for (uint32_t f = frame + 1u; f < currentFrame_; ++f) {
+            if (inputHistory_[f].confirmed[playerId]) {
+                break;
+            }
+            if (inputHistory_[f].inputs[playerId] != actualInput) {
+                inputHistory_[f].inputs[playerId] = actualInput;
+                anySubsequentChanged = true;
+            }
+        }
+    }
+
+    if (wasSimulated && (actualInput != prevSimulatedInput || anySubsequentChanged)) {
+        const RollbackSnapshot& restoreSnap = slotFor(frame);
+        if (restoreSnap.valid && restoreSnap.frame == frame) {
+            currentStateBytes_ = restoreSnap.stateBytes;
+            for (uint32_t f = frame; f < currentFrame_; ++f) {
+                auto& fSnap = slotFor(f);
+                fSnap.inputs = inputHistory_[f].inputs;
+                fSnap.inputConfirmed = inputHistory_[f].confirmed;
+
+                if (tickFn_) {
+                    tickFn_(currentStateBytes_, inputHistory_[f].inputs, f);
+                }
+                saveStateSnapshot(f + 1u, currentStateBytes_);
+                auto& nextSnap = slotFor(f + 1u);
+                nextSnap.inputs = inputHistory_[f].inputs;
+                nextSnap.inputConfirmed = inputHistory_[f].confirmed;
+            }
+            out.rolledBack = true;
+            out.framesResimulated = currentFrame_ - frame;
+            rollbackCount_ += 1u;
+            totalFramesResimulated_ += out.framesResimulated;
+        }
+    } else if (wasSimulated) {
+        auto& fSnap = slotFor(frame);
+        if (fSnap.valid && fSnap.frame == frame && playerId < fSnap.inputConfirmed.size()) {
+            fSnap.inputConfirmed[playerId] = 1u;
+        }
+        if (frame + 1u <= currentFrame_) {
+            auto& nextSnap = slotFor(frame + 1u);
+            if (nextSnap.valid && nextSnap.frame == frame + 1u && playerId < nextSnap.inputConfirmed.size()) {
+                nextSnap.inputConfirmed[playerId] = 1u;
+            }
+        }
+    }
+
+    if (!remoteChecksumHex.empty() && frame <= currentFrame_) {
+        bool matchesFrame = false;
+        const auto& snapAtFrame = slotFor(frame);
+        if (snapAtFrame.valid && snapAtFrame.frame == frame && snapAtFrame.checksumHex == remoteChecksumHex) {
+            matchesFrame = true;
+        }
+        if (!matchesFrame && frame + 1u <= currentFrame_) {
+            const auto& snapAfterFrame = slotFor(frame + 1u);
+            if (snapAfterFrame.valid && snapAfterFrame.frame == frame + 1u &&
+                snapAfterFrame.checksumHex == remoteChecksumHex) {
+                matchesFrame = true;
+            }
+        }
+        if (!matchesFrame) {
+            desyncDetected_ = true;
+        }
+    }
+
+    out.currentFrame = currentFrame_;
+    out.currentChecksum = currentChecksumHex_;
+    out.desyncDetected = desyncDetected_;
+    return out;
+}
+
+bool RollbackSession::verifyPeerChecksum(uint32_t frame, std::string_view remoteChecksumHex) {
+    if (remoteChecksumHex.empty()) return false;
+    const RollbackSnapshot* snap = getSnapshot(frame);
+    if (!snap) {
+        desyncDetected_ = true;
+        return false;
+    }
+    if (snap->checksumHex == remoteChecksumHex) {
+        return true;
+    }
+    // Also check frame + 1 if caller passed 0-based tick frame index while comparing post-tick checksum
+    if (frame + 1u <= currentFrame_) {
+        const RollbackSnapshot* postSnap = getSnapshot(frame + 1u);
+        if (postSnap && postSnap->checksumHex == remoteChecksumHex) {
+            return true;
+        }
+    }
+    desyncDetected_ = true;
+    return false;
+}
+
+const RollbackSnapshot* RollbackSession::getSnapshot(uint32_t frame) const noexcept {
+    if (frame > currentFrame_) return nullptr;
+    const RollbackSnapshot& snap = slotFor(frame);
+    if (!snap.valid || snap.frame != frame) return nullptr;
+    return &snap;
+}
+
+RollbackStats RollbackSession::getStats() const {
+    RollbackStats s;
+    s.currentFrame = currentFrame_;
+    s.rollbackCount = rollbackCount_;
+    s.totalFramesResimulated = totalFramesResimulated_;
+    s.deterministic = audit_.deterministic;
+    s.certificateHash = audit_.certificateHash;
+    s.desyncDetected = desyncDetected_;
+    return s;
+}
+
+std::vector<uint8_t> RollbackSession::exportReplay() const {
+    std::vector<uint8_t> out;
+    // Header: "BRRP" (4 bytes), version=1 (u32), playerCount (u32), currentFrame (u32),
+    // initialStateSize (u32), expectedFinalChecksum (u64)
+    out.push_back('B');
+    out.push_back('R');
+    out.push_back('R');
+    out.push_back('P');
+    appendU32LE(out, 1u);
+    appendU32LE(out, playerCount_);
+    appendU32LE(out, currentFrame_);
+    appendU32LE(out, static_cast<uint32_t>(initialStateBytes_.size()));
+    appendU64LE(out, currentChecksum_);
+
+    out.insert(out.end(), initialStateBytes_.begin(), initialStateBytes_.end());
+    for (uint32_t f = 0; f < currentFrame_; ++f) {
+        for (uint32_t p = 0; p < playerCount_; ++p) {
+            int32_t val = (f < inputHistory_.size() && p < inputHistory_[f].inputs.size())
+                              ? inputHistory_[f].inputs[p]
+                              : 0;
+            appendU32LE(out, static_cast<uint32_t>(val));
+        }
+    }
+    return out;
+}
+
+ReplayVerifyResult RollbackSession::verifyReplay(std::span<const uint8_t> replayBytes) const {
+    ReplayVerifyResult res;
+    res.deterministic = audit_.deterministic;
+    if (replayBytes.size() < 28u ||
+        replayBytes[0] != 'B' || replayBytes[1] != 'R' ||
+        replayBytes[2] != 'R' || replayBytes[3] != 'P') {
+        return res;
+    }
+
+    uint32_t version = readU32LE(replayBytes, 4);
+    uint32_t players = readU32LE(replayBytes, 8);
+    uint32_t frames = readU32LE(replayBytes, 12);
+    uint32_t initSize = readU32LE(replayBytes, 16);
+    uint64_t expectedCs = readU64LE(replayBytes, 20);
+    if (version != 1u || players == 0u) return res;
+
+    size_t needed = 28u + static_cast<size_t>(initSize) +
+                    static_cast<size_t>(frames) * static_cast<size_t>(players) * sizeof(uint32_t);
+    if (replayBytes.size() < needed) return res;
+
+    std::vector<uint8_t> state(replayBytes.begin() + 28, replayBytes.begin() + 28 + initSize);
+    size_t offset = 28u + static_cast<size_t>(initSize);
+    std::vector<int32_t> frameInputs(players, 0);
+
+    for (uint32_t f = 0; f < frames; ++f) {
+        for (uint32_t p = 0; p < players; ++p) {
+            frameInputs[p] = static_cast<int32_t>(readU32LE(replayBytes, offset));
+            offset += 4u;
+        }
+        if (tickFn_) {
+            tickFn_(state, frameInputs, f);
+        }
+    }
+
+    uint64_t actualCs = computeStateFnv1a64(state);
+    res.framesSimulated = frames;
+    res.expectedChecksum = formatChecksumHex(expectedCs);
+    res.actualChecksum = formatChecksumHex(actualCs);
+    res.ok = (actualCs == expectedCs);
+    return res;
+}
+
+}  // namespace bro::net

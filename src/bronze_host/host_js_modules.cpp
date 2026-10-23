@@ -23,6 +23,9 @@
 
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
+#if BRO_WITH_NET
+#include "net/bronze_api/net_rollback_api.h"
+#endif
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
 #endif
@@ -163,6 +166,9 @@ void installBroCoreModule() {
 
 void installNetModule() {
     bronze::embed::runEntry(bro_net_main);
+#if BRO_WITH_NET
+    installNetRollbackExtensions();
+#endif
 }
 
 void installPhysicsModule() {
