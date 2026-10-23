@@ -317,19 +317,31 @@ void main() {
         if (landIn) {
             baseColor = push.baseColor.rgb * ls.rgb;
             N = ln;
-            if (landHasSea()) {
-                float depth = landSeaLevel() - lh;
-                landWet = clamp(depth / max(lhStep, 1e-3) + 0.5, 0.0, 1.0);
-                if (landWet > 0.0) {
-                    vec3 up = landUp(inUV);
-                    float mu = clamp(dot(up, normalize(-worldPos)), 0.0, 1.0);
-                    float muW = sqrt(1.0 - (1.0 - mu * mu) / 1.769);
-                    vec3 through = exp(-landSeaAbsorb() * max(depth, 0.0) * (1.0 + 1.0 / muW));
-                    vec3 water = mix(landSeaScatter(), baseColor, through);
-                    baseColor = mix(baseColor, water, landWet);
-                    N = normalize(mix(N, up, landWet));
-                }
+            landWet = landSeaWet(lh, lhStep);
+            if (landWet > 0.0) {
+                baseColor = mix(baseColor, landSeaWater(inUV, lh, worldPos, baseColor), landWet);
+                N = normalize(mix(N, landUp(inUV), landWet));
             }
+        }
+    }
+#endif
+#ifdef SCENE_GROUND
+    // Turf over a land stands on the sea where the land does (its vertices
+    // lifted to the water by landTop): the same water a fragment at a time,
+    // over the land's own seabed, so the sea is not a flat shelf of turf.
+    float landWet = 0.0;
+    vec2 landM = landMapOf(worldPos + landEye3());
+    vec3 landWater = vec3(0.0);
+    {
+        vec2 dm = max(abs(dFdx(landM)), abs(dFdy(landM)));
+        float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
+        float lh;
+        vec4 ls;
+        bool landIn = landSample(landM, lambda, lh, ls);
+        float lhStep = fwidth(lh);   // (in uniform control flow)
+        if (landIn) {
+            landWet = landSeaWet(lh, lhStep);
+            if (landWet > 0.0) landWater = landSeaWater(landM, lh, worldPos, push.baseColor.rgb * ls.rgb);
         }
     }
 #endif
@@ -387,9 +399,6 @@ void main() {
 #ifdef SCENE_GRASS
     roughness = sward.roughness;
 #endif
-#ifdef SCENE_LAND
-    roughness = mix(roughness, landSeaRoughness(), landWet);
-#endif
 #ifdef SCENE_BARK
     // A tube's wood (scene_bark.glsl): inColor where on the stem, inUV its
     // height over the root and the bark word (negative: not a plant's).
@@ -402,6 +411,16 @@ void main() {
     vec4 groundThin, groundSward;
     groundSurface(worldPos, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
     baseColor *= push.baseColor.rgb;
+    if (landWet > 0.0) {
+        baseColor = mix(baseColor, landWater, landWet);
+        N = normalize(mix(N, landUp(landM), landWet));
+        groundAO = mix(groundAO, 1.0, landWet);
+        groundThin.w *= 1.0 - landWet;
+        groundSward.w *= 1.0 - landWet;
+    }
+#endif
+#if defined(SCENE_LAND) || defined(SCENE_GROUND)
+    roughness = mix(roughness, landSeaRoughness(), landWet);
 #endif
     // A land's plants past their range (mesh_land.vert): their canopy over
     // the ground as far as they cover it, in place of the ground's own.

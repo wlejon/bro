@@ -43,6 +43,14 @@ vec3 landSeaAbsorb() { return LAND_W(LD_SEA / 4 + 1).xyz; }
 vec3 landSeaScatter() { return LAND_W(LD_SEA / 4 + 2).xyz; }
 // What is drawn at ground height `h`: the water's surface over a seabed.
 float landTop(float h) { return landHasSea() ? max(h, landSeaLevel()) : h; }
+// How much of a fragment over ground at height `lh` is the sea's water (0
+// with no sea): as far as the ground lies under the sea level, its edge a
+// pixel's soft step of the ground's height (`lhStep`, its fwidth), so a
+// coast is as sharp as the pixels whatever the tiles' texels.
+float landSeaWet(float lh, float lhStep) {
+    if (!landHasSea()) return 0.0;
+    return clamp((landSeaLevel() - lh) / max(lhStep, 1e-3) + 0.5, 0.0, 1.0);
+}
 
 // --- the map ---
 
@@ -62,6 +70,18 @@ vec3 landUp(vec2 m) {
     vec2 dir = r > 0.0 ? m / r : vec2(0.0);
     float s = sin(th);
     return vec3(s * dir.x, cos(th), s * dir.y);
+}
+
+// The water over map point `m`, ground at `lh` under it, seen from the
+// eye at `-rel`: the seabed (`seabed`, its albedo) dimmed along the light's
+// way down and back (refracted into the water, n 1.33) over the colour deep
+// water sends back. Its normal is landUp(m).
+vec3 landSeaWater(vec2 m, float lh, vec3 rel, vec3 seabed) {
+    float depth = max(landSeaLevel() - lh, 0.0);
+    float mu = clamp(dot(landUp(m), normalize(-rel)), 0.0, 1.0);
+    float muW = sqrt(1.0 - (1.0 - mu * mu) / 1.769);
+    vec3 through = exp(-landSeaAbsorb() * depth * (1.0 + 1.0 / muW));
+    return mix(landSeaScatter(), seabed, through);
 }
 
 // The ground of height `h` at map point `m` in the land's frame (place.h's
