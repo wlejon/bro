@@ -74,6 +74,7 @@ bool isWatchedSource(std::string_view relPath) {
     if (dot == std::string_view::npos) return false;
     const std::string_view ext = relPath.substr(dot);
     return ext == ".js" || ext == ".mjs" || ext == ".cjs" ||
+           ext == ".ts" || ext == ".mts" ||
            ext == ".html" || ext == ".htm" || ext == ".css";
 }
 

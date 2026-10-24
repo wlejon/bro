@@ -6,12 +6,19 @@
 // exporting it had been rewritten.
 
 #include "engine/source_preflight.h"
+#include "bronze_host/eval_js_scan.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <chrono>
+
+namespace bro::bronze_host {
+bool isBaselineHostGlobalName(const std::string& name) {
+    return name == "Symbol" || name == "fetch";
+}
+} // namespace bro::bronze_host
 
 namespace fs = std::filesystem;
 
@@ -128,6 +135,86 @@ int main() {
           "export const { NotificationCenter } = globalThis.__lib;\n");
     why = checkAppSourceConsistency(dir.string());
     check(why.empty(), "uncertain export forms count as present", why);
+
+    // TypeScript (.ts / .mts) module graph with type-only imports/exports,
+    // generic type annotations, and .js specifiers resolving to .ts files.
+    fs::remove_all(dir);
+    write(dir / "index.html",
+          "<!DOCTYPE html><html><body>"
+          "<script type=\"module\" src=\"ts/main.ts\"></script>"
+          "</body></html>");
+    write(dir / "ts/main.ts",
+          "import type { MissingRuntimeExport } from './types.ts';\n"
+          "import { type Config, createApp, Mode } from './app.js';\n"
+          "const app = createApp({ mode: Mode.Fast });\n");
+    write(dir / "ts/types.ts",
+          "export interface MissingRuntimeExport { id: number; }\n");
+    write(dir / "ts/app.ts",
+          "export type Config = { mode: Mode };\n"
+          "export enum Mode { Fast, Safe }\n"
+          "export const registry: Map<string, number> = new Map();\n"
+          "export function createApp<T extends Config>(cfg: T): { ok: boolean } {\n"
+          "    return { ok: true };\n"
+          "}\n");
+    why = checkAppSourceConsistency(dir.string());
+    check(why.empty(), "TypeScript module tree with type imports and .js->.ts resolution is consistent", why);
+
+    // Missing runtime export in .ts module is still caught.
+    write(dir / "ts/app.ts",
+          "export type Config = { mode: number };\n"
+          "export function createApp(cfg: Config): void {}\n");
+    why = checkAppSourceConsistency(dir.string());
+    check(why.find("Mode") != std::string::npos && why.find("ts/app.ts") != std::string::npos,
+          "missing runtime export from .ts module is caught", why);
+
+    // Script-entry app with main.ts (no index.html).
+    fs::remove_all(dir);
+    write(dir / "main.ts",
+          "import { helper } from './lib';\n"
+          "helper();\n");
+    write(dir / "lib.ts",
+          "export function helper(): number { return 42; }\n");
+    why = checkAppSourceConsistency(dir.string());
+    check(why.empty(), "main.ts entry app without index.html is consistent", why);
+
+    // eval_js_scan TypeScript top-level scanning checks.
+    {
+        using bro::bronze_host::scanJsTopLevel;
+        using bro::bronze_host::prepareClassicScriptGlobals;
+
+        auto s1 = scanJsTopLevel(
+            "interface Box<T> { await?: Promise<T>; get(): T; }\n"
+            "type Mapper<A, B> = (a: A) => { out: B };\n"
+            "function Symbol<T extends { a: number }>(x: T): { ok: boolean } {\n"
+            "    return { ok: true };\n"
+            "}\n"
+            "var fetch: Map<string, number> = new Map(), name!: string = 'app', uninit: number;\n"
+            "const arrow = (x: number): { y: number } => { return { y: x }; };\n"
+        );
+        check(!s1.hasModuleDecl, "TS classic script has no module decl");
+        check(!s1.hasTopLevelAwait, "TS interface await property is not top-level await");
+        check(s1.topLevelFunctionDecls.size() == 1 && s1.topLevelFunctionDecls[0] == "Symbol",
+              "TS generic function with object return type is detected as top-level function decl");
+        check(s1.topLevelVarExports.size() == 1 && s1.topLevelVarExports[0].names.size() == 2 &&
+                  s1.topLevelVarExports[0].names[0] == "fetch" &&
+                  s1.topLevelVarExports[0].names[1] == "name",
+              "TS top-level var with generic and non-null type annotations records initialized names");
+
+        std::string prep = prepareClassicScriptGlobals(
+            "function Symbol<T>(x: T): { ok: boolean } { return { ok: true }; }\n"
+            "var name: string = 'hello';\n"
+        );
+        check(prep.find("globalThis.Symbol = Symbol;") != std::string::npos &&
+                  prep.find("globalThis.name = name;") != std::string::npos,
+              "prepareClassicScriptGlobals instruments TS function and var declarations");
+
+        auto s2 = scanJsTopLevel("export interface Foo { x: number }\n");
+        check(s2.hasModuleDecl, "export interface marks script as module");
+        auto s3 = scanJsTopLevel("export type Bar = string | number;\n");
+        check(s3.hasModuleDecl, "export type marks script as module");
+        auto s4 = scanJsTopLevel("export enum Kind { A, B }\n");
+        check(s4.hasModuleDecl, "export enum marks script as module");
+    }
 
     std::error_code ec;
     fs::remove_all(dir, ec);

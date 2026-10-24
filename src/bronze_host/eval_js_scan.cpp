@@ -24,6 +24,7 @@ struct ScanToken {
     bool parenIsControlCondition = false;  // for RParen: matching '(' followed if/while/for/with
     bool braceIsExprOrObject = false;      // for RBrace: matching '{' was in expression position
     bool opensFunctionBody = false;        // for LBrace: opens a function/method/arrow body
+    bool inTypeAnnotation = false;         // token is part of a TypeScript type annotation/declaration
 };
 
 bool isScanIdentStart(unsigned char c) {
@@ -370,17 +371,187 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
     bool varExpectIdent = false;
     std::vector<std::string> currentVarNames;
 
+    auto countAngleDelta = [](const ScanToken& t) -> int {
+        if (t.kind != ScanTokKind::OtherPunct) return 0;
+        int delta = 0;
+        for (char c : t.text) {
+            if (c == '<') ++delta;
+            else if (c == '>') --delta;
+        }
+        return delta;
+    };
+
+    auto markTypeRange = [&](size_t fromIdx, size_t toIdx) {
+        for (size_t m = fromIdx; m < toIdx && m < tokCount; ++m) {
+            tokens[m].inTypeAnnotation = true;
+        }
+    };
+
+    auto skipTypeParamsBeforeParen = [&](size_t idx) -> size_t {
+        if (idx >= tokCount || tokens[idx].kind != ScanTokKind::OtherPunct ||
+            tokens[idx].text.empty() || tokens[idx].text.front() != '<') {
+            return idx;
+        }
+        size_t k = idx;
+        int pDepth = 0, bDepth = 0, cDepth = 0, aDepth = 0;
+        while (k < tokCount) {
+            const ScanToken& tk = tokens[k];
+            if (tk.kind == ScanTokKind::LParen) ++pDepth;
+            else if (tk.kind == ScanTokKind::RParen) { if (--pDepth < 0) return idx; }
+            else if (tk.kind == ScanTokKind::LBracket) ++bDepth;
+            else if (tk.kind == ScanTokKind::RBracket) { if (--bDepth < 0) return idx; }
+            else if (tk.kind == ScanTokKind::LBrace) ++cDepth;
+            else if (tk.kind == ScanTokKind::RBrace) { if (--cDepth < 0) return idx; }
+            else if (pDepth == 0 && bDepth == 0 && cDepth == 0) {
+                if (tk.kind == ScanTokKind::Semicolon) return idx;
+                aDepth += countAngleDelta(tk);
+                if (aDepth <= 0) {
+                    ++k;
+                    if (k < tokCount && tokens[k].kind == ScanTokKind::LParen) {
+                        markTypeRange(idx, k);
+                        return k;
+                    }
+                    return idx;
+                }
+            }
+            ++k;
+        }
+        return idx;
+    };
+
+    auto scanTypeAnnotationEnd = [&](size_t startIdx, bool stopBeforeArrow) -> size_t {
+        size_t k = startIdx + 1;
+        int pDepth = 0, bDepth = 0, cDepth = 0, aDepth = 0;
+        bool expectTypeOperand = true;
+        bool prevParenHadTypeOrEmpty = false;
+        bool curParenHasColon = false;
+        size_t curParenStart = 0;
+
+        while (k < tokCount) {
+            const ScanToken& tk = tokens[k];
+            if (pDepth == 0 && bDepth == 0 && cDepth == 0 && aDepth == 0) {
+                if (tk.kind == ScanTokKind::Semicolon || tk.kind == ScanTokKind::Comma ||
+                    tk.kind == ScanTokKind::RParen || tk.kind == ScanTokKind::RBracket ||
+                    tk.kind == ScanTokKind::RBrace) {
+                    break;
+                }
+                if (tk.kind == ScanTokKind::OtherPunct && tk.text == "=") {
+                    break;
+                }
+                if (tk.kind == ScanTokKind::LBrace) {
+                    if (!expectTypeOperand) break;
+                    ++cDepth;
+                    expectTypeOperand = false;
+                    ++k;
+                    continue;
+                }
+                if (tk.kind == ScanTokKind::Arrow) {
+                    if (stopBeforeArrow && !prevParenHadTypeOrEmpty) break;
+                    expectTypeOperand = true;
+                    prevParenHadTypeOrEmpty = false;
+                    ++k;
+                    continue;
+                }
+                if (tk.newlineBefore && !expectTypeOperand) {
+                    const bool isTypeCont =
+                        (tk.kind == ScanTokKind::OtherPunct &&
+                         (tk.text == "|" || tk.text == "&" || tk.text == "?" ||
+                          (!tk.text.empty() && tk.text.front() == '<'))) ||
+                        tk.kind == ScanTokKind::Colon || tk.kind == ScanTokKind::LBracket ||
+                        (tk.kind == ScanTokKind::Ident && (tk.text == "extends" || tk.text == "is"));
+                    if (!isTypeCont) break;
+                }
+                prevParenHadTypeOrEmpty = false;
+                if (tk.kind == ScanTokKind::LParen) {
+                    pDepth = 1;
+                    curParenStart = k;
+                    curParenHasColon = false;
+                    expectTypeOperand = false;
+                } else if (tk.kind == ScanTokKind::LBracket) {
+                    bDepth = 1;
+                    expectTypeOperand = false;
+                } else if (tk.kind == ScanTokKind::OtherPunct) {
+                    if (!tk.text.empty() && tk.text.front() == '<') {
+                        aDepth += countAngleDelta(tk);
+                        if (aDepth < 0) aDepth = 0;
+                        expectTypeOperand = false;
+                    } else if (tk.text == "|" || tk.text == "&" || tk.text == "?") {
+                        expectTypeOperand = true;
+                    } else {
+                        expectTypeOperand = false;
+                    }
+                } else if (tk.kind == ScanTokKind::Colon || tk.kind == ScanTokKind::Dot) {
+                    expectTypeOperand = true;
+                } else if (tk.kind == ScanTokKind::Ident) {
+                    const std::string_view tw = tk.text;
+                    expectTypeOperand = (tw == "is" || tw == "asserts" || tw == "extends" ||
+                                         tw == "keyof" || tw == "typeof" || tw == "readonly" ||
+                                         tw == "infer" || tw == "unique" || tw == "new");
+                } else {
+                    expectTypeOperand = false;
+                }
+                ++k;
+                continue;
+            }
+            if (tk.kind == ScanTokKind::LParen) {
+                ++pDepth;
+            } else if (tk.kind == ScanTokKind::RParen) {
+                if (pDepth > 0) {
+                    --pDepth;
+                    if (pDepth == 0 && bDepth == 0 && cDepth == 0 && aDepth == 0) {
+                        prevParenHadTypeOrEmpty = (k == curParenStart + 1) || curParenHasColon;
+                    }
+                }
+            } else if (tk.kind == ScanTokKind::Colon && pDepth == 1 && bDepth == 0 && cDepth == 0 && aDepth == 0) {
+                curParenHasColon = true;
+            } else if (tk.kind == ScanTokKind::LBracket) {
+                ++bDepth;
+            } else if (tk.kind == ScanTokKind::RBracket) {
+                if (bDepth > 0) --bDepth;
+            } else if (tk.kind == ScanTokKind::LBrace) {
+                ++cDepth;
+            } else if (tk.kind == ScanTokKind::RBrace) {
+                if (cDepth > 0) --cDepth;
+            } else if (pDepth == 0 && bDepth == 0 && cDepth == 0 && aDepth > 0) {
+                aDepth += countAngleDelta(tk);
+                if (aDepth < 0) aDepth = 0;
+            }
+            ++k;
+        }
+        return k;
+    };
+
     auto markBodyAfterParams = [&](size_t startParenIdx) {
         size_t k = startParenIdx;
-        int pDepth = 0;
+        int pDepth = 0, bDepth = 0, cDepth = 0;
+        bool inParamDefault = false;
         while (k < tokCount) {
-            if (tokens[k].kind == ScanTokKind::LParen) ++pDepth;
-            else if (tokens[k].kind == ScanTokKind::RParen && --pDepth == 0) { ++k; break; }
+            const ScanToken& tk = tokens[k];
+            if (tk.kind == ScanTokKind::LParen) ++pDepth;
+            else if (tk.kind == ScanTokKind::RParen) {
+                if (--pDepth == 0) { ++k; break; }
+            } else if (tk.kind == ScanTokKind::LBracket) ++bDepth;
+            else if (tk.kind == ScanTokKind::RBracket) { if (bDepth > 0) --bDepth; }
+            else if (tk.kind == ScanTokKind::LBrace) ++cDepth;
+            else if (tk.kind == ScanTokKind::RBrace) { if (cDepth > 0) --cDepth; }
+            else if (pDepth == 1 && bDepth == 0 && cDepth == 0) {
+                if (tk.kind == ScanTokKind::Comma) {
+                    inParamDefault = false;
+                } else if (tk.kind == ScanTokKind::OtherPunct && tk.text == "=") {
+                    inParamDefault = true;
+                } else if (tk.kind == ScanTokKind::Colon && !inParamDefault) {
+                    const size_t endParamType = scanTypeAnnotationEnd(k, false);
+                    markTypeRange(k, endParamType);
+                    k = endParamType;
+                    continue;
+                }
+            }
             ++k;
         }
         if (k < tokCount && tokens[k].kind == ScanTokKind::Colon) {
-            ++k;
-            if (k < tokCount && tokens[k].kind == ScanTokKind::Ident) ++k;
+            const size_t endRetType = scanTypeAnnotationEnd(k, false);
+            markTypeRange(k, endRetType);
+            k = endRetType;
         }
         if (k < tokCount && tokens[k].kind == ScanTokKind::LBrace) {
             tokens[k].opensFunctionBody = true;
@@ -411,7 +582,7 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         const bool atTopLevel = braceScopes.empty() && parenDepth == 0 && bracketDepth == 0 &&
                                 functionDepth == 0 && conciseArrows.empty();
 
-        if (inTopLevelVar && atTopLevel) {
+        if (inTopLevelVar && atTopLevel && !tok.inTypeAnnotation) {
             if (tok.kind == ScanTokKind::Semicolon) {
                 const size_t afterSemi = static_cast<size_t>((tok.text.data() - code.data()) + tok.text.size());
                 if (!currentVarNames.empty()) {
@@ -436,7 +607,20 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
                 continue;
             } else if (varExpectIdent) {
                 if (tok.kind == ScanTokKind::Ident) {
-                    if (next.kind == ScanTokKind::OtherPunct && next.text == "=") {
+                    size_t afterIdent = i + 1;
+                    if (afterIdent + 1 < tokCount && tokens[afterIdent].kind == ScanTokKind::OtherPunct &&
+                        (tokens[afterIdent].text == "!" || tokens[afterIdent].text == "?") &&
+                        tokens[afterIdent + 1].kind == ScanTokKind::Colon) {
+                        tokens[afterIdent].inTypeAnnotation = true;
+                        ++afterIdent;
+                    }
+                    if (afterIdent < tokCount && tokens[afterIdent].kind == ScanTokKind::Colon) {
+                        const size_t endVarType = scanTypeAnnotationEnd(afterIdent, false);
+                        markTypeRange(afterIdent, endVarType);
+                        afterIdent = endVarType;
+                    }
+                    if (afterIdent < tokCount && tokens[afterIdent].kind == ScanTokKind::OtherPunct &&
+                        tokens[afterIdent].text == "=") {
                         currentVarNames.emplace_back(tok.text);
                     }
                     varExpectIdent = false;
@@ -447,16 +631,26 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         }
 
         if (tok.kind == ScanTokKind::LParen) { ++parenDepth; continue; }
-        if (tok.kind == ScanTokKind::RParen) { if (parenDepth > 0) --parenDepth; continue; }
+        if (tok.kind == ScanTokKind::RParen) {
+            if (parenDepth > 0) --parenDepth;
+            if (!tok.inTypeAnnotation && next.kind == ScanTokKind::Colon) {
+                const size_t endRetType = scanTypeAnnotationEnd(i + 1, true);
+                if (endRetType < tokCount && tokens[endRetType].kind == ScanTokKind::Arrow) {
+                    markTypeRange(i + 1, endRetType);
+                }
+            }
+            continue;
+        }
         if (tok.kind == ScanTokKind::LBracket) { ++bracketDepth; continue; }
         if (tok.kind == ScanTokKind::RBracket) { if (bracketDepth > 0) --bracketDepth; continue; }
         if (tok.kind == ScanTokKind::LBrace) {
-            if (tok.opensFunctionBody ||
-                (!braceScopes.empty() && braceScopes.back() == BraceScope::ClassBody &&
-                 prev.kind == ScanTokKind::Ident && prev.text == "static")) {
+            if (!tok.inTypeAnnotation &&
+                (tok.opensFunctionBody ||
+                 (!braceScopes.empty() && braceScopes.back() == BraceScope::ClassBody &&
+                  prev.kind == ScanTokKind::Ident && prev.text == "static"))) {
                 braceScopes.push_back(BraceScope::FunctionBody);
                 ++functionDepth;
-            } else if (pendingClassBody) {
+            } else if (!tok.inTypeAnnotation && pendingClassBody) {
                 pendingClassBody = false;
                 braceScopes.push_back(BraceScope::ClassBody);
             } else {
@@ -471,6 +665,8 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
             }
             continue;
         }
+        if (tok.inTypeAnnotation) continue;
+
         if (tok.kind == ScanTokKind::Arrow) {
             if (i + 1 < tokCount && tokens[i + 1].kind == ScanTokKind::LBrace) {
                 tokens[i + 1].opensFunctionBody = true;
@@ -483,6 +679,59 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         if (tok.kind != ScanTokKind::Ident) continue;
 
         const std::string_view w = tok.text;
+        if ((prev.kind == ScanTokKind::Ident && (prev.text == "let" || prev.text == "const")) ||
+            (!braceScopes.empty() && braceScopes.back() == BraceScope::ClassBody)) {
+            size_t afterIdent = i + 1;
+            if (afterIdent + 1 < tokCount && tokens[afterIdent].kind == ScanTokKind::OtherPunct &&
+                (tokens[afterIdent].text == "!" || tokens[afterIdent].text == "?") &&
+                tokens[afterIdent + 1].kind == ScanTokKind::Colon) {
+                tokens[afterIdent].inTypeAnnotation = true;
+                ++afterIdent;
+            }
+            if (afterIdent < tokCount && tokens[afterIdent].kind == ScanTokKind::Colon) {
+                const size_t endDeclType = scanTypeAnnotationEnd(afterIdent, false);
+                markTypeRange(afterIdent, endDeclType);
+            }
+        }
+        if (w == "interface" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot &&
+            next.kind == ScanTokKind::Ident && !next.newlineBefore) {
+            size_t k = i + 2;
+            int aDepth = 0;
+            while (k < tokCount && (tokens[k].kind != ScanTokKind::LBrace || aDepth > 0)) {
+                if (tokens[k].kind == ScanTokKind::Semicolon && aDepth == 0) break;
+                aDepth += countAngleDelta(tokens[k]);
+                if (aDepth < 0) aDepth = 0;
+                ++k;
+            }
+            if (k < tokCount && tokens[k].kind == ScanTokKind::LBrace) {
+                int cDepth = 0;
+                while (k < tokCount) {
+                    if (tokens[k].kind == ScanTokKind::LBrace) ++cDepth;
+                    else if (tokens[k].kind == ScanTokKind::RBrace && --cDepth == 0) { ++k; break; }
+                    ++k;
+                }
+                markTypeRange(i, k);
+            }
+            continue;
+        }
+        if (w == "type" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot &&
+            next.kind == ScanTokKind::Ident && !next.newlineBefore) {
+            size_t k = i + 2;
+            if (k < tokCount && tokens[k].kind == ScanTokKind::OtherPunct &&
+                !tokens[k].text.empty() && tokens[k].text.front() == '<') {
+                int aDepth = 0;
+                while (k < tokCount) {
+                    aDepth += countAngleDelta(tokens[k]);
+                    ++k;
+                    if (aDepth <= 0) break;
+                }
+            }
+            if (k < tokCount && tokens[k].kind == ScanTokKind::OtherPunct && tokens[k].text == "=") {
+                const size_t endAlias = scanTypeAnnotationEnd(k, false);
+                markTypeRange(i, endAlias);
+                continue;
+            }
+        }
         if (w == "function" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot) {
             size_t k = i + 1;
             if (k < tokCount && tokens[k].kind == ScanTokKind::OtherPunct && tokens[k].text == "*") ++k;
@@ -491,6 +740,7 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
                 fnName = tokens[k].text;
                 ++k;
             }
+            k = skipTypeParamsBeforeParen(k);
             if (k < tokCount && tokens[k].kind == ScanTokKind::LParen) markBodyAfterParams(k);
             if (atTopLevel && !inTopLevelVar && !fnName.empty()) {
                 const bool asyncPrefix = (prev.kind == ScanTokKind::Ident && prev.text == "async" && !prev.newlineBefore);
@@ -511,21 +761,27 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
             pendingClassBody = true;
             continue;
         }
-        if (next.kind == ScanTokKind::LParen &&
-            w != "if" && w != "for" && w != "while" && w != "switch" &&
+        if (w != "if" && w != "for" && w != "while" && w != "switch" &&
             w != "catch" && w != "with" && w != "function" && w != "super" && w != "import") {
             const bool memberBoundary =
                 (!braceScopes.empty() && braceScopes.back() == BraceScope::ClassBody) ||
                 prev.kind == ScanTokKind::LBrace || prev.kind == ScanTokKind::Comma ||
                 (prev.kind == ScanTokKind::Ident &&
-                 (prev.text == "async" || prev.text == "get" || prev.text == "set" || prev.text == "static")) ||
+                 (prev.text == "async" || prev.text == "get" || prev.text == "set" || prev.text == "static" ||
+                  prev.text == "public" || prev.text == "private" || prev.text == "protected" ||
+                  prev.text == "override" || prev.text == "abstract")) ||
                 (prev.kind == ScanTokKind::OtherPunct && prev.text == "*");
-            if (memberBoundary) markBodyAfterParams(i + 1);
+            if (memberBoundary) {
+                const size_t parenIdx = skipTypeParamsBeforeParen(i + 1);
+                if (parenIdx < tokCount && tokens[parenIdx].kind == ScanTokKind::LParen) {
+                    markBodyAfterParams(parenIdx);
+                }
+            }
         }
 
         if (atTopLevel) {
             if (w == "var" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot &&
-                !(prev.kind == ScanTokKind::Ident && prev.text == "export")) {
+                !(prev.kind == ScanTokKind::Ident && (prev.text == "export" || prev.text == "declare"))) {
                 inTopLevelVar = true;
                 varExpectIdent = true;
                 currentVarNames.clear();
@@ -543,7 +799,9 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
                     (next.kind == ScanTokKind::Ident &&
                      (next.text == "default" || next.text == "const" || next.text == "let" ||
                       next.text == "var" || next.text == "function" || next.text == "class" ||
-                      next.text == "async"))) {
+                      next.text == "async" || next.text == "type" || next.text == "interface" ||
+                      next.text == "enum" || next.text == "abstract" || next.text == "declare" ||
+                      next.text == "namespace"))) {
                     result.hasModuleDecl = true;
                 }
             }

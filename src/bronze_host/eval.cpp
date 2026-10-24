@@ -323,7 +323,9 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::string stem = "eval_" + std::to_string(ts) + "_" + std::to_string(id);
 
-    const auto tempJs = tempDir / (stem + ".js");
+    const std::string fileExt = std::filesystem::path(filename).extension().string();
+    const std::string tempExt = (fileExt == ".ts" || fileExt == ".mts" || fileExt == ".mjs") ? fileExt : std::string(".js");
+    const auto tempJs = tempDir / (stem + tempExt);
     const auto outDll = tempDir / (stem + kModuleExt);
 
     // Globals BEFORE the compile, not just before the run: the manifest the
@@ -369,7 +371,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     if ((status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) ||
         (err.find("unresolved name 'await'") != std::string::npos)) {
         std::string wrappedCode = wrapAsyncIife(std::string(code), filename);
-        std::filesystem::path tempJsWrap = tempDir / (stem + "_wrap.js");
+        std::filesystem::path tempJsWrap = tempDir / (stem + "_wrap" + tempExt);
         {
             std::ofstream ofs(tempJsWrap, std::ios::binary);
             if (ofs.is_open()) {
@@ -512,18 +514,20 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     }
 
+    const std::string srcExt = absSource.extension().string();
+    const std::string wrapExt = (srcExt == ".ts" || srcExt == ".mts" || srcExt == ".mjs") ? srcExt : std::string(".js");
     const std::string prepared = hasImportStmt(content) ? content : prepareClassicScriptGlobals(content);
     std::filesystem::path wrapFile;
     std::string buildSrc = absSource.string();
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
         std::string wrapped = wrapAsyncIife(prepared, absSource.string());
-        wrapFile = tempDir / (stem + "_wrap.js");
+        wrapFile = tempDir / (stem + "_wrap" + wrapExt);
         std::ofstream ofs(wrapFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());
         ofs.close();
         buildSrc = wrapFile.string();
     } else if (prepared != content) {
-        wrapFile = tempDir / (stem + "_prep.js");
+        wrapFile = tempDir / (stem + "_prep" + wrapExt);
         std::ofstream ofs(wrapFile, std::ios::binary);
         ofs.write(prepared.data(), prepared.size());
         ofs.close();
@@ -546,7 +550,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
 
     if (status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) {
         std::string wrapped = wrapAsyncIife(content, absSource.string());
-        auto wrappedFile = tempDir / (stem + "_wrap2.js");
+        auto wrappedFile = tempDir / (stem + "_wrap2" + wrapExt);
         std::ofstream ofs(wrappedFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());
         ofs.close();

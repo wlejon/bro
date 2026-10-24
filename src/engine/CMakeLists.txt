@@ -143,7 +143,8 @@ if(BRO_BUILD_TESTS)
     # The reload preflight alone: it needs the manifest reader and nothing
     # else of the engine.
     add_executable(bro_source_preflight_test
-        tests/test_source_preflight.cpp source_preflight.cpp app_loader.cpp)
+        tests/test_source_preflight.cpp source_preflight.cpp app_loader.cpp
+        ../bronze_host/eval_js_scan.cpp)
     target_include_directories(bro_source_preflight_test PRIVATE ${bro_SOURCE_DIR}/src)
     target_link_libraries(bro_source_preflight_test PRIVATE bro_util)
     target_compile_features(bro_source_preflight_test PRIVATE cxx_std_20)

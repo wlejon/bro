@@ -91,10 +91,11 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
         config.displayMode = bro::engine::DisplayMode::Server;
 
         if (!bro::engine::resolveLaunchTarget(target, config)) {
-            // If target is directly a .js script file:
+            // If target is directly a script file (.js/.mjs/.cjs/.ts/.mts):
             std::error_code ec;
-            if (std::filesystem::is_regular_file(target, ec) && target.size() >= 3 &&
-                target.rfind(".js") == target.size() - 3) {
+            const std::string ext = std::filesystem::path(target).extension().string();
+            if (std::filesystem::is_regular_file(target, ec) &&
+                (ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts")) {
                 scriptPath = target;
                 config.appDir = bro::util::executableDir();
             } else {
@@ -108,14 +109,17 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
         // A page app (one with an index.html) is not run here: its scripts,
         // and the app.dll they compile to, are written for a renderer. The
         // server runs the script named on the command line, else the app's
-        // own server.js. An app without index.html is a script-entry app and
-        // its server.js / main.js (or compiled module) is the entry as before.
+        // own server.js / server.ts. An app without index.html is a script-entry app and
+        // its server / main script (or compiled module) is the entry as before.
         std::error_code fsEc;
         const std::filesystem::path appPath(config.appDir);
         const bool pageApp = std::filesystem::is_regular_file(appPath / "index.html", fsEc);
-        if (pageApp && scriptPath.empty() &&
-            std::filesystem::is_regular_file(appPath / "server.js", fsEc)) {
-            scriptPath = (appPath / "server.js").string();
+        if (pageApp && scriptPath.empty()) {
+            if (std::filesystem::is_regular_file(appPath / "server.js", fsEc)) {
+                scriptPath = (appPath / "server.js").string();
+            } else if (std::filesystem::is_regular_file(appPath / "server.ts", fsEc)) {
+                scriptPath = (appPath / "server.ts").string();
+            }
         }
 
         std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);

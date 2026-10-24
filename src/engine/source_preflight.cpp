@@ -101,8 +101,8 @@ struct Cursor {
         ++i;
         return true;
     }
-    // `{ a, b as c, default as d }` — calls f(left, right) per item, right
-    // empty when there is no `as`. Leaves the cursor after `}`.
+    // `{ a, b as c, default as d, type e as f }` — calls f(left, right, isType)
+    // per item, right empty when there is no `as`. Leaves the cursor after `}`.
     template <class F> bool braceList(F f) {
         if (!at('{')) return false;
         ++i;
@@ -110,17 +110,30 @@ struct Cursor {
             ws();
             if (at('}')) { ++i; return true; }
             if (i >= s.size()) return false;
+            bool isType = false;
             std::string left;
             if (!quoted(left)) left = ident();
             if (left.empty()) return false;
             ws();
+            if (left == "type" && !at(',') && !at('}')) {
+                const size_t saved = i;
+                std::string nextTok;
+                if (!quoted(nextTok)) nextTok = ident();
+                ws();
+                if (!nextTok.empty() && !(nextTok == "as" && !at(',') && !at('}') && !word("as"))) {
+                    isType = true;
+                    left = std::move(nextTok);
+                } else {
+                    i = saved;
+                }
+            }
             std::string right;
             if (word("as")) {
                 ws();
                 if (!quoted(right)) right = ident();
                 ws();
             }
-            f(left, right);
+            f(left, right, isType);
             if (at(',')) ++i;
         }
     }
@@ -161,6 +174,24 @@ ModuleScan scanModule(std::string_view rawSrc) {
             if (c.at('(') || c.at('.')) { i = c.i; continue; }   // import() / import.meta
             ImportEdge edge;
             if (c.quoted(edge.specifier)) { out.imports.push_back(edge); i = c.i; continue; }
+            bool typeOnlyClause = false;
+            const size_t beforeType = c.i;
+            if (c.word("type")) {
+                c.ws();
+                if (c.at('{') || c.at('*')) {
+                    typeOnlyClause = true;
+                } else {
+                    const size_t afterTypeWs = c.i;
+                    const std::string nextWord = c.ident();
+                    c.ws();
+                    if (!nextWord.empty() && nextWord != "from" && !c.at(',')) {
+                        typeOnlyClause = true;
+                        c.i = afterTypeWs;
+                    } else {
+                        c.i = beforeType;
+                    }
+                }
+            }
             // Clause: default, `* as ns`, `{ ... }`, or default followed by one of those.
             bool ok = true;
             if (c.at('*')) {
@@ -168,17 +199,21 @@ ModuleScan scanModule(std::string_view rawSrc) {
                 if (!c.word("as")) ok = false;
                 c.ws(); c.ident();
             } else if (c.at('{')) {
-                ok = c.braceList([&](const std::string& l, const std::string&) { edge.names.push_back(l); });
+                ok = c.braceList([&](const std::string& l, const std::string&, bool isType) {
+                    if (!typeOnlyClause && !isType) edge.names.push_back(l);
+                });
             } else {
                 const std::string def = c.ident();
                 if (def.empty()) ok = false;
                 else {
-                    edge.names.push_back("default");
+                    if (!typeOnlyClause) edge.names.push_back("default");
                     c.ws();
                     if (c.at(',')) {
                         ++c.i; c.ws();
                         if (c.at('*')) { ++c.i; c.ws(); c.word("as"); c.ws(); c.ident(); }
-                        else ok = c.braceList([&](const std::string& l, const std::string&) { edge.names.push_back(l); });
+                        else ok = c.braceList([&](const std::string& l, const std::string&, bool isType) {
+                            if (!typeOnlyClause && !isType) edge.names.push_back(l);
+                        });
                     }
                 }
             }
@@ -193,6 +228,16 @@ ModuleScan scanModule(std::string_view rawSrc) {
         c.i = i;
         if (c.word("export")) {
             c.ws();
+            bool exportTypeOnly = false;
+            const size_t beforeExpType = c.i;
+            if (c.word("type")) {
+                c.ws();
+                if (c.at('{') || c.at('*')) {
+                    exportTypeOnly = true;
+                } else {
+                    c.i = beforeExpType;
+                }
+            }
             if (c.at('*')) {
                 ++c.i; c.ws();
                 if (c.word("as")) { c.ws(); out.exports.insert(c.ident()); c.ws(); }
@@ -203,31 +248,41 @@ ModuleScan scanModule(std::string_view rawSrc) {
                     if (c.quoted(edge.specifier)) out.imports.push_back(std::move(edge));
                 }
             } else if (c.at('{')) {
-                std::vector<std::pair<std::string, std::string>> items;
-                c.braceList([&](const std::string& l, const std::string& r) { items.emplace_back(l, r); });
-                for (auto& [l, r] : items) out.exports.insert(r.empty() ? l : r);
+                struct ExportItem { std::string left, right; bool isType; };
+                std::vector<ExportItem> items;
+                c.braceList([&](const std::string& l, const std::string& r, bool isType) {
+                    items.push_back({l, r, exportTypeOnly || isType});
+                });
+                for (auto& it : items) out.exports.insert(it.right.empty() ? it.left : it.right);
                 c.ws();
                 if (c.word("from")) {
                     c.ws();
                     ImportEdge edge;
-                    for (auto& [l, r] : items) edge.names.push_back(l);
+                    for (auto& it : items) {
+                        if (!it.isType) edge.names.push_back(it.left);
+                    }
                     if (c.quoted(edge.specifier)) out.imports.push_back(std::move(edge));
                 }
             } else if (c.word("default")) {
                 out.exports.insert("default");
             } else {
-                c.word("async");
-                c.ws();
+                if (c.word("declare")) c.ws();
+                if (c.word("abstract")) c.ws();
+                if (c.word("async")) c.ws();
                 if (c.word("function")) {
                     c.ws();
                     if (c.at('*')) { ++c.i; c.ws(); }
                     out.exports.insert(c.ident());
-                } else if (c.word("class")) {
+                } else if (c.word("class") || c.word("interface") || c.word("type") ||
+                           c.word("enum") || c.word("namespace")) {
                     c.ws();
                     out.exports.insert(c.ident());
                 } else if (c.word("const") || c.word("let") || c.word("var")) {
                     c.ws();
-                    if (c.at('{') || c.at('[')) {
+                    if (c.word("enum")) {
+                        c.ws();
+                        out.exports.insert(c.ident());
+                    } else if (c.at('{') || c.at('[')) {
                         out.exportsUncertain = true;
                     } else {
                         out.exports.insert(c.ident());
@@ -236,11 +291,19 @@ ModuleScan scanModule(std::string_view rawSrc) {
                         // ends; without semicolons the end is not knowable
                         // here, so any such comma makes the list uncertain.
                         int depth = 0;
+                        bool inTypeColon = false;
                         for (size_t k = c.i; k < src.size(); ++k) {
                             const char d = src[k];
                             if (d == '\'' || d == '"' || d == '`') { skipString(k); --k; continue; }
-                            if (d == '(' || d == '[' || d == '{') ++depth;
-                            else if (d == ')' || d == ']' || d == '}') { if (--depth < 0) break; }
+                            if (d == ':' && depth == 0) { inTypeColon = true; continue; }
+                            if (d == '=' && depth == 0 && (k + 1 >= src.size() || src[k + 1] != '>')) {
+                                inTypeColon = false;
+                                continue;
+                            }
+                            if (d == '(' || d == '[' || d == '{' || (inTypeColon && d == '<')) ++depth;
+                            else if (d == ')' || d == ']' || d == '}' || (inTypeColon && d == '>')) {
+                                if (--depth < 0) break;
+                            }
                             else if (d == ';' && depth == 0) break;
                             else if (d == ',' && depth == 0) { out.exportsUncertain = true; break; }
                         }
@@ -273,7 +336,7 @@ bool unresolvedRootPath(const std::string& p) {
 
 bool isScriptFile(const fs::path& p) {
     const std::string ext = p.extension().string();
-    return ext == ".js" || ext == ".mjs" || ext == ".cjs";
+    return ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts";
 }
 
 class Checker {
@@ -294,9 +357,15 @@ public:
             return {};   // bare specifier or URL
         }
         if (isFile(out)) return {};
-        for (const char* suffix : {".js", ".mjs", "/index.js"}) {
+        for (const char* suffix : {".js", ".mjs", ".ts", ".mts", "/index.js", "/index.ts"}) {
             fs::path alt = fs::path(out.string() + suffix);
             if (isFile(alt)) { out = alt; return {}; }
+        }
+        const std::string ext = out.extension().string();
+        if (ext == ".js" || ext == ".mjs") {
+            fs::path tsAlt = out;
+            tsAlt.replace_extension(ext == ".mjs" ? ".mts" : ".ts");
+            if (isFile(tsAlt)) { out = tsAlt; return {}; }
         }
         return "missing";
     }
@@ -367,7 +436,8 @@ std::string checkAppSourceConsistency(const std::string& appDir,
     if (isFile(index)) {
         std::string html;
         if (!readText(index, html) || html.empty()) return "index.html is empty";
-    } else if (!isFile(root / "main.js") && !isFile(root / "server.js")) {
+    } else if (!isFile(root / "main.js") && !isFile(root / "main.ts") &&
+               !isFile(root / "server.js") && !isFile(root / "server.ts")) {
         return "index.html does not exist";
     }
 

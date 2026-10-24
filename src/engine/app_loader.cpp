@@ -107,11 +107,13 @@ std::string AppLoader::resolvePath(const std::string& base,
 AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMounts* mounts) {
     AppManifest manifest;
     std::error_code ec;
-    if (appDir.size() >= 3 && appDir.substr(appDir.size() - 3) == ".js" &&
+    const std::string ext = std::filesystem::path(appDir).extension().string();
+    if ((ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts") &&
         std::filesystem::is_regular_file(appDir, ec)) {
         std::filesystem::path p(appDir);
         manifest.basePath = p.has_parent_path() ? p.parent_path().string() : std::string(".");
-        manifest.scripts.push_back({appDir, {}, /*isModule=*/false});
+        const bool isMod = (ext == ".mjs" || ext == ".mts");
+        manifest.scripts.push_back({appDir, {}, /*isModule=*/isMod});
         manifest.htmlPath.clear();
         LOG_INFO("AppLoader: loaded standalone script '%s'", appDir.c_str());
         return manifest;
@@ -126,13 +128,13 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
     }
 
     if (html.empty()) {
-        std::string serverJs = resolvePath(appDir, "server.js", mounts);
-        std::string mainJs = resolvePath(appDir, "main.js", mounts);
         std::string entryJs;
-        if (std::filesystem::exists(serverJs, ec)) {
-            entryJs = serverJs;
-        } else if (std::filesystem::exists(mainJs, ec)) {
-            entryJs = mainJs;
+        for (const char* candidate : {"server.js", "server.ts", "main.js", "main.ts"}) {
+            std::string resolved = resolvePath(appDir, candidate, mounts);
+            if (std::filesystem::exists(resolved, ec)) {
+                entryJs = std::move(resolved);
+                break;
+            }
         }
         if (!entryJs.empty()) {
             manifest.scripts.push_back({entryJs, {}, /*isModule=*/true});
@@ -140,7 +142,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             LOG_INFO("AppLoader: loaded script entry '%s' for '%s'", entryJs.c_str(), appDir.c_str());
             return manifest;
         }
-        LOG_ERROR("AppLoader::loadApp: no index.html or server.js/main.js found in '%s'", appDir.c_str());
+        LOG_ERROR("AppLoader::loadApp: no index.html or server/main script found in '%s'", appDir.c_str());
         return manifest;
     }
 
