@@ -40,6 +40,7 @@
 #include "scene/vulkan/frame/scene_module_shaders.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
+#include "scene/vulkan/shaders/sky/clouds_layout.h"
 
 #include <vulkan/vulkan.h>
 
@@ -186,13 +187,24 @@ private:
     uint32_t globeFrame_ = 0;
     float eyeRadius_ = 0.0f;     // the eye's distance from the body's centre (m)
 
+    /// A level whose window moved from cell `from` to `to` along `axis`
+    /// (0 x, 1 y): the bakes of what that changes (placeCache).
+    void moveLevel(int k, int axis, long long from, long long to);
+
     // The cache's chart (the body's frame) and its levels' windows, as
-    // baked; a bake this frame: levels from `first`, its rows from `y0`
-    // every `yStep`, `levels` of them.
+    // baked; a bake this frame: `levels` levels from `first`, `nx` columns
+    // from `x0` and `ny` rows from `y0` every `yStep` (both wrapping about
+    // the side), its passes from `pass0` (0 the base, 1 the light, 2 the
+    // distance to cloud).
     struct CacheBake {
-        int first, levels, y0, yStep;
+        int first, levels, x0, nx, y0, ny, yStep, pass0;
+        static CacheBake level(int first, int levels) {
+            return {first, levels, 0, CL_CACHE_SIDE, 0, CL_CACHE_SIDE, 1, 0};
+        }
     };
     std::vector<CacheBake> bakes_;
+    bool cacheBaked_ = false;       // the cache holds a deck (its first bake is whole)
+    uint32_t cachePending_ = 0;     // levels still to be baked again, a level a frame
     double chartC_[3] = {}, chartE1_[3] = {}, chartE2_[3] = {};
     long long levelCentre_[13][2] = {};
     bool chartValid_ = false;

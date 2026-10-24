@@ -95,7 +95,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     noiseSetLayout_ = noise.build(dev);
     if (!setLayout_ || !noiseSetLayout_) return false;
     marchLayout_ = pipelineLayout(dev, {gpu.defaults.cameraLayout, gpu.defaults.lightingLayout, setLayout_}, 0);
-    computeLayout_ = pipelineLayout(dev, {setLayout_}, 4 * sizeof(int32_t));
+    computeLayout_ = pipelineLayout(dev, {setLayout_}, 8 * sizeof(int32_t));
     noiseLayout_ = pipelineLayout(dev, {noiseSetLayout_}, 2 * sizeof(int32_t));
     skyVs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::SkyVert);
     marchFs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsFrag);
@@ -147,6 +147,8 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     byHash_.clear();
     current_ = nullptr;
     chartValid_ = false;
+    cacheBaked_ = false;
+    cachePending_ = 0;
     for (SceneVkImage* i :
          {&cover_, &shadow_, &coverNone_, &shadowNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
           &distB_, &cacheHolds_, &globe_})
@@ -433,11 +435,18 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
 void SceneClouds::placeCache(SceneFrame& frame) {
     const CloudSettings& c = frame.renderer.clouds();
     const double Rb = block_.shell[0];
-    // The nadir in the body's frame.
+    // The nadir in the body's frame: on a round body the eye's direction
+    // from the centre, the eye taken onto the body in double (the place's
+    // origin and axes as they are this frame, so a re-anchor leaves it
+    // where it was); otherwise the shadow's (the air's) up under the eye.
     double nb[3];
-    for (int i = 0; i < 3; ++i)
-        nb[i] = block_.toBody[i][0] * block_.shadowN[0] + block_.toBody[i][1] * block_.shadowN[1] +
-                block_.toBody[i][2] * block_.shadowN[2];
+    const Place& place = frame.graph.place();
+    if (frame.graph.hasBody() && !place.body().flat())
+        place.toBody(frame.world.eye, nb);
+    else
+        for (int i = 0; i < 3; ++i)
+            nb[i] = block_.toBody[i][0] * block_.shadowN[0] + block_.toBody[i][1] * block_.shadowN[1] +
+                    block_.toBody[i][2] * block_.shadowN[2];
     const double nl = std::sqrt(nb[0] * nb[0] + nb[1] * nb[1] + nb[2] * nb[2]);
     for (double& v : nb) v /= nl;
     const auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
@@ -462,6 +471,7 @@ void SceneClouds::placeCache(SceneFrame& frame) {
         chartE2_[2] = nb[0] * chartE1_[1] - nb[1] * chartE1_[0];
         chartValid_ = true;
         all = true;
+        cacheBaked_ = false;   // (every cell of every level is elsewhere)
     }
     cacheKey_ = key;
     // The nadir on the chart.
@@ -483,25 +493,93 @@ void SceneClouds::placeCache(SceneFrame& frame) {
     block_.cacheNadir[2] = block_.cacheNadir[3] = 0.0f;
 
     // The levels' windows: about the cell that holds the nadir. One that
-    // moved is baked whole; every level's rows a share a frame.
+    // moved bakes the cells it took in (and those about them whose band
+    // and distance to cloud they change); every level's rows a share a
+    // frame.
     bakes_.clear();
+    const bool whole = all && !cacheBaked_;
     for (int k = 0; k < CL_CACHE_LEVELS; ++k) {
+        // (A window moves once the nadir is a quarter cell past the cell it
+        // is about, so a nadir on a cell's edge does not move it back and
+        // forth; a lookup CL_CACHE_MARGIN cells from it, filtered, stays in.)
         const double cell = CL_CACHE_TEXEL0 * std::ldexp(1.0, k);
-        const long long cx = static_cast<long long>(std::floor(x / cell));
-        const long long cy = static_cast<long long>(std::floor(y / cell));
-        if (!all && (cx != levelCentre_[k][0] || cy != levelCentre_[k][1])) bakes_.push_back({k, 1, 0, 1});
+        const auto follow = [&](double u, long long c) {
+            const long long f = static_cast<long long>(std::floor(u));
+            const bool near = u >= static_cast<double>(c) - 0.25 && u < static_cast<double>(c) + 1.25;
+            return whole || !cacheBaked_ || !near ? f : c;
+        };
+        const long long cx = follow(x / cell, levelCentre_[k][0]);
+        const long long cy = follow(y / cell, levelCentre_[k][1]);
+        if (!whole && cacheBaked_) {
+            moveLevel(k, 0, levelCentre_[k][0], cx);
+            moveLevel(k, 1, levelCentre_[k][1], cy);
+        }
         levelCentre_[k][0] = cx;
         levelCentre_[k][1] = cy;
         block_.cacheLevel[k][0] = static_cast<float>(cx);
         block_.cacheLevel[k][1] = static_cast<float>(cy);
         block_.cacheLevel[k][2] = block_.cacheLevel[k][3] = 0.0f;
     }
-    if (all) {
-        bakes_.assign(1, {0, CL_CACHE_LEVELS, 0, 1});
+    if (whole) {
+        // (The scene's first: nothing to read meanwhile.)
+        bakes_.assign(1, CacheBake::level(0, CL_CACHE_LEVELS));
+        cachePending_ = 0;
+        cacheBaked_ = true;
     } else {
-        bakes_.push_back({0, CL_CACHE_LEVELS, static_cast<int>(cacheFrame_ % CL_CACHE_SLICES), CL_CACHE_SLICES});
+        if (all) cachePending_ = (1u << CL_CACHE_LEVELS) - 1u;
+        // A rebake of every level, a level a frame and the coarsest first
+        // (a level's light reads its own and the coarser's), each whole in
+        // its frame; the march reads what the others held meanwhile.
+        if (cachePending_) {
+            int k = CL_CACHE_LEVELS - 1;
+            while (!(cachePending_ & (1u << k))) --k;
+            cachePending_ &= ~(1u << k);
+            bakes_.push_back(CacheBake::level(k, 1));
+        }
+        CacheBake slice = CacheBake::level(0, CL_CACHE_LEVELS);
+        slice.y0 = static_cast<int>(cacheFrame_ % CL_CACHE_SLICES);
+        slice.yStep = CL_CACHE_SLICES;
+        slice.ny = CL_CACHE_SIDE / CL_CACHE_SLICES;
+        bakes_.push_back(slice);
     }
     ++cacheFrame_;
+}
+
+void SceneClouds::moveLevel(int k, int axis, long long from, long long to) {
+    const long long d = to - from;
+    if (d == 0) return;
+    constexpr int S = CL_CACHE_SIDE, H = CL_CACHE_SIDE / 2, R = CL_CACHE_REACH;
+    if (std::llabs(d) >= S - 2 * (R + 2)) {
+        // (A jump past most of the window: little of it is kept.)
+        bakes_.push_back(CacheBake::level(k, 1));
+        return;
+    }
+    // Cells `g0` .. `g0 + n - 1` along the axis, from pass `pass0` on.
+    const auto band = [&](long long g0, int n, int pass0) {
+        CacheBake b = CacheBake::level(k, 1);
+        b.pass0 = pass0;
+        const int s0 = static_cast<int>(g0 & (S - 1));
+        if (axis == 0) b.x0 = s0, b.nx = n;
+        else b.y0 = s0, b.ny = n;
+        bakes_.push_back(b);
+    };
+    // The cells taken in, whole, with the old edge's (its band reads them);
+    // the distance to cloud out to the reach from them; and at the edge
+    // given up, the cell whose band reads across the window's wrap to the
+    // cells taken in, and the distances out to the reach that counted on
+    // what was given up.
+    const int n = static_cast<int>(std::llabs(d));
+    if (d > 0) {
+        band(from + H - 1, n + 1, 0);
+        band(from + H - 1 - R, R, 2);
+        band(to - H, 1, 1);
+        band(to - H + 1, R, 2);
+    } else {
+        band(to - H, n + 1, 0);
+        band(from - H + 1, R, 2);
+        band(to + H - 1, 1, 1);
+        band(to + H - 1 - R, R, 2);
+    }
 }
 
 VkDescriptorSet SceneClouds::writeSet(SceneFrame& frame, bool march, bool bake) {
@@ -595,7 +673,8 @@ void SceneClouds::recordCache(SceneFrame& frame) {
         sun[i] = block_.toBody[i][0] * block_.sun[0] + block_.toBody[i][1] * block_.sun[1] +
                  block_.toBody[i][2] * block_.sun[2];
     const float turned = sun[0] * cacheSun_[0] + sun[1] * cacheSun_[1] + sun[2] * cacheSun_[2];
-    if (turned < 0.99996f) bakes_.assign(1, {0, CL_CACHE_LEVELS, 0, 1});   // (half a degree)
+    const bool sunKnown = cacheSun_[0] != 0.0f || cacheSun_[1] != 0.0f || cacheSun_[2] != 0.0f;
+    if (sunKnown && turned < 0.99996f) cachePending_ = (1u << CL_CACHE_LEVELS) - 1u;   // (half a degree)
     std::memcpy(cacheSun_, sun, sizeof(sun));
     if (bakes_.empty()) return;
     VkDescriptorSet set = writeSet(frame, false, false);
@@ -609,10 +688,11 @@ void SceneClouds::recordCache(SceneFrame& frame) {
                           pass == 0 ? current_->cache : pass == 1 ? lightPipeline_ : distPipeline_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         for (const CacheBake& b : bakes_) {
-            const int32_t push[4] = {b.first, b.y0, b.yStep, std::max(pass - 2, 0)};
+            if (b.pass0 > pass) continue;
+            const int32_t push[8] = {b.first, b.y0, b.yStep, std::max(pass - 2, 0), b.x0, b.nx, b.ny, 0};
             vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
-            const uint32_t rows = static_cast<uint32_t>((CL_CACHE_SIDE - b.y0 + b.yStep - 1) / b.yStep);
-            vkCmdDispatch(cmd, CL_CACHE_SIDE / CL_CACHE_GROUP, (rows + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP,
+            vkCmdDispatch(cmd, static_cast<uint32_t>((b.nx + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP),
+                          static_cast<uint32_t>((b.ny + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP),
                           static_cast<uint32_t>(b.levels * CL_CACHE_BINS));
         }
         memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

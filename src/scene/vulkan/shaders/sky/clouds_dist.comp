@@ -27,6 +27,7 @@ layout(set = 0, binding = CL_B_HOLDS, r16f) uniform readonly image3D holds;
 
 layout(push_constant) uniform Push {
     ivec4 rows;    // x the first level, y the first row, z the step between rows, w the pass (0 .. 2)
+    ivec4 cols;    // x the first column, y the columns, z the rows (both wrap about the side)
 } push;
 
 // The gap (cells) between a cell's box and one `i` cells off that may hold
@@ -34,11 +35,12 @@ layout(push_constant) uniform Push {
 float clGap(int i) { return float(max(abs(i) - 2, 0)); }
 
 void main() {
-    int x = int(gl_GlobalInvocationID.x);
-    int y = push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z;
+    if (int(gl_GlobalInvocationID.x) >= push.cols.y || int(gl_GlobalInvocationID.y) >= push.cols.z) return;
+    int x = (push.cols.x + int(gl_GlobalInvocationID.x)) & (CL_CACHE_SIDE - 1);
+    int y = (push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z) & (CL_CACHE_SIDE - 1);
     int k = push.rows.x + int(gl_GlobalInvocationID.z) / CL_CACHE_BINS;
     int bin = int(gl_GlobalInvocationID.z) % CL_CACHE_BINS;
-    if (x >= CL_CACHE_SIDE || y >= CL_CACHE_SIDE || k >= CL_CACHE_LEVELS) return;
+    if (k >= CL_CACHE_LEVELS) return;
     float cell = cloudCacheCell(k);
     int z = k * CL_CACHE_BINS + bin;
     const int R = CL_CACHE_REACH;
