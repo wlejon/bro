@@ -141,8 +141,9 @@ void LandRegionLattice::blendDir(const LandRegionSet& set, const double dir[3], 
         const int n = faces(level, dir, roots, w, chart);
         double sum[4] = {0.0, 0.0, 0.0, 0.0}, cover = 0.0;
         for (int f = 0; f < n; ++f) levelAt(*this, set, level, roots[f], chart[f][0], chart[f][1], w[f], sum, cover);
-        for (int c = 0; c < 4; ++c) acc[c] += rest * sum[c];
-        rest *= 1.0 - cover;
+        const double p = presence(set.centre[level], dir, 0.0, 0.0);
+        for (int c = 0; c < 4; ++c) acc[c] += rest * p * sum[c];
+        rest *= 1.0 - p * cover;
     }
     for (int c = 0; c < 4; ++c) coarse[c] = static_cast<float>(acc[c] + std::max(rest, 0.0) * coarse[c]);
 }
@@ -153,10 +154,163 @@ void LandRegionLattice::blendAt(const LandRegionSet& set, double x, double z, fl
     for (int level = 0; level < config.levels && rest > 0.0; ++level) {
         double sum[4] = {0.0, 0.0, 0.0, 0.0}, cover = 0.0;
         levelAt(*this, set, level, 0, x, z, 1.0, sum, cover);
-        for (int c = 0; c < 4; ++c) acc[c] += rest * sum[c];
-        rest *= 1.0 - cover;
+        const double p = presence(set.centre[level], nullptr, x, z);
+        for (int c = 0; c < 4; ++c) acc[c] += rest * p * sum[c];
+        rest *= 1.0 - p * cover;
     }
     for (int c = 0; c < 4; ++c) coarse[c] = static_cast<float>(acc[c] + std::max(rest, 0.0) * coarse[c]);
+}
+
+namespace {
+
+double dot3(const double a[3], const double b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+void cross3(const double a[3], const double b[3], double out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+/// The angle between two unit vectors (2 asin of half the chord: exact
+/// however small).
+double angle3(const double a[3], const double b[3]) {
+    const double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    return 2.0 * std::asin(std::min(0.5 * std::sqrt(dx * dx + dy * dy + dz * dz), 1.0));
+}
+
+/// The angle from unit vector p to the great-circle arc from a to b (less
+/// than a half turn).
+double angleToArc(const double p[3], const double a[3], const double b[3]) {
+    double n[3];
+    cross3(a, b, n);
+    const double l = std::sqrt(dot3(n, n));
+    const double end = std::min(angle3(p, a), angle3(p, b));
+    if (!(l > 0.0)) return end;
+    for (double& c : n) c /= l;
+    // (p's foot on the arc's circle lies between a and b: the arc's nearest
+    // point is there.)
+    double an[3], nb[3];
+    cross3(a, p, an);
+    cross3(p, b, nb);
+    if (dot3(an, n) >= 0.0 && dot3(nb, n) >= 0.0) return std::min(std::asin(std::min(std::fabs(dot3(p, n)), 1.0)), end);
+    return end;
+}
+
+}  // namespace
+
+double LandRegionLattice::presence(const LandRegionCentre& c, const double dir[3], double x, double z) const {
+    if (!c.active) return 1.0;
+    double d;
+    if (round() && dir) {
+        // (Along the ground: 2 R asin of half the chord.)
+        d = radius * angle3(dir, c.at.dir);
+    } else {
+        d = std::hypot(x - c.at.x, z - c.at.z);
+    }
+    if (d >= c.outer) return 0.0;
+    return 1.0 - smooth01(c.inner, c.outer, d);
+}
+
+double LandRegionLattice::between(const LandGroundPoint& a, const LandGroundPoint& b) const {
+    return round() ? radius * angle3(a.dir, b.dir) : std::hypot(a.x - b.x, a.z - b.z);
+}
+
+double LandRegionLattice::distanceTo(const LandGroundPoint& p, const LandRegionKey& k) const {
+    const double side = config.cells * config.cellOf(k.level);
+    const double x0 = originX(k), z0 = originZ(k), x1 = x0 + side, z1 = z0 + side;
+    if (!round()) {
+        const double dx = std::max({x0 - p.x, 0.0, p.x - x1}), dz = std::max({z0 - p.z, 0.0, p.z - z1});
+        return std::hypot(dx, dz);
+    }
+    // A face's chart lines are great circles (x = R atan(d.u / d.n) fixed is
+    // a plane through the centre), so the region's ground is a quadrilateral
+    // of great-circle arcs: inside it, or the nearest of its four sides.
+    Body body;
+    body.radius = radius;
+    if (dot3(p.dir, cubeFace(k.root).n) > 0.0) {
+        const ChartPoint c = chartOf(body, p.dir, k.root);
+        if (c.x >= x0 && c.x <= x1 && c.z >= z0 && c.z <= z1) return 0.0;
+    }
+    double q[4][3];
+    dirOf(body, {k.root, x0, z0}, q[0]);
+    dirOf(body, {k.root, x1, z0}, q[1]);
+    dirOf(body, {k.root, x1, z1}, q[2]);
+    dirOf(body, {k.root, x0, z1}, q[3]);
+    double a = 4.0;
+    for (int s = 0; s < 4; ++s) a = std::min(a, angleToArc(p.dir, q[s], q[(s + 1) & 3]));
+    return radius * a;
+}
+
+double LandRegionLattice::discRadius(int level) const {
+    return std::max(static_cast<double>(config.reach), 0.5) * config.stepOf(level);
+}
+
+bool LandRegionLattice::levelWanted(int level, double eyeHeight, double focalPixels) const {
+    return config.cellOf(level) * focalPixels >= eyeHeight;
+}
+
+void LandRegionLattice::disc(int level, const LandGroundPoint& p, double r,
+                             std::vector<std::pair<LandRegionKey, double>>& out) const {
+    out.clear();
+    if (!config.active() || !(half > 0.0)) return;
+    Body body;
+    body.radius = radius;
+    const double step = config.stepOf(level);
+    // (A face metre is a metre of ground to within a factor of two: the
+    // chart window holds every region near enough.)
+    const double window = 2.0 * r + config.cells * config.cellOf(level);
+    int lo, hi;
+    range(level, lo, hi);
+    for (int f = 0; f < roots(); ++f) {
+        double px = p.x, pz = p.z;
+        if (round()) {
+            // (The faces the reads blend at p: faces() above.)
+            if (dot3(p.dir, cubeFace(f).n) < 0.2) continue;
+            const ChartPoint c = chartOf(body, p.dir, f);
+            px = c.x;
+            pz = c.z;
+        }
+        const int i0 = std::max(static_cast<int>(std::floor((px - window + half) / step)) - 1, lo);
+        const int i1 = std::min(static_cast<int>(std::floor((px + window + half) / step)) + 1, hi);
+        const int j0 = std::max(static_cast<int>(std::floor((pz - window + half) / step)) - 1, lo);
+        const int j1 = std::min(static_cast<int>(std::floor((pz + window + half) / step)) + 1, hi);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) {
+                const LandRegionKey k{level, f, i, j};
+                const double d = distanceTo(p, k);
+                if (d < r) out.emplace_back(k, d);
+            }
+    }
+}
+
+void LandRegionFade::aim(const LandRegionLattice& L, int level, const LandGroundPoint& eye) {
+    if (!seen) {
+        seen = true;
+        target = at = eye;
+        radius = 0.0;
+        return;
+    }
+    if (L.between(target, eye) > kFollow * L.discRadius(level)) target = eye;
+}
+
+void LandRegionFade::ease(const LandRegionLattice& L, double D) {
+    if (at == target) return;
+    for (int i = 0; i < 3; ++i) at.dir[i] += (target.dir[i] - at.dir[i]) * kEase;
+    const double l = std::sqrt(dot3(at.dir, at.dir));
+    if (l > 0.0)
+        for (double& c : at.dir) c /= l;
+    at.x += (target.x - at.x) * kEase;
+    at.z += (target.z - at.z) * kEase;
+    if (L.between(at, target) < kSnap * D) at = target;
+}
+
+LandRegionCentre LandRegionFade::centre() const {
+    LandRegionCentre c;
+    c.active = seen;
+    c.at = at;
+    c.inner = kInner * radius;
+    c.outer = kOuter * radius;
+    return c;
 }
 
 void LandRegionStore::add(std::shared_ptr<const LandRegion> region) {
@@ -174,6 +328,13 @@ void LandRegionStore::remove(const LandRegionKey& key) {
     set_ = std::move(next);
 }
 
+void LandRegionStore::setCentres(const LandRegionCentre* centres) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto next = std::make_shared<LandRegionSet>(*set_);
+    for (int l = 0; l < LandRegionConfig::kMaxLevels; ++l) next->centre[l] = centres[l];
+    set_ = std::move(next);
+}
+
 void LandRegionStore::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     set_ = std::make_shared<const LandRegionSet>();
@@ -181,46 +342,50 @@ void LandRegionStore::clear() {
 
 void landRegionsWanted(const LandRegionLattice& L, const double eyeDir[3], double flatX, double flatZ,
                        double eyeHeight, double focalPixels, std::vector<LandRegionKey>& wanted,
-                       std::vector<LandRegionKey>* near) {
+                       std::vector<LandRegionKey>* near, const LandGroundPoint* centres) {
     wanted.clear();
     if (near) near->clear();
     if (!L.config.active() || !(L.half > 0.0)) return;
     Body body;
     body.radius = L.radius;
+    LandGroundPoint eye;
+    if (L.round())
+        for (int i = 0; i < 3; ++i) eye.dir[i] = eyeDir[i];
+    eye.x = flatX;
+    eye.z = flatZ;
     struct Ranked {
         LandRegionKey key;
-        double d;
+        double d, mid;
     };
+    std::vector<std::pair<LandRegionKey, double>> keys;
     std::vector<Ranked> level;
     for (int lv = L.config.levels - 1; lv >= 0; --lv) {
-        const double cell = L.config.cellOf(lv), step = L.config.stepOf(lv);
         // (A level whose cell is under a pixel from the eye's height is not wanted.)
-        if (cell * focalPixels < eyeHeight) continue;
+        if (!L.levelWanted(lv, eyeHeight, focalPixels)) continue;
+        const LandGroundPoint& c = centres ? centres[lv] : eye;
+        L.disc(lv, c, L.discRadius(lv), keys);
         level.clear();
-        int lo, hi;
-        L.range(lv, lo, hi);
-        for (int f = 0; f < L.roots(); ++f) {
+        const double step = L.config.stepOf(lv);
+        for (const auto& [k, d] : keys) {
+            // (Nearest first: by the ground's distance, then the region's middle's.)
+            LandGroundPoint m;
+            m.x = -L.half + (k.i + 0.5) * step;
+            m.z = -L.half + (k.j + 0.5) * step;
+            if (L.round()) dirOf(body, {k.root, m.x, m.z}, m.dir);
+            level.push_back({k, d, L.between(c, m)});
+            if (!near) continue;
+            // (Holding the eye's ground: its weight there is not zero.)
             double ex = flatX, ez = flatZ;
             if (L.round()) {
-                const CubeFace& F = cubeFace(f);
-                if (eyeDir[0] * F.n[0] + eyeDir[1] * F.n[1] + eyeDir[2] * F.n[2] < 0.2) continue;
-                const ChartPoint c = chartOf(body, eyeDir, f);
-                ex = c.x;
-                ez = c.z;
+                if (dot3(eyeDir, cubeFace(k.root).n) <= 0.0) continue;
+                const ChartPoint e = chartOf(body, eyeDir, k.root);
+                ex = e.x;
+                ez = e.z;
             }
-            const int ic = static_cast<int>(std::floor((ex + L.half) / step));
-            const int jc = static_cast<int>(std::floor((ez + L.half) / step));
-            for (int j = std::max(jc - L.config.reach, lo); j <= std::min(jc + L.config.reach, hi); ++j)
-                for (int i = std::max(ic - L.config.reach, lo); i <= std::min(ic + L.config.reach, hi); ++i) {
-                    const LandRegionKey k{lv, f, i, j};
-                    const double cx = -L.half + (i + 0.5) * step, cz = -L.half + (j + 0.5) * step;
-                    level.push_back({k, std::hypot(cx - ex, cz - ez)});
-                    // (Holding the eye's ground: its weight there is not zero.)
-                    if (near && L.weight(lv, L.originX(k), ex) > 0.0 && L.weight(lv, L.originZ(k), ez) > 0.0)
-                        near->push_back(k);
-                }
+            if (L.weight(lv, L.originX(k), ex) > 0.0 && L.weight(lv, L.originZ(k), ez) > 0.0) near->push_back(k);
         }
-        std::sort(level.begin(), level.end(), [](const Ranked& a, const Ranked& b) { return a.d < b.d; });
+        std::sort(level.begin(), level.end(),
+                  [](const Ranked& a, const Ranked& b) { return a.d < b.d || (a.d == b.d && a.mid < b.mid); });
         for (const Ranked& r : level) wanted.push_back(r.key);
     }
 }

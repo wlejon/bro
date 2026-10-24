@@ -169,7 +169,7 @@ bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {
                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, b) ||
             !b.mappedData)
             return false;
-    if (!gpu.allocator.createBuffer(static_cast<VkDeviceSize>(L.tableSize()) * 16,
+    if (!gpu.allocator.createBuffer(static_cast<VkDeviceSize>(L.tableSize() + 2 * LandRegionConfig::kMaxLevels) * 16,
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, land.tableBuffer))
         return false;
@@ -278,7 +278,7 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
 
 void SceneLandRegions::writeTable(SceneFrame& frame, const LandNode& node, Land& land, VkCommandBuffer cmd) {
     const int size = node.regionLattice().tableSize();
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(size) * 16;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(size + 2 * LandRegionConfig::kMaxLevels) * 16;
     land.table = {land.tableBuffer.buffer, 0, bytes};
     if (!land.tableDirty) return;
     const render::UploadSlice slice = frame.gpu.device.frameUpload(bytes, kStorageAlign);
@@ -295,6 +295,17 @@ void SceneLandRegions::writeTable(SceneFrame& frame, const LandNode& node, Land&
                 e[h * 4 + 1] = static_cast<uint32_t>(r.slot);
                 break;
             }
+    }
+    // Each level's centre: (its direction, 1 when it has one), (inner,
+    // outer, its chart x, z).
+    auto* f = reinterpret_cast<float*>(e + static_cast<size_t>(size) * 4);
+    for (int l = 0; l < LandRegionConfig::kMaxLevels; ++l) {
+        const LandRegionCentre& c = land.centres[l];
+        const float w[8] = {static_cast<float>(c.at.dir[0]), static_cast<float>(c.at.dir[1]),
+                            static_cast<float>(c.at.dir[2]), c.active ? 1.0f : 0.0f,
+                            static_cast<float>(c.inner),     static_cast<float>(c.outer),
+                            static_cast<float>(c.at.x),      static_cast<float>(c.at.z)};
+        std::memcpy(f + l * 8, w, sizeof(w));
     }
     // Into the table once what read it last is done, before what reads it next.
     VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -478,7 +489,18 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     const double focal = 0.5 * std::max(view.height, 1u) * std::fabs(view.proj.at(1, 1));
     std::vector<LandRegionKey>& wanted = land.wanted;
     std::vector<LandRegionKey> near;
-    landRegionsWanted(L, dir, eye[0], eye[2], std::max(height, 1.0), focal * kLead, wanted, &near);
+    // Each wanted level's disc about the ground under the eye (a level no
+    // longer wanted keeps its last, while its regions stay).
+    LandGroundPoint ground;
+    for (int i = 0; i < 3; ++i) ground.dir[i] = dir[i];
+    ground.x = eye[0];
+    ground.z = eye[2];
+    LandGroundPoint targets[LandRegionConfig::kMaxLevels];
+    for (int l = 0; l < L.config.levels; ++l) {
+        if (L.levelWanted(l, std::max(height, 1.0), focal * kLead)) land.fades[l].aim(L, l, ground);
+        targets[l] = land.fades[l].target;
+    }
+    landRegionsWanted(L, dir, eye[0], eye[2], std::max(height, 1.0), focal * kLead, wanted, &near, targets);
     land.pending = 0;
     for (const LandRegionKey& k : wanted) {
         const auto r = land.resident.find(k.packed());
@@ -490,7 +512,6 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
         const auto r = land.resident.find(k.packed());
         if (r == land.resident.end() || !r->second.in) settled = false;
     }
-    node.setRegionsSettled(settled);
     if (settled) land.warm = true;
 
     // Work while a region is being made or one can be begun; then the
@@ -498,6 +519,31 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     // it, made again this frame, and they must not find it in the table
     // (they would keep its heights after it is gone).
     const bool working = land.hasJob || begin(node, land, wanted);
+    // Each level read in the disc its regions in cover (after begin: a
+    // region it dropped is not); where that changes, the items over it are
+    // made again.
+    bool faded = false;
+    for (int l = 0; l < L.config.levels; ++l) {
+        const LandRegionCentre c = land.fades[l].step(L, l, [&](const LandRegionKey& k) {
+            const auto r = land.resident.find(k.packed());
+            return r != land.resident.end() && r->second.in;
+        });
+        if (c == land.centres[l]) continue;
+        node.regionFadeChanged(land.centres[l], c);
+        land.centres[l] = c;
+        faded = true;
+    }
+    if (faded) {
+        land.tableDirty = true;
+        node.regionStore().setCentres(land.centres);
+    }
+    // (Settled once, too, every wanted level is read whole at the ground
+    // under the eye: its disc grown past it.)
+    for (int l = 0; l < L.config.levels && settled; ++l)
+        if (L.levelWanted(l, std::max(height, 1.0), focal * kLead) &&
+            L.presence(land.centres[l], dir, eye[0], eye[2]) < 1.0)
+            settled = false;
+    node.setRegionsSettled(settled);
     writeTable(frame, node, land, cmd);
     if (!land.table.buffer || !working) return {};
     // (Until the ground under the eye has first been in, all of them made

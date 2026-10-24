@@ -170,6 +170,77 @@ void LandNode::regionChanged(const LandRegionKey& key) {
     ++itemsSerial_;
 }
 
+void LandNode::regionFadeChanged(const LandRegionCentre& before, const LandRegionCentre& after) {
+    if (!lattice_.config.active() || items_.empty() || itemCells_ <= 0) return;
+    const bool sphere = round();
+    const int roots = sphere ? 6 : 1;
+    const double half = sphere ? faceHalf(place_->body()) : static_cast<double>(extent_);
+    const double item = 2.0 * half / itemCells_;
+    const size_t n = static_cast<size_t>(roots) * itemCells_ * itemCells_;
+    if (n > items_.size()) return;
+    // Each item's middle (a body direction, or its chart point), kept.
+    if (itemMids_.size() != n * 3 || itemMidsHalf_ != half) {
+        itemMids_.assign(n * 3, 0.0);
+        itemMidsHalf_ = half;
+        for (size_t k = 0; k < n; ++k) {
+            const int root = static_cast<int>(k / (static_cast<size_t>(itemCells_) * itemCells_));
+            const int j = static_cast<int>(k / itemCells_ % itemCells_), i = static_cast<int>(k % itemCells_);
+            const double x = -half + (i + 0.5) * item, z = -half + (j + 0.5) * item;
+            double* m = &itemMids_[k * 3];
+            if (sphere) {
+                dirOf(place_->body(), {root, x, z}, m);
+            } else {
+                m[0] = x;
+                m[2] = z;
+            }
+        }
+    }
+    // Where a level's centre reads it all, none of it, or some: an item
+    // (with a margin for its tile's border and normals) is made again unless
+    // it is all or none of it both before and after. Compared as chords on a
+    // round body.
+    const double margin = 2.0 * item, R = sphere ? place_->body().radius : 0.0;
+    const auto chord = [&](double d) {
+        if (!sphere) return d;
+        return d <= 0.0 ? -1.0 : 2.0 * std::sin(std::min(d / (2.0 * R), 1.5707963267948966));
+    };
+    struct Bounds {
+        bool active;
+        double c[3];
+        double whole, none;   // within whole: all of it; past none: none of it
+    };
+    const auto boundsOf = [&](const LandRegionCentre& c) {
+        Bounds b{c.active, {0.0, 0.0, 0.0}, chord(c.inner - margin), chord(c.outer + margin)};
+        if (sphere) {
+            for (int i = 0; i < 3; ++i) b.c[i] = c.at.dir[i];
+        } else {
+            b.c[0] = c.at.x;
+            b.c[2] = c.at.z;
+        }
+        return b;
+    };
+    const Bounds a = boundsOf(before), b = boundsOf(after);
+    // 1 all of it, 0 none, -1 some.
+    const auto read = [](const Bounds& c, const double* m) {
+        if (!c.active) return 1;
+        const double dx = m[0] - c.c[0], dy = m[1] - c.c[1], dz = m[2] - c.c[2];
+        const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (d <= c.whole) return 1;
+        if (d >= c.none) return 0;
+        return -1;
+    };
+    const uint64_t g = generation_ ^ (++itemBumps_ * 0x9e3779b97f4a7c15ull);
+    bool any = false;
+    for (size_t k = 0; k < n; ++k) {
+        const double* m = &itemMids_[k * 3];
+        const int ra = read(a, m), rb = read(b, m);
+        if (ra == rb && ra >= 0) continue;
+        refreshItem(k, g);
+        any = true;
+    }
+    if (any) ++itemsSerial_;
+}
+
 void LandNode::refreshItem(size_t k, uint64_t generation) {
     const int cells = itemCells_;
     const int per = kItemSamples;

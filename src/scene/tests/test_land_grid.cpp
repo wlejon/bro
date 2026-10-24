@@ -260,12 +260,125 @@ void regions() {
     check(R.glslConfig().find("LAND_REGION") != std::string::npos, "round regions: their shaders' layout");
 }
 
+// PRESENCE: a level is read in a disc about the eye that what is in covers
+// whole, its fade ending inside it with a region still to come, round (no
+// region's straight edge), and growing over frames as regions arrive.
+void presence() {
+    LandRegionLattice F;
+    F.config.init = "init";
+    F.config.cells = 64;
+    F.config.apron = 8;
+    F.config.cell = 10.0;
+    F.config.levels = 1;
+    F.config.reach = 1;
+    F.half = 1000.0;
+    Body flatBody;
+    LandRegionSet set = everyRegion(F, flatBody, [](const double*, int) { return 7.0; });
+    const double D = F.discRadius(0);
+    check(D == 480.0, "presence: the disc a lattice step at reach 1");
+    // The eye at the root's middle; region (0, 2), its ground from 440 m
+    // west, is in the disc and not in.
+    LandGroundPoint eye;
+    const LandRegionKey gone{0, 0, 0, 2};
+    set.erase(gone.packed());
+    check(std::fabs(F.distanceTo(eye, gone) - 440.0) < 1e-9, "presence: a flat region's distance");
+    std::vector<std::pair<LandRegionKey, double>> keys;
+    F.disc(0, eye, D, keys);
+    bool listed = false;
+    for (const auto& [k, d] : keys) listed = listed || k == gone;
+    check(listed, "presence: the missing region is in the wanted disc");
+    const auto in = [&](const LandRegionKey& k) { return set.count(k.packed()) > 0; };
+    const double covered = F.covered(0, eye, eye, in);
+    check(std::fabs(covered - 440.0) < 1e-9, "presence: covered to the missing region (" + std::to_string(covered) + ")");
+    LandRegionFade fade;
+    fade.aim(F, 0, eye);
+    LandRegionCentre c = fade.step(F, 0, in);
+    check(c.active && c.outer > 0.0 && c.outer < 0.5 * covered, "presence: the disc grows, no jump (first outer " +
+                                                                    std::to_string(c.outer) + ")");
+    for (int f = 0; f < 60; ++f) {
+        fade.aim(F, 0, eye);
+        c = fade.step(F, 0, in);
+        check(c.outer <= covered + 1e-9, "presence: the fade ends inside what is in, every frame");
+    }
+    check(c.outer > 0.85 * covered, "presence: the disc grown to what is in (" + std::to_string(c.outer) + ")");
+    // Read with it: the region's level whole inside, the coarser field from
+    // the fade's end on, all round (toward the missing region and away).
+    set.centre[0] = c;
+    double insideWorst = 0.0, outsideWorst = 0.0;
+    for (int a = 0; a < 64; ++a) {
+        const double t = a * 0.0981747704;   // (2 pi / 64)
+        float v[4] = {3.0f, 0, 0, 0}, w[4] = {3.0f, 0, 0, 0};
+        F.blendAt(set, 0.95 * c.inner * std::cos(t), 0.95 * c.inner * std::sin(t), v);
+        F.blendAt(set, 1.01 * c.outer * std::cos(t), 1.01 * c.outer * std::sin(t), w);
+        insideWorst = std::max(insideWorst, std::fabs(v[0] - 7.0));
+        outsideWorst = std::max(outsideWorst, std::fabs(w[0] - 3.0));
+    }
+    check(insideWorst < 1e-4, "presence: the level whole inside its fade (" + std::to_string(insideWorst) + ")");
+    check(outsideWorst < 1e-6, "presence: the coarser field past it, round (" + std::to_string(outsideWorst) + ")");
+    // The region in: the disc grows to the wanted disc's edge over frames.
+    set = everyRegion(F, flatBody, [](const double*, int) { return 7.0; });
+    const double before = c.outer;
+    c = fade.step(F, 0, in);
+    check(c.outer > before && c.outer < LandRegionFade::kOuter * D - 1.0, "presence: the region in, the disc eased out");
+    for (int f = 0; f < 60; ++f) c = fade.step(F, 0, in);
+    check(std::fabs(c.outer - LandRegionFade::kOuter * D) < 1e-6, "presence: then to the wanted disc's");
+    // The eye moving: the centre follows it, eased, the fade inside what is in.
+    for (int f = 0; f < 200; ++f) {
+        eye.x = 2.0 * f;
+        fade.aim(F, 0, eye);
+        c = fade.step(F, 0, in);
+        check(c.outer <= F.covered(0, c.at, fade.target, in) + 1e-9, "presence: inside what is in as the eye moves");
+    }
+    for (int f = 0; f < 60; ++f) c = fade.step(F, 0, in);
+    check(c.at == fade.target && F.between(c.at, eye) <= LandRegionFade::kFollow * D,
+          "presence: the centre followed the eye (" + std::to_string(F.between(c.at, eye)) + " m)");
+
+    // Round: an eye 500 km from a cube face's edge on an Earth; the wanted
+    // disc crosses onto the next face, and a region's distance is its
+    // ground's nearest (against a dense search of its footprint).
+    Body body;
+    body.radius = kEarth;
+    LandRegionLattice R;
+    R.config.init = "init";
+    R.config.cells = 512;
+    R.config.apron = 32;
+    R.config.cell = 4096.0;
+    R.config.levels = 1;
+    R.half = faceHalf(body);
+    R.radius = body.radius;
+    LandGroundPoint p;
+    dirOf(body, {2, R.half - 500000.0, 1234567.0}, p.dir);
+    R.disc(0, p, R.discRadius(0), keys);
+    int roots[6] = {0, 0, 0, 0, 0, 0};
+    double worst = 0.0;
+    for (const auto& [k, d] : keys) {
+        ++roots[k.root];
+        // (The footprint's ground, densely: the nearest of it.)
+        const double side = R.config.cells * R.config.cellOf(0);
+        double best = 1e300;
+        for (int b = 0; b <= 200; ++b)
+            for (int a = 0; a <= 200; ++a) {
+                double q[3];
+                dirOf(body, {k.root, R.originX(k) + side * a / 200.0, R.originZ(k) + side * b / 200.0}, q);
+                const double dx = q[0] - p.dir[0], dy = q[1] - p.dir[1], dz = q[2] - p.dir[2];
+                best = std::min(best, 2.0 * kEarth * std::asin(std::min(0.5 * std::sqrt(dx * dx + dy * dy + dz * dz), 1.0)));
+            }
+        check(d <= best + 1.0, "presence: a region's distance never more than its ground's");
+        worst = std::max(worst, best - d);
+    }
+    int faces = 0;
+    for (int n : roots) faces += n > 0;
+    check(faces == 2, "presence: the disc 500 km from an edge on two faces (" + std::to_string(faces) + ")");
+    check(worst < 20000.0, "presence: a region's distance its ground's (worst short by " + std::to_string(worst) + " m)");
+}
+
 }  // namespace
 
 int main() {
     flat();
     round();
     regions();
+    presence();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

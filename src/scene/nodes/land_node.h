@@ -120,6 +120,9 @@ public:
     /// A region came in or went: the tiles over it are made again (its
     /// items' generations move; itemsSerial() with them).
     void regionChanged(const LandRegionKey& key);
+    /// A level's centre (land_regions.h, PRESENCE) went from `before` to
+    /// `after`: the tiles where it is read differently are made again.
+    void regionFadeChanged(const LandRegionCentre& before, const LandRegionCentre& after);
     uint64_t itemsSerial() const { return itemsSerial_; }
     /// Whether the regions holding the ground under the eye are in (set by
     /// the regions' runner each frame; true with none): the plants standing
@@ -291,6 +294,8 @@ private:
     LandRegionLattice lattice_;
     std::shared_ptr<LandRegionStore> regionStore_ = std::make_shared<LandRegionStore>();
     uint64_t itemsSerial_ = 0, itemBumps_ = 0;
+    std::vector<double> itemMids_;   // each item's middle (regionFadeChanged)
+    double itemMidsHalf_ = 0.0;
     bool regionsSettled_ = true;
     float extent_ = 4096.0f;
     Rings rings_;

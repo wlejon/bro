@@ -69,6 +69,34 @@ float landRegionFade(int L) {
     return landFieldFootprint > 0.0 ? 1.0 - smoothstep(1.0, 2.0, landFieldFootprint / landRegionCell(L)) : 1.0;
 }
 
+// Whether a level is read only about its centre (scene/world/land_regions.h,
+// PRESENCE): the land's reads; a region's run reads the coarser field
+// without it (land_region_layer.glsl clears it).
+bool landFieldPresence = true;
+
+// Level L's centre, from the words past the table's entries: two a level,
+// (its body direction, 1 when it has one) and (inner, outer, its chart x, z).
+vec4 landRegionCentreWord(int L, int k) {
+    return uintBitsToFloat(landRegionEntry(uint(LAND_REGION_TABLE + 2 * L + k)));
+}
+// How much of level L is read at body direction d (round) or chart point x
+// (flat): 1 - smoothstep(inner, outer, its distance along the ground from
+// the level's centre), none from outer on (both 0 while none of the level is
+// whole about the eye).
+float landRegionPresence(int L, vec3 d, vec2 x) {
+    if (!landFieldPresence) return 1.0;
+    vec4 a = landRegionCentreWord(L, 0);
+    if (a.w < 0.5) return 1.0;
+    vec4 b = landRegionCentreWord(L, 1);
+#ifdef LAND_GRID_ROUND
+    float dist = 2.0 * LAND_GRID_RADIUS * asin(min(0.5 * length(d - a.xyz), 1.0));
+#else
+    float dist = length(x - b.zw);
+#endif
+    if (dist >= b.y) return 0.0;
+    return 1.0 - smoothstep(b.x, b.y, dist);
+}
+
 // A region's weight along one axis at texel coordinate t.
 float landRegionWeight(float t) {
     float w = 2.0 * float(LAND_REGION_APRON);
@@ -149,7 +177,7 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
     vec4 acc = vec4(0.0);
     rest = 1.0;   // the share still the coarser levels'
     for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
-        float fade = landRegionFade(L);
+        float fade = landRegionFade(L) * landRegionPresence(L, d, vec2(0.0));
         if (fade <= 0.0) continue;
         float band = float(LAND_REGION_APRON) * landRegionCell(L);
         vec4 sum = vec4(0.0);
@@ -202,7 +230,7 @@ vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest
     vec4 acc = vec4(0.0);
     rest = 1.0;
     for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
-        float fade = landRegionFade(L);
+        float fade = landRegionFade(L) * landRegionPresence(L, vec3(0.0), x);
         if (fade <= 0.0) continue;
         vec4 sum = vec4(0.0);
         float cover = 0.0;

@@ -1653,7 +1653,7 @@ field is evaluated at is **split**: an integer part and a float fraction.
 - **The world writes** `processes.regions` (`docs/land-api.js`): an `init`
   function and `passes` from the same source, and the lattice: `cells` a
   region's side, an `apron` each side, level 0's `cell`, `ratio` between
-  levels, `levels`, `reach` (regions each way about the eye's) and `keep`
+  levels, `levels`, `reach` (the wanted disc's radius in lattice steps) and `keep`
   (channels kept). Its kernels have the global grid's API over a region's
   cells plus `procLevel`, `procBorder` and `procCoarse(c)`, the next coarser
   field at the cell (the coarser levels over the global grid), so a region
@@ -1672,6 +1672,16 @@ field is evaluated at is **split**: an integer part and a float fraction.
   through and a region arriving fades in over its footprint, no pop. The
   CPU (`LandBase` over a `LandRegionSet` snapshot) and the GPU
   (`ground/land_regions.glsl`) take the same steps.
+- **Presence** (`LandRegionFade`): a level is read only within the disc
+  about the eye its regions in cover whole — out to the nearest wanted
+  region not yet in, or the wanted disc's edge — fading from 0.6 to 0.9 of
+  that radius. Without it, a level whose regions were still streaming in
+  ended along their straight edges: from the limb, level 3's regions
+  missing on the next cube face were a straight seam across the snow. The
+  centre follows the eye, the radius grows as regions arrive, both eased
+  over some frames (the radius shrinks at once when it must), and the
+  items where a level's read changed are made again. The centre and fade
+  radii ride past the GPU table's entries and in the CPU's snapshot.
 - **The store** (`vulkan/ground/scene_land_regions.cpp`): one rgba32f
   2D-array image of slots (`keep` layers a slot), an open-addressed hash
   table of region keys to slots in device memory (rewritten only when its
@@ -1680,7 +1690,8 @@ field is evaluated at is **split**: an integer part and a float fraction.
   rows, each pass one dispatch, and a finish (the copy into its slot and
   the readback); the fills read the regions through the same table.
 - **Streaming is a world-service kind** ("land regions"): the wanted
-  regions are those within `reach` of the ground under the eye at every
+  regions are those whose ground comes within `reach` steps of the ground
+  under the eye (a disc, over a face's edges and corners) at every
   level whose cell is at least a pixel from the eye's height, coarser
   first, nearer first; up to 24 steps are offered a frame (two required
   once the land is warm, the rest budgeted by error, cell × focal /
@@ -1712,7 +1723,10 @@ field is evaluated at is **split**: an integer part and a float fraction.
   interior, a smooth field reproduced through regions with no step, the
   global grid read where none are in, a round small body's field
   reproduced across faces, edges and corners, the finest level covering
-  the coarser, the GLSL config), `bro_world_service_test` (every kind
+  the coarser, the GLSL config; a level's fade ending inside what is in
+  with a region missing, round, eased out as it arrives and following a
+  moving eye; a disc 500 km from a face's edge on both faces, a region's
+  distance its ground's), `bro_world_service_test` (every kind
   progresses: lead per kind, a dear kind granted after `starveFrames`, a
   dearer one never), `tests/scene/test_land_process.js` (two levels over a
   flat grid: the CPU's heights the levels' bands under the eye, no step

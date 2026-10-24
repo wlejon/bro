@@ -131,10 +131,16 @@
  * square regions of `cells` texels a side, overlapping their neighbours by
  * an `apron` of texels each side (cross-faded over two aprons' widths, so a
  * level's regions sum to one: no seams), on a round body running on past a
- * cube face's edge (the faces cross-faded too). The regions within `reach`
- * lattice steps of the ground under the eye are wanted at every level whose
- * cell is no finer than a pixel from the eye's height; coarser levels are
- * made first. Each region runs `init` (the source's function) once over its
+ * cube face's edge (the faces cross-faded too). The regions whose ground
+ * comes within `reach` lattice steps (half a step at reach 0) of the ground
+ * under the eye are wanted at every level whose cell is no finer than a
+ * pixel from the eye's height: a disc, crossing a cube face's edges and
+ * corners; coarser levels are made first. A level is read only within the
+ * disc about the eye that its regions in cover whole (out to the nearest
+ * wanted region not yet in, or the wanted disc's edge), fading into the
+ * coarser field from 0.6 to 0.9 of that radius, so its edge is a circle,
+ * never a region's straight side; as regions arrive the disc grows, eased
+ * over some frames. Each region runs `init` (the source's function) once over its
  * cells, then `passes` as the global grid's run, with the same kernel API
  * (procRead's offsets past the region's edge read its edge cells) and:
  *
@@ -274,7 +280,8 @@
  * @property {number} [cell=64] - level 0's cell, chart metres.
  * @property {number} [ratio=4] - each level's cell over its finer's.
  * @property {number} [levels=3] - levels, at most 6.
- * @property {number} [reach=1] - regions wanted each way about the eye's.
+ * @property {number} [reach=1] - the wanted disc's radius about the ground
+ *   under the eye, in lattice steps (`cells - 2 apron` cells; 0: half a step).
  * @property {number} [keep=2] - channels the regions keep and are read for
  *   (the first `keep`; the others are the global grid's).
  * @example
@@ -299,7 +306,8 @@
  * @property {number} regions - regional grids in (made and read back).
  * @property {number} regionsPending - regions wanted and not yet in.
  * @property {boolean} groundReady - the regions about the ground under the
- *   eye are in.
+ *   eye are in, and every wanted level is read whole there (its disc grown
+ *   past it).
  */
 
 class SceneGraph {

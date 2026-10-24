@@ -61,6 +61,8 @@ vec3 procUp() {
 }
 
 vec4 procCoarse(int c) {
+    // (What a region is made from does not depend on where the eye was.)
+    landFieldPresence = false;
 #ifdef LAND_GRID_ROUND
     return landFieldDirFrom(c, procUp(), vec3(0.0), procLevel_ + 1);
 #else

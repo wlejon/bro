@@ -130,8 +130,12 @@ private:
         uint32_t pending = 0;
         // The table (device-local: every texel of every fill looks regions
         // up in it), written again when the regions in change.
+        // Past its entries, each level's centre (land_regions.h, PRESENCE):
+        // where each level is read about now, kept by its fade.
         SceneVkBuffer tableBuffer;
         bool tableDirty = true;
+        LandRegionFade fades[LandRegionConfig::kMaxLevels];
+        LandRegionCentre centres[LandRegionConfig::kMaxLevels];
         VkDescriptorBufferInfo table{};
     };
 
