@@ -397,7 +397,7 @@ Value createRollbackSessionValue(std::span<const Value> args) {
             stateBytes = captureJsStateBytes(*rawHost);
         });
 
-    if (!host->session->isDeterministic() && !cfg.allowUnverified) {
+    if (!host->session->determinismLintPassed() && !cfg.allowUnverified) {
         return ev::throwError(host->session->errorSummary().c_str());
     }
 
@@ -409,10 +409,8 @@ Value createRollbackSessionValue(std::span<const Value> args) {
 
     ObjectBuilder sb;
     sb.set("__broRollbackId", ev::fromDouble(static_cast<double>(id)));
-    sb.set("determinismLintPassed", ev::fromBool(host->session->isDeterministic()));
-    sb.set("desyncDetectionEnabled", ev::fromBool(true));
-    sb.set("deterministic", ev::fromBool(host->session->isDeterministic()));
-    sb.set("deterministicCertified", ev::fromBool(host->session->isDeterministic()));
+    sb.set("determinismLintPassed", ev::fromBool(host->session->determinismLintPassed()));
+    sb.set("desyncDetectionEnabled", ev::fromBool(host->session->desyncDetectionEnabled()));
     sb.set("certificateHash", ev::fromUtf8(host->session->certificateHash()));
     sb.set("hazards", buildHazardsArray(host->session->hazards()));
     sb.set("playerCount", ev::fromDouble(static_cast<double>(host->session->playerCount())));
@@ -619,9 +617,8 @@ Value createRollbackSessionValue(std::span<const Value> args) {
         out.set("currentFrame", ev::fromDouble(static_cast<double>(st.currentFrame)));
         out.set("rollbackCount", ev::fromDouble(static_cast<double>(st.rollbackCount)));
         out.set("totalFramesResimulated", ev::fromDouble(static_cast<double>(st.totalFramesResimulated)));
-        out.set("determinismLintPassed", ev::fromBool(st.deterministic));
-        out.set("desyncDetectionEnabled", ev::fromBool(true));
-        out.set("deterministic", ev::fromBool(st.deterministic));
+        out.set("determinismLintPassed", ev::fromBool(st.determinismLintPassed));
+        out.set("desyncDetectionEnabled", ev::fromBool(st.desyncDetectionEnabled));
         out.set("certificateHash", ev::fromUtf8(st.certificateHash));
         out.set("desyncDetected", ev::fromBool(st.desyncDetected));
         return out.get();
@@ -658,8 +655,7 @@ Value createRollbackSessionValue(std::span<const Value> args) {
         out.set("framesSimulated", ev::fromDouble(static_cast<double>(res.framesSimulated)));
         out.set("expectedChecksum", ev::fromUtf8(res.expectedChecksum));
         out.set("actualChecksum", ev::fromUtf8(res.actualChecksum));
-        out.set("determinismLintPassed", ev::fromBool(res.deterministic));
-        out.set("deterministic", ev::fromBool(res.deterministic));
+        out.set("determinismLintPassed", ev::fromBool(res.determinismLintPassed));
         return out.get();
     });
 

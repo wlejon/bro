@@ -61,28 +61,28 @@ void test_cpp_determinism_gate() {
         }
     )JS";
     auto cleanAudit = bro::net::verifyRollbackTickSource(cleanTick);
-    ASSERT_TRUE(cleanAudit.deterministic);
+    ASSERT_TRUE(cleanAudit.determinismLintPassed);
     ASSERT_EQ(cleanAudit.certificateHash.size(), 64u);
     ASSERT_TRUE(cleanAudit.hazards.empty());
 
     // Math.random() must be rejected as unseeded-prng
     auto rngAudit = bro::net::verifyRollbackTickSource(
         "(state, inputs) => { state[0] += Math.random() > 0.5 ? 1 : 0; }");
-    ASSERT_TRUE(!rngAudit.deterministic);
+    ASSERT_TRUE(!rngAudit.determinismLintPassed);
     ASSERT_TRUE(!rngAudit.hazards.empty());
     ASSERT_EQ(rngAudit.hazards[0].kind, std::string("unseeded-prng"));
 
     // Date.now() must be rejected as wall-clock-time
     auto timeAudit = bro::net::verifyRollbackTickSource(
         "function(state, inputs) { state[0] = Date.now() | 0; }");
-    ASSERT_TRUE(!timeAudit.deterministic);
+    ASSERT_TRUE(!timeAudit.determinismLintPassed);
     ASSERT_TRUE(!timeAudit.hazards.empty());
     ASSERT_EQ(timeAudit.hazards[0].kind, std::string("wall-clock-time"));
 
     // performance.now() must be rejected as wall-clock-time
     auto perfAudit = bro::net::verifyRollbackTickSource(
         "(state) => { state[0] = performance.now() | 0; }");
-    ASSERT_TRUE(!perfAudit.deterministic);
+    ASSERT_TRUE(!perfAudit.determinismLintPassed);
     ASSERT_TRUE(!perfAudit.hazards.empty());
     ASSERT_EQ(perfAudit.hazards[0].kind, std::string("wall-clock-time"));
 }
@@ -112,8 +112,10 @@ void test_cpp_two_peer_rollback_convergence() {
     bro::net::RollbackSession peerA(cfgA, deterministicPhysicsTick);
     bro::net::RollbackSession peerB(cfgB, deterministicPhysicsTick);
 
-    ASSERT_TRUE(peerA.isDeterministic());
-    ASSERT_TRUE(peerB.isDeterministic());
+    ASSERT_TRUE(peerA.determinismLintPassed());
+    ASSERT_TRUE(peerB.determinismLintPassed());
+    ASSERT_TRUE(peerA.desyncDetectionEnabled());
+    ASSERT_TRUE(peerB.desyncDetectionEnabled());
     ASSERT_EQ(peerA.certificateHash(), peerB.certificateHash());
 
     // Frames 0..3: Player 0 inputs +2, Player 1 inputs +3 (both peers confirm frames 0..3)
@@ -260,10 +262,12 @@ void test_js_rollback_session_api() {
                     maxRollbackFrames: 64
                 });
 
-                if (!peer0.deterministic || !peer1.deterministic ||
-                    !peer0.determinismLintPassed || !peer1.determinismLintPassed ||
+                if (!peer0.determinismLintPassed || !peer1.determinismLintPassed ||
                     !peer0.desyncDetectionEnabled || !peer1.desyncDetectionEnabled) {
                     throw new Error("Expected determinismLintPassed and desyncDetectionEnabled === true");
+                }
+                if (peer0.deterministic !== undefined || peer0.deterministicCertified !== undefined) {
+                    throw new Error("Expected legacy aliases deterministic / deterministicCertified to be removed");
                 }
                 if (typeof peer0.certificateHash !== "string" || peer0.certificateHash.length !== 64) {
                     throw new Error("Expected 64-char SHA-256 certificateHash, got: " + peer0.certificateHash);
@@ -350,7 +354,7 @@ void test_cpp_and_js_verified_capsules() {
         }
     )JS";
     auto cap = bro::net::createVerifiedCapsule(safeMod, "stepMod", "peer-alpha");
-    ASSERT_TRUE(cap.deterministic);
+    ASSERT_TRUE(cap.determinismLintPassed);
     ASSERT_TRUE(cap.hazardFree);
     ASSERT_EQ(cap.hazardCount, 0u);
     ASSERT_EQ(cap.sha256.size(), 64u);
@@ -359,6 +363,7 @@ void test_cpp_and_js_verified_capsules() {
     auto verOk = bro::net::verifyCapsule(cap);
     ASSERT_TRUE(verOk.valid);
     ASSERT_TRUE(!verOk.tampered);
+    ASSERT_TRUE(verOk.determinismLintPassed);
     ASSERT_EQ(verOk.reason, std::string("verified"));
 
     // 2. Tampered source in transit must set tampered = true and valid = false
@@ -377,12 +382,12 @@ void test_cpp_and_js_verified_capsules() {
 
     // 4. Sandbox escape (`eval`) and division-by-zero (`/ 0`) detection
     auto evalCap = bro::net::createVerifiedCapsule("(x) => eval('x + 1')", "badEval", "peer-mal");
-    ASSERT_TRUE(!evalCap.deterministic);
+    ASSERT_TRUE(!evalCap.determinismLintPassed);
     ASSERT_TRUE(!evalCap.hazardFree);
     ASSERT_TRUE(!bro::net::verifyCapsule(evalCap).valid);
 
     auto divZeroCap = bro::net::createVerifiedCapsule("(x) => (x / 0) | 0", "badDiv", "peer-mal");
-    ASSERT_TRUE(!divZeroCap.deterministic);
+    ASSERT_TRUE(!divZeroCap.determinismLintPassed);
     ASSERT_TRUE(!divZeroCap.hazardFree);
     ASSERT_TRUE(!bro::net::verifyCapsule(divZeroCap).valid);
 
@@ -412,8 +417,11 @@ void test_cpp_and_js_verified_capsules() {
                     authorId: "peer-1"
                 });
 
-                if (!capsule.deterministic || !capsule.hazardFree || capsule.hazardCount !== 0) {
-                    throw new Error("Expected clean capsule to be deterministic and hazardFree");
+                if (!capsule.determinismLintPassed || !capsule.hazardFree || capsule.hazardCount !== 0) {
+                    throw new Error("Expected clean capsule to have determinismLintPassed and hazardFree");
+                }
+                if (capsule.deterministic !== undefined) {
+                    throw new Error("Expected legacy alias capsule.deterministic to be removed");
                 }
                 if (capsule.sha256.length !== 64 || capsule.certificateHash.length !== 64) {
                     throw new Error("Expected 64-hex sha256 and certificateHash");
@@ -425,13 +433,13 @@ void test_cpp_and_js_verified_capsules() {
                     expectedSha256: capsule.sha256,
                     expectedCertificateHash: capsule.certificateHash
                 });
-                if (!verifyRes.valid || verifyRes.tampered) {
+                if (!verifyRes.valid || verifyRes.tampered || !verifyRes.determinismLintPassed) {
                     throw new Error("Expected wireJson capsule to verify: " + JSON.stringify(verifyRes));
                 }
 
                 // Load and execute the verified capsule on the receiving peer
                 const loaded = bro.net.loadVerifiedCapsule(wireJson);
-                if (!loaded.valid || typeof loaded.fn !== "function") {
+                if (!loaded.valid || !loaded.determinismLintPassed || typeof loaded.fn !== "function") {
                     throw new Error("Expected loadVerifiedCapsule to return callable fn");
                 }
                 const st = new Int32Array([10, 5]);
@@ -463,8 +471,8 @@ void test_cpp_and_js_verified_capsules() {
                     (state) => { state[0] = Math.random() > 0.5 ? 1 : 0; },
                     { entryName: "badMod", authorId: "peer-2" }
                 );
-                if (badCapsule.deterministic !== false || badCapsule.hazardCount < 1) {
-                    throw new Error("Expected Math.random capsule to be flagged non-deterministic");
+                if (badCapsule.determinismLintPassed !== false || badCapsule.hazardCount < 1) {
+                    throw new Error("Expected Math.random capsule to fail determinismLintPassed");
                 }
                 const badVerify = bro.net.verifyCapsule(badCapsule);
                 if (badVerify.valid !== false) {

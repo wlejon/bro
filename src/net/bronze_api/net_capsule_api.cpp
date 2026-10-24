@@ -83,8 +83,8 @@ bool parseVerifiedCapsuleObject(Value capVal, net::VerifiedCapsule& outCap) {
     Value authorV = ev::getProperty(obj.get(), "authorId");
     if (authorV.isString()) outCap.authorId = ev::toUtf8(authorV);
 
-    Value detV = ev::getProperty(obj.get(), "deterministic");
-    if (detV.isBool()) outCap.deterministic = detV.asBool();
+    Value detV = ev::getProperty(obj.get(), "determinismLintPassed");
+    if (detV.isBool()) outCap.determinismLintPassed = detV.asBool();
 
     Value hfV = ev::getProperty(obj.get(), "hazardFree");
     if (hfV.isBool()) outCap.hazardFree = hfV.asBool();
@@ -103,8 +103,8 @@ net::CapsulePolicy parseCapsulePolicyObject(Value polVal) {
     if (!ev::isObject(polVal)) return pol;
     ev::Persistent p(polVal);
 
-    Value reqDet = ev::getProperty(p.get(), "requireDeterministic");
-    if (reqDet.isBool()) pol.requireDeterministic = reqDet.asBool();
+    Value reqDet = ev::getProperty(p.get(), "requireDeterminismLint");
+    if (reqDet.isBool()) pol.requireDeterminismLint = reqDet.asBool();
 
     Value reqHf = ev::getProperty(p.get(), "requireHazardFree");
     if (reqHf.isBool()) pol.requireHazardFree = reqHf.asBool();
@@ -165,7 +165,7 @@ Value createVerifiedCapsuleValue(std::span<const Value> args) {
     }
 
     net::VerifiedCapsule cap = net::createVerifiedCapsule(source, entryName, authorId);
-    if (strict && !cap.deterministic) {
+    if (strict && !cap.determinismLintPassed) {
         return ev::throwError(cap.errorSummary.c_str());
     }
 
@@ -174,8 +174,7 @@ Value createVerifiedCapsuleValue(std::span<const Value> args) {
     out.set("source", ev::fromUtf8(cap.source));
     out.set("entryName", ev::fromUtf8(cap.entryName));
     out.set("authorId", ev::fromUtf8(cap.authorId));
-    out.set("determinismLintPassed", ev::fromBool(cap.deterministic));
-    out.set("deterministic", ev::fromBool(cap.deterministic));
+    out.set("determinismLintPassed", ev::fromBool(cap.determinismLintPassed));
     out.set("hazardFree", ev::fromBool(cap.hazardFree));
     out.set("hazardCount", ev::fromDouble(static_cast<double>(cap.hazardCount)));
     out.set("hazards", buildHazardsArray(cap.hazards));
@@ -198,7 +197,6 @@ Value verifyCapsuleValue(std::span<const Value> args) {
         fail.set("valid", ev::fromBool(false));
         fail.set("tampered", ev::fromBool(false));
         fail.set("determinismLintPassed", ev::fromBool(false));
-        fail.set("deterministic", ev::fromBool(false));
         fail.set("hazardFree", ev::fromBool(false));
         fail.set("hazardCount", ev::fromDouble(0.0));
         fail.set("hazards", ev::makeArray(0));
@@ -214,8 +212,7 @@ Value verifyCapsuleValue(std::span<const Value> args) {
     ObjectBuilder out;
     out.set("valid", ev::fromBool(vres.valid));
     out.set("tampered", ev::fromBool(vres.tampered));
-    out.set("determinismLintPassed", ev::fromBool(vres.deterministic));
-    out.set("deterministic", ev::fromBool(vres.deterministic));
+    out.set("determinismLintPassed", ev::fromBool(vres.determinismLintPassed));
     out.set("hazardFree", ev::fromBool(vres.hazardFree));
     out.set("hazardCount", ev::fromDouble(static_cast<double>(vres.hazardCount)));
     out.set("hazards", buildHazardsArray(vres.hazards));
@@ -259,8 +256,7 @@ Value loadVerifiedCapsuleValue(std::span<const Value> args) {
     out.set("fn", fnP.get());
     out.set("entryName", ev::fromUtf8(cap.entryName));
     out.set("authorId", ev::fromUtf8(cap.authorId));
-    out.set("determinismLintPassed", ev::fromBool(vres.deterministic));
-    out.set("deterministic", ev::fromBool(vres.deterministic));
+    out.set("determinismLintPassed", ev::fromBool(vres.determinismLintPassed));
     out.set("hazardFree", ev::fromBool(vres.hazardFree));
     out.set("sha256", ev::fromUtf8(vres.sha256));
     out.set("certificateHash", ev::fromUtf8(vres.certificateHash));

@@ -79,7 +79,7 @@ std::string formatChecksumHex(uint64_t checksum) {
 DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource) {
     DeterminismAuditResult out;
     if (tickSource.empty()) {
-        out.deterministic = false;
+        out.determinismLintPassed = false;
         out.errorSummary = "RollbackSession tick function source is empty";
         return out;
     }
@@ -104,7 +104,7 @@ DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource) {
     }
 
     if (!parsed) {
-        out.deterministic = false;
+        out.determinismLintPassed = false;
         out.errorSummary = "Failed to parse rollback tick function for determinism verification: " + parseErr;
         DeterminismHazard h;
         h.kind = "parse-error";
@@ -127,11 +127,9 @@ DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource) {
     }
 
     if (out.hazards.empty()) {
-        out.deterministic = true;
         out.determinismLintPassed = true;
         out.certificateHash = computeSha256Hex("bronze-lockstep-cert-v1:" + std::string(tickSource));
     } else {
-        out.deterministic = false;
         out.determinismLintPassed = false;
         std::ostringstream oss;
         oss << "RollbackSession rejected non-deterministic tick function ("
@@ -225,7 +223,7 @@ void scanCapsuleStaticSafetyHazards(std::string_view src,
 
 std::string buildCapsuleCertHash(std::string_view entryName,
                                  std::string_view authorId,
-                                 bool deterministic,
+                                 bool determinismLintPassed,
                                  bool hazardFree,
                                  std::string_view sha256) {
     std::string payload = "bro-capsule-cert-v1|";
@@ -233,7 +231,7 @@ std::string buildCapsuleCertHash(std::string_view entryName,
     payload.push_back('|');
     payload.append(authorId);
     payload.push_back('|');
-    payload.push_back(deterministic ? '1' : '0');
+    payload.push_back(determinismLintPassed ? '1' : '0');
     payload.push_back('|');
     payload.push_back(hazardFree ? '1' : '0');
     payload.push_back('|');
@@ -259,11 +257,11 @@ VerifiedCapsule createVerifiedCapsule(std::string_view source,
 
     cap.hazardCount = static_cast<uint32_t>(cap.hazards.size());
     cap.hazardFree = cap.hazards.empty();
-    cap.deterministic = audit.deterministic && cap.hazardFree;
+    cap.determinismLintPassed = audit.determinismLintPassed && cap.hazardFree;
 
-    if (cap.deterministic) {
+    if (cap.determinismLintPassed) {
         cap.certificateHash = buildCapsuleCertHash(
-            cap.entryName, cap.authorId, cap.deterministic, cap.hazardFree, cap.sha256);
+            cap.entryName, cap.authorId, cap.determinismLintPassed, cap.hazardFree, cap.sha256);
     } else {
         cap.certificateHash = buildCapsuleCertHash(
             cap.entryName, cap.authorId, false, false, cap.sha256);
@@ -294,7 +292,7 @@ CapsuleVerifyResult verifyCapsule(const VerifiedCapsule& capsule,
     VerifiedCapsule recomputed = createVerifiedCapsule(
         capsule.source, capsule.entryName, capsule.authorId);
 
-    res.deterministic = recomputed.deterministic;
+    res.determinismLintPassed = recomputed.determinismLintPassed;
     res.hazardFree = recomputed.hazardFree;
     res.hazardCount = recomputed.hazardCount;
     res.hazards = recomputed.hazards;
@@ -315,7 +313,7 @@ CapsuleVerifyResult verifyCapsule(const VerifiedCapsule& capsule,
         return res;
     }
 
-    if ((capsule.deterministic && !recomputed.deterministic) ||
+    if ((capsule.determinismLintPassed && !recomputed.determinismLintPassed) ||
         (capsule.hazardFree && !recomputed.hazardFree)) {
         res.valid = false;
         res.tampered = true;
@@ -338,7 +336,7 @@ CapsuleVerifyResult verifyCapsule(const VerifiedCapsule& capsule,
         return res;
     }
 
-    if (policy.requireDeterministic && !recomputed.deterministic) {
+    if (policy.requireDeterminismLint && !recomputed.determinismLintPassed) {
         res.valid = false;
         res.reason = recomputed.errorSummary;
         return res;
@@ -616,8 +614,7 @@ RollbackStats RollbackSession::getStats() const {
     s.currentFrame = currentFrame_;
     s.rollbackCount = rollbackCount_;
     s.totalFramesResimulated = totalFramesResimulated_;
-    s.deterministic = audit_.deterministic;
-    s.determinismLintPassed = audit_.deterministic;
+    s.determinismLintPassed = audit_.determinismLintPassed;
     s.desyncDetectionEnabled = true;
     s.certificateHash = audit_.certificateHash;
     s.desyncDetected = desyncDetected_;
@@ -652,8 +649,7 @@ std::vector<uint8_t> RollbackSession::exportReplay() const {
 
 ReplayVerifyResult RollbackSession::verifyReplay(std::span<const uint8_t> replayBytes) const {
     ReplayVerifyResult res;
-    res.deterministic = audit_.deterministic;
-    res.determinismLintPassed = audit_.deterministic;
+    res.determinismLintPassed = audit_.determinismLintPassed;
     if (replayBytes.size() < 28u ||
         replayBytes[0] != 'B' || replayBytes[1] != 'R' ||
         replayBytes[2] != 'R' || replayBytes[3] != 'P') {

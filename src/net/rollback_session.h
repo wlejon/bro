@@ -20,7 +20,6 @@ struct DeterminismHazard {
 };
 
 struct DeterminismAuditResult {
-    bool deterministic = false;
     bool determinismLintPassed = false;
     std::string certificateHash;
     std::vector<DeterminismHazard> hazards;
@@ -38,7 +37,7 @@ struct VerifiedCapsule {
     std::string source;
     std::string entryName = "capsule";
     std::string authorId = "peer-0";
-    bool deterministic = false;
+    bool determinismLintPassed = false;
     bool hazardFree = false;
     uint32_t hazardCount = 0;
     std::vector<DeterminismHazard> hazards;
@@ -48,7 +47,7 @@ struct VerifiedCapsule {
 };
 
 struct CapsulePolicy {
-    bool requireDeterministic = true;
+    bool requireDeterminismLint = true;
     bool requireHazardFree = true;
     std::string expectedSha256;
     std::string expectedCertificateHash;
@@ -57,7 +56,7 @@ struct CapsulePolicy {
 struct CapsuleVerifyResult {
     bool valid = false;
     bool tampered = false;
-    bool deterministic = false;
+    bool determinismLintPassed = false;
     bool hazardFree = false;
     uint32_t hazardCount = 0;
     std::vector<DeterminismHazard> hazards;
@@ -127,7 +126,6 @@ struct RollbackStats {
     uint32_t currentFrame = 0;
     uint32_t rollbackCount = 0;
     uint64_t totalFramesResimulated = 0;
-    bool deterministic = false;
     bool determinismLintPassed = false;
     bool desyncDetectionEnabled = true;
     std::string certificateHash;
@@ -139,7 +137,6 @@ struct ReplayVerifyResult {
     uint32_t framesSimulated = 0;
     std::string expectedChecksum;
     std::string actualChecksum;
-    bool deterministic = false;
     bool determinismLintPassed = false;
 };
 
@@ -151,8 +148,7 @@ public:
 
     RollbackSession(const RollbackConfig& config, TickFn tickFn);
 
-    bool isDeterministic() const noexcept { return audit_.deterministic; }
-    bool determinismLintPassed() const noexcept { return audit_.deterministic; }
+    bool determinismLintPassed() const noexcept { return audit_.determinismLintPassed; }
     bool desyncDetectionEnabled() const noexcept { return true; }
     const std::string& certificateHash() const noexcept { return audit_.certificateHash; }
     const std::vector<DeterminismHazard>& hazards() const noexcept { return audit_.hazards; }
