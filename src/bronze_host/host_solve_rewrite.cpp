@@ -234,6 +234,14 @@ Value jsBroAutoKernel(Value, std::span<const Value> args) {
     });
     out.set("hazards", hazardsArr);
 
+    Value distinctArr = hostArrayOf(rep.requiresDistinct.size(), [&](size_t i) -> Value {
+        const auto& [a, b] = rep.requiresDistinct[i];
+        ev::Persistent aV(ev::fromUtf8(a));
+        ev::Persistent bV(ev::fromUtf8(b));
+        return hostArrayOf(2, [&](size_t j) -> Value { return j == 0 ? aV.get() : bV.get(); });
+    });
+    out.set("requiresDistinct", distinctArr);
+
     if (rep.parallelizable && !rep.kernelSource.empty()) {
         ev::Persistent kSrcVal(ev::fromUtf8(rep.kernelSource));
         Value kArgs[1] = {kSrcVal.get()};
