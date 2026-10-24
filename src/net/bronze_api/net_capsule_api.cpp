@@ -238,12 +238,16 @@ Value loadVerifiedCapsuleValue(std::span<const Value> args) {
         return ev::throwError(vres.reason.c_str());
     }
 
+    bronze::eval::DeterministicFpScope detScope(true);
+    bronze::eval::EvalOptions evalOpts;
+    evalOpts.deterministicFp = true;
+
     std::string evalExpr = "(" + cap.source + "\n)";
-    auto evalRes = bronze::eval::evalScript(evalExpr);
+    auto evalRes = bronze::eval::evalScript(evalExpr, evalOpts);
     if (evalRes.thrown || !ev::isFunction(evalRes.value)) {
         // Fallback for named function declaration + call expression
         std::string fallbackExpr = "(() => {\n" + cap.source + "\nreturn " + cap.entryName + ";\n})()";
-        evalRes = bronze::eval::evalScript(fallbackExpr);
+        evalRes = bronze::eval::evalScript(fallbackExpr, evalOpts);
     }
     if (evalRes.thrown || !ev::isFunction(evalRes.value)) {
         return ev::throwError("bro.net.loadVerifiedCapsule: failed to instantiate capsule entry function");

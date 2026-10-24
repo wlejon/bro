@@ -306,8 +306,14 @@ Value createRollbackSessionValue(std::span<const Value> args) {
 
     if (tickVal.get().isString()) {
         tickSource = ev::toUtf8(tickVal.get());
+        bronze::eval::DeterministicFpScope detScope(true);
+        bronze::eval::EvalOptions evalOpts;
+        evalOpts.deterministicFp = true;
         std::string expr = "(" + tickSource + ")";
-        auto evalRes = bronze::eval::evalScript(expr);
+        auto evalRes = bronze::eval::evalScript(expr, evalOpts);
+        if (evalRes.thrown || !ev::isFunction(evalRes.value)) {
+            evalRes = bronze::eval::evalScript(tickSource, evalOpts);
+        }
         if (!evalRes.thrown && ev::isFunction(evalRes.value)) {
             tickVal.set(evalRes.value);
         }
@@ -378,6 +384,7 @@ Value createRollbackSessionValue(std::span<const Value> args) {
     host->session = std::make_unique<net::RollbackSession>(
         cfg,
         [rawHost](std::vector<uint8_t>& stateBytes, std::span<const int32_t> inputs, uint32_t frame) {
+            bronze::eval::DeterministicFpScope detScope(true);
             restoreJsStateBytes(*rawHost, stateBytes);
             if (ev::isFunction(rawHost->tickFn.get())) {
                 ev::Persistent inArr(ev::makeArray(inputs.size()));
@@ -680,6 +687,35 @@ void installNetRollbackExtensions() {
         netVal = newNet.get();
     }
     ObjectBuilder netBuilder(netVal);
+    netBuilder.def("verifyDeterministic", 1, [](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || a[0].isUndefined() || a[0].isNull()) {
+            return ev::throwTypeError("bro.net.verifyDeterministic requires a function or source string");
+        }
+        std::string src;
+        if (a[0].isString()) {
+            src = ev::toUtf8(a[0]);
+        } else if (ev::isFunction(a[0])) {
+            Value toStrFn = ev::getProperty(a[0], "toString");
+            if (ev::isFunction(toStrFn)) {
+                auto r = ev::call(toStrFn, a[0], {});
+                if (!r.thrown && r.value.isString()) {
+                    src = ev::toUtf8(r.value);
+                }
+            }
+        } else {
+            return ev::throwTypeError("bro.net.verifyDeterministic requires a function or source string");
+        }
+        auto audit = net::verifyRollbackTickSource(src);
+        ObjectBuilder out;
+        out.set("determinismLintPassed", ev::fromBool(audit.determinismLintPassed));
+        out.set("valid", ev::fromBool(audit.determinismLintPassed));
+        out.set("hazardFree", ev::fromBool(audit.hazards.empty()));
+        out.set("hazardCount", ev::fromDouble(static_cast<double>(audit.hazards.size())));
+        out.set("certificateHash", ev::fromUtf8(audit.certificateHash));
+        out.set("errorSummary", ev::fromUtf8(audit.errorSummary));
+        out.set("hazards", buildHazardsArray(audit.hazards));
+        return out.get();
+    });
     netBuilder.def("createRollbackSession", 2, [](Value, std::span<const Value> a) -> Value {
         return createRollbackSessionValue(a);
     });

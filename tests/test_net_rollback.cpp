@@ -3,7 +3,9 @@
 
 #include "embed/embed.h"
 #include "eval/eval.h"
+#include <brass/runtime/deterministic_math.hpp>
 
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -492,6 +494,125 @@ void test_cpp_and_js_verified_capsules() {
     ev::destroyRealm(realm);
 }
 
+void test_closed_world_determinism_and_det_fp() {
+    std::printf("[6/6] Closed-world AST+IL determinism audit & brass_det_* FP lockstep (#156)...\n");
+
+    // 1. Alias bypasses, transitive helpers, and outer mutable state must be rejected
+    auto mathAliasAudit = bro::net::verifyRollbackTickSource(R"JS(
+        function tick(state) {
+            const M = Math;
+            state[0] = M.random();
+        }
+    )JS");
+    ASSERT_TRUE(!mathAliasAudit.determinismLintPassed);
+    ASSERT_TRUE(!mathAliasAudit.hazards.empty());
+    ASSERT_EQ(mathAliasAudit.hazards[0].kind, std::string("unseeded-prng"));
+
+    auto dateAliasAudit = bro::net::verifyRollbackTickSource(R"JS(
+        function tick(state) {
+            const D = Date;
+            state[0] = D.now() | 0;
+        }
+    )JS");
+    ASSERT_TRUE(!dateAliasAudit.determinismLintPassed);
+    ASSERT_TRUE(!dateAliasAudit.hazards.empty());
+    ASSERT_EQ(dateAliasAudit.hazards[0].kind, std::string("wall-clock-time"));
+
+    auto helperAudit = bro::net::verifyRollbackTickSource(R"JS(
+        function helperRng() {
+            return Math.random();
+        }
+        function tick(state) {
+            state[0] = helperRng();
+        }
+    )JS");
+    ASSERT_TRUE(!helperAudit.determinismLintPassed);
+    ASSERT_TRUE(!helperAudit.hazards.empty());
+
+    auto outerMutAudit = bro::net::verifyRollbackTickSource(R"JS(
+        let externalCounter = 0;
+        function tick(state) {
+            externalCounter++;
+            state[0] = (state[0] + externalCounter) | 0;
+        }
+    )JS");
+    ASSERT_TRUE(!outerMutAudit.determinismLintPassed);
+    ASSERT_TRUE(!outerMutAudit.hazards.empty());
+    ASSERT_EQ(outerMutAudit.hazards[0].kind, std::string("external-state-access"));
+
+    // 2. Transcendental math with "use deterministic" is accepted and matches brass_det_* bit-for-bit
+    const double x = 0.7, y = 1.2, z = 0.3;
+    const double expected0 = brass_det_sin(x) + brass_det_cos(y);
+    const double expected1 = brass_det_atan2(y, x) + brass_det_pow(x, 1.5) + brass_det_pow(y, 2.5);
+
+    std::vector<uint8_t> expectedBytes(2 * sizeof(double));
+    std::memcpy(expectedBytes.data(), &expected0, sizeof(double));
+    std::memcpy(expectedBytes.data() + sizeof(double), &expected1, sizeof(double));
+    std::string expectedHashHex = bro::net::formatChecksumHex(bro::net::computeStateFnv1a64(expectedBytes));
+
+    ev::Realm* realm = ev::createRealm();
+    {
+        ev::RealmScope scope(realm);
+        bro::bronze_host::installNetRollbackExtensions();
+
+        std::string script = R"JS(
+            (() => {
+                if (typeof bro.net.verifyDeterministic !== "function") {
+                    throw new Error("missing bro.net.verifyDeterministic");
+                }
+
+                // Alias bypasses must fail bro.net.verifyDeterministic
+                const v1 = bro.net.verifyDeterministic("function t(s) { const M = Math; return M.random(); }");
+                if (v1.determinismLintPassed !== false || v1.valid !== false) {
+                    throw new Error("Expected Math alias bypass to fail verifyDeterministic");
+                }
+                const v2 = bro.net.verifyDeterministic("function t(s) { const D = Date; return D.now(); }");
+                if (v2.determinismLintPassed !== false || v2.valid !== false) {
+                    throw new Error("Expected Date alias bypass to fail verifyDeterministic");
+                }
+                const v3 = bro.net.verifyDeterministic("function h() { return Math.random(); } function t(s) { return h(); }");
+                if (v3.determinismLintPassed !== false || v3.valid !== false) {
+                    throw new Error("Expected transitive helper Math.random() to fail verifyDeterministic");
+                }
+                const v4 = bro.net.verifyDeterministic("let outer = 0; function t(s) { outer++; return s[0] + outer; }");
+                if (v4.determinismLintPassed !== false || v4.valid !== false) {
+                    throw new Error("Expected outer mutable let access to fail verifyDeterministic");
+                }
+
+                // Tick with "use deterministic" using Math.sin, Math.cos, Math.atan2, Math.pow, **
+                const detTickSrc = `(state, inputs, frame) => {
+                    "use deterministic";
+                    const x = 0.7;
+                    const y = 1.2;
+                    state[0] = Math.sin(x) + Math.cos(y);
+                    state[1] = Math.atan2(y, x) + Math.pow(x, 1.5) + (y ** 2.5);
+                }`;
+                const vDet = bro.net.verifyDeterministic(detTickSrc);
+                if (!vDet.determinismLintPassed || !vDet.valid || vDet.hazardCount !== 0) {
+                    throw new Error("Expected 'use deterministic' transcendental tick to pass: " + JSON.stringify(vDet));
+                }
+
+                const session = bro.net.createRollbackSession({
+                    tick: detTickSrc,
+                    initialState: new Float64Array([0.0, 0.0]),
+                    playerCount: 1,
+                    localPlayerId: 0
+                });
+                session.advanceFrame(0);
+                return session.checksumHex;
+            })()
+        )JS";
+
+        ev::CallResult res = bronze::eval::evalScript(script);
+        if (res.thrown) {
+            std::fprintf(stderr, "JS #156 test threw: %s\n", ev::toUtf8(res.value).c_str());
+            std::exit(1);
+        }
+        ASSERT_EQ(ev::toUtf8(res.value), expectedHashHex);
+    }
+    ev::destroyRealm(realm);
+}
+
 }  // namespace
 
 int main() {
@@ -500,6 +621,7 @@ int main() {
     test_cpp_tampering_detection();
     test_js_rollback_session_api();
     test_cpp_and_js_verified_capsules();
+    test_closed_world_determinism_and_det_fp();
     std::printf("All rollback netcode & verified capsule tests passed!\n");
     return 0;
 }
