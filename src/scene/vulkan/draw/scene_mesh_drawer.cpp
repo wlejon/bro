@@ -261,10 +261,16 @@ constexpr uint32_t kCoverShadeConstantId = 4;
 
 bool SceneMeshDrawer::coverPrepassed(const MeshDraw& draw) const {
     // The blades and herb plants (not the far tier's tufts) of an opaque
-    // draw that cuts nothing else.
+    // draw that cuts nothing else; and the land (its turf), whose every
+    // pixel is dear (the turf's patterns, the sward's light) and whose hills
+    // and rings stand in front of one another: lit once a pixel, where
+    // nothing nearer (its own nearer hills, the plants and blades drawn
+    // before it) hides it. (Not a land with a shader of its own: the two
+    // passes are the built-in stages.)
+    if (rasterVariant(draw) & (raster::kTranslucent | raster::kLines | raster::kNoDepth | raster::kCuts)) return false;
+    if (draw.kind == MeshKind::Land) return draw.custom == nullptr;
     return draw.kind == MeshKind::Grass &&
-           (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) == 0u &&
-           (rasterVariant(draw) & (raster::kTranslucent | raster::kLines | raster::kNoDepth | raster::kCuts)) == 0u;
+           (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) == 0u;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {

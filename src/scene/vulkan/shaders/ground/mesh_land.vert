@@ -39,6 +39,9 @@ layout(location = 3) out vec4 outColor;
 layout(location = 4) out vec3 outTangent;
 layout(location = 5) out vec3 outBitangent;
 layout(location = 6) out vec4 outInstColor;
+// The opaque pass's depth prepass of the land and its shading must meet at
+// the same depth (SceneMeshDrawer::coverPrepassed).
+invariant gl_Position;
 #endif
 
 #include "common/scene_camera.glsl"

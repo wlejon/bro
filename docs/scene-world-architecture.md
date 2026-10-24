@@ -247,7 +247,15 @@ carries the dither. The prepass is 0.21-0.26 ms. Frames: meadow 2.69 →
 2.05 ms, glade 2.77 → 2.42, edge 2.55 → 1.85, with the stills the same and
 the glade's shadow pages now converging (none left wanted, 286 before).
 The far tier, the probes' and the turf's fills draw the cover in one pass
-as before. The plants keep their single pass: their leaves' vertex work is
+as before. The land (its turf) is drawn in the same two passes: its
+fragments are the dearest of the frame (the turf's patterns, the sward's
+light), and its own nearer hills and the plants and blades in front of it
+hide many of them. With its depth first, the planet's low view (2560x1364)
+lit its land in 1.56 ms rather than 1.75 (its vertex stage `invariant`
+now, so the two passes meet: the land's depth moves under a float's
+rounding, a few thousand pixels of plant edges on it); at ground level the land's cost stayed (it is what shows between
+the blades) while the far grass behind its hills dropped, the frame 4.17 to
+4.00 ms. The plants keep their single pass: their leaves' vertex work is
 the heavy part, which an ID buffer and resolve (above) would not repeat.
 
 ## 4. Async compute
