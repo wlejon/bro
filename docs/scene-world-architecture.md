@@ -322,7 +322,11 @@ sun, shadows and air stay current.
   the GPU, unlike feedback-driven virtual texturing. A tile's heights, the
   slope its footprint sees and its version come from the provider's items
   (for the turf, each mesh's triangles in 32 m cells), gathered into a
-  min/max pyramid so a tile reads a few cells. The atlas's slots bound the
+  min/max pyramid so a tile reads a few cells. The pyramid's base is held
+  to a fixed budget of cells over every root (a planet's six faces get 320
+  a side each, ~27 MB with their item lists), and a change to the items
+  re-gathers only the cells under the items that changed and their
+  ancestors, never the whole pyramid. The atlas's slots bound the
   set, the tile most too coarse refined first: in wilds the footprint rule
   alone asks for 4–10× the 1024 slots on hilly, forested routes, since a
   frustum hides no ground behind hills or trees. Occlusion (§3's

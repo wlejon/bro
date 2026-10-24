@@ -80,7 +80,8 @@ bool SurfaceLayers::setBounds(const bromath::AABB3& bounds) {
         configure(config_, bounds, map_);
         return true;
     }
-    if (std::memcmp(&bounds_, &bounds, sizeof(bounds)) != 0) gridDirty_ = true;
+    // (The grid follows at the next update: anew only when the bounds move
+    // its cells, else just the cells under items that changed.)
     bounds_ = bounds;
     return false;
 }
@@ -116,7 +117,7 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << k.level);
         // The ground under the tile with its border: its heights and its
         // items' generations.
-        const Cell g = under(k, side / config_.tileTexels * config_.border);
+        const Ground g = under(k, side / config_.tileTexels * config_.border);
         if (g.lo > g.hi) return;   // no ground here
         const double x0 = k.x * side, z0 = k.z * side, x1 = (k.x + 1) * side, z1 = (k.z + 1) * side;
         SurfaceMap::Patch patch;
@@ -168,52 +169,123 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
     return open.empty() ? 1.0f : open.top().error;
 }
 
-void SurfaceLayers::buildGrid() {
+SurfaceLayers::GridLayout SurfaceLayers::gridLayout() const {
+    GridLayout l;
+    if (!configured()) return l;
+    // Base cells a level-shift tile, starting where the coarsest tiles do
+    // (so a level's cells are that level's tiles): kGridCells across the
+    // coarsest tile where the budget allows, else as many as it does (a
+    // power of two a coarsest tile, at least one).
+    const int top = levels_ - 1;
+    const double topSide = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << top);
+    const int tx0 = static_cast<int>(std::floor(bounds_.min.x / topSide));
+    const int tz0 = static_cast<int>(std::floor(bounds_.min.z / topSide));
+    const int tx1 = static_cast<int>(std::floor(bounds_.max.x / topSide));
+    const int tz1 = static_cast<int>(std::floor(bounds_.max.z / topSide));
+    const size_t count = static_cast<size_t>(std::max(tx1 - tx0, tz1 - tz0) + 1);
+    const size_t rootCount = static_cast<size_t>(std::max(roots(), 1));
+    int cellsLog = 0;
+    while (cellsLog < top && (2 << cellsLog) <= kGridCells) {
+        const size_t n = count << (cellsLog + 1);
+        if (n * n * rootCount > kGridBudget) break;
+        ++cellsLog;
+    }
+    l.shift = top - cellsLog;
+    l.x0 = tx0 << cellsLog;
+    l.z0 = tz0 << cellsLog;
+    l.n = static_cast<int>(count << cellsLog);
+    return l;
+}
+
+bool SurfaceLayers::footprint(const SurfaceItem& item, int& i0, int& i1, int& j0, int& j1) const {
+    const bromath::AABB3& b = item.bounds;
+    if (b.min.x > b.max.x || item.root >= grids_.size()) return false;
+    const double cs = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << gridShift_);
+    cellRange(b.min.x, b.max.x, cs, gridX0_, gridN_, i0, i1);
+    cellRange(b.min.z, b.max.z, cs, gridZ0_, gridN_, j0, j1);
+    return i0 <= i1 && j0 <= j1;
+}
+
+void SurfaceLayers::link(uint32_t k, const SurfaceItem& item, std::vector<uint64_t>* dirty) {
+    int i0, i1, j0, j1;
+    if (!footprint(item, i0, i1, j0, j1)) return;
+    std::vector<int32_t>& head = grids_[item.root].head;
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            const size_t idx = static_cast<size_t>(j) * gridN_ + i;
+            int32_t node = freeLink_;
+            if (node >= 0) {
+                freeLink_ = links_[static_cast<size_t>(node)].next;
+            } else {
+                node = static_cast<int32_t>(links_.size());
+                links_.push_back({});
+            }
+            links_[static_cast<size_t>(node)] = {k, head[idx]};
+            head[idx] = node;
+            if (dirty) dirty->push_back(uint64_t{item.root} << 32 | idx);
+        }
+}
+
+void SurfaceLayers::unlink(uint32_t k, const SurfaceItem& item, std::vector<uint64_t>& dirty) {
+    int i0, i1, j0, j1;
+    if (!footprint(item, i0, i1, j0, j1)) return;
+    std::vector<int32_t>& head = grids_[item.root].head;
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            const size_t idx = static_cast<size_t>(j) * gridN_ + i;
+            for (int32_t* at = &head[idx]; *at >= 0; at = &links_[static_cast<size_t>(*at)].next) {
+                const int32_t node = *at;
+                if (links_[static_cast<size_t>(node)].item != k) continue;
+                *at = links_[static_cast<size_t>(node)].next;
+                links_[static_cast<size_t>(node)].next = freeLink_;
+                freeLink_ = node;
+                break;
+            }
+            dirty.push_back(uint64_t{item.root} << 32 | idx);
+        }
+}
+
+SurfaceLayers::Cell SurfaceLayers::gather(int32_t node) const {
+    Cell c{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
+    for (; node >= 0; node = links_[static_cast<size_t>(node)].next) {
+        const SurfaceItem& it = gridItems_[links_[static_cast<size_t>(node)].item];
+        c.lo = std::min(c.lo, it.bounds.min.y);
+        c.hi = std::max(c.hi, it.bounds.max.y);
+        c.sum += mix64(it.generation);
+    }
+    return c;
+}
+
+void SurfaceLayers::buildGrid(const GridLayout& layout) {
     gridDirty_ = false;
     grids_.clear();
+    links_.clear();
+    freeLink_ = -1;
+    gridShift_ = layout.shift;
+    gridX0_ = layout.x0;
+    gridZ0_ = layout.z0;
+    gridN_ = layout.n;
+    gridTouched_ = 0;
     if (!configured()) return;
-    // Base cells a level-gridShift_ tile, about kGridCells across the
-    // coarsest tile, starting where the coarsest tiles do (so a level's
-    // cells are that level's tiles).
-    const int top = levels_ - 1;
-    int cellsLog = 0;
-    while ((1 << (cellsLog + 1)) <= kGridCells) ++cellsLog;
-    gridShift_ = std::max(0, top - cellsLog);
-    const double cs = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << gridShift_);
-    const double topSide = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << top);
-    const int perTop = 1 << (top - gridShift_);
-    gridX0_ = static_cast<int>(std::floor(bounds_.min.x / topSide)) * perTop;
-    gridZ0_ = static_cast<int>(std::floor(bounds_.min.z / topSide)) * perTop;
-    const int nx = (static_cast<int>(std::floor(bounds_.max.x / topSide)) + 1) * perTop - gridX0_;
-    const int nz = (static_cast<int>(std::floor(bounds_.max.z / topSide)) + 1) * perTop - gridZ0_;
-    const int n = std::max(nx, nz);
-
+    const int n = gridN_;
+    const size_t cells = static_cast<size_t>(n) * n;
     const Cell empty{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
     grids_.resize(static_cast<size_t>(roots()));
     for (Grid& grid : grids_) {
-        grid.cells.emplace_back(static_cast<size_t>(n) * n, empty);
+        grid.cells.emplace_back(cells, empty);
         grid.side.push_back(n);
+        grid.head.assign(cells, -1);
     }
-    // (With no items, every root's chart is one item of generation 0.)
-    std::vector<SurfaceItem> whole;
-    if (items_.empty())
-        for (int r = 0; r < roots(); ++r) whole.push_back({bounds_, 0, static_cast<uint8_t>(r)});
-    for (const SurfaceItem& item : items_.empty() ? whole : items_) {
-        const bromath::AABB3& b = item.bounds;
-        if (b.min.x > b.max.x || item.root >= grids_.size()) continue;
+    size_t total = 0;
+    for (const SurfaceItem& item : gridItems_) {
         int i0, i1, j0, j1;
-        cellRange(b.min.x, b.max.x, cs, gridX0_, n, i0, i1);
-        cellRange(b.min.z, b.max.z, cs, gridZ0_, n, j0, j1);
-        const uint64_t g = mix64(item.generation);
-        std::vector<Cell>& base = grids_[item.root].cells[0];
-        for (int j = j0; j <= j1; ++j)
-            for (int x = i0; x <= i1; ++x) {
-                Cell& c = base[static_cast<size_t>(j) * n + x];
-                c.lo = std::min(c.lo, b.min.y);
-                c.hi = std::max(c.hi, b.max.y);
-                c.sum += g;
-            }
+        if (footprint(item, i0, i1, j0, j1)) total += static_cast<size_t>(i1 - i0 + 1) * (j1 - j0 + 1);
     }
+    links_.reserve(total);
+    for (size_t k = 0; k < gridItems_.size(); ++k) link(static_cast<uint32_t>(k), gridItems_[k], nullptr);
+    for (Grid& grid : grids_)
+        for (size_t idx = 0; idx < cells; ++idx) grid.cells[0][idx] = gather(grid.head[idx]);
+    gridTouched_ = static_cast<uint32_t>(cells * grids_.size());
     // Each coarser level's cell gathers its four.
     for (Grid& grid : grids_)
         while (grid.side.back() > 1) {
@@ -233,8 +305,107 @@ void SurfaceLayers::buildGrid() {
         }
 }
 
-SurfaceLayers::Cell SurfaceLayers::under(const CellKey& key, double pad) const {
-    Cell out{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
+bool SurfaceLayers::updateGrid() {
+    gridTouched_ = 0;
+    const GridLayout layout = gridLayout();
+    const bool rebuild = gridDirty_ || !(layout == GridLayout{gridShift_, gridX0_, gridZ0_, gridN_}) ||
+                         grids_.size() != static_cast<size_t>(roots());
+    std::vector<SurfaceItem> next;
+    if (itemsDirty_) {
+        itemsDirty_ = false;
+        next = std::move(items_);
+        items_ = {};
+        ownItems_ = !next.empty();
+    } else if (ownItems_) {
+        if (!rebuild) return false;
+        next = std::move(gridItems_);
+    }
+    // (With no items, every root's chart is one item of generation 0.)
+    if (!ownItems_) {
+        next.clear();
+        for (int r = 0; r < roots(); ++r) next.push_back({bounds_, 0, static_cast<uint8_t>(r)});
+    }
+    if (rebuild) {
+        gridItems_ = std::move(next);
+        buildGrid(layout);
+        return true;
+    }
+
+    // The items told apart by index: a changed one leaves the cells under
+    // its old box and joins those under its new one.
+    const auto same = [](const SurfaceItem& a, const SurfaceItem& b) {
+        return a.root == b.root && a.generation == b.generation &&
+               std::memcmp(&a.bounds, &b.bounds, sizeof(a.bounds)) == 0;
+    };
+    std::vector<uint64_t> dirty;
+    const size_t common = std::min(gridItems_.size(), next.size());
+    for (size_t k = 0; k < common; ++k)
+        if (!same(gridItems_[k], next[k])) {
+            unlink(static_cast<uint32_t>(k), gridItems_[k], dirty);
+            link(static_cast<uint32_t>(k), next[k], &dirty);
+        }
+    for (size_t k = common; k < gridItems_.size(); ++k) unlink(static_cast<uint32_t>(k), gridItems_[k], dirty);
+    for (size_t k = common; k < next.size(); ++k) link(static_cast<uint32_t>(k), next[k], &dirty);
+    gridItems_ = std::move(next);
+    if (dirty.empty()) return false;
+    std::sort(dirty.begin(), dirty.end());
+    dirty.erase(std::unique(dirty.begin(), dirty.end()), dirty.end());
+    gridTouched_ = static_cast<uint32_t>(dirty.size());
+
+    // Re-gather those cells, then their ancestors level by level.
+    const Cell empty{std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), 0};
+    std::vector<uint32_t> at, up;
+    for (size_t a = 0; a < dirty.size();) {
+        const uint32_t root = static_cast<uint32_t>(dirty[a] >> 32);
+        Grid& grid = grids_[root];
+        at.clear();
+        for (; a < dirty.size() && (dirty[a] >> 32) == root; ++a) {
+            const uint32_t idx = static_cast<uint32_t>(dirty[a]);
+            grid.cells[0][idx] = gather(grid.head[idx]);
+            at.push_back(idx);
+        }
+        for (size_t p = 1; p < grid.cells.size(); ++p) {
+            const int s = grid.side[p - 1], h = grid.side[p];
+            up.clear();
+            for (const uint32_t idx : at)
+                up.push_back(static_cast<uint32_t>((idx / s / 2) * h + (idx % s) / 2));
+            std::sort(up.begin(), up.end());
+            up.erase(std::unique(up.begin(), up.end()), up.end());
+            const std::vector<Cell>& fine = grid.cells[p - 1];
+            for (const uint32_t idx : up) {
+                const int px = static_cast<int>(idx % h), pz = static_cast<int>(idx / h);
+                Cell c = empty;
+                for (int dz = 0; dz < 2; ++dz)
+                    for (int dx = 0; dx < 2; ++dx) {
+                        const int x = px * 2 + dx, z = pz * 2 + dz;
+                        if (x >= s || z >= s) continue;
+                        const Cell& f = fine[static_cast<size_t>(z) * s + x];
+                        c.lo = std::min(c.lo, f.lo);
+                        c.hi = std::max(c.hi, f.hi);
+                        c.sum += f.sum;
+                    }
+                grid.cells[p][idx] = c;
+            }
+            at.swap(up);
+        }
+    }
+    return true;
+}
+
+size_t SurfaceLayers::gridBytes() const {
+    size_t bytes = links_.capacity() * sizeof(Link) + (gridItems_.capacity() + items_.capacity()) * sizeof(SurfaceItem);
+    for (const Grid& grid : grids_) {
+        bytes += grid.head.capacity() * sizeof(int32_t);
+        for (const std::vector<Cell>& level : grid.cells) bytes += level.capacity() * sizeof(Cell);
+    }
+    return bytes;
+}
+
+SurfaceLayers::Ground SurfaceLayers::under(const CellKey& key, double pad) const {
+    Ground out;
+    out.lo = std::numeric_limits<float>::max();
+    out.hi = -std::numeric_limits<float>::max();
+    out.sum = 0;
     if (key.root >= grids_.size()) return out;
     const Grid& grid = grids_[key.root];
     // The level whose cells are this tile's size (the base for finer tiles).
@@ -319,8 +490,8 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
     frame_ = frame;
     if (!configured()) return;
     stats_.levels = static_cast<uint32_t>(levels_);
-    const bool restaled = gridDirty_;
-    if (gridDirty_) buildGrid();
+    const bool restaled = updateGrid();
+    stats_.gridCells = gridTouched_;
 
     std::vector<Need> needs;
     stats_.worstError = select(view, needs);
@@ -337,7 +508,7 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
         for (const auto& [packed, t] : tiles_) {
             if (!t.filled || needed.count(packed)) continue;
             const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << t.key.level);
-            const Cell g = under(t.key, side / config_.tileTexels * config_.border);
+            const Ground g = under(t.key, side / config_.tileTexels * config_.border);
             if (mix64(generation_ ^ g.sum) != t.generation) stale.push_back(packed);
         }
         for (const uint64_t packed : stale) evict(packed);

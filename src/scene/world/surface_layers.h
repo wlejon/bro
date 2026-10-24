@@ -154,6 +154,7 @@ struct SurfaceLayerStats {
     uint32_t missing = 0;     // needed and not filled at the current generation (after commit)
     uint32_t filled = 0;      // fills issued this frame
     uint32_t levels = 0;
+    uint32_t gridCells = 0;   // base cells re-gathered this frame (the items' changes; all of them on a rebuild)
     /// The atlas's shortfall: how many times too coarse the worst tile the
     /// slots left unrefined is (1: none; the view has every tile it wants).
     float worstError = 1.0f;
@@ -195,13 +196,22 @@ public:
     /// The provider's items (see Items above); replaces the last. They are
     /// gathered into a pyramid of cells (each cell's lowest and highest
     /// ground and its items' generations), so a tile reads the few cells
-    /// under it whatever the items number: an item finer than a cell
-    /// (gridCells a side over the extent) is as coarse as its cell.
+    /// under it whatever the items number: an item finer than a cell is as
+    /// coarse as its cell. A base cell is a tile of one level, at most
+    /// kGridCells of them across a coarsest tile and at most kGridBudget of
+    /// them over every root together (a round body's six faces, twenty
+    /// coarsest tiles a side, get 320 a face), so the grid's memory is
+    /// bounded whatever the bounds. Items are told apart by their index: the
+    /// next update() re-gathers only the cells under the items that changed
+    /// (their old and new footprints) and those cells' ancestors.
     void setItems(std::vector<SurfaceItem> items) {
         items_ = std::move(items);
-        gridDirty_ = true;
+        itemsDirty_ = true;
     }
     static constexpr int kGridCells = 512;
+    static constexpr size_t kGridBudget = size_t{1} << 20;
+    /// The grid's bytes now (cells, the cells' item lists, the items kept).
+    size_t gridBytes() const;
 
     /// Select the tiles `view` needs and gather the jobs (jobs()): those not
     /// filled at the current generation. `frame` counts up by one a call.
@@ -245,16 +255,40 @@ private:
     struct Cell {
         float lo, hi;     // lo > hi: no ground
         uint64_t sum;     // its items' generations, mixed
-        float span = 0.0f;   // (under's) the cells' width, metres
+    };
+    /// What under() finds: the cells' ground and their width, metres.
+    struct Ground : Cell {
+        float span = 0.0f;
     };
     /// A root's pyramid of cells (buildGrid).
     struct Grid {
         std::vector<int> side;   // cells a side, each pyramid level
         std::vector<std::vector<Cell>> cells;
+        std::vector<int32_t> head;   // each base cell's first link (-1: none)
     };
-    void buildGrid();
+    /// One item over one base cell, in that cell's list.
+    struct Link {
+        uint32_t item;
+        int32_t next;
+    };
+    /// Where the grid's base cells lie: level-shift tiles from (x0, z0), n a side.
+    struct GridLayout {
+        int shift = 0, x0 = 0, z0 = 0, n = 0;
+        bool operator==(const GridLayout&) const = default;
+    };
+    GridLayout gridLayout() const;
+    void buildGrid(const GridLayout& layout);
+    /// A base cell's ground from its list of items (from link `node`).
+    Cell gather(int32_t node) const;
+    /// Bring the grid to items_ (or the bounds' whole item), re-gathering
+    /// only the cells the changed items lie over; false when none changed.
+    bool updateGrid();
+    /// The base cells item `item` lies over (empty: i0 > i1).
+    bool footprint(const SurfaceItem& item, int& i0, int& i1, int& j0, int& j1) const;
+    void link(uint32_t k, const SurfaceItem& item, std::vector<uint64_t>* dirty);
+    void unlink(uint32_t k, const SurfaceItem& item, std::vector<uint64_t>& dirty);
     /// The ground under tile `key` with `pad` metres past its edges.
-    Cell under(const CellKey& key, double pad) const;
+    Ground under(const CellKey& key, double pad) const;
     /// The tiles `view` needs (within the slots); returns the worst error
     /// left unrefined.
     float select(const View& view, std::vector<Need>& out) const;
@@ -269,11 +303,18 @@ private:
     int levels_ = 0;
     int pageShift_ = 8;
     uint64_t generation_ = 0;
-    std::vector<SurfaceItem> items_;
-    bool gridDirty_ = true;
+    std::vector<SurfaceItem> items_;   // the provider's, until the next update() takes them
+    bool itemsDirty_ = true;
+    bool ownItems_ = false;            // the provider gave items (else the bounds are the one)
+    bool gridDirty_ = true;        // rebuild it all (configured anew)
     int gridShift_ = 0;            // a base cell is a level-gridShift_ tile
     int gridX0_ = 0, gridZ0_ = 0;  // the base cells' first (in base cells)
+    int gridN_ = 0;                // base cells a side
     std::vector<Grid> grids_;      // a root's each
+    std::vector<SurfaceItem> gridItems_;   // the items the grid holds (the bounds' whole ones when none)
+    std::vector<Link> links_;
+    int32_t freeLink_ = -1;
+    uint32_t gridTouched_ = 0;     // base cells re-gathered by the last grid update
 
     std::unordered_map<uint64_t, Tile> tiles_;   // by CellKey::packed
     std::vector<uint64_t> slotTile_;              // each slot's tile (kFree when none)

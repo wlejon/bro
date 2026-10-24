@@ -310,6 +310,82 @@ void testItems() {
     check(over > 0, "the tiles over the changed item refill");
 }
 
+/// Six flat roots, as a round body's cube faces are six charts.
+struct SixFaces : SurfaceMap {
+    int roots() const override { return 6; }
+    Patch patch(int, double x0, double z0, double x1, double z1, float lo, float hi,
+                const bromath::Vec3& eye) const override {
+        Patch p;
+        p.box.min = {static_cast<float>(x0), lo, static_cast<float>(z0)};
+        p.box.max = {static_cast<float>(x1), hi, static_cast<float>(z1)};
+        p.above = std::fabs(eye.y - 0.5f * (lo + hi));
+        return p;
+    }
+};
+
+void testWholeBodyGrid() {
+    // A planet's chart: six faces 10,000 km a side, 1 m tiles (20 levels, so
+    // about twenty coarsest tiles a face), 128 x 128 items a face as the
+    // land's are.
+    SurfaceLayerConfig c;
+    c.slots = 2048;
+    const float e = 5.0e6f;
+    const bromath::AABB3 bounds{{-e, -9000.0f, -e}, {e, 9000.0f, e}};
+    SixFaces faces;
+    SurfaceLayers L;
+    L.configure(c, bounds, &faces);
+    const int cells = 128;
+    const float side = 2.0f * e / cells;
+    std::vector<SurfaceItem> items;
+    for (int f = 0; f < 6; ++f)
+        for (int z = 0; z < cells; ++z)
+            for (int x = 0; x < cells; ++x)
+                items.push_back({{{-e + x * side, -100.0f, -e + z * side}, {-e + (x + 1) * side, 100.0f, -e + (z + 1) * side}},
+                                 1, static_cast<uint8_t>(f)});
+    L.setItems(items);
+    const SurfaceLayers::View v = makeView({0.0f, 2000.0f, 0.0f}, {1.0f, -0.2f, 0.0f});
+    fillAll(L, v, 1);
+    const size_t budget = size_t{48} << 20;
+    check(L.gridBytes() < budget, "a whole body's grid stays under 48 MB (got " +
+                                      std::to_string(L.gridBytes() >> 20) + " MB)");
+    check(L.stats().gridCells > 0, "the first frame gathers the grid");
+    std::printf("whole body grid: %.1f MB\n", static_cast<double>(L.gridBytes()) / (1 << 20));
+
+    fillAll(L, v, 2);
+    check(L.stats().gridCells == 0, "unchanged items gather nothing");
+    L.setItems(items);
+    fillAll(L, v, 3);
+    check(L.stats().gridCells == 0, "the same items again gather nothing");
+
+    // One item changes (its heights and generation): only the base cells
+    // under it are gathered again. A base cell here is a 32 km tile (320 a
+    // face), the item 78 km, so it lies over at most 4 x 4 of them.
+    SurfaceItem& one = items[static_cast<size_t>(3) * cells * cells + 64 * cells + 64];
+    one.generation = 7;
+    one.bounds.max.y = 4000.0f;
+    L.setItems(items);
+    fillAll(L, v, 4);
+    check(L.stats().gridCells > 0 && L.stats().gridCells <= 16,
+          "one item's change gathers only the cells under it (got " + std::to_string(L.stats().gridCells) + ")");
+
+    // The bounds' heights grow (as a land's do when its items do): no cell
+    // moves, nothing is gathered.
+    bromath::AABB3 taller = bounds;
+    taller.max.y += 3000.0f;
+    L.setBounds(taller);
+    fillAll(L, v, 5);
+    check(L.stats().gridCells == 0, "the bounds' heights alone gather nothing");
+
+    // The last face's items go: its cells, and only those, are gathered.
+    items.resize(static_cast<size_t>(5) * cells * cells);
+    L.setItems(items);
+    fillAll(L, v, 6);
+    check(L.stats().gridCells > 300u * 300u && L.stats().gridCells <= 320u * 320u,
+          "a face's items gone gather that face's cells (got " +
+                                                  std::to_string(L.stats().gridCells) + ")");
+    check(L.gridBytes() < budget, "the grid stays under budget");
+}
+
 }  // namespace
 
 int main() {
@@ -319,6 +395,7 @@ int main() {
     testEvictionAndGenerations();
     testAliases();
     testItems();
+    testWholeBodyGrid();
     std::printf("surface layers: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
