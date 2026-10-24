@@ -100,6 +100,8 @@ vec4 cloudNoise(vec3 x, float footprint) {
     float lod = log2(max(footprint * float(CL_NOISE_SIDE), 1.0));
     return textureLod(cloudNoiseMap, fract(x), lod);
 }
+vec4 cloudFieldTex(vec3 x, float lod) { return textureLod(cloudNoiseMap, x, lod); }
+#include "sky/cloud_field.glsl"
 
 // `v` from [lo, hi] onto [a, b], unclamped.
 float cloudRemap(float v, float lo, float hi, float a, float b) {
@@ -375,7 +377,6 @@ float cloudShareLike(float cell) { return smoothstep(0.25, 1.0, cell / clouds.fo
 // large (so neither's lattice lines the clouds up in rows), their sum
 // spread back to one's.
 const float CLOUD_CUT_TILE = 13.0;
-const mat3 kCloudCutTurn = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
 vec4 cloudCutNoise(vec3 pd, float footprint) {
     float S = CLOUD_CUT_TILE * clouds.forms.w;
     vec4 a = cloudNoise(pd / S, footprint / S);
@@ -436,60 +437,6 @@ float cloudLumpsOf(vec3 pd, float footprint, float q) {
     vec4 w = cloudNoise(kCloudCutTurn * pd / T, max(footprint / T, 1.0 / 32.0));
     float y = max(w.y, w.z - CLOUD_LUMP_SMALL_DROP);
     return q * CLOUD_LUMPS * min(y - CLOUD_LUMP_FLOOR, 0.0);
-}
-// A far field seen from above, cut to the pixel: `share` of a cell `cell`
-// metres wide covered by clouds (a column's cover, the cache's or the
-// globe's, bilinear between cells) as the share of a footprint `footprint`
-// metres wide they cover, where the pixel is finer than the cell. The cell
-// is cut by a field of the engine's noise (CLOUD_FIELD_OCTAVES octaves of
-// its Perlin-Worley, the coarsest CLOUD_FIELD_TILE edges a tile, each the
-// last's CLOUD_FIELD_STEP as large, turned in turn: clouds from a cell's
-// size down to a cloud's edge, with broken, billowed rims), cloud where the
-// field, as a score about normal, is over the share's quantile. Prefiltered
-// by the footprint: each octave read at its mean over the footprint, with
-// its spread within it (the noise's w, its square's mean) widening the
-// score's step, so what is finer than the pixel is the share it covers and
-// a footprint as wide as the cell reads the cell's share (and a finer
-// octave fades out of the score as its clouds, about an eighth of its tile,
-// come under CLOUD_FIELD_PIXELS pixels: clouds a pixel or two across read
-// as speckle, so the finest shown are a few pixels, their rims still a
-// pixel sharp; the score's spread is its octaves' that remain, so the
-// share it covers is the same with or without them; the cut faded out
-// from CLOUD_FIELD_FROM .. CLOUD_FIELD_TO pixels a cell), never grain. The
-// score's spread from the tile's own mean and spread (its coarsest mip).
-const float CLOUD_FIELD_TILE = 40.0;
-const float CLOUD_FIELD_STEP = 0.36;
-const int CLOUD_FIELD_OCTAVES = 3;
-const float CLOUD_FIELD_FROM = 4.0;
-const float CLOUD_FIELD_TO = 10.0;
-const float CLOUD_FIELD_PIXELS = 4.0;
-const float CLOUD_FIELD_SOFT = 0.03;  // the score's least spread over a pixel (its edge a pixel or so)
-float cloudFieldShare(vec3 pd, float share, float cell, float footprint) {
-    float fade = smoothstep(CLOUD_FIELD_FROM, CLOUD_FIELD_TO, cell / max(footprint, 1.0));
-    if (fade <= 0.0 || share <= 0.0 || share >= 1.0) return share;
-    vec4 n0 = textureLod(cloudNoiseMap, vec3(0.5), float(CL_NOISE_MIPS - 1));
-    float M = n0.x, S = sqrt(max(n0.w - n0.x * n0.x, 1e-6));
-    float T = CLOUD_FIELD_TILE * clouds.forms.w;
-    float z = 0.0, v = 0.0, aa = 0.0, a = 1.0;
-    vec3 x = pd;
-    for (int i = 0; i < CLOUD_FIELD_OCTAVES; ++i) {
-        vec4 n = cloudNoise(x / T, footprint / T);
-        float ai = i == 0 ? a : a * smoothstep(0.5 * CLOUD_FIELD_PIXELS, CLOUD_FIELD_PIXELS, T / 8.0 / footprint);
-        z += ai * (n.x - M);
-        v += ai * ai * max(n.w - n.x * n.x, 0.0);
-        aa += ai * ai;
-        a *= 0.7;
-        T *= CLOUD_FIELD_STEP;
-        x = kCloudCutTurn * x;
-    }
-    float norm = S * sqrt(aa);
-    z /= norm;
-    v /= norm * norm;
-    // (The share's quantile and the normal's step, both logistic.)
-    float s = clamp(share, 0.005, 0.995);
-    float t = log((1.0 - s) / s) / 1.7;
-    float c = 1.0 / (1.0 + exp(-1.7 * (z - t) / sqrt(v + CLOUD_FIELD_SOFT)));
-    return mix(share, c, fade);
 }
 
 // The share of the footprint the cloud fills where the billows' noise is
@@ -620,4 +567,33 @@ vec4 cloudCacheBand(vec2 xy, int k) {
 vec4 cloudCacheColumn(vec2 xy, int k) {
     return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(CL_CACHE_LEVELS + k)),
                       0.0);
+}
+
+// --- The layer seen from above (clouds.frag) -------------------------------------
+
+const float CL_LAYER_FROM = 0.025; // a pixel's footprint (of the deck's thickness) where the layer begins
+const float CL_LAYER_TO = 0.05;    // and where it is all
+const float CL_GLOBE_FROM = 1.0;   // the cache's cell (of the globe's texel) where the layer begins to read the globe
+const float CL_GLOBE_TO = 2.0;     // and where it reads the globe alone
+const float CL_GLOBE_CLOUDS_FROM = 0.3;   // a pixel's footprint (edges) where the layer begins to read the globe
+const float CL_GLOBE_CLOUDS_TO = 1.0;     // and where it reads it alone
+
+// The cache's level about footprint `foot` at chart point `xy`, as a
+// fraction: its whole part the finer of the two read (whose window holds
+// the point), the rest how far toward the coarser.
+float cloudCacheLod(vec2 xy, float foot) {
+    vec2 dn = abs(xy - clouds.cacheNadir.xy);
+    float far = max(dn.x, dn.y) / (CL_CACHE_MARGIN * CL_CACHE_TEXEL0);
+    return max(max(log2(max(foot, 1e-3) / CL_CACHE_TEXEL0), log2(max(far, 1e-6)) + 1.0), 0.0);
+}
+// The cell (m) the layer's column is read over at chart point `xy` for a
+// pixel of footprint `foot` (at the layer's level `lod`, cloudCacheLod):
+// the cache's there, toward the globe's as clouds.frag blends to it, and
+// how much it reads the globe (y).
+vec2 cloudLayerCell(float lod, float foot) {
+    int k = int(lod);
+    float cell = cloudCacheCell(min(k, CL_CACHE_LEVELS - 1)) * exp2(k < CL_CACHE_LEVELS ? fract(lod) : 1.0);
+    float globe = max(smoothstep(CL_GLOBE_FROM, CL_GLOBE_TO, cell / cloudGlobeTexel()),
+                      smoothstep(CL_GLOBE_CLOUDS_FROM, CL_GLOBE_CLOUDS_TO, foot / clouds.forms.w));
+    return vec2(mix(cell, cloudGlobeTexel(), globe), globe);
 }

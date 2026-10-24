@@ -10,7 +10,7 @@
 //                     its mips down to a texel)
 //     CL_B_DEPTH      the opaque depth (SceneTargets::depthSnapshot): the march
 //     CL_B_COVER_OUT  the cover, written by the bake (rgba16f storage)
-//     CL_B_SHADOW_OUT the shadow's levels, written (r32f storage, a level a layer)
+//     CL_B_SHADOW_OUT the shadow's levels, written (rgba32f storage, a level a layer)
 //     CL_B_LAND_GRID  the land's processes' grid (the bake's cloudLandGrid)
 //     CL_B_CACHE      the deck's cache about the eye, sampled (below): its
 //                     base and the depths toward the sun and up
@@ -81,7 +81,9 @@
 // The clouds' shadow on the land: CL_SHADOW_LEVELS square levels of
 // CL_SHADOW_SIDE texels on the plane tangent to the body under the eye,
 // level l's texel CL_SHADOW_TEXEL0 * CL_SHADOW_GROWTH^l metres (on that
-// plane), each texel what the deck leaves of the sun at the datum there.
+// plane), each texel what the deck leaves of the sun at the datum there
+// (x), how much the layer cuts the clumps over it from a far field's share
+// (y) and that share by y (z): sky/clouds_shadow.comp.
 #define CL_SHADOW_LEVELS    7
 #define CL_SHADOW_SIDE      256
 #define CL_SHADOW_TEXEL0    60.0

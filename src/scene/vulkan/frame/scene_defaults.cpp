@@ -45,7 +45,9 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     sampler = makeSampler(dev, 0.0f);
     cubeSampler = makeSampler(dev, 16.0f);
     nearestSampler = makeSampler(dev, 0.0f, VK_FILTER_NEAREST);
-    repeatSampler = makeSampler(dev, 0.0f, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    // (Its mips for the clouds' noise, lighting binding 25; the probe grid's
+    // images through it have none.)
+    repeatSampler = makeSampler(dev, VK_LOD_CLAMP_NONE, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     if (!sampler || !cubeSampler || !nearestSampler || !repeatSampler) {
         LOG_ERROR("SceneDefaults: Failed creating the default samplers");
         return false;

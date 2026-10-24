@@ -6,14 +6,17 @@
 // datum's point under it: the cache's depth toward the sun where the sun's
 // ray from there enters the deck (sky/clouds_light.comp), read at the level
 // as coarse as the texel, so a level holds a shadow as sharp as its texels
-// and no sharper, and the land is shadowed by what lights the clouds.
+// and no sharper, and the land is shadowed by what lights the clouds. And
+// where clouds.frag's layer cuts a far field's share into clumps over the
+// texel, how much and the share it cuts, so the land's shadow cuts the same
+// clumps at its own pixel (common/scene_lighting.glsl's sceneCloudSun).
 
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
 
 layout(local_size_x = CL_SHADOW_GROUP, local_size_y = CL_SHADOW_GROUP) in;
 
-layout(set = 0, binding = CL_B_SHADOW_OUT, r32f) uniform writeonly image2DArray shadowOut;
+layout(set = 0, binding = CL_B_SHADOW_OUT, rgba32f) uniform writeonly image2DArray shadowOut;   // x what is left of the sun, y the layer's cut there, z the share it cuts by y
 
 // Where a ray from inside a sphere of radius R about the centre leaves it.
 float cloudSphereOut(vec3 ro, vec3 rd, float R) {
@@ -31,7 +34,7 @@ void main() {
     float R = clouds.shell.z;
     vec3 d = normalize(clouds.shadowN.xyz * R + clouds.shadowE1.xyz * c.x + clouds.shadowE2.xyz * c.y);
     vec3 s = clouds.sun.xyz;
-    float T = 1.0;
+    float T = 1.0, fade = 0.0, share = 0.0;
     float mu = dot(d, s);
     if (mu > -0.05) {
         // Where the sun's ray enters the deck, on the chart.
@@ -48,6 +51,43 @@ void main() {
             float below = 0.5 * clouds.cacheE1.w / max(dot(up, normalize(cloudToBody(s))), 0.05);
             T = exp(-(tau + sigma * below));
         }
+        // How much clouds.frag's layer cuts its share into clumps over the
+        // deck the sun's ray crosses at its middle (cloudFieldFade, at the
+        // eye's pixel there): there the land's shadow is cut by the same
+        // field (scene_lighting.glsl's sceneCloudSun), so each clump's
+        // shadow lies under it.
+        vec3 eye = clouds.shadowN.xyz * clouds.shadowE2.w;
+        float thick = clouds.shell.y - clouds.shell.x;
+        if (clouds.shadowE2.w > clouds.shell.y) {
+            vec3 m = a + s * cloudSphereOut(a, s, 0.5 * (clouds.shell.x + clouds.shell.y));
+            vec3 top = normalize(m) * clouds.shell.y;
+            float dist = length(top - eye);
+            float foot = clouds.params.y * dist;
+            // (From where the layer begins, all of it half way to where the
+            // layer is all: the march's cut of the cache's shares it blends
+            // with there casts no shadow finer than the levels', so the
+            // field's clumps are the shadow both cast. Where the layer is
+            // not, none: the march's clouds cast the levels' alone.)
+            float wl = smoothstep(CL_LAYER_FROM, 0.5 * (CL_LAYER_FROM + CL_LAYER_TO), foot / thick);
+            float vs = abs(dot((top - eye) / dist, normalize(top)));
+            vec3 pb = cloudToBody(top);
+            vec2 xy = cloudChartAt(normalize(pb));
+            float lod = cloudCacheLod(xy, foot);
+            int kl = int(lod);
+            vec2 lc = cloudLayerCell(lod, foot);
+            fade = wl * cloudFieldFade(lc.x, foot / max(vs, 0.25));
+            if (fade > 0.0) {
+                // (The share the layer cuts: its column's, as it reads it.)
+                float globe = kl < CL_CACHE_LEVELS ? lc.y : 1.0;
+                vec4 col = vec4(0.0);
+                if (globe < 1.0) {
+                    col = cloudCacheColumn(xy, kl);
+                    if (kl + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(xy, kl + 1), fract(lod));
+                }
+                if (globe > 0.0) col = mix(col, cloudGlobeColumn(normalize(pb)), globe);
+                share = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);
+            }
+        }
     }
-    imageStore(shadowOut, ivec3(t, l), vec4(T));
+    imageStore(shadowOut, ivec3(t, l), vec4(T, fade, fade * share, 0.0));
 }

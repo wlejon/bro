@@ -48,6 +48,9 @@ struct CloudShadowGpu {
     vec4 n;        // xyz the plane's normal (the body's up under the eye)
     vec4 e1;       // xyz its first axis
     vec4 e2;       // xyz its second
+    vec4 toBody[3];   // the clouds' turn into the body's frame (rows)
+    vec4 drift;    // xyz what the wind has carried the forms (m, the body's frame), w a cloud's edge (m)
+    vec4 shell;    // x the deck's bottom radius, y its top's
 };
 
 layout(set = 1, binding = 0) uniform LightingUBO {
@@ -149,6 +152,16 @@ layout(set = 1, binding = 23) uniform texture2DArray landSunImage;
 // The cloud deck's shadow's levels (sky/clouds_layout.h; CloudShadowGpu
 // above says where they lie): a level a layer, what the deck leaves of the sun.
 layout(set = 1, binding = 24) uniform texture2DArray cloudShadowImage;
+// The clouds' noise (SceneClouds::noiseView), through binding 17's sampler
+// (it repeats): the field a far layer's share is cut into, for its shadow.
+// (Not where the includer reads the clouds' own: SCENE_NO_CLOUD_FIELD.)
+#ifndef SCENE_NO_CLOUD_FIELD
+layout(set = 1, binding = 25) uniform texture3D cloudNoiseImage;
+vec4 cloudFieldTex(vec3 x, float lod) {
+    return textureLod(sampler3D(cloudNoiseImage, probeGridSampler), x, lod);
+}
+#include "sky/cloud_field.glsl"
+#endif
 
 // Whether the pipeline was built for a frame with the atmosphere on (the
 // mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
@@ -172,7 +185,8 @@ float sceneCloudSun(vec3 pos) {
     vec2 c = lighting.cloudShadow.params.y * vec2(dot(d, lighting.cloudShadow.e1.xyz), dot(d, lighting.cloudShadow.e2.xyz)) / cn;
     const float S = float(CL_SHADOW_SIDE);
     float texel = lighting.cloudShadow.params.z;
-    float sun = 0.0, left = 1.0;
+    vec3 sun = vec3(0.0);
+    float left = 1.0;
     for (int l = 0; l < CL_SHADOW_LEVELS; ++l) {
         vec2 g = c / texel + 0.5 * S;
         texel *= lighting.cloudShadow.params.w;
@@ -182,11 +196,40 @@ float sceneCloudSun(vec3 pos) {
         // the same shadow at different sharpness, and a seam between them
         // would be a line across the land.)
         float w = left * clamp((edge - 1.0) / 48.0, 0.0, 1.0);
-        sun += w * textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3(g / S, float(l)), 0.0).r;
+        sun += w * textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3(g / S, float(l)), 0.0).rgb;
         left -= w;
         if (left <= 0.0) break;
     }
-    return sun + left;
+    float T = sun.x + left;
+#ifndef SCENE_NO_CLOUD_FIELD
+    // Where the clouds' layer cuts a far field's share into clumps (its
+    // cut's fade, y, and the share it cuts, z over y: the shadow's
+    // compute's, sky/clouds_shadow.comp), the shadow is the same cut: the
+    // field read where the sun's ray from here crosses the deck's middle,
+    // at the deck's top as the layer reads it, over this pixel's footprint,
+    // each clump leaving CLOUD_SHADOW_CORE of the sun.
+    const float CLOUD_SHADOW_CORE = 0.15;
+    float fade = sun.y;
+    if (fade > 1e-3) {
+        float share = clamp(sun.z / fade, 0.0, 1.0);
+        if (share > 0.0 && share < 1.0) {
+            vec3 p = atmOrigin(pos);
+            vec3 s = lighting.atm.sunDir.xyz;
+            float b = dot(p, s);
+            float Rm = 0.5 * (lighting.cloudShadow.shell.x + lighting.cloudShadow.shell.y);
+            vec3 m = p + s * (-b + sqrt(max(b * b - (dot(p, p) - Rm * Rm), 0.0)));
+            vec3 top = normalize(m) * lighting.cloudShadow.shell.y;
+            vec3 pd = vec3(dot(lighting.cloudShadow.toBody[0].xyz, top), dot(lighting.cloudShadow.toBody[1].xyz, top),
+                           dot(lighting.cloudShadow.toBody[2].xyz, top)) - lighting.cloudShadow.drift.xyz;
+            float dist = length(pos);
+            float vs = abs(dot(pos / max(dist, 1e-3), d));
+            float foot = lighting.shadowView.x * dist / max(vs, 0.25);
+            float c = cloudFieldCut(cloudFieldScore(pd, lighting.cloudShadow.drift.w, foot), cloudFieldThreshold(share));
+            T = mix(T, 1.0 - c * (1.0 - CLOUD_SHADOW_CORE), fade);
+        }
+    }
+#endif
+    return T;
 }
 
 // The sun's light at camera-relative `pos`, for a sun of 1 at the top of

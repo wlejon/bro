@@ -64,6 +64,9 @@ layout(location = 0) in vec3 inWorldDir;
 layout(location = 0) out vec4 outColor;
 
 #include "common/scene_camera.glsl"
+// (The clouds' field from their own noise, sky/scene_cloud_layer.glsl's;
+// the lighting's copy of it is for the land's shadow.)
+#define SCENE_NO_CLOUD_FIELD
 #include "common/scene_lighting.glsl"
 
 #define CLOUD_SET 2
@@ -97,12 +100,18 @@ const float CL_SUN_AGAIN_SEEN = 0.0;   // while more than this much of the view 
 const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least
 const float CL_OPAQUE = 0.02;    // what is left of a view that ends it
 const float CL_DETAIL_SEEN = 0.3;  // what must be left of a view for the detail to show in it
-const float CL_LAYER_FROM = 0.025; // a pixel's footprint (of the deck's thickness) where the layer begins
-const float CL_LAYER_TO = 0.05;    // and where it is all
-const float CL_GLOBE_FROM = 1.0;   // the cache's cell (of the globe's texel) where the layer begins to read the globe
-const float CL_GLOBE_TO = 2.0;     // and where it reads the globe alone
-const float CL_GLOBE_CLOUDS_FROM = 0.3;   // a pixel's footprint (edges) where the layer begins to read the globe
-const float CL_GLOBE_CLOUDS_TO = 1.0;     // and where it reads it alone
+// (The layer's: CL_LAYER_FROM .. TO, CL_GLOBE_*, sky/scene_cloud_layer.glsl.)
+// A far field's clumps lit as relief (cloudFieldScore over its threshold a
+// height, CL_FIELD_RELIEF of the deck's thickness a unit of the score, its
+// slope toward the sun read CL_FIELD_SUN_STEP footprints sunward), greyer
+// toward their thin rims (CL_FIELD_RIM at the rim, all of it CL_FIELD_CORE
+// of the score in), the whole CL_FIELD_KEEP so the field's mean holds.
+const float CL_FIELD_RELIEF = 0.7;
+const float CL_FIELD_SUN_STEP = 2.0;
+const float CL_FIELD_LIT = 0.6;
+const float CL_FIELD_RIM = 0.55;
+const float CL_FIELD_CORE = 1.5;
+const float CL_FIELD_KEEP = 1.6;
 
 // What the march is doing.
 // The sky's and the ground's light a cloud scatters, of their irradiance:
@@ -137,11 +146,7 @@ ClAt clAt(vec3 a) {
 // The cache's level about footprint `foot` at `w`, as a fraction: its
 // whole part the finer of the two read (whose window holds the point), the
 // rest how far toward the coarser.
-float clLod(ClAt w, float foot) {
-    vec2 dn = abs(w.xy - clouds.cacheNadir.xy);
-    float far = max(dn.x, dn.y) / (CL_CACHE_MARGIN * CL_CACHE_TEXEL0);
-    return max(max(log2(max(foot, 1e-3) / CL_CACHE_TEXEL0), log2(max(far, 1e-6)) + 1.0), 0.0);
-}
+float clLod(ClAt w, float foot) { return cloudCacheLod(w.xy, foot); }
 
 // The cache at `w`, blended over the two levels about `lod` (none past the
 // coarsest).
@@ -452,18 +457,14 @@ void main() {
         // the clouds, CL_GLOBE_CLOUDS_FROM .. TO edges, so it is the share
         // they cover, never the cache's cut of a share into clouds a few
         // of its cells wide.)
-        float footCell = cloudCacheCell(min(k, CL_CACHE_LEVELS - 1)) * exp2(k < CL_CACHE_LEVELS ? fract(lod) : 1.0);
-        float globe = max(smoothstep(CL_GLOBE_FROM, CL_GLOBE_TO, footCell / cloudGlobeTexel()),
-                          smoothstep(CL_GLOBE_CLOUDS_FROM, CL_GLOBE_CLOUDS_TO, pixel * q.x / clouds.forms.w));
+        vec2 lc = cloudLayerCell(lod, pixel * q.x);
+        float footCell = lc.x, globe = lc.y;
         vec4 col = vec4(0.0);
         if (globe < 1.0) {
             col = cloudCacheColumn(w.xy, k);
             if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
         }
-        if (globe > 0.0) {
-            col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);
-            footCell = mix(footCell, cloudGlobeTexel(), globe);
-        }
+        if (globe > 0.0) col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);
         float len = q.y - q.x;
         // (The cell's mean cut to the pixel: as much more or less as the
         // billows fill of the pixel's footprint than of the cell's, at the
@@ -491,8 +492,33 @@ void main() {
         // (That share, of a cell far wider than the pixel, cut into clouds
         // at the pixel by the engine's field, cloudFieldShare: its footprint
         // the pixel's along the ground, stretched by the slant.)
-        float vs = abs(dot(rd, normalize(ro + rd * q.x)));
-        cv = cloudFieldShare(cloudDrift(w.p), cv, footCell, pixel * q.x / max(vs, 0.25));
+        // Its clumps lit as relief: the score over the threshold their
+        // height, its slope toward the sun from a second read sunward
+        // (lit on the sun's side, shaded and self-shadowed on the far one),
+        // greyer toward their thin rims.
+        vec3 upq = normalize(ro + rd * q.x);
+        float vs = abs(dot(rd, upq));
+        float footV = pixel * q.x / max(vs, 0.25);
+        float fieldShade = 1.0;
+        float fade = cloudFieldFade(footCell, footV);
+        if (fade > 0.0 && cv > 0.0 && cv < 1.0) {
+            vec3 pd = cloudDrift(w.p);
+            vec2 zv = cloudFieldScore(pd, clouds.forms.w, footV);
+            float th = cloudFieldThreshold(cv);
+            cv = mix(cv, cloudFieldCut(zv, th), fade);
+            float sinE = dot(upq, s);
+            vec3 st = s - upq * sinE;
+            float cosE = length(st);
+            float ds = CL_FIELD_SUN_STEP * footV;
+            float z2 = cosE > 1e-3 ? cloudFieldScore(pd + cloudToBody(st / cosE) * ds, clouds.forms.w, footV).x : zv.x;
+            float h = max(zv.x - th, 0.0);
+            float slope = CL_FIELD_RELIEF * thick * (max(z2 - th, 0.0) - h) / ds;
+            // (Its light over a flat top's, odd in the slope, so a field's
+            // sun and lee sides average to the flat top's.)
+            float lit = 1.0 + CL_FIELD_LIT * tanh(-slope * cosE / max(sinE, 0.15));
+            float tone = mix(CL_FIELD_RIM, 1.0, smoothstep(0.0, CL_FIELD_CORE, h));
+            fieldShade = mix(1.0, lit * tone * CL_FIELD_KEEP, fade);
+        }
         float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
         if (tauView < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
@@ -505,7 +531,7 @@ void main() {
         // (The powder's depth the column's own: what it sends comes from
         // cloud as deep as it is, however thin the view's mean. An opaque
         // top's lumps lit from the side, clTopShade.)
-        float shade = mix(1.0, clTopShade(pl, s, pixel * at), smoothstep(1.0, 3.0, tauView));
+        float shade = mix(1.0, clTopShade(pl, s, pixel * at), smoothstep(1.0, 3.0, tauView)) * fieldShade;
         clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.w, s, nu, ph, albedo, E * shade,
                     skyAbove, groundBelow);
         dbgLCol = col;

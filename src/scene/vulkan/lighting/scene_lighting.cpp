@@ -189,6 +189,8 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     writer.writeImage(24, gpu.clouds.shadowView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                       VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+    writer.writeImage(25, gpu.clouds.noiseView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);

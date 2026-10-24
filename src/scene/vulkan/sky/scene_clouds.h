@@ -97,6 +97,9 @@ public:
     /// binding 24.
     void fill(CloudShadowGpu& out) const { out = shadowBlock_; }
     VkImageView shadowView() const;
+    /// The lighting set's binding 25: the engine's noise (a 3D stand-in,
+    /// never read, while there are no shadows or no noise yet).
+    VkImageView noiseView() const;
 
     /// The noise (once), the cover (when it is to be baked) and the
     /// shadow's levels, into the graphics stream outside any rendering,
@@ -177,7 +180,7 @@ private:
         bool made = false;
     } noise_;
     SceneVkImage cover_, shadow_;
-    SceneVkImage coverNone_, shadowNone_, gridNone_;
+    SceneVkImage coverNone_, shadowNone_, noiseNone_, gridNone_;
     SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_, cacheHolds_;
     SceneVkImage globe_;
     // The deck the globe holds (its module, generation; 0 none), the wind's

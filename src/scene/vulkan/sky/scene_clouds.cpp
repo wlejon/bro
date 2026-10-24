@@ -32,7 +32,7 @@ constexpr VkFormat kCacheFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kSigmaFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kDistFormat = VK_FORMAT_R16_SFLOAT;
 constexpr VkFormat kCoverFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;
+constexpr VkFormat kShadowFormat = VK_FORMAT_R32G32B32A32_SFLOAT;   // what is left of the sun, the layer's cut, its share
 constexpr VkFormat kGridFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 // (Half floats: the mips' variance, E[x^2] - E[x]^2, is a small difference.)
 constexpr VkFormat kNoiseFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -126,7 +126,8 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_ || !lightPipeline_ ||
         !distPipeline_ ||
         !shadowPipeline_ || !noiseSampler_ || !coverSampler_ || !cacheSampler_ ||
-        !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1)) {
+        !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1) ||
+        !gpu.allocator.createStorageImage(2, 2, 2, kNoiseFormat, noiseNone_, false, 0)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' pipelines");
         return false;
     }
@@ -150,7 +151,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     cacheBaked_ = false;
     cachePending_ = 0;
     for (SceneVkImage* i :
-         {&cover_, &shadow_, &coverNone_, &shadowNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
+         {&cover_, &shadow_, &coverNone_, &shadowNone_, &noiseNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
           &distB_, &cacheHolds_, &globe_})
         if (i->isValid()) gpu.allocator.destroyImage(*i);
     globeKey_ = 0;
@@ -188,6 +189,9 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
 }
 
 VkImageView SceneClouds::shadowView() const { return shadowsOn_ && shadow_.isValid() ? shadow_.view : shadowNone_.view; }
+VkImageView SceneClouds::noiseView() const {
+    return shadowsOn_ && noise_.made && noise_.sampled ? noise_.sampled : noiseNone_.view;
+}
 
 namespace {
 
@@ -424,11 +428,20 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     }
     block_.shadowN[3] = CL_SHADOW_GROWTH;
     block_.shadowE1[3] = CL_SHADOW_TEXEL0;
+    block_.shadowE2[3] = el;
     shadowsOn_ = c.shadows;
     shadowBlock_.params[0] = shadowsOn_ ? 1.0f : 0.0f;
     shadowBlock_.params[1] = R;
     shadowBlock_.params[2] = CL_SHADOW_TEXEL0;
     shadowBlock_.params[3] = CL_SHADOW_GROWTH;
+    // The layer's field, for the cut of its clumps' shadows.
+    for (int i = 0; i < 3; ++i) {
+        for (int k = 0; k < 4; ++k) shadowBlock_.toBody[i][k] = block_.toBody[i][k];
+        shadowBlock_.drift[i] = block_.wind[i] * block_.shell[3];
+    }
+    shadowBlock_.drift[3] = block_.forms[3];
+    shadowBlock_.shell[0] = block_.shell[0];
+    shadowBlock_.shell[1] = block_.shell[1];
     placeCache(frame);
 }
 

@@ -68,6 +68,7 @@
 #include "land_region_dispatch.glsl.src.h"
 #include "land_region.comp.src.h"
 #include "clouds_layout.h.src.h"
+#include "cloud_field.glsl.src.h"
 #include "scene_cloud_layer.glsl.src.h"
 #include "cloud_module.glsl.src.h"
 #include "clouds_cover.comp.src.h"
@@ -201,6 +202,7 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_region_layer.glsl", kVkLandRegionLayerSrc},
         {"ground/land_region_dispatch.glsl", kVkLandRegionDispatchSrc},
         {"sky/clouds_layout.h", kVkCloudsLayoutSrc},
+        {"sky/cloud_field.glsl", kVkCloudFieldSrc},
         {"sky/scene_cloud_layer.glsl", kVkSceneCloudLayerSrc},
         {"sky/cloud_module.glsl", kVkCloudModuleSrc},
         // The built-in shaders compileBuiltinWith builds.
