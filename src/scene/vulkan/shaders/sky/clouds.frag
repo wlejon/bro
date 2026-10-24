@@ -486,6 +486,7 @@ void main() {
     int halvings = 0;
     float len = 0.0;         // inside: the next piece's length
     float clearAt = -1.0, clearFace = 0.0;   // the last clear sample, and the forms' field there
+    bool clearLazy = false;                  // (that field not read yet)
     float fLo = 0.0, fHi = 0.0;             // the field at the face's bounds (fLo 0: not known)
     int side = 0;                            // which bound the last halving moved
     int faces = 0;           // faces halved for
@@ -584,12 +585,23 @@ void main() {
                 continue;
             }
             // In a cloud's skin: the forms here, crossed a few pixels at a
-            // time while they hold none.
+            // time while they hold none. (Where the base's bound already
+            // says the point is clear, dB > 0, the forms there hold none
+            // whatever the skin does: their field is read only if the next
+            // sample meets a face, for its false position.)
+            if (dB > 0.0) {
+                ++dbgSkin;
+                clearAt = xPrev = t;
+                clearLazy = true;
+                t += skin;
+                continue;
+            }
             ClForms f = clFormsAt(w, lod, foot, foot, m.T > CL_DETAIL_SEEN);
             if (f.sigma <= 0.0) ++dbgSkin; else ++dbgIn;
             if (f.sigma <= 0.0) {
                 clearAt = xPrev = t;
                 clearFace = f.face;
+                clearLazy = false;
                 t += skin;
                 continue;
             }
@@ -597,6 +609,12 @@ void main() {
             // point and here.
             hLo = max(xPrev, sp.x);
             hHi = t;
+            if (hLo == clearAt && clearLazy) {
+                ClAt wc = clAt(ro + rd * clearAt);
+                float fc = pixel * clearAt;
+                clearFace = clFormsAt(wc, clLod(wc, fc), fc, fc, m.T > CL_DETAIL_SEEN).face;
+                clearLazy = false;
+            }
             fLo = hLo == clearAt ? clearFace : 0.0;
             fHi = f.face;
             halvings = faces < CL_FACES
@@ -662,6 +680,7 @@ void main() {
             // Out of the cloud: traced on from here.
             clearAt = t = xPrev = x;
             clearFace = f.face;
+            clearLazy = false;
             mode = CL_TRACE;
             tFace = -1.0;
             continue;
