@@ -280,20 +280,70 @@ float cloudSurfaceBlur(float footprint) {
 float cloudSurfaceBlurMost(float footprint) {
     return min(cloudBlur(footprint) + CLOUD_SKIN_BLUR, 1.0);
 }
+// A turret of the cauliflower from Worley's 1 - F1 `v` (the noise's y or
+// z): a dome over its cell, 1 at the cell's heart falling ever faster to 0
+// at its rim, so neighbouring turrets meet in a sharp crease, not a soft
+// trough (1 - F1 itself is a cone; its mean as a surface is soft bumps).
+// Its slope (of `v`) as `dv`: the dome is a circle's eased by
+// CLOUD_TURRET_EASE, so it meets its rim at a slope of about eight, not
+// upright (an upright wall moves the surface by a whole turret within a
+// pixel, however fine, and its silhouette steps from pixel to pixel).
+const float CLOUD_TURRET_EASE = 0.05;
+float cloudTurret(float v, out float dv) {
+    float f = (1.0 - v) * 1.45;
+    float r0 = sqrt(CLOUD_TURRET_EASE);
+    float r = sqrt(max(1.0 - f * f, 0.0) + CLOUD_TURRET_EASE);
+    float k = 1.0 / (sqrt(1.0 + CLOUD_TURRET_EASE) - r0);
+    dv = f < 1.0 ? k * 1.45 * max(f, 0.0) / r : 0.0;
+    return (r - r0) * k;
+}
+// How much Worley's 1 - F1 (two finer octaves, 0.625 + 0.25 + 0.125)
+// changes at most a metre, for cells `cell` metres wide.
+float cloudWorleySlope(float cell) { return 1.625 / cell; }
 // The skin's move of the surface (of the base, -CLOUD_SKIN .. 0.55
 // CLOUD_SKIN, `amp` of it: cloudSkinAt and how much the world lets it
 // move there) from the noises `n` (cloudBillows) and `e` (cloudDetail, read
 // where `wD`, cloudDetailAt, is above zero), `inCloud` the height within the
 // cloud's column (0 its base .. 1 its top: the detail's wisps under,
-// cauliflower over).
-float cloudSkinOf(vec4 n, vec4 e, float wD, float inCloud, float amp) {
-    float s = 0.55 * clamp(2.5 * (n.x - 0.5), -1.0, 1.0);
+// cauliflower over). The cauliflower is turrets on three scales, each a
+// dome on Worley's cells (the billows' cells, a quarter of their tile, and
+// the detail's at a quarter and an eighth of its), the larger ones
+// carrying the smaller, deep creases between them where the sun does not
+// reach; the billows' Perlin-Worley only the walls' slow heave. The most
+// the turrets move it a metre (of the base) as `slope`: the surface's blur
+// takes it in, so where they make the surface steeper than the base, its
+// edge still ramps over the footprint (cloudSkinBlur).
+float cloudSkinOf(vec4 n, vec4 e, float wD, float inCloud, float amp, out float slope) {
+    float s = 0.3 * clamp(2.5 * (n.x - 0.5), -1.0, 1.0);
+    float dy, dz, dn;
+    float c = 0.5 * cloudTurret(n.y, dn), cw = 0.5;
+    float dc = 0.5 * dn * cloudWorleySlope(0.25 * clouds.forms.y);
+    float under = 0.0;
     if (wD > 0.0) {
-        float fine = e.y * 0.6 + e.z * 0.4;
-        s -= 0.45 * wD * mix(1.0 - fine, fine, smoothstep(0.0, 0.2, inCloud));
+        c += wD * (0.3 * cloudTurret(e.y, dy) + 0.2 * cloudTurret(e.z, dz));
+        dc += wD * (0.3 * dy * cloudWorleySlope(0.25 * clouds.forms.z) +
+                    0.2 * dz * cloudWorleySlope(0.125 * clouds.forms.z));
+        cw += 0.5 * wD;
+        under = -0.45 * wD * (1.0 - (e.y * 0.6 + e.z * 0.4));
     }
-    return CLOUD_SKIN * s * amp;
+    // (The turrets from just over the base up, their creases cut in from
+    // there but their domes pushed out only higher: low on the wall none
+    // hangs over the flat base like a drip, and the wall is never a smooth
+    // rounded band under them.)
+    float top = 0.5 * smoothstep(0.1, 0.4, inCloud);
+    float cauli = mix(-0.85, top, c / cw);
+    float up = smoothstep(0.03, 0.2, inCloud);
+    s += mix(under, cauli, up);
+    slope = CLOUD_SKIN * amp * up * (top + 0.85) * dc / cw;
+    return CLOUD_SKIN * clamp(s, -1.0, 0.55) * amp;
 }
+float cloudSkinOf(vec4 n, vec4 e, float wD, float inCloud, float amp) {
+    float slope;
+    return cloudSkinOf(n, e, wD, inCloud, amp, slope);
+}
+// The blur the skin's `slope` (cloudSkinOf) adds over `footprint`: the
+// surface's move across it.
+float cloudSkinBlur(float slope, float footprint) { return slope * footprint; }
 // The forms' field at base `base` with the skin's move `skin`, blurred by
 // `w` (cloudBlur): positive in cloud, its surface at -w/2, the share of
 // the footprint the cloud fills 0.5 + field / w.
@@ -390,16 +440,23 @@ float cloudFormsShare(vec4 n, float base, float footprint) {
 // cloud's edge where that is shorter, the least a cloud's size; a view
 // crosses one cloud or the gap beside it in that length, whatever the
 // footprint, so a field reads as opaque from afar as its clouds cover.)
-float cloudSigmaOf(float base, float skin, float w, float footprint) {
+// (`ramp`, w or more, how wide the share's ramp is across the surface, in
+// from its outer edge at -w/2: the field's span over the footprint where
+// the skin is steeper than the base. In, so the surface reaches out no
+// further than w says, as the march's bounds take it: clBaseClear.)
+float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
     if (base <= 0.0) return 0.0;
     float v = cloudFieldOf(base, skin, w);
-    float share = clamp(0.5 + v / w, 0.0, 1.0);
+    float share = clamp((v + 0.5 * w) / ramp, 0.0, 1.0);
     if (share <= 0.0) return 0.0;
     float heart = clouds.forms.x;
     float near = heart * share * mix(0.35, 1.0, smoothstep(0.0, CLOUD_SKIN, v));
     float L = clamp(footprint, 20.0, clouds.forms.w);
     float through = 1.0 - share * (1.0 - exp(-heart * L));
     return mix(near, -log(max(through, 1e-4)) / L, w);
+}
+float cloudSigmaOf(float base, float skin, float w, float footprint) {
+    return cloudSigmaOf(base, skin, w, footprint, w);
 }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
     return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud, cloudSkinAt(footprint)), cloudSurfaceBlur(footprint), footprint);
