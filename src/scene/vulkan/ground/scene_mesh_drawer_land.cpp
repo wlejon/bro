@@ -70,7 +70,8 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     }
     // The fills run as a compute dispatch inside the frame's graphics
     // stream: they are read by the turf's fills and the frame's draws.
-    if (landKind_ < 0) landKind_ = gpu.world.addKind(this, {"land", WorldSchedule::Raster, 0.01f});
+    if (landKind_ < 0)
+        landKind_ = gpu.world.addKind(this, {"land", WorldSchedule::Raster, 0.01f, false, /*catchUp=*/true});
     if (landKind_ < 0) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's fills");
         return false;
@@ -78,9 +79,16 @@ bool SceneMeshDrawer::setupLand(SceneGpu& gpu) {
     if (!landProcesses_.setup(gpu) || !landRegions_.setup(gpu) || !setupLandHorizon(gpu) || !setupLandSun(gpu))
         return false;
     // The regions' dispatches, recorded after the fills (which read only
-    // regions made in earlier frames) and timed apart from them.
-    if (regionsKind_ < 0) regionsKind_ = gpu.world.addKind(this, {"land regions", WorldSchedule::Raster, 0.05f});
-    if (regionsKind_ < 0) {
+    // regions made in earlier frames) and timed apart from them: a kind for
+    // each of a batch's steps (its init's bands, its passes, its finish),
+    // since they cost unlike and each is priced by its own spans. A job's
+    // units are the batch's regions.
+    const auto regionKind = [&](int& kind, const char* name, float cost) {
+        if (kind < 0) kind = gpu.world.addKind(this, {name, WorldSchedule::Raster, cost, false, /*catchUp=*/true});
+        return kind >= 0;
+    };
+    if (!regionKind(regionsKind_, "land regions", 0.03f) || !regionKind(regionInitsKind_, "land region inits", 0.1f) ||
+        !regionKind(regionFinishesKind_, "land region finishes", 0.05f)) {
         LOG_ERROR("SceneMeshDrawer: the world service has no room for the land's regions");
         return false;
     }
@@ -401,8 +409,10 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // Then its regions about the eye (a region in moves its items), their
         // steps a job each.
         const SceneLandRegions::Offer ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
+        const int rk = regionKindOf(ro.step);
         for (int k = 0; k < ro.steps; ++k)
-            service.offer({static_cast<uint64_t>(k), id, regionsKind_, ro.error, 0.0, k < ro.required});
+            service.offer(
+                {static_cast<uint64_t>(k), id, rk, ro.error, 0.0, k < ro.required, static_cast<double>(ro.regions)});
         if (!lt.grid || !land->ready()) continue;
 
         // A new module, extent or rings: every tile again, over its items;
@@ -636,7 +646,17 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
     return recorded;
 }
 
-uint32_t SceneMeshDrawer::recordLandRegions(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream) {
+int SceneMeshDrawer::regionKindOf(SceneLandRegions::Step step) const {
+    switch (step) {
+        case SceneLandRegions::Step::Init: return regionInitsKind_;
+        case SceneLandRegions::Step::Finish: return regionFinishesKind_;
+        case SceneLandRegions::Step::Pass: break;
+    }
+    return regionsKind_;
+}
+
+uint32_t SceneMeshDrawer::recordLandRegions(SceneFrame& frame, SceneLandRegions::Step step,
+                                            std::span<const WorldJob> granted, WorldStream& stream) {
     std::unordered_map<uint32_t, int> budget;
     for (const WorldJob& j : granted) ++budget[j.producer];
     uint32_t recorded = 0;
@@ -645,7 +665,7 @@ uint32_t SceneMeshDrawer::recordLandRegions(SceneFrame& frame, std::span<const W
         SceneNode* node = frame.graph.findById(id);
         LandNode* land = node && node->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(node)->asLand() : nullptr;
         if (found == lands_.end() || !land) continue;
-        recorded += static_cast<uint32_t>(landRegions_.run(frame, *land, found->second->grid, stream.cmd(), n));
+        recorded += static_cast<uint32_t>(landRegions_.run(frame, *land, found->second->grid, stream.cmd(), step, n));
     }
     return recorded;
 }

@@ -475,10 +475,14 @@ private:
     VkDescriptorSetLayout landFillSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout landFillLayout_ = VK_NULL_HANDLE;
     int landKind_ = -1;   // the land's fills, a world service job kind
-    /// The lands' regions' dispatches (a job each, granted as the budget
-    /// holds), recorded into the frame's graphics stream.
-    uint32_t recordLandRegions(SceneFrame& frame, std::span<const WorldJob> granted, WorldStream& stream);
-    int regionsKind_ = -1;
+    /// The lands' regions' steps of kind `step` (a job each, granted as the
+    /// budget holds), recorded into the frame's graphics stream.
+    uint32_t recordLandRegions(SceneFrame& frame, SceneLandRegions::Step step, std::span<const WorldJob> granted,
+                               WorldStream& stream);
+    int regionKindOf(SceneLandRegions::Step step) const;
+    int regionsKind_ = -1;          // a batch's passes
+    int regionInitsKind_ = -1;      // its init's bands
+    int regionFinishesKind_ = -1;   // its finish (copies and read-backs)
     std::vector<uint32_t> landDrawn_;     // the land nodes prepared this frame
     std::vector<uint32_t> landOffered_;   // those whose tiles offer() updated this frame
     /// The land's horizon (scene_world_horizon.h): made from the first land

@@ -638,6 +638,22 @@ tiles it wants) and gives up its own budget.
   the land's sun levels made about the meadow shading it for 20 of them,
   and a still a second in caught a straight-edged lit field where, settled,
   the trees shade it; settling, it is five frames.
+- **Catch-up.** A kind may be a catch-up kind (`WorldJobKind::catchUp`:
+  the land's tiles and its regions' three kinds, whose work missing is the
+  ground under the eye wrong and the plants on it waiting). While one
+  leaves work worse than 2 px queued, the frames fill to 1.4 times the
+  target rather than the target, their need is the most over the last 120
+  timed frames rather than four (the frame's own spikes, a plant page
+  placed or a pipeline compiled, come every few dozen frames, and the
+  ceiling stacked on one ran a frame to 8.5 ms), and their frames over the
+  target leave the headroom alone. Spent from the target's slack alone,
+  the planet's ground (its frame 1.9–2.4 ms of 2.78) had the floor every
+  frame, and its 55 regions and their tiles took some 18,000 frames. A
+  frame catching up never spends less than keeping up would (the target
+  less the last four frames' need): where the spikes reach most of the
+  ceiling, as at the planet's region view, the long window alone held the
+  budget to 0.5 ms where keeping up spent 1.55, and the regions came in
+  slower than before the rule.
 - **The executor** (`vulkan/world/scene_world_service.h`, run by the
   `world-service` pass at the frame's head) feeds the policy the GPU
   timer's frames, collects the producers' offers, and runs each kind's
@@ -1690,18 +1706,30 @@ field is evaluated at is **split**: an integer part and a float fraction.
   2D-array image of slots (`keep` layers a slot), an open-addressed hash
   table of region keys to slots in device memory (rewritten only when its
   entries change), and the regions' channel 0 read back for the CPU as the
-  global grid's is. A region is a run of steps: its init in 16 bands of
-  rows, each pass one dispatch, and a finish (the copy into its slot and
-  the readback); the fills read the regions through the same table.
-- **Streaming is a world-service kind** ("land regions"): the wanted
-  regions are those whose ground comes within `reach` steps of the ground
-  under the eye (a disc, over a face's edges and corners) at every
-  level whose cell is at least a pixel from the eye's height, coarser
-  first, nearer first; up to 24 steps are offered a frame (two required
-  once the land is warm, the rest budgeted by error, cell × focal /
-  height), all of them while it warms. A region's steps are a few tens of
-  microseconds each, so a region arriving is spread over frames with no
-  hitch. Two scheduling fixes came with it, general to every kind: each
+  global grid's is. Regions are made a BATCH at a time, up to four of one
+  level (a level reads only coarser ones, so they are independent), each
+  in its own pair of run images: a batch is a run of steps, its init in 16
+  bands of rows, each pass iteration, and a finish (the copies into its
+  slots and the readbacks), each step dispatched over every region of the
+  batch before its one barrier. A 512² pass over one region is mostly that
+  barrier's drain, so a batch of four costs little more than one, and each
+  region's results are the same bit for bit as made alone. The fills read
+  the regions through the same table.
+- **Streaming is three world-service kinds** ("land region inits", "land
+  regions" for the passes, "land region finishes"): a band of the init
+  (the world's noise) costs several passes and the finish is copies, so
+  priced as one kind a grant was not what it spent. A frame offers the
+  batch's next kind of step only, a job a step whose units are the batch's
+  regions. The wanted regions are those whose ground comes within `reach`
+  steps of the ground under the eye (a disc, over a face's edges and
+  corners) at every level whose cell is at least a pixel from the eye's
+  height, coarser first, nearer first; up to 128 steps are offered a
+  frame (once the land is warm two passes, an init band or the finish
+  required, the rest budgeted by error, cell × focal / height), all of
+  them while it warms. A region in makes again only the tiles over it that
+  read it: those within its level's presence disc (its outer radius and a
+  margin of two items), the rest made again by the disc's fade when it
+  grows over them. Two scheduling fixes came with it, general to every kind: each
   kind's first job ranks ahead of every other kind's rest (one kind's
   endless cheap offers — shadow pages — no longer starve the rest), and a
   kind granted nothing for `starveFrames` (2) frames gets its first job

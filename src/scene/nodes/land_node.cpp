@@ -131,7 +131,7 @@ std::string LandNode::regionDispatch() const {
     return s;
 }
 
-void LandNode::regionChanged(const LandRegionKey& key) {
+void LandNode::regionChanged(const LandRegionKey& key, const LandRegionCentre& centre) {
     if (!lattice_.config.active() || items_.empty() || itemCells_ <= 0) return;
     const double cell = lattice_.config.cellOf(key.level);
     const double side = lattice_.config.cells * cell;
@@ -139,6 +139,23 @@ void LandNode::regionChanged(const LandRegionKey& key) {
     const double half = round() ? faceHalf(place_->body()) : static_cast<double>(extent_);
     const double item = 2.0 * half / itemCells_;
     const uint64_t g = generation_ ^ (++itemBumps_ * 0x9e3779b97f4a7c15ull);
+    // Where the level is read: past its centre's outer radius (with a
+    // margin for a tile's border and normals) no texel reads the region, so
+    // its items there keep their tiles (when the disc grows over them, its
+    // fade stales them, regionFadeChanged). Compared as chords on a round
+    // body. (Each region streamed in at a disc's edge re-filled the hundred
+    // and more tiles over it, though none of them read it yet.)
+    const double reach = centre.outer + 2.0 * item;
+    const double R = round() ? place_->body().radius : 0.0;
+    const double chordReach = round() ? 2.0 * std::sin(std::min(reach / (2.0 * R), 1.5707963267948966)) : reach;
+    const auto read = [&](const double* d, double x, double z) {
+        if (!centre.active) return true;
+        if (round()) {
+            const double a = d[0] - centre.at.dir[0], b = d[1] - centre.at.dir[1], c = d[2] - centre.at.dir[2];
+            return a * a + b * b + c * c <= chordReach * chordReach;
+        }
+        return std::hypot(x - centre.at.x, z - centre.at.z) <= reach;
+    };
     // The items under the region, a margin of one item round it (a tile's
     // border and its normals read past its edge): its ground sampled every
     // half item, each sample's item moved on (on a round body the sample's own
@@ -150,9 +167,10 @@ void LandNode::regionChanged(const LandRegionKey& key) {
             const double x = x0 - item + a * 0.5 * item, z = z0 - item + b * 0.5 * item;
             int root = 0;
             double cx = x, cz = z;
+            double d[3] = {0.0, 0.0, 0.0};
+            if (round()) dirOf(place_->body(), {key.root, x, z}, d);
+            if (!read(d, x, z)) continue;
             if (round()) {
-                double d[3];
-                dirOf(place_->body(), {key.root, x, z}, d);
                 const ChartPoint p = chartOf(place_->body(), d);
                 root = p.root;
                 cx = p.x;

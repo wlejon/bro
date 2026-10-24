@@ -68,6 +68,27 @@
 // target takes the budget to the floor until one comes in under it. Before any frame is read
 // (or on a device that cannot time its frames) the budget is the floor.
 //
+// Catch-up. A kind may be a catch-up kind (WorldJobKind::catchUp: the
+// land's tiles and regional grids, whose work missing is the ground itself
+// wrong under the eye, and the plants placed on it waiting). While a frame
+// leaves such a kind's work worse than catchUpError queued, the next frames
+// fill to a ceiling of catchUpRatio times the target instead of the target
+// (over that ceiling, the floor), and their frames over the target do not
+// move the headroom. Spent from the target's slack alone, a view whose own
+// frame stood near the target (the planet's ground, 2.2 ms of 2.78) had the
+// floor every frame: a tile and two of a region's hundreds of steps a frame,
+// its 55 regions and their tiles some 18,000 frames in coming. While behind,
+// the need is the largest over the last catchUpWindow frames rather than
+// `window`: the frame's own spikes (a plant page placed, a pipeline
+// compiled) come every few dozen frames, between the short window's, and
+// the ceiling stacked on one ran a frame to 8.5 ms. Catching up never
+// spends less than keeping up would (the target less the short window's
+// need): where the spikes reach most of the ceiling, the long window alone
+// gave less than that, and a view's regions came slower behind than in
+// step (the planet's region view, 0.5 ms a frame for 1.55). A catch-up kind whose
+// steps cost unlike (a region's init bands, its passes, its finish) is
+// several kinds, each priced by its own spans, so a grant is what it spends.
+//
 // A cut (cut(): the view jumped) forgets the slack, since a frame's cost is
 // its view's and the old view's says nothing of the new one's, and lets the
 // new view settle: its budget is at least settleMs until it has left
@@ -97,6 +118,7 @@
 // that grants them, the next frame's grants came on top of its own budget:
 // a frame drew the pages granted it last frame and spent its budget again.)
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -114,6 +136,7 @@ struct WorldJobKind {
     WorldSchedule schedule = WorldSchedule::Raster;
     float costMs = 0.05f;   // one unit's GPU ms until measured
     bool nextFrame = false;   // its grants are drawn the next frame (see Budget)
+    bool catchUp = false;     // its work queued past catchUpError lifts the frame's ceiling (see Catch-up)
 };
 
 /// A job a producer offers this frame.
@@ -139,6 +162,9 @@ struct WorldServiceConfig {
     float settleError = 1.0f;   // a cut has settled when nothing worse than this (pixels) is left queued
     int settleQuiet = 4;        // for this many frames running (what the frames in flight read back)
     int settleFrames = 30;      // and has settled, whatever is left, after this many frames
+    float catchUpRatio = 1.4f;   // while a catch-up kind is behind, the frame's ceiling is the target times this
+    float catchUpError = 2.0f;   // a catch-up kind is behind while it left work worse than this (pixels) queued
+    int catchUpWindow = 120;     // frames whose need sets the slack while behind (see Catch-up)
     int starveFrames = 2;     // a kind granted nothing this many frames running has its first job granted
     float starveDecay = 0.8f; // and its cost times this each frame more it is not (until one is)
 };
@@ -163,11 +189,12 @@ struct WorldServiceStats {
     uint32_t granted = 0;
     uint32_t queued = 0;      // offered and left for a later frame
     float worstError = 0.0f;  // the largest error left queued, pixels (0: none)
+    bool catchingUp = false;  // a catch-up kind was left behind: the next frame spends under the catch-up ceiling
 };
 
 class WorldService {
 public:
-    static constexpr int kMaxKinds = 12;
+    static constexpr int kMaxKinds = 16;
 
     void configure(const WorldServiceConfig& config) { config_ = config; }
     const WorldServiceConfig& config() const { return config_; }
@@ -193,6 +220,9 @@ public:
         quiet_ = 0;
     }
     bool settling() const { return settle_ > 0; }
+    /// A catch-up kind left work worse than catchUpError queued last frame,
+    /// so this frame's budget is spent under the catch-up ceiling.
+    bool catchingUp() const { return behind_; }
     /// Start a frame: drop the last one's offers and set this one's budget.
     void beginFrame();
     void offer(const WorldJob& job) { offers_.push_back(job); }
@@ -205,6 +235,11 @@ public:
     const WorldServiceStats& stats() const { return stats_; }
 
 private:
+    /// The frame's GPU ms the budget fills to: the target, or the catch-up
+    /// ceiling while behind.
+    float ceiling() const {
+        return behind_ ? std::max(config_.targetMs, config_.targetMs * config_.catchUpRatio) : config_.targetMs;
+    }
     struct Kind {
         WorldJobKind desc;
         float cost = 0.05f;
@@ -214,7 +249,9 @@ private:
     std::vector<Kind> kinds_;
     WorldServiceConfig config_;
     std::vector<double> need_;   // the last frames' ms apart from the service, newest last
-    bool over_ = false;          // the last frame read ran over the target
+    bool over_ = false;          // the last frame read ran over the target (the catch-up ceiling while behind)
+    bool overTarget_ = false;    // the last frame read ran over the target
+    bool behind_ = false;        // a catch-up kind left work worse than catchUpError queued last frame
     int settle_ = 0;             // frames a cut has left to settle in
     int quiet_ = 0;              // frames running it has left nothing worse than settleError queued
     float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate

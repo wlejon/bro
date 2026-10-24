@@ -117,9 +117,11 @@ public:
     std::string regionConfig() const { return lattice_.glslConfig(); }
     std::string regionDispatch() const;
     LandRegionStore& regionStore() { return *regionStore_; }
-    /// A region came in or went: the tiles over it are made again (its
-    /// items' generations move; itemsSerial() with them).
-    void regionChanged(const LandRegionKey& key);
+    /// A region came in or went: the tiles over it that read it, those
+    /// within its level's `centre` (PRESENCE: its outer radius, with a
+    /// margin), are made again (their items' generations move;
+    /// itemsSerial() with them).
+    void regionChanged(const LandRegionKey& key, const LandRegionCentre& centre);
     /// A level's centre (land_regions.h, PRESENCE) went from `before` to
     /// `after`: the tiles where it is read differently are made again.
     void regionFadeChanged(const LandRegionCentre& before, const LandRegionCentre& after);

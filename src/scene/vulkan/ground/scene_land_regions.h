@@ -1,8 +1,9 @@
 #pragma once
 // A land's regional grids on the GPU (docs/scene-world-architecture.md §11,
 // "As built: regional grids"; scene/world/land_regions.h): the regions wanted
-// about the eye (landRegionsWanted) made one at a time in two images of a
-// region's cells (rgba32f, a layer a channel), the world's region kernels
+// about the eye (landRegionsWanted) made up to kBatch of a level at a time,
+// each in two images of a region's cells (rgba32f, a layer a channel), the
+// world's region kernels
 // (land_region.comp, the land's LandRegionShaders set) run over it a frame's
 // budget of dispatches at a time in the frame's graphics stream, its kept
 // channels copied into a slot of the land's region slots and its channel 0
@@ -44,29 +45,41 @@ public:
     /// Steps offered a frame (one world-service job each: the service
     /// grants what its budget holds) once the ground about the eye has been
     /// in, and before (the first frames wait on it anyway).
-    static constexpr int kDispatchesPerFrame = 24;
+    static constexpr int kDispatchesPerFrame = 128;
     static constexpr int kDispatchesWarming = 1024;
+    /// Regions of one level made at once, a BATCH: each step dispatches
+    /// over every region of it before the one barrier the step waits on (a
+    /// pass over a 512-cell region is mostly the barrier's drain, so a batch
+    /// of four costs little more than one). Each region has its own run
+    /// images, so its results are its own, bit for bit as made alone.
+    static constexpr int kBatch = 4;
     /// Bands of its rows a region's init (the world's noise over its cells,
     /// the dearest of its steps) is split into, a step each, so a step is
     /// never much over a pass. A pass is one step.
     static constexpr int kBands = 16;
     /// Steps a frame made whatever the budget once the ground about the eye
-    /// has been in (a pass over a region is some 0.015 ms on a 4090; at the
-    /// budget's floor, behind work that never runs out, the regions about a
-    /// moving eye never came in).
+    /// has been in (at the budget's floor, behind work that never runs out,
+    /// the regions about a moving eye never came in).
     static constexpr int kRequiredSteps = 2;
     /// Read-backs in flight at most (a region's channel 0 each).
-    static constexpr int kReadbacks = 3;
+    static constexpr int kReadbacks = 2 * kBatch;
 
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
 
+    /// A batch's steps, each its own world-service kind (priced apart: an
+    /// init band is the world's noise, dearer than a pass, and the finish
+    /// is copies and read-backs). A frame offers one kind's: the batch's
+    /// init bands until they are run, then its passes, then its finish.
+    enum class Step { Init, Pass, Finish };
     /// The work a land's regions offer the world service this frame: the
-    /// next steps of the region being made (none: nothing to make),
-    /// required until the ground under the eye has first been in.
+    /// next steps of the batch being made (none: nothing to make), required
+    /// until the ground under the eye has first been in.
     struct Offer {
-        int steps = 0;      // a job each (an init band, a pass, the finish)
+        Step step = Step::Pass;
+        int steps = 0;      // a job each
         int required = 0;   // the first so many of them required
+        int regions = 0;    // the batch's regions: each job's units
         float error = 0.0f;   // the pixels a cell of the level being made spans
     };
     /// Land `node`'s regions this frame, over its global grid `grid` (the
@@ -75,9 +88,10 @@ public:
     /// frame's table written into `cmd` where it changed; and what there is
     /// to make.
     Offer prepare(SceneFrame& frame, LandNode& node, VkImageView grid, VkCommandBuffer cmd);
-    /// Up to `budget` of its steps (the world service's grant) recorded into
-    /// `cmd`; how many were.
-    int run(SceneFrame& frame, LandNode& node, VkImageView grid, VkCommandBuffer cmd, int budget);
+    /// Up to `budget` of its steps of kind `step` (the world service's
+    /// grant) recorded into `cmd`; the regions' steps they were (a step over
+    /// the batch's n regions counting n).
+    int run(SceneFrame& frame, LandNode& node, VkImageView grid, VkCommandBuffer cmd, Step step, int budget);
     /// What a land's fill binds for its regions this frame (none(): a land
     /// with none, never read).
     VkImageView slots(uint32_t id) const;
@@ -96,14 +110,18 @@ private:
         bool in = false;          // read back, in the table and the store
         uint64_t wanted = 0;      // the frame it was last wanted
     };
-    struct Job {
+    struct Member {
         LandRegionKey key;
         int slot = -1;
-        bool started = false;
+    };
+    /// The regions being made, in lockstep (member m in run[m]).
+    struct Job {
+        std::vector<Member> members;
+        bool started = false;   // its init's bands all run
         int current = 0;
         size_t pass = 0;
         int iteration = 0;
-        int band = 0;   // the next band of the dispatch under way
+        int band = 0;   // the next band of the init
     };
     struct Reading {
         LandRegionKey key;
@@ -116,7 +134,7 @@ private:
         bool failed = false;
         bool warm = false;   // the ground about the eye has been in
         VkPipeline pipeline = VK_NULL_HANDLE;
-        SceneVkImage slots, run[2];
+        SceneVkImage slots, run[kBatch][2];
         SceneVkBuffer data;
         SceneVkBuffer readbacks[kReadbacks];
         bool readbackBusy[kReadbacks] = {};
@@ -145,7 +163,12 @@ private:
     void receive(SceneFrame& frame, LandNode& node, Land& land);
     void drop(LandNode& node, Land& land, uint32_t packed);
     bool begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted);
-    void record(SceneFrame& frame, LandNode& node, Land& land, VkImageView grid, VkCommandBuffer cmd, int& budget);
+    /// The batch's next step: its init's bands run, its passes run (the
+    /// finish is all that is left), or neither.
+    static Step stepOf(const LandRegionConfig& C, Job& job);
+    int freeReadbacks(const Land& land) const;
+    void record(SceneFrame& frame, LandNode& node, Land& land, VkImageView grid, VkCommandBuffer cmd, Step step,
+                int& budget);
     void writeTable(SceneFrame& frame, const LandNode& node, Land& land, VkCommandBuffer cmd);
 
     VkDevice device_ = VK_NULL_HANDLE;

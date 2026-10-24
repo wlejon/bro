@@ -81,8 +81,10 @@ void SceneLandRegions::cleanup(SceneGpu& gpu) {
 }
 
 void SceneLandRegions::release(SceneGpu& gpu, Land& land) {
-    for (SceneVkImage* g : {&land.slots, &land.run[0], &land.run[1]})
-        if (g->isValid()) gpu.allocator.destroyImage(*g);
+    if (land.slots.isValid()) gpu.allocator.destroyImage(land.slots);
+    for (auto& pair : land.run)
+        for (SceneVkImage& g : pair)
+            if (g.isValid()) gpu.allocator.destroyImage(g);
     if (land.data.isValid()) gpu.allocator.destroyBuffer(land.data);
     if (land.tableBuffer.isValid()) gpu.allocator.destroyBuffer(land.tableBuffer);
     for (SceneVkBuffer& b : land.readbacks)
@@ -153,9 +155,11 @@ bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {
     if (!gpu.allocator.createStorageImage(cells, cells, 1, kFormat, land.slots, false,
                                           static_cast<uint32_t>(slots * L.config.keep)))
         return false;
-    for (SceneVkImage& r : land.run)
-        if (!gpu.allocator.createStorageImage(cells, cells, 1, kFormat, r, false, static_cast<uint32_t>(p.channels)))
-            return false;
+    for (auto& pair : land.run)
+        for (SceneVkImage& r : pair)
+            if (!gpu.allocator.createStorageImage(cells, cells, 1, kFormat, r, false,
+                                                  static_cast<uint32_t>(p.channels)))
+                return false;
     std::vector<float> data(LandProcess::kMaxData * 4, 0.0f);
     std::copy_n(p.data.begin(), std::min(p.data.size(), data.size()), data.begin());
     if (!gpu.allocator.createBuffer(data.size() * sizeof(float),
@@ -177,7 +181,8 @@ bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {
     land.freeSlots.clear();
     for (int s = slots - 1; s >= 0; --s) land.freeSlots.push_back(s);
     LOG_INFO("Land node %u: %d regional slots of %u x %u (%.0f MB)", node.id(), slots, cells, cells,
-             static_cast<double>(slots * L.config.keep + 2 * p.channels) * cells * cells * kTexelBytes / 1048576.0);
+             static_cast<double>(slots * L.config.keep + 2 * kBatch * p.channels + kReadbacks) * cells * cells *
+                 kTexelBytes / 1048576.0);
     return true;
 }
 
@@ -198,7 +203,7 @@ void SceneLandRegions::receive(SceneFrame& frame, LandNode& node, Land& land) {
             r->second.in = true;
             land.tableDirty = true;
             node.regionStore().add(std::move(region));
-            node.regionChanged(it->key);
+            node.regionChanged(it->key, land.centres[it->key.level]);
         }
         it = land.reading.erase(it);
     }
@@ -213,7 +218,7 @@ void SceneLandRegions::drop(LandNode& node, Land& land, uint32_t packed) {
     if (r.in) {
         land.tableDirty = true;
         node.regionStore().remove(r.key);
-        node.regionChanged(r.key);
+        node.regionChanged(r.key, land.centres[r.key.level]);
     }
     // The finer regions made from it go with it.
     std::vector<uint32_t> finer;
@@ -236,9 +241,15 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
             if (!allIn[static_cast<size_t>(l)]) return false;
         return true;
     };
+    // The next wanted region not resident, and those of its level after it,
+    // up to a batch.
+    Job job;
+    int level = -1;
     for (const LandRegionKey& k : wanted) {
+        if (static_cast<int>(job.members.size()) >= kBatch) break;
         if (land.resident.count(k.packed())) continue;
-        if (!startable(k.level)) return false;
+        if (level >= 0 && k.level != level) continue;
+        if (level < 0 && !startable(k.level)) return false;
         if (land.freeSlots.empty()) {
             // The longest unwanted region in (none that a region being made
             // or read back stands on).
@@ -257,9 +268,9 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
                     level = r.key.level;
                 }
             }
-            if (!victim) return false;
+            if (!victim) break;
             drop(node, land, victim);
-            if (land.freeSlots.empty()) return false;
+            if (land.freeSlots.empty()) break;
         }
         Resident r;
         r.key = k;
@@ -267,13 +278,28 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         r.wanted = land.frame;
         land.freeSlots.pop_back();
         land.resident[k.packed()] = r;
-        land.job = Job{};
-        land.job.key = k;
-        land.job.slot = r.slot;
-        land.hasJob = true;
-        return true;
+        job.members.push_back({k, r.slot});
+        level = k.level;
     }
-    return false;
+    if (job.members.empty()) return false;
+    land.job = std::move(job);
+    land.hasJob = true;
+    return true;
+}
+
+SceneLandRegions::Step SceneLandRegions::stepOf(const LandRegionConfig& C, Job& j) {
+    if (!j.started) return Step::Init;
+    while (j.pass < C.passes.size() && j.iteration >= C.passes[j.pass].iterations) {
+        ++j.pass;
+        j.iteration = 0;
+    }
+    return j.pass < C.passes.size() ? Step::Pass : Step::Finish;
+}
+
+int SceneLandRegions::freeReadbacks(const Land& land) const {
+    int n = 0;
+    for (bool busy : land.readbackBusy) n += busy ? 0 : 1;
+    return n;
 }
 
 void SceneLandRegions::writeTable(SceneFrame& frame, const LandNode& node, Land& land, VkCommandBuffer cmd) {
@@ -322,124 +348,126 @@ void SceneLandRegions::writeTable(SceneFrame& frame, const LandNode& node, Land&
 }
 
 void SceneLandRegions::record(SceneFrame& frame, LandNode& node, Land& land, VkImageView grid, VkCommandBuffer cmd,
-                              int& budget) {
+                              Step step, int& budget) {
     const LandRegionLattice& L = node.regionLattice();
     const LandRegionConfig& C = L.config;
-    VkDescriptorSet sets[2];
-    for (int k = 0; k < 2; ++k) {
-        sets[k] = frame.gpu.device.frameSet(setLayout_);
-        if (sets[k] == VK_NULL_HANDLE) {
-            budget = 0;
-            return;
+    Job& j = land.job;
+    const size_t n = j.members.size();
+    if (!land.hasJob || n == 0 || stepOf(C, j) != step) return;
+    const uint32_t cells = static_cast<uint32_t>(C.cells);
+
+    if (step == Step::Finish) {
+        // Done: each region's kept channels into its slot, its channel 0 to
+        // the CPU.
+        if (freeReadbacks(land) < static_cast<int>(n) || budget <= 0) return;
+        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0,
+                             nullptr, 0, nullptr);
+        for (size_t m = 0; m < n; ++m) {
+            int buffer = 0;
+            while (land.readbackBusy[buffer]) ++buffer;
+            const SceneVkImage& out = land.run[m][j.current];
+            VkImageCopy copy{};
+            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, static_cast<uint32_t>(C.keep)};
+            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(j.members[m].slot * C.keep),
+                                   static_cast<uint32_t>(C.keep)};
+            copy.extent = {cells, cells, 1};
+            vkCmdCopyImage(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.slots.image, VK_IMAGE_LAYOUT_GENERAL, 1,
+                           &copy);
+            VkBufferImageCopy rb{};
+            rb.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            rb.imageExtent = {cells, cells, 1};
+            vkCmdCopyImageToBuffer(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.readbacks[buffer].buffer, 1, &rb);
+            render::cmdBufferBarrier(cmd, land.readbacks[buffer].buffer, 0, VK_WHOLE_SIZE,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+            land.readbackBusy[buffer] = true;
+            land.reading.push_back({j.members[m].key, buffer, 0, false});
         }
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(0, land.run[k ^ 1].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        writer.writeImage(1, land.run[k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        writer.writeImage(2, grid, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        writer.writeImage(3, land.slots.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        writer.writeBuffer(4, land.table.buffer, land.table.range, land.table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        writer.writeBuffer(5, land.data.buffer, land.data.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        writer.updateSet(device_, sets[k]);
+        VkMemoryBarrier a{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        a.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        a.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &a, 0,
+                             nullptr, 0, nullptr);
+        land.hasJob = false;
+        land.job = Job{};
+        --budget;
+        return;   // (the next batch is begun by the next frame's prepare)
     }
-    const uint32_t groups = (static_cast<uint32_t>(C.cells) + LP_GROUP - 1) / LP_GROUP;
-    const uint32_t bandGroups = (groups + kBands - 1) / kBands;
-    bool bound = false;
-    // One band of the cells' rows (-1: all of them; the init's bands write
-    // apart, and only its last one is waited on).
-    const auto dispatch = [&](uint32_t mode, int k, uint32_t pass, uint32_t iteration, int band) {
-        if (!bound) {
-            // (The run's images: the last copy out of them, or their clear.)
-            VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, land.pipeline);
-            bound = true;
+
+    // Each region's two sets: sets[m][k] reads run[m][k ^ 1], writes run[m][k].
+    VkDescriptorSet sets[kBatch][2];
+    for (size_t m = 0; m < n; ++m)
+        for (int k = 0; k < 2; ++k) {
+            sets[m][k] = frame.gpu.device.frameSet(setLayout_);
+            if (sets[m][k] == VK_NULL_HANDLE) {
+                budget = 0;
+                return;
+            }
+            SceneVkDescriptorWriter writer;
+            writer.writeImage(0, land.run[m][k ^ 1].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            writer.writeImage(1, land.run[m][k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            writer.writeImage(2, grid, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            writer.writeImage(3, land.slots.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            writer.writeBuffer(4, land.table.buffer, land.table.range, land.table.offset,
+                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            writer.writeBuffer(5, land.data.buffer, land.data.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            writer.updateSet(device_, sets[m][k]);
         }
-        const Job& j = land.job;
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &sets[k], 0, nullptr);
+    const uint32_t groups = (cells + LP_GROUP - 1) / LP_GROUP;
+    const uint32_t bandGroups = (groups + kBands - 1) / kBands;
+    // (The run's images: the last copy out of them, or their clear.)
+    {
+        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, land.pipeline);
+    }
+    // One band of a region's cells' rows (-1: all of them).
+    const auto dispatch = [&](size_t m, uint32_t mode, int k, uint32_t pass, uint32_t iteration, int band) {
+        const LandRegionKey& key = j.members[m].key;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &sets[m][k], 0, nullptr);
         const uint32_t words[LR_P_WORDS] = {mode,
                                             pass,
                                             iteration,
-                                            static_cast<uint32_t>(j.key.level),
-                                            static_cast<uint32_t>(j.key.root),
-                                            static_cast<uint32_t>(j.key.i),
-                                            static_cast<uint32_t>(j.key.j),
+                                            static_cast<uint32_t>(key.level),
+                                            static_cast<uint32_t>(key.root),
+                                            static_cast<uint32_t>(key.i),
+                                            static_cast<uint32_t>(key.j),
                                             band < 0 ? 0u : static_cast<uint32_t>(band) * bandGroups * LP_GROUP};
         vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(words), words);
         vkCmdDispatch(cmd, groups,
                       band < 0 ? groups : std::min(bandGroups, groups - static_cast<uint32_t>(band) * bandGroups), 1);
-        if (band < 0 || band == kBands - 1) computeBarrier(cmd);
     };
 
-    while (budget > 0 && land.hasJob) {
-        Job& j = land.job;
-        if (!j.started) {
-            dispatch(LP_MODE_INIT, 0, 0, 0, j.band);
+    // Each step over every region of the batch, then its one barrier (the
+    // init's bands write apart, and only its last one is waited on).
+    while (budget > 0 && stepOf(C, j) == step) {
+        if (step == Step::Init) {
+            for (size_t m = 0; m < n; ++m) dispatch(m, LP_MODE_INIT, 0, 0, 0, j.band);
             --budget;
             if (++j.band == kBands) {
+                computeBarrier(cmd);
                 j.band = 0;
                 j.started = true;
                 j.current = 0;
             }
             continue;
         }
-        if (j.pass < C.passes.size()) {
-            if (j.iteration >= C.passes[j.pass].iterations) {
-                ++j.pass;
-                j.iteration = 0;
-                continue;
-            }
-            dispatch(LP_MODE_PASS, j.current ^ 1, static_cast<uint32_t>(j.pass), static_cast<uint32_t>(j.iteration), -1);
-            --budget;
-            ++j.iteration;
-            j.current ^= 1;
-            continue;
-        }
-        // Done: its kept channels into its slot, its channel 0 to the CPU.
-        int buffer = -1;
-        for (int b = 0; b < kReadbacks; ++b)
-            if (!land.readbackBusy[b]) {
-                buffer = b;
-                break;
-            }
-        if (buffer < 0) {
-            budget = 0;
-            return;
-        }
-        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0,
-                             nullptr, 0, nullptr);
-        const uint32_t cells = static_cast<uint32_t>(C.cells);
-        VkImageCopy copy{};
-        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, static_cast<uint32_t>(C.keep)};
-        copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(j.slot * C.keep),
-                               static_cast<uint32_t>(C.keep)};
-        copy.extent = {cells, cells, 1};
-        vkCmdCopyImage(cmd, land.run[j.current].image, VK_IMAGE_LAYOUT_GENERAL, land.slots.image,
-                       VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
-        VkBufferImageCopy rb{};
-        rb.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        rb.imageExtent = {cells, cells, 1};
-        vkCmdCopyImageToBuffer(cmd, land.run[j.current].image, VK_IMAGE_LAYOUT_GENERAL,
-                               land.readbacks[buffer].buffer, 1, &rb);
-        render::cmdBufferBarrier(cmd, land.readbacks[buffer].buffer, 0, VK_WHOLE_SIZE, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-        VkMemoryBarrier a{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        a.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-        a.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &a, 0,
-                             nullptr, 0, nullptr);
-        bound = false;
-        land.readbackBusy[buffer] = true;
-        land.reading.push_back({j.key, buffer, 0, false});
-        land.hasJob = false;
+        for (size_t m = 0; m < n; ++m)
+            dispatch(m, LP_MODE_PASS, j.current ^ 1, static_cast<uint32_t>(j.pass), static_cast<uint32_t>(j.iteration),
+                     -1);
+        computeBarrier(cmd);
         --budget;
-        break;   // (the next one is begun by run(), from the frame's wanted)
+        ++j.iteration;
+        j.current ^= 1;
     }
 }
 
@@ -553,23 +581,41 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     // the budget holds them, as pressing as the pixels a cell of the
     // level being made spans, as a tile's texels; the coarser levels' field
     // is read where a region is not yet in.)
-    const double cell = L.config.cellOf(land.job.key.level);
-    return {land.warm ? kDispatchesPerFrame : kDispatchesWarming, land.warm ? kRequiredSteps : kDispatchesWarming,
-            static_cast<float>(cell * focal / std::max(height, 1.0))};
+    // A frame offers the batch's next kind of step only (its init's bands,
+    // its passes, or its finish once read-backs are free for it).
+    Job& j = land.job;
+    Offer o;
+    o.step = stepOf(L.config, j);
+    o.regions = static_cast<int>(j.members.size());
+    o.error = static_cast<float>(L.config.cellOf(j.members.front().key.level) * focal / std::max(height, 1.0));
+    if (o.step == Step::Finish) {
+        if (freeReadbacks(land) < o.regions) return {};
+        o.steps = o.required = 1;
+        return o;
+    }
+    int left = kBands - j.band;
+    if (o.step == Step::Pass) {
+        left = L.config.passes[j.pass].iterations - j.iteration;
+        for (size_t p = j.pass + 1; p < L.config.passes.size(); ++p) left += L.config.passes[p].iterations;
+    }
+    o.steps = std::min(left, land.warm ? kDispatchesPerFrame : kDispatchesWarming);
+    // (Once warm, kRequiredSteps regions' steps: one step of a batch of
+    // four is already four of them, and two such of its dearest pass were
+    // a millisecond a frame whatever the budget.)
+    const int required = o.step == Step::Pass ? std::max(1, kRequiredSteps / std::max(o.regions, 1)) : 1;
+    o.required = land.warm ? std::min(o.steps, required) : o.steps;
+    return o;
 }
 
-int SceneLandRegions::run(SceneFrame& frame, LandNode& node, VkImageView grid, VkCommandBuffer cmd, int budget) {
+int SceneLandRegions::run(SceneFrame& frame, LandNode& node, VkImageView grid, VkCommandBuffer cmd, Step step,
+                          int budget) {
     const auto it = lands_.find(node.id());
     if (it == lands_.end() || it->second->failed || !grid || !it->second->table.buffer) return 0;
     Land& land = *it->second;
+    const int regions = static_cast<int>(land.job.members.size());
     const int given = budget;
-    // A job's dispatches, and the next job's once it is done, to the budget.
-    while (budget > 0) {
-        if (!land.hasJob && !begin(node, land, land.wanted)) break;
-        record(frame, node, land, grid, cmd, budget);
-        if (land.hasJob) break;   // (the budget spent, or no read-back free)
-    }
-    return given - budget;
+    record(frame, node, land, grid, cmd, step, budget);
+    return (given - budget) * regions;
 }
 
 void SceneLandRegions::submitted(uint64_t ticket) {

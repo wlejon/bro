@@ -160,9 +160,11 @@
  * the global grid; the first `keep` channels are the regions' and the rest
  * the global grid's. The tiles, landGrid and the surface read it; the CPU's
  * heights read the same regions read back, blended the same way. The engine
- * streams them a frame's budget of dispatches at a time (a band of init
- * rows, a whole pass, or a region's finish each), so a region in arrives
- * over some frames with no hitch, and the tiles under it are made again.
+ * streams them up to four of a level at a time, a frame's budget of steps
+ * at a time (a band of init rows, a whole pass, or the finish, each over
+ * every region of the batch; each region's result is its own, the same as
+ * made alone), so a region in arrives over some frames with no hitch, and
+ * the tiles under it that read it (within its level's disc) are made again.
  * `landStats()` says how many are in and how many wanted are pending.
  *
  * @example
