@@ -58,6 +58,34 @@ void main() {
     vec3 nLeaf = normalize(inLeafNormal);
     if (!wood && !gl_FrontFacing) nLeaf = -nLeaf;
     vec3 nForm = normalize(inCrownNormal);
+    // A near leaf as a leaf: how many pixels it spans (its detail fades in
+    // from 3 to 12 along it, so a canopy at 20 m and on holds its mean and
+    // never shimmers), its blade cupped across its midrib and arched along
+    // it (the normal bent by the slope of h = c(x/w)^2 - c'(v - 0.5)^2 on
+    // the element's frame, from the point's derivatives), and how near the
+    // blade's edge a point lies (thinner there, so more light through).
+    float leafDetail = 0.0, edge = 0.0;
+    if (!wood) {
+        vec2 dux = dFdx(inLeafUV), duy = dFdy(inLeafUV);
+        vec3 dpx = dFdx(pos), dpy = dFdy(pos);
+        float span = 1.0 / max(max(length(vec2(dux.y, duy.y)), length(vec2(dux.x, duy.x))), 1e-4);
+        leafDetail = (1.0 - far) * smoothstep(3.0, 12.0, span);
+        // The blade's half-width at this height (plantLeafPoint's outline).
+        float y = clamp(inLeafUV.y, 0.0, 1.0);
+        vec2 p1 = abs(plantLeafPoint(inSpecies, 1)), p3 = abs(plantLeafPoint(inSpecies, 3));
+        float w = y < p1.y ? p1.x * y / max(p1.y, 1e-3)
+                : y < p3.y ? mix(p1.x, p3.x, (y - p1.y) / max(p3.y - p1.y, 1e-3))
+                           : p3.x * (1.0 - y) / max(1.0 - p3.y, 1e-3);
+        float x = clamp(inLeafUV.x / max(w, 1e-3), -1.0, 1.0);
+        edge = smoothstep(0.55, 1.0, abs(x)) * leafDetail;
+        if (leafDetail > 0.0) {
+            vec3 r1 = cross(dpy, nLeaf), r2 = cross(nLeaf, dpx);
+            vec3 tU = r1 * dux.x + r2 * duy.x, tV = r1 * dux.y + r2 * duy.y;
+            float su = inversesqrt(max(dot(tU, tU), 1e-20)), sv = inversesqrt(max(dot(tV, tV), 1e-20));
+            vec3 bend = tU * su * (0.7 * x) - tV * sv * (0.5 * (y - 0.5));
+            nLeaf = normalize(nLeaf - bend * leafDetail);
+        }
+    }
     PlantSurface surf = plantSurface(PlantFragment(pos, nLeaf, nForm, inAlbedo, inLeafUV, far, depth, wood, inSpecies));
     vec3 N = surf.normal;
     vec3 albedo = surf.albedo;
@@ -94,18 +122,6 @@ void main() {
     // Wrapped: a lobe's terminator is soft, its shaded side never black.
     float wrap = clamp((NL + 0.45) / 1.45, 0.0, 1.0);
     vec3 direct = albedo / PI * sunRad * wrap * vis;
-    vec3 through = vec3(0.0);
-    if (!wood) {
-        // From behind, through the leaves at the crown's skin.
-        float back = pow(max(dot(-V, L), 0.0), 3.0);
-        float skin = 1.0 - depth;
-        through = surf.glow * albedo * sunRad / PI * back * sqrt(vis) * skin * (0.4 + 0.6 * max(-NL, 0.0));
-        // A glint off a near leaf's face.
-        vec3 H = normalize(L + V);
-        float spec = pow(max(dot(nLeaf, H), 0.0), 48.0) * (1.0 - far);
-        direct += sunRad * vis * spec * 0.05;
-    }
-
     // The sky about the form, less of it deep in the crown. The probes hold
     // the crown's own shade where it spans their spacing (its medium in their
     // world, a probe inside it); the leaves' crowding finer than that is
@@ -113,11 +129,43 @@ void main() {
     vec3 irr = sceneAmbientIrradiance(pos, probe, N);
     float spacing = probe.spacing;
     float resolved = spacing > 0.0 ? clamp(inCrown.w / spacing - 0.5, 0.0, 1.0) : 0.0;
-    float ao = mix(1.0, mix(0.3, 0.75, resolved), depth) * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
+    float crowd = mix(1.0, mix(0.3, 0.75, resolved), depth);
+    float ao = crowd * (0.7 + 0.3 * clamp(0.5 + 0.5 * nForm.y, 0.0, 1.0));
     vec3 indirect = irr * albedo * ao;
 
-    vec3 color = direct + through + indirect;
-    SceneAir air = sceneAir(pos, camDist);
+    vec3 through = vec3(0.0);
+    if (!wood) {
+        // From behind, through the leaves at the crown's skin.
+        float back = pow(max(dot(-V, L), 0.0), 3.0);
+        float skin = 1.0 - depth;
+        through = surf.glow * albedo * sunRad / PI * back * sqrt(vis) * skin * (0.4 + 0.6 * max(-NL, 0.0));
+        // A near leaf is thin: the light on its far face (the sun as much of
+        // it as the crown leaves toward it, the sky as much as the crowding
+        // above leaves) comes through it diffusely, its transmittance the
+        // species' glow on its colour, more of it at the thinner edge. The
+        // daub's mean is the crown term above; this is a leaf's own.
+        if (leafDetail > 0.0) {
+            float sunBack = max(-dot(nLeaf, L), 0.0);
+            vec3 backIrr = sunRad * vis * sunBack + sceneAmbientIrradiance(pos, probe, -nLeaf) * crowd;
+            through += surf.glow * albedo * backIrr / PI * (1.0 + 0.6 * edge) * leafDetail;
+        }
+        // The waxy face's sheen: a broad lobe of the sun and the sky's
+        // reflection by Fresnel (the cuticle's 0.04), on the face toward the
+        // eye; a leaf of a few pixels (and a daub of many) is its mean, as
+        // the transmission's detail above.
+        float NV = max(dot(nLeaf, V), 0.0);
+        // (Schlick's, its grazing rise capped by the cuticle's roughness:
+        // a rough face never mirrors the sky.)
+        float F = 0.04 + 0.16 * pow(1.0 - NV, 5.0);
+        vec3 H = normalize(L + V);
+        float NHl = max(dot(nLeaf, H), 0.0), NLl = max(dot(nLeaf, L), 0.0);
+        float sheen = distributionGGX(NHl, 0.45) * geometrySmith(NV, NLl, 0.45) * F / max(4.0 * NV, 1e-3);
+        float nearW = leafDetail;
+        direct += sunRad * vis * sheen * nearW;
+        indirect += sceneAmbientIrradiance(pos, probe, reflect(-V, nLeaf)) / PI * F * crowd * nearW;
+    }
+
+    vec3 color = direct + through + indirect;    SceneAir air = sceneAir(pos, camDist);
     color = color * air.transmittance + air.inscatter;
     indirect *= air.transmittance;
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), mix(1.0, 0.0, air.fade));
