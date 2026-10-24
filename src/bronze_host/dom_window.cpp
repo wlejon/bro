@@ -17,6 +17,7 @@
 #include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_matchmedia.h"
+#include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_window_open.h"
 
@@ -28,12 +29,18 @@
 #include "util/interrupt.h"
 
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
 
 namespace {
+
+std::unordered_map<uint64_t, std::string>& windowNames() {
+    static auto* map = new std::unordered_map<uint64_t, std::string>();
+    return *map;
+}
 
 struct WindowListener {
     dom::ListenerHandle handle;
@@ -69,6 +76,15 @@ Value makeGetComputedStyle() {
 
 void clearWindowListeners() {
     windowListeners().clear();
+    windowNames().clear();
+}
+
+void clearWindowName(uint64_t scopeId) {
+    if (scopeId == 0) {
+        windowNames().clear();
+    } else {
+        windowNames().erase(scopeId);
+    }
 }
 
 void installWindowGlobal(engine::Engine* enginePtr) {
@@ -84,6 +100,18 @@ void installWindowGlobal(engine::Engine* enginePtr) {
     b.set("self", b.get());
     b.set("top", b.get());
     b.set("parent", b.get());
+
+    b.accessor("name",
+               [](Value, std::span<const Value>) {
+                   auto& names = windowNames();
+                   auto it = names.find(currentRealmScope());
+                   return ev::fromUtf8(it != names.end() ? it->second : "");
+               },
+               [](Value, std::span<const Value> a) {
+                   std::string s = ev::toUtf8(argAt(a, 0));
+                   windowNames()[currentRealmScope()] = std::move(s);
+                   return ev::undefined();
+               });
 
     b.accessor("devicePixelRatio",
                [enginePtr](Value, std::span<const Value>) {

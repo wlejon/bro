@@ -2,6 +2,7 @@ add_library(bro_net STATIC
     net_service.cpp
     rollback_session.cpp
     bronze_api/net_rollback_api.cpp
+    bronze_api/net_capsule_api.cpp
 )
 target_include_directories(bro_net PUBLIC
     ${bro_SOURCE_DIR}/src

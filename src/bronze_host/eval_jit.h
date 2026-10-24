@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bronze_host/eval_js_scan.h"
 #include "embed/embed.h"
 #include "eval/eval.h"
 

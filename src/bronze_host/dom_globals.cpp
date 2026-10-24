@@ -688,7 +688,9 @@ bool isWebHostGlobalsInstalled() {
 }
 
 std::vector<std::string> registeredHostGlobals() {
-    return ev::hostGlobalNames();
+    std::vector<std::string> names = ev::hostGlobalNames();
+    names.push_back("name");
+    return names;
 }
 
 // A hidden system panel's waiting callbacks are not pending work: they run only

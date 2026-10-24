@@ -6,30 +6,37 @@
 [![Download nightly](https://img.shields.io/github/v/release/wlejon/bro?label=download%20nightly)](https://github.com/wlejon/bro/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, real-time audio, on-device AI, single-source GPU shaders, and in-process formal verification & constraint solving — all in one native process. Custom layout engine, Skia, and Vulkan 1.3 Core. Windows, macOS, and Linux.
+Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-device AI, in one native process. Custom layout engine, Skia, and Vulkan 1.3 Core. Windows, Mac, and Linux.
 
-**\* pre-alpha \***
+** this is pre-alpha **
 
-Each nightly zip also bundles **[bronze](https://github.com/wlejon/bronze)** (the AOT/JIT JS compiler, GPU shader compiler, and SMT prover built on **[brass](https://github.com/wlejon/brass)**). Apps run immediately from source via in-process JIT, or compile ahead of time to a native module (`app.dll`/`.so`/`.dylib`) via `bronze build`.
+Each nightly zip also carries **[bronze](https://github.com/wlejon/bronze)** under `bronze/`, the AOT JavaScript compiler, and the binaries in the same zip load what it emits: `bro-headless myapp --print-host-globals > web_host.globals` writes the manifest of globals bro supplies, and `bronze build app.js -o myapp/app.dll --emit-shared --host-globals web_host.globals` turns an app's JavaScript into a native module that `bro myapp` runs.
 
-## What is it?
+## What can I compare it to?
 
-Four capabilities unified inside a single native binary sharing one compiler IR and one bitvector SMT solver:
+Two familiar yardsticks, plus one that doesn't have a name yet:
 
-- **Chromium-class UI layer** — HTML5, CSS (flexbox, grid, gradients, animations), SVG, Canvas 2D, WebGL 2.0, Web Components, HarfBuzz text shaping.
-- **Godot-class game & media runtime** — 3D scene graph, Jolt physics, lock-free spatial audio & synthesis, SDF/CSG mesh generation, navmesh pathfinding, rollback & GNS networking.
-- **On-device AI & differentiable compute** — Local LLMs, diffusion, vision, speech, 3D generation, and a custom Vulkan/CUDA tensor engine with reverse-mode JIT autodiff.
-- **In-process theorem prover, superoptimizer & differentiable physics/GPU** — Because the JS compiler, SPIR-V/PTX GPU compiler, physics/audio engine, LLM, and SMT solver live in the same address space, plain JavaScript can be inverted (`bro.solve`), formally proven (`bro.prove`), symbolically differentiated (`bro.gpu.differentiate`), and superoptimized (`bro.superoptimize`) at runtime.
+- **Rendering parity with Chromium** (HTML/CSS). The app layer should look right.
+- **Feature parity with Godot's engine** (no editor). 3D, physics, audio, the game runtime.
+- **On-device generation and perception as a native engine subsystem.** Every modality the engine renders, it can also generate and understand, locally.
 
 ## Broworkshop
 
-[broworkshop](https://github.com/wlejon/broworkshop) houses starter apps, games, and interactive studios built with `bro`:
+[broworkshop](https://github.com/wlejon/broworkshop) houses the apps built with bro used to demonstrate the functionality.
 
-```bash
-bro broworkshop/bro.json
-```
+>bro broworkshop/bro.json
 
 ![launcher](docs/launcher.png)
+
+The launcher and a curated set of starter apps live in the sibling [broworkshop](https://github.com/wlejon/broworkshop) repo: games, tools, demos, and AI/research apps you can clone and reshape for your own thing. bro is the runtime; the workshop is where the patterns are worked out.
+
+## Why
+
+Coding agents build web UIs really well. While they can build native UIs, in my experience, there's a lot more debugging happening to get something working. Electron solves that, but only for what the web platform natively supports.
+
+In bro, HTML/CSS/JS is the UI/app layer like Electron but the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.
+
+None of this is new, it's just a reconfiguration that works better for coding agents.
 
 ## Hello world
 
@@ -48,70 +55,108 @@ bro broworkshop/bro.json
 bro path/to/hello
 ```
 
+See [broworkshop](https://github.com/wlejon/broworkshop) for example applications.
+
 ## What you get
 
-**1. The web app layer.** HTML5, CSS, SVG, Canvas 2D, WebGL 2.0, Shadow DOM, Web Workers, Fetch, localStorage, and HarfBuzz bidi/ligature text shaping. Unmodified `three.js` and `pixi.js` work out of the box.
+**The app layer.** Write the UI the way you already do. HTML5, CSS (flexbox, grid, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. Text is shaped by HarfBuzz with bidi reordering, so ligatures, cursive joining, and RTL come out right. three.js and jQuery just work, and your web knowledge (and your coding agent's) transfers.
 
-**2. 3D, physics, audio & systems** — reachable directly from JS in one process with zero IPC:
+**Beyond the web.** Reachable from the same JS, one process, no IPC:
 
-| API | Capability |
+| Reach for | to |
 |---|---|
-| `bro.scene` | 3D scene graph: PBR meshes, sprites, particles, skinned characters, GPU SDF raymarching |
-| `scene.createTerrain` · `createClipmapTerrain` · `createTileWorld` | Chunked height-field terrain, camera-centred clipmaps, square/hex tile grids |
-| `Physics` · `bro.physics` | Jolt rigid bodies, constraints, raycasts, vehicles, SIMD $-\nabla U$ force fields (`compileForceField`), inverse trajectory solver (`solveTrajectory`) |
-| `AudioContext` · `bro.audio` | Real-time synthesis, spatial audio, MIDI, and formally verified lock-free JS DSP kernels (`compileDspKernel`) |
-| `bro.mesh` · `bro.ai.game` · `bro.flora` | SDF/CSG mesh generation & inverse SDF fitting (`solveSDF`) · navmesh + A* · procedural flora |
-| `bro.net` | GNS networking, deterministic lockstep rollback (`createRollbackSession`), verified P2P code capsules (`createVerifiedCapsule`) |
-| `<video>` · `VideoEncoder` · `GifEncoder` | WebM/VP9 playback and RGBA frame encoding |
-| Native chrome · `bro.steam` | Native file dialogs, menu bars, gizmos, multi-window, Steamworks |
+| `bro.scene` | 3D scene graph: meshes, sprites, particles, PBR lighting, skinned characters |
+| `scene.createTerrain` · `createClipmapTerrain` · `createTileWorld` | chunked height-field terrain, camera-centred clipmaps, square/hex tile grids |
+| `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts, characters, vehicles |
+| `AudioContext` (broaudio) | real-time audio: synthesis, effects, spatial, MIDI |
+| `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) + rollback sessions (determinism lint & runtime state-hash desync detection) |
+| `<video>` · `VideoEncoder` · `GifEncoder` | WebM/VP9 playback, and encoding RGBA frames back out to a file |
+| native dialogs · menu bars · gizmos · multi-window · `bro.steam` | OS-native app chrome and Steamworks integration |
 
-**3. On-device AI & differentiable tensors** — runs locally on Vulkan/CUDA/CPU inside the frame loop:
+**On-device AI.** Every modality above, the engine can also **generate and perceive**, locally, on the GPU, in the frame loop. No API key, no network, runs offline. `bro.gpu` probes the live CUDA/Vulkan/Metal/CPU backend.
 
-| API | Capability |
+| Reach for | to |
 |---|---|
-| `bro.lm` | Local LLMs (Qwen3, Qwen3.5, Mistral), SMT-guided grammar repair (`createVerifiedValidator`), neuro-symbolic verified code synthesis (`synthesizeVerifiedFunction`) |
-| `bro.diffusion` · `bro.vision` | Image generation (U-Net/VAE, LoRA) & perception (SAM, depth, normals, matting, ControlNet) |
-| `bro.triposplat` · `bro.motion` | Single-image-to-3D & text-to-animation |
-| `bro.tts` · `bro.stt` · `bro.diar` · `bro.rave` | Speech synthesis (Kokoro, Qwen3-TTS), ASR (Whisper, Parakeet), speaker diarization, neural audio |
-| `bro.wake` · `bro.kws` · `bro.mic` · `bro.sense` · `bro.gesture` | Wake words, keyword spotting, live mic, acoustic sensing, gesture recognition |
-| `bro.tensor` · `bro.image` | GPU/SIMD tensor engine with formally audited backward shaders & fused reverse-mode autodiff (`jitBackward`) |
+| `bro.lm` | generate & understand **text** (local LLMs: Qwen3, Qwen3.5, Mistral) |
+| `bro.diffusion` · `bro.vision` | generate **images** (U-Net/VAE, LoRA) · perceive them (SAM, depth, normals, matting, ControlNet) |
+| `bro.triposplat` · `bro.motion` | generate **3D** from a single image · generate **animation** from text |
+| `bro.tts` · `bro.stt` · `bro.diar` | **speak** (Kokoro, Qwen3-TTS) · **hear** (Whisper, Parakeet, Qwen3-ASR) · **separate speakers** |
+| `bro.wake` · `bro.kws` · `bro.mic` · `bro.sense` · `bro.gesture` · `bro.listen` | wake words, keyword spotting, live mic, model-free acoustic sensors, gestures, concurrent streams |
+| `bro.tensor` · `bro.image` · `bro.rave` | the tensor + image-kernel substrate underneath them all, plus neural audio encode/decode |
 
-**4. In-process verification, constraint solving & superoptimization:**
+**Symbolic constraint solving & static checks.** `bronze` and `brass` include an in-process 32-bit bitvector (`int32`) SMT solver over straight-line JS functions (`bro.solve`, `bro.solveAll`, `bro.prove`, `bro.fuzz`, `bro.layout.solve`) and static kernel/rollback lint checks.
 
-| API | Capability |
-|---|---|
-| `bro.solve` · `bro.solveAll` · `bro.layout.solve` | Run plain JS functions backwards via the in-process bitvector SMT solver; solve declarative UI layout constraints |
-| `bro.prove` · `bro.fuzz` | Prove mathematical properties or synthesize minimal SMT counterexample inputs |
-| `bro.optimize` · `bro.superoptimize` · `bro.rewriteSource` | CEGIS superoptimization and verified source-to-source JS rewriting for size and speed |
-| `bro.gpu` · `bro.autoKernel` · `bro.scene.solveProcedural` | Single-source JS `@kernel`/`@shader` compilation to SPIR-V/PTX, symbolic shader autodiff (`differentiate`), inverse procedural parameter solving |
-| `bro.live` · `bro.evolve` | Self-healing proof-gated live reload (`createSupervisor`) & background evolutionary kernel superoptimization |
+The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc reference in [`docs/`](docs/) (read the `.js` files, not the source).
 
-Every `bro.*` namespace has an annotated JSDoc reference in [`docs/`](docs/) (indexed in `docs/reference.html`).
+**For development.** Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md). Line-coverage reports via OpenCppCoverage are wired up for bro and every sibling, `pwsh scripts/coverage.ps1` in any repo. See [docs/coverage.md](docs/coverage.md).
 
-## Running & testing
+## Architecture
+
+C++20 on Skia, Vulkan 1.3 (MoltenVK on macOS), SDL3 and Jolt, with JavaScript compiled by [bronze](https://github.com/wlejon/bronze) on [brass](https://github.com/wlejon/brass): in-process at boot (interpreter plus tiered JIT), or ahead of time into an `app.dll`/`.so`/`.dylib` the app folder carries. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (scripting and testing), `bro-server` (dedicated game server, no window or renderer).
+
+The rest lives in sibling libraries; [docs/ecosystem.md](docs/ecosystem.md) lists every repo, and [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) covers working across them.
+
+## Building
+
+See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands across Windows, Linux, and macOS. The build is modular: `-DBRO_PROFILE=minimal|app|desktop|full` picks a feature tier and individual `-DBRO_WITH_*` flags override it, with compiled-out features installing `{ available: false }` JS stubs. See [docs/build-options.md](docs/build-options.md).
+
+## Usage
+
+Running `bro` with no arguments opens the **project manager**: create projects from skeletons, open folders, or drop in folders and .zip files. See [docs/projects.md](docs/projects.md).
+
+To run a specific app directly, pass its path:
+
+### Windowed mode
 
 ```bash
-# Open the project manager
-bro
+# Windows
+./build/Release/bro.exe ../broworkshop/bro.json
 
-# Run an app in windowed mode
-bro ../broworkshop/bro.json
-
-# Run deterministically in headless mode (virtual time, GPU/CPU rendering, screenshots)
-bro-headless ../broworkshop/demos/dom-lab test.js
-bro-headless --no-gpu ../broworkshop/demos/dom-lab
+# Linux / macOS
+./build-release/bro ../broworkshop/bro.json
 ```
 
-See [docs/headless.md](docs/headless.md) for headless testing globals (`screenshot`, `advanceTime`, `flush`, `assert`) and [BUILDING.md](BUILDING.md) for CMake build presets and `-DBRO_PROFILE=minimal|app|desktop|full` configuration.
+Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.
 
-## Ecosystem
+### Headless mode
 
-`bro` is organized as a set of standalone sibling repositories (`bronze`, `brass`, `brotensor`, `brolm`, `broaudio`, `bromesh`, `brodiffusion`, `brovisionml`, `brosoundml`, `broworkshop`, etc.) that build together from `../<name>` or fetch automatically at configure time. See [docs/ecosystem.md](docs/ecosystem.md) and [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
+```bash
+bro-headless ../broworkshop/demos/dom-lab test.js                           # script file
+bro-headless ../broworkshop/demos/dom-lab -e "document.querySelector('#btn').click()"
+bro-headless --no-gpu ../broworkshop/demos/dom-lab                          # CPU-only (CI)
+```
+
+Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.
+
+See [docs/headless.md](docs/headless.md) for full documentation.
+
+## App structure
+
+An app is a directory containing at minimum an `index.html`:
+
+```
+myapp/
+  index.html      # required
+  style.css       # linked via <link rel="stylesheet">
+  app.js          # loaded via <script src="...">
+```
+
+For more elaborate setups, such as multiple apps under a project root with shared `lib/` and `system/` directories, see [broworkshop](https://github.com/wlejon/broworkshop) for the layout pattern (project-level `bro.json` with `default_app`, `lib`, `system`).
+
+## JS API reference
+
+Every binding is documented in an annotated `.js` file in [docs/](docs/) (JSDoc plus examples; load them in your editor), alongside the guides (`headless.md`, `settings.md`, `apps.md`, ...). `docs/reference.html` indexes them all.
 
 ## Warning
 
-While `bro` implements an HTML/CSS/JS engine, it is built for native local apps and games — not browsing untrusted websites. It exposes native system, GPU, and filesystem capabilities directly to JavaScript; use `bro.net.verifyCapsule` when loading untrusted peer applets.
+while you technically could easily wire this up to be an actual web browser, it was not built for that. i have not paid mind to security at all. this exposes a _lot_ more of your system to javascript than a browser does. it'd be better if we didn't run random internet code in this unsecured sandbox.
+
+## why are there so many repos?
+
+splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the list of sibling repos will continue to grow. [docs/ecosystem.md](docs/ecosystem.md) is the map: every repo, what it's for, and how they depend on each other, including the desktop-environment libraries.
 
 ## License
 
-[MIT](LICENSE). Third-party dependencies are under their respective permissive licenses in `third_party/`.
+[MIT](LICENSE)
+
+Third-party dependencies are under their own permissive licenses (MIT, BSD-3-Clause, zlib, Apache-2.0). See each library's LICENSE file in `third_party/` or its respective repository.

@@ -1,10 +1,12 @@
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/eval_js_scan.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_pins.h"
+#include "bronze_host/host_realm_scope.h"
 
 #include "cli/driver.h"
 #include "embed/embed.h"
@@ -324,8 +326,14 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     const auto tempJs = tempDir / (stem + ".js");
     const auto outDll = tempDir / (stem + kModuleExt);
 
-    const std::string execCode =
-        (hasAwaitStmt(code) && !hasImportStmt(code)) ? wrapAsyncIife(code, filename) : code;
+    // Globals BEFORE the compile, not just before the run: the manifest the
+    // compile admits is read off the registry, so the registry must be full.
+    if (!isWebHostGlobalsInstalled()) {
+        installWebHostGlobals(engine);
+    }
+    syncHostGlobalsFromGlobalThis();
+
+    const std::string execCode = scriptExecCode(code, filename);
     {
         std::ofstream ofs(tempJs, std::ios::binary);
         if (!ofs.is_open()) {
@@ -335,12 +343,6 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
             return false;
         }
         ofs.write(execCode.data(), execCode.size());
-    }
-
-    // Globals BEFORE the compile, not just before the run: the manifest the
-    // compile admits is read off the registry, so the registry must be full.
-    if (!isWebHostGlobalsInstalled()) {
-        installWebHostGlobals(engine);
     }
     const auto manifest = writeHostGlobalsManifest(tempDir, stem);
     const std::string globalsPath = manifest.string();
@@ -437,6 +439,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
+    syncHostGlobalsFromGlobalThis();
     ev::endModuleLoad(bronzeHandle);
     std::fflush(stdout);
 
@@ -494,6 +497,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
+    syncHostGlobalsFromGlobalThis();
     const auto manifest = writeHostGlobalsManifest(tempDir, stem);
     const std::string globalsPath = manifest.string();
     const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
@@ -508,13 +512,20 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     }
 
+    const std::string prepared = hasImportStmt(content) ? content : prepareClassicScriptGlobals(content);
     std::filesystem::path wrapFile;
     std::string buildSrc = absSource.string();
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        std::string wrapped = wrapAsyncIife(content, absSource.string());
+        std::string wrapped = wrapAsyncIife(prepared, absSource.string());
         wrapFile = tempDir / (stem + "_wrap.js");
         std::ofstream ofs(wrapFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());
+        ofs.close();
+        buildSrc = wrapFile.string();
+    } else if (prepared != content) {
+        wrapFile = tempDir / (stem + "_prep.js");
+        std::ofstream ofs(wrapFile, std::ios::binary);
+        ofs.write(prepared.data(), prepared.size());
         ofs.close();
         buildSrc = wrapFile.string();
     }
@@ -594,6 +605,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
+    syncHostGlobalsFromGlobalThis();
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {

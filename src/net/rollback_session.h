@@ -21,14 +21,16 @@ struct DeterminismHazard {
 
 struct DeterminismAuditResult {
     bool deterministic = false;
+    bool determinismLintPassed = false;
     std::string certificateHash;
     std::vector<DeterminismHazard> hazards;
     std::string errorSummary;
 };
 
-// Audits a JS tick function's source code using bronze's deterministic lockstep
-// verifier (AST + IL + x86_64/AArch64 LIR equivalence) and computes a SHA-256
-// hex proof certificate hash.
+// Audits a JS tick function's source code using bronze's static determinism lint
+// (rejecting Date/performance/Math.random/transcendental Math/for..in/host I/O
+// hazards and checking IL + x86_64/AArch64 LIR parity) and computes a SHA-256
+// hex source audit digest.
 DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource);
 
 struct VerifiedCapsule {
@@ -126,6 +128,8 @@ struct RollbackStats {
     uint32_t rollbackCount = 0;
     uint64_t totalFramesResimulated = 0;
     bool deterministic = false;
+    bool determinismLintPassed = false;
+    bool desyncDetectionEnabled = true;
     std::string certificateHash;
     bool desyncDetected = false;
 };
@@ -136,6 +140,7 @@ struct ReplayVerifyResult {
     std::string expectedChecksum;
     std::string actualChecksum;
     bool deterministic = false;
+    bool determinismLintPassed = false;
 };
 
 class RollbackSession {
@@ -147,6 +152,8 @@ public:
     RollbackSession(const RollbackConfig& config, TickFn tickFn);
 
     bool isDeterministic() const noexcept { return audit_.deterministic; }
+    bool determinismLintPassed() const noexcept { return audit_.deterministic; }
+    bool desyncDetectionEnabled() const noexcept { return true; }
     const std::string& certificateHash() const noexcept { return audit_.certificateHash; }
     const std::vector<DeterminismHazard>& hazards() const noexcept { return audit_.hazards; }
     const std::string& errorSummary() const noexcept { return audit_.errorSummary; }

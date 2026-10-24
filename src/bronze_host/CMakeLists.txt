@@ -100,12 +100,14 @@ set(BRO_BRONZE_HOST_SOURCES
     host_touch.cpp
     eval.cpp
     eval_jit.cpp
+    eval_js_scan.cpp
     host_noise.cpp
     host_custom_elements.cpp
     host_imagebitmap.cpp
     host_worker_msg.cpp
     host_worker_msg_read.cpp
     host_worker.cpp
+    host_worker_thread.cpp
     host_window_open.cpp
     host_window_message.cpp
     host_realm_scope.cpp
@@ -144,7 +146,9 @@ set(BRO_BRONZE_HOST_SOURCES
     host_gpu.cpp
     host_js_gpu.cpp
     host_js_gpu_autodiff.cpp
+    host_js_gpu_procedural.cpp
     host_solve.cpp
+    host_solve_layout.cpp
     host_solve_rewrite.cpp
     host_text.cpp
     host_steam.cpp

@@ -260,8 +260,10 @@ void test_js_rollback_session_api() {
                     maxRollbackFrames: 64
                 });
 
-                if (!peer0.deterministic || !peer1.deterministic) {
-                    throw new Error("Expected deterministic === true");
+                if (!peer0.deterministic || !peer1.deterministic ||
+                    !peer0.determinismLintPassed || !peer1.determinismLintPassed ||
+                    !peer0.desyncDetectionEnabled || !peer1.desyncDetectionEnabled) {
+                    throw new Error("Expected determinismLintPassed and desyncDetectionEnabled === true");
                 }
                 if (typeof peer0.certificateHash !== "string" || peer0.certificateHash.length !== 64) {
                     throw new Error("Expected 64-char SHA-256 certificateHash, got: " + peer0.certificateHash);

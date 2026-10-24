@@ -19,6 +19,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_iframe.h"
+#include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_numeric.h"
 #include "engine/engine.h"
 
@@ -33,9 +34,16 @@ namespace {
 
 static std::unordered_set<std::string> s_baselineSet;
 static std::vector<std::string> s_baselineProps;
+static std::unordered_map<std::string, ev::Persistent> s_baselineHostGlobals;
 static std::vector<uint64_t> s_scopeStack;
 static uint64_t s_activeScope = 0;
 static std::unordered_map<uint64_t, std::unordered_map<std::string, ev::Persistent>> s_scopeExpandos;
+static std::unordered_map<uint64_t, std::unordered_map<std::string, ev::Persistent>> s_scopeBaselineOverrides;
+
+bool isSpecialRealmGlobal(const std::string& key) {
+    return key == "globalThis" || key == "window" || key == "self" ||
+           key == "top" || key == "parent" || key == "document";
+}
 
 // `globalThis` rooted, or an undefined Persistent when there is none yet
 // (before the runtime has a global object). Callers test with isObject.
@@ -69,8 +77,24 @@ std::vector<std::string> ownPropertyNames(const ev::Persistent& obj) {
 }
 
 // Move every non-baseline own property of globalThis into the active
-// scope's table and take it off the object.
+// scope's table and take it off the object, and save/reset any baseline host
+// globals that the active scope replaced on globalThis.
 void saveActiveScopeExpandos(const ev::Persistent& gt) {
+    auto& overrides = s_scopeBaselineOverrides[s_activeScope];
+    for (auto& [key, baseVal] : s_baselineHostGlobals) {
+        ev::Persistent curVal(ev::getProperty(gt.get(), key));
+        if (ev::toBits(curVal.get()) != ev::toBits(baseVal.get())) {
+            overrides[key].set(curVal.get());
+            ev::registerGlobal(key, baseVal.get());
+        } else {
+            overrides.erase(key);
+            ev::GlobalValue regVal = ev::globalValue(key);
+            if (!regVal.found || ev::toBits(regVal.value) != ev::toBits(baseVal.get())) {
+                ev::registerGlobal(key, baseVal.get());
+            }
+        }
+    }
+
     std::vector<std::string> names = ownPropertyNames(gt);
     if (names.empty()) return;
 
@@ -96,12 +120,19 @@ void saveActiveScopeExpandos(const ev::Persistent& gt) {
     }
 }
 
-// Put `targetScope`'s expandos back onto globalThis.
+// Put `targetScope`'s expandos and baseline overrides back onto globalThis.
 void restoreScopeExpandos(uint64_t targetScope, const ev::Persistent& gt) {
     auto it = s_scopeExpandos.find(targetScope);
-    if (it == s_scopeExpandos.end()) return;
-    for (auto& [key, pval] : it->second) {
-        ev::setProperty(gt.get(), key, pval.get());
+    if (it != s_scopeExpandos.end()) {
+        for (auto& [key, pval] : it->second) {
+            ev::setProperty(gt.get(), key, pval.get());
+        }
+    }
+    auto ovIt = s_scopeBaselineOverrides.find(targetScope);
+    if (ovIt != s_scopeBaselineOverrides.end()) {
+        for (auto& [key, pval] : ovIt->second) {
+            ev::registerGlobal(key, pval.get());
+        }
     }
 }
 
@@ -184,6 +215,37 @@ void initRealmScopeBaseline() {
         s_baselineSet.insert(key);
         s_baselineProps.push_back(std::move(key));
     }
+    s_baselineHostGlobals.clear();
+    for (const std::string& key : ev::hostGlobalNames()) {
+        if (isSpecialRealmGlobal(key) || isDeferredName(key.c_str())) continue;
+        ev::GlobalValue gv = ev::globalValue(key);
+        if (gv.found) {
+            s_baselineHostGlobals[key].set(gv.value);
+        }
+    }
+}
+
+bool isBaselineHostGlobalName(const std::string& name) {
+    if (isSpecialRealmGlobal(name)) return false;
+    return s_baselineHostGlobals.find(name) != s_baselineHostGlobals.end() || ev::hasHostGlobal(name);
+}
+
+void syncHostGlobalsFromGlobalThis() {
+    if (s_baselineHostGlobals.empty()) return;
+    ev::Persistent gt = rootedGlobalThis();
+    if (!ev::isObject(gt.get())) return;
+    for (const std::string& key : ev::hostGlobalNames()) {
+        if (isSpecialRealmGlobal(key) || isDeferredName(key.c_str())) continue;
+        if (s_baselineHostGlobals.find(key) == s_baselineHostGlobals.end()) {
+            ev::GlobalValue bg = ev::globalValue(key);
+            if (bg.found) s_baselineHostGlobals[key].set(bg.value);
+        }
+        ev::Persistent propVal(ev::getProperty(gt.get(), key));
+        ev::GlobalValue regVal = ev::globalValue(key);
+        if (!regVal.found || ev::toBits(propVal.get()) != ev::toBits(regVal.value)) {
+            ev::registerGlobal(key, propVal.get());
+        }
+    }
 }
 
 void enterRealmScope(uint64_t scopeId) {
@@ -210,14 +272,29 @@ bool isChildRealm() {
 
 void clearRealmScope(uint64_t scopeId) {
     s_scopeExpandos.erase(scopeId);
+    s_scopeBaselineOverrides.erase(scopeId);
+    clearWindowName(scopeId);
     clearParsedDocumentsForScope(scopeId);
     clearContentWindowProxy(scopeId);
 }
 
 void resetAllRealmScopes() {
+    ev::Persistent gt = rootedGlobalThis();
+    if (ev::isObject(gt.get())) {
+        for (auto& [key, baseVal] : s_baselineHostGlobals) {
+            ev::Persistent curVal(ev::getProperty(gt.get(), key));
+            ev::GlobalValue regVal = ev::globalValue(key);
+            if (ev::toBits(curVal.get()) != ev::toBits(baseVal.get()) ||
+                !regVal.found || ev::toBits(regVal.value) != ev::toBits(baseVal.get())) {
+                ev::registerGlobal(key, baseVal.get());
+            }
+        }
+    }
     s_scopeStack.clear();
     s_scopeExpandos.clear();
+    s_scopeBaselineOverrides.clear();
     s_activeScope = 0;
+    clearWindowName(0);
     clearParsedDocuments();
     clearContentWindowProxy(0);
 }

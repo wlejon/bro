@@ -14,6 +14,7 @@ namespace bro::bronze_host {
 //   - `bro.rewriteSource(fnOrSource, opts)` (#143)
 //   - `bro.autoKernel(fnOrSource, opts)` (#144)
 void attachBroSolveApis(bronze::Value broObj);
+void attachBroLayoutApis(bronze::Value broObj);
 void attachBroRewriteApis(bronze::Value broObj);
 
 }  // namespace bro::bronze_host

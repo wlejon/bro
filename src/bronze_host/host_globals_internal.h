@@ -109,6 +109,7 @@ Value makeSessionStorageValue();
 // ---------------------------------------------------------------------------
 void installWindowGlobal(engine::Engine* engine);
 void clearWindowListeners();
+void clearWindowName(uint64_t scopeId = 0);
 
 // ---------------------------------------------------------------------------
 // Element cloning hook & document tracking
