@@ -79,6 +79,9 @@ layout(set = 2, binding = CL_B_DEPTH) uniform sampler2D cloudDepth;
 //#define CL_DEBUG_STEPS
 //#define CL_DEBUG_KINDS
 //#define CL_DEBUG_TAU
+// (CL_DEBUG_OUT: the march's 1 alpha, 2 reflectance of a white diffuser's,
+// 3 that over its alpha, in the bins its block lists.)
+//#define CL_DEBUG_OUT 3
 //#define CL_DEBUG_COUNT dbgSkin
 //#define CL_DEBUG_LAYER 3
 const int CL_VIEW_STEPS = 160;
@@ -211,6 +214,16 @@ float clLumps = 1.0;
 // How much the cache's base at level `lod` is a share cut into clouds
 // (cloudCutBase), not the world's surface.
 float clShareLike(float lod) { return cloudShareLike(CL_CACHE_TEXEL0 * exp2(lod)); }
+// How much the view looks down into the deck (the sine of its slope below
+// the horizontal where it enters it, CL_DOWN_FROM .. TO): a cloud seen from
+// above, its sunlit top, the eye over the deck (all of it CL_DOWN_OVER of
+// the deck's thickness over its top). There a share cut into clouds is
+// opaque at heart (cloudCutSteep), and the deep body's diffuse light
+// reaches the eye (clIntegrate); a view from below, across or within the
+// deck, at a base or a side, is as it was.
+const float CL_DOWN_FROM = 0.05, CL_DOWN_TO = 0.2;
+const float CL_DOWN_OVER = 0.25;
+float clDown = 0.0;
 
 // The forms at a point of the view.
 struct ClForms {
@@ -253,7 +266,7 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     // pixel, the turrets' slope with the base's: else where they are steep
     // it ramps in a sliver of a pixel and the silhouette steps.)
     float ramp = wB + cloudSkinBlur(slope, seen);
-    f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
+    f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp, cloudCutSteep(clShareLike(lod) * clDown));
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
     return f;
@@ -356,7 +369,7 @@ float clTopShade(vec3 p, vec3 s, float foot) {
 }
 
 void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
-                 float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow) {
+                 float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow, float down) {
     float r = length(p);
     vec3 up = p / r;
     float h = clamp((r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x), 0.0, 1.0);
@@ -380,6 +393,13 @@ void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 t
         a *= 0.6;
         b *= 0.8;
     }
+    // (The octaves past the sixth, b / (1 - 0.8) of the light, isotropic:
+    // the deep body's diffuse reflection, which leaves through the face the
+    // sun lights, so it reaches a view that looks down into the cloud, the
+    // sun over it (a heap's top seen from above, which the six octaves'
+    // forward lobes send back about half a white diffuser's light), and
+    // never one that looks up at its base or across at its side.)
+    ms += down * b / 0.2 * (0.25 / PI) * exp(-tau.x * a) * powder;
     // The sky's light, less what the cloud above hides (a floor for what
     // its body scatters about), and the ground's from below.
     float sees = mix(0.2, 1.0, exp(-0.15 * tau.y));
@@ -441,6 +461,8 @@ void main() {
     // CL_LAYER_FROM .. CL_LAYER_TO of the deck's thickness a pixel.
     float thick = clouds.shell.y - clouds.shell.x;
     clLumps = smoothstep(CL_LUMPS_FROM, CL_LUMPS_TO, abs(dot(rd, normalize(ro + rd * sp.x))));
+    clDown = smoothstep(CL_DOWN_FROM, CL_DOWN_TO, -dot(rd, normalize(ro + rd * sp.x))) *
+             smoothstep(clouds.shell.y, clouds.shell.y + CL_DOWN_OVER * (clouds.shell.y - clouds.shell.x), length(ro));
     float wl =length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
     vec4 dbgLCol = vec4(0.0);
@@ -533,7 +555,7 @@ void main() {
         // top's lumps lit from the side, clTopShade.)
         float shade = mix(1.0, clTopShade(pl, s, pixel * at), smoothstep(1.0, 3.0, tauView)) * fieldShade;
         clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.w, s, nu, ph, albedo, E * shade,
-                    skyAbove, groundBelow);
+                    skyAbove, groundBelow, 0.0);
         dbgLCol = col;
         dbgLMu = mu;
     }
@@ -788,8 +810,9 @@ void main() {
         if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)
+        float down = clDown * smoothstep(0.0, 0.2, dot(s, normalize(ro + rd * x)));
         clIntegrate(m, ro + rd * x, x, L, sigma, tau, sigma * max(120.0, foot), s, nu, ph, albedo, E,
-                    skyAbove, groundBelow);
+                    skyAbove, groundBelow, down);
         t += L;
         len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
     }
@@ -827,6 +850,18 @@ void main() {
     // (The HDR target is in physical units: a bin's colour scaled up to show.)
     outColor = vec4(vec3(bin & 1, (bin >> 1) & 1, bin >> 2) * 1e6, 1.0);
     return;
+#endif
+#ifdef CL_DEBUG_OUT
+    {
+        float mu0 = max(dot(normalize(ro + rd * (m.depthSum / max(m.weightSum, 1e-6))), s), 0.1);
+        float refl = dot(m.L, vec3(0.2126, 0.7152, 0.0722)) / max(dot(E, vec3(0.2126, 0.7152, 0.0722)) * mu0 / PI, 1e-6);
+        float v = CL_DEBUG_OUT == 1 ? alpha : CL_DEBUG_OUT == 2 ? refl : refl / max(alpha, 1e-3);
+        // (black none, red < .25, yellow < .5, green < .75, cyan < 1, blue < 1.5, white more)
+        vec3 c = alpha <= 1e-3 ? vec3(0) : v < 0.25 ? vec3(1, 0, 0) : v < 0.5 ? vec3(1, 1, 0) : v < 0.75 ? vec3(0, 1, 0)
+               : v < 1.0 ? vec3(0, 1, 1) : v < 1.5 ? vec3(0, 0, 1) : vec3(1);
+        outColor = vec4(c * 1e6, 1.0);
+        return;
+    }
 #endif
     if (alpha < 1.0 / 1024.0) discard;
     // The air between the eye and the deck, at its mean depth.

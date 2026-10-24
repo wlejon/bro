@@ -460,9 +460,10 @@ float cloudFormsShare(vec4 n, float base, float footprint) {
 // from its outer edge at -w/2: the field's span over the footprint where
 // the skin is steeper than the base. In, so the surface reaches out no
 // further than w says, as the march's bounds take it: clBaseClear.)
-float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
+float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp, float steep) {
     if (base <= 0.0) return 0.0;
     float v = cloudFieldOf(base, skin, w);
+    v += (steep - 1.0) * (v + 0.5 * w);   // (steeper in from its outer edge, -w/2)
     float share = clamp((v + 0.5 * w) / ramp, 0.0, 1.0);
     if (share <= 0.0) return 0.0;
     float heart = clouds.forms.x;
@@ -471,8 +472,20 @@ float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp)
     float through = 1.0 - share * (1.0 - exp(-heart * L));
     return mix(near, -log(max(through, 1e-4)) / L, w);
 }
+float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
+    return cloudSigmaOf(base, skin, w, footprint, ramp, 1.0);
+}
+// How much steeper the extinction rises inside a share cut into clouds,
+// `q` of it (cloudShareLike), than inside the world's surface: the cut
+// rises a quarter of the base a unit of its score, its clouds a few cells
+// across, so through the skin's soft ramp (cloudSurfaceBlur) most of a
+// small cloud was ramp, a thin grey veil where the world's heaps are
+// opaque at heart. Its outer edge, where the extinction begins, the same
+// (cloudSigmaOf's `steep`), so the march's faces and bounds are unmoved.
+const float CLOUD_CUT_STEEP = 4.0;
+float cloudCutSteep(float q) { return 1.0 + CLOUD_CUT_STEEP * q; }
 float cloudSigmaOf(float base, float skin, float w, float footprint) {
-    return cloudSigmaOf(base, skin, w, footprint, w);
+    return cloudSigmaOf(base, skin, w, footprint, w, 1.0);
 }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
     return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud, cloudSkinAt(footprint)), cloudSurfaceBlur(footprint), footprint);
