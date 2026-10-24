@@ -437,6 +437,61 @@ float cloudLumpsOf(vec3 pd, float footprint, float q) {
     float y = max(w.y, w.z - CLOUD_LUMP_SMALL_DROP);
     return q * CLOUD_LUMPS * min(y - CLOUD_LUMP_FLOOR, 0.0);
 }
+// A far field seen from above, cut to the pixel: `share` of a cell `cell`
+// metres wide covered by clouds (a column's cover, the cache's or the
+// globe's, bilinear between cells) as the share of a footprint `footprint`
+// metres wide they cover, where the pixel is finer than the cell. The cell
+// is cut by a field of the engine's noise (CLOUD_FIELD_OCTAVES octaves of
+// its Perlin-Worley, the coarsest CLOUD_FIELD_TILE edges a tile, each the
+// last's CLOUD_FIELD_STEP as large, turned in turn: clouds from a cell's
+// size down to a cloud's edge, with broken, billowed rims), cloud where the
+// field, as a score about normal, is over the share's quantile. Prefiltered
+// by the footprint: each octave read at its mean over the footprint, with
+// its spread within it (the noise's w, its square's mean) widening the
+// score's step, so what is finer than the pixel is the share it covers and
+// a footprint as wide as the cell reads the cell's share (and a finer
+// octave fades out of the score as its clouds, about an eighth of its tile,
+// come under CLOUD_FIELD_PIXELS pixels: clouds a pixel or two across read
+// as speckle, so the finest shown are a few pixels, their rims still a
+// pixel sharp; the score's spread is its octaves' that remain, so the
+// share it covers is the same with or without them; the cut faded out
+// from CLOUD_FIELD_FROM .. CLOUD_FIELD_TO pixels a cell), never grain. The
+// score's spread from the tile's own mean and spread (its coarsest mip).
+const float CLOUD_FIELD_TILE = 40.0;
+const float CLOUD_FIELD_STEP = 0.36;
+const int CLOUD_FIELD_OCTAVES = 3;
+const float CLOUD_FIELD_FROM = 4.0;
+const float CLOUD_FIELD_TO = 10.0;
+const float CLOUD_FIELD_PIXELS = 4.0;
+const float CLOUD_FIELD_SOFT = 0.03;  // the score's least spread over a pixel (its edge a pixel or so)
+float cloudFieldShare(vec3 pd, float share, float cell, float footprint) {
+    float fade = smoothstep(CLOUD_FIELD_FROM, CLOUD_FIELD_TO, cell / max(footprint, 1.0));
+    if (fade <= 0.0 || share <= 0.0 || share >= 1.0) return share;
+    vec4 n0 = textureLod(cloudNoiseMap, vec3(0.5), float(CL_NOISE_MIPS - 1));
+    float M = n0.x, S = sqrt(max(n0.w - n0.x * n0.x, 1e-6));
+    float T = CLOUD_FIELD_TILE * clouds.forms.w;
+    float z = 0.0, v = 0.0, aa = 0.0, a = 1.0;
+    vec3 x = pd;
+    for (int i = 0; i < CLOUD_FIELD_OCTAVES; ++i) {
+        vec4 n = cloudNoise(x / T, footprint / T);
+        float ai = i == 0 ? a : a * smoothstep(0.5 * CLOUD_FIELD_PIXELS, CLOUD_FIELD_PIXELS, T / 8.0 / footprint);
+        z += ai * (n.x - M);
+        v += ai * ai * max(n.w - n.x * n.x, 0.0);
+        aa += ai * ai;
+        a *= 0.7;
+        T *= CLOUD_FIELD_STEP;
+        x = kCloudCutTurn * x;
+    }
+    float norm = S * sqrt(aa);
+    z /= norm;
+    v /= norm * norm;
+    // (The share's quantile and the normal's step, both logistic.)
+    float s = clamp(share, 0.005, 0.995);
+    float t = log((1.0 - s) / s) / 1.7;
+    float c = 1.0 / (1.0 + exp(-1.7 * (z - t) / sqrt(v + CLOUD_FIELD_SOFT)));
+    return mix(share, c, fade);
+}
+
 // The share of the footprint the cloud fills where the billows' noise is
 // `n` (no detail: the layer's, the cache's), `base` as a surface.
 float cloudFormsShare(vec4 n, float base, float footprint) {

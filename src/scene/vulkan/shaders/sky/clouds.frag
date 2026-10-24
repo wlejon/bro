@@ -488,6 +488,11 @@ void main() {
         // column slanted to the horizon is no white sheet.)
         float m = len / thick;
         float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);
+        // (That share, of a cell far wider than the pixel, cut into clouds
+        // at the pixel by the engine's field, cloudFieldShare: its footprint
+        // the pixel's along the ground, stretched by the slant.)
+        float vs = abs(dot(rd, normalize(ro + rd * q.x)));
+        cv = cloudFieldShare(cloudDrift(w.p), cv, footCell, pixel * q.x / max(vs, 0.25));
         float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
         if (tauView < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
