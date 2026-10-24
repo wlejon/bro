@@ -704,9 +704,14 @@ void SceneClouds::recordCache(SceneFrame& frame) {
             if (b.pass0 > pass) continue;
             const int32_t push[8] = {b.first, b.y0, b.yStep, std::max(pass - 2, 0), b.x0, b.nx, b.ny, 0};
             vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
-            vkCmdDispatch(cmd, static_cast<uint32_t>((b.nx + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP),
-                          static_cast<uint32_t>((b.ny + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP),
-                          static_cast<uint32_t>(b.levels * CL_CACHE_BINS));
+            // (The extinction's and the light's groups are a row's columns
+            // with their whole columns of bins; the distance's a square.)
+            const uint32_t gx = static_cast<uint32_t>((b.nx + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP);
+            if (pass < 2)
+                vkCmdDispatch(cmd, gx, static_cast<uint32_t>(b.ny), static_cast<uint32_t>(b.levels));
+            else
+                vkCmdDispatch(cmd, gx, static_cast<uint32_t>((b.ny + CL_CACHE_GROUP - 1) / CL_CACHE_GROUP),
+                              static_cast<uint32_t>(b.levels * CL_CACHE_BINS));
         }
         memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       pass < 4 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : kReaders, VK_ACCESS_SHADER_READ_BIT);

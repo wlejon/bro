@@ -17,7 +17,12 @@
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
 
-layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
+// A group: CL_CACHE_GROUP columns of a row, each its CL_CACHE_BINS bins (z),
+// so a bin's neighbours up and down are the group's own and the world's
+// module is evaluated once a texel (their bases shared below).
+layout(local_size_x = CL_CACHE_GROUP, local_size_y = 1, local_size_z = CL_CACHE_BINS) in;
+
+shared float sBase[CL_CACHE_GROUP][CL_CACHE_BINS];
 
 layout(set = 0, binding = CL_B_SIGMA_OUT, rgba16f) uniform writeonly image3D sigmaOut;
 layout(set = 0, binding = CL_B_HOLDS, r16f) uniform writeonly image3D holdsOut;
@@ -43,7 +48,10 @@ bool cloudMayHold(float base, float foot) {
 }
 
 void main() {
-    if (int(gl_GlobalInvocationID.x) >= push.cols.y || int(gl_GlobalInvocationID.y) >= push.cols.z) return;
+    // (A column past the bake's still evaluates, for the group's barrier,
+    // and stores nothing; a group is one row and one level.)
+    if (int(gl_GlobalInvocationID.y) >= push.cols.z) return;
+    bool inside = int(gl_GlobalInvocationID.x) < push.cols.y;
     int x = (push.cols.x + int(gl_GlobalInvocationID.x)) & (CL_CACHE_SIDE - 1);
     int y = (push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z) & (CL_CACHE_SIDE - 1);
     int k = push.rows.x + int(gl_GlobalInvocationID.z) / CL_CACHE_BINS;
@@ -66,19 +74,25 @@ void main() {
     float baseRaw = cloudCutBase(share, pd, cell);
     float sigma = cloudForms(pd, max(share, 0.0), 0.5, cell, false);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
+    uint col = gl_LocalInvocationID.x;
+    sBase[col][bin] = baseRaw;
+    barrier();
+    if (!inside) return;
     // The base the march may read in the cell: it mixes the bins' about it
     // (and quickly changes up, as at a cloud's flat base), so the most of
-    // this bin's and the next ones' up and down, with a margin.
+    // this bin's and the next ones' up and down (the bins a bin's height
+    // away: the column's own), with a margin.
     float binH = clouds.cacheE1.w, most = baseRaw;
     float gLo = baseRaw, gHi = baseRaw, hLo = r, hHi = r;
-    for (int j = -1; j <= 1; j += 2) {
-        float rj = r + float(j) * binH;
-        float hj = (rj - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
-        if (hj <= 0.0 || hj >= 1.0) continue;
-        CloudPoint qj = CloudPoint(up * rj, up, hj, rj - clouds.shell.z, cover, cell, clouds.shell.w);
-        float gj = cloudCutBase(min(cloudDensity(qj), 1.0), cloudDrift(qj.p), cell);
-        most = max(most, gj);
-        if (j < 0) { gLo = gj; hLo = rj; } else { gHi = gj; hHi = rj; }
+    if (bin > 0) {
+        gLo = sBase[col][bin - 1];
+        hLo = r - binH;
+        most = max(most, gLo);
+    }
+    if (bin < CL_CACHE_BINS - 1) {
+        gHi = sBase[col][bin + 1];
+        hHi = r + binH;
+        most = max(most, gHi);
     }
     most = min(most + 0.1 * abs(most) + 0.01, 1.0);
     // How much of the skin's move the march shows here (z): none where the

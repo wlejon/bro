@@ -12,7 +12,16 @@
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
 
-layout(local_size_x = CL_CACHE_GROUP, local_size_y = CL_CACHE_GROUP) in;
+// A group: CL_CACHE_GROUP columns of a row, each its CL_CACHE_BINS bins (z),
+// so the columns' bands are made by all of their bins at once (below).
+layout(local_size_x = CL_CACHE_GROUP, local_size_y = 1, local_size_z = CL_CACHE_BINS) in;
+
+// For each of the group's columns and the nine about it (its own the
+// fifth): each bin's extinction, the column's sum of them, and the lowest
+// and highest bins that may hold cloud of all nine.
+shared float sSigma[CL_CACHE_GROUP][9][CL_CACHE_BINS];
+shared float sColumn[CL_CACHE_GROUP][9];
+shared uint sLo[CL_CACHE_GROUP], sHi[CL_CACHE_GROUP];
 
 layout(set = 0, binding = CL_B_CACHE_OUT, rgba16f) uniform writeonly image3D cacheOut;
 layout(set = 0, binding = CL_B_BAND_OUT, rgba16f) uniform writeonly image2DArray bandOut;
@@ -51,7 +60,10 @@ float cloudDepthToward(vec3 p, vec3 d, float first, float grow, int n, float cel
 }
 
 void main() {
-    if (int(gl_GlobalInvocationID.x) >= push.cols.y || int(gl_GlobalInvocationID.y) >= push.cols.z) return;
+    // (A column past the bake's still takes part in its group's band, for
+    // the barriers, and stores nothing; a group is one row and one level.)
+    if (int(gl_GlobalInvocationID.y) >= push.cols.z) return;
+    bool inside = int(gl_GlobalInvocationID.x) < push.cols.y;
     int x = (push.cols.x + int(gl_GlobalInvocationID.x)) & (CL_CACHE_SIDE - 1);
     int y = (push.rows.y + int(gl_GlobalInvocationID.y) * push.rows.z) & (CL_CACHE_SIDE - 1);
     int k = push.rows.x + int(gl_GlobalInvocationID.z) / CL_CACHE_BINS;
@@ -70,29 +82,45 @@ void main() {
     float first = 0.5 * min(cell, clouds.cacheE1.w * 2.0);
     float toSun = cloudDepthToward(p, sun, first, 1.35, 28, cell);
     float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell);
-    imageStore(cacheOut, at, vec4(base, toSun, toUp, 0.0));
-    if (bin != 0) return;
+    if (inside) imageStore(cacheOut, at, vec4(base, toSun, toUp, 0.0));
     // The column's band (the march's probe): the heights where it and the
     // columns about it may hold cloud (CL_B_HOLDS; so a lookup between
     // texels holds every column it may stand for), and the most any of them
     // holds (their optical depth up the deck; none only where none may).
-    float lo = 1.0, hi = 0.0, most = 0.0, own = 0.0;
+    // Each bin reads its own of the nine columns; the sums are each
+    // column's bins in order, as one thread would add them.
+    uint col = gl_LocalInvocationID.x;
+    if (bin == 0) {
+        sLo[col] = uint(CL_CACHE_BINS);
+        sHi[col] = 0u;
+    }
+    barrier();
+    bool held = false;
     for (int j = -1; j <= 1; ++j) {
         for (int i = -1; i <= 1; ++i) {
-            ivec2 n = ivec2(x + i, y + j) & (CL_CACHE_SIDE - 1);
-            float column = 0.0;
-            for (int b = 0; b < CL_CACHE_BINS; ++b) {
-                ivec3 nb = ivec3(n, k * CL_CACHE_BINS + b);
-                if (imageLoad(holds, nb).r > 0.5) {
-                    lo = min(lo, float(b) / float(CL_CACHE_BINS));
-                    hi = max(hi, float(b + 1) / float(CL_CACHE_BINS));
-                }
-                column += texelFetch(cloudSigmaMap, nb, 0).r;
-            }
-            most = max(most, column * clouds.cacheE1.w);
-            if (i == 0 && j == 0) own = column * clouds.cacheE1.w;
+            ivec3 nb = ivec3(ivec2(x + i, y + j) & (CL_CACHE_SIDE - 1), k * CL_CACHE_BINS + bin);
+            held = held || imageLoad(holds, nb).r > 0.5;
+            sSigma[col][(j + 1) * 3 + i + 1][bin] = texelFetch(cloudSigmaMap, nb, 0).r;
         }
     }
+    if (held) {
+        atomicMin(sLo[col], uint(bin));
+        atomicMax(sHi[col], uint(bin + 1));
+    }
+    barrier();
+    if (bin < 9) {
+        float column = 0.0;
+        for (int b = 0; b < CL_CACHE_BINS; ++b) column += sSigma[col][bin][b];
+        sColumn[col][bin] = column;
+    }
+    barrier();
+    if (bin != 0 || !inside) return;
+    float lo = 1.0, hi = 0.0, most = 0.0;
+    if (sHi[col] > 0u) {
+        lo = float(sLo[col]) / float(CL_CACHE_BINS);
+        hi = float(sHi[col]) / float(CL_CACHE_BINS);
+    }
+    for (int n = 0; n < 9; ++n) most = max(most, sColumn[col][n] * clouds.cacheE1.w);
     if (hi > lo) most = max(most, 1e-3);
     imageStore(bandOut, ivec3(x, y, k), vec4(lo, hi, most, 0.0));
     // The column as a layer (the march's, where the deck is a few pixels
@@ -100,10 +128,10 @@ void main() {
     // sends (the light's way up and, slanted, toward the sun: the column is
     // far wider than it is deep, so its neighbours are as it is) and of the
     // height.
-    CloudColumn col = cloudColumnNone();
+    CloudColumn layer = cloudColumnNone();
     for (int b = CL_CACHE_BINS - 1; b >= 0; --b) {
-        float d = texelFetch(cloudSigmaMap, ivec3(x, y, k * CL_CACHE_BINS + b), 0).r * clouds.cacheE1.w;
-        cloudColumnAdd(col, d, (float(b) + 0.5) / float(CL_CACHE_BINS), clouds.cacheE1.w, cloudShareLike(cell));
+        float d = sSigma[col][4][b] * clouds.cacheE1.w;
+        cloudColumnAdd(layer, d, (float(b) + 0.5) / float(CL_CACHE_BINS), clouds.cacheE1.w, cloudShareLike(cell));
     }
-    imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), cloudColumnLayer(col));
+    imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), cloudColumnLayer(layer));
 }
