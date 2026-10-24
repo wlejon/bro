@@ -555,8 +555,11 @@ SurfaceLayerConfig LandNode::tileConfig() const {
     c.maxLevels = 20;
     // The land's fragments read its albedo and normal at their own
     // footprint (mesh.frag): refine a tile while its texel covers more than
-    // four pixels.
-    c.texelPixels = 4.0f;
+    // two and a half pixels. (Four left the land from the air a bilinear
+    // blur of four pixels along the view and, where it slants, some seven
+    // across it; two cost the planet's region view 0.18 ms of its land's
+    // texture reads.)
+    c.texelPixels = 2.5f;
     return c;
 }
 
