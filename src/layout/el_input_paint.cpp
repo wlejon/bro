@@ -235,23 +235,42 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     renderer_->restore();
 
     if (inputType(nullptr) == InputType::Number) {
+        // Drawn in the field's own text colour (respects app themes and dark
+        // color-scheme): the arrows a little dimmer than the text, the
+        // divider faint. Fixed light-theme greys drew bright dividers and
+        // near-invisible arrows on a dark field.
+        bromath::Color ink = darkScheme_() ? cfromColor8({220, 220, 220, 255}) : cfromColor8({0, 0, 0, 255});
+        if (elem_) {
+            auto& style = elem_->computedStyle();
+            auto cIt = style.find("color");
+            bromath::Color parsed;
+            if (cIt != style.end() && !cIt->second.empty() && DrawTraversal::tryParseColor(cIt->second, parsed))
+                ink = parsed;
+        }
+        bromath::Color arrow = ink;  arrow.a *= 0.7f;
+        bromath::Color divider = ink; divider.a *= 0.18f;
+
         float btnW = kSpinButtonWidth;
         float bx = x + w - btnW;
-        renderer_->drawLine(bx, y, bx, y + h, cfromColor8({180, 180, 180, 255}), 1.0f);
-        renderer_->drawLine(bx, y + h / 2, bx + btnW, y + h / 2, cfromColor8({180, 180, 180, 255}), 1.0f);
+        renderer_->drawLine(bx, y + 1, bx, y + h - 1, divider, 1.0f);
 
+        // Two triangles, each centred in its half of the content height.
         float cx = bx + btnW / 2;
+        float half = h / 2;
+        float th = std::clamp(half * 0.45f, 2.0f, 4.0f);   // triangle height
+        float tw = th * 1.6f;                               // half its base, wider than tall
+        float upMid = y + half / 2 + 0.5f, downMid = y + half + half / 2 - 0.5f;
         render::PointF upPts[3] = {
-            {cx - 4, y + h / 4 + 2}, {cx + 4, y + h / 4 + 2}, {cx, y + h / 4 - 2}
+            {cx - tw, upMid + th / 2}, {cx + tw, upMid + th / 2}, {cx, upMid - th / 2}
         };
         renderer_->drawPolygon(std::span<const render::PointF>(upPts, 3),
-                              cfromColor8({80, 80, 80, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
+                              arrow, cfromColor8({0, 0, 0, 0}), 0.0f);
 
         render::PointF downPts[3] = {
-            {cx - 4, y + h * 3 / 4 - 2}, {cx + 4, y + h * 3 / 4 - 2}, {cx, y + h * 3 / 4 + 2}
+            {cx - tw, downMid - th / 2}, {cx + tw, downMid - th / 2}, {cx, downMid + th / 2}
         };
         renderer_->drawPolygon(std::span<const render::PointF>(downPts, 3),
-                              cfromColor8({80, 80, 80, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
+                              arrow, cfromColor8({0, 0, 0, 0}), 0.0f);
     }
 }
 
