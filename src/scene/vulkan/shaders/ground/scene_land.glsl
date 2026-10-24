@@ -207,7 +207,26 @@ vec2 landChartMap(int f, vec2 off, bool near) {
     return rho > 0.0 ? w.xz * (R * atan(rho, w.y) / rho) : vec2(0.0);
 }
 
-LandPos landPosOf(vec2 m) {
+// Map point `m`'s place on a round body's charts (landChartOff's face,
+// offset and whether it is near the anchor), worked out once for those that
+// read it: a fragment's land, turf tiles and turf cells all start from it.
+// Unused on a flat body.
+struct LandChart {
+    int face;
+    vec2 off;
+    bool near;
+};
+LandChart landChartOf(vec2 m) {
+    LandChart c;
+    c.face = 0;
+    c.off = vec2(0.0);
+    c.near = false;
+    if (landRound()) c.near = landChartOff(m, c.face, c.off);
+    return c;
+}
+
+// Map point `m` on the tiles, its chart place `c` (landChartOf(m)).
+LandPos landPosOf(vec2 m, LandChart c) {
     LandPos q;
     float tile0 = LAND_W(LD_TILES / 4).x;
     vec2 t;
@@ -218,9 +237,9 @@ LandPos landPosOf(vec2 m) {
         q.frac = t - floor(t);
         return q;
     }
-    int f;
-    vec2 off;
-    bool near = landChartOff(m, f, off);
+    int f = c.face;
+    vec2 off = c.off;
+    bool near = c.near;
     q.root = f;
     if (near) {
         vec4 a = landFaceAnchor(f);
@@ -235,6 +254,7 @@ LandPos landPosOf(vec2 m) {
     }
     return q;
 }
+LandPos landPosOf(vec2 m) { return landPosOf(m, landChartOf(m)); }
 
 // The ground's normal at map point `m` (on chart point `q`) whose slope is
 // `g` (dh/dx, dh/dz in the chart's metres) in the land's frame.
@@ -340,12 +360,11 @@ bool landSample(vec2 m, float lambda, out float height, out vec4 surface) {
 // The land at map point `m` from the tiles of level `lambda` (landTexels)
 // with its normal in the land's frame (from the heights a texel of the
 // level read either way, landSlope, as the fill's) and its surface. Level
-// ground where no level is resident.
-bool landSampleNormal(vec2 m, float lambda, out float height, out vec3 normal, out vec4 surface) {
+// ground where no level is resident. `q` is m on the tiles (landPosOf).
+bool landSampleNormal(vec2 m, LandPos q, float lambda, out float height, out vec3 normal, out vec4 surface) {
     height = 0.0;
     normal = landUp(m);
     surface = vec4(0.18, 0.18, 0.18, 0.0);
-    LandPos q = landPosOf(m);
     int s0, s1, level;
     vec2 uv0, uv1, g;
     float f;
@@ -360,6 +379,9 @@ bool landSampleNormal(vec2 m, float lambda, out float height, out vec3 normal, o
     }
     normal = landNormal(m, q, g);
     return true;
+}
+bool landSampleNormal(vec2 m, float lambda, out float height, out vec3 normal, out vec4 surface) {
+    return landSampleNormal(m, landPosOf(m), lambda, height, normal, surface);
 }
 
 #ifdef LAND_COVERS

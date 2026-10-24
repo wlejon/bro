@@ -326,9 +326,11 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
 // `vdata` the vertex colour (density, dryness, floor) for where the field
 // does not reach. Sets the colour, the roughness and the occlusion. On a round body
 // in the frame of the lattice cell holding it, across a cell's edge the
-// cells either side blended (scene_grass.glsl's coverTurfCells).
-void groundSurface(vec3 rel, float fp, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
-                   out vec4 thin, out vec4 swardLight) {
+// cells either side blended (scene_grass.glsl's coverTurfCells). `lc` is the
+// chart place of its map point, landChartOf(landMapOf(rel + landEye3())),
+// the caller's (it reads the land there too).
+void groundSurface(vec3 rel, float fp, vec4 vdata, LandChart lc, inout vec3 color, inout vec3 N, inout float roughness,
+                   inout float ao, out vec4 thin, out vec4 swardLight) {
     GroundBake b;
     if (!landRound()) {
         vec2 xz = rel.xz + camera.eyeWorld.xz;
@@ -337,10 +339,10 @@ void groundSurface(vec3 rel, float fp, vec4 vdata, inout vec3 color, inout vec3 
         return;
     }
     vec3 p = rel + landEye3();
-    bool baked = groundLayerSample(groundChartPosOf(landMapOf(p)), fp, b);
+    bool baked = groundLayerSample(groundChartPosOf(lc), fp, b);
     CoverCell cells[4];
     float w[4];
-    int n = coverTurfCells(p, cells, w);
+    int n = coverTurfCells(p, lc, cells, w);
     vec3 c0 = color, n0 = N, cSum = vec3(0.0), nSum = vec3(0.0);
     float r0 = roughness, a0 = ao, rSum = 0.0, aSum = 0.0;
     vec4 tSum = vec4(0.0), sSum = vec4(0.0);

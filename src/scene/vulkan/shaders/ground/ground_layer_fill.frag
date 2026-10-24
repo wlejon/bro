@@ -37,7 +37,7 @@ void main() {
     vec3 p = landPoint(landChartMap(int(push.model[1].x + 0.5), off, push.model[1].y > 0.5), 0.0);
     CoverCell cells[4];
     float w[4];
-    int n = coverTurfCells(p, cells, w);
+    int n = coverTurfCells(p, landChartOf(landMapOf(p)), cells, w);
     GroundBake sum;
     sum.a = sum.b = sum.c = sum.d = vec4(0.0);
     for (int i = 0; i < n; ++i) {

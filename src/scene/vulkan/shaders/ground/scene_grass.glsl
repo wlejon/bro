@@ -192,10 +192,10 @@ struct CoverCell {
     ivec2 cell;
     vec2 at;
 };
-CoverCell coverCellOf(vec2 m) {
-    int f;
-    vec2 off;
-    bool near = landChartOff(m, f, off);
+CoverCell coverCellOf(LandChart lc) {
+    int f = lc.face;
+    vec2 off = lc.off;
+    bool near = lc.near;
     float cells = grass.turf.y;
     vec2 chart = off;
     if (near) {
@@ -209,6 +209,7 @@ CoverCell coverCellOf(vec2 m) {
     c.at = clamp(L - vec2(c.cell), 0.0, 1.0);
     return c;
 }
+CoverCell coverCellOf(vec2 m) { return coverCellOf(landChartOf(m)); }
 
 // Cell `c`'s frame, as `grass.frame`'s rows.
 void coverCellFrame(CoverCell c, out vec4 rows[4]) {
@@ -238,10 +239,11 @@ void coverCellFrame(CoverCell c, out vec4 rows[4]) {
 // The cells the turf at land's-frame point `p` is shaded in and how much
 // each: the one holding it, and in the band about its edges the one across
 // each edge near (found a nudge over it, on this face or the next), mixed
-// bilinearly. Returns how many.
-int coverTurfCells(vec3 p, out CoverCell cells[4], out float w[4]) {
+// bilinearly. Returns how many. `lc` is p's map point's chart place
+// (landChartOf(landMapOf(p))).
+int coverTurfCells(vec3 p, LandChart lc, out CoverCell cells[4], out float w[4]) {
     vec2 m = landMapOf(p);
-    cells[0] = coverCellOf(m);
+    cells[0] = coverCellOf(lc);
     float side = landRadius() * (0.5 * 3.14159265 / grass.turf.y);
     float hb = 0.5 * grass.turf.z;
     // Its distance in from the nearer edge each way (chart metres), and

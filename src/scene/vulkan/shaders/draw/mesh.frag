@@ -339,13 +339,14 @@ void main() {
     float landWet = 0.0, landFar = 0.0;
     float groundFp = max(length(fwidth(worldPos)), 1e-4);
     vec2 landM = landMapOf(worldPos + landEye3());
+    LandChart landC = landChartOf(landM);   // (the land's and the turf's)
     vec3 landWater = vec3(0.0), landAlbedo = vec3(0.0), landN = N;
     {
         vec2 dm = max(abs(dFdx(landM)), abs(dFdy(landM)));
         float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
         float lh;
         vec4 ls;
-        bool landIn = landSampleNormal(landM, lambda, lh, landN, ls);
+        bool landIn = landSampleNormal(landM, landPosOf(landM, landC), lambda, lh, landN, ls);
         float lhStep = fwidth(lh);   // (in uniform control flow)
         // (The pixel's angle at the eye's distance: smooth, where a
         // triangle's own footprint would hand over a ring's facets.)
@@ -425,7 +426,7 @@ void main() {
     vec4 groundThin = vec4(0.0), groundSward = vec4(0.0);
     float landRoughness = roughness;
     if (landFar < 1.0) {
-        groundSurface(worldPos, groundFp, inColor, baseColor, N, roughness, groundAO, groundThin, groundSward);
+        groundSurface(worldPos, groundFp, inColor, landC, baseColor, N, roughness, groundAO, groundThin, groundSward);
         baseColor *= push.baseColor.rgb;
     }
     if (landFar > 0.0) {

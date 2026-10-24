@@ -31,10 +31,11 @@ LandPos groundPosOf(vec2 xz) {
     q.frac = t - floor(t);
     return q;
 }
-LandPos groundChartPosOf(vec2 m) {
-    int f;
-    vec2 off;
-    bool near = landChartOff(m, f, off);
+// (`c` the point's chart place, landChartOf.)
+LandPos groundChartPosOf(LandChart c) {
+    int f = c.face;
+    vec2 off = c.off;
+    bool near = c.near;
     float g = grass.layer.x;
     LandPos q;
     q.root = f;
