@@ -99,6 +99,13 @@ float groundTwigs(vec2 xz, float size, float fp) {
     return on;
 }
 
+// The twigs at footprint `fp`, faded out as a twig nears a pixel's width:
+// none from 0.117 m, and there their nine cells are not looked at.
+float groundTwigsSeen(vec2 xz, float fp) {
+    float seen = clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
+    return seen > 0.0 ? groundTwigs(xz, 0.35, fp) * seen : 0.0;
+}
+
 // The pixel footprints (m) over which turf on a land hands over to the
 // land's own surface (mesh.frag): its mottling's largest patches are tens of
 // metres.
@@ -154,10 +161,16 @@ GroundBake groundBake(vec2 xz, GroundData g, float fp) {
     b.b.y = groundFbm(xz + 57.0, 3.1, fp, 2);
     b.b.z = groundFbm(xz * vec2(1.0, 1.6) + 77.0, 9.0, fp, 2);
     b.b.w = groundFbm(xz + 5.0, 0.25, fp, 3);
-    b.c.x = groundFbm(xz + 23.0, 2.2, fp, 3);
-    b.c.y = groundFbm(xz + 51.0, 0.12, fp, 3);
-    b.c.z = groundFbm(xz + 91.0, 0.3, fp, 3);
-    b.c.w = groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0);
+    // (The forest floor's only where there is one, and its twigs only where
+    // a pixel can show them: worked out everywhere they were a fifth of the
+    // turf's cost seen from a kilometre up.)
+    b.c = vec4(0.5, 0.5, 0.5, 0.0);
+    if (g.under > 0.0) {
+        b.c.x = groundFbm(xz + 23.0, 2.2, fp, 3);
+        b.c.y = groundFbm(xz + 51.0, 0.12, fp, 3);
+        b.c.z = groundFbm(xz + 91.0, 0.3, fp, 3);
+        b.c.w = groundTwigsSeen(xz, fp);
+    }
     b.d = vec4(0.0);
     if (grass.herbInfo.x > 0.5 && g.herbs > 0.0) {
         vec3 bloom, pick;
@@ -256,8 +269,7 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
         litter = mix(litter, vec3(0.045, 0.075, 0.018) * (0.7 + 0.6 * tuss), smoothstep(0.58, 0.72, mossy) * 0.85);
         // (A twig is a centimetre or so across: finer than the finest
         // tile's texel, it is drawn here.)
-        float twig = fp < groundLayerFinest() ? groundTwigs(xz, 0.35, fp) * clamp(0.35 / fp * 0.1 - 0.3, 0.0, 1.0)
-                                               : b.c.w;
+        float twig = fp < groundLayerFinest() ? groundTwigsSeen(xz, fp) : b.c.w;
         litter = mix(litter, vec3(0.045, 0.032, 0.022), twig * 0.85);
         floorC = mix(bare, litter, smoothstep(0.0, 0.3, under));
     }
