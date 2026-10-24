@@ -61,12 +61,27 @@ void landRegionRange(int L, out int lo, out int hi) {
     hi = min(int(floor((2.0 * LAND_GRID_HALF + band) / step)), 1023);
 }
 
+// The cell of the field next coarser than level L: level L + 1's, or the
+// global grid's over the coarsest level.
+float landRegionCoarserCell(int L) {
+    return L + 1 < LAND_REGION_LEVELS ? landRegionCell(L + 1) : landGridCell();
+}
+
 // How much of level L a texel of landFieldFootprint (m) reads: all of it
-// while its cells are no wider than the texel, none from twice that (the
-// coarser field is the level's mean there), so a coarse tile holds the
-// regions' detail it can carry, as the module's noise does.
+// until the texel is half the coarser field's cell, none once it is that
+// cell, so a coarse tile holds the regions' detail it can carry, as the
+// module's noise does. (A texel wider than the level's cells reads their
+// mean over it, landRegionTexel. Faded out from the texel at the level's
+// own cell, a texel between it and the coarser field's read the coarser
+// field alone, as many texels a cell as the levels' ratio: from orbit the
+// global grid's cells, a fifth of level 3's, stood as staircases along
+// every coast and river, while the tiles held from nearer views showed the
+// regions' shapes beside them.)
 float landRegionFade(int L) {
-    return landFieldFootprint > 0.0 ? 1.0 - smoothstep(1.0, 2.0, landFieldFootprint / landRegionCell(L)) : 1.0;
+    if (!(landFieldFootprint > 0.0)) return 1.0;
+    float cell = landRegionCell(L);
+    float R = max(landRegionCoarserCell(L) / cell, 2.0);
+    return 1.0 - smoothstep(0.5 * R, R, landFieldFootprint / cell);
 }
 
 // Whether a level is read only about its centre (scene/world/land_regions.h,
@@ -105,7 +120,7 @@ float landRegionWeight(float t) {
 
 // Channel c of the region in `slot` at texel coordinate t: bilinear, held
 // inside its texels.
-vec4 landRegionTexel(int slot, int c, vec2 t) {
+vec4 landRegionBilinear(int slot, int c, vec2 t) {
     t = clamp(t - 0.5, vec2(0.0), vec2(float(LAND_REGION_CELLS - 1)));
     ivec2 i = min(ivec2(t), ivec2(LAND_REGION_CELLS - 2));
     vec2 f = t - vec2(i);
@@ -114,6 +129,18 @@ vec4 landRegionTexel(int slot, int c, vec2 t) {
     vec4 d = landRegionLoad(ivec3(i + ivec2(0, 1), layer)), e = landRegionLoad(ivec3(i + ivec2(1, 1), layer));
     vec4 lo = a + (b - a) * f.x, hi = d + (e - d) * f.x;
     return lo + (hi - lo) * f.y;
+}
+
+// The same over a reader's texel `q` of the region's texels wide: bilinear
+// while q is at most one, else the mean of four bilinear reads a quarter
+// of q off the point each way (their tents together about q wide), so a
+// coarse tile's texel takes the cells it spans, never the one its centre
+// lands on (a river a cell wide read every few cells was dotted).
+vec4 landRegionTexel(int slot, int c, vec2 t, float q) {
+    if (q <= 1.0) return landRegionBilinear(slot, c, t);
+    float o = 0.25 * q;
+    return 0.25 * (landRegionBilinear(slot, c, t + vec2(-o, -o)) + landRegionBilinear(slot, c, t + vec2(o, -o)) +
+                   landRegionBilinear(slot, c, t + vec2(-o, o)) + landRegionBilinear(slot, c, t + vec2(o, o)));
 }
 
 // Level L of one root at chart point s: its regions' weighted values (times
@@ -128,6 +155,7 @@ void landRegionLevel(int c, int L, int root, vec4 s, float wf, inout vec4 sum, i
     float a = float(LAND_REGION_APRON) / float(LAND_REGION_CELLS - 2 * LAND_REGION_APRON);
     int lo, hi;
     landRegionRange(L, lo, hi);
+    float q = landFieldFootprint / cell;
     ivec2 l = max(ivec2(floor(u - a)), ivec2(lo)), h = min(ivec2(floor(u + a)), ivec2(hi));
     for (int dj = 0; dj < 2; ++dj) {
         int j = l.y + dj;
@@ -144,7 +172,7 @@ void landRegionLevel(int c, int L, int root, vec4 s, float wf, inout vec4 sum, i
             precise vec2 t = (r + float(LAND_REGION_APRON) * cell + s.zw) / cell;
             float w = wf * landRegionWeight(t.x) * landRegionWeight(t.y);
             if (w <= 0.0) continue;
-            sum += w * landRegionTexel(slot, c, t);
+            sum += w * landRegionTexel(slot, c, t, q);
             cover += w;
         }
     }

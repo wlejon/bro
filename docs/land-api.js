@@ -79,7 +79,8 @@
  * (the processes' channel c, zero with none) and `landGridCover(int level,
  * vec2 p)` (how much of landGrid's kept channels there are the regional
  * grids' of `level` or finer, 0 .. 1: 0 past the regions about the eye or
- * where the texel is wider than the level's cells, so a surface shading a
+ * where the texel is as wide as the next coarser field's cells (a texel
+ * wider than the level's own reads their mean over it), so a surface shading a
  * band of relief laid down on a level can spread its lines by the band
  * where the band is not there; see REGIONAL GRIDS) (on a round body each
  * takes the vec3 datum point `q.at` instead), `landData(int i)` (the
