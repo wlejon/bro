@@ -6,7 +6,7 @@
 bool plantElement(Plant p, PlantSpecies s, PlantCrown c, PlantElementIn k, inout PlantElement e) { return false; }
 #endif
 
-vec2 plantLeafPoint(int species, int c) { return vec2(0.0); }
+vec2 plantLeafPoint(int species, int c, float detail) { return vec2(0.0); }
 
 bool plantLimb(Plant p, PlantSpecies s, PlantCrown c, int limb, out PlantLimb l) {
     l = PlantLimb(vec3(0.0), vec3(0.0), 0.0, 0.0, 0.0, vec3(0.0));

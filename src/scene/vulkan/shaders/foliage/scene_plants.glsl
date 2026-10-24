@@ -34,11 +34,16 @@ layout(std430, set = 3, binding = 2) readonly buffer PlantChunks {
 // A leaf chunk's elements (the plan's PP_LEAVES_PER_CHUNK).
 #define PLANT_LEAVES_PER_CHUNK 32
 
-// The element polygon: base, two pairs up its sides and the tip, as 4
-// triangles, drawn indexed (the drawer's leafIndices: 0 2 1, 1 2 4, 1 4 3,
-// 3 4 5), PLANT_LEAF_POINTS a polygon.
-#define PLANT_LEAF_VERTS 12
-#define PLANT_LEAF_POINTS 6
+// The element polygon: base, four pairs up its sides (left, right) and the
+// tip, as 8 triangles, drawn indexed (the drawer's leafIndices: 0 2 1, then
+// a strip up the pairs, then 7 8 9), PLANT_LEAF_POINTS a polygon. Its
+// outline is the module's at a detail (plantLeafPoint): 1 a near leaf's
+// whole blade, 0 the coarse polygon of points 0, 1 2, 5 6 and 9, the pairs
+// 3 4 and 7 8 on its sides, so a shadow view draws that coarse polygon
+// alone (the drawer's casterIndices: 4 triangles). PLANT_LEAF_POINTS is
+// scene_plant_layer.glsl's.
+#define PLANT_LEAF_VERTS 24
+#define PLANT_COARSE_VERTS 12
 // A limb or the trunk: a tapered tube of 6 sides, one span (6 quads).
 #define PLANT_TUBE_SIDES 6
 #define PLANT_TUBE_VERTS (PLANT_TUBE_SIDES * 6)
@@ -63,6 +68,7 @@ struct PlantVertex {
     vec2 shade;        // x the crown's height radius, y how deep in its lobe (0 skin .. 1 core)
     float far;         // 0 a leaf .. 1 a daub standing for many
     vec2 leafUV;       // an element's point (plantLeafPoint); a tube's 0
+    float outline;     // the detail its outline is drawn at (plantLeafOutlineDetail); a tube's 0
     int species;
     bool wood;
 };
@@ -108,24 +114,43 @@ layout(std430, set = 3, binding = 3) readonly buffer PlantPoses {
     uvec4 poses[];
 } plantPoses;
 
+// The detail an element's outline is drawn at, by the pixels its length
+// spans: 0 at 4 px and under, 1 from 12 (plants.frag's leaf detail's
+// band), a daub's always 0; and 0 past PLANT_OUTLINE_FAR metres, fading
+// from PLANT_OUTLINE_NEAR, so the camera's far bands (the plan's
+// PP_NEAR_BANDS on, a crown's reach past it) draw the coarse polygon alone
+// with nothing lost. The outline morphs between, so it never pops.
+#define PLANT_OUTLINE_NEAR 6.0
+#define PLANT_OUTLINE_FAR 10.0
+float plantLeafOutlineDetail(vec3 base, vec3 along, float far) {
+    float d = max(length(base), 1e-3);
+    float px = length(along) / d * 0.5 * abs(camera.proj[1][1]) * camera.viewport.y;
+    return (1.0 - far) * smoothstep(4.0, 12.0, px) * (1.0 - smoothstep(PLANT_OUTLINE_NEAR, PLANT_OUTLINE_FAR, d));
+}
+
 // Where pose slot `slot`'s point `c` lies (camera-relative), and the point
-// in the element's own frame. False: not drawn.
-bool plantPosedCorner(int slot, int c, out vec3 pos, out vec2 q) {
+// in the element's own frame, its outline at `detail` (< 0: by its span,
+// plantLeafOutlineDetail, the detail it was drawn at in it). False: not
+// drawn.
+bool plantPosedCorner(int slot, int c, inout float detail, out vec3 pos, out vec2 q) {
     uvec4 a = plantPoses.poses[slot * PLANT_POSE_UVEC4];
     uvec4 b = plantPoses.poses[slot * PLANT_POSE_UVEC4 + 1];
     if (b.w == 0u) return false;
     vec2 ab = unpackHalf2x16(b.y);
     vec3 along = vec3(unpackHalf2x16(b.x), ab.x);
     vec3 across = vec3(ab.y, unpackHalf2x16(b.z));
-    q = plantLeafPoint(int(b.w) - 1, c);
-    pos = uintBitsToFloat(a.xyz) + along * q.y + across * q.x;
+    vec3 base = uintBitsToFloat(a.xyz);
+    if (detail < 0.0) detail = plantLeafOutlineDetail(base, along, unpackHalf2x16(a.w).x);
+    q = plantLeafPoint(int(b.w) - 1, c, detail);
+    pos = base + along * q.y + across * q.x;
     return true;
 }
 
 // The whole vertex of pose slot `slot`'s point `c`, for the colour pass.
 bool plantPosedLeaf(int slot, int c, out PlantVertex o) {
     o.wood = false;
-    if (!plantPosedCorner(slot, c, o.pos, o.leafUV)) return false;
+    o.outline = -1.0;
+    if (!plantPosedCorner(slot, c, o.outline, o.pos, o.leafUV)) return false;
     uvec4 a = plantPoses.poses[slot * PLANT_POSE_UVEC4];
     uvec4 b = plantPoses.poses[slot * PLANT_POSE_UVEC4 + 1];
     uvec4 cc = plantPoses.poses[slot * PLANT_POSE_UVEC4 + 2];
@@ -133,6 +158,12 @@ bool plantPosedLeaf(int slot, int c, out PlantVertex o) {
     vec2 fd = unpackHalf2x16(a.w);
     vec2 n1 = unpackHalf2x16(cc.y);
     o.leafNormal = vec3(unpackHalf2x16(cc.x), n1.x);
+    // A near leaf's blade is cupped: its sides stand off its midrib toward
+    // its face, as much as the outline's detail (plants.frag bends its
+    // normal the same way). Its length the along axis's.
+    vec2 ab = unpackHalf2x16(b.y);
+    float len = length(vec3(unpackHalf2x16(b.x), ab.x));
+    o.pos += o.leafNormal * (0.18 * abs(o.leafUV.x) * len * o.outline);
     o.crownNormal = vec3(n1.y, unpackHalf2x16(cc.z));
     vec2 dz = unpackHalf2x16(d.y);
     o.albedo = vec3(unpackHalf2x16(cc.w), dz.y);
@@ -150,6 +181,7 @@ bool plantPosedLeaf(int slot, int c, out PlantVertex o) {
 bool plantWood(int pi, int limb, int v, out PlantVertex o) {
     o.wood = true;
     o.leafUV = vec2(0.0);
+    o.outline = 0.0;
     Plant p = plantAt(pi);
     PlantSpecies s = plantSpecies(p.species);
     o.species = p.species;

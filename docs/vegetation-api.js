@@ -272,8 +272,19 @@
  *     k.n strong (k.caster for a shadow view's): its polygon, normals,
  *     colour, crown centre, how far (a leaf .. a daub) and how deep in the
  *     crown it is (false leaves it out);
- *   - `vec2 plantLeafPoint(int species, int c)`: the element polygon's
- *     point c (base, two pairs up its sides, tip) as (across, along);
+ *   - `vec2 plantLeafPoint(int species, int c, float detail)`: the element
+ *     polygon's point c of 10 (base 0, four pairs up its sides, left odd and
+ *     right even, tip 9) as (across, along), its outline at `detail`. The
+ *     engine sets detail by the pixels an element's length spans: 0 at 4 px
+ *     and under (and for every daub and shadow caster), 1 from 12 px, a
+ *     smooth ramp between, fading to 0 from 6 to 10 m from the eye, so the
+ *     module morphs its outline continuously and a leaf never pops. At 0
+ *     only points 0, 1 2, 5 6 and 9 are drawn in shadow views and for the
+ *     camera's plants past 15 m, so 3 4 and 7 8 must lie on the coarse polygon's sides
+ *     there; at 1 all ten are the near blade's outline (ovate, lanceolate,
+ *     a spray: whatever the species' data says). The silhouette is this
+ *     geometry, the pass opaque (no cutout); a near leaf's sides also stand
+ *     off its midrib toward its face, cupped, by its detail;
  *   - `bool plantLimb(Plant p, PlantSpecies s, PlantCrown c, int limb, out
  *     PlantLimb l)`: tube `limb` (0 the trunk, then 1..`limbs`): its ends,
  *     radii, sway lag and colour;

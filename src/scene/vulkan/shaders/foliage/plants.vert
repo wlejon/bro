@@ -12,7 +12,7 @@ layout(location = 3) out vec3 outAlbedo;
 layout(location = 4) flat out int outSpecies;
 layout(location = 5) out vec4 outCrown;
 layout(location = 6) out vec2 outShade;
-layout(location = 7) out vec2 outInfo;   // x far, y wood
+layout(location = 7) out vec3 outInfo;   // x far, y wood, z the outline's detail
 layout(location = 8) out vec2 outLeafUV;
 
 #include "common/scene_camera.glsl"
@@ -46,7 +46,7 @@ void main() {
     outSpecies = o.species;
     outCrown = o.crown;
     outShade = o.shade;
-    outInfo = vec2(o.far, wood ? 1.0 : 0.0);
+    outInfo = vec3(o.far, wood ? 1.0 : 0.0, o.outline);
     outLeafUV = o.leafUV;
 }
 

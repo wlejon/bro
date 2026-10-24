@@ -24,8 +24,9 @@
 //                  prefix of the sequence should cover the whole crown, each
 //                  element growing as n falls (PlantElementIn.grow), so a far
 //                  plant is a few broad daubs.
-//   plantLeafPoint the element polygon's point c (base, two pairs up its
-//                  sides, tip) as (across, along).
+//   plantLeafPoint the element polygon's point c (base, four pairs up its
+//                  sides, tip) as (across, along), its outline at a detail
+//                  (0 coarse .. 1 a near leaf's blade; PLANT_LEAF_POINTS).
 //   plantLimb      tube `limb` of a plant (0 its trunk, then its limbs): its
 //                  ends, radii and colour.
 //   plantSway      the wind's push on a point of a plant.
@@ -94,7 +95,13 @@ struct PlantSurface {
 #ifdef PLANT_BUILD
 bool plantElement(Plant p, PlantSpecies s, PlantCrown c, PlantElementIn k, inout PlantElement e);
 #endif
-vec2 plantLeafPoint(int species, int c);
+// The element polygon's points: base 0, four pairs up its sides (left odd,
+// right even) and tip 9. At detail 0 (a daub, a leaf of 4 px or less, every
+// shadow view's) only 0, 1 2, 5 6 and 9 are drawn, so 3 4 and 7 8 must lie
+// on its sides there; at 1 (from 12 px) the whole outline is drawn, and the
+// module morphs between continuously.
+#define PLANT_LEAF_POINTS 10
+vec2 plantLeafPoint(int species, int c, float detail);
 bool plantLimb(Plant p, PlantSpecies s, PlantCrown c, int limb, out PlantLimb l);
 vec3 plantSway(Plant p, PlantSpecies s, float up, float lag);
 #ifdef PLANT_SHADE

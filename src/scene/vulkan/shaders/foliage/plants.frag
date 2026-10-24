@@ -18,7 +18,7 @@ layout(location = 3) in vec3 inAlbedo;
 layout(location = 4) flat in int inSpecies;
 layout(location = 5) in vec4 inCrown;
 layout(location = 6) in vec2 inShade;    // the crown's height radius, how deep in it
-layout(location = 7) in vec2 inInfo;
+layout(location = 7) in vec3 inInfo;    // x far, y wood, z the outline's detail
 layout(location = 8) in vec2 inLeafUV;   // across, along the element
 
 layout(location = 0) out vec4 outColor;
@@ -70,15 +70,21 @@ void main() {
         vec3 dpx = dFdx(pos), dpy = dFdy(pos);
         float span = 1.0 / max(max(length(vec2(dux.y, duy.y)), length(vec2(dux.x, duy.x))), 1e-4);
         leafDetail = (1.0 - far) * smoothstep(3.0, 12.0, span);
-        // The blade's half-width at this height (plantLeafPoint's outline).
-        float y = clamp(inLeafUV.y, 0.0, 1.0);
-        vec2 p1 = abs(plantLeafPoint(inSpecies, 1)), p3 = abs(plantLeafPoint(inSpecies, 3));
-        float w = y < p1.y ? p1.x * y / max(p1.y, 1e-3)
-                : y < p3.y ? mix(p1.x, p3.x, (y - p1.y) / max(p3.y - p1.y, 1e-3))
-                           : p3.x * (1.0 - y) / max(1.0 - p3.y, 1e-3);
-        float x = clamp(inLeafUV.x / max(w, 1e-3), -1.0, 1.0);
-        edge = smoothstep(0.55, 1.0, abs(x)) * leafDetail;
         if (leafDetail > 0.0) {
+            // The blade's half-width at this height (plantLeafPoint's
+            // outline at the detail it was drawn at: base, its left side,
+            // tip), only where the detail shows: a smaller leaf's fragments
+            // skip the module's outline.
+            float y = clamp(inLeafUV.y, 0.0, 1.0);
+            vec2 lo = vec2(0.0), hi = vec2(0.0, 1.0);
+            for (int i = 1; i < PLANT_LEAF_POINTS - 1; i += 2) {
+                vec2 p = abs(plantLeafPoint(inSpecies, i, inInfo.z));
+                if (p.y <= y) lo = p;
+                else { hi = p; break; }
+            }
+            float w = mix(lo.x, hi.x, clamp((y - lo.y) / max(hi.y - lo.y, 1e-3), 0.0, 1.0));
+            float x = clamp(inLeafUV.x / max(w, 1e-3), -1.0, 1.0);
+            edge = smoothstep(0.55, 1.0, abs(x)) * leafDetail;
             vec3 r1 = cross(dpy, nLeaf), r2 = cross(nLeaf, dpx);
             vec3 tU = r1 * dux.x + r2 * duy.x, tV = r1 * dux.y + r2 * duy.y;
             float su = inversesqrt(max(dot(tU, tU), 1e-20)), sv = inversesqrt(max(dot(tV, tV), 1e-20));

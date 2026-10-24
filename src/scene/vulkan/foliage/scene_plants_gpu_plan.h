@@ -55,6 +55,10 @@ namespace plants {
 constexpr VkDeviceSize commandOffset(uint32_t view, bool wood) {
     return VkDeviceSize{PP_A_COMMANDS + (2 * view + (wood ? 1u : 0u)) * PP_A_COMMAND_WORDS} * 4u;
 }
+/// The camera's far bands' leaves' (PP_NEAR_BANDS on), drawn coarse.
+constexpr VkDeviceSize farLeavesOffset() {
+    return VkDeviceSize{PP_A_COMMANDS + PP_A_FAR_LEAVES * PP_A_COMMAND_WORDS} * 4u;
+}
 
 class GpuPlanner {
 public:

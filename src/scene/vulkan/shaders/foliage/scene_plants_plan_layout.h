@@ -27,8 +27,16 @@
 #define PP_SLOTS                (PP_BANDS + PP_MAX_TILES)
 #define PP_LEAVES_PER_CHUNK     32    // a leaf chunk's elements (scene_plants.glsl's)
 #define PP_LIMBS_PER_CHUNK      8     // a wood chunk's tubes
-#define PP_LEAF_INDICES         12    // indices an element (the drawer's leafIndices)
-#define PP_TUBE_VERTS           36    // vertices a tube (PLANT_TUBE_VERTS)
+#define PP_LEAF_POINTS          10    // points an element's polygon (PLANT_LEAF_POINTS)
+#define PP_LEAF_INDICES         24    // indices an element, the camera's (the drawer's leafIndices)
+#define PP_CASTER_INDICES       12    // a shadow view's: its coarse polygon (casterIndices)
+// The camera's bands under PP_NEAR_BANDS draw an element's whole outline,
+// the rest its coarse polygon (the casters' indices): band 16 starts at
+// 2^4 - 1 = 15 m, and an outline's detail is 0 past PLANT_OUTLINE_FAR (10 m,
+// scene_plants.glsl), a crown's reach inside that, so a plant crossing it
+// changes nothing on screen.
+#define PP_NEAR_BANDS           16
+#define PP_TUBE_VERTS           36   // vertices a tube (PLANT_TUBE_VERTS)
 #define PP_MAX_LIMBS            48    // a species' tubes besides its trunk (PLANT_MAX_LIMBS)
 // A plant of at most PP_PACK_MOST elements (a far one) shares a leaf chunk:
 // class c gives each plant 2^c of its slots, PP_LEAVES_PER_CHUNK >> c plants
@@ -94,6 +102,7 @@
 #define PP_A_POSE               0     // x, 1, 1: a workgroup a leaf chunk (plants_pose.comp)
 #define PP_A_COMMANDS           4     // the draws' commands, PP_A_COMMAND_WORDS each:
 #define PP_A_COMMAND_WORDS      8     //   2v a view's leaves (indexed), 2v + 1 its wood (view 0 the camera, 1 + t tile t)
-#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * 2 * (1 + PP_MAX_TILES))
+#define PP_A_FAR_LEAVES         (2 * (1 + PP_MAX_TILES))   // then the camera's far bands' leaves (indexed, coarse)
+#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_FAR_LEAVES + 1))
 
 #endif

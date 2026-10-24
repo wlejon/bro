@@ -40,10 +40,11 @@ vec4 tLobe(PlantSpecies s, PlantCrown c, int j) {
     return vec4(c.center + vec3(cos(a) * w, v * (c.radii.y - r), sin(a) * w), r);
 }
 vec3 plantSway(Plant p, PlantSpecies s, float up, float lag) { return vec3(0.0); }
-vec2 plantLeafPoint(int species, int c) {
-    const vec2 pts[6] = vec2[6](vec2(0.0, 0.0), vec2(-0.48, 0.32), vec2(0.48, 0.32),
-                                vec2(-0.36, 0.72), vec2(0.36, 0.72), vec2(0.0, 1.0));
-    return pts[clamp(c, 0, 5)];
+vec2 plantLeafPoint(int species, int c, float detail) {
+    const vec2 pts[10] = vec2[10](vec2(0.0, 0.0), vec2(-0.48, 0.32), vec2(0.48, 0.32),
+                                  vec2(-0.42, 0.52), vec2(0.42, 0.52), vec2(-0.36, 0.72), vec2(0.36, 0.72),
+                                  vec2(-0.18, 0.86), vec2(0.18, 0.86), vec2(0.0, 1.0));
+    return pts[clamp(c, 0, 9)];
 }
 #ifdef PLANT_BUILD
 bool plantElement(Plant p, PlantSpecies s, PlantCrown c, PlantElementIn k, inout PlantElement e) {

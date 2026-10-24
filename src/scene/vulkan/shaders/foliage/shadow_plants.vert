@@ -38,17 +38,19 @@ void main() {
                 // The light's own axes: its view-projection's first two rows.
                 vec3 right = normalize(vec3(push.lightViewProj[0][0], push.lightViewProj[1][0], push.lightViewProj[2][0]));
                 vec3 up = normalize(vec3(push.lightViewProj[0][1], push.lightViewProj[1][1], push.lightViewProj[2][1]));
-                // A hexagon on the leaf polygon's 6 points and its indices
-                // (base, left 1, right 1, left 2, right 2, tip: round the ring
-                // 0 1 5 2 4 3, so its 4 triangles tile it).
-                const int ring[6] = int[6](0, 1, 5, 2, 4, 3);
+                // A hexagon on the coarse leaf polygon's 6 points and its
+                // indices (base 0, left 1, right 2, left 5, right 6, tip 9:
+                // round the ring 0 1 5 2 4 3, so its 4 triangles tile it).
+                const int ring[PLANT_LEAF_POINTS] = int[PLANT_LEAF_POINTS](0, 1, 5, 0, 0, 2, 4, 0, 0, 3);
                 float a = float(ring[c]) * 1.0471976 + plantRand(p.seed, 31u) * 6.2831853;
                 float r = cr.radii.x * 0.85;
                 pos = centre + right * cos(a) * r + up * sin(a) * mix(r, cr.radii.y * 0.85, 0.5);
             }
         } else {
+            // (The coarse polygon: a caster's outline at detail 0.)
             vec2 q;
-            ok = plantPosedCorner(gl_InstanceIndex * PLANT_LEAVES_PER_CHUNK + e, c, pos, q);
+            float detail = 0.0;
+            ok = plantPosedCorner(gl_InstanceIndex * PLANT_LEAVES_PER_CHUNK + e, c, detail, pos, q);
         }
     }
     if (!ok) {

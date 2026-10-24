@@ -31,27 +31,41 @@
 #include "util/log.h"
 
 #include <cstring>
+#include <initializer_list>
 
 namespace bro::scene::vk {
 
 namespace {
 
-constexpr uint32_t kLeafVerts = 12;
+constexpr uint32_t kLeafVerts = PP_LEAF_INDICES;
+constexpr uint32_t kCasterLeafVerts = PP_CASTER_INDICES;
 constexpr uint32_t kTubeVerts = PP_TUBE_VERTS;
 constexpr uint32_t kLeavesPerChunk = PP_LEAVES_PER_CHUNK;
 constexpr uint32_t kLimbsPerChunk = PP_LIMBS_PER_CHUNK;
 
 // The leaves draw indexed, so the vertex stage runs once a point of an
-// element's polygon (PLANT_LEAF_POINTS), not once a triangle's corner:
-// scene_plants.glsl's polygon of 4 triangles, a chunk's elements on.
-constexpr uint32_t kLeafPoints = 6;
-constexpr uint32_t kLeafIndexSlot = 1;   // its slot among the node's GPU meshes
-const bromesh::MeshData& leafIndices() {
-    static bromesh::MeshData m;
-    if (!m.indices.empty()) return m;
+// element's polygon (PLANT_LEAF_POINTS) a triangle uses, not once a
+// triangle's corner: scene_plants.glsl's polygon of 8 triangles for the
+// camera (base, a strip up its 4 pairs, tip), a chunk's elements on, and
+// its coarse polygon of 4 (points 0, 1 2, 5 6, 9) for a shadow view, whose
+// vertex stage never runs for the points it leaves out.
+constexpr uint32_t kLeafPoints = PP_LEAF_POINTS;
+constexpr uint32_t kLeafIndexSlot = 1;     // their slots among the node's GPU meshes
+constexpr uint32_t kCasterIndexSlot = 2;
+bromesh::MeshData elementIndices(std::initializer_list<uint32_t> polygon) {
+    bromesh::MeshData m;
     for (uint32_t e = 0; e < kLeavesPerChunk; ++e)
-        for (uint32_t c : {0u, 2u, 1u, 1u, 2u, 4u, 1u, 4u, 3u, 3u, 4u, 5u}) m.indices.push_back(e * kLeafPoints + c);
+        for (uint32_t c : polygon) m.indices.push_back(e * kLeafPoints + c);
     m.positions.assign(3 * kLeafPoints * kLeavesPerChunk, 0.0f);
+    return m;
+}
+const bromesh::MeshData& leafIndices() {
+    static const bromesh::MeshData m = elementIndices(
+        {0u, 2u, 1u, 1u, 2u, 4u, 1u, 4u, 3u, 3u, 4u, 6u, 3u, 6u, 5u, 5u, 6u, 8u, 5u, 8u, 7u, 7u, 8u, 9u});
+    return m;
+}
+const bromesh::MeshData& casterIndices() {
+    static const bromesh::MeshData m = elementIndices({0u, 2u, 1u, 1u, 2u, 6u, 1u, 6u, 5u, 5u, 6u, 9u});
     return m;
 }
 
@@ -114,8 +128,9 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     // The records, the runs changed since the last frame copied in.
     bool changed = false;
     const SceneVkBuffer* store = frame.gpu.resources.storage(node.id(), node.store(), changed);
-    const GpuMesh* ix = frame.gpu.resources.mesh(node.id(), kLeafIndexSlot, 1, leafIndices());
-    if (!store || !ix) return;
+    const GpuMesh* ix = frame.gpu.resources.mesh(node.id(), kLeafIndexSlot, 2, leafIndices());
+    const GpuMesh* casterIx = frame.gpu.resources.mesh(node.id(), kCasterIndexSlot, 1, casterIndices());
+    if (!store || !ix || !casterIx) return;
     // (Copied on the graphics queue, read by the plan on the compute queue.)
     if (changed) frame.gpu.device.computeReadsGraphics();
     // The shadow views its casters go to: the overlays of the levels where
@@ -168,11 +183,22 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
             part.indirectOffset = plants::commandOffset(v, part.push.extra[0] > 0.5f);
             if (v > 0) {
                 part.shadowOnly = part.castsShadow = true;
+                if (part.push.extra[0] < 0.5f) {
+                    part.indices = casterIx->indices.buffer;
+                    part.indexCount = kLeavesPerChunk * kCasterLeafVerts;
+                }
                 part.shadowView = tiles[v - 1];
                 part.shadowTimerLabel = "shadow:plants";
             }
             out.push_back(part);
         }
+    // The camera's far bands' leaves, their outline's detail 0 already: the
+    // coarse polygon's points alone.
+    MeshDraw far = leaves;
+    far.indirectOffset = plants::farLeavesOffset();
+    far.indices = casterIx->indices.buffer;
+    far.indexCount = kLeavesPerChunk * kCasterLeafVerts;
+    out.push_back(far);
 }
 
 }  // namespace bro::scene::vk

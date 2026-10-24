@@ -271,9 +271,9 @@ void main() {
 // [start, start + n) cut to `cap`: how much of it there is room for.
 uint fits(uint start, uint n, uint cap) { return start >= cap ? 0u : min(n, cap - start); }
 
-void putIndexed(uint command, uint first, uint count) {
+void putIndexed(uint command, uint first, uint count, uint indices) {
     uint a = PP_A_COMMANDS + command * PP_A_COMMAND_WORDS;
-    args.w[a] = uint(PP_LEAVES_PER_CHUNK * PP_LEAF_INDICES);
+    args.w[a] = uint(PP_LEAVES_PER_CHUNK) * indices;
     args.w[a + 1u] = count;
     args.w[a + 2u] = 0u;
     args.w[a + 3u] = 0u;
@@ -305,8 +305,9 @@ void main() {
     uint nt = tiles();
     // The leaf chunks: the camera's bands (each its own then its packed),
     // then each tile's leaves, its packed and its discs' chunks.
-    uint at = 0u;
+    uint at = 0u, nearLeaves = 0u;
     for (uint b = 0u; b < uint(PP_BANDS); ++b) {
+        if (b == uint(PP_NEAR_BANDS)) nearLeaves = at;
         work.w[PP_N_LEAF_START + b] = at;
         at += work.w[PP_N_LEAF + b];
         at = layPacks(cameraSlot(b), at);
@@ -354,7 +355,11 @@ void main() {
     args.w[PP_A_POSE] = min(leafArea, leafCap);
     args.w[PP_A_POSE + 1u] = 1u;
     args.w[PP_A_POSE + 2u] = 1u;
-    putIndexed(0u, 0u, fits(0u, cameraLeaves, leafCap));
+    // The camera's leaves: its near bands' whole outlines, its far bands'
+    // coarse polygons (whose detail is 0 there already).
+    putIndexed(0u, 0u, fits(0u, nearLeaves, leafCap), uint(PP_LEAF_INDICES));
+    putIndexed(uint(PP_A_FAR_LEAVES), nearLeaves, fits(nearLeaves, cameraLeaves - nearLeaves, leafCap),
+               uint(PP_CASTER_INDICES));
     putDraw(1u, leafArea, fits(leafArea, cameraWood, chunkCap));
     for (uint t = 0u; t < uint(PP_MAX_TILES); ++t) {
         uint s = tileSlot(t);
@@ -367,7 +372,7 @@ void main() {
             woodFirst = work.w[PP_N_WOOD_START + s];
             wood = fits(woodFirst, work.w[PP_N_WOOD + s], chunkCap);
         }
-        putIndexed(2u + 2u * t, first, leaves);
+        putIndexed(2u + 2u * t, first, leaves, uint(PP_CASTER_INDICES));
         putDraw(3u + 2u * t, woodFirst, wood);
     }
 }
