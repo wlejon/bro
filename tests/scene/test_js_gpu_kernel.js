@@ -27,14 +27,21 @@
     const gpuVal = k.evalGpu(1.5, -0.75);
     const refVal = Math.sin(1.5 * 0.25) * 2.0 + Math.cos(-0.75 * 0.25) * 1.5;
     assert(Math.abs(cpuVal - refVal) < 1e-5, `evalCpu matches JS math (${cpuVal} vs ${refVal})`);
-    assert(Math.abs(gpuVal - cpuVal) < 1e-5, `evalGpu matches evalCpu (${gpuVal} vs ${cpuVal})`);
+    // RelaxedPrecision lets hardware run the promoted ops at mediump (fp16,
+    // as NVIDIA does), so the match is to fp16's relative precision.
+    assert(Math.abs(gpuVal - cpuVal) <= Math.abs(cpuVal) * 2e-3,
+           `evalGpu matches evalCpu (${gpuVal} vs ${cpuVal})`);
     if (bro.gpu.vulkanComputeAvailable()) {
         assert(k.lastUsedVulkanGpu === true, 'evalGpu executed on the hardware Vulkan compute queue');
     }
 
     // Verify Terrain.prototype.setHeightSource accepts a compiled @kernel object directly
-    const terrain = new bro.scene.Terrain();
-    terrain.configure({
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('width', '64');
+    canvas.setAttribute('height', '64');
+    document.body.appendChild(canvas);
+    flush();
+    const terrain = canvas.getContext('scene').createTerrain({
         chunkSize: [16, 32, 16],
         cellSize: 1.0,
         loadRadius: 1,

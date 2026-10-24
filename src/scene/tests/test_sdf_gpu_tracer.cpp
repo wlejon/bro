@@ -18,6 +18,14 @@ namespace {
 int g_checks = 0;
 int g_failures = 0;
 
+void setEnv(const char* name, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(name, value ? value : "");
+#else
+    if (value) setenv(name, value, 1); else unsetenv(name);
+#endif
+}
+
 void check(bool ok, const std::string& what) {
     ++g_checks;
     if (ok) return;
@@ -406,13 +414,13 @@ void main() {
           "GlslCompiler static compute audit extracts workgroup local_size_x = 64");
 
     // 3. Environment variable toggles BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1
-    setenv("BRO_SHADER_RELAXED_PRECISION", "1", 1);
-    setenv("BRO_AUDIT_COMPUTE_SHADERS", "1", 1);
+    setEnv("BRO_SHADER_RELAXED_PRECISION", "1");
+    setEnv("BRO_AUDIT_COMPUTE_SHADERS", "1");
     std::string log;
     const auto envSpirv = bro::render::compileGlslToSpirv(
         compSrc, bro::render::ShaderStage::Compute, &log);
-    unsetenv("BRO_SHADER_RELAXED_PRECISION");
-    unsetenv("BRO_AUDIT_COMPUTE_SHADERS");
+    setEnv("BRO_SHADER_RELAXED_PRECISION", nullptr);
+    setEnv("BRO_AUDIT_COMPUTE_SHADERS", nullptr);
 
     check(!envSpirv.empty(), "compileGlslToSpirv succeeds with BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1");
     check(bro::render::GlslCompiler::lastRelaxedPrecisionStats().promotedCount > 0,
@@ -457,12 +465,9 @@ void testJsGpuKernelSingleSourceAndVulkanDispatch() {
         k.entry = "terrainWave";
         k.stage = brass::target::SpirvStage::Compute;
         k.words = res.spirvWords;
-        k.params = {
-            {brass::Type::f32(), 0, 4},
-            {brass::Type::f32(), 4, 4},
-            {brass::Type::ptr(), 8, 8},
-        };
-        k.push_constant_bytes = 16;
+        k.params = res.spirvLayout.params;
+        k.descriptors = res.spirvLayout.descriptors;
+        k.push_constant_bytes = res.spirvLayout.push_constant_bytes;
         k.local_size[0] = 64;
         k.local_size[1] = 1;
         k.local_size[2] = 1;
@@ -474,8 +479,13 @@ void testJsGpuKernelSingleSourceAndVulkanDispatch() {
         const bool launched = mod.valid() && outBuf.valid() &&
                               mod.launch_1d(1, 64, {1.5f, -0.75f, outBuf}, &err) &&
                               outBuf.download(&vkVal, sizeof(float));
-        check(launched && std::fabs(vkVal - cpuVal) < 1e-5f,
-              "single-source JS @kernel terrainWave executes on hardware Vulkan queue and matches CPU");
+        // Compiled with enableRelaxedPrecision: hardware may run the promoted
+        // ops at mediump (fp16, 10-bit mantissa), as NVIDIA does, so the match
+        // is to fp16's relative precision, not fp32's.
+        check(launched && std::fabs(vkVal - cpuVal) <= std::fabs(cpuVal) * 2e-3f,
+              "single-source JS @kernel terrainWave executes on hardware Vulkan queue and matches CPU (" +
+              std::to_string(res.spirvLayout.params.size()) + " params, vk " + std::to_string(vkVal) +
+              ", cpu " + std::to_string(cpuVal) + (err.empty() ? "" : ", " + err) + ")");
     }
 
     // 2. Buffer compute kernel dispatched on Vulkan (#116)
@@ -497,13 +507,9 @@ void testJsGpuKernelSingleSourceAndVulkanDispatch() {
         k.entry = "saxpy";
         k.stage = brass::target::SpirvStage::Compute;
         k.words = saxpyRes.spirvWords;
-        k.params = {
-            {brass::Type::ptr(), 0, 8},
-            {brass::Type::ptr(), 8, 8},
-            {brass::Type::f32(), 16, 4},
-            {brass::Type::i32(), 20, 4},
-        };
-        k.push_constant_bytes = 24;
+        k.params = saxpyRes.spirvLayout.params;
+        k.descriptors = saxpyRes.spirvLayout.descriptors;
+        k.push_constant_bytes = saxpyRes.spirvLayout.push_constant_bytes;
         k.local_size[0] = 64;
         k.local_size[1] = 1;
         k.local_size[2] = 1;

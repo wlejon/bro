@@ -24,6 +24,7 @@
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_solve.h"
 #include "bronze_host/host_window_open.h"
@@ -162,6 +163,7 @@ void installBroRoots(engine::Engine& engine) {
     {
         ev::Persistent gpu(makeBroGpuValue());
         ev::setProperty(bro->get(), "gpu", gpu.get());
+        registerJsGpuShutdown(engine);
     }
     {
         ev::Persistent steam(makeBroSteamValue());

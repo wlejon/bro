@@ -6,7 +6,15 @@
 #include <span>
 #include <string>
 
+namespace bro::engine { class Engine; }
+
 namespace bro::bronze_host {
+
+/// Release every compiled kernel's Vulkan module and close brass's Vulkan
+/// runtime when `engine` shuts down, while the driver is still loaded (brass's
+/// own exit handler runs in libbro's DLL detach, after the driver's). Once per
+/// engine; later calls for the same engine do nothing.
+void registerJsGpuShutdown(engine::Engine& engine);
 
 std::string normalizeJsKernelSourceString(
     const std::string& raw,

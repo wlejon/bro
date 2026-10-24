@@ -1,6 +1,7 @@
 #include "bronze_host/host_js_gpu.h"
 
 #include "codegen-brass/js_gpu_kernel.h"
+#include "engine/engine.h"
 
 #include <brass/gpu/vulkan_driver.hpp>
 #include <brass/target/spirv/spirv_binary_reader.hpp>
@@ -40,10 +41,6 @@ std::atomic<uint32_t> s_nextKernelId{1};
 std::unordered_map<uint32_t, std::shared_ptr<CompiledJsKernelEntry>>& kernelRegistry() {
     static auto* r = new std::unordered_map<uint32_t, std::shared_ptr<CompiledJsKernelEntry>>();
     return *r;
-}
-
-uint32_t alignUpU32(uint32_t v, uint32_t a) {
-    return a == 0 ? v : ((v + a - 1) / a) * a;
 }
 
 std::string trimWhitespace(std::string s) {
@@ -117,6 +114,12 @@ brass::target::SpirvKernel buildSpirvKernelDescriptor(
     k.local_size[1] = 1;
     k.local_size[2] = 1;
     k.local_size_spec_constants = false;
+    // The lowering's own layout: a buffer parameter is a 64-bit address in the
+    // push-constant block, indistinguishable in the binary from an i64.
+    k.params = res.spirvLayout.params;
+    k.descriptors = res.spirvLayout.descriptors;
+    k.push_constant_bytes = res.spirvLayout.push_constant_bytes;
+    k.shared_bytes = res.spirvLayout.shared_bytes;
 
     brass::spirv::Module mod;
     if (!res.spirvWords.empty() && brass::spirv::parse_binary(res.spirvWords, mod)) {
@@ -129,55 +132,6 @@ brass::target::SpirvKernel buildSpirvKernelDescriptor(
                 k.local_size[0] = em.operands[2].value;
                 k.local_size[1] = em.operands[3].value;
                 k.local_size[2] = em.operands[4].value;
-            }
-        }
-
-        brass::spirv::Id pcPtrTypeId = 0;
-        for (const auto& g : mod.globals) {
-            if (g.op == spv::OpVariable && !g.operands.empty() &&
-                g.operands[0].value == static_cast<uint32_t>(spv::StorageClassPushConstant)) {
-                pcPtrTypeId = g.type;
-                break;
-            }
-        }
-        brass::spirv::Id pcStructTypeId = 0;
-        if (pcPtrTypeId != 0) {
-            if (const auto* ptrTi = mod.type_info(pcPtrTypeId)) {
-                pcStructTypeId = ptrTi->elem;
-            }
-        }
-        if (pcStructTypeId != 0) {
-            for (const auto& g : mod.globals) {
-                if (g.op == spv::OpTypeStruct && g.result == pcStructTypeId) {
-                    uint32_t offset = 0;
-                    for (const auto& opnd : g.operands) {
-                        const auto* ti = mod.type_info(opnd.value);
-                        if (!ti) continue;
-                        brass::Type paramType = brass::Type::f32();
-                        uint32_t size = 4;
-                        if (ti->op == spv::OpTypePointer) {
-                            paramType = brass::Type::ptr();
-                            size = 8;
-                        } else if (ti->op == spv::OpTypeInt && ti->width == 64) {
-                            paramType = brass::Type::i64();
-                            size = 8;
-                        } else if (ti->op == spv::OpTypeInt) {
-                            paramType = brass::Type::i32();
-                            size = 4;
-                        } else if (ti->op == spv::OpTypeFloat && ti->width == 64) {
-                            paramType = brass::Type::f64();
-                            size = 8;
-                        } else {
-                            paramType = brass::Type::f32();
-                            size = 4;
-                        }
-                        offset = alignUpU32(offset, size);
-                        k.params.push_back(brass::target::SpirvParam{paramType, offset, size});
-                        offset += size;
-                    }
-                    k.push_constant_bytes = alignUpU32(offset, 4);
-                    break;
-                }
             }
         }
     }
@@ -249,11 +203,17 @@ Value implDispatch1D(CompiledJsKernelEntry& entry, std::span<const Value> args) 
     if (!outInfo.data || outInfo.elementCount == 0) return args[0];
     const size_t count = outInfo.elementCount;
 
-    // Path 1: Buffer compute kernel dispatched on the real Vulkan compute queue
+    // Path 1: Buffer compute kernel dispatched on the real Vulkan compute queue.
+    // There is no host fallback for a buffer kernel, so a dispatch that cannot
+    // run throws with the reason rather than handing back untouched buffers.
     if (!entry.compiled.hasScalarReturn) {
+        std::string failure;
         if (auto* vkMod = ensureVulkanModule(entry)) {
             const auto& params = entry.spirvKernel.params;
-            if (args.size() >= params.size() && !params.empty()) {
+            if (args.size() < params.size() || params.empty()) {
+                failure = "expected " + std::to_string(params.size()) + " arguments, got " +
+                          std::to_string(args.size());
+            } else {
                 struct BoundBuf {
                     size_t argIndex;
                     brass::gpu::VulkanBuffer buf;
@@ -268,11 +228,20 @@ Value implDispatch1D(CompiledJsKernelEntry& entry, std::span<const Value> args) 
                     const auto& p = params[i];
                     const Value& arg = args[i];
                     if (p.type.is_pointer()) {
-                        if (!ev::isTypedArray(arg)) { ok = false; break; }
+                        if (!ev::isTypedArray(arg)) {
+                            failure = "argument " + std::to_string(i) + " must be a typed array";
+                            ok = false;
+                            break;
+                        }
                         auto ti = ev::typedArrayInfo(arg);
-                        if (!ti.data || ti.byteLength == 0) { ok = false; break; }
+                        if (!ti.data || ti.byteLength == 0) {
+                            failure = "argument " + std::to_string(i) + " is an empty typed array";
+                            ok = false;
+                            break;
+                        }
                         auto gpuBuf = brass::gpu::VulkanBuffer::alloc(ti.byteLength);
                         if (!gpuBuf.valid() || !gpuBuf.upload(ti.data, ti.byteLength)) {
+                            failure = "buffer upload failed: " + brass::gpu::vulkan_last_error();
                             ok = false;
                             break;
                         }
@@ -307,9 +276,13 @@ Value implDispatch1D(CompiledJsKernelEntry& entry, std::span<const Value> args) 
                         entry.lastUsedVulkan = true;
                         return args[0];
                     }
+                    failure = "launch failed: " + err;
                 }
             }
+        } else {
+            failure = "no Vulkan compute device: " + brass::gpu::vulkan_last_error();
         }
+        return ev::throwError("dispatch1D(" + entry.compiled.kernelName + "): " + failure);
     }
 
     // Path 2: Single-source scalar-return kernel batch evaluation
@@ -538,6 +511,20 @@ Value compileJsKernelValue(std::span<const Value> args, bool defaultShaderStage)
     });
 
     return out.get();
+}
+
+void registerJsGpuShutdown(engine::Engine& engine) {
+    static engine::Engine* s_engine = nullptr;
+    if (s_engine == &engine) return;
+    s_engine = &engine;
+    engine.addShutdownHook([eng = &engine] {
+        {
+            std::lock_guard<std::mutex> lock(kernelRegistryMutex());
+            for (auto& [id, entry] : kernelRegistry()) entry->vkModule.reset();
+        }
+        brass::gpu::vulkan_close();
+        if (s_engine == eng) s_engine = nullptr;
+    });
 }
 
 void attachJsGpuKernelFunctions(ObjectBuilder& b) {
