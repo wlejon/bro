@@ -348,21 +348,29 @@ float cloudCutBase(float base, vec3 pd, float cell) {
 // The lumps a share cut into clouds is carved into, read per sample (the
 // cache's cells are as wide as the clouds where it holds shares, so its
 // cut alone is a few blobs a cell or two across): Worley's cells (1 - F1,
-// the noise's y) some CLOUD_LUMP_CELL edges across, the base lowered by
-// `q` (cloudShareLike) of CLOUD_LUMPS where they fall under
-// CLOUD_LUMP_FLOOR (toward their rims), so a far field seen from above is
-// a heap's dome a cell, lit on its sun side and shaded in its lee, and
-// parts between them. They never raise the base, so the cache's holds and
-// the march's bounds, taken on the base uncarved, stand as they are.
+// the noise's y) some CLOUD_LUMP_CELL edges across, and in the gaps between
+// them its cells half as wide (the noise's z, CLOUD_LUMP_SMALL_DROP
+// lower: fewer and smaller), the base lowered by `q` (cloudShareLike) of
+// CLOUD_LUMPS where they fall under CLOUD_LUMP_FLOOR (toward their rims),
+// so a far field seen from above is heaps' domes of a wide range of sizes,
+// lit on their sun side and shaded in their lee, and parts between them.
+// They never raise the base, so the cache's holds and the march's bounds,
+// taken on the base uncarved, stand as they are.
 const float CLOUD_LUMPS = 0.6;
-const float CLOUD_LUMP_FLOOR = 0.6;
+const float CLOUD_LUMP_FLOOR = 0.63;
 const float CLOUD_LUMP_CELL = 1.7;
+const float CLOUD_LUMP_SMALL_DROP = 0.12;
 float cloudLumpsOf(vec3 pd, float footprint, float q) {
     if (q <= 0.0) return 0.0;
     // (Read no finer than a 32nd of their tile, a few texels a cell: they
-    // are a heap's size, and the noise's coarse mips stay in the cache.)
+    // are a heap's size, and the noise's coarse mips stay in the cache.
+    // Read turned, as the cut's noise is: the tile is only four cells a
+    // side, so read along the body's axes its repeats lined up in rows
+    // along an axis lying level, straight streaks running off toward the
+    // horizon.)
     float T = 4.0 * CLOUD_LUMP_CELL * clouds.forms.w;
-    float y = cloudNoise(pd / T, max(footprint / T, 1.0 / 32.0)).y;
+    vec4 w = cloudNoise(kCloudCutTurn * pd / T, max(footprint / T, 1.0 / 32.0));
+    float y = max(w.y, w.z - CLOUD_LUMP_SMALL_DROP);
     return q * CLOUD_LUMPS * min(y - CLOUD_LUMP_FLOOR, 0.0);
 }
 // The share of the footprint the cloud fills where the billows' noise is
