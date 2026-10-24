@@ -77,6 +77,7 @@ layout(set = 2, binding = CL_B_DEPTH) uniform sampler2D cloudDepth;
 //#define CL_DEBUG_KINDS
 //#define CL_DEBUG_TAU
 //#define CL_DEBUG_COUNT dbgSkin
+//#define CL_DEBUG_LAYER 3
 const int CL_VIEW_STEPS = 160;
 const int CL_PROBE_LEVELS = 1;     // how much coarser the band probed is than the point's level
 const int CL_PROBE_UP = 6;   // how many levels coarser still it may be
@@ -277,6 +278,23 @@ float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
     return tau + clCache(w, clLod(w, foot)).y;
 }
 
+// The globe's column at body point `p` over a pixel's footprint `foot` (m):
+// where the pixel is wider than the globe's texel, the mean of four reads
+// across it (a rotated grid), so texels finer than the pixel (a deck's
+// cells, a field's clusters) average to their mean, never alias to grain.
+vec4 clGlobeColumn(vec3 p, float foot) {
+    vec3 up = normalize(p);
+    float wide = smoothstep(1.0, 2.0, foot / cloudGlobeTexel());
+    if (wide <= 0.0) return cloudGlobeColumn(up);
+    vec3 e1 = normalize(cross(up, abs(up.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 e2 = cross(up, e1);
+    float o = wide * foot / length(p);
+    return 0.25 * (cloudGlobeColumn(normalize(up + o * (0.375 * e1 + 0.125 * e2))) +
+                   cloudGlobeColumn(normalize(up + o * (-0.125 * e1 + 0.375 * e2))) +
+                   cloudGlobeColumn(normalize(up + o * (-0.375 * e1 - 0.125 * e2))) +
+                   cloudGlobeColumn(normalize(up + o * (0.125 * e1 - 0.375 * e2))));
+}
+
 // What the march carries along a view.
 struct ClMarch {
     vec3 L;          // light scattered toward the eye
@@ -420,6 +438,8 @@ void main() {
     clLumps = smoothstep(CL_LUMPS_FROM, CL_LUMPS_TO, abs(dot(rd, normalize(ro + rd * sp.x))));
     float wl =length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
+    vec4 dbgLCol = vec4(0.0);
+    float dbgLMu = 1.0;
     for (int i = 0; i < 2 && wl > 0.0; ++i) {
         vec2 q = i == 0 ? spanA : spanB;
         if (q.x >= q.y) continue;
@@ -441,7 +461,7 @@ void main() {
             if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
         }
         if (globe > 0.0) {
-            col = mix(col, cloudGlobeColumn(normalize(w.p)), globe);
+            col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);
             footCell = mix(footCell, cloudGlobeTexel(), globe);
         }
         float len = q.y - q.x;
@@ -461,7 +481,14 @@ void main() {
             float sharePixel = cloudFormsShare(cloudBillows(pd, footPixel), base, footPixel);
             cut = mix(clamp(sharePixel / max(shareCell, 1e-3), 0.0, 4.0), 1.0, globe);
         }
-        float tauView = col.x * len / thick * cut;
+        // The view's depth through the layer slanted `m` times its own: the
+        // share of the view its clouds cover (col.x's over the depth within
+        // them, col.w) as from above, and within them the depth the slant's.
+        // (Not col.x's slanted: a field of opaque clouds over a share of the
+        // column slanted to the horizon is no white sheet.)
+        float m = len / thick;
+        float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);
+        float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
         if (tauView < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
         vec3 pl = ro + rd * at;
@@ -474,9 +501,26 @@ void main() {
         // cloud as deep as it is, however thin the view's mean. An opaque
         // top's lumps lit from the side, clTopShade.)
         float shade = mix(1.0, clTopShade(pl, s, pixel * at), smoothstep(1.0, 3.0, tauView));
-        clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.x, s, nu, ph, albedo, E * shade,
+        clIntegrate(ml, pl, at, len, tauView / len, vec2(col.y / mu, col.y), col.w, s, nu, ph, albedo, E * shade,
                     skyAbove, groundBelow);
+        dbgLCol = col;
+        dbgLMu = mu;
     }
+#ifdef CL_DEBUG_LAYER
+    {
+        // The layer's terms: 1 the column's depth, 2 its alpha, 3 its
+        // reflectance (of a white diffuser's), 4 that over its alpha.
+        const int mode = CL_DEBUG_LAYER;
+        float refl = dot(ml.L, vec3(0.2126, 0.7152, 0.0722)) / max(dot(E, vec3(0.2126, 0.7152, 0.0722)) * dbgLMu / PI, 1e-6);
+        float v = mode == 1 ? dbgLCol.x : mode == 2 ? 1.0 - ml.T : mode == 3 ? refl : refl / max(1.0 - ml.T, 1e-3);
+        float k = mode == 1 ? 1.0 : 0.25;
+        // (black none, red < k/4, yellow < k/2, green < k, cyan < 2k, blue < 4k, white more)
+        vec3 c = v <= 0.0 ? vec3(0) : v < 0.25 * k ? vec3(1, 0, 0) : v < 0.5 * k ? vec3(1, 1, 0) : v < k ? vec3(0, 1, 0)
+               : v < 2.0 * k ? vec3(0, 1, 1) : v < 4.0 * k ? vec3(0, 0, 1) : vec3(1);
+        outColor = vec4(c * 1e6, 1.0);
+        return;
+    }
+#endif
 
     int mode = CL_TRACE;
     float t = sp.x;          // where the view is

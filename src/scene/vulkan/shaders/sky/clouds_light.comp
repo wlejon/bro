@@ -103,7 +103,7 @@ void main() {
     CloudColumn col = cloudColumnNone();
     for (int b = CL_CACHE_BINS - 1; b >= 0; --b) {
         float d = texelFetch(cloudSigmaMap, ivec3(x, y, k * CL_CACHE_BINS + b), 0).r * clouds.cacheE1.w;
-        cloudColumnAdd(col, d, (float(b) + 0.5) / float(CL_CACHE_BINS), clouds.cacheE1.w);
+        cloudColumnAdd(col, d, (float(b) + 0.5) / float(CL_CACHE_BINS), clouds.cacheE1.w, cloudShareLike(cell));
     }
-    imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), vec4(cloudColumnLayer(col), 0.0));
+    imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), cloudColumnLayer(col));
 }

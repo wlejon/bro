@@ -168,25 +168,39 @@ float cloudGlobeTexel() { return clouds.shell.x * 2.0 * CLOUD_QUARTER_PI / float
 // edge of it takes (cloudSigmaOf's clumped extinction over the edge: the
 // share where the clouds are opaque over an edge); the column's the most
 // of its bins', the bins' sum over it the depth within its clouds.
+// (Where the bins are shares of clouds wider than they are, `q` of it,
+// cloudShareLike: their extinction is a share's over a cloud's edge, the
+// path a view crosses one cloud or the gap beside it in, cloudSigmaOf; but
+// a bin is far less deep than an edge, and straight down a view crosses
+// the whole of the cloud in it, a heart's extinction over the bin. So the
+// depth within the clouds is that, by the share: a deck of opaque clouds
+// over a share of the column is that share of the view, opaque, not a thin
+// veil over all of it, which lit as one sent back a grey wash over the
+// sea.)
 struct CloudColumn {
-    float tau, took, depth, height, cover;
+    float tau, took, depth, height, cover, inner;
 };
-CloudColumn cloudColumnNone() { return CloudColumn(0.0, 0.0, 0.0, 0.0, 0.0); }
-void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH) {
+CloudColumn cloudColumnNone() { return CloudColumn(0.0, 0.0, 0.0, 0.0, 0.0, 0.0); }
+void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH, float q) {
     if (d <= 0.0) return;
     float wgt = exp(-c.tau) * (1.0 - exp(-d));
     c.took += wgt;
     c.depth += wgt * (c.tau + 0.5 * min(d, 1.0));
     c.height += wgt * h;
     c.tau += d;
-    c.cover = max(c.cover, 1.0 - exp(-d / binH * clouds.forms.w));
+    float share = 1.0 - exp(-d / binH * clouds.forms.w);
+    c.cover = max(c.cover, share);
+    c.inner += mix(d, max(d, share * clouds.forms.x * binH), q);
 }
 // The layer: x its optical depth (the view's, straight down), y the mean
-// depth from its top of what it sends, z the mean height of that.
-vec3 cloudColumnLayer(CloudColumn c) {
+// depth from its top of what it sends, z the mean height of that, w the
+// depth within its clouds (what the light one of them sends has scattered
+// about in: the powder's).
+vec4 cloudColumnLayer(CloudColumn c) {
     float cover = max(c.cover, 1e-4);
-    float tau = -log(max(1.0 - cover * (1.0 - exp(-c.tau / cover)), 0.005));
-    return c.took > 0.0 ? vec3(tau, c.depth / c.took, c.height / c.took) : vec3(0.0, 0.0, 0.5);
+    float inner = min(c.inner / cover, 1e3);
+    float tau = -log(max(1.0 - cover * (1.0 - exp(-inner)), 0.005));
+    return c.took > 0.0 ? vec4(tau, c.depth / c.took, c.height / c.took, inner) : vec4(0.0, 0.0, 0.5, 0.0);
 }
 
 // --- The deck --------------------------------------------------------------------

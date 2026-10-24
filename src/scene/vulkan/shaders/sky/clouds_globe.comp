@@ -44,7 +44,8 @@ void main() {
         CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, foot, clouds.shell.w);
         float share = min(cloudDensity(q), 1.0);
         if (share <= 0.0) continue;
-        cloudColumnAdd(col, cloudForms(cloudDrift(q.p), share, 0.5, foot, false) * binH, h, binH);
+        cloudColumnAdd(col, cloudForms(cloudDrift(q.p), share, 0.5, foot, false) * binH, h, binH,
+                       cloudShareLike(foot));
     }
-    imageStore(globeOut, ivec3(x, y, f), vec4(cloudColumnLayer(col), 0.0));
+    imageStore(globeOut, ivec3(x, y, f), cloudColumnLayer(col));
 }
