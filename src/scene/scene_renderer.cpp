@@ -10,6 +10,7 @@
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
+#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "scene/world/world_service.h"
 #include "render/vulkan_context.h"
 #include "util/log.h"
@@ -155,6 +156,12 @@ double SceneRenderer::takeGpuMs(bool wait) {
 void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
 
 void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
+    // The world shader sets still compiling (this scene's and the warm-up's
+    // of the last run: what this scene asks for next is among them).
+    if (const vk::shader_warmup::Progress sp = vk::shader_warmup::progress(); sp.shadersDone < sp.shaders)
+        out.push_back("shaders: compiling " + std::to_string(sp.shadersDone) + " / " + std::to_string(sp.shaders));
+    if (const int building = vk::pipeline_async::inFlight(); building > 0)
+        out.push_back("pipelines: " + std::to_string(building) + " building");
     for (const auto& [id, node] : graph_.nodes())
         if (node) node->pendingWork(out);
     const CullStats& s = cullStats_;

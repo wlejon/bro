@@ -66,7 +66,8 @@ private:
         uint64_t ticket = 0;
     };
 
-    VkPipeline pipeline(const LandNode& node);
+    /// Null while its kernels compile (`*pending` true) or when they failed.
+    VkPipeline pipeline(const LandNode& node, bool* pending = nullptr);
     bool start(SceneGpu& gpu, const LandNode& node, Run& run);
     void record(SceneFrame& frame, const LandNode& node, Run& run, VkCommandBuffer cmd);
     void release(SceneGpu& gpu, Run& run);

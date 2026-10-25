@@ -25,16 +25,16 @@ public:
 
     /// The set with `module` as land_module.glsl, `canopy` (or none, "")
     /// as land_canopy.glsl and `grid` (or none, "") as land_grid_config.glsl,
-    /// for a round body's land when `round` (land_body.glsl). False, with
-    /// the compiler's diagnostics in `err`, when it does not compile.
-    bool create(VkDevice device, const std::string& module, const std::string& canopy, const std::string& grid,
-                const std::string& regions, bool round, std::string& err) {
+    /// for a round body's land when `round` (land_body.glsl), compiled off
+    /// the frame thread (ModuleShaders::poll).
+    void start(const std::string& module, const std::string& canopy, const std::string& grid,
+               const std::string& regions, bool round) {
         Overrides overrides{{"ground/land_module.glsl", module}};
         if (!canopy.empty()) overrides.push_back({"ground/land_canopy.glsl", canopy});
         if (!grid.empty()) overrides.push_back({"ground/land_grid_config.glsl", grid});
         if (!regions.empty()) overrides.push_back({"ground/land_region_config.glsl", regions});
         if (round) overrides.push_back({"ground/land_body.glsl", "#define LAND_ROUND\n"});
-        return ModuleShaders::create(device, kBuiltin, overrides, err);
+        ModuleShaders::start(kBuiltin, overrides);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }
@@ -53,12 +53,11 @@ public:
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::LandProcessComp};
 
-    bool create(VkDevice device, const std::string& module, const std::string& dispatch, const std::string& grid,
-                std::string& err) {
+    void start(const std::string& module, const std::string& dispatch, const std::string& grid) {
         const Overrides overrides{{"ground/land_process_module.glsl", module},
                                   {"ground/land_process_dispatch.glsl", dispatch},
                                   {"ground/land_grid_config.glsl", grid}};
-        return ModuleShaders::create(device, kBuiltin, overrides, err);
+        ModuleShaders::start(kBuiltin, overrides);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }
@@ -77,13 +76,13 @@ public:
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::LandRegionComp};
 
-    bool create(VkDevice device, const std::string& module, const std::string& dispatch, const std::string& grid,
-                const std::string& regions, std::string& err) {
+    void start(const std::string& module, const std::string& dispatch, const std::string& grid,
+               const std::string& regions) {
         const Overrides overrides{{"ground/land_process_module.glsl", module},
                                   {"ground/land_region_dispatch.glsl", dispatch},
                                   {"ground/land_grid_config.glsl", grid},
                                   {"ground/land_region_config.glsl", regions}};
-        return ModuleShaders::create(device, kBuiltin, overrides, err);
+        ModuleShaders::start(kBuiltin, overrides);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }

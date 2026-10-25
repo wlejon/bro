@@ -3,10 +3,14 @@
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
+#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "util/log.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstring>
+#include <future>
+#include <memory>
 
 namespace bro::scene::vk {
 
@@ -205,7 +209,32 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setSpecialization(uint32_t id, b
     return *this;
 }
 
+namespace pipeline_async {
+namespace {
+std::atomic<int> s_inFlight{0};
+}
+Capture*& current() {
+    thread_local Capture* c = nullptr;
+    return c;
+}
+int inFlight() { return s_inFlight.load(std::memory_order_relaxed); }
+}  // namespace pipeline_async
+
 VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout) {
+    if (pipeline_async::Capture* c = pipeline_async::current(); c && !c->used && shader_warmup::async()) {
+        // Built on a thread of its own from a copy of this builder (the
+        // create-info points into it); that thread has no capture, so the
+        // copy builds there as below.
+        c->used = true;
+        auto copy = std::make_shared<SceneVkPipelineBuilder>(*this);
+        pipeline_async::s_inFlight.fetch_add(1, std::memory_order_relaxed);
+        c->future = std::async(std::launch::async, [copy, device, layout] {
+                        VkPipeline p = copy->build(device, layout);
+                        pipeline_async::s_inFlight.fetch_sub(1, std::memory_order_relaxed);
+                        return p;
+                    }).share();
+        return VK_NULL_HANDLE;
+    }
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexBindings_.size());

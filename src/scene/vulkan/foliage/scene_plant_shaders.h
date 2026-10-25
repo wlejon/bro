@@ -29,11 +29,9 @@ public:
         BuiltinSceneShader::PlantsIndirectFrag, BuiltinSceneShader::ShadowPlantsVert,
     };
 
-    /// The set with `module` as plant_module.glsl. False, with the
-    /// compiler's diagnostics in `err`, when it does not compile.
-    bool create(VkDevice device, const std::string& module, std::string& err) {
-        return ModuleShaders::create(device, kBuiltin, {{"foliage/plant_module.glsl", module}}, err);
-    }
+    /// The set with `module` as plant_module.glsl, compiled off the frame
+    /// thread (ModuleShaders::poll).
+    void start(const std::string& module) { ModuleShaders::start(kBuiltin, {{"foliage/plant_module.glsl", module}}); }
 
     VkShaderModule operator[](Stage s) const { return module(s); }
 };

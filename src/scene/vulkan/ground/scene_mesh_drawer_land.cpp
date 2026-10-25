@@ -172,21 +172,23 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
                          (scene::moduleSourceHash(regions) * 0x165667b19e3779f9ull) ^ (node.round() ? 1ull : 0ull);
     auto it = landByModule_.find(key);
     if (it == landByModule_.end()) {
-        // Compiled at the first frame that draws it (through the SPIR-V
-        // cache); one that does not compile is logged once and draws nothing.
+        // Asked for at the first frame that draws it and compiled off the
+        // frame thread (through the SPIR-V cache, warmed up from the last
+        // run); the land draws nothing until it is in. One that does not
+        // compile is logged once and draws nothing.
         auto set = std::make_unique<LandShaders>();
-        std::string err;
-        int index = -1;
-        if (set->create(device_, node.moduleSource(), node.canopySource(), grid, regions, node.round(), err)) {
-            index = static_cast<int>(landSets_.size());
-            set->index = static_cast<uint32_t>(index);
-            landSets_.push_back(std::move(set));
-        } else {
-            LOG_ERROR("Land node %u: its module did not compile, so it draws no land:\n%s", node.id(), err.c_str());
-        }
-        it = landByModule_.emplace(key, index).first;
+        set->start(node.moduleSource(), node.canopySource(), grid, regions, node.round());
+        set->index = static_cast<uint32_t>(landSets_.size());
+        landSets_.push_back(std::move(set));
+        it = landByModule_.emplace(key, static_cast<int>(landSets_.size() - 1)).first;
     }
-    return it->second < 0 ? nullptr : landSets_[static_cast<size_t>(it->second)].get();
+    LandShaders& set = *landSets_[static_cast<size_t>(it->second)];
+    std::string err;
+    const bool wasPending = set.state() == ModuleShaders::State::Pending;
+    const ModuleShaders::State st = set.poll(device_, err);
+    if (st == ModuleShaders::State::Failed && wasPending)
+        LOG_ERROR("Land node %u: its module did not compile, so it draws no land:\n%s", node.id(), err.c_str());
+    return st == ModuleShaders::State::Ready ? &set : nullptr;
 }
 
 VkPipeline SceneMeshDrawer::landFillPipeline(const LandShaders& shaders) {

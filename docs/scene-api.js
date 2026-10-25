@@ -802,7 +802,9 @@ class SceneGraph {
    * What the scene still prepares for its view, as of its newest render: one
    * line each (a land's processes not yet run, its regions and tiles still
    * to make, its tile boxes being made on the workers, plants still placed,
-   * the clouds' bakes, auto exposure still adapting, ...). [] once what the
+   * the clouds' bakes, auto exposure still adapting, a world's shader sets
+   * still compiling and pipelines still being built off the frame thread —
+   * docs/code-cache.md "Shader warm-up" — ...). [] once what the
    * view shows is ready. The heavy first-time work runs off the frame, so a
    * page shows its own progress from this and holds back views (or warms
    * them) until it empties; headless's perf.settle waits on the same list.

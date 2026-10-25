@@ -417,10 +417,11 @@ private:
     /// blades, their shadows, the herbs, the far tier's vertex stage, the
     /// turf and its fill): [0] the built-in set, then one per pair of a
     /// world's sward and herb modules, compiled at the first node that
-    /// has it.
+    /// has it, off the frame thread (the built-in set while it compiles,
+    /// `*pending` true then: its turf is not drawn).
     std::vector<std::unique_ptr<CoverShaders>> covers_;
-    std::unordered_map<uint64_t, uint32_t> coverByModule_;   // the modules' source hashes -> index (0: failed)
-    const CoverShaders& coverShaders(const GrassNode& node);
+    std::unordered_map<uint64_t, uint32_t> coverByModule_;   // the modules' source hashes -> index
+    const CoverShaders& coverShaders(const GrassNode& node, bool* pending = nullptr);
     /// The shaders a plants node is drawn with: one a world's plant module,
     /// compiled at the first node that has it.
     std::vector<std::unique_ptr<PlantShaders>> plantSets_;

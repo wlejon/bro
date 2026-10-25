@@ -45,13 +45,13 @@ public:
     /// The built-in set.
     bool createBuiltin(VkDevice device) { return ModuleShaders::createBuiltin(device, kBuiltin); }
     /// The set with `sward` as sward_module.glsl and `herbs` as
-    /// herb_module.glsl (an empty one keeps the built-in file). False, with
-    /// the compiler's diagnostics in `err`, when it does not compile.
-    bool create(VkDevice device, const std::string& sward, const std::string& herbs, std::string& err) {
+    /// herb_module.glsl (an empty one keeps the built-in file), compiled off
+    /// the frame thread (ModuleShaders::poll).
+    void start(const std::string& sward, const std::string& herbs) {
         Overrides overrides;
         if (!sward.empty()) overrides.emplace_back("ground/sward_module.glsl", sward);
         if (!herbs.empty()) overrides.emplace_back("ground/herb_module.glsl", herbs);
-        return ModuleShaders::create(device, kBuiltin, overrides, err);
+        ModuleShaders::start(kBuiltin, overrides);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }

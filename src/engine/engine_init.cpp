@@ -17,6 +17,7 @@
 #include "engine/default_styles.h"
 #include "engine/scene_audio_sync.h"
 #include "engine/terminal_layers.h"
+#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "dom/event_dispatch.h"
 #include "util/asset_path.h"
 #include "util/exe_dir.h"
@@ -256,6 +257,18 @@ void Engine::construct(const EngineConfig& config) {
     audioStartup_.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
     audioStartup_.realAudio = config.realAudio;
     serverStartTime_ = util::currentTimeMs();
+
+    // The world shader sets the app's last run compiled start compiling now,
+    // on worker threads, beside the device's bring-up and the page's own
+    // compile (scene_shader_warmup.h): its nodes find them made or under way.
+    // A window's frames skip what is still compiling; headless frames, read
+    // back at once, wait for it (BRO_ASYNC_SHADERS overrides).
+    scene::vk::shader_warmup::setAsync(displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm);
+    if (displayMode_ != DisplayMode::Server) {
+        std::string cacheDir = currentApp().dirs.cache;
+        if (cacheDir.empty() && !config.appId.empty()) cacheDir = appDirsFor(config.appId).cache;
+        if (!cacheDir.empty()) scene::vk::shader_warmup::begin(cacheDir + "/shader-warmup.bin");
+    }
 
     if (displayMode_ == DisplayMode::Server) {
         LOG_INFO("Server mode initializing (headless server tick loop)");

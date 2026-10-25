@@ -157,7 +157,8 @@ private:
         VkDescriptorBufferInfo table{};
     };
 
-    VkPipeline pipeline(const LandNode& node);
+    /// Null while its kernels compile (`*pending` true) or when they failed.
+    VkPipeline pipeline(const LandNode& node, bool* pending = nullptr);
     bool start(SceneGpu& gpu, const LandNode& node, Land& land);
     void release(SceneGpu& gpu, Land& land);
     void receive(SceneFrame& frame, LandNode& node, Land& land);

@@ -118,7 +118,7 @@ void SceneLandRegions::counts(uint32_t id, uint32_t& in, uint32_t& pending) cons
     pending = it->second->pending;
 }
 
-VkPipeline SceneLandRegions::pipeline(const LandNode& node) {
+VkPipeline SceneLandRegions::pipeline(const LandNode& node, bool* pending) {
     const std::string dispatch = node.regionDispatch();
     const std::string grid = node.gridConfig();
     const std::string regions = node.regionConfig();
@@ -128,22 +128,27 @@ VkPipeline SceneLandRegions::pipeline(const LandNode& node) {
                          (scene::moduleSourceHash(regions) * 0x165667b19e3779f9ull);
     auto it = byHash_.find(key);
     if (it == byHash_.end()) {
+        // Compiled off the frame thread (scene_shader_warmup.h); the regions
+        // start once it is in.
         auto set = std::make_unique<LandRegionShaders>();
-        std::string err;
-        int index = -1;
-        if (set->create(device_, p.source, dispatch, grid, regions, err)) {
-            index = static_cast<int>(sets_.size());
-            set->index = static_cast<uint32_t>(index);
-            sets_.push_back(std::move(set));
-            pipelines_.push_back(
-                createComputePipeline(device_, (*sets_.back())[LandRegionShaders::Run], layout_, "land region"));
-        } else {
-            LOG_ERROR("Land node %u: its regions' kernels did not compile, so it has no regions:\n%s", node.id(),
-                      err.c_str());
-        }
-        it = byHash_.emplace(key, index).first;
+        set->start(p.source, dispatch, grid, regions);
+        set->index = static_cast<uint32_t>(sets_.size());
+        sets_.push_back(std::move(set));
+        pipelines_.push_back(VK_NULL_HANDLE);
+        it = byHash_.emplace(key, static_cast<int>(sets_.size() - 1)).first;
     }
-    return it->second < 0 ? VK_NULL_HANDLE : pipelines_[static_cast<size_t>(it->second)];
+    const size_t i = static_cast<size_t>(it->second);
+    LandRegionShaders& set = *sets_[i];
+    std::string err;
+    const bool wasPending = set.state() == ModuleShaders::State::Pending;
+    const ModuleShaders::State st = set.poll(device_, err);
+    if (pending) *pending = st == ModuleShaders::State::Pending;
+    if (st == ModuleShaders::State::Failed && wasPending)
+        LOG_ERROR("Land node %u: its regions' kernels did not compile, so it has no regions:\n%s", node.id(),
+                  err.c_str());
+    if (st == ModuleShaders::State::Ready && !pipelines_[i])
+        pipelines_[i] = createComputePipeline(device_, set[LandRegionShaders::Run], layout_, "land region");
+    return st == ModuleShaders::State::Ready ? pipelines_[i] : VK_NULL_HANDLE;
 }
 
 bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {
@@ -485,6 +490,15 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
         slot.reset();
     }
     if (!slot) {
+        // (Not started until its kernels are compiled: the regions are not
+        // settled.)
+        bool pending = false;
+        pipeline(node, &pending);
+        if (pending) {
+            lands_.erase(node.id());
+            node.setRegionsSettled(false);
+            return {};
+        }
         slot = std::make_unique<Land>();
         slot->serial = node.gridSerial();
         if (!start(frame.gpu, node, *slot)) {

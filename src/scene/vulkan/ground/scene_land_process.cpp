@@ -90,7 +90,7 @@ void SceneLandProcesses::forget(SceneGpu& gpu, uint32_t id) {
     runs_.erase(it);
 }
 
-VkPipeline SceneLandProcesses::pipeline(const LandNode& node) {
+VkPipeline SceneLandProcesses::pipeline(const LandNode& node, bool* pending) {
     const std::string dispatch = node.processDispatch();
     const std::string grid = node.gridConfig();
     const LandProcess& p = node.process();
@@ -98,24 +98,28 @@ VkPipeline SceneLandProcesses::pipeline(const LandNode& node) {
                          (scene::moduleSourceHash(grid) * 0xc2b2ae3d27d4eb4full);
     auto it = byHash_.find(key);
     if (it == byHash_.end()) {
-        // Compiled when the land's processes first run (through the SPIR-V
-        // cache); processes that do not compile are logged once, and the
-        // land is never ready.
+        // Asked for when the land's processes first run and compiled off the
+        // frame thread (through the SPIR-V cache, warmed up from the last
+        // run); they start once it is in. Processes that do not compile are
+        // logged once, and the land is never ready.
         auto set = std::make_unique<LandProcessShaders>();
-        std::string err;
-        int index = -1;
-        if (set->create(device_, p.source, dispatch, grid, err)) {
-            index = static_cast<int>(sets_.size());
-            set->index = static_cast<uint32_t>(index);
-            sets_.push_back(std::move(set));
-            pipelines_.push_back(
-                createComputePipeline(device_, (*sets_.back())[LandProcessShaders::Run], layout_, "land process"));
-        } else {
-            LOG_ERROR("Land node %u: its processes did not compile, so it draws no land:\n%s", node.id(), err.c_str());
-        }
-        it = byHash_.emplace(key, index).first;
+        set->start(p.source, dispatch, grid);
+        set->index = static_cast<uint32_t>(sets_.size());
+        sets_.push_back(std::move(set));
+        pipelines_.push_back(VK_NULL_HANDLE);
+        it = byHash_.emplace(key, static_cast<int>(sets_.size() - 1)).first;
     }
-    return it->second < 0 ? VK_NULL_HANDLE : pipelines_[static_cast<size_t>(it->second)];
+    const size_t i = static_cast<size_t>(it->second);
+    LandProcessShaders& set = *sets_[i];
+    std::string err;
+    const bool wasPending = set.state() == ModuleShaders::State::Pending;
+    const ModuleShaders::State st = set.poll(device_, err);
+    if (pending) *pending = st == ModuleShaders::State::Pending;
+    if (st == ModuleShaders::State::Failed && wasPending)
+        LOG_ERROR("Land node %u: its processes did not compile, so it draws no land:\n%s", node.id(), err.c_str());
+    if (st == ModuleShaders::State::Ready && !pipelines_[i])
+        pipelines_[i] = createComputePipeline(device_, set[LandProcessShaders::Run], layout_, "land process");
+    return st == ModuleShaders::State::Ready ? pipelines_[i] : VK_NULL_HANDLE;
 }
 
 bool SceneLandProcesses::start(SceneGpu& gpu, const LandNode& node, Run& run) {
@@ -236,6 +240,13 @@ VkImageView SceneLandProcesses::update(SceneFrame& frame, LandNode& node, VkComm
         slot.reset();
     }
     if (!slot) {
+        // (Not run until its kernels are compiled: the land is not ready.)
+        bool pending = false;
+        pipeline(node, &pending);
+        if (pending) {
+            runs_.erase(node.id());
+            return VK_NULL_HANDLE;
+        }
         slot = std::make_unique<Run>();
         slot->serial = node.gridSerial();
         if (!start(frame.gpu, node, *slot)) {

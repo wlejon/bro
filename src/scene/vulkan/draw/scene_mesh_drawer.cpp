@@ -359,8 +359,11 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
             const bool indirect = SceneTargets::carriesIndirect(target);
             return buildPipeline(set[PlantShaders::Vert], set[indirect ? PlantShaders::IndirectFrag : PlantShaders::Frag],
                                  draw.kind, rasterBits, target);
-        });
+        }, true);
     }
+    // Built off the frame thread (the draw skipped until it is in), but for
+    // a surface layer tile's fill: a tile is filled once, so that one waits.
+    const bool async = !(ground && target.colorCount == 4);
     const uint32_t block = static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
                              (ground ? 1u * block : 0u) + (herb ? 2u * block : 0u) + (coverFar ? 3u * block : 0u);
@@ -392,7 +395,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
             fs = cover[indirect ? CoverShaders::GrassIndirectFrag : CoverShaders::GrassFrag];
         }
         return buildPipeline(vs, fs, draw.kind, rasterBits, target);
-    });
+    }, async);
 }
 
 VkPipeline SceneMeshDrawer::chartFillPipeline(CoverShaders& cover, const TargetFormat& target) {
@@ -699,6 +702,11 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
         SceneNode* g = frame.graph.findById(node.turfGrass());
         MeshNode* gm = g && g->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(g) : nullptr;
         if (GrassNode* grass = gm ? gm->asGrass() : nullptr) {
+            // (Not drawn while its grass's modules compile: drawn with the
+            // built-in set's ground it would build pipelines never used.)
+            bool pending = false;
+            coverShaders(*grass, &pending);
+            if (pending) return false;
             out.customSet = groundSet(frame, *grass);
             out.moduleSet = coverShaders(*grass).index;
             if (out.customSet) flags |= mesh_flags::kGround;
@@ -866,6 +874,7 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     bool custom = false;
     if (pass != CoverPass::None) {
         pipeline = builtinPipeline(draw, target, pass);
+        if (!pipeline) return;   // (still being built)
     } else if (draw.custom && draw.customSet) {
         if (CustomProgram* prog = program(*draw.custom, draw.kind)) {
             pipeline = customPipeline(*prog, draw, target);

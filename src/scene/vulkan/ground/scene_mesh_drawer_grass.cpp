@@ -415,30 +415,33 @@ uint64_t SceneMeshDrawer::groundGeneration(SceneGraph& graph, GrassNode& node) {
     return h;
 }
 
-const CoverShaders& SceneMeshDrawer::coverShaders(const GrassNode& node) {
+const CoverShaders& SceneMeshDrawer::coverShaders(const GrassNode& node, bool* pending) {
+    if (pending) *pending = false;
     const uint64_t sward = node.swardSourceHash(), herbs = node.hasHerbs() ? node.herbSourceHash() : 0;
     if (!sward && !herbs) return *covers_[0];
     const uint64_t key = sward * 1099511628211ull ^ herbs;
     auto it = coverByModule_.find(key);
     if (it == coverByModule_.end()) {
-        // Compiled here, at the first frame that draws them (its shaders in
-        // parallel, each from the SPIR-V cache when it has been compiled
-        // before). Modules that do not compile are logged once and drawn as
-        // none.
+        // Asked for at the first frame that draws them and compiled off the
+        // frame thread (its shaders in parallel, each from the SPIR-V cache
+        // when it has been compiled before); until they are in, the node
+        // draws as the built-in set (its ground, no blades or herbs).
+        // Modules that do not compile are logged once and drawn as none.
         auto set = std::make_unique<CoverShaders>();
-        std::string err;
-        uint32_t index = 0;
-        if (set->create(device_, node.swardSource(), herbs ? node.herbSource() : std::string(), err)) {
-            index = static_cast<uint32_t>(covers_.size());
-            set->index = index;
-            covers_.push_back(std::move(set));
-        } else {
-            LOG_ERROR("Grass node %u: its modules did not compile, so it draws no blades or herbs:\n%s", node.id(),
-                      err.c_str());
-        }
-        it = coverByModule_.emplace(key, index).first;
+        set->start(node.swardSource(), herbs ? node.herbSource() : std::string());
+        set->index = static_cast<uint32_t>(covers_.size());
+        covers_.push_back(std::move(set));
+        it = coverByModule_.emplace(key, static_cast<uint32_t>(covers_.size() - 1)).first;
     }
-    return *covers_[it->second];
+    CoverShaders& set = *covers_[it->second];
+    std::string err;
+    const bool wasPending = set.state() == ModuleShaders::State::Pending;
+    const ModuleShaders::State st = set.poll(device_, err);
+    if (pending) *pending = st == ModuleShaders::State::Pending;
+    if (st == ModuleShaders::State::Failed && wasPending)
+        LOG_ERROR("Grass node %u: its modules did not compile, so it draws no blades or herbs:\n%s", node.id(),
+                  err.c_str());
+    return st == ModuleShaders::State::Ready ? set : *covers_[0];
 }
 
 void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {

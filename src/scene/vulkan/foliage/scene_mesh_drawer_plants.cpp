@@ -88,23 +88,24 @@ const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
     if (!key) return nullptr;
     auto it = plantByModule_.find(key);
     if (it == plantByModule_.end()) {
-        // Compiled here, at the first frame that draws it (its shaders in
-        // parallel, each from the SPIR-V cache when it has been compiled
-        // before). A module that does not compile is logged once and draws
+        // Asked for at the first frame that draws it and compiled off the
+        // frame thread (its shaders in parallel, each from the SPIR-V cache
+        // when it has been compiled before); the plants draw nothing until
+        // it is in. A module that does not compile is logged once and draws
         // nothing.
         auto set = std::make_unique<PlantShaders>();
-        std::string err;
-        int index = -1;
-        if (set->create(device_, node.moduleSource(), err)) {
-            index = static_cast<int>(plantSets_.size());
-            set->index = static_cast<uint32_t>(index);
-            plantSets_.push_back(std::move(set));
-        } else {
-            LOG_ERROR("Plants node %u: its module did not compile, so it draws no plants:\n%s", node.id(), err.c_str());
-        }
-        it = plantByModule_.emplace(key, index).first;
+        set->start(node.moduleSource());
+        set->index = static_cast<uint32_t>(plantSets_.size());
+        plantSets_.push_back(std::move(set));
+        it = plantByModule_.emplace(key, static_cast<int>(plantSets_.size() - 1)).first;
     }
-    return it->second < 0 ? nullptr : plantSets_[static_cast<size_t>(it->second)].get();
+    PlantShaders& set = *plantSets_[static_cast<size_t>(it->second)];
+    std::string err;
+    const bool wasPending = set.state() == ModuleShaders::State::Pending;
+    const ModuleShaders::State st = set.poll(device_, err);
+    if (st == ModuleShaders::State::Failed && wasPending)
+        LOG_ERROR("Plants node %u: its module did not compile, so it draws no plants:\n%s", node.id(), err.c_str());
+    return st == ModuleShaders::State::Ready ? &set : nullptr;
 }
 
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
