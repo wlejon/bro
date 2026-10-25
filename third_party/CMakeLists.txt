@@ -79,6 +79,10 @@ bro_dependency(bronze TARGET bronze_runtime_shared
 # scripts take bronze's headers from the tree this names.
 set(BRONZE_DIR "${bronze_SOURCE_DIR}" CACHE PATH "bronze source tree (chosen by bro_dependency)" FORCE)
 
+# --- brasslua (Lua 5.4 compiler/runtime on brass and its bronze::embed bridge) ---
+bro_dependency(brasslua TARGET brasslua_bronze
+               OPTIONS BRASSLUA_ENABLE_BRONZE=ON BRASSLUA_BUILD_TESTS=OFF)
+
 # --- brotensor (tensor + ops, the AI-tower base) ---
 # bro is the FIRST loader of brotensor, so its backend is the one the cache
 # vars forwarded in the top-level CMakeLists.txt chose, and every later

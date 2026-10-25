@@ -21,6 +21,7 @@
 #include "eval/eval.h"
 #include "embed/embed.h"
 #include "modules/modules.h"
+#include "brasslua/bronze_bridge.h"
 
 #include <atomic>
 #include <chrono>
@@ -326,7 +327,10 @@ std::string scriptExecCode(const std::string& code, const std::string& filename)
 
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
                            bool moduleFile) {
-    if (isJitDisabled() || s_ahead || code.empty()) return false;
+    if (isJitDisabled() || s_ahead || code.empty() ||
+        std::filesystem::path(filename).extension() == ".lua") {
+        return false;
+    }
     {
         HostEvalScope evalScope;
         if (!isWebHostGlobalsInstalled()) {
@@ -438,6 +442,27 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename,
                    bronze::embed::ModuleHandle* moduleHandleOut, bool moduleFile) {
     HostEvalScope evalScope;
+    if (std::filesystem::path(filename).extension() == ".lua") {
+        if (!isWebHostGlobalsInstalled()) {
+            installWebHostGlobals(engine);
+        }
+        syncHostGlobalsFromGlobalThis();
+        brasslua::ExecutionOptions luaOpts;
+        luaOpts.source_name = filename;
+        auto luaRes = brasslua::bronze_bridge::evalLuaInBronzeRealm(code, luaOpts);
+        syncHostGlobalsFromGlobalThis();
+        if (!luaRes.success) {
+            LOG_ERROR("evalScriptJit (Lua): uncaught %s (in %s)",
+                      luaRes.error_message.c_str(), filename.c_str());
+            setTestFailure(true);
+            engine.setTestFailure(true);
+            return false;
+        }
+        drainMicrotasksAndLocalFetches();
+        settleRejections();
+        std::fflush(stdout);
+        return !(hasTestFailure() || engine.hasTestFailure());
+    }
     auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut, moduleFile);
     if (!reportCallResult(engine, res, "evalScriptJit", filename)) {
         return false;
@@ -474,6 +499,25 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     // as brokit's own runner and Node have it (docs/brokit-api.js), not the
     // cwd: for the script's run and what it awaits to its end.
     brokit::api::RequireDirGuard requireDir(absPath.parent_path());
+
+    if (absPath.extension() == ".lua") {
+        brasslua::ExecutionOptions luaOpts;
+        luaOpts.source_name = absPath.string();
+        auto luaRes = brasslua::bronze_bridge::evalLuaFileInBronzeRealm(absPath.string(), {}, luaOpts);
+        syncHostGlobalsFromGlobalThis();
+        if (!luaRes.success) {
+            LOG_ERROR("evalScriptFileJit (Lua): uncaught %s (in %s)",
+                      luaRes.error_message.c_str(), absPath.string().c_str());
+            setTestFailure(true);
+            engine.setTestFailure(true);
+            return false;
+        }
+        drainMicrotasksAndLocalFetches();
+        syncHostGlobalsFromGlobalThis();
+        settleRejections();
+        std::fflush(stdout);
+        return !(hasTestFailure() || engine.hasTestFailure());
+    }
 
     std::string content;
     {

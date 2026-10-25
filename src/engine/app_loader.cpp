@@ -108,12 +108,13 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
     AppManifest manifest;
     std::error_code ec;
     const std::string ext = std::filesystem::path(appDir).extension().string();
-    if ((ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts") &&
+    if ((ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts" || ext == ".lua") &&
         std::filesystem::is_regular_file(appDir, ec)) {
         std::filesystem::path p(appDir);
         manifest.basePath = p.has_parent_path() ? p.parent_path().string() : std::string(".");
         const bool isMod = (ext == ".mjs" || ext == ".mts");
-        manifest.scripts.push_back({appDir, {}, /*isModule=*/isMod});
+        const bool isLua = (ext == ".lua");
+        manifest.scripts.push_back({appDir, {}, /*isModule=*/isMod, /*isLua=*/isLua});
         manifest.htmlPath.clear();
         LOG_INFO("AppLoader: loaded standalone script '%s'", appDir.c_str());
         return manifest;
@@ -129,7 +130,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
 
     if (html.empty()) {
         std::string entryJs;
-        for (const char* candidate : {"server.js", "server.ts", "main.js", "main.ts"}) {
+        for (const char* candidate : {"server.js", "server.ts", "server.lua", "main.js", "main.ts", "main.lua"}) {
             std::string resolved = resolvePath(appDir, candidate, mounts);
             if (std::filesystem::exists(resolved, ec)) {
                 entryJs = std::move(resolved);
@@ -137,7 +138,8 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             }
         }
         if (!entryJs.empty()) {
-            manifest.scripts.push_back({entryJs, {}, /*isModule=*/true});
+            const bool isLua = (std::filesystem::path(entryJs).extension() == ".lua");
+            manifest.scripts.push_back({entryJs, {}, /*isModule=*/!isLua, /*isLua=*/isLua});
             manifest.htmlPath.clear();
             LOG_INFO("AppLoader: loaded script entry '%s' for '%s'", entryJs.c_str(), appDir.c_str());
             return manifest;
@@ -213,7 +215,9 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             }
 
             const bool isModule = (type == "module");
-            if (!isModule && !isExecutableScriptType(type)) {
+            const bool isLuaType = (type == "text/lua" || type == "application/lua" ||
+                                    type == "application/x-lua" || type == "lua");
+            if (!isModule && !isLuaType && !isExecutableScriptType(type)) {
                 // A data block. Skipped deliberately, and said out loud, so a
                 // page whose <script type="text/x-template"> never ran does not
                 // have to be discovered by its absence.
@@ -226,10 +230,11 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             if (std::regex_search(attrs, srcMatch, srcRe)) {
                 // External script
                 std::string resolved = resolvePath(appDir, srcMatch[1].str(), mounts);
-                manifest.scripts.push_back({resolved, {}, isModule});
+                const bool isLua = isLuaType || (std::filesystem::path(resolved).extension() == ".lua");
+                manifest.scripts.push_back({resolved, {}, isModule, isLua});
             } else if (!body.empty()) {
                 // Inline script
-                manifest.scripts.push_back({{}, body, isModule});
+                manifest.scripts.push_back({{}, body, isModule, isLuaType});
             }
         }
     }

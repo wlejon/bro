@@ -745,7 +745,7 @@ void Engine::initAppRealm() {
 std::string Engine::combinedClassicScripts() const {
     std::string combined;
     for (const auto& script : manifest_.scripts) {
-        if (script.isModule) continue;
+        if (script.isModule || script.isLua) continue;
         std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
         if (!code.empty()) {
             if (!combined.empty()) combined += "\n;\n";
@@ -776,14 +776,17 @@ std::vector<Engine::PageScriptUnit> Engine::pageScriptUnits() const {
     }
     std::vector<std::string> moduleFiles;
     for (const auto& script : manifest_.scripts) {
-        if (!script.isModule) continue;
+        if (!script.isModule && !script.isLua) continue;
         if (!script.isInline()) {
             if (std::find(moduleFiles.begin(), moduleFiles.end(), script.path) != moduleFiles.end()) continue;
             moduleFiles.push_back(script.path);
         }
         std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
         if (code.empty()) continue;
-        units.push_back({std::move(code), script.isInline() ? manifest_.htmlPath : script.path, !script.isInline()});
+        std::string unitName = script.isInline()
+            ? (script.isLua ? (manifest_.htmlPath + ".lua") : manifest_.htmlPath)
+            : script.path;
+        units.push_back({std::move(code), std::move(unitName), !script.isInline() && !script.isLua});
     }
     return units;
 }

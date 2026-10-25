@@ -177,6 +177,24 @@ int main() {
     why = checkAppSourceConsistency(dir.string());
     check(why.empty(), "main.ts entry app without index.html is consistent", why);
 
+    // Lua (.lua) script in index.html and main.lua script-entry app.
+    fs::remove_all(dir);
+    write(dir / "index.html",
+          "<!DOCTYPE html><html><body>"
+          "<script src=\"main.lua\"></script>"
+          "</body></html>");
+    write(dir / "main.lua",
+          "local x = (1 << 60) + 42\n"
+          "app_lua_ready = true\n");
+    why = checkAppSourceConsistency(dir.string());
+    check(why.empty(), "index.html with <script src=\"main.lua\"> is consistent", why);
+
+    fs::remove_all(dir);
+    write(dir / "main.lua",
+          "print('standalone main.lua app')\n");
+    why = checkAppSourceConsistency(dir.string());
+    check(why.empty(), "main.lua entry app without index.html is consistent", why);
+
     // eval_js_scan TypeScript top-level scanning checks.
     {
         using bro::bronze_host::scanJsTopLevel;

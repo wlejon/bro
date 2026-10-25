@@ -363,7 +363,7 @@ fi
 # run); a filter that names a .js file or a test_* stem overrides that, because
 # such a filter can match nothing else.
 BRO_TEST_JS="${BRO_TEST_JS:-1}"
-if [[ -n "${FILTER:-}" && ( "$FILTER" == *".js" || "$FILTER" == *".ts" || "$FILTER" == *"test_"* ) ]]; then
+if [[ -n "${FILTER:-}" && ( "$FILTER" == *".js" || "$FILTER" == *".ts" || "$FILTER" == *".lua" || "$FILTER" == *"test_"* ) ]]; then
     BRO_TEST_JS=1
 fi
 
@@ -390,7 +390,7 @@ EXE_SUFFIX=""
 # themselves with exit 77 in a tree that cannot build their subject.
 mapfile -t TEST_FILES < <(
     if [[ "$BRO_TEST_JS" == "1" ]]; then
-        find "$SCRIPT_DIR" -path "*/test_app" -prune -o \( -name "test_*.js" -o -name "test_*.ts" \) -print | sort
+        find "$SCRIPT_DIR" -path "*/test_app" -prune -o \( -name "test_*.js" -o -name "test_*.ts" -o -name "test_*.lua" \) -print | sort
     fi
     if [[ "${BRO_TEST_BRONZE:-1}" != "0" && -f "$SCRIPT_DIR/bronze_host/run_checks.sh" ]]; then
         bash "$SCRIPT_DIR/bronze_host/run_checks.sh" --list | sed 's/^/bronze:/'

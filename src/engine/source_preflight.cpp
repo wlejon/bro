@@ -436,8 +436,8 @@ std::string checkAppSourceConsistency(const std::string& appDir,
     if (isFile(index)) {
         std::string html;
         if (!readText(index, html) || html.empty()) return "index.html is empty";
-    } else if (!isFile(root / "main.js") && !isFile(root / "main.ts") &&
-               !isFile(root / "server.js") && !isFile(root / "server.ts")) {
+    } else if (!isFile(root / "main.js") && !isFile(root / "main.ts") && !isFile(root / "main.lua") &&
+               !isFile(root / "server.js") && !isFile(root / "server.ts") && !isFile(root / "server.lua")) {
         return "index.html does not exist";
     }
 
@@ -454,7 +454,7 @@ std::string checkAppSourceConsistency(const std::string& appDir,
         }
         if (script.path.find("://") != std::string::npos || unresolvedRootPath(script.path)) continue;
         if (!isFile(script.path)) return "script " + checker.rel(script.path) + " does not exist";
-        if (script.isModule) {
+        if (script.isModule && !script.isLua) {
             if (std::string why = checker.walk(fs::path(script.path).lexically_normal()); !why.empty())
                 return why;
         }

@@ -312,7 +312,7 @@ namespace {
 bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::string& filename,
                     ev::ModuleHandle* moduleHandleOut, bool moduleFile = false) {
     HostEvalScope evalScope;
-    if (!isJitDisabled()) {
+    if (!isJitDisabled() || std::filesystem::path(filename).extension() == ".lua") {
         return evalScriptJit(engine, code, filename, moduleHandleOut, moduleFile);
     }
 
@@ -474,7 +474,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     // machine code by then — but it can always name the file, and on a run
     // that drives five model surfaces in a loop that is most of the answer.
     util::setCrashContext("script " + filePath);
-    if (!isJitDisabled()) {
+    if (!isJitDisabled() || std::filesystem::path(filePath).extension() == ".lua") {
         return evalScriptFileJit(engine, filePath);
     }
 

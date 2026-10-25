@@ -27,6 +27,7 @@ desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
 | [bro](https://github.com/wlejon/bro) | The app runtime: HTML/CSS/JS apps on a GPU (Vulkan 1.3) engine with 3D, physics, audio, a native terminal element and on-device AI | every engine, terminal and desktop library (except brocas), bronze, brass | Windows, Linux, macOS |
 | [bronze](https://github.com/wlejon/bronze) | JavaScript compiler and shared runtime: AOT to native modules, plus in-process JIT. bro runs every app's script through it | brass | Windows x64, Linux x64, macOS arm64 |
 | [brass](https://github.com/wlejon/brass) | Code-generation backend and runtime for GC'd dynamic languages: MIR, JIT/AOT for x86-64 and AArch64, moving GC | none | Windows, Linux, macOS |
+| [brasslua](https://github.com/wlejon/brasslua) | Lua 5.4 JIT/AOT compiler and runtime on `brass` with shared `brass::gc::Heap` and `bronze::embed` bridge (`brasslua_bronze`) | brass, bronze (optional) | Windows, Linux, macOS |
 
 ## Engine libraries (linked by bro)
 

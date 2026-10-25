@@ -11,6 +11,7 @@ struct ScriptEntry {
     std::string path;    // non-empty for <script src="...">
     std::string code;    // non-empty for inline <script>...</script>
     bool isModule = false; // <script type="module"> — evaluated as an ES module
+    bool isLua = false;    // .lua file or <script type="text/lua"> — evaluated via brasslua
     bool isInline() const { return path.empty(); }
 };
 
