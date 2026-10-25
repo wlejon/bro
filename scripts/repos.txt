@@ -26,7 +26,7 @@
 bro             runtime   self       public   win,linux,mac    bronze,brass,brasslua,bromath,brokit,FastNoise2,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brolink,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,brovideo,broremote,brodmabuf,brodecor,broclip,brompris,bropulse,broime
 bronze          compiler  dep        public   win,linux,mac    brass
 brass           compiler  dep        public   win,linux,mac    -
-brasslua        compiler  dep        pending  win,linux,mac    brass,bronze
+brasslua        compiler  dep        public   win,linux,mac    brass,bronze
 bromath         engine    dep        public   win,linux,mac    -
 brokit          engine    dep        public   win,linux,mac    bromath,broimage,bronze,brass,FastNoise2
 FastNoise2      engine    dep        public   win,linux,mac    -
