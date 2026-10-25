@@ -176,6 +176,8 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
             out.push_back("clouds: cover not baked");
         else if (cloudStats_.cachePending)
             out.push_back("clouds: " + std::to_string(cloudStats_.cachePending) + " cache bakes to come");
+        else if (cloudStats_.volumePending)
+            out.push_back("clouds: " + std::to_string(cloudStats_.volumePending) + " volume bakes to come");
     }
     // (A tenth of a stop: what the eye does not see change.)
     if (hasMeshContent_ && exposure_.mode == ExposureSettings::Mode::Auto &&

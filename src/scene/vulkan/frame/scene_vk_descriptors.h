@@ -192,9 +192,10 @@ public:
                      VkDeviceSize offset = 0,
                      VkDescriptorType type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 
+    /// `element`: the element of an arrayed binding.
     void writeImage(uint32_t binding, VkImageView imageView, VkSampler sampler,
                     VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VkDescriptorType type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                    VkDescriptorType type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, uint32_t element = 0);
 
     void clear();
     void updateSet(VkDevice device, VkDescriptorSet set);

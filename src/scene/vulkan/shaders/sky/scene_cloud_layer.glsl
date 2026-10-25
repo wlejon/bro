@@ -59,6 +59,13 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w the edge (m)
     vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with
     vec4 data[CL_MAX_DATA];
+    // The volume about the eye (sky/cloud_volume.glsl).
+    vec4 volA;          // xyz its anchor (the drifted body frame, m), w the finest cell (m)
+    vec4 volE1;         // xyz its frame's first axis, w the slack (m) its distances are read less
+    vec4 volE2;         // xyz the second, w the debug view (CL_DEBUG_VOLUME)
+    vec4 volN;          // xyz up at the anchor, w the debug slice's height (m over the deck's bottom)
+    vec4 volEye;        // xyz the eye in the volume's frame (m), w a pixel's angle (radians)
+    vec4 volLevel[CL_VOL_LEVELS];   // xyz the cell (index) level k's window is about, w 1 once baked
 } clouds;
 
 layout(set = CLOUD_SET, binding = CL_B_COVER) uniform sampler2DArray cloudCoverMap;

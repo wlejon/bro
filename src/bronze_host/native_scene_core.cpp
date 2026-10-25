@@ -7,6 +7,7 @@
 #include "natives/scene/native_scene_decl.h"
 #include "util/asset_path.h"
 #include "scene/nodes/world_module.h"
+#include "scene/vulkan/shaders/sky/clouds_layout.h"
 #include <bromesh/analysis/raycast.h>
 #include <bromesh/analysis/bvh.h>
 #include <bromesh/primitives/primitives.h>
@@ -670,9 +671,17 @@ void bro_scene_SceneGraph_cloudStats(void* self, bronze_native_buffer* out) {
     auto* g = graphOf(self);
     if (!g) { transferBuffer(std::vector<double>{}, out); return; }
     const scene::CloudStats& s = g->cloudStats();
+    const scene::CloudStats::VolumeCheck& c = s.volumeCheck;
     transferBuffer(std::vector<double>{g->clouds().enabled ? 1.0 : 0.0, s.compiled ? 1.0 : 0.0, s.failed ? 1.0 : 0.0,
                                        s.covered && s.generation == g->clouds().generation ? 1.0 : 0.0,
-                                       static_cast<double>(g->clouds().generation)},
+                                       static_cast<double>(g->clouds().generation),
+                                       // The volume about the eye (scene_cloud_volume.h): its sizes, bakes,
+                                       // memory, slack, and its newest check.
+                                       CL_VOL_LEVELS, CL_VOL_SIDE, CL_VOL_DEPTH, CL_VOL_CELL0,
+                                       static_cast<double>(s.volumePending), s.volumeBytes, s.volumeCells,
+                                       static_cast<double>(s.volumeSlack), static_cast<double>(c.serial),
+                                       static_cast<double>(c.rays), c.compared, c.meanAbsError, c.meanSigma,
+                                       c.mostSigma, c.inside, c.violations, c.jumps, c.meanJump},
                    out);
 }
 

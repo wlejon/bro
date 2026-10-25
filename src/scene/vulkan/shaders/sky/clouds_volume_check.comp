@@ -1,0 +1,101 @@
+#version 450
+// The volume's check (vulkan/sky/scene_cloud_volume.cpp; run under
+// BRO_CLOUD_VOLUME_CHECK): CL_VOL_CHECK_RAYS rays from the eye over every
+// direction (a fixed spiral, turned a little each check), each walked
+// through the deck's spans as a march on the volume would: at each point
+// the finest level whose window holds it, and its distance to cloud; a
+// jump by that distance where it is over half a cell, else half a cell on.
+// At each point, the volume's extinction there (filtered) against the
+// forms' at the level's cell footprint (clFormsAt, as the bake evaluates
+// them): how closely the volume holds the forms as its level resolves
+// them. Inside each jump, CL_CHECK_IN points, the forms at the march's own
+// pixel footprint there (with the detail and without, as the march reads
+// them while the view is fresh and once it is mostly spent) and at the
+// level's cell: any cloud there is a
+// violation, a jump past cloud the march would draw. A ray's results,
+// CL_VOL_CHECK_FLOATS floats: the extinction's absolute error summed, the
+// forms' extinction summed, the points compared, the most of the forms'
+// extinction; the violations, the points sampled inside jumps, the jumps,
+// the metres jumped.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+#include "sky/cloud_forms_at.glsl"
+#include "sky/cloud_volume.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = CL_B_VOLUME_CHECK) writeonly buffer Check { float results[]; };
+
+layout(push_constant) uniform Push {
+    ivec4 a;    // x the check's serial (turns the spiral)
+    ivec4 b;
+} push;
+
+const int CL_CHECK_STEPS = 400;
+const int CL_CHECK_IN = 12;
+
+void main() {
+    int ray = int(gl_GlobalInvocationID.x);
+    if (ray >= CL_VOL_CHECK_RAYS) return;
+    // A Fibonacci spiral over the sphere, turned by the serial.
+    float n = float(CL_VOL_CHECK_RAYS);
+    float z = 1.0 - (2.0 * float(ray) + 1.0) / n;
+    float phi = float(ray) * 2.39996323 + float(push.a.x) * 0.7;
+    float rr = sqrt(max(1.0 - z * z, 0.0));
+    vec3 dl = vec3(rr * cos(phi), rr * sin(phi), z);
+    // The ray in the body's frame (the volume's axes, about the body's centre).
+    vec3 ro = cloudVolBody(clouds.volEye.xyz);
+    vec3 rd = clouds.volE1.xyz * dl.x + clouds.volE2.xyz * dl.y + clouds.volN.xyz * dl.z;
+    vec2 spA, spB;
+    cloudSpans(ro, rd, 1e30, spA, spB);
+    float pixel = clouds.volEye.w;
+    float err = 0.0, sumF = 0.0, compared = 0.0, mostF = 0.0;
+    float bad = 0.0, inside = 0.0, jumps = 0.0, jumped = 0.0;
+    int steps = 0;
+    for (int span = 0; span < 2; ++span) {
+        vec2 sp = span == 0 ? spA : spB;
+        float t = sp.x;
+        while (t < sp.y && steps < CL_CHECK_STEPS) {
+            ++steps;
+            vec3 v = clouds.volEye.xyz + dl * t;
+            int k = cloudVolLevel(v, 0.0);
+            if (k >= CL_VOL_LEVELS) break;   // (past the volume)
+            float cell = cloudVolCell(k);
+            ClAt w = clAtBody(ro + rd * t);
+            float sf = clFormsAt(w, clLod(w, cell), cell, cell, true).sigma;
+            float sv = cloudVolSample(k, v).x;
+            err += abs(sv - sf);
+            sumF += sf;
+            mostF = max(mostF, sf);
+            compared += 1.0;
+            float d = min(cloudVolFree(k, v), sp.y - t);
+            if (d > 0.5 * cell) {
+                for (int j = 0; j < CL_CHECK_IN; ++j) {
+                    float tj = t + d * (float(j) + 0.5) / float(CL_CHECK_IN);
+                    ClAt wj = clAtBody(ro + rd * tj);
+                    float foot = pixel * tj;
+                    float a = clFormsAt(wj, clLod(wj, foot), foot, foot, true).sigma;
+                    float b = clFormsAt(wj, clLod(wj, cell), cell, cell, true).sigma;
+                    float c = clFormsAt(wj, clLod(wj, foot), foot, foot, false).sigma;
+                    if (a > 0.0 || b > 0.0 || c > 0.0) bad += 1.0;
+                    inside += 1.0;
+                }
+                jumps += 1.0;
+                jumped += d;
+                t += d;
+            } else {
+                t += 0.5 * cell;
+            }
+        }
+    }
+    int o = ray * CL_VOL_CHECK_FLOATS;
+    results[o + 0] = err;
+    results[o + 1] = sumF;
+    results[o + 2] = compared;
+    results[o + 3] = mostF;
+    results[o + 4] = bad;
+    results[o + 5] = inside;
+    results[o + 6] = jumps;
+    results[o + 7] = jumped;
+}

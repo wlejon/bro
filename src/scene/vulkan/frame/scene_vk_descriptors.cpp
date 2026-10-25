@@ -115,7 +115,7 @@ void SceneVkDescriptorWriter::writeBuffer(uint32_t binding, VkBuffer buffer, VkD
 }
 
 void SceneVkDescriptorWriter::writeImage(uint32_t binding, VkImageView imageView, VkSampler sampler,
-                                         VkImageLayout layout, VkDescriptorType type) {
+                                         VkImageLayout layout, VkDescriptorType type, uint32_t element) {
     VkDescriptorImageInfo imgInfo{};
     imgInfo.imageView = imageView;
     imgInfo.sampler = sampler;
@@ -125,6 +125,7 @@ void SceneVkDescriptorWriter::writeImage(uint32_t binding, VkImageView imageView
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstBinding = binding;
+    write.dstArrayElement = element;
     write.descriptorCount = 1;
     write.descriptorType = type;
     writes_.push_back(write);

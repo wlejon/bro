@@ -59,6 +59,26 @@ struct CloudStats {
     // and slices of rows not yet made since the last whole change (0 when
     // it has converged; scene settle state).
     int cachePending = 0;
+    // The volume about the eye (vulkan/sky/scene_cloud_volume.h): its bakes
+    // still to come for this view (levels to bake whole again and slices of
+    // rows not yet made since the last whole change; settle state), its
+    // memory, the cells it baked the newest frame and the slack its
+    // distances are read less (m).
+    int volumePending = 0;
+    double volumeBytes = 0.0;
+    double volumeCells = 0.0;
+    float volumeSlack = 0.0f;
+    // Its newest check (BRO_CLOUD_VOLUME_CHECK=1; serial 0: none yet):
+    // rays walked on the volume; at each point its extinction against the
+    // forms' at the level's cell (the mean absolute error, the forms' mean
+    // and most), and inside each jump the forms the march would draw (the
+    // points sampled, the violations: cloud inside a jump).
+    struct VolumeCheck {
+        uint32_t serial = 0;
+        int rays = 0;
+        double compared = 0.0, meanAbsError = 0.0, meanSigma = 0.0, mostSigma = 0.0;
+        double inside = 0.0, violations = 0.0, jumps = 0.0, meanJump = 0.0;
+    } volumeCheck;
 };
 
 }  // namespace bro::scene

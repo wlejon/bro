@@ -29,6 +29,11 @@
 //     read from the cache every frame the deck is drawn, read by every lit
 //     shader (the lighting set's binding 24; scene_lighting.glsl's
 //     sceneCloudSun).
+//   - The volume (scene_cloud_volume.h): the forms as the march draws them
+//     baked into a clipmap of 3D grids about the eye, with a distance to
+//     cloud a march may jump by and the depth toward the sun; baked after
+//     the cache (PassCloudVolume). The march does not read it yet (but in
+//     its debug variant, CloudsVolumeFrag).
 //   - The march (sky/clouds.frag, built in): the cache's base cut into the
 //     forms per sample, drawn over the opaque surfaces in the HDR scope
 //     (pass_clouds.h).
@@ -41,6 +46,7 @@
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/shaders/sky/clouds_layout.h"
+#include "scene/vulkan/sky/scene_cloud_volume.h"
 
 #include <vulkan/vulkan.h>
 
@@ -125,7 +131,13 @@ public:
         float forms[4];
         float wind[4];
         float data[64][4];
+        CloudVolumeGpu volume;
     };
+
+    /// The volume about the eye's bakes, into the graphics stream after
+    /// recordPrepare (PassCloudVolume), and the frame they went in submitted.
+    void recordVolume(SceneFrame& frame);
+    void volumeSubmitted(uint64_t ticket) { volume_.submitted(ticket); }
 
 private:
     CloudShaders* shaders(SceneFrame& frame);
@@ -151,7 +163,9 @@ private:
     VkPipelineLayout noiseLayout_ = VK_NULL_HANDLE;
     VkShaderModule skyVs_ = VK_NULL_HANDLE;
     VkShaderModule marchFs_ = VK_NULL_HANDLE;
+    VkShaderModule marchVolumeFs_ = VK_NULL_HANDLE;   // the debug variant (BRO_CLOUD_VOLUME_DEBUG)
     PipelineVariants marchPipelines_;
+    SceneCloudVolume volume_;
     VkShaderModule noiseCs_ = VK_NULL_HANDLE;
     VkPipeline noisePipeline_ = VK_NULL_HANDLE;
     VkSampler coverSampler_ = VK_NULL_HANDLE;
@@ -215,6 +229,7 @@ private:
     float cacheTime_ = 0.0f;     // the wind's time it was last baked at
     float cacheSun_[3] = {};     // and the sun (the body's frame)
     uint32_t cacheFrame_ = 0;
+    float volumeTime_ = 0.0f;    // the wind's time the volume was last placed at
 
     Block block_{};
     CloudShadowGpu shadowBlock_{};

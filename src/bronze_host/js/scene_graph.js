@@ -416,7 +416,15 @@
     fn(SceneGraph.prototype, "cloudStats", function cloudStats() {
         const a = __bro_native.scene.SceneGraph_cloudStats(this);
         if (a.length < 5) return undefined;
-        return { enabled: a[0] > 0, compiled: a[1] > 0, failed: a[2] > 0, covered: a[3] > 0, generation: a[4] };
+        const s = { enabled: a[0] > 0, compiled: a[1] > 0, failed: a[2] > 0, covered: a[3] > 0, generation: a[4] };
+        if (a.length >= 23) {
+            s.volume = { levels: a[5], side: a[6], depth: a[7], cell: a[8], pending: a[9], bytes: a[10],
+                         cellsBaked: a[11], slack: a[12] };
+            if (a[13] > 0)
+                s.volume.check = { serial: a[13], rays: a[14], compared: a[15], meanAbsError: a[16], meanSigma: a[17],
+                                   mostSigma: a[18], inside: a[19], violations: a[20], jumps: a[21], meanJump: a[22] };
+        }
+        return s;
     });
     fn(SceneGraph.prototype, "setStarfield", function setStarfield(opts) {
         const d_opts = opts === undefined ? {} : opts;

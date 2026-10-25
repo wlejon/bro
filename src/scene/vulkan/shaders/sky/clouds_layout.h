@@ -39,6 +39,13 @@
 //                     as the cover's (below), each texel its column as a
 //                     layer (sky/clouds_globe.comp)
 //     CL_B_GLOBE_OUT  the same, written by its bake (rgba16f storage)
+//     CL_B_VOLUME     the volume about the eye, sampled: CL_VOL_LEVELS 3D
+//                     images, a level each (below; sky/cloud_volume.glsl)
+//     CL_B_VOLUME_OUT the same, written by its bakes (rgba16f storage)
+//     CL_B_VOLUME_DA/DB its distance transform's scratch (r16f storage, a
+//                     level each: sky/clouds_volume_dist.comp)
+//     CL_B_VOLUME_CHECK the volume's check's results (a storage buffer:
+//                     sky/clouds_volume_check.comp)
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -64,6 +71,11 @@
 #define CL_B_HOLDS          15
 #define CL_B_GLOBE          16
 #define CL_B_GLOBE_OUT      17
+#define CL_B_VOLUME         18
+#define CL_B_VOLUME_OUT     19
+#define CL_B_VOLUME_DA      20
+#define CL_B_VOLUME_DB      21
+#define CL_B_VOLUME_CHECK   22
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 
@@ -135,5 +147,40 @@
 #define CL_GLOBE_BINS       24
 #define CL_GLOBE_SLICES     128
 #define CL_GLOBE_GROUP      8
+
+// The volume about the eye (vulkan/sky/scene_cloud_volume.h): the engine's
+// forms as the march would draw them, baked into a clipmap of 3D grids
+// centred on the eye, so a march reads a cell instead of evaluating them.
+// Its cells lie on a frame fixed in the clouds' drifted frame (cloudDrift:
+// the wind a translation), a tangent frame at an anchor on the deck's
+// bottom near the eye (x, y along it, z up there), so the wind moves no
+// cell: what drifts is the world's base under the forms, which the bakes'
+// rotation of slices keeps up with. CL_VOL_LEVELS levels of CL_VOL_SIDE^2 x
+// CL_VOL_DEPTH cells, level k's cell CL_VOL_CELL0 * 2^k metres, each a
+// window about the eye's cell (vertically: about the deck where the window
+// is deeper than it, else about the eye held inside the deck), a cell
+// stored at its index modulo the sides (toroidally: a window that moves
+// bakes only the cells it takes in). A texel: x the forms' extinction
+// (1/m) at the cell's footprint (clFormsAt at foot = the cell), y how far
+// (m) any point of the cell is sure to be from a cell that may hold cloud
+// as the march draws it at any footprint up to its own (the cells' boxes'
+// gap out to CL_VOL_REACH cells, a level's), z the optical depth from the
+// cell's centre toward the sun (through the volume's levels, then the
+// cache's beyond), w whether the cell may hold cloud (the distance's
+// occupancy). A level is baked whole when the deck, the anchor or the time
+// jumps, the cells a window takes in as it moves, and every frame
+// CL_VOL_SIDE / CL_VOL_SLICES rows of every level (the world's base under
+// the drift, the sun).
+#define CL_VOL_LEVELS       5
+#define CL_VOL_SIDE         128
+#define CL_VOL_DEPTH        64
+#define CL_VOL_CELL0        32.0
+#define CL_VOL_SLICES       16
+#define CL_VOL_REACH        8
+#define CL_VOL_MARGIN       2        // cells inside a window's edge a lookup stays
+#define CL_VOL_GROUP        4        // a bake's group: CL_VOL_GROUP^3 cells
+#define CL_VOL_SUN_STEPS    6        // the sun's steps a level, from the cell's own up
+#define CL_VOL_CHECK_RAYS   4096     // the check's rays (a ray an invocation)
+#define CL_VOL_CHECK_FLOATS 8        // its results a ray
 
 #endif

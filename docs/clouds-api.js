@@ -160,12 +160,71 @@
 SceneGraph.prototype.setClouds = function (opts) {};
 
 /**
+ * @typedef {Object} CloudVolumeCheck
+ * The volume's newest self-check (only with BRO_CLOUD_VOLUME_CHECK=1 in the
+ * environment: a frame in 30, `rays` rays from the eye over every
+ * direction, each walked through the deck on the volume as a march would).
+ * @property {number} serial      the check's number
+ * @property {number} rays
+ * @property {number} compared    points where the volume's extinction was
+ *     compared with the forms' at the level's cell footprint
+ * @property {number} meanAbsError  the mean absolute difference (1/m)
+ * @property {number} meanSigma   the forms' mean extinction over those
+ *     points (1/m), and `mostSigma` the most: the scale of the error
+ * @property {number} mostSigma
+ * @property {number} jumps       jumps taken by the volume's distance, and
+ *     `meanJump` their mean length (m)
+ * @property {number} meanJump
+ * @property {number} inside      points sampled inside the jumps, the forms
+ *     read as the march reads them there (at its pixel's footprint, with
+ *     the detail and without) and at the cell's
+ * @property {number} violations  of those, points where the forms hold
+ *     cloud: a jump past cloud the march would draw (0 when conservative)
+ */
+
+/**
+ * @typedef {Object} CloudVolumeStats
+ * The volume about the eye: the engine's forms as the march draws them,
+ * baked into a clipmap of 3D grids centred on the eye (in the clouds'
+ * drifted frame, so the wind moves no cell): per cell the forms'
+ * extinction at the cell's footprint, a conservative distance (m) to the
+ * nearest cell that may hold cloud as the forms draw it at any footprint up
+ * to the cell's, and the optical depth toward the sun. Baked a share of
+ * every level's rows a frame, the cells a window takes in as the eye
+ * moves, a level whole when the deck or its time jumps. (This half of the
+ * mechanism bakes it; the march does not read it yet.)
+ * @property {number} levels      the clipmap's levels (each twice the last's cell)
+ * @property {number} side        cells a level's window spans across
+ * @property {number} depth       cells it spans up
+ * @property {number} cell        the finest level's cell (m)
+ * @property {number} pending     bakes still to come for this view (levels
+ *     to bake whole, slices of rows not yet made since the last whole
+ *     change: the settle state, "clouds: N volume bakes to come")
+ * @property {number} bytes       its GPU memory
+ * @property {number} cellsBaked  the cells whose forms the newest frame baked
+ * @property {number} slack       metres its distances are read less: how far
+ *     the world's base can have drifted under the forms since the oldest
+ *     rows were baked
+ * @property {CloudVolumeCheck} [check]
+ */
+
+/**
  * The deck's state, or undefined without one.
  * @returns {{ enabled: boolean, compiled: boolean, failed: boolean,
- *             covered: boolean, generation: number } | undefined}
+ *             covered: boolean, generation: number,
+ *             volume: CloudVolumeStats } | undefined}
  *   compiled: the module's shaders are built; failed: they did not compile
  *   (the console has the error); covered: the cover's cube is baked;
- *   generation: counts setClouds calls.
+ *   generation: counts setClouds calls; volume: the volume about the eye.
+ *
+ * Debugging the volume (environment variables, read once at start):
+ * BRO_CLOUD_VOLUME_DEBUG=1 draws the deck from the volume alone instead of
+ * the forms (to judge it against the real clouds); =2[:<m>] its channels as
+ * slices from above at <m> metres over the deck's bottom (default 1000), a
+ * panel a level left to right and a channel top to bottom (extinction,
+ * distance, the sun's depth, occupancy) in false colour; =3 the same as
+ * upright slices through the eye. BRO_CLOUD_VOLUME_CHECK=1 runs the check
+ * (`volume.check`, also logged).
  */
 SceneGraph.prototype.cloudStats = function () {};
 

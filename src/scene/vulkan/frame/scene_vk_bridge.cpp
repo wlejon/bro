@@ -57,6 +57,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassCloudsPrepare>());
+        graph_.add(std::make_unique<PassCloudVolume>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassCoverDepth>());
         graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
@@ -69,6 +70,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
         graph_.add(std::make_unique<PassWorldService>());
         graph_.add(std::make_unique<PassAtmosphere>());
         graph_.add(std::make_unique<PassCloudsPrepare>());
+        graph_.add(std::make_unique<PassCloudVolume>());
         graph_.add(std::make_unique<PassReflectionProbe>());
         graph_.add(std::make_unique<PassEnvironment>());
         graph_.add(std::make_unique<PassCoverDepth>());

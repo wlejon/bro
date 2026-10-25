@@ -249,6 +249,7 @@ add_library(bro_scene STATIC
     vulkan/post/scene_exposure.cpp
     vulkan/post/pass_postfx.cpp
     vulkan/sky/scene_clouds.cpp
+    vulkan/sky/scene_cloud_volume.cpp
     vulkan/sky/pass_clouds.cpp
     ${VK_GENERATED_HEADERS}
 )
