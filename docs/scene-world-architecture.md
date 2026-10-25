@@ -1732,10 +1732,13 @@ field is evaluated at is **split**: an integer part and a float fraction.
   regions. The wanted regions are those whose ground comes within `reach`
   steps of the ground under the eye (a disc, over a face's edges and
   corners) at every level whose cell is at least a pixel from the eye's
-  height, coarser first, nearer first; up to 128 steps are offered a
-  frame (once the land is warm two passes, an init band or the finish
-  required, the rest budgeted by error, cell × focal / height), all of
-  them while it warms. A region in makes again only the tiles over it that
+  height, coarser first, nearer first, but the regions holding the ground
+  under the eye ahead of the rest (a region waits only on the wanted
+  coarser regions it overlaps); up to 128 steps are offered a frame (two
+  passes, an init band or the finish required, the rest budgeted by error,
+  cell × focal / height), and while the ground under the eye is not in
+  (boot, or a view jumped to) up to 1024, all required but bounded to 8 ms
+  of GPU time a frame at their measured cost. A region in makes again only the tiles over it that
   read it: those within its level's presence disc (its outer radius and a
   margin of two items), the rest made again by the disc's fade when it
   grows over them. Two scheduling fixes came with it, general to every kind: each

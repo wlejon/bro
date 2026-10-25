@@ -235,28 +235,67 @@ void SceneLandRegions::drop(LandNode& node, Land& land, uint32_t packed) {
     for (uint32_t k : finer) drop(node, land, k);
 }
 
-bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted) {
+bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted,
+                             const std::vector<LandRegionKey>& near) {
     const LandRegionLattice& L = node.regionLattice();
-    // A level may start once every wanted region coarser than it is in.
-    std::vector<bool> allIn(static_cast<size_t>(L.config.levels) + 1, true);
+    // A region may start once every wanted region coarser than it that it
+    // reads is in: those it overlaps (grown by two of their cells, the
+    // read's reach), and on another root any (a face's lattice runs past its
+    // edges onto the next).
+    std::vector<LandRegionKey> missing;
     for (const LandRegionKey& k : wanted) {
         const auto r = land.resident.find(k.packed());
-        if (r == land.resident.end() || !r->second.in) allIn[static_cast<size_t>(k.level)] = false;
+        if (r == land.resident.end() || !r->second.in) missing.push_back(k);
     }
-    const auto startable = [&](int level) {
-        for (int l = level + 1; l < L.config.levels; ++l)
-            if (!allIn[static_cast<size_t>(l)]) return false;
+    // (Coarser region c is read by finer region k.)
+    const auto reads = [&](const LandRegionKey& k, const LandRegionKey& c) {
+        if (c.root != k.root) return true;
+        const double sk = L.config.cells * L.config.cellOf(k.level);
+        const double kx = L.originX(k), kz = L.originZ(k);
+        const double m = 2.0 * L.config.cellOf(c.level);
+        const double sc = L.config.cells * L.config.cellOf(c.level);
+        const double cx = L.originX(c), cz = L.originZ(c);
+        return cx - m < kx + sk && kx < cx + sc + m && cz - m < kz + sk && kz < cz + sc + m;
+    };
+    const auto startable = [&](const LandRegionKey& k) {
+        if (land.resident.count(k.packed())) return false;
+        for (const LandRegionKey& c : missing)
+            if (c.level > k.level && reads(k, c)) return false;
         return true;
     };
-    // The next wanted region not resident, and those of its level after it,
-    // up to a batch.
+    // The regions the ground under the eye waits on: those holding it, and
+    // the coarser ones they read; first, in `wanted`'s order (coarser
+    // first, nearer first), then the rest.
+    std::vector<LandRegionKey> order;
+    std::vector<LandRegionKey> nearMissing;
+    for (const LandRegionKey& k : near)
+        if (std::find(missing.begin(), missing.end(), k) != missing.end()) nearMissing.push_back(k);
+    std::vector<bool> urgent(wanted.size(), false);
+    for (size_t i = 0; i < wanted.size(); ++i) {
+        const LandRegionKey& k = wanted[i];
+        for (const LandRegionKey& n : nearMissing)
+            if (k == n || (k.level > n.level && reads(n, k))) urgent[i] = true;
+    }
+    for (size_t i = 0; i < wanted.size(); ++i)
+        if (urgent[i]) order.push_back(wanted[i]);
+    for (size_t i = 0; i < wanted.size(); ++i)
+        if (!urgent[i]) order.push_back(wanted[i]);
+    // The first startable one so ordered, and the startable ones of its
+    // level after it, up to a batch.
+    const LandRegionKey* first = nullptr;
+    for (const LandRegionKey& k : order)
+        if (startable(k)) {
+            first = &k;
+            break;
+        }
+    if (!first) return false;
+    std::vector<LandRegionKey> picks{*first};
+    for (const LandRegionKey& k : order) {
+        if (static_cast<int>(picks.size()) >= kBatch) break;
+        if (k.level == first->level && !(k == *first) && startable(k)) picks.push_back(k);
+    }
     Job job;
-    int level = -1;
-    for (const LandRegionKey& k : wanted) {
-        if (static_cast<int>(job.members.size()) >= kBatch) break;
-        if (land.resident.count(k.packed())) continue;
-        if (level >= 0 && k.level != level) continue;
-        if (level < 0 && !startable(k.level)) return false;
+    for (const LandRegionKey& k : picks) {
         if (land.freeSlots.empty()) {
             // The longest unwanted region in (none that a region being made
             // or read back stands on).
@@ -286,7 +325,6 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         land.freeSlots.pop_back();
         land.resident[k.packed()] = r;
         job.members.push_back({k, r.slot});
-        level = k.level;
     }
     if (job.members.empty()) return false;
     land.job = std::move(job);
@@ -556,13 +594,13 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
         const auto r = land.resident.find(k.packed());
         if (r == land.resident.end() || !r->second.in) settled = false;
     }
-    if (settled) land.warm = true;
+    const bool nearIn = settled;
 
     // Work while a region is being made or one can be begun; then the
     // table, after begin: a region it dropped for room stales the tiles over
     // it, made again this frame, and they must not find it in the table
     // (they would keep its heights after it is gone).
-    const bool working = land.hasJob || begin(node, land, wanted);
+    const bool working = land.hasJob || begin(node, land, wanted, near);
     // Each level read in the disc its regions in cover (after begin: a
     // region it dropped is not); where that changes, the items over it are
     // made again.
@@ -590,9 +628,9 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     node.setRegionsSettled(settled);
     writeTable(frame, node, land, cmd);
     if (!land.table.buffer || !working) return {};
-    // (Until the ground under the eye has first been in, all of them made
-    // whatever the frame's budget: the land is wrong there, and the plants
-    // wait on it. Then kRequiredSteps a frame whatever the budget, so the
+    // (While the ground under the eye is not in, all of them required, the
+    // offerer bounding them to kUrgentMs of the frame: the land is wrong
+    // there, and the plants wait on it. Else kRequiredSteps a frame whatever the budget, so the
     // regions about a moving eye keep coming in at the floor, the rest as
     // the budget holds them, as pressing as the pixels a cell of the
     // level being made spans, as a tile's texels; the coarser levels' field
@@ -604,6 +642,7 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     o.step = stepOf(L.config, j);
     o.regions = static_cast<int>(j.members.size());
     o.error = static_cast<float>(L.config.cellOf(j.members.front().key.level) * focal / std::max(height, 1.0));
+    o.urgent = !nearIn;
     if (o.step == Step::Finish) {
         if (freeReadbacks(land) < o.regions) return {};
         o.steps = o.required = 1;
@@ -614,12 +653,12 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
         left = L.config.passes[j.pass].iterations - j.iteration;
         for (size_t p = j.pass + 1; p < L.config.passes.size(); ++p) left += L.config.passes[p].iterations;
     }
-    o.steps = std::min(left, land.warm ? kDispatchesPerFrame : kDispatchesWarming);
-    // (Once warm, kRequiredSteps regions' steps: one step of a batch of
-    // four is already four of them, and two such of its dearest pass were
-    // a millisecond a frame whatever the budget.)
+    o.steps = std::min(left, o.urgent ? kDispatchesWarming : kDispatchesPerFrame);
+    // (Else kRequiredSteps regions' steps: one step of a batch of four is
+    // already four of them, and two such of its dearest pass were a
+    // millisecond a frame whatever the budget.)
     const int required = o.step == Step::Pass ? std::max(1, kRequiredSteps / std::max(o.regions, 1)) : 1;
-    o.required = land.warm ? std::min(o.steps, required) : o.steps;
+    o.required = o.urgent ? o.steps : std::min(o.steps, required);
     return o;
 }
 

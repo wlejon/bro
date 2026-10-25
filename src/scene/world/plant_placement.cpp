@@ -438,9 +438,15 @@ void PlantPlacement::update(const double eye[3], std::vector<Placed>& placed, st
         std::lock_guard<std::mutex> lock(inbox_->mutex);
         cost = inbox_->costMs;
     }
+    const auto now = std::chrono::steady_clock::now();
+    const double since = lastUpdate_.time_since_epoch().count() != 0
+                             ? std::chrono::duration<double, std::milli>(now - lastUpdate_).count()
+                             : 0.0;
+    lastUpdate_ = now;
+    const double span = queueMs > 0.0 ? std::clamp(1.25 * since, queueMs, std::max(queueMs, kMaxQueueMs)) : 0.0;
     const double threads = workers_.threads();
     const size_t limit = static_cast<size_t>(
-        std::clamp(cost > 0.0 ? threads * queueMs / cost : (queueMs > 0.0 ? threads : 1.0), 1.0, 4096.0));
+        std::clamp(cost > 0.0 ? threads * span / cost : (span > 0.0 ? threads : 1.0), 1.0, 4096.0));
     while (!queue_.empty() && posted_.size() < limit) {
         const CellKey k = queue_.back();
         queue_.pop_back();

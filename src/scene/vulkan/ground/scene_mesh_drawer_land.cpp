@@ -417,9 +417,15 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // steps a job each.
         const SceneLandRegions::Offer ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
         const int rk = regionKindOf(ro.step);
+        int required = ro.required;
+        if (ro.urgent && rk >= 0 && ro.required > 0) {
+            // (Urgent: as many as kUrgentMs holds at the kind's cost, one at least.)
+            const double each = std::max(static_cast<double>(service.cost(rk)) * std::max(ro.regions, 1), 1e-3);
+            required = std::clamp(static_cast<int>(SceneLandRegions::kUrgentMs / each), 1, ro.required);
+        }
         for (int k = 0; k < ro.steps; ++k)
             service.offer(
-                {static_cast<uint64_t>(k), id, rk, ro.error, 0.0, k < ro.required, static_cast<double>(ro.regions)});
+                {static_cast<uint64_t>(k), id, rk, ro.error, 0.0, k < required, static_cast<double>(ro.regions)});
         if (!lt.grid || !land->ready()) continue;
 
         // A new module, extent or rings: every tile again, over its items;

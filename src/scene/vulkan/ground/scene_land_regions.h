@@ -14,7 +14,11 @@
 // (LandNode::regionChanged), so its tiles are filled again over it.
 //
 // A region of a level starts only once every wanted region of the coarser
-// levels is in (it starts from them, procCoarse). Regions no longer wanted
+// levels that it overlaps is in (it starts from them, procCoarse; on another
+// root, any), so what it is made from is what it would be made from had the
+// whole coarser level come first. The regions holding the ground under the
+// eye go first, each level's as soon as the coarser ones under it are in,
+// then the rest nearest first. Regions no longer wanted
 // stay while their slots are not needed; a region dropped takes the finer
 // regions over it with it (they were made from it).
 
@@ -74,15 +78,23 @@ public:
     /// init bands until they are run, then its passes, then its finish.
     enum class Step { Init, Pass, Finish };
     /// The work a land's regions offer the world service this frame: the
-    /// next steps of the batch being made (none: nothing to make), required
-    /// until the ground under the eye has first been in.
+    /// next steps of the batch being made (none: nothing to make). While
+    /// the ground under the eye is not in (`urgent`: the land is wrong
+    /// there, and the plants wait on it) all of them are required, and the
+    /// offerer bounds them to a frame's slice of GPU time (kUrgentMs at the
+    /// steps' measured cost), so a view arrived at has its ground in a
+    /// second or two rather than at the budget's floor, and no one frame
+    /// runs them all (the boot's first frame ran 1024 steps, 320 ms).
     struct Offer {
         Step step = Step::Pass;
         int steps = 0;      // a job each
         int required = 0;   // the first so many of them required
         int regions = 0;    // the batch's regions: each job's units
         float error = 0.0f;   // the pixels a cell of the level being made spans
+        bool urgent = false;
     };
+    /// GPU ms a frame of urgent steps (the world service's settle budget's).
+    static constexpr float kUrgentMs = 8.0f;
     /// Land `node`'s regions this frame, over its global grid `grid` (the
     /// view SceneLandProcesses::update gave, null while it runs): read-backs
     /// in handed to the node, the wanted regions about the frame's eye, this
@@ -133,7 +145,6 @@ private:
     struct Land {
         uint64_t serial = 0;
         bool failed = false;
-        bool warm = false;   // the ground about the eye has been in
         VkPipeline pipeline = VK_NULL_HANDLE;
         SceneVkImage slots, run[kBatch][2];
         SceneVkBuffer data;
@@ -164,7 +175,11 @@ private:
     void release(SceneGpu& gpu, Land& land);
     void receive(SceneFrame& frame, LandNode& node, Land& land);
     void drop(LandNode& node, Land& land, uint32_t packed);
-    bool begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted);
+    /// The next batch begun: the first region of `near` (those holding the
+    /// ground under the eye), else of `wanted`, whose coarser regions are in,
+    /// and the regions of its level after it in `wanted` whose are too.
+    bool begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted,
+               const std::vector<LandRegionKey>& near);
     /// The batch's next step: its init's bands run, its passes run (the
     /// finish is all that is left), or neither.
     static Step stepOf(const LandRegionConfig& C, Job& job);

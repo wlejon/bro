@@ -34,6 +34,7 @@
 #include "scene/world/world_cells.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -135,9 +136,14 @@ public:
     size_t pending() const;
     /// The work kept posted, in ms of each pool thread's time at the jobs'
     /// cost learned as they run: enough to keep the pool busy from one
-    /// update to the next, little enough that a turn of the eye soon
-    /// re-ranks what is left. 0 posts one job at a time.
+    /// update to the next (the last interval between updates, a frame, a
+    /// quarter over, at least this and at most kMaxQueueMs), little enough
+    /// that a turn of the eye soon re-ranks what is left. 0 posts one job
+    /// at a time. (At 4 ms whatever the frame, a 60 Hz frame kept the pool
+    /// busy a quarter of it: the planet's 36,000 leaves about the eye came
+    /// in at 1,300 a second.)
     double queueMs = 4.0;
+    static constexpr double kMaxQueueMs = 50.0;
 
 private:
     struct Inbox {
@@ -178,6 +184,7 @@ private:
     bool looked_ = false;
     CellKey eyeLeaf_;
     Eyes wanted_;   // the eye at the last look
+    std::chrono::steady_clock::time_point lastUpdate_{};   // (epoch: none yet)
 };
 
 }  // namespace bro::scene
