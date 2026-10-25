@@ -15,9 +15,11 @@
 // halo cell's centre, copied from them after every pass (halo()), and at
 // each corner the mean of the three faces' corner cells.
 //
-// The grid is SAMPLED bilinearly between cell centres, the halo included,
-// so a sample is continuous across a cube face's edge; the CPU (sample())
-// and the GPU (shaders/ground/land_grid.glsl) take the same steps.
+// The grid is SAMPLED by the cubic B-spline over the cell centres about a
+// point (landBspline, land_regions.h), the halo included, so a sample and
+// its slopes and curvatures are continuous across the cells' edges (across
+// a cube face's to within the halo's one cell); the CPU (sample()) and the
+// GPU (shaders/ground/land_grid.glsl) take the same steps.
 
 #include "scene/world/land_regions.h"
 #include "scene/world/place.h"
@@ -83,8 +85,8 @@ public:
     const std::vector<HaloCopy>& halo() const { return halo_; }
 
     /// Chart point (x, z) of `root` sampled from `values` (texels() floats,
-    /// root by root): bilinear between the cell centres either side, the
-    /// halo's included, held at the halo's centres past them.
+    /// root by root): the cubic B-spline over the four cell centres about
+    /// it each way, the halo's included, held at the halo's past them.
     float sample(const float* values, int root, double x, double z) const;
     /// At a body direction (unit; a round body's), on the face it lies on.
     float sampleDir(const float* values, const double dir[3]) const;

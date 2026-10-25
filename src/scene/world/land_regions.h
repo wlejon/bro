@@ -72,6 +72,19 @@
 
 namespace bro::scene {
 
+/// The uniform cubic B-spline's weights at fraction `f` between the middle
+/// two of four cells: how the land's grids are read between their cell
+/// centres, here and on the GPU (shaders/ground/land_grid.glsl's
+/// landBspline). C2, so slopes and curvatures of a field read from cells
+/// show no cell edges; it smooths, reading (a + 4 b + c) / 6 at a centre.
+inline void landBspline(double f, double w[4]) {
+    const double g = 1.0 - f, f2 = f * f, f3 = f2 * f;
+    w[0] = g * g * g / 6.0;
+    w[1] = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    w[2] = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+    w[3] = f3 / 6.0;
+}
+
 struct LandRegionConfig {
     struct Pass {
         std::string fn;

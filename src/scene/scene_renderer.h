@@ -75,6 +75,9 @@ struct CullStats {
     float worldBudgetMs = 0.0f, worldSpentMs = 0.0f;
     int worldJobs = 0, worldQueued = 0;
     float worldWorstError = 0.0f;
+    // Each kind's GPU ms a unit, by its name, as last measured (its guess
+    // until it is): a land tile's making ("land"), a turf tile's, ...
+    std::vector<std::pair<std::string, float>> worldKindMs;
     // The exposure (scene/exposure.h): the applied EV100 (before the
     // compensation), the metered one and the scale the tonemap multiplied
     // by, as of the newest frame the GPU finished (a frame or two behind).

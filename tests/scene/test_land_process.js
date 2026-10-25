@@ -5,8 +5,8 @@
 // Verifies:
 //   - until they have run and been read back the land is not ready: its
 //     heights are NaN, landStats().ready false; then it is
-//   - the CPU's heights are the grid's: at a cell's centre exactly what
-//     procInit wrote there (procPoint, procData), between centres bilinear
+//   - the CPU's heights are the grid's: the cubic B-spline over what
+//     procInit wrote at the cells' centres (procPoint, procData)
 //   - the GPU's heights are the CPU's: the land is seen from 2 m over the
 //     CPU's height and not from 2 m under, at cell centres and between
 //   - a pass runs its iterations over procInit's values (a 3 x 3 smoothing
@@ -15,7 +15,7 @@
 //   - channel 0's y scales the tree, on the CPU and the GPU, and is 1 where
 //     procInit leaves it
 //   - on a round body the grid is the six cube faces: across a face's edge
-//     the heights are procInit's smooth field to within its bilinear error,
+//     the heights are procInit's smooth field to within its B-spline error,
 //     with no step, and the GPU stands on them there too
 //   - processes that do not compile leave the land unready and drawing
 //     nothing
@@ -93,20 +93,28 @@ void blur(inout vec4 v[PROC_CHANNELS]) {
 
     // Cell (i, j)'s centre is at -E + (i + 0.5) CELL (i from 0).
     const centre = (i) => -E + (i + 0.5) * CELL;
+    // The grid read through the cubic B-spline over procInit's cells (the
+    // halo and past it the edge's cells), at centres and between.
+    const bspline = (t) => [(1 - t) ** 3 / 6, (3 * t ** 3 - 6 * t * t + 4) / 6, (-3 * t ** 3 + 3 * t * t + 3 * t + 1) / 6, t ** 3 / 6];
+    const cellF = (i, j) => f(centre(Math.min(Math.max(i, 0), CELLS - 1)), centre(Math.min(Math.max(j, 0), CELLS - 1)));
+    const spline = (x, z) => {
+        const u = (x + E) / CELL - 0.5, v = (z + E) / CELL - 0.5;
+        const i = Math.floor(u), j = Math.floor(v), wx = bspline(u - i), wz = bspline(v - j);
+        let s = 0;
+        for (let b = 0; b < 4; b++)
+            for (let a = 0; a < 4; a++) s += wx[a] * wz[b] * cellF(i - 1 + a, j - 1 + b);
+        return s;
+    };
     let worst = 0;
     for (const [i, j] of [[12, 33], [0, 0], [49, 7], [25, 25], [40, 49]]) {
         const x = centre(i), z = centre(j);
-        worst = Math.max(worst, Math.abs(land.landHeight(x, z) - f(x, z)));
+        worst = Math.max(worst, Math.abs(land.landHeight(x, z) - spline(x, z)));
     }
-    assert(worst < 2e-3, `at a cell's centre the height is procInit's (worst ${worst.toExponential(2)} m)`);
-    // Between centres, bilinear.
+    assert(worst < 2e-3, `at a cell's centre the height is the B-spline of procInit's cells (worst ${worst.toExponential(2)} m)`);
     {
-        const x0 = centre(20), z0 = centre(30), fx = 0.3, fz = 0.7;
-        const h = (x, z) => land.landHeight(x, z);
-        const want = (1 - fz) * ((1 - fx) * h(x0, z0) + fx * h(x0 + CELL, z0)) +
-                     fz * ((1 - fx) * h(x0, z0 + CELL) + fx * h(x0 + CELL, z0 + CELL));
-        const got = h(x0 + fx * CELL, z0 + fz * CELL);
-        assert(Math.abs(got - want) < 2e-3, `between centres, bilinear (${got.toFixed(4)} / ${want.toFixed(4)})`);
+        const x = centre(20) + 0.3 * CELL, z = centre(30) + 0.7 * CELL;
+        const got = land.landHeight(x, z), want = spline(x, z);
+        assert(Math.abs(got - want) < 2e-3, `between centres, the B-spline (${got.toFixed(4)} / ${want.toFixed(4)})`);
     }
     standsOn(land, centre(30), centre(20), 'at a cell centre');
     standsOn(land, centre(10) + 13.7, centre(41) - 8.2, 'between centres');
@@ -253,7 +261,7 @@ void redge(inout vec4 v[PROC_CHANNELS]) { if (procBorder() == 0) v[0].x = procCo
     let rworst = 0;
     for (const [x, z] of [[0, 0], [31, -17], [-60, 44], [45, 50]])
         rworst = Math.max(rworst, Math.abs(land.landHeight(x, z) - bands(x, z)));
-    assert(rworst < 0.25, `regions: the CPU's heights are the levels' bands, to their bilinear error (worst ${rworst.toFixed(3)} m)`);
+    assert(rworst < 0.25, `regions: the CPU's heights are the levels' bands, to their B-spline error (worst ${rworst.toFixed(3)} m)`);
     // No step anywhere out from the eye, through the regions' aprons and
     // their edges into the global grid's field.
     let rstep = 0, prevH = null;
@@ -301,7 +309,7 @@ void procInit(inout vec4 v[PROC_CHANNELS]) {
         if (prev !== null) step = Math.max(step, Math.abs(h - prev));
         prev = h;
     }
-    // (A cell is ~310 km of a field changing 300 m a radian: its bilinear
+    // (A cell is ~310 km of a field changing 300 m a radian: its B-spline
     // error is centimetres, its halo's nearest-cell copy at the edge a metre.)
     assert(err < 3, `across a face's edge the heights are procInit's field (worst ${err.toFixed(3)} m)`);
     assert(step < 1, `and step nowhere between points 2 km apart (largest ${step.toFixed(3)} m)`);

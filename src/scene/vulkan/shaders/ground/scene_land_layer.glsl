@@ -113,3 +113,15 @@ LandSurface landSurfaceOf(vec3 albedo) {
 }
 
 vec4 landData(int i);
+
+// The module's height (it defines it after this file), for the filtered
+// reads.
+#ifdef LAND_ROUND
+float landHeight(vec3 p);
+#else
+float landHeight(vec2 p);
+#endif
+
+// Footprint-aware inputs: values with their spread over the texel, shares
+// of a line, the landform at a scale (ground/land_filters.glsl).
+#include "ground/land_filters.glsl"

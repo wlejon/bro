@@ -29,6 +29,17 @@
 // it a texel; 0, the default, reads every level whole, as the CPU does).
 float landFieldFootprint = 0.0;
 
+// The global grid read at the reader's texel: a texel wider than its cells
+// reads their mean over it (landGridTexel), as the regions' do.
+vec4 landGridRead(int c, int root, vec2 x) { return landGridTexel(c, root, x, landFieldFootprint / landGridCell()); }
+#ifdef LAND_GRID_ROUND
+vec4 landGridReadDir(int c, vec3 d) {
+    vec4 r;
+    LAND_GRID_DIR(landGridRead, c, d, r)
+    return r;
+}
+#endif
+
 #ifdef LAND_REGIONS
 
 float landRegionCell(int L) { return LAND_REGION_CELL0 * pow(LAND_REGION_RATIO, float(L)); }
@@ -118,29 +129,35 @@ float landRegionWeight(float t) {
     return smoothstep(0.0, w, t) * smoothstep(0.0, w, float(LAND_REGION_CELLS) - t);
 }
 
-// Channel c of the region in `slot` at texel coordinate t: bilinear, held
-// inside its texels.
-vec4 landRegionBilinear(int slot, int c, vec2 t) {
+// Channel c of the region in `slot` at texel coordinate t: the cubic
+// B-spline over its texels (landBspline, as the global grid's), held
+// inside them.
+vec4 landRegionCubic(int slot, int c, vec2 t) {
     t = clamp(t - 0.5, vec2(0.0), vec2(float(LAND_REGION_CELLS - 1)));
-    ivec2 i = min(ivec2(t), ivec2(LAND_REGION_CELLS - 2));
+    ivec2 i = ivec2(floor(t));
     vec2 f = t - vec2(i);
+    vec4 wx = landBspline(f.x), wy = landBspline(f.y);
     int layer = slot * LAND_REGION_KEEP + c;
-    vec4 a = landRegionLoad(ivec3(i, layer)), b = landRegionLoad(ivec3(i + ivec2(1, 0), layer));
-    vec4 d = landRegionLoad(ivec3(i + ivec2(0, 1), layer)), e = landRegionLoad(ivec3(i + ivec2(1, 1), layer));
-    vec4 lo = a + (b - a) * f.x, hi = d + (e - d) * f.x;
-    return lo + (hi - lo) * f.y;
+    ivec4 xs = clamp(i.x + ivec4(-1, 0, 1, 2), 0, LAND_REGION_CELLS - 1);
+    vec4 sum = vec4(0.0);
+    for (int b = 0; b < 4; ++b) {
+        int y = clamp(i.y - 1 + b, 0, LAND_REGION_CELLS - 1);
+        sum += wy[b] * (wx.x * landRegionLoad(ivec3(xs.x, y, layer)) + wx.y * landRegionLoad(ivec3(xs.y, y, layer)) +
+                        wx.z * landRegionLoad(ivec3(xs.z, y, layer)) + wx.w * landRegionLoad(ivec3(xs.w, y, layer)));
+    }
+    return sum;
 }
 
-// The same over a reader's texel `q` of the region's texels wide: bilinear
-// while q is at most one, else the mean of four bilinear reads a quarter
-// of q off the point each way (their tents together about q wide), so a
-// coarse tile's texel takes the cells it spans, never the one its centre
-// lands on (a river a cell wide read every few cells was dotted).
+// The same over a reader's texel `q` of the region's texels wide: one read
+// while q is at most one, else the mean of four a quarter of q off the
+// point each way, so a coarse tile's texel takes the cells it spans, never
+// the one its centre lands on (a river a cell wide read every few cells
+// was dotted).
 vec4 landRegionTexel(int slot, int c, vec2 t, float q) {
-    if (q <= 1.0) return landRegionBilinear(slot, c, t);
+    if (q <= 1.0) return landRegionCubic(slot, c, t);
     float o = 0.25 * q;
-    return 0.25 * (landRegionBilinear(slot, c, t + vec2(-o, -o)) + landRegionBilinear(slot, c, t + vec2(o, -o)) +
-                   landRegionBilinear(slot, c, t + vec2(-o, o)) + landRegionBilinear(slot, c, t + vec2(o, o)));
+    return 0.25 * (landRegionCubic(slot, c, t + vec2(-o, -o)) + landRegionCubic(slot, c, t + vec2(o, -o)) +
+                   landRegionCubic(slot, c, t + vec2(-o, o)) + landRegionCubic(slot, c, t + vec2(o, o)));
 }
 
 // Level L of one root at chart point s: its regions' weighted values (times
@@ -237,13 +254,13 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
     return acc;
 }
 vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) {
-    if (c >= LAND_REGION_KEEP) return landGridAtDir(c, d);
+    if (c >= LAND_REGION_KEEP) return landGridReadDir(c, d);
     // The face the point is on; the others only within a band of its edge.
     int f0 = landGridFace(d);
     vec2 x0 = landGridChart(d, f0);
     float rest;
     vec4 acc = landFieldDirLevels(c, d, p, minLevel, LAND_REGION_LEVELS, f0, x0, rest);
-    if (rest > 0.0) acc += rest * landGridAt(c, f0, x0);
+    if (rest > 0.0) acc += rest * landGridReadDir(c, d);
     return acc;
 }
 vec4 landFieldDir(int c, vec3 d, vec3 p) { return landFieldDirFrom(c, d, p, 0); }
@@ -269,10 +286,10 @@ vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest
     return acc;
 }
 vec4 landFieldAtFrom(int c, vec2 x, int minLevel) {
-    if (c >= LAND_REGION_KEEP) return landGridAt(c, 0, x);
+    if (c >= LAND_REGION_KEEP) return landGridRead(c, 0, x);
     float rest;
     vec4 acc = landFieldAtLevels(c, x, minLevel, LAND_REGION_LEVELS, rest);
-    if (rest > 0.0) acc += rest * landGridAt(c, 0, x);
+    if (rest > 0.0) acc += rest * landGridRead(c, 0, x);
     return acc;
 }
 vec4 landFieldAt(int c, vec2 x) { return landFieldAtFrom(c, x, 0); }
@@ -286,12 +303,12 @@ float landFieldCoverAt(int level, vec2 x) {
 #else   // no regions: the global grid alone
 
 #ifdef LAND_GRID_ROUND
-vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) { return landGridAtDir(c, d); }
-vec4 landFieldDir(int c, vec3 d, vec3 p) { return landGridAtDir(c, d); }
+vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) { return landGridReadDir(c, d); }
+vec4 landFieldDir(int c, vec3 d, vec3 p) { return landGridReadDir(c, d); }
 float landFieldCoverDir(int level, vec3 d, vec3 p) { return 0.0; }
 #else
-vec4 landFieldAtFrom(int c, vec2 x, int minLevel) { return landGridAt(c, 0, x); }
-vec4 landFieldAt(int c, vec2 x) { return landGridAt(c, 0, x); }
+vec4 landFieldAtFrom(int c, vec2 x, int minLevel) { return landGridRead(c, 0, x); }
+vec4 landFieldAt(int c, vec2 x) { return landGridRead(c, 0, x); }
 float landFieldCoverAt(int level, vec2 x) { return 0.0; }
 #endif
 

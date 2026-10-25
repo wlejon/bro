@@ -1641,9 +1641,10 @@ field is evaluated at is **split**: an integer part and a float fraction.
   with a one-cell halo. The halo is a table of copies made on the CPU: an
   edge cell takes the nearest cell of the face its centre lies on, a corner
   the mean of its face's corner and the two edge halos beside it (no step
-  at a cube's corner). Bilinear sampling between cell centres, the same
-  arithmetic in C++ (`LandGrid::sample`/`sampleDir`) and GLSL
-  (`ground/land_grid.glsl`).
+  at a cube's corner). Cubic B-spline sampling over the cell centres (C2:
+  slopes and curvatures show no cells; within a cell of a face's edge the
+  faces about the point cross-faded), the same arithmetic in C++
+  (`LandGrid::sample`/`sampleDir`) and GLSL (`ground/land_grid.glsl`).
 - **The run** (`vulkan/ground/scene_land_process.cpp`): rgba32f 2D-array
   images (layer root·C + channel) ping-ponged, `land_process.comp` in
   three modes (init, a pass, the halo), up to 128 passes a frame; then
@@ -1663,10 +1664,10 @@ field is evaluated at is **split**: an integer part and a float fraction.
   passes a frame is a hitch, fine at creation only). The regional grids
   are below.
 - **The oracle:** `bro_land_grid_test` (halo sources and corners, the field
-  through bilinear sampling within 2 m anywhere, no step across a face's
+  through B-spline sampling within 2 m anywhere, no step across a face's
   edge or corner), `bro_plant_placement_test`'s base checks (flat and round),
   `tests/scene/test_land_process.js` (not ready then ready, procInit exact
-  at cell centres and bilinear between, the GPU standing on the CPU's
+  through the cells' B-spline, the GPU standing on the CPU's
   heights, a pass's iterations, plants held until ready, a second channel
   colouring the surface, a kernel that does not compile never ready, and on
   an Earth-radius body the field across a face's edge). An Earth-radius

@@ -124,6 +124,8 @@ void SceneWorldService::runFrame(SceneFrame& frame) {
     frame.stats.worldJobs = static_cast<int>(s.granted);
     frame.stats.worldQueued = static_cast<int>(s.queued);
     frame.stats.worldWorstError = s.worstError;
+    frame.stats.worldKindMs.clear();
+    for (int k = 0; k < policy_.kindCount(); ++k) frame.stats.worldKindMs.emplace_back(policy_.kind(k).name, policy_.cost(k));
 }
 
 }  // namespace bro::scene::vk

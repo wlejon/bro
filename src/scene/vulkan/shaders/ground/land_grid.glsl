@@ -14,18 +14,46 @@
 // A cell's side in chart metres.
 float landGridCell() { return 2.0 * LAND_GRID_HALF / float(LAND_GRID_CELLS); }
 
-// Channel `c` at chart point `x` of `root`: bilinear between the cell
-// centres either side (texel i's at -half + (i - 0.5) cells), the halo's
-// included, held at the halo's centres past them.
+// The uniform cubic B-spline's four weights at fraction f between the
+// middle two of four cells (scene/world/land_grid.h's landBspline): a read
+// through them is C2, so the slopes and curvatures of a field read from
+// cells (or of heights built on one) are continuous across the cells'
+// edges, never the cells' facets and creases a bilinear read draws. It
+// smooths rather than interpolates: at a cell's centre it reads
+// (a + 4 b + c) / 6 along each axis.
+vec4 landBspline(float f) {
+    float g = 1.0 - f, f2 = f * f, f3 = f2 * f;
+    return vec4(g * g * g, 3.0 * f3 - 6.0 * f2 + 4.0, -3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0, f3) * (1.0 / 6.0);
+}
+
+// Channel `c` at chart point `x` of `root`: the cubic B-spline over the
+// four cell centres about it each way (texel i's at -half + (i - 0.5)
+// cells), the halo's included, held at the halo's past them.
 vec4 landGridAt(int c, int root, vec2 x) {
-    vec2 s = (x + LAND_GRID_HALF) / landGridCell() + 0.5;
-    ivec2 i = clamp(ivec2(floor(s)), ivec2(0), ivec2(LAND_GRID_CELLS));
-    vec2 f = clamp(s - vec2(i), 0.0, 1.0);
+    vec2 s = clamp((x + LAND_GRID_HALF) / landGridCell() + 0.5, vec2(0.0), vec2(float(LAND_GRID_CELLS + 1)));
+    ivec2 i = ivec2(floor(s));
+    vec2 f = s - vec2(i);
+    vec4 wx = landBspline(f.x), wy = landBspline(f.y);
     int layer = clamp(root, 0, LAND_GRID_ROOTS - 1) * LAND_GRID_CHANNELS + clamp(c, 0, LAND_GRID_CHANNELS - 1);
-    vec4 a = landGridLoad(ivec3(i, layer)), b = landGridLoad(ivec3(i + ivec2(1, 0), layer));
-    vec4 d = landGridLoad(ivec3(i + ivec2(0, 1), layer)), e = landGridLoad(ivec3(i + ivec2(1, 1), layer));
-    vec4 lo = a + (b - a) * f.x, hi = d + (e - d) * f.x;
-    return lo + (hi - lo) * f.y;
+    ivec4 xs = clamp(i.x + ivec4(-1, 0, 1, 2), 0, LAND_GRID_CELLS + 1);
+    vec4 sum = vec4(0.0);
+    for (int b = 0; b < 4; ++b) {
+        int y = clamp(i.y - 1 + b, 0, LAND_GRID_CELLS + 1);
+        sum += wy[b] * (wx.x * landGridLoad(ivec3(xs.x, y, layer)) + wx.y * landGridLoad(ivec3(xs.y, y, layer)) +
+                        wx.z * landGridLoad(ivec3(xs.z, y, layer)) + wx.w * landGridLoad(ivec3(xs.w, y, layer)));
+    }
+    return sum;
+}
+
+// The same over a reader's texel `q` cells wide: one read while q is at
+// most one, else the mean of four a quarter of q off the point each way, so
+// a coarse texel takes the cells it spans (land_regions.glsl's
+// landFieldFootprint; a far tile's texel of 48 km over 20 km cells).
+vec4 landGridTexel(int c, int root, vec2 x, float q) {
+    if (q <= 1.0) return landGridAt(c, root, x);
+    float o = 0.25 * q * landGridCell();
+    return 0.25 * (landGridAt(c, root, x + vec2(-o, -o)) + landGridAt(c, root, x + vec2(o, -o)) +
+                   landGridAt(c, root, x + vec2(-o, o)) + landGridAt(c, root, x + vec2(o, o)));
 }
 
 #ifdef LAND_GRID_ROUND
@@ -62,10 +90,44 @@ vec3 landGridDir(int f, vec2 x) {
     return normalize(kLandFaceN[f] + t.x * kLandFaceU[f] + t.y * kLandFaceV[f]);
 }
 
-// Channel `c` at body direction `d` (unit).
+// How much face `f`'s read at chart point x is weighed in at body
+// direction d: all of it within its square less a cell, none a cell past
+// it. (A read through the B-spline reaches two cells about the point, the
+// halo only one past the face: near an edge each face's read clamps at
+// its halo, and the face a point lies on changed there with a step.
+// Within a cell of an edge the faces about the point are cross-faded.)
+float landGridFaceWeight(vec2 x) {
+    float c = landGridCell();
+    return 1.0 - smoothstep(LAND_GRID_HALF - c, LAND_GRID_HALF + c, max(abs(x.x), abs(x.y)));
+}
+
+// Channel `c` at body direction `d` (unit), its root's chart read through
+// `read` (landGridAt, or a texel's mean): on the face it lies on, the
+// faces about it cross-faded within a cell of an edge.
+#define LAND_GRID_DIR(read, c, d, result)                                                         \
+    {                                                                                            \
+        int f0_ = landGridFace(d);                                                               \
+        vec2 x0_ = landGridChart(d, f0_);                                                        \
+        if (max(abs(x0_.x), abs(x0_.y)) < LAND_GRID_HALF - landGridCell()) {                     \
+            result = read(c, f0_, x0_);                                                          \
+        } else {                                                                                 \
+            vec4 s_ = vec4(0.0);                                                                 \
+            float w_ = 0.0;                                                                      \
+            for (int k_ = 0; k_ < 6; ++k_) {                                                     \
+                if (k_ != f0_ && dot(d, kLandFaceN[k_]) < 0.2) continue;                          \
+                vec2 x_ = k_ == f0_ ? x0_ : landGridChart(d, k_);                                \
+                float wk_ = landGridFaceWeight(x_);                                              \
+                if (wk_ <= 0.0) continue;                                                        \
+                s_ += wk_ * read(c, k_, x_);                                                     \
+                w_ += wk_;                                                                       \
+            }                                                                                    \
+            result = w_ > 0.0 ? s_ / w_ : read(c, f0_, x0_);                                     \
+        }                                                                                        \
+    }
 vec4 landGridAtDir(int c, vec3 d) {
-    int f = landGridFace(d);
-    return landGridAt(c, f, landGridChart(d, f));
+    vec4 r;
+    LAND_GRID_DIR(landGridAt, c, d, r)
+    return r;
 }
 #endif
 

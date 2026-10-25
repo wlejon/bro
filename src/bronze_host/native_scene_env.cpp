@@ -323,6 +323,8 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["worldJobs"] = s.worldJobs;
     j["worldQueued"] = s.worldQueued;
     j["worldWorstError"] = s.worldWorstError;
+    j["worldKindMs"] = nlohmann::json::object();
+    for (const auto& [name, ms] : s.worldKindMs) j["worldKindMs"][name] = ms;
     j["exposureEv"] = s.exposureEv;
     j["meteredEv"] = s.meteredEv;
     j["exposureScale"] = s.exposureScale;

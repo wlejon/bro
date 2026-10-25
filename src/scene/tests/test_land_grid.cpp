@@ -1,8 +1,8 @@
 // The land's processes' grid (scene/world/land_grid.h): a flat body's one
 // root and its halo repeating the edge's cells; a round body's six cube
 // faces, each halo cell copied from the cell of the face its centre lies on
-// that holds it; sampling a cell's value at its centre, bilinear between,
-// continuous across a face's edge and a cube's corner; the shaders' layout.
+// that holds it; sampling by the cubic B-spline over the cells (a linear
+// field exact, the slope continuous), continuous across a face's edge and a cube's corner; the shaders' layout.
 
 #include "scene/world/land_grid.h"
 
@@ -61,12 +61,22 @@ void flat() {
     check(edges, "flat: the halo repeats the edge's cells");
     const auto f = [](int, double x, double z) { return 3.0 * x - 2.0 * z + 7.0; };
     const std::vector<float> v = fill(g, f);
-    // A linear field is exact anywhere within the centres; held past them.
+    // The cubic B-spline reads a linear field exactly anywhere its four
+    // centres each way are the field's (a cell inside the last centres:
+    // the halo repeats the edge's cells); held past them.
     double worst = 0.0;
-    for (double x = -980.0; x <= 980.0; x += 37.3)
-        for (double z = -980.0; z <= 980.0; z += 41.9) worst = std::max(worst, std::fabs(g.sample(v.data(), 0, x, z) - f(0, x, z)));
-    check(worst < 1e-2, "flat: bilinear between centres (worst " + std::to_string(worst) + ")");
+    for (double x = -940.0; x <= 940.0; x += 37.3)
+        for (double z = -940.0; z <= 940.0; z += 41.9) worst = std::max(worst, std::fabs(g.sample(v.data(), 0, x, z) - f(0, x, z)));
+    check(worst < 1e-2, "flat: a linear field exact between centres (worst " + std::to_string(worst) + ")");
     check(std::fabs(g.sample(v.data(), 0, 2000.0, 0.0) - f(0, 980.0, 0.0)) < 1e-2, "flat: held past the last centre");
+    // Its slope continuous across a cell's centre (a bilinear read's kinks
+    // are there, a step of the slope of f'' a cell): a curved field's x
+    // slope just either side of one.
+    const auto curved = [](int, double x, double z) { return 0.002 * x * x + 0.001 * x * z; };
+    const std::vector<float> cv = fill(g, curved);
+    const auto slopeAt = [&](double x) { return (g.sample(cv.data(), 0, x + 0.5, 30.0) - g.sample(cv.data(), 0, x - 0.5, 30.0)); };
+    const double knot = -1000.0 + 19.5 * 40.0;   // (texel 20's centre)
+    check(std::fabs(slopeAt(knot - 0.6) - slopeAt(knot + 0.6)) < 0.01, "flat: the slope has no step at a cell's centre");
     const std::string glsl = g.glslConfig(2);
     check(glsl.find("LAND_GRID_CELLS 50") != std::string::npos && glsl.find("LAND_GRID_CHANNELS 2") != std::string::npos &&
               glsl.find("LAND_GRID_ROUND") == std::string::npos,
@@ -193,7 +203,7 @@ void regions() {
         }
     check(worst < 1e-4, "flat regions: their weights sum to one over the root (worst " + std::to_string(worst) + ")");
     // A smooth field sampled into the regions comes back to within its
-    // bilinear error, with no step where the regions overlap.
+    // B-spline's error, with no step where the regions overlap.
     const auto smooth = [](const double* p, int) { return 40.0 * std::sin(p[0] / 120.0) * std::cos(p[2] / 170.0); };
     const LandRegionSet field = everyRegion(F, flatBody, smooth);
     double err = 0.0, step = 0.0;
@@ -206,7 +216,7 @@ void regions() {
         err = std::max(err, std::fabs(a[0] - smooth(p, 0)));
         step = std::max(step, static_cast<double>(std::fabs(a[0] - b[0])));
     }
-    check(err < 0.1, "flat regions: a smooth field to within its bilinear error (" + std::to_string(err) + " m)");
+    check(err < 0.1, "flat regions: a smooth field to within its B-spline error (" + std::to_string(err) + " m)");
     check(step < 0.01, "flat regions: no step across their aprons (" + std::to_string(step) + " m)");
     // With none in, the coarser field (the global grid's) is read as it is.
     float c[4] = {3.0f, 1.0f, 2.0f, 4.0f};

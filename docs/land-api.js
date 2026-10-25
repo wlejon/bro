@@ -93,6 +93,73 @@
  * Where a grass node's turf covers the land (`grass.shadeGround(land)`), the
  * turf shades it; the surface is what shows elsewhere.
  *
+ * FILTERED READS (ground/land_filters.glsl). A texel stands for
+ * `q.footprint` metres of ground, so every line the surface draws (snow,
+ * trees, rock, wetness) must be the share of that ground past the line:
+ * soft and the same every time, never a point's yes or no texel by texel,
+ * and never the grid's cells. These give the surface its inputs that way,
+ * each read at a scale clamped to at least the footprint, so what the
+ * texel cannot hold is its mean and what that mean hides is its spread:
+ *
+ *     struct LandStat { float mean; float spread; }
+ *         a value's mean over the footprint and its spread (standard
+ *         deviation) there; landStatAdd(a, b) (independent: spreads in
+ *         quadrature), landStatScale(a, k)
+ *     float landShare(LandStat v, float t)
+ *     float landShare(float mean, float spread, float t)
+ *         the share of the footprint where v is over t (the normal
+ *         distribution's, a step with no spread): "where is this line"
+ *         in one call that blurs correctly at any footprint
+ *     vec4 landGridMean(int c, P p, float w, out vec4 spread)
+ *         channel c's mean over ground w (at least the texel) wide and its
+ *         spread there: reads a quarter of w about p, each at half of w
+ *         (the regional levels finer than that faded to the coarser field,
+ *         each a texel's mean of the cells it spans: the levels as a
+ *         pyramid)
+ *     float landGridCell(P p)
+ *         the cell (m) of the finest grid the land reads at p for the texel
+ *         (the regional levels as far as each is in, the global grid's past
+ *         them): a shape the grid's cells make (a D8 network's branches) is
+ *         read at a cell or more
+ *     LandTerrain landTerrain(LandPoint q, float scale, float base)
+ *         the landform at `scale` (m): the land's heights a scale either way
+ *         (each read at half the scale, the noise's octaves and the grids'
+ *         levels finer than that at their mean), the scale at least 1.5
+ *         texels, heights under `base` read as base (a sea's level). Its
+ *         `slope` (rise along east, north; `grade` its length), `east` and
+ *         `north` (the ground's frame, north toward the body's +y pole; on a
+ *         flat body (1, 0, 0) and (0, 0, 1)), `hollow` (the ring's mean less
+ *         the centre, m: > 0 a hollow or valley, < 0 a spur or crest, its
+ *         relief over its surroundings -hollow; where the texel is wider
+ *         than the scale, its mean over the texel: the wider read's times
+ *         (scale / read)², so from orbit a hollow is the few metres a broad
+ *         form makes), `height` (the heights' mean and spread: the relief
+ *         there, less the slope's plane) and `scale` (the scale read)
+ *     LandStat landGrain(vec3 P, float seed, float wavelength, int octaves,
+ *                        float lacunarity, float gain, float scale)
+ *         a fractal value noise of body point P (`landBodyPoint(q.at)` or
+ *         `(q.p)`): each octave faded to its mean as the footprint (or
+ *         `scale`, where wider) passes 0.3 to 0.6 of its wavelength; mean
+ *         the held octaves (all of them together a spread of about 1),
+ *         spread the share the footprint does not hold, so a line it ragged
+ *         is crisp to the texel where the texel holds it and the share of
+ *         each side where it does not; `landValueNoise(vec3)` its octave
+ *
+ * (P is vec3, the datum point q.at, on a round body; vec2, q.p, on a flat
+ * one.) The grids themselves (landGrid) are read through the cubic
+ * B-spline (below), so slopes and curvatures taken of a channel, or of
+ * heights built on one, show no cells.
+ *
+ * @example
+ *   // A tree line ragged by a grain, cut where the view holds it and the
+ *   // share of each side where it does not, at any footprint.
+ *   LandTerrain t = landTerrain(q, 90.0, 0.0);
+ *   LandStat grain = landGrain(landBodyPoint(q.at), 5.3, 1600.0, 8, 0.47, 0.68, 0.0);
+ *   float temp = 12.0 - 6.5 * q.height / 1000.0 + 0.02 * t.hollow;          // a gully the milder
+ *   LandStat line = LandStat(temp + 2.0 * grain.mean,
+ *                            length(vec2(2.0 * grain.spread, 6.5 * t.height.spread / 1000.0)));
+ *   float trees = landShare(line, -3.0);                                    // forest where over -3 C
+ *
  * PROCESSES (land_process_layer.glsl is the contract; docs/scene-world-
  * architecture.md §11, "Processes"). GLSL that defines
  *
@@ -121,7 +188,13 @@
  * 128 iterations a frame, then channel 0 is read back once: until then the
  * land draws nothing, its heights are NaN and `landStats().ready` is false.
  * Processes that do not compile are logged and the land stays unready.
- * Between cell centres both sides read the grid bilinearly, the same way.
+ * Between cell centres both sides read the grid through the cubic B-spline
+ * over the four centres about a point each way, the same way (C2: a
+ * channel's slopes and curvatures, and those of the heights built on it, are
+ * continuous across the cells; it smooths, reading (a + 4 b + c) / 6 at a
+ * centre); on a round body the faces about a point within a cell of an edge
+ * are cross-faded. A texel wider than a grid's cells reads their mean over
+ * it.
  *
  * REGIONAL GRIDS (`processes.regions`; scene/world/land_regions.h,
  * ground/land_region_layer.glsl). Finer grids of the same processes made

@@ -14,18 +14,25 @@ double smooth01(double e0, double e1, double x) {
 }
 
 /// Region `r`'s channel 0 (four floats) at texel coordinates (u, v) (texel
-/// centres at + 0.5): bilinear, held inside its texels.
+/// centres at + 0.5): the cubic B-spline over its texels (landBspline),
+/// held inside them.
 void texelAt(const LandRegion& r, int cells, double u, double v, double out[4]) {
     u = std::clamp(u - 0.5, 0.0, cells - 1.0);
     v = std::clamp(v - 0.5, 0.0, cells - 1.0);
-    const int i = std::min(static_cast<int>(u), cells - 2), j = std::min(static_cast<int>(v), cells - 2);
-    const double fx = u - i, fz = v - j;
+    const int i = static_cast<int>(std::floor(u)), j = static_cast<int>(std::floor(v));
+    double wx[4], wz[4];
+    landBspline(u - i, wx);
+    landBspline(v - j, wz);
     const float* t = r.texels.data();
-    const auto at = [&](int a, int b, int c) { return static_cast<double>(t[(static_cast<size_t>(b) * cells + a) * 4 + c]); };
-    for (int c = 0; c < 4; ++c) {
-        const double lo = at(i, j, c) + (at(i + 1, j, c) - at(i, j, c)) * fx;
-        const double hi = at(i, j + 1, c) + (at(i + 1, j + 1, c) - at(i, j + 1, c)) * fx;
-        out[c] = lo + (hi - lo) * fz;
+    for (int c = 0; c < 4; ++c) out[c] = 0.0;
+    for (int b = 0; b < 4; ++b) {
+        const int y = std::clamp(j - 1 + b, 0, cells - 1);
+        for (int a = 0; a < 4; ++a) {
+            const int x = std::clamp(i - 1 + a, 0, cells - 1);
+            const double w = wx[a] * wz[b];
+            const float* px = t + (static_cast<size_t>(y) * cells + x) * 4;
+            for (int c = 0; c < 4; ++c) out[c] += w * px[c];
+        }
     }
 }
 

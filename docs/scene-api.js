@@ -122,6 +122,9 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [worldQueued]     jobs left for a later frame
  * @property {number} [worldWorstError] the largest error left queued, in pixels on screen (what is shown
  *   in its place: a missing tile's coarser parent's texels); 0 when nothing waits
+ * @property {Object<string, number>} [worldKindMs] each kind of job's GPU ms a unit by its name, as last
+ *   measured (its guess until it is): `land` a land tile's making (its surface module run over every
+ *   texel), `turf`, `land horizon`, `land sun`, `shadow pages`, ...
  * @property {number} [exposureEv]      the exposure applied (EV100, `setExposure`), read back from the GPU a
  *   few frames late
  * @property {number} [meteredEv]       auto exposure: the EV100 that frame's histogram metered (fixed: the setting)

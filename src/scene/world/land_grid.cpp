@@ -62,20 +62,49 @@ float LandGrid::sample(const float* values, int root, double x, double z) const 
     const int n = cells_, s = side();
     const double c = cell();
     // Texel i's centre is at -half + (i - 0.5) cells.
-    const double u = (x + half_) / c + 0.5, v = (z + half_) / c + 0.5;
-    const int i = std::clamp(static_cast<int>(std::floor(u)), 0, n);
-    const int j = std::clamp(static_cast<int>(std::floor(v)), 0, n);
-    const double fx = std::clamp(u - i, 0.0, 1.0), fz = std::clamp(v - j, 0.0, 1.0);
+    // (The cubic B-spline over the four centres about it each way, as
+    // shaders/ground/land_grid.glsl's landGridAt.)
+    const double u = std::clamp((x + half_) / c + 0.5, 0.0, n + 1.0), v = std::clamp((z + half_) / c + 0.5, 0.0, n + 1.0);
+    const int i = static_cast<int>(std::floor(u)), j = static_cast<int>(std::floor(v));
+    double wx[4], wz[4];
+    landBspline(u - i, wx);
+    landBspline(v - j, wz);
     const float* r = values + static_cast<size_t>(std::clamp(root, 0, roots() - 1)) * rootTexels();
-    const auto at = [&](int a, int b) { return static_cast<double>(r[static_cast<size_t>(b) * s + a]); };
-    const double lo = at(i, j) + (at(i + 1, j) - at(i, j)) * fx;
-    const double hi = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * fx;
-    return static_cast<float>(lo + (hi - lo) * fz);
+    double sum = 0.0;
+    for (int b = 0; b < 4; ++b) {
+        const size_t row = static_cast<size_t>(std::clamp(j - 1 + b, 0, n + 1)) * s;
+        double acc = 0.0;
+        for (int a = 0; a < 4; ++a) acc += wx[a] * r[row + std::clamp(i - 1 + a, 0, n + 1)];
+        sum += wz[b] * acc;
+    }
+    return static_cast<float>(sum);
 }
 
 float LandGrid::sampleDir(const float* values, const double dir[3]) const {
     const ChartPoint p = chartOf(body_, dir);
-    return sample(values, p.root, p.x, p.z);
+    // Within a cell of a face's edge the faces about the point cross-faded,
+    // each by how far inside its square it lies (the B-spline reaches two
+    // cells about a point, the halo one past the face; as land_grid.glsl's
+    // landGridFaceWeight).
+    const double c = cell();
+    const auto weight = [&](const ChartPoint& q) {
+        const double m = std::max(std::fabs(q.x), std::fabs(q.z));
+        const double t = std::clamp((m - (half_ - c)) / (2.0 * c), 0.0, 1.0);
+        return 1.0 - t * t * (3.0 - 2.0 * t);
+    };
+    if (!round() || std::max(std::fabs(p.x), std::fabs(p.z)) < half_ - c) return sample(values, p.root, p.x, p.z);
+    double sum = 0.0, wsum = 0.0;
+    for (int k = 0; k < 6; ++k) {
+        // (Face k's normal: +x, -x, +y, -y, +z, -z.)
+        const double n = (k & 1 ? -1.0 : 1.0) * dir[k >> 1];
+        if (k != p.root && n < 0.2) continue;
+        const ChartPoint q = k == p.root ? p : chartOf(body_, dir, k);
+        const double w = weight(q);
+        if (w <= 0.0) continue;
+        sum += w * sample(values, k, q.x, q.z);
+        wsum += w;
+    }
+    return wsum > 0.0 ? static_cast<float>(sum / wsum) : sample(values, p.root, p.x, p.z);
 }
 
 void LandBase::global(int root, double x, double z, float out[4]) const {
@@ -100,7 +129,15 @@ void LandBase::field(int root, double x, double z, float out[4]) const {
 
 void LandBase::fieldDir(const double dir[3], float out[4]) const {
     const ChartPoint p = chartOf(grid.body(), dir);
-    global(p.root, p.x, p.z, out);
+    if (grid.round()) {
+        // (The faces cross-faded at their edges, as the GPU's landGridAtDir.)
+        out[0] = values.empty() ? 0.0f : grid.sampleDir(values.data(), dir);
+        out[1] = scales.empty() ? 1.0f : grid.sampleDir(scales.data(), dir);
+        out[2] = own[0].empty() ? 0.0f : grid.sampleDir(own[0].data(), dir);
+        out[3] = own[1].empty() ? 0.0f : grid.sampleDir(own[1].data(), dir);
+    } else {
+        global(p.root, p.x, p.z, out);
+    }
     if (!regions || !lattice.config.active()) return;
     const auto set = regions->snapshot();
     if (grid.round())
