@@ -23,7 +23,7 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 | `--width N` | Viewport width in pixels (default: 1920) |
 | `--height N` | Viewport height in pixels (default: 1080) |
 | `--device-scale-factor S` | Render as a HiDPI display with `S` device px per CSS px (default 1): `devicePixelRatio`, `@media (resolution)` and every captured frame follow, layout and input stay in CSS px. Same as calling `setDeviceScaleFactor(S)` first. `--no-gpu` renders at the scale too. |
-| `--splash` | Show the startup splash. Off by default in headless: its canvas animation leaks into early screenshots; opt in only to exercise the splash lifecycle. |
+| `--splash` | Show the startup splash. Off by default in headless: its canvas animation leaks into early screenshots; opt in only to exercise the splash lifecycle. It also turns on the corner work-status panel (docs/system-panels.md "Background work"), off otherwise in headless. |
 | `--no-splash` | Explicitly disable the splash (the default). |
 | `--notification <args>` | Start as a click on one of the app's notifications would: the page hears `notificationclick` after load (see [sys-api.js](sys-api.js)). |
 | `--single-instance` | Honour the app's `"singleInstance"`: claim its channel, or hand `-- args` to the instance holding it and exit 0 (headless runs otherwise never claim it). |

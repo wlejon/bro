@@ -77,6 +77,7 @@ add_library(bro_engine STATIC
     replaced_elements.cpp
     replaced_elements_input.cpp
     system_panels.cpp
+    shader_status.cpp
     iframe.cpp
     sub_document.cpp
     scroll_layers.cpp

@@ -24,8 +24,45 @@ Both scans match panels by relative path (`menu.html`, `settings/graphics.html`,
 | Menu bar | `system/menu.html` | `MenuBar::visible` | `bro.menu.show()` (app-facing, opt-in; hidden by default) |
 | Perf HUD | `system/perf.html` | overlay toggle | `system_toggle_perf` action (default `F8`): frame/phase timings plus a "Secondary windows" section (one row per live `bro.window.open` window, hidden when there are none) |
 | Preferences modal | `system/nav.html` + `system/settings/{graphics,audio,input}.html` | `Engine::isSystemVisible()` | `system_toggle_settings` action, or the `__system.preferences` menu item |
-| Splash screen | `system/splash.html` | `Engine::splashVisible_` | shown automatically at startup if `splashEnabled_`; dismisses itself |
+| Splash screen | `system/splash.html` | `Engine::splashVisible_` | shown automatically at startup if `splashEnabled_`; dismisses itself (see "Background work" below) |
+| Work status | `system/status.html` | `Engine::statusVisible_` | shown by the engine after the splash while the scene's shaders compile or its pipelines build; fades out when they are done |
 | DOM inspector | `system/inspector.html` | `Engine::inspector().visible` | the `__system.inspector` menu item |
+
+### Background work: the splash's line and the status panel
+
+A cold start after a rebuild compiles every world shader set the app uses
+(docs/code-cache.md "Shader warm-up"), which once froze a window for 20 s and
+more. That work is shown, for every app, with no code of its own
+(`src/engine/shader_status.cpp`):
+
+- **The splash** shows a line under its dots of what is still being made:
+  `compiling scripts 42%` while the page's script compiles (the same estimate
+  as `--bro-compile-progress`, docs/compile-progress.md), `compiling shaders
+  23 / 61` while world shader sets compile, `building pipelines 3` while
+  graphics pipelines are built off the frame thread. The engine writes it into
+  the panel's `#bro-work` element each frame; it is empty when nothing is
+  pending.
+- **Dismissal** waits, past the splash's minimum (1.8 s) and the page's compile,
+  for the shaders and pipelines asked for so far: the sets the warm-up record
+  queued at boot (what the app used last run) and what its first frames asked
+  for. It waits at most 4 s for them and dismisses then regardless.
+- **After the splash**, while shaders or pipelines are still in progress for
+  more than a moment (250 ms), the status panel shows the same line in a small
+  box in the bottom-right corner (`pointer-events: none`). The engine sets
+  `bro-busy` on its `<html>` while there is work; without it the box fades out
+  (a CSS transition) and the engine hides the panel. Work still under way as
+  the splash goes shows at once. It is shown in every window (`bro`,
+  `bro --drm`) and, like the splash, not in headless unless `--splash` is
+  passed, so headless screenshots stay clean by default.
+
+The counts are the scene's: `scene::vk::shader_warmup::progress()` (every world
+shader set asked for in this process, the warm-up record's included: `shaders`
+and `shadersDone`) and `scene::vk::pipeline_async::inFlight()`, the same
+numbers `scene.pendingWork()` reports as `shaders: compiling N / M` and
+`pipelines: N building` (docs/scene-api.js). An app without a 3D scene asks
+for none, so its splash and its window are unchanged. An app overriding
+`system/splash.html` or `system/status.html` gets the line in its own
+`#bro-work` element, if it has one.
 
 ## Panel DOM and APIs
 

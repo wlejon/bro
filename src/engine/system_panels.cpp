@@ -190,6 +190,9 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         } else if (fullRel == "splash") {
             doc.tabLabel = "";
             doc.group = "splash";
+        } else if (fullRel == "status") {
+            doc.tabLabel = "";
+            doc.group = "status";
         } else if (fullRel.rfind("settings/", 0) == 0) {
             doc.group = "settings";
             std::string leaf = stem;
@@ -396,6 +399,7 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     if (doc.group == "menu") return menuBar_.visible;
     if (doc.group == "inspector") return inspector_.visible;
     if (doc.group == "splash") return splashVisible_;
+    if (doc.group == "status") return statusVisible_;
     return false;
 }
 
@@ -409,7 +413,7 @@ bool Engine::isSystemDocumentHidden(const dom::Document* doc) const {
 
 bool Engine::isSystemVisible() const {
     return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible
-        || inspector_.visible || splashVisible_;
+        || inspector_.visible || splashVisible_ || statusVisible_;
 }
 
 void Engine::toggleSystemPerf() {
@@ -511,11 +515,22 @@ void Engine::tickSystemPanels(double nowMs) {
     // A panel shown since the last frame is built here, at the top of a frame,
     // never from inside the script or input handler that asked for it.
     loadVisibleSystemPanels();
+    tickWorkStatus(nowMs);
 
     if (splashVisible_) {
         constexpr double kMinDisplayMs = 1800.0;
+        // Past its minimum and the page's compile, the splash waits for the
+        // scene's shaders and pipelines asked for so far (the warm-up record's
+        // sets, queued at boot, and what the first frames asked for), at most
+        // this long; what is left then shows in the status panel.
+        constexpr double kShaderWaitCapMs = 4000.0;
         double elapsed = nowMs - splashStartMs_;
+        bool ready = false;
         if (!appCompiling_ && elapsed >= kMinDisplayMs && !splashDismissTriggered_) {
+            if (splashReadyMs_ < 0.0) splashReadyMs_ = nowMs;
+            ready = !backgroundWorkPending() || nowMs - splashReadyMs_ >= kShaderWaitCapMs;
+        }
+        if (ready) {
             splashDismissTriggered_ = true;
             splashDismissStartMs_ = nowMs;
             for (auto& doc : systemDocs_) {

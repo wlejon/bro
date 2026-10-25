@@ -178,6 +178,10 @@ void Engine::construct(const EngineConfig& config) {
     if (displayMode_ != DisplayMode::Server) render::prewarmSystemFontMgr();
 
     splashEnabled_ = config.showSplash;
+    // The corner status panel (shader_status.cpp) in every window; in headless
+    // only with the splash (--splash), so screenshots stay clean by default.
+    statusEnabled_ = displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm ||
+                     (displayMode_ == DisplayMode::Headless && splashEnabled_);
     compiledApp_ = config.compiledApp;
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     aotDir_ = config.aotDir;

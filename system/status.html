@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* The engine's work-in-progress status: shown after the splash while the
+   scene's shaders compile or its pipelines build (docs/system-panels.md).
+   No script: the engine writes #bro-work's text and sets bro-busy on <html>
+   while there is work; without it the box fades out and the engine hides
+   the panel. */
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    pointer-events: none;
+}
+
+#box {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: #9fe88a;
+    background: rgba(5, 10, 7, 0.72);
+    border: 1px solid rgba(124, 255, 92, 0.25);
+    border-radius: 4px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.6s ease-out;
+}
+
+html[bro-busy] #box {
+    opacity: 1;
+    transition: opacity 0.2s ease-in;
+}
+</style>
+</head>
+<body>
+<div id="box"><span id="bro-work"></span></div>
+</body>
+</html>

@@ -26,6 +26,7 @@
 namespace bro::engine {
 
 void Engine::setCompileProgress(bool compiling, double progress) {
+    compileProgress_ = compiling ? std::clamp(progress, 0.0, 1.0) : -1.0;  // the splash's line (shader_status.cpp)
     dom::Element* root = document_ ? document_->documentElement() : nullptr;
     if (!root) return;
     if (!compiling) {

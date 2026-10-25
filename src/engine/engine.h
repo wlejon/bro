@@ -984,6 +984,11 @@ private:
     void loadVisibleSystemPanels();
     bool isSystemDocVisible(const SystemDocument& doc) const;
     void tickSystemPanels(double nowMs);
+    /// The scene's shaders and pipelines still in progress (shader_status.cpp).
+    bool backgroundWorkPending() const;
+    /// Writes the work in progress into the splash and the status panel, and
+    /// shows / hides the status panel.
+    void tickWorkStatus(double nowMs);
     void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
     void drawSystemPanels(render::Renderer* renderer,
                           layout::DrawTraversal& traversal);
@@ -1342,6 +1347,17 @@ private:
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
     double splashDismissStartMs_ = 0.0;
+    // Background work shown in the panels (shader_status.cpp): the page's
+    // compile progress, the splash's wait for the shaders, and the corner
+    // status panel (system/status.html) after the splash.
+    double compileProgress_ = -1.0;     // 0..1 while a page script compiles
+    double splashReadyMs_ = -1.0;       // when only the shaders held the splash
+    bool statusEnabled_ = false;
+    bool statusVisible_ = false;
+    bool statusBusy_ = false;
+    double statusBusySinceMs_ = -1.0;
+    double statusIdleSinceMs_ = -1.0;
+    std::string splashWorkText_, statusWorkText_;
     bool appCompiling_ = false;
     double lastSystemRafMs_ = 0.0;
     bool systemDirty_ = true;

@@ -326,6 +326,7 @@ void Engine::performAppReload() {
     if (displayMode_ == DisplayMode::Windowed && splashEnabled_) {
         splashVisible_ = true;
         splashDismissTriggered_ = false;
+        splashReadyMs_ = -1.0;
         splashStartMs_ = util::currentTimeMs();
         pumpSplashFrame(0.0);
     }

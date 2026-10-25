@@ -67,7 +67,8 @@ bool Engine::windowIdle() const {
     // Headless frames of the windowed pipeline wait on the event loop when
     // there is one, else they sleep (idleWait).
     if (!headlessPipeline_ && (!eventLoop_ || !eventLoop_->canWaitEvents())) return false;
-    if (!hasRenderedOnce_ || uiDirty_ || systemDirty_ || appBaseDirty_ || splashVisible_ || pendingAppReload_)
+    if (!hasRenderedOnce_ || uiDirty_ || systemDirty_ || appBaseDirty_ || splashVisible_ || statusVisible_ ||
+        pendingAppReload_)
         return false;
     if (document_ && document_->isDirty()) return false;
     // A pass in flight (or its result not yet taken), or animations it is
