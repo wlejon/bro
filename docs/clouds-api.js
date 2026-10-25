@@ -198,8 +198,11 @@ SceneGraph.prototype.setClouds = function (opts) {};
  * @property {number} depth       cells it spans up
  * @property {number} cell        the finest level's cell (m)
  * @property {number} pending     bakes still to come for this view (levels
- *     to bake whole, slices of rows not yet made since the last whole
- *     change: the settle state, "clouds: N volume bakes to come")
+ *     to bake whole, and slices of rows of two rounds of them since the
+ *     last whole change or the last frame the cache still changed: a
+ *     cell's distance and sun depth read cells of other rows, so the
+ *     second round from a settled cache is final): the settle state,
+ *     "clouds: N volume bakes to come"
  * @property {number} bytes       its GPU memory
  * @property {number} cellsBaked  the cells whose forms the newest frame baked
  * @property {number} slack       metres its distances are read less: how far

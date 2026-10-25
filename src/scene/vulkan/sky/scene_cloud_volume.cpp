@@ -35,6 +35,9 @@ constexpr double kAnchorReach = 40000.0;
 constexpr uint32_t kCheckEvery = 30;
 constexpr VkDeviceSize kCheckBytes = sizeof(float) * CL_VOL_CHECK_RAYS * CL_VOL_CHECK_FLOATS;
 constexpr int kDepth[3] = {CL_VOL_SIDE, CL_VOL_SIDE, CL_VOL_DEPTH};
+// The slices baked, from a cache that no longer changes, before what the
+// volume holds is final: two rounds.
+constexpr int kSettleSlices = 2 * CL_VOL_SLICES;
 
 double dot3(const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
@@ -236,7 +239,13 @@ void SceneCloudVolume::place(const Frame& f, CloudVolumeGpu& out, CloudStats& st
         sliceTime_[j] = f.windTime;
     }
     ++frame_;
-    sliceRun_ = all ? 0 : std::min(sliceRun_ + 1, CL_VOL_SLICES);
+    // What is still to come of it for this view (the settle state): the
+    // levels to bake whole again, and two rounds of every slice since the
+    // last whole change or the last frame the cache it is baked from still
+    // changed (a cell's distance reads its neighbours' rows and its sun
+    // depth the cells toward the sun, so one round from a final cache
+    // leaves some made from rows still to come; the second is final).
+    sliceRun_ = all || !f.sourceSettled ? 0 : std::min(sliceRun_ + 1, kSettleSlices);
 
     // The slack: how far the base may have drifted under the forms since
     // the oldest slice was baked (and a float's rounding of a planet's
@@ -262,7 +271,7 @@ void SceneCloudVolume::place(const Frame& f, CloudVolumeGpu& out, CloudStats& st
     cellsBaked_ = 0;
     for (const Box& b : boxes_)
         if (b.pass0 == 0) cellsBaked_ += static_cast<uint64_t>(b.nx) * b.ny * b.nz;
-    stats.volumePending = std::popcount(pending_) + (CL_VOL_SLICES - sliceRun_);
+    stats.volumePending = std::popcount(pending_) + (kSettleSlices - sliceRun_);
     stats.volumeBytes = static_cast<double>(CL_VOL_LEVELS) * CL_VOL_SIDE * CL_VOL_SIDE * CL_VOL_DEPTH * (8 + 2 + 2) +
                         static_cast<double>(kCheckBytes);
     stats.volumeCells = static_cast<double>(cellsBaked_);

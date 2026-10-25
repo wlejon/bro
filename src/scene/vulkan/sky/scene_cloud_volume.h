@@ -81,6 +81,7 @@ public:
         float pixel;
         uint64_t key;
         bool jump;
+        bool sourceSettled;   // the cache it is baked from has no bakes to come
     };
     /// Where the levels lie this frame and what of them is baked; their
     /// place in the block, the settle state and the check into `stats`.
@@ -117,7 +118,7 @@ private:
     uint32_t pending_ = 0;          // levels to bake whole again, a level a frame
     uint64_t key_ = 0;
     uint32_t frame_ = 0;
-    int sliceRun_ = 0;              // slices made since the last whole change
+    int sliceRun_ = 0;              // slices made since the last whole change or change of the cache
     float sliceTime_[CL_VOL_SLICES] = {};   // the wind's time each slice of rows was last baked at
     std::vector<Box> boxes_;
     uint64_t cellsBaked_ = 0;

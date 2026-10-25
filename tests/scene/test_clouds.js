@@ -58,11 +58,16 @@ if (!scn) {
 
     const up = () => scn.setCamera({ fov: 60, near: 0.1, far: 1e6, position: [0, 2, 0], target: [0, 6, -5], up: [0, 1, 0] });
     const down = () => scn.setCamera({ fov: 60, near: 0.1, far: 1e6, position: [0, 40, 0], target: [0, 0, -60], up: [0, 1, 0] });
-    // (Long enough for the volume about the eye, which the march reads, to
-    // be baked again row by row twice over, 8 rows of 128 a frame: what
-    // it holds right after its first bake still changes as its rows are
-    // baked again, so twelve frames drew a different picture each time.)
-    const shoot = (view) => { view(); frames(40); return scn.captureFrame(); };
+    // (Shot once the scene has settled for the view: the clouds' cache and
+    // the volume about the eye, which is final only once its rows have
+    // been baked again from the settled cache.)
+    const shoot = (view) => {
+        view();
+        frames();
+        const s = perf.settle({ maxFrames: 600 });
+        assert(s.settled, `the scene settles for the view (${s.pending.join('; ')})`);
+        return scn.captureFrame();
+    };
 
     const offUp = shoot(up), offDown = shoot(down);
     const skyOff = boxRGB(offUp, 32, 16, 160, 96);

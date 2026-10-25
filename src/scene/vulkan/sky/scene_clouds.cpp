@@ -472,6 +472,7 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     vf.jump = std::fabs(block_.shell[3] - volumeTime_) > 0.25f;
     volumeTime_ = block_.shell[3];
     CloudStats vstats = frame.renderer.cloudStats();
+    vf.sourceSettled = vstats.cachePending == 0;
     volume_.place(vf, block_.volume, vstats);
     frame.renderer.setCloudStats(vstats);
 }
