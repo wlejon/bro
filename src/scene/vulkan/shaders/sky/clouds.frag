@@ -33,9 +33,14 @@
 // with the steps; inside, pieces from the face each CL_IN_GROWTH times the
 // last (fine at the skin, where the detail and the powder show; long deeper
 // in) until the view is spent or leaves the cloud, where it traces on to
-// the next one (halving for up to CL_FACES faces). No jitter: the picture
-// is the same every frame. At most CL_VIEW_STEPS iterations a pixel, each
-// one lookup of the forms or of the bounds.
+// the next one (halving for up to CL_FACES faces). Once the view is
+// CL_IN_FORMS deep into a cloud (or where the pixel is as wide as the
+// volume's finest cell) and the volume about the eye holds the piece
+// (sky/cloud_volume.glsl), the piece's extinction is the volume's, the
+// forms baked at a cell's footprint, one fetch: little of what is that deep
+// shows, and nothing of its detail. No jitter: the picture is the same
+// every frame. At most CL_VIEW_STEPS iterations a pixel, each one lookup
+// of the forms, of the bounds or of the volume.
 //
 // From above, where a pixel spans CL_LAYER_TO of the deck's thickness or
 // more (orbit, the limb, a climb from a region's height), no march: each
@@ -104,6 +109,7 @@ const float CL_IN_LONGEST = 400.0;
 const float CL_SUN_AGAIN = 60.0;   // how far (m, more over a coarse pixel) a view inside goes before its sun depth is taken again
 const float CL_SUN_AGAIN_SEEN = 0.0;   // while more than this much of the view is left
 const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least
+const float CL_IN_FORMS = 3.0;     // the view's depth into a cloud past which its pieces read the volume
 const float CL_OPAQUE = 0.02;    // what is left of a view that ends it
 const float CL_DETAIL_SEEN = 0.3;  // what must be left of a view for the detail to show in it
 // (The layer's: CL_LAYER_FROM .. TO, CL_GLOBE_*, sky/scene_cloud_layer.glsl.)
@@ -140,6 +146,7 @@ float clPhase(float nu, float k) { return mix(clHg(nu, 0.8 * k), clHg(nu, -0.3 *
 // there (clAt, clCache, clBaseShows, clFormsAt, ...): shared with the
 // volume's bakes.
 #include "sky/cloud_forms_at.glsl"
+#include "sky/cloud_volume.glsl"
 
 // How far (m) the view at `w` is sure to meet no cloud, from the cache's
 // level `k`: its cell's own (the gap between the cell's box and the nearest
@@ -175,8 +182,14 @@ float clBaseClear(float base, float foot, float q, float vs) {
 // first few hundred metres (so a heap's sunward side is lit, its far side
 // and underside shaded, and the skin's creases shadowed by the lobes about
 // them, which the cache's cells are too coarse to tell), each piece read
-// over its length; the cache's depth from where they end. Once a face, not
-// marched.
+// over its length; the cache's depth from where they end. Where the pixel
+// is finer than the volume's finest cell and the volume holds the first
+// piece's end, the volume's depth from there instead (its cells baked at
+// their footprint toward the sun through the finer levels and the cache
+// beyond): one fetch for the two further pieces and the cache. (Not over a
+// coarser pixel: from a region's height the volume's coarse cells' depth,
+// none in a cell that holds no cloud, lit the heaps flat.) Once a face,
+// not marched.
 const int CL_SUN_PIECES = 3;
 float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
     float sc = max(1.0, foot / 15.0);
@@ -187,6 +200,13 @@ float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
         float f = max(foot, 3.0 * len);
         tau += clFormsAt(w, clLod(w, f), f, foot, detail && i == 0).sigma * len;
         at += len;
+        // (From the end of the first piece, the volume's depth toward the
+        // sun where it holds the point at a cell as fine as the piece.)
+        if (foot < clouds.volA.w) {
+            vec3 v = cloudVolLocal(cloudToBody(a + s * at));
+            int k = cloudVolLevel(v, len);
+            if (k < CL_VOL_LEVELS) return tau + cloudVolSample(k, v).z;
+        }
         len *= 2.8;
     }
     ClAt w = clAt(a + s * at);
@@ -496,6 +516,7 @@ void main() {
     }
 #endif
 
+    vec3 dl = cloudVolDir(cloudToBody(rd));   // the view in the volume's frame
     int mode = CL_TRACE;
     float t = sp.x;          // where the view is
     float probeEnd = t;      // the band says nothing more before here
@@ -510,6 +531,7 @@ void main() {
     int faces = 0;           // faces halved for
     float tFace = -1.0, tauFace = 0.0, tauUp = 0.0;   // inside: where the sun's depth was taken, its depths toward the sun and up there
     float tauIn = 0.0;       // inside: the view's depth from tFace to the piece
+    float tauSeen = 0.0;     // inside: the view's depth from the cloud's face
     int steps = 0;
     int dbgFree = 0, dbgB = 0, dbgSkip = 0, dbgSkin = 0, dbgIn = 0, dbgHalve = 0, dbgPiece = 0;
     float dbgTau = -1.0;
@@ -692,13 +714,24 @@ void main() {
         // (The forms' mean over the piece: it is taken as one, so what is
         // finer than it along the view is its mean, not a point of it that
         // the next pixel's piece misses.)
-        ClForms f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), foot, m.T > CL_DETAIL_SEEN);
+        // (Deep in the cloud, where the detail no longer shows, or where the
+        // piece is as long as a cell, the volume's extinction there over a
+        // cell about the piece's mean: one fetch.)
+        ClForms f = ClForms(0.0, -1.0);
+        int kv = CL_VOL_LEVELS;
+        vec3 v = clouds.volEye.xyz + dl * x;
+        if (tFace >= 0.0 && (tauSeen > CL_IN_FORMS || foot >= clouds.volA.w)) kv = cloudVolLevel(v, max(foot, CL_PIECE_MEAN * L));
+        if (kv < CL_VOL_LEVELS) {
+            f.sigma = cloudVolSample(kv, v).x;
+        } else {
+            f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), foot, m.T > CL_DETAIL_SEEN);
+        }
         float sigma = f.sigma;
         if (sigma <= 0.0) {
             // Out of the cloud: traced on from here.
             clearAt = t = xPrev = x;
             clearFace = f.face;
-            clearLazy = false;
+            clearLazy = kv < CL_VOL_LEVELS;   // (the volume's: no field)
             mode = CL_TRACE;
             tFace = -1.0;
             continue;
@@ -719,7 +752,7 @@ void main() {
             tFace = t;
             tauFace = clSunDepth(ro + rd * t, s, pixel * t, m.T > CL_DETAIL_SEEN);
             tauUp = clCache(w, lod).z;
-            tauIn = 0.0;
+            tauIn = tauSeen = 0.0;
         } else if (m.T > CL_SUN_AGAIN_SEEN && x - tFace > CL_SUN_AGAIN * max(1.0, foot / 15.0)) {
             tFace = x;
             tauFace = clSunDepth(ro + rd * x, s, foot, m.T > CL_DETAIL_SEEN);
@@ -728,6 +761,7 @@ void main() {
         }
         vec2 tau = vec2(max(tauFace - (tauIn + 0.5 * sigma * L) * nu, 0.0), tauUp);
         tauIn += sigma * L;
+        tauSeen += sigma * L;
         if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)

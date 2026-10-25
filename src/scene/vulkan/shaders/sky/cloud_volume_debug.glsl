@@ -16,9 +16,8 @@
 //      green, cyan, blue, white all);
 //   3  the same, each panel the window's x and height through the eye's row.
 //
-// The includer is clouds.frag, after clIntegrate.
-
-#include "sky/cloud_volume.glsl"
+// The includer is clouds.frag, after clIntegrate (sky/cloud_volume.glsl
+// included).
 
 vec3 clVolBins(float v) {
     return v <= 0.0 ? vec3(0) : v < 0.125 ? vec3(1, 0, 0) : v < 0.25 ? vec3(1, 1, 0) : v < 0.5 ? vec3(0, 1, 0)
