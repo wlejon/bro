@@ -5,8 +5,8 @@
 // the cell's centre over the cell's footprint, as the march would draw them
 // there (sky/cloud_forms_at.glsl's clFormsAt, from the cache's base), and
 // whether the cell may hold cloud as the march draws it at any footprint up
-// to its own (the occupancy the distance is made from). The distance's and
-// the sun's passes follow (clouds_volume_dist.comp, clouds_volume_sun.comp).
+// to its own (the occupancy the distance is made from). The distance's
+// passes follow (clouds_volume_dist.comp).
 //
 // The occupancy: the most base the march may read anywhere in the cell's
 // box, over every level of the cache it may read there (from the finest

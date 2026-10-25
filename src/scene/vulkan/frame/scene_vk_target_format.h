@@ -31,6 +31,15 @@ struct Capture {
 Capture*& current();
 /// Pipelines being built off the frame thread now (pendingWork).
 int inFlight();
+/// Something was not drawn or baked this frame because its pipeline or its
+/// shader set is not in yet (PipelineVariants::get, ModuleShaders::poll,
+/// AsyncComputePipeline::get say it): the settle state counts the frame's
+/// (SceneRenderer::pendingWork), and what cached such a frame's drawing
+/// draws it again once nothing is skipped (the shadow pages).
+void noteSkip();
+/// The skips since the last call (the bridge: once a render, at its start
+/// and its end).
+int takeSkips();
 }  // namespace pipeline_async
 
 struct TargetFormat {
@@ -81,7 +90,10 @@ public:
         auto it = pipelines_.find(key);
         if (it != pipelines_.end()) return it->second;
         if (auto pit = pending_.find(key); pit != pending_.end()) {
-            if (pit->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return VK_NULL_HANDLE;
+            if (pit->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                pipeline_async::noteSkip();
+                return VK_NULL_HANDLE;
+            }
             VkPipeline p = pit->second.get();
             pending_.erase(pit);
             if (p != VK_NULL_HANDLE) pipelines_.emplace(key, p);
@@ -95,6 +107,7 @@ public:
         cur = prev;
         if (capture.used) {
             pending_.emplace(key, capture.future);
+            pipeline_async::noteSkip();
             return VK_NULL_HANDLE;
         }
         if (p != VK_NULL_HANDLE) pipelines_.emplace(key, p);

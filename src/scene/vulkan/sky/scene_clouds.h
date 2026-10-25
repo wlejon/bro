@@ -31,9 +31,12 @@
 //     sceneCloudSun).
 //   - The volume (scene_cloud_volume.h): the forms as the march draws them
 //     baked into a clipmap of 3D grids about the eye, with a distance to
-//     cloud a march may jump by and the depth toward the sun; baked after
-//     the cache (PassCloudVolume). The march does not read it yet (but in
-//     its debug variant, CloudsVolumeFrag).
+//     cloud a march may jump by; baked after the cache (PassCloudVolume).
+//     The march reads its extinction deep in a cloud.
+//   - Every compute pipeline here and the march's are built off the frame
+//     thread (AsyncComputePipeline, PipelineVariants' async), the module's
+//     set compiled off it (ModuleShaders::start): the deck is neither baked
+//     nor drawn until they are in (cloudStats().compiled false meanwhile).
 //   - The march (sky/clouds.frag, built in): the cache's base cut into the
 //     forms per sample, drawn over the opaque surfaces in the HDR scope
 //     (pass_clouds.h).
@@ -75,17 +78,16 @@ public:
                                                               BuiltinSceneShader::CloudsGlobeComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
-    /// as land_grid_config.glsl.
-    bool create(VkDevice device, const std::string& module, const std::string& grid, std::string& err) {
+    /// as land_grid_config.glsl, compiled off the frame thread (poll).
+    void start(const std::string& module, const std::string& grid) {
         Overrides overrides{{"sky/cloud_module.glsl", module}};
         if (!grid.empty()) overrides.push_back({"ground/land_grid_config.glsl", grid});
-        return ModuleShaders::create(device, kBuiltin, overrides, err);
+        ModuleShaders::start(kBuiltin, overrides);
     }
 
     VkShaderModule operator[](Stage s) const { return module(s); }
-    VkPipeline cover = VK_NULL_HANDLE;
-    VkPipeline cache = VK_NULL_HANDLE;
-    VkPipeline globe = VK_NULL_HANDLE;
+    // Started once the modules are made.
+    AsyncComputePipeline cover, cache, globe;
 };
 
 class SceneClouds {
@@ -167,16 +169,20 @@ private:
     PipelineVariants marchPipelines_;
     SceneCloudVolume volume_;
     VkShaderModule noiseCs_ = VK_NULL_HANDLE;
-    VkPipeline noisePipeline_ = VK_NULL_HANDLE;
+    AsyncComputePipeline noisePipeline_;
     VkSampler coverSampler_ = VK_NULL_HANDLE;
     VkSampler noiseSampler_ = VK_NULL_HANDLE;
     VkSampler cacheSampler_ = VK_NULL_HANDLE;
     VkShaderModule lightCs_ = VK_NULL_HANDLE;
     VkShaderModule shadowCs_ = VK_NULL_HANDLE;
-    VkPipeline lightPipeline_ = VK_NULL_HANDLE;
+    AsyncComputePipeline lightPipeline_;
     VkShaderModule distCs_ = VK_NULL_HANDLE;
-    VkPipeline distPipeline_ = VK_NULL_HANDLE;
-    VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+    AsyncComputePipeline distPipeline_;
+    AsyncComputePipeline shadowPipeline_;
+    /// Whether the set's and the engine's pipelines are in (the march's is
+    /// asked for as it draws): nothing of the deck is baked or drawn before.
+    enum class Readiness { Building, Ready, Failed };
+    Readiness pipelinesReady(CloudShaders& set);
 
     // The module sets, by their sources' hash (-1: did not compile).
     std::vector<std::unique_ptr<CloudShaders>> sets_;

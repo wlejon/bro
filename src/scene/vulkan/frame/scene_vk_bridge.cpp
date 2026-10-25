@@ -28,6 +28,7 @@
 #include "util/log.h"
 
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
+#include "scene/vulkan/frame/scene_vk_target_format.h"
 #include <algorithm>
 
 namespace bro::scene::vk {
@@ -153,6 +154,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
 
     stalls::RenderClock clock;
     stalls::current() = &clock;
+    pipeline_async::takeSkips();   // (the frame's own from here)
     VkCommandBuffer cmd = device_.beginFrame();
     clock.step("begin frame");
     timer_.begin(cmd);
@@ -222,6 +224,12 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     clock.step("submit");
     clock.finish();
     stalls::current() = nullptr;
+    // What the frame skipped for want of a pipeline or a shader set: the
+    // shadow pages it redrew lack those casters, so once a frame skips
+    // nothing every page is drawn again.
+    frame.stats.pipelineSkips = pipeline_async::takeSkips();
+    if (skippedLastFrame_ && frame.stats.pipelineSkips == 0) renderer.invalidateShadowPages();
+    skippedLastFrame_ = frame.stats.pipelineSkips > 0;
     stats = frame.stats;
     return frame.drewContent;
 }

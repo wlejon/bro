@@ -11,6 +11,7 @@
 // wrote.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/ground/scene_land_shaders.h"
 
 #include <vulkan/vulkan.h>
@@ -79,7 +80,7 @@ private:
     // The compiled sets, by their sources' hash (-1: did not compile), and
     // a pipeline each.
     std::vector<std::unique_ptr<LandProcessShaders>> sets_;
-    std::vector<VkPipeline> pipelines_;
+    std::vector<AsyncComputePipeline> pipelines_;
     std::unordered_map<uint64_t, int> byHash_;
     std::unordered_map<uint32_t, std::unique_ptr<Run>> runs_;
 };

@@ -189,20 +189,20 @@ SceneGraph.prototype.setClouds = function (opts) {};
  * drifted frame, so the wind moves no cell): per cell the forms'
  * extinction at the cell's footprint, a conservative distance (m) to the
  * nearest cell that may hold cloud as the forms draw it at any footprint up
- * to the cell's, and the optical depth toward the sun. Baked a share of
- * every level's rows a frame, the cells a window takes in as the eye
- * moves, a level whole when the deck or its time jumps. (This half of the
- * mechanism bakes it; the march does not read it yet.)
+ * to the cell's. Baked a share of every level's rows a frame, the cells a
+ * window takes in as the eye moves, a level whole when the deck or its time
+ * jumps. The march reads its extinction deep in a cloud; the light toward
+ * the sun is the forms' and the cache's, never the volume's.
  * @property {number} levels      the clipmap's levels (each twice the last's cell)
  * @property {number} side        cells a level's window spans across
  * @property {number} depth       cells it spans up
  * @property {number} cell        the finest level's cell (m)
  * @property {number} pending     bakes still to come for this view (levels
- *     to bake whole, and slices of rows of two rounds of them since the
- *     last whole change or the last frame the cache still changed: a
- *     cell's distance and sun depth read cells of other rows, so the
- *     second round from a settled cache is final): the settle state,
- *     "clouds: N volume bakes to come"
+ *     to bake whole, and slices of rows of a round of them since the last
+ *     whole change or the last frame the cache still changed: a cell's
+ *     distance reads the rows about it, which each slice's distance passes
+ *     make again, so a round from a settled cache is final): the settle
+ *     state, "clouds: N volume bakes to come"
  * @property {number} bytes       its GPU memory
  * @property {number} cellsBaked  the cells whose forms the newest frame baked
  * @property {number} slack       metres its distances are read less: how far
@@ -216,7 +216,9 @@ SceneGraph.prototype.setClouds = function (opts) {};
  * @returns {{ enabled: boolean, compiled: boolean, failed: boolean,
  *             covered: boolean, generation: number,
  *             volume: CloudVolumeStats } | undefined}
- *   compiled: the module's shaders are built; failed: they did not compile
+ *   compiled: the module's shaders and the deck's pipelines are built
+ *   (compiled off the frame thread, so the deck is not drawn for the frames
+ *   before; docs/code-cache.md "Shader warm-up"); failed: they did not compile
  *   (the console has the error); covered: the cover's cube is baked;
  *   generation: counts setClouds calls; volume: the volume about the eye.
  *
@@ -225,7 +227,7 @@ SceneGraph.prototype.setClouds = function (opts) {};
  * the forms (to judge it against the real clouds); =2[:<m>] its channels as
  * slices from above at <m> metres over the deck's bottom (default 1000), a
  * panel a level left to right and a channel top to bottom (extinction,
- * distance, the sun's depth, occupancy) in false colour; =3 the same as
+ * distance, occupancy) in false colour; =3 the same as
  * upright slices through the eye. BRO_CLOUD_VOLUME_CHECK=1 runs the check
  * (`volume.check`, also logged).
  */

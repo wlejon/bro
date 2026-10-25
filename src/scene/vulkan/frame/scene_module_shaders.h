@@ -44,10 +44,6 @@ public:
     /// after that leaves `err` alone).
     State poll(VkDevice device, std::string& err);
     State state() const { return state_; }
-    /// start, waiting for it here. False, with the compiler's diagnostics in
-    /// `err`, when one does not compile.
-    bool create(VkDevice device, std::span<const BuiltinSceneShader> stages, const Overrides& overrides,
-                std::string& err);
     void destroy(VkDevice device);
 
     VkShaderModule module(int stage) const { return modules_[static_cast<size_t>(stage)]; }

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <future>
 #include <memory>
@@ -212,12 +213,15 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setSpecialization(uint32_t id, b
 namespace pipeline_async {
 namespace {
 std::atomic<int> s_inFlight{0};
+std::atomic<int> s_skips{0};
 }
 Capture*& current() {
     thread_local Capture* c = nullptr;
     return c;
 }
 int inFlight() { return s_inFlight.load(std::memory_order_relaxed); }
+void noteSkip() { s_skips.fetch_add(1, std::memory_order_relaxed); }
+int takeSkips() { return s_skips.exchange(0, std::memory_order_relaxed); }
 }  // namespace pipeline_async
 
 VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout) {
@@ -358,6 +362,57 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
         shader_sets::noteComputePipeline(device, layout, module, name, pipeline);
     }
     return pipeline;
+}
+
+namespace {
+template <typename Build>
+std::shared_future<VkPipeline> buildOnThread(Build build) {
+    pipeline_async::s_inFlight.fetch_add(1, std::memory_order_relaxed);
+    return std::async(std::launch::async, [build] {
+               VkPipeline p = build();
+               pipeline_async::s_inFlight.fetch_sub(1, std::memory_order_relaxed);
+               return p;
+           }).share();
+}
+}  // namespace
+
+void AsyncComputePipeline::start(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
+                                 const char* name) {
+    future_ = buildOnThread([=] { return createComputePipeline(device, shader, layout, name); });
+    started_ = true;
+    failed_ = false;
+}
+
+void AsyncComputePipeline::start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
+    future_ = buildOnThread([=] { return createComputePipeline(device, module, layout, name); });
+    started_ = true;
+    failed_ = false;
+}
+
+VkPipeline AsyncComputePipeline::get() {
+    if (pipeline_ || !future_.valid()) return pipeline_;
+    if (future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        if (shader_warmup::async()) {
+            pipeline_async::noteSkip();
+            return VK_NULL_HANDLE;
+        }
+        // (Headless: the frame holds everything it draws.)
+        const double t0 = stalls::nowMs();
+        future_.wait();
+        stalls::notePipeline(stalls::nowMs() - t0);
+    }
+    pipeline_ = future_.get();
+    future_ = {};
+    failed_ = pipeline_ == VK_NULL_HANDLE;
+    return pipeline_;
+}
+
+void AsyncComputePipeline::destroy(VkDevice device) {
+    if (future_.valid()) pipeline_ = future_.get();
+    future_ = {};
+    if (pipeline_) destroyScenePipeline(device, pipeline_, nullptr);
+    pipeline_ = VK_NULL_HANDLE;
+    started_ = failed_ = false;
 }
 
 } // namespace bro::scene::vk

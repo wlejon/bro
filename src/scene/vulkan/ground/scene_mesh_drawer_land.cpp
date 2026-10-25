@@ -151,8 +151,7 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
     landRegions_.cleanup(gpu);
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
-    for (VkPipeline p : landFillPipelines_)
-        if (p) destroyScenePipeline(device_, p, nullptr);
+    for (AsyncComputePipeline& p : landFillPipelines_) p.destroy(device_);
     landFillPipelines_.clear();
     for (auto& s : landSets_) s->destroy(device_);
     landSets_.clear();
@@ -188,14 +187,17 @@ const LandShaders* SceneMeshDrawer::landShaders(const LandNode& node) {
     const ModuleShaders::State st = set.poll(device_, err);
     if (st == ModuleShaders::State::Failed && wasPending)
         LOG_ERROR("Land node %u: its module did not compile, so it draws no land:\n%s", node.id(), err.c_str());
-    return st == ModuleShaders::State::Ready ? &set : nullptr;
+    if (st != ModuleShaders::State::Ready) return nullptr;
+    // (Its tiles' fill pipeline, built off the frame thread: the set is not
+    // in until it is, so no tile is taken for a fill it cannot run.)
+    if (set.index >= landFillPipelines_.size()) landFillPipelines_.resize(set.index + 1);
+    AsyncComputePipeline& fill = landFillPipelines_[set.index];
+    if (!fill.started()) fill.start(device_, set[LandShaders::Fill], landFillLayout_, "land fill");
+    return fill.get() ? &set : nullptr;
 }
 
 VkPipeline SceneMeshDrawer::landFillPipeline(const LandShaders& shaders) {
-    if (shaders.index >= landFillPipelines_.size()) landFillPipelines_.resize(shaders.index + 1, VK_NULL_HANDLE);
-    VkPipeline& p = landFillPipelines_[shaders.index];
-    if (!p) p = createComputePipeline(device_, shaders[LandShaders::Fill], landFillLayout_, "land fill");
-    return p;
+    return shaders.index < landFillPipelines_.size() ? landFillPipelines_[shaders.index].get() : VK_NULL_HANDLE;
 }
 
 SceneMeshDrawer::LandTiles* SceneMeshDrawer::landTiles(SceneFrame& frame, LandNode& node) {

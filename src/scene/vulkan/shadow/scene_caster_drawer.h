@@ -69,16 +69,19 @@ private:
     // None for Grass and Plants: their module set's shadow stage.
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
-    VkPipeline builtin_[kMeshKindCount][2] = {};   // [kind][two-sided]
-    // Grass and plants casters by their module set (MeshDraw::moduleSet,
-    // their world's modules): [set][two-sided].
-    std::vector<std::array<VkPipeline, 2>> grass_;
-    std::vector<std::array<VkPipeline, 2>> plants_;
+    // The built-in, cutout, grass and plants casters' pipelines, built off
+    // the frame thread (a caster is not drawn until its pipeline is in;
+    // the shadow pages it was skipped from are drawn again then): by
+    // variant, a kind's (kBuiltin | kind << 1 | two-sided), a cutout's
+    // (kCutout | instanced << 1 | two-sided), and the grass's and plants'
+    // by their module set (MeshDraw::moduleSet, their world's modules:
+    // kGrass / kPlants | set << 1 | two-sided).
+    static constexpr uint32_t kBuiltin = 0x0000, kCutout = 0x0100, kGrass = 0x4000, kPlants = 0x8000;
+    PipelineVariants pipelines_;
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
     VkShaderModule vsCutout_[2] = {};              // [instanced]
     VkShaderModule fsCutout_ = VK_NULL_HANDLE;
-    VkPipeline cutout_[2][2] = {};                 // [instanced][two-sided]
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster
     // falls back to its undisplaced silhouette.

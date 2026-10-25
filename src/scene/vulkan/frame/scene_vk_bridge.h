@@ -113,6 +113,7 @@ private:
     uint64_t readbackRecordedSerial_ = 0;   // render whose submission includes the copy
     uint64_t readbackTicket_ = 0;
     bool readSinceRender_ = false;
+    bool skippedLastFrame_ = false;   // the last render skipped a draw for a pipeline not yet in
     uint64_t pixelsSerial_ = 0;
     std::vector<uint8_t> pixels_;
 };

@@ -67,8 +67,7 @@ bool SceneLandRegions::setup(SceneGpu& gpu) {
 void SceneLandRegions::cleanup(SceneGpu& gpu) {
     for (auto& [id, land] : lands_) release(gpu, *land);
     lands_.clear();
-    for (VkPipeline p : pipelines_)
-        if (p) destroyScenePipeline(device_, p, nullptr);
+    for (AsyncComputePipeline& p : pipelines_) p.destroy(device_);
     pipelines_.clear();
     for (auto& s : sets_) s->destroy(device_);
     sets_.clear();
@@ -134,7 +133,7 @@ VkPipeline SceneLandRegions::pipeline(const LandNode& node, bool* pending) {
         set->start(p.source, dispatch, grid, regions);
         set->index = static_cast<uint32_t>(sets_.size());
         sets_.push_back(std::move(set));
-        pipelines_.push_back(VK_NULL_HANDLE);
+        pipelines_.emplace_back();
         it = byHash_.emplace(key, static_cast<int>(sets_.size() - 1)).first;
     }
     const size_t i = static_cast<size_t>(it->second);
@@ -146,9 +145,12 @@ VkPipeline SceneLandRegions::pipeline(const LandNode& node, bool* pending) {
     if (st == ModuleShaders::State::Failed && wasPending)
         LOG_ERROR("Land node %u: its regions' kernels did not compile, so it has no regions:\n%s", node.id(),
                   err.c_str());
-    if (st == ModuleShaders::State::Ready && !pipelines_[i])
-        pipelines_[i] = createComputePipeline(device_, set[LandRegionShaders::Run], layout_, "land region");
-    return st == ModuleShaders::State::Ready ? pipelines_[i] : VK_NULL_HANDLE;
+    if (st != ModuleShaders::State::Ready) return VK_NULL_HANDLE;
+    // (Its pipeline built off the frame thread: pending until it is in.)
+    if (!pipelines_[i].started()) pipelines_[i].start(device_, set[LandRegionShaders::Run], layout_, "land region");
+    const VkPipeline built = pipelines_[i].get();
+    if (pending) *pending = !built && pipelines_[i].usable();
+    return built;
 }
 
 bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {

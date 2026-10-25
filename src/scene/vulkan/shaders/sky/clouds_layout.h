@@ -164,13 +164,11 @@
 // (1/m) at the cell's footprint (clFormsAt at foot = the cell), y how far
 // (m) any point of the cell is sure to be from a cell that may hold cloud
 // as the march draws it at any footprint up to its own (the cells' boxes'
-// gap out to CL_VOL_REACH cells, a level's), z the optical depth from the
-// cell's centre toward the sun (through the volume's levels, then the
-// cache's beyond), w whether the cell may hold cloud (the distance's
-// occupancy). A level is baked whole when the deck, the anchor or the time
-// jumps, the cells a window takes in as it moves, and every frame
-// CL_VOL_SIDE / CL_VOL_SLICES rows of every level (the world's base under
-// the drift, the sun).
+// gap out to CL_VOL_REACH cells, a level's), z unused (0), w whether the
+// cell may hold cloud (the distance's occupancy). A level is baked whole
+// when the deck, the anchor or the time jumps, the cells a window takes in
+// as it moves, and every frame CL_VOL_SIDE / CL_VOL_SLICES rows of every
+// level (the world's base under the drift).
 #define CL_VOL_LEVELS       5
 #define CL_VOL_SIDE         128
 #define CL_VOL_DEPTH        64
@@ -179,7 +177,6 @@
 #define CL_VOL_REACH        8
 #define CL_VOL_MARGIN       2        // cells inside a window's edge a lookup stays
 #define CL_VOL_GROUP        4        // a bake's group: CL_VOL_GROUP^3 cells
-#define CL_VOL_SUN_STEPS    6        // the sun's steps a level, from the cell's own up
 #define CL_VOL_CHECK_RAYS   4096     // the check's rays (a ray an invocation)
 #define CL_VOL_CHECK_FLOATS 8        // its results a ray
 

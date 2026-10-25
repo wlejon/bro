@@ -82,6 +82,9 @@ struct CullStats {
     // compensation), the metered one and the scale the tonemap multiplied
     // by, as of the newest frame the GPU finished (a frame or two behind).
     float exposureEv = 0.0f, meteredEv = 0.0f, exposureScale = 1.0f;
+    // Draws and bakes the frame skipped for a pipeline or shader set not
+    // yet in (vk::pipeline_async::noteSkip): 0 where frames wait for them.
+    int pipelineSkips = 0;
 };
 
 class SceneRenderer {

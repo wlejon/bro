@@ -162,6 +162,10 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
         out.push_back("shaders: compiling " + std::to_string(sp.shadersDone) + " / " + std::to_string(sp.shaders));
     if (const int building = vk::pipeline_async::inFlight(); building > 0)
         out.push_back("pipelines: " + std::to_string(building) + " building");
+    // (What the newest frame did not draw for them, built or compiled since
+    // or not: a frame that waits for nothing ends it.)
+    else if (cullStats_.pipelineSkips > 0)
+        out.push_back("pipelines: " + std::to_string(cullStats_.pipelineSkips) + " draws skipped last frame");
     for (const auto& [id, node] : graph_.nodes())
         if (node) node->pendingWork(out);
     const CullStats& s = cullStats_;

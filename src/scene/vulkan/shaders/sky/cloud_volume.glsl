@@ -49,8 +49,8 @@ int cloudVolLevel(vec3 v, float foot) {
     return CL_VOL_LEVELS;
 }
 
-// Level `k` at `v`, trilinear (x the extinction, z the sun's depth: the
-// distance and the occupancy only by cloudVolTexel). (A sampler of the
+// Level `k` at `v`, trilinear (x the extinction: the distance and the
+// occupancy only by cloudVolTexel). (A sampler of the
 // array by a constant index: an index that varies by pixel is not
 // dynamically uniform.)
 vec4 cloudVolSample(int k, vec3 v) {

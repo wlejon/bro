@@ -63,8 +63,7 @@ bool SceneLandProcesses::setup(SceneGpu& gpu) {
 void SceneLandProcesses::cleanup(SceneGpu& gpu) {
     for (auto& [id, run] : runs_) release(gpu, *run);
     runs_.clear();
-    for (VkPipeline p : pipelines_)
-        if (p) destroyScenePipeline(device_, p, nullptr);
+    for (AsyncComputePipeline& p : pipelines_) p.destroy(device_);
     pipelines_.clear();
     for (auto& s : sets_) s->destroy(device_);
     sets_.clear();
@@ -106,7 +105,7 @@ VkPipeline SceneLandProcesses::pipeline(const LandNode& node, bool* pending) {
         set->start(p.source, dispatch, grid);
         set->index = static_cast<uint32_t>(sets_.size());
         sets_.push_back(std::move(set));
-        pipelines_.push_back(VK_NULL_HANDLE);
+        pipelines_.emplace_back();
         it = byHash_.emplace(key, static_cast<int>(sets_.size() - 1)).first;
     }
     const size_t i = static_cast<size_t>(it->second);
@@ -117,9 +116,12 @@ VkPipeline SceneLandProcesses::pipeline(const LandNode& node, bool* pending) {
     if (pending) *pending = st == ModuleShaders::State::Pending;
     if (st == ModuleShaders::State::Failed && wasPending)
         LOG_ERROR("Land node %u: its processes did not compile, so it draws no land:\n%s", node.id(), err.c_str());
-    if (st == ModuleShaders::State::Ready && !pipelines_[i])
-        pipelines_[i] = createComputePipeline(device_, set[LandProcessShaders::Run], layout_, "land process");
-    return st == ModuleShaders::State::Ready ? pipelines_[i] : VK_NULL_HANDLE;
+    if (st != ModuleShaders::State::Ready) return VK_NULL_HANDLE;
+    // (Its pipeline built off the frame thread: pending until it is in.)
+    if (!pipelines_[i].started()) pipelines_[i].start(device_, set[LandProcessShaders::Run], layout_, "land process");
+    const VkPipeline built = pipelines_[i].get();
+    if (pending) *pending = !built && pipelines_[i].usable();
+    return built;
 }
 
 bool SceneLandProcesses::start(SceneGpu& gpu, const LandNode& node, Run& run) {

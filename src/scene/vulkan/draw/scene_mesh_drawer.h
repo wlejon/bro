@@ -21,6 +21,7 @@
 #include "scene/world/land_sun.h"
 #include "scene/world/surface_layers.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/world/scene_surface_layers.h"
 #include "scene/vulkan/world/scene_world_horizon.h"
 #include "scene/vulkan/world/scene_world_service.h"
@@ -472,7 +473,7 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<LandTiles>> lands_;   // by land node id
     std::vector<std::unique_ptr<LandShaders>> landSets_;
     std::unordered_map<uint64_t, int> landByModule_;   // the module's source hash -> index (-1: failed)
-    std::vector<VkPipeline> landFillPipelines_;         // by set index
+    std::vector<AsyncComputePipeline> landFillPipelines_;   // by set index
     VkDescriptorSetLayout landFillSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout landFillLayout_ = VK_NULL_HANDLE;
     int landKind_ = -1;   // the land's fills, a world service job kind

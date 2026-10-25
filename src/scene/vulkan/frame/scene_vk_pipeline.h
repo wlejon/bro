@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <future>
 #include <string>
 #include <utility>
 #include <vector>
@@ -128,5 +129,27 @@ VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkP
                                  const char* name);
 /// The same of a shader module the caller keeps.
 VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name);
+
+/// A compute pipeline built on a thread of its own from when it is started
+/// (pipeline_async::inFlight counts it), so no frame waits on the driver's
+/// compile: get() is null until it is in where frames skip what is not
+/// ready (shader_warmup::async()), and waits for it where they do not.
+class AsyncComputePipeline {
+public:
+    /// `module` (start's second form) and `layout` outlive the build.
+    void start(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout, const char* name);
+    void start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name);
+    VkPipeline get();
+    /// Started and not yet failed (a null pipeline once built).
+    bool usable() const { return started_ && !failed_; }
+    bool started() const { return started_; }
+    /// Waits for one still being built.
+    void destroy(VkDevice device);
+
+private:
+    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    std::shared_future<VkPipeline> future_;
+    bool started_ = false, failed_ = false;
+};
 
 } // namespace bro::scene::vk

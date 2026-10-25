@@ -7,8 +7,7 @@
 // where it evaluated the forms (their extinction at the cell's footprint),
 // jump through clear air by a distance it may trust (to the nearest cell
 // that may hold cloud as the forms draw it at any footprint up to the
-// cell's), and light a sample by one fetch (the optical depth toward the
-// sun). SceneClouds owns it and binds its images in the clouds' set.
+// cell's). SceneClouds owns it and binds its images in the clouds' set.
 //
 //   - The frame: a tangent frame at an anchor on the deck's bottom near the
 //     eye, fixed in the clouds' drifted frame (cloudDrift), so the wind
@@ -21,11 +20,11 @@
 //     stored toroidally, so a window that moves bakes only what it takes
 //     in (and the distances out to the reach about it and its given-up edge).
 //   - The bakes (sky/clouds_volume*.comp): the forms and the occupancy, the
-//     distance an axis a pass, the sun's depth; a level whole when the deck,
-//     the anchor or the time jumps (all of them the first frame, else one a
-//     frame, coarsest first), and every frame CL_VOL_SIDE / CL_VOL_SLICES
-//     rows of every level (the world's base drifting under the forms, the
-//     sun moving). The distance a march reads is less the slack the rows'
+//     distance an axis a pass; a level whole when the deck, the anchor or
+//     the time jumps (all of them the first frame, else one a frame,
+//     coarsest first), and every frame CL_VOL_SIDE / CL_VOL_SLICES rows of
+//     every level (the world's base drifting under the forms). The
+//     distance a march reads is less the slack the rows'
 //     age leaves (the wind times the time since the oldest was baked).
 //   - The check (BRO_CLOUD_VOLUME_CHECK=1; sky/clouds_volume_check.comp):
 //     every kCheckEvery frames, rays from the eye walked on the volume; its
@@ -38,6 +37,7 @@
 //     eye's row.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/shaders/sky/clouds_layout.h"
 #include "scene/world/clouds.h"
 
@@ -64,8 +64,13 @@ struct CloudVolumeGpu {
 
 class SceneCloudVolume {
 public:
+    /// Its pipelines start building (AsyncComputePipeline).
     bool setup(SceneGpu& gpu, VkPipelineLayout computeLayout);
     void cleanup(SceneGpu& gpu);
+    /// Whether its pipelines are built (nothing of it is placed or baked
+    /// before they are).
+    enum class Readiness { Building, Ready, Failed };
+    Readiness readiness();
     bool ensureImages(SceneGpu& gpu);
     /// Its bindings of the clouds' set.
     void write(SceneVkDescriptorWriter& w) const;
@@ -105,7 +110,7 @@ private:
     void readCheck(CloudStats& stats);
 
     SceneVkDevice* device_ = nullptr;
-    VkPipeline forms_ = VK_NULL_HANDLE, dist_ = VK_NULL_HANDLE, sun_ = VK_NULL_HANDLE, check_ = VK_NULL_HANDLE;
+    AsyncComputePipeline forms_, dist_, check_;
     VkSampler sampler_ = VK_NULL_HANDLE;
     SceneVkImage vol_[CL_VOL_LEVELS], distA_[CL_VOL_LEVELS], distB_[CL_VOL_LEVELS];
     SceneVkBuffer checkBuf_;

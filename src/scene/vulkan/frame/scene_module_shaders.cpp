@@ -30,7 +30,10 @@ void ModuleShaders::start(std::span<const BuiltinSceneShader> stages, const Over
 ModuleShaders::State ModuleShaders::poll(VkDevice device, std::string& err) {
     if (state_ != State::Pending) return state_;
     if (future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        if (shader_warmup::async()) return State::Pending;
+        if (shader_warmup::async()) {
+            pipeline_async::noteSkip();
+            return State::Pending;
+        }
         // (Headless: the frame holds everything it draws.)
         const double t0 = stalls::nowMs();
         future_.wait();
@@ -60,17 +63,6 @@ ModuleShaders::State ModuleShaders::poll(VkDevice device, std::string& err) {
     }
     state_ = State::Ready;
     return state_;
-}
-
-bool ModuleShaders::create(VkDevice device, std::span<const BuiltinSceneShader> stages, const Overrides& overrides,
-                           std::string& err) {
-    start(stages, overrides);
-    if (future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        const double t0 = stalls::nowMs();
-        future_.wait();
-        stalls::noteShaderSet(stalls::nowMs() - t0);
-    }
-    return poll(device, err) == State::Ready;
 }
 
 void ModuleShaders::destroy(VkDevice device) {

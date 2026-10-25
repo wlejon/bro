@@ -19,6 +19,7 @@
 // regions over it with it (they were made from it).
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/ground/scene_land_shaders.h"
 #include "scene/world/land_regions.h"
 
@@ -178,7 +179,7 @@ private:
     SceneVkImage none_;
     SceneVkBuffer noneTable_;
     std::vector<std::unique_ptr<LandRegionShaders>> sets_;
-    std::vector<VkPipeline> pipelines_;
+    std::vector<AsyncComputePipeline> pipelines_;
     std::unordered_map<uint64_t, int> byHash_;
     std::unordered_map<uint32_t, std::unique_ptr<Land>> lands_;
 };

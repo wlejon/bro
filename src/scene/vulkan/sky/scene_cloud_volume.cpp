@@ -36,8 +36,11 @@ constexpr uint32_t kCheckEvery = 30;
 constexpr VkDeviceSize kCheckBytes = sizeof(float) * CL_VOL_CHECK_RAYS * CL_VOL_CHECK_FLOATS;
 constexpr int kDepth[3] = {CL_VOL_SIDE, CL_VOL_SIDE, CL_VOL_DEPTH};
 // The slices baked, from a cache that no longer changes, before what the
-// volume holds is final: two rounds.
-constexpr int kSettleSlices = 2 * CL_VOL_SLICES;
+// volume holds is final: one round. (A cell's extinction and occupancy are
+// its own; its distance reads the rows out to the reach on either side,
+// which each slice's distance passes make again about it, so the round's
+// last slice makes its neighbour's, the round's first, again.)
+constexpr int kSettleSlices = CL_VOL_SLICES;
 
 double dot3(const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
@@ -80,10 +83,9 @@ float SceneCloudVolume::debugHeight() { return debugEnv().height; }
 bool SceneCloudVolume::setup(SceneGpu& gpu, VkPipelineLayout layout) {
     device_ = &gpu.device;
     VkDevice dev = gpu.device.device();
-    forms_ = createComputePipeline(dev, BuiltinSceneShader::CloudsVolumeComp, layout, "clouds volume");
-    dist_ = createComputePipeline(dev, BuiltinSceneShader::CloudsVolumeDistComp, layout, "clouds volume dist");
-    sun_ = createComputePipeline(dev, BuiltinSceneShader::CloudsVolumeSunComp, layout, "clouds volume sun");
-    check_ = createComputePipeline(dev, BuiltinSceneShader::CloudsVolumeCheckComp, layout, "clouds volume check");
+    forms_.start(dev, BuiltinSceneShader::CloudsVolumeComp, layout, "clouds volume");
+    dist_.start(dev, BuiltinSceneShader::CloudsVolumeDistComp, layout, "clouds volume dist");
+    if (checkWanted()) check_.start(dev, BuiltinSceneShader::CloudsVolumeCheckComp, layout, "clouds volume check");
     VkSamplerCreateInfo s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     s.magFilter = s.minFilter = VK_FILTER_LINEAR;
     s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -91,7 +93,19 @@ bool SceneCloudVolume::setup(SceneGpu& gpu, VkPipelineLayout layout) {
     s.addressModeU = s.addressModeV = s.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     s.maxLod = 0.0f;
     if (vkCreateSampler(dev, &s, nullptr, &sampler_) != VK_SUCCESS) sampler_ = VK_NULL_HANDLE;
-    return forms_ && dist_ && sun_ && check_ && sampler_;
+    return sampler_ != VK_NULL_HANDLE;
+}
+
+SceneCloudVolume::Readiness SceneCloudVolume::readiness() {
+    Readiness r = Readiness::Ready;
+    for (AsyncComputePipeline* p : {&forms_, &dist_, &check_}) {
+        if (p == &check_ && !checkWanted()) continue;
+        if (!p->get()) {
+            if (!p->usable()) return Readiness::Failed;
+            r = Readiness::Building;
+        }
+    }
+    return r;
 }
 
 void SceneCloudVolume::cleanup(SceneGpu& gpu) {
@@ -100,9 +114,7 @@ void SceneCloudVolume::cleanup(SceneGpu& gpu) {
         for (SceneVkImage* i : {&vol_[k], &distA_[k], &distB_[k]})
             if (i->isValid()) gpu.allocator.destroyImage(*i);
     if (checkBuf_.isValid()) gpu.allocator.destroyBuffer(checkBuf_);
-    for (VkPipeline* p : {&forms_, &dist_, &sun_, &check_})
-        if (*p) destroyScenePipeline(dev, *p, nullptr);
-    forms_ = dist_ = sun_ = check_ = VK_NULL_HANDLE;
+    for (AsyncComputePipeline* p : {&forms_, &dist_, &check_}) p->destroy(dev);
     if (sampler_) vkDestroySampler(dev, sampler_, nullptr);
     sampler_ = VK_NULL_HANDLE;
     anchored_ = baked_ = false;
@@ -240,11 +252,9 @@ void SceneCloudVolume::place(const Frame& f, CloudVolumeGpu& out, CloudStats& st
     }
     ++frame_;
     // What is still to come of it for this view (the settle state): the
-    // levels to bake whole again, and two rounds of every slice since the
-    // last whole change or the last frame the cache it is baked from still
-    // changed (a cell's distance reads its neighbours' rows and its sun
-    // depth the cells toward the sun, so one round from a final cache
-    // leaves some made from rows still to come; the second is final).
+    // levels to bake whole again, and a round of every slice since the last
+    // whole change or the last frame the cache it is baked from still
+    // changed (kSettleSlices).
     sliceRun_ = all || !f.sourceSettled ? 0 : std::min(sliceRun_ + 1, kSettleSlices);
 
     // The slack: how far the base may have drifted under the forms since
@@ -326,16 +336,16 @@ void SceneCloudVolume::record(VkCommandBuffer cmd, VkDescriptorSet set, VkPipeli
             count += 2 * R;
         }
     };
-    // The forms, the distance an axis a pass (each over its boxes grown by
-    // the reach along the axes done so far), the sun's depth.
-    for (int pass = 0; pass < 5 && !boxes_.empty(); ++pass) {
-        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pass == 0 ? forms_ : pass == 4 ? sun_ : dist_);
+    // The forms, then the distance an axis a pass (each over its boxes
+    // grown by the reach along the axes done so far).
+    for (int pass = 0; pass < 4 && !boxes_.empty(); ++pass) {
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pass == 0 ? forms_.get() : dist_.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
         for (const Box& b0 : boxes_) {
-            if (pass < b0.pass0 || (pass == 4 && b0.pass0 != 0)) continue;
+            if (pass < b0.pass0) continue;
             Box b = b0;
-            if (pass >= 1 && pass <= 3) grow(b.x0, b.nx, CL_VOL_SIDE);
-            if (pass >= 2 && pass <= 3) grow(b.y0, b.ny, CL_VOL_SIDE);
+            if (pass >= 1) grow(b.x0, b.nx, CL_VOL_SIDE);
+            if (pass >= 2) grow(b.y0, b.ny, CL_VOL_SIDE);
             if (pass == 3) grow(b.z0, b.nz, CL_VOL_DEPTH);
             const int32_t push[8] = {b.k, b.x0, b.nx, std::max(pass - 1, 0), b.y0, b.ny, b.z0, b.nz};
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
@@ -343,10 +353,10 @@ void SceneCloudVolume::record(VkCommandBuffer cmd, VkDescriptorSet set, VkPipeli
             vkCmdDispatch(cmd, groups(b.nx), groups(b.ny), groups(b.nz));
         }
         barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                pass < 4 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : kReaders, VK_ACCESS_SHADER_READ_BIT);
+                pass < 3 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : kReaders, VK_ACCESS_SHADER_READ_BIT);
     }
     if (check) {
-        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, check_);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, check_.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
         const int32_t push[8] = {static_cast<int32_t>(++checkSerial_), 0, 0, 0, 0, 0, 0, 0};
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);

@@ -111,13 +111,12 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     noiseCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsNoiseComp);
     lightCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsLightComp);
     shadowCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsShadowComp);
-    noisePipeline_ = noiseCs_ && noiseLayout_ ? createComputePipeline(dev, noiseCs_, noiseLayout_, "clouds noise")
-                                              : VK_NULL_HANDLE;
     distCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsDistComp);
-    if (lightCs_ && computeLayout_) lightPipeline_ = createComputePipeline(dev, lightCs_, computeLayout_, "clouds light");
-    if (distCs_ && computeLayout_) distPipeline_ = createComputePipeline(dev, distCs_, computeLayout_, "clouds dist");
-    if (shadowCs_ && computeLayout_)
-        shadowPipeline_ = createComputePipeline(dev, shadowCs_, computeLayout_, "clouds shadow");
+    // (Built off the frame thread; the deck is drawn once they are in.)
+    if (noiseCs_ && noiseLayout_) noisePipeline_.start(dev, noiseCs_, noiseLayout_, "clouds noise");
+    if (lightCs_ && computeLayout_) lightPipeline_.start(dev, lightCs_, computeLayout_, "clouds light");
+    if (distCs_ && computeLayout_) distPipeline_.start(dev, distCs_, computeLayout_, "clouds dist");
+    if (shadowCs_ && computeLayout_) shadowPipeline_.start(dev, shadowCs_, computeLayout_, "clouds shadow");
     VkSamplerCreateInfo s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     s.magFilter = s.minFilter = VK_FILTER_LINEAR;
     s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
@@ -132,9 +131,9 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     s.addressModeU = s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     if (vkCreateSampler(dev, &s, nullptr, &cacheSampler_) != VK_SUCCESS) cacheSampler_ = VK_NULL_HANDLE;
     // What binding 24 of the lighting set holds with no clouds (never read).
-    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_ || !lightPipeline_ ||
-        !distPipeline_ ||
-        !shadowPipeline_ || !noiseSampler_ || !coverSampler_ || !cacheSampler_ || !volume_.setup(gpu, computeLayout_) ||
+    if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_.usable() ||
+        !lightPipeline_.usable() || !distPipeline_.usable() || !shadowPipeline_.usable() || !noiseSampler_ ||
+        !coverSampler_ || !cacheSampler_ || !volume_.setup(gpu, computeLayout_) ||
         !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1) ||
         !gpu.allocator.createStorageImage(2, 2, 2, kNoiseFormat, noiseNone_, false, 0)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' pipelines");
@@ -148,9 +147,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     for (auto& s : sets_) {
         if (!s) continue;
         s->pipelines.destroy(gpu.device);
-        if (s->cover) destroyScenePipeline(dev, s->cover, nullptr);
-        if (s->cache) destroyScenePipeline(dev, s->cache, nullptr);
-        if (s->globe) destroyScenePipeline(dev, s->globe, nullptr);
+        for (AsyncComputePipeline* p : {&s->cover, &s->cache, &s->globe}) p->destroy(dev);
         s->destroy(dev);
     }
     sets_.clear();
@@ -173,9 +170,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
         if (noise_.allocId) gpu.device.context().memoryPool().free(dev, noise_.allocId);
     }
     noise_ = Noise{};
-    for (VkPipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_})
-        if (*p) destroyScenePipeline(dev, *p, nullptr);
-    lightPipeline_ = distPipeline_ = shadowPipeline_ = VK_NULL_HANDLE;
+    for (AsyncComputePipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_}) p->destroy(dev);
     SceneVkShaderModule::destroy(dev, noiseCs_);
     SceneVkShaderModule::destroy(dev, lightCs_);
     SceneVkShaderModule::destroy(dev, distCs_);
@@ -192,7 +187,6 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
         if (*l) vkDestroyDescriptorSetLayout(dev, *l, nullptr);
     for (VkSampler* s : {&noiseSampler_, &coverSampler_, &cacheSampler_})
         if (*s) vkDestroySampler(dev, *s, nullptr);
-    noisePipeline_ = VK_NULL_HANDLE;
     noiseCs_ = skyVs_ = VK_NULL_HANDLE;
     marchLayout_ = computeLayout_ = noiseLayout_ = VK_NULL_HANDLE;
     setLayout_ = noiseSetLayout_ = VK_NULL_HANDLE;
@@ -223,29 +217,53 @@ CloudShaders* SceneClouds::shaders(SceneFrame& frame) {
     const uint64_t key = mixBits(c.sourceHash, moduleSourceHash(grid));
     auto it = byHash_.find(key);
     if (it == byHash_.end()) {
-        // Compiled once a module (the SPIR-V cache keeps it across runs);
-        // one that does not compile is logged once and draws no clouds.
+        // Compiled once a module, off the frame thread (the SPIR-V cache
+        // keeps it across runs; pipelinesReady says when it is in).
         auto set = std::make_unique<CloudShaders>();
-        std::string err;
-        int index = -1;
-        VkDevice dev = device_->device();
-        if (set->create(dev, c.source, grid, err)) {
-            set->cover = createComputePipeline(dev, (*set)[CloudShaders::Cover], computeLayout_, "clouds cover");
-            set->cache = createComputePipeline(dev, (*set)[CloudShaders::Cache], computeLayout_, "clouds cache");
-            set->globe = createComputePipeline(dev, (*set)[CloudShaders::Globe], computeLayout_, "clouds globe");
-            if (set->cover && set->cache && set->globe) {
-                index = static_cast<int>(sets_.size());
-                set->index = static_cast<uint32_t>(index);
-                sets_.push_back(std::move(set));
-            } else {
-                err = "its compute pipelines could not be made";
-            }
-        }
-        if (index < 0) LOG_ERROR("The clouds' module did not compile, so no clouds are drawn:\n%s", err.c_str());
+        set->start(c.source, grid);
+        const int index = static_cast<int>(sets_.size());
+        set->index = static_cast<uint32_t>(index);
+        sets_.push_back(std::move(set));
         it = byHash_.emplace(key, index).first;
     }
     currentKey_ = key;
-    return it->second < 0 ? nullptr : sets_[static_cast<size_t>(it->second)].get();
+    if (it->second < 0) return nullptr;
+    CloudShaders* set = sets_[static_cast<size_t>(it->second)].get();
+    // One that does not compile is logged once and draws no clouds.
+    std::string err;
+    const ModuleShaders::State st = set->poll(device_->device(), err);
+    if (st == ModuleShaders::State::Ready && !set->cover.started()) {
+        VkDevice dev = device_->device();
+        set->cover.start(dev, (*set)[CloudShaders::Cover], computeLayout_, "clouds cover");
+        set->cache.start(dev, (*set)[CloudShaders::Cache], computeLayout_, "clouds cache");
+        set->globe.start(dev, (*set)[CloudShaders::Globe], computeLayout_, "clouds globe");
+    }
+    if (st == ModuleShaders::State::Failed || pipelinesReady(*set) == Readiness::Failed) {
+        if (err.empty()) err = "its compute pipelines could not be made";
+        LOG_ERROR("The clouds' module did not compile, so no clouds are drawn:\n%s", err.c_str());
+        it->second = -1;
+        return nullptr;
+    }
+    return set;
+}
+
+SceneClouds::Readiness SceneClouds::pipelinesReady(CloudShaders& set) {
+    if (set.state() == ModuleShaders::State::Pending) return Readiness::Building;
+    if (set.state() != ModuleShaders::State::Ready) return Readiness::Failed;
+    Readiness r = Readiness::Ready;
+    for (AsyncComputePipeline* p : {&set.cover, &set.cache, &set.globe, &noisePipeline_, &lightPipeline_,
+                                    &distPipeline_, &shadowPipeline_}) {
+        if (!p->get()) {
+            if (!p->usable()) return Readiness::Failed;
+            r = Readiness::Building;
+        }
+    }
+    switch (volume_.readiness()) {
+    case SceneCloudVolume::Readiness::Failed: return Readiness::Failed;
+    case SceneCloudVolume::Readiness::Building: return Readiness::Building;
+    case SceneCloudVolume::Readiness::Ready: break;
+    }
+    return r;
 }
 
 bool SceneClouds::ensureImages(SceneGpu& gpu) {
@@ -324,7 +342,7 @@ void SceneClouds::recordNoise(SceneFrame& frame) {
     VkCommandBuffer cmd = frame.cmd;
     const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, CL_NOISE_MIPS, 0, 1};
     render::cmdTransitionImage(cmd, noise_.image, all, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noisePipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noisePipeline_.get());
     for (int m = 0; m < CL_NOISE_MIPS; ++m) {
         VkDescriptorSet set = frame.gpu.device.frameSet(noiseSetLayout_);
         SceneVkDescriptorWriter w;
@@ -358,8 +376,12 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     }
     if (!frame.gpu.atmosphere.active() || !frame.view.perspective) return;
     current_ = shaders(frame);
-    stats.compiled = current_ != nullptr;
+    // (Still compiling or building: nothing of the deck yet, said as not
+    // yet compiled, the settle state's "clouds: not yet compiled".)
+    const bool building = current_ && pipelinesReady(*current_) != Readiness::Ready;
+    stats.compiled = current_ != nullptr && !building;
     stats.failed = current_ == nullptr;
+    if (building) current_ = nullptr;
     if (!current_ || !ensureImages(frame.gpu)) {
         frame.renderer.setCloudStats(stats);
         return;
@@ -696,7 +718,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
         memoryBarrier(cmd, kReaders | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT |
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->cover);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->cover.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         const uint32_t groups = (CL_COVER_SIDE + CL_COVER_GROUP - 1) / CL_COVER_GROUP;
         vkCmdDispatch(cmd, groups, groups, 6);
@@ -717,7 +739,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
         // What earlier frames read of the levels is done with.
         memoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
-        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadowPipeline_);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadowPipeline_.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         const uint32_t groups = (CL_SHADOW_SIDE + CL_SHADOW_GROUP - 1) / CL_SHADOW_GROUP;
         vkCmdDispatch(cmd, groups, groups, CL_SHADOW_LEVELS);
@@ -746,7 +768,7 @@ void SceneClouds::recordCache(SceneFrame& frame) {
     // The extinction, its light, then its distance to cloud an axis a pass.
     for (int pass = 0; pass < 5; ++pass) {
         bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pass == 0 ? current_->cache : pass == 1 ? lightPipeline_ : distPipeline_);
+                          pass == 0 ? current_->cache.get() : pass == 1 ? lightPipeline_.get() : distPipeline_.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         for (const CacheBake& b : bakes_) {
             if (b.pass0 > pass) continue;
@@ -781,7 +803,7 @@ void SceneClouds::recordGlobe(SceneFrame& frame) {
     // What earlier frames read of it is done with; the cover baked.
     memoryBarrier(cmd, kReaders, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->globe);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->globe.get());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
     const int32_t push[4] = {0, y0, yStep, 0};
     vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
@@ -816,7 +838,7 @@ void SceneClouds::recordDraw(SceneFrame& frame) {
          .setColorBlendAttachment(0, over)
          .disableDepthTest();
         return b.build(device_->device(), marchLayout_);
-    });
+    }, /*async=*/true);
     VkDescriptorSet set = writeSet(frame, true, false);
     if (!pipeline || !set) return;
     const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
