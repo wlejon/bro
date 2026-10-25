@@ -1,5 +1,6 @@
 #include "scene/vulkan/frame/scene_module_shaders.h"
 
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 
 #include <thread>
@@ -24,11 +25,13 @@ bool ModuleShaders::create(VkDevice device, std::span<const BuiltinSceneShader> 
     std::vector<std::vector<uint32_t>> spirv(n);
     std::vector<std::string> errs(n);
     {
+        const double t0 = stalls::nowMs();
         std::vector<std::thread> threads;
         threads.reserve(n);
         for (size_t s = 0; s < n; ++s)
             threads.emplace_back([&, s] { spirv[s] = SceneVkShaderCompiler::compileBuiltinWith(stages[s], overrides, &errs[s]); });
         for (std::thread& t : threads) t.join();
+        stalls::noteShaderSet(stalls::nowMs() - t0);
     }
     err.clear();
     for (size_t s = 0; s < n; ++s) {

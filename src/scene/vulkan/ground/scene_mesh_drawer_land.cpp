@@ -406,6 +406,8 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
 
         // Its processes first (their read-back may move its generation):
         // no tiles until they have run and their heights are in.
+        // The tile boxes the workers have made since the last frame.
+        land->takeItems();
         lt.grid = landProcesses_.update(frame, *land, frame.cmd);
         // Then its regions about the eye (a region in moves its items), their
         // steps a job each.

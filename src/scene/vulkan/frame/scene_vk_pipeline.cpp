@@ -2,6 +2,7 @@
 #include "render/vulkan_pipeline_cache.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -282,8 +283,10 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     pipelineInfo.flags |= render::pipelineStatsFlags();
 
     VkPipeline pipeline = VK_NULL_HANDLE;
+    const double t0 = stalls::nowMs();
     VkResult res = vkCreateGraphicsPipelines(device, render::VulkanPipelineCache::forDevice(device), 1,
                                              &pipelineInfo, nullptr, &pipeline);
+    stalls::notePipeline(stalls::nowMs() - t0);
     if (res != VK_SUCCESS) {
         LOG_ERROR("SceneVkPipelineBuilder: Failed to create graphics pipeline: %d", res);
         return VK_NULL_HANDLE;
@@ -313,8 +316,11 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
     ci.layout = layout;
     ci.flags = render::pipelineStatsFlags();
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (vkCreateComputePipelines(device, render::VulkanPipelineCache::forDevice(device), 1, &ci, nullptr,
-                                 &pipeline) != VK_SUCCESS) {
+    const double t0 = stalls::nowMs();
+    const VkResult res =
+        vkCreateComputePipelines(device, render::VulkanPipelineCache::forDevice(device), 1, &ci, nullptr, &pipeline);
+    stalls::notePipeline(stalls::nowMs() - t0);
+    if (res != VK_SUCCESS) {
         LOG_ERROR("createComputePipeline: Failed creating %s", name);
         pipeline = VK_NULL_HANDLE;
     } else {

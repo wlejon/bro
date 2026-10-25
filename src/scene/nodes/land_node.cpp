@@ -1,6 +1,7 @@
 #include "scene/nodes/land_node.h"
 
 #include "scene/nodes/world_module.h"
+#include "scene/world/world_workers.h"
 
 #include <algorithm>
 #include <cctype>
@@ -184,8 +185,7 @@ void LandNode::regionChanged(const LandRegionKey& key, const LandRegionCentre& c
         }
     std::sort(touched.begin(), touched.end());
     touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
-    for (size_t k : touched) refreshItem(k, g);
-    ++itemsSerial_;
+    refreshItems(std::move(touched), g);
 }
 
 void LandNode::regionFadeChanged(const LandRegionCentre& before, const LandRegionCentre& after) {
@@ -248,64 +248,14 @@ void LandNode::regionFadeChanged(const LandRegionCentre& before, const LandRegio
         return -1;
     };
     const uint64_t g = generation_ ^ (++itemBumps_ * 0x9e3779b97f4a7c15ull);
-    bool any = false;
+    std::vector<size_t> ks;
     for (size_t k = 0; k < n; ++k) {
         const double* m = &itemMids_[k * 3];
         const int ra = read(a, m), rb = read(b, m);
         if (ra == rb && ra >= 0) continue;
-        refreshItem(k, g);
-        any = true;
+        ks.push_back(k);
     }
-    if (any) ++itemsSerial_;
-}
-
-void LandNode::refreshItem(size_t k, uint64_t generation) {
-    const int cells = itemCells_;
-    const int per = kItemSamples;
-    const int root = static_cast<int>(k / (static_cast<size_t>(cells) * cells));
-    const int cz = static_cast<int>(k / cells % cells), cx = static_cast<int>(k % cells);
-    const size_t n = static_cast<size_t>(per) * per;
-    std::vector<float> h(n, 0.0f), xs(n), ys(n), zs(n);
-    const double e = round() ? faceHalf(place_->body()) : static_cast<double>(extent_);
-    const double side = 2.0 * e / cells, step = side / (per - 1);
-    const double ox = -e + cx * side, oz = -e + cz * side;
-    if (round()) {
-        const Body& body = place_->body();
-        const double R = body.radius;
-        const CubeFace& F = cubeFace(root);
-        const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
-        for (int j = 0; j < per; ++j)
-            for (int i = 0; i < per; ++i) {
-                double d[3];
-                dirOf(body, {root, ox + i * step, oz + j * step}, d);
-                const size_t s = static_cast<size_t>(j) * per + i;
-                xs[s] = static_cast<float>(R * d[0] - o[0]);
-                ys[s] = static_cast<float>(R * d[1] - o[1]);
-                zs[s] = static_cast<float>(R * d[2] - o[2]);
-            }
-        if (height_) height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
-    } else {
-        for (int j = 0; j < per; ++j)
-            for (int i = 0; i < per; ++i) {
-                xs[static_cast<size_t>(j) * per + i] = static_cast<float>(ox + i * step);
-                zs[static_cast<size_t>(j) * per + i] = static_cast<float>(oz + j * step);
-            }
-        if (height_) height_->sample(xs.data(), zs.data(), static_cast<int>(n), h.data());
-    }
-    float lo = std::numeric_limits<float>::max(), hi = -lo;
-    for (int j = 0; j < per; ++j)
-        for (int i = 0; i < per; ++i) {
-            const float v = overTree(h[static_cast<size_t>(j) * per + i], root, ox + i * step, oz + j * step);
-            lo = std::min(lo, v);
-            hi = std::max(hi, v);
-        }
-    SurfaceItem& it = items_[k];
-    const float pad = (hi - lo) * kItemMargin + 1.0f;
-    it.bounds.min.y = std::min(it.bounds.min.y, lo - pad);
-    it.bounds.max.y = std::max(it.bounds.max.y, hi + pad);
-    it.generation = generation;
-    chartBounds_.min.y = std::min(chartBounds_.min.y, it.bounds.min.y);
-    chartBounds_.max.y = std::max(chartBounds_.max.y, it.bounds.max.y + canopyTop_);
+    refreshItems(std::move(ks), g);
 }
 
 std::string LandNode::gridConfig() const { return process_.active() ? grid_.glslConfig(process_.channels) : std::string(); }
@@ -336,9 +286,10 @@ void LandNode::setGridBase(uint64_t serial, std::vector<float> channel0) {
     b.regions = regionStore_;
     base_ = std::make_shared<const LandBase>(std::move(b));
     baseSerial_ = serial;
-    // Its heights (and so its tiles' boxes) are the tree's over the base.
-    ++generation_;
-    rebuildItems();
+    // Its heights (and so its tiles' boxes) are the tree's over the base:
+    // the items made again on a worker, a new generation once they are in
+    // (the whole body's boxes are seconds of heights on one thread).
+    rebuildItems(/*now=*/false);
 }
 
 float LandNode::overTree(float tree, int root, double x, double z) const {
@@ -399,6 +350,8 @@ void LandNode::pendingWork(std::vector<std::string>& out) const {
     if (stats_.regionsPending)
         out.push_back("land: " + std::to_string(stats_.regionsPending) + " regions pending");
     if (stats_.missing) out.push_back("land: " + std::to_string(stats_.missing) + " tiles missing");
+    if (const uint64_t n = itemBatchesPending())
+        out.push_back("land: " + std::to_string(n) + " batches of tile boxes being made");
 }
 
 float LandNode::heightOver(const double dir[3]) const {
@@ -729,13 +682,22 @@ int LandNode::firstRing(const bromath::Vec3& eye, float focalPixels) const {
     return first;
 }
 
-void LandNode::rebuildItems() {
-    if (round()) {
-        rebuildFaceItems();
+namespace {
+
+// Every item of a land, from `in` (its generation 0: the caller's).
+void buildFaceItems(const LandNode::ItemInputs& in, std::vector<SurfaceItem>& items_, int& itemCells_,
+                    bromath::AABB3& chartBounds_);
+
+void buildItems(const LandNode::ItemInputs& in, std::vector<SurfaceItem>& items_, int& itemCells_,
+                bromath::AABB3& chartBounds_) {
+    if (in.round) {
+        buildFaceItems(in, items_, itemCells_, chartBounds_);
         return;
     }
+    const FieldRef& height_ = in.height;
+    constexpr uint64_t generation_ = 0;
     items_.clear();
-    const float e = extent_;
+    const float e = in.extent;
     const int cells = std::clamp(static_cast<int>(std::ceil(2.0f * e / kItemMetres)), 1, kItemCells);
     itemCells_ = cells;
     const float side = 2.0f * e / static_cast<float>(cells);
@@ -751,8 +713,8 @@ void LandNode::rebuildItems() {
             zs[static_cast<size_t>(j) * cols + i] = -e + static_cast<float>(j) * step;
         }
     if (height_) height_->sample(xs.data(), zs.data(), static_cast<int>(h.size()), h.data());
-    if (base_)
-        for (size_t k = 0; k < h.size(); ++k) h[k] = overTree(h[k], 0, xs[k], zs[k]);
+    if (in.base)
+        for (size_t k = 0; k < h.size(); ++k) h[k] = in.overTree(h[k], 0, xs[k], zs[k]);
     chartBounds_ = bromath::aempty3();
     items_.reserve(static_cast<size_t>(cells) * cells);
     for (int cz = 0; cz < cells; ++cz)
@@ -771,14 +733,14 @@ void LandNode::rebuildItems() {
             chartBounds_.min = bromath::vmin(chartBounds_.min, box.min);
             chartBounds_.max = bromath::vmax(chartBounds_.max, box.max);
         }
-    // (Where the canopy stands for the plants, the land rises by it.)
-    if (!bromath::aisEmpty(chartBounds_)) chartBounds_.max.y += canopyTop_;
-    map_.set(place_, lowest());
 }
 
-void LandNode::rebuildFaceItems() {
+void buildFaceItems(const LandNode::ItemInputs& in, std::vector<SurfaceItem>& items_, int& itemCells_,
+                    bromath::AABB3& chartBounds_) {
+    const FieldRef& height_ = in.height;
+    constexpr uint64_t generation_ = 0;
     items_.clear();
-    const Body& body = place_->body();
+    const Body& body = in.body;
     const double R = body.radius;
     const double e = faceHalf(body);
     const int cells = kFaceCells;
@@ -808,11 +770,11 @@ void LandNode::rebuildFaceItems() {
                 }
             height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
         }
-        if (base_)
+        if (in.base)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < cols; ++i) {
                     float& v = h[static_cast<size_t>(j) * cols + i];
-                    v = overTree(v, f, -e + i * step, -e + j * step);
+                    v = in.overTree(v, f, -e + i * step, -e + j * step);
                 }
         for (int cz = 0; cz < cells; ++cz)
             for (int cx = 0; cx < cells; ++cx) {
@@ -832,8 +794,152 @@ void LandNode::rebuildFaceItems() {
                 chartBounds_.max = bromath::vmax(chartBounds_.max, box.max);
             }
     }
-    chartBounds_.max.y += canopyTop_;
-    map_.set(place_, lowest());
+}
+
+// Item `k`'s height range from `in` (of `cells` a side a root).
+void itemRange(const LandNode::ItemInputs& in, int cells, size_t k, float& lo, float& hi) {
+    const int per = kItemSamples;
+    const int root = static_cast<int>(k / (static_cast<size_t>(cells) * cells));
+    const int cz = static_cast<int>(k / cells % cells), cx = static_cast<int>(k % cells);
+    const size_t n = static_cast<size_t>(per) * per;
+    std::vector<float> h(n, 0.0f), xs(n), ys(n), zs(n);
+    const double e = in.round ? faceHalf(in.body) : static_cast<double>(in.extent);
+    const double side = 2.0 * e / cells, step = side / (per - 1);
+    const double ox = -e + cx * side, oz = -e + cz * side;
+    if (in.round) {
+        const Body& body = in.body;
+        const double R = body.radius;
+        const CubeFace& F = cubeFace(root);
+        const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
+        for (int j = 0; j < per; ++j)
+            for (int i = 0; i < per; ++i) {
+                double d[3];
+                dirOf(body, {root, ox + i * step, oz + j * step}, d);
+                const size_t s = static_cast<size_t>(j) * per + i;
+                xs[s] = static_cast<float>(R * d[0] - o[0]);
+                ys[s] = static_cast<float>(R * d[1] - o[1]);
+                zs[s] = static_cast<float>(R * d[2] - o[2]);
+            }
+        if (in.height) in.height->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+    } else {
+        for (int j = 0; j < per; ++j)
+            for (int i = 0; i < per; ++i) {
+                xs[static_cast<size_t>(j) * per + i] = static_cast<float>(ox + i * step);
+                zs[static_cast<size_t>(j) * per + i] = static_cast<float>(oz + j * step);
+            }
+        if (in.height) in.height->sample(xs.data(), zs.data(), static_cast<int>(n), h.data());
+    }
+    lo = std::numeric_limits<float>::max();
+    hi = -lo;
+    for (int j = 0; j < per; ++j)
+        for (int i = 0; i < per; ++i) {
+            const float v = in.overTree(h[static_cast<size_t>(j) * per + i], root, ox + i * step, oz + j * step);
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+}
+
+// Items a refresh job makes: about a few milliseconds of a worker's time.
+constexpr size_t kItemsPerBatch = 512;
+
+}  // namespace
+
+LandNode::ItemInputs LandNode::itemInputs() const {
+    ItemInputs in;
+    in.height = height_;
+    in.base = base_;
+    in.regions = regionStore_->snapshot();
+    in.round = round();
+    if (in.round) in.body = place_->body();
+    in.extent = extent_;
+    return in;
+}
+
+void LandNode::rebuildItems(bool now) {
+    if (now) {
+        // Every batch asked before is of items made again here.
+        itemEpoch_ = itemsAsked_;
+        buildItems(itemInputs(), items_, itemCells_, chartBounds_);
+        for (SurfaceItem& it : items_) it.generation = generation_;
+        // (Where the canopy stands for the plants, the land rises by it.)
+        if (round() || !bromath::aisEmpty(chartBounds_)) chartBounds_.max.y += canopyTop_;
+        map_.set(place_, lowest());
+        return;
+    }
+    ItemBatch b;
+    b.seq = ++itemsAsked_;
+    b.whole = true;
+    WorldWorkers::shared().post([in = itemInputs(), b = std::move(b), inbox = itemInbox_]() mutable {
+        buildItems(in, b.items, b.cells, b.chart);
+        std::lock_guard<std::mutex> lock(inbox->mutex);
+        inbox->done.push_back(std::move(b));
+    });
+}
+
+void LandNode::refreshItems(std::vector<size_t> ks, uint64_t generation) {
+    if (ks.empty()) return;
+    const ItemInputs in = itemInputs();
+    for (size_t at = 0; at < ks.size(); at += kItemsPerBatch) {
+        ItemBatch b;
+        b.seq = ++itemsAsked_;
+        b.generation = generation;
+        b.ks.assign(ks.begin() + static_cast<std::ptrdiff_t>(at),
+                    ks.begin() + static_cast<std::ptrdiff_t>(std::min(at + kItemsPerBatch, ks.size())));
+        WorldWorkers::shared().post([in, cells = itemCells_, b = std::move(b), inbox = itemInbox_]() mutable {
+            b.lo.resize(b.ks.size());
+            b.hi.resize(b.ks.size());
+            for (size_t i = 0; i < b.ks.size(); ++i) itemRange(in, cells, b.ks[i], b.lo[i], b.hi[i]);
+            std::lock_guard<std::mutex> lock(inbox->mutex);
+            inbox->done.push_back(std::move(b));
+        });
+    }
+}
+
+void LandNode::takeItems() {
+    if (itemsApplied_ == itemsAsked_) return;
+    {
+        std::lock_guard<std::mutex> lock(itemInbox_->mutex);
+        for (ItemBatch& b : itemInbox_->done) {
+            const uint64_t seq = b.seq;
+            itemReady_.emplace(seq, std::move(b));
+        }
+        itemInbox_->done.clear();
+    }
+    // In the order asked: a later batch's boxes grow what an earlier made.
+    bool changed = false;
+    for (auto it = itemReady_.begin(); it != itemReady_.end() && it->first == itemsApplied_ + 1;
+         it = itemReady_.erase(it)) {
+        ++itemsApplied_;
+        if (it->first <= itemEpoch_) continue;   // its items made again at once since
+        applyItems(it->second);
+        changed = true;
+    }
+    if (changed) ++itemsSerial_;
+}
+
+void LandNode::applyItems(ItemBatch& b) {
+    if (b.whole) {
+        // Its heights (and so its tiles' boxes) are the tree's over the base.
+        ++generation_;
+        items_ = std::move(b.items);
+        itemCells_ = b.cells;
+        chartBounds_ = b.chart;
+        for (SurfaceItem& it : items_) it.generation = generation_;
+        if (round() || !bromath::aisEmpty(chartBounds_)) chartBounds_.max.y += canopyTop_;
+        map_.set(place_, lowest());
+        return;
+    }
+    const size_t n = std::min({b.ks.size(), b.lo.size(), b.hi.size()});
+    for (size_t i = 0; i < n; ++i) {
+        if (b.ks[i] >= items_.size()) continue;
+        SurfaceItem& it = items_[b.ks[i]];
+        const float pad = (b.hi[i] - b.lo[i]) * kItemMargin + 1.0f;
+        it.bounds.min.y = std::min(it.bounds.min.y, b.lo[i] - pad);
+        it.bounds.max.y = std::max(it.bounds.max.y, b.hi[i] + pad);
+        it.generation = b.generation;
+        chartBounds_.min.y = std::min(chartBounds_.min.y, it.bounds.min.y);
+        chartBounds_.max.y = std::max(chartBounds_.max.y, it.bounds.max.y + canopyTop_);
+    }
 }
 
 }  // namespace bro::scene

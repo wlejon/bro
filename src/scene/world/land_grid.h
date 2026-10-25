@@ -123,8 +123,9 @@ struct LandBase {
     /// Channel 0 (x the height added, y the tree's scale, z and w the world's
     /// own) at a root's chart point, at a round body's direction (unit): the
     /// global grid's, the regions' blended over it.
-    void field(int root, double x, double z, float out[4]) const;
-    void fieldDir(const double dir[3], float out[4]) const;
+    /// `set`: the regions as of one snapshot of them (null: as they are now).
+    void field(int root, double x, double z, float out[4], const LandRegionSet* set = nullptr) const;
+    void fieldDir(const double dir[3], float out[4], const LandRegionSet* set = nullptr) const;
 
     /// The world's own value k (0 z, 1 w) at a root's chart point, at a
     /// round body's direction (unit).
@@ -142,9 +143,9 @@ struct LandBase {
     /// The land's height over the tree's `tree` at a flat body's (x, z),
     /// at a round body's root and chart point, at its direction (unit).
     float over(float tree, double x, double z) const { return over(tree, 0, x, z); }
-    float over(float tree, int root, double x, double z) const {
+    float over(float tree, int root, double x, double z, const LandRegionSet* set = nullptr) const {
         float v[4];
-        field(root, x, z, v);
+        field(root, x, z, v, set);
         return v[0] + v[1] * tree;
     }
     float overDir(float tree, const double dir[3]) const {

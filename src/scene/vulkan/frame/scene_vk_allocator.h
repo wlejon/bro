@@ -90,6 +90,10 @@ public:
     /// (VulkanContext::createBuffer).
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer, bool shared = false);
+    /// The memory a buffer the CPU reads back is made in: host-visible and
+    /// cached where the device has it (uncached memory reads at a few
+    /// hundred MB/s: a 4 MB region's read-back was 75 ms of a frame).
+    VkMemoryPropertyFlags readbackMemory() const;
     /// Device-local vertex / index buffers, filled through the upload stream.
     bool createVertexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);
     bool createIndexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);

@@ -27,6 +27,7 @@
 #include "scene/vulkan/lighting/scene_lighting.h"
 #include "util/log.h"
 
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include <algorithm>
 
 namespace bro::scene::vk {
@@ -150,7 +151,10 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     const bool readbackInline = readSinceRender_;
     readSinceRender_ = false;
 
+    stalls::RenderClock clock;
+    stalls::current() = &clock;
     VkCommandBuffer cmd = device_.beginFrame();
+    clock.step("begin frame");
     timer_.begin(cmd);
     SceneFrame frame(cmd, gpu_, graph, renderer);
     frame.stats = stats;
@@ -162,6 +166,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     atmosphere_.beginFrame(frame);
     meshes_.setAtmosphere(atmosphere_.active());
     clouds_.beginFrame(frame);
+    clock.step("frame setup");
     frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
@@ -169,7 +174,9 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.dof = renderer.depthOfFieldEnabled();
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();
+    clock.step("lighting");
     buildDrawLists(frame);
+    clock.step("draw lists");
     // The sub-pixel resolve, on a frame with opaque draws that mark detail
     // finer than a pixel: what grows on the ground (a grass node's).
     frame.subpixel = std::any_of(frame.lists.opaque.begin(), frame.lists.opaque.end(),
@@ -180,8 +187,9 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     probes_.fill(frame.lighting.probeGrid, frame.world.eye);
     timer_.mark(cmd, "setup");
     meshes_.recordPlans(frame);
+    clock.step("probes and plans");
 
-    graph_.run(frame);
+    graph_.run(frame);   // (each pass a step)
 
     // A frame whose compute no pass read (none declared it) still waits for
     // it before its end.
@@ -211,6 +219,9 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
             readbackTicket_ = device_.lastFrameTicket();
         }
     }
+    clock.step("submit");
+    clock.finish();
+    stalls::current() = nullptr;
     stats = frame.stats;
     return frame.drewContent;
 }

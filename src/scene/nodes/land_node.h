@@ -49,6 +49,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -269,18 +272,62 @@ public:
     /// about the eye and not in, tiles the view needs and has not made.
     void pendingWork(std::vector<std::string>& out) const override;
 
+    /// The items' boxes are made again off the frame (land_node_items.cpp):
+    /// the batches asked and not yet applied.
+    uint64_t itemBatchesPending() const { return itemsAsked_ - itemsApplied_; }
+    /// The batches the workers have finished since the last call applied,
+    /// in the order they were asked (the frame thread, each frame).
+    void takeItems();
+
+    /// What an item's box is made of, as of the moment it is asked for: the
+    /// land's tree, its processes' base and one snapshot of its regions, so
+    /// a box made on a worker is the box the frame would have made then.
+    struct ItemInputs {
+        FieldRef height;
+        std::shared_ptr<const LandBase> base;
+        std::shared_ptr<const LandRegionSet> regions;
+        Body body;
+        bool round = false;
+        float extent = 0.0f;
+        float overTree(float tree, int root, double x, double z) const {
+            return base ? base->over(tree, root, x, z, regions.get()) : tree;
+        }
+    };
+
 private:
     void buildRings();
     int wantedRings() const;
-    void rebuildItems();
-    void rebuildFaceItems();
-    /// Item `k`'s box from the land's heights as they are now (a region in
-    /// or out moves its ground), its generation `generation`.
-    void refreshItem(size_t k, uint64_t generation);
+    ItemInputs itemInputs() const;
+    /// Every item again: at once (`now`), or on a worker, applied with a
+    /// new generation when done (a frame never waits on the heights).
+    void rebuildItems(bool now = true);
+    /// Items `ks`' boxes again from the land's heights as they are now (a
+    /// region in or out moves its ground), their generation `generation`:
+    /// made on the workers in batches, applied by takeItems.
+    void refreshItems(std::vector<size_t> ks, uint64_t generation);
     /// The height over the tree's `tree` at chart point (x, z) of `root`
     /// (the tree's with no processes).
     float overTree(float tree, int root, double x, double z) const;
     void configureGrid();
+
+    struct ItemBatch {
+        uint64_t seq = 0, generation = 0;
+        bool whole = false;   // every item (rebuildItems), else ks' heights
+        std::vector<size_t> ks;
+        std::vector<float> lo, hi;
+        std::vector<SurfaceItem> items;
+        int cells = 0;
+        bromath::AABB3 chart = bromath::aempty3();
+    };
+    struct ItemInbox {
+        std::mutex mutex;
+        std::vector<ItemBatch> done;
+    };
+    std::shared_ptr<ItemInbox> itemInbox_ = std::make_shared<ItemInbox>();
+    std::map<uint64_t, ItemBatch> itemReady_;   // done, waiting on an earlier one
+    uint64_t itemsAsked_ = 0, itemsApplied_ = 0;
+    uint64_t itemEpoch_ = 0;   // batches asked up to it are dropped (a rebuild at once since)
+    void applyItems(ItemBatch& b);
 
     const Place* place_ = nullptr;
     double radius_ = 0.0;   // the body's the items were made for (0 the plane)

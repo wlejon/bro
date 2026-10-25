@@ -170,8 +170,7 @@ bool SceneLandRegions::start(SceneGpu& gpu, const LandNode& node, Land& land) {
         return false;
     for (SceneVkBuffer& b : land.readbacks)
         if (!gpu.allocator.createBuffer(static_cast<VkDeviceSize>(cells) * cells * kTexelBytes,
-                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, b) ||
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpu.allocator.readbackMemory(), b) ||
             !b.mappedData)
             return false;
     if (!gpu.allocator.createBuffer(static_cast<VkDeviceSize>(L.tableSize() + 2 * LandRegionConfig::kMaxLevels) * 16,

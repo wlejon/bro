@@ -49,6 +49,12 @@ bool SceneVkAllocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     return true;
 }
 
+VkMemoryPropertyFlags SceneVkAllocator::readbackMemory() const {
+    constexpr VkMemoryPropertyFlags kCoherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    constexpr VkMemoryPropertyFlags kCached = kCoherent | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    return render::findMemoryType(device_.context().memoryProperties(), ~0u, kCached) ? kCached : kCoherent;
+}
+
 bool SceneVkAllocator::createVertexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer) {
     if (!createBuffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer))

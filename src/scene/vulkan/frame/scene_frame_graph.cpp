@@ -6,6 +6,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_depth.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "util/log.h"
 
 namespace bro::scene::vk {
@@ -119,7 +120,9 @@ void SceneFrameGraph::run(SceneFrame& frame) {
         for (const auto& use : io.uses()) transition(frame.cmd, *use.image, layoutFor(use.access));
         if (io.drawsHdr() && !scopeOpen_) openScope(frame, io.scope());
 
+        if (stalls::RenderClock* clock = stalls::current()) clock->step("between passes");
         pass.record(frame);
+        if (stalls::RenderClock* clock = stalls::current()) clock->step(pass.name());
         if (frame.timer) frame.timer->mark(frame.cmd, pass.name());
     }
     if (scopeOpen_) closeScope(frame);

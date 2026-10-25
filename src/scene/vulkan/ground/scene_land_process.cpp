@@ -143,8 +143,7 @@ bool SceneLandProcesses::start(SceneGpu& gpu, const LandNode& node, Run& run) {
         return false;
     // Channel 0 of every root, for the CPU.
     if (!gpu.allocator.createBuffer(grid.texels() * kTexelBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                    run.readback) ||
+                                    gpu.allocator.readbackMemory(), run.readback) ||
         !run.readback.mappedData)
         return false;
     return true;

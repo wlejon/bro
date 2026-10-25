@@ -114,20 +114,24 @@ void LandBase::global(int root, double x, double z, float out[4]) const {
     out[3] = own[1].empty() ? 0.0f : grid.sample(own[1].data(), root, x, z);
 }
 
-void LandBase::field(int root, double x, double z, float out[4]) const {
+void LandBase::field(int root, double x, double z, float out[4], const LandRegionSet* in) const {
     if (grid.round()) {
         double d[3];
         dirOf(grid.body(), {root, x, z}, d);
-        fieldDir(d, out);
+        fieldDir(d, out, in);
         return;
     }
     global(root, x, z, out);
     if (!regions || !lattice.config.active()) return;
+    if (in) {
+        lattice.blendAt(*in, x, z, out);
+        return;
+    }
     const auto set = regions->snapshot();
     lattice.blendAt(*set, x, z, out);
 }
 
-void LandBase::fieldDir(const double dir[3], float out[4]) const {
+void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* in) const {
     const ChartPoint p = chartOf(grid.body(), dir);
     if (grid.round()) {
         // (The faces cross-faded at their edges, as the GPU's landGridAtDir.)
@@ -139,11 +143,15 @@ void LandBase::fieldDir(const double dir[3], float out[4]) const {
         global(p.root, p.x, p.z, out);
     }
     if (!regions || !lattice.config.active()) return;
-    const auto set = regions->snapshot();
+    std::shared_ptr<const LandRegionSet> held;
+    if (!in) {
+        held = regions->snapshot();
+        in = held.get();
+    }
     if (grid.round())
-        lattice.blendDir(*set, dir, out);
+        lattice.blendDir(*in, dir, out);
     else
-        lattice.blendAt(*set, p.x, p.z, out);
+        lattice.blendAt(*in, p.x, p.z, out);
 }
 
 std::string LandGrid::glslConfig(int channels) const {
