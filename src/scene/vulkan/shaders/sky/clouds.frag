@@ -182,14 +182,13 @@ float clBaseClear(float base, float foot, float q, float vs) {
 // first few hundred metres (so a heap's sunward side is lit, its far side
 // and underside shaded, and the skin's creases shadowed by the lobes about
 // them, which the cache's cells are too coarse to tell), each piece read
-// over its length; the cache's depth from where they end. Where the pixel
-// is finer than the volume's finest cell and the volume holds the first
-// piece's end, the volume's depth from there instead (its cells baked at
-// their footprint toward the sun through the finer levels and the cache
-// beyond): one fetch for the two further pieces and the cache. (Not over a
-// coarser pixel: from a region's height the volume's coarse cells' depth,
-// none in a cell that holds no cloud, lit the heaps flat.) Once a face,
-// not marched.
+// over its length; the cache's depth from where they end. Once a face, not
+// marched. (Not the volume's baked depth: read from the end of the first
+// piece, its coarse levels' depth, trilinear between cell centres a level's
+// cell apart, lit whole lobes flat white, and a level's six cells of the
+// sun's ray before the next level drew a seam along a plane that moved
+// with the eye; nor the volume's extinction for the two further pieces,
+// which shaded the heaps unlike the forms they were baked from.)
 const int CL_SUN_PIECES = 3;
 float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
     float sc = max(1.0, foot / 15.0);
@@ -200,13 +199,6 @@ float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
         float f = max(foot, 3.0 * len);
         tau += clFormsAt(w, clLod(w, f), f, foot, detail && i == 0).sigma * len;
         at += len;
-        // (From the end of the first piece, the volume's depth toward the
-        // sun where it holds the point at a cell as fine as the piece.)
-        if (foot < clouds.volA.w) {
-            vec3 v = cloudVolLocal(cloudToBody(a + s * at));
-            int k = cloudVolLevel(v, len);
-            if (k < CL_VOL_LEVELS) return tau + cloudVolSample(k, v).z;
-        }
         len *= 2.8;
     }
     ClAt w = clAt(a + s * at);
