@@ -94,6 +94,13 @@ public:
     /// pipeline cache (render::VulkanPipelineCache).
     VkPipeline build(VkDevice device, VkPipelineLayout layout);
 
+    /// The stages as added, and one stage's module replaced (shader set B's
+    /// twin of a pipeline, scene_shader_sets.h).
+    const std::vector<VkPipelineShaderStageCreateInfo>& stages() const { return shaderStages_; }
+    void setStageModule(size_t index, VkShaderModule module) {
+        if (index < shaderStages_.size()) shaderStages_[index].module = module;
+    }
+
 private:
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages_;
     std::vector<VkVertexInputBindingDescription> vertexBindings_;

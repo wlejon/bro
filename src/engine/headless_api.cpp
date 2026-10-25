@@ -559,6 +559,25 @@ bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
 #endif
 }
 
+std::vector<std::string> Engine::scenePendingWork() {
+    std::vector<std::string> out;
+#if BRO_WITH_3D
+    renderPendingScenes(true);
+    for (auto& sg : sceneGraphs_)
+        if (sg.graph) sg.graph->renderer().pendingWork(out);
+#endif
+    return out;
+}
+
+void Engine::advanceSceneExposure(float seconds) {
+#if BRO_WITH_3D
+    for (auto& sg : sceneGraphs_)
+        if (sg.graph) sg.graph->renderer().advanceExposureTime(seconds);
+#else
+    (void)seconds;
+#endif
+}
+
 dom::Element* Engine::querySelector(const std::string& selector) const {
     if (!document_) return nullptr;
 

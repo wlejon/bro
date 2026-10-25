@@ -5,6 +5,7 @@
 // (scene_lighting.glsl's sceneLandSun).
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/land_node.h"
 #include "scene/scene_graph.h"
@@ -82,7 +83,7 @@ bool SceneMeshDrawer::setupLandSun(SceneGpu& gpu) {
 void SceneMeshDrawer::cleanupLandSun(SceneGpu& gpu) {
     if (landSunImage_.isValid()) gpu.allocator.destroyImage(landSunImage_);
     if (landSunNone_.isValid()) gpu.allocator.destroyImage(landSunNone_);
-    if (landSunPipeline_) vkDestroyPipeline(device_, landSunPipeline_, nullptr);
+    if (landSunPipeline_) destroyScenePipeline(device_, landSunPipeline_, nullptr);
     SceneVkShaderModule::destroy(device_, landSunModule_);
     if (landSunLayout_) vkDestroyPipelineLayout(device_, landSunLayout_, nullptr);
     if (landSunSetLayout_) vkDestroyDescriptorSetLayout(device_, landSunSetLayout_, nullptr);
@@ -183,7 +184,7 @@ uint32_t SceneMeshDrawer::recordLandSun(SceneFrame& frame, std::span<const World
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, landSunPipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, landSunPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, landSunLayout_, 0, 1, &set, 0, nullptr);
     uint32_t recorded = 0;
     for (const WorldJob& job : granted) {

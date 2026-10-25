@@ -31,6 +31,9 @@ enum class BuiltinSceneShader {
 /// use, from the same text with the same DEFINES as the build-time compile,
 /// and falls back to the embedded SPIR-V (with the error logged) when it
 /// does not compile. Unset, `0` or empty: the embedded SPIR-V.
+///
+/// Each blob it hands out is noted with how it was made, so shader set B
+/// (scene_shader_sets.h) can make it again from another tree.
 class SceneVkShaderCompiler {
 public:
     SceneVkShaderCompiler() = default;
@@ -63,6 +66,8 @@ public:
     /// The SPIR-V of a built-in shader: the embedded words, or under
     /// BRO_SCENE_SHADER_SOURCE the words compiled from source.
     static const std::vector<uint32_t>& getBuiltinSpirv(BuiltinSceneShader shader);
+    /// The same, not noted for shader set B (scene_shader_sets.h).
+    static const std::vector<uint32_t>& getBuiltinSpirvUnnoted(BuiltinSceneShader shader);
 
     /// The SPIR-V embedded at build time, whatever the switch says.
     static const std::vector<uint32_t>& embeddedSpirv(BuiltinSceneShader shader);

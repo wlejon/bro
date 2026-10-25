@@ -3,6 +3,7 @@
 #include "embed/embed.h"
 #include "engine/engine.h"
 #include "bronze_host/host_numeric.h"
+#include <functional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -49,5 +50,9 @@ void buildTreeString(std::ostringstream& out, bro::dom::Element* el, int depth, 
 void installHeadlessInput(engine::Engine& engine);
 void installHeadlessFrame(engine::Engine& engine);
 void installHeadlessTestHooks(engine::Engine& engine);
+// perf.pendingWork / settle / loadShaderSet / useShaderSet / compareShaders
+// (host_headless_scene.cpp), through installHeadlessFrame's perf object.
+void installHeadlessScenePerf(engine::Engine& engine,
+                              const std::function<void(const char*, uint32_t, ev::NativeFn)>& setPerfFn);
 
 } // namespace bro::bronze_host

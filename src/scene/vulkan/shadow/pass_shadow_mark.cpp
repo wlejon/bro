@@ -1,4 +1,5 @@
 #include "scene/vulkan/shadow/pass_shadow_mark.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_util.h"
 #include "scene/nodes/light_node.h"
@@ -41,7 +42,7 @@ bool PassShadowMark::setup(SceneGpu& gpu) {
 
 void PassShadowMark::cleanup(SceneGpu& gpu) {
     VkDevice dev = gpu.device.device();
-    if (pipeline_) gpu.device.defer([dev, p = pipeline_] { vkDestroyPipeline(dev, p, nullptr); });
+    if (pipeline_) gpu.device.defer([dev, p = pipeline_] { destroyScenePipeline(dev, p, nullptr); });
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     if (sampler_) gpu.device.defer([dev, s = sampler_] { vkDestroySampler(dev, s, nullptr); });
@@ -126,7 +127,7 @@ void PassShadowMark::record(SceneFrame& frame) {
     render::cmdBufferBarrier(cmd, pages.requestBuffer(), 0, pages.requestBytes(), VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     const uint32_t cols = (frame.gpu.targets.width() + kStep - 1) / kStep;
     const uint32_t rows = (frame.gpu.targets.height() + kStep - 1) / kStep;

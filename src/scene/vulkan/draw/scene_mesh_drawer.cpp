@@ -1,4 +1,5 @@
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/depth_policy.h"
 #include "scene/nodes/grass_node.h"
@@ -874,7 +875,7 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     if (!pipeline) pipeline = builtinPipeline(draw, target);
     if (!pipeline) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     const VkDescriptorSet sets[3] = {cameraSet, draw.lightingSet ? draw.lightingSet : lightingSet,
                                      draw.materialSet ? draw.materialSet : defaults_->defaultMaterialSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);

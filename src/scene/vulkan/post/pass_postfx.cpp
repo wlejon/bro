@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/pass_postfx.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -52,7 +53,7 @@ void drawInto(SceneFrame& frame, SceneVkImage& target, VkPipeline pipeline, VkPi
 void destroyPipelines(SceneVkDevice& device, std::initializer_list<VkPipeline*> pipelines) {
     VkDevice dev = device.device();
     for (VkPipeline* p : pipelines) {
-        if (*p) device.defer([dev, pipeline = *p] { vkDestroyPipeline(dev, pipeline, nullptr); });
+        if (*p) device.defer([dev, pipeline = *p] { destroyScenePipeline(dev, pipeline, nullptr); });
         *p = VK_NULL_HANDLE;
     }
 }

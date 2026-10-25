@@ -301,6 +301,11 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `perf.stats()` | The counters since the last reset (CPU style/layout only). |
 | `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from Vulkan timestamp queries written at the start and end of each scene's render (summed over the page's scenes). Blocking: it waits for that render's submission, so each call returns an isolated per-frame GPU cost. `perf.gpuFrameMs({ wait: false })` waits for nothing: it returns the oldest render that has finished and was not read yet (the previous answer when none has), so a loop reading it every frame reads each render once, a frame or so behind, and its frames overlap the GPU's as a window's do (the wilds bench's walk: 21.8 ms a frame waiting, 13.9 not). This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. A GPU kept busy frame after frame can slow down after a minute or so (a laptop or APU's sustained power limit: on halo the same frames ran 2 to 4 times as long), so a long trace should let the GPU rest between frames (`wallSleep`, about twice the frame's time). |
 | `perf.gpuPasses()` | The last timed 3D scene render's GPU milliseconds pass by pass, `{ name: ms, ..., compute: {...} }` (below). The first call turns the per-pass timestamps on and returns `{}`. |
+| `perf.pendingWork()` | The 3D scenes' settle state: what they still stream or converge for the current view, one string a kind of work (`["land: 7 regions pending", "plants: 30084 placements pending", "clouds: 9 cache bakes to come"]`), `[]` once settled. See "Settling a scene" below. |
+| `perf.settle({ maxFrames: 4000, held: true, exposure: true, kinds, stallFrames: 600 })` | Frames (1000/30 ms each) until `pendingWork()` is empty, on a held clock: `{ settled, stalled, frames, pending, waited: { kind: frames } }`. Below. |
+| `perf.loadShaderSet(dir)` | Load shader set B, the scene's shaders compiled from another shader tree. `{ dir, shaders, differing, pipelines, twinned, failed }`. See "Shader A/B" below. |
+| `perf.useShaderSet('a' \| 'b', { rebake })` | The set the scenes draw with from now on. |
+| `perf.compareShaders({ b: dir, frames: 60, warm: 4, held: true })` | Sets A and B measured on the same view, frame by frame in pairs: each set's frame and pass GPU ms, and B's difference from A with its spread. Below. |
 
 Measuring GPU frame cost — drive the camera directly (suppress the app's rAF so it can't clobber it), `flush()`, and read `perf.gpuFrameMs()` each frame; each read serializes on that frame's query, so summing gives a clean average:
 
@@ -318,6 +323,42 @@ console.log(`${(sum/200).toFixed(2)} ms/frame (${(200000/sum).toFixed(0)} fps)`)
 Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subtract to attribute GPU cost to it. The absolute numbers track real windowed framerate.
 
 Where a frame's GPU time went: `perf.gpuPasses()` returns the last timed scene render pass by pass, and draw by draw inside the opaque pass, as `{ name: ms, ... }` (`{ setup: 0.02, shadow: 0.81, 'plants:leaves': 0.27, ..., rest: 0.11 }`: each the time since the mark before it, a name marked twice summed, `rest` the last mark to the render's end), the async compute stream's stages under `compute` when the frame had one, led by `start`, when the stream began after the graphics did (negative: before), so a graphics pass that waits on the compute can be told from one that is slow (`compute: { start: -0.01, 'plants:cells': 0.02, 'plants:plan': 0.03, 'plants:pose': 0.01, ..., rest: 0.01 }`). The first call turns the marks on (each pass end then writes one timestamp; before it nothing is written), so it returns `{}`: flush a frame and call it again. A plants node's draws are named `plants:leaves` and `plants:wood`; the shadow pass's casters by where they go and their mesh kind, the overlays drawn each frame as `shadow:moving:<kind>` and the cached pages redrawn as `shadow:pages:<kind>` (`shadow:moving:plants`, `shadow:pages:static`, `shadow:pages:land`, ...), a run of casters under one name timed as one, each part's end as `shadow:moving` / `shadow:pages`; a grass node's draws by ring (`grass:ring0`-`3`, near to far fans, and `herb:ring0`-`2`). A GPU number read while the CPU is slow is inflated by the GPU clocking down between frames, so compare passes within one render, not across runs with different CPU loads.
+
+#### Settling a scene
+
+A still or a cost wants the scene finished for its view: the land's regions and tiles in, the plants placed over them, the clouds' cover and cache baked, the exposure at its meter. Each part of the scene reports its own pending work (`SceneNode::pendingWork` for a node, `SceneRenderer::pendingWork` for the renderer's bakes), so a new subsystem adds itself there and no app polls it. `perf.pendingWork()` reads it as of the newest render; `perf.settle()` runs frames until it is empty:
+
+```js
+setShot('low');                         // the view
+const s = perf.settle({ maxFrames: 8000 });
+// { settled: true, stalled: false, frames: 795, pending: [],
+//   waited: { land: 75, plants: 795, 'world service': 75 } }
+screenshot('low.png');
+```
+
+The kinds now reported: `land processes` (the land's processes not yet run), `land` (regional grids wanted about the eye, tiles the view needs and has not made), `plants` (placement's leaves to place), `world service` (jobs left queued whose error is over a pixel), `ground layers` (the turf's tiles not filled), `clouds` (not compiled, the cover not baked, the cache's levels and slices still to bake), `exposure` (auto exposure more than a tenth of a stop from its meter).
+
+- **Held clock.** `held` (default) holds the scene's clock (`bro.time.scale` 0) while it waits: the land's and plants' work goes on frame by frame, the wind, sway and drift do not, so the picture after is the same moment however long the wait took. The exposure is let adapt over each held frame (`exposure: false` holds it too).
+- **Budgets.** While it waits, every world service spends at least its settle budget a frame (`WorldServiceConfig::settleMs`), as after a view cut: the frames run for their results, not to a frame time.
+- **`kinds`**: wait for those kinds only (`['land processes']`: the land made before a view that stands on it).
+- **Stalls.** Work whose reasons do not change for `stallFrames` frames is not coming in: the wait ends there, `stalled: true` and the reasons in `pending`.
+
+#### Shader A/B
+
+Two builds measured one after the other drift apart with the GPU's clocks (5-15% between runs, an unchanged control included). `perf.compareShaders` measures two sets of the scene's shaders in one process, on the same held view, a frame of each in turn, so drift hits both alike:
+
+```js
+const r = perf.compareShaders({ b: 'D:/scratch/shaders', frames: 60 });
+// r.a.frame, r.b.frame:        { mean, median, min }   GPU ms
+// r.a.passes['clouds'], ...:   { mean, median, min }   (compute stages as 'compute:<name>')
+// r.diff.frame, r.diff.passes['clouds']: { ms, median, se, pct }   B - A
+// r.set: { dir, shaders, differing, pipelines, twinned, failed }
+```
+
+- **The sets.** Set A is what the scene runs (the embedded SPIR-V, or `BRO_SCENE_SHADER_SOURCE`'s). Set B is the same shaders compiled from `dir`, a shader tree in the layout `BRO_SCENE_SHADER_SOURCE` takes (a copy of `src/scene/vulkan/shaders`, edited); the built-in shaders, the kinds built with a world's modules and run-time GLSL that includes the tree's files alike. Every scene pipeline whose SPIR-V differs under B gets a twin built from B's, the pipelines made before the load included; both stay compiled, and the scene binds the twin while B is active, so a switch costs nothing. A shader that does not compile from B keeps A's (named in `failed`, the error logged). `perf.loadShaderSet(dir)` loads (or replaces) set B on its own; `compareShaders({ b })` loads it when it is not the one loaded.
+- **The frames.** `warm` frames of each set, then `frames` pairs, one frame of A and one of B in an order drawn at random a pair (a fixed seed): work the scene spreads over frames in a cycle (the clouds' cache slices, the plants' plan) falls on both alike, where a fixed A B B A order gives each set the same phases of it every time. Each frame's GPU ms is waited on (`perf.gpuFrameMs()`), its passes read (`perf.gpuPasses()`). The difference is taken pair by pair: `ms` its mean, `se` the mean's standard error, `pct` the mean over A's mean. On an identical copy every pass over 0.1 ms comes within a percent or two, inside its `se`.
+- **Stills.** `perf.useShaderSet('b', { rebake: true })` draws with B from now on; `rebake` makes the bakes the scene keeps across frames (the clouds' cover, cache and globe) again by the set now active, as for a new view, so `perf.settle()` then `screenshot()` is B's picture at the same held moment as A's. Without `rebake` (as `compareShaders` switches, every frame) the kept bakes are whichever set last made them.
+- The planet's `capture.js -- compare <shots> dir=<tree>` prints the table and writes both sets' stills.
 
 What a shader costs the GPU's register file: run with `BRO_VK_PIPELINE_STATS=1` (and `BRO_PIPELINE_CACHE=0`, so every pipeline is built) and each scene pipeline logs the driver's statistics per stage as it is created (`pipeline stats [mesh kind 8 cluster raster 2] FS: Register Count=80 ...`; VK_KHR_pipeline_executable_properties, where the device has it). Registers set occupancy: a variant past 64 a thread runs fewer warps to hide its texture fetches.
 

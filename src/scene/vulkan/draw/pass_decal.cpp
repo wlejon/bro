@@ -1,4 +1,5 @@
 #include "scene/vulkan/draw/pass_decal.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/decal_node.h"
 #include "scene/scene_graph.h"
@@ -129,7 +130,7 @@ void PassDecal::record(SceneFrame& frame) {
     VkCommandBuffer cmd = frame.cmd;
     const SceneDefaults& d = frame.gpu.defaults;
     const SceneVkImage& depth = frame.gpu.targets.depthSnapshot;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     const VkDescriptorSet frameSets[2] = {frame.cameraSet, frame.lightingSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, frameSets, 0, nullptr);
     const VkDeviceSize offset = 0;

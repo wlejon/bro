@@ -1,4 +1,5 @@
 #include "scene/vulkan/sky/scene_clouds.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_util.h"
 #include "scene/nodes/land_node.h"
@@ -17,6 +18,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -139,9 +141,9 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     for (auto& s : sets_) {
         if (!s) continue;
         s->pipelines.destroy(gpu.device);
-        if (s->cover) vkDestroyPipeline(dev, s->cover, nullptr);
-        if (s->cache) vkDestroyPipeline(dev, s->cache, nullptr);
-        if (s->globe) vkDestroyPipeline(dev, s->globe, nullptr);
+        if (s->cover) destroyScenePipeline(dev, s->cover, nullptr);
+        if (s->cache) destroyScenePipeline(dev, s->cache, nullptr);
+        if (s->globe) destroyScenePipeline(dev, s->globe, nullptr);
         s->destroy(dev);
     }
     sets_.clear();
@@ -164,7 +166,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     }
     noise_ = Noise{};
     for (VkPipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_})
-        if (*p) vkDestroyPipeline(dev, *p, nullptr);
+        if (*p) destroyScenePipeline(dev, *p, nullptr);
     lightPipeline_ = distPipeline_ = shadowPipeline_ = VK_NULL_HANDLE;
     SceneVkShaderModule::destroy(dev, noiseCs_);
     SceneVkShaderModule::destroy(dev, lightCs_);
@@ -312,7 +314,7 @@ void SceneClouds::recordNoise(SceneFrame& frame) {
     VkCommandBuffer cmd = frame.cmd;
     const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, CL_NOISE_MIPS, 0, 1};
     render::cmdTransitionImage(cmd, noise_.image, all, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noisePipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, noisePipeline_);
     for (int m = 0; m < CL_NOISE_MIPS; ++m) {
         VkDescriptorSet set = frame.gpu.device.frameSet(noiseSetLayout_);
         SceneVkDescriptorWriter w;
@@ -355,7 +357,7 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
 
     // The cover: baked again for a new generation or module, once the
     // land it reads (when it reads one) is ready.
-    if (bakedGeneration_ != c.generation || bakedHash_ != currentKey_) {
+    if (bakedGeneration_ != c.generation || bakedHash_ != currentKey_ || bakedEpoch_ != shaderSetBakeEpoch()) {
         bakeGrid_ = gridNone_.view;
         if (c.land) {
             SceneNode* n = frame.graph.findById(c.land);
@@ -464,7 +466,9 @@ void SceneClouds::placeCache(SceneFrame& frame) {
     for (double& v : nb) v /= nl;
     const auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
 
-    const uint64_t key = mixBits(currentKey_, c.generation);
+    // (A shader set switched to with a rebake asked bakes everything again:
+    // scene_shader_sets.h.)
+    const uint64_t key = mixBits(mixBits(currentKey_, c.generation), shaderSetBakeEpoch());
     bool all = !chartValid_ || key != cacheKey_ || bake_;
     // (A frame's jump in the wind's time: a deck that moved, not drifted.)
     all = all || std::fabs(block_.shell[3] - cacheTime_) > 0.25f;
@@ -556,6 +560,12 @@ void SceneClouds::placeCache(SceneFrame& frame) {
         bakes_.push_back(slice);
     }
     ++cacheFrame_;
+    // What is still to come of it for this view (the settle state): the
+    // levels to bake again, and the slices since the last whole change.
+    sliceRun_ = all ? 0 : std::min(sliceRun_ + 1, CL_CACHE_SLICES);
+    CloudStats stats = frame.renderer.cloudStats();
+    stats.cachePending = std::popcount(cachePending_) + (CL_CACHE_SLICES - sliceRun_);
+    frame.renderer.setCloudStats(stats);
 }
 
 void SceneClouds::moveLevel(int k, int axis, long long from, long long to) {
@@ -649,7 +659,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
         memoryBarrier(cmd, kReaders | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT |
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->cover);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->cover);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         const uint32_t groups = (CL_COVER_SIDE + CL_COVER_GROUP - 1) / CL_COVER_GROUP;
         vkCmdDispatch(cmd, groups, groups, 6);
@@ -657,6 +667,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
                       VK_ACCESS_SHADER_READ_BIT);
         bakedGeneration_ = frame.renderer.clouds().generation;
         bakedHash_ = currentKey_;
+        bakedEpoch_ = shaderSetBakeEpoch();
         bake_ = false;
     }
 
@@ -669,7 +680,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
         // What earlier frames read of the levels is done with.
         memoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadowPipeline_);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadowPipeline_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         const uint32_t groups = (CL_SHADOW_SIDE + CL_SHADOW_GROUP - 1) / CL_SHADOW_GROUP;
         vkCmdDispatch(cmd, groups, groups, CL_SHADOW_LEVELS);
@@ -697,7 +708,7 @@ void SceneClouds::recordCache(SceneFrame& frame) {
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     // The extinction, its light, then its distance to cloud an axis a pass.
     for (int pass = 0; pass < 5; ++pass) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                           pass == 0 ? current_->cache : pass == 1 ? lightPipeline_ : distPipeline_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         for (const CacheBake& b : bakes_) {
@@ -721,7 +732,7 @@ void SceneClouds::recordCache(SceneFrame& frame) {
 void SceneClouds::recordGlobe(SceneFrame& frame) {
     // (Read only by the layer the march draws from over the deck.)
     if (eyeRadius_ <= block_.shell[1]) return;
-    const uint64_t key = mixBits(currentKey_, frame.renderer.clouds().generation) | 1u;
+    const uint64_t key = mixBits(mixBits(currentKey_, frame.renderer.clouds().generation), shaderSetBakeEpoch()) | 1u;
     const bool all = key != globeKey_ || std::fabs(block_.shell[3] - globeTime_) > 0.25f;
     globeKey_ = key;
     globeTime_ = block_.shell[3];
@@ -733,7 +744,7 @@ void SceneClouds::recordGlobe(SceneFrame& frame) {
     // What earlier frames read of it is done with; the cover baked.
     memoryBarrier(cmd, kReaders, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->globe);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->globe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
     const int32_t push[4] = {0, y0, yStep, 0};
     vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
@@ -770,7 +781,7 @@ void SceneClouds::recordDraw(SceneFrame& frame) {
     VkDescriptorSet set = writeSet(frame, true, false);
     if (!pipeline || !set) return;
     const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, marchLayout_, 0, 3, sets, 0, nullptr);
     vkCmdDraw(frame.cmd, 3, 1, 0, 0);
     frame.drewContent = true;

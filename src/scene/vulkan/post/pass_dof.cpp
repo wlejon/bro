@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/pass_dof.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
@@ -56,8 +57,8 @@ void PassDoF::cleanup(SceneGpu& gpu) {
     for (SceneVkImage& img : blur_) gpu.allocator.destroyImage(img);
     gpu.device.defer([dev, s = sampler_, p0 = blurPipeline_, p1 = compositePipeline_] {
         if (s) vkDestroySampler(dev, s, nullptr);
-        if (p0) vkDestroyPipeline(dev, p0, nullptr);
-        if (p1) vkDestroyPipeline(dev, p1, nullptr);
+        if (p0) destroyScenePipeline(dev, p0, nullptr);
+        if (p1) destroyScenePipeline(dev, p1, nullptr);
     });
     sampler_ = VK_NULL_HANDLE;
     blurPipeline_ = compositePipeline_ = VK_NULL_HANDLE;

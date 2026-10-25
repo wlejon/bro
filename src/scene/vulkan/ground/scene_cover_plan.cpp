@@ -1,4 +1,5 @@
 #include "scene/vulkan/ground/scene_cover_plan.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_util.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -75,7 +76,7 @@ void CoverPlan::cleanup(SceneGpu& gpu) {
     jobs_.clear();
     commands_.clear();
     for (VkPipeline p : pipelines_)
-        if (p) vkDestroyPipeline(device_, p, nullptr);
+        if (p) destroyScenePipeline(device_, p, nullptr);
     pipelines_.clear();
     if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -198,7 +199,7 @@ void CoverPlan::record(SceneFrame& frame) {
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     for (const Job& j : jobs_) {
         if (j.pipeline != boundPipeline) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, j.pipeline);
+            bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, j.pipeline);
             boundPipeline = j.pipeline;
         }
         if (j.listSet != bound) {

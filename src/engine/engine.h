@@ -505,6 +505,13 @@ public:
     /// on, so it finds none; false while no render with them has been read.
     bool gpuPasses(std::vector<std::pair<std::string, double>>& passes,
                    std::vector<std::pair<std::string, double>>& compute, bool& computed);
+    /// The page's scenes' settle state (SceneRenderer::pendingWork) as of
+    /// the newest render (a render a flush left pending is drawn first):
+    /// what each still streams or converges for its view; empty: settled.
+    std::vector<std::string> scenePendingWork();
+    /// Let the scenes' exposure adapt over `seconds` with their clock held
+    /// (perf.settle: the exposure settles while the scene does not move).
+    void advanceSceneExposure(float seconds);
 
     dom::Element* querySelector(const std::string& selector) const;
     // Builds the panel first if it has not been shown yet.

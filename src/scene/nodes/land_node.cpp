@@ -394,6 +394,13 @@ bromath::AABB3 LandNode::bounds() const {
     return {{-rf, -R - rf, -rf}, {rf, -R + rf, rf}};
 }
 
+void LandNode::pendingWork(std::vector<std::string>& out) const {
+    if (!ready()) out.push_back("land processes: not yet run");
+    if (stats_.regionsPending)
+        out.push_back("land: " + std::to_string(stats_.regionsPending) + " regions pending");
+    if (stats_.missing) out.push_back("land: " + std::to_string(stats_.missing) + " tiles missing");
+}
+
 float LandNode::heightOver(const double dir[3]) const {
     const double R = place_->body().radius;
     const float tree = height_ ? height_->at(R * dir[0], R * dir[1], R * dir[2]) : 0.0f;

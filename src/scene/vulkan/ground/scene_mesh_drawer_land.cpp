@@ -6,6 +6,7 @@
 // them (mesh_land.vert reads them through the page table).
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/grass_node.h"
 #include "scene/nodes/land_node.h"
@@ -133,7 +134,7 @@ bool SceneMeshDrawer::setupLandHorizon(SceneGpu& gpu) {
 
 void SceneMeshDrawer::cleanupLandHorizon(SceneGpu& gpu) {
     horizon_.destroy(gpu.allocator);
-    if (horizonPipeline_) vkDestroyPipeline(device_, horizonPipeline_, nullptr);
+    if (horizonPipeline_) destroyScenePipeline(device_, horizonPipeline_, nullptr);
     SceneVkShaderModule::destroy(device_, horizonModule_);
     if (horizonLayout_) vkDestroyPipelineLayout(device_, horizonLayout_, nullptr);
     if (horizonSetLayout_) vkDestroyDescriptorSetLayout(device_, horizonSetLayout_, nullptr);
@@ -151,7 +152,7 @@ void SceneMeshDrawer::cleanupLand(SceneGpu& gpu) {
     for (auto& [id, lt] : lands_) lt->atlas.destroy(gpu.device, gpu.allocator);
     lands_.clear();
     for (VkPipeline p : landFillPipelines_)
-        if (p) vkDestroyPipeline(device_, p, nullptr);
+        if (p) destroyScenePipeline(device_, p, nullptr);
     landFillPipelines_.clear();
     for (auto& s : landSets_) s->destroy(device_);
     landSets_.clear();
@@ -495,7 +496,7 @@ uint32_t SceneMeshDrawer::recordLandHorizon(SceneFrame& frame, std::span<const W
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonPipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, horizonLayout_, 0, 1, &set, 0, nullptr);
     const float eye[4] = {frame.world.eye.x, frame.world.eye.y, frame.world.eye.z, 0.0f};
     vkCmdPushConstants(cmd, horizonLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(eye), eye);
@@ -630,7 +631,7 @@ uint32_t SceneMeshDrawer::recordLand(SceneFrame& frame, std::span<const WorldJob
                 writer.updateSet(device_, set);
 
                 lt.atlas.beginFills(cmd, fills);
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, landFillLayout_, 0, 1, &set, 0, nullptr);
                 const uint32_t stride = static_cast<uint32_t>(config.stride());
                 const uint32_t words[LF_P_WORDS] = {stride, static_cast<uint32_t>(config.border),

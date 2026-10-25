@@ -16,6 +16,8 @@
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_gpu_timer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
+#include "scene/vulkan/shaders/sky/clouds_layout.h"
 #include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_util.h"
@@ -25,7 +27,10 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 using namespace bro;
@@ -623,6 +628,114 @@ int main() {
         SceneVkShaderCompiler::destroyModule(device.device(), cs);
         allocator.destroyBuffer(out);
     }
+
+    // Shader set B (scene_shader_sets.h): a pipeline made before set B is
+    // loaded gets its twin from B's tree; switching sets binds it, with no
+    // compile; an identical tree twins nothing.
+    std::cout << "[Test] Shader set B: twins, switch, identical tree... " << std::flush;
+    {
+        namespace fs = std::filesystem;
+        const std::string srcDir = SceneVkShaderCompiler::buildShaderSourceDir();
+        const fs::path tmp = fs::temp_directory_path() / "bro_shader_set_test";
+        std::error_code ec;
+        fs::remove_all(tmp, ec);
+        fs::copy(srcDir, tmp, fs::copy_options::recursive, ec);
+        assert(!ec);
+        const auto setSide = [&](const char* from, const char* to) {
+            const fs::path f = tmp / "sky" / "clouds_layout.h";
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            in.close();
+            std::string text = ss.str();
+            const size_t at = text.find(from);
+            assert(at != std::string::npos);
+            text.replace(at, std::strlen(from), to);
+            std::ofstream(f, std::ios::binary | std::ios::trunc) << text;
+        };
+
+        // A run-time compute shader that reads a constant of the tree's.
+        const char* src =
+            "#version 450\n"
+            "#include \"sky/clouds_layout.h\"\n"
+            "layout(local_size_x = 1) in;\n"
+            "layout(set = 0, binding = 0) buffer Out { uint v[]; } o;\n"
+            "void main() { o.v[0] = uint(CL_CACHE_SIDE); }\n";
+        const auto spirv = SceneVkShaderCompiler::compileGlsl(src, VK_SHADER_STAGE_COMPUTE_BIT);
+        assert(!spirv.empty());
+        VkShaderModule cs = SceneVkShaderCompiler::createModule(device.device(), spirv);
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+                                             nullptr};
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.bindingCount = 1;
+        li.pBindings = &binding;
+        VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+        assert(vkCreateDescriptorSetLayout(device.device(), &li, nullptr, &setLayout) == VK_SUCCESS);
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &setLayout;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        assert(vkCreatePipelineLayout(device.device(), &pli, nullptr, &layout) == VK_SUCCESS);
+        VkPipeline pipeline = createComputePipeline(device.device(), cs, layout, "shader set test");
+        assert(pipeline != VK_NULL_HANDLE);
+        SceneVkShaderCompiler::destroyModule(device.device(), cs);   // (the twin is made from the recipe)
+
+        SceneVkBuffer out;
+        assert(allocator.createBuffer(sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, out,
+                                      true));
+        const auto run = [&]() -> uint32_t {
+            context.frames().beginFrame();
+            VkCommandBuffer cmd = device.beginFrame();
+            VkDescriptorSet set = device.frameSet(setLayout);
+            VkDescriptorBufferInfo bi{out.buffer, 0, sizeof(uint32_t)};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet = set;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &bi;
+            vkUpdateDescriptorSets(device.device(), 1, &w, 0, nullptr);
+            bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
+            vkCmdDispatch(cmd, 1, 1, 1);
+            render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+            assert(device.submitFrame(cmd));
+            context.queue().wait(device.lastFrameTicket());
+            return *static_cast<const uint32_t*>(out.mappedData);
+        };
+        assert(run() == CL_CACHE_SIDE);
+        assert(!useShaderSet(1));   // (no set B yet)
+
+        // The identical tree: nothing differs, nothing twinned.
+        ShaderSetInfo info;
+        std::string err;
+        assert(loadShaderSetB(tmp.string(), &info, &err));
+        assert(info.differing == 0 && info.twinned == 0 && info.failed.empty());
+        assert(useShaderSet(1) && run() == CL_CACHE_SIDE);
+        assert(useShaderSet(0));
+
+        // The constant changed in B's tree: the pipeline twinned, the switch
+        // binds it, back to A binds A's.
+        setSide("#define CL_CACHE_SIDE       128", "#define CL_CACHE_SIDE       96");
+        assert(loadShaderSetB(tmp.string(), &info, &err));
+        assert(info.twinned >= 1 && info.differing >= 1 && info.failed.empty());
+        assert(run() == CL_CACHE_SIDE);
+        const uint64_t epoch = shaderSetBakeEpoch();
+        assert(useShaderSet(1, true) && shaderSetBakeEpoch() == epoch + 1);
+        assert(run() == 96u);
+        assert(useShaderSet(0) && run() == CL_CACHE_SIDE);
+        assert(!loadShaderSetB((tmp / "none").string(), &info, &err) && !err.empty());
+
+        const int twinned = shaderSetInfo().twinned;
+        destroyScenePipeline(device.device(), pipeline, nullptr);   // (and its twin)
+        assert(shaderSetInfo().twinned == twinned - 1);
+        vkDestroyPipelineLayout(device.device(), layout, nullptr);
+        vkDestroyDescriptorSetLayout(device.device(), setLayout, nullptr);
+        allocator.destroyBuffer(out);
+        fs::remove_all(tmp, ec);
+    }
+    std::cout << "PASSED" << std::endl;
 
     // Clean up
     allocator.destroyImage(color);

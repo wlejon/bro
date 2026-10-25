@@ -55,6 +55,10 @@ struct CloudStats {
     bool failed = false;     // its module did not compile (logged)
     bool covered = false;    // its cover is baked for this generation
     uint64_t generation = 0; // the generation the cover is baked for
+    // The cache's bakes still to come for this view: levels to bake again
+    // and slices of rows not yet made since the last whole change (0 when
+    // it has converged; scene settle state).
+    int cachePending = 0;
 };
 
 }  // namespace bro::scene

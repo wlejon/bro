@@ -1,4 +1,5 @@
 #include "scene/vulkan/frame/scene_fullscreen.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
@@ -64,7 +65,7 @@ void draw(SceneVkDevice& device, VkCommandBuffer cmd, VkImageView target, uint32
     const VkRect2D scissor{{0, 0}, {width, height}};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     if (set) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
     if (push && pushBytes) vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushBytes, push);
     vkCmdDraw(cmd, 3, 1, 0, 0);

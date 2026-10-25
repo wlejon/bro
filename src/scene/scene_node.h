@@ -167,6 +167,13 @@ public:
     /// advance, particle integration, etc.). Default: no-op.
     virtual void onTick(float /*dtSec*/) {}
 
+    /// The settle state (SceneRenderer::pendingWork): what this node still
+    /// has to stream or converge for the current view, one reason a kind of
+    /// work appended to `out` ("land: 12 regions pending"); nothing once
+    /// settled. A node with work that comes in over frames reports it here,
+    /// so a still waits for it with no app polling it.
+    virtual void pendingWork(std::vector<std::string>& /*out*/) const {}
+
     // --- Type tag for downcasting ---
     enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, InstancedMesh, GaussianSplat, Particles3D, Camera, Decal, ReflectionProbe };
     virtual Type type() const { return Type::Base; }

@@ -9,6 +9,8 @@
 #include "scene/nodes/land_node.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
+#include "scene/world/world_service.h"
 #include "render/vulkan_context.h"
 #include "util/log.h"
 
@@ -151,6 +153,64 @@ double SceneRenderer::takeGpuMs(bool wait) {
 }
 
 void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
+
+void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
+    for (const auto& [id, node] : graph_.nodes())
+        if (node) node->pendingWork(out);
+    const CullStats& s = cullStats_;
+    // (The world service and the shadow pages run under budgets that may
+    // leave work queued for good; their queues count only where what waits
+    // is seen: the world service's jobs by the largest error left, over a
+    // pixel.)
+    if (s.worldQueued && s.worldWorstError > 1.0f) {
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "world service: %d jobs queued, the worst %.1f px off", s.worldQueued,
+                      s.worldWorstError);
+        out.push_back(buf);
+    }
+    if (s.groundLayerMissing)
+        out.push_back("ground layers: " + std::to_string(s.groundLayerMissing) + " tiles missing");
+    if (clouds_.enabled && clouds_.sourceHash) {
+        if (!cloudStats_.compiled && !cloudStats_.failed) out.push_back("clouds: not yet compiled");
+        else if (cloudStats_.compiled && (!cloudStats_.covered || cloudStats_.generation != clouds_.generation))
+            out.push_back("clouds: cover not baked");
+        else if (cloudStats_.cachePending)
+            out.push_back("clouds: " + std::to_string(cloudStats_.cachePending) + " cache bakes to come");
+    }
+    // (A tenth of a stop: what the eye does not see change.)
+    if (hasMeshContent_ && exposure_.mode == ExposureSettings::Mode::Auto &&
+        std::fabs(s.exposureEv - s.meteredEv) > 0.1f) {
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "exposure: %.2f EV from its meter", s.exposureEv - s.meteredEv);
+        out.push_back(buf);
+    }
+}
+
+void SceneRenderer::settleAll(bool on) { WorldService::settleAll(on); }
+
+namespace {
+SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
+    SceneRenderer::ShaderSetSummary s;
+    s.dir = i.dir;
+    s.shaders = i.shaders;
+    s.differing = i.differing;
+    s.pipelines = i.pipelines;
+    s.twinned = i.twinned;
+    s.failed = i.failed;
+    return s;
+}
+} // namespace
+
+bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error) {
+    vk::ShaderSetInfo info;
+    if (!vk::loadShaderSetB(dir, &info, error)) return false;
+    out = summaryOf(info);
+    return true;
+}
+
+bool SceneRenderer::useShaderSet(int set, bool rebake) { return vk::useShaderSet(set, rebake); }
+int SceneRenderer::shaderSet() { return vk::activeShaderSet(); }
+SceneRenderer::ShaderSetSummary SceneRenderer::shaderSetSummary() { return summaryOf(vk::shaderSetInfo()); }
 
 bool SceneRenderer::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
                               std::vector<std::pair<std::string, double>>& compute, bool& computed) {

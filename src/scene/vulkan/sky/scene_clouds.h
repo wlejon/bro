@@ -224,6 +224,8 @@ private:
     VkImageView bakeGrid_ = VK_NULL_HANDLE;
     uint64_t bakedGeneration_ = 0;
     uint64_t bakedHash_ = 0;
+    uint64_t bakedEpoch_ = 0;    // the shader sets' bake epoch it was baked in
+    int sliceRun_ = 0;           // the cache's slices made since its last whole change
 };
 
 }  // namespace bro::scene::vk

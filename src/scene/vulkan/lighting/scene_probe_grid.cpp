@@ -1,4 +1,5 @@
 #include "scene/vulkan/lighting/scene_probe_grid.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
@@ -177,7 +178,7 @@ void SceneProbeGrid::cleanup(SceneGpu& gpu) {
     a.destroyBuffer(sums_);
     a.destroyBuffer(traces_);
     for (VkPipeline& p : pipelines_) {
-        if (p) gpu.device.defer([dev, pipeline = p] { vkDestroyPipeline(dev, pipeline, nullptr); });
+        if (p) gpu.device.defer([dev, pipeline = p] { destroyScenePipeline(dev, pipeline, nullptr); });
         p = VK_NULL_HANDLE;
     }
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
@@ -488,7 +489,7 @@ void SceneProbeGrid::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Stage stag
     const uint32_t job[4] = {static_cast<uint32_t>(b.cascade), in.probes,
                              static_cast<uint32_t>(b.x0) | static_cast<uint32_t>(b.z0) << 16,
                              static_cast<uint32_t>(b.x1) | static_cast<uint32_t>(b.z1) << 16};
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[stage]);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[stage]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(job), job);
     // A world stage's invocations: its box's texels or voxels, 8 x 8 a group.

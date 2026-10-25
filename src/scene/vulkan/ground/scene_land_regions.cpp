@@ -1,4 +1,5 @@
 #include "scene/vulkan/ground/scene_land_regions.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
@@ -67,7 +68,7 @@ void SceneLandRegions::cleanup(SceneGpu& gpu) {
     for (auto& [id, land] : lands_) release(gpu, *land);
     lands_.clear();
     for (VkPipeline p : pipelines_)
-        if (p) vkDestroyPipeline(device_, p, nullptr);
+        if (p) destroyScenePipeline(device_, p, nullptr);
     pipelines_.clear();
     for (auto& s : sets_) s->destroy(device_);
     sets_.clear();
@@ -428,7 +429,7 @@ void SceneLandRegions::record(SceneFrame& frame, LandNode& node, Land& land, VkI
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, land.pipeline);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, land.pipeline);
     }
     // One band of a region's cells' rows (-1: all of them).
     const auto dispatch = [&](size_t m, uint32_t mode, int k, uint32_t pass, uint32_t iteration, int band) {

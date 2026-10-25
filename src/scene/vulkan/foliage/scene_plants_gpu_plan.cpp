@@ -10,6 +10,8 @@
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/shaders/world/world_cells_layout.h"
 #include "util/log.h"
 
@@ -41,21 +43,7 @@ constexpr BuiltinSceneShader kStageShaders[] = {BuiltinSceneShader::PlantsPlanCo
 constexpr const char* kStageNames[] = {"plants plan count", "plants plan layout", "plants plan place"};
 
 VkPipeline computePipeline(SceneVkDevice& device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
-    VkComputePipelineCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    ci.stage.module = module;
-    ci.stage.pName = "main";
-    ci.layout = layout;
-    ci.flags = render::pipelineStatsFlags();
-    VkPipeline p = VK_NULL_HANDLE;
-    if (vkCreateComputePipelines(device.device(), device.context().pipelineCache(), 1, &ci, nullptr, &p) !=
-        VK_SUCCESS)
-        return VK_NULL_HANDLE;
-    render::setPipelineStatsLabel(name);
-    render::logPipelineStats(device.device(), p);
-    return p;
+    return createComputePipeline(device.device(), module, layout, name);
 }
 
 void putPlanes(uint32_t* p, const bromath::Frustum& f) {
@@ -196,13 +184,13 @@ void GpuPlanner::cleanup(SceneGpu& gpu) {
     queued_.clear();
     cellsPass_.cleanup(gpu);
     for (int s = 0; s < kStages; ++s) {
-        if (pipelines_[s]) vkDestroyPipeline(device_, pipelines_[s], nullptr);
+        if (pipelines_[s]) destroyScenePipeline(device_, pipelines_[s], nullptr);
         SceneVkShaderModule::destroy(device_, modules_[s]);
         pipelines_[s] = VK_NULL_HANDLE;
         modules_[s] = VK_NULL_HANDLE;
     }
     for (VkPipeline p : posePipelines_)
-        if (p) vkDestroyPipeline(device_, p, nullptr);
+        if (p) destroyScenePipeline(device_, p, nullptr);
     posePipelines_.clear();
     if (poseLayout_) vkDestroyPipelineLayout(device_, poseLayout_, nullptr);
     if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
@@ -420,7 +408,7 @@ void GpuPlanner::record(SceneFrame& frame) {
     mark("plants:cells");
     // Count, lay out, place.
     const auto bind = [&](Stage s, const Node* n) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &n->planSet_, 0, nullptr);
     };
     for (Node* n : queued_) {
@@ -441,7 +429,7 @@ void GpuPlanner::record(SceneFrame& frame) {
     mark("plants:plan");
     // The leaf poses, a workgroup a leaf chunk the plan made.
     for (Node* n : queued_) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, n->pose_);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, n->pose_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 0, 1, &frame.cameraSet, 0, nullptr);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, poseLayout_, 3, 1, &n->drawSet, 0, nullptr);
         vkCmdDispatchIndirect(cmd, n->args.buffer, VkDeviceSize{PP_A_POSE} * 4);

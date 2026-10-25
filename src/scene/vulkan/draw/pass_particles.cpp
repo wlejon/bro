@@ -1,4 +1,5 @@
 #include "scene/vulkan/draw/pass_particles.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/particles3d_node.h"
 #include "scene/scene_graph.h"
@@ -162,7 +163,7 @@ void PassParticles::record(SceneFrame& frame) {
         writer.updateSet(device_->device(), set);
 
         const VkDescriptorSet sets[2] = {frame.cameraSet, set};
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
         vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                            &push);

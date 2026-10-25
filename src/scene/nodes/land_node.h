@@ -265,6 +265,10 @@ public:
     void setStats(const Stats& s) { stats_ = s; }
     const Stats& stats() const { return stats_; }
 
+    /// The settle state: its processes not yet run, regional grids wanted
+    /// about the eye and not in, tiles the view needs and has not made.
+    void pendingWork(std::vector<std::string>& out) const override;
+
 private:
     void buildRings();
     int wantedRings() const;

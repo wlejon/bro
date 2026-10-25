@@ -1,4 +1,5 @@
 #include "scene/vulkan/draw/pass_billboard.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/html_node.h"
 #include "scene/nodes/light_node.h"
@@ -247,7 +248,7 @@ void PassBillboard::record(SceneFrame& frame) {
     if (!pipeline) return;
 
     VkCommandBuffer cmd = frame.cmd;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
     auto draw = [&](const Push& push, VkDescriptorSet material) {
         VkDescriptorSet set = material ? material : frame.gpu.defaults.defaultMaterialSet;

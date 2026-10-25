@@ -67,6 +67,8 @@ void WorldService::beginFrame() {
     if (settle_ > 0) {
         budget = std::max(budget, config_.settleMs);
         --settle_;
+    } else if (s_settlingAll.load(std::memory_order_relaxed)) {
+        budget = std::max(budget, config_.settleMs);
     }
     budget_ = budget;
     stats_.budgetMs = budget;

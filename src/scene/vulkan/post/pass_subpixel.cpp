@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/pass_subpixel.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -73,7 +74,7 @@ void PassSubpixel::record(SceneFrame& frame) {
     // (column-major), which no projection makes depend on x or y.
     const float* ip = frame.view.invProj.data;
     const float push[4] = {ip[10], ip[14], ip[11], ip[15]};
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(frame.cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(frame.cmd, 3, 1, 0, 0);

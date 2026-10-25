@@ -119,6 +119,7 @@
 // a frame drew the pages granted it last frame and spent its budget again.)
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -220,6 +221,10 @@ public:
         quiet_ = 0;
     }
     bool settling() const { return settle_ > 0; }
+    /// Every service spends at least settleMs a frame while on, as a cut
+    /// that settles does: a headless wait for the scene to settle
+    /// (perf.settle) runs frames for their results, not to a frame time.
+    static void settleAll(bool on) { s_settlingAll.store(on, std::memory_order_relaxed); }
     /// A catch-up kind left work worse than catchUpError queued last frame,
     /// so this frame's budget is spent under the catch-up ceiling.
     bool catchingUp() const { return behind_; }
@@ -235,6 +240,7 @@ public:
     const WorldServiceStats& stats() const { return stats_; }
 
 private:
+    static inline std::atomic<bool> s_settlingAll{false};
     /// The frame's GPU ms the budget fills to: the target, or the catch-up
     /// ceiling while behind.
     float ceiling() const {

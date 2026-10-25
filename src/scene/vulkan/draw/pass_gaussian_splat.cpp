@@ -1,4 +1,5 @@
 #include "scene/vulkan/draw/pass_gaussian_splat.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/gaussian_splat_node.h"
 #include "scene/scene_graph.h"
@@ -165,7 +166,7 @@ void PassGaussianSplat::drawNode(SceneFrame& frame, VkPipeline pipeline, Gaussia
     writer.updateSet(device_->device(), set);
 
     VkCommandBuffer cmd = frame.cmd;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
     const VkBuffer buffers[2] = {quad_.buffer, inst.buffer.buffer};
     const VkDeviceSize offsets[2] = {0, 0};

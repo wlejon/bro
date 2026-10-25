@@ -1,4 +1,5 @@
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -110,7 +111,7 @@ void SceneCasterDrawer::cleanup(SceneGpu& gpu) {
     for (auto& [key, p] : custom_) pipelines.push_back(p);
     gpu.device.defer([dev, pipelines] {
         for (VkPipeline p : pipelines) {
-            if (p != VK_NULL_HANDLE) vkDestroyPipeline(dev, p, nullptr);
+            if (p != VK_NULL_HANDLE) destroyScenePipeline(dev, p, nullptr);
         }
     });
     custom_.clear();
@@ -236,7 +237,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     if (!pipeline) pipeline = builtinPipeline(draw.kind, twoSided);
     if (!pipeline) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     if (draw.kind != MeshKind::Instanced || customBound)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &frame.cameraSet, 0, nullptr);
     if (cutout)

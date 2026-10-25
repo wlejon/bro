@@ -8,6 +8,7 @@
 // each filled whole by the fill's GROUND_LAYER_CHART build.
 
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/nodes/grass_node.h"
 #include "scene/nodes/land_node.h"
@@ -413,7 +414,7 @@ uint32_t SceneMeshDrawer::recordTurf(SceneFrame& frame, std::span<const WorldJob
                     push.model[3] = static_cast<float>(config.border);
                     push.model[4] = static_cast<float>(face);
                     push.model[5] = near ? 1.0f : 0.0f;
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &cameraSet, 0,
                                             nullptr);
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &turf.customSet, 0,

@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/pass_ssao.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -129,8 +130,8 @@ void PassSSAO::cleanup(SceneGpu& gpu) {
     gpu.allocator.destroyImage(noise_);
     gpu.device.defer([dev, s = clampSampler_, p0 = ssaoPipeline_, p1 = blurPipeline_] {
         if (s) vkDestroySampler(dev, s, nullptr);
-        if (p0) vkDestroyPipeline(dev, p0, nullptr);
-        if (p1) vkDestroyPipeline(dev, p1, nullptr);
+        if (p0) destroyScenePipeline(dev, p0, nullptr);
+        if (p1) destroyScenePipeline(dev, p1, nullptr);
     });
     clampSampler_ = VK_NULL_HANDLE;
     ssaoPipeline_ = blurPipeline_ = VK_NULL_HANDLE;
@@ -260,7 +261,7 @@ void PassAoApply::record(SceneFrame& frame) {
     writer.updateSet(device_->device(), set);
 
     const float push[4] = {frame.renderer.ssaoIntensity(), 0.0f, 0.0f, 0.0f};
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(frame.cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(frame.cmd, 3, 1, 0, 0);

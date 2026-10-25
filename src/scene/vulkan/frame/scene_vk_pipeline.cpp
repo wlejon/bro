@@ -1,6 +1,7 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "render/vulkan_pipeline_cache.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -21,6 +22,7 @@ VkShaderModule SceneVkShaderModule::create(VkDevice device, const uint32_t* code
         LOG_ERROR("SceneVkShaderModule: Failed to create shader module (%zu bytes)", sizeBytes);
         return VK_NULL_HANDLE;
     }
+    shader_sets::noteModule(module, code, sizeBytes);
     return module;
 }
 
@@ -30,6 +32,7 @@ VkShaderModule SceneVkShaderModule::create(VkDevice device, const std::vector<ui
 
 void SceneVkShaderModule::destroy(VkDevice device, VkShaderModule module) {
     if (device != VK_NULL_HANDLE && module != VK_NULL_HANDLE) {
+        shader_sets::forgetModule(module);
         vkDestroyShaderModule(device, module, nullptr);
     }
 }
@@ -286,6 +289,7 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
         return VK_NULL_HANDLE;
     }
     render::logPipelineStats(device, pipeline);
+    shader_sets::noteGraphicsPipeline(device, layout, *this, pipeline);
 
     return pipeline;
 }
@@ -316,6 +320,7 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
     } else {
         render::setPipelineStatsLabel(name);
         render::logPipelineStats(device, pipeline);
+        shader_sets::noteComputePipeline(device, layout, module, name, pipeline);
     }
     return pipeline;
 }

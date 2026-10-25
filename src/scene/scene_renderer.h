@@ -115,6 +115,33 @@ public:
     /// Every scene renderer's renders from now on time their passes
     /// (perf.gpuPasses(); nothing is stamped before the first call).
     static void timeGpuPasses();
+
+    /// The settle state: what the scene still has to stream or converge for
+    /// the current view, one reason a kind of work (empty once settled).
+    /// Each node reports its own (SceneNode::pendingWork: the land's regions
+    /// and tiles, plant placement, ...), and the renderer its bakes (the
+    /// clouds' cover and cache), the world service's queue (where what it
+    /// left is over a pixel off), the turf's layers and the exposure's
+    /// distance from its meter, as of the newest frame rendered.
+    void pendingWork(std::vector<std::string>& out) const;
+    /// While on, every scene's world service spends at least its settle
+    /// budget a frame (WorldService::settleAll): perf.settle's frames.
+    static void settleAll(bool on);
+
+    /// Shader set B (vulkan/frame/scene_shader_sets.h): the scene's shaders
+    /// from another source tree, twinned beside set A's, for an A/B in one
+    /// process (perf.loadShaderSet / perf.useShaderSet / perf.compareShaders).
+    struct ShaderSetSummary {
+        std::string dir;
+        int shaders = 0, differing = 0, pipelines = 0, twinned = 0;
+        std::vector<std::string> failed;
+    };
+    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error);
+    /// 0 (A) or 1 (B, once loaded); false when it cannot be. `rebake`: the
+    /// bakes kept across frames are made again by it (for a still).
+    static bool useShaderSet(int set, bool rebake = false);
+    static int shaderSet();
+    static ShaderSetSummary shaderSetSummary();
     /// The last timed render's GPU milliseconds pass by pass, added into
     /// `passes` (by name), and its async compute stream's into `compute`
     /// (`computed` set when it had one). False when no render with its

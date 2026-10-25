@@ -1,4 +1,5 @@
 #include "scene/vulkan/lighting/scene_atmosphere.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
@@ -130,7 +131,7 @@ void SceneAtmosphere::cleanup(SceneGpu& gpu) {
         for (SceneVkImage* img : {&s.skyView, &s.inscatter, &s.transmittance}) a.destroyImage(*img);
     slots_.clear();
     for (VkPipeline& p : pipelines_) {
-        if (p) gpu.device.defer([dev, pipeline = p] { vkDestroyPipeline(dev, pipeline, nullptr); });
+        if (p) gpu.device.defer([dev, pipeline = p] { destroyScenePipeline(dev, pipeline, nullptr); });
         p = VK_NULL_HANDLE;
     }
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
@@ -392,7 +393,7 @@ void SceneAtmosphere::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Job job, 
             return;
     }
     w.updateSet(device.device(), set);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[job]);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[job]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdDispatch(cmd, gx, gy, 1);
 }

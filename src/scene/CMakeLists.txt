@@ -194,6 +194,7 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_vk_device.cpp
     vulkan/frame/scene_vk_allocator.cpp
     vulkan/frame/scene_vk_pipeline.cpp
+    vulkan/frame/scene_shader_sets.cpp
     vulkan/frame/scene_vk_descriptors.cpp
     vulkan/frame/scene_vk_shader_compiler.cpp
     vulkan/frame/scene_module_shaders.cpp

@@ -1,4 +1,5 @@
 #include "scene/vulkan/lighting/scene_environment.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -136,7 +137,7 @@ void SceneEnvironment::cleanup(SceneVkDevice& device, SceneVkAllocator& allocato
     allocator.destroyImage(brdfLut_);
     skyPipelines_.destroy(device);
     for (VkPipeline* p : {&convertPipeline_, &irradiancePipeline_, &prefilterPipeline_, &brdfPipeline_}) {
-        if (*p) vkDestroyPipeline(dev_, *p, nullptr);
+        if (*p) destroyScenePipeline(dev_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
     for (VkShaderModule* m : {&postVs_, &convertFs_, &irradianceFs_, &prefilterFs_, &brdfFs_, &skyVs_, &atmosphereFs_,
@@ -412,14 +413,14 @@ void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetF
         background = pipeline(kSkybox, skyboxFs_);
     }
     if (background) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, background);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, background);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
     const StarfieldParams& stars = renderer.starfield();
     if (!stars.enabled) return;
     if (VkPipeline p = pipeline(kSkyStars, starfieldFs_)) {
         const float push[4] = {stars.intensity, stars.density, stars.rotation, 0.0f};
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
         vkCmdPushConstants(cmd, skyLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }

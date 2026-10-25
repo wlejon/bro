@@ -5,6 +5,8 @@
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/shaders/world/world_cells_layout.h"
 #include "scene/vulkan/shaders/world/world_horizon_layout.h"
 #include "util/log.h"
@@ -56,22 +58,11 @@ bool WorldCellsPass::setup(SceneGpu& gpu) {
     for (int s = 0; s < kSteps; ++s) {
         modules_[s] = SceneVkShaderCompiler::createBuiltinModule(device_, shaders[s]);
         if (!modules_[s]) return false;
-        VkComputePipelineCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = modules_[s];
-        ci.stage.pName = "main";
-        ci.layout = layout_;
-        ci.flags = render::pipelineStatsFlags();
-        if (vkCreateComputePipelines(device_, gpu.device.context().pipelineCache(), 1, &ci, nullptr,
-                                     &pipelines_[s]) != VK_SUCCESS) {
-            pipelines_[s] = VK_NULL_HANDLE;
+        pipelines_[s] = createComputePipeline(device_, modules_[s], layout_, kStepNames[s]);
+        if (!pipelines_[s]) {
             LOG_ERROR("world cells: failed creating the %s step", kStepNames[s]);
             return false;
         }
-        render::setPipelineStatsLabel(kStepNames[s]);
-        render::logPipelineStats(device_, pipelines_[s]);
     }
     ready_ = true;
     return true;
@@ -80,7 +71,7 @@ bool WorldCellsPass::setup(SceneGpu& gpu) {
 void WorldCellsPass::cleanup(SceneGpu& gpu) {
     if (noHorizon_.isValid()) gpu.allocator.destroyBuffer(noHorizon_);
     for (int s = 0; s < kSteps; ++s) {
-        if (pipelines_[s]) vkDestroyPipeline(device_, pipelines_[s], nullptr);
+        if (pipelines_[s]) destroyScenePipeline(device_, pipelines_[s], nullptr);
         SceneVkShaderModule::destroy(device_, modules_[s]);
         pipelines_[s] = VK_NULL_HANDLE;
         modules_[s] = VK_NULL_HANDLE;
@@ -208,7 +199,7 @@ void WorldCellsPass::record(VkCommandBuffer cmd, const std::vector<Target*>& tar
     if (targets.empty()) return;
     for (int s = 0; s < kSteps; ++s) {
         if (s > 0) computeBarrier(cmd);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
+        bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[s]);
         for (const Target* t : targets) {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &t->set, 0, nullptr);
             // (The leaf step: a workgroup a top in view, as the top step counted.)

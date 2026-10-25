@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/scene_exposure.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
@@ -81,7 +82,7 @@ void SceneExposure::cleanup(SceneGpu& gpu) {
     for (Readback& r : readbacks_) gpu.allocator.destroyBuffer(r.buffer);
     gpu.allocator.destroyBuffer(histogram_);
     gpu.allocator.destroyBuffer(state_);
-    if (pipeline_) gpu.device.defer([dev, pipeline = pipeline_] { vkDestroyPipeline(dev, pipeline, nullptr); });
+    if (pipeline_) gpu.device.defer([dev, pipeline = pipeline_] { destroyScenePipeline(dev, pipeline, nullptr); });
     pipeline_ = VK_NULL_HANDLE;
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -187,7 +188,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         ap.brighter = exposure::kIncidentBrighter;
         ap.darker = exposure::kIncidentDarker;
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);
     // Auto: an invocation a pixel of every 4 x 4 block, 16 x 16 a workgroup.

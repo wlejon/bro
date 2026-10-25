@@ -1,4 +1,5 @@
 #include "scene/vulkan/post/pass_ssr.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
@@ -87,7 +88,7 @@ void PassSSR::record(SceneFrame& frame) {
     writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
     writer.updateSet(device_->device(), set);
 
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
     vkCmdDraw(frame.cmd, 3, 1, 0, 0);
 }

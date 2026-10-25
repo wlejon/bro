@@ -922,6 +922,7 @@ void installHeadlessFrame(engine::Engine& engine) {
             }
             return o.get();
         });
+    installHeadlessScenePerf(engine, setPerfFn);
     ev::registerGlobal("perf", perf.get());
 }
 

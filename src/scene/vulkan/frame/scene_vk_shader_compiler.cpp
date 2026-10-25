@@ -1,5 +1,6 @@
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "render/glsl_compiler.h"
 #include "util/log.h"
 
@@ -248,10 +249,15 @@ bool expandIncludes(const std::string& source, std::string& out, std::string* er
             for (const auto& o : overrides)
                 if (o.first == name) replaced = &o.second;
             const char* embedded = name.empty() || replaced ? nullptr : embeddedInclude(name);
+            // (A file only shader set B's tree has is read from there.)
+            const bool fromSetB = !embedded && !replaced && !name.empty() &&
+                                  !shader_sets::setBSourceDir().empty() &&
+                                  std::ifstream(shader_sets::setBSourceDir() + name).good();
             const std::string included = replaced ? *replaced
-                                       : embedded ? SceneVkShaderCompiler::shaderSource(name.c_str(), embedded)
-                                                  : std::string();
-            if ((!embedded && !replaced) || depth > 8 || !expandIncludes(included, out, errOut, overrides, depth + 1)) {
+                                       : embedded || fromSetB ? SceneVkShaderCompiler::shaderSource(name.c_str(), embedded)
+                                                              : std::string();
+            if ((!embedded && !replaced && !fromSetB) || depth > 8 ||
+                !expandIncludes(included, out, errOut, overrides, depth + 1)) {
                 if (errOut && errOut->empty()) *errOut = "unknown or recursive include: " + line;
                 return false;
             }
@@ -319,12 +325,35 @@ void writeSpirvCache(const std::string& path, const std::vector<uint32_t>& words
     if (!written || ec) fs::remove(tmp, ec);
 }
 
+// Above 0 inside compileBuiltinWith: its compileGlsl's blob is noted by it.
+thread_local int t_noteDepth = 0;
+
+std::vector<uint32_t> compileGlslImpl(const std::string& glslSource, VkShaderStageFlagBits stage,
+                                      std::string* errOut, const SceneVkShaderCompiler::IncludeOverrides& overrides);
+
 } // namespace
 
 std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glslSource,
                                                         VkShaderStageFlagBits stage,
                                                         std::string* errOut,
                                                         const IncludeOverrides& overrides) {
+    std::vector<uint32_t> spirv = compileGlslImpl(glslSource, stage, errOut, overrides);
+    if (!spirv.empty() && t_noteDepth == 0 && !shader_sets::compilingSetB()) {
+        auto r = std::make_shared<ShaderRecipe>();
+        r->kind = ShaderRecipe::Kind::Glsl;
+        r->glsl = glslSource;
+        r->stage = stage;
+        r->overrides = overrides;
+        r->words = spirv;
+        shader_sets::noteSpirv(std::move(r));
+    }
+    return spirv;
+}
+
+namespace {
+
+std::vector<uint32_t> compileGlslImpl(const std::string& glslSource, VkShaderStageFlagBits stage,
+                                      std::string* errOut, const SceneVkShaderCompiler::IncludeOverrides& overrides) {
     render::ShaderStage glStage;
     switch (stage) {
         case VK_SHADER_STAGE_VERTEX_BIT:   glStage = render::ShaderStage::Vertex; break;
@@ -357,16 +386,41 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glsl
     return spirv;
 }
 
+std::vector<uint32_t> compileBuiltinWithImpl(BuiltinSceneShader shader,
+                                             const SceneVkShaderCompiler::IncludeOverrides& overrides,
+                                             std::string* errOut);
+
+} // namespace
+
 std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinWith(BuiltinSceneShader shader,
                                                                const IncludeOverrides& overrides,
                                                                std::string* errOut) {
+    ++t_noteDepth;
+    std::vector<uint32_t> spirv = compileBuiltinWithImpl(shader, overrides, errOut);
+    --t_noteDepth;
+    if (!spirv.empty() && t_noteDepth == 0 && !shader_sets::compilingSetB()) {
+        auto r = std::make_shared<ShaderRecipe>();
+        r->kind = ShaderRecipe::Kind::BuiltinWith;
+        r->builtin = shader;
+        r->overrides = overrides;
+        r->words = spirv;
+        shader_sets::noteSpirv(std::move(r));
+    }
+    return spirv;
+}
+
+namespace {
+
+std::vector<uint32_t> compileBuiltinWithImpl(BuiltinSceneShader shader,
+                                             const SceneVkShaderCompiler::IncludeOverrides& overrides,
+                                             std::string* errOut) {
     const BuiltinInfo* info = infoOf(shader);
     const char* embedded = info ? embeddedInclude(info->source) : nullptr;
     if (!embedded) {
-        if (errOut) *errOut = std::string("no embedded source for ") + builtinName(shader);
+        if (errOut) *errOut = std::string("no embedded source for ") + SceneVkShaderCompiler::builtinName(shader);
         return {};
     }
-    std::string text = shaderSource(info->source, embedded);
+    std::string text = SceneVkShaderCompiler::shaderSource(info->source, embedded);
     std::string defines;
     std::istringstream words(info->defines);
     for (std::string d; words >> d;) defines += "#define " + d + " 1\n";
@@ -380,8 +434,10 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinWith(BuiltinSceneShad
     const VkShaderStageFlagBits stage = std::strcmp(info->stage, "vert") == 0   ? VK_SHADER_STAGE_VERTEX_BIT
                                         : std::strcmp(info->stage, "frag") == 0 ? VK_SHADER_STAGE_FRAGMENT_BIT
                                                                                 : VK_SHADER_STAGE_COMPUTE_BIT;
-    return compileGlsl(text, stage, errOut, overrides);
+    return SceneVkShaderCompiler::compileGlsl(text, stage, errOut, overrides);
 }
+
+} // namespace
 
 const std::string& SceneVkShaderCompiler::shaderSourceDir() {
     static const std::string s_dir = resolveSourceDir();
@@ -393,7 +449,8 @@ const char* SceneVkShaderCompiler::buildShaderSourceDir() {
 }
 
 std::string SceneVkShaderCompiler::shaderSource(const char* fileName, const char* embedded) {
-    const std::string& dir = shaderSourceDir();
+    // (Shader set B's compiles read its tree.)
+    const std::string& dir = shader_sets::compilingSetB() ? shader_sets::setBSourceDir() : shaderSourceDir();
     if (!dir.empty()) {
         std::ifstream in(dir + fileName, std::ios::binary);
         if (in) {
@@ -444,12 +501,37 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinFromSource(BuiltinSce
     const render::ShaderStage stage = std::strcmp(info->stage, "vert") == 0   ? render::ShaderStage::Vertex
                                       : std::strcmp(info->stage, "frag") == 0 ? render::ShaderStage::Fragment
                                                                               : render::ShaderStage::Compute;
+    // (Through the SPIR-V cache, by the expanded text as compileGlsl keys it.)
+    const VkShaderStageFlagBits vkStage = stage == render::ShaderStage::Vertex     ? VK_SHADER_STAGE_VERTEX_BIT
+                                          : stage == render::ShaderStage::Fragment ? VK_SHADER_STAGE_FRAGMENT_BIT
+                                                                                   : VK_SHADER_STAGE_COMPUTE_BIT;
+    const std::string cachePath = spirvCachePath(text, vkStage);
+    if (!cachePath.empty()) {
+        std::vector<uint32_t> cached = readSpirvCache(cachePath);
+        if (!cached.empty()) return cached;
+    }
     std::vector<uint32_t> spirv = render::compileGlslToSpirv(text, stage, &err);
     if (spirv.empty() && errOut) *errOut = std::move(err);
+    else if (!spirv.empty() && !cachePath.empty()) writeSpirvCache(cachePath, spirv);
     return spirv;
 }
 
 const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader shader) {
+    const std::vector<uint32_t>& words = getBuiltinSpirvUnnoted(shader);
+    // Noted once a shader, for shader set B (scene_shader_sets.h).
+    static std::array<std::atomic<bool>, kBuiltinCount> s_noted{};
+    const size_t i = static_cast<size_t>(shader);
+    if (i < kBuiltinCount && !words.empty() && !s_noted[i].exchange(true)) {
+        auto r = std::make_shared<ShaderRecipe>();
+        r->kind = ShaderRecipe::Kind::Builtin;
+        r->builtin = shader;
+        r->words = words;
+        shader_sets::noteSpirv(std::move(r));
+    }
+    return words;
+}
+
+const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirvUnnoted(BuiltinSceneShader shader) {
     const std::string& dir = shaderSourceDir();
     if (dir.empty() || !infoOf(shader)) return embeddedSpirv(shader);
 

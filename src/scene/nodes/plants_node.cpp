@@ -121,6 +121,11 @@ size_t PlantsNode::placementPending() const {
     return rulesRef_ && hold_ ? 1 : 0;
 }
 
+void PlantsNode::pendingWork(std::vector<std::string>& out) const {
+    if (const size_t n = placementPending())
+        out.push_back("plants: " + std::to_string(n) + " placements pending");
+}
+
 void PlantsNode::setPlace(const Place* place) {
     place_ = place;
     const double radius = place && !place->body().flat() ? place->body().radius : 0.0;

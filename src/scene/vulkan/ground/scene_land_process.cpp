@@ -1,4 +1,5 @@
 #include "scene/vulkan/ground/scene_land_process.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
@@ -63,7 +64,7 @@ void SceneLandProcesses::cleanup(SceneGpu& gpu) {
     for (auto& [id, run] : runs_) release(gpu, *run);
     runs_.clear();
     for (VkPipeline p : pipelines_)
-        if (p) vkDestroyPipeline(device_, p, nullptr);
+        if (p) destroyScenePipeline(device_, p, nullptr);
     pipelines_.clear();
     for (auto& s : sets_) s->destroy(device_);
     sets_.clear();
@@ -166,7 +167,7 @@ void SceneLandProcesses::record(SceneFrame& frame, const LandNode& node, Run& ru
         writer.writeBuffer(3, run.data.buffer, run.data.size, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         writer.updateSet(device_, sets[k]);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, run.pipeline);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, run.pipeline);
     const uint32_t groups = (static_cast<uint32_t>(grid.cells()) + LP_GROUP - 1) / LP_GROUP;
     const uint32_t haloRows = (run.haloCopies + kHaloGroupsX * LP_GROUP - 1) / (kHaloGroupsX * LP_GROUP);
     const uint32_t haloGroupsY = std::max<uint32_t>((haloRows + LP_GROUP - 1) / LP_GROUP, 1);
