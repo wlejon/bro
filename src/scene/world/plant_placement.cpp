@@ -359,9 +359,13 @@ bool PlantPlacement::owns(int32_t x, int32_t z) const {
 void PlantPlacement::want(const Eyes& e) {
     const double range = rules_->range;
     std::unordered_set<uint64_t, KeyHash> queued;
-    std::vector<CellKey> next;
-    for (const CellKey& k : queue_)
-        if (distance2(e, k) <= range * range && queued.insert(k.packed()).second) next.push_back(k);
+    // (Each with its distance, worked out once: sorting on distance2 itself
+    // was most of a jump's first look, 58 ms of a frame.)
+    std::vector<std::pair<double, CellKey>> next;
+    for (const CellKey& k : queue_) {
+        const double d2 = distance2(e, k);
+        if (d2 <= range * range && queued.insert(k.packed()).second) next.push_back({d2, k});
+    }
     // (A round body's chart has up to 1.5 of its metres to the ground's.)
     const int32_t reach = static_cast<int32_t>(std::ceil((round_ ? 1.5 : 1.0) * range / grid_.leaf)) + 1;
     for (int r = 0; r < 6; ++r) {
@@ -389,12 +393,13 @@ void PlantPlacement::want(const Eyes& e) {
                 const CellKey k{x, z, 0, static_cast<uint8_t>(r)};
                 const uint64_t p = k.packed();
                 if (resident_.count(p) || posted_.count(p) || queued.count(p)) continue;
-                next.push_back(k);
+                next.push_back({d2, k});
             }
     }
-    std::sort(next.begin(), next.end(),
-              [&](const CellKey& a, const CellKey& b) { return distance2(e, a) > distance2(e, b); });
-    queue_ = std::move(next);
+    std::sort(next.begin(), next.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    queue_.clear();
+    queue_.reserve(next.size());
+    for (const auto& [d2, k] : next) queue_.push_back(k);
     wanted_ = e;
 }
 

@@ -6,6 +6,7 @@
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
@@ -168,8 +169,15 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
 }
 
 void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
-    offerLand(frame, service);
-    offerLandSun(frame, service);
+    {
+        stalls::Part part("offer land");
+        offerLand(frame, service);
+    }
+    {
+        stalls::Part part("offer land sun");
+        offerLandSun(frame, service);
+    }
+    stalls::Part part("offer turf");
     offerTurf(frame, service);
 }
 
@@ -641,7 +649,11 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     const bromesh::MeshData& data = node.currentMesh();
     if (data.empty()) return false;
     const uint32_t slot = &data == &node.mesh() ? 0u : static_cast<uint32_t>(node.selectedLod()) + 1u;
-    const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), slot, node.geometryGeneration(), data);
+    const GpuMesh* gm;
+    {
+        stalls::Part part("mesh upload");
+        gm = frame.gpu.resources.mesh(node.id(), slot, node.geometryGeneration(), data);
+    }
     if (!gm) return false;
 
     // A skinned node whose skin is not set up yet (no bones, or weights that
@@ -669,8 +681,10 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     }
     // A big plain mesh (a ground, a mountain ring) in chunks, each pass
     // drawing those its view reaches. Not a custom shader's: its vertex
-    // chunk may move the points out of the chunks' bounds.
-    if (out.kind == MeshKind::Static && !out.lines && !node.customShader()) {
+    // chunk may move the points out of the chunks' bounds. Nor a land's:
+    // its ring blocks are its chunks (prepareLand).
+    if (out.kind == MeshKind::Static && !out.lines && !node.customShader() && !node.asLand()) {
+        stalls::Part part("mesh chunks");
         const GpuMesh* c = frame.gpu.resources.chunked(node.id(), slot, node.geometryGeneration(), data);
         if (c && !c->chunks.empty()) {
             out.chunks = &c->chunks;

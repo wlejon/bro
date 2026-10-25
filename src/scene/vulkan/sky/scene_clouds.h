@@ -101,6 +101,8 @@ public:
     void beginFrame(SceneFrame& frame);
     /// The deck is drawn this frame.
     bool active() const { return on_; }
+    /// The deck is drawn or its cover is being baked (a face a frame) this frame.
+    bool preparing() const { return on_ || bake_; }
     /// The lighting block's shadow (off: params[0] 0) and the lighting set's
     /// binding 24.
     void fill(CloudShadowGpu& out) const { out = shadowBlock_; }
@@ -241,11 +243,15 @@ private:
     CloudShadowGpu shadowBlock_{};
     bool on_ = false;
     bool shadowsOn_ = false;
-    bool bake_ = false;          // the cover is baked this frame
+    bool bake_ = false;          // a face of the cover is baked this frame (coverFace_)
+    bool coverDone_ = false;     // and it is the cover's last
+    bool coverHeld_ = false;     // the cover has been baked whole once (the deck is drawn meanwhile)
+    int coverFace_ = 0;          // the next face of the bake under way
     VkImageView bakeGrid_ = VK_NULL_HANDLE;
     uint64_t bakedGeneration_ = 0;
     uint64_t bakedHash_ = 0;
     uint64_t bakedEpoch_ = 0;    // the shader sets' bake epoch it was baked in
+    uint64_t bakingKey_ = 0;     // what the bake under way is of (0: none)
     int sliceRun_ = 0;           // the cache's slices made since its last whole change
 };
 

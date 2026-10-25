@@ -6,7 +6,7 @@
 
 namespace bro::scene::vk {
 
-bool PassCloudsPrepare::active(const SceneFrame& frame) const { return frame.gpu.clouds.active(); }
+bool PassCloudsPrepare::active(const SceneFrame& frame) const { return frame.gpu.clouds.preparing(); }
 
 void PassCloudsPrepare::record(SceneFrame& frame) { frame.gpu.clouds.recordPrepare(frame); }
 

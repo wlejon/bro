@@ -2,6 +2,7 @@
 
 #include "scene/nodes/land_node.h"
 #include "scene/scene_graph.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_timer.h"
 #include "util/log.h"
@@ -38,6 +39,7 @@ int SceneWorldService::addKind(WorldProducer* producer, const WorldJobKind& kind
     producers_.resize(static_cast<size_t>(k) + 1, nullptr);
     producers_[static_cast<size_t>(k)] = producer;
     markNames_[static_cast<size_t>(k)] = "world:" + kind.name;
+    offerNames_[static_cast<size_t>(k)] = "world offer:" + kind.name;
     return k;
 }
 
@@ -103,19 +105,29 @@ void SceneWorldService::runFrame(SceneFrame& frame) {
     eye_ = view.eye;
     forward_ = forward;
     haveView_ = true;
-    beginFrame(frame.timer, frame.renderer.frameTargetMs(), cut);
+    {
+        stalls::Part part("world:costs");
+        beginFrame(frame.timer, frame.renderer.frameTargetMs(), cut);
+    }
     // Each producer offers once, whatever kinds it registered.
     std::vector<WorldProducer*> offered;
-    for (WorldProducer* p : producers_) {
+    for (size_t k = 0; k < producers_.size(); ++k) {
+        WorldProducer* p = producers_[k];
         if (!p || std::find(offered.begin(), offered.end(), p) != offered.end()) continue;
         offered.push_back(p);
+        // (Named in a slow render's log by its first kind.)
+        stalls::Part part(offerNames_[k].c_str());
         p->offer(frame, policy_);
     }
-    policy_.schedule();
+    {
+        stalls::Part part("world:schedule");
+        policy_.schedule();
+    }
     WorldStreams streams{frame.cmd, [&frame] { return frame.computeStream(); }, frame.timer};
     for (int k = 0; k < policy_.kindCount(); ++k) {
         WorldProducer* p = producers_[static_cast<size_t>(k)];
         if (!p) continue;
+        stalls::Part part(markNames_[static_cast<size_t>(k)].c_str());
         run(streams, k, [&](WorldStream& s) { return p->record(frame, k, policy_.granted(k), s); });
     }
     const WorldServiceStats& s = policy_.stats();

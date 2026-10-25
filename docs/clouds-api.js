@@ -219,7 +219,9 @@ SceneGraph.prototype.setClouds = function (opts) {};
  *   compiled: the module's shaders and the deck's pipelines are built
  *   (compiled off the frame thread, so the deck is not drawn for the frames
  *   before; docs/code-cache.md "Shader warm-up"); failed: they did not compile
- *   (the console has the error); covered: the cover's cube is baked;
+ *   (the console has the error); covered: the cover's cube is baked (a face
+ *   a frame, the deck drawn once all six are; a later bake, for a new
+ *   generation, keeps the deck drawn with the faces not yet done as they were);
  *   generation: counts setClouds calls; volume: the volume about the eye.
  *
  * Debugging the volume (environment variables, read once at start):

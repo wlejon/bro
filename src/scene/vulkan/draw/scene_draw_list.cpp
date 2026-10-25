@@ -6,6 +6,7 @@
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_frame.h"
 
 #include <algorithm>
@@ -81,7 +82,10 @@ void buildDrawLists(SceneFrame& frame) {
             if (GrassNode* grass = static_cast<MeshNode*>(node)->asGrass()) {
                 // Grass: a draw per ring, each cut to the cells in view.
                 std::vector<MeshDraw> rings;
-                drawer.prepareGrass(frame, *grass, rings);
+                {
+                    stalls::Part part("grass draws");
+                    drawer.prepareGrass(frame, *grass, rings);
+                }
                 for (MeshDraw& draw : rings) {
                     placeDraw(frame, node, std::nullopt, draw);
                     const auto index = static_cast<uint32_t>(lists.meshes.size());
@@ -95,7 +99,12 @@ void buildDrawLists(SceneFrame& frame) {
             if (LandNode* land = static_cast<MeshNode*>(node)->asLand()) {
                 // Land: its rings about the eye, over the whole land (never culled).
                 MeshDraw draw;
-                if (!drawer.prepareLand(frame, *land, draw)) continue;
+                bool prepared;
+                {
+                    stalls::Part part("land draws");
+                    prepared = drawer.prepareLand(frame, *land, draw);
+                }
+                if (!prepared) continue;
                 placeDraw(frame, node, frame.view.toPlace(land->bounds()), draw);
                 const auto index = static_cast<uint32_t>(lists.meshes.size());
                 lists.meshes.push_back(draw);
@@ -107,7 +116,10 @@ void buildDrawLists(SceneFrame& frame) {
                 // Plants: their leaves and their wood, cut to the view, and
                 // their casters (never in the colour lists).
                 std::vector<MeshDraw> parts;
-                drawer.preparePlants(frame, *plants, parts);
+                {
+                    stalls::Part part("plants draws");
+                    drawer.preparePlants(frame, *plants, parts);
+                }
                 for (MeshDraw& draw : parts) {
                     placeDraw(frame, node, std::nullopt, draw);
                     const auto index = static_cast<uint32_t>(lists.meshes.size());

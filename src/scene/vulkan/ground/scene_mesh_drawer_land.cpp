@@ -12,6 +12,7 @@
 #include "scene/nodes/land_node.h"
 #include "scene/nodes/world_module.h"
 #include "scene/scene_graph.h"
+#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
@@ -326,7 +327,10 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     if (lt->tiles.stats().resident == 0 || lt->generation != node.generation()) return false;
 
     // The static path's material, turf and lighting, then the land's own.
-    if (!prepare(frame, node, out)) return false;
+    {
+        stalls::Part part("land draw material");
+        if (!prepare(frame, node, out)) return false;
+    }
     out.kind = MeshKind::Land;
     // Its vertices are the body's (its transform is ignored): as a caster
     // they are taken relative to the eye on the body.
@@ -346,6 +350,7 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     const bromath::Vec3 eye = frame.world.eye;
     const SceneView& view = frame.world;
     constexpr float kFirstRingPixels = 4.0f;
+    stalls::Part ringPart("land draw blocks");
     lt->firstRing = node.firstRing(eye, 0.5f * static_cast<float>(std::max(view.height, 1u)) *
                                             std::fabs(view.proj.at(1, 1)) / kFirstRingPixels);
     lt->chunks.clear();
@@ -411,11 +416,21 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // Its processes first (their read-back may move its generation):
         // no tiles until they have run and their heights are in.
         // The tile boxes the workers have made since the last frame.
-        land->takeItems();
-        lt.grid = landProcesses_.update(frame, *land, frame.cmd);
+        {
+            stalls::Part part("land take items");
+            land->takeItems();
+        }
+        {
+            stalls::Part part("land processes");
+            lt.grid = landProcesses_.update(frame, *land, frame.cmd);
+        }
         // Then its regions about the eye (a region in moves its items), their
         // steps a job each.
-        const SceneLandRegions::Offer ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
+        SceneLandRegions::Offer ro;
+    {
+        stalls::Part part("land regions prepare");
+        ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
+    }
         const int rk = regionKindOf(ro.step);
         int required = ro.required;
         if (ro.urgent && rk >= 0 && ro.required > 0) {
@@ -430,6 +445,7 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
 
         // A new module, extent or rings: every tile again, over its items;
         // a region in or out: the tiles over it.
+        stalls::Part setPart("land tiles' items");
         if (lt.generation != land->generation()) {
             lt.generation = land->generation();
             lt.itemsSerial = land->itemsSerial();
@@ -458,6 +474,7 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         sv.focalPixels = 0.5f * static_cast<float>(std::max(view.height, 1u)) * std::fabs(view.proj.at(1, 1));
         sv.orthoMetresPerPixel =
             2.0f / std::max(std::fabs(view.proj.at(1, 1)) * static_cast<float>(std::max(view.height, 1u)), 1e-6f);
+        stalls::Part updatePart("land tiles update");
         lt.tiles.update(sv, ++lt.frame);
         for (const SurfaceJob& j : lt.tiles.jobs())
             service.offer({j.key.packed(), id, landKind_, j.error, j.side, j.required});

@@ -1,4 +1,5 @@
 #include "scene/vulkan/sky/scene_clouds.h"
+#include "scene/vulkan/frame/scene_gpu_timer.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_util.h"
@@ -156,6 +157,10 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     chartValid_ = false;
     cacheBaked_ = false;
     cachePending_ = 0;
+    coverHeld_ = false;
+    bakingKey_ = 0;
+    coverFace_ = 0;
+    bakedGeneration_ = 0;
     for (SceneVkImage* i :
          {&cover_, &shadow_, &coverNone_, &shadowNone_, &noiseNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
           &distB_, &cacheHolds_, &globe_})
@@ -388,7 +393,11 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     }
 
     // The cover: baked again for a new generation or module, once the
-    // land it reads (when it reads one) is ready.
+    // land it reads (when it reads one) is ready, a face a frame (the six
+    // at once were 43 ms of one frame's GPU on a planet). Until the first is
+    // whole the deck is not drawn; a bake of a deck drawn before shows the
+    // faces done and the rest as they were, and its cache whole once it is.
+    coverDone_ = false;
     if (bakedGeneration_ != c.generation || bakedHash_ != currentKey_ || bakedEpoch_ != shaderSetBakeEpoch()) {
         bakeGrid_ = gridNone_.view;
         if (c.land) {
@@ -404,9 +413,16 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
                 if (land->round()) bakeGrid_ = grid;
             }
         }
+        const uint64_t key = mixBits(mixBits(currentKey_, c.generation), shaderSetBakeEpoch()) | 1u;
+        if (key != bakingKey_) {
+            bakingKey_ = key;
+            coverFace_ = 0;
+        }
         bake_ = true;
+        coverDone_ = coverFace_ == 5;
     }
-    stats.covered = true;
+    const bool held = !bake_ || coverDone_ || coverHeld_;
+    stats.covered = held;
     stats.generation = c.generation;
     frame.renderer.setCloudStats(stats);
     on_ = true;
@@ -476,6 +492,12 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     shadowBlock_.drift[3] = block_.forms[3];
     shadowBlock_.shell[0] = block_.shell[0];
     shadowBlock_.shell[1] = block_.shell[1];
+    if (!held) {
+        // (The block filled for the cover's face; nothing else of the deck.)
+        on_ = shadowsOn_ = false;
+        shadowBlock_ = CloudShadowGpu{};
+        return;
+    }
     placeCache(frame);
 
     // The volume about the eye: the eye in the body's frame as the march
@@ -527,7 +549,7 @@ void SceneClouds::placeCache(SceneFrame& frame) {
     // (A shader set switched to with a rebake asked bakes everything again:
     // scene_shader_sets.h.)
     const uint64_t key = mixBits(mixBits(currentKey_, c.generation), shaderSetBakeEpoch());
-    bool all = !chartValid_ || key != cacheKey_ || bake_;
+    bool all = !chartValid_ || key != cacheKey_ || coverDone_;
     // (A frame's jump in the wind's time: a deck that moved, not drifted.)
     all = all || std::fabs(block_.shell[3] - cacheTime_) > 0.25f;
     cacheTime_ = block_.shell[3];
@@ -704,7 +726,7 @@ VkDescriptorSet SceneClouds::writeSet(SceneFrame& frame, bool march, bool bake) 
 }
 
 void SceneClouds::recordPrepare(SceneFrame& frame) {
-    if (!on_ || !current_) return;
+    if (!preparing() || !current_) return;
     VkCommandBuffer cmd = frame.cmd;
     const AtmosphereGpu& atm = frame.lighting.atm;
     for (int k = 0; k < 3; ++k) block_.sun[k] = atm.sunDir[k];
@@ -720,15 +742,23 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->cover.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
+        const int32_t push[8] = {coverFace_, 0, 0, 0, 0, 0, 0, 0};
+        vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
         const uint32_t groups = (CL_COVER_SIDE + CL_COVER_GROUP - 1) / CL_COVER_GROUP;
-        vkCmdDispatch(cmd, groups, groups, 6);
+        vkCmdDispatch(cmd, groups, groups, 1);
         memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, kReaders,
                       VK_ACCESS_SHADER_READ_BIT);
-        bakedGeneration_ = frame.renderer.clouds().generation;
-        bakedHash_ = currentKey_;
-        bakedEpoch_ = shaderSetBakeEpoch();
-        bake_ = false;
+        if (frame.timer) frame.timer->mark(cmd, "clouds:cover");
+        if (++coverFace_ == 6) {
+            bakedGeneration_ = frame.renderer.clouds().generation;
+            bakedHash_ = currentKey_;
+            bakedEpoch_ = shaderSetBakeEpoch();
+            bakingKey_ = 0;
+            coverFace_ = 0;
+            coverHeld_ = true;
+        }
     }
+    if (!on_) return;
 
     recordCache(frame);
     recordGlobe(frame);

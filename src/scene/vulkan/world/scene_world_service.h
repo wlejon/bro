@@ -126,6 +126,7 @@ private:
     WorldService policy_;
     std::vector<WorldProducer*> producers_;   // by kind
     std::array<std::string, WorldService::kMaxKinds> markNames_;   // "world:<kind>", a timed pass's name
+    std::array<std::string, WorldService::kMaxKinds> offerNames_;  // "world offer:<kind>", a slow render's part
     uint64_t staleThrough_ = 0;   // renders up to this order were of a view before the last cut
     bool haveView_ = false;
     bromath::Vec3 eye_{0.0f, 0.0f, 0.0f}, forward_{0.0f, 0.0f, -1.0f};   // the last render's

@@ -308,7 +308,7 @@ void SurfaceLayers::buildGrid(const GridLayout& layout) {
 bool SurfaceLayers::updateGrid() {
     gridTouched_ = 0;
     const GridLayout layout = gridLayout();
-    const bool rebuild = gridDirty_ || !(layout == GridLayout{gridShift_, gridX0_, gridZ0_, gridN_}) ||
+    bool rebuild = gridDirty_ || !(layout == GridLayout{gridShift_, gridX0_, gridZ0_, gridN_}) ||
                          grids_.size() != static_cast<size_t>(roots());
     std::vector<SurfaceItem> next;
     if (itemsDirty_) {
@@ -325,20 +325,27 @@ bool SurfaceLayers::updateGrid() {
         next.clear();
         for (int r = 0; r < roots(); ++r) next.push_back({bounds_, 0, static_cast<uint8_t>(r)});
     }
+    // The items told apart by index: a changed one leaves the cells under
+    // its old box and joins those under its new one. When most changed (the
+    // land's first boxes in place of its charts), building the grid again
+    // is cheaper than relinking them, and their cells' sort.
+    const auto same = [](const SurfaceItem& a, const SurfaceItem& b) {
+        return a.root == b.root && a.generation == b.generation &&
+               std::memcmp(&a.bounds, &b.bounds, sizeof(a.bounds)) == 0;
+    };
+    const size_t common = std::min(gridItems_.size(), next.size());
+    if (!rebuild) {
+        size_t changed = std::max(gridItems_.size(), next.size()) - common;
+        for (size_t k = 0; k < common; ++k) changed += !same(gridItems_[k], next[k]);
+        if (changed * 4 > std::max(gridItems_.size(), next.size())) rebuild = true;
+    }
     if (rebuild) {
         gridItems_ = std::move(next);
         buildGrid(layout);
         return true;
     }
 
-    // The items told apart by index: a changed one leaves the cells under
-    // its old box and joins those under its new one.
-    const auto same = [](const SurfaceItem& a, const SurfaceItem& b) {
-        return a.root == b.root && a.generation == b.generation &&
-               std::memcmp(&a.bounds, &b.bounds, sizeof(a.bounds)) == 0;
-    };
     std::vector<uint64_t> dirty;
-    const size_t common = std::min(gridItems_.size(), next.size());
     for (size_t k = 0; k < common; ++k)
         if (!same(gridItems_[k], next[k])) {
             unlink(static_cast<uint32_t>(k), gridItems_[k], dirty);
