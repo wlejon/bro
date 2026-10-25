@@ -448,6 +448,7 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_isValid", BRO_NATIVE_FN(bro_scene_SceneGraph_isValid), "bool", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setBaseColorTextureFromScene", BRO_NATIVE_FN(bro_scene_SceneNode_setBaseColorTextureFromScene), "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_cullStatsJson", BRO_NATIVE_FN(bro_scene_SceneGraph_cullStatsJson), "str", {"__bro_native.scene.SceneGraph"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_pendingWorkJson", BRO_NATIVE_FN(bro_scene_SceneGraph_pendingWorkJson), "str", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstances", BRO_NATIVE_FN(bro_scene_SceneNode_setInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstancesFromTransforms", BRO_NATIVE_FN(bro_scene_SceneNode_setInstancesFromTransforms), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_instanceCount_get", BRO_NATIVE_FN(bro_scene_SceneNode_instanceCount_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&

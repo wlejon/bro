@@ -799,10 +799,30 @@ class SceneGraph {
   reanchorAt(b) {}
 
   /**
+   * What the scene still prepares for its view, as of its newest render: one
+   * line each (a land's processes not yet run, its regions and tiles still
+   * to make, its tile boxes being made on the workers, plants still placed,
+   * the clouds' bakes, auto exposure still adapting, ...). [] once what the
+   * view shows is ready. The heavy first-time work runs off the frame, so a
+   * page shows its own progress from this and holds back views (or warms
+   * them) until it empties; headless's perf.settle waits on the same list.
+   *
+   * @example
+   *   const status = document.querySelector('#status');
+   *   const show = () => { const p = scene.pendingWork(); status.textContent = p[0] ?? ''; };
+   *   scene.addEventListener('ready', () => { status.hidden = true; });
+   * @returns {string[]}
+   */
+  pendingWork() {}
+
+  /**
    * `'reanchor'`: the move a re-anchor made, `{rotation (9, row-major),
    * translation, tilts, turn(d), apply(p)}`, new = rotation * old +
    * translation.
-   * @param {'reanchor'} type
+   * `'ready'`: pendingWork() emptied (read each animation frame while a
+   * listener waits), `{type: 'ready', pending: []}`; fired again each time
+   * new work (a new view's) comes and goes.
+   * @param {'reanchor'|'ready'} type
    * @param {function(Object)} listener
    */
   addEventListener(type, listener) {}

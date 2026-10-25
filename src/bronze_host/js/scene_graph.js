@@ -327,7 +327,38 @@
             apply: (p) => { const r = turn(p); return [r[0] + t[0], r[1] + t[1], r[2] + t[2]]; },
         };
     };
+    // What the scene still prepares (its nodes' and renderer's settle state
+    // as of the newest render): [] once what the view shows is ready.
+    fn(SceneGraph.prototype, "pendingWork", function pendingWork() {
+        const s = __bro_native.scene.SceneGraph_pendingWorkJson(this);
+        return s ? JSON.parse(s) : [];
+    });
+    // The ready event: pendingWork() read each animation frame while a
+    // listener waits, fired each time it empties ({type, pending: []}).
+    const readyListeners = new WeakMap();
+    const watchReady = (graph, set) => {
+        let was = null;
+        const tick = () => {
+            if (!set.size) { readyListeners.delete(graph); return; }
+            const now = graph.pendingWork();
+            if (now.length === 0 && was !== 0)
+                for (const l of Array.from(set)) l({ type: 'ready', pending: now });
+            was = now.length;
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    };
     fn(SceneGraph.prototype, "addEventListener", function addEventListener(type, listener) {
+        if (type === 'ready' && typeof listener === 'function') {
+            let set = readyListeners.get(this);
+            if (!set) {
+                set = new Set();
+                readyListeners.set(this, set);
+                watchReady(this, set);
+            }
+            set.add(listener);
+            return;
+        }
         if (type !== 'reanchor' || typeof listener !== 'function') return;
         let set = reanchorListeners.get(this);
         if (!set) {
@@ -342,6 +373,11 @@
         set.add(listener);
     });
     fn(SceneGraph.prototype, "removeEventListener", function removeEventListener(type, listener) {
+        if (type === 'ready') {
+            const ready = readyListeners.get(this);
+            if (ready) ready.delete(listener);
+            return;
+        }
         if (type !== 'reanchor') return;
         const set = reanchorListeners.get(this);
         if (set) set.delete(listener);

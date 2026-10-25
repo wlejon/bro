@@ -280,6 +280,16 @@ int32_t bro_scene_SceneGraph_cullStats_culledNodes(void) {
     return tl_cullStatsSlot.culledNodes;
 }
 
+const char* bro_scene_SceneGraph_pendingWorkJson(void* self) {
+    static thread_local std::string tl_pendingJson;
+    auto* g = graphOf(self);
+    if (!g) return "[]";
+    std::vector<std::string> pending;
+    g->renderer().pendingWork(pending);
+    tl_pendingJson = nlohmann::json(pending).dump();
+    return tl_pendingJson.c_str();
+}
+
 const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     auto* g = graphOf(self);
     static thread_local std::string tl_cullJson;

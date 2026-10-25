@@ -1043,6 +1043,9 @@ void bro_scene_SceneNode_visibilityRange_get(void* self, bronze_native_buffer* o
 bool bro_scene_SceneGraph_isValid(void* self);
 void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceScene);
 const char* bro_scene_SceneGraph_cullStatsJson(void* self);
+// bro.scene.SceneGraph.prototype.pendingWork: what the scene still prepares
+// (SceneRenderer::pendingWork), a JSON array of strings, [] once ready.
+const char* bro_scene_SceneGraph_pendingWorkJson(void* self);
 void bro_scene_SceneNode_setInstances(void* self, const float* data, uint32_t count);
 void bro_scene_SceneNode_setInstancesFromTransforms(void* self, const float* data, uint32_t count);
 double bro_scene_SceneNode_instanceCount_get(void* self);
