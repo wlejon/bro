@@ -201,6 +201,9 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
 
 void SceneRenderer::settleAll(bool on) { WorldService::settleAll(on); }
 
+void SceneRenderer::setAsyncShaders(bool on) { vk::shader_warmup::forceAsync(on); }
+bool SceneRenderer::asyncShaders() { return vk::shader_warmup::async(); }
+
 namespace {
 SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
     SceneRenderer::ShaderSetSummary s;

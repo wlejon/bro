@@ -56,6 +56,9 @@ void begin(const std::string& recordPath);
 /// BRO_ASYNC_SHADERS=1 / 0 overrides either: a headless run measuring boot
 /// frames as a window has them sets 1.
 void setAsync(bool on);
+/// The same, the environment not consulted (perf.asyncShaders: a test
+/// settling one scene each way in one process).
+void forceAsync(bool on);
 bool async();
 
 struct Progress {

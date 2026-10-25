@@ -410,7 +410,13 @@ class SceneNode {
    * The land's height at world (x, z), metres; NaN off the land and until
    * it is ready (its processes read back). On a round
    * body (x, z) and the answer are the place frame's: the y of the ground
-   * under (x, z), the body's curve included.
+   * under (x, z), the body's curve included. With `processes.regions` the
+   * answer is the regions' where they are in, blended over the global
+   * grid's, so it moves as they come in about the eye: a thing placed on
+   * the ground before `landStats().groundReady` (a camera held some metres
+   * over it, a prop) is placed again once it is, or it floats or sinks by
+   * what the regions added; how much depends on when it was placed, which
+   * in a window, whose frames never wait for a compile, varies run to run.
    * @param {number} x
    * @param {number} z
    * @returns {number}

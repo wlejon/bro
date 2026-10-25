@@ -211,6 +211,14 @@ void installHeadlessScenePerf(engine::Engine& engine,
             j["waited"] = waited;
             return fromJson(j);
         });
+    // perf.asyncShaders([on]): whether frames skip what is still compiling
+    // (a window's policy) or wait for it (headless's); `on` sets it for the
+    // process from now on. Returns the policy in force.
+    setPerfFn("asyncShaders", 1,
+        [](Value, std::span<const Value> a) -> Value {
+            if (!a.empty() && !ev::isUndefined(a[0])) scene::SceneRenderer::setAsyncShaders(ev::toBool(a[0]));
+            return ev::fromBool(scene::SceneRenderer::asyncShaders());
+        });
     // perf.loadShaderSet(dir): set B from a shader tree.
     setPerfFn("loadShaderSet", 1,
         [](Value, std::span<const Value> a) -> Value {

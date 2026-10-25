@@ -133,6 +133,12 @@ public:
     /// While on, every scene's world service spends at least its settle
     /// budget a frame (WorldService::settleAll): perf.settle's frames.
     static void settleAll(bool on);
+    /// Whether frames skip what is not yet compiled or built (a window's
+    /// policy) or wait for it (headless's): vk::shader_warmup::async(), set
+    /// for this process from now on (perf.asyncShaders), the environment's
+    /// BRO_ASYNC_SHADERS not consulted.
+    static void setAsyncShaders(bool on);
+    static bool asyncShaders();
 
     /// Shader set B (vulkan/frame/scene_shader_sets.h): the scene's shaders
     /// from another source tree, twinned beside set A's, for an A/B in one

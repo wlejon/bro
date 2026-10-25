@@ -277,6 +277,8 @@ void setAsync(bool on) {
     s_async.store(on, std::memory_order_relaxed);
 }
 
+void forceAsync(bool on) { s_async.store(on, std::memory_order_relaxed); }
+
 bool async() { return s_async.load(std::memory_order_relaxed); }
 
 Progress progress() {
