@@ -12,6 +12,7 @@
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
 #include "util/log.h"
+#include "util/subresource_access.h"
 #include "video/audio_decoder.h"
 #include "video/media_backend.h"
 #include "video/video_pipeline.h"
@@ -76,6 +77,14 @@ bool ElVideo::load(const std::string& path) {
     unload();
     const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
     currentSrc_ = resolved;
+    // The page named the file: the host's access gate decides whether it may
+    // be read (util/subresource_access.h). A refusal is a load that failed.
+    if (const std::string refused = util::subresourceReadRefusal(resolved); !refused.empty()) {
+        errorCode_ = 4;  // MEDIA_ERR_SRC_NOT_SUPPORTED
+        errorMessage_ = "MEDIA_ELEMENT_ERROR: " + refused;
+        pendingError_ = true;
+        return false;
+    }
     auto* p = new bro::video::VideoPipeline();
     if (!p->open(resolved)) {
         delete p;

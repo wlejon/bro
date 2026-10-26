@@ -40,6 +40,13 @@
  * model and take no onReady / onError callbacks (only the inference calls
  * have async forms).
  *
+ * ── Permissions ──
+ * Every loader asks read access for its model path (a directory covers what
+ * is in it), and every image given as a filename for that file, before
+ * anything is opened; refused, the call throws an Error with code 'EACCES' and
+ * `path` (name 'PermissionRevoked' for a revoked grant). Nothing in bro.vision
+ * writes a file.
+ *
  * ── Inputs ──
  * Every model takes an image as either:
  *   - an ImageData-shaped `{ width, height, data }` where `data` is an RGBA

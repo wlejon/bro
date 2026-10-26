@@ -231,7 +231,8 @@ void* bro_scene_SceneGraph_createDecal(void* self, bool opts_texture_given, cons
     g->root()->addChild(node);
     if (opts_texture_given && opts_texture && opts_texture[0] != '\0') {
         broimage::Image img;
-        if (broimage::decode_file(bro::util::resolveAssetPath(opts_texture), img) && img.width > 0 && img.height > 0) {
+        if (broimage::decode_file(bro::bronze_host::readableAssetPath(opts_texture), img) && img.width > 0 &&
+            img.height > 0) {
             node->setAlbedoTexture(img.width, img.height, img.pixels.data());
         }
     }

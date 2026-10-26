@@ -2,6 +2,7 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_bro_namespaces.h"
+#include "bronze_host/host_access.h"
 #include "util/asset_path.h"
 
 #if BRO_WITH_VIDEO || BRO_WITH_AUDIO
@@ -39,6 +40,15 @@ static std::string resolveMediaPath(const std::string& src) {
     return util::resolveAssetPath(src);
 }
 
+// The file (or URL) the app named, resolved, after the host's access gate
+// allowed reading it (host_access.h): a refusal is thrown.
+static std::string readableMediaPath(const std::string& src) {
+    std::string path = resolveMediaPath(src);
+    if (hasScheme(path)) requireNetAccess(path);
+    else requirePathAccess(path, false);
+    return path;
+}
+
 #if BRO_WITH_VIDEO
 static int intOption(Value opts, const char* name, int fallback) {
     if (!ev::isObject(opts)) return fallback;
@@ -70,7 +80,7 @@ static video::Window windowOption(Value opts) {
 static Value js_media_peaks(Value, std::span<const Value> a) {
     if (a.empty()) return ev::throwTypeError("peaks(path, options)");
     std::string rawPath = ev::toUtf8(a[0]);
-    std::string path = resolveMediaPath(rawPath);
+    std::string path = readableMediaPath(rawPath);
 
     int buckets = a.size() >= 2 ? intOption(a[1], "buckets", 2048) : 2048;
     if (buckets < 1) buckets = 1;
@@ -96,7 +106,7 @@ static Value js_media_peaks(Value, std::span<const Value> a) {
 static Value js_media_thumbnails(Value, std::span<const Value> a) {
     if (a.empty()) return ev::throwTypeError("thumbnails(path, options)");
     std::string rawPath = ev::toUtf8(a[0]);
-    std::string path = resolveMediaPath(rawPath);
+    std::string path = readableMediaPath(rawPath);
 
     int count = a.size() >= 2 ? intOption(a[1], "count", 24) : 24;
     int height = a.size() >= 2 ? intOption(a[1], "height", 72) : 72;
@@ -213,7 +223,7 @@ static Value js_media_canDecode(Value, std::span<const Value> a) {
 // broaudio's tag reader (headers and tag blocks only, never the audio).
 static Value js_media_tags(Value, std::span<const Value> a) {
     if (a.empty()) return ev::throwTypeError("tags(path)");
-    const std::string path = resolveMediaPath(ev::toUtf8(a[0]));
+    const std::string path = readableMediaPath(ev::toUtf8(a[0]));
     broaudio::AudioTags t;
     if (!broaudio::readAudioTags(path.c_str(), t)) return ev::null();
 

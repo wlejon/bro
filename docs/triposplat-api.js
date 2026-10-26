@@ -32,6 +32,12 @@
  * image (bro.vision's BiRefNet matting is the natural upstream step — see
  * docs/vision-api.js).
  *
+ * Permissions: load() asks read access for each weights path, generate() for an
+ * image given by path, and exportPLY / exportSplat (both forms) write access for
+ * the file; refused, the call throws an Error with code 'EACCES' and `path`
+ * (name 'PermissionRevoked' for a revoked grant) and nothing is read or
+ * written.
+ *
  * With DINOv3 loaded, its features pass through an affine-free LayerNorm over
  * the channels (the reference's F.layer_norm) before conditioning the flow
  * model.

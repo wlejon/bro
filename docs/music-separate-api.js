@@ -123,7 +123,9 @@ class Separator {
 }
 
 /**
- * Load the HTDemucs htdemucs_ft separator from its folder.
+ * Load the HTDemucs htdemucs_ft separator from its folder. Asks read access for
+ * the folder first; refused, it throws (onReady form included) an Error with
+ * code 'EACCES' and `path` (name 'PermissionRevoked' for a revoked grant).
  * @param {string} modelDir - config.json + the four per-stem safetensors
  * @param {SeparatorLoadOptions} [opts]
  * @returns {Separator|{cancel: function(), wait: function()}} the separator, or an AsyncHandle with opts.onReady

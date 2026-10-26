@@ -10,6 +10,12 @@
  *
  * Availability: Gated by `BRO_WITH_CONF`. Check `bro.conf.available`.
  *
+ * Access: the store is the user's desktop settings, so `set` and `reset`
+ * change the user's desktop configuration and need `files` (docs/apps.md,
+ * Permissions); reading, watching and schemas need nothing. A refusal is an
+ * Error with `code: 'EACCES'`: `set`'s promise rejects with it, `reset` throws
+ * it, and nothing changes.
+ *
  * @example
  *   if (bro.conf.available) {
  *     // Register a schema with defaults and validation

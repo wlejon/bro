@@ -22,6 +22,7 @@
 #include "util/asset_path.h"
 #include "util/exe_dir.h"
 #include "util/model_dirs.h"
+#include "util/subresource_access.h"
 #include "util/user_dirs.h"
 
 #include <algorithm>
@@ -685,6 +686,13 @@ void Engine::initAppRealm() {
         // Relative to the importing sheet (its directory), else the document.
         std::string path = AppLoader::resolvePath(
             base.empty() ? document_->basePath() : base, url, &assetMounts_);
+        importedBase = std::filesystem::path(path).parent_path().string();
+        // The sheet named the file: the host's access gate decides whether it
+        // may be read (util/subresource_access.h).
+        if (const std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+            LOG_WARN("@import: %s", refused.c_str());
+            return std::string();
+        }
         std::string css = AppLoader::loadFile(path);
         if (css.empty()) {
             LOG_WARN("@import: failed to load '%s' (resolved to '%s')",
@@ -1184,6 +1192,12 @@ void Engine::loadCustomFonts() {
         // through @import too); a sheet with no base is the document's.
         std::string path = AppLoader::resolvePath(
             ff.baseUrl.empty() ? basePath : ff.baseUrl, ff.src, &assetMounts_);
+        // The sheet named the file: the host's access gate decides whether it
+        // may be read (util/subresource_access.h).
+        if (const std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+            LOG_WARN("@font-face '%s': %s", ff.family.c_str(), refused.c_str());
+            continue;
+        }
 
         // One copy of the bytes, shared by the UI, layout and raster
         // renderers. Mapped read-only where a mapping does not lock the file

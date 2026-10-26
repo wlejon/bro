@@ -82,6 +82,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_class.cpp
     host_vendor_globals.cpp
     host_anchor_download.cpp
+    host_access.cpp
     host_file_path.cpp
     host_event_spec.cpp
     host_navigator.cpp

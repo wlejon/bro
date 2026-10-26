@@ -127,7 +127,7 @@ bro.settings.set("appearance.colorScheme", "light");
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `models.dirs` | string | `""` | Directories holding model weights, a path list (`;` between entries on Windows, `:` elsewhere), searched by `bro.models.find` after `BRO_MODELS` and before the per-user models directory. See [models-api.js](models-api.js). |
+| `models.dirs` | string | `""` | Directories holding model weights, a path list (`;` between entries on Windows, `:` elsewhere), searched by `bro.models.find` after `BRO_MODELS` and before the per-user models directory. An app's model directories are readable to it without `files`, so setting this reads each directory named: outside the app's own folders that needs `files`, and a refusal throws an Error with `code: 'EACCES'` (docs/apps.md, Permissions). See [models-api.js](models-api.js). |
 | `models.sources` | string | `""` (= `wlejon/brovisionml-data wlejon/brosoundml-data`) | Where `bro.models.fetch` / `bro.models.available` look for a model folder, in order, separated by spaces or commas: a Hugging Face dataset `<owner>/<repo>`, or a full URL `<endpoint>/datasets/<owner>/<repo>` for a mirror or local server answering the same tree/resolve paths. Empty means the default. Installs go to the per-user models directory. See [models-api.js](models-api.js). |
 
 ## Action binding system

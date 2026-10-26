@@ -55,6 +55,13 @@
  * model_index.json plus text_encoder/, unet/ (or transformer/), vae/,
  * tokenizer/, scheduler/.
  *
+ * Permissions: every call that opens a path asks read access for it first —
+ * loadModel/createPipeline/loadTerrain, loadWeights, applyLora,
+ * reloadTextEncoder, and the image paths in GenerateOptions (initImagePath,
+ * maskImagePath, controls[].imagePath, conditionImages) — and refused, throws
+ * an Error with code 'EACCES' and `path` (name 'PermissionRevoked' for a
+ * revoked grant) before anything is read.
+ *
  * @example
  *   // --- Quick start: one image, in a Worker, off the main thread ----------
  *   if (!bro.gpu.available) {

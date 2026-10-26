@@ -38,6 +38,13 @@
  * boundary (directions, attention maps, taps, modulation rows), so they are
  * cheap to drive from JS every step.
  *
+ * Permissions: addControlNet, loadControlDictionary, VAE.loadWeights,
+ * qwenImage21ReloadTextEncoder and the image arguments (control images,
+ * qwenImage21PrimeEdit / qwenImage21EncodePromptImages condition images) ask
+ * read access for each path first; refused, the call throws an Error with code
+ * 'EACCES' and `path` (name 'PermissionRevoked' for a revoked grant) before
+ * anything is read.
+ *
  * @example
  *   // --- Control axes in three lines ----------------------------------------
  *   pipe.loadControlDictionary('assets/axes_turbo.bcd1');

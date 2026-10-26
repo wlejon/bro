@@ -16,10 +16,12 @@
 
 #include "bronze_host/host_control.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_headless_internal.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
+#include "engine/agent_view.h"
 #include "engine/control.h"
 #include "engine/engine.h"
 #include "platform/control_protocol.h"
@@ -320,6 +322,8 @@ std::string filesArgument(Value list) {
     return "--files=" + platform::inbox::encode(out);
 }
 
+std::string controlOutputPath(const std::vector<std::string>& argv);
+
 // __broControl.call(argv, endpoint, outArg, cb): argv's strings, an element
 // {files: [{name, data}]} becoming a --files= bundle; cb(ok, payload, files)
 // with files [{name, data: Uint8Array}] from the reply's bundle.
@@ -342,9 +346,19 @@ Value nativeControlCall(engine::Engine& engine, std::span<const Value> a) {
             argv.push_back(ev::toUtf8(el.get()));
         }
     }
+    // The host's gate first (host_access.h): a command sent to another
+    // engine's control endpoint is a connection (Net, ipc://<address>), save
+    // the session inbox's own requests; one run here writes where it names
+    // and `launch` starts an app (Spawn), as fs and bro.apps would.
+    const std::string address = clientAddress(engine, endpoint);
+    const bool inboxRequest = endpoint.empty() && !argv.empty() && argv[0] == "inbox";
+    if (!address.empty() && !inboxRequest) requireNetAccess("ipc://" + address);
+    if (address.empty()) {
+        if (const std::string out = controlOutputPath(argv); !out.empty()) requirePathAccess(out, true);
+        if (!argv.empty() && argv[0] == "launch") requireSpawnAccess(argv.size() > 1 ? argv[1] : std::string());
+    }
     const uint64_t id = g_clientNext++;
     g_clientCb[id] = new ev::Persistent(cb.get());
-    const std::string address = clientAddress(engine, endpoint);
     if (address.empty()) {
         engine.control().dispatchWithFile(
             std::move(argv), static_cast<size_t>(outArg),
@@ -590,6 +604,27 @@ void installInboxNamespace(engine::Engine& engine) {
     ev::defineAccessor(bro.get(), "inbox", getter.get(), ev::undefined());
 }
 
+// The file or folder a control command writes where its caller named
+// (screenshot [path], shot [handle] [path], record [seconds] [dir]), or "":
+// read off the positional arguments the way the commands themselves read them.
+std::string controlOutputPath(const std::vector<std::string>& argv) {
+    if (argv.empty()) return {};
+    std::vector<std::string> pos;
+    for (size_t i = 1; i < argv.size(); ++i)
+        if (argv[i].rfind("--", 0) != 0) pos.push_back(argv[i]);
+    auto at = [&](size_t i) { return i < pos.size() ? pos[i] : std::string(); };
+    const std::string& cmd = argv[0];
+    if (cmd == "screenshot") return at(0);
+    if (cmd == "record") return at(1);
+    if (cmd == "shot") {
+        const std::string target = at(0);
+        if (!target.empty() && !engine::view::isWindowHandle(target) && !engine::view::isElementHandle(target))
+            return target;  // shot <path>: the screen
+        return at(1);
+    }
+    return {};
+}
+
 }  // namespace
 
 void installControlCommands(engine::Engine& engine) {
@@ -621,6 +656,10 @@ void installControlCommands(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             std::vector<std::string> argv;
             for (const Value& v : a) argv.push_back(ev::toUtf8(v));
+            // A command writing where the script said asks the host's gate
+            // first (host_access.h), as any native writing a file does.
+            if (const std::string out = controlOutputPath(argv); !out.empty()) requirePathAccess(out, true);
+            if (!argv.empty() && argv[0] == "launch") requireSpawnAccess(argv.size() > 1 ? argv[1] : std::string());
             const uint64_t id = g_localNext++;
             auto res = std::make_shared<LocalResult>();
             g_local[id] = res;

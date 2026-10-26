@@ -14,6 +14,12 @@
 // plants and grass nodes, vegetation records) is docs/vegetation-api.js.
 // Lighting configs are docs/lighting-api.js, clips / blend spaces / state
 // machines docs/animation-api.js, skeletons and skins docs/rigging-api.js.
+//
+// Files named by path (a sprite's or decal's `texture`, a tile world's atlas,
+// savePly / loadSplatPly, and the SceneGraph's setEnvironment panorama and
+// setColorLUT) are read and written as `fs` would (docs/apps.md,
+// Permissions): outside the app's own folders that needs `files`, and a
+// refusal throws an Error with `code: 'EACCES'` and the absolute `path`.
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 

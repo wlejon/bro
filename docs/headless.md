@@ -36,7 +36,9 @@ By default headless renders offscreen on a Vulkan device through the same pipeli
 
 ## Headless globals
 
-These functions are available in addition to all standard DOM APIs:
+These functions are available in addition to all standard DOM APIs.
+
+The ones that write a file the script names (`writeFile`, `screenshot`, `screenshotCanvas`, `controlCommand('screenshot' | 'shot' | 'record', ...)`) and `perf.loadShaderSet` reading its tree ask the same access gate as `fs` (docs/apps.md, Permissions): outside the app's own folders and temp a write needs `files` (`tests/run_tests.sh` grants it), and a refusal throws an Error with `code: 'EACCES'` and the absolute `path`, with nothing written. `controlCommand('launch', id)` starts an app, so it asks `spawn`.
 
 ### Core
 

@@ -10,6 +10,7 @@
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "util/log.h"
+#include "util/subresource_access.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/draw_traversal.h"
@@ -138,6 +139,12 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
     if (srcAttr.empty()) return out;
 
     out.resolvedSrc = AppLoader::resolvePath(basePath, srcAttr, mounts);
+    // The page named the folder (or file): the host's access gate decides
+    // whether it may be read, before anything in it is (subresource_access.h).
+    if (const std::string refused = util::subresourceReadRefusal(out.resolvedSrc); !refused.empty()) {
+        LOG_WARN("%s: %s", what, refused.c_str());
+        return out;
+    }
 
     std::error_code ec;
     out.appDir = out.resolvedSrc;

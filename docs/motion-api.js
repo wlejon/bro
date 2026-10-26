@@ -92,7 +92,10 @@ class ArdyMotionPipeline {
 bro.motion.init = function() {};
 
 /**
- * Loads an ARDY motion model pipeline.
+ * Loads an ARDY motion model pipeline. `checkpoint` and `textEncoder` are read
+ * as `fs` would read them (docs/apps.md, Permissions; the model dirs are
+ * readable without `files`); a refusal throws an Error with `code: 'EACCES'`
+ * and the absolute `path` before anything loads.
  *
  * @param {MotionLoadOptions} opts - Configuration paths and device
  * @returns {ArdyMotionPipeline} Loaded motion generation pipeline

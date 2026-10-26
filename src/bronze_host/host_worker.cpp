@@ -1,6 +1,7 @@
 #include "bronze_host/host_worker_internal.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
 #include "bronze_host/host_runtime.h"
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cctype>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -217,6 +219,14 @@ void installWorkerGlobals(engine::Engine& engine) {
                 return ev::throwTypeError("new Worker('" + url + "'): " + err);
             }
             std::string base = engine.appDir().empty() ? "." : engine.appDir();
+            // The script is read where the worker thread will read it (relative
+            // to the app's folder): the host's gate first (host_access.h).
+            {
+                const std::filesystem::path sp(std::u8string(script.begin(), script.end()));
+                const std::filesystem::path full = sp.is_absolute() ? sp : std::filesystem::path(base) / sp;
+                const std::u8string u = full.u8string();
+                requirePathAccess(std::string(u.begin(), u.end()), false);
+            }
             uint64_t wid = s_workerIdSeq.fetch_add(1, std::memory_order_relaxed);
             auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid);
             {

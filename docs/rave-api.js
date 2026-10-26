@@ -26,6 +26,10 @@
  *   const latent = new Float32Array(8 * 100);
  *   const stereo = rave.decode(latent, 100, { channels: 2, stereoWidth: 1.0, seed: 1 });
  *   console.log('Stereo channels:', stereo.channels);
+ *
+ * Permissions: loadRave asks read access for the model directory first;
+ * refused, it throws (onReady form included) an Error with code 'EACCES' and
+ * `path` (name 'PermissionRevoked' for a revoked grant).
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────

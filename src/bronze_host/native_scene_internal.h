@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_access.h"  // paths the app names ask the host's gate
 #include "bronze_host/host_builder.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"

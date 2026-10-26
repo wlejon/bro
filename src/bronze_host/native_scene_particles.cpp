@@ -39,8 +39,11 @@ bool colorOf(const nlohmann::json& v, bromath::Color& out) {
 void applyParticleOpts(scene::ParticleNode* node, const nlohmann::json& j) {
     if (auto it = j.find("maxParticles"); it != j.end() && it->is_number())
         node->setMaxParticles(it->get<int>());
-    if (auto it = j.find("texture"); it != j.end() && it->is_string())
-        node->setTexturePath(it->get<std::string>());
+    if (auto it = j.find("texture"); it != j.end() && it->is_string()) {
+        const std::string tex = it->get<std::string>();
+        requirePathAccess(tex, false);  // read: the host's gate first (host_access.h)
+        node->setTexturePath(tex);
+    }
     if (auto it = j.find("blend"); it != j.end() && it->is_string())
         node->setBlend(it->get<std::string>() == "additive" ? scene::ParticleNode::Blend::Additive
                                                             : scene::ParticleNode::Blend::Normal);

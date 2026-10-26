@@ -799,6 +799,7 @@ bool bro_scene_SceneNode_savePly(void* self, const char* path) {
     if (n && n->type() == scene::SceneNode::Type::GaussianSplat && path) {
         auto* sn = static_cast<scene::GaussianSplatNode*>(n);
         if (sn->splatCount() == 0) return false;
+        bro::bronze_host::requirePathAccess(path, true);  // the host's gate (host_access.h)
         return bromesh::saveSplatPLY(sn->cloud(), path);
     }
     return false;
@@ -851,6 +852,7 @@ bool bro_scene_SceneNode_loadSplatPly(void* self, const char* path) {
     auto* n = nodeOf(self);
     if (!n || n->type() != scene::SceneNode::Type::GaussianSplat || !path) return false;
     auto* sn = static_cast<scene::GaussianSplatNode*>(n);
+    bro::bronze_host::requirePathAccess(path, false);  // the host's gate (host_access.h)
     auto cloud = bromesh::loadSplatPLY(path);
     if (cloud.empty()) return false;
     sn->setCloud(std::move(cloud));

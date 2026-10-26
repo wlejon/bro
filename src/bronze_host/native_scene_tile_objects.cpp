@@ -65,7 +65,7 @@ scene::TileWorld::ObjectStyle parseObjectStyle(const char* styleJson) {
     if (ev::isString(tex)) {
         broimage::Image img;
         std::string err;
-        if (broimage::decode_file(bro::util::resolveAssetPath(ev::toUtf8(tex)), img, &err) &&
+        if (broimage::decode_file(bro::bronze_host::readableAssetPath(ev::toUtf8(tex)), img, &err) &&
             img.width > 0 && img.height > 0) {
             style.texWidth = img.width;
             style.texHeight = img.height;

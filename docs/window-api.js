@@ -313,7 +313,10 @@ bro.window.hotkeyRouting;
  * Captures what is on screen to a PNG (docs/screen-capture.md). Under DRM it is the frame bro
  * last handed to KMS scanout, read back from the scanout buffer: client windows, the shell and
  * its overlays exactly as the display shows them. Elsewhere it is the app's own composite.
- * Synchronous; under DRM it costs a read of the scanout buffer and a PNG encode.
+ * Synchronous; under DRM it costs a read of the scanout buffer and a PNG encode. A `path` the
+ * app names is written as `fs` would write it (docs/apps.md, Permissions): outside the app's own
+ * folders and temp it needs `files`, and a refusal throws an Error with `code: 'EACCES'` and the
+ * absolute `path`; the default path is bro's own.
  *
  * @param {string} [path] where to write the PNG; default `$XDG_RUNTIME_DIR/bro-screen.png`
  * @returns {string|null} the path written, or null (the reason is logged)

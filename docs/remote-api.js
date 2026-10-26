@@ -154,7 +154,10 @@
  * The other end: a page shows another machine's broremote server (helm
  * --remote, `broremote serve-test`, another bro hosting) and drives it.
  * helmapps' remote app is built on it. Needs the `remote`
- * capability (docs/apps.md, Permissions), like host().
+ * capability (docs/apps.md, Permissions), like host(); with `ssh` every
+ * connection starts the ssh program, so connect also needs `spawn` (asked
+ * with the line it would run) and throws an Error with `code: 'EACCES'`
+ * without it, before anything starts.
  *
  *   bro.remote.connect(options?) -> session
  *       options.ssh          ssh destination ([user@]host): `ssh HOST

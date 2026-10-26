@@ -36,6 +36,7 @@
 // meant, while an output is a file the app is choosing to write and the app
 // directory is usually the last place it wants it.
 
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_class.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_element.h"
@@ -457,6 +458,7 @@ Value videoEncoderCtor(Value, std::span<const Value> a) {
 
     const std::string path = r.getStr("path");
     if (path.empty()) return ev::throwTypeError("VideoEncoder: `path` is required");
+    requirePathAccess(path, true);  // the host's gate, before the file is made
 
     video::WebmEncoder::Config cfg;
     cfg.width = r.getInt("width", 0);
@@ -590,6 +592,7 @@ Value gifEncoderCtor(Value, std::span<const Value> a) {
 
     const std::string path = r.getStr("path");
     if (path.empty()) return ev::throwTypeError("GifEncoder: `path` is required");
+    requirePathAccess(path, true);  // the host's gate, before the file is made
 
     video::GifEncoder::Config cfg;
     cfg.width = r.getInt("width", 0);

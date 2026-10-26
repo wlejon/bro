@@ -1,4 +1,5 @@
 #include "bronze_host/host_anchor_download.h"
+#include "bronze_host/host_access.h"
 
 #include "dom/element.h"
 #include "util/asset_path.h"
@@ -113,6 +114,14 @@ bool runAnchorDownload(dom::Element* el) {
     std::vector<uint8_t> bytes;
     if (!util::inlineURLBytes(href, bytes)) {
         std::string path = util::resolveAssetPath(href);
+        // The page named the file: the host's gate decides whether it may be
+        // read (host_access.h). The copy lands in the Downloads folder, a
+        // place bro chose, as a browser's download does.
+        std::string asked;
+        if (const std::string refused = pathRefusal(path, false, &asked); !refused.empty()) {
+            LOG_WARN("[download] %s", refused.c_str());
+            return false;
+        }
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             LOG_WARN("[download] cannot read '%s'", href.c_str());

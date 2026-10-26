@@ -4,6 +4,7 @@
 // state with a helper that runs frames on a held clock until it is settled.
 
 #include "bronze_host/host_headless_internal.h"
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_brokit.h"
 #include "engine/engine.h"
 #if BRO_WITH_3D
@@ -225,7 +226,9 @@ void installHeadlessScenePerf(engine::Engine& engine,
             if (a.empty() || !ev::isString(a[0])) return ev::throwTypeError("loadShaderSet(dir) requires a directory");
             scene::SceneRenderer::ShaderSetSummary s;
             std::string err;
-            if (!scene::SceneRenderer::loadShaderSet(absoluteDir(ev::toUtf8(a[0])), s, &err))
+            const std::string dir = absoluteDir(ev::toUtf8(a[0]));
+            requirePathAccess(dir, false);  // the host's gate (host_access.h)
+            if (!scene::SceneRenderer::loadShaderSet(dir, s, &err))
                 return ev::throwTypeError(err.c_str());
             return fromJson(summaryJson(s));
         });

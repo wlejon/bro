@@ -78,6 +78,9 @@ bro.net.addEventListener = function(type, listener) {};
 bro.net.removeEventListener = function(type, listener) {};
 
 /**
+ * Listen on UDP `port`. Needs the `net` capability (docs/apps.md,
+ * Permissions), asked as `udp-bind://0.0.0.0:<port>`; a refusal throws an
+ * Error with `code: 'EACCES'` before anything is bound.
  * @param {number} port
  * @param {Function} [callback]
  */
@@ -95,6 +98,9 @@ bro.net.closeHost = function() {};
 bro.net.isHosting = function() {};
 
 /**
+ * Connect to a host. Needs the `net` capability, asked as
+ * `udp://<address>:<port>`; a refusal throws an Error with `code: 'EACCES'`
+ * before anything is sent.
  * @param {string} address
  * @param {number} port
  * @param {Function} [callback]

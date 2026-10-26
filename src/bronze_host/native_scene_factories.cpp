@@ -607,7 +607,7 @@ void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts) {
             }
             if (j.contains("name") && j["name"].is_string()) node->setName(j["name"].get<std::string>());
             if (j.contains("src") && j["src"].is_string()) {
-                node->setImagePath(bro::util::resolveAssetPath(j["src"].get<std::string>()));
+                node->setImagePath(bro::bronze_host::readableAssetPath(j["src"].get<std::string>()));
             }
             if (j.contains("width") || j.contains("height")) node->setSize(j.value("width", 0.0f), j.value("height", 0.0f));
             if (j.contains("opacity")) node->setOpacity(j.value("opacity", 1.0f));

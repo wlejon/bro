@@ -2,6 +2,11 @@
 
 /**
  * Every bro.tts loader takes these (paths go through the asset-path resolver).
+ * Permissions: the loaders, loadVoice / loadVoiceStyle / loadPrompt,
+ * setAssetRoot / setAssets and a WAV-path `ref` ask read access for each path,
+ * savePrompt write access, before anything is opened; refused, the call
+ * throws (onReady form included) an Error with code 'EACCES' and `path` (name
+ * 'PermissionRevoked' for a revoked grant).
  * @typedef {Object} KokoroLoadOptions
  * @property {string} [device] `'cuda'` | `'vulkan'` (`'vk'`) | `'metal'`
  *   | `'cpu'`; defaults to the GPU (brotensor's default device), else CPU.

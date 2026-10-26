@@ -128,7 +128,10 @@ bro.diar.init = function() {};
 
 /**
  * Load Sortformer neural diarization model from directory (synchronously, or
- * asynchronously when `opts.onReady` is given).
+ * asynchronously when `opts.onReady` is given). Like loadClusterDiarizer (both
+ * directories), it asks read access first; refused, it throws (onReady form
+ * included) an Error with code 'EACCES' and `path` (name 'PermissionRevoked'
+ * for a revoked grant).
  *
  * @param {string} modelDir
  * @param {Object} [opts]

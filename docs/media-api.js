@@ -8,6 +8,12 @@
  *   - GifEncoder: Animated GIF89a export with median-cut quantization
  *   - bro.media: Audio waveform peak and thumbnail strip extraction
  *
+ * Access (docs/apps.md, Permissions): the encoders write their `path`, and
+ * bro.media.peaks / thumbnails / tags read theirs (an http(s) URL needs `net`),
+ * as `fs` would: outside the app's own folders that takes `files`. A refusal
+ * is thrown before anything is opened, an Error with `code: 'EACCES'` and the
+ * absolute `path`.
+ *
  * @example
  *   // Encode WebM video from canvas
  *   const enc = new VideoEncoder({

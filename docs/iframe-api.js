@@ -12,6 +12,13 @@
  * resolve their relative imports against the sub-document's folder, and a
  * module may use top-level `await`.
  *
+ * A `src` folder outside the app's own folders is read as `fs` would read it
+ * (docs/apps.md, Permissions): without `files` it is refused (logged) and no
+ * sub-document loads. The same holds for the page's other subresources from
+ * disk: an `<img>` or CSS url() (the `error` event), a `<video>` (a failed
+ * load), an `@font-face` src or an `@import`. They are answered from what is
+ * decided and never raise a prompt.
+ *
  * @example
  *   // Create dynamic iframe and capture its rendered output
  *   const frame = document.createElement('iframe');

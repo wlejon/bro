@@ -227,7 +227,7 @@ const char* bro_lighting_SpriteNode_texture_get(void* self) {
 void bro_lighting_SpriteNode_texture_set(void* self, const char* v) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Sprite && v) {
-        static_cast<scene::SpriteNode*>(n)->setImagePath(bro::util::resolveAssetPath(v));
+        static_cast<scene::SpriteNode*>(n)->setImagePath(bro::bronze_host::readableAssetPath(v));
     }
 }
 
@@ -355,7 +355,9 @@ void bro_lighting_GaussianSplatNode_savePly(void* self, const char* path) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::GaussianSplat && path) {
         auto* sn = static_cast<scene::GaussianSplatNode*>(n);
-        bromesh::saveSplatPLY(sn->cloud(), bro::util::resolveAssetPath(path));
+        const std::string out = bro::util::resolveAssetPath(path);
+        bro::bronze_host::requirePathAccess(out, true);  // the host's gate (host_access.h)
+        bromesh::saveSplatPLY(sn->cloud(), out);
     }
 }
 
@@ -388,7 +390,7 @@ void bro_lighting_DecalNode_texture_set(void* self, const char* v) {
         auto* dn = static_cast<scene::DecalNode*>(n);
         s_decalTextures[dn] = v;
         broimage::Image img;
-        if (broimage::decode_file(bro::util::resolveAssetPath(v), img) && img.width > 0 && img.height > 0) {
+        if (broimage::decode_file(bro::bronze_host::readableAssetPath(v), img) && img.width > 0 && img.height > 0) {
             dn->setAlbedoTexture(img.width, img.height, img.pixels.data());
         }
     }

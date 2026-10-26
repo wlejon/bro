@@ -173,7 +173,10 @@
 
 /**
  * Options of loadLaya / loadLayaAsync (also accepted on the first argument
- * alongside `path`).
+ * alongside `path`). Both ask read access for the checkpoint directory before
+ * looking at it: refused, loadLaya throws and loadLayaAsync rejects with an
+ * Error of code 'EACCES' carrying `path` (name 'PermissionRevoked' for a
+ * revoked grant).
  * @typedef {Object} LoadLayaOptions
  * @property {string} [path] - Checkpoint directory (rl_agent_config.json, encoder/, tokenizer/, model.safetensors): the family root for `english`, or its `multilingual/` / `typed-decisions/` subdirectory; `modelPath` is an alias
  * @property {(string|number|Array<number>)} [devices] - 'all' = one replica per CUDA device; an index; or a list. Default: the default device only

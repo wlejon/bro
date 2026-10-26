@@ -1,5 +1,6 @@
 // native_net.cpp — C entry points behind bro.net over GameNetworkingSockets (net::NetService).
 
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rooted.h"
@@ -336,6 +337,9 @@ using namespace bro::bronze_host;
 void bro_net_host(int32_t port, uint64_t callback) {
     auto* sub = getNetSubscriber();
     if (!sub) return;
+    // GameNetworkingSockets listens on UDP: the host's gate first
+    // (host_access.h), before anything is bound.
+    requireNetAccess("udp-bind://0.0.0.0:" + std::to_string(port));
     netState().hosting = true;
     sub->host(static_cast<uint16_t>(port));
     if (callback != 0) {
@@ -363,6 +367,7 @@ int32_t bro_net_connect(const char* address, int32_t port, uint64_t callback) {
     if (port > 0 && addr.find(':') == std::string::npos) {
         addr += ":" + std::to_string(port);
     }
+    requireNetAccess("udp://" + addr);  // the host's gate (host_access.h)
     sub->connect(addr);
     if (callback != 0) {
         Value fn = ev::fromBits(callback);

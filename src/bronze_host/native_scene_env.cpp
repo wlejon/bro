@@ -183,7 +183,7 @@ bool bro_scene_SceneGraph_setColorLUT(void* self, const char* path, int32_t size
     auto* g = graphOf(self);
     if (!g) return false;
     if (path && path[0] != '\0') {
-        std::string tex = bro::util::resolveAssetPath(path);
+        std::string tex = bro::bronze_host::readableAssetPath(path);
         return g->loadColorLUT(tex, size, static_cast<float>(amount));
     } else {
         g->clearColorLUT();
@@ -237,7 +237,7 @@ bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, c
     bool loaded = true;
     if (opts_panorama_given) {
         if (opts_panorama && opts_panorama[0] != '\0') {
-            loaded = g->loadEnvironment(bro::util::resolveAssetPath(opts_panorama));
+            loaded = g->loadEnvironment(bro::bronze_host::readableAssetPath(opts_panorama));
         } else {
             g->clearEnvironment();
         }

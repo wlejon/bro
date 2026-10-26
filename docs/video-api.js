@@ -9,6 +9,12 @@
 //      "<video> playback" section at the bottom of this file.
 //   2. VideoEncoder / GifEncoder, RGBA frames in, .webm / .gif file out.
 //
+// Both reach files as `fs` would (docs/apps.md, Permissions): a <video> src
+// outside the app's own folders needs `files` (refused, the load fails with
+// MEDIA_ERR_SRC_NOT_SUPPORTED and the reason in error.message), and an
+// encoder's `path` is written only where the app may write (refused, the
+// constructor throws an Error with code 'EACCES' and the path).
+//
 // In a video-less build the encoders are absent (feature-detect
 // `typeof VideoEncoder`); <video> elements still exist with the full JS
 // surface callable, but nothing decodes, the element paints a black box,

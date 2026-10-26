@@ -151,7 +151,7 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
         std::string s = ev::toUtf8(atlas);
         broimage::Image img;
         std::string err;
-        if (broimage::decode_file(util::resolveAssetPath(s), img, &err) &&
+        if (broimage::decode_file(bro::bronze_host::readableAssetPath(s), img, &err) &&
             img.width > 0 && img.height > 0) {
             cfg.atlasWidth = img.width;
             cfg.atlasHeight = img.height;

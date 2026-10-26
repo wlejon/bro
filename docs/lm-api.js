@@ -31,6 +31,12 @@
  *     batches concurrent calls across GPUs. Documented in laya-api.js: what
  *     it is good and bad at, escalation, latency under load.
  *
+ * Permissions: every loader asks read access for each path it is given (a
+ * model directory covers what is in it) before opening anything; an app
+ * without it gets an Error with code 'EACCES' and `path` (name
+ * 'PermissionRevoked' for a revoked grant), thrown from the call, onReady
+ * form included. Nothing in bro.lm writes a file.
+ *
  * @example
  *   // --- Qwen3 Text Generation ----------------------------------------------
  *   const { model, tokenizer } = bro.lm.loadQwen('../brolm/weights/Qwen3-0.6B-GGUF/Qwen3-0.6B-BF16.gguf');

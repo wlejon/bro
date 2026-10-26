@@ -751,7 +751,10 @@ bro.music.available;
 bro.music.init = function() {};
 
 /**
- * Load YuE2-3B from its folder.
+ * Load YuE2-3B from its folder. loadYuE2 and loadVae ask read access for the
+ * folder, YuE2Stream.saveSong write access for its file, first; refused, the
+ * call throws (onReady form included) an Error with code 'EACCES' and `path`
+ * (name 'PermissionRevoked' for a revoked grant).
  * @param {string} modelDir - config.json, model.safetensors, qwen.tiktoken
  * @param {YuE2LoadOptions} [opts]
  * @returns {YuE2|{cancel: function(), wait: function()}} the model, or an AsyncHandle with opts.onReady

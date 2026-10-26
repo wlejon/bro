@@ -3,6 +3,7 @@
 #include "util/asset_path.h"
 #include "util/object_url.h"
 #include "util/remote_asset.h"
+#include "util/subresource_access.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -105,6 +106,13 @@ ImageSource resolveImageSource(const std::string& url, const std::string& basePa
 
     std::error_code ec;
     const std::filesystem::path fp = std::filesystem::u8path(path);
+    // The page named the file, so the host's access gate decides whether it
+    // may be read (util/subresource_access.h), before even its size is
+    // looked at.
+    if (std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+        src.error = refused;
+        return src;
+    }
     const auto size = std::filesystem::file_size(fp, ec);
     if (ec) {
         src.error = "cannot open " + path;

@@ -9,6 +9,11 @@
  * @property {Function} [onReady] `onReady(model)`: when given, the load runs on
  *   a background thread and the loader returns an AsyncHandle instead of the model.
  * @property {Function} [onError] `onError(message)`, the async load's failure.
+ *
+ * Permissions: every bro.stt loader asks read access for its directory or
+ * files before opening anything; refused, it throws (onReady form included)
+ * an Error with code 'EACCES' and `path` (name 'PermissionRevoked' for a
+ * revoked grant).
  */
 
 /**

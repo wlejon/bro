@@ -3,9 +3,12 @@
  * @summary Documentation and examples for the `bro.apps` JavaScript API.
  *
  * launch needs the `spawn` capability; setDefaultApp, setDefaultAppForMime,
- * addRecent and clearRecent change the user's desktop configuration and need
- * `files` (docs/apps.md, Permissions). A refusal is an Error carrying the
- * reason and `code: 'EACCES'`.
+ * addRecent and clearRecent change the user's desktop configuration, and
+ * getRecent and getDefaultApp read it, so they need `files`; getDefaultApp and
+ * getAppsForMime given a file's path read the file as `fs` would (docs/apps.md,
+ * Permissions). A refusal is an Error carrying the reason and
+ * `code: 'EACCES'` (and `path` for a file): thrown, or launch's promise
+ * rejected.
  */
 
 /**

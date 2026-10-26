@@ -13,6 +13,7 @@
 
 #include "natives/motion/native_motion_decl.h"
 
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_natives.h"
 #include "embed/embed.h"
 
@@ -343,6 +344,9 @@ void* bro_motion_load(bool opts_checkpoint_given, const char* opts_checkpoint,
     const std::string ckpt = opts_checkpoint;
     const std::string tenc = opts_textEncoder;
     const std::string dev  = (opts_device_given && opts_device) ? opts_device : "";
+    // Both are read: the host's gate first (host_access.h).
+    bro::bronze_host::requirePathAccess(ckpt, false);
+    bro::bronze_host::requirePathAccess(tenc, false);
     try {
         return loadPipeline(ckpt, tenc, dev).release();
     } catch (const std::exception& e) {

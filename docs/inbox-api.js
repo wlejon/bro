@@ -103,5 +103,7 @@ const agent = await inbox.serve('upper', { about: 'shouts it back' }, async (req
 });
 await agent.close();
 
-/** Which inbox: '' the session's (the default), 'self' this engine's, or a control endpoint's name. */
+/** Which inbox: '' the session's (the default), 'self' this engine's, or a control endpoint's name.
+ *  A named endpoint is another engine's control socket, so reaching it asks `net` (docs/apps.md,
+ *  Permissions); a refusal is an Error with code 'EACCES'. */
 inbox.endpoint = '';

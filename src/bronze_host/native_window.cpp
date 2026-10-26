@@ -3,6 +3,7 @@
 // position and size limits as scalar pairs, and the display list.
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
@@ -561,6 +562,9 @@ const char* bro_window_captureScreen(const char* path) {
     s_written.clear();
     auto* eng = hostEngine();
     if (!eng) return "";
+    // A path the app named asks the host's gate (host_access.h); the default
+    // one is bro's own.
+    if (path && *path) requirePathAccess(path, true);
     std::string target = (path && *path) ? path : engine::Engine::defaultScreenCapturePath();
     std::string why;
     if (!eng->captureScreen(target, &why)) {

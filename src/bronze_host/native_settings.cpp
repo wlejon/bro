@@ -22,10 +22,12 @@
 // observer — the engine's own hook, which fires after it has applied the
 // change (installSettingsObserver, below, says why it is posted).
 
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "engine/settings.h"
+#include "util/model_dirs.h"
 #include "platform/window.h"
 #include "natives/settings/native_settings_decl.h"
 
@@ -207,10 +209,24 @@ const char* getDefaultsJson(const char* category) {
     return natives::strResult(std::move(out));
 }
 
-void setString(const char* key, const char* value) { if (auto* s = store()) s->setUser(key, std::string(value)); }
+// `models.dirs` names folders bro reads model weights from, and an app's own
+// grants count them as readable from its next launch on: setting it is
+// reading them, so each asks the host's gate first (host_access.h).
+void requireSettingAccess(const char* key, const char* value) {
+    if (std::string_view(key) != "models.dirs") return;
+    for (const std::string& dir : util::modelDirs(value)) requirePathAccess(dir, false);
+}
+
+void setString(const char* key, const char* value) {
+    requireSettingAccess(key, value);
+    if (auto* s = store()) s->setUser(key, std::string(value));
+}
 void setNumber(const char* key, double value) { if (auto* s = store()) s->setUser(key, value); }
 void setBool(const char* key, bool value) { if (auto* s = store()) s->setUser(key, value); }
-void setDefaultString(const char* key, const char* value) { if (auto* s = store()) s->setDefault(key, std::string(value)); }
+void setDefaultString(const char* key, const char* value) {
+    requireSettingAccess(key, value);
+    if (auto* s = store()) s->setDefault(key, std::string(value));
+}
 void setDefaultNumber(const char* key, double value) { if (auto* s = store()) s->setDefault(key, value); }
 void setDefaultBool(const char* key, bool value) { if (auto* s = store()) s->setDefault(key, value); }
 
