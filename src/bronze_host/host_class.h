@@ -31,8 +31,14 @@ struct ObjectBuilder;
 // per CLASS instead of one per instance, and `x instanceof Name` answering
 // true instead of false.
 //
-// Declare one at file scope per class — the members are pointers, so it is
+// Declare one at file scope per class — it has no members, so it is
 // constant-initialised and has no static constructor to order.
+//
+// PER REALM. The object is the class's identity; its constructor and prototype
+// are the current realm's (host_class.cpp keeps them per thread, per realm),
+// so install() runs once in each realm that should have the class, a change one
+// realm makes to its prototype is invisible to every other, and make() births
+// an instance on the prototype of the realm it is made in.
 class HostClass {
 public:
     // Mint, decorate, and register `name`. `body` runs for `new Name(...)`;
@@ -77,15 +83,15 @@ public:
     // refused by bronze and must not be passed.
     void setStatic(const char* name, Value v) const;
 
+    // The current realm's, or undefined where this realm never installed it.
     Value prototype() const;
     Value constructor() const;
 
+    struct Slots;
+
 private:
-    // Heap-allocated and never freed, on purpose: a static destructor would
-    // run these after the engine has torn the runtime down. host_class.cpp
-    // has the full reasoning.
-    ev::Persistent* proto_ = nullptr;
-    ev::Persistent* ctor_ = nullptr;
+    Slots* slotsIfAny() const;
+    Slots& slots() const;
 };
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head><title>Isolation child</title></head>
+<body>
+  <!-- For tests/dom/test_iframe_realm_isolation.js: what a frame does to the
+       builtins and to its own custom-element registry must not reach the
+       page that holds it. -->
+  <script>
+    // The builtins are frozen before any script runs (lockdown), so this
+    // write is refused (a TypeError in strict code, dropped in sloppy) rather
+    // than changing the parent's push.
+    var patchResult = (function () {
+      try {
+        Array.prototype.push = function () { return 'patched'; };
+        return Array.prototype.push.call([], 1) === 'patched' ? 'patched' : 'refused';
+      } catch (e) {
+        return 'threw:' + e.name;
+      }
+    })();
+    function readPatch() { return patchResult; }
+
+    class ChildIso extends HTMLElement {
+      constructor() { super(); this.from = 'child'; }
+    }
+    customElements.define('x-iso', ChildIso);
+    function definedHere(name) { return typeof customElements.get(name); }
+    function makeIso() {
+      var e = document.createElement('x-iso');
+      document.body.appendChild(e);
+      return e.from;
+    }
+  </script>
+</body>
+</html>

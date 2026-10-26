@@ -276,6 +276,7 @@ void clearRealmScope(uint64_t scopeId) {
     clearWindowName(scopeId);
     clearParsedDocumentsForScope(scopeId);
     clearContentWindowProxy(scopeId);
+    clearCustomElementsForScope(scopeId);
 }
 
 void resetAllRealmScopes() {

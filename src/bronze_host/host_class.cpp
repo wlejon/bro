@@ -22,18 +22,23 @@
 // Object.setPrototypeOf after the fact also preserves the payload, but puts
 // the cell in dictionary mode for the rest of its life.
 //
-// THE LEAKED PERSISTENT. The prototype must outlive every instance, which
-// means the life of the process. A file-scope or function-local Persistent
-// would be destroyed during static destruction — after the engine has torn the
-// runtime down — freeing a root out of a registry that no longer exists. So
-// the Persistent is heap-allocated and never deleted, deliberately. It is not
-// what keeps the prototype alive in any case: registerGlobal roots the
-// constructor for the process and the prototype hangs off it. What the
-// Persistent buys is skipping a global lookup and a property read per
-// instance, and a Value that is safe to hold across the allocation makeHandle
-// performs.
+// PER REALM, PER THREAD. The constructor and prototype live in a table keyed
+// by (class, realm), held per thread because a realm belongs to one thread. A
+// prototype is mutable and app code can reach it, so a realm sharing another's
+// would let one app change what another's `div.appendChild` does; and a Worker
+// installing the same file-scope class used to overwrite the main thread's
+// pointers with its own heap's. A destroyed realm's entries are dropped
+// (ev::addRealmDestroyHook), so its classes are collectable with it.
 //
-// A CLASS THAT WAS NEVER INSTALLED still works: make() falls back to the bare
+// THE LEAKED PERSISTENTS. The table is heap-allocated and never freed: a
+// static or thread_local destructor would release roots after the engine has
+// torn the runtime down. The Persistents are not what keeps the prototype
+// alive in any case — registerGlobal roots the constructor in its realm and
+// the prototype hangs off it. What they buy is skipping a global lookup and a
+// property read per instance, and a Value that is safe to hold across the
+// allocation makeHandle performs.
+//
+// A CLASS THIS REALM NEVER INSTALLED still works: make() falls back to the bare
 // 3-argument handle. That is the honest degrade for a value built before its
 // install ran — no methods, but no fatal either.
 
@@ -42,12 +47,71 @@
 #include "util/log.h"
 
 #include <span>
+#include <unordered_map>
 #include <utility>
 
 namespace bro::bronze_host {
 
+struct HostClass::Slots {
+    ev::Persistent* ctor = nullptr;
+    ev::Persistent* proto = nullptr;
+};
+
+namespace {
+
+struct SlotKey {
+    const HostClass* cls;
+    const ev::Realm* realm;
+    bool operator==(const SlotKey& o) const noexcept { return cls == o.cls && realm == o.realm; }
+};
+struct SlotKeyHash {
+    size_t operator()(const SlotKey& k) const noexcept {
+        return std::hash<const void*>()(k.cls) * 31u ^ std::hash<const void*>()(k.realm);
+    }
+};
+using SlotTable = std::unordered_map<SlotKey, HostClass::Slots, SlotKeyHash>;
+
+SlotTable& threadSlots() {
+    static thread_local auto* t = new SlotTable();
+    return *t;
+}
+
+void releaseSlots(HostClass::Slots& s) {
+    delete s.ctor;
+    delete s.proto;
+    s.ctor = nullptr;
+    s.proto = nullptr;
+}
+
+void dropRealmSlots(ev::Realm* realm) {
+    SlotTable& t = threadSlots();
+    for (auto it = t.begin(); it != t.end();) {
+        if (it->first.realm == realm) {
+            releaseSlots(it->second);
+            it = t.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+}  // namespace
+
+HostClass::Slots& HostClass::slots() const {
+    return threadSlots()[SlotKey{this, ev::currentRealm()}];
+}
+
+HostClass::Slots* HostClass::slotsIfAny() const {
+    auto& t = threadSlots();
+    auto it = t.find(SlotKey{this, ev::currentRealm()});
+    return it == t.end() ? nullptr : &it->second;
+}
+
 void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
                         const std::function<void(ObjectBuilder&)>& decorate) {
+    ev::addRealmDestroyHook(&dropRealmSlots);
+    Slots& s = slots();
+    releaseSlots(s);
     // A class the program may name but not construct — what makeBrandConstructor
     // used to be, except that this one can actually brand, because it has a
     // prototype its instances are born on.
@@ -62,7 +126,7 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
     // too, and `Element.name` reading as a diagnosed absence rather than
     // "Element" was the last place a host object could be told from a real one.
     ev::Persistent ctor(ev::makeFunction(std::move(ctorBody), arity, name));
-    ctor_ = new ev::Persistent(ctor.get());
+    s.ctor = new ev::Persistent(ctor.get());
 
     {
         // Reading mints it. ObjectBuilder's own Persistent is what holds it
@@ -71,24 +135,25 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
         proto.set("constructor", ctor.get());
         if (decorate) decorate(proto);
         // Re-read after decoration: setProperty may have moved the object.
-        proto_ = new ev::Persistent(proto.get());
+        s.proto = new ev::Persistent(proto.get());
     }
 
-    ev::registerGlobal(name, ctor_->get());
+    ev::registerGlobal(name, s.ctor->get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
         ev::Persistent gtP(gt.value);
-        ev::setProperty(gtP.get(), name, ctor_->get());
+        ev::setProperty(gtP.get(), name, s.ctor->get());
     }
 }
 
 void HostClass::alias(const char* name) const {
-    if (!ctor_) return;
-    ev::registerGlobal(name, ctor_->get());
+    const Slots* s = slotsIfAny();
+    if (!s || !s->ctor) return;
+    ev::registerGlobal(name, s->ctor->get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
         ev::Persistent gtP(gt.value);
-        ev::setProperty(gtP.get(), name, ctor_->get());
+        ev::setProperty(gtP.get(), name, s->ctor->get());
     }
 }
 
@@ -106,10 +171,14 @@ void HostClass::bind(const char* name) {
         }
     }
     if (g.found && ev::isFunction(g.value)) {
-        ctor_ = new ev::Persistent(g.value);
-        Value proto = ev::getProperty(ctor_->get(), "prototype");
+        ev::addRealmDestroyHook(&dropRealmSlots);
+        ev::Persistent ctor(g.value);
+        Slots& s = slots();
+        releaseSlots(s);
+        s.ctor = new ev::Persistent(ctor.get());
+        Value proto = ev::getProperty(ctor.get(), "prototype");
         if (ev::isObject(proto)) {
-            proto_ = new ev::Persistent(proto);
+            s.proto = new ev::Persistent(proto);
         }
     }
 }
@@ -141,29 +210,35 @@ Value setPrototype(Value obj, Value proto) {
 namespace bro::bronze_host {
 
 void HostClass::inherit(const HostClass& base) const {
-    if (!proto_ || !base.proto_) return;
-    ev::setPrototype(proto_->get(), base.proto_->get());
+    const Slots* s = slotsIfAny();
+    const Slots* b = base.slotsIfAny();
+    if (!s || !s->proto || !b || !b->proto) return;
+    s->proto->set(ev::setPrototype(s->proto->get(), b->proto->get()));
 }
 
 Value HostClass::make(void* data, ev::HandleDestructor dtor, ev::Finalize when) const {
-    if (!proto_) return ev::makeHandle(data, dtor, when);
-    return ev::makeHandle(data, dtor, when, proto_->get());
+    const Slots* s = slotsIfAny();
+    if (!s || !s->proto) return ev::makeHandle(data, dtor, when);
+    return ev::makeHandle(data, dtor, when, s->proto->get());
 }
 
 void HostClass::setStatic(const char* name, Value v) const {
-    if (!ctor_) return;
+    const Slots* s = slotsIfAny();
+    if (!s || !s->ctor) return;
     // setProperty may move the function object and answers its new address;
     // the registered global is a ROOT, so the registry follows the move too.
     ev::Persistent valP(v);
-    ctor_->set(ev::setProperty(ctor_->get(), name, valP.get()));
+    s->ctor->set(ev::setProperty(s->ctor->get(), name, valP.get()));
 }
 
 Value HostClass::prototype() const {
-    return proto_ ? proto_->get() : ev::undefined();
+    const Slots* s = slotsIfAny();
+    return s && s->proto ? s->proto->get() : ev::undefined();
 }
 
 Value HostClass::constructor() const {
-    return ctor_ ? ctor_->get() : ev::undefined();
+    const Slots* s = slotsIfAny();
+    return s && s->ctor ? s->ctor->get() : ev::undefined();
 }
 
 }  // namespace bro::bronze_host

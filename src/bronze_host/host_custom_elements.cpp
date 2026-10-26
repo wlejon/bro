@@ -5,6 +5,7 @@
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_realm_scope.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
@@ -24,8 +25,15 @@ struct CustomElementDef {
     std::vector<std::string> observedAttributes;
 };
 
-static std::unordered_map<std::string, CustomElementDef> s_registry;
-static std::unordered_map<std::string, std::vector<ev::Persistent>> s_pendingWhenDefined;
+// One registry per realm scope (host_realm_scope.h): a window's
+// CustomElementRegistry is its own, so a frame defining <x-row> neither
+// defines it for its parent nor collides with the parent's <x-row>, and a
+// constructor one frame registered is never run against another's elements.
+// Dropped with the scope (clearCustomElementsForScope).
+using Registry = std::unordered_map<std::string, CustomElementDef>;
+static std::unordered_map<uint64_t, Registry> s_registries;
+static std::unordered_map<uint64_t, std::unordered_map<std::string, std::vector<ev::Persistent>>>
+    s_pendingWhenDefined;
 static thread_local dom::Element* s_activeConstructingElement = nullptr;
 // The constructor being run, by its definition's root: it is read again from
 // inside the construct call (constructCustomElementBase), after user code has
@@ -53,11 +61,30 @@ constexpr const char* kUpgradedMarker = "__bro_ce_upgraded__";
 // names the class — see constructCustomElementBase.
 constexpr const char* kTagMarker = "__bro_ce_tag__";
 
+// The registry of the realm the script now running belongs to.
+static Registry& currentRegistry() { return s_registries[currentRealmScope()]; }
+
+// The registry of the window `el` lives in, or null when it has none: an
+// element is upgraded by its own document's definitions, whichever realm's
+// script inserted it.
+static Registry* registryFor(dom::Element* el) {
+    if (s_registries.empty()) return nullptr;
+    dom::Document* doc = el->document();
+    auto it = s_registries.find(doc ? scopeIdForDocument(doc) : currentRealmScope());
+    return it == s_registries.end() ? nullptr : &it->second;
+}
+
+static const CustomElementDef* findDefinition(dom::Element* el, const std::string& lowerTag) {
+    Registry* reg = registryFor(el);
+    if (!reg) return nullptr;
+    auto it = reg->find(lowerTag);
+    return it == reg->end() ? nullptr : &it->second;
+}
+
 static const CustomElementDef* definitionFor(dom::Element* el) {
     const std::string& tag = el->tagName();
     if (tag.find('-') == std::string::npos) return nullptr;
-    auto it = s_registry.find(toLowerStr(tag));
-    return it == s_registry.end() ? nullptr : &it->second;
+    return findDefinition(el, toLowerStr(tag));
 }
 
 static bool isUpgraded(dom::Element* el) {
@@ -173,7 +200,7 @@ static void forEachElementInSubtree(dom::Node* root, bool includeRoot, Fn&& fn) 
 }
 
 static void upgradeAndConnect(dom::Node* root, bool includeRoot) {
-    if (s_registry.empty()) return;
+    if (s_registries.empty()) return;
     const bool connected = isConnected(root);
     forEachElementInSubtree(root, includeRoot, [&](dom::Element* el) {
         const CustomElementDef* def = definitionFor(el);
@@ -191,7 +218,7 @@ void onCustomElementConnected(dom::Element* el) {
 }
 
 void onCustomElementDisconnected(dom::Element* el) {
-    if (!el || s_registry.empty()) return;
+    if (!el || s_registries.empty()) return;
     forEachElementInSubtree(el, true, [](dom::Element* e) {
         if (definitionFor(e)) fireLifecycle(e, "disconnectedCallback");
     });
@@ -204,10 +231,9 @@ void upgradeCustomElementsInSubtree(dom::Node* root) {
 void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
                                      const char* oldValue, const char* newValue) {
     if (!el) return;
-    std::string tag = toLowerStr(el->tagName());
-    auto it = s_registry.find(tag);
-    if (it == s_registry.end()) return;
-    const auto& def = it->second;
+    const CustomElementDef* found = findDefinition(el, toLowerStr(el->tagName()));
+    if (!found) return;
+    const auto& def = *found;
     bool observed = false;
     for (const auto& attr : def.observedAttributes) {
         if (attr == name) { observed = true; break; }
@@ -228,10 +254,9 @@ void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
 }
 
 Value constructCustomElement(dom::Element* el, const std::string& tagName) {
-    std::string tag = toLowerStr(tagName);
-    auto it = s_registry.find(tag);
-    if (it == s_registry.end()) return ev::undefined();
-    ev::CallResult res = runCustomElementConstructor(el, it->second);
+    const CustomElementDef* def = findDefinition(el, toLowerStr(tagName));
+    if (!def) return ev::undefined();
+    ev::CallResult res = runCustomElementConstructor(el, *def);
     if (res.thrown) return ev::throwValue(res.value);
     return res.value;
 }
@@ -275,8 +300,7 @@ Value constructCustomElementBase(Value newObject) {
     Value tagVal = ev::getProperty(self.get(), kTagMarker);
     if (!ev::isString(tagVal)) return ev::throwTypeError("Illegal constructor");
     std::string tag = toLowerStr(ev::toUtf8(tagVal));
-    if (s_registry.find(tag) == s_registry.end())
-        return ev::throwTypeError("Illegal constructor");
+    if (currentRegistry().count(tag) == 0) return ev::throwTypeError("Illegal constructor");
 
     dom::Document* doc = currentHostDocument();
     if (!doc) return ev::throwError("new <custom element>: the engine has no document");
@@ -310,7 +334,7 @@ void installCustomElementsGlobals() {
         if (name.find('-') == std::string::npos) {
             return ev::throwTypeError("customElements.define: name must contain a hyphen");
         }
-        if (s_registry.find(name) != s_registry.end()) {
+        if (currentRegistry().count(name) != 0) {
             return ev::throwTypeError("customElements.define: name already defined");
         }
 
@@ -331,15 +355,18 @@ void installCustomElementsGlobals() {
                 }
             }
         }
-        s_registry[name] = std::move(def);
+        const uint64_t scope = currentRealmScope();
+        s_registries[scope][name] = std::move(def);
 
-        // Resolve any promises awaiting this element name.
-        auto pendIt = s_pendingWhenDefined.find(name);
-        if (pendIt != s_pendingWhenDefined.end()) {
-            for (auto& p : pendIt->second) {
+        // Resolve any promises this realm has awaiting this element name.
+        auto& pending = s_pendingWhenDefined[scope];
+        auto pendIt = pending.find(name);
+        if (pendIt != pending.end()) {
+            std::vector<ev::Persistent> waiting = std::move(pendIt->second);
+            pending.erase(pendIt);
+            for (auto& p : waiting) {
                 ev::resolvePromise(p.get(), a[1]);
             }
-            s_pendingWhenDefined.erase(pendIt);
         }
 
         // Stamp the tag on the class's prototype so `new MyElement()` can find
@@ -354,7 +381,7 @@ void installCustomElementsGlobals() {
         // document order, and those in the document get connectedCallback:
         // markup routinely precedes the script that defines its components.
         if (dom::Document* doc = currentHostDocument()) {
-            const CustomElementDef& stored = s_registry[name];
+            const CustomElementDef& stored = s_registries[scope][name];
             for (dom::Element* el : doc->querySelectorAll(name)) {
                 if (upgradeElement(el, stored) && isConnected(el)) fireLifecycle(el, "connectedCallback");
             }
@@ -365,8 +392,9 @@ void installCustomElementsGlobals() {
     ce.def("get", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !ev::isString(a[0])) return ev::undefined();
         std::string name = toLowerStr(ev::toUtf8(a[0]));
-        auto it = s_registry.find(name);
-        return it != s_registry.end() ? it->second.ctor.get() : ev::undefined();
+        Registry& reg = currentRegistry();
+        auto it = reg.find(name);
+        return it != reg.end() ? it->second.ctor.get() : ev::undefined();
     });
 
     ce.def("whenDefined", 1, [](Value, std::span<const Value> a) -> Value {
@@ -380,15 +408,17 @@ void installCustomElementsGlobals() {
             ev::rejectPromise(p.get(), err.get());
             return p.get();
         }
-        auto it = s_registry.find(name);
-        if (it != s_registry.end()) {
+        Registry& reg = currentRegistry();
+        auto it = reg.find(name);
+        if (it != reg.end()) {
             ev::Persistent p(ev::createPromise());
             ev::resolvePromise(p.get(), it->second.ctor.get());
             return p.get();
         }
         Value p = ev::createPromise();
-        s_pendingWhenDefined[name].emplace_back(p);
-        return s_pendingWhenDefined[name].back().get();
+        auto& waiting = s_pendingWhenDefined[currentRealmScope()][name];
+        waiting.emplace_back(p);
+        return waiting.back().get();
     });
 
     ce.def("upgrade", 1, [](Value, std::span<const Value> a) -> Value {
@@ -405,11 +435,13 @@ void installCustomElementsGlobals() {
     }
 }
 
+void clearCustomElementsForScope(uint64_t scopeId) {
+    s_registries.erase(scopeId);
+    s_pendingWhenDefined.erase(scopeId);
+}
+
 void resetCustomElementsRegistry() {
-    for (auto& [_, def] : s_registry) {
-        def.ctor.set(ev::undefined());
-    }
-    s_registry.clear();
+    s_registries.clear();
     s_pendingWhenDefined.clear();
     s_activeConstructingElement = nullptr;
     s_activeCtor = nullptr;

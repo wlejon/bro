@@ -494,6 +494,24 @@ if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
 
+if(BRO_BUILD_TESTS)
+    # HostClass keeps a constructor and prototype per realm: two realms on one
+    # thread, each with its own (tests/test_host_class_realm.cpp). Built from
+    # the class's own sources over the shared runtime, not the whole layer.
+    add_executable(bro_host_class_realm_test
+        ${bro_SOURCE_DIR}/tests/test_host_class_realm.cpp
+        host_class.cpp
+        host_profile.cpp
+    )
+    target_include_directories(bro_host_class_realm_test PRIVATE
+        ${bro_SOURCE_DIR}/src
+        ${bronze_SOURCE_DIR}/src
+    )
+    target_link_libraries(bro_host_class_realm_test PRIVATE bronze::runtime_shared)
+    target_compile_features(bro_host_class_realm_test PRIVATE cxx_std_20)
+    add_test(NAME bro_host_class_realm_test COMMAND bro_host_class_realm_test)
+endif()
+
 bro_apply_feature_defs(bro_bronze_host)
 
 # --- bro's own JavaScript, compiled by bronze at build time: bro_bronze_js ---

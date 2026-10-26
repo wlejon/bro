@@ -239,7 +239,9 @@ void decorateIFrameProto(ObjectBuilder& b) {
             if (engine::Engine* engine = hostEngine()) {
                 if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
                     if (d->document) {
-                        clearContentWindowProxy(scopeIdForDocument(d->document.get()));
+                        const uint64_t scope = scopeIdForDocument(d->document.get());
+                        clearContentWindowProxy(scope);
+                        clearCustomElementsForScope(scope);
                     }
                 }
                 engine->reloadIframe(el);
@@ -300,7 +302,9 @@ void decorateIFrameProto(ObjectBuilder& b) {
             if (engine::Engine* engine = hostEngine()) {
                 if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
                     if (d->document) {
-                        clearContentWindowProxy(scopeIdForDocument(d->document.get()));
+                        const uint64_t scope = scopeIdForDocument(d->document.get());
+                        clearContentWindowProxy(scope);
+                        clearCustomElementsForScope(scope);
                     }
                 }
                 engine->reloadIframe(el);

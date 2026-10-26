@@ -84,6 +84,8 @@ Value constructCustomElement(dom::Element* el, const std::string& tagName);
 // `new` produced, which is what names the class when this is a direct
 // `new MyElement()` rather than an upgrade.
 Value constructCustomElementBase(Value newObject);
+// Each realm scope has its own registry; a closed frame's goes with it.
+void clearCustomElementsForScope(uint64_t scopeId);
 
 // ---------------------------------------------------------------------------
 // Worker

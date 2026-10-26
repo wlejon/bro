@@ -856,21 +856,13 @@ void installIntlGlobals() {
         ev::setProperty(global.get(), "Intl", intlVal.get());
     }
 
-    // <Ctor>.prototype[name] = fn, with the prototype and the new function
-    // rooted across makeFunction's allocation.
-    auto setProtoMethod = [](const char* ctorName, const char* name, uint32_t arity,
-                             ev::NativeFn fn) {
-        ev::GlobalValue ctorG = ev::globalValue(ctorName);
-        if (!ctorG.found || !ev::isObject(ctorG.value)) return;
-        ev::Persistent ctor(ctorG.value);
-        ev::Persistent proto(ev::getProperty(ctor.get(), "prototype"));
-        if (!ev::isObject(proto.get())) return;
-        ev::Persistent f(ev::makeFunction(std::move(fn), arity, name));
-        ev::setProperty(proto.get(), name, f.get());
-    };
+    // The builtins' locale methods answer through this Intl. They are given to
+    // bronze (ev::setLocaleMethod) rather than assigned onto the prototypes:
+    // the builtins are frozen by lockdown before any of this runs, and the
+    // same Number.prototype is every realm's on the thread.
 
     // Number.prototype.toLocaleString
-    setProtoMethod("Number", "toLocaleString", 1,
+    ev::setLocaleMethod(ev::LocaleMethod::NumberToLocaleString,
         [](Value thisValue, std::span<const Value> a) {
             double n = ev::isNumber(thisValue) ? ev::toDouble(thisValue) : 0.0;
             NumberFormatOptions opt = parseNumberFormatOptions(a);
@@ -878,7 +870,7 @@ void installIntlGlobals() {
         });
 
     // Date.prototype.toLocaleDateString & Date.prototype.toLocaleTimeString
-    setProtoMethod("Date", "toLocaleDateString", 1,
+    ev::setLocaleMethod(ev::LocaleMethod::DateToLocaleDateString,
         [](Value thisValue, std::span<const Value> a) {
             const Rooted date(thisValue);  // the option reads allocate
             DateTimeOptions opt = parseDateTimeOptions(a);
@@ -887,7 +879,7 @@ void installIntlGlobals() {
             opt.hasDay = true;
             return ev::fromUtf8(formatDateTimeDetails(date, opt));
         });
-    setProtoMethod("Date", "toLocaleTimeString", 1,
+    ev::setLocaleMethod(ev::LocaleMethod::DateToLocaleTimeString,
         [](Value thisValue, std::span<const Value> a) {
             const Rooted date(thisValue);  // the option reads allocate
             DateTimeOptions opt = parseDateTimeOptions(a);
@@ -898,7 +890,7 @@ void installIntlGlobals() {
         });
 
     // String.prototype.localeCompare
-    setProtoMethod("String", "localeCompare", 1,
+    ev::setLocaleMethod(ev::LocaleMethod::StringLocaleCompare,
         [](Value thisValue, std::span<const Value> a) {
             std::string s1 = ev::isString(thisValue) ? ev::toUtf8(thisValue) : "";
             std::string s2 = (a.size() > 0 && ev::isString(a[0])) ? ev::toUtf8(a[0]) : "";

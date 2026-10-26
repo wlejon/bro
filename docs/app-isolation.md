@@ -283,7 +283,12 @@ What the design must keep possible, and what it still lacks for it:
 4. Network granularity: on or off, or per host?
 5. The exception policy: continue or disconnect.
 6. The cost of freezing intrinsics at boot, and checking certificates in
-   Release.
+   Release. *Freezing answered (step 2):* about 3 ms per thread (the walk
+   freezes some 980 objects), paid once by the main thread and once by each
+   Worker, and invisible in a headless app's start; compiled code is no slower
+   (three.js in brobench shows no difference above noise), because a frozen
+   object's caches keep hitting (measurements under step 2).
+   Certificates are still open.
 
 ## Order of work
 
@@ -378,6 +383,68 @@ What the design must keep possible, and what it still lacks for it:
      own processes, with grants of their own). Two processes changing
      `grants.json` at once: the last write wins.
 2. **Frozen intrinsics;** per-realm host globals and HostClass prototypes.
+   **Built** (2026-10-26):
+   - Lockdown is bronze's `embed::lockdown()` (`runtime/lockdown.h`, and
+     "Realms and lockdown" in bronze's `docs/internals.md`). It walks from the
+     builtin globals and the intrinsics no global names (the iterator,
+     generator and async prototypes) through properties, accessors and
+     prototypes, and freezes all of it. bro calls it first thing in
+     `installWebHostGlobals` and at the start of every Worker thread, before
+     any install and before any script, bro's own `bro_core.js` included, so
+     nothing in bro can lean on a patched intrinsic either. A plain bronze
+     program never locks down.
+   - The override mistake is fixed in the engine rather than by SES's
+     accessor conversion: an inherited read-only data property on an object
+     lockdown froze is shadowed by an own property on the receiver
+     (`MyError.prototype.name = 'X'`, `obj.toString = f`), and the frozen
+     object itself still refuses. Reads pay nothing for it.
+   - Frozen objects keep their inline caches: a frozen object's layout can
+     never change, so bronze's read, prototype-chain, enumeration and statics
+     caches name it as they name any shape, and after the walk nothing bumps
+     a prototype epoch on its account.
+   - What the host installs is the realm's own and is not frozen: the host
+     globals (bronze's registry is per `Realm` now; a new realm starts with
+     none), and every HostClass prototype. bronze's `embed::HostClass` keeps a
+     constructor and prototype per (class, realm); bro's own
+     `bronze_host/host_class.cpp` does the same (it kept one pair per process,
+     so a Worker's install overwrote the main thread's); and the 24 siblings'
+     copies of `src/api/host_class.*` are gone, each now an alias of bronze's
+     (bromesh and brogameagent keep their own `ObjectBuilder`, whose methods
+     wrap every native, through a thin subclass). A destroyed realm drops its
+     classes (`embed::addRealmDestroyHook`).
+   - The one built-in patcher in the ecosystem was bro's own Intl
+     (`host_intl.cpp`), which assigned `Number.prototype.toLocaleString`,
+     the `Date` `toLocaleDateString`/`toLocaleTimeString` and
+     `String.prototype.localeCompare`. It now gives them to bronze
+     (`embed::setLocaleMethod`), and the frozen builtin calls them.
+   - bro's realm-scope tables, audited: the scope expandos and baseline
+     overrides, the content-window proxies and the parsed documents were
+     already keyed by scope; the custom-element registry was one per process,
+     so a frame's `customElements.define('x-row')` defined it for its parent
+     too. It is one per scope now, dropped with the scope. Left for step 3:
+     frames are still scopes of one bronze realm, and a removed `<iframe>`
+     does not clear its scope's tables (a reload, a new `src` and a closed
+     window do).
+   - Tests: bronze `eval_lockdown_test` (everything reached frozen, refusals,
+     the override fix at each tier, two realms sharing the frozen set, hot
+     reads still hitting caches), `embed_global_object_test` and
+     `embed_realm_test` (host globals, lazy globals and HostClass prototypes
+     per realm; the locale hook); bro `bro_host_class_realm_test` (bro's
+     HostClass per realm) and `tests/dom/test_iframe_realm_isolation.js`
+     (a frame's patch of `Array.prototype` refused, the override fix, host
+     prototypes still extensible, one custom-element registry per frame).
+   - Measured (RTX 4090 box, Release, headless): the lockdown walk is 3.0 to
+     3.2 ms; a headless start of `demos/dom-lab`, interleaved six times each
+     way, was 1220 to 1262 ms wall locked and 1229 to 1259 ms not (no
+     difference above noise). three.js in `../brobench` (the AOT-compiled
+     app, 300 frames a scene), six runs each way interleaved, js ms per
+     frame, median (best): many_meshes 129.4 (115.3) locked against 120.9
+     (112.6) not, instanced 28.0 (23.4) against 28.8 (26.7), hierarchy 19.3
+     (13.7) against 18.8 (15.0). The box was shared with other builds, and
+     runs of one mode spread 15 to 40 %, so no difference shows in either
+     direction: lockdown does not cost the compiled code, and a win from
+     epochs that never bump is too small to see over three.js's own misses
+     (its prototypes are its own, not the builtins').
 3. **Compartment = Realm + document + ledger;** host objects owned by their
    compartment; `<appview>`.
 4. **Fiber scheduling and time slices.**

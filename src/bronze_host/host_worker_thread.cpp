@@ -39,6 +39,9 @@ void WorkerInstance::threadFunc() {
     BootClock::time_point bootMarks[4] = {bootStart, bootStart, bootStart, bootStart};
     ensureSharedRuntimeEnv();
     const ProfilerThreadScope profiled(scriptPath_);  // bro.profiler {threads: 'workers'}
+    // This thread's builtins, frozen before the first install, as the main
+    // thread's are (dom_globals.cpp installWebHostGlobals).
+    ev::lockdown();
 
     installImageBitmapGlobals();
     installNoiseGlobals();
