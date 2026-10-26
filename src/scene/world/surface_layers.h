@@ -100,7 +100,9 @@ struct SurfaceLayerConfig {
     int pageSize = 256;          // page-table entries a side, a level (a power of two)
     int maxLevels = 20;          // the most levels (the provider's bounds set how many)
     float texelPixels = 1.5f;    // a tile is refined while its texel covers more pixels than this
-    // Out of the view, within shadeReach of the eye: a tile is refined while
+    // Out of the view, within shadeReach of the eye, where its shade (away
+    // from the view's sun, as far as its own heights could cast it) falls
+    // into the view: a tile is refined while
     // its texel is wider than its distance over shadeTexels (no finer than
     // shadeTexelMetres), what a reader of the ground about the eye needs of
     // it where the view does not look; as wrong, it counts texelPixels
@@ -188,6 +190,7 @@ public:
         float focalPixels = 1000.0f;
         bool perspective = true;
         float orthoMetresPerPixel = 0.01f;
+        bromath::Vec3 shade{0.0f, 0.0f, 0.0f};   // toward the sun the shade reader casts by (none: zero)
     };
 
     /// (Re)start with `config` over the provider's `bounds` (every root's

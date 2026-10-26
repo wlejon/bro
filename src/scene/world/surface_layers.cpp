@@ -132,7 +132,19 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         // (The coarsest tiles are kept whatever the view sees.)
         const bool seen = !patch.hidden && bromath::fintersects(view.frustum, box);
         const float dist = std::max(boxDistance(view.eye, box), patch.nearest);
-        const bool shaded = !seen && !patch.hidden && config_.shadeTexels > 0.0f && dist < config_.shadeReach;
+        bool shaded = !seen && !patch.hidden && config_.shadeTexels > 0.0f && dist < config_.shadeReach &&
+                      view.shade.y > 0.0f;
+        if (shaded) {
+            // Its shade, away from the sun as far as twice its heights' span
+            // could cast it, falls into the view: only then does what reads
+            // it show what stands here. (Every unseen tile about the eye
+            // refined kept 700 of them missing on the planet's landing.)
+            const float reach = std::min(2.0f * (box.max.y - box.min.y) / std::max(view.shade.y, 0.02f),
+                                         config_.shadeReach);
+            const bromath::Vec3 cast = view.shade * -reach;
+            const bromath::AABB3 swept{bromath::vmin(box.min, box.min + cast), bromath::vmax(box.max, box.max + cast)};
+            shaded = bromath::fintersects(view.frustum, swept);
+        }
         if (k.level != top && !seen && !shaded) return;
         float metresPerPixel = view.orthoMetresPerPixel;
         if (shaded) {

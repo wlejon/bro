@@ -142,7 +142,8 @@ void SceneMeshDrawer::offerLandSun(SceneFrame& frame, WorldService& service) {
     const SceneView& view = frame.world;
     const float focal = 0.5f * static_cast<float>(std::max(view.height, 1u)) * std::fabs(view.proj.at(1, 1));
     const float over = std::max(view.eye.y - land->chartBounds().max.y, 1.0f);
-    landSun_.update(view.eye, {-d[0], -d[1], -d[2]}, generation, tiles, focal / over);
+    landSun_.update(view.eye, {-d[0], -d[1], -d[2]}, generation, tiles, focal / over, over,
+                    land->canopySourceHash() ? land->canopyCastRange() : 0.0f);
     for (const LandSun::Want& w : landSun_.wants()) {
         const double side = static_cast<double>(LS_SIDE) * LandSun::kTexel0 * std::ldexp(1.0, w.level);
         service.offer({static_cast<uint64_t>(w.level), land->id(), landSunKind_, w.error, side, w.required});

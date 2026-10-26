@@ -134,7 +134,9 @@ void testSelection() {
 // land's sun, needs): refined as fine as its texels, coarse past its reach,
 // and nothing but the coarsest without it.
 void testShade() {
-    const SurfaceLayers::View v = makeView({0.0f, 2.0f, 0.0f}, {0.0f, -0.2f, 1.0f});
+    // The sun low behind the eye: what stands behind it shades the view.
+    SurfaceLayers::View v = makeView({0.0f, 2.0f, 0.0f}, {0.0f, -0.2f, 1.0f});
+    v.shade = bromath::vnorm(bromath::Vec3{0.0f, 0.5f, -1.0f});
     const auto behind = [&](const SurfaceLayerConfig& c, float& coarsest, double& farthest) {
         SurfaceLayers L;
         L.configure(c, world());
@@ -170,6 +172,9 @@ void testShade() {
     check(behind(c, coarsest, farthest) > 0, "a shade reader's ground behind the eye is refined");
     check(coarsest <= 2.0f, "behind the eye, no texel twice the reader's (got " + std::to_string(coarsest) + ")");
     check(farthest < 2000.0, "nothing past the reach refined behind the eye");
+    // The sun ahead: nothing behind the eye shades the view.
+    v.shade = bromath::vnorm(bromath::Vec3{0.0f, 0.5f, 1.0f});
+    check(behind(c, coarsest, farthest) == 0, "with the sun ahead, nothing behind the eye refined");
 }
 
 void testCoarsestPastSlots() {

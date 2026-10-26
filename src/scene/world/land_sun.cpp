@@ -28,10 +28,11 @@ constexpr float kMaxError = 64.0f;
 }  // namespace
 
 void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged,
-                     float pixelsPerMetre) {
+                     float pixelsPerMetre, float above, float canopyRange) {
     ++frame_;
     sun_ = sun;
     eyeY_ = eye.y;
+    above_ = above;
     generation_ = generation;
     wants_.clear();
     for (int l = 0; l < kLevels; ++l) {
@@ -45,12 +46,18 @@ void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_
         // (What a moved level leaves wrong: the coarser level's texel at the
         // nearest ground.)
         const float coarser = static_cast<float>(2.0 * texel) * pixelsPerMetre;
+        // (Risen or fallen a tenth of the canopy's cast range, where its
+        // fade could be in reach of the eye then or now: past it, all of
+        // the canopy shades. Every snap of height made the planet's descent
+        // remake the finest level 15 times a second, ahead of its tiles.)
+        const bool rose = canopyRange > 0.0f && std::min(above, s.madeAbove) < canopyRange &&
+                          std::fabs(eye.y - s.madeY) > 0.1 * canopyRange;
         Want w;
         w.level = l;
         if (s.shown.layer < 0) {
             w.required = true;
             w.error = kMovedError;
-        } else if (s.shown.x0 != s.cx - half || s.shown.z0 != s.cz - half || std::fabs(eye.y - s.madeY) > snap) {
+        } else if (s.shown.x0 != s.cx - half || s.shown.z0 != s.cz - half || rose) {
             w.error = std::min(kMovedError, coarser);
         } else if (s.generation != generation) {
             w.error = kLandError;
@@ -85,6 +92,7 @@ LandSun::Level LandSun::make(int l) {
     s.shown = made;
     s.sun = sun_;
     s.madeY = eyeY_;
+    s.madeAbove = above_;
     s.generation = generation_;
     s.changed = false;
     s.madeFrame = frame_;

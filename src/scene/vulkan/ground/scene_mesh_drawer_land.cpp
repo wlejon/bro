@@ -474,6 +474,8 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         sv.focalPixels = 0.5f * static_cast<float>(std::max(view.height, 1u)) * std::fabs(view.proj.at(1, 1));
         sv.orthoMetresPerPixel =
             2.0f / std::max(std::fabs(view.proj.at(1, 1)) * static_cast<float>(std::max(view.height, 1u)), 1e-6f);
+        // (The land's sun reads them: what shades the view from out of it.)
+        if (const float* d = frame.lighting.sunDirection; d[3] >= 0.5f) sv.shade = {-d[0], -d[1], -d[2]};
         stalls::Part updatePart("land tiles update");
         lt.tiles.update(sv, ++lt.frame);
         for (const SurfaceJob& j : lt.tiles.jobs())

@@ -22,10 +22,10 @@
 // its own, and made again when
 //   - it was never made (required: nothing else gives the land's shade);
 //   - the eye moved it a snap (its square no longer centred), or rose or
-//     fell a snap since it was made (past the plants' cast range of the
-//     eye then, the canopy shades it: a level made from 300 m and kept
-//     while the eye came straight down stood the wood's canopy over the
-//     meadow before it, where the shadow pages draw the trees);
+//     fell a tenth of the canopy's cast range while in reach of it (past
+//     that range of the eye then, the canopy shades: a level made from high
+//     and kept while the eye came straight down stood the wood's canopy
+//     over the meadow before it, where the shadow pages draw the trees);
 //   - the sun turned more than kSunTurnCos since it was made;
 //   - the land changed (its module, extent, rings or canopy: `generation`);
 //   - the land's tiles changed since it was made (they refine as the eye
@@ -75,9 +75,10 @@ public:
     /// This frame's state: the eye, the sun (toward it), the land's
     /// generation, whether its tiles changed since the last call, and the
     /// pixels a metre of the nearest ground spans (the view's focal length
-    /// over the eye's height above the land's highest). Gathers wants().
+    /// over the eye's height above the land's highest), that height, and
+    /// the canopy's cast range (0: none). Gathers wants().
     void update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged,
-                float pixelsPerMetre);
+                float pixelsPerMetre, float above, float canopyRange);
     const std::vector<Want>& wants() const { return wants_; }
 
     /// Level `l` is made this frame: where (its corner and texel) and into
@@ -93,6 +94,7 @@ private:
         Level shown;
         double cx = 0.0, cz = 0.0;   // the centre wanted now
         double madeY = 0.0;          // the eye's height when it was made
+        float madeAbove = 0.0f;      // and its height over the land's highest
         bromath::Vec3 sun{0.0f, 1.0f, 0.0f};
         uint64_t generation = 0;
         bool changed = false;     // the tiles changed since it was made
@@ -102,6 +104,7 @@ private:
     std::array<State, kLevels> state_{};
     bromath::Vec3 sun_{0.0f, 1.0f, 0.0f};
     double eyeY_ = 0.0;
+    float above_ = 0.0f;
     uint64_t generation_ = 0;
     uint64_t frame_ = 0;
     std::vector<Want> wants_;
