@@ -62,9 +62,9 @@
 // allows; the granted ones are filled (commit()). A job's error is in
 // pixels, what the view shows while it is not made: a missing tile's texels
 // are its nearest resident ancestor's, 2^(levels between) times its own on
-// screen (none resident: as if one above the coarsest), at most about the
-// view's height (twice its focal length in pixels); a stale tile's are its
-// own. A tile's error is never above its
+// screen (none resident: the coarsest's, required and so made that frame;
+// a missing coarsest tile, as if one above it), at most about the view's
+// height (twice its focal length in pixels); a stale tile's are its own. A tile's error is never above its
 // parent's while that one is a job too, so with ties going to the larger
 // tile a tile is never ranked ahead of its parent. The coarsest level's
 // missing tiles are required (filled whatever the budget), so nothing is

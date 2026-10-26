@@ -558,10 +558,12 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
         t.wanted = n.generation;
         if (t.filled && t.generation == n.generation) continue;
         // A stale tile shows its own texels; a missing one its nearest
-        // resident ancestor's (none: as if one above the coarsest).
+        // resident ancestor's, or the coarsest's, made this frame whatever
+        // the budget (required) where none is; a missing coarsest tile, as if
+        // one above it.
         int shown = n.key.level;
         if (!t.filled) {
-            shown = levels_;
+            shown = n.key.level < top ? top : levels_;
             for (int up = 1; n.key.level + up <= top; ++up) {
                 const auto a = tiles_.find(n.key.parent(up).packed());
                 if (a != tiles_.end() && a->second.filled) {
