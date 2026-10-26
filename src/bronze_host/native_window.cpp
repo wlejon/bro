@@ -21,8 +21,9 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 
+#include <filesystem>
 #include <string>
-
+#include <system_error>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -37,6 +38,20 @@ ev::Persistent* g_singleInstanceDispatcher = nullptr;
 bool isHeadless() {
     auto* eng = hostEngine();
     return !eng || eng->displayMode() == engine::DisplayMode::Headless;
+}
+
+// A notification's or the tray's icon the app named is a file the platform
+// reads (a toast's image, the tray's pixels), so it asks the host's gate to
+// read it like any path the app names (host_access.h): throws when refused.
+// A bare icon-theme name ("dialog-information") names no file and is not
+// asked about.
+void requireIconAccess(const char* icon) {
+    if (!icon || !*icon || !ev::accessGateActive()) return;
+    const std::string s(icon);
+    std::error_code ec;
+    const bool names_file = s.find_first_of("/\\") != std::string::npos ||
+                            std::filesystem::exists(std::filesystem::path(std::u8string(s.begin(), s.end())), ec);
+    if (names_file) requirePathAccess(s, false);
 }
 
 // The secondary window (bro.window.open) whose realm is calling, or null for
@@ -410,6 +425,7 @@ int32_t bro_window_getProgressValue(void) {
 
 int32_t bro_window_notify(const char* title, const char* body, const char* icon, int32_t timeoutMs, bool silent, int32_t replacesId,
                           const char* actions, const char* payload) {
+    requireIconAccess(icon);
     auto* w = getWindow();
     platform::desktop::NotificationOptions opts;
     opts.icon = icon ? icon : "";
@@ -459,6 +475,7 @@ void bro_window_clearNotifications(void) {
 
 bool bro_window_setTray(const char* icon, const char* tooltip, const char* menuJson) {
     (void)menuJson;
+    requireIconAccess(icon);
     auto* w = getWindow();
     platform::desktop::TrayConfig config;
     config.icon = icon ? icon : "";

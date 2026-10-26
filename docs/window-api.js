@@ -248,6 +248,12 @@ bro.window.setProgress = function(state, value) {};
 
 /**
  * Displays a desktop notification.
+ *
+ * An `icon` path is a file the platform reads, so it is read as `fs` would
+ * read it (docs/apps.md, Permissions): one in the user's home outside the
+ * app's own folders needs `files`, and a refusal throws an Error with
+ * `code: 'EACCES'` and the absolute `path`. A bare icon-theme name is not a
+ * file and is not asked about. The same holds for setTray's `icon`.
  * @param {string} title
  * @param {string} [body=""]
  * @param {Object} [options]

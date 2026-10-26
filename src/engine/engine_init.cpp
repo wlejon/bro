@@ -687,9 +687,9 @@ void Engine::initAppRealm() {
         std::string path = AppLoader::resolvePath(
             base.empty() ? document_->basePath() : base, url, &assetMounts_);
         importedBase = std::filesystem::path(path).parent_path().string();
-        // The sheet named the file: the host's access gate decides whether it
-        // may be read (util/subresource_access.h).
-        if (const std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+        // The sheet named the file or URL: the host's access gate decides
+        // whether it may be read or fetched (util/subresource_access.h).
+        if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
             LOG_WARN("@import: %s", refused.c_str());
             return std::string();
         }
@@ -1192,9 +1192,9 @@ void Engine::loadCustomFonts() {
         // through @import too); a sheet with no base is the document's.
         std::string path = AppLoader::resolvePath(
             ff.baseUrl.empty() ? basePath : ff.baseUrl, ff.src, &assetMounts_);
-        // The sheet named the file: the host's access gate decides whether it
-        // may be read (util/subresource_access.h).
-        if (const std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+        // The sheet named the file or URL: the host's access gate decides
+        // whether it may be read or fetched (util/subresource_access.h).
+        if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
             LOG_WARN("@font-face '%s': %s", ff.family.c_str(), refused.c_str());
             continue;
         }

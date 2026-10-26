@@ -141,7 +141,7 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
     out.resolvedSrc = AppLoader::resolvePath(basePath, srcAttr, mounts);
     // The page named the folder (or file): the host's access gate decides
     // whether it may be read, before anything in it is (subresource_access.h).
-    if (const std::string refused = util::subresourceReadRefusal(out.resolvedSrc); !refused.empty()) {
+    if (const std::string refused = util::subresourceRefusal(out.resolvedSrc); !refused.empty()) {
         LOG_WARN("%s: %s", what, refused.c_str());
         return out;
     }

@@ -3,6 +3,7 @@
 #include "util/log.h"
 #include "util/remote_asset.h"
 #include "util/string_utils.h"
+#include "util/subresource_access.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -42,6 +43,12 @@ std::string AppLoader::loadFile(const std::string& path) {
     // so this one branch is what makes `<script src="https://cdn/…">` mean what
     // the web says it means. Cached on disk; see util/remote_asset.h.
     if (util::isHttpUrl(path)) {
+        // A connection, so the host's access gate decides from the app's
+        // `net`, without asking (util/subresource_access.h).
+        if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
+            LOG_ERROR("AppLoader::loadFile: %s", refused.c_str());
+            return {};
+        }
         std::string body = util::fetchRemoteCached(path);
         if (body.empty())
             LOG_ERROR("AppLoader::loadFile: cannot fetch '%s'", path.c_str());

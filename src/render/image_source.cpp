@@ -76,6 +76,14 @@ ImageSource resolveImageSource(const std::string& url, const std::string& basePa
     }
 
     if (util::isHttpUrl(url)) {
+        // Fetching it is a connection: the host's access gate decides, from
+        // the app's `net` (util/subresource_access.h). A cached copy is not
+        // an exception: whether the page may reach the URL does not depend
+        // on whether it once did.
+        if (std::string refused = util::subresourceRefusal(url); !refused.empty()) {
+            src.error = refused;
+            return src;
+        }
         src.kind = ImageSource::Kind::Remote;
         src.url = url;
         src.key = url + orientSuffix(oriented);
@@ -109,7 +117,7 @@ ImageSource resolveImageSource(const std::string& url, const std::string& basePa
     // The page named the file, so the host's access gate decides whether it
     // may be read (util/subresource_access.h), before even its size is
     // looked at.
-    if (std::string refused = util::subresourceReadRefusal(path); !refused.empty()) {
+    if (std::string refused = util::subresourceRefusal(path); !refused.empty()) {
         src.error = refused;
         return src;
     }

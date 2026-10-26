@@ -3,7 +3,8 @@
 // so a path in the user's home outside the app's own folders is refused
 // without `files` and reached with it, whichever library the native is in:
 // bro's own (headless writeFile/screenshot, VideoEncoder, GifEncoder,
-// bro.media, bro.window.captureScreen, <img>), the desktop siblings (bro.vfs,
+// bro.media, bro.window.captureScreen, a notification's and the tray's icon,
+// <img>), the desktop siblings (bro.vfs,
 // bro.search, bro.thumb, bro.apps' recent files, bro.conf's settings) and the
 // file IO of the media and model siblings (bro.mesh, bro.image, broaudio's
 // AudioContext, bro.tensor, bro.lm).
@@ -28,8 +29,8 @@ const docs = path.join(home, 'Documents');        // the user's files: neither t
 for (const d of [home, tmp, appHome, docs]) fs.mkdirSync(d, { recursive: true });
 fs.writeFileSync(path.join(docs, 'secret.txt'), 'secret');
 // A 1x1 PNG, for <img> and the image readers.
-fs.writeFileSync(path.join(docs, 'pixel.png'), Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+const pixelB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+fs.writeFileSync(path.join(docs, 'pixel.png'), Buffer.from(pixelB64, 'base64'));
 fs.writeFileSync(path.join(docs, 'tri.obj'), 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
 
 const app = path.join(home, 'apps', 'nativesapp');
@@ -38,7 +39,7 @@ fs.writeFileSync(path.join(app, 'bro.json'), JSON.stringify({ id: 'org.bro.test.
 fs.writeFileSync(path.join(app, 'index.html'), '<!DOCTYPE html><html><body>natives</body></html>');
 
 let scriptN = 0;
-function run(body, args) {
+function run(body, args, extraEnv) {
     const script = path.join(scratch, 'script' + (scriptN++) + '.js');
     // What each attempt did: 'ok', 'absent' (compiled out), or the error as
     // "<code>|<message>|<path>".
@@ -52,7 +53,8 @@ function run(body, args) {
         'const has = (ns) => !!(ns && ns.available !== false);\n' +
         'const pump = () => { for (let i = 0; i < 40; i++) advanceTime(25); };\n';
     fs.writeFileSync(script, prelude + body + '\nconsole.log("RESULT:" + JSON.stringify(R));\n');
-    const env = { ...process.env, BRO_APP_HOME: appHome, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp };
+    const env = { ...process.env, BRO_APP_HOME: appHome, HOME: home, USERPROFILE: home, TMP: tmp, TEMP: tmp, TMPDIR: tmp,
+                  ...(extraEnv || {}) };
     const r = cp.spawnSync(headless, (args || []).concat([app, script]), { env, encoding: 'utf8', timeout: 120000 });
     const out = (r.stdout || '') + (r.stderr || '');
     const line = out.split(/\r?\n/).find((l) => l.indexOf('RESULT:') >= 0);
@@ -76,6 +78,9 @@ const probe =
     'if (has(bro.media) && bro.media.tags) attempt("mediaTags", () => bro.media.tags(path.join(D, "secret.txt")));\n' +
     'else R.mediaTags = "absent";\n' +
     'attempt("captureScreen", () => bro.window.captureScreen(path.join(D, "c.png")));\n' +
+    // A notification's and the tray's icon are files the platform reads.
+    'attempt("notifyIcon", () => bro.window.notify("t", "b", { icon: path.join(D, "pixel.png") }));\n' +
+    'attempt("trayIcon", () => { bro.window.setTray({ icon: path.join(D, "pixel.png") }); bro.window.removeTray(); });\n' +
     // The desktop siblings.
     'if (has(bro.vfs)) attempt("vfs", () => bro.vfs.getMime(path.join(D, "secret.txt"))); else R.vfs = "absent";\n' +
     'if (has(bro.search)) attempt("search", () => bro.search.filesSync(D)); else R.search = "absent";\n' +
@@ -100,13 +105,13 @@ const probe =
 {
     const r = run(probe);
     const keys = ['writeFile', 'screenshot', 'videoEncoder', 'gifEncoder', 'mediaTags', 'captureScreen',
-                  'vfs', 'search', 'appsRecent', 'conf', 'meshLoad', 'imageWrite', 'lmLoad'];
+                  'notifyIcon', 'trayIcon', 'vfs', 'search', 'appsRecent', 'conf', 'meshLoad', 'imageWrite', 'lmLoad'];
     for (const k of keys) {
         if (r[k] === 'absent') { console.log('test_permissions_natives: ' + k + ' compiled out'); continue; }
         assert(refused(r[k]), k + ' refused without files: ' + r[k]);
     }
     // A path refusal names the path, absolute.
-    for (const k of ['writeFile', 'vfs', 'search']) {
+    for (const k of ['writeFile', 'notifyIcon', 'vfs', 'search']) {
         if (r[k] === 'absent') continue;
         assert(r[k].split('|')[2].indexOf('Documents') >= 0, k + "'s refusal carries the path: " + r[k]);
     }
@@ -118,8 +123,8 @@ const probe =
 {
     for (const f of fs.readdirSync(docs)) if (/^(w\.txt|s\.png|v\.webm|g\.gif|c\.png|e\.png)$/.test(f)) fs.rmSync(path.join(docs, f));
     const g = run(probe, ['--grant', 'files']);
-    for (const k of ['writeFile', 'screenshot', 'videoEncoder', 'gifEncoder', 'mediaTags', 'vfs', 'search',
-                     'appsRecent', 'conf', 'meshLoad', 'imageWrite']) {
+    for (const k of ['writeFile', 'screenshot', 'videoEncoder', 'gifEncoder', 'mediaTags', 'notifyIcon', 'trayIcon',
+                     'vfs', 'search', 'appsRecent', 'conf', 'meshLoad', 'imageWrite']) {
         if (g[k] === 'absent') continue;
         assert(g[k] === 'ok', k + ' works with files: ' + g[k]);
     }
@@ -130,6 +135,73 @@ const probe =
     }
     assert(g.img === 'ok', 'an <img> naming the file loads with files: ' + g.img);
     assert(g.written.indexOf('w.txt') >= 0 && g.written.indexOf('s.png') >= 0, 'the granted writes landed: ' + g.written.join(', '));
+}
+
+// ---- an <img> over http asks `net` ----------------------------------------------------
+// The page's subresources from the network (<img>, CSS url(), @font-face,
+// @import, <video>, scripts and sheets over http) ask `net` for the URL,
+// answered without a prompt. A server in a process of its own (granted net)
+// serves the PNG and logs every request, so a refused load is seen never to
+// have reached it.
+{
+    const pngB64 = pixelB64;
+    const portFile = path.join(scratch, 'http.port');
+    const hitsFile = path.join(scratch, 'http.hits');
+    const stopFile = path.join(scratch, 'http.stop');
+    const serverApp = path.join(scratch, 'serverapp');
+    fs.mkdirSync(serverApp, { recursive: true });
+    fs.writeFileSync(path.join(serverApp, 'bro.json'), JSON.stringify({ id: 'org.bro.test.PermNativesServer', name: 'Server' }));
+    fs.writeFileSync(path.join(serverApp, 'index.html'), '<!DOCTYPE html><html><body>server</body></html>');
+    const serverScript = path.join(scratch, 'server.js');
+    fs.writeFileSync(serverScript,
+        'const fs = require("fs");\n' +
+        'const png = Buffer.from(' + JSON.stringify(pngB64) + ', "base64");\n' +
+        'const srv = require("http").createServer((req, res) => {\n' +
+        '    fs.appendFileSync(' + JSON.stringify(hitsFile) + ', req.url + "\\n");\n' +
+        '    res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png.length }); res.end(png); });\n' +
+        'srv.listen(0, "127.0.0.1");\n' +
+        'fs.writeFileSync(' + JSON.stringify(portFile) + ', String(srv.address().port));\n' +
+        'const end = perf.now() + 120000;\n' +
+        'while (!fs.existsSync(' + JSON.stringify(stopFile) + ') && perf.now() < end) { wallSleep(10); advanceTime(1); }\n' +
+        'srv.close();\n');
+    const server = cp.spawn(headless, ['--grant', 'net,files', serverApp, serverScript],
+                            { env: { ...process.env, BRO_APP_HOME: appHome }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let serverOut = '';
+    server.stdout.on('data', (d) => { serverOut = (serverOut + d).slice(-4000); });
+    server.stderr.on('data', (d) => { serverOut = (serverOut + d).slice(-4000); });
+    const until = perf.now() + 60000;
+    let serverExit = null;
+    server.on('exit', (code) => { serverExit = code; });
+    while (!fs.existsSync(portFile) && serverExit === null && perf.now() < until) { wallSleep(50); advanceTime(1); }
+    assert(serverExit === null, 'the http server is running, exit ' + serverExit + ': ' + serverOut);
+    assert(fs.existsSync(portFile), 'the http server started');
+    const port = Number(fs.readFileSync(portFile, 'utf8'));
+    const hits = () => (fs.existsSync(hitsFile) ? fs.readFileSync(hitsFile, 'utf8').split('\n').filter(Boolean) : []);
+
+    // Its own user-data dir, so the remote cache the document loader keeps is
+    // the scratch folder's, not the machine's.
+    const appData = path.join(scratch, 'appdata');
+    fs.mkdirSync(appData, { recursive: true });
+    const httpEnv = { APPDATA: appData, XDG_DATA_HOME: appData };
+    const httpProbe = (name) =>
+        'const himg = document.createElement("img");\n' +
+        'himg.onload = () => { R.httpImg = "ok"; }; himg.onerror = () => { R.httpImg = "error"; };\n' +
+        'himg.src = "http://127.0.0.1:' + port + '/' + name + '.png"; document.body.appendChild(himg);\n' +
+        'for (let i = 0; i < 200 && !R.httpImg; i++) { wallSleep(10); advanceTime(10); flush(); }\n' +
+        'R.width = himg.naturalWidth;\n';
+
+    const r = run(httpProbe('refused'), [], httpEnv);
+    assert(r.httpImg === 'error', 'an http <img> fails to load without net: ' + r.httpImg);
+    assert(hits().indexOf('/refused.png') < 0, 'the refused <img> never reached the server: ' + hits().join(', '));
+
+    const g = run(httpProbe('granted'), ['--grant', 'net'], httpEnv);
+    assert(g.httpImg === 'ok' && g.width === 1, 'an http <img> loads with net: ' + g.httpImg + ' ' + g.width);
+    assert(hits().indexOf('/granted.png') >= 0, 'the granted <img> was fetched: ' + hits().join(', '));
+
+    fs.writeFileSync(stopFile, '');
+    const stopBy = perf.now() + 10000;
+    while (server.exitCode === null && perf.now() < stopBy) { wallSleep(20); advanceTime(1); }
+    if (server.exitCode === null) { try { server.kill(); } catch (e) { /* best effort */ } }
 }
 
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }

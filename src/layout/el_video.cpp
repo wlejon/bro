@@ -77,9 +77,10 @@ bool ElVideo::load(const std::string& path) {
     unload();
     const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
     currentSrc_ = resolved;
-    // The page named the file: the host's access gate decides whether it may
-    // be read (util/subresource_access.h). A refusal is a load that failed.
-    if (const std::string refused = util::subresourceReadRefusal(resolved); !refused.empty()) {
+    // The page named the file or URL: the host's access gate decides whether
+    // it may be read or fetched (util/subresource_access.h). A refusal is a
+    // load that failed.
+    if (const std::string refused = util::subresourceRefusal(resolved); !refused.empty()) {
         errorCode_ = 4;  // MEDIA_ERR_SRC_NOT_SUPPORTED
         errorMessage_ = "MEDIA_ELEMENT_ERROR: " + refused;
         pendingError_ = true;

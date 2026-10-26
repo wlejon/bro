@@ -105,6 +105,13 @@
  * `decode()` resolves and `load` (or `error`) fires as a task. Await one of
  * them before drawing the image into a canvas or uploading it as a texture.
  *
+ * A `src` is the page's subresource, answered from the app's grants without a
+ * prompt (docs/apps.md, Permissions): a file in the user's home outside the
+ * app's own folders needs `files`, and an http(s) URL needs `net`, as do CSS
+ * url() images, @font-face and @import sources, `<video src>` and scripts or
+ * stylesheets over http. Refused, the load fails (`error` fires) and nothing
+ * is read or fetched.
+ *
  *     const img = new Image();
  *     img.src = 'photos/big.jpg';
  *     await img.decode();

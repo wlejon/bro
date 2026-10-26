@@ -14,16 +14,17 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// The layers below the bronze host (images, fonts, <video>, <iframe>) ask the
-// same one gate through util/subresource_access.h; this is the forwarder, put
-// in place when the library loads. Answered without asking: markup never
-// raises a prompt.
-std::string subresourceRead(const std::string& path) {
-    return ev::checkAccessWithoutAsking(ev::AccessKind::Read, path);
+// The layers below the bronze host (images, fonts, @import, <video>,
+// <iframe>, scripts and sheets over http) ask the same one gate through
+// util/subresource_access.h; this is the forwarder, put in place when the
+// library loads: a file is a read, an http(s) URL a connection. Answered
+// without asking: markup never raises a prompt.
+std::string subresourceLoad(bool net, const std::string& subject) {
+    return ev::checkAccessWithoutAsking(net ? ev::AccessKind::Net : ev::AccessKind::Read, subject);
 }
 
 [[maybe_unused]] const bool kSubresourceGateInstalled = [] {
-    util::setSubresourceReadGate(&subresourceRead);
+    util::setSubresourceGate(&subresourceLoad);
     return true;
 }();
 
