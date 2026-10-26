@@ -31,7 +31,11 @@
  * File paths (`createClipFromFile*`, `createStreamFromFile`, `savePreset`,
  * `loadPreset`) resolve the way `fs.*` does: relative to the app directory,
  * mount paths honoured. A path being written resolves through its parent
- * directory, which must exist.
+ * directory, which must exist. The loaders ask to read their path and
+ * `savePreset` to write its (docs/apps.md "Permissions"); one the app may not
+ * touch is an Error with code 'EACCES' and `path` (named PermissionRevoked for
+ * a grant taken back): thrown, or `createClipFromFileAsync`'s promise
+ * rejected. Nothing is read or written.
  *
  * @example
  *   // A looping clip on its own bus with reverb, moving in 3D

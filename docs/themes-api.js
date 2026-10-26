@@ -69,6 +69,13 @@ const theme = bro.themes.import(jsonOrXmlString, { format: 'auto' });
 const wtJson = bro.themes.export(theme, { format: 'windows_terminal' });
 const itermXml = bro.themes.export(theme, { format: 'iterm' });
 
+// Read / write a theme file (paths resolve like fs.*). load asks to read the
+// path and save to write it (docs/apps.md "Permissions"): one the app may not
+// touch throws an Error with code 'EACCES' and `path` (named PermissionRevoked
+// for a grant taken back), and nothing is read or written.
+const fromFile = bro.themes.load('themes/dark.json', { format: 'auto', colorFormat: 'hex' });
+const wrote = bro.themes.save(theme, 'themes/copy.json', { format: 'windows-terminal' }); // true when written
+
 // ============================================================================
 // 3. Color Space & Gamut Utilities
 // ============================================================================

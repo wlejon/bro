@@ -32,7 +32,9 @@
  * CLIPS. Every `clip` argument is any of
  *   - a path string ("sfx/hit.wav"): decoded with the same loaders as
  *     AudioContext.decodeAudioFile (wav / flac / mp3 / ogg / opus), resolved
- *     like fs.* paths (relative to the app);
+ *     like fs.* paths (relative to the app); a path the app may not read
+ *     throws an Error with code 'EACCES' and `path` (spectrogram's `path`
+ *     PNG asks to write the same way);
  *   - an AudioBuffer;
  *   - {samples: Float32Array, sampleRate, channels?}: interleaved samples,
  *     which is what decodeAudioFile and the bro.tts synthesizers return;
@@ -718,6 +720,9 @@ class ClapModel {
  * on a work thread, returns an AsyncHandle, and calls onReady(model) or
  * onError(message).
  * `new bro.ear.ClapModel()` throws; the class is exported for instanceof.
+ * A `dir` given (and a WAV path handed to score / embedAudio) asks read access
+ * first; refused, the call throws an Error with code 'EACCES' and `path` (name
+ * 'PermissionRevoked' for a revoked grant).
  * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
  *   tokenizer files); defaults as described above.
  * @param {{device?: 'cuda'|'vulkan'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]

@@ -63,6 +63,13 @@
  *               have fewer than C entries, or hold a non-number; an encoder's
  *               file path that is not a string; a non-number orient / alpha /
  *               gamma.
+ *   Error       (code 'EACCES', `path` the absolute path) a path the app may
+ *               not touch: a decoder / probe / frames entry point handed a
+ *               path asks to read it, encodePngFile / encodeJpegFile ask to
+ *               write it (docs/apps.md "Permissions"; outside the app's own
+ *               places that needs the `files` grant). Named PermissionRevoked
+ *               for a grant taken back. Nothing is read or written. Bytes
+ *               never ask.
  *
  * Covered: the geometric kernels in both name sets (resize, crop, centerCrop,
  * flip, rotate90, pad, letterbox and the alpha-aware RGBA8 resizes), the
@@ -384,7 +391,8 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 //
 // Each decoder takes EITHER a path string (used as given — resolve it first if
 // you want app-relative) OR the encoded bytes as a TypedArray, and returns
-// `{width, height, channels, pixels}`. Plain 8-bit RGBA decode is already
+// `{width, height, channels, pixels}`. A path asks to read the file and throws
+// an EACCES Error when the app may not (see ERRORS above). Plain 8-bit RGBA decode is already
 // covered by `new Image()`; these are the high-bit-depth, HDR and
 // auto-oriented cases.
 //
@@ -804,7 +812,8 @@ bro.image.applyExifOrientation = function(pixels, width, height, orient) {};
 //
 // `pixels` is interleaved HWC. The *File variants write the file (path used as
 // given) and return a boolean; the memory variants return the encoded bytes,
-// or null on failure.
+// or null on failure. A *File variant asks to write its path first and throws
+// an EACCES Error, writing nothing, when the app may not (see ERRORS above).
 
 /**
  * PNG, lossless.

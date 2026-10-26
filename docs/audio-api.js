@@ -118,7 +118,10 @@
  * File paths (`decodeAudioFile`, `saveWav`, `exportRecordingToWav`) resolve
  * the way `fs.*` does: relative to the app directory, mount paths honoured.
  * A path being written resolves through its parent directory, which must
- * exist.
+ * exist. `decodeAudioFile` asks to read its path, `saveWav` and
+ * `exportRecordingToWav` to write theirs (docs/apps.md "Permissions"); one the
+ * app may not touch throws an Error with code 'EACCES' and `path` (named
+ * PermissionRevoked for a grant taken back), and nothing is read or written.
  *
  * Live microphone chunks for speech/ML consumers are `bro.mic`, documented in
  * `mic-api.js`; see also the "Microphone" section at the end of this file.

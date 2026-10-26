@@ -13,6 +13,11 @@
 // the app directory, not the process's working directory. A file that cannot
 // be read gives an empty result rather than throwing — check `mesh.empty` or
 // `cloud.count`. Savers return `true` when the file was written.
+//
+// Every loader asks to read its path and every saver to write its
+// (docs/apps.md "Permissions"); one the app may not touch throws an Error
+// with code 'EACCES' and `path` (named PermissionRevoked for a grant taken
+// back), and nothing is read or written.
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 

@@ -553,8 +553,9 @@ Rig.spec = function(name) {};
 Rig.specFromJSON = function(jsonText) {};
 
 /**
- *  Load a spec from a JSON file. Note this path does NOT go through the app
- *  path resolver the mesh loaders use.
+ *  Load a spec from a JSON file. The path resolves like the mesh loaders'
+ *  (relative to the app) and asks to be read: one the app may not read
+ *  throws an Error with code 'EACCES' and `path`.
  * @param {string} path
  * @returns {SkeletonRig}
  */
@@ -654,7 +655,9 @@ Rig.transferWeights = function(targetMesh, sourceMesh, sourceSkin, maxDistance) 
 // bromesh's rigging half adds these to the `Mesh` class documented in
 // docs/mesh-api.js. `Mesh.loadGLTF` and `mesh.saveGLTF` exist only when
 // bromesh was built with glTF support; `Mesh.loadGLTF` is also forwarded onto
-// `bro.mesh`.
+// `bro.mesh`. loadGLTF asks to read its path and saveGLTF to write its, as
+// the loaders in docs/mesh-io-api.js do (an EACCES Error with `path` when the
+// app may not).
 
 /**
  *  Deform the mesh in place by `skin` and a flat array of column-major 4x4

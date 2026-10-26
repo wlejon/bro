@@ -238,7 +238,10 @@ rngState = gpu.xavierInit(W2, rngState);
 // The huggingface safetensors container. The reader mmap's the file: opening a
 // multi-GB checkpoint and reading only its header() is cheap, no payload is
 // faulted in until get() uploads a tensor. Paths go through bro's path
-// resolver, so an app-relative path works.
+// resolver, so an app-relative path works. openSafetensors asks to read its
+// path and saveSafetensors to write its (docs/apps.md "Permissions"); one the
+// app may not touch throws an Error with code 'EACCES' and `path` (named
+// PermissionRevoked for a grant taken back), and nothing is read or written.
 
 /**
  * Open a .safetensors file.

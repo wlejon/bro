@@ -217,7 +217,10 @@ gtrainer.warmupWith(bcSits);
 // and footer must be where the writer put them, frame offsets must lie in
 // the frame stream (64-bit, so files past 2 GiB work), an unknown field type
 // or a roster row size that disagrees with the schema is rejected, and a
-// failed open() (false) leaves the reader empty.
+// failed open() (false) leaves the reader empty. open() asks to write
+// (recorder) or read (reader) its path first: one the app may not touch
+// throws an Error with code 'EACCES' and `path`, as docs/ai-game-learning.js
+// "Replay I/O" says.
 
 const rec = bro.ai.game.grid.createGenericRecorder();
 rec.open("ep_0001.bgargrid", /*episodeId*/ 1n, /*seed*/ 0xC0DEn, /*dt*/ 1/60, {
@@ -260,7 +263,8 @@ const xs = rr.trajectory(/*rowIndex*/ 0, "x"); // values for that field across a
  *  @param {Object} opts.net: { inDim, hidden:[...], valueHidden, numActions, seed:bigint }
  *  @param {Object} [opts.buffer]: { capacity }
  *  @param {Object} [opts.trainer]: { lr, momentum, batch, policyWeight, valueWeight, publishEvery, rngSeed }
- *  @param {Object} [opts.ckpt]: { dir, ringSize, bestWindow }   omit for no disk writes
+ *  @param {Object} [opts.ckpt]: { dir, ringSize, bestWindow }   omit for no disk writes; `dir`
+ *         asks to be written once, here (an EACCES Error with `path` when the app may not)
  *  @param {number} [opts.ingestBurst=64]
  *  @param {number} [opts.stepsPerTick=1]
  *  @returns {GridTrainer}

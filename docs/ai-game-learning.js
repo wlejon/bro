@@ -436,6 +436,12 @@ sim.resetCounters();                // does NOT reset world state
 // and the reader is left empty); a frame whose counts overrun its own bytes
 // reads as empty rather than past its end. The same holds for the generic
 // reader in docs/ai-game-tools.js.
+//
+// Paths are opened as given (relative to the working directory). Recorder
+// open() asks to write its path and ReplayReader open() to read its
+// (docs/apps.md "Permissions"); one the app may not touch throws an Error
+// with code 'EACCES' and `path` (named PermissionRevoked for a grant taken
+// back), and nothing is opened or created.
 
 /** @returns {AIRecorder} */
 const rec = bro.ai.game.createRecorder();
