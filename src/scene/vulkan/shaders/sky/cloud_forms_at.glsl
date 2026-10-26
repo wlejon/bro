@@ -61,10 +61,9 @@ vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
     vec3 c = clCacheBase(w, lod);
     if (cloudHeapMapSide() <= 0.0) return c.xy;
     float texel;
-    vec4 col = cloudHeapMapColumn(cloudChartAt(normalize(pd)), foot, texel);
+    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), foot, w.h * (clouds.shell.y - clouds.shell.x), texel);
     float far = cloudHeapsFar(foot, texel);
-    float z = w.h * (clouds.shell.y - clouds.shell.x);
-    float own = far < 1.0 ? min(0.5 + cloudHeapColumnIn(col, z) / clouds.forms.w, 1.0) : 0.0;
+    float own = far < 1.0 ? min(0.5 + in_ / clouds.forms.w, 1.0) : 0.0;
     return vec2(max(c.x, mix(own, c.z, far)), c.y);
 }
 float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot).x; }

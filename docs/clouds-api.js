@@ -38,8 +38,13 @@
  *     the world's (cloudHeap). The engine bakes them into a map about the
  *     eye's drifted nadir (8 levels of 1024 x 1024 texels, the finest 16 m
  *     and each level's twice the last's): each texel the heaps' column over
- *     it (its base, how high its top stands, how far it is inside their
- *     outline, its top's slope). The march reads its base there at every
+ *     it (its bottom, how high its top stands, how far it is inside their
+ *     outline, its top's slope; past their outline, the nearest's outline's
+ *     height and slope there). A point's distance inside the heaps is
+ *     read from each texel's column about it and blended between them (in
+ *     metres, as from a lobe's ellipsoid: over a top, from a dome about the
+ *     heaps' size), so their surface goes on smoothly from texel to texel.
+ *     The march reads its base there at every
  *     distance, so a heap seen from 400 km off is the heap flown through,
  *     the same heap in the same place, refined as it nears, never a field
  *     the engine made up; where they come under a few pixels across, their

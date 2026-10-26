@@ -74,12 +74,16 @@ CloudHeapCell cloudHeapCell(ivec3 id) {
 }
 
 // How far (m) a point is inside a lobe at most (negative: outside, by
-// about how far; it changes no faster than the distance): `v` from the
-// cell's middle on its tangent plane, `z` metres up the deck.
+// about how far; it changes about as fast as the distance, so a tall lobe
+// ends over its top as sharply as at its walls): `v` from the cell's middle
+// on its tangent plane, `z` metres up the deck. (The ellipsoid's distance
+// as its radius, of 1, over that radius's gradient.)
 float cloudLobeIn(vec4 lobe, float middle, float base, vec2 v, float z) {
     if (lobe.w <= 0.0) return -1e5;
+    vec2 a = max(lobe.zw, vec2(1.0));
     vec2 e = vec2(length(v - lobe.xy), z - base - middle);
-    float inEll = (1.0 - length(e / max(lobe.zw, vec2(1.0)))) * max(min(lobe.z, lobe.w), 1.0);
+    float k0 = length(e / a), k1 = length(e / (a * a));
+    float inEll = k1 > 1e-9 ? k0 * (1.0 - k0) / k1 : min(a.x, a.y);
     return min(inEll, (z - base) * 3.0);
 }
 float cloudHeapIn(CloudHeap h, vec2 v, float z) {
@@ -99,18 +103,19 @@ void cloudHeapAbout(vec3 up, out vec3 fe, out ivec2 c0, out float wall) {
 }
 
 // The heaps' column over drifted body direction `up` (the heaps' map's
-// texel, sky/clouds_layout.h), as cloudLobeIn measures how far a point is
-// inside a lobe (its ellipsoid's radius, of 1, by its shorter half-axis)
-// taken straight across and straight down: x its bottom (m up the deck: the
-// lowest of the lobes over it, its base or where its ellipsoid's underside
-// is over that; where none is over it, the nearest's base), y how high
-// its top stands over that (the highest lobe's; 0 none), z how far `up` is
-// inside the lobes' outline across (m, by the lobe's shorter half-axis over
-// its width: a flat lobe's walls as soft as cloudLobeIn's; negative
-// outside, by at least that: a lobe's outline its base where its middle is
-// under it, else its widest), w how far a point is inside under the top a
-// metre under it (the highest lobe's, likewise). The 5 x 5 cells about it
-// are searched, so a heap past them is more than a cell off.
+// texel, sky/clouds_layout.h), in metres as cloudLobeIn measures how far a
+// point is inside a lobe, taken straight across and straight down: x its
+// bottom (m up the deck: the lowest of the lobes over it, its base or
+// where its ellipsoid's underside is over that), y how high its top stands
+// over that (the highest lobe's), z how far `up` is inside the lobes'
+// outline across (m; negative outside, by at least that: a lobe's outline
+// its base where its middle is under it, else its widest), w how far a
+// point is inside under the top a metre under it (the top's slope's
+// cosine: the highest lobes'). Where no lobe is over it, x the height of
+// the nearest's outline, y 0 and w its slope's cosine there, so the field
+// (scene_cloud_layer.glsl's cloudHeapColumnIn) goes on smoothly across the
+// outline. The 5 x 5 cells about it are searched, so a heap past them is
+// more than a cell off.
 vec4 cloudHeapColumn(vec3 up) {
 #ifndef CLOUD_HEAPS
     return vec4(0.0, 0.0, -1e5, 1.0);
@@ -121,8 +126,19 @@ vec4 cloudHeapColumn(vec3 up) {
     float wall;
     cloudHeapAbout(up, fe, c0, wall);
     float rb = clouds.shell.x;
-    float dIn = -(1.0 + wall) * cloudHeapSide(), zNear = 0.0;
-    float zb = 1e9, top = -1e9, rateTop = 1.0;
+    float dIn = -(1.0 + wall) * cloudHeapSide(), zNear = 0.0, cNear = 1.0;
+    // (The rate under the top: the lobes' over the texel, each weighed by
+    // how near its top is to the highest, by CL_HEAP_RATE_NEAR metres, and
+    // how far within its outline the texel is, so it changes smoothly from
+    // texel to texel where one lobe stands over another.)
+    const float CL_HEAP_RATE_NEAR = 100.0;
+    // (The bottom likewise: the least of the lobes' over the texel within
+    // CL_HEAP_BOTTOM_NEAR metres, each weighed by how far within its
+    // outline the texel is to the fourth, so a lower lobe's bottom comes in
+    // over its rim's last hundred metres or so, not at its outline.)
+    const float CL_HEAP_BOTTOM_NEAR = 200.0;
+    float bm = 1e9, botW = 0.0, botSum = 0.0;
+    float top = -1e9, rateW = 0.0, rateSum = 0.0;
     for (int k = 0; k < 25; ++k) {
         ivec3 id = cloudHeapOwn(ivec3(int(fe.z), c0 + ivec2(k % 5, k / 5) - 2));
         CloudHeapCell c = cloudHeapCell(id);
@@ -135,27 +151,46 @@ vec4 cloudHeapColumn(vec3 up) {
             if (lb.w <= 0.0) continue;
             float r = max(lb.z, 1.0), hh = max(lb.w, 1.0), mid = h.middle[l], base = h.base[l];
             float rho = length(v - lb.xy);
-            float m = mid / hh, least = min(r, hh);
+            float m = mid / hh;
             float rf = mid < 0.0 ? r * sqrt(max(1.0 - m * m, 0.0)) : r;
-            float d = (rf - rho) * least / r;
+            float d = rf - rho;
             if (d > dIn) {
                 dIn = d;
-                zNear = base;
+                // (Its outline's height, and its slope's cosine there: a
+                // vertical wall where its middle is over its base.)
+                zNear = base + max(mid, 0.0);
+                float sm = max(-m, 0.0);
+                cNear = sm > 0.0 ? (sm / hh) * inversesqrt((1.0 - sm * sm) / (r * r) + sm * sm / (hh * hh)) : 0.0;
             }
             float q = rho / r;
             if (q >= 1.0) continue;
             float s = sqrt(1.0 - q * q);
             float t = mid + hh * s;   // (its top over its base)
             if (t <= 0.0) continue;
-            zb = min(zb, base + max(mid - hh * s, 0.0));
-            if (base + t > top) {
-                top = base + t;
-                rateTop = max(least / hh * s, 0.02);
+            float bot = base + max(mid - hh * s, 0.0);
+            if (bot < bm) {
+                botSum *= exp((bot - bm) / CL_HEAP_BOTTOM_NEAR);
+                bm = bot;
             }
+            float s2 = s * s, wb = s2 * s2;
+            botW += wb;
+            botSum += wb * exp((bm - bot) / CL_HEAP_BOTTOM_NEAR);
+            // (Its top's slope's cosine: the ellipsoid's normal there.)
+            float rate = max((s / hh) * inversesqrt(q * q / (r * r) + s * s / (hh * hh)), 0.02);
+            if (base + t > top) {
+                float f = exp((top - base - t) / CL_HEAP_RATE_NEAR);
+                rateW *= f;
+                rateSum *= f;
+                top = base + t;
+            }
+            float wl = s * exp((base + t - top) / CL_HEAP_RATE_NEAR);
+            rateW += wl;
+            rateSum += wl * rate;
         }
     }
-    if (top < -1e8) return vec4(zNear, 0.0, dIn, 1.0);
-    return vec4(zb, top - zb, dIn, rateTop);
+    if (top < -1e8) return vec4(zNear, 0.0, dIn, cNear);
+    float zb = min(bm - CL_HEAP_BOTTOM_NEAR * log(max(botSum, 1e-30) / max(botW, 1e-30)), top);
+    return vec4(zb, top - zb, dIn, rateSum / max(rateW, 1e-6));
 #endif
 }
 

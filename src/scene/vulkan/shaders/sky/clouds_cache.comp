@@ -157,7 +157,17 @@ void main() {
     // (half its diagonal across, half a bin up), its skin's most out and
     // its blur at the cell's footprint of it; else wherever the world says
     // they fill any share.
-    bool heapHolds = lattice ? heapIn + 1.25 * cell + 0.5 * binH + 0.2 * clouds.forms.w > 0.0 : heapShare > 0.0;
+    // And wherever the heaps' map's columns (sky/clouds_layout.h), which the
+    // march draws them by, may reach into it: they fill a heap's column
+    // from its lowest lobe's bottom to its highest's top, so more than the
+    // lobes do (under an overhang, between lobes one over another).
+    float margin = 1.25 * cell + 0.5 * binH + 0.2 * clouds.forms.w;
+    bool heapHolds = lattice ? heapIn + margin > 0.0 : heapShare > 0.0;
+    if (cloudHeapMapSide() > 0.0) {
+        float texel;
+        float mapIn = cloudHeapMapIn(cloudChartAt(normalize(pd)), cell, h * thick, texel);
+        heapHolds = heapHolds || mapIn + texel + margin > 0.0;
+    }
     // (What lies between texels, across the chart, the distance's margin of
     // a cell about each that may takes in.)
     imageStore(holdsOut, at, vec4(cloudMayHold(most, cell) || heapHolds ? 1.0 : 0.0));

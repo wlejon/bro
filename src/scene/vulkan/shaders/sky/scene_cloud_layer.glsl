@@ -574,12 +574,48 @@ vec4 cloudHeapMapColumn(vec2 xy, float foot, out float texel) {
     return a;
 }
 // How far (m) a point `z` metres up the deck is inside the heaps of column
-// `c` at most (negative: outside, by at least about that): under the top
-// and over the bottom (as far as under the top a metre), inside the outline
-// across.
+// `c` at most (negative: outside, by about that): over the bottom (a flat
+// base's), inside the outline across, and under the top along its slope;
+// over the top, from a dome CL_HEAP_CURVE of the heaps' cell across with
+// the top's slope there (so near the top the gap along its slope, farther
+// up the gap: a point over a heap's steep rim is the gap's distance off,
+// not the slope's few metres, which raised a curtain over every rim's
+// texels).
+const float CL_HEAP_CURVE = 0.4;
 float cloudHeapColumnIn(vec4 c, float z) {
-    float zr = z - c.x;
-    return min(min(zr, c.y - zr) * c.w, c.z);
+    float zr = z - c.x, g = zr - c.y;
+    float R = CL_HEAP_CURVE * max(cloudHeapMapSide(), 1.0);
+    float top = g <= 0.0 ? -g * c.w : R - sqrt(R * R + 2.0 * R * c.w * g + g * g);
+    return min(min(zr, top), c.z);
+}
+
+// How far (m) a point `z` metres up the deck at the drifted point's chart
+// point `xy` is inside the heaps (cloudHeapColumnIn) over footprint `foot`,
+// blended over the two levels about it; and the texel it was read over
+// (past the map, or with no map, -1e5). Each texel's own, then blended
+// between them: blending the columns before would make a field whose edge
+// steps from texel to texel where one lobe stands over another (the least
+// of blended tops, bottoms and slopes), not one that changes smoothly.
+float cloudHeapMapLevelIn(vec2 xy, int k, float z) {
+    vec2 g = xy / cloudHeapTexel(k) - 0.5;
+    ivec2 i = ivec2(floor(g));
+    vec2 f = g - vec2(i);
+    const int M = CL_HEAP_SIDE - 1;
+    float a = cloudHeapColumnIn(texelFetch(cloudHeapMap, ivec3(i & M, k), 0), z);
+    float b = cloudHeapColumnIn(texelFetch(cloudHeapMap, ivec3((i + ivec2(1, 0)) & M, k), 0), z);
+    float c = cloudHeapColumnIn(texelFetch(cloudHeapMap, ivec3((i + ivec2(0, 1)) & M, k), 0), z);
+    float d = cloudHeapColumnIn(texelFetch(cloudHeapMap, ivec3((i + ivec2(1, 1)) & M, k), 0), z);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float cloudHeapMapIn(vec2 xy, float foot, float z, out float texel) {
+    float lod = cloudHeapLod(xy, foot);
+    int k = int(lod);
+    texel = cloudHeapTexel(min(k, CL_HEAP_LEVELS - 1)) * exp2(fract(lod));
+    if (clouds.heapNadir.z < 0.5 || k >= CL_HEAP_LEVELS) return -1e5;
+    float v = cloudHeapMapLevelIn(xy, k, z);
+    float f = fract(lod);
+    if (k + 1 < CL_HEAP_LEVELS && f > 0.0) v = mix(v, cloudHeapMapLevelIn(xy, k + 1, z), f);
+    return v;
 }
 // How much of the heaps a footprint `foot` (or the heaps' map's texel
 // `texel` read for it) sees as their share, not as themselves: where they

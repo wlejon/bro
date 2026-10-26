@@ -114,9 +114,9 @@ void main() {
             vec2 hxy = cloudChartAt(normalize(cloudDrift(w.p)));
             for (int i = 0; i < 2; ++i) {
                 float f = i == 0 ? cell : footMax, texel;
-                vec4 col = cloudHeapMapColumn(hxy, f, texel);
+                float in_ = cloudHeapMapIn(hxy, f, wc.h * thick, texel);
                 if (cloudHeapsFar(f, texel) < 1.0)
-                    most = max(most, 0.5 + (cloudHeapColumnIn(col, wc.h * thick) + 0.87 * cell + texel) / clouds.forms.w);
+                    most = max(most, 0.5 + (in_ + 0.87 * cell + texel) / clouds.forms.w);
             }
         }
         most += 0.04 * abs(most) + 0.004;
