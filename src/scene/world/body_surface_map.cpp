@@ -70,6 +70,15 @@ SurfaceMap::Patch BodySurfaceMap::patch(int root, double x0, double z0, double x
     const double rel[3] = {e[0] - mid * centre[0], e[1] - mid * centre[1], e[2] - mid * centre[2]};
     out.above = static_cast<float>(std::max(dot3(rel, centre), 0.0));
 
+    // Its ground's nearest to the eye: no nearer than at its edge's angle
+    // from the eye's direction, at the height there nearest the eye. (The
+    // box, widened by the bulge on every side, held the eye 8 km over a
+    // 1000 km square, and its texels read as a billion pixels.)
+    const double le = std::sqrt(dot3(e, e));
+    const double gap = std::max(angleBetween(e, centre) - radius, 0.0);
+    const double r = std::clamp(le * std::cos(gap), R + lo, R + hi);
+    out.nearest = static_cast<float>(std::sqrt(std::max(le * le + r * r - 2.0 * le * r * std::cos(gap), 0.0)));
+
     // Hidden: every point of the square, even at its highest, past the
     // body's limb from the eye (the body as low as its lowest ground).
     out.hidden = beyondLimb(body, e, centre, radius, lowest_, hi);

@@ -64,9 +64,13 @@
 // are its nearest resident ancestor's, 2^(levels between) times its own on
 // screen (none resident: the coarsest's, required and so made that frame;
 // a missing coarsest tile, as if one above it), at most about the view's
-// height (twice its focal length in pixels); a stale tile's are its own. A tile's error is never above its
-// parent's while that one is a job too, so with ties going to the larger
-// tile a tile is never ranked ahead of its parent. The coarsest level's
+// height (twice its focal length in pixels); a stale tile's are its own; a
+// tile the view sees only through children it holds, no more than
+// texelPixels (drawn nowhere, its children's jobs say what it shows where
+// one is missing). A tile's error is never above its
+// parent's (what that one shows) while that one is a job too, so with ties
+// going to the larger tile a tile is never ranked ahead of a parent it
+// shows through. The coarsest level's
 // missing tiles are required (filled whatever the budget), so nothing is
 // ever without a layer after the first frame. A stale tile keeps drawing
 // until its refill lands. A tile no view needs stays where it is until its
@@ -140,6 +144,7 @@ public:
     struct Patch {
         bromath::AABB3 box;    // the square's ground between its heights
         float above = 0.0f;    // the eye's height over its ground (at the heights' middle)
+        float nearest = 0.0f;  // no ground of it nearer the eye (where the box says less)
         bool hidden = false;   // the body hides all of it from the eye
     };
     virtual ~SurfaceMap() = default;

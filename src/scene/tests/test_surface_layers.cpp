@@ -204,6 +204,24 @@ void testBudgetAndCoarsest() {
     bool stale = !L.jobs().empty();
     for (const SurfaceJob& j : L.jobs()) stale = stale && !j.required;
     check(stale, "a new generation makes every needed tile a job, none of them required");
+    // Every child held (stale): a refined tile is drawn nowhere and waits as
+    // the threshold; the view's leaves say their own texels.
+    std::set<uint64_t> parents;
+    for (const SurfaceJob& j : L.jobs())
+        if (j.key.level < top) parents.insert(j.key.parent().packed());
+    bool hidden = true, leaves = false;
+    int refined = 0;
+    for (const SurfaceJob& j : L.jobs()) {
+        if (parents.count(j.key.packed())) {
+            ++refined;
+            hidden = hidden && j.error <= c.texelPixels;
+        } else {
+            leaves = leaves || j.error > c.texelPixels;
+        }
+    }
+    check(refined > 0 && hidden, "a refined tile whose children are all held waits as the threshold (" +
+                                     std::to_string(refined) + " refined)");
+    check(leaves, "a stale leaf says its own texels");
     L.commit({});
 }
 

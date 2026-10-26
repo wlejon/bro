@@ -132,7 +132,7 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         // (The coarsest tiles are kept whatever the view sees.)
         const bool seen = !patch.hidden && bromath::fintersects(view.frustum, box);
         if (k.level != top && !seen) return;
-        const float dist = boxDistance(view.eye, box);
+        const float dist = std::max(boxDistance(view.eye, box), patch.nearest);
         float metresPerPixel = view.orthoMetresPerPixel;
         if (view.perspective) {
             // The eye's height over the ground's middle there, and the
@@ -549,13 +549,16 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
     size_t topNeeded = 0;
     for (const Need& n : needs) topNeeded += n.key.level == top;
     if (topNeeded > static_cast<size_t>(config_.slots / 2)) return;
-    std::unordered_map<uint64_t, float> jobError;   // this frame's jobs, by key
     for (const Need& n : needs) {
-        const uint64_t packed = n.key.packed();
-        Tile& t = tiles_[packed];
+        Tile& t = tiles_[n.key.packed()];
         t.key = n.key;
         t.lastNeeded = frame;
         t.wanted = n.generation;
+    }
+    std::unordered_map<uint64_t, float> jobError;   // this frame's jobs, by key
+    for (const Need& n : needs) {
+        const uint64_t packed = n.key.packed();
+        const Tile& t = tiles_[packed];
         if (t.filled && t.generation == n.generation) continue;
         // A stale tile shows its own texels; a missing one its nearest
         // resident ancestor's, or the coarsest's, made this frame whatever
@@ -582,6 +585,21 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
             if (p != jobError.end()) error = std::min(error, p->second);
         }
         jobError[packed] = error;
+        // Refined, and every child the view needs held: drawn nowhere this
+        // frame, it waits as the threshold, not its texels. (A region's move
+        // restaled the coarsest tiles under an eye 8 km up, their children
+        // all in, and each said the view's height wrong for seconds; where
+        // a child is missing its own job says what this one shows.)
+        bool refined = false, covered = true;
+        for (int c = 0; n.key.level > 0 && c < 4; ++c) {
+            const CellKey ck{n.key.x * 2 + (c & 1), n.key.z * 2 + (c >> 1), static_cast<uint8_t>(n.key.level - 1),
+                             n.key.root};
+            const auto ct = tiles_.find(ck.packed());
+            if (ct == tiles_.end() || ct->second.lastNeeded != frame) continue;
+            refined = true;
+            covered = covered && ct->second.filled;
+        }
+        if (refined && covered) error = std::min(error, config_.texelPixels);
         const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << n.key.level);
         jobs_.push_back({n.key, error, side, !t.filled && n.key.level == top});
     }
