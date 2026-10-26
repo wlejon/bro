@@ -69,6 +69,12 @@
  *   on codebook 0.
  * @property {Float32Array} [voiceSteer]
  * @property {Float32Array} [speakerVector]
+ * @property {Float32Array} [languageVector] Replaces the language row of the
+ *   prompt (the codec embedding of the `language` token) with this point, hidden
+ *   width floats. With English text another language's row speaks the English
+ *   words with that language's accent, so a blend of `languageEmbedding` rows,
+ *   `en + a·(x − en)`, is a continuous accent; `a` past 1 pushes further. Under
+ *   `'auto'` the row is added in the position a language token would take.
  * @property {boolean} [trace=false] Attach `stages` to the result.
  * @property {(ParakeetModel|{model: ParakeetModel, tokenizer?: ParakeetTokenizer})} [align]
  *   Attach `words` to the result: the take is heard back by Parakeet and the
@@ -568,6 +574,18 @@ class QwenTtsModel {
 
   /** @returns {string[]} */
   languages() {}
+
+  /**
+   * A language's row in the codec embedding: the point `languageVector`
+   * replaces. Any name from `languages()` (dialect tags too).
+   * @param {string} name
+   * @returns {Float32Array}
+   * @example
+   * const en = qwen.languageEmbedding('english'), ru = qwen.languageEmbedding('russian');
+   * const v = en.map((e, d) => e + 0.7 * (ru[d] - e));   // 70% of the way to a Russian accent
+   * qwen.synthesize('The farmer parked his car.', { speaker: 'ryan', languageVector: v });
+   */
+  languageEmbedding(name) {}
 
   /**
    * A preset speaker's dialect tag (`'sichuan_dialect'`, `'beijing_dialect'`),
