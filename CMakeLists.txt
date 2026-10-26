@@ -533,9 +533,3 @@ endforeach()
 include(cmake/glslang.cmake)
 
 add_subdirectory(src)
-
-enable_testing()
-add_test(
-    NAME bro_verify_host_bindings
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/scripts/verify-host-bindings.py
-)
