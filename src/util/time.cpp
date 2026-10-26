@@ -58,8 +58,12 @@ double tscTicksPerMs() {
 double threadCpuTimeMs() {
 #ifdef _WIN32
 #if defined(_M_X64) || defined(_M_IX86)
+    // The rate first: its first call spins 20 ms on this thread, and those
+    // cycles belong before this reading, not inside the interval the caller
+    // takes from it to the next.
+    const double rate = tscTicksPerMs();
     ULONG64 cycles = 0;
-    if (QueryThreadCycleTime(GetCurrentThread(), &cycles)) return double(cycles) / tscTicksPerMs();
+    if (QueryThreadCycleTime(GetCurrentThread(), &cycles)) return double(cycles) / rate;
 #endif
     FILETIME created, exited, kernel, user;
     if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0.0;
