@@ -27,7 +27,8 @@ constexpr float kMaxError = 64.0f;
 
 }  // namespace
 
-void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged) {
+void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged,
+                     float pixelsPerMetre) {
     ++frame_;
     sun_ = sun;
     generation_ = generation;
@@ -40,13 +41,16 @@ void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_
         s.cx = std::floor(eye.x / snap + 0.5) * snap;
         s.cz = std::floor(eye.z / snap + 0.5) * snap;
         const double half = 0.5 * kSide * texel;
+        // (What a moved level leaves wrong: the coarser level's texel at the
+        // nearest ground.)
+        const float coarser = static_cast<float>(2.0 * texel) * pixelsPerMetre;
         Want w;
         w.level = l;
         if (s.shown.layer < 0) {
             w.required = true;
             w.error = kMovedError;
         } else if (s.shown.x0 != s.cx - half || s.shown.z0 != s.cz - half) {
-            w.error = kMovedError;
+            w.error = std::min(kMovedError, coarser);
         } else if (s.generation != generation) {
             w.error = kLandError;
         } else if (bromath::vdot(s.sun, sun) < kSunTurnCos) {

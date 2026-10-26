@@ -27,7 +27,12 @@
 //   - the land's tiles changed since it was made (they refine as the eye
 //     moves) and kTilesRefreshFrames have passed.
 // A want's error doubles every kRefreshFrames it waits, so one outranked
-// frame after frame is still made.
+// frame after frame is still made. A moved level is wrong by no more than
+// the next coarser level's texel as the nearest ground shows it (where it
+// no longer reaches, that level shades), so its want is at most that many
+// pixels: from orbit, under one, where the fixed want queued a level in
+// most frames. (Not so one over refined tiles: their heights stood over
+// the hollows shade the whole of them, whatever the texel.)
 
 #include <bromath/vec.h>
 
@@ -64,9 +69,11 @@ public:
     };
 
     /// This frame's state: the eye, the sun (toward it), the land's
-    /// generation and whether its tiles changed since the last call. Gathers
-    /// wants().
-    void update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged);
+    /// generation, whether its tiles changed since the last call, and the
+    /// pixels a metre of the nearest ground spans (the view's focal length
+    /// over the eye's height above the land's highest). Gathers wants().
+    void update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_t generation, bool tilesChanged,
+                float pixelsPerMetre);
     const std::vector<Want>& wants() const { return wants_; }
 
     /// Level `l` is made this frame: where (its corner and texel) and into
