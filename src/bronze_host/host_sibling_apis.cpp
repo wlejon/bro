@@ -746,6 +746,9 @@ void installSiblingApis(engine::Engine& engine) {
     }
 #endif
 #if BRO_WITH_MPRIS
+    // Headless sees no session players and publishes none onto the session
+    // bus: a test must not read or answer to the machine's media players.
+    brompris::api::setSessionAccess(engine.displayMode() != engine::DisplayMode::Headless);
     brompris::api::installMpris();
     if (installHooks) {
         engine.addFramePump([] {
