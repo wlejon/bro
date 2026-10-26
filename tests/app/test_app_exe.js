@@ -203,8 +203,11 @@ function run() {
         const data = path.join(scratch, 'install');
         const env = isWin ? { LOCALAPPDATA: data, APPDATA: path.join(scratch, 'roaming') } : { XDG_DATA_HOME: data };
         broCli(['--install', app], env);
-        const installed = path.join(data, 'bro', 'apps', 'org.bro.test.ExeApp');
-        const built = path.join(data, 'bro', 'bin', isWin ? 'org-bro-test-ExeApp.exe' : 'org-bro-test-ExeApp');
+        // Under BRO_APP_HOME the install root is <BRO_APP_HOME>/bro/apps
+        // (docs/apps.md), its executables beside it in bro/bin; the desktop
+        // entry and Start menu shortcut stay where the platform says.
+        const installed = path.join(baseEnv.BRO_APP_HOME, 'bro', 'apps', 'org.bro.test.ExeApp');
+        const built = path.join(baseEnv.BRO_APP_HOME, 'bro', 'bin', isWin ? 'org-bro-test-ExeApp.exe' : 'org-bro-test-ExeApp');
         assert(fs.existsSync(built), '--install built ' + built);
         const bi = info(built, env);
         assert(norm(bi.app) === norm(installed) && bi.state === 'current', 'for the installed copy: ' + JSON.stringify(bi));
