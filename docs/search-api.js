@@ -4,7 +4,10 @@
  *
  * A walk's or grep's root, a GitignoreMatcher's root and a loaded ignore file
  * are read as `fs` would read them (docs/apps.md, Permissions); a refusal is
- * an Error carrying the reason, `code: 'EACCES'` and `path`.
+ * an Error carrying the reason, `code: 'EACCES'` and `path`. A files() or
+ * grep() still running when the user takes the grant back is cancelled,
+ * streams no more onFile/onMatch calls, and its promise rejects with an Error
+ * named PermissionRevoked (`code: 'EACCES'`, `path` the root).
  */
 
 /**

@@ -8,6 +8,13 @@
  * watches, directory models and getMime read. A refusal throws (or rejects
  * with) an Error carrying the reason, `code: 'EACCES'` and `path`; listTrash
  * leaves out items whose original place the app may not read.
+ *
+ * A watch, a DirectoryModel and a running usage scan stop when the user takes
+ * the grant back while the app runs: the watch's callback gets one
+ * `{ kind: 'error', watch, path, error }` event and nothing after, the model's
+ * 'error' listeners get the error (entries() is empty from then on), and the
+ * scan is cancelled and its `done` rejects; the error is named
+ * PermissionRevoked, with `code: 'EACCES'` and `path`.
  */
 
 /**
@@ -98,6 +105,9 @@ const model = new bro.vfs.DirectoryModel('/home/j/projects/bro');
 model.on('change', (items) => {
     console.log(`Directory updated, count: ${items.length}`);
 });
+// The model stopped because the user took back the app's access to the folder
+// (err.name === 'PermissionRevoked', err.code === 'EACCES', err.path):
+model.on('error', (err) => console.warn(err.message));
 
 // Configure sorting ('name' | 'size' | 'mtime' | 'type' | 'kind' | 'ext' | 'extension')
 // and case-insensitive substring filter on entry name:
@@ -113,9 +123,11 @@ const currentItems = model.entries();
 //
 // Each event in `events` has shape:
 //   { kind, watch, path, oldPath?, error? }
-// where `kind` is 'created' | 'modified' | 'deleted' | 'renamed' | 'attributes' | 'overflow',
-// `watch` is the numeric watch descriptor ID, `path` is the UTF-8 path, and
-// `oldPath` is present when `kind === 'renamed'`.
+// where `kind` is 'created' | 'removed' | 'modified' | 'renamed' | 'rescan' |
+// 'root-removed' | 'error', `watch` is the numeric watch descriptor ID, `path`
+// is the UTF-8 path, and `oldPath` is present when `kind === 'renamed'`. An
+// 'error' event's `error` says why; when the user took back the app's access
+// to the folder it is an Error named PermissionRevoked and the watch is over.
 
 const watcher = bro.vfs.watch('/home/j/projects/bro', (events) => {
     for (const ev of events) {
