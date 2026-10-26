@@ -291,42 +291,120 @@ What the design must keep possible, and what it still lacks for it:
    `process.env`, the network and `<terminal>`**, in today's one-app-per-process
    bro. This contains mistakes there too. **Built** (2026-10-26):
    - The catalogue is one table, `src/engine/capabilities.cpp`: ask
-     capabilities `files`, `net`, `spawn`, `mic`, `wl`, `displays`, `clip`,
-     `pulse`, `remote` and `sys.<member>` (power, audio, network, bluetooth,
+     capabilities `files`, `net`, `spawn`, `mic`, `env`, `mpris`, `wl`,
+     `displays`, `clip`, `pulse`, `remote` and `sys.<member>` (power, audio,
+     network, bluetooth,
      notifications, tray, processes); shell capabilities `shell`,
      `compositor`, `seat`, `cred`, `portal`, `permissions`, granted only by
      the host executable (helm's main, `--grant`). The grants live in
      `AppPermissions` (`src/engine/app_permissions.cpp`), the store in
      `grant_store.cpp`.
-   - Enforcement is at the natives, not in `require`: brokit's access policy
-     (`brokit::api::setAccessPolicy`) asks at every fs entry point, sqlite
-     open, process start and network connect or listen; bro installs it
-     (`src/bronze_host/host_permissions.cpp`), with the terminal's spawn
-     gate, broaudio's capture gate, and the path and spawn gates of brovfs,
-     brosearch, brothumb and broapps. The gated `bro.<ns>` objects are
-     still the stub or the live namespace, put in place by the catalogue; a
-     declared, undecided one is a stub that asks on first touch.
+   - Enforcement is at the natives, not in `require`. Every native that opens
+     a path, connects, listens, starts a process or captures asks one gate,
+     bronze's `embed/embed_access.h` (`AccessKind` Read, Write, Spawn, Net,
+     Capture, EnvRead, EnvWrite, DesktopRead, DesktopWrite), which bro
+     installs over `AppPermissions` (`src/bronze_host/host_permissions.cpp`).
+     The askers: brokit's fs, sqlite, child_process, net, fetch, WebSocket
+     and `process.env`; the terminal's spawn; broaudio's capture; brovfs,
+     brosearch, brothumb, broapps and broconf; the media, model and game-AI
+     siblings' file natives (bro.image, AudioContext and bro.ear, bro.mesh
+     and bro.rigging, bro.themes, bro.tensor, bro.lm, bro.diffusion,
+     brosoundml, bro.vision, bro.ai.game); bro's own natives through
+     `host_access.h` (screenshots, recordings, encoders, bro.media, scene
+     textures, bro.net, notification and tray icons, Workers); and the
+     page's subresources (`util::subresourceRefusal`: a path asks Read, an
+     http(s) URL asks `net`, answered from what is decided, never a prompt
+     from markup). The gated `bro.<ns>` objects are proxies over the live
+     namespace (or its stub) that ask on first touch and refuse once revoked.
+   - `process.env` (`env`): without it an app sees only who and where it is
+     (`envAlwaysVisible` in `app_permissions.cpp`: the user and home, the
+     temp and system folders, PATH and the shell, LANG/LANGUAGE/TZ and
+     `LC_*`, the terminal and desktop, `XDG_*`, the machine's OS, CPU and
+     name, bro's own `BRO_*`, and `CI`); tokens, keys and the rest are
+     absent rather than refused, so enumeration and `in` agree. A write it may
+     not make lands in an app-local overlay: the app reads it back and its
+     children inherit it, but the process's environment is untouched.
+   - `mpris` is its own capability: the media players listed say what the
+     user is playing, and a published player can stand in for another.
+     bro-headless keeps bro.mpris off the session bus altogether.
+   - An app's own `bro.conf` section (`<appId>.*`) is always writable, as its
+     own directories are; reading the desktop's keys and writing them need
+     `files`.
+   - The path check is cheap: `checkFs` makes the path absolute and lexically
+     normal, resolves the parent once per directory (a cache cleared when the
+     grants change) and checks only the leaf for a link, all outside the
+     permissions lock. Windows, Release, a file in the app's data dir:
+     `statSync` 87 us through the gate against about 70 us with no gate,
+     `existsSync` of a missing file 25.5 against 12.8 (it was 56 us over
+     before the cache).
    - Decided differently from the proposal: a grant is *allow* or *deny* (an
-     undecided one asks), not allow/ask/deny; revocation takes effect at the
-     next launch, not while the app runs (no `PermissionRevoked` yet);
+     undecided one asks), not allow/ask/deny;
      `sys.processes` is one capability, not `sys.processes.read`; `files`
      is one capability for everything beyond the app's own directories and
      what the user picked, and with it an app may read and write anywhere
-     except bro's own state; identity is the install record's folder
-     (`install:<id>`) with no hash yet (step 6), else the canonical folder;
-     dev mode is the store's `devMode` flag (`bro --dev-mode on`), not a helm
-     setting yet, and it also overrides the user's denials; the store is
+     except bro's own state; identity is the install record (step 6), else
+     the canonical folder; dev mode is the store's `devMode` flag
+     (`bro --dev-mode on`, or helm's Settings), shown in helm's bar while it
+     is on, and it also overrides the user's denials; the store is
      bro's own (`grants.json` in bro's config directory), which no app can
      write, rather than helm's.
-   - Not gated yet: `process.env`, and the natives of other siblings that
-     take a file path of their own (mesh, image, model and media loaders and
-     encoders, screenshots).
+   - Revocation while the app runs (pulled forward from step 5). Each running
+     bro polls `grants.json`'s modification time and size every 250 ms of
+     wall time (stamped before the read, a failed read skipped, so a write in
+     progress is never taken for an empty store), on the frame pump; `bro
+     --revoke-app`, `--reset-app` and helm's `bro.permissions.set` reach
+     every running app that way. A change reloads the grants, and then:
+     a call under a capability taken back throws an Error named
+     `PermissionRevoked` (code EACCES); and what the app holds open under it
+     is closed with that Error. The ledger is `embed::holdAccess` /
+     `accessChanged` / `revalidateHeldAccess`: whatever opened a resource
+     holds it there, and its revoke runs on the thread that holds it
+     (the main thread or the Worker's own loop). Held: brokit's sockets,
+     listeners, UDP sockets, WebSockets (closed 1008), fetches and their
+     bodies, children (killed; 'error' before 'exit') and fs watchers;
+     `<terminal>` sessions (a `permissionrevoked` event, the reason printed,
+     then the kill); the microphone, mic taps and loopback captures
+     (bro.mic's `onError`, bro.listen's `revoked`); bro.vfs watches,
+     directory models and usage scans; bro.search walks.
+   - Each capability's last use per app is recorded (`usage.json` beside the
+     store, flushed with the frame pump, not per call), shown by
+     `bro.permissions.list` and helm's page.
+   - Not closed on revocation yet: a handle the app took from a gated
+     namespace before (the proxy refuses only new reads off the namespace);
+     a file already open; `getUserMedia` tracks (the capture stops, but no
+     `ended` fires); one-shot jobs (a bro.vfs copy runs to its end); bro.net
+     sockets, `VideoEncoder`/`GifEncoder` outputs and bro-ctl recordings,
+     which do not hold yet; apps started through broapps' `launch` (their
+     own processes, with grants of their own). Two processes changing
+     `grants.json` at once: the last write wins.
 2. **Frozen intrinsics;** per-realm host globals and HostClass prototypes.
 3. **Compartment = Realm + document + ledger;** host objects owned by their
    compartment; `<appview>`.
 4. **Fiber scheduling and time slices.**
 5. **Disconnects, the error card, and the ledger's per-resource tests.**
-6. **Install identity, helm's prompts and the Apps settings page.**
+6. **Install identity, helm's prompts and the Apps settings page.** Identity
+   and the page are **built** (2026-10-26); helm's prompts are not:
+   - `bro --install` writes `<root>/<id>.install.json` beside the installed
+     folder (`src/engine/install_record.*`): each file's path, size,
+     modification time and SHA-256, and the tree's hash (SHA-256 over
+     "path\0size\0file hash\n" in path order). The grant store's record for
+     the app carries the hash (`installHash`) its decisions were made for.
+   - Launch hashes nothing: it compares each recorded file's size and time
+     with the folder (0.5 ms for a three-file app on Windows); only a
+     difference costs a full hash then. A background thread hashes the
+     content after launch and, on a mismatch, takes the grants back while
+     the app runs.
+   - A changed hash marks the app's decisions `changed` (`bro --permissions`,
+     `bro.permissions.list`) and asks again; a reinstall of the same content
+     keeps them. A `--link` install records no content (it is a checkout
+     being worked on): its hash names the link's target. An installed folder
+     with no record is `unrecorded`, and grants made then hold only while it
+     stays so.
+   - helm's Settings, App Permissions (`helm/ui/js/settings/pages/permissions.js`):
+     every installed or known app, each declared capability with its state
+     and last use, revoke and reset, the picked paths with removal, and dev
+     mode, all through `bro.permissions` (`docs/permissions-api.js`); dev
+     mode on shows a pill in helm's bar.
 7. **Certificates checked in Release, and native preconditions.**
 8. **Retire** realm-scope swapping. (`desktop_trust`'s location and
    environment rules, grants by id and the applet certificates went with
