@@ -33,9 +33,13 @@ void WorldService::observe(const WorldFrameTiming& timing) {
     over_ = timing.frameMs > ceiling();
     overTarget_ = timing.frameMs > config_.targetMs;
     // (The headroom is the surprise at the target: while behind, frames run
-    // over the target by design and say nothing of it.)
+    // over the target by design and say nothing of it; nor does a frame over
+    // the ceiling whatever the service did, its own need past it. A second
+    // of the planet's march at 3.3 ms from orbit raised the headroom 0.3 ms,
+    // and at its fall of 5e-5 a frame held the budget at its floor for the
+    // next twenty seconds, land tiles 16 px behind.)
     const float q = config_.overRate;
-    if (!behind_)
+    if (!behind_ && !(over_ && timing.frameMs - service > ceiling()))
         headroom_ = std::clamp(headroom_ + config_.headroomStep * (over_ ? 1.0f - q : -q), 0.0f, config_.targetMs);
     need_.push_back(std::max(timing.frameMs - service, 0.0));
     const size_t window = static_cast<size_t>(std::max({config_.window, config_.catchUpWindow, 1}));

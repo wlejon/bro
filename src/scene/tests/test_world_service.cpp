@@ -325,6 +325,15 @@ void testFloorOverTarget() {
     s.observe(frameOf(1.0));
     s.beginFrame();
     check(near(s.budgetMs(), 2.78 - 2.6 - 0.0099), "back under target, the slack returns, less the headroom");
+    // A run of frames over the target by their own need, whatever the
+    // service did: no headroom, the slack whole once they end.
+    WorldService u;
+    u.configure(c);
+    const int ku = u.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    for (int i = 0; i < 30; ++i) u.observe(frameOf(3.4, ku, 1, 0.05));
+    for (int i = 0; i < 4; ++i) u.observe(frameOf(1.0));
+    u.beginFrame();
+    check(near(u.budgetMs(), 2.78 - 1.0), "frames over by their own need raise no headroom");
     // Need past the target, though the frame read was under it: the floor.
     WorldService t;
     t.configure(c);
