@@ -1,6 +1,6 @@
 // bro.app.open(id, args) / bro.app.find(id): another folder app by id, found
-// where `bro <id>` finds it (the install roots of `bro --install`, docs/apps.md),
-// else beside this app in its project, and started with the stock bro:
+// beside this app in its project, else where `bro <id>` finds it (the install
+// roots of `bro --install`, docs/apps.md), and started with the stock bro:
 // `bro <dir> args...`. Headless starts nothing: it records the call, which
 // openedApps() reports, so the resolution and the command line are what is
 // tested here (a single-instance app's hand-off is bro's own, covered by
@@ -56,6 +56,18 @@ assert(f && f.from === 'installed' && same(f.dir, installed), 'find: the install
 const s = bro.app.find(siblingId);
 assert(s && s.from === 'project' && same(s.dir, path.join(project, 'sib')), 'find: the project sibling: ' + JSON.stringify(s));
 assert(bro.app.find('org.bro.test.NoSuchApp') === null, 'find: an unknown id is null');
+
+// An id both installed and in the project: the project's copy, the one built
+// and changed with this app, over an installed one of any version.
+const bothId = 'org.bro.test.Both' + (process.pid % 100000);
+for (const dir of [path.join(root, bothId), path.join(project, 'both')]) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'bro.json'), JSON.stringify({ id: bothId, name: 'Both' }));
+    fs.writeFileSync(path.join(dir, 'index.html'), '<!DOCTYPE html><html><body>both</body></html>');
+}
+const b = bro.app.find(bothId);
+assert(b && b.from === 'project' && same(b.dir, path.join(project, 'both')),
+    'find: the project copy over the installed one: ' + JSON.stringify(b));
 assert(bro.app.find('../escape') === null, 'find: a path is not an id');
 
 let result = null, failure = null;

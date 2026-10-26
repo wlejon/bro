@@ -194,7 +194,13 @@ if (!fs.existsSync(windowed)) {
     // macOS keeps apps in ~/Library/Application Support/bro/apps.
     const isMac = process.platform === 'darwin';
     // APPDATA too: on Windows --install writes the app's Start menu shortcut.
-    const env = isWin ? { LOCALAPPDATA: data, APPDATA: path.join(data, 'Roaming') } : isMac ? { HOME: data } : { XDG_DATA_HOME: data };
+    // These name the user's own roots, so the runs below take no
+    // BRO_APP_HOME (a scratch profile has apps of its own, docs/apps.md): the
+    // platform's config, cache and state homes go under `data` instead.
+    const env = isWin ? { LOCALAPPDATA: data, APPDATA: path.join(data, 'Roaming') }
+              : isMac ? { HOME: data }
+              : { XDG_DATA_HOME: data, XDG_CONFIG_HOME: path.join(data, 'config'),
+                  XDG_CACHE_HOME: path.join(data, 'cache'), XDG_STATE_HOME: path.join(data, 'state') };
     cp.execFileSync(windowed, ['--install', fixture, '--exec', '/opt/bro/bin/bro'], { env: scratchEnv(env), encoding: 'utf8' });
     const installed = isMac ? path.join(data, 'Library', 'Application Support', 'bro', 'apps', 'org.bro.test.ManifestApp')
                             : path.join(data, 'bro', 'apps', 'org.bro.test.ManifestApp');
@@ -204,8 +210,7 @@ if (!fs.existsSync(windowed)) {
         assert(fs.existsSync(de), 'desktop entry written to ' + de);
         assert(fs.readFileSync(de, 'utf8').indexOf(installed) >= 0, 'it runs the installed copy');
     }
-    const byId = probe('org.bro.test.ManifestApp', '({id: bro.app.id, dir: bro.app.dir})',
-        { ...env, BRO_APP_HOME: path.join(scratch, 'home5') });
+    const byId = probe('org.bro.test.ManifestApp', '({id: bro.app.id, dir: bro.app.dir})', env);
     assert(byId.id === 'org.bro.test.ManifestApp' && norm(byId.dir) === norm(installed),
         'bro-headless <id> runs the installed app: ' + JSON.stringify(byId));
     const list = cp.execFileSync(windowed, ['--list-apps'], { env: scratchEnv(env), encoding: 'utf8' });
@@ -219,8 +224,7 @@ if (!fs.existsSync(windowed)) {
     cp.execFileSync(windowed, ['--install', member], { env: scratchEnv(env), encoding: 'utf8' });
     const copied = path.join(appsRoot, 'org.bro.test.ProjectMember');
     assert(fs.existsSync(path.join(copied, 'lib', 'greet.js')), 'the project library bundled at ' + copied + '/lib');
-    const inst = probe('org.bro.test.ProjectMember', '({dir: bro.app.dir, greeting: globalThis.sharedGreeting})',
-        { ...env, BRO_APP_HOME: path.join(scratch, 'home6') });
+    const inst = probe('org.bro.test.ProjectMember', '({dir: bro.app.dir, greeting: globalThis.sharedGreeting})', env);
     assert(norm(inst.dir) === norm(copied) && inst.greeting === 'from the project library',
         'the installed copy imports its bundled /lib: ' + JSON.stringify(inst));
     cp.execFileSync(windowed, ['--uninstall', 'org.bro.test.ProjectMember'], { env: scratchEnv(env), encoding: 'utf8' });
@@ -229,8 +233,7 @@ if (!fs.existsSync(windowed)) {
     // developer mode for a symlink; there it is not tested.)
     if (!isWin) {
         cp.execFileSync(windowed, ['--install', member, '--link'], { env: scratchEnv(env), encoding: 'utf8' });
-        const linked = probe('org.bro.test.ProjectMember', '({greeting: globalThis.sharedGreeting})',
-            { ...env, BRO_APP_HOME: path.join(scratch, 'home7') });
+        const linked = probe('org.bro.test.ProjectMember', '({greeting: globalThis.sharedGreeting})', env);
         assert(linked.greeting === 'from the project library', 'a linked install finds its project: ' + JSON.stringify(linked));
         cp.execFileSync(windowed, ['--uninstall', 'org.bro.test.ProjectMember'], { env: scratchEnv(env), encoding: 'utf8' });
     }

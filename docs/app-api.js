@@ -149,11 +149,13 @@ bro.app.spawn = function(args, options) {};
  */
 
 /**
- * Open another folder app by its id, on every platform: found as `bro <id>`
- * finds it (the install roots of `bro --install`: `%LOCALAPPDATA%\bro\apps`
- * and `%ProgramFiles%\bro\apps` on Windows, `~/Library/Application Support/bro/apps`
- * on macOS, `$XDG_DATA_HOME/bro/apps` and `$XDG_DATA_DIRS/bro/apps` on Linux),
- * else beside this app in its project, and started detached with the stock
+ * Open another folder app by its id, on every platform: found beside this
+ * app in its project first (the copy built and changed with it), else as
+ * `bro <id>` finds it (the install roots of `bro --install`:
+ * `%LOCALAPPDATA%\bro\apps` and `%ProgramFiles%\bro\apps` on Windows,
+ * `~/Library/Application Support/bro/apps` on macOS, `$XDG_DATA_HOME/bro/apps`
+ * and `$XDG_DATA_DIRS/bro/apps` on Linux, `<BRO_APP_HOME>/bro/apps` alone
+ * under a scratch profile), and started detached with the stock
  * bro: `bro <dir> ...args`. A single-instance app that is already running
  * gets an `instance` event with these args instead of a second window (bro
  * does the hand-off, as for any launch). Rejects when no app has the id, or

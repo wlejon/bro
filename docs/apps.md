@@ -169,9 +169,11 @@ skips the hand-off and opens a second instance. That is how an app does
 "New Window".
 
 One app opens another by id with `bro.app.open(id, args)`, on every
-platform: the id is found as `bro <id>` finds it (the install roots), else
-beside the calling app in its project, and the stock bro starts it. A
-single-instance target that is running gets the `instance` event above
+platform: the id is found beside the calling app in its project first, else
+as `bro <id>` finds it (the install roots), and the stock bro starts it. The
+project's copy is the one built and changed with the caller; an installed
+app's siblings are the install root's other apps, so it finds those either
+way. A single-instance target that is running gets the `instance` event above
 rather than a second window. `bro.app.find(id)` says where it would be found.
 See [app-api.js](app-api.js).
 
@@ -278,6 +280,10 @@ Installed folder apps live in one directory per app, named by id:
 | Linux | `$XDG_DATA_HOME/bro/apps/<id>` (`~/.local/share/bro/apps`) | `$XDG_DATA_DIRS/bro/apps/<id>` (`/usr/local/share/bro/apps`, `/usr/share/bro/apps`) |
 | Windows | `%LOCALAPPDATA%\bro\apps\<id>` | `%ProgramFiles%\bro\apps\<id>` |
 | macOS | `~/Library/Application Support/bro/apps/<id>` | `/Library/Application Support/bro/apps/<id>` |
+
+Under `BRO_APP_HOME=<dir>` the one install root, user and system alike, is
+`<dir>/bro/apps`: a test or scratch profile neither finds the machine's
+installed apps nor installs over them.
 
 ```
 bro --install <app-dir> [--link] [--system] [--exec <bro>] [--no-exe]

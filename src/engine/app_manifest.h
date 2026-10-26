@@ -98,13 +98,14 @@ AppDirs appDirsFor(const std::string& id);
 /// (%LOCALAPPDATA%\bro\apps), then the system roots ($XDG_DATA_DIRS/bro/apps,
 /// so /usr/share/bro/apps and /usr/local/share/bro/apps; %ProgramFiles%\bro\apps).
 /// Each app is <root>/<id>/ (a directory, or on POSIX a symlink to one).
+/// Under BRO_APP_HOME=<dir> (a scratch profile) the one root is <dir>/bro/apps.
 std::vector<std::string> installedAppRoots();
 
 /// The root `bro --install` copies an app into: the user's
 /// ($XDG_DATA_HOME/bro/apps, %LOCALAPPDATA%\bro\apps, ~/Library/Application
 /// Support/bro/apps), or with `system` the machine's
 /// (/usr/local/share/bro/apps, %ProgramFiles%\bro\apps, /Library/Application
-/// Support/bro/apps).
+/// Support/bro/apps). Under BRO_APP_HOME=<dir>, <dir>/bro/apps for both.
 std::string installRoot(bool system);
 
 /// The installed app directory for `id`, or "" when none is installed.

@@ -308,7 +308,31 @@ AppDirs appDirsFor(const std::string& idIn) {
     return d;
 }
 
+namespace {
+
+// A scratch profile (BRO_APP_HOME: an app's tests, a clean run) has apps of
+// its own, the user's and the machine's alike, in <dir>/bro/apps beside its
+// grant store: it neither finds nor installs over the real ones.
+// Settled at the first question, before any script runs: an app that may
+// change the environment must not move the install roots bro protects and
+// identifies installs by.
+std::string scratchAppsRoot() {
+    static const std::string root = [] {
+        const std::string home = getEnv("BRO_APP_HOME");
+        if (home.empty()) return std::string();
+        fs::path h = u8path(home);
+        std::error_code ec;
+        fs::path abs = fs::absolute(h, ec);
+        if (!ec) h = abs;
+        return u8str((h / "bro" / "apps").lexically_normal());
+    }();
+    return root;
+}
+
+}  // namespace
+
 std::string installRoot(bool system) {
+    if (std::string scratch = scratchAppsRoot(); !scratch.empty()) return scratch;
 #ifdef _WIN32
     const std::string pf = getEnv("ProgramFiles");
     if (system) return u8str(u8path(pf.empty() ? std::string("C:/Program Files") : pf) / "bro" / "apps");
@@ -333,6 +357,7 @@ std::string installRoot(bool system) {
 
 std::vector<std::string> installedAppRoots() {
     std::vector<std::string> roots;
+    if (std::string scratch = scratchAppsRoot(); !scratch.empty()) return {scratch};
 #if defined(_WIN32)
     std::string local = getEnv("LOCALAPPDATA");
     if (!local.empty()) roots.push_back(u8str(u8path(local) / "bro" / "apps"));

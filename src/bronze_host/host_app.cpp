@@ -190,13 +190,16 @@ struct AppTarget {
     std::string from;  // "installed" | "project" | "self"
 };
 
-// Where `bro <id>` finds the app (the install roots, docs/apps.md), else a
-// sibling in this app's project.
+// A sibling in this app's project, else where `bro <id>` finds the app (the
+// install roots, docs/apps.md). The project's copy first: it is the one built
+// and changed with this app, where an installed copy of the same id may be
+// any older version. An installed app's project is its install root, so it
+// finds the other installed apps as siblings.
 AppTarget resolveAppId(const std::string& id) {
     const engine::AppRuntimeInfo& self = engine::currentApp();
     if (!engine::isValidAppId(id)) return {};
-    if (std::string dir = engine::findInstalledApp(id); !dir.empty()) return {native(dir), "installed"};
     if (std::string dir = findSiblingApp(id, self); !dir.empty()) return {native(dir), "project"};
+    if (std::string dir = engine::findInstalledApp(id); !dir.empty()) return {native(dir), "installed"};
     if (id == self.id && !self.dir.empty()) return {native(self.dir), "self"};
     return {};
 }
