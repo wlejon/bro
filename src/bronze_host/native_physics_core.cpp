@@ -445,8 +445,11 @@ void bro_physics_setMotionType(int32_t tag, bool isStatic) {
     if (!id.IsInvalid()) w->setMotionType(id, isStatic);
 }
 
+// A dt of zero (or less) is not refused: PhysicsWorld::moveKinematic places
+// the body at the target at once, where a positive dt sets the velocity that
+// reaches it over that step.
 void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt) {
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(dt) || dt <= 0.0) return;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(dt)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
@@ -461,7 +464,7 @@ void bro_physics_moveKinematicRot(int32_t tag, double x, double y, double z,
                                   double qx, double qy, double qz, double qw, double dt) {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
         !std::isfinite(qx) || !std::isfinite(qy) || !std::isfinite(qz) || !std::isfinite(qw) ||
-        !std::isfinite(dt) || dt <= 0.0) return;
+        !std::isfinite(dt)) return;
     auto* pw = getActiveWorld();
     auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;

@@ -949,7 +949,9 @@ Physics.setMotionType = function(tag, type) {};
  * Moves a kinematic body towards a target over `dt`. Two forms:
  * `(tag, x, y, z, dt)` keeps the body's current rotation, and
  * `(tag, x, y, z, qx, qy, qz, qw, dt)` carries a target rotation too — the
- * one a kinematic platform or a picked-up prop turns with.
+ * one a kinematic platform or a picked-up prop turns with. A `dt` of 0
+ * places the body at the target at once (a teleport, no velocity); a
+ * positive `dt` gives it the velocity that reaches the target over that step.
  *
  * [manual] because a native has one arity: each form is its own entry
  * point (`bro_physics_moveKinematic` / `bro_physics_moveKinematicRot`,
