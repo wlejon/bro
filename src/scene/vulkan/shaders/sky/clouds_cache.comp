@@ -48,8 +48,15 @@ bool cloudMayHold(float base, float foot) {
     return max(out0, outW) > 0.0;
 }
 
+// The heaps of the 3 x 3 cells of the lattice about each column (made by
+// its first nine bins, read by all of them), and its nearest wall (of a
+// cell): sky/cloud_heaps.glsl's cloudHeapsIn, the world asked once a cell.
+shared CloudHeap sHeap[CL_CACHE_GROUP][9];
+shared vec4 sCell[CL_CACHE_GROUP][9][2];   // its middle's direction (xyz, w 1: it holds one), its east (north from them)
+shared float sWall[CL_CACHE_GROUP];
+
 void main() {
-    // (A column past the bake's still evaluates, for the group's barrier,
+    // (A column past the bake's still evaluates, for the group's barriers,
     // and stores nothing; a group is one row and one level.)
     if (int(gl_GlobalInvocationID.y) >= push.cols.z) return;
     bool inside = int(gl_GlobalInvocationID.x) < push.cols.y;
@@ -64,27 +71,60 @@ void main() {
     vec3 up = cloudChartDir(xy);
     float h = (float(bin) + 0.5) / float(CL_CACHE_BINS);
     float r = mix(clouds.shell.x, clouds.shell.y, h);
+    float thick = clouds.shell.y - clouds.shell.x;
     vec4 cover = cloudCoverAt(up);
     CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, cell, clouds.shell.w);
-    // (The base the march reads: under 0 as the world gives it, how far
-    // the clear air is from cloud, which it steps by; and a share cut into
-    // clouds where the cell is wide. The extinction the cell's mean, of the
-    // share.)
     vec3 pd = cloudDrift(q.p);
-    float share = min(cloudDensity(q), 1.0);
-    // The heaps, where the cell is finer than them (their surface at a half,
-    // rising over the edge across it, as the world's shapes); where it is as
-    // wide, the world's share holds them.
-    float hs = cloudHeapSide();
-    if (hs > 0.0) {
-        float near = 1.0 - smoothstep(0.15 * hs, 0.6 * hs, cell);
-        if (near > 0.0)
-            share = max(share, near * min(0.5 + cloudHeapsIn(pd, h * (clouds.shell.y - clouds.shell.x)) / clouds.forms.w, 1.0));
-    }
-    float baseRaw = cloudCutBase(share, pd, cell);
-    float sigma = cloudForms(pd, max(share, 0.0), 0.5, cell, false);
-    ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
     uint col = gl_LocalInvocationID.x;
+    // The slabs: the world's base, the march's (under 0 as the world gives
+    // it, how far the clear air is from cloud, which it steps by).
+    float slab = min(cloudDensity(q), 1.0);
+    // The heaps: where the cell is finer than they are, the heaps
+    // themselves (their surface at a half, rising over the edge across it,
+    // as the world's shapes); where it is as wide, the world's share of
+    // them. What the light and the shadow read, and what the march reads of
+    // them where they are finer than its pixel; elsewhere it reads the
+    // heaps' map (sky/clouds_layout.h).
+    float hs = cloudHeapSide();
+    bool lattice = hs > 0.0 && cell < hs;   // (uniform over the group)
+    float heapIn = -1e5;
+#ifdef CLOUD_HEAPS
+    if (lattice) {
+        if (bin < 9) {
+            vec3 fe;
+            ivec2 c0;
+            float wall;
+            vec3 upd = normalize(cloudDrift(up * mix(clouds.shell.x, clouds.shell.y, 0.5)));
+            cloudHeapAbout(upd, fe, c0, wall);
+            if (bin == 0) sWall[col] = wall;
+            CloudHeapCell hc = cloudHeapCell(cloudHeapOwn(ivec3(int(fe.z), c0 + ivec2(bin % 3, bin / 3) - 1)));
+            CloudHeap hh;
+            bool any = cloudHeap(hc, hh);
+            if (!any)
+                for (int l = 0; l < CL_HEAP_LOBES; ++l) hh.lobe[l] = vec4(0.0);
+            sHeap[col][bin] = hh;
+            sCell[col][bin][0] = vec4(hc.up, any ? 1.0 : 0.0);
+            sCell[col][bin][1] = vec4(hc.east, 0.0);
+        }
+        barrier();
+        vec3 upd = normalize(pd);
+        heapIn = -sWall[col] * hs;
+        for (int n = 0; n < 9; ++n) {
+            vec4 cu = sCell[col][n][0];
+            if (cu.w < 0.5) continue;
+            vec3 e = sCell[col][n][1].xyz, nn = cross(cu.xyz, e);
+            vec3 v3 = (upd - cu.xyz) * clouds.shell.x;
+            heapIn = max(heapIn, cloudHeapIn(sHeap[col][n], vec2(dot(v3, e), dot(v3, nn)), h * thick));
+        }
+    }
+#endif
+    float near = hs > 0.0 ? 1.0 - smoothstep(0.15 * hs, 0.6 * hs, cell) : 0.0;
+    float heapShare = near < 1.0 ? cloudHeapsShareAt(q) : 0.0;
+    float heaps = mix(min(heapShare, 1.0), min(0.5 + heapIn / clouds.forms.w, 1.0), near);
+    float baseRaw = slab;
+    // (The extinction the cell's mean, of slabs and heaps.)
+    float sigma = cloudForms(pd, max(max(slab, heaps), 0.0), 0.5, cell, false);
+    ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
     sBase[col][bin] = baseRaw;
     barrier();
     if (!inside) return;
@@ -111,8 +151,14 @@ void main() {
     // stays a flat grey plane and its lobes are on its walls and its top.
     float rise = (gHi - gLo) / max(hHi - hLo, 1.0) * clouds.forms.w;
     float shows = 1.0 - smoothstep(0.5, 0.8, rise / CLOUD_EDGE_STEEPEST);
-    imageStore(sigmaOut, at, vec4(sigma, baseRaw, shows, 0.0));
+    imageStore(sigmaOut, at, vec4(sigma, baseRaw, shows, heaps));
+    // Whether the heaps may reach into the cell as the march draws them:
+    // where the lattice is searched, a heap's surface within the cell's box
+    // (half its diagonal across, half a bin up), its skin's most out and
+    // its blur at the cell's footprint of it; else wherever the world says
+    // they fill any share.
+    bool heapHolds = lattice ? heapIn + 1.25 * cell + 0.5 * binH + 0.2 * clouds.forms.w > 0.0 : heapShare > 0.0;
     // (What lies between texels, across the chart, the distance's margin of
     // a cell about each that may takes in.)
-    imageStore(holdsOut, at, vec4(cloudMayHold(most, cell) ? 1.0 : 0.0));
+    imageStore(holdsOut, at, vec4(cloudMayHold(most, cell) || heapHolds ? 1.0 : 0.0));
 }

@@ -16,8 +16,9 @@
 // raised by how fast the base may rise toward the box's corners (cloudDensity's contract: the least of a field rising 1 an
 // edge any way and one rising CLOUD_EDGE_STEEPEST up or down and a fifth
 // of that across, so along an axis of the cache's interpolation 1 an edge
-// across and CLOUD_EDGE_STEEPEST up; a share cut into clouds
-// CLOUD_CUT_STEEPEST times as fast) with the march's own margin (clouds.frag's clBaseClear), and
+// across and CLOUD_EDGE_STEEPEST up), and the heaps' map's columns over
+// it (rising no faster than 1 a metre), with the march's own margin
+// (clouds.frag's clBaseClear), and
 // whether the skin's most out may carry the surface to it at the widest
 // blur the footprint gives (cloudMayHold: the field is linear in the blur).
 // The forms' extinction is zero wherever the occupancy is, so it is read
@@ -87,21 +88,35 @@ void main() {
                 // The cache's base is trilinear between its texels, a convex
                 // mix of theirs: the most of the texels about the box bounds
                 // it over the box.
+                // (The slabs' base and the heaps' share alike.)
                 for (int iy = i0.y; iy <= i1.y; ++iy)
                     for (int ix = i0.x; ix <= i1.x; ++ix)
-                        for (int b = b0; b <= b1; ++b)
-                            most = max(most, texelFetch(cloudSigmaMap, ivec3(ix & (CL_CACHE_SIDE - 1),
-                                                         iy & (CL_CACHE_SIDE - 1), j * CL_CACHE_BINS + b), 0).g);
+                        for (int b = b0; b <= b1; ++b) {
+                            vec4 t = texelFetch(cloudSigmaMap, ivec3(ix & (CL_CACHE_SIDE - 1),
+                                                iy & (CL_CACHE_SIDE - 1), j * CL_CACHE_BINS + b), 0);
+                            most = max(most, max(t.g, t.a));
+                        }
             } else {
                 // (A box over many texels: the centre's, raised by how fast
                 // the base may rise to the box's corner along each axis of
                 // the interpolation, 1 an edge across and
-                // CLOUD_EDGE_STEEPEST up, a share cut into clouds
-                // CLOUD_CUT_STEEPEST times as fast.)
-                float c = textureLod(cloudSigmaMap, cloudCacheCoord(wc.xy, wc.h, j), 0.0).g;
-                float rise = 0.5 * (2.0 + CLOUD_EDGE_STEEPEST) * cell / clouds.forms.w *
-                             mix(1.0, CLOUD_CUT_STEEPEST, clShareLike(float(j)));
-                most = max(most, c + rise);
+                // CLOUD_EDGE_STEEPEST up.)
+                vec4 t = textureLod(cloudSigmaMap, cloudCacheCoord(wc.xy, wc.h, j), 0.0);
+                float rise = 0.5 * (2.0 + CLOUD_EDGE_STEEPEST) * cell / clouds.forms.w;
+                most = max(most, max(t.g, t.a) + rise);
+            }
+        }
+        // The heaps as the march reads them from their map at the box's
+        // footprints: how far the centre is inside them, and the box's
+        // reach and a texel's more (the map's columns rise no faster than
+        // 1 a metre, and a texel's interpolation of them is off by less).
+        if (cloudHeapMapSide() > 0.0) {
+            vec2 hxy = cloudChartAt(normalize(cloudDrift(w.p)));
+            for (int i = 0; i < 2; ++i) {
+                float f = i == 0 ? cell : footMax, texel;
+                vec4 col = cloudHeapMapColumn(hxy, f, texel);
+                if (cloudHeapsFar(f, texel) < 1.0)
+                    most = max(most, 0.5 + (cloudHeapColumnIn(col, wc.h * thick) + 0.87 * cell + texel) / clouds.forms.w);
             }
         }
         most += 0.04 * abs(most) + 0.004;

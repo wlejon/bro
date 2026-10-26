@@ -71,11 +71,12 @@ public:
         Cover,    // clouds_cover.comp
         Cache,    // clouds_cache.comp
         Globe,    // clouds_globe.comp
+        Heaps,    // clouds_heaps.comp
         kStages
     };
-    static constexpr BuiltinSceneShader kBuiltin[kStages] = {BuiltinSceneShader::CloudsCoverComp,
-                                                              BuiltinSceneShader::CloudsCacheComp,
-                                                              BuiltinSceneShader::CloudsGlobeComp};
+    static constexpr BuiltinSceneShader kBuiltin[kStages] = {
+        BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsCacheComp, BuiltinSceneShader::CloudsGlobeComp,
+        BuiltinSceneShader::CloudsHeapsComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl, compiled off the frame thread (poll).
@@ -87,7 +88,7 @@ public:
 
     VkShaderModule operator[](Stage s) const { return module(s); }
     // Started once the modules are made.
-    AsyncComputePipeline cover, cache, globe;
+    AsyncComputePipeline cover, cache, globe, heaps;
 };
 
 class SceneClouds {
@@ -107,9 +108,6 @@ public:
     /// binding 24.
     void fill(CloudShadowGpu& out) const { out = shadowBlock_; }
     VkImageView shadowView() const;
-    /// The lighting set's binding 25: the engine's noise (a 3D stand-in,
-    /// never read, while there are no shadows or no noise yet).
-    VkImageView noiseView() const;
 
     /// The noise (once), the cover (when it is to be baked) and the
     /// shadow's levels, into the graphics stream outside any rendering,
@@ -134,6 +132,8 @@ public:
         float cacheLevel[13][4];
         float forms[4];
         float wind[4];
+        float heapNadir[4];
+        float heapLevel[CL_HEAP_LEVELS][4];
         float data[64][4];
         CloudVolumeGpu volume;
     };
@@ -158,6 +158,13 @@ private:
     /// The globe's bake: all of it when it is not current, else a slice of
     /// its rows, while the eye is over the deck (sky/clouds_layout.h).
     void recordGlobe(SceneFrame& frame);
+    /// Where the heaps' map's windows lie this frame (about the drifted
+    /// nadir) and what of it is baked (beginFrame, after placeCache); its
+    /// bakes (before the cache's).
+    void placeHeaps(SceneFrame& frame, const double nadir[3]);
+    void recordHeaps(SceneFrame& frame);
+    /// Body direction `u` on the cache's chart (m): cloudChartAt's.
+    void chartAt(const double u[3], double& x, double& y) const;
 
     SceneVkDevice* device_ = nullptr;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
@@ -202,7 +209,7 @@ private:
         bool made = false;
     } noise_;
     SceneVkImage cover_, shadow_;
-    SceneVkImage coverNone_, shadowNone_, noiseNone_, gridNone_;
+    SceneVkImage coverNone_, shadowNone_, gridNone_;
     SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_, cacheHolds_;
     SceneVkImage globe_;
     // The deck the globe holds (its module, generation; 0 none), the wind's
@@ -238,6 +245,22 @@ private:
     float cacheSun_[3] = {};     // and the sun (the body's frame)
     uint32_t cacheFrame_ = 0;
     float volumeTime_ = 0.0f;    // the wind's time the volume was last placed at
+    uint32_t chartSerial_ = 0;   // moved each time the chart is laid about a new centre
+
+    // The heaps' map (sky/clouds_layout.h): a bake this frame, `levels`
+    // levels from `first`, `nx` texels from `x0` of `ny` rows from `y0`
+    // (both wrapping about the side).
+    struct HeapBake {
+        int first, levels, x0, nx, y0, ny;
+        static HeapBake level(int first, int levels) { return {first, levels, 0, CL_HEAP_SIDE, 0, CL_HEAP_SIDE}; }
+    };
+    SceneVkImage heaps_;
+    std::vector<HeapBake> heapBakes_;
+    long long heapCentre_[CL_HEAP_LEVELS][2] = {};
+    bool heapBaked_ = false;        // the map holds the deck's heaps (its first bake is whole)
+    uint32_t heapPending_ = 0;      // levels still to be baked again, a level a frame
+    uint64_t heapKey_ = 0;          // the deck it holds (its module, generation, the lattice's cell)
+    uint32_t heapChart_ = 0;        // the chart's serial it was baked on
 
     Block block_{};
     CloudShadowGpu shadowBlock_{};

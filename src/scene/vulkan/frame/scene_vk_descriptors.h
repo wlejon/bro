@@ -120,11 +120,8 @@ struct alignas(16) CloudShadowGpu {
     alignas(16) float n[4];        // the levels' plane's normal
     alignas(16) float e1[4];       // its axes
     alignas(16) float e2[4];
-    alignas(16) float toBody[3][4];   // the clouds' turn into the body's frame (CloudsUBO's toBody)
-    alignas(16) float drift[4];       // xyz what the wind has carried the forms (m, the body's frame), w a cloud's edge (m)
-    alignas(16) float shell[4];       // x the deck's bottom radius, y its top's
 };
-static_assert(sizeof(CloudShadowGpu) == 144);
+static_assert(sizeof(CloudShadowGpu) == 64);
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {

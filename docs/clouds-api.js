@@ -18,11 +18,12 @@
  *   - THE CACHE. cloudDensity is baked about the eye's nadir on a chart
  *     fixed to the body: 13 levels of 128 x 128 columns, 32 bins up the
  *     deck, the finest cell 62.5 m and each level's twice the last's. With
- *     each texel: the base the march reads (where the cell is about as
- *     wide as a cloud or wider, a share the engine cuts into clouds by its
- *     own noise, read no coarser than an eighth of its tile so the widest
- *     cells never cut along its lattice into rows), how much of the skin's move shows there (none under a
- *     flat base), the forms' mean extinction over the cell, whether any of
+ *     each texel: the slabs' base the march reads (where the cell is about
+ *     as wide as a cloud or wider, the share they fill: the world's, never
+ *     the engine's clouds), the heaps' (the heaps themselves where the
+ *     cell is finer than them, else the world's share of them), how much
+ *     of the skin's move shows there (none under a flat base), the forms'
+ *     mean extinction over the cell (slabs and heaps), whether any of
  *     the cell may hold cloud as a view however near sees it, the deck's
  *     depth from it toward the sun and up, the distance to the nearest cell
  *     that may; with each column its band (the heights about it that may
@@ -32,6 +33,20 @@
  *     when the deck, the time or the sun jumps, and a sixteenth of every
  *     level's rows each frame (the wind, the sun's motion). The world's
  *     function never runs per pixel.
+ *   - THE HEAPS (with `heaps`). The world's cumulus as things: one about
+ *     each cell of a lattice the engine lays on the cover's cube, its lobes
+ *     the world's (cloudHeap). The engine bakes them into a map about the
+ *     eye's drifted nadir (8 levels of 1024 x 1024 texels, the finest 16 m
+ *     and each level's twice the last's): each texel the heaps' column over
+ *     it (its base, how high its top stands, how far it is inside their
+ *     outline, its top's slope). The march reads its base there at every
+ *     distance, so a heap seen from 400 km off is the heap flown through,
+ *     the same heap in the same place, refined as it nears, never a field
+ *     the engine made up; where they come under a few pixels across, their
+ *     share in the cache (the world's cloudHeapsShare) takes over, so from
+ *     orbit a field of them is the veil they make. They drift with the
+ *     wind, the map with them: baked whole when the deck or the chart
+ *     changes, else the texels a window takes in as the eye moves.
  *   - THE GLOBE. While the eye is over the deck, the whole deck as columns
  *     on a cube about the body (1024 texels a face, some 10 km each): the
  *     world's base at the texel's footprint (the share its clouds fill,
@@ -55,12 +70,9 @@
  *     under four pixels across its move fades out (none at two) into a
  *     softer edge, so a heap seen small is the world's smooth dome, lit on
  *     its sun side and shaded in its lee, never grain; the detail fades out
- *     the same way. Where the cache holds a share, the engine carves it
- *     into lumps a few edges across (only lowering the base), so a far
- *     field seen from over the deck is distinct heaps with ground between;
- *     seen nearly edge-on (from under the deck, to its horizon) a field's
- *     heaps stand behind one another and the lumps are left out.
- *     Everything drifts with `wind`.
+ *     the same way. The engine adds no clouds of its own: what it moves is
+ *     the world's slabs' surface and the lattice's heaps'. Everything
+ *     drifts with `wind`.
  *   - THE MARCH. Every pixel marches its view through the deck shell
  *     against the scene's depth, at native resolution, with no jitter (the
  *     same picture every frame). A cumulus is a soft solid with a skin, so
@@ -80,7 +92,10 @@
  *     globe's and the pixel finer than the clouds; else the globe's, the
  *     footprint's mean of what the march would show (a field of heaps
  *     under a pixel a soft veil at its cover, an overcast's edge soft over
- *     the footprint). A few texture reads a pixel, and the same clouds at
+ *     the footprint). Where the heaps are a few pixels across or more, the
+ *     layer is the slabs' column and over it the heaps' tops from their
+ *     map (opaque, lit by their slope toward the sun), the heaps the march
+ *     draws below. A few texture reads a pixel, and the same clouds at
  *     every height on the way up. An opaque layer's top is lit as a lumpy
  *     surface, not flat: the billows' noise at 16 edges a tile (its lumps
  *     some 2 edges across) as a relief 0.8 edges high, its slope toward the
@@ -148,12 +163,12 @@
  *     deck's bottom, drifting with the wind, and asks the module's
  *     cloudHeap (with `#define CLOUD_HEAPS`) for the heap each holds: its
  *     lobes, half-ellipsoids on flat bases, within a cell of the cell's
- *     middle (sky/scene_cloud_layer.glsl has the types). The engine adds
- *     them to cloudDensity's base where the cache's cells are finer than
- *     them, so cloudDensity there gives the rest (slabs); where the
- *     footprint is as wide as them, its share holds them. One heap at
- *     every distance: the one a view from far off sees is the one flown
- *     through. Without it (or 0) the module's cloudDensity is all.
+ *     middle (sky/scene_cloud_layer.glsl has the types), and its
+ *     cloudHeapsShare for their mean where they are finer than the
+ *     footprint; cloudDensity then gives the rest (slabs) at every
+ *     footprint (THE HEAPS). One heap at every distance: the one a view
+ *     from far off sees is the one flown through. Without it (or 0) the
+ *     module's cloudDensity is all.
  * @property {boolean} [shadows=true]  the deck shadows what the sun lights
  * @property {LandNode|number} [land]  a round land whose processes' grid the
  *     cover's bake reads (cloudLandGrid); without one it reads zero
@@ -265,13 +280,25 @@ SceneGraph.prototype.cloudStats = function () {};
  *       (0.5 - distance / edge), so a view crosses the gaps between heaps
  *       in a few steps; a module that clamps it at 0 is still right, only
  *       slower. Where q.footprint is as wide as the clouds or wider, give
- *       the share of the footprint they fill (0..1) instead: the engine
- *       cuts a share into clouds of its own at the cache's coarse levels,
- *       and the globe reads it as it is, so it must be the footprint's
- *       mean (a share that thresholds a noise finer than the footprint
- *       reads from orbit as hard-edged patches). Baked into the cache
- *       (q.footprint 62.5 m at least) and the globe (some 10 km), never
- *       per pixel. Zero outside the shell is the engine's.
+ *       the share of the footprint they fill (0..1) instead: the cache's
+ *       coarse levels and the globe read it as it is, so it must be the
+ *       footprint's mean (a share that thresholds a noise finer than the
+ *       footprint reads from orbit as hard-edged patches). Baked into the
+ *       cache (q.footprint 62.5 m at least) and the globe (some 10 km),
+ *       never per pixel. Zero outside the shell is the engine's. With
+ *       heaps (below), the slabs alone.
+ *
+ *   #define CLOUD_HEAPS, with
+ *   bool cloudHeap(CloudHeapCell c, out CloudHeap h)
+ *       The heap cell `c` of the engine's lattice holds (setClouds' heaps):
+ *       up to four lobes, half-ellipsoids on flat bases, all of them within
+ *       a cell of the cell's middle; false none. Asked once a cell by the
+ *       heaps' map's bake and the cache's, never per pixel.
+ *   float cloudHeapsShare(CloudPoint q)
+ *       The share of the air the heaps fill at `q` on the mean over its
+ *       footprint (read where it is as wide as they are), and above 0,
+ *       however little, wherever a heap may stand, under 0 where none
+ *       can: the engine's bounds trust it to pass no heap by.
  *
  *   struct CloudPoint {
  *       vec3 p;          // the point in the body's frame (m from its centre)

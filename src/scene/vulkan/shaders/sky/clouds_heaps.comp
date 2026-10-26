@@ -1,0 +1,43 @@
+#version 450
+// The heaps' map (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h): for
+// texels `x0` .. `x0 + nx - 1` of rows `y0` .. `y0 + ny - 1` (both wrapping
+// about the side) of the levels from `first` on (a level a z of the
+// dispatch), the heaps' column over the texel's centre (sky/cloud_heaps.glsl's
+// cloudHeapColumn), each texel's the one of its level's window its storage
+// index holds (toroidally). The map lies on the cache's chart, its points
+// the drifted frame's: the heaps drift with the wind, the map with them.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_HEAP_GROUP, local_size_y = CL_HEAP_GROUP) in;
+
+layout(set = 0, binding = CL_B_HEAPS_OUT, rgba16f) uniform writeonly image2DArray heapsOut;
+
+layout(push_constant) uniform Push {
+    ivec4 rows;    // x the first level, y the first row, z the rows
+    ivec4 cols;    // x the first column, y the columns
+} push;
+
+vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
+
+#include "sky/cloud_module.glsl"
+#include "sky/cloud_heaps.glsl"
+
+// Storage index `i` of the window about texel `c`: the texel it holds.
+int cloudHeapTexelOf(int i, int c) {
+    int lo = c - CL_HEAP_SIDE / 2;
+    return lo + ((i - lo) & (CL_HEAP_SIDE - 1));
+}
+
+void main() {
+    if (int(gl_GlobalInvocationID.x) >= push.cols.y || int(gl_GlobalInvocationID.y) >= push.rows.z) return;
+    int x = (push.cols.x + int(gl_GlobalInvocationID.x)) & (CL_HEAP_SIDE - 1);
+    int y = (push.rows.y + int(gl_GlobalInvocationID.y)) & (CL_HEAP_SIDE - 1);
+    int k = push.rows.x + int(gl_GlobalInvocationID.z);
+    if (k >= CL_HEAP_LEVELS) return;
+    vec2 c = clouds.heapLevel[k].xy;
+    float texel = cloudHeapTexel(k);
+    vec2 xy = (vec2(cloudHeapTexelOf(x, int(c.x)), cloudHeapTexelOf(y, int(c.y))) + 0.5) * texel;
+    imageStore(heapsOut, ivec3(x, y, k), cloudHeapColumn(cloudChartDir(xy)));
+}

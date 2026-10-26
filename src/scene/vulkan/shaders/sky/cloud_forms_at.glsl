@@ -38,35 +38,41 @@ vec4 clCache(ClAt w, float lod) {
     if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
     return mix(a, textureLod(cloudCacheMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0), f);
 }
-// The base (x) and how much of the skin's move shows (y), from the cache's
-// extinction's image (what every sample reads; the depths only what is lit
-// does).
-vec2 clBaseShows(ClAt w, float lod) {
+// The cache's slabs' base (x), how much of the skin's move shows over them
+// (y) and its heaps' base (z: the world's share of them where its cells are
+// as wide as they are), from the cache's extinction's image (what every
+// sample reads; the depths only what is lit does).
+vec3 clCacheBase(ClAt w, float lod) {
     int k = int(lod);
-    if (k >= CL_CACHE_LEVELS) return vec2(0.0, 1.0);
-    vec2 a = textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k), 0.0).gb;
+    if (k >= CL_CACHE_LEVELS) return vec3(0.0, 1.0, 0.0);
+    vec3 a = textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k), 0.0).gba;
     float f = fract(lod);
     if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
-    return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).gb, f);
+    return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).gba, f);
 }
-float clBase(ClAt w, float lod) { return clBaseShows(w, lod).x; }
 
-// How much of the lumps a share is carved into this view shows
-// (cloudLumpsOf): all from over the deck, none along a view that meets it
-// at a slope under CL_LUMPS_FROM (its sine; the view's where it enters the
-// deck), so flat that a field's heaps stand one behind another and their
-// gaps close (and a view through it would find each heap's faces in turn).
-const float CL_LUMPS_FROM = 0.08, CL_LUMPS_TO = 0.2;
-float clLumps = 1.0;
+// The base the march reads at `w` (`pd` drifted) over footprint `foot`
+// (x), and how much of the skin's move shows (y): the most of the slabs'
+// (the cache's) and the heaps' (the heaps' map's columns, sky/
+// clouds_layout.h: the lattice's heaps as themselves at every distance,
+// toward their share in the cache where they are finer than the pixel);
+// the skin shows as the cache says.
+vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
+    vec3 c = clCacheBase(w, lod);
+    if (cloudHeapMapSide() <= 0.0) return c.xy;
+    float texel;
+    vec4 col = cloudHeapMapColumn(cloudChartAt(normalize(pd)), foot, texel);
+    float far = cloudHeapsFar(foot, texel);
+    float z = w.h * (clouds.shell.y - clouds.shell.x);
+    float own = far < 1.0 ? min(0.5 + cloudHeapColumnIn(col, z) / clouds.forms.w, 1.0) : 0.0;
+    return vec2(max(c.x, mix(own, c.z, far)), c.y);
+}
+float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot).x; }
 
-// How much the cache's base at level `lod` is a share cut into clouds
-// (cloudCutBase), not the world's surface.
-float clShareLike(float lod) { return cloudShareLike(CL_CACHE_TEXEL0 * exp2(lod)); }
 // How much the view looks down into the deck (the sine of its slope below
 // the horizontal where it enters it, CL_DOWN_FROM .. TO): a cloud seen from
 // above, its sunlit top, the eye over the deck (all of it CL_DOWN_OVER of
-// the deck's thickness over its top). There a share cut into clouds is
-// opaque at heart (cloudCutSteep), and the deep body's diffuse light
+// the deck's thickness over its top). There the deep body's diffuse light
 // reaches the eye (clIntegrate); a view from below, across or within the
 // deck, at a base or a side, is as it was.
 const float CL_DOWN_FROM = 0.05, CL_DOWN_TO = 0.2;
@@ -88,8 +94,8 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     if (w.h <= 0.0 || w.h >= 1.0) return f;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
-    vec2 bs = clBaseShows(w, lod);
-    float base = max(bs.x + cloudLumpsOf(pd, foot, clShareLike(lod) * clLumps), 0.0);
+    vec2 bs = clBaseShows(w, lod, pd, foot);
+    float base = max(bs.x, 0.0);
     float wD = detail ? cloudDetailAt(foot) : 0.0;
     vec4 e = vec4(0.0);
     float inCloud = 0.5;
@@ -114,7 +120,7 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     // pixel, the turrets' slope with the base's: else where they are steep
     // it ramps in a sliver of a pixel and the silhouette steps.)
     float ramp = wB + cloudSkinBlur(slope, seen);
-    f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp, cloudCutSteep(clShareLike(lod) * clDown));
+    f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
     return f;

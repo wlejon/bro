@@ -25,7 +25,9 @@
 
 namespace bro::scene::vk {
 
-static_assert(sizeof(SceneClouds::Block) == 16 * (3 + 6 + 4 + CL_CACHE_LEVELS + 2 + CL_MAX_DATA + 5 + CL_VOL_LEVELS));
+static_assert(sizeof(SceneClouds::Block) ==
+              16 * (3 + 6 + 4 + CL_CACHE_LEVELS + 2 + 1 + CL_HEAP_LEVELS + CL_MAX_DATA + 5 + CL_VOL_LEVELS));
+static_assert(CL_HEAP_SIDE % CL_HEAP_GROUP == 0 && (CL_HEAP_SIDE & (CL_HEAP_SIDE - 1)) == 0);
 static_assert(CloudSettings::kMaxData == CL_MAX_DATA);
 static_assert(CL_CACHE_LEVELS == 13 && CL_CACHE_SIDE % (CL_CACHE_GROUP * CL_CACHE_SLICES) == 0);
 
@@ -35,7 +37,8 @@ constexpr VkFormat kCacheFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kSigmaFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kDistFormat = VK_FORMAT_R16_SFLOAT;
 constexpr VkFormat kCoverFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kShadowFormat = VK_FORMAT_R32G32B32A32_SFLOAT;   // what is left of the sun, the layer's cut, its share
+constexpr VkFormat kHeapFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;   // what is left of the sun
 constexpr VkFormat kGridFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 // (Half floats: the mips' variance, E[x^2] - E[x]^2, is a small difference.)
 constexpr VkFormat kNoiseFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -96,6 +99,8 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     set.addBinding(CL_B_VOLUME_DA, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CL_VOL_LEVELS, kStages);
     set.addBinding(CL_B_VOLUME_DB, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CL_VOL_LEVELS, kStages);
     set.addBinding(CL_B_VOLUME_CHECK, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages);
+    set.addBinding(CL_B_HEAPS, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kStages);
+    set.addBinding(CL_B_HEAPS_OUT, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
     setLayout_ = set.build(dev);
     SceneVkDescriptorLayoutBuilder noise;
     noise.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -135,8 +140,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_.usable() ||
         !lightPipeline_.usable() || !distPipeline_.usable() || !shadowPipeline_.usable() || !noiseSampler_ ||
         !coverSampler_ || !cacheSampler_ || !volume_.setup(gpu, computeLayout_) ||
-        !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1) ||
-        !gpu.allocator.createStorageImage(2, 2, 2, kNoiseFormat, noiseNone_, false, 0)) {
+        !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' pipelines");
         return false;
     }
@@ -148,7 +152,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     for (auto& s : sets_) {
         if (!s) continue;
         s->pipelines.destroy(gpu.device);
-        for (AsyncComputePipeline* p : {&s->cover, &s->cache, &s->globe}) p->destroy(dev);
+        for (AsyncComputePipeline* p : {&s->cover, &s->cache, &s->globe, &s->heaps}) p->destroy(dev);
         s->destroy(dev);
     }
     sets_.clear();
@@ -157,13 +161,16 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     chartValid_ = false;
     cacheBaked_ = false;
     cachePending_ = 0;
+    heapBaked_ = false;
+    heapPending_ = 0;
+    heapKey_ = 0;
     coverHeld_ = false;
     bakingKey_ = 0;
     coverFace_ = 0;
     bakedGeneration_ = 0;
     for (SceneVkImage* i :
-         {&cover_, &shadow_, &coverNone_, &shadowNone_, &noiseNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
-          &distB_, &cacheHolds_, &globe_})
+         {&cover_, &shadow_, &coverNone_, &shadowNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
+          &distB_, &cacheHolds_, &globe_, &heaps_})
         if (i->isValid()) gpu.allocator.destroyImage(*i);
     globeKey_ = 0;
     volume_.cleanup(gpu);
@@ -199,9 +206,6 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
 }
 
 VkImageView SceneClouds::shadowView() const { return shadowsOn_ && shadow_.isValid() ? shadow_.view : shadowNone_.view; }
-VkImageView SceneClouds::noiseView() const {
-    return shadowsOn_ && noise_.made && noise_.sampled ? noise_.sampled : noiseNone_.view;
-}
 
 namespace {
 
@@ -242,6 +246,7 @@ CloudShaders* SceneClouds::shaders(SceneFrame& frame) {
         set->cover.start(dev, (*set)[CloudShaders::Cover], computeLayout_, "clouds cover");
         set->cache.start(dev, (*set)[CloudShaders::Cache], computeLayout_, "clouds cache");
         set->globe.start(dev, (*set)[CloudShaders::Globe], computeLayout_, "clouds globe");
+        set->heaps.start(dev, (*set)[CloudShaders::Heaps], computeLayout_, "clouds heaps");
     }
     if (st == ModuleShaders::State::Failed || pipelinesReady(*set) == Readiness::Failed) {
         if (err.empty()) err = "its compute pipelines could not be made";
@@ -256,7 +261,7 @@ SceneClouds::Readiness SceneClouds::pipelinesReady(CloudShaders& set) {
     if (set.state() == ModuleShaders::State::Pending) return Readiness::Building;
     if (set.state() != ModuleShaders::State::Ready) return Readiness::Failed;
     Readiness r = Readiness::Ready;
-    for (AsyncComputePipeline* p : {&set.cover, &set.cache, &set.globe, &noisePipeline_, &lightPipeline_,
+    for (AsyncComputePipeline* p : {&set.cover, &set.cache, &set.globe, &set.heaps, &noisePipeline_, &lightPipeline_,
                                     &distPipeline_, &shadowPipeline_}) {
         if (!p->get()) {
             if (!p->usable()) return Readiness::Failed;
@@ -280,17 +285,18 @@ bool SceneClouds::ensureImages(SceneGpu& gpu) {
         !a.createStorageImage(CL_SHADOW_SIDE, CL_SHADOW_SIDE, 1, kShadowFormat, shadow_, false, CL_SHADOW_LEVELS) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kSigmaFormat, cacheSigma_, false) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kCacheFormat, cacheLight_, false) ||
-        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, 1, kCacheFormat, cacheBand_, false, 2 * CL_CACHE_LEVELS) ||
+        !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, 1, kCacheFormat, cacheBand_, false, 3 * CL_CACHE_LEVELS) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kDistFormat, distA_, false) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kDistFormat, distB_, false) ||
         !a.createStorageImage(CL_CACHE_SIDE, CL_CACHE_SIDE, cacheDepth, kDistFormat, cacheHolds_, false) ||
         !a.createStorageImage(CL_GLOBE_SIDE, CL_GLOBE_SIDE, 1, kCacheFormat, globe_, false, 6) ||
+        !a.createStorageImage(CL_HEAP_SIDE, CL_HEAP_SIDE, 1, kHeapFormat, heaps_, false, CL_HEAP_LEVELS) ||
         !a.createStorageImage(1, 1, 1, kCoverFormat, coverNone_, false, 1) ||
         !a.createStorageImage(1, 1, 1, kGridFormat, gridNone_, false, 1) || !createNoise(gpu)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' images");
         for (SceneVkImage* i :
              {&cover_, &shadow_, &coverNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_, &distB_,
-              &cacheHolds_, &globe_})
+              &cacheHolds_, &globe_, &heaps_})
             if (i->isValid()) a.destroyImage(*i);
         return false;
     }
@@ -478,20 +484,12 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     }
     block_.shadowN[3] = CL_SHADOW_GROWTH;
     block_.shadowE1[3] = CL_SHADOW_TEXEL0;
-    block_.shadowE2[3] = el;
+    block_.shadowE2[3] = 0.0f;
     shadowsOn_ = c.shadows;
     shadowBlock_.params[0] = shadowsOn_ ? 1.0f : 0.0f;
     shadowBlock_.params[1] = R;
     shadowBlock_.params[2] = CL_SHADOW_TEXEL0;
     shadowBlock_.params[3] = CL_SHADOW_GROWTH;
-    // The layer's field, for the cut of its clumps' shadows.
-    for (int i = 0; i < 3; ++i) {
-        for (int k = 0; k < 4; ++k) shadowBlock_.toBody[i][k] = block_.toBody[i][k];
-        shadowBlock_.drift[i] = block_.wind[i] * block_.shell[3];
-    }
-    shadowBlock_.drift[3] = block_.forms[3];
-    shadowBlock_.shell[0] = block_.shell[0];
-    shadowBlock_.shell[1] = block_.shell[1];
     if (!held) {
         // (The block filled for the cover's face; nothing else of the deck.)
         on_ = shadowsOn_ = false;
@@ -569,14 +567,12 @@ void SceneClouds::placeCache(SceneFrame& frame) {
         chartValid_ = true;
         all = true;
         cacheBaked_ = false;   // (every cell of every level is elsewhere)
+        ++chartSerial_;
     }
     cacheKey_ = key;
     // The nadir on the chart.
-    const double vx = dot(nb, chartE1_), vy = dot(nb, chartE2_);
-    const double sv = std::sqrt(vx * vx + vy * vy);
-    const double th = std::atan2(sv, dot(nb, chartC_));
-    const double scale = sv > 1e-12 ? th * Rb / sv : Rb;
-    const double x = vx * scale, y = vy * scale;
+    double x, y;
+    chartAt(nb, x, y);
     for (int i = 0; i < 3; ++i) {
         block_.cacheC[i] = static_cast<float>(chartC_[i]);
         block_.cacheE1[i] = static_cast<float>(chartE1_[i]);
@@ -646,6 +642,123 @@ void SceneClouds::placeCache(SceneFrame& frame) {
     CloudStats stats = frame.renderer.cloudStats();
     stats.cachePending = std::popcount(cachePending_) + (CL_CACHE_SLICES - sliceRun_);
     frame.renderer.setCloudStats(stats);
+    placeHeaps(frame, nb);
+}
+
+void SceneClouds::chartAt(const double u[3], double& x, double& y) const {
+    const auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const double vx = dot(u, chartE1_), vy = dot(u, chartE2_);
+    const double sv = std::sqrt(vx * vx + vy * vy);
+    const double th = std::atan2(sv, dot(u, chartC_));
+    const double Rb = block_.shell[0];
+    const double scale = sv > 1e-12 ? th * Rb / sv : Rb;
+    x = vx * scale;
+    y = vy * scale;
+}
+
+void SceneClouds::placeHeaps(SceneFrame& frame, const double nb[3]) {
+    const CloudSettings& c = frame.renderer.clouds();
+    heapBakes_.clear();
+    std::memset(block_.heapNadir, 0, sizeof(block_.heapNadir));
+    std::memset(block_.heapLevel, 0, sizeof(block_.heapLevel));
+    if (c.heapCell <= 0.0f) {
+        heapBaked_ = false;
+        heapPending_ = 0;
+        return;
+    }
+    // (The deck the cache holds and the lattice's cell; a chart about a new
+    // centre puts every texel elsewhere.)
+    uint32_t cellBits;
+    std::memcpy(&cellBits, &c.heapCell, sizeof(cellBits));
+    const uint64_t key = mixBits(cacheKey_, cellBits) | 1u;
+    const bool all = key != heapKey_ || coverDone_ || heapChart_ != chartSerial_;
+    if (heapChart_ != chartSerial_) heapBaked_ = false;
+    heapKey_ = key;
+    heapChart_ = chartSerial_;
+    // The drifted nadir (the heaps drift with the wind: cloudDrift), on the chart.
+    const double Rb = block_.shell[0], t = block_.shell[3];
+    double pd[3];
+    for (int i = 0; i < 3; ++i) pd[i] = nb[i] * Rb - static_cast<double>(block_.wind[i]) * t;
+    const double pl = std::sqrt(pd[0] * pd[0] + pd[1] * pd[1] + pd[2] * pd[2]);
+    for (double& v : pd) v /= pl;
+    double x, y;
+    chartAt(pd, x, y);
+    const bool whole = all && !heapBaked_;
+    for (int k = 0; k < CL_HEAP_LEVELS; ++k) {
+        // (As the cache's: a window moves once the nadir is a quarter texel
+        // past the texel it is about.)
+        const double texel = CL_HEAP_TEXEL0 * std::ldexp(1.0, k);
+        const auto follow = [&](double u, long long ctr) {
+            const long long f = static_cast<long long>(std::floor(u));
+            const bool near = u >= static_cast<double>(ctr) - 0.25 && u < static_cast<double>(ctr) + 1.25;
+            return whole || !heapBaked_ || !near ? f : ctr;
+        };
+        const long long cx = follow(x / texel, heapCentre_[k][0]);
+        const long long cy = follow(y / texel, heapCentre_[k][1]);
+        if (!whole && heapBaked_) {
+            // The texels a window takes in, a strip along each axis it moved.
+            constexpr int S = CL_HEAP_SIDE, H = CL_HEAP_SIDE / 2;
+            for (int axis = 0; axis < 2; ++axis) {
+                const long long from = heapCentre_[k][axis], to = axis == 0 ? cx : cy;
+                const long long d = to - from;
+                if (d == 0) continue;
+                HeapBake b = HeapBake::level(k, 1);
+                if (std::llabs(d) < S) {
+                    const int s0 = static_cast<int>((d > 0 ? from + H : to - H) & (S - 1));
+                    const int n = static_cast<int>(std::llabs(d));
+                    if (axis == 0) b.x0 = s0, b.nx = n;
+                    else b.y0 = s0, b.ny = n;
+                }
+                heapBakes_.push_back(b);
+            }
+        }
+        heapCentre_[k][0] = cx;
+        heapCentre_[k][1] = cy;
+        block_.heapLevel[k][0] = static_cast<float>(cx);
+        block_.heapLevel[k][1] = static_cast<float>(cy);
+    }
+    if (whole) {
+        heapBakes_.assign(1, HeapBake::level(0, CL_HEAP_LEVELS));
+        heapPending_ = 0;
+        heapBaked_ = true;
+    } else {
+        if (all) heapPending_ = (1u << CL_HEAP_LEVELS) - 1u;
+        // A rebake of every level, a level a frame and the coarsest first;
+        // the march reads what the others held meanwhile.
+        if (heapPending_) {
+            int k = CL_HEAP_LEVELS - 1;
+            while (!(heapPending_ & (1u << k))) --k;
+            heapPending_ &= ~(1u << k);
+            heapBakes_.push_back(HeapBake::level(k, 1));
+        }
+    }
+    block_.heapNadir[0] = static_cast<float>(x);
+    block_.heapNadir[1] = static_cast<float>(y);
+    block_.heapNadir[2] = 1.0f;
+    CloudStats stats = frame.renderer.cloudStats();
+    stats.cachePending += std::popcount(heapPending_);
+    frame.renderer.setCloudStats(stats);
+}
+
+void SceneClouds::recordHeaps(SceneFrame& frame) {
+    if (heapBakes_.empty() || !current_->heaps.get()) return;
+    VkDescriptorSet set = writeSet(frame, false, false);
+    if (!set) return;
+    VkCommandBuffer cmd = frame.cmd;
+    // What earlier frames read of the map is done with; the cover baked.
+    memoryBarrier(cmd, kReaders, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->heaps.get());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
+    for (const HeapBake& b : heapBakes_) {
+        const int32_t push[8] = {b.first, b.y0, b.ny, 0, b.x0, b.nx, 0, 0};
+        vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, static_cast<uint32_t>((b.nx + CL_HEAP_GROUP - 1) / CL_HEAP_GROUP),
+                      static_cast<uint32_t>((b.ny + CL_HEAP_GROUP - 1) / CL_HEAP_GROUP), static_cast<uint32_t>(b.levels));
+    }
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, kReaders,
+                  VK_ACCESS_SHADER_READ_BIT);
+    if (frame.timer) frame.timer->mark(cmd, "clouds:heaps");
 }
 
 void SceneClouds::moveLevel(int k, int axis, long long from, long long to) {
@@ -720,6 +833,9 @@ VkDescriptorSet SceneClouds::writeSet(SceneFrame& frame, bool march, bool bake) 
     w.writeImage(CL_B_GLOBE, globe_.view, coverSampler_, VK_IMAGE_LAYOUT_GENERAL);
     w.writeImage(CL_B_GLOBE_OUT, globe_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    w.writeImage(CL_B_HEAPS, heaps_.view, cacheSampler_, VK_IMAGE_LAYOUT_GENERAL);
+    w.writeImage(CL_B_HEAPS_OUT, heaps_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
     volume_.write(w);
     w.updateSet(device_->device(), set);
     return set;
@@ -760,6 +876,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
     }
     if (!on_) return;
 
+    recordHeaps(frame);
     recordCache(frame);
     recordGlobe(frame);
 

@@ -32,11 +32,14 @@
 //   bool cloudHeap(CloudHeapCell c, out CloudHeap h)     (with #define CLOUD_HEAPS)
 //       the heap cell `c` of the engine's lattice holds (sky/cloud_heaps.glsl,
 //       setClouds' heaps.cell metres a cell), its lobes within a cell of
-//       its middle; false none. The engine adds the heaps to
-//       cloudDensity's base where the footprint is finer than them (so
-//       cloudDensity there gives what is not heaps: slabs), and draws them
-//       as themselves where the cache's cells are wider than them; where
-//       the footprint is wider, cloudDensity's share holds them as before.
+//       its middle; false none. The engine draws the heaps as themselves
+//       at every distance (the heaps' map, sky/clouds_layout.h), so
+//       cloudDensity gives what is not heaps: slabs.
+//   float cloudHeapsShare(CloudPoint q)                  (with CLOUD_HEAPS)
+//       the share of the air the heaps fill at q, on the mean over
+//       q.footprint (read where they are finer than it), above 0 however
+//       little wherever a heap may stand and under 0 where none can: the
+//       march's bounds trust it.
 //
 // and may read cloudData(i), the world's data (vec4 i of at most 64). The
 // engine owns the rest: the forms the base is cut into (cloudForms: its
@@ -66,6 +69,8 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 cacheLevel[CL_CACHE_LEVELS];   // xy the cell (index) of level k's window that holds the nadir
     vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w the edge (m)
     vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with; w the heaps' cell (m, 0 none)
+    vec4 heapNadir;     // xy the drifted nadir on the cache's chart (m), z 1 when the heaps' map is baked
+    vec4 heapLevel[CL_HEAP_LEVELS];   // xy the texel (index) of level k of the heaps' map that holds it
     vec4 data[CL_MAX_DATA];
     // The volume about the eye (sky/cloud_volume.glsl).
     vec4 volA;          // xyz its anchor (the drifted body frame, m), w the finest cell (m)
@@ -82,6 +87,7 @@ layout(set = CLOUD_SET, binding = CL_B_CACHE) uniform sampler3D cloudCacheMap;
 layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
 layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
 layout(set = CLOUD_SET, binding = CL_B_GLOBE) uniform sampler2DArray cloudGlobeMap;
+layout(set = CLOUD_SET, binding = CL_B_HEAPS) uniform sampler2DArray cloudHeapMap;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -137,8 +143,6 @@ vec4 cloudNoise(vec3 x, float footprint) {
     float lod = log2(max(footprint * float(CL_NOISE_SIDE), 1.0));
     return textureLod(cloudNoiseMap, fract(x), lod);
 }
-vec4 cloudFieldTex(vec3 x, float lod) { return textureLod(cloudNoiseMap, x, lod); }
-#include "sky/cloud_field.glsl"
 
 // `v` from [lo, hi] onto [a, b], unclamped.
 float cloudRemap(float v, float lo, float hi, float a, float b) {
@@ -273,13 +277,8 @@ const float CLOUD_SKIN = 0.2;
 // may rise at most up or down (cloudDensity's contract: it is the least of
 // a field rising no faster than that any way and one rising no faster than
 // this up or down and a fifth of an edge's rate across, as under a flat
-// base, where the march shows none of the skin's move: clouds_light.comp),
-// and how
-// much faster still the cache's cut of a share into clouds may
-// (cloudCutBase: twice its noise read at a cell's footprint, which changes
-// by under a half a cell, and 1.5 times the share).
+// base, where the march shows none of the skin's move: clouds_light.comp).
 const float CLOUD_EDGE_STEEPEST = 3.0;
-const float CLOUD_CUT_STEEPEST = 2.0;
 
 // Body point `p` as the forms' noise sees it: carried by the wind.
 vec3 cloudDrift(vec3 p) { return p - clouds.wind.xyz * clouds.shell.w; }
@@ -408,73 +407,6 @@ float cloudFieldOf(float base, float skin, float w) {
 // cell as wide as a cloud's edge, about the least a cloud's size, is all
 // share).
 float cloudShareLike(float cell) { return smoothstep(0.25, 1.0, cell / clouds.forms.w); }
-// The noise a share is cut into clouds by (cloudSurfaceBase): the engine's
-// at CLOUD_CUT_TILE edges a tile, its billows some one and a half edges
-// across, about the least a cloud's size, with the same turned and 0.62 as
-// large (so neither's lattice lines the clouds up in rows), their sum
-// spread back to one's.
-const float CLOUD_CUT_TILE = 13.0;
-vec4 cloudCutNoise(vec3 pd, float footprint) {
-    float S = CLOUD_CUT_TILE * clouds.forms.w;
-    vec4 a = cloudNoise(pd / S, footprint / S);
-    vec4 b = cloudNoise(kCloudCutTurn * pd / (0.62 * S), footprint / (0.62 * S));
-    return vec4(0.6 + (0.5 * (a.x + b.x) - 0.6) * 1.4, a.yzw);
-}
-// The base the cache keeps for a cell `cell` metres wide at `pd` (drifted)
-// where the world's is `base`: as the world gives it where the cell is fine
-// enough that it is the clouds' surface, and where it is wide enough that
-// it is a share of the cell (cloudShareLike), that share cut into clouds by
-// the noise (cloudCutNoise at the cell's footprint: cloud where it is over
-// a threshold that falls as the share rises), so a far field the cache
-// holds only as shares is still clouds and gaps, about as many as the
-// share says, which the march reads as it reads the heaps (under 0 as far
-// as the noise and the share take it: how far the clouds it cuts are).
-float cloudCutBase(float base, vec3 pd, float cell) {
-    float q = cloudShareLike(cell);
-    if (q <= 0.0) return base;
-    // (The noise as a score, about normal: its mean and spread. It is read
-    // at a quarter of the cell, so a cell is a sample of it, not its mean,
-    // and keeps its spread; its clouds a few cells across at the least.
-    // The threshold the score's quantile for the share, logistic; under a
-    // share of 2% steeply higher, out of the score's reach by none. Never
-    // read coarser than an eighth of the noise's tile: its coarse mips are a
-    // few texels a tile, flat and blocky, so cells wider than that cut along
-    // its lattice into rows that run off to the horizon; read finer, a wide
-    // cell is one sample of the clouds, as a narrower one is.)
-    float z = (cloudCutNoise(pd, min(0.25 * cell, 0.125 * CLOUD_CUT_TILE * clouds.forms.w)).x - 0.77) / 0.074;
-    float s = clamp(base, 0.02, 0.98);
-    float t = log((1.0 - s) / s) / 1.7 + max(0.02 - base, 0.0) * 150.0;
-    float cut = min(0.5 + 0.25 * (z - t), 1.0);
-    return mix(base, cut, q);
-}
-// The lumps a share cut into clouds is carved into, read per sample (the
-// cache's cells are as wide as the clouds where it holds shares, so its
-// cut alone is a few blobs a cell or two across): Worley's cells (1 - F1,
-// the noise's y) some CLOUD_LUMP_CELL edges across, and in the gaps between
-// them its cells half as wide (the noise's z, CLOUD_LUMP_SMALL_DROP
-// lower: fewer and smaller), the base lowered by `q` (cloudShareLike) of
-// CLOUD_LUMPS where they fall under CLOUD_LUMP_FLOOR (toward their rims),
-// so a far field seen from above is heaps' domes of a wide range of sizes,
-// lit on their sun side and shaded in their lee, and parts between them.
-// They never raise the base, so the cache's holds and the march's bounds,
-// taken on the base uncarved, stand as they are.
-const float CLOUD_LUMPS = 0.6;
-const float CLOUD_LUMP_FLOOR = 0.63;
-const float CLOUD_LUMP_CELL = 1.7;
-const float CLOUD_LUMP_SMALL_DROP = 0.12;
-float cloudLumpsOf(vec3 pd, float footprint, float q) {
-    if (q <= 0.0) return 0.0;
-    // (Read no finer than a 32nd of their tile, a few texels a cell: they
-    // are a heap's size, and the noise's coarse mips stay in the cache.
-    // Read turned, as the cut's noise is: the tile is only four cells a
-    // side, so read along the body's axes its repeats lined up in rows
-    // along an axis lying level, straight streaks running off toward the
-    // horizon.)
-    float T = 4.0 * CLOUD_LUMP_CELL * clouds.forms.w;
-    vec4 w = cloudNoise(kCloudCutTurn * pd / T, max(footprint / T, 1.0 / 32.0));
-    float y = max(w.y, w.z - CLOUD_LUMP_SMALL_DROP);
-    return q * CLOUD_LUMPS * min(y - CLOUD_LUMP_FLOOR, 0.0);
-}
 
 // The share of the footprint the cloud fills where the billows' noise is
 // `n` (no detail: the layer's, the cache's), `base` as a surface.
@@ -497,10 +429,9 @@ float cloudFormsShare(vec4 n, float base, float footprint) {
 // from its outer edge at -w/2: the field's span over the footprint where
 // the skin is steeper than the base. In, so the surface reaches out no
 // further than w says, as the march's bounds take it: clBaseClear.)
-float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp, float steep) {
+float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
     if (base <= 0.0) return 0.0;
     float v = cloudFieldOf(base, skin, w);
-    v += (steep - 1.0) * (v + 0.5 * w);   // (steeper in from its outer edge, -w/2)
     float share = clamp((v + 0.5 * w) / ramp, 0.0, 1.0);
     if (share <= 0.0) return 0.0;
     float heart = clouds.forms.x;
@@ -509,20 +440,8 @@ float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp,
     float through = 1.0 - share * (1.0 - exp(-heart * L));
     return mix(near, -log(max(through, 1e-4)) / L, w);
 }
-float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
-    return cloudSigmaOf(base, skin, w, footprint, ramp, 1.0);
-}
-// How much steeper the extinction rises inside a share cut into clouds,
-// `q` of it (cloudShareLike), than inside the world's surface: the cut
-// rises a quarter of the base a unit of its score, its clouds a few cells
-// across, so through the skin's soft ramp (cloudSurfaceBlur) most of a
-// small cloud was ramp, a thin grey veil where the world's heaps are
-// opaque at heart. Its outer edge, where the extinction begins, the same
-// (cloudSigmaOf's `steep`), so the march's faces and bounds are unmoved.
-const float CLOUD_CUT_STEEP = 4.0;
-float cloudCutSteep(float q) { return 1.0 + CLOUD_CUT_STEEP * q; }
 float cloudSigmaOf(float base, float skin, float w, float footprint) {
-    return cloudSigmaOf(base, skin, w, footprint, w, 1.0);
+    return cloudSigmaOf(base, skin, w, footprint, w);
 }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
     return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud, cloudSkinAt(footprint)), cloudSurfaceBlur(footprint), footprint);
@@ -617,6 +536,59 @@ vec4 cloudCacheBand(vec2 xy, int k) {
 vec4 cloudCacheColumn(vec2 xy, int k) {
     return textureLod(cloudBandMap, vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(CL_CACHE_LEVELS + k)),
                       0.0);
+}
+// The same of its slabs alone (the heaps left out).
+vec4 cloudCacheSlabColumn(vec2 xy, int k) {
+    return textureLod(cloudBandMap,
+                      vec3(xy / (cloudCacheCell(k) * float(CL_CACHE_SIDE)), float(2 * CL_CACHE_LEVELS + k)), 0.0);
+}
+
+// --- The heaps' map about the eye (sky/clouds_layout.h) --------------------------
+
+float cloudHeapTexel(int k) { return CL_HEAP_TEXEL0 * exp2(float(k)); }
+// The heaps' cell (m) where the map holds them (0: none).
+float cloudHeapMapSide() { return clouds.heapNadir.z > 0.5 ? clouds.wind.w : 0.0; }
+
+// The map's level about footprint `foot` at chart point `xy` (a drifted
+// point's), as a fraction, as cloudCacheLod's.
+float cloudHeapLod(vec2 xy, float foot) {
+    vec2 dn = abs(xy - clouds.heapNadir.xy);
+    float far = max(dn.x, dn.y) / (CL_HEAP_MARGIN * CL_HEAP_TEXEL0);
+    return max(max(log2(max(foot, 1e-3) / CL_HEAP_TEXEL0), log2(max(far, 1e-6)) + 1.0), 0.0);
+}
+
+// The heaps' column (sky/cloud_heaps.glsl's cloudHeapColumn) at the
+// drifted point's chart point `xy` over footprint `foot`, blended over the
+// two levels about it; and the texel it was read over (y; past the map, or
+// with no map, no heaps: z -1e5).
+vec4 cloudHeapMapColumn(vec2 xy, float foot, out float texel) {
+    float lod = cloudHeapLod(xy, foot);
+    int k = int(lod);
+    texel = cloudHeapTexel(min(k, CL_HEAP_LEVELS - 1)) * exp2(fract(lod));
+    if (clouds.heapNadir.z < 0.5 || k >= CL_HEAP_LEVELS) return vec4(0.0, 0.0, -1e5, 1.0);
+    const float S = float(CL_HEAP_SIDE);
+    vec4 a = textureLod(cloudHeapMap, vec3(xy / (cloudHeapTexel(k) * S), float(k)), 0.0);
+    float f = fract(lod);
+    if (k + 1 < CL_HEAP_LEVELS && f > 0.0)
+        a = mix(a, textureLod(cloudHeapMap, vec3(xy / (cloudHeapTexel(k + 1) * S), float(k + 1)), 0.0), f);
+    return a;
+}
+// How far (m) a point `z` metres up the deck is inside the heaps of column
+// `c` at most (negative: outside, by at least about that): under the top
+// and over the bottom (as far as under the top a metre), inside the outline
+// across.
+float cloudHeapColumnIn(vec4 c, float z) {
+    float zr = z - c.x;
+    return min(min(zr, c.y - zr) * c.w, c.z);
+}
+// How much of the heaps a footprint `foot` (or the heaps' map's texel
+// `texel` read for it) sees as their share, not as themselves: where they
+// are a few pixels across or less, their share (the cache's), so a field of
+// them far off is the veil its heaps make; and all of it by the map's
+// coarsest texels, so past the map nothing changes.
+float cloudHeapsFar(float foot, float texel) {
+    float hs = cloudHeapMapSide();
+    return max(smoothstep(0.25 * hs, 0.6 * hs, foot), smoothstep(0.4 * hs, 0.8 * hs, texel));
 }
 
 // --- The layer seen from above (clouds.frag) -------------------------------------

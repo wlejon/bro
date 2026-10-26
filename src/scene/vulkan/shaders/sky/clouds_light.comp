@@ -21,6 +21,7 @@ layout(local_size_x = CL_CACHE_GROUP, local_size_y = 1, local_size_z = CL_CACHE_
 // and highest bins that may hold cloud of all nine.
 shared float sSigma[CL_CACHE_GROUP][9][CL_CACHE_BINS];
 shared float sColumn[CL_CACHE_GROUP][9];
+shared float sSlab[CL_CACHE_GROUP][CL_CACHE_BINS];   // the column's own slabs' extinction (no heaps)
 shared uint sLo[CL_CACHE_GROUP], sHi[CL_CACHE_GROUP];
 
 layout(set = 0, binding = CL_B_CACHE_OUT, rgba16f) uniform writeonly image3D cacheOut;
@@ -44,13 +45,27 @@ float cloudSigmaAt(vec3 p, float foot) {
     return textureLod(cloudSigmaMap, cloudCacheCoord(xy, h, k), 0.0).r;
 }
 
+// The same of the slabs alone (the heaps' none).
+float cloudSlabSigmaAt(vec3 p, float foot) {
+    float r = length(p);
+    float h = (r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x);
+    if (h <= 0.0 || h >= 1.0) return -1.0;
+    vec2 xy = cloudChartAt(p / r);
+    int k = cloudCacheLevel(xy, foot);
+    if (k >= CL_CACHE_LEVELS) return -1.0;
+    float cell = cloudCacheCell(k);
+    float base = textureLod(cloudSigmaMap, cloudCacheCoord(xy, h, k), 0.0).g;
+    return cloudSigmaOf(base, 0.0, cloudSurfaceBlur(cell), cell);
+}
+
 // The depth from `p` toward `d` (the body's frame): `n` steps, each `grow`
 // times the last, from `first`, read no finer than `cell`; to where the
-// way leaves the deck.
-float cloudDepthToward(vec3 p, vec3 d, float first, float grow, int n, float cell) {
+// way leaves the deck. Of the slabs alone if `slabs`.
+float cloudDepthToward(vec3 p, vec3 d, float first, float grow, int n, float cell, bool slabs) {
     float tau = 0.0, at = 0.0, len = first;
     for (int i = 0; i < n; ++i) {
-        float s = cloudSigmaAt(p + d * (at + 0.5 * len), max(len, cell));
+        vec3 q = p + d * (at + 0.5 * len);
+        float s = slabs ? cloudSlabSigmaAt(q, max(len, cell)) : cloudSigmaAt(q, max(len, cell));
         if (s < 0.0) break;
         tau += s * len;
         at += len;
@@ -80,9 +95,12 @@ void main() {
     vec3 sun = normalize(cloudToBody(clouds.sun.xyz));
     // (From half a cell, or of a bin straight up: the texel's own.)
     float first = 0.5 * min(cell, clouds.cacheE1.w * 2.0);
-    float toSun = cloudDepthToward(p, sun, first, 1.35, 28, cell);
-    float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell);
-    if (inside) imageStore(cacheOut, at, vec4(base, toSun, toUp, 0.0));
+    float toSun = cloudDepthToward(p, sun, first, 1.35, 28, cell, false);
+    float toUp = cloudDepthToward(p, up, 0.5 * clouds.cacheE1.w, 1.35, 12, cell, false);
+    // (The bottom bin's slabs' alone: the land's shadow, the heaps' own from
+    // their map over it where they are drawn as themselves.)
+    float slabsToSun = bin == 0 ? cloudDepthToward(p, sun, first, 1.35, 28, cell, true) : toSun;
+    if (inside) imageStore(cacheOut, at, vec4(slabsToSun, toSun, toUp, 0.0));
     // The column's band (the march's probe): the heights where it and the
     // columns about it may hold cloud (CL_B_HOLDS; so a lookup between
     // texels holds every column it may stand for), and the most any of them
@@ -94,6 +112,7 @@ void main() {
         sLo[col] = uint(CL_CACHE_BINS);
         sHi[col] = 0u;
     }
+    sSlab[col][bin] = cloudSigmaOf(base, 0.0, cloudSurfaceBlur(cell), cell);
     barrier();
     bool held = false;
     for (int j = -1; j <= 1; ++j) {
@@ -128,10 +147,14 @@ void main() {
     // sends (the light's way up and, slanted, toward the sun: the column is
     // far wider than it is deep, so its neighbours are as it is) and of the
     // height.
-    CloudColumn layer = cloudColumnNone();
+    // And its slabs' alone (from 2 CL_CACHE_LEVELS on: where the layer
+    // draws the heaps as themselves, from their map, over them).
+    CloudColumn layer = cloudColumnNone(), slabs = cloudColumnNone();
     for (int b = CL_CACHE_BINS - 1; b >= 0; --b) {
-        float d = sSigma[col][4][b] * clouds.cacheE1.w;
-        cloudColumnAdd(layer, d, (float(b) + 0.5) / float(CL_CACHE_BINS), clouds.cacheE1.w, cloudShareLike(cell));
+        float hb = (float(b) + 0.5) / float(CL_CACHE_BINS);
+        cloudColumnAdd(layer, sSigma[col][4][b] * clouds.cacheE1.w, hb, clouds.cacheE1.w, cloudShareLike(cell));
+        cloudColumnAdd(slabs, sSlab[col][b] * clouds.cacheE1.w, hb, clouds.cacheE1.w, cloudShareLike(cell));
     }
     imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), cloudColumnLayer(layer));
+    imageStore(bandOut, ivec3(x, y, 2 * CL_CACHE_LEVELS + k), cloudColumnLayer(slabs));
 }

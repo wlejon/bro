@@ -70,13 +70,13 @@
 #include "land_region_dispatch.glsl.src.h"
 #include "land_region.comp.src.h"
 #include "clouds_layout.h.src.h"
-#include "cloud_field.glsl.src.h"
 #include "scene_cloud_layer.glsl.src.h"
 #include "cloud_heaps.glsl.src.h"
 #include "cloud_module.glsl.src.h"
 #include "clouds_cover.comp.src.h"
 #include "clouds_cache.comp.src.h"
 #include "clouds_globe.comp.src.h"
+#include "clouds_heaps.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -206,7 +206,6 @@ const char* embeddedInclude(const std::string& name) {
         {"ground/land_region_layer.glsl", kVkLandRegionLayerSrc},
         {"ground/land_region_dispatch.glsl", kVkLandRegionDispatchSrc},
         {"sky/clouds_layout.h", kVkCloudsLayoutSrc},
-        {"sky/cloud_field.glsl", kVkCloudFieldSrc},
         {"sky/scene_cloud_layer.glsl", kVkSceneCloudLayerSrc},
         {"sky/cloud_heaps.glsl", kVkCloudHeapsSrc},
         {"sky/cloud_module.glsl", kVkCloudModuleSrc},
@@ -229,6 +228,7 @@ const char* embeddedInclude(const std::string& name) {
         {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
         {"sky/clouds_cache.comp", kVkCloudsCacheCompSrc},
         {"sky/clouds_globe.comp", kVkCloudsGlobeCompSrc},
+        {"sky/clouds_heaps.comp", kVkCloudsHeapsCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

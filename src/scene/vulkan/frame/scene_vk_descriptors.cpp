@@ -91,9 +91,6 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createLightingLayout(VkDev
     builder.addBinding(23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     // The cloud deck's shadow's levels (SceneClouds::shadowView), the same way.
     builder.addBinding(24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    // The clouds' noise (SceneClouds::noiseView), through binding 17's
-    // sampler (it repeats): the field their shadow's clumps are cut by.
-    builder.addBinding(25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

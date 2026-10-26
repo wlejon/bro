@@ -10,10 +10,12 @@
 //                     its mips down to a texel)
 //     CL_B_DEPTH      the opaque depth (SceneTargets::depthSnapshot): the march
 //     CL_B_COVER_OUT  the cover, written by the bake (rgba16f storage)
-//     CL_B_SHADOW_OUT the shadow's levels, written (rgba32f storage, a level a layer)
+//     CL_B_SHADOW_OUT the shadow's levels, written (r32f storage, a level a layer)
 //     CL_B_LAND_GRID  the land's processes' grid (the bake's cloudLandGrid)
-//     CL_B_CACHE      the deck's cache about the eye, sampled (below): its
-//                     base and the depths toward the sun and up
+//     CL_B_CACHE      the deck's cache about the eye, sampled (below): the
+//                     slabs' alone depth toward the sun (x: in the bottom
+//                     bin, the land's shadow's; above, y), the depths
+//                     toward the sun and up, the free distance (w)
 //     CL_B_CACHE_OUT  the same, written by its light's bake (rgba16f storage)
 //     CL_B_SIGMA      the cache's extinction (x, the forms' mean over a
 //                     cell), base (y) and how much of the skin's move shows
@@ -27,7 +29,9 @@
 //                     it holds (its optical depth up the whole deck; none
 //                     only where none may hold any);
 //                     and from layer CL_CACHE_LEVELS on, the column as a
-//                     layer at each level (cloudCacheColumn)
+//                     layer at each level (cloudCacheColumn), and from
+//                     2 CL_CACHE_LEVELS on its slabs' alone
+//                     (cloudCacheSlabColumn)
 //     CL_B_BAND_OUT   the same, written by the light's bake (rgba16f storage)
 //     CL_B_DIST_A/B   the distance transform's scratch (r16f storage, as the
 //                     cache: sky/clouds_dist.comp)
@@ -46,6 +50,9 @@
 //                     level each: sky/clouds_volume_dist.comp)
 //     CL_B_VOLUME_CHECK the volume's check's results (a storage buffer:
 //                     sky/clouds_volume_check.comp)
+//     CL_B_HEAPS      the heaps' map about the eye, sampled (below:
+//                     sky/clouds_heaps.comp), a level a layer
+//     CL_B_HEAPS_OUT  the same, written by its bake (rgba16f storage)
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -76,6 +83,8 @@
 #define CL_B_VOLUME_DA      20
 #define CL_B_VOLUME_DB      21
 #define CL_B_VOLUME_CHECK   22
+#define CL_B_HEAPS          23
+#define CL_B_HEAPS_OUT      24
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 
@@ -93,9 +102,8 @@
 // The clouds' shadow on the land: CL_SHADOW_LEVELS square levels of
 // CL_SHADOW_SIDE texels on the plane tangent to the body under the eye,
 // level l's texel CL_SHADOW_TEXEL0 * CL_SHADOW_GROWTH^l metres (on that
-// plane), each texel what the deck leaves of the sun at the datum there
-// (x), how much the layer cuts the clumps over it from a far field's share
-// (y) and that share by y (z): sky/clouds_shadow.comp.
+// plane), each texel what the deck leaves of the sun at the datum there:
+// sky/clouds_shadow.comp.
 #define CL_SHADOW_LEVELS    7
 #define CL_SHADOW_SIDE      256
 #define CL_SHADOW_TEXEL0    60.0
@@ -130,6 +138,26 @@
 #define CL_CACHE_SLICES     16
 #define CL_CACHE_REACH      8        // cells across the distance to cloud is sought over
 #define CL_CACHE_GROUP      8
+
+// The heaps' map about the eye (sky/cloud_heaps.glsl): the heaps of the
+// engine's lattice as the march reads them at every distance, so a heap
+// seen from far is the heap flown through. On the cache's chart, read with
+// the drifted point (cloudDrift: the heaps drift with the wind, the map's
+// texels do not move under them), CL_HEAP_LEVELS square windows of
+// CL_HEAP_SIDE texels about the drifted nadir, level k's texel
+// CL_HEAP_TEXEL0 * 2^k metres, stored toroidally as the cache's are, a
+// level a layer. A texel: the heaps' column over its centre
+// (cloudHeapColumn): x the bottom (m up the deck), y how high the top
+// stands over it, z how far the centre is inside the heaps' outline across
+// (negative: outside), w how far inside a metre under the top or over the
+// bottom is. Baked whole when the
+// deck, the chart or the time jumps, else the texels a window takes in as
+// it moves: the heaps do not change as they drift.
+#define CL_HEAP_LEVELS      8
+#define CL_HEAP_SIDE        1024
+#define CL_HEAP_TEXEL0      16.0
+#define CL_HEAP_MARGIN      480.0    // texels about the nadir a level's lookups stay within
+#define CL_HEAP_GROUP       8
 
 // The globe: the deck's columns over the whole body, for the layer the
 // march reads from far over the deck where the cache's cells are coarser
