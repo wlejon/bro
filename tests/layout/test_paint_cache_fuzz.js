@@ -30,7 +30,9 @@ for (const [seed, rounded] of seeds) {
         PAINT_FUZZ_MODE: 'headless', PAINT_FUZZ_SEED: String(seed), PAINT_FUZZ_STEPS: steps,
         PAINT_FUZZ_ROUNDED: rounded ? '1' : '0',
     });
-    const r = cp.spawnSync(exe, [app, driver], { encoding: 'utf8', env });
+    // --grant env: the app reads PAINT_FUZZ_* from process.env, which shows
+    // an app without `env` only who and where it is (docs/apps.md).
+    const r = cp.spawnSync(exe, ['--grant', 'env', app, driver], { encoding: 'utf8', env });
     const out = (r.stdout || '') + (r.stderr || '');
     const line = out.split(/\r?\n/).find((l) => l.includes('PAINT_FUZZ seed='));
     assert(r.status === 0,

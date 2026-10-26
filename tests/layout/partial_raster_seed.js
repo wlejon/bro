@@ -16,7 +16,10 @@ module.exports = function checkPartialRasterSeed(seed, steps) {
         PAINT_FUZZ_MODE: 'headless', PAINT_FUZZ_SEED: String(seed), PAINT_FUZZ_STEPS: String(steps),
         PAINT_FUZZ_VERIFY_PARTIAL: '1',
     });
-    const r = cp.spawnSync(exe, ['--no-gpu', app, path.join(app, 'headless.js')], { encoding: 'utf8', env });
+    // --grant env: the app reads PAINT_FUZZ_* from process.env, which shows
+    // an app without `env` only who and where it is (docs/apps.md).
+    const r = cp.spawnSync(exe, ['--no-gpu', '--grant', 'env', app, path.join(app, 'headless.js')],
+                           { encoding: 'utf8', env });
     const out = (r.stdout || '') + (r.stderr || '');
     const line = out.split(/\r?\n/).find((l) => l.includes('PAINT_FUZZ seed='));
     assert(r.status === 0 && line && line.includes(' ok '),
