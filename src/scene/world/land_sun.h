@@ -25,7 +25,7 @@
 //   - the sun turned more than kSunTurnCos since it was made;
 //   - the land changed (its module, extent, rings or canopy: `generation`);
 //   - the land's tiles changed since it was made (they refine as the eye
-//     moves) and kRefreshFrames have passed.
+//     moves) and kTilesRefreshFrames have passed.
 // A want's error doubles every kRefreshFrames it waits, so one outranked
 // frame after frame is still made.
 
@@ -45,6 +45,7 @@ public:
     static constexpr int kSnapTexels = 32;
     static constexpr float kSunTurnCos = 0.99999048f;   // a quarter of a degree
     static constexpr int kRefreshFrames = 30;
+    static constexpr int kTilesRefreshFrames = 8;   // a level made at most this often as its tiles refine
 
     /// Where a level lies and the copy (array layer) shown; layer -1 while it
     /// was never made.
