@@ -82,6 +82,8 @@ float clDown = 0.0;
 struct ClForms {
     float sigma;    // their extinction
     float face;     // their field less its surface's (cloudFieldOf): > 0 in cloud, < 0 out
+    float cover;    // how much of the pixel they fill here (its share across the surface's ramp; all of
+                    // it where the surface's blur is a cloud's edge or wider, as the share's extinction says)
 };
 
 // The forms at `w` (`lod` the cache's level there) over footprint `foot`,
@@ -89,7 +91,7 @@ struct ClForms {
 // (how much of the skin's move shows is the pixel's, not the length a
 // piece's mean is taken over: cloudSkinAt).
 ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
-    ClForms f = ClForms(0.0, -1.0);
+    ClForms f = ClForms(0.0, -1.0, 0.0);
     if (w.h <= 0.0 || w.h >= 1.0) return f;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
@@ -122,5 +124,6 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
+    f.cover = f.sigma > 0.0 ? mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB) : 0.0;
     return f;
 }

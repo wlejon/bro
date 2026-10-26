@@ -263,6 +263,23 @@ float clTopShade(vec3 p, vec3 s, float foot) {
     return mix(1.0, clamp(lit / max(sinE, 0.08), 0.15, 2.5), vis);
 }
 
+// The pixel's cover by the cloud a view has been through (cone tracing):
+// what the view gathered in it since it met it (from light `L0`, what was
+// left `T0`) as much as the most of the pixel its forms filled along the
+// way (ClForms.cover). A view that goes in deep is the pixel's whole; one
+// that grazes a rim takes the share of the pixel the rim fills, so an
+// outline is the pixel's mean across its edge, not a stair of views each
+// wholly in or wholly out.
+// (A cover within a tenth of the whole is the whole: a piece deep in the
+// cloud that reads the volume reads its cells' mean, a little short of it
+// where a cell reaches the surface.)
+const float CL_COVER_WHOLE = 0.9;
+void clCover(inout ClMarch m, vec3 L0, float T0, float cover) {
+    if (cover >= 1.0) return;
+    m.L = L0 + cover * (m.L - L0);
+    m.T = T0 * mix(1.0, m.T / max(T0, 1e-6), cover);
+}
+
 void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
                  float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow, float down) {
     float r = length(p);
@@ -539,10 +556,15 @@ void main() {
     float tFace = -1.0, tauFace = 0.0, tauUp = 0.0;   // inside: where the sun's depth was taken, its depths toward the sun and up there
     float tauIn = 0.0;       // inside: the view's depth from tFace to the piece
     float tauSeen = 0.0;     // inside: the view's depth from the cloud's face
+    vec3 coverL = vec3(0.0);                // inside: the light and what was left where the view met the cloud,
+    float coverT = 1.0, cover = 1.0;        // and the most of the pixel the cloud has filled (clCover),
+    float coverLast = 0.0;                  // and the last piece's
     int steps = 0;
     int dbgFree = 0, dbgB = 0, dbgSkip = 0, dbgSkin = 0, dbgIn = 0, dbgHalve = 0, dbgPiece = 0;
     float dbgTau = -1.0;
-    while (wl < 1.0 && steps < CL_VIEW_STEPS && m.T > CL_OPAQUE) {
+    // (Not ended in a cloud that has not covered the pixel: what the view
+    // left of the pixel past a rim it grazed is what lies behind it.)
+    while (wl < 1.0 && steps < CL_VIEW_STEPS && (m.T > CL_OPAQUE || cover < 1.0)) {
         ++steps;
         if (mode == CL_TRACE) {
             if (t >= sp.y) {
@@ -708,6 +730,8 @@ void main() {
         }
         // Inside: the next piece, sampled at its middle.
         if (t >= sp.y) {
+            clCover(m, coverL, coverT, cover);
+            cover = 1.0;
             mode = CL_TRACE;
             tFace = -1.0;
             continue;
@@ -724,18 +748,23 @@ void main() {
         // (Deep in the cloud, where the detail no longer shows, or where the
         // piece is as long as a cell, the volume's extinction there over a
         // cell about the piece's mean: one fetch.)
-        ClForms f = ClForms(0.0, -1.0);
+        ClForms f = ClForms(0.0, -1.0, 0.0);
         int kv = CL_VOL_LEVELS;
         vec3 v = clouds.volEye.xyz + dl * x;
         if (tFace >= 0.0 && (tauSeen > CL_IN_FORMS || foot >= clouds.volA.w)) kv = cloudVolLevel(v, max(foot, CL_PIECE_MEAN * L));
         if (kv < CL_VOL_LEVELS) {
-            f.sigma = cloudVolSample(kv, v).x;
+            // (Its cover its cell's, as wide as the pixel or finer.)
+            vec4 vs = cloudVolSample(kv, v);
+            f.sigma = vs.x;
+            f.cover = mix(vs.z, 1.0, cloudSurfaceBlur(foot));
         } else {
             f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), foot, m.T > CL_DETAIL_SEEN);
         }
         float sigma = f.sigma;
         if (sigma <= 0.0) {
             // Out of the cloud: traced on from here.
+            clCover(m, coverL, coverT, cover);
+            cover = 1.0;
             clearAt = t = xPrev = x;
             clearFace = f.face;
             clearLazy = kv < CL_VOL_LEVELS;   // (the volume's: no field)
@@ -756,6 +785,9 @@ void main() {
         // it by that rim's depth, its neighbour, which missed the rim, by the
         // far lobe's own: the near lobe's outline stepped pixel by pixel.)
         if (tFace < 0.0) {
+            coverL = m.L;
+            coverT = m.T;
+            cover = coverLast = 0.0;
             tFace = t;
             tauFace = clSunDepth(ro + rd * t, s, pixel * t, m.T > CL_DETAIL_SEEN);
             tauUp = clCache(w, lod).z;
@@ -766,6 +798,13 @@ void main() {
             tauUp = clCache(w, lod).z;
             tauIn = -0.5 * sigma * L;
         }
+        // (Opaque with its cover still rising, the view is going in deep: the
+        // pixel's whole. Only one that has passed its nearest to the
+        // cloud's heart is marched on, out of the rim it grazed.)
+        float c = min(f.cover / CL_COVER_WHOLE, 1.0);
+        if (m.T <= CL_OPAQUE && c >= coverLast) c = 1.0;
+        coverLast = c;
+        cover = max(cover, c);
         vec2 tau = vec2(max(tauFace - (tauIn + 0.5 * sigma * L) * nu, 0.0), tauUp);
         tauIn += sigma * L;
         tauSeen += sigma * L;
@@ -778,6 +817,7 @@ void main() {
         t += L;
         len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
     }
+    if (tFace >= 0.0) clCover(m, coverL, coverT, cover);
     if (wl > 0.0) {
         m.L = mix(m.L, ml.L, wl);
         m.T = mix(m.T, ml.T, wl);
