@@ -208,6 +208,9 @@ public:
     /// One unit's GPU ms, as last measured (its guess before).
     float cost(int k) const { return kinds_[static_cast<size_t>(k)].cost; }
     bool measured(int k) const { return kinds_[static_cast<size_t>(k)].measured; }
+    /// Kind `k`'s jobs this frame left queued, and the largest error among them.
+    uint32_t queued(int k) const { return kinds_[static_cast<size_t>(k)].queued; }
+    float worstError(int k) const { return kinds_[static_cast<size_t>(k)].worstError; }
 
     /// A frame the GPU timer read (oldest first, each once).
     void observe(const WorldFrameTiming& timing);
@@ -251,6 +254,8 @@ private:
         float cost = 0.05f;
         bool measured = false;
         int starved = 0;   // frames running it offered jobs and was granted none
+        uint32_t queued = 0;      // this frame's jobs left for a later one
+        float worstError = 0.0f;  // and the largest error among them (pixels)
     };
     std::vector<Kind> kinds_;
     WorldServiceConfig config_;

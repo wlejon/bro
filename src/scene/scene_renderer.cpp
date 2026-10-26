@@ -173,10 +173,12 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
     // leave work queued for good; their queues count only where what waits
     // is seen: the world service's jobs by the largest error left, over a
     // pixel.)
-    if (s.worldQueued && s.worldWorstError > 1.0f) {
-        char buf[128];
-        std::snprintf(buf, sizeof buf, "world service: %d jobs queued, the worst %.1f px off", s.worldQueued,
-                      s.worldWorstError);
+    // (By kind, so what waits is named.)
+    for (const CullStats::WorldKindQueue& q : s.worldKindQueued) {
+        if (q.worstError <= 1.0f) continue;
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "world service: %d %s jobs queued, the worst %.1f px off", q.queued,
+                      q.name.c_str(), q.worstError);
         out.push_back(buf);
     }
     if (s.groundLayerMissing)

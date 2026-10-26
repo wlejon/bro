@@ -46,6 +46,7 @@ void WorldService::beginFrame() {
     offers_.clear();
     for (auto& g : granted_) g.clear();
     stats_ = {};
+    for (Kind& k : kinds_) k.queued = 0, k.worstError = 0.0f;
     float budget = config_.floorMs;
     const auto worst = [&](int frames) {
         const size_t n = std::min(need_.size(), static_cast<size_t>(std::max(frames, 1)));
@@ -119,6 +120,8 @@ void WorldService::schedule() {
             if (!kind.desc.nextFrame && now + held + c <= budget_) held += c;
             ++stats_.queued;
             stats_.worstError = std::max(stats_.worstError, j.error);
+            ++kind.queued;
+            kind.worstError = std::max(kind.worstError, j.error);
             if (kind.desc.catchUp && j.error > config_.catchUpError) behind = true;
             continue;
         }

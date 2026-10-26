@@ -138,6 +138,11 @@ void SceneWorldService::runFrame(SceneFrame& frame) {
     frame.stats.worldWorstError = s.worstError;
     frame.stats.worldKindMs.clear();
     for (int k = 0; k < policy_.kindCount(); ++k) frame.stats.worldKindMs.emplace_back(policy_.kind(k).name, policy_.cost(k));
+    frame.stats.worldKindQueued.clear();
+    for (int k = 0; k < policy_.kindCount(); ++k)
+        if (policy_.queued(k))
+            frame.stats.worldKindQueued.push_back(
+                {policy_.kind(k).name, static_cast<int>(policy_.queued(k)), policy_.worstError(k)});
 }
 
 }  // namespace bro::scene::vk

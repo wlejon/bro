@@ -636,6 +636,27 @@ void testBase() {
     check(!p.entry(entryAt(p, eye + Vec3{5.0f, 0.0f, 0.0f}, 2)).drawn, "where no shadow can fall nothing is drawn");
 }
 
+void testBaseCapped() {
+    // Where even the coarsest level spans what is seen in more than its
+    // base's pages (the land to the horizon from high up): only that many
+    // pages about the eye, never the whole window the pool cannot hold.
+    ShadowPagesConfig c;
+    c.levels = 3;
+    ShadowPages p;
+    p.configure(c);
+    ShadowPlan plan;
+    const Vec3 eye{0.0f, 1.0f, 0.0f};
+    ShadowSun sun = downSun();
+    sun.casters = {{-1.0e5f, 0.0f, -1.0e5f}, {1.0e5f, 2.0f, 1.0e5f}};
+    p.beginFrame(eye);
+    p.setSun(sun);
+    p.endLights();
+    p.setSeen({{-1.0e5f, 0.0f, -1.0e5f}, {1.0e5f, 5.0f, 1.0e5f}});
+    p.plan(plan);
+    check(p.stats().needed > 0 && p.stats().needed <= 36, "a base wider than the coarsest level's is its base's pages");
+    check(p.wants().empty() && p.entry(entryAt(p, eye, 2)).drawn, "drawn at once about the eye, none waiting");
+}
+
 void testCasters() {
     ShadowPagesConfig c;
     c.staleNow = 0;   // (the redraws left to the world service, so they show)
@@ -729,6 +750,7 @@ int main() {
     testBuildAcrossShowAndRange();
     testStaleNow();
     testBase();
+    testBaseCapped();
     testOverlays();
     testCoverRects();
     testLocalMaps();

@@ -651,6 +651,20 @@ void ShadowPages::markBase() {
         const double span = std::max(rect[1] - rect[0], rect[3] - rect[2]);
         int level = 0;
         while (level < config_.levels - 1 && span > kBasePages * pageSize(level)) ++level;
+        // (Where even the coarsest level spans it in more than kBasePages
+        // pages, as from high up, the land to the horizon: that many pages
+        // of it about the level's window's middle. The whole window was more
+        // than the pool holds, needed every frame and never drawn.)
+        const double most = kBasePages * pageSize(level);
+        const int64_t mid[2] = {sun.ox[level] + SP_WINDOW / 2, sun.oy[level] + SP_WINDOW / 2};
+        for (int a = 0; a < 2; ++a) {
+            double& lo = rect[2 * a];
+            double& hi = rect[2 * a + 1];
+            if (hi - lo <= most) continue;
+            const double c = std::clamp(static_cast<double>(mid[a]) * pageSize(level), lo + 0.5 * most, hi - 0.5 * most);
+            lo = c - 0.5 * most;
+            hi = c + 0.5 * most;
+        }
         // (A clipmap's level maps run in order from its level 0's.)
         forLevelRect((&m)[level], rect, [this](int i) {
             Entry& e = entries_[static_cast<size_t>(i)];

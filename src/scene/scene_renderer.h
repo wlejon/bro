@@ -78,6 +78,14 @@ struct CullStats {
     // Each kind's GPU ms a unit, by its name, as last measured (its guess
     // until it is): a land tile's making ("land"), a turf tile's, ...
     std::vector<std::pair<std::string, float>> worldKindMs;
+    // Each kind with jobs left queued: its name, how many and the largest
+    // error among them (pixels).
+    struct WorldKindQueue {
+        std::string name;
+        int queued = 0;
+        float worstError = 0.0f;
+    };
+    std::vector<WorldKindQueue> worldKindQueued;
     // The exposure (scene/exposure.h): the applied EV100 (before the
     // compensation), the metered one and the scale the tonemap multiplied
     // by, as of the newest frame the GPU finished (a frame or two behind).
