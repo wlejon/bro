@@ -1,5 +1,7 @@
 #include "scene/world/land_sun.h"
 
+#include "scene/world/world_service.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -49,7 +51,10 @@ void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_
             w.error = kLandError;
         } else if (bromath::vdot(s.sun, sun) < kSunTurnCos) {
             w.error = kSunError;
-        } else if (s.changed && frame_ - s.madeFrame >= static_cast<uint64_t>(kTilesRefreshFrames)) {
+        } else if (s.changed && (frame_ - s.madeFrame >= static_cast<uint64_t>(kTilesRefreshFrames) ||
+                                 WorldService::settlingAll())) {
+            // (Held back only to spare the frames of a moving eye: a
+            // settle, everything in now, waits for none.)
             w.error = kTilesError;
         } else {
             s.wantedFrame = 0;

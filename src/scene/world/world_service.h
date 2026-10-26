@@ -229,6 +229,7 @@ public:
     /// that settles does: a headless wait for the scene to settle
     /// (perf.settle) runs frames for their results, not to a frame time.
     static void settleAll(bool on) { s_settlingAll.store(on, std::memory_order_relaxed); }
+    static bool settlingAll() { return s_settlingAll.load(std::memory_order_relaxed); }
     /// A catch-up kind left work worse than catchUpError queued last frame,
     /// so this frame's budget is spent under the catch-up ceiling.
     bool catchingUp() const { return behind_; }
