@@ -120,7 +120,8 @@ if (!fs.existsSync(windowed)) {
         r = bro(['--grant-app', id, 'net']);
         fs.appendFileSync(path.join(src, 'js', 'main.js'), '// edited in the checkout\n');
         l = launch(grantedNow);
-        assert(l.R.granted.indexOf('net') >= 0, 'an edited linked install keeps its grant: ' + JSON.stringify(l.R));
+        assert(l.R.granted.indexOf('net') >= 0, 'an edited linked install keeps its grant: ' + JSON.stringify(l.R) +
+            ' (' + l.out.split(/\r?\n/).filter((s) => /permissions:/.test(s)).join(' | ') + ')');
     }
 
     try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }

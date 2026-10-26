@@ -215,10 +215,23 @@ void AppPermissions::applyStore(const GrantStoreData& store, const StoreStamp& s
 void AppPermissions::configure(const PermissionsSetup& setup) {
     // An installed app's grants are for the content that was installed
     // (install_record.h): a stat of each file, and a hash only if one moved.
-    const std::string identity = appIdentityFor(setup.appDir);
+    std::string identity = appIdentityFor(setup.appDir);
+    std::string installedDir = setup.appDir;
+    if (identity.rfind("path:", 0) == 0 && isValidAppId(setup.appId)) {
+        // A --link install's folder is a symlink in the install root, and the
+        // launcher may have resolved it to the checkout it points at (realpath
+        // on POSIX): that checkout is the linked install.
+        const std::string link = findInstalledApp(setup.appId);
+        std::error_code ec;
+        if (!link.empty() && fs::is_symlink(u8path(link), ec) &&
+            canonicalPath(link) == canonicalPath(setup.appDir)) {
+            identity = "install:" + setup.appId;
+            installedDir = link;
+        }
+    }
     std::string installHash;
     if (identity.rfind("install:", 0) == 0) {
-        const InstallCheck check = checkInstall(setup.appDir);
+        const InstallCheck check = checkInstall(installedDir);
         installHash = check.hash;
         LOG_INFO("permissions: install record of %s: %s%s (%.2f ms)", identity.c_str(),
                  !check.recorded ? "none" : check.matches ? "matches" : "DIFFERS",
