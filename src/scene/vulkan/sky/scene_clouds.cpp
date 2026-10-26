@@ -26,7 +26,7 @@
 namespace bro::scene::vk {
 
 static_assert(sizeof(SceneClouds::Block) ==
-              16 * (3 + 6 + 4 + CL_CACHE_LEVELS + 2 + 1 + CL_HEAP_LEVELS + CL_MAX_DATA + 5 + CL_VOL_LEVELS));
+              16 * (3 + 3 + 3 + 3 * CL_SHADOW_LEVELS + 4 + CL_CACHE_LEVELS + 2 + 1 + CL_HEAP_LEVELS + CL_MAX_DATA + 5 + CL_VOL_LEVELS));
 static_assert(CL_HEAP_SIDE % CL_HEAP_GROUP == 0 && (CL_HEAP_SIDE & (CL_HEAP_SIDE - 1)) == 0);
 static_assert(CloudSettings::kMaxData == CL_MAX_DATA);
 static_assert(CL_CACHE_LEVELS == 13 && CL_CACHE_SIDE % (CL_CACHE_GROUP * CL_CACHE_SLICES) == 0);
@@ -477,14 +477,8 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     const float l1 = std::sqrt(e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2]);
     for (float& v : e1) v /= l1;
     const float e2[3] = {n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]};
-    for (int k = 0; k < 3; ++k) {
-        block_.shadowN[k] = shadowBlock_.n[k] = n[k];
-        block_.shadowE1[k] = shadowBlock_.e1[k] = e1[k];
-        block_.shadowE2[k] = shadowBlock_.e2[k] = e2[k];
-    }
-    block_.shadowN[3] = CL_SHADOW_GROWTH;
-    block_.shadowE1[3] = CL_SHADOW_TEXEL0;
-    block_.shadowE2[3] = 0.0f;
+    for (int k = 0; k < 3; ++k) shadowNadir_[k] = n[k];
+    placeShadow(n, e1, e2, R, c);
     shadowsOn_ = c.shadows;
     shadowBlock_.params[0] = shadowsOn_ ? 1.0f : 0.0f;
     shadowBlock_.params[1] = R;
@@ -519,6 +513,61 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     frame.renderer.setCloudStats(vstats);
 }
 
+// The shadow's levels baked every frame; the coarser ones a level a frame
+// in turn, and any whose nadir the eye's has left by more than
+// 1 / kShadowMoved of its half-width (8 texels), so the land a level holds
+// is about the eye however fast it goes. (The clouds drift a texel of the
+// third level in some 20 s: a coarse level a few frames old shows them
+// where they are.)
+constexpr int kShadowEvery = 2;
+constexpr double kShadowMoved = 32.0;
+static_assert(CL_SHADOW_LEVELS <= 12 && CL_SHADOW_LEVELS > kShadowEvery);
+
+void SceneClouds::placeShadow(const float n[3], const float e1[3], const float e2[3], float R,
+                              const CloudSettings& c) {
+    // (The eye's nadir and axes, air space, into the body's frame.)
+    const auto body = [&](const float* a, double* out) {
+        for (int i = 0; i < 3; ++i)
+            out[i] = static_cast<double>(block_.toBody[i][0]) * a[0] + block_.toBody[i][1] * a[1] + block_.toBody[i][2] * a[2];
+    };
+    double now[3][3];
+    body(n, now[0]);
+    body(e1, now[1]);
+    body(e2, now[2]);
+    // All again for another deck, a jump in the wind's time, or the first.
+    const uint64_t key = mixBits(mixBits(currentKey_, c.generation), shaderSetBakeEpoch());
+    const bool every = !shadowValid_ || key != shadowKey_ || std::fabs(block_.shell[3] - shadowTime_) > 0.25f;
+    shadowValid_ = true;
+    shadowKey_ = key;
+    shadowTime_ = block_.shell[3];
+    const int turn = kShadowEvery + static_cast<int>(shadowTurn_++ % (CL_SHADOW_LEVELS - kShadowEvery));
+    std::memset(block_.shadowBake, 0, sizeof(block_.shadowBake));
+    shadowBakes_ = 0;
+    double texel = CL_SHADOW_TEXEL0;
+    for (int l = 0; l < CL_SHADOW_LEVELS; ++l, texel *= CL_SHADOW_GROWTH) {
+        double (&lv)[3][3] = shadowLevel_[l];
+        const double d = lv[0][0] * now[0][0] + lv[0][1] * now[0][1] + lv[0][2] * now[0][2];
+        const double moved = std::acos(std::clamp(d, -1.0, 1.0)) * R;
+        if (every || l < kShadowEvery || l == turn || moved > 0.5 * CL_SHADOW_SIDE * texel / kShadowMoved) {
+            std::memcpy(lv, now, sizeof(now));
+            block_.shadowBake[shadowBakes_ / 4][shadowBakes_ % 4] = static_cast<float>(l);
+            ++shadowBakes_;
+        }
+        // (Back into air space: the transpose of the turn into the body's.)
+        float air[3][3];
+        for (int a = 0; a < 3; ++a)
+            for (int j = 0; j < 3; ++j)
+                air[a][j] = static_cast<float>(block_.toBody[0][j] * lv[a][0] + block_.toBody[1][j] * lv[a][1] +
+                                               block_.toBody[2][j] * lv[a][2]);
+        for (int j = 0; j < 3; ++j) {
+            block_.shadowN[l][j] = shadowBlock_.n[l][j] = air[0][j];
+            block_.shadowE1[l][j] = shadowBlock_.e1[l][j] = air[1][j];
+            block_.shadowE2[l][j] = shadowBlock_.e2[l][j] = air[2][j];
+        }
+        block_.shadowN[l][3] = static_cast<float>(texel);
+    }
+}
+
 void SceneClouds::recordVolume(SceneFrame& frame) {
     if (!on_ || !current_) return;
     VkDescriptorSet set = writeSet(frame, false, false);
@@ -538,8 +587,8 @@ void SceneClouds::placeCache(SceneFrame& frame) {
         place.toBody(frame.world.eye, nb);
     else
         for (int i = 0; i < 3; ++i)
-            nb[i] = block_.toBody[i][0] * block_.shadowN[0] + block_.toBody[i][1] * block_.shadowN[1] +
-                    block_.toBody[i][2] * block_.shadowN[2];
+            nb[i] = block_.toBody[i][0] * shadowNadir_[0] + block_.toBody[i][1] * shadowNadir_[1] +
+                    block_.toBody[i][2] * shadowNadir_[2];
     const double nl = std::sqrt(nb[0] * nb[0] + nb[1] * nb[1] + nb[2] * nb[2]);
     for (double& v : nb) v /= nl;
     const auto dot = [](const double* a, const double* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
@@ -847,6 +896,19 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
     const AtmosphereGpu& atm = frame.lighting.atm;
     for (int k = 0; k < 3; ++k) block_.sun[k] = atm.sunDir[k];
     block_.sun[3] = atm.sunIlluminance[3];
+    // A jump in the sun (the body's frame, a quarter of a degree): every
+    // shadow level again, each where it lies.
+    {
+        float sun[3];
+        for (int i = 0; i < 3; ++i)
+            sun[i] = block_.toBody[i][0] * block_.sun[0] + block_.toBody[i][1] * block_.sun[1] +
+                     block_.toBody[i][2] * block_.sun[2];
+        if (sun[0] * shadowSun_[0] + sun[1] * shadowSun_[1] + sun[2] * shadowSun_[2] < 0.99999f) {
+            for (int l = 0; l < CL_SHADOW_LEVELS; ++l) block_.shadowBake[l / 4][l % 4] = static_cast<float>(l);
+            shadowBakes_ = CL_SHADOW_LEVELS;
+        }
+        std::memcpy(shadowSun_, sun, sizeof(sun));
+    }
     if (!noise_.made) recordNoise(frame);
 
     if (bake_) {
@@ -880,7 +942,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
     recordCache(frame);
     recordGlobe(frame);
 
-    if (shadowsOn_) {
+    if (shadowsOn_ && shadowBakes_ > 0) {
         VkDescriptorSet set = writeSet(frame, false, false);
         if (!set) return;
         // What earlier frames read of the levels is done with.
@@ -889,7 +951,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
         bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadowPipeline_.get());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
         const uint32_t groups = (CL_SHADOW_SIDE + CL_SHADOW_GROUP - 1) / CL_SHADOW_GROUP;
-        vkCmdDispatch(cmd, groups, groups, CL_SHADOW_LEVELS);
+        vkCmdDispatch(cmd, groups, groups, static_cast<uint32_t>(shadowBakes_));
         memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     }

@@ -50,12 +50,13 @@ float cloudHeapsLeave(vec3 e, vec3 sb, float sinE, float texel) {
 
 void main() {
     uvec2 t = gl_GlobalInvocationID.xy;
-    int l = int(gl_GlobalInvocationID.z);
+    uint z = gl_GlobalInvocationID.z;
+    int l = int(clouds.shadowBake[z >> 2][z & 3u]);
     if (t.x >= uint(CL_SHADOW_SIDE) || t.y >= uint(CL_SHADOW_SIDE)) return;
-    float texel = clouds.shadowE1.w * pow(clouds.shadowN.w, float(l));
+    float texel = clouds.shadowN[l].w;
     vec2 c = (vec2(t) + 0.5 - 0.5 * float(CL_SHADOW_SIDE)) * texel;
     float R = clouds.shell.z;
-    vec3 d = normalize(clouds.shadowN.xyz * R + clouds.shadowE1.xyz * c.x + clouds.shadowE2.xyz * c.y);
+    vec3 d = normalize(clouds.shadowN[l].xyz * R + clouds.shadowE1[l].xyz * c.x + clouds.shadowE2[l].xyz * c.y);
     vec3 s = clouds.sun.xyz;
     float T = 1.0;
     float mu = dot(d, s);

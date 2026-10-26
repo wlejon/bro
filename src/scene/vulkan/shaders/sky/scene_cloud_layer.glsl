@@ -59,9 +59,10 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 shell;         // x the deck's bottom radius, y its top's, z the datum's radius, w the time (s)
     vec4 params;        // x the scattering albedo, y radians a pixel, z the shortest view step (m), w a step's share of its distance
     vec4 sun;           // xyz toward the sun (air space), w its angular radius
-    vec4 shadowN;       // xyz the shadow's nadir (air space), w the levels' growth
-    vec4 shadowE1;      // xyz its plane's first axis, w the finest level's texel (m)
-    vec4 shadowE2;      // xyz its second axis
+    vec4 shadowBake[3];                    // the shadow's levels baked this frame, in order
+    vec4 shadowN[CL_SHADOW_LEVELS];        // xyz each level's nadir (air space), w its texel (m)
+    vec4 shadowE1[CL_SHADOW_LEVELS];       // xyz its plane's first axis
+    vec4 shadowE2[CL_SHADOW_LEVELS];       // xyz its second axis
     vec4 cacheC;        // xyz the cache's chart's centre (the body's frame), w the deck's bottom radius
     vec4 cacheE1;       // xyz its first axis (the body's frame), w a bin's height (m)
     vec4 cacheE2;       // xyz its second axis

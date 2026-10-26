@@ -103,11 +103,15 @@
 // CL_SHADOW_SIDE texels on the plane tangent to the body under the eye,
 // level l's texel CL_SHADOW_TEXEL0 * CL_SHADOW_GROWTH^l metres (on that
 // plane), each texel what the deck leaves of the sun at the datum there:
-// sky/clouds_shadow.comp.
-#define CL_SHADOW_LEVELS    7
-#define CL_SHADOW_SIDE      256
+// sky/clouds_shadow.comp. A point r from the eye's nadir reads texels
+// r / 256 to r / 128 wide, so from high up the land a few hundred km off
+// still holds each heap's shadow. Each level lies about the nadir as it
+// was when it was last baked (the finest every frame, the rest in turn:
+// vulkan/sky/scene_clouds.cpp), at most 12.
+#define CL_SHADOW_LEVELS    11
+#define CL_SHADOW_SIDE      512
 #define CL_SHADOW_TEXEL0    60.0
-#define CL_SHADOW_GROWTH    4.0
+#define CL_SHADOW_GROWTH    2.0
 #define CL_SHADOW_STEPS     12
 #define CL_SHADOW_GROUP     8
 

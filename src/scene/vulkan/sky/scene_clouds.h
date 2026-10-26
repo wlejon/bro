@@ -122,9 +122,10 @@ public:
         float shell[4];
         float params[4];
         float sun[4];
-        float shadowN[4];
-        float shadowE1[4];
-        float shadowE2[4];
+        float shadowBake[3][4];                  // the shadow's levels baked this frame, in order
+        float shadowN[CL_SHADOW_LEVELS][4];      // each level's nadir (air space), w its texel (m)
+        float shadowE1[CL_SHADOW_LEVELS][4];
+        float shadowE2[CL_SHADOW_LEVELS][4];
         float cacheC[4];
         float cacheE1[4];
         float cacheE2[4];
@@ -145,6 +146,9 @@ public:
 
 private:
     CloudShaders* shaders(SceneFrame& frame);
+    // The shadow's levels this frame about the eye's nadir `n` (axes `e1`,
+    // `e2`; air space): which are baked again, and each one's plane.
+    void placeShadow(const float n[3], const float e1[3], const float e2[3], float R, const CloudSettings& c);
     bool ensureImages(SceneGpu& gpu);
     bool createNoise(SceneGpu& gpu);
     void recordNoise(SceneFrame& frame);
@@ -264,6 +268,17 @@ private:
 
     Block block_{};
     CloudShadowGpu shadowBlock_{};
+    // The shadow's levels: each one's nadir and axes in the body's frame as
+    // it was last baked (so a re-anchor moves none), how many are baked this
+    // frame (block_.shadowBake), and what says when the rest are again.
+    double shadowLevel_[CL_SHADOW_LEVELS][3][3] = {};
+    int shadowBakes_ = 0;
+    uint32_t shadowTurn_ = 0;
+    bool shadowValid_ = false;
+    float shadowTime_ = 0.0f;
+    uint64_t shadowKey_ = 0;
+    float shadowSun_[3] = {};
+    double shadowNadir_[3] = {0.0, 1.0, 0.0};   // the eye's this frame (air space)
     bool on_ = false;
     bool shadowsOn_ = false;
     bool bake_ = false;          // a face of the cover is baked this frame (coverFace_)

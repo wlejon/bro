@@ -45,9 +45,9 @@ struct LandSunGpu {
 // air space (about the body's centre, the place frame's axes).
 struct CloudShadowGpu {
     vec4 params;   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w the levels' growth
-    vec4 n;        // xyz the plane's normal (the body's up under the eye)
-    vec4 e1;       // xyz its first axis
-    vec4 e2;       // xyz its second
+    vec4 n[CL_SHADOW_LEVELS];    // xyz each level's plane's normal (the body's up under the eye as it was baked)
+    vec4 e1[CL_SHADOW_LEVELS];   // xyz its first axis
+    vec4 e2[CL_SHADOW_LEVELS];   // xyz its second
 };
 
 layout(set = 1, binding = 0) uniform LightingUBO {
@@ -159,24 +159,26 @@ layout(constant_id = 2) const bool SCENE_ATMOSPHERE = true;
 bool sceneAtmosphereOn() { return SCENE_ATMOSPHERE && lighting.atm.sunDir.w > 0.5; }
 
 // What the cloud deck leaves of the sun at camera-relative `pos` (1 with no
-// clouds): its shadow's levels (sky/clouds_shadow.comp) about the body's
-// point under the eye, on the plane tangent to the body there, the finest
-// level holding the point (blended into the next over its last texels).
+// clouds): its shadow's levels (sky/clouds_shadow.comp), each about the
+// body's point under the eye as it was when the level was baked, on the
+// plane tangent to the body there, the finest level holding the point
+// (blended into the next over its last texels).
 // A point is taken at the datum under it: the deck's shadow on a hill is
 // the shadow on the ground under the hill.
 float sceneCloudSun(vec3 pos) {
     if (lighting.cloudShadow.params.x < 0.5) return 1.0;
     vec3 d = normalize(atmOrigin(pos));
-    float cn = dot(d, lighting.cloudShadow.n.xyz);
-    if (cn < 0.05) return 1.0;
-    vec2 c = lighting.cloudShadow.params.y * vec2(dot(d, lighting.cloudShadow.e1.xyz), dot(d, lighting.cloudShadow.e2.xyz)) / cn;
     const float S = float(CL_SHADOW_SIDE);
     float texel = lighting.cloudShadow.params.z;
     float sun = 0.0;
     float left = 1.0;
     for (int l = 0; l < CL_SHADOW_LEVELS; ++l) {
-        vec2 g = c / texel + 0.5 * S;
+        float cn = dot(d, lighting.cloudShadow.n[l].xyz);
+        vec2 g = lighting.cloudShadow.params.y *
+                 vec2(dot(d, lighting.cloudShadow.e1[l].xyz), dot(d, lighting.cloudShadow.e2[l].xyz)) /
+                 (max(cn, 0.05) * texel) + 0.5 * S;
         texel *= lighting.cloudShadow.params.w;
+        if (cn < 0.05) continue;
         float edge = min(min(g.x, g.y), min(S - g.x, S - g.y));
         if (edge < 1.0) continue;
         // (Blended over the outer 48 texels, a long way: two levels hold

@@ -122,8 +122,13 @@
  *     gets it.
  *   - THE SHADOW. The deck's shadow on the land, plants, grass and every
  *     lit mesh, through the shared sun term (common/scene_lighting.glsl):
- *     levels of a map on a plane at the eye's nadir, each twice the last,
- *     read from the cache's depth toward the sun.
+ *     levels of a map on a plane at the eye's nadir, each twice the last
+ *     (512 texels a side from 60 m, so land r from the nadir holds texels
+ *     r / 256 to r / 128 wide: each heap shades the land under it from
+ *     high up too), read from the cache's depth toward the sun and the
+ *     heaps' map. The finest two are baked every frame, the rest one a
+ *     frame in turn, each about the nadir as it was when baked (sooner
+ *     when the eye has moved 8 of its texels).
  *
  * Noise-free under a pixel: the base is baked as its mean over each cell
  * (`q.footprint`), the engine's noise is mipmapped and carries its own

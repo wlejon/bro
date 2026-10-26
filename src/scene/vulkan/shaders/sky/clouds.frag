@@ -423,7 +423,10 @@ void main() {
                 vec3 pdh = cloudDrift(wh.p);
                 float footH = pixel * tH;
                 hc = cloudHeapMapColumn(cloudChartAt(normalize(pdh)), footH, texel);
-                float cov = seeH * smoothstep(-0.5, 0.5, hc.z / max(footH, 1.0)) * step(1.0, hc.y);
+                // (The share of the pixel the heap fills as the march draws
+                // it nearer: its outline the base, the billows its skin.)
+                float own = min(0.5 + hc.z / clouds.forms.w, 1.0);
+                float cov = seeH * step(1.0, hc.y) * cloudFormsShare(cloudBillows(pdh, footH), own, footH);
                 if (cov > 0.0) {
                     vec3 uph = normalize(wh.p);
                     vec3 sb = normalize(cloudToBody(s));

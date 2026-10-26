@@ -3,6 +3,7 @@
 #include "scene/vulkan/shaders/ground/land_sun_layout.h"
 #include "scene/vulkan/shaders/lighting/probe_grid_layout.h"
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
+#include "scene/vulkan/shaders/sky/clouds_layout.h"
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
@@ -116,12 +117,12 @@ static_assert(sizeof(LandSunGpu) == 16 * (2 + LS_LEVELS));
 /// shaders/common/scene_lighting.glsl; filled by SceneClouds::fill
 /// (vulkan/sky/scene_clouds.h). Directions in air space.
 struct alignas(16) CloudShadowGpu {
-    alignas(16) float params[4];   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w growth
-    alignas(16) float n[4];        // the levels' plane's normal
-    alignas(16) float e1[4];       // its axes
-    alignas(16) float e2[4];
+    alignas(16) float params[4];                 // x 1 when shown, y the datum's radius, z the finest level's texel (m), w growth
+    alignas(16) float n[CL_SHADOW_LEVELS][4];    // each level's plane's normal (its nadir as it was baked)
+    alignas(16) float e1[CL_SHADOW_LEVELS][4];   // its axes
+    alignas(16) float e2[CL_SHADOW_LEVELS][4];
 };
-static_assert(sizeof(CloudShadowGpu) == 64);
+static_assert(sizeof(CloudShadowGpu) == 16 * (1 + 3 * CL_SHADOW_LEVELS));
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
