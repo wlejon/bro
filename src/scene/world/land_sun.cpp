@@ -31,6 +31,7 @@ void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_
                      float pixelsPerMetre) {
     ++frame_;
     sun_ = sun;
+    eyeY_ = eye.y;
     generation_ = generation;
     wants_.clear();
     for (int l = 0; l < kLevels; ++l) {
@@ -49,7 +50,7 @@ void LandSun::update(const bromath::Vec3& eye, const bromath::Vec3& sun, uint64_
         if (s.shown.layer < 0) {
             w.required = true;
             w.error = kMovedError;
-        } else if (s.shown.x0 != s.cx - half || s.shown.z0 != s.cz - half) {
+        } else if (s.shown.x0 != s.cx - half || s.shown.z0 != s.cz - half || std::fabs(eye.y - s.madeY) > snap) {
             w.error = std::min(kMovedError, coarser);
         } else if (s.generation != generation) {
             w.error = kLandError;
@@ -83,6 +84,7 @@ LandSun::Level LandSun::make(int l) {
     made.layer = 2 * l + (s.shown.layer == 2 * l ? 1 : 0);
     s.shown = made;
     s.sun = sun_;
+    s.madeY = eyeY_;
     s.generation = generation_;
     s.changed = false;
     s.madeFrame = frame_;

@@ -21,7 +21,11 @@
 // under it. A level is centred on the eye, snapped to kSnapTexels texels of
 // its own, and made again when
 //   - it was never made (required: nothing else gives the land's shade);
-//   - the eye moved it a snap (its square no longer centred);
+//   - the eye moved it a snap (its square no longer centred), or rose or
+//     fell a snap since it was made (past the plants' cast range of the
+//     eye then, the canopy shades it: a level made from 300 m and kept
+//     while the eye came straight down stood the wood's canopy over the
+//     meadow before it, where the shadow pages draw the trees);
 //   - the sun turned more than kSunTurnCos since it was made;
 //   - the land changed (its module, extent, rings or canopy: `generation`);
 //   - the land's tiles changed since it was made (they refine as the eye
@@ -88,6 +92,7 @@ private:
     struct State {
         Level shown;
         double cx = 0.0, cz = 0.0;   // the centre wanted now
+        double madeY = 0.0;          // the eye's height when it was made
         bromath::Vec3 sun{0.0f, 1.0f, 0.0f};
         uint64_t generation = 0;
         bool changed = false;     // the tiles changed since it was made
@@ -96,6 +101,7 @@ private:
     };
     std::array<State, kLevels> state_{};
     bromath::Vec3 sun_{0.0f, 1.0f, 0.0f};
+    double eyeY_ = 0.0;
     uint64_t generation_ = 0;
     uint64_t frame_ = 0;
     std::vector<Want> wants_;

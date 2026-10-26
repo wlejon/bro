@@ -1,6 +1,7 @@
 #include "scene/nodes/land_node.h"
 
 #include "scene/nodes/world_module.h"
+#include "scene/world/land_sun.h"
 #include "scene/world/world_workers.h"
 
 #include <algorithm>
@@ -520,6 +521,15 @@ SurfaceLayerConfig LandNode::tileConfig() const {
     // across it; two cost the planet's region view 0.18 ms of its land's
     // texture reads.)
     c.texelPixels = 2.5f;
+    // The land's sun reads these tiles over its levels' squares about the
+    // eye, out of the view as much as in it: there, as fine as its levels'
+    // texels. (Held only by the coarsest out of the view, a ridge off to the
+    // side stood a thousand-kilometre tile's heights and shaded the hollow
+    // before the eye where a flight that had looked there left it lit.)
+    c.shadeTexels = 0.5f * static_cast<float>(LandSun::kSide);
+    c.shadeTexelMetres = LandSun::kTexel0;
+    c.shadeReach = 0.5f * static_cast<float>(LandSun::kSide) * LandSun::kTexel0 *
+                   static_cast<float>(1 << (LandSun::kLevels - 1));
     return c;
 }
 

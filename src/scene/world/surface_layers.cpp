@@ -131,10 +131,15 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         const bromath::AABB3& box = patch.box;
         // (The coarsest tiles are kept whatever the view sees.)
         const bool seen = !patch.hidden && bromath::fintersects(view.frustum, box);
-        if (k.level != top && !seen) return;
         const float dist = std::max(boxDistance(view.eye, box), patch.nearest);
+        const bool shaded = !seen && !patch.hidden && config_.shadeTexels > 0.0f && dist < config_.shadeReach;
+        if (k.level != top && !seen && !shaded) return;
         float metresPerPixel = view.orthoMetresPerPixel;
-        if (view.perspective) {
+        if (shaded) {
+            // (As its reader needs it: a texel of that as wide as
+            // texelPixels of the view's.)
+            metresPerPixel = std::max(dist / config_.shadeTexels, config_.shadeTexelMetres) / config_.texelPixels;
+        } else if (view.perspective) {
             // The eye's height over the ground's middle there, and the
             // ground's slope (its heights over the cells' width): a slope
             // facing the view meets it the steeper.
@@ -146,7 +151,7 @@ float SurfaceLayers::select(const View& view, std::vector<Need>& out) const {
         }
         const float texelPixels = texelMetres(k.level) / std::max(metresPerPixel, 1e-9f);
         out.push_back({k, dist, mix64(generation_ ^ g.sum), texelPixels});
-        if (k.level == 0 || !seen) return;
+        if (k.level == 0 || (!seen && !shaded)) return;
         const float error = texelMetres(k.level) / (config_.texelPixels * std::max(metresPerPixel, 1e-9f));
         if (error > 1.0f) open.push({error, k});
     };

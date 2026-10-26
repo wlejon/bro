@@ -130,6 +130,48 @@ void testSelection() {
     check(L.jobs().empty() && L.fills().empty() && L.pageWrites().empty(), "a still view fills nothing more");
 }
 
+// Out of the view near the eye (what a reader of the ground about it, the
+// land's sun, needs): refined as fine as its texels, coarse past its reach,
+// and nothing but the coarsest without it.
+void testShade() {
+    const SurfaceLayers::View v = makeView({0.0f, 2.0f, 0.0f}, {0.0f, -0.2f, 1.0f});
+    const auto behind = [&](const SurfaceLayerConfig& c, float& coarsest, double& farthest) {
+        SurfaceLayers L;
+        L.configure(c, world());
+        fillAll(L, v, 1);
+        int n = 0;
+        coarsest = 0.0f;
+        farthest = 0.0;
+        std::set<uint64_t> refined;   // the parents of what is filled
+        for (const SurfaceFill& f : L.fills())
+            if (f.key.level + 1 < L.levels()) refined.insert(f.key.parent().packed());
+        for (const SurfaceFill& f : L.fills()) {
+            if (f.z0 + f.side > -10.0 || f.key.level + 1 >= L.levels()) continue;
+            if (refined.count(f.key.packed())) {
+                ++n;
+                continue;
+            }
+            ++n;
+            const double d = std::hypot(-(f.z0 + f.side), std::max({f.x0, -(f.x0 + f.side), 0.0}));
+            const float texel = static_cast<float>(f.side) / static_cast<float>(c.tileTexels);
+            coarsest = std::max(coarsest, texel / std::max(static_cast<float>(d) / c.shadeTexels, c.shadeTexelMetres));
+            farthest = std::max(farthest, d);
+        }
+        return n;
+    };
+    SurfaceLayerConfig c;
+    c.slots = 2048;
+    float coarsest = 0.0f;
+    double farthest = 0.0;
+    check(behind(c, coarsest, farthest) == 0, "without a shade reader, nothing behind the eye but the coarsest");
+    c.shadeTexels = 256.0f;
+    c.shadeTexelMetres = 0.5f;
+    c.shadeReach = 2000.0f;
+    check(behind(c, coarsest, farthest) > 0, "a shade reader's ground behind the eye is refined");
+    check(coarsest <= 2.0f, "behind the eye, no texel twice the reader's (got " + std::to_string(coarsest) + ")");
+    check(farthest < 2000.0, "nothing past the reach refined behind the eye");
+}
+
 void testCoarsestPastSlots() {
     // Coarsest tiles in view beyond what the atlas could keep (three levels
     // of 1 m tiles over 10 km: 4 m tiles at the top): the layer offers
@@ -409,6 +451,7 @@ void testWholeBodyGrid() {
 int main() {
     testSelection();
     testBudgetAndCoarsest();
+    testShade();
     testCoarsestPastSlots();
     testEvictionAndGenerations();
     testAliases();
