@@ -570,7 +570,11 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
                 }
             }
         }
-        float error = n.texelPixels * static_cast<float>(uint64_t{1} << (shown - n.key.level));
+        // (No more than the view is wide: a texel past that is the whole view
+        // wrong, however many levels up it is; with none resident, as if one
+        // above the coarsest, a planet's metre tile said billions.)
+        float error = std::min(n.texelPixels * std::exp2(static_cast<float>(shown - n.key.level)),
+                               2.0f * view.focalPixels);
         if (n.key.level < top) {
             const auto p = jobError.find(n.key.parent().packed());
             if (p != jobError.end()) error = std::min(error, p->second);
