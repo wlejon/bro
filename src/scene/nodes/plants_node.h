@@ -47,6 +47,7 @@
 
 namespace bro::scene {
 
+class LandNode;
 class PlantPlacement;
 struct PlacementRules;
 
@@ -96,9 +97,10 @@ public:
     const PlacementRules* rules() const;
     /// The eye this frame (the camera's, in the frame the plants stand in:
     /// SceneView::world): the leaves placed by the rules come in about it
-    /// and go behind it. Never waits for a placement; a cell not placed yet
-    /// is not drawn yet.
-    void follow(const bromath::Vec3& eye);
+    /// and go behind it, the eye's height over `land` (none: 0) counting in
+    /// their distance, so none are placed from high over them. Never waits
+    /// for a placement; a cell not placed yet is not drawn yet.
+    void follow(const bromath::Vec3& eye, const LandNode* land = nullptr);
     /// The body it stands on, its graph's (SceneGraph keeps it set; null or
     /// a flat body: the plane). On a round body the rules place on its
     /// chart (world/plant_placement.h) and the plants stand in the place

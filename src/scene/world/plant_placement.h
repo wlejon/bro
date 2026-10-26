@@ -123,11 +123,13 @@ public:
     const Body* body() const { return round_ ? &body_ : nullptr; }
 
     /// The eye moved (`eye` in the body's frame: on the plane its x and z
-    /// on the ground): the leaves wanted about it, the jobs posted for
-    /// those not placed (`queueMs` of them at once, the nearest first),
-    /// those gone too far named in `dropped`, and the jobs finished since
-    /// the last call in `placed` (still wanted ones only). Never waits.
-    void update(const double eye[3], std::vector<Placed>& placed, std::vector<CellKey>& dropped);
+    /// on the ground; `lift` its height over the ground under it, which
+    /// counts in a leaf's distance, so from high over the range nothing is
+    /// wanted): the leaves wanted about it, the jobs posted for those not
+    /// placed (`queueMs` of them at once, the nearest first), those gone
+    /// too far named in `dropped`, and the jobs finished since the last
+    /// call in `placed` (still wanted ones only). Never waits.
+    void update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped);
 
     /// Leaves placed (handed out by update and not dropped since).
     size_t resident() const { return resident_.size(); }
@@ -161,11 +163,13 @@ private:
         bool on = false;
         double x = 0.0, z = 0.0;
         double g[3] = {1.0, 0.0, 1.0};   // the ground's metric there (xx, xz, zz), a chart metre's
+        double lift2 = 0.0;   // the eye's height over the ground, squared
     };
     using Eyes = std::array<EyeOn, 6>;
     void eyes(const double eye[3], Eyes& out, CellKey& leaf) const;
     /// The squared distance on root k.root's chart from the eye to leaf k's
-    /// square (infinite on a root the eye is off).
+    /// square, the eye's height over the ground with it (infinite on a root
+    /// the eye is off).
     double distance2(const Eyes& e, const CellKey& k) const;
     /// A root's leaf (x, z) is its own (on a round body: it reaches into
     /// the face).
@@ -183,6 +187,7 @@ private:
     std::vector<CellKey> queue_;   // wanted, not posted: the farthest first (taken from the back)
     bool looked_ = false;
     CellKey eyeLeaf_;
+    double eyeLift_ = 0.0;
     Eyes wanted_;   // the eye at the last look
     std::chrono::steady_clock::time_point lastUpdate_{};   // (epoch: none yet)
 };

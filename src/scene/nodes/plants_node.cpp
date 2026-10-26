@@ -1,4 +1,5 @@
 #include "scene/nodes/plants_node.h"
+#include "scene/nodes/land_node.h"
 
 #include "scene/nodes/world_module.h"
 #include "scene/texture_source.h"
@@ -134,14 +135,30 @@ void PlantsNode::setPlace(const Place* place) {
     setRules(rulesRef_);
 }
 
-void PlantsNode::follow(const bromath::Vec3& eye) {
+void PlantsNode::follow(const bromath::Vec3& eye, const LandNode* land) {
     store_.tick();
     if (!placement_) return;
     double at[3] = {eye.x, eye.y, eye.z};
     if (radius_ > 0.0) place_->toBody(eye, at);
+    // The eye's height over the land under it (its sea's surface where that
+    // is higher).
+    double lift = 0.0;
+    if (land) {
+        const double floor = land->sea().on ? land->sea().level : -std::numeric_limits<double>::infinity();
+        if (radius_ > 0.0) {
+            const double n = std::sqrt(at[0] * at[0] + at[1] * at[1] + at[2] * at[2]);
+            const double dir[3] = {at[0] / n, at[1] / n, at[2] / n};
+            lift = n - radius_ - std::max<double>(land->heightOver(dir), floor);
+        } else {
+            lift = at[1] - std::max<double>(land->heightAt(static_cast<float>(at[0]), static_cast<float>(at[2])), floor);
+        }
+        // (No height yet, while the land's processes have not run: as on
+        // the ground until it has one.)
+        if (!std::isfinite(lift)) lift = 0.0;
+    }
     std::vector<PlantPlacement::Placed> placed;
     std::vector<CellKey> dropped;
-    placement_->update(at, placed, dropped);
+    placement_->update(at, lift, placed, dropped);
     const std::vector<float> none;
     for (const CellKey& key : dropped) {
         const auto it = leaves_.find(key);

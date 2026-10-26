@@ -347,7 +347,7 @@ void PlantPlacement::eyes(const double eye[3], Eyes& out, CellKey& leaf) const {
 double PlantPlacement::distance2(const Eyes& e, const CellKey& k) const {
     const EyeOn& on = e[k.root % 6];
     if (!on.on) return std::numeric_limits<double>::infinity();
-    return leafDistance2(grid_, k.x, k.z, on.x, on.z, round_ ? on.g : nullptr);
+    return leafDistance2(grid_, k.x, k.z, on.x, on.z, round_ ? on.g : nullptr) + on.lift2;
 }
 
 bool PlantPlacement::owns(int32_t x, int32_t z) const {
@@ -376,20 +376,23 @@ void PlantPlacement::want(const Eyes& e) {
         // placed, posted or queued; the nearest last. A leaf this far
         // inside the range was in it at the last look, so is one of those
         // already: only the band outside it is looked up (all of it on the
-        // first look on the root or a jump).
+        // first look on the root or a jump). The range on the ground is
+        // what the eye's height over it leaves of it, none from over it.
+        if (on.lift2 >= range * range) continue;
         const EyeOn& was = wanted_[static_cast<size_t>(r)];
         const double mx = on.x - was.x, mz = on.z - was.z;
-        const double moved = !was.on ? 1e30
+        const double moved = !was.on || was.lift2 >= range * range ? 1e30
                              : g    ? std::sqrt(std::max(g[0] * mx * mx + 2.0 * g[1] * mx * mz + g[2] * mz * mz, 0.0))
                                     : std::hypot(mx, mz);
-        const double inner = range - moved - 1.5 * grid_.leaf;
+        const double inner = std::sqrt(std::max(range * range - std::max(was.lift2, on.lift2), 0.0)) - moved - 1.5 * grid_.leaf;
         const double inner2 = inner > 0.0 ? inner * inner : -1.0;
         const auto cx = static_cast<int32_t>(std::floor(on.x / grid_.leaf));
         const auto cz = static_cast<int32_t>(std::floor(on.z / grid_.leaf));
         for (int32_t z = cz - reach; z <= cz + reach; ++z)
             for (int32_t x = cx - reach; x <= cx + reach; ++x) {
-                const double d2 = leafDistance2(grid_, x, z, on.x, on.z, g);
-                if (d2 > range * range || d2 <= inner2 || !owns(x, z)) continue;
+                const double ground2 = leafDistance2(grid_, x, z, on.x, on.z, g);
+                const double d2 = ground2 + on.lift2;
+                if (d2 > range * range || ground2 <= inner2 || !owns(x, z)) continue;
                 const CellKey k{x, z, 0, static_cast<uint8_t>(r)};
                 const uint64_t p = k.packed();
                 if (resident_.count(p) || posted_.count(p) || queued.count(p)) continue;
@@ -403,16 +406,21 @@ void PlantPlacement::want(const Eyes& e) {
     wanted_ = e;
 }
 
-void PlantPlacement::update(const double eye[3], std::vector<Placed>& placed, std::vector<CellKey>& dropped) {
+void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped) {
     placed.clear();
     dropped.clear();
     const double keep = static_cast<double>(rules_->range) + rules_->hysteresis;
     Eyes e;
     CellKey leaf;
     eyes(eye, e, leaf);
-    if (!looked_ || leaf != eyeLeaf_) {
+    lift = std::max(lift, 0.0);
+    for (EyeOn& on : e) on.lift2 = lift * lift;
+    // (Looked again as the eye crosses a leaf, or rises or falls a quarter
+    // of one.)
+    if (!looked_ || leaf != eyeLeaf_ || std::abs(lift - eyeLift_) > 0.25 * grid_.leaf) {
         looked_ = true;
         eyeLeaf_ = leaf;
+        eyeLift_ = lift;
         for (auto it = resident_.begin(); it != resident_.end();) {
             const CellKey k = CellKey::unpacked(*it);
             if (distance2(e, k) > keep * keep) {

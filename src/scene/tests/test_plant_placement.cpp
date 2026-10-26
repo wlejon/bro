@@ -228,11 +228,11 @@ void testStream() {
     double last = -1.0;
     std::vector<PlantPlacement::Placed> placed;
     std::vector<CellKey> dropped;
-    const auto run = [&](double x, double z) {
+    const auto run = [&](double x, double z, double lift = 0.0) {
         last = -1.0;
         for (int i = 0; i < 10000; ++i) {
             const double eye[3] = {x, 0.0, z};
-            placement.update(eye, placed, dropped);
+            placement.update(eye, lift, placed, dropped);
             for (const CellKey& k : dropped) resident.erase(k.packed());
             for (const auto& p : placed) {
                 placedTwice += resident.insert(p.key.packed()).second ? 0 : 1;
@@ -269,6 +269,20 @@ void testStream() {
     bool moved = !resident.empty();
     for (uint64_t k : resident) moved = moved && leafDistance(grid, CellKey::unpacked(k), 5000.0, -3000.0) <= 300.0;
     check(moved && resident.size() == placement.resident() && placedTwice == 0, "a jump drops the old, places the new");
+
+    // The eye's height counts: from over the range nothing is wanted and
+    // what was placed is dropped; back down, the range is placed again.
+    run(5000.0, -3000.0, 500.0);
+    check(resident.empty() && placement.resident() == 0 && placement.pending() == 0, "from over the range, none placed");
+    run(5000.0, -3000.0, 200.0);
+    const double reach = std::sqrt(300.0 * 300.0 - 200.0 * 200.0);
+    bool within = !resident.empty();
+    for (uint64_t k : resident) within = within && leafDistance(grid, CellKey::unpacked(k), 5000.0, -3000.0) <= reach;
+    check(within && placedTwice == 0, "from 200 m up, the leaves the height leaves in range");
+    run(5000.0, -3000.0, 0.0);
+    size_t all = 0;
+    for (uint64_t k : resident) all += leafDistance(grid, CellKey::unpacked(k), 5000.0, -3000.0) <= 300.0 ? 1 : 0;
+    check(all == resident.size() && all > 0 && placedTwice == 0, "down on the ground, the range placed again");
 }
 
 void testStore() {

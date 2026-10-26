@@ -145,7 +145,9 @@ void blur(inout vec4 v[PROC_CHANNELS]) {
         rules: { ground: N('Constant', { Value: 0 }), range: 150, layers: [{ spacing: 6, chance: 1, species: [0] }] },
         range: 150, land,
     });
-    look(0, 200, 0);
+    // (From 100 m up: the eye's height over the land counts in the range,
+    // so from 200 m none of a 150 m range is placed.)
+    look(0, 100, 0);
     frames(20);
     const placedBefore = plants.plantPlacement();
     land.setLand({ processes: { source: INIT, resolution: CELLS, data: [9, 0, 0, 0] } });
