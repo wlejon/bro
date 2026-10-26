@@ -12,7 +12,7 @@ constexpr Capability kCatalogue[] = {
     // --- asked for ---
     {"files", K::Ask, "read and write files anywhere in your home folder"},
     {"net", K::Ask, "use the network"},
-    {"spawn", K::Ask, "start programs and terminals"},
+    {"spawn", K::Ask, "start programs and terminals, which run with all of your account's powers"},
     {"mic", K::Ask, "record from the microphone"},
     {"wl", K::Ask, "use Wayland desktop protocols (panels, window lists, screen capture)"},
     {"displays", K::Ask, "change display configuration and brightness"},
