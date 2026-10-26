@@ -48,6 +48,13 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// The resource types spelled wide whatever UNICODE says: RT_ICON and its kin
+// follow it, and a host that builds bro without UNICODE (helm) would hand the
+// W functions narrow names.
+const LPCWSTR kRtIcon = MAKEINTRESOURCEW(3);
+const LPCWSTR kRtGroupIcon = MAKEINTRESOURCEW(14);
+const LPCWSTR kRtVersion = MAKEINTRESOURCEW(16);
+
 std::wstring wide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
@@ -273,7 +280,7 @@ bool stampWindowsResources(const std::string& exePath, const AppDescriptor& mani
             const int size = kIconSizes[i];
             std::vector<uint8_t> dib = iconDib(icons[i], size);
             const WORD rid = WORD(i + 1);
-            ok = UpdateResourceW(h, RT_ICON, MAKEINTRESOURCEW(rid), lang, dib.data(), DWORD(dib.size())) != 0;
+            ok = UpdateResourceW(h, kRtIcon, MAKEINTRESOURCEW(rid), lang, dib.data(), DWORD(dib.size())) != 0;
             GroupIconEntry e{};
             e.width = BYTE(size >= 256 ? 0 : size);
             e.height = e.width;
@@ -285,9 +292,9 @@ bool stampWindowsResources(const std::string& exePath, const AppDescriptor& mani
             group.insert(group.end(), ep, ep + sizeof(e));
         }
         // Group 1: the first icon group is the one Explorer shows for the file.
-        if (ok) ok = UpdateResourceW(h, RT_GROUP_ICON, MAKEINTRESOURCEW(1), lang, group.data(), DWORD(group.size())) != 0;
+        if (ok) ok = UpdateResourceW(h, kRtGroupIcon, MAKEINTRESOURCEW(1), lang, group.data(), DWORD(group.size())) != 0;
     }
-    if (ok) ok = UpdateResourceW(h, RT_VERSION, MAKEINTRESOURCEW(VS_VERSION_INFO), lang, const_cast<uint8_t*>(version.data()),
+    if (ok) ok = UpdateResourceW(h, kRtVersion, MAKEINTRESOURCEW(VS_VERSION_INFO), lang, const_cast<uint8_t*>(version.data()),
                                  DWORD(version.size())) != 0;
     if (!ok) {
         err = lastError("UpdateResource");
@@ -461,7 +468,7 @@ std::string describeWindowsExe(const std::string& exePath, const AppExeIdentity&
     }
     if (HMODULE mod = LoadLibraryExW(exe.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) {
         std::string sizes;
-        if (HRSRC r = FindResourceW(mod, MAKEINTRESOURCEW(1), RT_GROUP_ICON)) {
+        if (HRSRC r = FindResourceW(mod, MAKEINTRESOURCEW(1), kRtGroupIcon)) {
             if (HGLOBAL g = LoadResource(mod, r)) {
                 const auto* dir = static_cast<const GroupIconDir*>(LockResource(g));
                 const auto* e = reinterpret_cast<const GroupIconEntry*>(dir + 1);
