@@ -96,6 +96,7 @@ const int CL_FREE_LEVELS = 3;      // how much coarser the second distance to cl
 const float CL_BASE_MARGIN = 1.04; // the base's at a step's ends times this, plus CL_BASE_PAD,
 const float CL_BASE_PAD = 0.004;   // bounds it along the step
 const float CL_SKIN_PIXELS = 8.0;// a step across a cloud's skin, in pixels
+const float CL_SKIN_RISE = 1.0;    // and how far it rises or falls at most, in pixels (a heap's top from above)
 const float CL_FACE_PIXELS = 1.5;  // how closely (pixels) a face is found
 const int CL_FACE_HALVINGS = 4;    // at most
 const int CL_FACES = 3;            // faces a view halves for at most
@@ -644,8 +645,13 @@ void main() {
             float dFree = clFree(w, k);
             int kc = min(k + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
             if (kc > k) dFree = max(dFree, clFree(w, kc));
-            float dB = clBaseClear(clBase(w, lod, foot), foot, abs(dot(rd, normalize(a))));
-            float skin = max(CL_SKIN_PIXELS * foot, 1.0);
+            float vs = abs(dot(rd, normalize(a)));
+            float dB = clBaseClear(clBase(w, lod, foot), foot, vs);
+            // (A step rises by at most CL_SKIN_RISE pixels' footprint: a
+            // view looking down crossed eight in one, as deep as a heap
+            // under a high eye is thick, and of the heaps it fell through
+            // drew only the rings its samples met, crescents from 180 km.)
+            float skin = max(foot * min(CL_SKIN_PIXELS, CL_SKIN_RISE / max(vs, 1e-3)), 1.0);
             float d = max(max(dFree, dB), skip);
             if (d > skin) {
                 if (d == dFree) ++dbgFree; else if (d == dB) ++dbgB; else ++dbgSkip;
