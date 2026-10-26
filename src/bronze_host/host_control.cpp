@@ -656,10 +656,13 @@ void installControlCommands(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             std::vector<std::string> argv;
             for (const Value& v : a) argv.push_back(ev::toUtf8(v));
-            // A command writing where the script said asks the host's gate
-            // first (host_access.h), as any native writing a file does.
-            if (const std::string out = controlOutputPath(argv); !out.empty()) requirePathAccess(out, true);
-            if (!argv.empty() && argv[0] == "launch") requireSpawnAccess(argv.size() > 1 ? argv[1] : std::string());
+            // The harness driving the app (host_access.h): under bro-headless
+            // a command writing where the script said, or launching an app,
+            // is the developer's act; in a windowed bro it asks the gate.
+            if (const std::string out = controlOutputPath(argv); !out.empty())
+                requireHarnessPathAccess(engine, out, true);
+            if (!argv.empty() && argv[0] == "launch")
+                requireHarnessSpawnAccess(engine, argv.size() > 1 ? argv[1] : std::string());
             const uint64_t id = g_localNext++;
             auto res = std::make_shared<LocalResult>();
             g_local[id] = res;

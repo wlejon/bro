@@ -2,7 +2,7 @@
 // library's natives ask the one access gate (bronze's embed/embed_access.h),
 // so a path in the user's home outside the app's own folders is refused
 // without `files` and reached with it, whichever library the native is in:
-// bro's own (headless writeFile/screenshot, VideoEncoder, GifEncoder,
+// bro's own (VideoEncoder, GifEncoder,
 // bro.media, bro.window.captureScreen, a notification's and the tray's icon,
 // <img>), the desktop siblings (bro.vfs,
 // bro.search, bro.thumb, bro.apps' recent files, bro.conf's settings) and the
@@ -104,19 +104,25 @@ const probe =
 // ---- without `files` ------------------------------------------------------------------
 {
     const r = run(probe);
-    const keys = ['writeFile', 'screenshot', 'videoEncoder', 'gifEncoder', 'mediaTags', 'captureScreen',
+    const keys = ['videoEncoder', 'gifEncoder', 'mediaTags', 'captureScreen',
                   'notifyIcon', 'trayIcon', 'vfs', 'search', 'appsRecent', 'conf', 'meshLoad', 'imageWrite', 'lmLoad'];
     for (const k of keys) {
         if (r[k] === 'absent') { console.log('test_permissions_natives: ' + k + ' compiled out'); continue; }
         assert(refused(r[k]), k + ' refused without files: ' + r[k]);
     }
+    // The headless driver's writers are the harness's, not the app's
+    // (host_access.h, requireHarnessPathAccess): they write where the script
+    // says whatever the app was granted.
+    for (const k of ['writeFile', 'screenshot']) assert(r[k] === 'ok', k + ' is the harness\'s: ' + r[k]);
     // A path refusal names the path, absolute.
-    for (const k of ['writeFile', 'notifyIcon', 'vfs', 'search']) {
+    for (const k of ['notifyIcon', 'vfs', 'search']) {
         if (r[k] === 'absent') continue;
         assert(r[k].split('|')[2].indexOf('Documents') >= 0, k + "'s refusal carries the path: " + r[k]);
     }
     assert(r.img === 'error', 'an <img> naming the file fails to load: ' + r.img);
-    assert(r.written.length === 0, 'nothing refused was written: ' + r.written.join(', '));
+    // (The app's own fs cannot see Documents without files, so look from here.)
+    const landed = ['w.txt', 's.png', 'v.webm', 'g.gif', 'c.png', 'e.png'].filter((f) => fs.existsSync(path.join(docs, f)));
+    assert(landed.join(',') === 'w.txt,s.png', 'only the harness\'s writes landed: ' + landed.join(', '));
 }
 
 // ---- with `files` ---------------------------------------------------------------------

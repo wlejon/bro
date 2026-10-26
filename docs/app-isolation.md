@@ -316,7 +316,9 @@ What the design must keep possible, and what it still lacks for it:
      and bro.rigging, bro.themes, bro.tensor, bro.lm, bro.diffusion,
      brosoundml, bro.vision, bro.ai.game); bro's own natives through
      `host_access.h` (screenshots, recordings, encoders, bro.media, scene
-     textures, bro.net, notification and tray icons, Workers); and the
+     textures, bro.net, notification and tray icons, Workers; the headless
+     driver's own writers are the developer's harness, ungated under
+     bro-headless, gated in a window: `requireHarnessPathAccess`); and the
      page's subresources (`util::subresourceRefusal`: a path asks Read, an
      http(s) URL asks `net`, answered from what is decided, never a prompt
      from markup). The gated `bro.<ns>` objects are proxies over the live

@@ -1,6 +1,7 @@
 // bro's own natives asking the host's access gate (host_access.h).
 
 #include "bronze_host/host_access.h"
+#include "engine/engine.h"
 #include "util/asset_path.h"
 #include "util/subresource_access.h"
 
@@ -51,6 +52,16 @@ void requirePathAccess(const std::string& path, bool write) {
     std::string asked;
     const std::string refused = pathRefusal(path, write, &asked);
     if (!refused.empty()) ev::throwAccessError(refused, "EACCES", asked);
+}
+
+void requireHarnessPathAccess(const engine::Engine& engine, const std::string& path, bool write) {
+    if (engine.displayMode() == engine::DisplayMode::Headless) return;
+    requirePathAccess(path, write);
+}
+
+void requireHarnessSpawnAccess(const engine::Engine& engine, const std::string& command) {
+    if (engine.displayMode() == engine::DisplayMode::Headless) return;
+    requireSpawnAccess(command);
 }
 
 std::string readableAssetPath(const std::string& src) {

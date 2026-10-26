@@ -13,6 +13,10 @@
 
 #include <string>
 
+namespace bro::engine {
+class Engine;
+}
+
 namespace bro::bronze_host {
 
 /// `path` absolute and lexically normal, as the gate is asked about it.
@@ -32,6 +36,17 @@ void requireNetAccess(const std::string& url);
 
 /// The same for starting `command` (AccessKind::Spawn): throws when refused.
 void requireSpawnAccess(const std::string& command);
+
+/// The test harness's own natives: the headless driver's writers and readers
+/// (screenshot, screenshotCanvas, writeFile, controlCommand's output files
+/// and `launch`, perf.loadShaderSet). Under bro-headless they are the
+/// developer's harness driving the app, not the app's act, so they answer to
+/// whoever ran the script and ask nothing of the app's grants; where they
+/// also exist outside headless (a windowed bro installs them for its
+/// self-tests) an app could call them, so there they ask the gate as any
+/// native does.
+void requireHarnessPathAccess(const engine::Engine& engine, const std::string& path, bool write);
+void requireHarnessSpawnAccess(const engine::Engine& engine, const std::string& command);
 
 /// An asset path the app named (util::resolveAssetPath: app-relative, a
 /// mount, or absolute), resolved, after the gate allowed reading it; throws

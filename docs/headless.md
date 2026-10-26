@@ -38,7 +38,7 @@ By default headless renders offscreen on a Vulkan device through the same pipeli
 
 These functions are available in addition to all standard DOM APIs.
 
-The ones that write a file the script names (`writeFile`, `screenshot`, `screenshotCanvas`, `controlCommand('screenshot' | 'shot' | 'record', ...)`) and `perf.loadShaderSet` reading its tree ask the same access gate as `fs` (docs/apps.md, Permissions): outside the app's own folders and temp a write needs `files` (`tests/run_tests.sh` grants it), and a refusal throws an Error with `code: 'EACCES'` and the absolute `path`, with nothing written. `controlCommand('launch', id)` starts an app, so it asks `spawn`.
+These are the test harness, the developer driving the app, not the app's own act. So under bro-headless the ones that write a file the script names (`writeFile`, `screenshot`, `screenshotCanvas`, `controlCommand('screenshot' | 'shot' | 'record', ...)`), `perf.loadShaderSet` reading its tree and `controlCommand('launch', id)` ask nothing of the app's grants (docs/apps.md, Permissions): a test writes its captures to `tests/out/` whatever the app declares. Everything the app's own code reaches (`fs`, `VideoEncoder`, `bro.window.captureScreen`, ...) stays gated in headless exactly as in a window, so a test script that writes with `require('fs')` runs with `--grant files`. A windowed bro installs the same globals for its self-tests, and there they ask the access gate as `fs` does: a refusal throws an Error with `code: 'EACCES'` and the absolute `path`, with nothing written.
 
 ### Core
 

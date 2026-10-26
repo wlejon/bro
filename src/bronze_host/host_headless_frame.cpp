@@ -439,7 +439,7 @@ void installHeadlessFrame(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("screenshot() requires a path argument");
             std::string path = ev::toUtf8(a[0]);
-            requirePathAccess(path, true);  // the host's gate (host_access.h)
+            requireHarnessPathAccess(engine, path, true);  // the harness's, not the app's (host_access.h)
             bool ok = false;
             if (a.size() >= 2 && ev::isNumber(a[1])) {
                 if (a.size() < 5 || !ev::isNumber(a[2]) || !ev::isNumber(a[3]) || !ev::isNumber(a[4]))
@@ -477,7 +477,7 @@ void installHeadlessFrame(engine::Engine& engine) {
             if (a.size() < 2) return ev::throwTypeError("screenshotCanvas(path, selector) requires both arguments");
             std::string path = ev::toUtf8(a[0]);
             std::string selector = ev::toUtf8(a[1]);
-            requirePathAccess(path, true);  // the host's gate (host_access.h)
+            requireHarnessPathAccess(engine, path, true);  // the harness's, not the app's (host_access.h)
             auto* el = engine.querySelector(selector);
             if (!el) {
                 return ev::throwTypeError(std::string("screenshotCanvas: element not found: ") + selector);
@@ -511,10 +511,10 @@ void installHeadlessFrame(engine::Engine& engine) {
 
     // writeFile(path, data)
     ev::registerGlobal("writeFile", ev::makeFunction(
-        [](Value, std::span<const Value> a) -> Value {
+        [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("writeFile(path, data) requires both arguments");
             std::string path = ev::toUtf8(a[0]);
-            requirePathAccess(path, true);  // the host's gate (host_access.h)
+            requireHarnessPathAccess(engine, path, true);  // the harness's, not the app's (host_access.h)
             Value data = a[1];
 
             const uint8_t* bytes = nullptr;

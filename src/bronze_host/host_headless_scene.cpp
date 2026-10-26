@@ -222,12 +222,12 @@ void installHeadlessScenePerf(engine::Engine& engine,
         });
     // perf.loadShaderSet(dir): set B from a shader tree.
     setPerfFn("loadShaderSet", 1,
-        [](Value, std::span<const Value> a) -> Value {
+        [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty() || !ev::isString(a[0])) return ev::throwTypeError("loadShaderSet(dir) requires a directory");
             scene::SceneRenderer::ShaderSetSummary s;
             std::string err;
             const std::string dir = absoluteDir(ev::toUtf8(a[0]));
-            requirePathAccess(dir, false);  // the host's gate (host_access.h)
+            requireHarnessPathAccess(engine, dir, false);  // the harness's, not the app's (host_access.h)
             if (!scene::SceneRenderer::loadShaderSet(dir, s, &err))
                 return ev::throwTypeError(err.c_str());
             return fromJson(summaryJson(s));

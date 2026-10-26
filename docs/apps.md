@@ -313,12 +313,16 @@ undecided}` and `bro.app.requestPermission(name)` asks now
 
 Every native that opens a path the app named asks the same `fs` policy:
 the siblings' loaders, encoders and savers (mesh, image, audio, the model
-loaders), media and video, screenshots and captures (the headless test
-functions and `controlCommand` included), and the page's subresources from
+loaders), media and video, screenshots and captures, and the page's subresources from
 disk (`<img>`, CSS `url()`, `@font-face`, `@import`, `<iframe>`, `<video>`,
 `Worker` scripts), which are answered from what is decided and never
 prompt. `bro.net`'s sockets ask `net`, and a control command sent to
-another engine's endpoint is a connection too.
+another engine's endpoint is a connection too. The test harness is not the
+app: under `bro-headless` the driver's own functions (`screenshot`,
+`writeFile`, `controlCommand`'s output files and `launch`,
+`perf.loadShaderSet`) act for the developer running the script and ask
+nothing of the app's grants ([headless.md](headless.md)); a windowed bro,
+which installs them for its self-tests, gates them like `fs`.
 
 **Not gated yet:** a granted `spawn`, which runs programs with the user's
 full rights; and what a deputy opens for the app (an MPRIS player's
