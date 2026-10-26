@@ -70,7 +70,6 @@ const id = 'org.bro.test.NotifyRoute' + process.pid + Date.now() % 100000;
 fs.writeFileSync(path.join(app, 'bro.json'), JSON.stringify({ id, name: 'NR', singleInstance: true }));
 fs.writeFileSync(path.join(app, 'index.html'), '<!DOCTYPE html><html><body>nr</body></html>');
 const env = { ...process.env, BRO_APP_HOME: path.join(scratch, 'home') };
-delete env.BRO_TRUSTED_APP_DIR;
 const report = path.join(scratch, 'report.json');
 env.BRO_TEST_SI_OUT = report;
 

@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace bro::engine {
 
@@ -50,6 +51,11 @@ struct HeadlessHooks {
     /// run — a profile table, a leak census — has to be called here rather
     /// than registered with the CRT, because the CRT never gets the chance.
     std::function<void()> beforeExit;
+
+    /// Capabilities this host executable grants its app outright, before any
+    /// `--grant` (docs/apps.md, Permissions): a shell's own headless driver
+    /// grants its UI what the windowed shell does. Empty for bro-headless.
+    std::vector<std::string> hostGrants;
 
     /// Name used in usage text and diagnostics.
     std::string programName = "bro-headless";

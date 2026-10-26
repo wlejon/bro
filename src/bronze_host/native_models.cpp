@@ -9,6 +9,7 @@
 
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_natives.h"
+#include "engine/app_permissions.h"
 #include "engine/engine.h"
 #include "engine/settings.h"
 #include "natives/models/native_models_decl.h"
@@ -62,6 +63,9 @@ struct Registry {
     int nextId = 1;
     std::map<int, Sub> subs;
     std::vector<std::shared_ptr<SharedJob>> stopping;  // cancelled by every id, not yet settled
+    // Ids answered for a fetch the app may not make (no `net`): the poll
+    // settles each as failed with the refusal, so the promise rejects with it.
+    std::map<int, std::string> refused;
     bool hookInstalled = false;
 };
 
@@ -134,7 +138,16 @@ int32_t bro_models_fetchStart(const char* name, bool listOnly) {
     const std::string n = name ? name : "";
     if (!bro::util::isModelName(n)) return 0;
     Registry& r = registry();
+    // Both an install and a listing reach the network, so both need `net`.
+    // Asked before the lock: asking may show a dialog.
+    std::string refusal = bro::engine::appPermissions().use(
+        "net", (listOnly ? "list model " : "download model ") + n);
     std::lock_guard<std::mutex> lk(r.mu);
+    if (!refusal.empty()) {
+        const int id = r.nextId++;
+        r.refused[id] = std::move(refusal);
+        return id;
+    }
     reapLocked(r);
     if (!r.hookInstalled) {
         if (auto* eng = bro::bronze_host::hostEngine()) {
@@ -183,6 +196,15 @@ const char* bro_models_fetchPoll(int32_t id) {
     {
         std::lock_guard<std::mutex> lk(r.mu);
         reapLocked(r);
+        if (auto ref = r.refused.find(id); ref != r.refused.end()) {
+            j.beginObject();
+            j.key("state").string("failed");
+            j.key("code").string("permission");
+            j.key("error").string(ref->second);
+            j.endObject();
+            r.refused.erase(ref);
+            return bro::bronze_host::natives::strResult(j.str());
+        }
         auto it = r.subs.find(id);
         if (it == r.subs.end()) {
             j.beginObject();

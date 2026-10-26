@@ -1,5 +1,6 @@
 #include "engine/app_manifest.h"
 
+#include "engine/capabilities.h"
 #include "util/json_in.h"
 #include "util/log.h"
 
@@ -142,12 +143,25 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
     f.strings("keywords", out.keywords);
     f.boolean("singleInstance", out.singleInstance);
     f.boolean("display", out.display);
-    f.boolean("shell", out.shell);
     {
+        // Unlike the other keys, a mistake here fails the manifest: an app
+        // that names a capability bro does not have would otherwise run
+        // without it and fail somewhere far from the typo.
         std::vector<std::string> perms;
+        if (const JsonValue* v = root.find("permissions"); v && !(v->isArray() || v->isString())) {
+            if (error) *error = path + ": \"permissions\" should be a list of capability names";
+            return false;
+        }
         f.strings("permissions", perms);
-        f.strings("privileged", perms);
-        for (const auto& p : perms) addUnique(out.permissions, p);
+        for (const auto& p : perms) {
+            if (!findCapability(p)) {
+                if (error)
+                    *error = path + ": \"permissions\" names \"" + p + "\", which is not a capability (they are: " +
+                             capabilityNameList() + "; docs/apps.md, Permissions)";
+                return false;
+            }
+            addUnique(out.permissions, p);
+        }
     }
 
     if (const JsonValue* ft = root.find("fileTypes")) {
@@ -188,8 +202,18 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
     return true;
 }
 
+bool isReservedAppId(const std::string& id) {
+    // bro's own config directory (grant_store.h, the grant store) is where
+    // an app called "bro" would keep its config: no app may be called that.
+    // Case-blind, as the file systems that hold it can be.
+    if (id.size() != 3) return false;
+    auto lower = [](char c) { return char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c); };
+    return lower(id[0]) == 'b' && lower(id[1]) == 'r' && lower(id[2]) == 'o';
+}
+
 bool isValidAppId(const std::string& id) {
     if (id.empty() || id.size() > 255) return false;
+    if (isReservedAppId(id)) return false;
     if (id.front() == '.' || id.back() == '.' || id.find("..") != std::string::npos) return false;
     for (unsigned char c : id) {
         bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
@@ -217,6 +241,7 @@ std::string appIdFor(const AppDescriptor& manifest, const std::string& appDir) {
     while (!slug.empty() && slug.front() == '.') slug.erase(slug.begin());
     while (!slug.empty() && slug.back() == '.') slug.pop_back();
     while (slug.find("..") != std::string::npos) slug.replace(slug.find(".."), 2, "_");
+    if (isReservedAppId(slug)) slug = "app." + slug;
     return slug.empty() ? std::string("app") : slug;
 }
 
@@ -330,49 +355,6 @@ std::vector<std::string> installedAppRoots() {
     }
 #endif
     return roots;
-}
-
-std::string userPermissionsFile() {
-    // BRO_PERMISSIONS_FILE names the file outright: how a test keeps the
-    // user's own grants (a development machine's { "*": ["*"] }) out of it.
-    std::string over = getEnv("BRO_PERMISSIONS_FILE");
-    if (!over.empty()) return over;
-#if defined(_WIN32)
-    std::string base = getEnv("APPDATA");
-    if (base.empty()) return {};
-    return u8str(u8path(base) / "bro" / "permissions.json");
-#elif defined(__APPLE__)
-    std::string h = getEnv("HOME");
-    if (h.empty()) return {};
-    return u8str(u8path(h) / "Library" / "Application Support" / "bro" / "permissions.json");
-#else
-    std::string base = xdgDir("XDG_CONFIG_HOME", ".config");
-    if (base.empty()) return {};
-    return u8str(u8path(base) / "bro" / "permissions.json");
-#endif
-}
-
-std::vector<std::string> userPermissionGrants(const std::string& id) {
-    std::vector<std::string> out;
-    const std::string path = userPermissionsFile();
-    if (path.empty() || id.empty()) return out;
-    std::ifstream file(u8path(path), std::ios::binary);
-    if (!file.is_open()) return out;
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    JsonValue root;
-    std::string err;
-    if (!util::parseJson(ss.str(), root, &err) || !root.isObject()) {
-        LOG_WARN("%s: %s; no permissions granted from it", path.c_str(), err.empty() ? "not a JSON object" : err.c_str());
-        return out;
-    }
-    Fields f{root, path};
-    f.strings(id.c_str(), out);
-    // "*" as an id grants to every app: a development machine's one switch.
-    std::vector<std::string> everyApp;
-    f.strings("*", everyApp);
-    out.insert(out.end(), everyApp.begin(), everyApp.end());
-    return out;
 }
 
 std::string findInstalledApp(const std::string& id) {

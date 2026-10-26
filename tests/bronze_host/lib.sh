@@ -304,7 +304,9 @@ bh_run_check() {
 
     [[ -n "$preclean" ]] && rm -f $preclean
 
-    local -a cmd=("$bin" "$(bh_to_win_path "$appdir")")
+    # Each probe app's bro.json declares the capabilities it uses (appdir_net:
+    # net); the run grants exactly those, as a user who said yes would.
+    local -a cmd=("$bin" --grant declared "$(bh_to_win_path "$appdir")")
     if [[ -n "$driver" ]]; then cmd+=("$(bh_to_win_path "$driver")")
     else cmd+=(-e "$expr"); fi
 

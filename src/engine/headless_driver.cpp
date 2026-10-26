@@ -4,6 +4,7 @@
 #include "engine/config_loader.h"
 #include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/capabilities.h"
 #include "engine/control.h"
 
 #include "bronze_host/bronze_host.h"
@@ -110,6 +111,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::string launchNotification;
     std::string nativeManifestOut;
     std::string aotBuildDir;
+    std::vector<std::string> hostGrants;
 
     bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
@@ -150,6 +152,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "                  __bro_native.* entry points and signatures) to <path>\n"
                 "                  and exit: the --native-manifest for the same build.\n"
                 "                  Combines with --print-host-globals in one run\n"
+                "  --grant <cap>[,<cap>...]\n"
+                "                  Grant the app these capabilities for this run, as a\n"
+                "                  host does (tests, development; logged loudly).\n"
+                "                  `declared` is every capability its bro.json declares\n"
                 "  --aot-build <dir>\n"
                 "                  Compile the page's scripts ahead of time into <dir>\n"
                 "                  instead of running them, and exit (an app executable's\n"
@@ -190,6 +196,9 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             nativeManifestOut = argv[++i];
         } else if (strcmp(argv[i], "--aot-build") == 0 && i + 1 < argc) {
             aotBuildDir = argv[++i];
+        } else if (strcmp(argv[i], "--grant") == 0 && i + 1 < argc) {
+            // What this run's host grants the app outright (tests, development).
+            appendGrantList(argv[++i], hostGrants);
         } else if (appDir.empty()) {
             appDir = argv[i];
         } else if (scriptPath.empty() && argv[i][0] != '-') {
@@ -337,6 +346,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.installHostBindings = hooks.installHostBindings;
         config.installWorkerHostBindings = hooks.installWorkerHostBindings;
         config.aotBuildDir = aotBuildDir;
+        config.hostGrants = hooks.hostGrants;
+        config.hostGrants.insert(config.hostGrants.end(), hostGrants.begin(), hostGrants.end());
         if (!aotBuildDir.empty()) config.showSplash = false;
 
         if (hooks.beforeEngine) hooks.beforeEngine();

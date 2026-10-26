@@ -134,6 +134,10 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
             config.appDir = dir;
         } else if (fileExists(dir + "/system/projects/index.html")) {
             config.appDir = dir + "/system/projects";
+            // The project manager is bro's own, not an app the user installed:
+            // bro as its host grants what it is for, reading and writing the
+            // user's project folders and its registry, and launching projects.
+            config.hostGrants = {"files", "spawn"};
         } else {
             return false;
         }

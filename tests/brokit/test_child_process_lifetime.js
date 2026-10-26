@@ -24,7 +24,8 @@ if (!isWin && process.platform !== 'linux') {
         "const a = cp.spawn(" + longCmd + ", { stdio: 'pipe' });" +
         "const b = cp.spawn(" + longCmd + ", { detached: true });" +
         "console.log('PIDS ' + a.pid + ' ' + b.pid);";
-    const out = String(cp.execFileSync(process.execPath, [bro.appDir, '-e', inner], { encoding: 'utf8' }));
+    // The inner run starts processes: it is granted that.
+    const out = String(cp.execFileSync(process.execPath, ['--grant', 'spawn', bro.appDir, '-e', inner], { encoding: 'utf8' }));
     const m = /PIDS (\d+) (\d+)/.exec(out);
     assert(m, 'inner run printed the child pids: ' + out.slice(-300));
     const child = Number(m[1]), detached = Number(m[2]);

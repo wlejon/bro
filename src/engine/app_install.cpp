@@ -359,10 +359,13 @@ std::string installExe(const std::string& appDir, const AppDescriptor& m, bool s
 int runAppCommand(const std::vector<std::string>& args) {
     if (args.empty()) return -1;
     const std::string& cmd = args[0];
+    const bool permissionsCmd = cmd == "--permissions" || cmd == "--grant-app" || cmd == "--revoke-app" ||
+                                cmd == "--dev-mode";
     if (cmd != "--install" && cmd != "--uninstall" && cmd != "--list-apps" && cmd != "--desktop-entry" &&
-        cmd != "--build-exe" && cmd != "--exe-info")
+        cmd != "--build-exe" && cmd != "--exe-info" && !permissionsCmd)
         return -1;
     attachConsole();
+    if (permissionsCmd) return runPermissionsCommand(args);
 
     bool link = false, system = false, noExe = false, force = false, quiet = false;
     std::string exec, target, out, stampEngine, iconPng;

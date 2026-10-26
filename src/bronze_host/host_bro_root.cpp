@@ -26,6 +26,7 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_permissions.h"
 #include "bronze_host/host_solve.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine.h"
@@ -333,21 +334,10 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_REMOTE
     setUnavailable("remote", "BRO_WITH_REMOTE");
 #endif
-    // Privileged desktop shell namespaces:
-    // If not granted to this app by the desktop trust model, install the unavailable
-    // namespace stub so that bro.<ns>.available === false and every call throws.
-    static const char* const kPrivilegedNamespaces[] = {
-        "displays", "cred", "seat", "portal", "sys", "compositor", "wl", "clip", "pulse",
-        // Hosting this screen for a remote viewer, and routing its input in
-        // as local input: the whole session, so the user's decision.
-        "remote",
-    };
-    for (const char* ns : kPrivilegedNamespaces) {
-        if (!engine.hasPrivilege(ns)) {
-            setUnavailable(ns, "it is privileged and granted only to a trusted shell app "
-                               "(see docs/apps.md, Permissions)");
-        }
-    }
+    // The privileged namespaces, by what the app is granted
+    // (host_permissions.cpp, engine/capabilities.h).
+    installAccessPolicy();
+    installGatedNamespaces(bro->get());
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -380,7 +370,7 @@ void markAvailableNamespaces() {
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
         "apps", "vfs", "thumb", "a11y",
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
-        "decor", "clip", "mpris", "pulse", "ime",
+        "decor", "clip", "mpris", "pulse", "ime", "permissions",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;
@@ -398,6 +388,9 @@ void markAvailableNamespaces() {
         ev::Persistent root(broG.value);
         for (const char* name : kGated) {
             if (isDeferredName(name)) continue;
+            // A namespace still to be asked for: reading anything off its
+            // stub is a use, which would ask now (host_permissions.cpp).
+            if (isAskingNamespace(name)) continue;
             decorate(ev::getProperty(root.get(), name));
         }
     }

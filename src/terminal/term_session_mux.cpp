@@ -45,6 +45,12 @@ bool connectMux(std::unique_ptr<bromux::Client>& out, const std::string& server,
 } // namespace
 
 bool TermSession::spawnPersistent(const SpawnOptions& opts, const PersistentOptions& p, std::string* error) {
+    if (std::string refused = checkSpawnGate("start " + (opts.command.empty() ? defaultShell() : opts.command) +
+                                             " in a persistent terminal session");
+        !refused.empty()) {
+        if (error) *error = refused;
+        return false;
+    }
     {
         std::lock_guard<std::mutex> g(mu_);
         if (pty_ || mux_) {
@@ -75,6 +81,12 @@ bool TermSession::spawnPersistent(const SpawnOptions& opts, const PersistentOpti
 }
 
 bool TermSession::attach(uint64_t sessionId, const std::string& server, std::string* error) {
+    // Typing into a running shell is as much as starting one.
+    if (std::string refused = checkSpawnGate("attach to terminal session " + std::to_string(sessionId));
+        !refused.empty()) {
+        if (error) *error = refused;
+        return false;
+    }
     {
         std::lock_guard<std::mutex> g(mu_);
         if (pty_ || mux_) {

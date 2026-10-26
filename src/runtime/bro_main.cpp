@@ -9,6 +9,7 @@
 #include "engine/launcher.h"
 #include "engine/app_runtime.h"
 #include "engine/app_exe.h"
+#include "engine/capabilities.h"
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -198,6 +199,10 @@ static void printUsage() {
         "       bro --uninstall <app-id> [--system]\n"
         "       bro --list-apps\n"
         "       bro --desktop-entry <app-directory>\n"
+        "       bro --permissions [<app-id | app-directory>]\n"
+        "       bro --grant-app <app-id | app-directory> <capability>\n"
+        "       bro --revoke-app <app-id | app-directory> <capability>\n"
+        "       bro --dev-mode on|off\n"
         "\n"
         "Loads index.html from the given directory and runs it in a\n"
         "GPU-accelerated window (Skia + Vulkan via SDL3). Everything after the\n"
@@ -222,6 +227,9 @@ static void printUsage() {
         "                          handing the arguments to the running one.\n"
         "  --notification <args>   Start as a click on one of the app's notifications\n"
         "                          (the page hears notificationclick; docs/sys-api.js).\n"
+        "  --grant <cap>[,<cap>...] Grant the app these capabilities for this run, as a\n"
+        "                          host does (development and tests; logged loudly).\n"
+        "                          `declared` is every capability its bro.json declares.\n"
         "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
@@ -320,9 +328,19 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     bool haveTarget = exe != nullptr;
     bool dropActivatorFolder = false;
     std::vector<std::string> appArgs;
+    // `--grant <cap>[,<cap>...]`: what this run's host (the person at the
+    // terminal) grants the app outright. Not for an app's own executable,
+    // whose arguments are all the app's.
+    std::vector<std::string> cliGrants;
+    bool expectGrant = false;
     bool dashDash = false;
     for (const std::string& a : args) {
         if (expectNotificationArgs) { cliNotification = a; expectNotificationArgs = false; continue; }
+        if (expectGrant) {
+            bro::engine::appendGrantList(a, cliGrants);
+            expectGrant = false;
+            continue;
+        }
         if (dropActivatorFolder) {
             dropActivatorFolder = false;
             if (a.empty() || a[0] != '-') continue;
@@ -339,6 +357,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
             if (a == "--drm")          { cliDrm = true; continue; }
             if (a == "--new-instance") { cliNewInstance = true; continue; }
             if (a == "--notification") { expectNotificationArgs = true; continue; }
+            if (!exe && a == "--grant") { expectGrant = true; continue; }
             if (a == "--notification-activated") { cliNotificationCom = true; continue; }
             if (cliNotificationCom && (a == "-Embedding" || a == "/Embedding")) continue;
         }
@@ -371,6 +390,8 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     if (cliSplash)   config.showSplash = true;
     if (cliNoGpu)    config.graphics.useGPU = false;
     if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
+    // Added to what the launch resolved (the project manager's own grants).
+    config.hostGrants.insert(config.hostGrants.end(), cliGrants.begin(), cliGrants.end());
 
     // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
     // JS and spawned children can locate themselves without guessing from cwd,

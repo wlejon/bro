@@ -107,7 +107,8 @@ if (!bro.terminal || !bro.terminal.available) {
     process.env.BRO_MUX_SERVER = SERVER;
     const exe = path.join(process.env.BRO_EXE_DIR, WIN ? 'bro-headless.exe' : 'bro-headless');
     const appDir = path.join(process.env.BRO_APP_DIR, '..', 'terminal', 'persistent_reload_app');
-    const r = cp.spawnSync(exe, [appDir, path.join(appDir, 'verify.js')], { encoding: 'utf8' });
+    // The child app starts a terminal: its run grants it that.
+    const r = cp.spawnSync(exe, ['--grant', 'spawn', appDir, path.join(appDir, 'verify.js')], { encoding: 'utf8' });
     const out = (r.stdout || '') + (r.stderr || '');
     assert(r.status === 0 && out.includes('PERSISTENT_RELOAD_OK'),
            'the session outlived the reload (child exited ' + r.status + '):\n' + out.slice(-3000));

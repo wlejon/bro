@@ -23,7 +23,19 @@ constexpr size_t kReadChunk = 16u << 10;
 // mode reset and publishes.
 constexpr std::string_view kEsu = "\x1b[?2026l";
 
+SpawnGate& spawnGate() {
+    static SpawnGate g;
+    return g;
+}
+
 } // namespace
+
+void setSpawnGate(SpawnGate gate) { spawnGate() = std::move(gate); }
+
+std::string checkSpawnGate(const std::string& what) {
+    const SpawnGate& g = spawnGate();
+    return g ? g(what) : std::string();
+}
 
 std::string defaultShell() {
 #if defined(_WIN32)
@@ -80,6 +92,12 @@ TermSession::~TermSession() {
 }
 
 bool TermSession::spawn(const SpawnOptions& opts, std::string* error) {
+    if (std::string refused = checkSpawnGate("start " + (opts.command.empty() ? defaultShell() : opts.command) +
+                                             " in a terminal");
+        !refused.empty()) {
+        if (error) *error = refused;
+        return false;
+    }
     std::shared_ptr<bropty::IPtyProcess> pty;
     {
         std::lock_guard<std::mutex> g(mu_);

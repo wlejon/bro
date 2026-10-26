@@ -82,45 +82,8 @@ bool parseConfig(const std::string& path, EngineConfig& config,
         return std::stof(num);
     };
 
-    auto getStringArray = [&](const char* key) -> std::vector<std::string> {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = content.find(needle);
-        if (pos == std::string::npos) return {};
-        pos += needle.size();
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
-        if (pos >= content.size() || content[pos] != '[') return {};
-        pos++;
-        std::vector<std::string> items;
-        while (pos < content.size() && content[pos] != ']') {
-            while (pos < content.size() && content[pos] != '"' && content[pos] != ']') pos++;
-            if (pos >= content.size() || content[pos] == ']') break;
-            pos++;
-            std::string item;
-            while (pos < content.size() && content[pos] != '"') {
-                if (content[pos] == '\\' && pos + 1 < content.size()) {
-                    pos++;
-                    item += content[pos];
-                } else {
-                    item += content[pos];
-                }
-                pos++;
-            }
-            if (pos < content.size() && content[pos] == '"') pos++;
-            items.push_back(item);
-        }
-        return items;
-    };
-
     std::string app = getString("app");
     if (!app.empty()) config.appDir = app;
-
-    int shellFlag = getBool("shell");
-    if (shellFlag == 1) config.isShellApp = true;
-
-    auto priv = getStringArray("privileged");
-    if (!priv.empty()) {
-        config.privilegedNamespaces = std::move(priv);
-    }
 
     std::string title = getString("title");
     if (!title.empty()) config.title = title;
@@ -139,21 +102,21 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     if (outIsProjectManifest) *outIsProjectManifest = isProject;
 
     // An app manifest's identity and desktop keys (engine/app_manifest.h).
-    // A project manifest names no app of its own: the app's bro.json, parsed
-    // after it, does.
-    if (!isProject) {
+    // A project root that names a default app has no app of its own: that
+    // app's bro.json, parsed after it, does. An app that only points at a
+    // project's lib or system dir is still an app, and its permissions,
+    // id and name have to be read.
+    if (defaultApp.empty()) {
         AppDescriptor m;
         std::string err;
         if (parseAppManifest(path, m, &err)) {
-            if (m.shell) config.isShellApp = true;
-            for (const auto& p : m.permissions) {
-                bool have = false;
-                for (const auto& q : config.privilegedNamespaces) have = have || q == p;
-                if (!have) config.privilegedNamespaces.push_back(p);
-            }
             config.manifest = std::move(m);
         } else {
-            LOG_WARN("bro.json: %s", err.c_str());
+            // The Engine refuses to start on it (engine_init.cpp). Run without
+            // its manifest, the app would run without its identity and the
+            // capabilities it declares, and fail far from the mistake.
+            LOG_ERROR("bro.json: %s", err.c_str());
+            config.manifestError = err;
         }
     }
 

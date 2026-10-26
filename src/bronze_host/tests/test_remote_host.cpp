@@ -306,25 +306,25 @@ int main(int argc, char** argv) {
         return 77;
     }
     const fs::path dir = BRO_REMOTE_TEST_DIR;
-    // bro.remote is privileged: the app asks for it (bro.json "permissions")
-    // and the test names its folder trusted (docs/apps.md, Permissions).
-    setEnv("BRO_TRUSTED_APP_DIR", (dir / "app").string());
+    // bro.remote is the `remote` capability: the app declares it (bro.json
+    // "permissions") and the test, as its host, grants it (`--grant`;
+    // docs/apps.md, Permissions).
     std::random_device rd;
     const std::string id = std::to_string(rd() % 1000000);
 
     std::string socket = "bro-remote-test-" + id;
     setEnv("BRO_REMOTE_TEST_SOCKET", socket);
     runSession("headless",
-               {headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
-                (dir / "host_remote.js").string()},
+               {headless.string(), "--grant", "remote", "--width", "320", "--height", "240",
+                (dir / "app").string(), (dir / "host_remote.js").string()},
                socket, true);
 
     socket = "bro-remote-test-v" + id;
     setEnv("BRO_REMOTE_TEST_SOCKET", socket);
-    runViewerSession({headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
-                      (dir / "host_remote.js").string()},
-                     {headless.string(), "--width", "320", "--height", "240", (dir / "app").string(),
-                      (dir / "view_remote.js").string()});
+    runViewerSession({headless.string(), "--grant", "remote", "--width", "320", "--height", "240",
+                      (dir / "app").string(), (dir / "host_remote.js").string()},
+                     {headless.string(), "--grant", "remote", "--width", "320", "--height", "240",
+                      (dir / "app").string(), (dir / "view_remote.js").string()});
 
     // is_regular_file: in an embedding build (helm) "bro" beside the test is
     // bro's binary directory, not the executable.
@@ -338,7 +338,8 @@ int main(int argc, char** argv) {
         // driver, so there the window is a real (small, brief) one.
         setEnv("SDL_VIDEODRIVER", "offscreen");
 #endif
-        runSession("windowed", {windowed.string(), "--no-splash", (dir / "app").string()}, socket, false);
+        runSession("windowed", {windowed.string(), "--no-splash", "--grant", "remote", (dir / "app").string()},
+                   socket, false);
     } else {
         std::printf("note: no bro beside the test; the windowed session is skipped\n");
     }

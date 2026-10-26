@@ -757,6 +757,8 @@ void Engine::hostDropFile(uint64_t hostId, const std::vector<std::string>& paths
     WindowHost* hp = windowHostById(hostId);
     if (!hp || !hp->document) return;
     if (paths.empty()) return;
+    // Dropped on one of the app's windows: the app's (app_permissions.h).
+    appPermissions().grantPicked(paths);
     windowHostDispatchDrop(*hp, (x >= 0) ? x : hp->lastMouseX,
                            (y >= 0) ? y : hp->lastMouseY, &paths, nullptr);
 }

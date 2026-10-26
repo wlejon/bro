@@ -86,14 +86,22 @@ struct EngineConfig {
     // Colours come from the element's scheme / scrollbar-color at draw time
     // (Scrollbar::colorsFor).
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
-    bool isShellApp = false;
+    // The capabilities (capabilities.h) the host executable grants its app,
+    // whatever the app's manifest declares and whatever the grant store
+    // holds: helm's main grants its UI `shell` and the rest; bro and
+    // bro-headless take them from `--grant` (a development and test switch,
+    // logged loudly). "declared" stands for everything the manifest declares.
+    // The only way to a shell capability (app_permissions.h).
+    std::vector<std::string> hostGrants;
+    // Why the app's bro.json could not be read (config_loader.cpp), "" when
+    // it was. The Engine refuses to start with one.
+    std::string manifestError;
     // This process is the session's desktop shell over a system compositor
     // (helm as the Winlogon shell on Windows). Agent control then serves
     // "display" without BRO_CONTROL, as a DRM bro does, and its screenshots
     // and injected input are the whole session's (platform/desktop_session.h),
     // so other apps' windows and global hotkeys are in reach. Implied by DRM.
     bool desktopShell = false;
-    std::vector<std::string> privilegedNamespaces;
     // The app manifest's identity and desktop keys (engine/app_manifest.h,
     // docs/apps.md), and the effective id finalizeAppIdentity() settles on:
     // the declared one, else the folder's name. The id is the window's

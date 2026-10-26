@@ -202,6 +202,8 @@ void Engine::handleDropFile(const std::vector<std::string>& paths, float x, floa
     if (!target) target = document_->body();
     if (!target) return;
 
+    // The user handed these to the app: the powerbox (app_permissions.h).
+    appPermissions().grantPicked(paths);
     for (const char* type : { "dragenter", "dragover", "drop" }) {
         dom::DragEvent evt(type, true, true);
         for (const auto& p : paths) evt.addFile(p);

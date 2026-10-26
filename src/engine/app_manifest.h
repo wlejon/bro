@@ -4,7 +4,7 @@
 // (docs/apps.md). A folder holding bro.json and a page is a desktop
 // application: the manifest names it, says where its state lives, whether a
 // second launch hands off to the first, which files it opens, and which
-// privileged namespaces it asks for. The window keys (title, width, ...) are
+// capabilities it may ask for. The window keys (title, width, ...) are
 // config_loader.cpp's; this is everything else.
 
 #include <string>
@@ -49,23 +49,28 @@ struct AppDescriptor {
     bool display = true;
     std::vector<AppFileType> fileTypes;
     std::vector<AppAction> actions;
-    /// Privileged namespaces asked for (`permissions`, and the older
-    /// `privileged`, merged). Asking grants nothing: desktop_trust.h decides.
+    /// The capabilities the app may ask for (`permissions`, capabilities.h).
+    /// Declaring grants nothing: app_permissions.h decides what is granted.
     std::vector<std::string> permissions;
-    bool shell = false;
 };
 
 /// Read the app keys of a bro.json. Returns false (with *error) when the file
-/// cannot be read or is not a JSON object; unknown keys are ignored, and a key
-/// of the wrong type is skipped with a warning rather than failing the launch.
+/// cannot be read, is not a JSON object, or its `permissions` names something
+/// that is not a capability: a launch then fails with that sentence. Unknown
+/// keys are ignored, and any other key of the wrong type is skipped with a
+/// warning.
 bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* error = nullptr);
 
 /// An id is reverse-DNS (`org.example.Editor`) or a simple slug (`notes`):
-/// 1-255 chars of [A-Za-z0-9._-], not starting or ending with '.', no "..".
-/// It names the window's app_id / WM class, the desktop entry
-/// (<id>.desktop), the single-instance channel and the per-app directories,
-/// so it must be safe as a file name everywhere.
+/// 1-255 chars of [A-Za-z0-9._-], not starting or ending with '.', no "..",
+/// and not the reserved "bro" (isReservedAppId). It names the window's app_id
+/// / WM class, the desktop entry (<id>.desktop), the single-instance channel
+/// and the per-app directories, so it must be safe as a file name everywhere.
 bool isValidAppId(const std::string& id);
+
+/// "bro", in any case: bro's own config directory is where that app's would
+/// be (grant_store.h). A folder named so gets the id "app.bro".
+bool isReservedAppId(const std::string& id);
 
 /// The effective id: the declared one when valid, else the app folder's name
 /// reduced to [A-Za-z0-9._-] (the rule util::appUserDataDir has always used).
@@ -104,18 +109,5 @@ std::string installRoot(bool system);
 
 /// The installed app directory for `id`, or "" when none is installed.
 std::string findInstalledApp(const std::string& id);
-
-/// The user's own permission grants (docs/apps.md, Permissions): the file
-/// $XDG_CONFIG_HOME/bro/permissions.json (%APPDATA%\bro\permissions.json,
-/// ~/Library/Application Support/bro/permissions.json), an object mapping app
-/// ids to the privileged namespaces granted to them:
-///   { "org.example.Remote": ["remote"], "my.shell": ["shell"] }
-/// "*" grants every namespace the app asks for; "shell" grants shell status.
-/// The id "*" grants to every app ({ "*": ["*"] }: a development machine that
-/// does not want the trust check). Returns what is listed for `id` plus what
-/// is listed for "*" ([] when the file or both are absent).
-/// BRO_PERMISSIONS_FILE=<path> reads that file instead (tests isolate with it).
-std::vector<std::string> userPermissionGrants(const std::string& id);
-std::string userPermissionsFile();
 
 }  // namespace bro::engine

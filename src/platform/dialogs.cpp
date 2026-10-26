@@ -16,8 +16,18 @@ namespace {
 Window* s_window = nullptr;
 bool s_interactive = true;
 bool s_autoAccept = true;
+// Whether a headless script chose the auto-answer (setDialogAnswer), as
+// opposed to the default: only a chosen answer answers a permission prompt.
+bool s_autoAnswerChosen = false;
 std::vector<std::string> s_queuedPicks;
 std::string s_lastFileFilter;
+Dialogs::PickHook s_pickHook;
+
+// Every file dialog's answer passes here on its way to the caller: what the
+// user picked is the app's to use (the powerbox, engine/app_permissions.h).
+void notePicked(const std::vector<std::string>& picked) {
+    if (s_pickHook && !picked.empty()) s_pickHook(picked);
+}
 
 std::string normalizeSeparators(std::string s) {
 #ifdef _WIN32
@@ -156,6 +166,23 @@ void Dialogs::setPickedFiles(std::vector<std::string> paths) {
 
 void Dialogs::setAutoDialogAnswer(bool accept) {
     s_autoAccept = accept;
+    s_autoAnswerChosen = true;
+}
+
+void Dialogs::setPickHook(PickHook hook) {
+    s_pickHook = std::move(hook);
+}
+
+std::optional<bool> Dialogs::askPermission(const std::string& message) {
+    if (!s_interactive) {
+        // Nobody to ask: an answer the script chose stands for the user's,
+        // and without one there is no answer at all (the caller denies).
+        LOG_INFO("[permission] %s -> %s", message.c_str(),
+                 !s_autoAnswerChosen ? "(unanswered)" : s_autoAccept ? "Allow" : "Deny");
+        if (!s_autoAnswerChosen) return std::nullopt;
+        return s_autoAccept;
+    }
+    return windowSystem().dialogs().messageBox(s_window, message, /*withCancel=*/true);
 }
 
 void Dialogs::showAlert(const std::string& message) {
@@ -203,15 +230,19 @@ bool Dialogs::showOpenFileDialog(const std::string& filter, bool allowMultiple,
 
     if (!s_interactive) {
         picked = takeQueuedPicks();
+        notePicked(picked);
         return true;
     }
-    return showFileDialog(request, picked, refusal);
+    const bool ok = showFileDialog(request, picked, refusal);
+    if (ok) notePicked(picked);
+    return ok;
 }
 
 bool Dialogs::showOpenFolderDialog(const std::string& defaultLocation, bool allowMultiple,
                                    std::vector<std::string>& picked, std::string& refusal) {
     if (!s_interactive) {
         picked = takeQueuedPicks();
+        notePicked(picked);
         return true;
     }
 
@@ -219,7 +250,9 @@ bool Dialogs::showOpenFolderDialog(const std::string& defaultLocation, bool allo
     request.kind = DialogBackend::FileDialogKind::OpenFolder;
     request.defaultLocation = normalizeSeparators(defaultLocation);
     request.allowMultiple = allowMultiple;
-    return showFileDialog(request, picked, refusal);
+    const bool ok = showFileDialog(request, picked, refusal);
+    if (ok) notePicked(picked);
+    return ok;
 }
 
 bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& defaultName,
@@ -239,9 +272,10 @@ bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& d
         if (!s_queuedPicks.empty()) {
             saved = s_queuedPicks.front();
             s_queuedPicks.erase(s_queuedPicks.begin());
-            return true;
+        } else {
+            saved = request.defaultLocation.empty() ? std::string("untitled") : request.defaultLocation;
         }
-        saved = request.defaultLocation.empty() ? std::string("untitled") : request.defaultLocation;
+        notePicked({*saved});
         return true;
     }
 
@@ -251,6 +285,7 @@ bool Dialogs::showSaveFileDialog(const std::string& filter, const std::string& d
         saved = std::nullopt;
     } else {
         saved = picked[0];
+        notePicked({*saved});
     }
     return true;
 }
@@ -342,8 +377,10 @@ void Dialogs::pumpAsync() {
             ++it;
         }
     }
-    for (auto& d : ready)
+    for (auto& d : ready) {
+        if (d.ok) notePicked(d.picked);
         if (d.done) d.done(d.ok, std::move(d.picked), std::move(d.refusal));
+    }
 }
 
 std::vector<std::string> Dialogs::pickFiles(const std::string& accept, bool allowMultiple) {

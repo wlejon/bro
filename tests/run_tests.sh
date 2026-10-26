@@ -157,6 +157,10 @@ else
 fi
 
 TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
+# The capabilities a JS test's run is granted (src/engine/capabilities.cpp's
+# catalogue): those a user decides, and those only a host can grant.
+ASK_GRANTS="files,net,spawn,mic,wl,displays,clip,pulse,remote,sys.power,sys.audio,sys.network,sys.bluetooth,sys.notifications,sys.tray,sys.processes"
+SHELL_GRANTS="shell,compositor,seat,cred,portal,permissions"
 
 # --- Staleness gate ---------------------------------------------------------
 # Refuse to run if any source file is newer than the selected binary. Fails
@@ -536,10 +540,15 @@ run_one_test() {
 
     local TEST_APP_FOR_RUN="$TEST_APP"
     local EXTRA_ENV=()
+    # The test app declares nothing, so what a test may reach is what this
+    # run grants it as its host: every capability a user could allow, so the
+    # suite exercises the APIs themselves (tests/permissions/ checks the gates,
+    # in child runs of its own). The desktop groups test the shell's
+    # namespaces, which only a host can grant, so they get those as well.
+    local GRANTS="$ASK_GRANTS"
     case "$REL" in
         compositor/*|cred/*|displays/*|portal/*|seat/*|sys/*|wl/*)
-            TEST_APP_FOR_RUN="$(to_win_path "$SCRIPT_DIR/desktop_trust/trusted_app")"
-            EXTRA_ENV+=( "BRO_TRUSTED_APP_DIR=$TEST_APP_FOR_RUN" )
+            GRANTS="$ASK_GRANTS,$SHELL_GRANTS"
             ;;
     esac
     # The shell-host tests run the DRM shell host's compositor headless, with
@@ -561,7 +570,7 @@ run_one_test() {
             ;;
     esac
 
-    local EXTRA_TEST_ARGS=()
+    local EXTRA_TEST_ARGS=( "--grant" "$GRANTS" )
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
         EXTRA_TEST_ARGS+=( "--no-gpu" )
     fi

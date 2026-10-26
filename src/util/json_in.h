@@ -1,8 +1,9 @@
 #pragma once
 
 // bro's JSON reader, the counterpart of json_out.h, for what the engine reads
-// itself without a JSON library: bro.json and permissions.json before any JS
-// realm exists (engine/app_manifest.cpp), a service's reply (a Hugging Face
+// itself without a JSON library: bro.json and the grant store before any JS
+// realm exists (engine/app_manifest.cpp, engine/grant_store.cpp), a service's
+// reply (a Hugging Face
 // tree listing, util/model_fetch.h). Parses RFC 8259 JSON into a JsonValue
 // tree; numbers are doubles, strings are UTF-8 (\u escapes, surrogate pairs
 // included); a repeated key keeps its last value, as JSON.parse does.

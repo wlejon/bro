@@ -21,6 +21,7 @@
 #include "dom/event_dispatch.h"
 #include "util/asset_path.h"
 #include "util/exe_dir.h"
+#include "util/model_dirs.h"
 #include "util/user_dirs.h"
 
 #include <algorithm>
@@ -192,9 +193,7 @@ void Engine::construct(const EngineConfig& config) {
     installHostBindings_ = config.installHostBindings;
     installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
-    desktopTrust_ = evaluateDesktopTrust(config.appDir, config.appId.empty() ? appIdFor(config.manifest, config.appDir)
-                                                                             : config.appId,
-                                         config.isShellApp, config.privilegedNamespaces);
+    if (!config.manifestError.empty()) throw std::runtime_error(config.manifestError);
     // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
     bronze_host::applyJitTierOverride();
     // CSS animations are Web Animations records (css_transitions.h).
@@ -240,6 +239,27 @@ void Engine::construct(const EngineConfig& config) {
     settings_->defineEngineAction("system_reload_app",
                                   watchSources_ ? std::vector<std::string>{"F5"} : std::vector<std::string>{});
     settings_->applyAppOverrides(config.graphics, config.input);
+
+    // === What the app may do (app_permissions.h) ===
+    // Before any realm exists: every check from the first script on reads it.
+    {
+        PermissionsSetup perms;
+        perms.appDir = config.appDir;
+        perms.appId = config.appId.empty() ? appIdFor(config.manifest, config.appDir) : config.appId;
+        perms.appName = config.manifest.name;
+        perms.declared = config.manifest.permissions;
+        perms.hostGrants = config.hostGrants;
+        perms.dirs = appDirsFor(perms.appId);
+        for (const auto& [prefix, dir] : assetMounts_.mounts()) perms.readRoots.push_back(dir);
+        for (const std::string& d : util::modelDirs(settings_->getString("models.dirs")))
+            perms.readRoots.push_back(d);
+        appPermissions().configure(perms);
+        // The powerbox: a file or folder picked in bro's own dialogs is the
+        // app's to read and write.
+        platform::Dialogs::setPickHook([](const std::vector<std::string>& paths) {
+            appPermissions().grantPicked(paths);
+        });
+    }
 
     auto& gfx = settings_->graphics();
     auto& inp = settings_->input();

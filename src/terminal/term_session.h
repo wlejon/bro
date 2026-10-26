@@ -72,6 +72,17 @@ struct SpawnOptions {
 // cmd.exe) on Windows, $SHELL (else /bin/sh) elsewhere.
 std::string defaultShell();
 
+// The host's say over a terminal starting a program or taking over a running
+// session: the app's `spawn` capability (engine/app_permissions.h). The gate
+// answers "" to allow, else the sentence spawn fails with. It lives here, at
+// the PTY and the session attach, rather than in the element's binding, so no
+// path to a child process goes around it. Set once by the host, on the main
+// thread; with none set, everything is allowed.
+using SpawnGate = std::function<std::string(const std::string& what)>;
+void setSpawnGate(SpawnGate gate);
+// The gate's answer for `what` ("" with none set).
+std::string checkSpawnGate(const std::string& what);
+
 class TermSession {
 public:
     static constexpr std::chrono::milliseconds kSyncTimeout{200};

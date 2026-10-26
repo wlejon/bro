@@ -44,10 +44,8 @@ function run() {
     const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
 
     const baseEnv = { ...process.env };
-    delete baseEnv.BRO_TRUSTED_APP_DIR;
-    delete baseEnv.BRO_TRUST_ALL;
+    // Also where bro's grant store is: never the user's own grants.
     baseEnv.BRO_APP_HOME = path.join(scratch, 'home');
-    baseEnv.BRO_PERMISSIONS_FILE = path.join(scratch, 'no-permissions.json');
     baseEnv.SDL_VIDEODRIVER = 'offscreen';
     baseEnv.SDL_AUDIODRIVER = 'dummy';
 

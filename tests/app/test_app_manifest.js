@@ -1,7 +1,7 @@
 // The app manifest and runtime (docs/apps.md, docs/app-api.js): bro.json's
 // identity and desktop keys reach bro.app, the per-app directories are keyed
-// by the id, an anonymous app gets its folder's name, privileged namespaces
-// stay stubs unless the user grants them, and `bro --desktop-entry` /
+// by the id, an anonymous app gets its folder's name, gated namespaces stay
+// stubs until the app is granted their capability, and `bro --desktop-entry` /
 // `--install` turn the folder into a FreeDesktop application.
 //
 // Each case runs the fixture app in a child bro-headless with a scratch
@@ -25,11 +25,9 @@ fs.mkdirSync(scratch, { recursive: true });
 
 function scratchEnv(extra) {
     const env = { ...process.env };
-    delete env.BRO_TRUSTED_APP_DIR;
+    // Each case names its own BRO_APP_HOME, which also holds bro's grant
+    // store: never the user's own grants.
     delete env.BRO_APP_HOME;
-    delete env.BRO_TRUST_ALL;
-    // Not the user's own grants (a development machine may grant everything).
-    env.BRO_PERMISSIONS_FILE = path.join(scratch, 'no-permissions.json');
     return { ...env, ...(extra || {}) };
 }
 
@@ -72,8 +70,8 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
     assert(m.actions.length === 1 && m.actions[0].id === 'new-window' &&
         JSON.stringify(m.actions[0].args) === '["--new-window"]', 'actions (the malformed one skipped): ' +
         JSON.stringify(m.actions));
-    assert(JSON.stringify(a.permissions.requested) === '["remote","compositor"]', 'permissions.requested');
-    assert(a.permissions.granted.length === 0 && a.permissions.shell === false, 'nothing granted by asking');
+    assert(JSON.stringify(a.permissions.declared) === '["remote","compositor"]', 'permissions.declared');
+    assert(a.permissions.granted.length === 0, 'nothing granted by declaring: ' + JSON.stringify(a.permissions));
 }
 
 // ---- per-app directories ------------------------------------------------------
@@ -142,30 +140,22 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
             'catch (e) { return e.message; } })()', home);
         assert(msg.indexOf(r.r) >= 0, 'a call into bro.' + name + ' throws the reason: ' + msg);
     }
-    // The manifest asks; asking alone is refused.
-    const asked = probe(fixture, '({remote: ' + ns('remote').slice(1, -1) + ', granted: bro.app.permissions.granted})', home);
-    assert(asked.remote.a === false && asked.granted.length === 0, 'asking grants nothing: ' + JSON.stringify(asked));
+    // The manifest declares remote, which is then the user's to decide (a
+    // headless run nobody answers decides nothing), and compositor, which
+    // only a host grants.
+    const asked = probe(fixture, '({remote: ' + ns('remote').slice(1, -1) + ', p: bro.app.permissions})', home);
+    assert(asked.remote.a === false && asked.p.granted.length === 0, 'declaring grants nothing: ' + JSON.stringify(asked));
+    assert(asked.p.undecided.indexOf('remote') >= 0, 'remote is undecided: ' + JSON.stringify(asked.p));
+    assert(asked.p.denied.indexOf('compositor') >= 0, 'compositor is denied: ' + JSON.stringify(asked.p));
 
-    // The user's permissions file grants `remote` to this id, and only what
-    // the app asked for (compositor is asked for but not granted; sys is
-    // granted but not asked for).
-    // The file: %APPDATA%\bro, $XDG_CONFIG_HOME/bro, ~/Library/Application Support/bro.
-    const cfg = path.join(scratch, 'usercfg');
-    const mac = process.platform === 'darwin';
-    const permDir = mac ? path.join(cfg, 'Library', 'Application Support', 'bro') : path.join(cfg, 'bro');
-    fs.mkdirSync(permDir, { recursive: true });
-    fs.writeFileSync(path.join(permDir, 'permissions.json'),
-        JSON.stringify({ 'org.bro.test.ManifestApp': ['remote', 'sys'] }));
-    // BRO_PERMISSIONS_FILE emptied: the platform's own location, under cfg.
-    const grantEnv = { ...home, BRO_PERMISSIONS_FILE: '', ...(isWin ? { APPDATA: cfg } : mac ? { HOME: cfg } : { XDG_CONFIG_HOME: cfg }) };
+    // The host grants remote (tests/permissions/ covers the user's grants).
     const g = probe(fixture, '({remote: bro.remote.available, reason: bro.remote.reason, comp: bro.compositor.available, ' +
-        'sys: bro.sys.available, granted: bro.app.permissions.granted})', grantEnv);
-    assert(JSON.stringify(g.granted) === '["remote"]', 'the user granted remote: ' + JSON.stringify(g));
+        'granted: bro.app.permissions.granted})', home, ['--grant', 'remote']);
+    assert(JSON.stringify(g.granted) === '["remote"]', 'the host granted remote: ' + JSON.stringify(g));
     if (g.remote === false) {
         assert(/compiled without/.test(g.reason), 'bro.remote is unavailable only because it is compiled out: ' + g.reason);
     }
     assert(g.comp === false, 'compositor, not granted, stays a stub');
-    assert(g.sys === false, 'sys, granted but not asked for, stays a stub');
 }
 
 // ---- an app inside a project ---------------------------------------------------

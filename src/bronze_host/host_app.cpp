@@ -7,7 +7,8 @@
 //   bro.app.logFile                         where stdout/stderr go ("" for none)
 //   bro.app.singleInstance                  this process owns the instance channel
 //   bro.app.manifest                        the declared desktop keys
-//   bro.app.permissions                     { requested, granted, shell }
+//   bro.app.permissions                     { declared, granted, denied, undecided }
+//   bro.app.requestPermission(name)         ask for a declared capability now
 //   bro.app.spawn(args, {newInstance})      start another process of this app
 //   bro.app.open(id, args, {newInstance})   start another app, found by id
 //   bro.app.find(id)                        where open(id) would find it
@@ -22,6 +23,7 @@
 #include "bronze_host/host_values.h"
 #include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/capabilities.h"
 #include "engine/config_loader.h"
 #include "engine/engine.h"
 #include "platform/desktop_notifications.h"
@@ -453,23 +455,46 @@ Value makeBroAppValue() {
         o.set("manifest", man.get());
     }
 
-    {
+    // permissions -> { declared, granted, denied, undecided }: read afresh,
+    // since an answer to a prompt changes it while the app runs
+    // (engine/app_permissions.h).
+    o.accessor("permissions", [](Value, std::span<const Value>) -> Value {
+        const engine::PermissionsReport r = engine::appPermissions().report();
         ObjectBuilder perms;
-        auto* eng = hostEngine();
-        std::vector<std::string> granted;
-        for (const auto& ns : m.permissions)
-            if (eng && eng->hasPrivilege(ns)) granted.push_back(ns);
-        { ev::Persistent v(strings(m.permissions)); perms.set("requested", v.get()); }
-        { ev::Persistent v(strings(granted)); perms.set("granted", v.get()); }
-        perms.set("shell", ev::fromBool(eng && eng->isShellApp()));
-        o.set("permissions", perms.get());
-    }
+        { ev::Persistent v(strings(r.declared)); perms.set("declared", v.get()); }
+        { ev::Persistent v(strings(r.granted)); perms.set("granted", v.get()); }
+        { ev::Persistent v(strings(r.denied)); perms.set("denied", v.get()); }
+        { ev::Persistent v(strings(r.undecided)); perms.set("undecided", v.get()); }
+        return perms.get();
+    }, nullptr);
+
+    // requestPermission(name) -> Promise<boolean>: ask for a declared
+    // capability now, rather than at its first use. Asked on the main thread
+    // with bro's own dialog; an undeclared or shell capability answers false
+    // without asking, as one already decided answers its decision.
+    o.def("requestPermission", 1, [](Value, std::span<const Value> a) -> Value {
+        ev::Persistent promise(ev::createPromise());
+        const std::string cap = hasArg(a, 0) && ev::isString(a[0]) ? ev::toUtf8(a[0]) : std::string();
+        if (!engine::findCapability(cap)) {
+            ev::Persistent err(makeErrorValue("bro.app.requestPermission: \"" + cap +
+                                              "\" is not a capability (they are: " +
+                                              engine::capabilityNameList() + ")"));
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        }
+        const bool granted = engine::appPermissions().request(cap);
+        ev::resolvePromise(promise.get(), ev::fromBool(granted));
+        return promise.get();
+    });
 
     // spawn(args = [], {newInstance}) -> bool: another process of this app,
     // detached, from this app's working directory. With newInstance, it skips
-    // the single-instance hand-off and opens a window of its own.
+    // the single-instance hand-off and opens a window of its own. Starting a
+    // process is the `spawn` capability's, whatever the process is.
     o.def("spawn", 2, [](Value, std::span<const Value> a) -> Value {
         const engine::AppRuntimeInfo& app = engine::currentApp();
+        if (std::string refused = engine::appPermissions().use("spawn", "bro.app.spawn"); !refused.empty())
+            return ev::throwError(refused);
         auto* eng = hostEngine();
         if (eng && eng->displayMode() == engine::DisplayMode::Headless) return ev::fromBool(false);
         std::vector<std::string> argv{exePath()};
@@ -517,6 +542,14 @@ Value makeBroAppValue() {
             return promise.get();
         }
         const std::string id = ev::toUtf8(a[0]);
+        // The other app runs under its own grants, but with arguments this
+        // one chose, which can steer what that app does with them: starting
+        // it is a process start like any other, the `spawn` capability's.
+        if (std::string refused = engine::appPermissions().use("spawn", "bro.app.open(" + id + ")"); !refused.empty()) {
+            ev::Persistent err(makeErrorValue(refused));
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        }
         std::vector<std::string> extra = hasArg(a, 1) ? readStrings(a[1]) : std::vector<std::string>{};
         bool newInstance = false;
         if (hasArg(a, 2) && ev::isObject(a[2])) newInstance = ev::toBool(ev::getProperty(a[2], "newInstance"));

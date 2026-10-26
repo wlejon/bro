@@ -48,4 +48,9 @@ void publishLaunchEnv(EngineConfig& config);
 /// or -1 when `args` is not an app-management command.
 int runAppCommand(const std::vector<std::string>& args);
 
+/// `bro --permissions [<id|dir>]`, `--grant-app <id|dir> <cap>`,
+/// `--revoke-app <id|dir> <cap>`, `--dev-mode on|off`: the grant store
+/// (grant_store.h). runAppCommand hands these over; `args[0]` is the command.
+int runPermissionsCommand(const std::vector<std::string>& args);
+
 } // namespace bro::engine

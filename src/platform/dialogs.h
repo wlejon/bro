@@ -81,6 +81,19 @@ public:
     /// Headless exposes this as `setDialogAnswer()`.
     static void setAutoDialogAnswer(bool accept);
 
+    /// Called on the main thread with the paths every file, folder and save
+    /// dialog (sync, async, `<input type=file>`) answered with, before the
+    /// caller sees them: the engine grants them to the app (the powerbox,
+    /// engine/app_permissions.h).
+    using PickHook = std::function<void(const std::vector<std::string>& paths)>;
+    static void setPickHook(PickHook hook);
+
+    /// Ask the user whether the app may have a capability: OK / Cancel.
+    /// nullopt when there is no answer: no message box could be shown, or a
+    /// headless run whose script never chose one with setDialogAnswer() (an
+    /// unanswered prompt is a deny the caller does not keep).
+    static std::optional<bool> askPermission(const std::string& message);
+
     static void showAlert(const std::string& message);
     static bool showConfirm(const std::string& message);
     /// Answers the default text, or nullopt for a cancel — prompt's two

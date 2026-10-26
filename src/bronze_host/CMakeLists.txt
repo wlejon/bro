@@ -117,6 +117,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_app.cpp
     host_notification.cpp
     host_bro_root.cpp
+    host_permissions.cpp
     native_tables.cpp
     host_sibling_apis.cpp
     native_time.cpp

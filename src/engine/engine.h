@@ -2,7 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
-#include "engine/desktop_trust.h"
+#include "engine/app_permissions.h"
 #include "engine/device_scale.h"
 #include "engine/scroll_layers.h"
 #include "engine/engine_config.h"
@@ -589,9 +589,11 @@ public:
         bool moduleFile = false;
     };
     std::vector<PageScriptUnit> pageScriptUnits() const;
-    const DesktopTrustInfo& desktopTrust() const { return desktopTrust_; }
-    bool isShellApp() const { return desktopTrust_.isShell; }
-    bool hasPrivilege(const std::string& ns) const { return desktopTrust_.hasPrivilege(ns); }
+    /// The app is the desktop shell: it was granted the `shell` capability,
+    /// which only the host executable grants (app_permissions.h).
+    bool isShellApp() const { return appPermissions().granted("shell"); }
+    /// Whether the app holds `cap` (capabilities.h) now, without asking.
+    bool hasCapability(std::string_view cap) const { return appPermissions().granted(cap); }
     const std::function<void(Engine&)>& installHostBindings() const { return installHostBindings_; }
     const std::function<void()>& installWorkerHostBindings() const { return installWorkerHostBindings_; }
     /// Engine-supplied virtual path prefixes (`/app`, `/lib`, `/system`, ...),
@@ -1175,7 +1177,6 @@ private:
 
     AppManifest manifest_;
     std::string appDir_;
-    DesktopTrustInfo desktopTrust_;
     std::string titleOverride_;
     std::string fallbackTitle_ = "Bro";   // the window's title while the page has none
     void applyWindowIcon(const EngineConfig& config);

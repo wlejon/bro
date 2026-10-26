@@ -74,7 +74,6 @@ enum class AppModuleStatus {
     AbiMismatch,         ///< a bronze module, compiled against a different ABI
     NoEntryPoint,        ///< stamped, but exports no `bronze_main`
     MissingHostGlobals,  ///< stamped, but requires host globals missing from this runtime
-    UntrustedApplet,     ///< failed eBPF-style applet certificate or capability manifest verification
 };
 
 struct AppModuleResult {
@@ -87,6 +86,17 @@ struct AppModuleResult {
     /// The Bronze GC module handle for this app module (0 if not loaded/ran).
     bronze::embed::ModuleHandle moduleHandle{0};
 };
+
+/// Verify the `<entry>_host_globals` manifest exported by `handle` against the
+/// calling thread's runtime (`bronze::embed::globalValue(name).found`).
+/// Populates `describedOut` (if non-null) with the comma-separated list of
+/// declared globals (or "none" / "none declared"). Returns true when all
+/// declared globals exist on the runtime; returns false and sets `errorOut` to
+/// `"host globals missing from runtime: <names>"` if any are missing. This is
+/// the module's ABI check, not a grant: what the app may do is decided by its
+/// capabilities (engine/capabilities.h) where the power is exercised.
+bool verifyHostGlobals(ModuleHandle handle, std::string& errorOut,
+                       std::string* describedOut = nullptr);
 
 /// Load `modulePath`, verify it, install the web host globals on `engine`,
 /// and run the compiled top level — the sequence
@@ -101,24 +111,6 @@ struct AppModuleResult {
 /// be detached on app reload via `unloadAppModule()`. The underlying OS
 /// shared library image is never dlclosed/FreeLibrary-freed because surviving
 /// heap function objects may hold code pointers into its .text.
-/// Verify the `<entry>_host_globals` manifest exported by `handle` against the
-/// calling thread's runtime (`bronze::embed::globalValue(name).found`).
-/// Populates `describedOut` (if non-null) with the comma-separated list of
-/// declared globals (or "none" / "none declared"). Returns true when all
-/// declared globals exist on the runtime; returns false and sets `errorOut` to
-/// `"host globals missing from runtime: <names>"` if any are missing.
-bool verifyHostGlobals(ModuleHandle handle, std::string& errorOut,
-                       std::string* describedOut = nullptr);
-
-/// Compute the 64-bit FNV-1a hex digest of `filePath` (used by `.cert.json` moduleHash).
-std::string computeModuleFileHash(const std::string& filePath, bool* okOut = nullptr);
-
-/// Verify the `<appDir>/app.cert.json` (or `<module_stem>.cert.json`) proof certificate
-/// and `<appDir>/bro.json` capability manifest against `modulePath` and `handle`
-/// BEFORE `bronze_main` is allowed to execute.
-bool verifyAppletCertificate(const std::string& modulePath, ModuleHandle handle,
-                             std::string& errorOut);
-
 AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePath);
 
 /// Unload a bronze module handle previously returned from beginModuleLoad().

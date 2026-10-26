@@ -72,7 +72,10 @@ add_library(bro_engine STATIC
     app_manifest.cpp
     app_runtime.cpp
     config_loader.cpp
-    desktop_trust.cpp
+    capabilities.cpp
+    grant_store.cpp
+    app_permissions.cpp
+    permissions_cli.cpp
     launcher.cpp
     replaced_elements.cpp
     replaced_elements_input.cpp

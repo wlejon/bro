@@ -3,5 +3,6 @@
     "width": 640,
     "height": 480,
     "splash": false,
-    "compiled": true
+    "compiled": true,
+    "permissions": ["net"]
 }
