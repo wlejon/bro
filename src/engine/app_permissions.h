@@ -61,26 +61,70 @@ public:
 
     GrantState state(std::string_view cap) const;
     bool granted(std::string_view cap) const { return state(cap) == GrantState::Granted; }
+    /// Granted by the host executable: nothing in the store can take it back.
+    bool hostGranted(std::string_view cap) const;
 
     /// Use `cap` now, for `what` ("fetch https://example.com/"). "" when it is
-    /// granted, asking first when it is declared, undecided and this is the
-    /// main thread; otherwise the sentence the refusal throws with, naming
-    /// the app, the capability and `what`.
-    std::string use(std::string_view cap, const std::string& what);
+    /// granted, asking first when it is declared, undecided, `mayAsk` and
+    /// this is the main thread; otherwise the sentence the refusal throws
+    /// with, naming the app, the capability and `what`. A capability granted
+    /// earlier in this run and since taken back is refused with
+    /// bronze::embed::kPermissionRevokedPrefix before the sentence, which
+    /// makes the program's error a PermissionRevoked. Each granted use is
+    /// recorded as the capability's last use (usage below).
+    std::string use(std::string_view cap, const std::string& what, bool mayAsk = true);
 
     /// bro.app.requestPermission: ask now when undecided (main thread only);
     /// whether it is granted afterwards.
     bool request(std::string_view cap);
 
     /// "" when the app may read (or write) `path`, else the refusal.
-    std::string checkFs(const std::string& path, bool write);
+    std::string checkFs(const std::string& path, bool write, bool mayAsk = true);
+
+    /// process.env: "" when the app may read variable `name` ("" for the
+    /// whole listing). The variables that name the user, the locale and the
+    /// desktop, and where things are (envAlwaysVisible), need nothing; the
+    /// rest (where tokens and passwords live) need `env`.
+    std::string checkEnvRead(const std::string& name, bool mayAsk);
+    /// Changing the real environment needs `env`, and is never asked for: a
+    /// refused change stays in the app's own view of it (brokit).
+    std::string checkEnvWrite(const std::string& name);
 
     /// The powerbox: what the user picked or dropped is the app's to read and
     /// write (a folder, all under it), now and in later runs.
     void grantPicked(const std::vector<std::string>& paths);
 
+    /// Read the grant store again (it changed: `bro --revoke-app`, the
+    /// shell's bro.permissions.set, another process's prompt). What it no
+    /// longer grants is revoked from now on; true when anything this app may
+    /// do changed. The caller then has what is held open revalidated
+    /// (bronze::embed::accessChanged).
+    bool reload();
+
+    /// Whether the grant store's file changed since it was last read (its
+    /// size and modification time, one stat): what the main loop polls.
+    bool storeChanged();
+
+    /// Record, and write out, when each capability was last used
+    /// (grant_store.h, usage). Cheap to call every frame: it writes at most
+    /// every `minIntervalMs`, or at once when a capability was used for the
+    /// first time this run; `force` writes whatever is pending.
+    void flushUsage(bool force = false, double minIntervalMs = 60000.0);
+
+    /// The installed app's content no longer matches what `bro --install`
+    /// recorded (found after launch, by the background verification): its
+    /// decisions are forgotten in the store, so it asks again, and reload()
+    /// revokes them now. Main thread.
+    void installChanged(const std::string& actualHash);
+
     PermissionsReport report() const;
     const std::string& identity() const { return identity_; }
+    const std::string& installHash() const { return installHash_; }
+    const std::string& appDir() const { return appDir_; }
+    // Whether a bro.conf change (broconf's gate subject: "set <path>.<key>
+    // in the desktop settings", or "reset ...") is to the app's own settings,
+    // the section named by its id: always its to write, as its own folders are.
+    bool ownsConfChange(std::string_view subject) const;
     bool configured() const { return configured_; }
     bool onMainThread() const { return std::this_thread::get_id() == mainThread_; }
 
@@ -93,19 +137,44 @@ private:
     std::string refusal(std::string_view cap, const std::string& what, const std::string& reason) const;
     void persist(std::string_view cap, Decision d);
     bool underAny(const std::string& p, const std::vector<std::string>& roots) const;
+    // The store file's modification time and size; -1 when it is missing (or,
+    // for the last read, when that read failed and must be repeated).
+    struct StoreStamp {
+        long long mtime = -1, size = -1;
+    };
+    static StoreStamp stampStore();
+    void applyStore(const GrantStoreData& store, const StoreStamp& stamp);   // under mu_
+    void noteUse(std::string_view cap);             // under mu_
 
     mutable std::mutex mu_;
     bool configured_ = false;
     std::thread::id mainThread_;
     std::string identity_, appId_, appName_, appDir_;
+    std::string installHash_;   // what grants of an install attach to (install_record.h)
     std::vector<std::string> declared_, hostGrants_;
     std::map<std::string, Decision> decisions_;
     bool devMode_ = false;
+    // Capabilities granted at some point of this run: one refused now was
+    // revoked, and says so.
+    std::vector<std::string> everGranted_;
     // Canonical, comparable forms (canonicalPath below).
     std::vector<std::string> writeRoots_, readRoots_, picked_, protected_;
     std::string storeFile_;  // the grant store, canonical (canonicalPath)
     std::string home_;
+    std::string procSelf_;   // Linux: /proc/<pid>, this process's own
+    // The store file as stamped just before it was last read: what
+    // storeChanged compares.
+    StoreStamp store_;
+    // Last use per capability (ms since the epoch), and what is not written yet.
+    std::map<std::string, double> lastUsed_;
+    bool usagePending_ = false, usageUrgent_ = false;
+    double usageWrittenAt_ = 0.0;
 };
+
+/// Environment variables every app sees without `env`: who the user is, the
+/// locale and time zone, the terminal and the desktop session, and where the
+/// standard folders are. Nothing that holds a credential.
+bool envAlwaysVisible(std::string_view name);
 
 /// The process's one instance.
 AppPermissions& appPermissions();

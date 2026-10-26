@@ -7,6 +7,7 @@
 #include "engine/grant_store.h"
 #include "engine/launcher.h"
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 
@@ -21,22 +22,39 @@ int permissionsUsage() {
         "usage: bro --permissions [<id | app-dir>]\n"
         "       bro --grant-app <id | app-dir> <capability>\n"
         "       bro --revoke-app <id | app-dir> <capability>\n"
+        "       bro --reset-app <id | app-dir>\n"
         "       bro --dev-mode on|off\n"
         "capabilities: %s\n", capabilityNameList().c_str());
     return 2;
 }
 
+std::string ago(double epochMs) {
+    const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::system_clock::now().time_since_epoch())
+                                               .count());
+    const double s = (now - epochMs) / 1000.0;
+    char buf[64];
+    if (s < 120) std::snprintf(buf, sizeof buf, "used %.0f s ago", s < 0 ? 0 : s);
+    else if (s < 7200) std::snprintf(buf, sizeof buf, "used %.0f min ago", s / 60);
+    else if (s < 172800) std::snprintf(buf, sizeof buf, "used %.0f h ago", s / 3600);
+    else std::snprintf(buf, sizeof buf, "used %.0f days ago", s / 86400);
+    return buf;
+}
+
 void printEntry(const AppPermissionsEntry& e) {
-    std::printf("%s\t%s\t%s%s\n", e.identity.c_str(), e.id.c_str(), e.dir.c_str(),
-                e.installed ? " (installed)" : "");
+    std::printf("%s\t%s\t%s%s%s\n", e.identity.c_str(), e.id.c_str(), e.dir.c_str(),
+                e.installed ? " (installed" : "",
+                e.installed ? (e.install.empty() ? ")" : (", " + e.install + ")").c_str()) : "");
     // Every declared capability, decided or not, then any decision the
     // manifest no longer declares (kept, but it grants nothing).
     for (const std::string& cap : e.declared) {
         auto it = e.decisions.find(cap);
         const Capability* c = findCapability(cap);
-        std::printf("  %-18s %-10s %s\n", cap.c_str(),
+        auto used = e.lastUsed.find(cap);
+        std::printf("  %-18s %-10s %s%s\n", cap.c_str(),
                     it == e.decisions.end() ? "undecided" : decisionName(it->second),
-                    c && c->kind == CapabilityKind::Shell ? "(host only)" : "");
+                    c && c->kind == CapabilityKind::Shell ? "(host only)" : "",
+                    used == e.lastUsed.end() ? "" : ago(used->second).c_str());
     }
     for (const auto& [cap, d] : e.decisions) {
         bool declared = false;
@@ -104,6 +122,17 @@ int runPermissionsCommand(const std::vector<std::string>& args) {
             std::fprintf(stderr, "bro: %s\n", err.c_str());
         }
         printEntry(e);
+        return 0;
+    }
+    if (cmd == "--reset-app") {
+        if (args.size() != 2) return permissionsUsage();
+        std::string identity, dir;
+        if (!target(args[1], identity, dir)) return 1;
+        if (!resetAppPermissions(identity, &err)) {
+            std::fprintf(stderr, "bro: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("%s: every decision and picked path forgotten; it asks again\n", identity.c_str());
         return 0;
     }
     // --grant-app / --revoke-app

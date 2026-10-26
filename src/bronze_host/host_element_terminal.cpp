@@ -19,8 +19,11 @@
 #include "engine/terminal_layers.h"
 #include "layout/el_terminal.h"
 
+#include "embed/embed_access.h"
+
 #include <cmath>
 #include <cwchar>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,6 +41,36 @@
 namespace bro::bronze_host {
 
 namespace {
+
+// A terminal's program runs under the app's `spawn` grant (the terminal's
+// spawn gate asked it at start): held in the access gate's ledger, by the
+// terminal's process-unique id, so taking the grant back while it runs
+// (embed_access.h, revalidateHeldAccess) ends it with ElTerminal::revoke.
+// Entries for terminals gone or no longer running are let go at the next
+// start.
+std::map<uint64_t, ev::HeldAccessId>& terminalHolds() {
+    static std::map<uint64_t, ev::HeldAccessId> holds;
+    return holds;
+}
+
+void holdTerminal(layout::ElTerminal& t, const std::string& what) {
+    auto& holds = terminalHolds();
+    for (auto it = holds.begin(); it != holds.end();) {
+        layout::ElTerminal* other = layout::ElTerminal::byId(it->first);
+        if (!other || !other->running() || other == &t) {
+            ev::releaseAccess(it->second);
+            it = holds.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (!ev::accessGateActive()) return;
+    const uint64_t id = t.layerId();
+    holds[id] = ev::holdAccess(ev::AccessKind::Spawn, what, [id](const std::string& refusal) {
+        terminalHolds().erase(id);
+        if (layout::ElTerminal* term = layout::ElTerminal::byId(id)) term->revoke(ev::refusalMessage(refusal));
+    });
+}
 
 struct WslDistribution {
     std::string name;
@@ -441,6 +474,8 @@ void decorateTerminalProto(ObjectBuilder& b) {
             if (auto* eng = hostEngine()) eng->flushLayoutForRead(st->el->document());
         if (!t->spawn(spec, &error))
             return ev::throwValue(hostMakeDomError("OperationError", "spawn(): " + error));
+        holdTerminal(*t, (spec.command.empty() ? layout::ElTerminal::defaultShell() : spec.command) +
+                             " in a terminal");
         return ev::fromDouble(double(t->pid()));
     });
     // attach(sessionId, {server}): show and drive a persistent session.
@@ -453,6 +488,7 @@ void decorateTerminalProto(ObjectBuilder& b) {
         std::string error;
         if (!t->attach(id, serverOf(a, 1), &error))
             return ev::throwValue(hostMakeDomError("OperationError", "attach(): " + error));
+        holdTerminal(*t, "terminal session " + std::to_string(id));
         return ev::undefined();
     });
     // detach(): let go of the persistent session; its program runs on.

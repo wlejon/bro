@@ -14,6 +14,8 @@ constexpr Capability kCatalogue[] = {
     {"net", K::Ask, "use the network"},
     {"spawn", K::Ask, "start programs and terminals, which run with all of your account's powers"},
     {"mic", K::Ask, "record from the microphone"},
+    {"env", K::Ask, "read and change your environment variables, where tokens and passwords often live"},
+    {"mpris", K::Ask, "see and control your media players, and publish one"},
     {"wl", K::Ask, "use Wayland desktop protocols (panels, window lists, screen capture)"},
     {"displays", K::Ask, "change display configuration and brightness"},
     {"clip", K::Ask, "read the clipboard history"},
@@ -52,9 +54,10 @@ const Capability* findCapability(std::string_view name) {
 std::string capabilityForNamespace(std::string_view ns) {
     // Only the capabilities that ARE a namespace: `shell` is a role, and
     // files, net, spawn and mic are exercised through many surfaces (checked
-    // where each is exercised), never as one bro.<name> object. bro.mic is
+    // where each is exercised), never as one bro.<name> object (env is
+    // process.env and /proc's environ files). bro.mic is
     // one of mic's surfaces, gated at the capture itself.
-    if (ns == "shell" || ns == "files" || ns == "net" || ns == "spawn" || ns == "mic") return {};
+    if (ns == "shell" || ns == "files" || ns == "net" || ns == "spawn" || ns == "mic" || ns == "env") return {};
     const Capability* c = findCapability(ns);
     return c ? std::string(c->name) : std::string();
 }

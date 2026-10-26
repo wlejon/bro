@@ -1,19 +1,26 @@
 // The app's capabilities (engine/app_permissions.h) where the bronze host
 // meets them:
 //
-//   - brokit's access policy: fs, child_process and the network ask the
-//     app's permissions at the native, before anything is opened, started or
-//     connected (installAccessPolicy);
-//   - the terminal's spawn gate (the PTY and the session attach);
-//   - the privileged bro.<namespace> objects and bro.sys's members: live,
-//     the unavailable stub, or a stub that asks on first touch
+//   - bronze's access gate (embed/embed_access.h): every native that reads or
+//     writes a path, starts a process, connects or listens, captures sound,
+//     reads the environment or the user's desktop configuration asks it, in
+//     brokit and in every sibling alike (installAccessPolicy);
+//   - the terminal's spawn gate and broaudio's engine-level capture gate,
+//     which sit below the embedding API;
+//   - the privileged bro.<namespace> objects and bro.sys's members: each a
+//     proxy that answers from the capability's state at every touch, so a
+//     grant given or taken back while the app runs takes effect at once
 //     (installGatedNamespaces);
+//   - the grant store's watch: a change made by another process (`bro
+//     --revoke-app`, the shell's bro.permissions.set) is read within a
+//     quarter second, what it took back is revoked, and what is held open
+//     under it is closed (installPermissionsPump);
 //   - bro.permissions, the shell's view of every app's grants.
 //
 // The privileged namespaces' sibling natives are reached only through the
 // namespace object: none registers a __bro_native entry or a global of its
-// own. So the object put in a namespace's place is the gate there. An app
-// that was never handed the live object has no reference to it to keep.
+// own. So the proxy put in a namespace's place is the gate there. An app that
+// was never handed the live object has no reference to it to keep.
 
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"
@@ -21,32 +28,26 @@
 #include "bronze_host/host_proxy.h"
 #include "engine/app_permissions.h"
 #include "engine/capabilities.h"
+#include "engine/engine.h"
 #include "engine/grant_store.h"
+#include "engine/install_record.h"
 #if BRO_WITH_TERMINAL
 #include "terminal/term_session.h"
 #endif
 #include "util/log.h"
+#include "util/time.h"
 #if BRO_WITH_AUDIO
 #include <broaudio/capture_gate.h>
 #endif
-#if BRO_WITH_SEARCH
-#include <brosearch/api.h>
-#endif
-#if BRO_WITH_APPS
-#include <broapps/api.h>
-#endif
-#if BRO_WITH_VFS
-#include <brovfs/api.h>
-#endif
-#if BRO_WITH_THUMB
-#include <brothumb/api.h>
-#endif
 
-#include "api/api.h"  // brokit::api::setAccessPolicy
+#include "embed/embed_access.h"
 
 #include <algorithm>
+#include <atomic>
+#include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -59,81 +60,119 @@ using engine::GrantState;
 // A function that throws `message` whatever it is called with.
 Value throwingFunction(const std::string& message) {
     return ev::makeFunction([message](Value, std::span<const Value>) -> Value {
-        return ev::throwError(message);
+        return ev::throwAccessError(message);
     }, 0);
 }
 
-// `fn` called with `self` as its receiver, whatever receiver the caller
-// used: what the asking stub hands out, since a member read off the stub is
-// then called with the stub as `this`.
-Value boundTo(const std::shared_ptr<ev::Persistent>& self, Value fnIn) {
-    auto fn = std::make_shared<ev::Persistent>(fnIn);
-    return ev::makeFunction([self, fn](Value, std::span<const Value> args) -> Value {
-        ev::CallResult r = ev::call(fn->get(), self->get(), args);
-        if (r.thrown) return ev::throwValue(r.value);
-        return r.value;
-    }, 0);
-}
+// ---- the gated namespaces ------------------------------------------------------
 
 // One gated member: `holder[key]` is where it lives (bro.wl is bro["wl"],
 // bro.sys.processes is the sys object's "processes").
 struct Gate {
     std::string path;   // "wl", "sys.processes": also its capability's name
-    std::string key;
-    std::shared_ptr<ev::Persistent> holder;
     std::shared_ptr<ev::Persistent> live;
+    // Functions read off the live namespace, wrapped once each: a wrapper
+    // asks again at every call, so one kept from before a revocation is
+    // refused after it.
+    std::map<std::string, std::shared_ptr<ev::Persistent>> wrapped;
 };
 
-void putInHolder(const Gate& g, Value v) {
-    ev::Persistent value(v);
-    g.holder->set(ev::setProperty(g.holder->get(), g.key, value.get()));
+// `fn` (read off the live namespace as `key`) called with the live namespace
+// as its receiver, while the capability is granted.
+Value gatedFunction(const std::shared_ptr<Gate>& g, const std::string& key, Value fnIn) {
+    auto fn = std::make_shared<ev::Persistent>(fnIn);
+    const std::string what = "bro." + g->path + "." + key;
+    return ev::makeFunction([g, fn, what](Value, std::span<const Value> args) -> Value {
+        const std::string refused = appPermissions().use(g->path, what);
+        if (!refused.empty()) return ev::throwAccessError(refused);
+        ev::CallResult r = ev::call(fn->get(), g->live->get(), args);
+        if (r.thrown) return ev::throwValue(r.value);
+        return r.value;
+    }, 0);
 }
 
-// The stand-in for a declared, undecided namespace: its first touch asks.
-// Allowed, the live namespace takes its place and the touch is answered from
-// it; denied, the unavailable stub does. Unanswered (a headless run that set
-// no answer), the touch is refused and the next one asks again.
-Value makeAskingNamespace(const Gate& gate) {
-    auto g = std::make_shared<Gate>(gate);
+Value liveKeys(Value obj) {
+    ev::Persistent target(obj);
+    ev::GlobalValue objectCtor = ev::globalValue("Object");
+    if (!objectCtor.found) return ev::makeArray(0);
+    ev::Persistent ctor(objectCtor.value);
+    ev::Persistent keysFn(ev::getProperty(ctor.get(), "keys"));
+    const Value args[1] = {target.get()};
+    ev::CallResult r = ev::call(keysFn.get(), ctor.get(), std::span<const Value>(args, 1));
+    return r.thrown ? ev::makeArray(0) : r.value;
+}
+
+// The namespace's stand-in. At every touch it asks the capability's state:
+// granted, the touch reaches the live namespace (each function wrapped to
+// ask again when called); undecided, the touch asks the user first; denied
+// or revoked, it is the unavailable stub (available false, reason why, every
+// function throwing it).
+Value makeGatedNamespace(const std::string& cap, Value live) {
+    auto g = std::make_shared<Gate>();
+    g->path = cap;
+    g->live = std::make_shared<ev::Persistent>(live);
     HostProxyTraps traps;
     traps.get = [g](const std::string& key, Value& out) -> bool {
         const std::string refused = appPermissions().use(g->path, "bro." + g->path + "." + key);
         if (refused.empty()) {
-            putInHolder(*g, g->live->get());
             Value v = ev::getProperty(g->live->get(), key);
-            out = ev::isFunction(v) ? boundTo(g->live, v) : v;
+            if (key == "available" && ev::isUndefined(v)) {
+                out = ev::fromBool(true);
+            } else if (ev::isFunction(v)) {
+                auto& slot = g->wrapped[key];
+                if (!slot) {
+                    ev::Persistent keep(v);
+                    slot = std::make_shared<ev::Persistent>(gatedFunction(g, key, keep.get()));
+                }
+                out = slot->get();
+            } else {
+                out = v;
+            }
             return true;
         }
-        if (appPermissions().state(g->path) == GrantState::Denied) {
-            ev::Persistent stub(makeUnavailableNamespace(g->path, refused));
-            putInHolder(*g, stub.get());
-        }
         if (key == "available") out = ev::fromBool(false);
-        else if (key == "reason") out = ev::fromUtf8(refused);
-        else out = throwingFunction("bro." + g->path + "." + key + ": " + refused);
+        else if (key == "reason") out = ev::fromUtf8(ev::refusalMessage(refused));
+        else out = throwingFunction(refused);
         return true;
     };
-    traps.has = [](const std::string& key) -> bool { return key == "available" || key == "reason"; };
-    traps.ownKeys = []() -> std::vector<std::string> { return {"available", "reason"}; };
+    traps.set = [g](const std::string& key, Value v) {
+        // A handler assigned (bro.clip.onchange = f) lands on the live
+        // namespace only while granted; refused, it is dropped.
+        if (!appPermissions().use(g->path, "bro." + g->path + "." + key, /*mayAsk=*/false).empty()) return;
+        ev::Persistent value(v);
+        ev::setProperty(g->live->get(), key, value.get());
+    };
+    traps.has = [g](const std::string& key) -> bool {
+        if (key == "available" || key == "reason") return true;
+        if (!appPermissions().granted(g->path)) return false;
+        return !ev::isUndefined(ev::getProperty(g->live->get(), key));
+    };
+    traps.ownKeys = [g]() -> std::vector<std::string> {
+        std::vector<std::string> keys{"available"};
+        if (!appPermissions().granted(g->path)) {
+            keys.push_back("reason");
+            return keys;
+        }
+        ev::Persistent arr(liveKeys(g->live->get()));
+        const Value lenV = ev::getProperty(arr.get(), "length");
+        const uint32_t n = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            Value k = ev::getElement(arr.get(), i);
+            if (ev::isString(k) && ev::toUtf8(k) != "available") keys.push_back(ev::toUtf8(k));
+        }
+        return keys;
+    };
     return makeHostProxy(std::move(traps));
 }
 
-// holder[key] for capability `cap`: left live when granted, the asking stub
-// when undecided, the unavailable stub (saying why) when denied.
+// holder[key] for capability `cap`: left live when the host grants it (no
+// store, prompt or dev mode can take that back), the gated proxy otherwise.
 void gateMember(const std::shared_ptr<ev::Persistent>& holder, const std::string& key, const std::string& cap) {
-    Value live = ev::getProperty(holder->get(), key);
-    if (!ev::isObject(live)) return;
-    const GrantState st = appPermissions().state(cap);
-    if (st == GrantState::Granted) return;
-    Gate g{cap, key, holder, std::make_shared<ev::Persistent>(live)};
-    if (st == GrantState::Undecided) {
-        ev::Persistent asking(makeAskingNamespace(g));
-        putInHolder(g, asking.get());
-        return;
-    }
-    // Denied: use() asks nothing for a denied capability; it only words why.
-    ev::Persistent stub(makeUnavailableNamespace(cap, appPermissions().use(cap, {})));
-    putInHolder(g, stub.get());
+    ev::Persistent live(ev::getProperty(holder->get(), key));
+    if (!ev::isObject(live.get())) return;
+    if (appPermissions().hostGranted(cap)) return;
+    ev::Persistent gated(makeGatedNamespace(cap, live.get()));
+    holder->set(ev::setProperty(holder->get(), key, gated.get()));
 }
 
 // A namespace this build compiled out is already the unavailable stub; it
@@ -163,14 +202,15 @@ void gateSys(const std::shared_ptr<ev::Persistent>& bro) {
         copy(member);
         gateMember(sys, member, std::string("sys.") + member);
     }
-    // The process table's top-level aliases go with sys.processes.
+    // The process table's top-level aliases go with sys.processes, asking
+    // at each call.
     for (const char* alias : {"listProcesses", "killProcess"}) {
-        if (appPermissions().granted("sys.processes")) { copy(alias); continue; }
+        if (appPermissions().hostGranted("sys.processes")) { copy(alias); continue; }
         auto fn = std::make_shared<ev::Persistent>(ev::getProperty(live->get(), alias));
         const std::string what = std::string("bro.sys.") + alias;
         ev::Persistent wrapper(ev::makeFunction([fn, live, what](Value, std::span<const Value> args) -> Value {
             const std::string refused = appPermissions().use("sys.processes", what);
-            if (!refused.empty()) return ev::throwError(what + ": " + refused);
+            if (!refused.empty()) return ev::throwAccessError(refused);
             ev::CallResult r = ev::call(fn->get(), live->get(), args);
             if (r.thrown) return ev::throwValue(r.value);
             return r.value;
@@ -179,6 +219,47 @@ void gateSys(const std::shared_ptr<ev::Persistent>& bro) {
     }
     bro->set(ev::setProperty(bro->get(), "sys", sys->get()));
 }
+
+// ---- grant changes while the app runs -------------------------------------------
+
+// bro.permissions' 'change' listeners (main thread only).
+std::vector<std::shared_ptr<ev::Persistent>>& changeListeners() {
+    static auto* v = new std::vector<std::shared_ptr<ev::Persistent>>();
+    return *v;
+}
+
+// The store changed (read again by the caller's reload): revalidate what this
+// thread holds open, have every other thread do the same at its next turn,
+// and tell the shell's listeners.
+void afterGrantChange(bool appChanged) {
+    if (appChanged) {
+        bronze::embed::accessChanged();
+        bronze::embed::revalidateHeldAccess();
+    }
+    if (changeListeners().empty()) return;
+    const auto listeners = changeListeners();
+    for (const auto& fn : listeners) {
+        ev::Persistent evt(ev::createObject());
+        {
+            ev::Persistent type(ev::fromUtf8("change"));
+            evt.set(ev::setProperty(evt.get(), "type", type.get()));
+        }
+        const Value args[1] = {evt.get()};
+        ev::CallResult r = ev::call(fn->get(), ev::undefined(), std::span<const Value>(args, 1));
+        if (r.thrown) LOG_WARN("bro.permissions: a 'change' listener threw");
+    }
+}
+
+// A change this process made itself (bro.permissions.set and the rest): applied
+// now, not a quarter second later, so a script sees it on its next line.
+void applyOwnChange() { afterGrantChange(appPermissions().reload()); }
+
+// The background check of an installed app's content (install_record.h).
+struct InstallVerification {
+    std::thread worker;
+    std::atomic<bool> done{false};
+    std::string actual;   // written by the worker before `done`
+};
 
 // ---- bro.permissions -----------------------------------------------------------
 
@@ -193,6 +274,7 @@ Value entryValue(const engine::AppPermissionsEntry& e) {
     o.set("name", ev::fromUtf8(e.name));
     o.set("dir", ev::fromUtf8(e.dir));
     o.set("installed", ev::fromBool(e.installed));
+    o.set("install", ev::fromUtf8(e.install));
     { ev::Persistent v(stringsValue(e.declared)); o.set("declared", v.get()); }
     {
         // Every declared capability, decided or not, and any decision the
@@ -211,8 +293,29 @@ Value entryValue(const engine::AppPermissionsEntry& e) {
                 d.set(cap.c_str(), ev::fromUtf8(engine::decisionName(dec)));
         o.set("decisions", d.get());
     }
+    {
+        ObjectBuilder u;
+        for (const auto& [cap, t] : e.lastUsed) u.set(cap.c_str(), ev::fromDouble(t));
+        o.set("lastUsed", u.get());
+    }
     { ev::Persistent v(stringsValue(e.picked)); o.set("picked", v.get()); }
     return o.get();
+}
+
+// The identity `app` names (an identity, an installed app's id, an app
+// folder), or throws.
+bool resolveApp(std::span<const Value> a, const char* fn, std::string& identity, std::string& err) {
+    if (a.empty() || !ev::isString(a[0])) {
+        err = std::string("bro.permissions.") + fn + ": the first argument is the app (identity, id or folder)";
+        return false;
+    }
+    const std::string app = ev::toUtf8(a[0]);
+    identity = engine::resolveIdentityArg(app, engine::loadGrantStore());
+    if (identity.empty()) {
+        err = std::string("bro.permissions.") + fn + ": no app '" + app + "'";
+        return false;
+    }
+    return true;
 }
 
 Value makeBroPermissionsValue() {
@@ -230,6 +333,8 @@ Value makeBroPermissionsValue() {
     });
     // list() -> every installed app and every app the store knows.
     o.def("list", 0, [](Value, std::span<const Value>) -> Value {
+        // This process's own uses so far, so its entry is current too.
+        appPermissions().flushUsage(/*force=*/true);
         const std::vector<engine::AppPermissionsEntry> all = engine::listAppPermissions();
         return hostArrayOf(all.size(), [&all](size_t i) -> Value { return entryValue(all[i]); });
     });
@@ -238,19 +343,55 @@ Value makeBroPermissionsValue() {
     o.def("set", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !ev::isString(a[0]) || !ev::isString(a[1]) || !ev::isString(a[2]))
             return ev::throwTypeError("bro.permissions.set(app, capability, 'allow' | 'deny' | 'undecided')");
-        const std::string app = ev::toUtf8(a[0]), cap = ev::toUtf8(a[1]), how = ev::toUtf8(a[2]);
+        const std::string cap = ev::toUtf8(a[1]), how = ev::toUtf8(a[2]);
         engine::Decision d;
         if (how == "allow") d = engine::Decision::Allow;
         else if (how == "deny") d = engine::Decision::Deny;
         else if (how == "undecided") d = engine::Decision::Undecided;
         else return ev::throwTypeError("bro.permissions.set: the decision is 'allow', 'deny' or 'undecided'");
-        const engine::GrantStoreData store = engine::loadGrantStore();
-        const std::string identity = engine::resolveIdentityArg(app, store);
-        if (identity.empty()) return ev::throwError("bro.permissions.set: no app '" + app + "'");
-        std::string err;
+        std::string identity, err;
+        if (!resolveApp(a, "set", identity, err)) return ev::throwError(err);
         if (!engine::decideAppCapability(identity, {}, cap, d, &err))
             return ev::throwError("bro.permissions.set: " + err);
+        applyOwnChange();
         return ev::fromBool(true);
+    });
+    // reset(app) -> true: every decision and picked path forgotten; it asks again.
+    o.def("reset", 1, [](Value, std::span<const Value> a) -> Value {
+        std::string identity, err;
+        if (!resolveApp(a, "reset", identity, err)) return ev::throwError(err);
+        if (!engine::resetAppPermissions(identity, &err)) return ev::throwError("bro.permissions.reset: " + err);
+        applyOwnChange();
+        return ev::fromBool(true);
+    });
+    // removePicked(app, path) -> true: one picked file or folder taken back.
+    o.def("removePicked", 2, [](Value, std::span<const Value> a) -> Value {
+        std::string identity, err;
+        if (!resolveApp(a, "removePicked", identity, err)) return ev::throwError(err);
+        if (a.size() < 2 || !ev::isString(a[1]))
+            return ev::throwTypeError("bro.permissions.removePicked(app, path): path as list() reports it");
+        if (!engine::removeAppPicked(identity, ev::toUtf8(a[1]), &err))
+            return ev::throwError("bro.permissions.removePicked: " + err);
+        applyOwnChange();
+        return ev::fromBool(true);
+    });
+    // on('change', fn) / off('change', fn): the store changed, from any process.
+    o.def("on", 2, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 2 || !ev::isString(a[0]) || ev::toUtf8(a[0]) != "change" || !ev::isFunction(a[1]))
+            return ev::throwTypeError("bro.permissions.on('change', listener)");
+        changeListeners().push_back(std::make_shared<ev::Persistent>(a[1]));
+        return ev::undefined();
+    });
+    o.def("off", 2, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 2 || !ev::isFunction(a[1])) return ev::undefined();
+        auto& ls = changeListeners();
+        for (auto it = ls.begin(); it != ls.end(); ++it) {
+            if ((*it)->get().rawBits() == a[1].rawBits()) {
+                ls.erase(it);
+                break;
+            }
+        }
+        return ev::undefined();
     });
     // devMode: every app granted every ask capability it declares.
     o.accessor("devMode",
@@ -259,6 +400,7 @@ Value makeBroPermissionsValue() {
             std::string err;
             if (!engine::setGrantStoreDevMode(!a.empty() && ev::toBool(a[0]), &err))
                 return ev::throwError("bro.permissions.devMode: " + err);
+            applyOwnChange();
             return ev::undefined();
         });
     return o.get();
@@ -270,53 +412,98 @@ void installAccessPolicy() {
     static bool installed = false;
     if (installed) return;
     installed = true;
-    brokit::api::AccessPolicy policy;
-    policy.fs = [](const std::string& path, brokit::api::FsAccess access) {
-        return appPermissions().checkFs(path, access == brokit::api::FsAccess::Write);
-    };
-    policy.spawn = [](const std::string& command) { return appPermissions().use("spawn", "start " + command); };
-    policy.net = [](const std::string& url) { return appPermissions().use("net", "connect to " + url); };
-    brokit::api::setAccessPolicy(std::move(policy));
+    using bronze::embed::AccessKind;
+    // One gate for every library's natives (embed/embed_access.h): brokit's
+    // fs, child_process, sockets and process.env, and every sibling's paths,
+    // launches, captures and desktop configuration.
+    bronze::embed::setAccessGate([](const bronze::embed::AccessRequest& r) -> std::string {
+        const std::string subject(r.subject);
+        const bool mayAsk = !r.held;
+        switch (r.kind) {
+            case AccessKind::Read: return appPermissions().checkFs(subject, false, mayAsk);
+            case AccessKind::Write: return appPermissions().checkFs(subject, true, mayAsk);
+            case AccessKind::Spawn: return appPermissions().use("spawn", "start " + subject, mayAsk);
+            case AccessKind::Net: return appPermissions().use("net", "connect to " + subject, mayAsk);
+            case AccessKind::Capture: return appPermissions().use("mic", subject, mayAsk);
+            case AccessKind::EnvRead: return appPermissions().checkEnvRead(subject, mayAsk);
+            case AccessKind::EnvWrite: return appPermissions().checkEnvWrite(subject);
+            // The user's default apps and recent files are desktop
+            // configuration outside the app's own directories: `files`'.
+            case AccessKind::DesktopRead: return appPermissions().use("files", subject, mayAsk);
+            case AccessKind::DesktopWrite:
+                // Its own bro.conf section (its id) is the app's, like its
+                // config folder.
+                if (appPermissions().ownsConfChange(subject)) return {};
+                return appPermissions().use("files", subject, mayAsk);
+        }
+        return "unknown access";
+    });
 #if BRO_WITH_TERMINAL
     terminal::setSpawnGate([](const std::string& what) { return appPermissions().use("spawn", what); });
 #endif
 #if BRO_WITH_AUDIO
-    // broaudio's capture paths (the engine's microphone, its taps, loopback)
-    // and the surfaces over them (getUserMedia, bro.mic, bro.listen) all ask
-    // this one gate, so the microphone is gated in the native rather than in
-    // each script-facing name for it.
+    // broaudio's capture paths below the embedding API (the engine's
+    // microphone, its taps, loopback) ask this one gate too, so the
+    // microphone is gated in the native rather than in each script-facing
+    // name for it.
     broaudio::setCaptureGate([](const std::string& what) { return appPermissions().use("mic", what); });
-#endif
-    // The desktop siblings that take paths or start programs natively, outside
-    // brokit: the same rules as `fs` and child_process, so bro.vfs cannot
-    // delete, bro.search read, or bro.apps launch what require('fs') or
-    // child_process would be refused.
-#if BRO_WITH_VFS
-    brovfs::api::setPathGate([](const std::string& path, brovfs::api::PathAccess a) {
-        return appPermissions().checkFs(path, a == brovfs::api::PathAccess::Write);
-    });
-#endif
-#if BRO_WITH_SEARCH
-    brosearch::api::setPathGate([](const std::string& path, brosearch::api::PathAccess a) {
-        return appPermissions().checkFs(path, a == brosearch::api::PathAccess::Write);
-    });
-#endif
-#if BRO_WITH_THUMB
-    brothumb::api::setPathGate([](const std::string& path, brothumb::api::PathAccess a) {
-        return appPermissions().checkFs(path, a == brothumb::api::PathAccess::Write);
-    });
-#endif
-#if BRO_WITH_APPS
-    broapps::api::setSpawnGate([](const std::string& what) { return appPermissions().use("spawn", what); });
-    // The user's default apps and recent files are desktop configuration
-    // outside the app's own directories: the `files` capability's.
-    broapps::api::setConfigWriteGate([](const std::string& what) { return appPermissions().use("files", what); });
+    // And a capture that started is held in the gate's ledger, so taking
+    // `mic` back while it runs stops it (revalidateHeldAccess asks Capture).
+    broaudio::setCaptureHolder(
+        [](const std::string& what, broaudio::CaptureRevoke revoke) -> uint64_t {
+            if (!bronze::embed::accessGateActive()) return 0;
+            return bronze::embed::holdAccess(AccessKind::Capture, what, std::move(revoke));
+        },
+        [](uint64_t token) { bronze::embed::releaseAccess(token); });
 #endif
 }
 
-bool isAskingNamespace(const char* name) {
+void installPermissionsPump(engine::Engine& engine) {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+    auto verify = std::make_shared<InstallVerification>();
+    // An installed app's content, hashed in full off the main thread: what
+    // the launch's stat check cannot see (install_record.h).
+    const std::string hash = appPermissions().installHash();
+    if (!hash.empty() && hash != "unrecorded" && hash.rfind("linked:", 0) != 0) {
+        const std::string dir = appPermissions().appDir();
+        verify->worker = std::thread([verify, dir] {
+            const double t0 = util::currentTimeMs();
+            verify->actual = engine::hashInstalledTree(dir);
+            LOG_INFO("permissions: install content verified in %.1f ms", util::currentTimeMs() - t0);
+            verify->done.store(true, std::memory_order_release);
+        });
+    } else {
+        verify->done.store(true, std::memory_order_release);
+    }
+    auto lastPollMs = std::make_shared<double>(0.0);
+    engine.addFramePump([verify, lastPollMs] {
+        if (verify->worker.joinable() && verify->done.load(std::memory_order_acquire)) {
+            verify->worker.join();
+            if (!verify->actual.empty() && verify->actual != appPermissions().installHash()) {
+                appPermissions().installChanged(verify->actual);
+                afterGrantChange(true);
+            }
+        }
+        // The other threads' turn to revalidate comes at their own loops;
+        // this one's is here (a Worker's grant check is the same gate).
+        bronze::embed::revalidateHeldAccess();
+        const double now = util::currentTimeMs();
+        if (now - *lastPollMs < 250.0) return;
+        *lastPollMs = now;
+        if (appPermissions().storeChanged()) afterGrantChange(appPermissions().reload());
+        appPermissions().flushUsage();
+    });
+    engine.addShutdownHook([verify] {
+        if (verify->worker.joinable()) verify->worker.join();
+        appPermissions().flushUsage(/*force=*/true);
+    });
+}
+
+bool isGatedNamespace(const char* name) {
     const std::string cap = engine::capabilityForNamespace(name);
-    return !cap.empty() && appPermissions().state(cap) == GrantState::Undecided;
+    return !cap.empty() && !appPermissions().hostGranted(cap);
 }
 
 void installGatedNamespaces(Value broIn) {

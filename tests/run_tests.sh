@@ -159,7 +159,7 @@ fi
 TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 # The capabilities a JS test's run is granted (src/engine/capabilities.cpp's
 # catalogue): those a user decides, and those only a host can grant.
-ASK_GRANTS="files,net,spawn,mic,wl,displays,clip,pulse,remote,sys.power,sys.audio,sys.network,sys.bluetooth,sys.notifications,sys.tray,sys.processes"
+ASK_GRANTS="files,net,spawn,mic,env,mpris,wl,displays,clip,pulse,remote,sys.power,sys.audio,sys.network,sys.bluetooth,sys.notifications,sys.tray,sys.processes"
 SHELL_GRANTS="shell,compositor,seat,cred,portal,permissions"
 
 # --- Staleness gate ---------------------------------------------------------
@@ -488,7 +488,8 @@ run_one_test() {
     # frame loop, raster thread, swapchains and presenters a
     # headless run never touches are what it exercises. BRO_CAPTURE_PRESENTS=1
     # reads every presented frame back for its presentedFrame() checks. It
-    # reports like a JS test: assert() fails it (exit 1), skipTest() 77.
+    # reports like a JS test: assert() fails it (exit 1), skipTest() 77. The
+    # host grants it the ask capabilities, as a headless run's.
     if [[ "$1" == windowed:* ]]; then
         local NAME="${1#windowed:}" BIN="$BRO_DIR/bro$EXE_SUFFIX"
         if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
@@ -505,10 +506,10 @@ run_one_test() {
         fi
         if [[ -n "$TIMEOUT_BIN" ]]; then
             (cd "$RUN_CWD" && env "${WS_ENV[@]}" SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
-                "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BIN" --no-splash "$APP" >/dev/null 2>&1)
+                "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BIN" --no-splash --grant "$ASK_GRANTS" "$APP" >/dev/null 2>&1)
         else
             (cd "$RUN_CWD" && env "${WS_ENV[@]}" SDL_AUDIODRIVER=dummy BRO_CAPTURE_PRESENTS=1 \
-                "$BIN" --no-splash "$APP" >/dev/null 2>&1)
+                "$BIN" --no-splash --grant "$ASK_GRANTS" "$APP" >/dev/null 2>&1)
         fi
         STATUS=$?
         OUTPUT=$(cat "$RUN_CWD"/bro*.log 2>/dev/null)

@@ -25,6 +25,7 @@
 #include "engine/app_exe.h"
 #include "engine/app_manifest.h"
 #include "engine/config_loader.h"
+#include "engine/install_record.h"
 #include "engine/launcher.h"
 #include "util/exe_dir.h"
 
@@ -360,7 +361,7 @@ int runAppCommand(const std::vector<std::string>& args) {
     if (args.empty()) return -1;
     const std::string& cmd = args[0];
     const bool permissionsCmd = cmd == "--permissions" || cmd == "--grant-app" || cmd == "--revoke-app" ||
-                                cmd == "--dev-mode";
+                                cmd == "--reset-app" || cmd == "--dev-mode";
     if (cmd != "--install" && cmd != "--uninstall" && cmd != "--list-apps" && cmd != "--desktop-entry" &&
         cmd != "--build-exe" && cmd != "--exe-info" && !permissionsCmd)
         return -1;
@@ -423,6 +424,7 @@ int runAppCommand(const std::vector<std::string>& args) {
             removeStartMenuShortcut(installed.name.empty() ? target : installed.name, system);
         }
         if (fs::exists(fs::symlink_status(dir, ec))) { removeAll(dir); any = true; }
+        removeInstallRecord(u8str(dir));
         const std::string apps = applicationsDir(system);
         if (!apps.empty()) {
             fs::path entry = u8path(apps) / u8path(target + ".desktop");
@@ -482,6 +484,18 @@ int runAppCommand(const std::vector<std::string>& args) {
     } else if (!copyApp(src, dest, bundledLib(src), err)) {
         std::fprintf(stderr, "bro: %s\n", err.c_str());
         return 1;
+    }
+    // What was installed, hashed: the grants the user gives the app attach to
+    // it, and other content asks again (install_record.h).
+    if (!writeInstallRecord(u8str(dest), id, link, &err)) {
+        std::fprintf(stderr, "bro: %s\n", err.c_str());
+        return 1;
+    }
+    {
+        InstallRecord rec;
+        if (readInstallRecord(u8str(dest), rec))
+            std::printf("install record %s (%s)\n", installRecordPath(u8str(dest)).c_str(),
+                        rec.linked ? "linked: grants hold across edits" : rec.hash.substr(0, 16).c_str());
     }
 
     // The app's own executable, stamped with the installed folder.

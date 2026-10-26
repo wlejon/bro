@@ -227,6 +227,12 @@ bool ElTerminal::spawn(const SpawnSpec& spec, std::string* error) {
 bool ElTerminal::write(std::string_view bytes) { return impl_->session->write(bytes); }
 void ElTerminal::feed(std::string_view output) { impl_->session->feed(output); }
 void ElTerminal::kill() { impl_->session->kill(); }
+void ElTerminal::revoke(const std::string& message) {
+    if (!impl_->session->running()) return;
+    termDispatch(elem_, "permissionrevoked", "{\"message\":" + termJsonString(message) + "}");
+    feed("\r\n\x1b[0m[" + message + "]\r\n");
+    impl_->session->kill();
+}
 int64_t ElTerminal::pid() const { return impl_->session->pid(); }
 double ElTerminal::lastInputMs() const { return impl_->session->stats().lastInputMs; }
 double ElTerminal::shownOutputMs() const { return impl_->frameOutputMs; }

@@ -139,6 +139,10 @@ public:
     bool write(std::string_view bytes);  // raw bytes to the child's input
     void feed(std::string_view output);  // bytes into the emulator, as if the child wrote them
     void kill();
+    // The host took back the grant the program runs under (the app's
+    // `spawn`): a `permissionrevoked` event ({ message }) and the message on
+    // the screen, then the program is killed (its `exit` follows).
+    void revoke(const std::string& message);
     int64_t pid() const;
     // The flight recorder's latency stamps (CLOCK_MONOTONIC ms, 0 = none
     // yet): when input last went to the program, and when the output in the

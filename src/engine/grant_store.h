@@ -23,6 +23,7 @@
 //       "install:org.example.Notes": {
 //         "id": "org.example.Notes",
 //         "dir": "/home/j/.local/share/bro/apps/org.example.Notes",
+//         "installHash": "<what was installed when this was decided>",
 //         "capabilities": { "net": "allow", "spawn": "deny" },
 //         "picked": ["/home/j/Documents/notes"]
 //       }
@@ -44,6 +45,10 @@ enum class Decision { Undecided, Allow, Deny };
 struct AppGrantRecord {
     std::string id;    // the app's id when last run (for listings)
     std::string dir;   // its folder when last run
+    // An install: the hash of what was installed when these decisions were
+    // made (install_record.h). Content with another hash asks again: its
+    // decisions and picked paths are forgotten at its launch.
+    std::string installHash;
     std::map<std::string, Decision> decisions;
     std::vector<std::string> picked;
 };
@@ -63,8 +68,10 @@ std::string grantStorePath();
 
 /// Read the store. A missing file is an empty store; an unreadable or
 /// malformed one is too, with a warning, so a corrupt file denies (nothing is
-/// decided) rather than granting.
-GrantStoreData loadGrantStore();
+/// decided) rather than granting. `readOk` (when given) is false for a store
+/// that is there but could not be read or parsed, so a reader that already
+/// has a good copy keeps it and tries again.
+GrantStoreData loadGrantStore(bool* readOk = nullptr);
 
 /// Read, change and atomically replace the store. False (with *error) when it
 /// could not be written; the change is then lost.
@@ -87,11 +94,41 @@ const char* decisionName(Decision d);   // "allow", "deny", "undecided"
 struct AppPermissionsEntry {
     std::string identity, id, name, dir;
     bool installed = false;
+    // An install's state against its record: "current" (the decisions were
+    // made for what is installed), "changed" (installed again, or altered,
+    // since: its next launch asks again), "unrecorded" (no record: installed
+    // before records, or not by `bro --install`), "linked" (a --link
+    // install); "" for an app run from a folder.
+    std::string install;
     std::vector<std::string> declared;
     std::map<std::string, Decision> decisions;
     std::vector<std::string> picked;
+    std::map<std::string, double> lastUsed;   // ms since the epoch, by capability
 };
 std::vector<AppPermissionsEntry> listAppPermissions();
+
+/// The hash an identity's decisions attach to when made now: an install's
+/// recorded hash ("unrecorded" without a record), "" for a folder.
+std::string currentInstallHash(const std::string& identity, const std::string& dir);
+
+/// Forget every decision and picked path of `identity` (it asks again).
+bool resetAppPermissions(const std::string& identity, std::string* error);
+
+/// Take back one picked file or folder.
+bool removeAppPicked(const std::string& identity, const std::string& path, std::string* error);
+
+// ---- when each capability was last used ----------------------------------------
+//
+// Kept apart from the grants, in usage.json beside them, so the frequent
+// writes of running apps never race the user's decisions or wake every
+// running app's watch on grants.json:
+//
+//   { "install:org.example.Notes": { "net": 1761480000000, "files": ... } }
+
+std::string grantUsagePath();
+std::map<std::string, std::map<std::string, double>> loadGrantUsage();
+/// Merge `used` into identity's entry (the later time of each wins).
+bool mergeGrantUsage(const std::string& identity, const std::map<std::string, double>& used, std::string* error);
 
 /// Decide `cap` for `identity` (Undecided forgets the decision, so the app
 /// asks again). Only an ask capability can be decided here: a shell one is

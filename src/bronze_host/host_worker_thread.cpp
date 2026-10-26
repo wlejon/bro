@@ -14,6 +14,7 @@
 #include "eval/eval.h"
 #include "util/log.h"
 #include <api/api.h>
+#include "embed/embed_access.h"
 
 #include <algorithm>
 #include <atomic>
@@ -499,6 +500,9 @@ void WorkerInstance::threadFunc() {
         }
         pollNet();
         tickWorkerSiblingApis();
+        // A grant taken back while the app runs: what this Worker holds open
+        // under it closes here (embed/embed_access.h).
+        bronze::embed::revalidateHeldAccess();
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }

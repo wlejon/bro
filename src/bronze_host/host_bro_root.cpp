@@ -338,6 +338,7 @@ void installBroRoots(engine::Engine& engine) {
     // (host_permissions.cpp, engine/capabilities.h).
     installAccessPolicy();
     installGatedNamespaces(bro->get());
+    installPermissionsPump(engine);
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -388,9 +389,10 @@ void markAvailableNamespaces() {
         ev::Persistent root(broG.value);
         for (const char* name : kGated) {
             if (isDeferredName(name)) continue;
-            // A namespace still to be asked for: reading anything off its
-            // stub is a use, which would ask now (host_permissions.cpp).
-            if (isAskingNamespace(name)) continue;
+            // A gated namespace: reading anything off its proxy is a use,
+            // which may ask now; it answers `available` itself
+            // (host_permissions.cpp).
+            if (isGatedNamespace(name)) continue;
             decorate(ev::getProperty(root.get(), name));
         }
     }

@@ -58,6 +58,7 @@ void ElTerminal::detachIfRemoved() {}
 bool ElTerminal::write(std::string_view) { return false; }
 void ElTerminal::feed(std::string_view) {}
 void ElTerminal::kill() {}
+void ElTerminal::revoke(const std::string&) {}
 int64_t ElTerminal::pid() const { return 0; }
 double ElTerminal::lastInputMs() const { return 0.0; }
 double ElTerminal::shownOutputMs() const { return 0.0; }

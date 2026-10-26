@@ -194,6 +194,8 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 | `net` | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `net`, `http`'s servers and clients, `WebSocketServer`, `bro.models`' downloads | ask |
 | `spawn` | `child_process`, `bro.app.spawn`, `bro.app.open`, `bro.apps.launch`, `<terminal>` | ask |
 | `mic` | `getUserMedia`, `bro.mic`, `bro.listen`, system loopback capture | ask |
+| `env` | `process.env` beyond the variables every app sees (below), changing the real environment, and (Linux) any process's `/proc/<pid>/environ` | ask |
+| `mpris` | the `bro.mpris` namespace: media players' state and controls, and publishing one | ask |
 | `wl`, `displays`, `clip`, `pulse`, `remote` | the `bro.<name>` namespace | ask |
 | `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`) | ask |
 | `shell` | the desktop shell's role (input routing, the DRM compositor host; `Engine::isShellApp()`) | shell |
@@ -218,6 +220,35 @@ that asks on first touch, and is the live namespace from then on if allowed.
 A refused namespace is a stub: `bro.remote.available === false`,
 `bro.remote.reason` says why, and any call throws that reason. A refused
 native throws an error naming the capability and the path, command or URL.
+Every native that touches a file, starts a process, connects, captures
+sound or reads the environment asks one gate, bronze's
+(`embed/embed_access.h`), which brokit and every sibling library call and
+bro answers from these rules.
+
+**While the app runs.** Every bro process reads the grant store again
+within a quarter second of a change: `bro --revoke-app` in a terminal, the
+shell's `bro.permissions.set`, another app's prompt being answered. A
+capability taken back (denied, reset to ask, or granted only by dev mode
+when it is turned off) is revoked at once. Its calls throw an Error named
+`PermissionRevoked` (code `EACCES`, or `ERR_ACCESS_DENIED` for the network),
+a function kept from a gated namespace refuses like the namespace, and what
+the app holds open under it is closed with that error: a microphone capture,
+a socket, server or WebSocket, a child process or `<terminal>`, a watcher.
+A picked path taken back closes what is open under it the same way. One
+granted while running works at its next use. A process records when it last
+used each capability (`usage.json` beside the store, written within a
+minute and at once on a capability's first use in a run), which the
+listings show.
+
+**The environment.** Without `env`, `process.env` shows an app the
+variables that say who the user is, the locale and time zone, the terminal
+and desktop session, where the standard folders are, `PATH`, and bro's own
+`BRO_*` switches; every other variable reads as unset, since tokens and
+passwords live there. A variable the app sets or deletes without `env`
+changes only its own view of the environment, which its child processes are
+given; the real one (what bro and its libraries read) is unchanged. A
+granted `spawn` starts programs with the whole environment, so it reveals
+it too.
 
 **Shell capabilities** are never asked for and never granted by the user's
 store or dev mode: only the host executable grants them. helm's main grants
@@ -232,13 +263,27 @@ reads and writes anywhere. A file or folder the user picks in a file dialog
 (open, save, folder, sync or async) or drops on the window is the app's to
 read and write from then on (a folder with everything in it), kept with its
 grants. Paths are resolved (`..`, links) before deciding. No app writes bro's
-own state (the grant store, the install roots, bro's executable and resource
-directories), with `files` or without.
+own state (the grant store and usage file, the install roots, bro's
+executable and resource directories), with `files` or without. On Linux no
+app reads a process's memory (`/proc/<pid>/mem`) or writes this process's
+own `/proc` entries, and a process's `environ` is `env`'s.
 
 **Identity.** An app run from an install root (a folder named by its id,
 [below](#installing-and-how-launchers-find-apps)) is the install record
 `install:<id>`; any other is its canonical folder, `path:<dir>`. The id in
-bro.json alone identifies nothing, since any app can claim one.
+bro.json alone identifies nothing, since any app can claim one. `bro
+--install` records a hash of what it installed beside it
+(`<root>/<id>.install.json`: each file's size, time and SHA-256, and the
+tree's), and the user's decisions for an install are kept with that hash.
+An install that is no longer what was installed asks again: its decisions
+and picked paths are forgotten. A launch checks the record by a stat of
+each file, no reads (about a millisecond for a small app); a file added,
+removed or changed in size or time costs a hash of the tree then. Content
+changed with its size and time put back is found after launch, by a hash of
+the tree on a background thread, which takes the grants back while the app
+runs. Installing again is new content, decided anew. A `--link` install
+records no content (it is a checkout being worked on): its grants hold
+across edits and attach to where the link points.
 
 **The grant store** is `grants.json` in bro's config directory:
 `$XDG_CONFIG_HOME/bro` (`~/.config/bro`), `%APPDATA%\bro`,
@@ -251,9 +296,10 @@ every launch.
 **Managing.**
 
 ```
-bro --permissions [<id|dir>]        # the store, every app (or one) and its decisions
+bro --permissions [<id|dir>]        # the store, every app (or one): decisions, last uses, install state
 bro --grant-app <id|dir> <cap>      # allow
-bro --revoke-app <id|dir> <cap>     # deny
+bro --revoke-app <id|dir> <cap>     # deny (a running app has it revoked at once)
+bro --reset-app <id|dir>            # forget every decision and picked path: it asks again
 bro --dev-mode on|off
 ```
 
@@ -265,11 +311,19 @@ undecided}` and `bro.app.requestPermission(name)` asks now
 ([app-api.js](app-api.js)); the shell manages every app through
 `bro.permissions`.
 
-**Not gated yet:** `process.env`; the natives of other siblings that take a
-file path of their own (mesh, image, model and media loaders and encoders,
-screenshots), which read and write without the `fs` policy; and a granted
-`spawn`, which runs programs with the user's full rights. [app-isolation.md](app-isolation.md) is where
-this goes next.
+Every native that opens a path the app named asks the same `fs` policy:
+the siblings' loaders, encoders and savers (mesh, image, audio, the model
+loaders), media and video, screenshots and captures (the headless test
+functions and `controlCommand` included), and the page's subresources from
+disk (`<img>`, CSS `url()`, `@font-face`, `@import`, `<iframe>`, `<video>`,
+`Worker` scripts), which are answered from what is decided and never
+prompt. `bro.net`'s sockets ask `net`, and a control command sent to
+another engine's endpoint is a connection too.
+
+**Not gated yet:** a granted `spawn`, which runs programs with the user's
+full rights; and what a deputy opens for the app (an MPRIS player's
+`openUri`, the Steam overlay's web page, Steam networking).
+[app-isolation.md](app-isolation.md) is where this goes next.
 
 ## Installing, and how launchers find apps
 

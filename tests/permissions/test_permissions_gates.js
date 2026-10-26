@@ -118,4 +118,24 @@ const sysProbe =
     }
 }
 
+// ---- bro.conf: the app's own section is its own; the desktop's is `files`' ----------
+const confProbe =
+    'R.confOut = !(bro.conf && bro.conf.available !== false && typeof bro.conf.set === "function");\n' +
+    'if (!R.confOut) {\n' +
+    '    const id = "org.bro.test.PermGates";\n' +
+    '    attempt("schema", () => bro.conf.registerSchema({ id, path: id, keys: { mine: { type: "string", default: "a" } } }));\n' +
+    '    settle("own", Promise.resolve().then(() => bro.conf.set(id + ".mine", "b")));\n' +
+    '    settle("desktop", Promise.resolve().then(() => bro.conf.set("desktop.interface.theme", "BroDark")));\n' +
+    '    pump();\n' +
+    '}\n';
+{
+    const r = run(confProbe);
+    if (r.confOut) {
+        console.log('test_permissions_gates: bro.conf is compiled out of this build; not tested');
+    } else {
+        assert(r.own === 'ok', 'an app writes its own bro.conf section without files: ' + r.own);
+        assert(refused(r.desktop, 'files'), 'and not the desktop\'s: ' + r.desktop);
+    }
+}
+
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* best effort */ }

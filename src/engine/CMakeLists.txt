@@ -74,6 +74,7 @@ add_library(bro_engine STATIC
     config_loader.cpp
     capabilities.cpp
     grant_store.cpp
+    install_record.cpp
     app_permissions.cpp
     permissions_cli.cpp
     launcher.cpp
