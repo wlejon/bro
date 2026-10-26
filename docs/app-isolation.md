@@ -1,10 +1,13 @@
 # App isolation (design proposal)
 
-**Status: proposed 2026-10-26. Nothing here is built.** It is the design to
-discuss before any of it is. Once built it replaces the location and
-environment rules of `src/engine/desktop_trust.cpp`, grants by app id in
-`permissions.json`, and the applet certificates (`app.cert.json`,
-`bronze verify-applet`, broapps' certificate inspection, helm's badge).
+**Status: proposed 2026-10-26; step 1 of the order of work (below) is built.**
+Step 1 replaced the location and environment rules of `desktop_trust.cpp`,
+grants by app id in `permissions.json`, and the applet certificates
+(`app.cert.json`, `bronze verify-applet`, broapps' certificate inspection,
+helm's badge), which are deleted. What it built, and where it decided
+differently from this proposal, is under "Order of work"; the user-facing
+rules are in [apps.md](apps.md), Permissions. The rest is still a design to
+discuss.
 
 ## Goals
 
@@ -286,7 +289,38 @@ What the design must keep possible, and what it still lacks for it:
 
 1. **The capability catalogue, and gating `fs`, `child_process`,
    `process.env`, the network and `<terminal>`**, in today's one-app-per-process
-   bro. This contains mistakes there too.
+   bro. This contains mistakes there too. **Built** (2026-10-26):
+   - The catalogue is one table, `src/engine/capabilities.cpp`: ask
+     capabilities `files`, `net`, `spawn`, `mic`, `wl`, `displays`, `clip`,
+     `pulse`, `remote` and `sys.<member>` (power, audio, network, bluetooth,
+     notifications, tray, processes); shell capabilities `shell`,
+     `compositor`, `seat`, `cred`, `portal`, `permissions`, granted only by
+     the host executable (helm's main, `--grant`). The grants live in
+     `AppPermissions` (`src/engine/app_permissions.cpp`), the store in
+     `grant_store.cpp`.
+   - Enforcement is at the natives, not in `require`: brokit's access policy
+     (`brokit::api::setAccessPolicy`) asks at every fs entry point, sqlite
+     open, process start and network connect or listen; bro installs it
+     (`src/bronze_host/host_permissions.cpp`), with the terminal's spawn
+     gate, broaudio's capture gate, and the path and spawn gates of brovfs,
+     brosearch, brothumb and broapps. The gated `bro.<ns>` objects are
+     still the stub or the live namespace, put in place by the catalogue; a
+     declared, undecided one is a stub that asks on first touch.
+   - Decided differently from the proposal: a grant is *allow* or *deny* (an
+     undecided one asks), not allow/ask/deny; revocation takes effect at the
+     next launch, not while the app runs (no `PermissionRevoked` yet);
+     `sys.processes` is one capability, not `sys.processes.read`; `files`
+     is one capability for everything beyond the app's own directories and
+     what the user picked, and with it an app may read and write anywhere
+     except bro's own state; identity is the install record's folder
+     (`install:<id>`) with no hash yet (step 6), else the canonical folder;
+     dev mode is the store's `devMode` flag (`bro --dev-mode on`), not a helm
+     setting yet, and it also overrides the user's denials; the store is
+     bro's own (`grants.json` in bro's config directory), which no app can
+     write, rather than helm's.
+   - Not gated yet: `process.env`, and the natives of other siblings that
+     take a file path of their own (mesh, image, model and media loaders and
+     encoders, screenshots).
 2. **Frozen intrinsics;** per-realm host globals and HostClass prototypes.
 3. **Compartment = Realm + document + ledger;** host objects owned by their
    compartment; `<appview>`.
@@ -294,5 +328,6 @@ What the design must keep possible, and what it still lacks for it:
 5. **Disconnects, the error card, and the ledger's per-resource tests.**
 6. **Install identity, helm's prompts and the Apps settings page.**
 7. **Certificates checked in Release, and native preconditions.**
-8. **Retire** `desktop_trust`'s location and environment rules, grants by id,
-   applet certificates, and realm-scope swapping.
+8. **Retire** realm-scope swapping. (`desktop_trust`'s location and
+   environment rules, grants by id and the applet certificates went with
+   step 1.)

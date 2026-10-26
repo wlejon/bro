@@ -166,6 +166,9 @@ bro.models.sources;
  *   'io'           the models directory could not be written (disk full,
  *                  permissions)
  *   'unsupported'  this build has no HTTP client
+ *   'permission'   the app may not use the network (the `net` capability,
+ *                  docs/apps.md, Permissions); the message says why. A
+ *                  model already in a models directory needs no network.
  * @example
  *   const dir = await bro.models.fetch('sam2.1-hiera-base-plus', {
  *     onProgress: ({ done, total }) => console.log(`${(100 * done / total).toFixed(0)}%`),

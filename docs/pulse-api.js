@@ -12,9 +12,9 @@
  * - Per-stream volume, mute, and live sink re-routing (`setStreamVolume`, `setStreamMuted`, `setStreamMute`, `moveStream`)
  * - Real-time sink and stream lifecycle events (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_PULSE` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["pulse", ...]` in its `bro.json`.
+ * Gated by the `pulse` capability (docs/apps.md, Permissions): an app that declares it in
+ * bro.json's `permissions` is asked at first touch; until granted it is the unavailable stub.
+ * Compiled in with `BRO_WITH_PULSE`.
  */
 
 // ============================================================================

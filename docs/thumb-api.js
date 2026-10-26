@@ -1,6 +1,11 @@
 /**
  * @file docs/thumb-api.js
  * @summary Documentation and examples for the `bro.thumb` JavaScript API.
+ *
+ * The source file of get, getSync, hasFailed and recordFailure is read as
+ * `fs` would read it (docs/apps.md, Permissions); a refusal is an Error
+ * carrying the reason, `code: 'EACCES'` and `path`. The thumbnail cache is
+ * bro's, not the app's, and needs nothing.
  */
 
 /**

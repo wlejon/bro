@@ -91,7 +91,7 @@ fails otherwise.
 
 Each desktop sibling has its own flag, on in `desktop`, `app` and `full`, off in
 `minimal`; off, its namespace is the `{ available: false }` stub. The
-privileged ones are further gated at run time ([apps.md](apps.md#permissions)).
+gated ones also need their capability at run time ([apps.md](apps.md#permissions)).
 
 | Flag | Library | Namespace | Platforms (default on) |
 |---|---|---|---|

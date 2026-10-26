@@ -153,8 +153,8 @@
  *
  * The other end: a page shows another machine's broremote server (helm
  * --remote, `broremote serve-test`, another bro hosting) and drives it.
- * helmapps' remote app is built on it. Needs the "remote"
- * permission, like host().
+ * helmapps' remote app is built on it. Needs the `remote`
+ * capability (docs/apps.md, Permissions), like host().
  *
  *   bro.remote.connect(options?) -> session
  *       options.ssh          ssh destination ([user@]host): `ssh HOST

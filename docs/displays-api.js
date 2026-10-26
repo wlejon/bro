@@ -11,9 +11,9 @@
  * - Backlight device brightness querying and modification (`setBrightness`, `getBrightness`, `getBacklightDevices`)
  * - Display change event listening (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_DISPLAYS` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["displays", ...]` in its `bro.json`.
+ * Gated by the `displays` capability (docs/apps.md, Permissions): an app that declares it in
+ * bro.json's `permissions` is asked at first touch; until granted it is the unavailable stub.
+ * Compiled in with `BRO_WITH_DISPLAYS`.
  */
 
 // ============================================================================

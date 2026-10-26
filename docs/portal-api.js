@@ -14,9 +14,9 @@
  * - Inhibit & Session state (`onInhibit`, `offInhibit`, `getActiveInhibitions`, `isInhibited`, `onQueryEndResponse`, `queryEndResponse`, `onStateChanged`, `notifyStateChanged`)
  * - Global Shortcuts & Remote Desktop (`onBindShortcuts`, `onListShortcuts`, `onConfigureShortcuts`, `triggerShortcut`, `releaseShortcut`, `onRemoteDesktop`, `onRemoteDesktopStart`, `onRemoteDesktopInput`)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_PORTAL` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["portal", ...]` in its `bro.json`.
+ * Gated by the `portal` capability, a shell capability (docs/apps.md, Permissions): only the
+ * host executable grants it (helm's main, or `--grant portal`); it is never asked for, and for
+ * every other app it is the unavailable stub. Compiled in with `BRO_WITH_PORTAL`.
  */
 
 // ============================================================================

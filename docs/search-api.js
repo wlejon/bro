@@ -1,6 +1,10 @@
 /**
  * @file docs/search-api.js
  * @summary Documentation and examples for the `bro.search` JavaScript API.
+ *
+ * A walk's or grep's root, a GitignoreMatcher's root and a loaded ignore file
+ * are read as `fs` would read them (docs/apps.md, Permissions); a refusal is
+ * an Error carrying the reason, `code: 'EACCES'` and `path`.
  */
 
 /**

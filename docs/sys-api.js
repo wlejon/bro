@@ -14,9 +14,13 @@
  * - `bro.sys.tray`: StatusNotifierWatcher / system tray host, item activation, and DBusMenu inspection
  * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_SYS` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["sys", ...]` in its `bro.json`.
+ * Gated member by member (docs/apps.md, Permissions): each of `bro.sys.power`, `.audio`,
+ * `.network`, `.bluetooth`, `.notifications`, `.tray` and `.processes` needs its own
+ * capability, `sys.<member>` (`sys.processes` also covers the top-level `listProcesses` /
+ * `killProcess`). A member the app declares is asked for at first touch; until granted it is
+ * the unavailable stub (`available === false`, `reason`, every call throws), while the
+ * granted members are live. Listing processes therefore never brings power-off with it.
+ * Compiled in with `BRO_WITH_SYS`.
  */
 
 // ============================================================================

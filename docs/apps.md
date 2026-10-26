@@ -54,11 +54,14 @@ is [app-api.js](app-api.js) (`bro.app`).
 | `display` | `false` hides the app from launchers (`NoDisplay=true`): a helper started by another app. |
 | `fileTypes` | What the app opens: the desktop entry's `MimeType=`, and `%F` in its `Exec=` so the opened files arrive as arguments. |
 | `actions` | Launcher actions: `[Desktop Action <id>]` entries that run the app with `args`. `id` is `[A-Za-z0-9-]`. |
-| `permissions` | Privileged namespaces the app asks for (below). `privileged` is the older spelling and still read. |
-| `shell` | A desktop shell component (panel, launcher, compositor host): asks for every privileged namespace (below). |
+| `permissions` | The capabilities the app may ask for (below). Declaring one grants nothing. |
 
 The engine reads bro.json with a real JSON parser for these keys. A key of the
-wrong type is skipped with a warning; it never fails the launch.
+wrong type is skipped with a warning, with two exceptions that fail the launch
+with a message saying what is wrong: a bro.json that is not a JSON object, and
+a `permissions` that is not a list of capability names (a misspelt capability
+would otherwise be denied without anyone learning why). The id `bro` is bro's
+own and no app's.
 
 **Window title.** The window opens titled with `name`, then follows the page's
 title: its `<title>` once it loads, and every later `document.title = ...`
@@ -105,8 +108,8 @@ bro [bro flags] <app-dir | app-id> [app arguments...]
 
 Everything after the app directory is the app's: `bro.app.argv`. bro takes
 out only its own flags (`--no-gpu`, `--no-splash`, `--splash`, `--drm`,
-`--new-instance`, `--notification <args>`, `--notification-activated`), and
-only before a `--`. The `--` itself is passed through,
+`--new-instance`, `--notification <args>`, `--notification-activated`,
+`--grant <caps>`), and only before a `--`. The `--` itself is passed through,
 so `bro ~/apps/term -- vim notes.txt` gives the app `["--", "vim",
 "notes.txt"]`. `bro.app.cwd` is the directory the app was started from.
 
@@ -177,40 +180,94 @@ test runs of one app never hand off to each other.
 
 ## Permissions
 
-Privileged namespaces (`compositor`, `wl`, `displays`, `seat`, `sys`, `cred`,
-`portal`, `clip`, `pulse`, `remote`) are stubs for an ordinary app:
-`bro.remote.available === false`, `bro.remote.reason` says why, and any call
-throws that reason. An app gets the namespaces it lists in `permissions`, or
-all of them for `"shell": true`, when one of these holds:
+An app reaches outside itself only through capabilities granted to it, one
+app at a time. The aim is first to contain mistakes: an app that deletes the
+wrong folder, or starts the wrong process, can only do so if it was given the
+means. Nothing assumes an app is friendly. The catalogue is one table,
+`src/engine/capabilities.cpp`:
 
-- it is installed in a trusted location (`isTrustedAppLocation`,
-  `src/engine/desktop_trust.cpp`): `apps/` and `system/` beside the executable
-  or in the resource dir; Linux `/usr/share/bro`, `/usr/local/share/bro`,
-  `/opt/bro/apps`; Windows `%ProgramFiles%\bro\{apps,system}`,
-  `%ProgramData%\bro\{apps,system}`; macOS `/Library/Application
-  Support/bro/{apps,system}`, `/Applications/bro.app/Contents/Resources/apps`,
-  `/usr/local/share/bro`, `/opt/bro/apps`;
-- `BRO_TRUSTED_APP_DIR=<dir>[:<dir>...]` names its directory (`;` on Windows);
-- the user's permissions file grants them to its id. The app gets the
-  intersection of what it asked for and what was granted:
+| Capability | Gates | Kind |
+|---|---|---|
+| `files` | files beyond the app's own (below), through `fs`, sqlite, `bro.vfs`, `bro.search` and `bro.thumb` alike; `bro.apps`' default apps and recent files | ask |
+| `net` | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `net`, `http`'s servers and clients, `WebSocketServer`, `bro.models`' downloads | ask |
+| `spawn` | `child_process`, `bro.app.spawn`, `bro.app.open`, `bro.apps.launch`, `<terminal>` | ask |
+| `mic` | `getUserMedia`, `bro.mic`, `bro.listen`, system loopback capture | ask |
+| `wl`, `displays`, `clip`, `pulse`, `remote` | the `bro.<name>` namespace | ask |
+| `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`) | ask |
+| `shell` | the desktop shell's role (input routing, the DRM compositor host; `Engine::isShellApp()`) | shell |
+| `compositor`, `seat`, `cred`, `portal` | the `bro.<name>` namespace | shell |
+| `permissions` | `bro.permissions`, every app's grants ([permissions-api.js](permissions-api.js)) | shell |
 
-```json
-// ~/.config/bro/permissions.json, %APPDATA%\bro\permissions.json,
-// ~/Library/Application Support/bro/permissions.json
-{
-    "org.example.ScreenShare": ["remote"],
-    "org.example.MyShell": ["shell"],
-    "org.example.Settings": ["*"]
-}
+Everything else (the DOM, canvas, WebGL, the scene, audio output, timers,
+`bro.conf`, the app's own directories) needs nothing.
+
+**Declaring.** `permissions` in bro.json lists what the app may ask for.
+Declaring grants nothing; a capability the app did not declare is denied
+without anyone being asked; a name that is not a capability fails the launch.
+
+**Asking.** An *ask* capability the app declared and the user has not decided
+is asked for the first time it is used on the main thread: a native dialog
+names the app and what it tried, and the answer is kept. Used from a Worker
+first, it is refused with a message saying to ask on the main thread
+(`bro.app.requestPermission`). `bro-headless` answers with `setDialogAnswer`
+(docs/headless.md); a run that never chose an answer is refused and nothing is
+kept. A gated namespace the app declared but has not been granted is a stub
+that asks on first touch, and is the live namespace from then on if allowed.
+A refused namespace is a stub: `bro.remote.available === false`,
+`bro.remote.reason` says why, and any call throws that reason. A refused
+native throws an error naming the capability and the path, command or URL.
+
+**Shell capabilities** are never asked for and never granted by the user's
+store or dev mode: only the host executable grants them. helm's main grants
+its UI every capability.
+
+**Files.** Without `files` an app writes only its own config, data, cache and
+log directories ([Per-app directories](#per-app-directories-and-the-log)),
+the OS temp directory, and what the user picked; it reads anywhere outside the
+user's home but, under the home, only those, its own folder, bro's resources
+and `/lib`, and the model directories (`bro.models.dirs`). With `files` it
+reads and writes anywhere. A file or folder the user picks in a file dialog
+(open, save, folder, sync or async) or drops on the window is the app's to
+read and write from then on (a folder with everything in it), kept with its
+grants. Paths are resolved (`..`, links) before deciding. No app writes bro's
+own state (the grant store, the install roots, bro's executable and resource
+directories), with `files` or without.
+
+**Identity.** An app run from an install root (a folder named by its id,
+[below](#installing-and-how-launchers-find-apps)) is the install record
+`install:<id>`; any other is its canonical folder, `path:<dir>`. The id in
+bro.json alone identifies nothing, since any app can claim one.
+
+**The grant store** is `grants.json` in bro's config directory:
+`$XDG_CONFIG_HOME/bro` (`~/.config/bro`), `%APPDATA%\bro`,
+`~/Library/Application Support/bro`, or `<dir>/bro` under `BRO_APP_HOME=<dir>`.
+It maps each identity to its decisions and picked paths, and holds one global
+`devMode` flag. **Dev mode** grants every app every ask capability it declares,
+over the user's denials, never a shell capability, and is logged loudly at
+every launch.
+
+**Managing.**
+
+```
+bro --permissions [<id|dir>]        # the store, every app (or one) and its decisions
+bro --grant-app <id|dir> <cap>      # allow
+bro --revoke-app <id|dir> <cap>     # deny
+bro --dev-mode on|off
 ```
 
-`bro.app.permissions` reports `{requested, granted, shell}`.
+A host grants capabilities outright for one run with
+`--grant <cap>[,<cap>...]` on `bro` or `bro-headless` (`--grant declared` is
+everything bro.json declares), logged loudly: what tests and development use.
+Inside an app, `bro.app.permissions` reports `{declared, granted, denied,
+undecided}` and `bro.app.requestPermission(name)` asks now
+([app-api.js](app-api.js)); the shell manages every app through
+`bro.permissions`.
 
-On a development machine, `{ "*": ["*"] }` in the permissions file, or
-`BRO_TRUST_ALL=1` for one process, grants every app what its manifest asks for;
-a namespace missing from the manifest is still refused.
-`BRO_PERMISSIONS_FILE=<path>` reads that file instead of the user's (the test
-suites point it at a file that does not exist).
+**Not gated yet:** `process.env`; the natives of other siblings that take a
+file path of their own (mesh, image, model and media loaders and encoders,
+screenshots), which read and write without the `fs` policy; and a granted
+`spawn`, which runs programs with the user's full rights. [app-isolation.md](app-isolation.md) is where
+this goes next.
 
 ## Installing, and how launchers find apps
 

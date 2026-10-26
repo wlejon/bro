@@ -14,9 +14,9 @@
  * For standard web clipboard access in any application (`navigator.clipboard.readText`,
  * `writeText`, `read`, `write`, `ClipboardItem`), see `docs/clipboard-api.js`.
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_CLIP` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["clip", ...]` in its `bro.json`.
+ * Gated by the `clip` capability (docs/apps.md, Permissions): an app that declares it in
+ * bro.json's `permissions` is asked at first touch; until granted it is the unavailable stub.
+ * Compiled in with `BRO_WITH_CLIP`.
  */
 
 // ============================================================================

@@ -15,9 +15,9 @@
  * - XDG Autostart management (`listAutostart`, `runAutostart`)
  * - Session event listening (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_SEAT` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["seat", ...]` in its `bro.json`.
+ * Gated by the `seat` capability, a shell capability (docs/apps.md, Permissions): only the
+ * host executable grants it (helm's main, or `--grant seat`); it is never asked for, and for
+ * every other app it is the unavailable stub. Compiled in with `BRO_WITH_SEAT`.
  */
 
 // ============================================================================

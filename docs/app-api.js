@@ -8,7 +8,7 @@
  * page is a desktop application: `bro <dir> [args...]` runs it, and bro.app is
  * everything such an app would otherwise need native code for — its argv, where
  * its settings and data go, its log file, whether a second launch should hand
- * over to the first, and which privileged namespaces it was granted.
+ * over to the first, and which capabilities it was granted.
  *
  * (`bro.apps`, docs/apps-api.js, is the other direction: the catalog of every
  * application installed on the machine.)
@@ -122,7 +122,8 @@ bro.app.cwd;
  * ...args` from this app's working directory. With `newInstance`, the new
  * process skips the single-instance hand-off and opens a window of its own
  * (what a "New Window" command wants). Returns false headless, or when the
- * process could not be started.
+ * process could not be started. Needs the `spawn` capability (docs/apps.md,
+ * Permissions); without it, throws the refusal.
  * @param {string[]} [args]
  * @param {{newInstance?: boolean}} [options]
  * @returns {boolean}
@@ -156,7 +157,8 @@ bro.app.spawn = function(args, options) {};
  * bro: `bro <dir> ...args`. A single-instance app that is already running
  * gets an `instance` event with these args instead of a second window (bro
  * does the hand-off, as for any launch). Rejects when no app has the id, or
- * the process could not be started.
+ * the process could not be started. Needs the `spawn` capability: the other
+ * app runs under its own grants, but with arguments this app chose.
  *
  * Headless starts nothing: it resolves with `spawned: false` and records the
  * call, which `openedApps()` lists (docs/headless.md).
@@ -288,16 +290,34 @@ bro.app.oninstance;
 // ── Permissions ──────────────────────────────────────────────────────────────
 
 /**
- * The privileged namespaces bro.json asked for (`permissions`) and what was
- * granted (docs/apps.md, Permissions): everything asked, for an app installed in a
- * trusted location; otherwise what the user's permissions file grants this id.
- * A namespace not granted is the unavailable stub: `bro.<ns>.available ===
- * false`, `bro.<ns>.reason` says why, and every call throws.
+ * The capabilities bro.json declares (`permissions`) and where each stands now
+ * (docs/apps.md, Permissions), read afresh on every access. `granted`,
+ * `denied` and `undecided` cover the declared capabilities and any the host
+ * granted outright (`--grant`, helm). An undeclared capability is denied and
+ * never asked for; a declared one nobody has decided is asked for at its first
+ * use on the main thread, or now with requestPermission. A gated namespace not
+ * granted is a stub: `bro.<ns>.available === false`, `bro.<ns>.reason` says
+ * why, and every call throws.
  * @readonly
- * @type {{requested: string[], granted: string[], shell: boolean}}
+ * @type {{declared: string[], granted: string[], denied: string[], undecided: string[]}}
  * @example
- *   if (!bro.app.permissions.granted.includes('remote')) {
- *     console.log(bro.remote.reason);
- *   }
+ *   const p = bro.app.permissions;
+ *   if (p.denied.includes('remote')) console.log(bro.remote.reason);
  */
 bro.app.permissions;
+
+/**
+ * Ask for a capability now, rather than at its first use: shows bro's dialog
+ * for a declared ask capability nobody has decided (headless: the
+ * `setDialogAnswer` answer, refused without one), and keeps the answer.
+ * Resolves with whether the app has the capability: at once, without asking,
+ * for one already decided, one not declared, and a shell capability (false).
+ * Rejects with an Error for a name that is not a capability.
+ * @param {string} name A capability, e.g. 'net', 'files', 'sys.processes'.
+ * @returns {Promise<boolean>}
+ * @example
+ *   // Before showing the download button.
+ *   if (await bro.app.requestPermission('net')) startDownload();
+ *   else showOffline();
+ */
+bro.app.requestPermission = function(name) {};

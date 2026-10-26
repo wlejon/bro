@@ -152,6 +152,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `paths-api.js` | `bro.appDir` / `bro.resolvePath`: real filesystem paths, for sidecar binaries and external tools |
 | `models-api.js` | `bro.models`: where model weights live: `find(name)` → a directory or null, searching `dirs` (BRO_MODELS, the `models.dirs` setting, `<bro user data>/models`); `fetch(name, {onProgress, signal})` installs a missing folder from the `models.sources` HF datasets (verified, resumable, renamed into place), `available(name)`; main realm only |
 | `app-api.js` | `bro.app`: the running folder app's id/name/version, argv + cwd, per-app config/data/cache dirs and log, single-instance `instance` events, granted permissions, `spawn`; manifest + install in `docs/apps.md` |
+| `permissions-api.js` | `bro.permissions` (shell only): every app's capabilities from the grant store: `list`, `set`, `capabilities`, `devMode`; the capability model is docs/apps.md "Permissions" |
 | `tensor-api.js` | `bro.tensor` core: `GpuTensor`, RNG, safetensors, dense/elementwise, norms, matmul, RoPE, reductions, optimisers |
 | `tensor-nn-api.js` | `bro.tensor` part 2: the attention family, conv2d/3d + NCHW spatial, diffusion sampler steps, INT8/k-quant, audio/codec ops |
 | `diffusion-api.js` | `bro.diffusion`: `loadModel`, `generate`, the step-wise `PipelineState` API, LoRA, schedulers |

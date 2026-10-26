@@ -12,9 +12,9 @@
  * - Idle inhibition and idle notifications (`inhibitIdle`, `createIdleNotification`)
  * - Output, seat, and protocol capability inspection (`getOutputs`, `getSeats`, `hasCompositor`, `hasShm`, `hasLayerShell`, `hasForeignToplevel`, `hasScreencopy`, `hasSessionLock`, `hasIdleInhibit`, `hasIdleNotify`)
  *
- * Privileged API: Mounted automatically in Bronze when `BRO_WITH_WL` is enabled and
- * the app is verified as a trusted shell app declaring `"shell": true` or
- * `"permissions": ["wl", ...]` in its `bro.json`.
+ * Gated by the `wl` capability (docs/apps.md, Permissions): an app that declares it in
+ * bro.json's `permissions` is asked at first touch; until granted it is the unavailable stub.
+ * Compiled in with `BRO_WITH_WL`.
  */
 
 // ============================================================================

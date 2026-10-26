@@ -23,8 +23,9 @@
  *   `snapWindowToward`)
  * - Event listeners (`on`, `off`, `addEventListener`, `removeEventListener`)
  *
- * Privileged API: mounted when `BRO_WITH_COMPOSITOR` is enabled and the app is a trusted shell
- * app declaring `"shell": true` or `"permissions": ["compositor", ...]` in its `bro.json`.
+ * Gated by the `compositor` capability, a shell capability (docs/apps.md, Permissions): only
+ * the host executable grants it (helm's main, or `--grant compositor`); it is never asked for,
+ * and for every other app it is the unavailable stub. Compiled in with `BRO_WITH_COMPOSITOR`.
  *
  * Backends: under `bro --drm` (bro.window.displayMode === 'drm') the calls drive bro's own
  * Wayland server (brocompositor over wlroots), which honours everything here. Elsewhere the

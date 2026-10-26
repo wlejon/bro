@@ -1,6 +1,13 @@
 /**
  * @file docs/vfs-api.js
  * @summary Documentation and examples for the `bro.vfs` JavaScript API.
+ *
+ * Every path a call takes is checked as `fs` would check it (docs/apps.md,
+ * Permissions): copy reads its sources and writes its destination, move,
+ * remove, trash, restore and undo/redo write what they touch, scans, usage,
+ * watches, directory models and getMime read. A refusal throws (or rejects
+ * with) an Error carrying the reason, `code: 'EACCES'` and `path`; listTrash
+ * leaves out items whose original place the app may not read.
  */
 
 /**
