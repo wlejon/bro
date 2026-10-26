@@ -113,7 +113,12 @@ Value makeGatedNamespace(const std::string& cap, Value live) {
     g->live = std::make_shared<ev::Persistent>(live);
     HostProxyTraps traps;
     traps.get = [g](const std::string& key, Value& out) -> bool {
-        const std::string refused = appPermissions().use(g->path, "bro." + g->path + "." + key);
+        // `available` and `reason` describe the namespace, so their refusal
+        // names no member: the reason is then the start of what any call
+        // refused for the same cause throws ("..., so bro.<ns>.<fn> is refused").
+        const bool aboutNs = key == "available" || key == "reason";
+        const std::string refused =
+            appPermissions().use(g->path, aboutNs ? std::string() : "bro." + g->path + "." + key);
         if (refused.empty()) {
             Value v = ev::getProperty(g->live->get(), key);
             if (key == "available" && ev::isUndefined(v)) {
