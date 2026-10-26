@@ -24,7 +24,7 @@
 // band of the columns about it (the heights that may hold any; both made
 // from where the cache's cells may hold cloud however near, CL_B_HOLDS),
 // and how far the base must still rise before even the skin's most out
-// reaches the surface (clBaseClear). Where that falls under CL_SKIN_PIXELS
+// reaches the surface (clBaseClearParts). Where that falls under CL_SKIN_PIXELS
 // pixels the view is on a skin: the forms are read every CL_SKIN_PIXELS
 // pixels, never more, so no edge is stepped over and torn. Where the view
 // meets cloud, its face is found back toward the last clear point by false
@@ -150,18 +150,26 @@ float clFree(ClAt w, int k) {
 // margin of the base's change across a step) is sure to meet no cloud over
 // footprint `foot`: where even the skin's most out leaves the surface
 // short of it, by how far the base must still rise over how fast it can
-// (the base is the least of one rising 1 over an edge's metres at most,
-// any way, and one rising CLOUD_EDGE_STEEPEST up or down and little
-// across, a flat base: so along the view the faster of the two; a heap's,
-// its column's, rises no faster), along a view `vs` (the sine of its
-// slope) from the horizontal. Under 0 the base says how far the clear air
-// is from cloud, so between heaps and over them this is most of the way
-// there.
-float clBaseClear(float base, float foot, float vs) {
+// along the view, `rate` times 1 over an edge's metres. Under 0 the base
+// says how far the clear air is from cloud, so between heaps and over them
+// this is most of the way there.
+float clBaseClearAt(float base, float foot, float rate) {
     float w = cloudSurfaceBlur(foot);
     float most = base + (CL_BASE_MARGIN - 1.0) * abs(base) + CL_BASE_PAD + 0.55 * CLOUD_SKIN * cloudSkinAt(foot) * (1.0 - w) - 0.5 + 0.5 * w;
-    float rate = max(1.0, vs * CLOUD_EDGE_STEEPEST + 0.2 * sqrt(max(1.0 - vs * vs, 0.0)));
     return most < 0.0 ? -most * clouds.forms.w / rate : 0.0;
+}
+// The same of a base made of the slabs' and the heaps' (clBaseParts `b`),
+// along a view `vs` (the sine of its slope) from the horizontal: the nearer
+// of the two's. The slabs' base is the least of one rising 1 over an
+// edge's metres at most, any way, and one rising CLOUD_EDGE_STEEPEST up or
+// down and little across, a flat base: so along the view the faster of the
+// two. The heaps' own field rises a metre a metre whichever way the view
+// goes (their share's, where the pixel reads it, as the slabs'), so a view
+// down through the gaps between heaps steps as far as the nearest heap is,
+// not a third of it.
+float clBaseClearParts(vec4 b, float foot, float vs) {
+    float rate = max(1.0, vs * CLOUD_EDGE_STEEPEST + 0.2 * sqrt(max(1.0 - vs * vs, 0.0)));
+    return min(clBaseClearAt(b.x, foot, rate), clBaseClearAt(b.y, foot, mix(1.0, rate, b.w)));
 }
 
 // The cloud's optical depth from a point of its face `a` (air space) toward
@@ -649,7 +657,7 @@ void main() {
             int kc = min(k + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
             if (kc > k) dFree = max(dFree, clFree(w, kc));
             float vs = abs(dot(rd, normalize(a)));
-            float dB = clBaseClear(clBase(w, lod, foot), foot, vs);
+            float dB = clBaseClearParts(clBaseParts(w, lod, cloudDrift(w.p), foot), foot, vs);
             // (A step rises by at most CL_SKIN_RISE pixels' footprint: a
             // view looking down crossed eight in one, as deep as a heap
             // under a high eye is thick, and of the heaps it fell through

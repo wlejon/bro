@@ -18,7 +18,7 @@
 // of that across, so along an axis of the cache's interpolation 1 an edge
 // across and CLOUD_EDGE_STEEPEST up), and the heaps' map's columns over
 // it (rising no faster than 1 a metre), with the march's own margin
-// (clouds.frag's clBaseClear), and
+// (clouds.frag's clBaseClearAt), and
 // whether the skin's most out may carry the surface to it at the widest
 // blur the footprint gives (cloudMayHold: the field is linear in the blur).
 // The forms' extinction is zero wherever the occupancy is, so it is read

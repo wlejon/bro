@@ -429,7 +429,7 @@ float cloudFormsShare(vec4 n, float base, float footprint) {
 // (`ramp`, w or more, how wide the share's ramp is across the surface, in
 // from its outer edge at -w/2: the field's span over the footprint where
 // the skin is steeper than the base. In, so the surface reaches out no
-// further than w says, as the march's bounds take it: clBaseClear.)
+// further than w says, as the march's bounds take it: clBaseClearAt.)
 float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp) {
     if (base <= 0.0) return 0.0;
     float v = cloudFieldOf(base, skin, w);

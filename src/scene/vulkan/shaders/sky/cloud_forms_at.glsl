@@ -57,14 +57,22 @@ vec3 clCacheBase(ClAt w, float lod) {
 // clouds_layout.h: the lattice's heaps as themselves at every distance,
 // toward their share in the cache where they are finer than the pixel);
 // the skin shows as the cache says.
-vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
+// Its parts: x the slabs', y the heaps' (-1 with no map), z how much of the
+// skin's move shows, w how much of the heaps' is their share (cloudHeapsFar):
+// the heaps' own field changes no faster than a metre's distance a metre,
+// where the slabs' may rise CLOUD_EDGE_STEEPEST times that (clouds.frag's clBaseClearParts).
+vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot) {
     vec3 c = clCacheBase(w, lod);
-    if (cloudHeapMapSide() <= 0.0) return c.xy;
+    if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
     float texel;
     float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), foot, w.h * (clouds.shell.y - clouds.shell.x), texel);
     float far = cloudHeapsFar(foot, texel);
     float own = far < 1.0 ? min(0.5 + in_ / clouds.forms.w, 1.0) : 0.0;
-    return vec2(max(c.x, mix(own, c.z, far)), c.y);
+    return vec4(c.x, mix(own, c.z, far), c.y, far);
+}
+vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
+    vec4 b = clBaseParts(w, lod, pd, foot);
+    return vec2(max(b.x, b.y), b.z);
 }
 float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot).x; }
 
