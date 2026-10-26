@@ -80,7 +80,9 @@ if (!bro.conf.available) {
     // must survive the reload that write triggers.
     bro.conf.set('perf.ui.mine', 'kept');
     const fixture = path.resolve('tests/conf/fixtures/conf_child.js');
-    const r = cp.spawnSync(headless, [bro.appDir, fixture], {
+    // The child writes desktop keys (perf.ui.*, not its app's own section),
+    // which asks `files`: it is granted it as this run was.
+    const r = cp.spawnSync(headless, ['--grant', 'files', bro.appDir, fixture], {
         env: { ...process.env, BRO_TEST_CONF_CHILD_N: '5' }, encoding: 'utf-8', timeout: 120000,
     });
     assert(r.status === 0, 'the child ran: status ' + r.status + ' ' + (r.stderr || '') + (r.stdout || ''));
