@@ -20,7 +20,7 @@ void main() {
     if (wood) {
         int k = int(chunk.y) + gl_VertexIndex / perElement;
         PlantVertex o;
-        ok = float(k) < chunk.z && plantWood(int(chunk.x), k, c, o);
+        ok = float(k) < chunk.z && plantWood(plantChunkIndex(chunk.x), k, c, o);
         pos = o.pos;
     } else {
         int e = gl_VertexIndex / perElement;
@@ -30,7 +30,7 @@ void main() {
             // hexagon square to the light about its centre.
             ok = float(e) < chunk.y;
             if (ok) {
-                int pi = int(plantChunks.chunks[int(chunk.x) + e].x);
+                int pi = plantChunkIndex(plantChunks.chunks[plantChunkIndex(chunk.x) + e].x);
                 Plant p = plantAt(pi);
                 PlantSpecies s = plantSpecies(p.species);
                 PlantCrown cr = plantCrown(s, p.scale);

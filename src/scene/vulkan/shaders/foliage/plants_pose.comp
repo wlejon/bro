@@ -30,12 +30,12 @@ void main() {
         // element e % that, of chunk.y plants listed from record chunk.x.
         int per = int(chunk.z), j = e / per;
         if (j < int(chunk.y)) {
-            vec4 r = plantChunks.chunks[int(chunk.x) + j];
-            drawn = plantElementAt(int(r.x), e % per, r.y, chunk.w > 3.5, pose, cr, species);
+            vec4 r = plantChunks.chunks[plantChunkIndex(chunk.x) + j];
+            drawn = plantElementAt(plantChunkIndex(r.x), e % per, r.y, chunk.w > 3.5, pose, cr, species);
         }
     } else {
         // (chunk.w: 1 a shadow view's caster.)
-        drawn = plantElementAt(int(chunk.x), int(chunk.y) + e, chunk.z, chunk.w > 0.5, pose, cr, species);
+        drawn = plantElementAt(plantChunkIndex(chunk.x), int(chunk.y) + e, chunk.z, chunk.w > 0.5, pose, cr, species);
     }
     uvec4 a, b, c, d;
     if (drawn) {

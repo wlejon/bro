@@ -455,11 +455,11 @@ void main() {
                 uint fit = work.w[PP_N_PACK_FIT + g];
                 uint first = work.w[PP_N_PACK_START + g];
                 uint per = uint(PP_LEAVES_PER_CHUNK) >> c;
-                if (d < fit) chunks.c[first + d] = vec4(float(plant), k.elements, 0.0, 0.0);
+                if (d < fit) chunks.c[first + d] = vec4(uintBitsToFloat(plant), k.elements, 0.0, 0.0);
                 if (d % per == 0u && d < work.w[PP_N_PACK + g]) {
                     uint at = work.w[PP_N_PACK_CHUNK + g] + d / per;
                     uint n = d < fit ? min(fit - d, per) : 0u;
-                    if (at < leafCap) chunks.c[at] = vec4(float(first + d), float(n), float(1u << c), 3.0 + caster);
+                    if (at < leafCap) chunks.c[at] = vec4(uintBitsToFloat(first + d), float(n), float(1u << c), 3.0 + caster);
                 }
             }
             if (k.disc) {
@@ -469,11 +469,11 @@ void main() {
                 uint d = sDisc + myDisc;
                 uint fit = work.w[PP_N_DISC_FIT + s];
                 uint first = work.w[PP_N_DISC_START + s];
-                if (d < fit) chunks.c[first + d] = vec4(float(plant), 0.0, 0.0, 0.0);
+                if (d < fit) chunks.c[first + d] = vec4(uintBitsToFloat(plant), 0.0, 0.0, 0.0);
                 if (d % uint(PP_LEAVES_PER_CHUNK) == 0u && d < work.w[PP_N_DISC + s]) {
                     uint c = work.w[PP_N_DISC_CHUNK + s] + d / uint(PP_LEAVES_PER_CHUNK);
                     uint n = d < fit ? min(fit - d, uint(PP_LEAVES_PER_CHUNK)) : 0u;
-                    if (c < leafCap) chunks.c[c] = vec4(float(first + d), float(n), 0.0, 2.0);
+                    if (c < leafCap) chunks.c[c] = vec4(uintBitsToFloat(first + d), float(n), 0.0, 2.0);
                 }
             } else {
                 uint start = work.w[PP_N_LEAF_START + s];
@@ -481,13 +481,13 @@ void main() {
                 uint at = start + sLeaf[band] + myLeaf;
                 for (uint c = 0u; c < k.leafChunks; ++c)
                     putChunk(at + c, end, leafCap,
-                             vec4(float(plant), float(c * uint(PP_LEAVES_PER_CHUNK)), k.elements, caster));
+                             vec4(uintBitsToFloat(plant), float(c * uint(PP_LEAVES_PER_CHUNK)), k.elements, caster));
                 start = work.w[PP_N_WOOD_START + s];
                 end = start + work.w[PP_N_WOOD + s];
                 at = start + sWood[band] + myWood;
                 for (uint c = 0u; c < k.woodChunks; ++c)
                     putChunk(at + c, end, chunkCap,
-                             vec4(float(plant), float(c * uint(PP_LIMBS_PER_CHUNK)), float(k.limbs), 0.0));
+                             vec4(uintBitsToFloat(plant), float(c * uint(PP_LIMBS_PER_CHUNK)), float(k.limbs), 0.0));
             }
         }
         barrier();

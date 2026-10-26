@@ -30,7 +30,7 @@ void main() {
         vec4 chunk = plantChunks.chunks[gl_InstanceIndex];
         int k = int(chunk.y) + gl_VertexIndex / perElement;
         // (A wood chunk's z: the plant's tubes drawn, the trunk alone far off.)
-        ok = float(k) < chunk.z && plantWood(int(chunk.x), k, c, o);
+        ok = float(k) < chunk.z && plantWood(plantChunkIndex(chunk.x), k, c, o);
     } else {
         ok = plantPosedLeaf(gl_InstanceIndex * PLANT_LEAVES_PER_CHUNK + gl_VertexIndex / perElement, c, o);
     }

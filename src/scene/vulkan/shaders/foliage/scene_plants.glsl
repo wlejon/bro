@@ -19,7 +19,9 @@
 // record (in the same buffer): plant, 0, 0, 0. A packed chunk, plants of
 // few elements sharing its slots: its first packed record, how many, the
 // slots each, 3 (4 a caster's); a packed record: plant, its element count,
-// 0, 0.
+// 0, 0. A plant or a record (every x) is its index's bits (plantChunkIndex),
+// not its value: a float holds an index exactly only to 2^24, and the
+// node's store is past that from about 9M plants.
 //
 // A shader including this includes its module last (foliage/plant_module.glsl,
 // a world's in its place), after everything the module may use.
@@ -30,6 +32,9 @@
 layout(std430, set = 3, binding = 2) readonly buffer PlantChunks {
     vec4 chunks[];
 } plantChunks;
+
+// A chunk's or a record's x: the plant or record it names.
+int plantChunkIndex(float x) { return int(floatBitsToUint(x)); }
 
 // A leaf chunk's elements (the plan's PP_LEAVES_PER_CHUNK).
 #define PLANT_LEAVES_PER_CHUNK 32
