@@ -191,7 +191,7 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 | Capability | Gates | Kind |
 |---|---|---|
 | `files` | files beyond the app's own (below), through `fs`, sqlite, `bro.vfs`, `bro.search` and `bro.thumb` alike; `bro.apps`' default apps and recent files | ask |
-| `net` | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `net`, `http`'s servers and clients, `WebSocketServer`, `bro.models`' downloads | ask |
+| `net` | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `net`, `http`'s servers and clients, `WebSocketServer`, `bro.models`' downloads, `bro.net`, the page's subresources over http(s) (`<img>`, CSS `url()`, `@import`, `@font-face`, scripts, `<video>`, `<iframe>`) | ask |
 | `spawn` | `child_process`, `bro.app.spawn`, `bro.app.open`, `bro.apps.launch`, `<terminal>` | ask |
 | `mic` | `getUserMedia`, `bro.mic`, `bro.listen`, system loopback capture | ask |
 | `env` | `process.env` beyond the variables every app sees (below), changing the real environment, and (Linux) any process's `/proc/<pid>/environ` | ask |

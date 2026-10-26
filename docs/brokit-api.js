@@ -848,6 +848,20 @@ process.env;            // Proxy, string-keyed environment variables
                          //   write:   process.env.FOO = 'x'  // updates real env (setenv)
                          //   delete:  delete process.env.FOO
                          //   has:     'FOO' in process.env
+                         // Under bro's app permissions (docs/apps.md): without `env`
+                         //   an app sees only the variables every app sees (who and
+                         //   where it is: user, home, temp, PATH, locale, LC_*, XDG_*,
+                         //   the desktop, the machine, BRO_*, CI); the others are
+                         //   absent, not refused. A write it may not make lands in an
+                         //   app-local overlay: it reads it back and child_process
+                         //   children inherit it, but the real environment is unchanged.
+                         // What an app holds open under a capability it loses while
+                         //   running is closed with an Error named 'PermissionRevoked'
+                         //   (code EACCES): net sockets and servers and dgram sockets
+                         //   emit 'error' then close; a WebSocket errors (event.error)
+                         //   and closes with 1008; a fetch rejects or its body stream
+                         //   errors; a child is killed and emits 'error' before 'exit';
+                         //   an fs.watch watcher emits 'error' and closes.
 
 // Example
 if (process.platform === 'win32') {

@@ -108,6 +108,16 @@ class ListenStream {
    */
   feed(samples) {}
 
+  /**
+   * Null while the stream may run. When the user takes `mic` back while it
+   * runs, the stream's capture is closed and this holds the reason (the
+   * refusal's message, as a PermissionRevoked Error would carry it); the
+   * stream delivers nothing more.
+   * @readonly
+   * @type {string|null}
+   */
+  revoked;
+
   close() {}
 
 }

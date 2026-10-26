@@ -55,6 +55,10 @@
  *   chunkFrames fewer chunks fit, and a main thread that falls that many chunks behind drops
  *   the oldest (counted in stats().dropped) instead of the ring growing.
  * @property {Function} [onChunk] -  Callback invoked per chunk on the main thread: (chunk: MicChunk) => void.
+ * @property {Function} [onError] -  (err: Error) => void, on the main thread, when the capture is ended
+ *   for the app: the user took `mic` back while it ran (bro --revoke-app, helm's App Permissions).
+ *   err.name is 'PermissionRevoked', err.code 'EACCES'; the device is closed and not reopened, and
+ *   a later bro.mic.start throws the same refusal.
  * @property {number} [targetPeak] -  AGC target peak level in [0, 1] (default 0.95).
  * @property {number} [halfLifeSec] -  AGC running-peak decay half-life in seconds.
  * @property {number} [noiseGate] -  AGC noise gate threshold (chunks below this do not raise running peak).

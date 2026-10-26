@@ -606,6 +606,11 @@ class HTMLTerminalElement extends HTMLElement {
  *  `event.detail` is `{ cols, rows }`. */
 /** `exit`: the process exited and all its output is on the screen.
  *  `event.detail` is `{ exitCode }` (null when the platform gave none). Fires once. */
+/** `permissionrevoked`: the user took `spawn` back while the session ran
+ *  (bro --revoke-app, helm's App Permissions). `event.detail` is `{ message }`,
+ *  the reason, which is also printed on the screen; then the process (or the
+ *  persistent session's attach) is killed and `exit` follows. A later spawn()
+ *  throws the refusal (name 'PermissionRevoked'). */
 /** `keydown` / `keyup` / `composition*` / `paste` / `copy`: the usual DOM
  *  events, before the terminal acts; preventDefault() cancels its action. */
 /** `titlechange`: the program set its title (OSC 0 / 2). detail `{ title }`. */
