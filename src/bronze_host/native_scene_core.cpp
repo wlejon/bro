@@ -660,6 +660,11 @@ const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const
         c.detailScale = static_cast<float>(std::clamp(at(8, 1200.0), 1.0, 1e7));
         c.edge = static_cast<float>(std::clamp(at(9, 600.0), 1.0, 1e6));
         for (uint32_t i = 0; i < 3; ++i) c.wind[i] = static_cast<float>(at(10 + i, 0.0));
+        c.heapCell = static_cast<float>(std::max(at(13, 0.0), 0.0));
+        if (c.heapCell > 0.0f && c.heapCell < 100.0f) {
+            tl_error = "heaps.cell must be 100 m or more (0: no heaps)";
+            return tl_error.c_str();
+        }
         const size_t floats = std::min<size_t>(data ? data_len : 0, scene::CloudSettings::kMaxData * 4);
         if (floats) c.data.assign(data, data + floats);
     }

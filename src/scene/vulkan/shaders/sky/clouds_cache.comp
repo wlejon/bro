@@ -35,6 +35,7 @@ layout(push_constant) uniform Push {
 vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 #include "sky/cloud_module.glsl"
+#include "sky/cloud_heaps.glsl"
 
 // Whether the forms of base at most `base` may hold cloud read over a
 // footprint of at most `foot` (the skin's most out, the surface's blur at
@@ -71,6 +72,15 @@ void main() {
     // share.)
     vec3 pd = cloudDrift(q.p);
     float share = min(cloudDensity(q), 1.0);
+    // The heaps, where the cell is finer than them (their surface at a half,
+    // rising over the edge across it, as the world's shapes); where it is as
+    // wide, the world's share holds them.
+    float hs = cloudHeapSide();
+    if (hs > 0.0) {
+        float near = 1.0 - smoothstep(0.15 * hs, 0.6 * hs, cell);
+        if (near > 0.0)
+            share = max(share, near * min(0.5 + cloudHeapsIn(pd, h * (clouds.shell.y - clouds.shell.x)) / clouds.forms.w, 1.0));
+    }
     float baseRaw = cloudCutBase(share, pd, cell);
     float sigma = cloudForms(pd, max(share, 0.0), 0.5, cell, false);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);

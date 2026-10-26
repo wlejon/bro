@@ -29,6 +29,14 @@
 //       cell's footprint, at least 62.5 m), never run per pixel, so it may
 //       read q.cover, the engine's noise (cloudNoise) and the world's data
 //       as it likes. Zero outside the deck is the engine's.
+//   bool cloudHeap(CloudHeapCell c, out CloudHeap h)     (with #define CLOUD_HEAPS)
+//       the heap cell `c` of the engine's lattice holds (sky/cloud_heaps.glsl,
+//       setClouds' heaps.cell metres a cell), its lobes within a cell of
+//       its middle; false none. The engine adds the heaps to
+//       cloudDensity's base where the footprint is finer than them (so
+//       cloudDensity there gives what is not heaps: slabs), and draws them
+//       as themselves where the cache's cells are wider than them; where
+//       the footprint is wider, cloudDensity's share holds them as before.
 //
 // and may read cloudData(i), the world's data (vec4 i of at most 64). The
 // engine owns the rest: the forms the base is cut into (cloudForms: its
@@ -57,7 +65,7 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 cacheNadir;    // xy the eye's nadir on the chart (m)
     vec4 cacheLevel[CL_CACHE_LEVELS];   // xy the cell (index) of level k's window that holds the nadir
     vec4 forms;         // x a cloud's heart's extinction (1/m), y the billows' tile (m), z the detail's, w the edge (m)
-    vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with
+    vec4 wind;          // xyz the wind (m/s, the body's frame): what the forms drift with; w the heaps' cell (m, 0 none)
     vec4 data[CL_MAX_DATA];
     // The volume about the eye (sky/cloud_volume.glsl).
     vec4 volA;          // xyz its anchor (the drifted body frame, m), w the finest cell (m)
@@ -86,6 +94,28 @@ struct CloudPoint {
 };
 
 vec4 cloudData(int i) { return clouds.data[clamp(i, 0, CL_MAX_DATA - 1)]; }
+
+// A heap (sky/cloud_heaps.glsl): lobes, half-ellipsoids each standing on
+// its base: the ellipsoid's middle at xy metres off the cell's middle on
+// the plane tangent there (east, north) and `middle` metres over its base
+// (under 0: below it), z across and w up its half-axes, cut flat at `base`
+// (metres up the deck). w 0: no lobe.
+const int CL_HEAP_LOBES = 4;
+struct CloudHeap {
+    vec4 lobe[CL_HEAP_LOBES];
+    vec4 middle;
+    vec4 base;
+};
+// A cell of the heaps' lattice, as the world is asked about it.
+struct CloudHeapCell {
+    ivec3 id;      // x the cube's face, y and z the cell on it
+    vec3 up;       // its middle's direction (the drifted body frame)
+    vec3 east;     // the plane tangent there (unit)
+    vec3 north;
+    vec3 hash;     // three uniform draws of its own, 0 .. 1
+    vec4 cover;    // cloudCoverAt(up)
+    float side;    // its width (m, at the deck's bottom)
+};
 
 // The world's (defined by its module, after this file).
 vec4 cloudCover(vec3 up);

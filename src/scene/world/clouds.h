@@ -40,6 +40,9 @@ struct CloudSettings {
     float detailScale = 1200.0f;
     float edge = 600.0f;
     float wind[3] = {0.0f, 0.0f, 0.0f};
+    /// The heaps' lattice cell (m at the deck's bottom; 0: the world has no
+    /// heaps): sky/cloud_heaps.glsl, docs/clouds-api.js.
+    float heapCell = 0.0f;
     /// cloudData(i): at most kMaxData vec4s, as floats.
     std::vector<float> data;
     static constexpr size_t kMaxData = 64;

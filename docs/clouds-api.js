@@ -143,6 +143,17 @@
  * @property {ArrayLike<number>} [wind=[0,0,0]]  the wind (m/s, the body's
  *     frame) the forms drift with; a module that moves its base reads
  *     cloudDrift(p) to move with them
+ * @property {{cell: number}} [heaps]  the heaps' lattice: the engine lays
+ *     cells `cell` metres wide (100 or more) on the cover's cube at the
+ *     deck's bottom, drifting with the wind, and asks the module's
+ *     cloudHeap (with `#define CLOUD_HEAPS`) for the heap each holds: its
+ *     lobes, half-ellipsoids on flat bases, within a cell of the cell's
+ *     middle (sky/scene_cloud_layer.glsl has the types). The engine adds
+ *     them to cloudDensity's base where the cache's cells are finer than
+ *     them, so cloudDensity there gives the rest (slabs); where the
+ *     footprint is as wide as them, its share holds them. One heap at
+ *     every distance: the one a view from far off sees is the one flown
+ *     through. Without it (or 0) the module's cloudDensity is all.
  * @property {boolean} [shadows=true]  the deck shadows what the sun lights
  * @property {LandNode|number} [land]  a round land whose processes' grid the
  *     cover's bake reads (cloudLandGrid); without one it reads zero

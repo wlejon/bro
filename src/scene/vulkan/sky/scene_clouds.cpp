@@ -452,7 +452,7 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     block_.forms[2] = c.detailScale;
     block_.forms[3] = c.edge;
     for (int i = 0; i < 3; ++i) block_.wind[i] = c.wind[i];
-    block_.wind[3] = 0.0f;
+    block_.wind[3] = c.heapCell;   // (the heaps' lattice cell: sky/cloud_heaps.glsl)
     const size_t vecs = std::min(c.data.size() / 4, static_cast<size_t>(CL_MAX_DATA));
     std::memset(block_.data, 0, sizeof(block_.data));
     std::memcpy(block_.data, c.data.data(), vecs * 4 * sizeof(float));
