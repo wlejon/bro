@@ -55,6 +55,11 @@ void WorldService::beginFrame() {
     // Keeping up: the target, less the need over the short window.
     if (!need_.empty() && !overTarget_)
         budget = std::max(budget, static_cast<float>(config_.targetMs - headroom_ - worst(config_.window)));
+    // Over it whatever the world does: still a share of the frame, so a view
+    // that costs past the target (the planet's 1-40 km at 4-7 ms) does not
+    // starve its world, missing tiles and all, for 0.1 ms a frame more.
+    if (!need_.empty() && overTarget_)
+        budget = std::max(budget, static_cast<float>(config_.floorShare * worst(config_.window)));
     // Catching up: the ceiling, less the need over the longer catch-up
     // window (the frame's own spikes, a plant page placed or a pipeline
     // compiled every few dozen frames, fall between the short window's

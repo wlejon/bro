@@ -154,6 +154,7 @@ struct WorldJob {
 struct WorldServiceConfig {
     float targetMs = 2.78f;   // the frame's GPU target (the 4090 at 360 fps)
     float floorMs = 0.1f;     // the least budget a frame
+    float floorShare = 0.1f;  // and of the frame's own need over the short window, while over the target
     int window = 4;           // frames whose need sets the slack
     float costRate = 0.25f;      // how far one measurement moves a kind's cost (the power of its ratio)
     float costQuantile = 0.9f;   // the weight of a dearer measurement's pull, the rest a cheaper one's

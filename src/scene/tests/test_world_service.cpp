@@ -304,6 +304,7 @@ void testFloorOverTarget() {
     WorldServiceConfig c;
     c.targetMs = 2.78f;
     c.floorMs = 0.12f;
+    c.floorShare = 0.0f;   // (the floor alone; testShareOverTarget the share)
     s.configure(c);
     const int k = s.addKind({"turf", WorldSchedule::Raster, 0.05f});
     for (int i = 0; i < 4; ++i) s.observe(frameOf(1.0));
@@ -331,6 +332,36 @@ void testFloorOverTarget() {
     t.observe(frameOf(2.7));
     t.beginFrame();
     check(near(t.budgetMs(), 0.12), "slack under the floor is the floor");
+}
+
+void testShareOverTarget() {
+    WorldService s;
+    WorldServiceConfig c;
+    c.targetMs = 2.78f;
+    c.floorMs = 0.12f;
+    c.floorShare = 0.1f;
+    s.configure(c);
+    const int k = s.addKind({"land", WorldSchedule::Raster, 0.05f});
+    // A view that costs 7 ms whatever the world does: a tenth of its need.
+    s.observe(frameOf(7.0, k, 4, 0.2));
+    s.beginFrame();
+    check(near(s.budgetMs(), 0.68), "over the target, a tenth of the frame's need (6.8 ms)");
+    for (uint64_t i = 1; i <= 20; ++i) s.offer({i, 0, k, 3.0f, 1.0, false});
+    s.schedule();
+    check(s.granted(k).size() == 13, "and it grants what fits that (thirteen at 0.05)");
+    // A light frame over it by a little: the floor, as before.
+    WorldService t;
+    t.configure(c);
+    t.addKind({"land", WorldSchedule::Raster, 0.05f});
+    t.observe(frameOf(2.9));
+    t.beginFrame();
+    check(near(t.budgetMs(), 0.29), "just over, a tenth of 2.9");
+    WorldService u;
+    u.configure(c);
+    u.addKind({"land", WorldSchedule::Raster, 0.05f});
+    u.observe(frameOf(1.0));
+    u.beginFrame();
+    check(u.budgetMs() > 1.0f, "under the target the slack, the share playing no part");
 }
 
 void testHeadroom() {
@@ -462,6 +493,7 @@ int main() {
     testNextFrame();
     testBudgetFollowsSlack();
     testFloorOverTarget();
+    testShareOverTarget();
     testHeadroom();
     testCostLearning();
     testViewCut();
