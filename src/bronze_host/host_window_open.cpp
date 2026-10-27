@@ -4,7 +4,7 @@
 #include "bronze_host/host_window_message.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_worker_msg.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "engine/engine.h"
 #include "platform/system_info.h"
 #include "platform/window.h"
@@ -41,11 +41,12 @@ struct ParentMessage {
 };
 
 // A window.postMessage between two windows, cloned at the call and waiting for
-// the drain: `hostId` is the secondary window on the other end.
+// the drain: `hostId` is the secondary window on the other end. The two
+// windows are two compartments, so the clone is bytes (serializeForPost),
+// read back in the receiver's realm.
 struct WindowMessage {
     uint64_t hostId = 0;
-    ev::Persistent data;
-    ev::Persistent ports;
+    Message msg;
 };
 
 static std::unordered_map<uint64_t, std::shared_ptr<WindowHandleState>> s_handleStates;
@@ -85,7 +86,7 @@ static Value openerProxyFor(uint64_t hostId) {
         parsePostMessageArgs(a, "Window.postMessage", false, target);
         WindowMessage m;
         m.hostId = hostId;
-        cloneForPostMessage(message, target.transfer, m.data, m.ports);
+        serializeForPost(message, target.transfer, m.msg);
         if (target.deliver) s_openerInbox.push_back(std::move(m));
         return ev::undefined();
     });
@@ -360,7 +361,7 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
         parsePostMessageArgs(a, "Window.postMessage", true, target);
         WindowMessage m;
         m.hostId = id;
-        cloneForPostMessage(message, target.transfer, m.data, m.ports);
+        serializeForPost(message, target.transfer, m.msg);
         if (!target.deliver) return ev::undefined();
         auto it = s_handleStates.find(id);
         if (it != s_handleStates.end() && !it->second->closed && it->second->engine) {
@@ -384,11 +385,14 @@ Value hostWindowOpener() {
 }
 
 void installBroWindowParent(Value broWinIn) {
+    // A secondary window's own: the app's document and its frames have no
+    // window that opened theirs, and see no bro.window.parent.
+    if (currentCompartment()->windowHostId == 0 && currentWindowHostId() == 0) return;
     // Rooted: building `parent` allocates, and broWinIn is a plain copy.
     ev::Persistent broWin(broWinIn);
     ObjectBuilder parent;
     parent.def("postMessage", 2, [](Value, std::span<const Value> a) -> Value {
-        if (!isChildRealm()) {
+        if (currentWindowHostId() == 0) {
             return ev::throwTypeError("bro.window.parent.postMessage is only available in a secondary window");
         }
         if (a.empty()) return ev::undefined();
@@ -398,15 +402,7 @@ void installBroWindowParent(Value broWinIn) {
         if (!serializeMessage(a[0], transferVals, msg)) {
             return ev::throwTypeError("postMessage: value is not cloneable");
         }
-        dom::Document* curDoc = currentHostDocument();
-        uint64_t hostId = 0;
-        if (curDoc && hostEngine()) {
-            if (auto* wh = hostEngine()->windowHostForDocument(curDoc)) {
-                hostId = wh->id;
-            }
-        }
-        if (hostId == 0) hostId = currentRealmScope();
-        s_parentInbox.push_back({hostId, std::move(msg)});
+        s_parentInbox.push_back({currentWindowHostId(), std::move(msg)});
         return ev::undefined();
     });
     ev::setProperty(broWin.get(), "parent", parent.get());
@@ -456,7 +452,7 @@ void installBroWindowOpen(Value broWinIn) {
     installBroWindowParent(broWin.get());
 
     ev::Persistent openFn(ev::makeFunction([](Value, std::span<const Value> a) -> Value {
-        if (isChildRealm()) {
+        if (inChildCompartment()) {
             return ev::throwTypeError("bro.window.open is only available from the main app realm");
         }
         if (a.empty() || !ev::isString(a[0])) {
@@ -578,7 +574,6 @@ void windowHostNotifyClosed(uint64_t id) {
     s_windowHandles.erase(hIt);
     s_childInboxes.erase(id);
     s_openerProxies.erase(id);
-    clearRealmScope(id);
     fireHandleListeners(listeners, handle, event);
 }
 
@@ -610,9 +605,10 @@ void drainHostWindowMessages() {
             for (auto& m : batch) {
                 auto* host = eng->windowHostById(hostId);
                 if (!host || host->pendingClose || !host->document) break;
-                ev::Persistent source(openerProxyFor(hostId));
-                deliverWindowMessageEvent(hostId, host->document.get(), m.data, m.ports, source,
-                                          kHostPageOrigin);
+                // `source` is the window's own `window.opener`, made in its realm.
+                const uint64_t id = hostId;
+                deliverWindowMessage(host->document.get(), std::make_shared<Message>(std::move(m.msg)),
+                                     [id] { return openerProxyFor(id); }, kHostPageOrigin);
             }
         }
     }
@@ -624,14 +620,20 @@ void drainHostWindowMessages() {
         auto batch = std::move(s_openerInbox);
         s_openerInbox.clear();
         for (auto& m : batch) {
-            auto hIt = s_windowHandles.find(m.hostId);
-            ev::Persistent source(hIt != s_windowHandles.end() ? hIt->second.get() : ev::null());
-            deliverWindowMessageEvent(0, nullptr, m.data, m.ports, source, kHostPageOrigin);
+            const uint64_t id = m.hostId;
+            deliverWindowMessage(nullptr, std::make_shared<Message>(std::move(m.msg)),
+                                 [id] {
+                                     auto hIt = s_windowHandles.find(id);
+                                     return hIt != s_windowHandles.end() ? hIt->second.get() : ev::null();
+                                 },
+                                 kHostPageOrigin);
         }
     }
     if (!s_parentInbox.empty()) {
         auto batch = std::move(s_parentInbox);
         s_parentInbox.clear();
+        // The handles and their listeners are the app's: read back in its realm.
+        CompartmentScope app(&appCompartment());
 
         for (auto& pm : batch) {
             ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(pm.msg); });
@@ -677,7 +679,7 @@ Value handleWindowOpen(std::span<const Value> a) {
     }
     // A secondary window is only opened from the main realm, as
     // bro.window.open is.
-    if (isChildRealm()) return ev::null();
+    if (inChildCompartment()) return ev::null();
 
     engine::WindowHostOptions opts;
     opts.src = url;

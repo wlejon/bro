@@ -1,229 +1,44 @@
+// <iframe src=dir>: a sub-document running as a compartment of its own
+// (host_compartment.h). It is the app's own, so the host page reaches its
+// window and document as the web's same-origin frames are reached; an
+// <appview> is another app, reached only by message: its contentWindow is a
+// window proxy carrying postMessage (host_membrane.h), and its contentDocument
+// is null, as a cross-origin frame's is.
+
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_element.h"
-#include "bronze_host/host_proxy.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_window_open.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
+#include "bronze_host/host_membrane.h"
+#include "bronze_host/host_appview.h"
 #include "bronze_host/host_storage.h"
 #include "dom/element.h"
 #include "engine/app_loader.h"
 #include "engine/engine.h"
+#include "engine/window_host.h"
 #include "util/log.h"
 
 namespace bro::bronze_host {
 
 namespace {
 
-static std::unordered_map<uint64_t, ev::Persistent> s_contentWindowProxies;
-
-// The global `document`, and globalThis.document, set to `docIn`.
-void setDocumentGlobal(Value docIn) {
-    ev::Persistent doc(docIn);
-    ev::registerGlobal("document", doc.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "document", doc.get());
+// The compartment an <iframe> / <appview> element's sub-document runs in, or
+// null before it has loaded (or once it is stopped).
+Compartment* frameCompartment(dom::Element* el) {
+    engine::Engine* eng = hostEngine();
+    if (!el || !eng) return nullptr;
+    engine::IframeDoc* d = eng->iframeDocForElement(el);
+    if (!d || !d->document) return nullptr;
+    Compartment* c = compartmentForDocument(d->document.get());
+    return c && c->document == d->document.get() && !c->dying ? c : nullptr;
 }
 
-// The functions crossing a frame's realm boundary, each with the wrapper that
-// runs it in its own realm (the document it runs against): the frame's
-// functions its contentWindow handed out, and the functions its caller passed
-// into them (a callback the child calls runs in the parent). One wrapper a
-// function and realm, so a function read twice is the same one; all of them
-// dropped with the frame.
-struct RealmFunction {
-    ev::Persistent fn, wrapper;
-    dom::Document* doc;
-};
-static std::unordered_map<uint64_t, std::vector<RealmFunction>> s_realmFunctions;
-
-Value wrapRealmFunction(uint64_t frameScope, dom::Document* doc, Value fnIn);
-
-// Call `fn` in the realm of `doc`, as a browser runs a function in its own:
-// its scope, its document as the global `document` and the current one, the
-// caller's back after it returns or throws. Sub-document realms share one
-// global object, entered by swapping these (runHostSubDocScripts, a timer, an
-// event); a call through contentWindow entered nothing, so the child's
-// function ran against the parent's document. A function passed in runs in
-// the caller's realm, and one returned in `doc`'s.
-Value callInRealm(uint64_t frameScope, dom::Document* doc, Value fnIn, Value selfIn, std::span<const Value> argsIn) {
-    // Rooted: entering and leaving the realm moves expandos on and off
-    // globalThis, a chain of allocating calls.
-    ev::Persistent fn(fnIn), self(selfIn);
-    std::vector<ev::Persistent> args;
-    args.reserve(argsIn.size());
-    for (Value v : argsIn) args.emplace_back(v);
-    dom::Document* prevDoc = currentHostDocument();
-    // A frame gone since (a wrapper kept past it) has no realm to enter.
-    const bool enter = doc && doc != prevDoc && dom::Document::isLiveDocument(doc);    if (enter && prevDoc) {
-        for (auto& a : args)
-            if (ev::isFunction(a.get())) a.set(wrapRealmFunction(frameScope, prevDoc, a.get()));
-    }
-    ev::GlobalValue docG = ev::globalValue("document");
-    ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
-    if (enter) {
-        enterRealmScope(scopeIdForDocument(doc));
-        setCurrentHostDocument(doc);
-        setDocumentGlobal(hostDocumentValue(doc));
-    }
-    std::vector<Value> argv;
-    argv.reserve(args.size());
-    for (auto& a : args) argv.push_back(a.get());
-    ev::CallResult r = ev::call(fn.get(), self.get(), std::span<const Value>(argv.data(), argv.size()));
-    ev::Persistent result(r.value);
-    if (enter) {
-        if (!ev::isNull(prevDocVal.get())) setDocumentGlobal(prevDocVal.get());
-        setCurrentHostDocument(prevDoc);
-        exitRealmScope();
-    }
-    if (r.thrown) return ev::throwValue(result.get());
-    // A function it returns is of its realm too.
-    if (ev::isFunction(result.get())) return wrapRealmFunction(frameScope, doc, result.get());
-    return result.get();
-}
-
-Value wrapRealmFunction(uint64_t frameScope, dom::Document* doc, Value fnIn) {
-    ev::Persistent fn(fnIn);
-    auto& wrapped = s_realmFunctions[frameScope];
-    for (auto& r : wrapped)
-        if (r.doc == doc && (r.fn.get().rawBits() == fn.get().rawBits() ||
-                             r.wrapper.get().rawBits() == fn.get().rawBits()))
-            return r.wrapper.get();
-    auto held = std::make_shared<ev::Persistent>(fn.get());
-    ev::Persistent wrapper(ev::makeFunction(
-        [frameScope, doc, held](Value self, std::span<const Value> a) -> Value {
-            return callInRealm(frameScope, doc, held->get(), self, a);
-        },
-        0));
-    wrapped.push_back({ev::Persistent(fn.get()), ev::Persistent(wrapper.get()), doc});
-    return wrapped.back().wrapper.get();
-}
-
-Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
-    if (!el || !d || !d->document) return ev::null();
-    uint64_t scopeId = scopeIdForDocument(d->document.get());
-    auto it = s_contentWindowProxies.find(scopeId);
-    if (it != s_contentWindowProxies.end()) {
-        return it->second.get();
-    }
-
-    HostProxyTraps traps;
-    dom::Document* docPtr = d->document.get();
-
-    traps.get = [scopeId, docPtr, el](const std::string& key, Value& out) -> bool {
-        if (key == "document") {
-            out = hostDocumentValue(docPtr);
-            return true;
-        }
-        if (key == "frameElement") {
-            out = hostElementValue(el);
-            return true;
-        }
-        if (key == "window" || key == "self") {
-            auto it = s_contentWindowProxies.find(scopeId);
-            if (it != s_contentWindowProxies.end()) {
-                out = it->second.get();
-                return true;
-            }
-        }
-        if (key == "parent" || key == "top") {
-            ev::GlobalValue g = ev::globalValue("window");
-            out = g.found ? g.value : ev::undefined();
-            return true;
-        }
-        // Rooted across exitRealmScope: switching the scope back moves every
-        // expando on and off globalThis, a chain of allocating calls that
-        // leaves a raw Value read inside the frame's scope stale.
-        enterRealmScope(scopeId);
-        ev::GlobalValue g = ev::globalValue("globalThis");
-        ev::Persistent value;
-        if (g.found && ev::isObject(g.value)) {
-            value.set(ev::getProperty(g.value, key));
-        }
-        exitRealmScope();
-        if (ev::isUndefined(value.get())) return false;
-        // A function of the frame's realm runs there, whoever calls it.
-        out = ev::isFunction(value.get()) ? wrapRealmFunction(scopeId, docPtr, value.get()) : value.get();
-        return true;
-    };
-
-    traps.set = [scopeId](const std::string& key, Value v) {
-        // Rooted: globalValue may allocate (embed.h) before the write.
-        ev::Persistent value(v);
-        enterRealmScope(scopeId);
-        ev::GlobalValue g = ev::globalValue("globalThis");
-        if (g.found && ev::isObject(g.value)) {
-            ev::setProperty(g.value, key, value.get());
-        }
-        exitRealmScope();
-    };
-
-    traps.has = [scopeId](const std::string& key) -> bool {
-        if (key == "document" || key == "frameElement" || key == "window" || key == "self" || key == "parent" || key == "top") {
-            return true;
-        }
-        enterRealmScope(scopeId);
-        ev::GlobalValue g = ev::globalValue("globalThis");
-        bool hasProp = false;
-        if (g.found && ev::isObject(g.value)) {
-            Value v = ev::getProperty(g.value, key);
-            hasProp = !ev::isUndefined(v);
-        }
-        exitRealmScope();
-        return hasProp;
-    };
-
-    traps.ownKeys = [scopeId]() -> std::vector<std::string> {
-        std::vector<std::string> keys = {"document", "frameElement", "window", "self", "parent", "top"};
-        enterRealmScope(scopeId);
-        // Each value rooted before the next lookup: globalValue, getProperty,
-        // call and getElement may all allocate.
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::Persistent global(gt.value);
-            ev::GlobalValue objG = ev::globalValue("Object");
-            if (objG.found && ev::isObject(objG.value)) {
-                ev::Persistent objectNs(objG.value);
-                ev::Persistent namesFn(ev::getProperty(objectNs.get(), "getOwnPropertyNames"));
-                if (ev::isFunction(namesFn.get())) {
-                    const Value arg = global.get();
-                    ev::CallResult res = ev::call(namesFn.get(), objectNs.get(), std::span<const Value>(&arg, 1));
-                    if (!res.thrown && ev::isObject(res.value)) {
-                        ev::Persistent names(res.value);
-                        Value lenVal = ev::getProperty(names.get(), "length");
-                        int len = ev::isNumber(lenVal) ? satCast<int>(ev::toDouble(lenVal)) : 0;
-                        for (int i = 0; i < len; ++i) {
-                            Value k = ev::getElement(names.get(), i);
-                            if (ev::isString(k)) keys.push_back(ev::toUtf8(k));
-                        }
-                    }
-                }
-            }
-        }
-        exitRealmScope();
-        return keys;
-    };
-
-    Value proxy = makeHostProxy(std::move(traps));
-    s_contentWindowProxies[scopeId].set(proxy);
-    return proxy;
-}
-
-} // namespace
-
-void clearContentWindowProxy(uint64_t scopeId) {
-    if (scopeId == 0) {
-        s_contentWindowProxies.clear();
-        s_realmFunctions.clear();
-    } else {
-        s_contentWindowProxies.erase(scopeId);
-        s_realmFunctions.erase(scopeId);
-    }
-}
+}  // namespace
 
 void decorateIFrameProto(ObjectBuilder& b) {
     b.accessor("src",
@@ -236,16 +51,9 @@ void decorateIFrameProto(ObjectBuilder& b) {
             if (!el) return ev::undefined();
             std::string src = ev::toUtf8(argAt(a, 0));
             el->setAttribute("src", src);
-            if (engine::Engine* engine = hostEngine()) {
-                if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
-                    if (d->document) {
-                        const uint64_t scope = scopeIdForDocument(d->document.get());
-                        clearContentWindowProxy(scope);
-                        clearCustomElementsForScope(scope);
-                    }
-                }
-                engine->reloadIframe(el);
-            }
+            // The old document's compartment goes with it at the drain
+            // (teardownSubDoc); the new one is made when its scripts run.
+            if (engine::Engine* engine = hostEngine()) engine->reloadIframe(el);
             return ev::undefined();
         });
 
@@ -271,51 +79,38 @@ void decorateIFrameProto(ObjectBuilder& b) {
             return ev::undefined();
         });
 
+    // The frame's window: itself to the app's own page, a proxy carrying
+    // postMessage (and `closed`) to another app's (windowProxyFor). Null
+    // until it has loaded.
     b.accessor("contentWindow",
         [](Value self, std::span<const Value>) -> Value {
-            dom::Element* el = hostElementOf(self);
-            auto* eng = hostEngine();
-            if (!el || !eng) return ev::null();
-            engine::IframeDoc* d = eng->iframeDocForElement(el);
-            if (!d || !d->document) return ev::null();
-            return makeContentWindowProxy(el, d);
+            Compartment* c = frameCompartment(hostElementOf(self));
+            return c ? windowProxyFor(c) : ev::null();
         },
         nullptr);
 
-    // The sub-document's own `document` value (the one its scripts see), so
-    // the host can reach into a same-app frame the way the web allows for a
-    // same-origin one; null until the frame has loaded.
+    // Its document, to the app's own page; null to another app's, as a
+    // cross-origin frame's is.
     b.accessor("contentDocument",
         [](Value self, std::span<const Value>) -> Value {
-            dom::Element* el = hostElementOf(self);
-            auto* eng = hostEngine();
-            if (!el || !eng) return ev::null();
-            engine::IframeDoc* d = eng->iframeDocForElement(el);
-            if (!d || !d->document) return ev::null();
-            return hostDocumentValue(d->document.get());
+            Compartment* c = frameCompartment(hostElementOf(self));
+            if (!c || !c->realm || !sameApp(currentCompartment(), c)) return ev::null();
+            ev::Persistent global(ev::getRealmGlobal(c->realm));
+            return ev::getProperty(global.get(), "document");
         },
         nullptr);
 
     b.def("reload", 0, [](Value self, std::span<const Value>) -> Value {
         dom::Element* el = hostElementOf(self);
-        if (el && (el->tagName() == "IFRAME" || el->tagName() == "iframe")) {
-            if (engine::Engine* engine = hostEngine()) {
-                if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
-                    if (d->document) {
-                        const uint64_t scope = scopeIdForDocument(d->document.get());
-                        clearContentWindowProxy(scope);
-                        clearCustomElementsForScope(scope);
-                    }
-                }
-                engine->reloadIframe(el);
-            }
+        if (el && el->isFrameHost()) {
+            if (engine::Engine* engine = hostEngine()) engine->reloadIframe(el);
         }
         return ev::undefined();
     });
 
     b.def("capture", 0, [](Value self, std::span<const Value>) -> Value {
         dom::Element* el = hostElementOf(self);
-        if (!el || (el->tagName() != "IFRAME" && el->tagName() != "iframe")) return ev::null();
+        if (!el || !el->isFrameHost()) return ev::null();
         engine::Engine* engine = hostEngine();
         if (!engine) return ev::null();
         int w = 0, h = 0;
@@ -328,20 +123,37 @@ void decorateIFrameProto(ObjectBuilder& b) {
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                           const std::vector<engine::ScriptEntry>& scripts,
                           const std::string& appDir, const std::string& basePath,
-                          bool isChild) {
-    if (scripts.empty() || !subDoc) return;
+                          bool /*isChild*/) {
+    if (!subDoc) return;
 
-    uint64_t scopeId = scopeIdForDocument(subDoc);
-    enterRealmScope(scopeId);
-    dom::Document* prevHostDoc = currentHostDocument();
-    setCurrentHostDocument(subDoc);
-    reloadHostStorage(basePath);
-
-    // Rooted: running the scripts allocates, and the restore must name the
-    // previous document's CURRENT address; globalThis is re-read each time.
-    ev::GlobalValue docG = ev::globalValue("document");
-    ev::Persistent prevDoc(docG.found ? docG.value : ev::null());
-    setDocumentGlobal(hostDocumentValue(subDoc));
+    // Every sub-document is a compartment of its own, made here as its
+    // scripts are about to run (a scriptless one too: its window still
+    // receives messages, and its events dispatch in its own realm).
+    Compartment* c = compartmentForDocument(subDoc);
+    if (c->document != subDoc || c->kind == CompartmentKind::App) {
+        CompartmentSetup setup;
+        setup.document = subDoc;
+        setup.appDir = appDir;
+        setup.basePath = basePath;
+        if (engine::IframeDoc* f = engine.iframeForDocument(subDoc)) {
+            // Frames and appviews are hosted by the app's own document only
+            // (Engine::syncIframes).
+            setup.parent = &appCompartment();
+            setup.hostElement = f->element;
+            if (f->element && (f->element->tagName() == "appview" || f->element->tagName() == "APPVIEW")) {
+                setup.kind = CompartmentKind::AppView;
+                prepareAppView(engine, setup);
+            } else {
+                setup.kind = CompartmentKind::Frame;
+            }
+        } else if (engine::WindowHost* wh = engine.windowHostForDocument(subDoc)) {
+            setup.kind = CompartmentKind::Window;
+            setup.windowHostId = wh->id;
+        } else {
+            setup.kind = CompartmentKind::Panel;
+        }
+        c = createCompartment(engine, std::move(setup));
+    }
 
     // Module and classic scripts alike, in document order, as the main
     // document runs its scripts (Engine::initAppRealm). Every script is
@@ -350,40 +162,35 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     // document for an inline one (the "<inline>" name sits in basePath), and
     // the realm's module registry evaluates a module that two scripts import
     // once. Each script is its own unit, so a module's top-level bindings stay
-    // in its own scope.
-    (void)appDir;
-    for (const auto& s : scripts) {
-        std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
-        if (code.empty()) continue;
-        std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
-        evalScript(engine, code, fname);
-    }
-
-    if (!ev::isNull(prevDoc.get())) setDocumentGlobal(prevDoc.get());
-
-    setCurrentHostDocument(prevHostDoc);
-    exitRealmScope();
+    // in its own scope. One entry of the compartment's: an appview's may yield
+    // at its slice and finish on later frames.
+    runEntry(c, EntryKind::Async, [&engine, scripts, basePath] {
+        reloadHostStorage(basePath);
+        for (const auto& s : scripts) {
+            std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
+            if (code.empty()) continue;
+            std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
+            evalScript(engine, code, fname);
+        }
+    });
 }
 
 namespace {
-// globalThis.<hook>() in the document's realm. The global is rooted across
-// the property read (a getter may allocate) so the call's receiver is current.
+// globalThis.<hook>() in the document's compartment. The global is rooted
+// across the property read (a getter may allocate) so the call's receiver is
+// current.
 void callRealmHook(dom::Document* doc, const char* hook) {
     if (!doc) return;
-    dom::Document* prevHostDoc = currentHostDocument();
-    setCurrentHostDocument(doc);
-    uint64_t scopeId = scopeIdForDocument(doc);
-    enterRealmScope(scopeId);
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
+    runEntry(doc, EntryKind::Sync, [hook] {
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (!gt.found || !ev::isObject(gt.value)) return;
         ev::Persistent global(gt.value);
         ev::Persistent fn(ev::getProperty(global.get(), hook));
         if (ev::isFunction(fn.get())) {
-            ev::call(fn.get(), global.get(), {});
+            ev::CallResult r = ev::call(fn.get(), global.get(), {});
+            if (r.thrown) reportBronzeError(hook, r.value);
         }
-    }
-    exitRealmScope();
-    setCurrentHostDocument(prevHostDoc);
+    });
 }
 }  // namespace
 

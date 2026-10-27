@@ -105,8 +105,9 @@ capability call runs in helm's compartment behind a membrane: arguments are
 cloned in, results cloned out, and a callback becomes a capability in turn.
 This replaces `wrapRealmFunction` and the shared `contentWindow` for apps.
 
-`<iframe>` should become compartments as well, so there is one mechanism
-(open question 1).
+`<iframe>`s are compartments as well, so there is one mechanism (open
+question 1). A page's own frames are of its app, and they reach one another
+directly.
 
 ## Capabilities and permissions
 
@@ -274,7 +275,11 @@ What the design must keep possible, and what it still lacks for it:
 ## Open questions
 
 1. Do `<iframe>`s become compartments, removing realm-scope expando swapping
-   (one mechanism)? Recommended: yes.
+   (one mechanism)? *Answered (step 3):* yes. Every sub-document is a
+   compartment with its own realm, and the swapping is gone. A page's own
+   frames share its ownership group, so they reach one another as
+   same-origin frames do; another app inline is an `<appview>`, behind the
+   membrane.
 2. Per-compartment memory accounting in one shared bronze heap: allocation
    attribution, and what a budget means at collection.
 3. Can the interpreter tier poll for time slices cheaply, and do brass's
@@ -451,11 +456,100 @@ What the design must keep possible, and what it still lacks for it:
      epochs that never bump is too small to see over three.js's own misses
      (its prototypes are its own, not the builtins').
 3. **Compartment = Realm + document + ledger;** host objects owned by their
-   compartment; `<appview>`.
-4. **Fiber scheduling and time slices.** The engine half is **built**
-   (2026-10-26), in bronze and brass. bro does not use it yet; that comes
-   with step 3's `<appview>`. bronze's `docs/internals.md` ("Realm
-   ownership", "Compartments") describes the mechanism.
+   compartment; `<appview>`. **Built** (2026-10-26):
+   - **A compartment is a bronze realm** bound to one document and one
+     `AppPermissions` (`src/bronze_host/host_compartment.h`). The app's
+     document is the app compartment, on the default realm; every
+     sub-document the engine hosts is a compartment of its own: an
+     `<iframe>`, a secondary window, a system panel, an `<appview>`. Each
+     realm installs its own host globals, `bro` root, host classes and
+     module instances. The realm-scope swapping that made frames share one
+     realm (`host_realm_scope.*`) is gone, which is step 8.
+   - **Ownership groups answer open question 1.** An app's frames, windows
+     and panels join the app's realm group (bronze `embed::joinRealmGroup`).
+     Within a group they reach one another as the web's same-origin frames
+     do: `contentWindow` and `contentDocument` are the frame's own,
+     `parent`, `top` and `frameElement` the page's, and a DOM node passes
+     between them. Each still has its own globals, and every call runs in
+     the callee's realm, so a frame's function sees the frame's globals
+     whoever calls it. An appview is a group of its own, and another app's
+     handle reaching a native is a TypeError.
+   - **The membrane** (`host_membrane.h`). Between apps only a window proxy
+     crosses: `postMessage` and `closed`. A post goes as bytes and is read
+     back in the receiver's realm, with its `source` the receiver's proxy
+     for the sender. The page grants functions with `appview.expose(name,
+     fn)`; inside the app they are `bro.app.host[name]`. A call clones its
+     arguments into the page, runs there and clones the result back.
+     Promises settle across, a function argument becomes a capability the
+     other way, and errors cross as clones.
+   - **`<appview>`** (`docs/appview-api.js`, `host_appview.cpp`). The app is
+     who its `bro.json` says: its own `bro.app` (id, name, folders) and its
+     own grants from its manifest and the grant store. The page's grants and
+     folders never pass to it; bro's shared asset mounts do. An undecided
+     capability is a `permissionrequest` event at the element, answered with
+     `allow()` / `deny()`, later through `decide()` after `preventDefault()`,
+     and by bro's own dialog when no listener answers. The page controls its
+     lifecycle (`start`, `stop`, `running`), and its exposed functions
+     survive restarts.
+   - **Per-compartment host state.** Window proxies, the custom-element
+     registries, observer hooks (each compartment's records and frame
+     callbacks), the deferred module groups (each realm's `bro.scene` and
+     the rest run in that realm), the parsed documents and the `PerCompartment`
+     slots (one value per compartment where the host kept one per process)
+     are each the compartment's and go with it. A compartment torn down while
+     its own code runs is destroyed at the next frame seam.
+   - **Promise jobs run in the compartment that subscribed them**
+     (`installJobCompartmentHooks`).
+   - **Tests:** `tests/appview/test_appview.js` (identity, no
+     `contentDocument`, the proxy window, `expose` across the membrane,
+     the page's denial held and recorded, echo, stop/start, removal), the
+     iframe suites (realm call, callback and isolation, `contentWindow`,
+     module scripts, `location.reload`), and bronze's `eval_test` and
+     `embed_realm_test` for callee realms and groups.
+   - **Still open:** the ledger holds what the gates hold (step 1), but not
+     yet every resource a compartment's natives create (step 5).
+4. **Fiber scheduling and time slices.** **Built** (2026-10-26): the engine
+   half in bronze and brass, and bro's half for `<appview>`. bronze's
+   `docs/internals.md` ("Realm ownership", "Compartments") describes the
+   mechanism.
+   - **bro's half** (`host_compartment.h`, `runEntry`). An appview has a
+     fiber of its own: 8 ms slices and an 8 MB stack, because its scripts
+     compile on it. Every entry that starts its code goes through
+     `runEntry`:
+     - Async entries are timers, `requestAnimationFrame`, messages, the
+       document's scripts, and the observer tick. One that outlasts its
+       slice yields, and the frame seam (`serviceCompartmentFibers`, step
+       0b of `hostFrame`) gives it one slice per frame until it finishes.
+       Async entries that arrive while a job is suspended queue behind it,
+       in order.
+     - Sync entries are events dispatched into it, a capability call
+       into it, and panel hooks. The host needs these finished, so a job
+       suspended before one finishes first. An app that does not return
+       within `kSyncEntryBudgetMs` (1 s) is terminated, with nothing it
+       can catch. It is logged, its view is stopped, and its page gets a
+       `terminated` event at the element, with the reason and where the
+       app was. `start()` runs it again.
+     - Host code that enters another compartment from an app's fiber (a
+       capability call into the page, a clone) holds yields off for its
+       `CompartmentScope`, so the host's scope stack never holds a
+       suspended entry.
+     - A compartment whose entry is on its fiber is never destroyed
+       mid-run (`fiberDepth`). A suspended job is unwound before the
+       realm goes.
+     - A terminated app's document resolves to a dead slot until the
+       engine releases it, never to the page's compartment.
+     - Frames, windows and panels are the page's own app and run on the
+       page's stack.
+   - **Tests (bro):** `tests/appview/test_appview_slices.js`. A 2e8-step
+     loop on a message leaves the frame that started it with the job
+     unfinished, and it finishes over later frames while the app runs on.
+     A click listener that never returns stops the app with "did not
+     return", the page hears `terminated`, and `start()` runs the app
+     again.
+   - **Still open in bro:** promise jobs the host queues for an appview
+     from the page's stack (a membrane promise settling) run at the page's
+     checkpoint, not on the fiber. Input to a suspended app waits for the
+     suspended job, within the sync budget, rather than queueing as a task.
    - **The API.** `embed::createCompartment(realm, {sliceMs, stackBytes,
      name})` gives a realm a fiber. `runInCompartment(c, job)` runs one entry
      there, then that fiber's own microtasks, and returns `Idle`, `Yielded` or
@@ -530,6 +624,7 @@ What the design must keep possible, and what it still lacks for it:
      mode, all through `bro.permissions` (`docs/permissions-api.js`); dev
      mode on shows a pill in helm's bar.
 7. **Certificates checked in Release, and native preconditions.**
-8. **Retire** realm-scope swapping. (`desktop_trust`'s location and
-   environment rules, grants by id and the applet certificates went with
-   step 1.)
+8. **Retire** realm-scope swapping. **Done with step 3** (2026-10-26):
+   `host_realm_scope.*` is deleted, and every sub-document is a realm.
+   (`desktop_trust`'s location and environment rules, grants by id and the
+   applet certificates went with step 1.)

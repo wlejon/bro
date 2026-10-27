@@ -1,5 +1,6 @@
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_events.h"
@@ -331,6 +332,10 @@ void deliverHostMediaQueryChanges() {
         bool freshMatches = htmlayout::css::evaluateMediaQuery(st->media, mctx);
         if (freshMatches != st->lastMatches) {
             st->lastMatches = freshMatches;
+            // The event and its listeners are the list's document's
+            // compartment's.
+            CompartmentScope scope(st->doc);
+            if (!scope.entered()) continue;
 
             ObjectBuilder evt;
             evt.set("type", ev::fromUtf8("change"));
@@ -349,21 +354,6 @@ void deliverHostMediaQueryChanges() {
             // Everything held across the listener calls is rooted: the calls,
             // the document wrapper and the property writes all allocate.
             ev::Persistent evRoot(evt.get());
-
-            dom::Document* prevDoc = currentHostDocument();
-            ev::GlobalValue docG = ev::globalValue("document");
-            ev::GlobalValue gtG = ev::globalValue("globalThis");
-            const bool haveGlobal = gtG.found && ev::isObject(gtG.value);
-            ev::Persistent global(haveGlobal ? gtG.value : ev::undefined());
-            ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
-            if (st->doc) {
-                setCurrentHostDocument(st->doc);
-                ev::Persistent subDocVal(hostDocumentValue(st->doc));
-                ev::registerGlobal("document", subDocVal.get());
-                if (haveGlobal) {
-                    ev::setProperty(global.get(), "document", subDocVal.get());
-                }
-            }
 
             std::vector<MqlListener> toInvoke;
             toInvoke.reserve(st->listeners.size());
@@ -403,16 +393,7 @@ void deliverHostMediaQueryChanges() {
                 if (r.thrown) reportBronzeError("matchMedia onchange", r.value);
             }
 
-            if (st->doc && dom::Document::isLiveDocument(st->doc)) {
-                if (!ev::isNull(prevDocVal.get())) {
-                    ev::registerGlobal("document", prevDocVal.get());
-                    if (haveGlobal) {
-                        ev::setProperty(global.get(), "document", prevDocVal.get());
-                    }
-                }
-                setCurrentHostDocument(prevDoc);
-                st->doc->markDirty();
-            }
+            if (st->doc && dom::Document::isLiveDocument(st->doc)) st->doc->markDirty();
         }
     }
 }

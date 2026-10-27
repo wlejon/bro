@@ -987,7 +987,7 @@ void Element::markStyleDirty() {
 // control, so redirect there.
 static bool layoutOwnsChildren(const Element* e) {
     std::string_view tag = e->tagName();
-    return tag != "SELECT" && tag != "TEXTAREA" && tag != "IFRAME" && tag != "SVG";
+    return tag != "SELECT" && tag != "TEXTAREA" && tag != "SVG" && !Element::isFrameHostTag(tag);
 }
 
 void Element::markStructureDirty() {

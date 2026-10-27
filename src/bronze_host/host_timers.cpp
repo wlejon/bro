@@ -21,7 +21,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_builder.h"  // argAt / numAt / i32At
 
 #include "dom/document.h"
@@ -252,12 +252,8 @@ void fireHostTimers(double nowMs) {
         ev::Persistent fn = it->fn;
         std::vector<ev::Persistent> args = it->args;
         dom::Document* entryDoc = it->doc;
-        if (it->idle) {
-            const bool didTimeout = it->idleTimeoutMs > 0.0 &&
-                                    nowMs - it->dueMs >= it->idleTimeoutMs;
-            args.clear();
-            args.emplace_back(makeIdleDeadline(didTimeout));
-        }
+        const bool idle = it->idle;
+        const bool didTimeout = idle && it->idleTimeoutMs > 0.0 && nowMs - it->dueMs >= it->idleTimeoutMs;
         if (it->repeating) {
             // Advance from the DEADLINE, so a long frame does not stretch the
             // interval — but skip whole missed periods instead of firing a
@@ -279,44 +275,24 @@ void fireHostTimers(double nowMs) {
             continue;
         }
 
-        dom::Document* prevDoc = currentHostDocument();
-        ev::GlobalValue docG = ev::globalValue("document");
-        // Held in a Persistent, not a raw Value: the callback below may
-        // allocate enough to move the heap, and the restore after it must
-        // name the document's CURRENT address. `globalThis` is re-read after
-        // the call for the same reason.
-        ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
-        if (entryDoc) {
-            enterRealmScope(scopeIdForDocument(entryDoc));
-            setCurrentHostDocument(entryDoc);
-            ev::Persistent subDocVal(hostDocumentValue(entryDoc));
-            ev::registerGlobal("document", subDocVal.get());
-            ev::GlobalValue gt = ev::globalValue("globalThis");
-            if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", subDocVal.get());
-            }
-        }
-
-        std::vector<Value> argv;
-        argv.reserve(args.size());
-        for (ev::Persistent& arg : args) argv.push_back(arg.get());
-        // Nothing has allocated since the argv reads, so every Value in it is
-        // current when `call` roots them.
-        ev::CallResult r = ev::call(fn.get(), ev::undefined(),
-                                    std::span<const Value>(argv.data(), argv.size()));
-        if (r.thrown) reportBronzeError("timer", r.value);
-
-        if (entryDoc) {
-            if (!ev::isNull(prevDocVal.get())) {
-                ev::registerGlobal("document", prevDocVal.get());
-                ev::GlobalValue gt = ev::globalValue("globalThis");
-                if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", prevDocVal.get());
-                }
-            }
-            setCurrentHostDocument(prevDoc);
-            exitRealmScope();
-        }
+        // An entry of the compartment of the document that set it: the call,
+        // the IdleDeadline made for it and the report of what it throws are
+        // all that realm's. A compartment torn down since gets nothing.
+        runEntry(entryDoc, EntryKind::Async,
+                 [fn = std::move(fn), args = std::move(args), idle, didTimeout]() mutable {
+                     if (idle) {
+                         args.clear();
+                         args.emplace_back(makeIdleDeadline(didTimeout));
+                     }
+                     std::vector<Value> argv;
+                     argv.reserve(args.size());
+                     for (ev::Persistent& arg : args) argv.push_back(arg.get());
+                     // Nothing has allocated since the argv reads, so every
+                     // Value in it is current when `call` roots them.
+                     ev::CallResult r = ev::call(fn.get(), ev::undefined(),
+                                                 std::span<const Value>(argv.data(), argv.size()));
+                     if (r.thrown) reportBronzeError("timer", r.value);
+                 });
     }
 }
 

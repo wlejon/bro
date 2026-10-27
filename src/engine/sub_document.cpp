@@ -205,8 +205,7 @@ void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
 
 static void collectNestedIframes(dom::Element* el, std::vector<dom::Element*>& out) {
     if (!el) return;
-    std::string_view tag = el->tagName();
-    if (tag == "iframe" || tag == "IFRAME") out.push_back(el);
+    if (el->isFrameHost()) out.push_back(el);
     for (auto* child : el->childNodes()) {
         if (child->nodeType() == dom::NodeType::Element)
             collectNestedIframes(static_cast<dom::Element*>(child), out);
@@ -219,8 +218,8 @@ void warnNestedIframes(SubDocRef d, const char* what) {
     collectNestedIframes(d.document->documentElement(), frames);
     for (auto* f : frames) {
         std::string src = f->getAttribute("src");
-        LOG_WARN("%s: nested <iframe src=\"%s\"> is not supported — "
-                 "the element renders as an empty box", what, src.c_str());
+        LOG_WARN("%s: nested <%s src=\"%s\"> is not supported — "
+                 "the element renders as an empty box", what, f->tagName().c_str(), src.c_str());
     }
 }
 
@@ -386,7 +385,7 @@ void teardownSubDoc(SubDocRef d) {
         bro::bronze_host::clearHostTimersForDocument(doc);
         bro::bronze_host::clearHostAnimationFramesForDocument(doc);
         bro::bronze_host::clearHostElementsForDocument(doc);
-        bro::bronze_host::clearRealmScope(bro::bronze_host::scopeIdForDocument(doc));
+        bro::bronze_host::destroyCompartmentForDocument(doc);
         bro::bronze_host::clearHostDocument(doc);
     }
     d.animations.clear();  // their records name its elements

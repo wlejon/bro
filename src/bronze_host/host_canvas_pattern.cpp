@@ -1,5 +1,6 @@
 #include "bronze_host/host_canvas_pattern.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_image.h"
@@ -79,9 +80,7 @@ void decorateCanvasPatternProto(ObjectBuilder& b) {
 }
 
 void installCanvasPatternClass() {
-    static bool installed = false;
-    if (installed) return;
-    installed = true;
+    if (!firstInRealm(&g_canvasPatternClass)) return;
     g_canvasPatternClass.install("CanvasPattern", 0, nullptr, decorateCanvasPatternProto);
 }
 

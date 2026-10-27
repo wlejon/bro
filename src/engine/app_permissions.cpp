@@ -9,6 +9,7 @@
 #include "embed/embed_access.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -185,9 +186,23 @@ bool envAlwaysVisible(std::string_view n) {
     return n.rfind("LC_", 0) == 0 || n.rfind("XDG_", 0) == 0 || n.rfind("BRO_", 0) == 0 || n == "CI";
 }
 
-AppPermissions& appPermissions() {
+AppPermissions& processPermissions() {
     static AppPermissions s;
     return s;
+}
+
+namespace {
+std::atomic<PermissionsResolver> g_permissionsResolver{nullptr};
+}
+
+void setPermissionsResolver(PermissionsResolver resolver) {
+    g_permissionsResolver.store(resolver, std::memory_order_release);
+}
+
+AppPermissions& appPermissions() {
+    if (PermissionsResolver r = g_permissionsResolver.load(std::memory_order_acquire))
+        if (AppPermissions* p = r()) return *p;
+    return processPermissions();
 }
 
 AppPermissions::StoreStamp AppPermissions::stampStore() {
@@ -404,12 +419,19 @@ std::string AppPermissions::use(std::string_view cap, const std::string& what, b
                        "(bro.app.requestPermission('" + std::string(cap) + "'))");
     // The dialog is modal; nothing else takes the lock meanwhile but other
     // threads' checks, which must not wait on the user.
+    Asker asker = asker_;
     lock.unlock();
     const Capability* c = findCapability(cap);
     const std::string question = appName_ + " wants to " + c->summary + " (" + std::string(cap) + ").\n\n" +
                                  (what.empty() ? std::string() : "It is trying to: " + what + "\n\n") +
                                  "Allow it? Your answer is remembered for this app.";
-    const std::optional<bool> answer = platform::Dialogs::askPermission(question);
+    std::optional<bool> answer;
+    const AskAnswer hosted = asker ? asker(cap, question, what) : AskAnswer::Unhandled;
+    if (hosted == AskAnswer::Allow) answer = true;
+    else if (hosted == AskAnswer::Deny) answer = false;
+    else if (hosted == AskAnswer::Pending)
+        return refusal(cap, what, "its host page is asking for it; try again once it is answered");
+    else answer = platform::Dialogs::askPermission(question);
     lock.lock();
     // Answered in the meantime (another prompt for the same capability).
     j = judge(cap);
@@ -432,6 +454,23 @@ std::string AppPermissions::use(std::string_view cap, const std::string& what, b
     persist(cap, d);
     LOG_INFO("permissions: %s %s %s", appName_.c_str(), *answer ? "was granted" : "was denied", std::string(cap).c_str());
     return refused;
+}
+
+void AppPermissions::setAsker(Asker asker) {
+    std::lock_guard<std::mutex> lock(mu_);
+    asker_ = std::move(asker);
+}
+
+void AppPermissions::decide(std::string_view cap, bool allow) {
+    const Decision d = allow ? Decision::Allow : Decision::Deny;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!configured_ || !findCapability(cap)) return;
+        decisions_[std::string(cap)] = d;
+    }
+    persist(cap, d);
+    LOG_INFO("permissions: %s %s %s (its host page asked)", appName_.c_str(), allow ? "was granted" : "was denied",
+             std::string(cap).c_str());
 }
 
 bool AppPermissions::request(std::string_view cap) {

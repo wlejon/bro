@@ -3,14 +3,10 @@
 // child's element, a promise continuation) runs in the parent's realm, against
 // the parent's document and globals, as it does in a browser; and the child's
 // own continuations run in the child, wherever the microtask checkpoint is.
-// Sub-document realms share one global object and are entered by swapping it
-// (bronze_host: enterRealmScope, the document global, the current document).
-// A callback ran in whichever realm called it: the child's document, the
-// child's globals. A promise job ran in the checkpoint's realm, the app's: a
-// child's `then` read the parent's document. Now a function the parent passes
-// in is wrapped to enter the parent's realm, a listener runs in the realm that
-// registered it, and a promise job in the realm that subscribed it (bronze's
-// job-context hooks).
+// Each sub-document is a realm of its own (a compartment), and every call
+// enters the callee's realm, so a function the parent passes in runs in the
+// parent's realm; a listener runs in the realm that registered it, and a
+// promise job in the realm that subscribed it (bronze's job-context hooks).
 
 document.title = 'Parent title';
 globalThis.parentOnly = 'parent';

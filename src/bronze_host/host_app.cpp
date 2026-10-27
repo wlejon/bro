@@ -18,7 +18,7 @@
 
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "engine/app_manifest.h"
@@ -196,7 +196,7 @@ struct AppTarget {
 // any older version. An installed app's project is its install root, so it
 // finds the other installed apps as siblings.
 AppTarget resolveAppId(const std::string& id) {
-    const engine::AppRuntimeInfo& self = engine::currentApp();
+    const engine::AppRuntimeInfo& self = compartmentApp();
     if (!engine::isValidAppId(id)) return {};
     if (std::string dir = findSiblingApp(id, self); !dir.empty()) return {native(dir), "project"};
     if (std::string dir = engine::findInstalledApp(id); !dir.empty()) return {native(dir), "installed"};
@@ -334,7 +334,7 @@ bool launchForNotification(const std::string& appDir, const std::string& args) {
 
 Value makeBroAppValue() {
     platform::desktop::setNotificationLaunchHandler(launchForNotification);
-    const engine::AppRuntimeInfo& app = engine::currentApp();
+    const engine::AppRuntimeInfo& app = compartmentApp();
     const engine::AppDescriptor& m = app.manifest;
     ObjectBuilder o;
     o.set("id", ev::fromUtf8(app.id));
@@ -362,19 +362,19 @@ Value makeBroAppValue() {
     }
     o.set("cwd", ev::fromUtf8(native(app.cwd)));
     o.accessor("configDir", [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8(ensureDir(engine::currentApp().dirs.config));
+        return ev::fromUtf8(ensureDir(compartmentApp().dirs.config));
     }, nullptr);
     o.accessor("dataDir", [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8(ensureDir(engine::currentApp().dirs.data));
+        return ev::fromUtf8(ensureDir(compartmentApp().dirs.data));
     }, nullptr);
     o.accessor("cacheDir", [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8(ensureDir(engine::currentApp().dirs.cache));
+        return ev::fromUtf8(ensureDir(compartmentApp().dirs.cache));
     }, nullptr);
     o.accessor("logFile", [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8(native(engine::currentApp().logFile));
+        return ev::fromUtf8(native(compartmentApp().logFile));
     }, nullptr);
     o.accessor("singleInstance", [](Value, std::span<const Value>) -> Value {
-        return ev::fromBool(engine::currentApp().singleInstance);
+        return ev::fromBool(compartmentApp().singleInstance);
     }, nullptr);
     // How long this launch took, in ms from just before main(): the page
     // loaded (its scripts ran) and its first frame shown (-1 until then;
@@ -495,7 +495,7 @@ Value makeBroAppValue() {
     // the single-instance hand-off and opens a window of its own. Starting a
     // process is the `spawn` capability's, whatever the process is.
     o.def("spawn", 2, [](Value, std::span<const Value> a) -> Value {
-        const engine::AppRuntimeInfo& app = engine::currentApp();
+        const engine::AppRuntimeInfo& app = compartmentApp();
         if (std::string refused = engine::appPermissions().use("spawn", "bro.app.spawn"); !refused.empty())
             return ev::throwError(refused);
         auto* eng = hostEngine();
@@ -593,7 +593,7 @@ Value makeBroAppValue() {
     o.def("_setInstanceDispatcher", 1, [](Value, std::span<const Value> a) -> Value {
         // The app's top-level page hears launches; an <iframe>'s realm runs
         // bro_core.js too and must not take them over.
-        if (isChildRealm()) return ev::undefined();
+        if (inChildCompartment()) return ev::undefined();
         if (!g_instanceDispatcher) g_instanceDispatcher = new ev::Persistent();
         g_instanceDispatcher->set(hasArg(a, 0) ? a[0] : ev::undefined());
         engine::setAppInstanceHandler(onInstance);

@@ -1,26 +1,22 @@
 // `window.postMessage(message, targetOrigin, transfer)`, and the delivery of a
 // `message` MessageEvent at ANY window of the process — the main app window, a
-// secondary bro window (bro.window.open / window.open), an <iframe> realm.
+// secondary bro window (bro.window.open / window.open), an <iframe>, an
+// <appview>.
 //
-// The message is structured-cloned at the call (brokit's `structuredClone`,
-// the path MessageChannel's ports use) and delivered LATER, as a task: a
-// `message` MessageEvent at the window, `onmessage` first and then the
-// `addEventListener('message')` listeners.
+// Every window is a compartment of its own (host_compartment.h): its own
+// realm, its own `window`. A post to the caller's own window is cloned with
+// brokit's `structuredClone` (the path MessageChannel's ports use), in its
+// realm. A post to ANOTHER window crosses compartments, so nothing of the
+// sender's heap may reach the receiver: the message is serialized to bytes at
+// the call (host_worker_msg.h, the Worker path) and read back inside the
+// receiver's realm, so every object the receiver sees is its own.
 //
-// A task, not a microtask: on the web a posted message is a task on the
-// posted-message queue, so code after the call and every promise job it
-// queued run before any listener sees the message. postHostTask is this
-// layer's task queue, drained at the top of the frame seam.
-//
-// WHICH window: the one whose realm made the call. Every realm shares one
-// heap and one `window` object, with a realm scope swapped in around each
-// call into it (host_realm_scope.cpp), so the target is recorded at the call
-// — the realm scope and its document — and delivery switches back into that
-// realm before it reads `onmessage` or dispatches at that document's window
-// listeners. Without that, a secondary window's self-post reached the main
-// window. Cross-window posts (a window.open handle and the opened window's
-// `window.opener`) are host_window_open.cpp's; they deliver through
-// deliverWindowMessageEvent below with the other window as `source`.
+// Either way the message is delivered LATER, as a task: a `message`
+// MessageEvent at the window, `onmessage` first and then the
+// `addEventListener('message')` listeners. On the web a posted message is a
+// task on the posted-message queue, so code after the call and every promise
+// job it queued run before any listener sees it. postHostTask is this layer's
+// task queue, drained at the top of the frame seam.
 //
 // The page's origin is `bro://app` (location.origin), in every realm.
 // `targetOrigin` is checked the way the spec does: `*` always delivers, `/`
@@ -28,6 +24,7 @@
 // matches, and anything that is not a URL is a SyntaxError.
 
 #include "bronze_host/host_window_open.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_window_message.h"
@@ -35,7 +32,7 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_document.h"
 #include "engine/engine.h"
-#include "engine/window_host.h"
+#include "util/log.h"
 
 #include <string>
 #include <vector>
@@ -71,57 +68,56 @@ bool isArrayLike(Value v) {
     return ev::isNumber(ev::getProperty(v, "length"));
 }
 
-// Resolve `scopeId`/`doc` as recorded at a post to the document to deliver
-// at, or nullptr when that window is gone.
-dom::Document* liveDocumentFor(uint64_t scopeId, dom::Document* doc) {
-    engine::Engine* eng = hostEngine();
-    if (!eng) return nullptr;
-    if (scopeId == 0) return eng->document();
-    if (engine::WindowHost* wh = eng->windowHostById(scopeId)) {
-        if (wh->pendingClose || !wh->document) return nullptr;
-        return wh->document.get();
-    }
-    // An <iframe> realm: its scope id is its document, which is live exactly
-    // while the engine still hosts it.
-    if (doc && eng->iframeForDocument(doc)) return doc;
-    return nullptr;
+// The document a delivery recorded at the post is still live: the app's
+// always, a sub-document while its compartment is.
+bool documentLive(dom::Document* doc) {
+    if (!doc) return true;
+    Compartment* c = compartmentForDocument(doc);
+    return c && c->kind != CompartmentKind::App && c->document == doc && !c->dying;
 }
 
-// Enter a realm and make `doc` its current document for the length of a
-// delivery: what the frame seam does around a timer or an rAF of that realm.
-class RealmEntry {
-public:
-    RealmEntry(uint64_t scopeId, dom::Document* doc) {
-        prevHostDoc_ = currentHostDocument();
-        enterRealmScope(scopeId);
-        if (doc == prevHostDoc_) return;
-        swapped_ = true;
-        ev::GlobalValue docG = ev::globalValue("document");
-        prevDocVal_.set(docG.found ? docG.value : ev::null());
-        setCurrentHostDocument(doc);
-        setDocumentGlobal(hostDocumentValue(doc));
-    }
-    ~RealmEntry() {
-        if (swapped_) {
-            if (!ev::isNull(prevDocVal_.get())) setDocumentGlobal(prevDocVal_.get());
-            setCurrentHostDocument(prevHostDoc_);
-        }
-        exitRealmScope();
-    }
-    RealmEntry(const RealmEntry&) = delete;
-    RealmEntry& operator=(const RealmEntry&) = delete;
+// The MessageEvent itself, and its dispatch, in the receiver's compartment
+// (entered by the caller).
+void dispatchMessageEvent(dom::Document* target, const ev::Persistent& data, const ev::Persistent& ports,
+                          const ev::Persistent& source, const std::string& origin) {
+    ev::GlobalValue ctor = ev::globalValue("MessageEvent");
+    if (!ctor.found || !ev::isFunction(ctor.value)) return;
+    ev::Persistent ctorP(ctor.value);
 
-private:
-    static void setDocumentGlobal(Value v) {
-        ev::Persistent val(v);
-        ev::registerGlobal("document", val.get());
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "document", val.get());
+    ev::GlobalValue win = ev::globalValue("window");
+    if (!win.found || !ev::isObject(win.value)) return;
+    ev::Persistent winP(win.value);
+
+    ev::Persistent init(ev::createObject());
+    ev::Persistent originV(ev::fromUtf8(origin));
+    ev::Persistent portsV(ports.get());
+    if (!ev::isObject(portsV.get())) portsV.set(hostArrayOf(0, [](size_t) { return ev::undefined(); }));
+    init.set(ev::setProperty(init.get(), "data", data.get()));
+    init.set(ev::setProperty(init.get(), "origin", originV.get()));
+    init.set(ev::setProperty(init.get(), "source", source.get()));
+    init.set(ev::setProperty(init.get(), "ports", portsV.get()));
+
+    ev::Persistent typeP(ev::fromUtf8("message"));
+    Value cargs[2] = {typeP.get(), init.get()};
+    ev::CallResult made = ev::construct(ctorP.get(), std::span<const Value>(cargs, 2));
+    if (made.thrown) {
+        reportBronzeError("window message", made.value);
+        return;
     }
-    dom::Document* prevHostDoc_ = nullptr;
-    ev::Persistent prevDocVal_;
-    bool swapped_ = false;
-};
+    ev::Persistent evtP(made.value);
+
+    Value onmessage = ev::getProperty(winP.get(), "onmessage");
+    if (ev::isFunction(onmessage)) {
+        ev::Persistent handler(onmessage);
+        Value arg = evtP.get();
+        ev::CallResult r = ev::call(handler.get(), winP.get(), std::span<const Value>(&arg, 1));
+        if (r.thrown) reportBronzeError("window onmessage", r.value);
+    }
+
+    // The listeners registered on THIS document's window, handed this same
+    // MessageEvent object (host_dom_events.cpp's provided-event path).
+    hostDispatchToWindowOf(target ? target : (hostEngine() ? hostEngine()->document() : nullptr), evtP.get());
+}
 
 Value windowPostMessage(Value, std::span<const Value> a) {
     if (a.empty()) {
@@ -139,14 +135,14 @@ Value windowPostMessage(Value, std::span<const Value> a) {
     cloneForPostMessage(message, target.transfer, data, ports);
     if (!target.deliver) return ev::undefined();
 
-    // The window that posted is the window that receives: its realm and its
-    // document, recorded now. `source` is that window.
-    dom::Document* doc = currentHostDocument();
-    const uint64_t scopeId = scopeIdForDocument(doc);
+    // The window that posted is the window that receives: its document,
+    // recorded now (null for the app's). `source` is that window.
+    Compartment* self = currentCompartment();
+    dom::Document* doc = self->kind == CompartmentKind::App ? nullptr : self->document;
     ev::GlobalValue win = ev::globalValue("window");
-    ev::Persistent source(win.found ? win.value : ev::null());
-    postHostTask([scopeId, doc, data, ports, source]() {
-        deliverWindowMessageEvent(scopeId, doc, data, ports, source, kHostPageOrigin);
+    auto source = std::make_shared<ev::Persistent>(win.found ? win.value : ev::null());
+    postHostTask([doc, data, ports, source]() {
+        deliverWindowMessageEvent(doc, data, ports, [source] { return source->get(); }, kHostPageOrigin);
     });
     return ev::undefined();
 }
@@ -232,52 +228,48 @@ void cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& tr
     dataOut.set(cloned.value);
 }
 
-void deliverWindowMessageEvent(uint64_t scopeId, dom::Document* doc, const ev::Persistent& data,
-                               const ev::Persistent& ports, const ev::Persistent& source,
-                               const std::string& origin) {
-    dom::Document* target = liveDocumentFor(scopeId, doc);
-    if (!target) return;  // the window closed before its message arrived
-    ev::GlobalValue ctor = ev::globalValue("MessageEvent");
-    if (!ctor.found || !ev::isFunction(ctor.value)) return;
-    ev::Persistent ctorP(ctor.value);
-
-    RealmEntry realm(scopeId, target);
-
-    ev::GlobalValue win = ev::globalValue("window");
-    if (!win.found || !ev::isObject(win.value)) return;
-    ev::Persistent winP(win.value);
-
-    ev::Persistent init(ev::createObject());
-    ev::Persistent originV(ev::fromUtf8(origin));
-    ev::Persistent portsV(ports.get());
-    if (!ev::isObject(portsV.get())) portsV.set(hostArrayOf(0, [](size_t) { return ev::undefined(); }));
-    init.set(ev::setProperty(init.get(), "data", data.get()));
-    init.set(ev::setProperty(init.get(), "origin", originV.get()));
-    init.set(ev::setProperty(init.get(), "source", source.get()));
-    init.set(ev::setProperty(init.get(), "ports", portsV.get()));
-
-    ev::Persistent typeP(ev::fromUtf8("message"));
-    Value cargs[2] = {typeP.get(), init.get()};
-    ev::CallResult made = ev::construct(ctorP.get(), std::span<const Value>(cargs, 2));
-    if (made.thrown) {
-        reportBronzeError("window message", made.value);
-        return;
+void serializeForPost(const ev::Persistent& message, const ev::Persistent& transfer, Message& out) {
+    std::vector<ev::Persistent> transfers;
+    if (ev::isObject(transfer.get())) {
+        Value tv = transfer.get();
+        transfers = collectTransferList(std::span<const Value>(&tv, 1), 0);
     }
-    ev::Persistent evtP(made.value);
-
-    // `onmessage` as THIS realm sees it: the realm scope just entered put its
-    // own expandos back on the shared global.
-    Value onmessage = ev::getProperty(winP.get(), "onmessage");
-    if (ev::isFunction(onmessage)) {
-        ev::Persistent handler(onmessage);
-        Value arg = evtP.get();
-        ev::CallResult r = ev::call(handler.get(), winP.get(), std::span<const Value>(&arg, 1));
-        if (r.thrown) reportBronzeError("window onmessage", r.value);
+    const std::vector<Value> transferVals = currentValues(transfers);
+    if (!serializeMessage(message.get(), transferVals, out)) {
+        ev::throwValue(hostMakeDomError("DataCloneError", "postMessage: the message could not be cloned"));
     }
+}
 
-    // The listeners registered on THIS document's window, handed this same
-    // MessageEvent object (host_dom_events.cpp's provided-event path).
-    hostDispatchToWindowOf(target, evtP.get());
+void deliverWindowMessageEvent(dom::Document* doc, const ev::Persistent& data, const ev::Persistent& ports,
+                               const std::function<Value()>& makeSource, const std::string& origin) {
+    if (!documentLive(doc)) return;  // the window closed before its message arrived
+    // An entry of the receiver's: it may run after an earlier one suspended
+    // in it, so the window is asked again then.
+    runEntry(doc, EntryKind::Async, [doc, data, ports, makeSource, origin] {
+        if (!documentLive(doc)) return;
+        ev::Persistent source(makeSource ? makeSource() : ev::null());
+        dispatchMessageEvent(doc, data, ports, source, origin);
+    });
+}
+
+void deliverWindowMessage(dom::Document* doc, std::shared_ptr<const Message> msg,
+                          const std::function<Value()>& makeSource, const std::string& origin) {
+    if (!documentLive(doc) || !msg) return;
+    runEntry(doc, EntryKind::Async, [doc, msg, makeSource, origin] {
+        if (!documentLive(doc)) return;
+        // Read back here, in the receiver's realm: its objects are the
+        // receiver's.
+        ev::CallResult read = ev::catchThrow([&] { return deserializeMessage(*msg); });
+        if (read.thrown) {
+            LOG_WARN("%swindow: dropping a message that does not deserialize: %s", compartmentLogPrefix().c_str(),
+                     thrownValueText(read.value).c_str());
+            return;
+        }
+        ev::Persistent data(read.value);
+        ev::Persistent ports(ev::undefined());
+        ev::Persistent source(makeSource ? makeSource() : ev::null());
+        dispatchMessageEvent(doc, data, ports, source, origin);
+    });
 }
 
 Value makeWindowPostMessage() {

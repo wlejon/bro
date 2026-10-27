@@ -1,8 +1,10 @@
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
+#include "bronze_host/host_appview.h"
 #include "bronze_host/host_element_video.h"
 #include "bronze_host/host_element_terminal.h"
 #if BRO_WITH_REMOTE
@@ -54,6 +56,7 @@ HostClass g_htmlUListElementClass;
 HostClass g_htmlLIElementClass;
 HostClass g_htmlFormElementClass;
 HostClass g_htmlIFrameElementClass;
+HostClass g_htmlAppViewElementClass;
 HostClass g_htmlHeadingElementClass;
 HostClass g_htmlOptionElementClass;
 HostClass g_htmlTemplateElementClass;
@@ -72,9 +75,9 @@ HostClass g_htmlRemoteViewElementClass;
 // an <option> holding `text`, with `value` when one is given. Selectedness
 // is the `selected` attribute here, so either flag sets it.
 Value optionConstructor(Value, std::span<const Value> a) {
-    auto* eng = hostEngine();
-    if (!eng || !eng->document()) return ev::throwError("new Option(): the engine has no document");
-    dom::Document* doc = eng->document();
+    // The calling compartment's document, never another's.
+    dom::Document* doc = currentHostDocument();
+    if (!doc) return ev::throwError("new Option(): the engine has no document");
     dom::Element* el = doc->createElement("option");
     if (!el) return ev::throwError("new Option(): the document refused an <option>");
     if (!a.empty() && !a[0].isUndefined()) {
@@ -107,9 +110,9 @@ void decorateDetailsProto(ObjectBuilder& b) {
 }
 
 Value audioConstructor(Value, std::span<const Value> a) {
-    auto* eng = hostEngine();
-    if (!eng || !eng->document()) return ev::throwError("new Audio(): the engine has no document");
-    dom::Element* el = eng->document()->createElement("audio");
+    dom::Document* doc = currentHostDocument();
+    if (!doc) return ev::throwError("new Audio(): the engine has no document");
+    dom::Element* el = doc->createElement("audio");
     if (!el) return ev::throwError("new Audio(): the document refused an <audio>");
     if (!a.empty() && !a[0].isUndefined()) {
         std::string src = ev::toUtf8(a[0]);
@@ -225,9 +228,9 @@ const HostClass& commentHostClass() { return g_commentClass; }
 const HostClass& documentFragmentHostClass() { return g_documentFragmentClass; }
 
 void installHtmlInterfaces() {
-    static bool s_installed = false;
-    if (s_installed) return;
-    s_installed = true;
+    // Once per realm: each compartment has its own classes (HostClass keeps
+    // one constructor and prototype per realm).
+    if (!firstInRealm(&g_nodeClass)) return;
 
     // 1. Node
     g_nodeClass.install("Node", 0, illegalConstructor, decorateNodeProto);
@@ -242,9 +245,9 @@ void installHtmlInterfaces() {
     // Text
     g_textClass.install("Text", 1, [](Value, std::span<const Value> a) -> Value {
         std::string data = a.empty() ? "" : ev::toUtf8(a[0]);
-        auto* eng = hostEngine();
-        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
-        auto* t = eng->document()->createTextNode(data);
+        dom::Document* doc = currentHostDocument();
+        if (!doc) return ev::throwTypeError("No active document");
+        auto* t = doc->createTextNode(data);
         return hostNodeValue(t);
     }, nullptr);
     g_textClass.inherit(g_characterDataClass);
@@ -252,18 +255,18 @@ void installHtmlInterfaces() {
     // Comment
     g_commentClass.install("Comment", 1, [](Value, std::span<const Value> a) -> Value {
         std::string data = a.empty() ? "" : ev::toUtf8(a[0]);
-        auto* eng = hostEngine();
-        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
-        auto* c = eng->document()->createComment(data);
+        dom::Document* doc = currentHostDocument();
+        if (!doc) return ev::throwTypeError("No active document");
+        auto* c = doc->createComment(data);
         return hostNodeValue(c);
     }, nullptr);
     g_commentClass.inherit(g_characterDataClass);
 
     // DocumentFragment
     g_documentFragmentClass.install("DocumentFragment", 0, [](Value, std::span<const Value>) -> Value {
-        auto* eng = hostEngine();
-        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
-        auto* f = eng->document()->createDocumentFragment();
+        dom::Document* doc = currentHostDocument();
+        if (!doc) return ev::throwTypeError("No active document");
+        auto* f = doc->createDocumentFragment();
         return hostNodeValue(f);
     }, nullptr);
     g_documentFragmentClass.inherit(g_nodeClass);
@@ -319,6 +322,7 @@ void installHtmlInterfaces() {
         {g_htmlLIElementClass, "HTMLLIElement"},
         {g_htmlFormElementClass, "HTMLFormElement"},
         {g_htmlIFrameElementClass, "HTMLIFrameElement", decorateIFrameProto},
+        {g_htmlAppViewElementClass, "HTMLAppViewElement", decorateAppViewProto},
         {g_htmlHeadingElementClass, "HTMLHeadingElement"},
         {g_htmlDetailsElementClass, "HTMLDetailsElement", decorateDetailsProto},
         {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
@@ -420,6 +424,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "li") return g_htmlLIElementClass.prototype();
     if (tag == "form") return g_htmlFormElementClass.prototype();
     if (tag == "iframe") return g_htmlIFrameElementClass.prototype();
+    if (tag == "appview") return g_htmlAppViewElementClass.prototype();
     if (tag == "h1" || tag == "h2" || tag == "h3" ||
         tag == "h4" || tag == "h5" || tag == "h6") {
         return g_htmlHeadingElementClass.prototype();

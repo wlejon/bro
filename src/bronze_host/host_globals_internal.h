@@ -84,8 +84,8 @@ Value constructCustomElement(dom::Element* el, const std::string& tagName);
 // `new` produced, which is what names the class when this is a direct
 // `new MyElement()` rather than an upgrade.
 Value constructCustomElementBase(Value newObject);
-// Each realm scope has its own registry; a closed frame's goes with it.
-void clearCustomElementsForScope(uint64_t scopeId);
+// Each compartment has its own registry; a closed frame's goes with it.
+void clearCustomElementsForCompartment(uint64_t compartmentId);
 
 // ---------------------------------------------------------------------------
 // Worker
@@ -111,7 +111,8 @@ Value makeSessionStorageValue();
 // ---------------------------------------------------------------------------
 void installWindowGlobal(engine::Engine* engine);
 void clearWindowListeners();
-void clearWindowName(uint64_t scopeId = 0);
+// A compartment's window.name (0: every one).
+void clearWindowName(uint64_t compartmentId = 0);
 
 // ---------------------------------------------------------------------------
 // Element cloning hook & document tracking
@@ -127,7 +128,6 @@ void clearHostAnimationFramesForDocument(dom::Document* doc);
 bool hasPendingAnimationFrames();
 void resetWindowHostOpenState();
 dom::Document* currentHostDocument();
-void setCurrentHostDocument(dom::Document* doc);
 void deliverHostMediaQueryChanges();
 
 } // namespace bro::bronze_host

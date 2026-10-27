@@ -29,6 +29,7 @@
 #include "engine/app_manifest.h"
 #include "engine/grant_store.h"
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -119,6 +120,21 @@ public:
 
     PermissionsReport report() const;
     const std::string& identity() const { return identity_; }
+    const std::string& appName() const { return appName_; }
+
+    /// Who asks the user about this app's undecided capabilities. Unset (or
+    /// answering Unhandled), bro's native dialog asks. An app running inline
+    /// in a host page (an <appview>) has its host page ask instead: Allow /
+    /// Deny is the user's answer, kept like the dialog's; Pending means the
+    /// host is asking in its own time, so this use is refused (not kept) and
+    /// the answer arrives through decide().
+    enum class AskAnswer { Unhandled, Allow, Deny, Pending };
+    using Asker = std::function<AskAnswer(std::string_view cap, const std::string& question,
+                                          const std::string& what)>;
+    void setAsker(Asker asker);
+    /// The user's answer about `cap`, from wherever it was asked: kept in the
+    /// store as a prompt's is.
+    void decide(std::string_view cap, bool allow);
     const std::string& installHash() const { return installHash_; }
     const std::string& appDir() const { return appDir_; }
     // Whether a bro.conf change (broconf's gate subject: "set <path>.<key>
@@ -147,6 +163,7 @@ private:
     void noteUse(std::string_view cap);             // under mu_
 
     mutable std::mutex mu_;
+    Asker asker_;
     bool configured_ = false;
     std::thread::id mainThread_;
     std::string identity_, appId_, appName_, appDir_;
@@ -176,8 +193,18 @@ private:
 /// standard folders are. Nothing that holds a credential.
 bool envAlwaysVisible(std::string_view name);
 
-/// The process's one instance.
+/// The grants of the code running now: the app's (processPermissions), or,
+/// when a host page runs another app inline (an <appview> compartment,
+/// docs/app-isolation.md step 3), that app's own. Every gate asks this, so a
+/// check made while a compartment's code runs judges that compartment.
 AppPermissions& appPermissions();
+/// The process's own app: the one the engine was started for.
+AppPermissions& processPermissions();
+/// Who answers appPermissions(): the script host's current compartment. A
+/// resolver answering null (another thread, no compartment) means the
+/// process's.
+using PermissionsResolver = AppPermissions* (*)();
+void setPermissionsResolver(PermissionsResolver resolver);
 
 /// `path` absolute, symlinks and ".." resolved as far as it exists, in the
 /// form the checks compare (forward slashes; case-folded on Windows).

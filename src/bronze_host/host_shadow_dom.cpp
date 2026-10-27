@@ -1,5 +1,6 @@
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
@@ -207,9 +208,7 @@ const HostClass& shadowRootHostClass() {
 }
 
 void installShadowRootClass() {
-    static bool s_installed = false;
-    if (s_installed) return;
-    s_installed = true;
+    if (!firstInRealm(&g_shadowRootClass)) return;
 
     g_shadowRootClass.install("ShadowRoot", 0, illegalConstructor, decorateShadowRootProto);
     g_shadowRootClass.inherit(nodeHostClass());

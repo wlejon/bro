@@ -1,6 +1,7 @@
 // DOM Range implementation for bronze_host.
 
 #include "bronze_host/host_range.h"
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
 #include "bronze_host/host_runtime.h"
@@ -119,11 +120,7 @@ Value throwRangeError(bro::dom::Range::Error e, const char* who) {
 
 Value js_range_ctor(Value, std::span<const Value>) {
     auto* r = new bro::dom::Range();
-    if (auto* engine = hostEngine()) {
-        if (auto* doc = engine->document()) {
-            r->setDocument(doc);
-        }
-    }
+    if (auto* doc = currentHostDocument()) r->setDocument(doc);  // the caller's own
     return wrapOwnedRange(r);
 }
 

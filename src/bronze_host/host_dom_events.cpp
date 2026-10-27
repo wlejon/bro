@@ -36,7 +36,7 @@
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_event_spec.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_touch.h"
 #include "bronze_host/host_dom_events_types.h"
 
@@ -581,6 +581,10 @@ dom::Document* listenerRealm(const ListenerRef& ref) {
     return ref.realm && dom::Document::isLiveDocument(ref.realm) ? ref.realm : nullptr;
 }
 
+// The listener's call, inside its compartment (below).
+static void callListenerInCompartment(const ev::Persistent& fn, const ev::Persistent& thisObj, dom::Event& evt,
+                                      const char* origin);
+
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin,
                         dom::Document* docOverride) {
@@ -593,28 +597,18 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
         else if (evt.currentTarget()) targetDoc = evt.currentTarget()->document();
     }
 
-    dom::Document* prevDoc = currentHostDocument();
-    bool swapDoc = (targetDoc && targetDoc != prevDoc);
+    // The event object, the call and the report of what it throws, all in
+    // the compartment of the document the event is dispatched in: an element
+    // belongs to its document's compartment, and so do its listeners. A
+    // compartment torn down since hears nothing. A sync entry: the dispatch
+    // reads what the listener did, so it runs to its end before this returns
+    // (or the app is stopped), and may capture by reference.
+    runEntry(targetDoc ? compartmentForDocument(targetDoc) : currentCompartment(), EntryKind::Sync,
+             [&] { callListenerInCompartment(fn, thisObj, evt, origin); });
+}
 
-    ev::GlobalValue docG = ev::globalValue("document");
-    // Rooted: the listener call below allocates, and the restore must name
-    // the previous document's CURRENT address (as the rAF path does).
-    ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
-    auto setDocumentGlobal = [](Value docIn) {
-        ev::Persistent doc(docIn);
-        ev::registerGlobal("document", doc.get());
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::setProperty(gt.value, "document", doc.get());
-        }
-    };
-
-    if (swapDoc) {
-        enterRealmScope(scopeIdForDocument(targetDoc));
-        setCurrentHostDocument(targetDoc);
-        setDocumentGlobal(hostDocumentValue(targetDoc));
-    }
-
+static void callListenerInCompartment(const ev::Persistent& fn, const ev::Persistent& thisObj, dom::Event& evt,
+                                      const char* origin) {
     auto live = std::make_shared<LiveEvent>();
     live->ev = &evt;
     // The event object is rooted for the call: buildEventValue's own
@@ -633,14 +627,7 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     // dom::Event may be destroyed at any point and the object must not reach
     // it. A listener that stashed the object gets the named refusal instead.
     live->ev = nullptr;
-    // The thrown value outlives the document swap back, which allocates.
     ev::Persistent thrown(r.thrown ? r.value : ev::undefined());
-
-    if (swapDoc) {
-        if (!ev::isNull(prevDocVal.get())) setDocumentGlobal(prevDocVal.get());
-        setCurrentHostDocument(prevDoc);
-        exitRealmScope();
-    }
 
     // Report and keep going — one broken listener must not silence the ones
     // registered after it, which is what the rAF and window paths do too.

@@ -32,11 +32,11 @@ namespace bro::engine {
 IframeDoc::IframeDoc() = default;
 IframeDoc::~IframeDoc() = default;
 
-// Depth-first collect every <iframe> element in a document subtree.
+// Depth-first collect every <iframe> and <appview> element in a document
+// subtree: both host a sub-document, each its own compartment.
 static void collectIframes(dom::Element* el, std::vector<dom::Element*>& out) {
     if (!el) return;
-    std::string_view tag = el->tagName();
-    if (tag == "iframe" || tag == "IFRAME") out.push_back(el);
+    if (el->isFrameHost()) out.push_back(el);
     for (auto* child : el->childNodes()) {
         if (child->nodeType() == dom::NodeType::Element)
             collectIframes(static_cast<dom::Element*>(child), out);
@@ -89,12 +89,19 @@ void Engine::syncIframes() {
         if (!present) it = iframeLoadFailed_.erase(it);
         else ++it;
     }
+    for (auto it = stoppedIframes_.begin(); it != stoppedIframes_.end();) {
+        bool present = false;
+        for (auto* f : frames) if (f == *it) { present = true; break; }
+        if (!present) it = stoppedIframes_.erase(it);
+        else ++it;
+    }
 
     // Create sub-docs for new src'd iframes.
     for (auto* f : frames) {
         std::string src = f->getAttribute("src");
         if (src.empty()) continue;
         if (iframeDocForElement(f)) continue;
+        if (stoppedIframes_.count(f)) continue;  // an appview stopped by its page
         // Don't re-attempt a src that already failed. syncIframes runs on every
         // DOM structure change, so without this a single bad src re-hits the
         // filesystem and re-logs the error on every mutation, forever. An
@@ -211,6 +218,24 @@ void Engine::reloadIframe(dom::Element* el) {
     uiDirty_ = true;
 }
 
+// An <appview>'s stop() and start(): queued like a reload, since the teardown
+// must wait for the raster-idle drain as a reload's does.
+void Engine::stopIframe(dom::Element* el) {
+    if (!el) return;
+    stoppedIframes_.insert(el);
+    reloadIframe(el);
+}
+
+void Engine::startIframe(dom::Element* el) {
+    if (!el) return;
+    stoppedIframes_.erase(el);
+    reloadIframe(el);
+}
+
+bool Engine::iframeStopped(const dom::Element* el) const {
+    return stoppedIframes_.count(const_cast<dom::Element*>(el)) != 0;
+}
+
 bool Engine::reloadIframeForDocument(const dom::Document* doc) {
     if (!doc) return false;
     for (auto& d : iframeDocs_) {
@@ -275,6 +300,8 @@ void Engine::processPendingIframeReloads() {
                 break;
             }
         }
+        // A stopped appview is torn down and stays down until start().
+        if (stoppedIframes_.count(el)) src.clear();
         if (!src.empty()) {
             createIframeDoc(el, src);
             // Record a failed rebuild so syncIframes doesn't immediately retry it

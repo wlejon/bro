@@ -11,9 +11,9 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
-#include <memory>
 #include <cstdint>
 
 namespace bro::render {
@@ -621,6 +621,12 @@ public:
     }
     void* iframeDoc() const { return iframeDoc_; }
     uint64_t iframeDocId() const { return iframeDocId_; }
+    // The elements that host a sub-document in their box: <iframe>, and
+    // <appview> (a folder app running inline as its own compartment).
+    static bool isFrameHostTag(std::string_view tag) {
+        return tag == "iframe" || tag == "IFRAME" || tag == "appview" || tag == "APPVIEW";
+    }
+    bool isFrameHost() const { return isFrameHostTag(tagName()); }
 
     // Whether the scene graph's last render produced a 3D layer to composite
     // here (set after each scene render, read by the draw traversal). The

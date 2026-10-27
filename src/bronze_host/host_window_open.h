@@ -1,6 +1,5 @@
 #pragma once
 
-#include "bronze_host/host_realm_scope.h"
 #include "embed/embed.h"
 #include <cstdint>
 #include <span>

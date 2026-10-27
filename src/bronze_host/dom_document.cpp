@@ -1,6 +1,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_events.h"
 #include "bronze_host/host_values.h"
@@ -70,37 +71,25 @@ void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clon
     }
 }
 
-static dom::Document* s_activeDocOverride = nullptr;
-
 namespace {
 
+// The document a `document` object acts on: the one it was made for, or, for
+// the app's (made with none), whatever the engine is showing (a reload swaps
+// it). Every compartment's `document` is its own object over its own
+// document, so nothing here follows the running code.
 dom::Document* documentFor(dom::Document* fixed) {
-    if (fixed) {
-        fixed->setElementClonedCallback(&fireElementCloned);
-        return fixed;
-    }
-    if (s_activeDocOverride) {
-        s_activeDocOverride->setElementClonedCallback(&fireElementCloned);
-        return s_activeDocOverride;
-    }
-    dom::Document* doc = hostEngine() ? hostEngine()->document() : nullptr;
+    dom::Document* doc = fixed ? fixed : (hostEngine() ? hostEngine()->document() : nullptr);
     if (doc) doc->setElementClonedCallback(&fireElementCloned);
     return doc;
 }
 
 }  // namespace
 
+// The running code's document: its compartment's (host_compartment.h).
 dom::Document* currentHostDocument() {
-    if (s_activeDocOverride) return s_activeDocOverride;
+    Compartment* c = currentCompartment();
+    if (c && c->document) return c->document;
     return hostEngine() ? hostEngine()->document() : nullptr;
-}
-
-void setCurrentHostDocument(dom::Document* doc) {
-    if (!doc || (hostEngine() && doc == hostEngine()->document())) {
-        s_activeDocOverride = nullptr;
-    } else {
-        s_activeDocOverride = doc;
-    }
 }
 
 namespace {
@@ -747,13 +736,18 @@ std::unordered_map<dom::Document*, ev::Persistent> s_docWrappers;
 }
 
 // The app's document object (it follows the engine's document), as
-// registered: the global `document` is a sub-document's while one runs.
+// registered in the app's realm.
 static ev::Persistent s_appDocumentValue;
 
 void setAppDocumentValue(Value v) { s_appDocumentValue.set(v); }
 
 Value hostDocumentValue(dom::Document* doc) {
     if (!doc) return ev::null();
+    // Only to the code of the compartment that owns it: a document object's
+    // methods act on its document whoever holds them, so another
+    // compartment's is never handed out (null, as a cross-origin frame's
+    // contentDocument is).
+    if (compartmentForDocument(doc) != currentCompartment()) return ev::null();
     if (hostEngine() && doc == hostEngine()->document()) {
         if (ev::isObject(s_appDocumentValue.get())) return s_appDocumentValue.get();
         ev::GlobalValue g = ev::globalValue("document");
@@ -771,9 +765,6 @@ Value hostDocumentValue(dom::Document* doc) {
 void clearHostDocument(dom::Document* doc) {
     if (!doc) return;
     s_docWrappers.erase(doc);
-    if (s_activeDocOverride == doc) {
-        s_activeDocOverride = nullptr;
-    }
     removeHostMediaQueriesForDocument(doc);
 }
 

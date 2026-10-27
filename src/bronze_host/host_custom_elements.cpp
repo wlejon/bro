@@ -5,7 +5,7 @@
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
@@ -25,11 +25,11 @@ struct CustomElementDef {
     std::vector<std::string> observedAttributes;
 };
 
-// One registry per realm scope (host_realm_scope.h): a window's
+// One registry per compartment (host_compartment.h): a window's
 // CustomElementRegistry is its own, so a frame defining <x-row> neither
 // defines it for its parent nor collides with the parent's <x-row>, and a
 // constructor one frame registered is never run against another's elements.
-// Dropped with the scope (clearCustomElementsForScope).
+// Dropped with the compartment (clearCustomElementsForCompartment).
 using Registry = std::unordered_map<std::string, CustomElementDef>;
 static std::unordered_map<uint64_t, Registry> s_registries;
 static std::unordered_map<uint64_t, std::unordered_map<std::string, std::vector<ev::Persistent>>>
@@ -62,7 +62,7 @@ constexpr const char* kUpgradedMarker = "__bro_ce_upgraded__";
 constexpr const char* kTagMarker = "__bro_ce_tag__";
 
 // The registry of the realm the script now running belongs to.
-static Registry& currentRegistry() { return s_registries[currentRealmScope()]; }
+static Registry& currentRegistry() { return s_registries[currentCompartmentId()]; }
 
 // The registry of the window `el` lives in, or null when it has none: an
 // element is upgraded by its own document's definitions, whichever realm's
@@ -70,7 +70,7 @@ static Registry& currentRegistry() { return s_registries[currentRealmScope()]; }
 static Registry* registryFor(dom::Element* el) {
     if (s_registries.empty()) return nullptr;
     dom::Document* doc = el->document();
-    auto it = s_registries.find(doc ? scopeIdForDocument(doc) : currentRealmScope());
+    auto it = s_registries.find(doc ? compartmentForDocument(doc)->id : currentCompartmentId());
     return it == s_registries.end() ? nullptr : &it->second;
 }
 
@@ -355,7 +355,7 @@ void installCustomElementsGlobals() {
                 }
             }
         }
-        const uint64_t scope = currentRealmScope();
+        const uint64_t scope = currentCompartmentId();
         s_registries[scope][name] = std::move(def);
 
         // Resolve any promises this realm has awaiting this element name.
@@ -416,7 +416,7 @@ void installCustomElementsGlobals() {
             return p.get();
         }
         Value p = ev::createPromise();
-        auto& waiting = s_pendingWhenDefined[currentRealmScope()][name];
+        auto& waiting = s_pendingWhenDefined[currentCompartmentId()][name];
         waiting.emplace_back(p);
         return waiting.back().get();
     });
@@ -435,9 +435,9 @@ void installCustomElementsGlobals() {
     }
 }
 
-void clearCustomElementsForScope(uint64_t scopeId) {
-    s_registries.erase(scopeId);
-    s_pendingWhenDefined.erase(scopeId);
+void clearCustomElementsForCompartment(uint64_t compartmentId) {
+    s_registries.erase(compartmentId);
+    s_pendingWhenDefined.erase(compartmentId);
 }
 
 void resetCustomElementsRegistry() {

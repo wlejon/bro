@@ -50,7 +50,10 @@
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_natives.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
+#include "bronze_host/host_global_sync.h"
+#include "bronze_host/host_membrane.h"
+#include "bronze_host/host_appview.h"
 #include "bronze_host/host_rejection_events.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_window_open.h"
@@ -133,46 +136,16 @@ void fireAnimationFrames() {
             waiting.push_back(std::move(entry));
             continue;
         }
-        dom::Document* targetDoc = entry.doc;
-        dom::Document* prevDoc = currentHostDocument();
-        bool swapDoc = (targetDoc && targetDoc != prevDoc);
-
-        ev::GlobalValue docG = ev::globalValue("document");
-        // A Persistent, not a raw Value: the callback may allocate enough to
-        // move the heap, and the restore must name the document's CURRENT
-        // address; `globalThis` is re-read after the call for the same reason.
-        ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
-
-        if (swapDoc) {
-            enterRealmScope(scopeIdForDocument(targetDoc));
-            setCurrentHostDocument(targetDoc);
-            ev::Persistent subDocVal(hostDocumentValue(targetDoc));
-            ev::registerGlobal("document", subDocVal.get());
-            ev::GlobalValue gt = ev::globalValue("globalThis");
-            if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", subDocVal.get());
+        // An entry of the compartment of the document that asked for it; one
+        // torn down since gets nothing.
+        runEntry(entry.doc, EntryKind::Async, [fn = entry.fn, clockMs = g_host->clockMs] {
+            Value ts = ev::fromDouble(clockMs);
+            ev::CallResult r = ev::call(fn.get(), ev::undefined(), std::span<const Value>(&ts, 1));
+            if (r.thrown) {
+                ev::Persistent thrown(r.value);
+                reportBronzeError("requestAnimationFrame", thrown.get());
             }
-        }
-
-        Value ts = ev::fromDouble(g_host->clockMs);
-        ev::CallResult r = ev::call(entry.fn.get(), ev::undefined(),
-                                    std::span<const Value>(&ts, 1));
-        // The thrown value outlives the document swap back, which allocates.
-        ev::Persistent thrown(r.thrown ? r.value : ev::undefined());
-
-        if (swapDoc) {
-            if (!ev::isNull(prevDocVal.get())) {
-                ev::registerGlobal("document", prevDocVal.get());
-                ev::GlobalValue gt = ev::globalValue("globalThis");
-                if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", prevDocVal.get());
-                }
-            }
-            setCurrentHostDocument(prevDoc);
-            exitRealmScope();
-        }
-
-        if (r.thrown) reportBronzeError("requestAnimationFrame", thrown.get());
+        });
     }
     if (!waiting.empty()) {
         std::vector<RafEntry> carried;
@@ -196,6 +169,14 @@ void fireAnimationFrames() {
 // actually advanced by.
 //
 // THE ORDER, and what each position is answering to:
+//
+//  0. The realms of compartments torn down while their own code was on the
+//     stack (a window closing itself) go, now that none of it is.
+//
+//  0b. Each appview suspended at its slice runs one more, then what queued
+//     for it meanwhile (host_compartment.h, runEntry); and a page whose app
+//     the runtime stopped hears `terminated`. Before this frame's timers and
+//     rAF queue new entries behind them.
 //
 //  1. A leftover drain. Any task that enqueued a bronze job after we returned
 //     last frame — e.g. a listener dispatched during input processing — is
@@ -248,6 +229,8 @@ void fireAnimationFrames() {
 // and mic chunks ride the engine's ungated frame pump rather than this
 // pause-gated seam.
 void hostFrame(double dtMs) {
+    reapDeadCompartments();                              // 0
+    serviceCompartmentFibers();                          // 0b
     drainMicrotasksAndLocalFetches();                    // 1
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
@@ -349,7 +332,11 @@ Value makeBrandConstructor(const char* name) {
         [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
 }
 
-// The text a thrown value is reported with. bronze attaches NO `stack` and no
+// The text a thrown value is reported with.
+//
+// The exception policy for an app inline in another's page (a compartment):
+// its uncaught exception goes to ITS window's `error` event, and is logged
+// with the app named, and the app (and its host page) carry on. bronze attaches NO `stack` and no
 // source position to an Error it raises (runtime/exception.h: "bronze has no
 // stack to print, which is a deliberate divergence from node"; the JIT's
 // `retainSource` keeps source text for Function.prototype.toString only), so
@@ -403,7 +390,8 @@ std::string thrownValueText(Value thrown) {
 void reportBronzeError(const char* origin, Value thrown) {
     ev::Persistent root(thrown);
     if (hostDispatchUncaughtError(root.get())) return;
-    LOG_ERROR("[bronze:%s] uncaught %s", origin, thrownValueText(root.get()).c_str());
+    LOG_ERROR("%s[bronze:%s] uncaught %s", compartmentLogPrefix().c_str(), origin,
+              thrownValueText(root.get()).c_str());
 }
 
 // Zero before the first frame, which is what a program's top level sees. It is
@@ -461,6 +449,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     if (engine.document()) {
         engine.document()->setElementClonedCallback(&fireElementCloned);
     }
+    // The app's compartment (host_compartment.h): this realm, the engine's
+    // document, the process's grants. Sub-documents get compartments of
+    // their own (createCompartment), each installed by installRealmHostGlobals.
+    initAppCompartment(engine);
 
     // Install dynamic evaluation and function hooks (eval, new Function)
     // into bronze before anything the compiled program can run.
@@ -494,24 +486,54 @@ void installWebHostGlobals(engine::Engine& engine) {
     // while the frames (and audio fed from script) run on behind the dialog.
     installDialogPump(engine);
 
-    // Install HTML interfaces BEFORE document is created:
-    installHtmlInterfaces();
-
     // HTML's `pattern` attribute is an ECMAScript regular expression by
     // definition, so the constraint layer (src/layout/form_validation.cpp)
     // asks the host to test one rather than carrying a second, differing
     // regex engine of its own. This is where it is handed the tester; until
     // it is, every `pattern` constraint silently matches everything.
     installHostPatternTester();
+    // Notification clicks and dismissals, taken from the desktop once a frame.
+    installNotificationPump(engine);
+    // unhandledrejection / rejectionhandled at the window: bronze's
+    // end-of-drain report goes to the page from here on, not to stderr.
+    installMainThreadRejectionTracking();
+    // Escape → close request → the topmost modal dialog's cancel/close.
+    installDialogHooks(engine);
+    // A promise job runs in the compartment that subscribed it.
+    installJobCompartmentHooks();
+
+    // Everything the app's own code sees, in its realm.
+    installRealmHostGlobals(engine, appCompartment());
+
+    // The app's alone: the headless driver's globals, the agent-control
+    // commands that need its realm (eval, dom, inspect), and the embedder's
+    // bindings.
+    installHeadlessGlobals(engine);
+    installControlCommands(engine);
+    if (engine.installHostBindings()) {
+        engine.installHostBindings()(engine);
+    }
+
+    snapshotBaselineGlobalProps();
+}
+
+void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
+    const bool app = c.kind == CompartmentKind::App;
+    // Install HTML interfaces BEFORE document is created:
+    installHtmlInterfaces();
 
     {
-        // Null: the global follows the engine's current document rather than
-        // naming one. documentFor() above has the reason.
+        // The app's follows the engine's current document rather than naming
+        // one (documentFor has the reason); a sub-document's is its own.
         // Registered (rooted) straight away; the globalThis copies are read
         // back from the registry, since the constructor lookup and each
         // setProperty may allocate.
-        ev::registerGlobal("document", makeDocumentValue(nullptr));
-        setAppDocumentValue(ev::globalValue("document").value);
+        if (app) {
+            ev::registerGlobal("document", makeDocumentValue(nullptr));
+            setAppDocumentValue(ev::globalValue("document").value);
+        } else {
+            ev::registerGlobal("document", hostDocumentValue(c.document));
+        }
         ev::registerGlobal("Document", documentHostClass().constructor());
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) {
@@ -522,6 +544,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     }
     // window, self, top, parent and the window-shaped surface (dom_window.cpp).
     installWindowGlobal(g_host->engine);
+    // A frame's or an appview's `parent` and `top` stand for its host page's
+    // window: postMessage only, as a cross-origin window is (host_membrane.h).
+    if (c.parent && (c.kind == CompartmentKind::Frame || c.kind == CompartmentKind::AppView))
+        installParentWindowProxy(c);
     {
         // Registered (rooted) first, then read back from the registry for the
         // globalThis copy: the globalThis lookup may allocate, which a raw
@@ -566,8 +592,6 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Notification (js/notification.js): over bro.window.notify, read when
     // a notification is made.
     installNotificationModule();
-    // Its clicks and dismissals, taken from the desktop once a frame.
-    installNotificationPump(engine);
     // window -> Window.prototype -> EventTarget.prototype -> Object.prototype
     // (brokit's EventTarget is installed by now), so String(window) and
     // window instanceof Window work.
@@ -604,26 +628,15 @@ void installWebHostGlobals(engine::Engine& engine) {
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use.
     installObserversModule();
-    installHeadlessGlobals(engine);
-    // The agent-control commands that need this realm (eval, dom, inspect).
-    installControlCommands(engine);
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();
     installIntlGlobals();
     installWebAnimationGlobals();
     installVideoGlobals();
-    // unhandledrejection / rejectionhandled at the window: bronze's
-    // end-of-drain report goes to the page from here on, not to stderr.
-    installMainThreadRejectionTracking();
-    // Escape → close request → the topmost modal dialog's cancel/close.
-    installDialogHooks(engine);
-
-    if (engine.installHostBindings()) {
-        engine.installHostBindings()(engine);
-    }
-
-    snapshotBaselineGlobalProps();
+    // An appview's `bro.app.host`, where its host page's grants appear, and
+    // its prompts routed to that page (host_appview.cpp).
+    if (c.kind == CompartmentKind::AppView) attachAppViewCompartment(c);
 }
 
 static std::vector<std::string> s_baselineGlobalProps;
@@ -669,15 +682,20 @@ static void clearGlobalProp(const std::string& key) {
 }
 
 static void snapshotBaselineGlobalProps() {
-    initRealmScopeBaseline();
-    installJobRealmHooks();
+    snapshotBaselineHostGlobalNames();
     std::vector<std::string> names;
     if (globalOwnPropertyNames(names)) s_baselineGlobalProps = std::move(names);
 }
 
 void resetGlobalExpandos() {
-    resetAllRealmScopes();
-    setCurrentHostDocument(nullptr);
+    // A reload: every sub-document's compartment goes (the engine tears the
+    // documents down too), and the app's realm is put back as installed.
+    destroyChildCompartments("the app reloaded");
+    CompartmentScope app(&appCompartment());
+    restoreBaselineHostGlobals();
+    clearWindowName(0);
+    clearParsedDocuments();
+    clearWindowProxies(0);
     if (g_host) {
         g_host->rafPending.clear();
     }

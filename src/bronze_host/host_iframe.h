@@ -4,7 +4,8 @@
 
 namespace bro::bronze_host {
 
+/// HTMLIFrameElement's members; an <appview>'s prototype starts from them too
+/// (host_appview.h).
 void decorateIFrameProto(ObjectBuilder& b);
-void clearContentWindowProxy(uint64_t scopeId);
 
 } // namespace bro::bronze_host

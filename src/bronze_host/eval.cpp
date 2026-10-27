@@ -6,7 +6,8 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_pins.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
+#include "bronze_host/host_global_sync.h"
 
 #include "cli/driver.h"
 #include "embed/embed.h"
@@ -650,7 +651,10 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
         }
     }
 
-    const std::string cacheKey = std::to_string(static_cast<int>(kind)) + "\n" + params + "\n" + body;
+    // Per compartment: a function is its realm's (it runs there whoever calls
+    // it), so one compartment's compiled `new Function` is never another's.
+    const std::string cacheKey = std::to_string(currentCompartmentId()) + "\n" +
+                                 std::to_string(static_cast<int>(kind)) + "\n" + params + "\n" + body;
     auto it = s_dynFnCache.find(cacheKey);
     if (it != s_dynFnCache.end() && !ev::isUndefined(it->second.get())) {
         return it->second.get();

@@ -7,6 +7,13 @@
  * sub-documents with independent JS realms, DOM trees, CSS cascades, timers,
  * and GPU surfaces.
  *
+ * A frame is a realm of its own (its own globals, builtins frozen as the
+ * page's are), and it is the page's own app: the page reaches its window and
+ * document and the frame reaches `parent`, `top` and `frameElement`, as the
+ * web's same-origin frames do, and a function of either runs in its own realm
+ * whoever calls it. Another app running inline is an `<appview>`
+ * (docs/appview-api.js), reached only by message.
+ *
  * The sub-document's `<script>` tags run in document order as the main
  * document's do, `<script type="module">` included: inline and `src=` modules
  * resolve their relative imports against the sub-document's folder, and a

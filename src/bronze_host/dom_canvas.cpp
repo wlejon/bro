@@ -3,6 +3,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_class.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_element.h"
@@ -161,11 +162,8 @@ bool encodeCanvasBitmap(const std::vector<uint8_t>& px, int w, int h, const std:
 HostClass g_bitmapRendererClass;
 
 Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Element* el) {
-    static bool installed = false;
-    if (!installed) {
-        installed = true;
+    if (firstInRealm(&g_bitmapRendererClass))
         g_bitmapRendererClass.install("ImageBitmapRenderingContext", 0, nullptr, nullptr);
-    }
     ObjectBuilder b;
     b.set("canvas", canvasRoot.get());
     b.def("transferFromImageBitmap", 1, [el](Value, std::span<const Value> a) -> Value {
@@ -355,7 +353,7 @@ Value makeCanvasValue(dom::Element* el) {
         }
         if (type == "scene") {
 #if BRO_WITH_3D
-            if (isChildRealm()) return ev::null();
+            if (inChildCompartment()) return ev::null();
             auto* eng = hostEngine();
             if (!eng) return ev::null();
             dom::Document* curDoc = currentHostDocument();
@@ -373,7 +371,7 @@ Value makeCanvasValue(dom::Element* el) {
 #endif
         }
         if (type != "webgl2" && type != "webgl") return ev::null();
-        if (isChildRealm()) return ev::null();
+        if (inChildCompartment()) return ev::null();
         auto* eng = hostEngine();
         if (!eng) return ev::null();
         dom::Document* curDoc = currentHostDocument();

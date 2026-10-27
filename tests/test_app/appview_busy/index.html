@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AppView Busy</title>
+  <style>html, body { margin: 0; width: 100%; height: 100%; }</style>
+</head>
+<body>
+  <script>
+    // An app that works too long: a long job on a message, which must yield
+    // to its host page slice by slice, and a click listener that never
+    // returns, which its page waits on, so the runtime stops the app.
+    window.addEventListener('message', (e) => {
+      if (e.data !== 'spin') return;
+      let x = 0;
+      for (let i = 0; i < 2e8; i++) x = (x + i) | 0;
+      parent.postMessage({ spun: true, x });
+    });
+    document.body.addEventListener('click', () => {
+      for (;;) {}
+    });
+    parent.postMessage({ ready: true });
+  </script>
+</body>
+</html>

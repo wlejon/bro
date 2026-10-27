@@ -18,8 +18,10 @@ void installObserverHooks();
 
 // The observer module's per-frame pass (resize, then intersection), fired
 // from the frame seam after requestAnimationFrame and its microtask
-// checkpoint. A no-op until the module has registered its callback.
+// checkpoint, in each compartment whose module registered its callback.
 void fireHostObserverFrame();
+// A compartment's watches, queued records and callbacks, at its teardown.
+void dropObserverState(uint64_t compartmentId);
 
 // Lift a value some compiled JS (or a sibling installer) ASSIGNED onto
 // `globalThis` into bronze's host-global registry, so a compiled read of the
@@ -85,6 +87,8 @@ void installDeferredModules();
 // Run the 3D group now: a SceneGraph made by getContext('scene') needs the
 // prototypes js/scene*.js install.
 void ensure3DModules();
+// A compartment's deferred groups, at its teardown.
+void dropModuleGroups(uint64_t compartmentId);
 // Whether `name` (a `bro.<ns>` member or a global) belongs to a group that
 // has not run: markAvailableNamespaces skips it rather than run the group.
 bool isDeferredName(const char* name);

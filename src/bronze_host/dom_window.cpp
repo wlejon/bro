@@ -17,7 +17,7 @@
 #include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_matchmedia.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_window_open.h"
 
@@ -104,12 +104,12 @@ void installWindowGlobal(engine::Engine* enginePtr) {
     b.accessor("name",
                [](Value, std::span<const Value>) {
                    auto& names = windowNames();
-                   auto it = names.find(currentRealmScope());
+                   auto it = names.find(currentCompartmentId());
                    return ev::fromUtf8(it != names.end() ? it->second : "");
                },
                [](Value, std::span<const Value> a) {
                    std::string s = ev::toUtf8(argAt(a, 0));
-                   windowNames()[currentRealmScope()] = std::move(s);
+                   windowNames()[currentCompartmentId()] = std::move(s);
                    return ev::undefined();
                });
 
@@ -297,9 +297,9 @@ void installWindowGlobal(engine::Engine* enginePtr) {
     setAndRegister("screen", makeScreenValue());
 
     b.def("getSelection", 0, [](Value, std::span<const Value>) {
-        auto* e = hostEngine();
-        if (!e || !e->document()) return ev::null();
-        return wrapSelection(e->document()->selection());
+        dom::Document* doc = currentHostDocument();  // this window's
+        if (!doc) return ev::null();
+        return wrapSelection(doc->selection());
     });
 
     b.def("open", 1, [](Value, std::span<const Value> a) {

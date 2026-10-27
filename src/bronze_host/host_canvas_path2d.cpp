@@ -7,6 +7,7 @@
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_canvas2d_paths.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_compartment.h"
 #include <include/core/SkMatrix.h>
 #include <include/core/SkRect.h>
 #include <include/utils/SkParsePath.h>
@@ -118,9 +119,7 @@ Value makePath2DValue(const SkPath& path) {
 }
 
 void installPath2DClass() {
-    static bool s_installed = false;
-    if (s_installed) return;
-    s_installed = true;
+    if (!firstInRealm(&g_path2DClass)) return;
 
     g_path2DClass.install("Path2D", 0,
         [](Value, std::span<const Value> a) -> Value {

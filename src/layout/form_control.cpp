@@ -261,7 +261,7 @@ int tabIndex(const dom::Element* el) {
         if (end != v.c_str()) return static_cast<int>(n);
     }
     static const char* const kFocusable[] = {
-        "a", "area", "button", "input", "select", "textarea", "iframe",
+        "a", "area", "button", "input", "select", "textarea", "iframe", "appview",
         "summary", "audio", "video", "terminal",
     };
     std::string t = el->tagName();
@@ -356,7 +356,7 @@ bool isInteractiveContent(const dom::Element* el) {
         tagIs(el, "textarea", "TEXTAREA") ||
         tagIs(el, "details", "DETAILS") ||
         tagIs(el, "embed", "EMBED") ||
-        tagIs(el, "iframe", "IFRAME")) {
+        el->isFrameHost()) {
         return true;
     }
     if (tagIs(el, "a", "A")) {

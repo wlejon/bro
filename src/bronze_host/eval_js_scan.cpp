@@ -1,5 +1,5 @@
 #include "bronze_host/eval_js_scan.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_global_sync.h"
 
 #include <algorithm>
 #include <string>

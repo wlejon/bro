@@ -354,6 +354,11 @@ public:
     canvas::CanvasScene* createCanvasContext(dom::Element* canvas);
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
+    /// An <appview>'s lifecycle: stop tears its sub-document (and compartment)
+    /// down at the next drain and keeps it down; start loads it again.
+    void stopIframe(dom::Element* el);
+    void startIframe(dom::Element* el);
+    bool iframeStopped(const dom::Element* el) const;
     bool reloadIframeForDocument(const dom::Document* doc);
     /// Reloads the app at the next frame: the page's own `location.reload()`,
     /// a source change the watcher saw, or the `system_reload_app` action (F5).
@@ -1336,6 +1341,8 @@ private:
     std::vector<render::SkiaRenderer::LayerSurface> iframeSurfaceFrees_;
     bool iframeSyncNeeded_ = false;
     std::unordered_map<dom::Element*, std::string> iframeLoadFailed_;
+    // <appview>s their page stopped: not loaded until start().
+    std::unordered_set<dom::Element*> stoppedIframes_;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;

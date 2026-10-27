@@ -1,13 +1,9 @@
 // A function of an <iframe>'s realm, called by the parent through
 // iframe.contentWindow, runs against its own realm's document and globals,
-// as it does in a browser. Sub-document realms share one global object and
-// are entered by swapping it (bronze_host: enterRealmScope, the document
-// global, the current document); a call from the parent entered nothing, so
-// the child's function ran against the parent's document: its
-// document.querySelectorAll found the parent's elements, its createElement
-// went into the parent. A function the proxy hands out now enters the
-// child's realm around the call, and leaves it after, whatever it returns or
-// throws.
+// as it does in a browser. Each sub-document is a realm of its own (a
+// compartment), and every call enters the callee's realm and leaves it after,
+// whatever it returns or throws: the child's document.querySelectorAll finds
+// the child's elements and its createElement goes into the child.
 
 document.title = 'Parent title';
 var secret = 'parent';

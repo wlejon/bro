@@ -167,7 +167,7 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
             tag == "img" || tag == "IMG" ||
             tag == "video" || tag == "VIDEO" ||
             tag == "canvas" || tag == "CANVAS" ||
-            tag == "iframe" || tag == "IFRAME" ||
+            dom::Element::isFrameHostTag(tag) ||
             tag == "terminal" || tag == "TERMINAL" ||
             tag == "input" || tag == "INPUT" ||
             tag == "embed" || tag == "EMBED" ||

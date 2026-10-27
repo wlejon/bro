@@ -24,6 +24,7 @@
 // webgl_textures.cpp keep asking one question.
 
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_class.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_image.h"
@@ -167,8 +168,7 @@ namespace {
 // element's LAYOUT box, not the decode, and this layer has no layout box for a
 // detached image: accepted and ignored, as they were before.
 Value imageConstructor(Value, std::span<const Value>) {
-    engine::Engine* engine = hostEngine();
-    dom::Document* doc = engine ? engine->document() : nullptr;
+    dom::Document* doc = currentHostDocument();  // the caller's own
     if (!doc) return ev::throwError("new Image(): the engine has no document");
     dom::Element* el = doc->createElement("img");
     if (!el) return ev::throwError("new Image(): the document refused an <img>");

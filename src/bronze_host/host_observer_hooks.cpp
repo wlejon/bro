@@ -35,11 +35,18 @@
 // that (Document::addNodeFreedObserver). A slot whose node has since been
 // freed reports null rather than a pointer into released storage.
 //
-// LIFETIME. One process-lived state block, never freed: it holds Persistents
-// (the two JS callbacks), and a static destructor would release root slots
-// against a runtime whose statics may already be gone — the same convention
-// the timer table and the host classes follow.
+// ONE STATE PER COMPARTMENT (host_compartment.h). Each realm runs its own
+// observers.js, which registers its own callbacks and takes its own records,
+// so the watches, the queue and the callbacks are the calling compartment's:
+// a frame's observers never take the page's records, and the page's keep
+// firing while a frame lives. A compartment's state goes at its teardown.
+//
+// LIFETIME. The table is process-lived, never freed: its states hold
+// Persistents (the two JS callbacks), and a static destructor would release
+// root slots against a runtime whose statics may already be gone — the same
+// convention the timer table and the host classes follow.
 
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
@@ -48,6 +55,7 @@
 #include "bronze_host/host_node_sweep.h"
 
 #include <algorithm>
+#include <memory>
 
 #include "dom/document.h"
 #include "dom/node.h"
@@ -96,11 +104,26 @@ struct HookState {
     ev::Persistent onFrame;
 };
 
-HookState* g_state = nullptr;
+// By compartment id. unique_ptr so a state keeps its address while the map
+// grows; the map itself is never destroyed (LIFETIME above).
+std::unordered_map<uint64_t, std::unique_ptr<HookState>>* g_states = nullptr;
 
+std::unordered_map<uint64_t, std::unique_ptr<HookState>>& states() {
+    if (!g_states) g_states = new std::unordered_map<uint64_t, std::unique_ptr<HookState>>();
+    return *g_states;
+}
+
+// The calling compartment's.
 HookState& state() {
-    if (!g_state) g_state = new HookState();
-    return *g_state;
+    auto& slot = states()[currentCompartmentId()];
+    if (!slot) slot = std::make_unique<HookState>();
+    return *slot;
+}
+
+HookState* existingState() {
+    if (!g_states) return nullptr;
+    auto it = g_states->find(currentCompartmentId());
+    return it != g_states->end() ? it->second.get() : nullptr;
 }
 
 bool isAncestorOf(dom::Node* maybeAncestor, dom::Node* node) {
@@ -114,11 +137,24 @@ bool isAncestorOf(dom::Node* maybeAncestor, dom::Node* node) {
 // The notice hook
 // ---------------------------------------------------------------------------
 
-void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) {
-    if (!g_state || !notice.target || g_state->watches.empty()) return;
+void noticeFor(HookState& s, const dom::Document::MutationNotice& notice);
 
+void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) {
+    if (!g_states || !notice.target) return;
+    // Copied out first: a callback may make another compartment's state.
+    std::vector<std::pair<uint64_t, HookState*>> watching;
+    for (auto& [id, s] : *g_states)
+        if (s && !s->watches.empty()) watching.emplace_back(id, s.get());
+    for (auto& [id, s] : watching) {
+        Compartment* c = compartmentById(id);
+        if (!c || c->dying) continue;
+        noticeFor(*s, notice);
+    }
+}
+
+void noticeFor(HookState& s, const dom::Document::MutationNotice& notice) {
     std::vector<HostNodeState*> matched;
-    for (auto& [st, w] : g_state->watches) {
+    for (auto& [st, w] : s.watches) {
         dom::Node* watched = st->node;
         if (!watched) continue;  // freed since observe()
         if (watched == notice.target) {
@@ -149,12 +185,12 @@ void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) 
         rec.hasOldValue = true;
     }
     rec.nodes = std::move(matched);
-    g_state->queue.push_back(std::move(rec));
+    s.queue.push_back(std::move(rec));
 
-    if (g_state->signalled) return;
-    Value fn = g_state->onMutation.get();
+    if (s.signalled) return;
+    Value fn = s.onMutation.get();
     if (!ev::isFunction(fn)) return;
-    g_state->signalled = true;
+    s.signalled = true;
     // Calling into JS from inside a notice is allowed: the callback only
     // queues a microtask. It must not mutate the DOM, and it does not.
     ev::CallResult r = ev::call(fn, ev::undefined(), {});
@@ -230,14 +266,15 @@ Value observeMutations(Value, std::span<const Value> a) {
 
 Value unobserveMutations(Value, std::span<const Value> a) {
     dom::Node* node = hostNodeOf(argAt(a, 0));
-    if (!node || !g_state) return ev::undefined();
+    HookState* s = existingState();
+    if (!node || !s) return ev::undefined();
     const bool subtree = boolAt(a, 1);
-    auto it = g_state->watches.find(hostNodeStateFor(node));
-    if (it == g_state->watches.end()) return ev::undefined();
+    auto it = s->watches.find(hostNodeStateFor(node));
+    if (it == s->watches.end()) return ev::undefined();
     Watch& w = it->second;
     if (subtree) { if (w.subtree > 0) --w.subtree; }
     else { if (w.direct > 0) --w.direct; }
-    if (w.direct == 0 && w.subtree == 0) g_state->watches.erase(it);
+    if (w.direct == 0 && w.subtree == 0) s->watches.erase(it);
     return ev::undefined();
 }
 
@@ -290,25 +327,41 @@ void installObserverHooks() {
 }
 
 bool hostObserversHold(const HostNodeState* st) {
-    if (!g_state || !st) return false;
+    if (!g_states || !st) return false;
     auto* key = const_cast<HostNodeState*>(st);
-    if (g_state->watches.count(key)) return true;
     auto names = [key](const std::vector<HostNodeState*>& v) {
         return std::find(v.begin(), v.end(), key) != v.end();
     };
-    for (const RawRecord& rec : g_state->queue) {
-        if (rec.target == key || rec.previousSibling == key || rec.nextSibling == key) return true;
-        if (names(rec.added) || names(rec.removed) || names(rec.nodes)) return true;
+    for (auto& [id, s] : *g_states) {
+        if (!s) continue;
+        if (s->watches.count(key)) return true;
+        for (const RawRecord& rec : s->queue) {
+            if (rec.target == key || rec.previousSibling == key || rec.nextSibling == key) return true;
+            if (names(rec.added) || names(rec.removed) || names(rec.nodes)) return true;
+        }
     }
     return false;
 }
 
 void fireHostObserverFrame() {
-    if (!g_state) return;
-    Value fn = g_state->onFrame.get();
-    if (!ev::isFunction(fn)) return;
-    ev::CallResult r = ev::call(fn, ev::undefined(), {});
-    if (r.thrown) reportBronzeError("__bro_observers.onFrame", r.value);
+    if (!g_states) return;
+    // Each compartment's tick, in it; the list copied first, since a tick
+    // may make another compartment's state or tear one down.
+    std::vector<std::pair<uint64_t, ev::Persistent>> ticks;
+    for (auto& [id, s] : *g_states)
+        if (s && ev::isFunction(s->onFrame.get())) ticks.emplace_back(id, ev::Persistent(s->onFrame.get()));
+    for (auto& [id, fn] : ticks) {
+        Compartment* c = compartmentById(id);
+        if (!c) continue;
+        runEntry(c, EntryKind::Async, [fn = std::move(fn)] {
+            ev::CallResult r = ev::call(fn.get(), ev::undefined(), {});
+            if (r.thrown) reportBronzeError("__bro_observers.onFrame", r.value);
+        });
+    }
+}
+
+void dropObserverState(uint64_t compartmentId) {
+    if (g_states) g_states->erase(compartmentId);
 }
 
 }  // namespace bro::bronze_host

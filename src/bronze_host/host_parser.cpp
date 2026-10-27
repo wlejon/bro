@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 
 namespace bro::bronze_host {
 
@@ -21,7 +21,7 @@ namespace {
 
 struct ParsedDocEntry {
     std::unique_ptr<dom::Document> doc;
-    uint64_t scopeId = 0;
+    uint64_t compartmentId = 0;
 };
 
 std::vector<ParsedDocEntry> s_parsedDocs;
@@ -32,8 +32,9 @@ dom::Document* parseIntoNewDocument(const std::string& html) {
     auto doc = std::make_unique<dom::Document>();
     dom::Document* ptr = doc.get();
     doc->parse(html);
-    const uint64_t scopeId = currentRealmScope();
-    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), scopeId});
+    // The parsing compartment's: its code alone may wrap and walk it.
+    noteDocumentOwner(ptr, currentCompartment());
+    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentCompartmentId()});
     return ptr;
 }
 
@@ -44,7 +45,8 @@ dom::Document* parseXmlIntoNewDocument(const std::string& xml) {
     auto doc = std::make_unique<dom::Document>();
     dom::Document* ptr = doc.get();
     doc->parseXml(xml);
-    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentRealmScope()});
+    noteDocumentOwner(ptr, currentCompartment());
+    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentCompartmentId()});
     return ptr;
 }
 }  // namespace
@@ -54,17 +56,19 @@ void clearParsedDocuments() {
         if (entry.doc) {
             clearHostElementsForDocument(entry.doc.get());
             clearHostDocument(entry.doc.get());
+            forgetDocumentOwner(entry.doc.get());
         }
     }
     s_parsedDocs.clear();
 }
 
-void clearParsedDocumentsForScope(uint64_t scopeId) {
+void clearParsedDocumentsForCompartment(uint64_t compartmentId) {
     for (auto it = s_parsedDocs.begin(); it != s_parsedDocs.end(); ) {
-        if (it->scopeId == scopeId) {
+        if (it->compartmentId == compartmentId) {
             if (it->doc) {
                 clearHostElementsForDocument(it->doc.get());
                 clearHostDocument(it->doc.get());
+                forgetDocumentOwner(it->doc.get());
             }
             it = s_parsedDocs.erase(it);
         } else {

@@ -22,6 +22,7 @@
 // installer nine times.
 
 #include "bronze_host/host_js_modules.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_natives.h"
 #if BRO_WITH_NET
 #include "net/bronze_api/net_rollback_api.h"
@@ -34,8 +35,11 @@
 #endif
 #include "embed/embed.h"
 
+#include <memory>
 #include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 extern "C" void bro_observers_main();
@@ -287,14 +291,24 @@ struct ModuleGroup {
     std::vector<std::string> names;
 };
 
-// Never freed, like every root this layer keeps for the process: their
-// Persistents must not be destroyed by static teardown after the heap.
-std::vector<ModuleGroup*>& groups() {
-    static auto* all = new std::vector<ModuleGroup*>();
+// Each compartment's groups: every realm installs its own, and a group runs
+// in the realm that installed it. Per thread (a Worker installs none, and
+// reads its own empty map), and never freed, like every root this layer
+// keeps (its Persistents must not be destroyed by teardown after the heap);
+// a compartment's groups go with it (dropModuleGroups).
+using Groups = std::vector<std::unique_ptr<ModuleGroup>>;
+std::unordered_map<uint64_t, Groups>& groupsByCompartment() {
+    thread_local auto* all = new std::unordered_map<uint64_t, Groups>();
     return *all;
 }
 
-ModuleGroup* g3d = nullptr;
+Groups& groups() { return groupsByCompartment()[currentCompartment()->id]; }
+
+ModuleGroup* group3d() {
+    for (const auto& g : groups())
+        if (std::string_view(g->label) == "3d") return g.get();
+    return nullptr;
+}
 
 void runGroup(ModuleGroup& g) {
     if (g.started) return;
@@ -367,11 +381,12 @@ void deferGlobal(ModuleGroup& g, const char* name) {
 }
 
 ModuleGroup& newGroup(const char* label, void (*install)()) {
-    auto* g = new ModuleGroup();
+    auto g = std::make_unique<ModuleGroup>();
     g->label = label;
     g->install = install;
-    groups().push_back(g);
-    return *g;
+    ModuleGroup& out = *g;
+    groups().push_back(std::move(g));
+    return out;
 }
 
 // bro.<sub>, or undefined.
@@ -384,7 +399,7 @@ Value broMember(const char* sub) {
 }  // namespace
 
 bool isDeferredName(const char* name) {
-    for (const ModuleGroup* g : groups()) {
+    for (const auto& g : groups()) {
         if (g->started) continue;
         for (const std::string& n : g->names) {
             if (n == name) return true;
@@ -394,12 +409,14 @@ bool isDeferredName(const char* name) {
 }
 
 void ensure3DModules() {
-    if (g3d) runGroup(*g3d);
+    if (ModuleGroup* g = group3d()) runGroup(*g);
 }
+
+void dropModuleGroups(uint64_t compartmentId) { groupsByCompartment().erase(compartmentId); }
 
 std::string deferredModuleGroups() {
     std::string out;
-    for (const ModuleGroup* g : groups()) {
+    for (const auto& g : groups()) {
         if (g->started) continue;
         if (!out.empty()) out += ' ';
         out += g->label;
@@ -409,7 +426,7 @@ std::string deferredModuleGroups() {
 
 std::string loadedModuleGroups() {
     std::string out;
-    for (const ModuleGroup* g : groups()) {
+    for (const auto& g : groups()) {
         if (!g->started) continue;
         if (!out.empty()) out += ' ';
         out += g->label;
@@ -448,7 +465,6 @@ void installDeferredModules() {
             installAnimationModule();
             installSceneModule();
         });
-        g3d = &g;
         for (const char* name : {"Physics", "PhysicsCharacter", "PhysicsSoftBody", "PhysicsVehicle",
                                  "PhysicsRagdoll", "PhysicsWorldHandle", "Terrain", "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
             deferGlobal(g, name);

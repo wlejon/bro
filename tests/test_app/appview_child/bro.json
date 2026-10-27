@@ -1,0 +1,6 @@
+{
+    "id": "org.bro.test.AppViewChild",
+    "name": "AppView Child",
+    "description": "The app tests/appview runs inline in an <appview>",
+    "permissions": ["files"]
+}

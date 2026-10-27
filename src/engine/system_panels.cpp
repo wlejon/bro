@@ -88,6 +88,8 @@ void Engine::initSystemPanels() {
 void Engine::destroySystemPanels() {
     for (auto& doc : systemDocs_) {
         if (doc.animations) doc.animations->clear();  // their records name its elements
+        // Its compartment (realm, grants' view, membrane entries) goes first.
+        if (doc.document) bro::bronze_host::destroyCompartmentForDocument(doc.document.get());
         doc.document.reset();
         doc.animations.reset();
     }

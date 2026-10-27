@@ -8,7 +8,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "natives/scene/native_scene_decl.h"
 #include "bronze_host/host_natives.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_rooted.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_runtime.h"
@@ -54,7 +54,7 @@ void bro_scene_SceneGraph_attachTo(uint64_t sceneBits, uint64_t canvasBits) {
     }
     auto* eng = hostEngine();
     dom::Document* doc = el->document();
-    if (!eng || isChildRealm() || !doc ||
+    if (!eng || inChildCompartment() || !doc ||
         eng->isWindowHostDocument(doc) || eng->isIframeDocument(doc)) {
         ev::throwTypeError("attachTo: a scene can only be shown by a canvas of the main document");
         return;

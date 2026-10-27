@@ -1,5 +1,6 @@
 #include "bronze_host/host_canvas_gradient.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_compartment.h"
 #include "canvas/canvas2d.h"
 #include "util/string_utils.h"
 
@@ -77,9 +78,7 @@ sk_sp<SkShader> HostCanvasGradient::buildShader() const {
 }
 
 void installCanvasGradientClass() {
-    static bool installed = false;
-    if (installed) return;
-    installed = true;
+    if (!firstInRealm(&g_canvasGradientClass)) return;
     g_canvasGradientClass.install("CanvasGradient", 0, nullptr, decorateCanvasGradientProto);
 }
 

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><title>AppView Child</title></head>
+<body>
+  <p id="hello">an app running inline</p>
+  <script>
+    // Who it is, what it can reach of its host page, a capability the page
+    // granted, and a capability it declared but was not given: reported to
+    // the page by message, the only way across.
+    const out = { id: bro.app.id, name: bro.app.name, title: document.title };
+    out.parentDocument = typeof parent.document;
+    out.parentPost = typeof parent.postMessage;
+    out.hostAdd = typeof (bro.app.host && bro.app.host.add);
+    try {
+      out.sum = bro.app.host.add(2, 3);
+    } catch (e) {
+      out.sum = 'threw: ' + e.message;
+    }
+    // A file in the user's home folder, outside the app's own folders: what
+    // `files` covers (a missing file still asks first).
+    try {
+      require('fs').readFileSync(require('os').homedir() + '/bro-appview-probe.txt', 'utf8');
+      out.files = 'read';
+    } catch (e) {
+      out.files = (e.code === 'EACCES' ? 'refused: ' : 'failed: ') + e.message;
+    }
+    parent.postMessage(out);
+    window.addEventListener('message', (e) => {
+      parent.postMessage({ echo: e.data, sourceIsParent: e.source === parent });
+    });
+  </script>
+</body>
+</html>

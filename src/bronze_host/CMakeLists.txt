@@ -112,7 +112,10 @@ set(BRO_BRONZE_HOST_SOURCES
     host_worker_thread.cpp
     host_window_open.cpp
     host_window_message.cpp
-    host_realm_scope.cpp
+    host_compartment.cpp
+    host_global_sync.cpp
+    host_membrane.cpp
+    host_appview.cpp
     host_observer_hooks.cpp
     host_js_modules.cpp
     host_app.cpp

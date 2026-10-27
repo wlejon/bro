@@ -93,17 +93,19 @@ void clearHostTimers();
 /// Reset expandos added to globalThis across an app reload.
 void resetGlobalExpandos();
 
-/// Active host document tracking for sub-documents (iframes, window hosts).
+/// The running code's document: its compartment's (host_compartment.h). Each
+/// sub-document (an iframe, a secondary window, a system panel, an appview)
+/// runs in a compartment of its own.
 dom::Document* currentHostDocument();
-void setCurrentHostDocument(dom::Document* doc);
 void clearHostDocument(dom::Document* doc);
 void clearHostElementsForDocument(dom::Document* doc);
 void clearHostTimersForDocument(dom::Document* doc);
 void clearHostAnimationFramesForDocument(dom::Document* doc);
-uint64_t scopeIdForDocument(dom::Document* doc);
-void clearRealmScope(uint64_t scopeId);
+/// The compartment of a sub-document is torn down with it: what its code
+/// holds open is revoked and its realm goes (host_compartment.h).
+void destroyCompartmentForDocument(const dom::Document* doc);
 void clearParsedDocuments();
-void clearParsedDocumentsForScope(uint64_t scopeId);
+void clearParsedDocumentsForCompartment(uint64_t compartmentId);
 
 /// Canvas cleanup across element destruction and app reload.
 void clearHostCanvases();

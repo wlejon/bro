@@ -4,7 +4,7 @@
 #include "bronze_host/host_events.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_web_animations.h"
 
 #include "dom/document.h"
@@ -65,7 +65,7 @@ void decorateElementInteraction(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (st && st->el) {
             auto* e = hostEngine();
-            if (isChildRealm() || (e && st->el->document() != e->document())) {
+            if (inChildCompartment() || (e && st->el->document() != e->document())) {
                 return ev::throwTypeError("requestPointerLock is only available in the main window");
             }
             if (e) e->requestPointerLock(st->el);

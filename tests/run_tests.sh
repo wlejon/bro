@@ -561,11 +561,13 @@ run_one_test() {
             EXTRA_ENV+=( "BRO_HEADLESS_COMPOSITOR=1" "BC_TEST_CLIENT_DIR=$(bc_client_dir)" )
             ;;
     esac
-    # bro.conf tests write settings, and bro.models tests install models: into
-    # a scratch BRO_APP_HOME, never the user's own settings.ini or models folder.
+    # bro.conf tests write settings, bro.models tests install models, and
+    # appview tests record an inline app's permission decisions: into a
+    # scratch BRO_APP_HOME, never the user's own settings.ini, models folder or
+    # grant store.
     local CONF_HOME=""
     case "$REL" in
-        conf/*|models/*)
+        conf/*|models/*|appview/*)
             CONF_HOME=$(mktemp -d "${TMPDIR:-/tmp}/bro_conf.XXXXXX")
             EXTRA_ENV+=( "BRO_APP_HOME=$(to_win_path "$CONF_HOME")" )
             ;;

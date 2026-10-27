@@ -5,8 +5,11 @@
 // an iframe share with it.
 
 #include "embed/embed.h"
+#include "bronze_host/host_worker_msg.h"
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <span>
 #include <string>
 
@@ -41,14 +44,23 @@ void parsePostMessageArgs(std::span<const Value> args, const char* what,
                           bool legacyTransferArray, PostMessageTarget& out);
 // structuredClone `message` with `transfer`; the MessagePorts in the list come
 // back as `portsOut` (an array). A clone error is thrown on to the caller.
+// For a post to the caller's own window: the clone is of its realm.
 void cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
                          ev::Persistent& dataOut, ev::Persistent& portsOut);
-// Deliver a `message` MessageEvent at one window: the realm `scopeId` (0 =
-// main; a window host id; an iframe document's scope) whose document is
-// `doc` (ignored for 0). `onmessage` first, then that document's window
-// listeners. A window that has gone away receives nothing. ALLOCATES.
-void deliverWindowMessageEvent(uint64_t scopeId, dom::Document* doc, const ev::Persistent& data,
-                               const ev::Persistent& ports, const ev::Persistent& source,
-                               const std::string& origin);
+// The clone a post to ANOTHER compartment's window carries: bytes
+// (host_worker_msg.h), read back in the receiver's realm, so every object the
+// receiver gets is its own. A value that cannot be cloned is the caller's
+// DataCloneError; MessagePorts do not cross compartments.
+void serializeForPost(const ev::Persistent& message, const ev::Persistent& transfer, Message& out);
+// Deliver a `message` MessageEvent at the window of `doc` (null: the app's),
+// inside its compartment: `onmessage` first, then that document's window
+// listeners. A same-window post hands its clone (`data`, `ports`, of that
+// realm); a post from another compartment hands `msg`, read back there.
+// `makeSource` runs inside the receiver's compartment and answers the
+// event's `source`. A window that has gone away receives nothing. ALLOCATES.
+void deliverWindowMessageEvent(dom::Document* doc, const ev::Persistent& data, const ev::Persistent& ports,
+                               const std::function<Value()>& makeSource, const std::string& origin);
+void deliverWindowMessage(dom::Document* doc, std::shared_ptr<const Message> msg,
+                          const std::function<Value()>& makeSource, const std::string& origin);
 
 }  // namespace bro::bronze_host

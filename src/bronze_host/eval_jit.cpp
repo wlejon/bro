@@ -8,7 +8,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_pins.h"
-#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_global_sync.h"
 #include "bronze_host/host_rejection_events.h"
 #include "engine/engine.h"
 #include "engine/app_runtime.h"
