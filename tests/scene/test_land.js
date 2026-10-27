@@ -13,8 +13,8 @@
 //     from 52 m looking down and not from 48 m
 //   - far from the origin (the rings follow the eye) it still draws
 //   - a plants node standing on it (createPlants' `land`): past their range
-//     the land is drawn as their canopy, within it and once they leave it
-//     as its own surface
+//     the land is drawn as their canopy, and where they are drawn but not
+//     yet placed; once they leave it, as its own surface
 //   - the land's sun: a ridge at a low sun shades flat ground far behind it
 //     and not the same ground before it
 

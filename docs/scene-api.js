@@ -1139,6 +1139,54 @@ class SceneGraph {
   inspectFrame(opts) {}
 
   /**
+   * Inspection as a recording: the renders `keepInspect` names are written
+   * to `path` (replaced), each its depth, luma and camera, cut `scale`
+   * times each way (default 2), by a thread of the engine's own while the
+   * scene goes on; nothing is compared until `inspectRecording` asks. A
+   * frame kept costs a few ms of the CPU, so a flight records at its own
+   * pace, and the recording can be asked again without flying. Each render
+   * is copied out while a recording goes on, as with setInspect. Throws when
+   * the file cannot be made.
+   * @param {string} path a real filesystem path (bro.resolvePath)
+   * @param {{ scale?: number }} [opts]
+   * @example
+   * scene.recordInspect(bro.resolvePath('/app/captures/run.inspect'));
+   * // ... per frame, after advancing time:
+   * scene.keepInspect();
+   * // ... then
+   * scene.stopInspectRecording();
+   * const { frames } = scene.inspectRecording(bro.resolvePath('/app/captures/run.inspect'));
+   * frames.forEach((s, i) => { if (s.compared && s.rose + s.sank > 0.02) console.log('a pop at frame', i); });
+   */
+  recordInspect(path, opts) {}
+
+  /**
+   * Keep the last render in the recording (recordInspect). False when none
+   * is going on, or nothing was rendered since the last one kept.
+   * @returns {boolean}
+   */
+  keepInspect() {}
+
+  /**
+   * Finish the recording: what was kept written, the file closed.
+   * @returns {number} the frames kept
+   */
+  stopInspectRecording() {}
+
+  /**
+   * Every frame of a recording (recordInspect) compared with the one kept
+   * before it, as inspectFrame compares two renders (the first frame's
+   * `compared` false), the frames shared out over the CPU's threads. With
+   * `image`, `images` holds that picture of each of `frames` (indices into
+   * the recording), at the recording's size. Throws when the file is not a
+   * recording.
+   * @param {string} path
+   * @param {{ image?: 'change' | 'normals', frames?: number[] }} [opts]
+   * @returns {{ frames: Object[], images?: (Uint8Array|null)[] }}
+   */
+  inspectRecording(path, opts) {}
+
+  /**
    * @returns {Object}
    */
   asTexture() {}

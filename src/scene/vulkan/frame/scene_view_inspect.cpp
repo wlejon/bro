@@ -40,7 +40,7 @@ uint8_t unit8(double v) { return static_cast<uint8_t>(std::clamp(v, 0.0, 1.0) * 
 }  // namespace
 
 void ViewInspector::build(const InspectCamera& cam, uint32_t width, uint32_t height, const float* depth,
-                          const uint8_t* rgba, Frame& f) {
+                          const uint8_t* luma, Frame& f) {
     f.w = width;
     f.h = height;
     toBodyAxes(cam.basis, cam.eye, f.eyeBody);
@@ -70,8 +70,7 @@ void ViewInspector::build(const InspectCamera& cam, uint32_t width, uint32_t hei
         const double cy = 2.0 * (y + 0.5) / height - 1.0;
         for (uint32_t x = 0; x < width; ++x) {
             const size_t i = static_cast<size_t>(y) * width + x;
-            const uint8_t* p = rgba + i * 4;
-            f.luma[i] = static_cast<float>((0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) / 255.0);
+            f.luma[i] = static_cast<float>(luma[i] / 255.0);
             const double cx = 2.0 * (x + 0.5) / width - 1.0;
             const float d = depth[i];
             const bool sky = !(d > 0.0f);
@@ -199,13 +198,13 @@ bool ViewInspector::projectPrev(const double bodyPoint[3], bool direction, int& 
 }
 
 void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t height, const float* depth,
-                            const uint8_t* rgba, Image image, std::vector<double>& stats,
+                            const uint8_t* luma, Image image, std::vector<double>& stats,
                             std::vector<uint8_t>& outImage) {
     stats.assign(kStatCount, 0.0);
     stats[kWidth] = width;
     stats[kHeight] = height;
     if (width == 0 || height == 0) return;
-    build(cam, width, height, depth, rgba, cur_);
+    build(cam, width, height, depth, luma, cur_);
     const Frame& c = cur_;
     const Frame& p = prev_;
     const size_t n = static_cast<size_t>(width) * height;

@@ -201,7 +201,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
 
     // Inspection copies the render's result and depth out with it, with its
     // camera on the body.
-    const bool inspectCopy = inspect_ && ensureInspectBuffer();
+    const bool inspectCopy = (inspect_ || recorder_.isOpen()) && ensureInspectBuffer();
     if (inspectCopy) {
         recordInspectCopy(cmd);
         inspectCamera_.invProj = frame.view.invProj;
@@ -319,7 +319,34 @@ void SceneVkBridge::setInspect(bool on) {
     inspect_ = on;
     inspector_.reset();
     inspectedSerial_ = inspectSerial_;   // (a copy before the switch is not compared)
-    if (!on) releaseInspectBuffer();
+    if (!on && !recorder_.isOpen()) releaseInspectBuffer();
+}
+
+bool SceneVkBridge::recordInspect(const std::string& path, int scale, std::string& err) {
+    stopInspectRecording();
+    keptSerial_ = inspectSerial_;   // (a copy before the recording is not kept)
+    return recorder_.open(path, scale, err);
+}
+
+bool SceneVkBridge::keepInspect() {
+    if (!recorder_.isOpen() || inspectSerial_ == 0 || inspectSerial_ == keptSerial_ || !inspectBuffer_.isValid())
+        return false;
+    if (inspectTicket_ == 0 || !device_.context().queue().wait(inspectTicket_)) {
+        LOG_ERROR("SceneVkBridge: waiting for the inspection copy failed");
+        return false;
+    }
+    keptSerial_ = inspectSerial_;
+    const auto* base = static_cast<const uint8_t*>(inspectBuffer_.mappedData);
+    const auto* depth = reinterpret_cast<const float*>(base + static_cast<size_t>(inspectW_) * inspectH_ * 4);
+    recorder_.add(inspectCamera_, inspectW_, inspectH_, depth, base);
+    return true;
+}
+
+uint64_t SceneVkBridge::stopInspectRecording() {
+    if (!recorder_.isOpen()) return 0;
+    recorder_.close();
+    if (!inspect_) releaseInspectBuffer();
+    return recorder_.frames();
 }
 
 // Once the last render that copied into it is done.
@@ -393,7 +420,10 @@ bool SceneVkBridge::inspect(ViewInspector::Image image, std::vector<double>& sta
     inspectedSerial_ = inspectSerial_;
     const auto* base = static_cast<const uint8_t*>(inspectBuffer_.mappedData);
     const auto* depth = reinterpret_cast<const float*>(base + static_cast<size_t>(inspectW_) * inspectH_ * 4);
-    inspector_.inspect(inspectCamera_, inspectW_, inspectH_, depth, base, image, stats, pixels);
+    const size_t n = static_cast<size_t>(inspectW_) * inspectH_;
+    inspectLuma_.resize(n);
+    for (size_t i = 0; i < n; ++i) inspectLuma_[i] = ViewInspector::lumaOf(base + i * 4);
+    inspector_.inspect(inspectCamera_, inspectW_, inspectH_, depth, inspectLuma_.data(), image, stats, pixels);
     return true;
 }
 

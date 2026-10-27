@@ -978,6 +978,13 @@ int32_t bro_scene_SceneGraph_readTonemapWidth(void);
 void bro_scene_SceneGraph_setInspect(void* self, bool on);
 void bro_scene_SceneGraph_inspectFrame(void* self, int32_t image, bronze_native_buffer* out);
 void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out);
+const char* bro_scene_SceneGraph_recordInspect(void* self, const char* path, int32_t scale);
+bool bro_scene_SceneGraph_keepInspect(void* self);
+double bro_scene_SceneGraph_stopInspectRecording(void* self);
+void bro_scene_SceneGraph_inspectRecording(const char* path, int32_t image, const double* frames, uint32_t frames_len,
+                                           bronze_native_buffer* out);
+const char* bro_scene_SceneGraph_inspectRecordingError(void);
+void bro_scene_SceneGraph_inspectRecordingImage(int32_t k, bronze_native_buffer* out);
 void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t dirs_len, bronze_native_buffer* out);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);

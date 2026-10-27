@@ -67,11 +67,16 @@ public:
     };
 
     /// Compare this render with the last one given. `depth` is reversed-Z
-    /// (0 = far), `rgba` top-down; both `width` x `height`. Fills `stats`
-    /// (kStatCount) and, unless `image` is None, `outImage` (RGBA).
+    /// (0 = far), `luma` (lumaOf) top-down; both `width` x `height`. Fills
+    /// `stats` (kStatCount) and, unless `image` is None, `outImage` (RGBA).
     void inspect(const InspectCamera& cam, uint32_t width, uint32_t height, const float* depth,
-                 const uint8_t* rgba, Image image, std::vector<double>& stats,
+                 const uint8_t* luma, Image image, std::vector<double>& stats,
                  std::vector<uint8_t>& outImage);
+
+    /// A pixel's luma (Rec. 709 weights over its sRGB bytes, 0 .. 255).
+    static uint8_t lumaOf(const uint8_t* rgba) {
+        return static_cast<uint8_t>((2126u * rgba[0] + 7152u * rgba[1] + 722u * rgba[2] + 5000u) / 10000u);
+    }
 
     /// Forget the previous render (the next one compares with nothing).
     void reset() { prevW_ = prevH_ = 0; }
@@ -90,7 +95,7 @@ private:
     };
 
     void build(const InspectCamera& cam, uint32_t width, uint32_t height, const float* depth,
-               const uint8_t* rgba, Frame& f);
+               const uint8_t* luma, Frame& f);
     // The previous render's pixel of a body point (false outside its view).
     bool projectPrev(const double bodyPoint[3], bool direction, int& px, int& py) const;
     double lumaChange(float luma, int px, int py) const;

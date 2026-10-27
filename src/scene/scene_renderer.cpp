@@ -311,6 +311,18 @@ bool SceneRenderer::inspectFrame(int image, std::vector<double>& stats, std::vec
     return vkBridge_->inspect(kind, stats, pixels);
 }
 
+bool SceneRenderer::recordInspect(const std::string& path, int scale, std::string& err) {
+    if (!vkBridge_) {
+        err = "the scene has not rendered yet";
+        return false;
+    }
+    return vkBridge_->recordInspect(path, scale, err);
+}
+
+bool SceneRenderer::keepInspect() { return vkBridge_ && vkBridge_->keepInspect(); }
+
+uint64_t SceneRenderer::stopInspectRecording() { return vkBridge_ ? vkBridge_->stopInspectRecording() : 0; }
+
 render::LayerImage SceneRenderer::outputImage() const {
     if (!vkBridge_ || !hasMeshContent_) return {};
     return vkBridge_->outputImage();

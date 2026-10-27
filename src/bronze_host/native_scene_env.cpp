@@ -7,6 +7,7 @@
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
 #include "scene/nodes/land_node.h"
+#include "scene/vulkan/frame/scene_inspect_record.h"
 #include "engine/scene_audio_sync.h"
 #include "util/asset_path.h"
 #include <bromesh/analysis/raycast.h>
@@ -594,6 +595,57 @@ void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t 
 
 void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out) {
     copyBuffer(tl_inspectPixels.data(), static_cast<uint32_t>(tl_inspectPixels.size()), out);
+}
+
+const char* bro_scene_SceneGraph_recordInspect(void* self, const char* path, int32_t scale) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* g = graphOf(self);
+    if (!g) return tl_error.c_str();
+    // (Its first render, if none was drawn yet, so the renderer is there.)
+    if (auto* eng = hostEngine()) eng->renderPendingScenes(/*forRead=*/true);
+    g->renderer().recordInspect(path ? path : "", scale, tl_error);
+    return tl_error.c_str();
+}
+
+bool bro_scene_SceneGraph_keepInspect(void* self) {
+    // The frame a flush left pending is drawn first, as every read does.
+    if (auto* eng = hostEngine()) eng->renderPendingScenes(/*forRead=*/true);
+    auto* g = graphOf(self);
+    return g && g->renderer().keepInspect();
+}
+
+double bro_scene_SceneGraph_stopInspectRecording(void* self) {
+    auto* g = graphOf(self);
+    return g ? static_cast<double>(g->renderer().stopInspectRecording()) : 0.0;
+}
+
+static thread_local std::string tl_recordingError;
+static thread_local std::vector<std::vector<uint8_t>> tl_recordingImages;
+
+void bro_scene_SceneGraph_inspectRecording(const char* path, int32_t image, const double* frames, uint32_t frames_len,
+                                           bronze_native_buffer* out) {
+    tl_recordingError.clear();
+    std::vector<uint32_t> wanted;
+    for (uint32_t i = 0; i < frames_len; ++i)
+        if (frames[i] >= 0.0) wanted.push_back(static_cast<uint32_t>(frames[i]));
+    const auto kind = image == 2 ? scene::vk::ViewInspector::Image::Normals
+                    : image == 1 ? scene::vk::ViewInspector::Image::Change
+                                 : scene::vk::ViewInspector::Image::None;
+    std::vector<double> stats;
+    uint32_t w = 0, h = 0;
+    scene::vk::inspectRecording(path ? path : "", kind, wanted, stats, tl_recordingImages, w, h, tl_recordingError);
+    transferBuffer(std::move(stats), out);
+}
+
+const char* bro_scene_SceneGraph_inspectRecordingError(void) { return tl_recordingError.c_str(); }
+
+void bro_scene_SceneGraph_inspectRecordingImage(int32_t k, bronze_native_buffer* out) {
+    static const std::vector<uint8_t> none;
+    const std::vector<uint8_t>& px = k >= 0 && static_cast<size_t>(k) < tl_recordingImages.size()
+                                         ? tl_recordingImages[static_cast<size_t>(k)]
+                                         : none;
+    copyBuffer(px.data(), static_cast<uint32_t>(px.size()), out);
 }
 
 int32_t bro_scene_SceneGraph_readTonemapWidth(void) { return tl_tonemapW; }

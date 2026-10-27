@@ -183,6 +183,12 @@ public:
     /// generation. False before the cover is baked.
     bool cloudCoverAt(const double* dirs, size_t count, std::vector<float>& out);
     bool inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
+    /// Inspection as a recording (scene/vulkan/frame/scene_inspect_record.h):
+    /// start one at `path` (renders cut `scale` times each way), keep the
+    /// last render in it, finish it (the frames kept).
+    bool recordInspect(const std::string& path, int scale, std::string& err);
+    bool keepInspect();
+    uint64_t stopInspectRecording();
 
     // --- Render settings (see SceneGraph for API docs) ---
 

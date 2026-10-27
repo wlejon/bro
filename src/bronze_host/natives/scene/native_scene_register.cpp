@@ -380,6 +380,12 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_setInspect", BRO_NATIVE_FN(bro_scene_SceneGraph_setInspect), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_inspectFrame", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectFrame), "f64[]", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_inspectImage", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectImage), "u8[]", {}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_recordInspect", BRO_NATIVE_FN(bro_scene_SceneGraph_recordInspect), "str", {"__bro_native.scene.SceneGraph", "str", "i32"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_keepInspect", BRO_NATIVE_FN(bro_scene_SceneGraph_keepInspect), "bool", {"__bro_native.scene.SceneGraph"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_stopInspectRecording", BRO_NATIVE_FN(bro_scene_SceneGraph_stopInspectRecording), "f64", {"__bro_native.scene.SceneGraph"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_inspectRecording", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecording), "f64[]", {"str", "i32", "f64[]"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_inspectRecordingError", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecordingError), "str", {}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_inspectRecordingImage", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecordingImage), "u8[]", {"i32"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_cloudCoverAt", BRO_NATIVE_FN(bro_scene_SceneGraph_cloudCoverAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapHeight", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapHeight), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&

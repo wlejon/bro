@@ -713,19 +713,55 @@
     fn(SceneGraph.prototype, "setInspect", function setInspect(on) {
         __bro_native.scene.SceneGraph_setInspect(this, !!on);
     });
-    fn(SceneGraph.prototype, "inspectFrame", function inspectFrame(opts) {
-        const image = opts && opts.image === 'change' ? 1 : opts && opts.image === 'normals' ? 2 : 0;
-        const s = __bro_native.scene.SceneGraph_inspectFrame(this, image);
-        if (!s || s.length < INSPECT_STATS.length) return null;
+    // (A frame's stats, INSPECT_STATS then four bands of three, from `at`.)
+    const INSPECT_STAT_COUNT = INSPECT_STATS.length + 12;
+    const inspectStats = (s, at) => {
         const out = {};
-        for (let i = 0; i < INSPECT_STATS.length; i++) out[INSPECT_STATS[i]] = s[i];
-        out.compared = s[2] !== 0;
+        for (let i = 0; i < INSPECT_STATS.length; i++) out[INSPECT_STATS[i]] = s[at + i];
+        out.compared = s[at + 2] !== 0;
         out.bands = [];
-        for (let b = 0, i = INSPECT_STATS.length; i + 2 < s.length; b++, i += 3)
+        for (let i = at + INSPECT_STATS.length; i + 2 < at + INSPECT_STAT_COUNT; i += 3)
             out.bands.push({ moved: s[i], normalMoved: s[i + 1], lumaMoved: s[i + 2] });
+        return out;
+    };
+    const inspectImageKind = (opts) => opts && opts.image === 'change' ? 1 : opts && opts.image === 'normals' ? 2 : 0;
+    fn(SceneGraph.prototype, "inspectFrame", function inspectFrame(opts) {
+        const image = inspectImageKind(opts);
+        const s = __bro_native.scene.SceneGraph_inspectFrame(this, image);
+        if (!s || s.length < INSPECT_STAT_COUNT) return null;
+        const out = inspectStats(s, 0);
         if (image) {
             const px = __bro_native.scene.SceneGraph_inspectImage();
             out.image = px && px.length ? new Uint8Array(px.buffer, px.byteOffset, px.byteLength) : null;
+        }
+        return out;
+    });
+    fn(SceneGraph.prototype, "recordInspect", function recordInspect(path, opts) {
+        const scale = opts && opts.scale !== undefined ? opts.scale | 0 : 2;
+        const err = __bro_native.scene.SceneGraph_recordInspect(this, String(path), scale);
+        if (err) throw new Error(`recordInspect: ${err}`);
+    });
+    fn(SceneGraph.prototype, "keepInspect", function keepInspect() {
+        return __bro_native.scene.SceneGraph_keepInspect(this);
+    });
+    fn(SceneGraph.prototype, "stopInspectRecording", function stopInspectRecording() {
+        return __bro_native.scene.SceneGraph_stopInspectRecording(this);
+    });
+    fn(SceneGraph.prototype, "inspectRecording", function inspectRecording(path, opts) {
+        const image = inspectImageKind(opts);
+        const wanted = image && opts.frames ? Float64Array.from(opts.frames) : new Float64Array(0);
+        const s = __bro_native.scene.SceneGraph_inspectRecording(String(path), image, wanted);
+        const err = __bro_native.scene.SceneGraph_inspectRecordingError();
+        if (err) throw new Error(`inspectRecording: ${err}`);
+        const frames = [];
+        for (let at = 0; s && at + INSPECT_STAT_COUNT <= s.length; at += INSPECT_STAT_COUNT) frames.push(inspectStats(s, at));
+        const out = { frames };
+        if (image) {
+            out.images = [];
+            for (let k = 0; k < wanted.length; k++) {
+                const px = __bro_native.scene.SceneGraph_inspectRecordingImage(k);
+                out.images.push(px && px.length ? new Uint8Array(px.buffer, px.byteOffset, px.byteLength) : null);
+            }
         }
         return out;
     });

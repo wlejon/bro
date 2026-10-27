@@ -19,6 +19,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_inspect_record.h"
 #include "scene/vulkan/frame/scene_view_inspect.h"
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
@@ -89,6 +90,18 @@ public:
     /// Waits for the render; false when inspection is off, nothing was
     /// rendered since the last call, or the copy failed.
     bool inspect(ViewInspector::Image image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
+    /// Record inspection to `path` (scene_inspect_record.h): each render's
+    /// depth and result copied out with it, as setInspect does, and those
+    /// keepInspect names written, cut `scale` times each way; compared
+    /// afterwards (inspectRecording), never here. Replaces a recording
+    /// going on; false, with why in `err`, when the file cannot be made.
+    bool recordInspect(const std::string& path, int scale, std::string& err);
+    /// Keep the last render in the recording (waits for it); false when
+    /// none is going on or nothing was rendered since the last one kept.
+    bool keepInspect();
+    /// Finish the recording (what is kept written, the file closed); the
+    /// frames it kept.
+    uint64_t stopInspectRecording();
     /// GPU milliseconds of the last render, waiting on its ticket; -1 when
     /// nothing was rendered (or timed) since the previous call. Not `wait`:
     /// the oldest render finished and not read yet (SceneGpuTimer::takeMs).
@@ -142,6 +155,9 @@ private:
     uint32_t inspectW_ = 0, inspectH_ = 0;
     InspectCamera inspectCamera_;
     ViewInspector inspector_;
+    std::vector<uint8_t> inspectLuma_;
+    InspectRecorder recorder_;       // recordInspect
+    uint64_t keptSerial_ = 0;        // the render keepInspect last kept
 };
 
 }  // namespace bro::scene::vk
