@@ -888,6 +888,15 @@ void LandNode::rebuildItems(bool now) {
 
 void LandNode::refreshItems(std::vector<size_t> ks, uint64_t generation) {
     if (ks.empty()) return;
+    // Stale now: the CPU's heights moved this frame and the fills read the
+    // regions as they are this frame, so the tiles are made again at once;
+    // only the boxes (how high and low the items reach) wait on the
+    // workers. (Their tiles waited the nine frames a batch took, the eye
+    // set on the new heights standing under the land drawn as it was: a
+    // white floor at the landing.)
+    for (const size_t k : ks)
+        if (k < items_.size()) items_[k].generation = generation;
+    ++itemsSerial_;
     const ItemInputs in = itemInputs();
     for (size_t at = 0; at < ks.size(); at += kItemsPerBatch) {
         ItemBatch b;

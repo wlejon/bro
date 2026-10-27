@@ -493,12 +493,27 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // CPU's heights moved with the region that staled it, and the eye
         // set on them stood under the land still drawn as it was, for
         // seconds behind the regions' urgent steps.
+        // The nearest first: the ground about the eye is what it stands on.
+        // (In the layer's order, coarsest first, the tiles under an eye 1 m
+        // up came last of the 129 a region staled, a white floor for six
+        // frames.)
         double staleMs = 0.0;
         const double tileMs = std::max(static_cast<double>(service.cost(landKind_)), 1e-3);
-        for (const SurfaceJob& j : lt.tiles.jobs()) {
-            const bool now = j.required || (j.stale && staleMs + tileMs <= SceneLandRegions::kUrgentMs);
-            if (now && !j.required) staleMs += tileMs;
-            service.offer({j.key.packed(), id, landKind_, j.error, j.side, now});
+        const std::span<const SurfaceJob> jobs = lt.tiles.jobs();
+        std::vector<uint32_t> stale;
+        for (uint32_t i = 0; i < jobs.size(); ++i)
+            if (jobs[i].stale && !jobs[i].required) stale.push_back(i);
+        std::sort(stale.begin(), stale.end(),
+                  [&](uint32_t a, uint32_t b) { return jobs[a].distance < jobs[b].distance; });
+        std::vector<bool> now(jobs.size(), false);
+        for (const uint32_t i : stale) {
+            if (staleMs + tileMs > SceneLandRegions::kUrgentMs) break;
+            now[i] = true;
+            staleMs += tileMs;
+        }
+        for (uint32_t i = 0; i < jobs.size(); ++i) {
+            const SurfaceJob& j = jobs[i];
+            service.offer({j.key.packed(), id, landKind_, j.error, j.side, j.required || now[i]});
         }
         offerRegions(staleMs);
         landOffered_.push_back(id);

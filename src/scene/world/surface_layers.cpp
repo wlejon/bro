@@ -623,7 +623,7 @@ void SurfaceLayers::update(const View& view, uint64_t frame) {
         }
         if (refined && covered) error = std::min(error, config_.texelPixels);
         const double side = static_cast<double>(config_.tileMetres) * static_cast<double>(uint64_t{1} << n.key.level);
-        jobs_.push_back({n.key, error, side, !t.filled && n.key.level == top, t.filled});
+        jobs_.push_back({n.key, error, side, !t.filled && n.key.level == top, t.filled, n.distance});
     }
 }
 
