@@ -107,13 +107,13 @@ if (!scene) {
 
     const s45 = Math.SQRT1_2;
     // bone-1 rotation ramps identity → 90 deg over 1 s (linear key interp)
-    const bendClip = new Animation({
+    const bendClip = new AnimationClip({
         name: 'bend', duration: 1,
         channels: [{ boneIndex: 1, path: 'rotation',
                      times: new Float32Array([0, 1]),
                      values: new Float32Array([0,0,0,1,  0,0,s45,s45]) }], // about Z
     });
-    const twistClip = new Animation({
+    const twistClip = new AnimationClip({
         name: 'twist', duration: 1,
         channels: [{ boneIndex: 1, path: 'rotation',
                      times: new Float32Array([0, 1]),

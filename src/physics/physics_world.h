@@ -726,6 +726,11 @@ public:
     /// Returns true if the physics thread is idle (JS can access bodies).
     bool isIdle() const;
 
+    /// Wait out a step the physics thread is still running. A query walks the
+    /// broad phase, which Update() rebuilds, so one made mid-step (a step
+    /// overrunning its frame) read a tree being changed under it.
+    void awaitStepForQuery() const;
+
     /// Returns true if there are dynamic bodies or characters requiring simulation.
     bool hasActiveBodies() const;
 
@@ -1399,7 +1404,7 @@ private:
     // resting phases (Idle and Done) instead of spinning through one of them.
     struct Shared {
         mutable std::mutex m;
-        std::condition_variable cv;
+        mutable std::condition_variable cv;
         uint32_t state = kPhysicsIdle;
         bool shutdownRequested = false;
     };

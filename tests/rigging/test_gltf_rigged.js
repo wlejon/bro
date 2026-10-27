@@ -16,7 +16,7 @@ const r    = Rig.autoRig(mesh, spec, lm, { method: 'voxelBind', smoothIterations
 assert(r.skeleton.boneCount > 0, 'autoRig produced skeleton');
 
 // One trivial animation with a single rotation channel on bone 0.
-const anim = new Animation({
+const anim = new AnimationClip({
     name: 'idle',
     duration: 1.0,
     channels: [{

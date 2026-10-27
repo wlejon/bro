@@ -14,6 +14,7 @@ namespace bro::bronze_host {
 
 // The native state behind one JS Animation (or CSSAnimation) object.
 struct AnimationState {
+    uint32_t tag = kHostAnimationTag;  // first, as host_class.h's handle tags are
     uint64_t id = 0;
     std::string name;
     ev::Persistent self;

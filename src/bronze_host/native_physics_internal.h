@@ -124,6 +124,9 @@ extern HostPhysicsWorld g_defaultWorld;
 HostPhysicsWorld* getActiveWorld();
 void pushActiveWorld(HostPhysicsWorld* w);
 void popActiveWorld();
+// A world going away is no longer active: an enter() with no exit() left it
+// on the stack, and the next query read the freed world.
+void forgetActiveWorld(HostPhysicsWorld* w);
 
 struct HostPhysicsCharacter {
     uint32_t tag = kHostPhysicsCharacterTag;

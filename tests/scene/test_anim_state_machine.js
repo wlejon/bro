@@ -56,7 +56,7 @@ if (!scene) {
     ]});
 
     const s45 = Math.SQRT1_2;
-    const mkClip = (name, dur, quat) => new Animation({
+    const mkClip = (name, dur, quat) => new AnimationClip({
         name, duration: dur,
         channels: [{ boneIndex: 1, path: 'rotation',
                      times: new Float32Array([0, dur]),

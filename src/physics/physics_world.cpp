@@ -502,7 +502,13 @@ void PhysicsWorld::physicsThreadFunc() {
 
         lk.lock();
         shared_.state = kPhysicsDone;
+        shared_.cv.notify_all();  // a query waiting out the step (awaitStepForQuery)
     }
+}
+
+void PhysicsWorld::awaitStepForQuery() const {
+    std::unique_lock<std::mutex> lk(shared_.m);
+    shared_.cv.wait(lk, [this] { return shared_.state != kPhysicsStep && shared_.state != kPhysicsBusy; });
 }
 
 void PhysicsWorld::signalStep() {
@@ -3502,9 +3508,28 @@ static Vec3 hitSurfaceNormal(const PhysicsSystem& system, BodyID id,
     return lock.GetBody().GetWorldSpaceSurfaceNormal(subShapeID, position);
 }
 
+// A query's numbers come from script, and Jolt's broad phase walks off its
+// tree on a NaN or infinite bound (overlapSphere({}) crashed in CollideShape).
+// A query that is not a place hits nothing.
+static bool finiteRay(RVec3 origin, Vec3 direction, float maxDistance) {
+    return std::isfinite(origin.GetX()) && std::isfinite(origin.GetY()) &&
+           std::isfinite(origin.GetZ()) && std::isfinite(direction.GetX()) &&
+           std::isfinite(direction.GetY()) && std::isfinite(direction.GetZ()) &&
+           std::isfinite(maxDistance);
+}
+
+static bool finiteQueryShape(const BodyOptions& o) {
+    const Vec4 q = o.rotation.GetXYZW();
+    return finiteRay(o.position, o.halfExtents, o.radius) && std::isfinite(o.halfHeight) &&
+           std::isfinite(q.GetX()) && std::isfinite(q.GetY()) && std::isfinite(q.GetZ()) &&
+           std::isfinite(q.GetW());
+}
+
 std::vector<RayHit> PhysicsWorld::raycast(RVec3 origin, Vec3 direction,
                                           float maxDistance,
                                           const QueryFilter& filter) const {
+    if (!finiteRay(origin, direction, maxDistance)) return {};
+    awaitStepForQuery();
     RRayCast ray(origin, direction * maxDistance);
     RayCastSettings settings;
     MaskObjectLayerFilter layerFilter(filter.layerMask);
@@ -3537,6 +3562,8 @@ std::vector<RayHit> PhysicsWorld::raycast(RVec3 origin, Vec3 direction,
 bool PhysicsWorld::raycastClosest(RVec3 origin, Vec3 direction,
                                   RayHit& outHit, float maxDistance,
                                   const QueryFilter& filter) const {
+    if (!finiteRay(origin, direction, maxDistance)) return false;
+    awaitStepForQuery();
     RRayCast ray(origin, direction * maxDistance);
     MaskObjectLayerFilter layerFilter(filter.layerMask);
     IgnoreBodiesFilter bodyFilter(filter);
@@ -3557,6 +3584,9 @@ std::vector<ShapeCastHit> PhysicsWorld::castShape(const BodyOptions& shapeOpts,
                                                   Vec3 direction, float maxDistance,
                                                   const QueryFilter& filter) const {
     std::vector<ShapeCastHit> hits;
+    if (!finiteQueryShape(shapeOpts) || !finiteRay(shapeOpts.position, direction, maxDistance))
+        return hits;
+    awaitStepForQuery();
     auto shape = buildShape(shapeOpts);
     if (!shape || shape->GetType() != EShapeType::Convex) return hits;
 
@@ -3593,6 +3623,9 @@ std::vector<ShapeCastHit> PhysicsWorld::castShape(const BodyOptions& shapeOpts,
 bool PhysicsWorld::castShapeClosest(const BodyOptions& shapeOpts, Vec3 direction,
                                     float maxDistance, ShapeCastHit& outHit,
                                     const QueryFilter& filter) const {
+    if (!finiteQueryShape(shapeOpts) || !finiteRay(shapeOpts.position, direction, maxDistance))
+        return false;
+    awaitStepForQuery();
     auto shape = buildShape(shapeOpts);
     if (!shape || shape->GetType() != EShapeType::Convex) return false;
 
@@ -3618,6 +3651,8 @@ bool PhysicsWorld::castShapeClosest(const BodyOptions& shapeOpts, Vec3 direction
 std::vector<OverlapHit> PhysicsWorld::overlapShape(const BodyOptions& shapeOpts,
                                                    const QueryFilter& filter) const {
     std::vector<OverlapHit> hits;
+    if (!finiteQueryShape(shapeOpts)) return hits;
+    awaitStepForQuery();
     auto shape = buildShape(shapeOpts);
     if (!shape || shape->GetType() != EShapeType::Convex) return hits;
 
@@ -3652,6 +3687,8 @@ std::vector<OverlapHit> PhysicsWorld::overlapShape(const BodyOptions& shapeOpts,
 
 std::vector<BodyID> PhysicsWorld::overlapPoint(RVec3 point,
                                                const QueryFilter& filter) const {
+    if (!finiteRay(point, Vec3::sZero(), 0.0f)) return {};
+    awaitStepForQuery();
     MaskObjectLayerFilter layerFilter(filter.layerMask);
     IgnoreBodiesFilter bodyFilter(filter);
     AllHitCollisionCollector<CollidePointCollector> collector;

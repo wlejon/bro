@@ -55,19 +55,19 @@ if (!scene) {
     ]});
 
     const s45 = Math.SQRT1_2;
-    const walkClip = new Animation({
+    const walkClip = new AnimationClip({
         name: 'walk', duration: 1,
         channels: [{ boneIndex: 0, path: 'translation',
                      times: new Float32Array([0, 0.5, 1]),
                      values: new Float32Array([0,0,0, 0,0.3,1, 0,0,2]) }],
     });
-    const runClip = new Animation({
+    const runClip = new AnimationClip({
         name: 'run', duration: 1,
         channels: [{ boneIndex: 0, path: 'translation',
                      times: new Float32Array([0, 1]),
                      values: new Float32Array([0,0,0, 0,0,4]) }],
     });
-    const turnClip = new Animation({
+    const turnClip = new AnimationClip({
         name: 'turn', duration: 1,
         channels: [{ boneIndex: 0, path: 'rotation',
                      times: new Float32Array([0, 1]),

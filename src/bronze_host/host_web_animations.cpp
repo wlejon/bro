@@ -327,9 +327,18 @@ struct Call {
     engine::WebAnimation* rec = nullptr;
 };
 
+// The receiver's state, or null when `self` is not an Animation (or a
+// CSSAnimation / CSSTransition): a method borrowed onto another object, as
+// `Animation.prototype.play.call(other)`, must not read that object's handle.
+AnimationState* stateOf(Value self) {
+    if (!ev::isObject(self)) return nullptr;
+    auto* st = static_cast<AnimationState*>(ev::handleData(self));
+    return (st && st->tag == kHostAnimationTag) ? st : nullptr;
+}
+
 Call callOf(Value self) {
     Call c;
-    c.st = static_cast<AnimationState*>(ev::handleData(self));
+    c.st = stateOf(self);
     c.eng = hostEngine();
     if (c.st && c.eng) c.mgr = c.eng->webAnimationManagerOf(c.st->id);
     if (c.mgr) c.rec = c.mgr->find(c.st->id);
@@ -382,18 +391,9 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
 
 namespace {
 
-static ev::Persistent s_skeletalAnimationCtor;
-
 Value animationConstructor(Value self, std::span<const Value> a) {
     (void)self;
-    if (ev::isFunction(s_skeletalAnimationCtor.get()) && !a.empty() && ev::isObject(a[0])) {
-        Value chan = ev::getProperty(a[0], "channels");
-        Value dur = ev::getProperty(a[0], "duration");
-        if (!ev::isUndefined(chan) || !ev::isUndefined(dur)) {
-            ev::CallResult r = ev::construct(s_skeletalAnimationCtor.get(), a);
-            return r.thrown ? ev::undefined() : r.value;
-        }
-    }
+    (void)a;
     engine::Engine* eng = hostEngine();
     uint64_t id = 0;
     if (eng) {
@@ -575,12 +575,12 @@ void decorateAnimationProto(ObjectBuilder& b) {
     }, nullptr);
 
     b.accessor("effect", [](Value self_, std::span<const Value>) {
-        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        auto* st = stateOf(self_);
         return st ? effectValueFor(st) : ev::null();
     }, nullptr);
 
     b.accessor("ready", [](Value self_, std::span<const Value>) {
-        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        auto* st = stateOf(self_);
         if (!st) return ev::null();
         if (ev::isUndefined(st->readyPromise.get())) {
             ev::Persistent self(self_);
@@ -596,17 +596,17 @@ void decorateAnimationProto(ObjectBuilder& b) {
 
     b.accessor("id",
         [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+            auto* st = stateOf(self_);
             return st ? ev::fromUtf8(st->name) : ev::fromUtf8("");
         },
         [](Value self_, std::span<const Value> a) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+            auto* st = stateOf(self_);
             if (st && !a.empty()) st->name = ev::toUtf8(a[0]);
             return ev::undefined();
         });
 
     b.accessor("finished", [](Value self_, std::span<const Value>) {
-        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        auto* st = stateOf(self_);
         if (!st) return ev::null();
         if (ev::isUndefined(st->finishedPromise.get())) {
             st->finishedPromise.set(ev::createPromise());
@@ -623,11 +623,11 @@ void decorateAnimationProto(ObjectBuilder& b) {
     auto handlerAccessor = [&b](const char* name, ev::Persistent AnimationState::*slot) {
         b.accessor(name,
             [slot](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+                auto* st = stateOf(self_);
                 return (st && ev::isFunction((st->*slot).get())) ? (st->*slot).get() : ev::null();
             },
             [slot](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+                auto* st = stateOf(self_);
                 if (st) {
                     if (!a.empty() && ev::isFunction(a[0])) (st->*slot).set(a[0]);
                     else (st->*slot).set(ev::undefined());
@@ -657,13 +657,6 @@ void decorateCssTransitionProto(ObjectBuilder& b) {
 } // namespace
 
 void installWebAnimationGlobals() {
-    ev::GlobalValue existing = ev::globalValue("Animation");
-    if (existing.found && ev::isFunction(existing.value)) {
-        s_skeletalAnimationCtor.set(existing.value);
-    } else {
-        s_skeletalAnimationCtor.set(ev::undefined());
-    }
-
     installTimelineAndEffectClasses();
 
     g_animationClass.install("Animation", 0, animationConstructor, decorateAnimationProto);
@@ -671,17 +664,6 @@ void installWebAnimationGlobals() {
     g_cssAnimationClass.inherit(g_animationClass);
     g_cssTransitionClass.install("CSSTransition", 0, nullptr, decorateCssTransitionProto);
     g_cssTransitionClass.inherit(g_animationClass);
-
-    if (ev::isFunction(s_skeletalAnimationCtor.get())) {
-        Value skelProto = ev::getProperty(s_skeletalAnimationCtor.get(), "prototype");
-        if (ev::isObject(skelProto)) {
-            ev::setPrototype(skelProto, g_animationClass.prototype());
-        }
-        Value retarget = ev::getProperty(s_skeletalAnimationCtor.get(), "retarget");
-        if (!ev::isUndefined(retarget)) {
-            ev::setProperty(g_animationClass.constructor(), "retarget", retarget);
-        }
-    }
 
     ev::registerGlobal("Animation", g_animationClass.constructor());
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());

@@ -164,14 +164,21 @@ A disconnect is how a mistake ends: the app stops, everything else goes on,
 and the user sees why.
 
 **Where one happens:**
-- an uncaught exception (policy to decide: log and continue as a browser
-  does, or disconnect after repeated ones);
-- a time slice overrun that keeps recurring, at which point helm marks the
-  app not responding and offers to stop it;
+- a call the page waits on (an event dispatched into the app, a function it
+  handed the page) that does not return within a second;
+- the app's stack ending on a host error;
 - the app's memory budget exceeded;
 - a stack overflow;
-- a native precondition failed;
 - a capability revoked while held open.
+
+**What is not one:**
+- An uncaught exception is reported and the app runs on, as a web page does:
+  the page hears it as `apperror`.
+- A job that keeps yielding past 5 s marks the app not responding
+  (`unresponsive`, `responding` false). The page, or helm, offers to stop it.
+- A failed native precondition is a `TypeError` or `RangeError` the app may
+  catch. A disconnect is for what would have been a crash, and a refused
+  call is not one.
 
 **How it works:**
 - Termination is uncatchable by the app. It unwinds the app's fiber
@@ -222,12 +229,12 @@ carries a certificate:
 - brass's barrier and guard-elimination certificates;
 - bronze's IL proofs for raw unboxes, pins and bounds.
 
-Every check it cannot prove stays in as a guard. Today these are checked only
-in Debug and test builds (`BRONZE_VERIFY_MIR_DEFAULT`; full MIR verification
-was a quarter of load time). For compartment code the certificates are
-checked in Release, alone, without the full verifier; that cost must be
-measured. Then the generated code has exactly the property wanted: a proven
-site cannot fail, and every unproven site has a guard.
+Every check it cannot prove stays in as a guard. Both kinds of certificate
+are checked in every build, Release included, alone and without the full
+verifier (step 7). A refused certificate is a compile error naming the
+function, so code with an unproven elision never runs. The generated code then
+has exactly the property wanted: a proven site cannot fail, and every unproven
+site has a guard.
 
 **Native preconditions at every native entry.** Each native states its
 preconditions:
@@ -236,11 +243,13 @@ preconditions:
 - lifetime (not torn down);
 - thread.
 
-The entry checks them, and a failure disconnects the app with a message naming
-the native and the bad argument. The preconditions are declared once beside
-the native's registration (`natives/<sub>/`, the siblings' `src/api/`) so
-check and declaration cannot drift. Where the compiler proves a precondition
-holds at a call site, the entry check is dropped with a certificate: the same
+The entry checks them, and a failure throws an error naming the native and
+the bad argument. Declared argument types, the handle's brand and its owning
+realm are already checked at every native entry by bronze's native
+mechanism. The rest is found by fuzzing rather than declared blind (step 7),
+and fixed where the native or its library takes the input, so the check sits
+beside the code that needs it. Where the compiler proves a precondition holds
+at a call site, the entry check could be dropped with a certificate: the same
 proof-or-guard pattern, carried over to natives. The call graph also says
 exactly which natives each app can reach.
 
@@ -289,14 +298,19 @@ What the design must keep possible, and what it still lacks for it:
    through the prologue's existing stack-limit check. The cost is below noise:
    one load and one compare per backedge (measurements under step 4).
 4. Network granularity: on or off, or per host?
-5. The exception policy: continue or disconnect.
+5. The exception policy: continue or disconnect. *Answered (step 5):*
+   continue. An uncaught exception is logged and told to the page
+   (`apperror`), and the app runs on. Disconnects are for would-be crashes
+   and stalls.
 6. The cost of freezing intrinsics at boot, and checking certificates in
    Release. *Freezing answered (step 2):* about 3 ms per thread (the walk
    freezes some 980 objects), paid once by the main thread and once by each
    Worker, and invisible in a headless app's start; compiled code is no slower
    (three.js in brobench shows no difference above noise), because a frozen
    object's caches keep hitting (measurements under step 2).
-   Certificates are still open.
+   *Certificates answered (step 7):* checking bronze's IL proofs and
+   brass's certificates in Release costs about 2.4 ms of a 300 ms three.js
+   compile.
 
 ## Order of work
 
@@ -600,7 +614,19 @@ What the design must keep possible, and what it still lacks for it:
      synchronous natives an app can reach (file I/O, model loads), which
      bro does when it adopts compartments.
 5. **Disconnects, the error card, and the ledger's per-resource tests.**
-   Begun (2026-10-26):
+   **Built** (2026-10-27), except the memory budget:
+   - **Mistakes reach the page** (`host_appview.cpp`,
+     `tests/appview/test_appview_disconnect.js`). An uncaught exception is
+     logged and fired at the `<appview>` as `apperror`, and the app runs on
+     (open question 5). A job still yielding after 5 s
+     (`kNotRespondingMs`) logs a warning, fires `unresponsive` and makes
+     `responding` false; `responsive` follows when it finishes, and the page
+     may `stop()` it.
+   - **The error card.** A terminated app's view shows a card naming the
+     app, the reason and the site, drawn by bro in a closed shadow root on
+     the element, unless the page cancels `terminated` to draw its own. A
+     frame host with no sub-document lays its shadow tree out as an ordinary
+     box (`layout_node_adapter.h`), and `start()` clears the card.
    - **Teardown test** (`tests/appview/test_appview_teardown.js`, fixture
      `tests/test_app/appview_ledger`). An app holding a 2D canvas, a
      sounding oscillator, an interval, an `fs.watch` on its own folder, a
@@ -612,12 +638,11 @@ What the design must keep possible, and what it still lacks for it:
      resolves against its own document (it read the page's folder before),
      and its compartment terminates the workers it made at teardown
      (`host_worker.cpp`).
-   - **Still open:** WebGL and the 3D scene in a sub-document (both answer
-     null, so an inline app has neither); the error card; the exception
-     policy (open question 5); recurring overruns marked not responding;
-     per-kind tests for model handles and GPU objects once a sub-document
-     can hold them; brokit's `fs` / `fetch` relative paths resolve against
-     the process's app folder, not an appview's.
+   - **Still open:** the memory budget (open question 2); WebGL and the 3D
+     scene in a sub-document (both answer null, so an inline app has
+     neither); per-kind tests for model handles and GPU objects once a
+     sub-document can hold them; brokit's `fs` / `fetch` relative paths
+     resolve against the process's app folder, not an appview's.
 6. **Install identity, helm's prompts and the Apps settings page.** Identity
    and the page are **built** (2026-10-26); helm's prompts are not:
    - `bro --install` writes `<root>/<id>.install.json` beside the installed
@@ -641,7 +666,60 @@ What the design must keep possible, and what it still lacks for it:
      and last use, revoke and reset, the picked paths with removal, and dev
      mode, all through `bro.permissions` (`docs/permissions-api.js`); dev
      mode on shows a pill in helm's bar.
-7. **Certificates checked in Release, and native preconditions.**
+7. **Certificates checked in Release, and native preconditions.** **Built**
+   (2026-10-27):
+   - **bronze's IL proofs in every build.** `il::verifyModuleProofs` runs as
+     each module is translated for brass (`brass_backend.cpp`), where only
+     `bronze check` ran it before. A refusal is a compile error, "proof
+     certificate refused in function F: ...". Two sound shapes it refused
+     are now accepted: a raw unbox dominated by its `is.number` test's true
+     edge (in a branch dead for a value that is never a number), and a
+     guarded region's run point, a raw unbox ahead of its test whose result
+     only feeds f64 arithmetic until the test passes (a bitcast nothing
+     observes).
+   - **brass's barrier and guard certificates in every build.** Tier 2
+     already ran the full verifier. The translate-time pipeline (barrier
+     elision, bounds and guard elimination) checks its certificates alone
+     (`verify_module_certificates`, `verify_certificates` for a lazily
+     lowered function) unless `verify_lowered_module` asks for everything.
+   - **Cost:** about 2.4 ms of a 300 ms three.js compile. 115 broworkshop
+     apps compile with no refusals.
+   - **The native fuzzer** (`tests/fuzz/test_native_fuzz.js`). Each
+     `bro.<ns>` runs in a child `bro-headless` over an app with no
+     capabilities (`tests/test_app/fuzz_bare`). Every function, constructor,
+     method of what they return, and method again after
+     `dispose`/`destroy`/`free` is called with 22 hostile argument sets
+     (NaN, ±1e308, 2^31, '', {}, a symbol, 1n, empty and short typed
+     arrays, ...). A child that dies is a failure naming the call; one still
+     in a call at 180 s is reported SLOW. Children run eight at a time; the
+     run takes about three minutes over 71 namespaces.
+   - **What it found, fixed where the input is taken:**
+     - bronze: a BigInt property key (`o[1n]`) was a fatal; it is
+       `ToString(1n)` (`rt_key.cpp`, oracle `bigint_property_key`).
+     - bronze: any `std::exception` out of a host function is the JS error
+       its call throws (`std::bad_alloc` a RangeError), never the process's
+       end (`embed_function.cpp`).
+     - bro: Web Animations' methods read any handle as theirs
+       (`Animation.prototype.persist.call(clip)` segfaulted). They check a
+       payload tag, as Workers now do. The global `Animation` was a shim
+       that also built skeletal clips; it is the Web Animations one only,
+       and the clip is `AnimationClip`.
+     - bro: a physics query with a NaN or infinite position, and one made
+       while a step still ran on the physics thread, read Jolt's broad phase
+       broken or mid-rebuild. A non-finite query hits nothing, and a query
+       waits the step out. A world `enter()`ed and then collected stayed
+       the active world and was read after free.
+     - brogameagent: about 90 `assert`s on sizes and shapes (gone in
+       Release, so a short weights blob read past its end) throw
+       (`BGA_CHECK`). `NavGrid` cell indices saturate, so 1e308 is past the
+       edge, not a 2^31-iteration loop.
+     - bromesh: `remesh` on a mesh at infinity never ended. broimage:
+       reading a directory as an image allocated LONG_MAX bytes.
+   - **Still open:** long native calls (a bake over a mesh the fuzzer
+     subdivided) cannot be preempted, the scheduling item above. bro's raw
+     natives (`natives/<sub>/`), which compiled code calls directly, do not
+     yet turn a C++ exception into a catchable error: one unwinds to the
+     compartment's job and ends it.
 8. **Retire** realm-scope swapping. **Done with step 3** (2026-10-26):
    `host_realm_scope.*` is deleted, and every sub-document is a realm.
    (`desktop_trust`'s location and environment rules, grants by id and the

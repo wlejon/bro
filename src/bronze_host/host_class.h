@@ -111,5 +111,7 @@ inline constexpr uint32_t kHostElementTag = 0x454C454Du;  // 'ELEM'
 inline constexpr uint32_t kHostImageTag = 0x494D4147u;    // 'IMAG'
 inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;  // 'VENC'
 inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
+inline constexpr uint32_t kHostAnimationTag = 0x414E494Du;  // 'ANIM'
+inline constexpr uint32_t kHostWorkerTag = 0x574F524Bu;     // 'WORK'
 
 }  // namespace bro::bronze_host

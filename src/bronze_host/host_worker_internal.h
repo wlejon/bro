@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_class.h"
 #include "bronze_host/host_worker_msg.h"
 #include "util/asset_mounts.h"
 
@@ -33,6 +34,9 @@ inline Value makeWorkerMessageEvent(const ev::Persistent& data) {
 
 class WorkerInstance {
 public:
+    // First, as host_class.h's handle tags are.
+    const uint32_t tag = kHostWorkerTag;
+
     WorkerInstance(std::string scriptPath, std::string basePath, const util::AssetMounts* mounts, uint64_t workerId)
         : scriptPath_(std::move(scriptPath)),
           basePath_(std::move(basePath)),

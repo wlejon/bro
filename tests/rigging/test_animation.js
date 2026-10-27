@@ -7,7 +7,7 @@ const skel = Skeleton.fromBones([
 
 // One channel: bone 1 translation, two keyframes at t=0 and t=2 going from
 // (0, 0, 0) to (0, 0, 10).
-const anim = new Animation({
+const anim = new AnimationClip({
     name: 'jump',
     duration: 2.0,
     channels: [{
@@ -82,7 +82,7 @@ assert(anim.channels[0].times.length === 2,      'times length');
         { name: 'tip',   parent:  0 },
         { name: 'root',  parent: -1 },
     ]);
-    const r = Animation.retarget(anim, skel, dst);
+    const r = AnimationClip.retarget(anim, skel, dst);
     assert(r.channelCount >= 1, 'retarget kept the tip channel');
     // bone index for tip in dst is 1
     assert(r.channels[0].boneIndex === 1, 'retargeted to dst bone index');
@@ -98,6 +98,16 @@ assert(anim.channels[0].times.length === 2,      'times length');
     assert(s.findBoneBySuffix('Hips') === 0,        'suffix match Hips');
     assert(s.findBoneBySuffix('spine.001') === 1,   'suffix match spine.001');
     assert(s.findBoneBySuffix('missing') === -1,    'no suffix match');
+}
+
+// ── A clip is not a Web Animation ───────────────────────────────────────────
+{
+    assert(!(anim instanceof Animation), 'the global Animation is the Web Animations one');
+    assert(typeof anim.persist === 'undefined', 'a clip carries no Web Animation methods');
+    // A Web Animation method borrowed onto a clip reads nothing of it.
+    Animation.prototype.persist.call(anim);
+    const d = Object.getOwnPropertyDescriptor(Animation.prototype, 'playState');
+    assert(d.get.call(anim) === 'idle', 'a borrowed getter sees no animation');
 }
 
 console.log('PASS test_animation');

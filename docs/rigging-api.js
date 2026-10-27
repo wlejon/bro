@@ -10,7 +10,7 @@
 //
 // Mount points. `bro.rigging` carries `SkinData`, `Skeleton`, `Joint`,
 // `SkeletonRig` (aliased `RigSpec` and `Rig`), `Pose`, `AnimationClip`
-// (aliased `Animation` and `SkeletalAnimation`), `VoxelChunk` and `IK`, plus
+// (the global `Animation` is the Web Animations one), `VoxelChunk` and `IK`, plus
 // the forwarded rig statics `specFromFile`, `detectHumanoid`,
 // `detectLandmarks`, `detectQuadruped`, `missingLandmarks`, `fitSkeleton`,
 // `autoRig` and `transferWeights`. Every one of those classes is also a real
@@ -384,8 +384,7 @@ class Pose {
 // ── AnimationClip ────────────────────────────────────────────────────────────
 
 /**
- * Keyframed channels over a skeleton's bones. `Animation` and
- * `SkeletalAnimation` are aliases of the same class.
+ * Keyframed channels over a skeleton's bones.
  */
 class AnimationClip {
 

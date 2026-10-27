@@ -22,6 +22,10 @@ void popActiveWorld() {
     if (!tl_activeWorlds.empty()) tl_activeWorlds.pop_back();
 }
 
+void forgetActiveWorld(HostPhysicsWorld* w) {
+    std::erase(tl_activeWorlds, w);
+}
+
 
 // Physics.setMotionType is hand-written in js/physics.js: the public member
 // takes 'static' | 'dynamic' | 'kinematic' or a boolean, the native takes the
@@ -64,6 +68,7 @@ using namespace bro::bronze_host;
 void bro_physics_PhysicsWorldHandle_dtor(void* self) {
     auto* pw = static_cast<HostPhysicsWorld*>(self);
     if (pw && pw != &g_defaultWorld) {
+        forgetActiveWorld(pw);
         delete pw;
     }
 }

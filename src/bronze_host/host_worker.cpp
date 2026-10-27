@@ -45,7 +45,8 @@ static void hostWorkerDtor(void* p) {
 
 static WorkerInstance* getWorker(Value v) {
     if (!ev::isObject(v)) return nullptr;
-    return static_cast<WorkerInstance*>(ev::handleData(v));
+    auto* w = static_cast<WorkerInstance*>(ev::handleData(v));
+    return (w && w->tag == kHostWorkerTag) ? w : nullptr;
 }
 
 static std::string percentDecode(const std::string& s) {
