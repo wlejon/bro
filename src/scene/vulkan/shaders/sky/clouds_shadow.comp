@@ -29,6 +29,7 @@ float cloudSphereOut(vec3 ro, vec3 rd, float R) {
 // deck's bottom) toward `sb`, its sine of elevation `sinE`, their columns
 // read over `texel`: CL_SHADOW_HEAP_STEPS heights up the deck.
 const int CL_SHADOW_HEAP_STEPS = 16;
+const float CL_SHADOW_THROUGH = 0.5;
 float cloudHeapsLeave(vec3 e, vec3 sb, float sinE, float texel) {
     float thick = clouds.shell.y - clouds.shell.x;
     float dz = thick / float(CL_SHADOW_HEAP_STEPS);
@@ -45,7 +46,13 @@ float cloudHeapsLeave(vec3 e, vec3 sb, float sinE, float texel) {
         tau += clouds.forms.x * len * smoothstep(-0.5, 0.5, in_ / max(max(texel, mt), 1.0));
         if (tau > 12.0) break;
     }
-    return exp(-tau);
+    // (And the sun it scatters through, forward and out of its base into
+    // its own shadow: of what a thick cloud passes, 1 / (1 + fall tau),
+    // CL_SHADOW_THROUGH comes out of a heap's base, the rest its sides.
+    // Without it a heap's shadow was the blue sky's light alone, navy
+    // ellipses on a green land under white heaps.)
+    float T = exp(-tau);
+    return T + CL_SHADOW_THROUGH * max(1.0 / (1.0 + CLOUD_DIFFUSE_FALL * tau) - T, 0.0);
 }
 
 void main() {

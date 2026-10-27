@@ -277,6 +277,9 @@ vec3 cloudToBody(vec3 a) {
 
 // How far the skin moves the surface at most, of the base, either way.
 const float CLOUD_SKIN = 0.2;
+// How a cloud's diffuse light falls with its depth tau toward the sun,
+// 1 / (1 + it tau): 0.75 (1 - g), g 0.85, as a thick cloud passes flux.
+const float CLOUD_DIFFUSE_FALL = 0.11;
 // How much faster than 0 to 1 over `forms.edge` metres the world's base
 // may rise at most up or down (cloudDensity's contract: it is the least of
 // a field rising no faster than that any way and one rising no faster than

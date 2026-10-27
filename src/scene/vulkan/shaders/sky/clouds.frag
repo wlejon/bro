@@ -290,10 +290,9 @@ void clCover(inout ClMarch m, vec3 L0, float T0, float cover) {
     m.T = T0 * mix(1.0, m.T / max(T0, 1e-6), cover);
 }
 
-// (How the deep body's diffuse light falls with the depth toward the sun:
-// 0.75 (1 - g). clIntegrate's `deep` is how much of that light the piece
-// takes: the sun over its horizon.)
-const float CL_DIFFUSE_FALL = 0.11;
+// (The deep body's diffuse light falls with the depth toward the sun as
+// CLOUD_DIFFUSE_FALL has it. clIntegrate's `deep` is how much of that light
+// the piece takes: the sun over its horizon.)
 void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
                  float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow, float deep) {
     float r = length(p);
@@ -330,7 +329,7 @@ void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 t
     // a base 2 km under it a grey a tenth of the top's. The sixth octave's
     // exp(-0.05 tau) left the inside dark grey, so it was given only to
     // views looking down from over the deck.)
-    ms += deep * b / 0.2 * (0.25 / PI) / (1.0 + CL_DIFFUSE_FALL * tau.x) * powder;
+    ms += deep * b / 0.2 * (0.25 / PI) / (1.0 + CLOUD_DIFFUSE_FALL * tau.x) * powder;
     // The sky's light, less what the cloud above hides (a floor for what
     // its body scatters about), and the ground's from below.
     float sees = mix(0.2, 1.0, exp(-0.15 * tau.y));
