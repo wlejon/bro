@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -144,16 +145,21 @@ std::map<std::string, double> framePasses(engine::Engine& engine) {
 
 void installHeadlessScenePerf(engine::Engine& engine,
                               const std::function<void(const char*, uint32_t, ev::NativeFn)>& setPerfFn) {
-    // perf.pendingWork(): the scene's settle state, [] once settled.
-    setPerfFn("pendingWork", 0,
-        [&engine](Value, std::span<const Value>) -> Value {
-            return fromJson(nlohmann::json(engine.scenePendingWork()));
+    // perf.pendingWork({ within }): the scene's settle state, [] once settled.
+    setPerfFn("pendingWork", 1,
+        [&engine](Value, std::span<const Value> a) -> Value {
+            const Value opts = a.empty() ? ev::undefined() : a[0];
+            const double within = optNumber(opts, "within", std::numeric_limits<double>::infinity());
+            return fromJson(nlohmann::json(engine.scenePendingWork(within)));
         });
-    // perf.settle({ maxFrames, held, exposure }): frames until settled.
+    // perf.settle({ maxFrames, held, exposure, kinds, within }): frames until settled.
     setPerfFn("settle", 1,
         [&engine](Value, std::span<const Value> a) -> Value {
             const Value opts = a.empty() ? ev::undefined() : a[0];
             const int maxFrames = static_cast<int>(std::max(0.0, optNumber(opts, "maxFrames", 4000)));
+            // { within: m }: the world whole that far from the eye, as a
+            // player's first view needs; past it, it streams in as they go.
+            const double within = optNumber(opts, "within", std::numeric_limits<double>::infinity());
             const bool held = optBool(opts, "held", true);
             const bool exposure = optBool(opts, "exposure", true);
             // Work whose reasons have not changed for this many frames is
@@ -172,8 +178,8 @@ void installHeadlessScenePerf(engine::Engine& engine,
                     }
                 }
             }
-            const auto pendingNow = [&engine, &kinds] {
-                std::vector<std::string> all = engine.scenePendingWork();
+            const auto pendingNow = [&engine, &kinds, within] {
+                std::vector<std::string> all = engine.scenePendingWork(within);
                 if (kinds.empty()) return all;
                 std::vector<std::string> some;
                 for (std::string& r : all)

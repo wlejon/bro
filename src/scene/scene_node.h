@@ -171,8 +171,11 @@ public:
     /// has to stream or converge for the current view, one reason a kind of
     /// work appended to `out` ("land: 12 regions pending"); nothing once
     /// settled. A node with work that comes in over frames reports it here,
-    /// so a still waits for it with no app polling it.
-    virtual void pendingWork(std::vector<std::string>& /*out*/) const {}
+    /// so a still waits for it with no app polling it. `within`: how far
+    /// from the eye the world must be whole (perf.settle's `within`: a
+    /// player's first view, the rest streaming in as they go); work only
+    /// past it is not reported. Infinite: all of what the node keeps.
+    virtual void pendingWork(std::vector<std::string>& /*out*/, double /*within*/) const {}
 
     // --- Type tag for downcasting ---
     enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, InstancedMesh, GaussianSplat, Particles3D, Camera, Decal, ReflectionProbe };

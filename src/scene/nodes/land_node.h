@@ -279,7 +279,7 @@ public:
 
     /// The settle state: its processes not yet run, regional grids wanted
     /// about the eye and not in, tiles the view needs and has not made.
-    void pendingWork(std::vector<std::string>& out) const override;
+    void pendingWork(std::vector<std::string>& out, double within) const override;
 
     /// The items' boxes are made again off the frame (land_node_items.cpp):
     /// the batches asked and not yet applied.

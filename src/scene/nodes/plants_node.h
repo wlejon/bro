@@ -120,7 +120,7 @@ public:
     /// Placement's leaves wanted and not yet placed.
     size_t placementPending() const;
     /// The settle state: placement's leaves still to place.
-    void pendingWork(std::vector<std::string>& out) const override;
+    void pendingWork(std::vector<std::string>& out, double within) const override;
 
     /// The plants in the store now.
     int plantCount() const { return static_cast<int>(store_.live()); }

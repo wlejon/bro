@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -137,7 +138,8 @@ public:
     /// clouds' cover and cache), the world service's queue (where what it
     /// left is over a pixel off), the turf's layers and the exposure's
     /// distance from its meter, as of the newest frame rendered.
-    void pendingWork(std::vector<std::string>& out) const;
+    /// `within`: SceneNode::pendingWork's.
+    void pendingWork(std::vector<std::string>& out, double within = std::numeric_limits<double>::infinity()) const;
     /// While on, every scene's world service spends at least its settle
     /// budget a frame (WorldService::settleAll): perf.settle's frames.
     static void settleAll(bool on);

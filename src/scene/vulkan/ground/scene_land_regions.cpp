@@ -244,6 +244,10 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
     // reads is in: those it overlaps (grown by two of their cells, the
     // read's reach), and on another root any (a face's lattice runs past its
     // edges onto the next).
+    // (The eye's wait only on the eye's: waiting on those missing where it is
+    // expected, which are made only after the eye's are all in, held the
+    // eye's for seconds, a climb's regions 11 pending from the pad to 100
+    // km up. Where it is expected waits on both.)
     std::vector<LandRegionKey> missing;
     const auto miss = [&](const std::vector<LandRegionKey>& keys) {
         for (const LandRegionKey& k : keys) {
@@ -252,6 +256,7 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         }
     };
     miss(wanted);
+    const size_t eyeMissing = missing.size();
     miss(land.expected);
     // (Coarser region c is read by finer region k.)
     const auto reads = [&](const LandRegionKey& k, const LandRegionKey& c) {
@@ -263,10 +268,11 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         const double cx = L.originX(c), cz = L.originZ(c);
         return cx - m < kx + sk && kx < cx + sc + m && cz - m < kz + sk && kz < cz + sc + m;
     };
-    const auto startable = [&](const LandRegionKey& k) {
+    const auto startable = [&](const LandRegionKey& k, bool expected) {
         if (land.resident.count(k.packed())) return false;
-        for (const LandRegionKey& c : missing)
-            if (c.level > k.level && reads(k, c)) return false;
+        const size_t n = expected ? missing.size() : eyeMissing;
+        for (size_t i = 0; i < n; ++i)
+            if (missing[i].level > k.level && reads(k, missing[i])) return false;
         return true;
     };
     // The regions the ground under the eye waits on: those holding it, and
@@ -291,9 +297,13 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
     order.insert(order.end(), land.expected.begin(), land.expected.end());
     // The first startable one so ordered, and the startable ones of its
     // level after it, up to a batch.
+    const auto isExpected = [&](const LandRegionKey& k) {
+        return std::find(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(eyes), k) ==
+               order.begin() + static_cast<std::ptrdiff_t>(eyes);
+    };
     size_t firstAt = order.size();
     for (size_t i = 0; i < order.size(); ++i)
-        if (startable(order[i])) {
+        if (startable(order[i], i >= eyes)) {
             firstAt = i;
             break;
         }
@@ -302,24 +312,22 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
     std::vector<LandRegionKey> picks{first};
     for (const LandRegionKey& k : order) {
         if (static_cast<int>(picks.size()) >= kBatch) break;
-        if (k.level == first.level && !(k == first) && startable(k)) picks.push_back(k);
+        if (k.level == first.level && !(k == first) && startable(k, isExpected(k))) picks.push_back(k);
     }
-    const auto isExpected = [&](const LandRegionKey& k) {
-        return std::find(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(eyes), k) ==
-               order.begin() + static_cast<std::ptrdiff_t>(eyes);
-    };
     Job job;
     job.expected = firstAt >= eyes;
     for (const LandRegionKey& k : picks) {
         const bool expected = isExpected(k);
         if (land.freeSlots.empty()) {
-            // Where the eye is expected, only in room nothing wants.
-            if (expected) break;
             // The longest unwanted region in (none that a region being made
             // or read back stands on): first one not wanted where the eye is
             // expected either, else one that is (the eye takes it back).
+            // Where the eye is expected, only in room nothing wants: the
+            // first of those alone. (Only a free slot left the slots full of
+            // the regions the eye left behind, and the landing's never came:
+            // a descent from orbit came down onto ground still being made.)
             uint32_t victim = 0;
-            for (int tier = 0; tier < 2 && !victim; ++tier) {
+            for (int tier = 0; tier < (expected ? 1 : 2) && !victim; ++tier) {
                 uint64_t oldest = land.frame;
                 int level = L.config.levels;
                 for (const auto& [packed, r] : land.resident) {
@@ -671,7 +679,16 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     expect(frame, node, land, focal);
     // The eye's own first: a batch made only where it is expected is let go
     // once the eye wants a region not in (none of it is in a slot yet).
-    if (land.hasJob && land.job.expected && land.pending > 0) {
+    // And a batch none of whose regions anything wants now (the eye gone on,
+    // nowhere it is expected) is let go too: a level-0 batch begun on a
+    // climb went on at the floor's step a frame from 100 km to orbit, the
+    // landing's regions waiting behind it.
+    bool unwanted = land.hasJob;
+    for (const Member& m : land.job.members)
+        if (std::find(wanted.begin(), wanted.end(), m.key) != wanted.end() ||
+            std::find(land.expected.begin(), land.expected.end(), m.key) != land.expected.end())
+            unwanted = false;
+    if (land.hasJob && ((land.job.expected && land.pending > 0) || unwanted)) {
         for (const Member& m : land.job.members) {
             land.resident.erase(m.key.packed());
             land.freeSlots.push_back(m.slot);
@@ -730,7 +747,10 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     // step of the batch ranked over the land's tiles a region's move had
     // left 250 m over the ground, a wall across the view for seconds.)
     const double cell = L.config.cellOf(j.members.front().key.level);
-    o.error = static_cast<float>(cell * focal / std::max(height, cell));
+    // (Where the eye is expected, as pressing as it will be with the eye
+    // there, on the ground: by the eye's own height, from orbit a landing's
+    // regions ranked under every tile and bake, a step every few frames.)
+    o.error = static_cast<float>(cell * focal / std::max(j.expected ? 0.0 : height, cell));
     o.urgent = !nearIn && !j.expected;
     if (o.step == Step::Finish) {
         if (freeReadbacks(land) < o.regions) return {};

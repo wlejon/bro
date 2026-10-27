@@ -155,7 +155,7 @@ double SceneRenderer::takeGpuMs(bool wait) {
 
 void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
 
-void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
+void SceneRenderer::pendingWork(std::vector<std::string>& out, double within) const {
     // The world shader sets still compiling (this scene's and the warm-up's
     // of the last run: what this scene asks for next is among them).
     if (const vk::shader_warmup::Progress sp = vk::shader_warmup::progress(); sp.shadersDone < sp.shaders)
@@ -167,7 +167,7 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
     else if (cullStats_.pipelineSkips > 0)
         out.push_back("pipelines: " + std::to_string(cullStats_.pipelineSkips) + " draws skipped last frame");
     for (const auto& [id, node] : graph_.nodes())
-        if (node) node->pendingWork(out);
+        if (node) node->pendingWork(out, within);
     const CullStats& s = cullStats_;
     // (The world service and the shadow pages run under budgets that may
     // leave work queued for good; their queues count only where what waits

@@ -406,7 +406,8 @@ void PlantPlacement::want(const Eyes& e) {
     wanted_ = e;
 }
 
-void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped) {
+void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped,
+                            bool post) {
     placed.clear();
     dropped.clear();
     const double keep = static_cast<double>(rules_->range) + rules_->hysteresis;
@@ -460,7 +461,7 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
     const double threads = workers_.threads();
     const size_t limit = static_cast<size_t>(
         std::clamp(cost > 0.0 ? threads * span / cost : (span > 0.0 ? threads : 1.0), 1.0, 4096.0));
-    while (!queue_.empty() && posted_.size() < limit) {
+    while (post && !queue_.empty() && posted_.size() < limit) {
         const CellKey k = queue_.back();
         queue_.pop_back();
         posted_.insert(k.packed());

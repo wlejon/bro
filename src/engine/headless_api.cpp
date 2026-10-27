@@ -567,12 +567,12 @@ bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
 #endif
 }
 
-std::vector<std::string> Engine::scenePendingWork() {
+std::vector<std::string> Engine::scenePendingWork(double within) {
     std::vector<std::string> out;
 #if BRO_WITH_3D
     renderPendingScenes(true);
     for (auto& sg : sceneGraphs_)
-        if (sg.graph) sg.graph->renderer().pendingWork(out);
+        if (sg.graph) sg.graph->renderer().pendingWork(out, within);
 #endif
     return out;
 }

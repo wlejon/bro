@@ -128,8 +128,11 @@ public:
     /// wanted): the leaves wanted about it, the jobs posted for those not
     /// placed (`queueMs` of them at once, the nearest first), those gone
     /// too far named in `dropped`, and the jobs finished since the last
-    /// call in `placed` (still wanted ones only). Never waits.
-    void update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped);
+    /// call in `placed` (still wanted ones only). Never waits. `post`
+    /// false: no new jobs (the ground under the eye not yet in), the rest
+    /// as ever.
+    void update(const double eye[3], double lift, std::vector<Placed>& placed, std::vector<CellKey>& dropped,
+                bool post = true);
 
     /// Leaves placed (handed out by update and not dropped since).
     size_t resident() const { return resident_.size(); }

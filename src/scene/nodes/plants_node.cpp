@@ -109,7 +109,17 @@ void PlantsNode::setRules(std::shared_ptr<const PlacementRules> rules) {
 }
 
 void PlantsNode::setGround(std::shared_ptr<const LandBase> base, bool hold) {
-    if (base == base_ && hold == hold_) return;
+    if (base == base_) {
+        if (hold == hold_) return;
+        // Held, the placement posts no new cells (it follows the eye, its
+        // reach and what it drops, and what it placed stays: the eye
+        // outrunning the regions under it on a descent dropped every plant
+        // and placed them all again once they were in); let go, it goes on,
+        // begun if it never was.
+        hold_ = hold;
+        if (!hold_ && !placement_) setRules(rulesRef_);
+        return;
+    }
     base_ = std::move(base);
     hold_ = hold;
     setRules(rulesRef_);
@@ -118,8 +128,8 @@ void PlantsNode::setGround(std::shared_ptr<const LandBase> base, bool hold) {
 const PlacementRules* PlantsNode::rules() const { return rulesRef_.get(); }
 
 size_t PlantsNode::placementPending() const {
-    if (placement_) return placement_->pending();
-    return rulesRef_ && hold_ ? 1 : 0;
+    const size_t n = placement_ ? placement_->pending() : 0;
+    return rulesRef_ && hold_ ? std::max<size_t>(n, 1) : n;
 }
 
 float PlantsNode::drawReach() const {
@@ -128,9 +138,15 @@ float PlantsNode::drawReach() const {
     return placement_ ? std::min(params_.range, static_cast<float>(placement_->reach())) : 0.0f;
 }
 
-void PlantsNode::pendingWork(std::vector<std::string>& out) const {
-    if (const size_t n = placementPending())
-        out.push_back("plants: " + std::to_string(n) + " placements pending");
+void PlantsNode::pendingWork(std::vector<std::string>& out, double within) const {
+    const size_t n = placementPending();
+    if (!n) return;
+    // (Within a distance, placed out to it: past where they are placed the
+    // land's canopy stands for them, drawReach.)
+    const double reach = drawReach();
+    if (std::isinf(within) || reach < std::min(within, static_cast<double>(params_.range)))
+        out.push_back("plants: " + std::to_string(n) + " placements pending, placed out to " +
+                      std::to_string(static_cast<int>(reach)) + " m");
 }
 
 void PlantsNode::setPlace(const Place* place) {
@@ -164,7 +180,7 @@ void PlantsNode::follow(const bromath::Vec3& eye, const LandNode* land) {
     }
     std::vector<PlantPlacement::Placed> placed;
     std::vector<CellKey> dropped;
-    placement_->update(at, lift, placed, dropped);
+    placement_->update(at, lift, placed, dropped, !hold_);
     const std::vector<float> none;
     for (const CellKey& key : dropped) {
         const auto it = leaves_.find(key);

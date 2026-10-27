@@ -347,9 +347,11 @@ bromath::AABB3 LandNode::bounds() const {
     return {{-rf, -R - rf, -rf}, {rf, -R + rf, rf}};
 }
 
-void LandNode::pendingWork(std::vector<std::string>& out) const {
+void LandNode::pendingWork(std::vector<std::string>& out, double within) const {
     if (!ready()) out.push_back("land processes: not yet run");
-    if (stats_.regionsPending)
+    // (Within a distance, the regions the ground under the eye reads
+    // (groundReady); the rest refine what the coarser levels already give.)
+    if (stats_.regionsPending && (std::isinf(within) || !regionsSettled_))
         out.push_back("land: " + std::to_string(stats_.regionsPending) + " regions pending");
     if (stats_.missing) out.push_back("land: " + std::to_string(stats_.missing) + " tiles missing");
     if (const uint64_t n = itemBatchesPending())
