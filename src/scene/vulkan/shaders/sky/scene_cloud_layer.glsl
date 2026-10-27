@@ -80,6 +80,11 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 volN;          // xyz up at the anchor, w the debug slice's height (m over the deck's bottom)
     vec4 volEye;        // xyz the eye in the volume's frame (m), w a pixel's angle (radians)
     vec4 volLevel[CL_VOL_LEVELS];   // xyz the cell (index) level k's window is about, w 1 once baked
+    // The view's columns (sky/clouds_view.comp).
+    vec4 viewToWorld[3];   // rows of the view's turn into air space
+    vec4 viewInvProj[4];   // rows of its projection's inverse
+    vec4 viewEye;          // xyz the eye (air space)
+    vec4 viewSize;         // xy the texels made, z 1 when they are this frame's, w pixels a texel
 } clouds;
 
 layout(set = CLOUD_SET, binding = CL_B_COVER) uniform sampler2DArray cloudCoverMap;
@@ -89,6 +94,7 @@ layout(set = CLOUD_SET, binding = CL_B_SIGMA) uniform sampler3D cloudSigmaMap;
 layout(set = CLOUD_SET, binding = CL_B_BAND) uniform sampler2DArray cloudBandMap;
 layout(set = CLOUD_SET, binding = CL_B_GLOBE) uniform sampler2DArray cloudGlobeMap;
 layout(set = CLOUD_SET, binding = CL_B_HEAPS) uniform sampler2DArray cloudHeapMap;
+layout(set = CLOUD_SET, binding = CL_B_VIEW) uniform sampler2DArray cloudViewMap;
 
 struct CloudPoint {
     vec3 p;            // the point in the body's frame (m from its centre)
@@ -695,4 +701,12 @@ vec2 cloudLayerCell(float lod, float foot) {
     float globe = max(smoothstep(CL_GLOBE_FROM, CL_GLOBE_TO, cell / cloudGlobeTexel()),
                       smoothstep(CL_GLOBE_CLOUDS_FROM, CL_GLOBE_CLOUDS_TO, foot / clouds.forms.w));
     return vec2(mix(cell, cloudGlobeTexel(), globe), globe);
+}
+// How much the layer reads the view's column (sky/clouds_view.comp) for a
+// pixel of footprint `foot`, the view's texel `texel` and the column's cell
+// `cell` (cloudLayerCell): where the layer draws, the cell coarser than the
+// texel, and the globe's not as fine as it.
+float cloudViewWeight(float foot, float texel, float cell) {
+    if (foot < CL_LAYER_FROM * (clouds.shell.y - clouds.shell.x)) return 0.0;
+    return smoothstep(1.0, 2.0, cell / texel) * (1.0 - smoothstep(0.5, 1.0, texel / cloudGlobeTexel()));
 }

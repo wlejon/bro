@@ -53,6 +53,8 @@
 //     CL_B_HEAPS      the heaps' map about the eye, sampled (below:
 //                     sky/clouds_heaps.comp), a level a layer
 //     CL_B_HEAPS_OUT  the same, written by its bake (rgba16f storage)
+//     CL_B_VIEW       the view's columns, sampled (below: sky/clouds_view.comp)
+//     CL_B_VIEW_OUT   the same, written by its bake (rgba16f storage)
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -85,6 +87,22 @@
 #define CL_B_VOLUME_CHECK   22
 #define CL_B_HEAPS          23
 #define CL_B_HEAPS_OUT      24
+#define CL_B_VIEW           25
+#define CL_B_VIEW_OUT       26
+
+// The view's columns (sky/clouds_view.comp): where the layer draws the deck
+// from above, a pixel is far finer than the cache's cell there (its windows
+// lie about the nadir, 128 cells across, so from a few hundred kilometres
+// up the view's far side reads cells of 16 km) or the globe's texel (some
+// 10 km); each texel of an image over the view (CL_VIEW_W x CL_VIEW_H,
+// `viewSize.w` pixels a texel each way, 2 or more) is the column where its
+// ray enters the deck as a layer, the world's clouds at its own footprint
+// over CL_VIEW_BINS heights, made each frame the eye is over the deck.
+#define CL_VIEW_W           1920
+#define CL_VIEW_H           1080
+#define CL_VIEW_BINS        8
+#define CL_VIEW_GROUP       8
+#define CL_VIEW_HEAP_STEPS  4        // the heaps' share's heights a bin
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 

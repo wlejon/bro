@@ -72,11 +72,12 @@ public:
         Cache,    // clouds_cache.comp
         Globe,    // clouds_globe.comp
         Heaps,    // clouds_heaps.comp
+        View,     // clouds_view.comp
         kStages
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {
         BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsCacheComp, BuiltinSceneShader::CloudsGlobeComp,
-        BuiltinSceneShader::CloudsHeapsComp};
+        BuiltinSceneShader::CloudsHeapsComp, BuiltinSceneShader::CloudsViewComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl, compiled off the frame thread (poll).
@@ -88,7 +89,7 @@ public:
 
     VkShaderModule operator[](Stage s) const { return module(s); }
     // Started once the modules are made.
-    AsyncComputePipeline cover, cache, globe, heaps;
+    AsyncComputePipeline cover, cache, globe, heaps, view;
 };
 
 class SceneClouds {
@@ -145,6 +146,10 @@ public:
         float heapLevel[CL_HEAP_LEVELS][4];
         float data[64][4];
         CloudVolumeGpu volume;
+        float viewToWorld[3][4];   // the view's columns (sky/clouds_view.comp)
+        float viewInvProj[4][4];
+        float viewEye[4];
+        float viewSize[4];
     };
 
     /// The volume about the eye's bakes, into the graphics stream after
@@ -170,6 +175,9 @@ private:
     /// The globe's bake: all of it when it is not current, else a slice of
     /// its rows, while the eye is over the deck (sky/clouds_layout.h).
     void recordGlobe(SceneFrame& frame);
+    /// The view's columns (sky/clouds_view.comp), each frame they are used
+    /// (beginFrame says: block_.viewSize).
+    void recordView(SceneFrame& frame);
     /// Where the heaps' map's windows lie this frame (about the drifted
     /// nadir) and what of it is baked (beginFrame, after placeCache); its
     /// bakes (before the cache's).
@@ -224,6 +232,7 @@ private:
     SceneVkImage coverNone_, shadowNone_, gridNone_;
     SceneVkImage cacheSigma_, cacheLight_, cacheBand_, distA_, distB_, cacheHolds_;
     SceneVkImage globe_;
+    SceneVkImage view_;          // the view's columns (sky/clouds_layout.h's CL_VIEW_*)
     // The deck the globe holds (its module, generation; 0 none), the wind's
     // time it was last baked at, and its next slice.
     uint64_t globeKey_ = 0;

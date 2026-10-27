@@ -60,6 +60,7 @@ BRO_SCENE_SHADER(CloudsCoverComp,          "clouds_cover.comp",           "sky/c
 BRO_SCENE_SHADER(CloudsCacheComp,          "clouds_cache.comp",           "sky/clouds_cache.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsGlobeComp,          "clouds_globe.comp",           "sky/clouds_globe.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsHeapsComp,          "clouds_heaps.comp",           "sky/clouds_heaps.comp",              "comp", "")
+BRO_SCENE_SHADER(CloudsViewComp,           "clouds_view.comp",            "sky/clouds_view.comp",               "comp", "")
 BRO_SCENE_SHADER(CloudsDistComp,           "clouds_dist.comp",            "sky/clouds_dist.comp",               "comp", "")
 BRO_SCENE_SHADER(CloudsLightComp,         "clouds_light.comp",           "sky/clouds_light.comp",              "comp", "")
 BRO_SCENE_SHADER(CloudsShadowComp,         "clouds_shadow.comp",          "sky/clouds_shadow.comp",             "comp", "")

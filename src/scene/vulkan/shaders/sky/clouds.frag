@@ -473,7 +473,19 @@ void main() {
             col = cloudCacheColumn(w.xy, k);
             if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
         }
-        if (globe > 0.0) col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);        float len = q.y - q.x;
+        if (globe > 0.0) col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);
+        // (The view's own column where the cell is coarser than its texel,
+        // sky/clouds_view.comp: the world's clouds at the pixel's footprint,
+        // not a cell kilometres wide blurred over hundreds of pixels.)
+        float wv = 0.0;
+        if (i == 0 && clouds.viewSize.z > 0.5) {
+            wv = cloudViewWeight(pixel * q.x, pixel * q.x * clouds.viewSize.w, footCell);
+            if (wv > 0.0) {
+                vec2 uv = clamp(gl_FragCoord.xy / clouds.viewSize.w, vec2(0.5), clouds.viewSize.xy - 0.5);
+                col = mix(col, textureLod(cloudViewMap, vec3(uv / vec2(CL_VIEW_W, CL_VIEW_H), 0.0), 0.0), wv);
+            }
+        }
+        float len = q.y - q.x;
         // The heaps as themselves where they are a few pixels across or more
         // (their map's columns: the heaps the march draws nearer), over the
         // slabs' column (the cache's without them); where they are finer,
@@ -542,7 +554,7 @@ void main() {
             // field of heaps was gone wherever their share was under the
             // surface's half.)
             float c0 = shareCell > 1e-3 ? clamp(sharePixel / shareCell, 0.0, 4.0) : 1.0;
-            cut = mix(c0, 1.0, globe);
+            cut = mix(c0, 1.0, max(globe, wv));
         }
         // The view's depth through the layer slanted `m` times its own: the
         // share of the view its clouds cover (col.x's over the depth within
@@ -550,7 +562,8 @@ void main() {
         // (Not col.x's slanted: a field of opaque clouds over a share of the
         // column slanted to the horizon is no white sheet.)
         float m = len / thick;
-        float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);        float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
+        float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);
+        float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
         if (tauView < 1e-4 && tauH < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
         if (!sky) {

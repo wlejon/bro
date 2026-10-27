@@ -1,0 +1,86 @@
+#version 450
+// The view's columns (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h's
+// CL_VIEW_*): for each texel of the image over the view (`viewSize.w`
+// pixels a texel each way), the column where its ray enters the deck from
+// above, as a layer (cloudColumnLayer, as the cache's and the globe's
+// columns are): the world's cloudDensity and the heaps' share at the
+// texel's own footprint there over CL_VIEW_BINS heights, their forms' mean
+// extinction (cloudSigmaOf's veil as opaque as they cover). The layer
+// (clouds.frag) reads it where the cache's cell is coarser than a pixel:
+// from a few hundred kilometres up its cells are kilometres across, and
+// the deck it drew was a blur of them.
+// None (x 0) where the ray misses the deck or starts in it.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_VIEW_GROUP, local_size_y = CL_VIEW_GROUP) in;
+
+layout(set = 0, binding = CL_B_VIEW_OUT, rgba16f) uniform writeonly image2DArray viewOut;
+
+vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
+
+#include "sky/cloud_module.glsl"
+#include "sky/cloud_heaps.glsl"
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(clouds.viewSize.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    // The texel's ray, as clouds.frag's pixel's: its NDC through the
+    // projection's inverse, turned into air space.
+    vec2 ndc = (vec2(px) + 0.5) / vec2(size) * 2.0 - 1.0;
+    vec4 c = vec4(ndc, 1.0, 1.0);
+    vec4 v = vec4(dot(clouds.viewInvProj[0], c), dot(clouds.viewInvProj[1], c), dot(clouds.viewInvProj[2], c),
+                  dot(clouds.viewInvProj[3], c));
+    vec3 dv = normalize(v.xyz / v.w);
+    vec3 rd = normalize(vec3(dot(clouds.viewToWorld[0].xyz, dv), dot(clouds.viewToWorld[1].xyz, dv),
+                             dot(clouds.viewToWorld[2].xyz, dv)));
+    vec3 ro = clouds.viewEye.xyz;
+    // Where it enters the deck's top.
+    float b = dot(ro, rd);
+    float d = b * b - (dot(ro, ro) - clouds.shell.y * clouds.shell.y);
+    float t = -b - sqrt(max(d, 0.0));
+    if (d <= 0.0 || t <= 0.0) {
+        imageStore(viewOut, ivec3(px, 0), vec4(0.0, 0.0, 0.5, 0.0));
+        return;
+    }
+    // (None where the layer does not draw, the march's, or where the
+    // globe's texel is as fine as this one: clouds.frag reads it nowhere
+    // else, cloudViewWeight.)
+    float foot = clouds.params.y * clouds.viewSize.w * t;
+    float thick = clouds.shell.y - clouds.shell.x;
+    if (cloudViewWeight(clouds.params.y * t, foot, 1e9) <= 0.0) {
+        imageStore(viewOut, ivec3(px, 0), vec4(0.0, 0.0, 0.5, 0.0));
+        return;
+    }
+    vec3 up = normalize(cloudToBody(ro + rd * t));
+    vec4 cover = cloudCoverAt(up);
+    float binH = thick / float(CL_VIEW_BINS);
+    CloudColumn col = cloudColumnNone();
+    for (int k = CL_VIEW_BINS - 1; k >= 0; --k) {
+        float h = (float(k) + 0.5) / float(CL_VIEW_BINS);
+        float r = mix(clouds.shell.x, clouds.shell.y, h);
+        CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, foot, clouds.shell.w);
+        float slab = min(cloudDensity(q), 1.0), heaps = 0.0;
+        // (The heaps' share over the bin's height, not at its middle: they
+        // stand a kilometre or so, as tall as a bin, on bases that rise and
+        // fall from place to place, and one height a bin was in them here
+        // and out of them beside, a net of rings over the whole field.)
+        for (int j = 0; j < CL_VIEW_HEAP_STEPS; ++j) {
+            q.height = (float(k) + (float(j) + 0.5) / float(CL_VIEW_HEAP_STEPS)) / float(CL_VIEW_BINS);
+            q.altitude = mix(clouds.shell.x, clouds.shell.y, q.height) - clouds.shell.z;
+            q.p = up * (q.altitude + clouds.shell.z);
+            heaps += max(cloudHeapsShareAt(q), 0.0) / float(CL_VIEW_HEAP_STEPS);
+        }
+        q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, foot, clouds.shell.w);
+        if (slab <= 0.0 && heaps <= 0.0) continue;
+        // (The forms over half a billow's tile at least: their lobes a few
+        // pixels across from up here are finer than the field the world
+        // draws at the pixel.)
+        float sSlab = slab > 0.0 ? cloudForms(cloudDrift(q.p), slab, 0.5, max(foot, 0.5 * clouds.forms.y), false) : 0.0;
+        float sigma = max(sSlab, cloudHeapsShareSigma(heaps));
+        cloudColumnAdd(col, sigma * binH, h, binH, cloudShareLike(foot), (sigma - sSlab) * binH);
+    }
+    imageStore(viewOut, ivec3(px, 0), cloudColumnLayer(col));
+}
