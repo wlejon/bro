@@ -431,17 +431,25 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         stalls::Part part("land regions prepare");
         ro = landRegions_.prepare(frame, *land, lt.grid, frame.cmd);
     }
-        const int rk = regionKindOf(ro.step);
-        int required = ro.required;
-        if (ro.urgent && rk >= 0 && ro.required > 0) {
-            // (Urgent: as many as kUrgentMs holds at the kind's cost, one at least.)
-            const double each = std::max(static_cast<double>(service.cost(rk)) * std::max(ro.regions, 1), 1e-3);
-            required = std::clamp(static_cast<int>(SceneLandRegions::kUrgentMs / each), 1, ro.required);
+        // (Offered after the tiles: the urgent ones share kUrgentMs with
+        // the tiles a region in left stale.)
+        const auto offerRegions = [&](double staleMs) {
+            const int rk = regionKindOf(ro.step);
+            int required = ro.required;
+            if (ro.urgent && rk >= 0 && ro.required > 0) {
+                // (Urgent: as many as what the stale tiles leave of kUrgentMs
+                // holds at the kind's cost, one at least.)
+                const double each = std::max(static_cast<double>(service.cost(rk)) * std::max(ro.regions, 1), 1e-3);
+                required = std::clamp(static_cast<int>((SceneLandRegions::kUrgentMs - staleMs) / each), 1, ro.required);
+            }
+            for (int k = 0; k < ro.steps; ++k)
+                service.offer(
+                    {static_cast<uint64_t>(k), id, rk, ro.error, 0.0, k < required, static_cast<double>(ro.regions)});
+        };
+        if (!lt.grid || !land->ready()) {
+            offerRegions(0.0);
+            continue;
         }
-        for (int k = 0; k < ro.steps; ++k)
-            service.offer(
-                {static_cast<uint64_t>(k), id, rk, ro.error, 0.0, k < required, static_cast<double>(ro.regions)});
-        if (!lt.grid || !land->ready()) continue;
 
         // A new module, extent or rings: every tile again, over its items;
         // a region in or out: the tiles over it.
@@ -460,7 +468,10 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         bounds.min.y -= kDepthMargin;
         bounds.max.y += kDepthMargin;
         if (lt.tiles.setBounds(bounds)) lt.cleared = false;
-        if (!lt.tiles.configured()) continue;
+        if (!lt.tiles.configured()) {
+            offerRegions(0.0);
+            continue;
+        }
         if (!lt.cleared) {
             lt.atlas.clearPages(frame.cmd);
             lt.cleared = true;
@@ -478,8 +489,18 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         if (const float* d = frame.lighting.sunDirection; d[3] >= 0.5f) sv.shade = {-d[0], -d[1], -d[2]};
         stalls::Part updatePart("land tiles update");
         lt.tiles.update(sv, ++lt.frame);
-        for (const SurfaceJob& j : lt.tiles.jobs())
-            service.offer({j.key.packed(), id, landKind_, j.error, j.side, j.required});
+        // A stale tile is made whatever the budget, up to kUrgentMs: the
+        // CPU's heights moved with the region that staled it, and the eye
+        // set on them stood under the land still drawn as it was, for
+        // seconds behind the regions' urgent steps.
+        double staleMs = 0.0;
+        const double tileMs = std::max(static_cast<double>(service.cost(landKind_)), 1e-3);
+        for (const SurfaceJob& j : lt.tiles.jobs()) {
+            const bool now = j.required || (j.stale && staleMs + tileMs <= SceneLandRegions::kUrgentMs);
+            if (now && !j.required) staleMs += tileMs;
+            service.offer({j.key.packed(), id, landKind_, j.error, j.side, now});
+        }
+        offerRegions(staleMs);
         landOffered_.push_back(id);
     }
     landDrawn_.clear();

@@ -121,6 +121,7 @@ struct SurfaceJob {
     float error = 0.0f;      // pixels on screen while it is not filled
     double side = 1.0;       // metres
     bool required = false;   // a missing tile of the coarsest level
+    bool stale = false;      // held, but filled from items since changed
 };
 
 /// A tile to fill this frame: its key, its slot and its ground rectangle

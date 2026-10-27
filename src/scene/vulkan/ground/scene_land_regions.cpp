@@ -641,7 +641,12 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     Offer o;
     o.step = stepOf(L.config, j);
     o.regions = static_cast<int>(j.members.size());
-    o.error = static_cast<float>(L.config.cellOf(j.members.front().key.level) * focal / std::max(height, 1.0));
+    // (A cell seen from nearer than its own width spans the view, no more:
+    // over an eye landing 0.1 m up a level-0 cell said 500000 px, and every
+    // step of the batch ranked over the land's tiles a region's move had
+    // left 250 m over the ground, a wall across the view for seconds.)
+    const double cell = L.config.cellOf(j.members.front().key.level);
+    o.error = static_cast<float>(cell * focal / std::max(height, cell));
     o.urgent = !nearIn;
     if (o.step == Step::Finish) {
         if (freeReadbacks(land) < o.regions) return {};
