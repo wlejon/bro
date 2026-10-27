@@ -9,9 +9,12 @@ namespace bro::video {
 // Software VP9 encoder + WebM muxer. Single video track, RGBA in, file out.
 //
 // Frames are encoded in submission order with a monotonically increasing
-// timestamp derived from (frameIndex / fps). Forced keyframes happen at the
-// configured interval; the encoder may insert additional keyframes if its
-// rate-control logic decides one is needed.
+// timestamp derived from (frameIndex / fps), on the encoder's own thread:
+// addFrameRGBA copies the frame and returns (waiting only while a few
+// frames are already queued), so a renderer's next frame overlaps this
+// one's encode. Forced keyframes happen at the configured interval; the
+// encoder may insert additional keyframes if its rate-control logic decides
+// one is needed.
 //
 // Hardware encode is intentionally absent — VP9 hardware support is sparse
 // (no NVENC, no D3D12 Video Encode). When that becomes a bottleneck, add a
@@ -34,7 +37,7 @@ public:
         int targetBitrateKbps = 0;
         int keyframeIntervalSec = 2;
         Quality quality = Quality::Good;
-        // 0 = libvpx default (typically 1).
+        // libvpx's threads; 0 = the machine's cores, up to 16.
         int threads = 0;
 
         // How far a player has to turn the picture clockwise to show it the
@@ -61,8 +64,10 @@ public:
     virtual ~WebmEncoder() = default;
 
     // Push one RGBA frame. `srcStride` may be 0 to use width*4.
-    // Width/height of `rgba` must match the configured size. Returns false
-    // on encode error; call lastError() for details.
+    // Width/height of `rgba` must match the configured size. The frame is
+    // copied, so `rgba` may be reused on return. Returns false on an encode
+    // error, an earlier frame's included (it is found on the encoder's
+    // thread); call lastError() for details.
     virtual bool addFrameRGBA(const uint8_t* rgba, int srcStride) = 0;
 
     // Push interleaved float PCM. `frameCount` is samples per channel.

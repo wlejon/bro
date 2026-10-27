@@ -12,7 +12,11 @@
 #include <mkvmuxer/mkvwriter.h>
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace bro::video {
@@ -53,6 +57,26 @@ std::vector<uint8_t> makeOpusHead(int channels, int inputSampleRate, int preSkip
     h[15] = static_cast<uint8_t>((inputSampleRate >> 24) & 0xff);
     // h[16..17]: output gain = 0; h[18]: channel mapping family = 0
     return h;
+}
+
+// Frames copied and waiting for the encoding thread. A caller that runs
+// ahead of the encoder waits on the oldest; at 1080p this is about 33 MB.
+constexpr size_t kQueuedFrames = 4;
+
+// libvpx's threads: the machine's cores, up to 16 (VP9 spreads a frame over
+// its tile columns and, with row-MT, their superblock rows; past 16 it gains
+// nothing at these sizes).
+unsigned int defaultThreads() {
+    const unsigned int n = std::thread::hardware_concurrency();
+    return std::clamp(n, 1u, 16u);
+}
+
+// VP9 tile columns (log2), each at least 256 px wide as the format requires,
+// at most 64 of them: the units the threads share a frame by.
+int tileColumnsLog2(int width) {
+    int log2 = 0;
+    while (log2 < 6 && (width >> (log2 + 1)) >= 256) ++log2;
+    return log2;
 }
 
 int qualityToDeadline(WebmEncoder::Quality q) {
@@ -205,27 +229,41 @@ public:
             setErr("null rgba pointer");
             return false;
         }
-        if (srcStride <= 0) srcStride = cfg_.width * 4;
-
-        rgbaToI420(rgba, srcStride, cfg_.width, cfg_.height,
-                   image_.planes[VPX_PLANE_Y], image_.stride[VPX_PLANE_Y],
-                   image_.planes[VPX_PLANE_U], image_.stride[VPX_PLANE_U],
-                   image_.planes[VPX_PLANE_V], image_.stride[VPX_PLANE_V]);
-
-        // Force a keyframe at the start so the file is decodable from frame 0
-        // even if the encoder's internal heuristic would have deferred it.
-        const vpx_enc_frame_flags_t flags =
-            (frameIndex_ == 0) ? VPX_EFLAG_FORCE_KF : 0;
-
-        if (vpx_codec_encode(&codec_, &image_,
-                             static_cast<vpx_codec_pts_t>(frameIndex_), 1,
-                             flags, deadline_) != VPX_CODEC_OK) {
-            setErr(std::string("vpx_codec_encode failed: ") +
-                   (vpx_codec_error_detail(&codec_) ? vpx_codec_error_detail(&codec_) : ""));
+        if (finished_) {
+            setErr("addFrameRGBA after finish");
             return false;
         }
-        ++frameIndex_;
-        return drainPackets();
+        if (srcStride <= 0) srcStride = cfg_.width * 4;
+
+        // The frame is copied and encoded on the encoder's thread, so the
+        // caller goes on to its next frame (a renderer keeps its GPU busy
+        // rather than idling through the encode). An encode that failed says
+        // so at the next frame or at finish().
+        const size_t row = static_cast<size_t>(cfg_.width) * 4;
+        std::vector<uint8_t> frame;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex_);
+            queueSpace_.wait(lock, [&] { return queue_.size() < kQueuedFrames || encodeFailed_; });
+            if (encodeFailed_) {
+                setErr(encodeErr_);
+                return false;
+            }
+            if (!spare_.empty()) {
+                frame = std::move(spare_.back());
+                spare_.pop_back();
+            }
+        }
+        frame.resize(row * static_cast<size_t>(cfg_.height));
+        for (int y = 0; y < cfg_.height; ++y)
+            std::memcpy(frame.data() + row * static_cast<size_t>(y),
+                        rgba + static_cast<size_t>(srcStride) * static_cast<size_t>(y), row);
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            queue_.push_back(std::move(frame));
+        }
+        queueReady_.notify_one();
+        if (!worker_.joinable()) worker_ = std::thread([this] { encodeLoop(); });
+        return true;
     }
 
     bool addAudioFramesPCM(const float* interleaved, int frameCount) override {
@@ -263,7 +301,20 @@ public:
         finished_ = true;
 
         bool ok = true;
-        if (codecInited_) {
+        // The frames still queued are encoded before the encoder is flushed.
+        if (worker_.joinable()) {
+            {
+                std::lock_guard<std::mutex> lock(queueMutex_);
+                stopWorker_ = true;
+            }
+            queueReady_.notify_one();
+            worker_.join();
+            if (encodeFailed_) {
+                setErr(encodeErr_);
+                ok = false;
+            }
+        }
+        if (codecInited_ && ok) {
             // Flush: feed null images until no more packets emerge.
             while (true) {
                 if (vpx_codec_encode(&codec_, nullptr,
@@ -341,6 +392,46 @@ public:
     int framesWritten() const override { return framesWritten_; }
 
 private:
+    // The encoder's thread: each queued frame converted and encoded in turn,
+    // until finish() asks it to stop and the queue is empty.
+    void encodeLoop() {
+        while (true) {
+            std::vector<uint8_t> frame;
+            {
+                std::unique_lock<std::mutex> lock(queueMutex_);
+                queueReady_.wait(lock, [&] { return !queue_.empty() || stopWorker_; });
+                if (queue_.empty()) return;
+                frame = std::move(queue_.front());
+                queue_.pop_front();
+            }
+            rgbaToI420(frame.data(), cfg_.width * 4, cfg_.width, cfg_.height,
+                       image_.planes[VPX_PLANE_Y], image_.stride[VPX_PLANE_Y],
+                       image_.planes[VPX_PLANE_U], image_.stride[VPX_PLANE_U],
+                       image_.planes[VPX_PLANE_V], image_.stride[VPX_PLANE_V]);
+            // Force a keyframe at the start so the file is decodable from
+            // frame 0 even if the encoder's heuristic would have deferred it.
+            const vpx_enc_frame_flags_t flags = (frameIndex_ == 0) ? VPX_EFLAG_FORCE_KF : 0;
+            const bool encoded = vpx_codec_encode(&codec_, &image_, static_cast<vpx_codec_pts_t>(frameIndex_), 1,
+                                                  flags, deadline_) == VPX_CODEC_OK;
+            if (encoded) {
+                ++frameIndex_;
+                drainPackets();
+            }
+            {
+                std::lock_guard<std::mutex> lock(queueMutex_);
+                if (!encoded) {
+                    encodeFailed_ = true;
+                    encodeErr_ = std::string("vpx_codec_encode failed: ") +
+                                 (vpx_codec_error_detail(&codec_) ? vpx_codec_error_detail(&codec_) : "");
+                    queue_.clear();
+                }
+                spare_.push_back(std::move(frame));
+            }
+            queueSpace_.notify_one();
+            if (!encoded) return;
+        }
+    }
+
     // The video half of open(), lifted out so a sound-only file simply does
     // not run it. Everything below the muxer is shared.
     bool initVideoCodec(std::string* err) {
@@ -364,7 +455,7 @@ private:
                          static_cast<unsigned int>(cfg_.fpsDen);
         if (vc.kf_max_dist == 0) vc.kf_max_dist = 1;
         vc.kf_min_dist = 0;
-        vc.g_threads = (cfg_.threads > 0) ? static_cast<unsigned int>(cfg_.threads) : 1;
+        vc.g_threads = (cfg_.threads > 0) ? static_cast<unsigned int>(cfg_.threads) : defaultThreads();
         vc.g_pass = VPX_RC_ONE_PASS;
         vc.g_lag_in_frames = 0;       // no look-ahead — keeps encode synchronous
         vc.g_error_resilient = 0;
@@ -377,14 +468,18 @@ private:
         }
         codecInited_ = true;
 
-        // Realtime preset: row-MT + cpu-used 7 (fastest); Good: cpu-used 1.
+        // Realtime: cpu-used 7 (fastest); Good: 3; Best: 0. On 120 frames
+        // of a 1080p planet flight with 16 threads, Good at 3 encodes 36 fps
+        // where 1 did 18 (2.3 on one thread, the old default), 0.16 dB PSNR
+        // under it; Realtime 161 fps, 0.42 dB under.
         const int cpuUsed =
             (cfg_.quality == Quality::Realtime) ? 7 :
-            (cfg_.quality == Quality::Best)     ? 0 : 1;
+            (cfg_.quality == Quality::Best)     ? 0 : 3;
         vpx_codec_control(&codec_, VP8E_SET_CPUUSED, cpuUsed);
-        if (cfg_.quality == Quality::Realtime) {
-            vpx_codec_control(&codec_, VP9E_SET_ROW_MT, 1);
-        }
+        // Every preset spreads a frame over the threads: by tile columns,
+        // and with row-MT by their rows of superblocks too.
+        vpx_codec_control(&codec_, VP9E_SET_TILE_COLUMNS, tileColumnsLog2(cfg_.width));
+        vpx_codec_control(&codec_, VP9E_SET_ROW_MT, 1);
 
         if (!vpx_img_alloc(&image_, VPX_IMG_FMT_I420, cfg_.width, cfg_.height, 1)) {
             setErr("vpx_img_alloc failed");
@@ -481,6 +576,9 @@ private:
     void enqueuePacket(uint64_t pts_ns, uint64_t trackId, bool isKey,
                        const uint8_t* buf, size_t len,
                        int64_t discardPaddingNs = 0) {
+        // (Video packets come from the encoder's thread, audio's from the
+        // caller's.)
+        std::lock_guard<std::mutex> lock(packetMutex_);
         PendingPacket p;
         p.pts_ns = pts_ns;
         p.trackId = trackId;
@@ -566,8 +664,20 @@ private:
     std::vector<uint8_t> audioOutBuf_;
 
     std::vector<PendingPacket> pending_;
+    std::mutex packetMutex_;
 
-    uint64_t frameIndex_ = 0;
+    // The encoder's thread and the frames queued for it (spare_: buffers it
+    // is done with, reused).
+    std::thread worker_;
+    std::mutex queueMutex_;
+    std::condition_variable queueReady_, queueSpace_;
+    std::deque<std::vector<uint8_t>> queue_;
+    std::vector<std::vector<uint8_t>> spare_;
+    bool stopWorker_ = false;
+    bool encodeFailed_ = false;
+    std::string encodeErr_;
+
+    uint64_t frameIndex_ = 0;   // the encoder thread's while it runs
     int framesWritten_ = 0;
     bool finished_ = false;
     std::string lastErr_;

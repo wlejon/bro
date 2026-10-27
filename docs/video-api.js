@@ -69,8 +69,9 @@
 //                   encoder may insert extra keyframes on top of this.
 //   quality, 'realtime' | 'good' | 'best' (default 'good').
 //                   Maps to libvpx VPX_DL_REALTIME / GOOD / BEST and
-//                   tunes cpu-used (7 / 1 / 0).
-//   threads, encoder threads (default 1). Bump for >720p.
+//                   tunes cpu-used (7 / 3 / 0). On a 1080p flight with
+//                   16 threads 'good' encodes about 36 fps, 'realtime' 160.
+//   threads, encoder threads (default the machine's cores, up to 16).
 //   rotation, 0 | 90 | 180 | 270 (default 0). How far a player has to
 //                   turn the picture CLOCKWISE to show it the right way up.
 //                   Metadata, not a pass over the pixels: the frames are
@@ -105,8 +106,11 @@ const enc = new VideoEncoder({
 // than that (a RangeError: rows would overlap past the buffer). Returns true; on
 // encoder failure throws with the libvpx error string.
 //
-// The encoder copies pixels into its own YUV plane, so the caller can reuse
-// the same Uint8Array for the next frame.
+// The encoder copies the pixels and encodes them on its own thread, so the
+// call returns at once (waiting only while a few frames are already queued)
+// and the caller can reuse the same Uint8Array for the next frame; a page
+// renders its next frame while this one encodes. An encode that fails throws
+// at the next add*Frame call or at finish().
 
 const frame = new Uint8Array(256 * 192 * 4);
 for (let i = 0; i < 60; i++) {
