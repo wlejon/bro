@@ -703,10 +703,14 @@ vec2 cloudLayerCell(float lod, float foot) {
     return vec2(mix(cell, cloudGlobeTexel(), globe), globe);
 }
 // How much the layer reads the view's column (sky/clouds_view.comp) for a
-// pixel of footprint `foot`, the view's texel `texel` and the column's cell
-// `cell` (cloudLayerCell): where the layer draws, the cell coarser than the
-// texel, and the globe's not as fine as it.
-float cloudViewWeight(float foot, float texel, float cell) {
+// pixel of footprint `foot`, the view's texel `texel`, the cache's cell
+// `cell` and how much the layer would read the globe `globe`
+// (cloudLayerCell): where the layer draws, wherever it would read the globe
+// and where the cache's cell is coarser than the texel. (The view's column
+// is the world's at the pixel's own footprint at any distance; the globe's
+// texels, 10 km, were stair-stepped patches from orbit and a field of
+// another look where the view gave way to them.)
+float cloudViewWeight(float foot, float texel, float cell, float globe) {
     if (foot < CL_LAYER_FROM * (clouds.shell.y - clouds.shell.x)) return 0.0;
-    return smoothstep(1.0, 2.0, cell / texel) * (1.0 - smoothstep(0.5, 1.0, texel / cloudGlobeTexel()));
+    return max(smoothstep(1.0, 2.0, cell / texel), globe);
 }

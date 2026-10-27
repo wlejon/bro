@@ -103,6 +103,8 @@
 #define CL_VIEW_BINS        8
 #define CL_VIEW_GROUP       8
 #define CL_VIEW_HEAP_STEPS  4        // the heaps' share's heights a bin
+#define CL_VIEW_HEAPS_AT    800.0    // m up the deck where a texel reads the heaps as themselves
+#define CL_VIEW_HEAPS_LEAST 300.0    // m: a heap's rim's least height there
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 

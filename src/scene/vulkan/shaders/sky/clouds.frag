@@ -454,6 +454,7 @@ void main() {
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
     vec4 dbgLCol = vec4(0.0);
     float dbgLMu = 1.0;
+    vec2 dbgW = vec2(0.0);
     for (int i = 0; i < 2 && wl > 0.0; ++i) {
         vec2 q = i == 0 ? spanA : spanB;
         if (q.x >= q.y) continue;
@@ -479,7 +480,13 @@ void main() {
         // not a cell kilometres wide blurred over hundreds of pixels.)
         float wv = 0.0;
         if (i == 0 && clouds.viewSize.z > 0.5) {
-            wv = cloudViewWeight(pixel * q.x, pixel * q.x * clouds.viewSize.w, footCell);
+            // (And wherever the view's texel holds the heaps as themselves,
+            // CL_VIEW_HEAPS_*: the cache's cells, however fine, have only
+            // their share, a veil where the heaps a few pixels across were.)
+            float texelV = pixel * q.x * clouds.viewSize.w;
+            float side = cloudHeapMapSide();
+            float real = side > 0.0 ? 1.0 - smoothstep(0.3 * side, 0.6 * side, texelV) : 0.0;
+            wv = cloudViewWeight(pixel * q.x, texelV, footCell, max(globe, real));
             if (wv > 0.0) {
                 vec2 uv = clamp(gl_FragCoord.xy / clouds.viewSize.w, vec2(0.5), clouds.viewSize.xy - 0.5);
                 col = mix(col, textureLod(cloudViewMap, vec3(uv / vec2(CL_VIEW_W, CL_VIEW_H), 0.0), 0.0), wv);
@@ -594,12 +601,19 @@ void main() {
             }
         }
         dbgLCol = col;
+        dbgW = vec2(wv, globe);
     }
 #ifdef CL_DEBUG_LAYER
     {
         // The layer's terms: 1 the column's depth, 2 its alpha, 3 its
-        // reflectance (of a white diffuser's), 4 that over its alpha.
+        // reflectance (of a white diffuser's), 4 that over its alpha; 5 no
+        // clouds at all (what is under them), 6 the alpha's contours every
+        // 40th (a grain too faint for the bands shows as rings), 7 where the
+        // layer reads the view's columns (red) and the globe's (green).
         const int mode = CL_DEBUG_LAYER;
+        if (mode == 5) discard;
+        if (mode == 6) { float a = fract((1.0 - ml.T) * 40.0); outColor = vec4(vec3(a, a, 0.0) * 1e6, 1.0); return; }
+        if (mode == 7) { outColor = vec4(vec3(dbgW, 0.0) * 1e6, 1.0); return; }
         float refl = dot(ml.L, vec3(0.2126, 0.7152, 0.0722)) / max(dot(E, vec3(0.2126, 0.7152, 0.0722)) * dbgLMu / PI, 1e-6);
         float v = mode == 1 ? dbgLCol.x : mode == 2 ? 1.0 - ml.T : mode == 3 ? refl : refl / max(1.0 - ml.T, 1e-3);
         float k = mode == 1 ? 1.0 : 0.25;
