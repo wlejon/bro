@@ -10,6 +10,11 @@
     // to its host page slice by slice, and a click listener that never
     // returns, which its page waits on, so the runtime stops the app.
     window.addEventListener('message', (e) => {
+      // An exception nothing catches: the app runs on.
+      if (e.data === 'throw') throw new Error('busy threw on purpose');
+      // A job that never finishes: it yields, and the page hears the app
+      // stopped responding.
+      if (e.data === 'forever') for (;;) {}
       if (e.data !== 'spin') return;
       let x = 0;
       for (let i = 0; i < 2e8; i++) x = (x + i) | 0;

@@ -371,9 +371,32 @@ void stopTerminated(Compartment* c, const std::string& reason, const std::string
 }
 
 void settle(Compartment* c, const ev::CompartmentStatus& s) {
-    if (!s.uncaught.empty())
+    if (!s.uncaught.empty()) {
         LOG_ERROR("%s '%s': uncaught %s", compartmentKindName(c->kind), c->name.c_str(), s.uncaught.c_str());
-    if (s.state == ev::CompartmentState::Terminated) stopTerminated(c, s.terminationReason, s.terminationSite);
+        noteAppViewError(*c, s.uncaught);
+    }
+    if (s.state == ev::CompartmentState::Terminated) {
+        stopTerminated(c, s.terminationReason, s.terminationSite);
+        return;
+    }
+    // Not responding: one job still yielding past kNotRespondingMs, told to
+    // the page once, and again when it finishes.
+    if (s.state == ev::CompartmentState::Yielded) {
+        const double now = steadyMs();
+        if (c->suspendedSinceMs == 0) c->suspendedSinceMs = now;
+        if (!c->notResponding && now - c->suspendedSinceMs >= kNotRespondingMs) {
+            c->notResponding = true;
+            LOG_WARN("%s '%s' is not responding: one job has run %d ms", compartmentKindName(c->kind),
+                     c->name.c_str(), static_cast<int>(now - c->suspendedSinceMs));
+            noteAppViewResponding(*c, false);
+        }
+    } else {
+        c->suspendedSinceMs = 0;
+        if (c->notResponding) {
+            c->notResponding = false;
+            noteAppViewResponding(*c, true);
+        }
+    }
 }
 
 // Run (or resume) on the fiber, from the host's own stack, entered there too
@@ -467,7 +490,7 @@ void serviceCompartmentFibers() {
             settle(c, onFiber(c, &body));
         }
     }
-    dispatchAppViewTerminations();
+    dispatchAppViewEvents();
 }
 
 namespace {

@@ -161,8 +161,9 @@ public:
         // by CSS width/height (or the width/height attrs), falling back to the
         // HTML default 300x150. Its own children are not laid out by the host
         // tree (see buildChildren) — the sub-document renders into this box.
-        // An <appview> is the same box around an app.
-        if (elem_->isFrameHost()) {
+        // An <appview> is the same box around an app. A stopped one showing
+        // its shadow tree (bro's error card) is an ordinary box around that.
+        if (elem_->isFrameHost() && (elem_->iframeDoc() || !elem_->hasShadow())) {
             std::string wa = elem_->getAttribute("width");
             std::string ha = elem_->getAttribute("height");
             w = wa.empty() ? 300.0f : std::strtof(wa.c_str(), nullptr);
@@ -571,7 +572,9 @@ private:
                 tag == "textarea" || tag == "TEXTAREA") return;
             // <iframe> hosts an isolated sub-document rendered into its box; its
             // markup children (fallback content) are not laid out by the host.
-            if (dom::Element::isFrameHostTag(tag)) return;
+            // A stopped one with a shadow root lays that out instead: bro's
+            // error card for an app it stopped (host_appview.cpp).
+            if (dom::Element::isFrameHostTag(tag) && (elem->iframeDoc() || !elem->hasShadow())) return;
             // <terminal> paints its own screen; markup inside it is not content.
             if (tag == "terminal" || tag == "TERMINAL") return;
             // <remoteview> shows a remote screen; markup inside it neither.

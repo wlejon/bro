@@ -616,8 +616,16 @@ public:
     // the IframeDoc's never-recycled id, the handle its composited layer is
     // recorded under.
     void setIframeDoc(void* d, uint64_t id) {
+        // With a sub-document the box is replaced and its shadow tree is not
+        // laid out; without one a shadow root's content is (a stopped
+        // <appview>'s error card), so the box is rebuilt when that changes.
+        const bool changed = (iframeDoc_ != nullptr) != (d != nullptr);
         iframeDoc_ = d;
         iframeDocId_ = d ? id : 0;
+        if (changed && hasShadow()) {
+            markStructureDirty();
+            markDirty();
+        }
     }
     void* iframeDoc() const { return iframeDoc_; }
     uint64_t iframeDocId() const { return iframeDocId_; }

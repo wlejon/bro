@@ -30,6 +30,13 @@
  *     the page waits on it (an event dispatched into it, a function it handed
  *     the page), it must finish within a second, or bro stops it and fires
  *     `terminated` at the element with the reason; `start()` runs it again.
+ *   - Its mistakes reach the page, not past it. An exception nothing caught
+ *     is an `apperror` event and the app runs on, as a web page does. A job
+ *     still running after 5 s (yielding all the while) makes `responding`
+ *     false and fires `unresponsive`, and `responsive` when it finishes; the
+ *     page may `stop()` it. A stopped app's view shows an error card naming
+ *     the app, the reason and where it was, unless the page cancels
+ *     `terminated` to draw its own; the card goes when the app runs again.
  *   - What it held is let go when it stops (`stop()`, termination, removal):
  *     its timers, Workers, sound, watchers and child processes
  *     (`<terminal>`, `child_process`).
@@ -88,6 +95,15 @@ class HTMLAppViewElement extends HTMLIFrameElement {
   running;
 
   /**
+   *  False while one job of the app's has run 5 s without finishing (it
+   *  yields, so the page goes on; `unresponsive` fired), true otherwise;
+   *  null while it is not running.
+   * @readonly
+   * @type {boolean|null}
+   */
+  responding;
+
+  /**
    *  The app's id (its manifest's, else its canonical folder's); null while
    *  it is not running.
    * @readonly
@@ -142,10 +158,13 @@ class HTMLAppViewElement extends HTMLIFrameElement {
  * Dispatched at the `<appview>` (in this page) when bro stopped the app: it
  * did not return within a second where the page waits on it, or its stack
  * ended on a host error. The view is stopped (`running` false); `start()`
- * runs the app again.
+ * runs the app again. Cancelable: unless the page calls `preventDefault()`,
+ * the view shows bro's error card (the app's name, the reason, the site)
+ * until the app runs again.
  *
  * @example
  *   view.addEventListener('terminated', (e) => {
+ *     e.preventDefault();               // the page draws its own
  *     showErrorCard(`${view.appName} was stopped: ${e.detail.reason}`, e.detail.site);
  *   });
  */
@@ -157,6 +176,21 @@ class AppViewTerminatedEvent extends CustomEvent {
    */
   detail;
 }
+
+/**
+ * Dispatched at the `<appview>` (in this page) for each exception of the
+ * app's that nothing caught (its own `error` listeners did not handle it).
+ * The app runs on.
+ */
+class AppViewErrorEvent extends CustomEvent {
+  /** @type {{error: string}} the error as an uncaught error prints */
+  detail;
+}
+
+/**
+ * `unresponsive` / `responsive` (CustomEvent, no detail): one job of the
+ * app's has run 5 s without finishing, and later did. See `responding`.
+ */
 
 /**
  * Dispatched at the `<appview>` (in this page) when the app uses a

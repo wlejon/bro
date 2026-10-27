@@ -107,6 +107,10 @@ struct Compartment {
     // Async entries that arrived while a job was suspended on the fiber, run
     // in order once it finishes.
     std::deque<std::function<void()>> queued;
+    // When the job suspended on the fiber first yielded (steady ms, 0 when
+    // none is), and whether it has run past kNotRespondingMs.
+    double suspendedSinceMs = 0;
+    bool notResponding = false;
 };
 
 /// The app's compartment (the default realm, the engine's document).
@@ -192,6 +196,9 @@ inline constexpr double kAppViewSliceMs = 8.0;
 /// How long the host waits on a sync entry (with what was suspended before
 /// it) before it stops the app.
 inline constexpr double kSyncEntryBudgetMs = 1000.0;
+/// How long one job of an appview's may run, yielding slice by slice, before
+/// its page hears the app is not responding (its `unresponsive` event).
+inline constexpr double kNotRespondingMs = 5000.0;
 
 /// How the host waits on an entry into a compartment's code.
 enum class EntryKind : uint8_t {

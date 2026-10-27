@@ -12,7 +12,9 @@
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/host_membrane.h"
 #include "bronze_host/host_runtime.h"
+#include "dom/document.h"
 #include "dom/element.h"
+#include "dom/shadow_root.h"
 #include "engine/app_manifest.h"
 #include "engine/app_permissions.h"
 #include "engine/app_runtime.h"
@@ -45,9 +47,13 @@ std::unordered_map<const dom::Element*, std::vector<Exposed>> s_exposed;
 // Documents whose freed nodes clear s_exposed, so a later element at a freed
 // one's address never inherits what was exposed to it.
 std::unordered_set<const dom::Document*> s_exposedDocs;
+// The views showing an error card, so a new run of the app clears only a
+// card bro put there.
+std::unordered_set<const dom::Element*> s_cardViews;
 
 void onExposedNodeFreed(dom::Document*, dom::Node* node) {
     s_exposed.erase(static_cast<const dom::Element*>(node));
+    s_cardViews.erase(static_cast<const dom::Element*>(node));
 }
 
 Compartment* viewCompartment(dom::Element* el) {
@@ -125,53 +131,122 @@ AskAnswer askHostPage(uint64_t id, std::string_view capIn, const std::string& qu
     return ev::isBool(prevented) && ev::toBool(prevented) ? AskAnswer::Pending : AskAnswer::Unhandled;
 }
 
-// Apps the runtime stopped, told to their pages at the next frame seam: the
-// stop may come from deep in the host's own stack.
-struct Termination {
+// What the runtime tells a page about its app, at the next frame seam: the
+// note may come from deep in the host's own stack, or from inside the app.
+struct ViewEvent {
     uint64_t page = 0;
     std::unique_ptr<ev::Persistent> element;
-    std::string reason, site;
+    std::string type;  // terminated, apperror, unresponsive, responsive
+    std::string app;
+    std::string text;  // terminated: the reason; apperror: the error
+    std::string site;
 };
-std::vector<Termination> s_terminations;
+std::vector<ViewEvent> s_viewEvents;
+
+void queueViewEvent(Compartment& c, const char* type, std::string text, std::string site) {
+    if (c.kind != CompartmentKind::AppView || !c.parent || !c.hostElement) return;
+    CompartmentScope scope(c.parent);
+    if (!scope.entered()) return;
+    s_viewEvents.push_back({c.parent->id, std::make_unique<ev::Persistent>(hostElementValue(c.hostElement)), type,
+                            c.name, std::move(text), std::move(site)});
+}
+
+const char* const kCardCss =
+    ":host { display: block; }"
+    ".card { box-sizing: border-box; width: 100%; height: 100%; padding: 16px;"
+    " background: #2a1d1f; color: #f3e6e6; font: 13px system-ui, sans-serif; overflow: hidden; }"
+    ".title { font-weight: 600; font-size: 15px; margin-bottom: 8px; }"
+    ".reason { margin-bottom: 8px; }"
+    ".site { font-family: monospace; font-size: 11px; color: #c9a9ab; white-space: pre-wrap; }";
+
+void removeChildren(dom::Node* n) {
+    while (!n->childNodes().empty()) n->removeChild(n->childNodes().back());
+}
+
+// The stopped view's error card: who stopped, why and where, drawn in a
+// closed shadow root of the element (a view with no document paints its own
+// content), until the app runs again.
+void showErrorCard(dom::Element* el, const ViewEvent& t) {
+    dom::Document* doc = el->document();
+    if (!doc) return;
+    dom::ShadowRoot* root = el->shadowRoot();
+    if (!root) {
+        root = el->attachShadow(dom::ShadowRoot::Mode::Closed);
+        if (!root) return;
+    } else if (!s_cardViews.count(el)) {
+        return;  // the page's own shadow root: not bro's to fill
+    }
+    removeChildren(root);
+    auto add = [&](dom::Node* parent, const char* tag, const char* cls, const std::string& text) {
+        dom::Element* e = doc->createElement(tag);
+        if (cls) e->setAttribute("class", cls);
+        if (!text.empty()) e->setTextContent(text);
+        parent->appendChild(e);
+        return e;
+    };
+    add(root, "style", nullptr, kCardCss);
+    dom::Element* card = add(root, "div", "card", {});
+    add(card, "div", "title", (t.app.empty() ? std::string("The app") : t.app) + " was stopped");
+    add(card, "div", "reason", t.text);
+    if (!t.site.empty()) add(card, "div", "site", t.site);
+    s_cardViews.insert(el);
+    if (s_exposedDocs.insert(doc).second) doc->addNodeFreedObserver(&onExposedNodeFreed);
+    doc->markDirty();
+}
+
+void clearErrorCard(dom::Element* el) {
+    if (!el || !s_cardViews.erase(el)) return;
+    if (dom::ShadowRoot* root = el->shadowRoot()) removeChildren(root);
+    if (dom::Document* doc = el->document()) doc->markDirty();
+}
 
 }  // namespace
 
 void noteAppViewTerminated(Compartment& c, const std::string& reason, const std::string& site) {
-    if (c.kind != CompartmentKind::AppView || !c.parent || !c.hostElement) return;
-    CompartmentScope scope(c.parent);
-    if (!scope.entered()) return;
-    s_terminations.push_back(
-        {c.parent->id, std::make_unique<ev::Persistent>(hostElementValue(c.hostElement)), reason, site});
+    queueViewEvent(c, "terminated", reason, site);
 }
 
-void dispatchAppViewTerminations() {
-    if (s_terminations.empty()) return;
-    std::vector<Termination> list = std::move(s_terminations);
-    s_terminations.clear();
-    for (Termination& t : list) {
+void noteAppViewError(Compartment& c, const std::string& error) {
+    queueViewEvent(c, "apperror", error, {});
+}
+
+void noteAppViewResponding(Compartment& c, bool responding) {
+    queueViewEvent(c, responding ? "responsive" : "unresponsive", {}, {});
+}
+
+void dispatchAppViewEvents() {
+    if (s_viewEvents.empty()) return;
+    std::vector<ViewEvent> list = std::move(s_viewEvents);
+    s_viewEvents.clear();
+    for (ViewEvent& t : list) {
         Compartment* page = compartmentById(t.page);
         if (!page) continue;
+        const bool terminated = t.type == "terminated";
         // The view stops as stop() stops it (its document goes), out here
         // where nothing of the engine's is mid-dispatch into it.
-        {
+        if (terminated) {
             CompartmentScope scope(page);
             if (!scope.entered()) continue;
             if (dom::Element* el = hostElementOf(t.element->get()))
                 if (engine::Engine* eng = hostEngine()) eng->stopIframe(el);
         }
-        runEntry(page, EntryKind::Sync, [&t] {
+        bool prevented = false;
+        runEntry(page, EntryKind::Sync, [&t, &prevented, terminated] {
             ev::Persistent ctor(ev::globalValue("CustomEvent").value);
             if (!ev::isObject(t.element->get()) || !ev::isFunction(ctor.get())) return;
             ev::Persistent detail(ev::createObject());
-            ev::setProperty(detail.get(), "reason", ev::fromUtf8(t.reason));
-            ev::setProperty(detail.get(), "site", ev::fromUtf8(t.site));
+            if (terminated) ev::setProperty(detail.get(), "reason", ev::fromUtf8(t.text));
+            if (t.type == "apperror") ev::setProperty(detail.get(), "error", ev::fromUtf8(t.text));
+            if (terminated) ev::setProperty(detail.get(), "site", ev::fromUtf8(t.site));
             ev::Persistent init(ev::createObject());
             ev::setProperty(init.get(), "detail", detail.get());
-            ev::Persistent type(ev::fromUtf8("terminated"));
+            // A page that draws its own card cancels terminated.
+            ev::setProperty(init.get(), "cancelable", ev::fromBool(terminated));
+            ev::Persistent type(ev::fromUtf8(t.type));
             Value cargs[2] = {type.get(), init.get()};
             ev::CallResult made = ev::construct(ctor.get(), std::span<const Value>(cargs, 2));
             if (made.thrown) {
-                reportBronzeError("appview terminated", made.value);
+                reportBronzeError("appview event", made.value);
                 return;
             }
             ev::Persistent evt(made.value);
@@ -179,8 +254,15 @@ void dispatchAppViewTerminations() {
             if (!ev::isFunction(dispatch.get())) return;
             Value arg = evt.get();
             ev::CallResult r = ev::call(dispatch.get(), t.element->get(), std::span<const Value>(&arg, 1));
-            if (r.thrown) reportBronzeError("appview terminated", r.value);
+            if (r.thrown) reportBronzeError("appview event", r.value);
+            Value dp = ev::getProperty(evt.get(), "defaultPrevented");
+            prevented = ev::isBool(dp) && ev::toBool(dp);
         });
+        if (terminated && !prevented) {
+            CompartmentScope scope(page);
+            if (!scope.entered()) continue;
+            if (dom::Element* el = hostElementOf(t.element->get())) showErrorCard(el, t);
+        }
     }
 }
 
@@ -229,6 +311,8 @@ void prepareAppView(engine::Engine& engine, CompartmentSetup& setup) {
 }
 
 void attachAppViewCompartment(Compartment& c) {
+    // A new run of the app: its view's error card, if it had one, goes.
+    clearErrorCard(c.hostElement);
     {
         ev::GlobalValue broG = ev::globalValue("bro");
         ev::Persistent bro(broG.found ? broG.value : ev::undefined());
@@ -265,6 +349,14 @@ void decorateAppViewProto(ObjectBuilder& b) {
     b.accessor("running",
                [](Value self, std::span<const Value>) -> Value {
                    return ev::fromBool(viewCompartment(hostElementOf(self)) != nullptr);
+               },
+               nullptr);
+    // False while a job of the app's has run for kNotRespondingMs without
+    // finishing (it yields, so the page goes on); null when not running.
+    b.accessor("responding",
+               [](Value self, std::span<const Value>) -> Value {
+                   Compartment* c = viewCompartment(hostElementOf(self));
+                   return c ? ev::fromBool(!c->notResponding) : ev::null();
                },
                nullptr);
     b.accessor("appId",

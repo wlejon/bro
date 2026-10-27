@@ -390,8 +390,10 @@ std::string thrownValueText(Value thrown) {
 void reportBronzeError(const char* origin, Value thrown) {
     ev::Persistent root(thrown);
     if (hostDispatchUncaughtError(root.get())) return;
-    LOG_ERROR("%s[bronze:%s] uncaught %s", compartmentLogPrefix().c_str(), origin,
-              thrownValueText(root.get()).c_str());
+    const std::string text = thrownValueText(root.get());
+    LOG_ERROR("%s[bronze:%s] uncaught %s", compartmentLogPrefix().c_str(), origin, text.c_str());
+    // An appview's: its page hears it (apperror) and the app runs on.
+    if (Compartment* c = currentCompartment()) noteAppViewError(*c, text);
 }
 
 // Zero before the first frame, which is what a program's top level sees. It is

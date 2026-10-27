@@ -42,10 +42,19 @@ void prepareAppView(engine::Engine& engine, CompartmentSetup& setup);
 /// the page exposed, and its prompts routed to the page.
 void attachAppViewCompartment(Compartment& c);
 
-/// The runtime stopped the app in `c` (it ran over where its page waits on
-/// it, or its fiber ended on a host error): a `terminated` event at its
-/// element, {reason, site}, dispatched at the next frame seam.
+/// What the runtime tells the page about the app in `c`, as events at its
+/// element dispatched at the next frame seam (dispatchAppViewEvents):
+///   - terminated {reason, site}: the runtime stopped it (it ran over where
+///     its page waits on it, or its fiber ended on a host error). Unless the
+///     page cancels it, the stopped view shows an error card (a closed
+///     shadow root of the element) until the app runs again.
+///   - apperror {error}: an exception of the app's nothing caught. The app
+///     runs on, as a web page does; the page may show it.
+///   - unresponsive / responsive: a job of the app's has run kNotRespondingMs
+///     without finishing (it yields, so the page goes on), and later did.
 void noteAppViewTerminated(Compartment& c, const std::string& reason, const std::string& site);
-void dispatchAppViewTerminations();
+void noteAppViewError(Compartment& c, const std::string& error);
+void noteAppViewResponding(Compartment& c, bool responding);
+void dispatchAppViewEvents();
 
 }  // namespace bro::bronze_host
