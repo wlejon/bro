@@ -1558,6 +1558,7 @@ private:
     static constexpr double kTerminalEchoWaitMs = 3.0;
     double lastGCMs_ = 0.0, lastGpuFrameMs_ = -1.0;
     bool sceneRenderPending_ = false;  // renderPendingScenes
+    bool sceneDrawnForRead_ = false;   // a read drew the frame the last flush left: a capture shows that render
     bool inTimeStep_ = false;          // inside an advanceTime step
     bool testFailure_ = false;
 

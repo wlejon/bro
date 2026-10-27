@@ -204,6 +204,7 @@ void Engine::flush() {
         if (sg.graph) sg.graph->setDeviceScale(deviceScale_.render);
         if (sg.graph) sceneRenderPending_ = true;
     }
+    sceneDrawnForRead_ = false;
     // An advanceTime step's flush leaves the scenes pending: the next step,
     // a capture or a read of what a render drew draws them
     // (renderPendingScenes), so the steps between two looks at the frame
@@ -242,6 +243,7 @@ void Engine::renderPendingScenes(bool forRead) {
     sceneRenderPending_ = false;
     for (auto& sg : sceneGraphs_)
         if (sg.graph) sg.graph->render();
+    sceneDrawnForRead_ = forRead;
 #endif
 }
 
@@ -394,10 +396,16 @@ std::vector<uint8_t> Engine::capturePixels() {
     for (auto& sg : sceneGraphs_) {
         if (sg.graph) sg.graph->materializeHtmlNodes(skia);
     }
-    // This render is the frame a flush left pending.
+    // This render is the frame a flush left pending, unless a read of it
+    // (perf.gpuFrameMs, pendingWork, ...) already drew it: then the capture
+    // is of that render, not a second one of the same frame (which gave the
+    // world's services two frames for it and doubled a flight capture's GPU
+    // time).
+    const bool drawn = !sceneRenderPending_ && sceneDrawnForRead_;
     sceneRenderPending_ = false;
+    sceneDrawnForRead_ = false;
     for (auto& sg : sceneGraphs_) {
-        if (!sg.graph) continue;
+        if (!sg.graph || drawn) continue;
         sg.graph->setDeviceScale(deviceScale_.render);
         sg.graph->render();
     }
