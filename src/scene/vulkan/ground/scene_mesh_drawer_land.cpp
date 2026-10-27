@@ -15,6 +15,7 @@
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
+#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
@@ -419,6 +420,9 @@ void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {
         // The tile boxes the workers have made since the last frame.
         {
             stalls::Part part("land take items");
+            // (A frame that holds what it asks for waits for the boxes over
+            // the processes' heights: ready, it draws.)
+            if (!shader_warmup::async()) land->waitBaseItems();
             land->takeItems();
         }
         {

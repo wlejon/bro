@@ -48,6 +48,7 @@
 #include "scene/world/surface_layers.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -105,8 +106,11 @@ public:
     /// z and w the world's own: LandBase), 4 floats every texel of the grid,
     /// read back for grid serial `serial`.
     void setGridBase(uint64_t serial, std::vector<float> channel0);
-    /// It has no processes, or theirs is in.
-    bool ready() const { return !process_.active() || baseSerial_ == gridSerial_; }
+    /// It has no processes, or theirs is in and its tiles' boxes made over
+    /// it (until then the drawer has no tiles of it to draw).
+    bool ready() const {
+        return !process_.active() || (baseSerial_ == gridSerial_ && itemsApplied_ >= baseItems_);
+    }
     /// What its processes add to its tree (null with none, or until ready):
     /// what the plants standing on it add to their ground.
     std::shared_ptr<const LandBase> groundBase() const { return base_; }
@@ -278,6 +282,10 @@ public:
     /// The batches the workers have finished since the last call applied,
     /// in the order they were asked (the frame thread, each frame).
     void takeItems();
+    /// Blocks until the boxes over the processes' base are made, then takes
+    /// them: a frame that holds everything it asks for (headless) draws the
+    /// land the frame it is ready.
+    void waitBaseItems();
 
     /// What an item's box is made of, as of the moment it is asked for: the
     /// land's tree, its processes' base and one snapshot of its regions, so
@@ -321,12 +329,14 @@ private:
     };
     struct ItemInbox {
         std::mutex mutex;
+        std::condition_variable doneCv;   // a batch pushed to done
         std::vector<ItemBatch> done;
     };
     std::shared_ptr<ItemInbox> itemInbox_ = std::make_shared<ItemInbox>();
     std::map<uint64_t, ItemBatch> itemReady_;   // done, waiting on an earlier one
     uint64_t itemsAsked_ = 0, itemsApplied_ = 0;
     uint64_t itemEpoch_ = 0;   // batches asked up to it are dropped (a rebuild at once since)
+    uint64_t baseItems_ = 0;   // the batch of the boxes over the processes' base
     void applyItems(ItemBatch& b);
 
     const Place* place_ = nullptr;

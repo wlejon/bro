@@ -291,6 +291,7 @@ void LandNode::setGridBase(uint64_t serial, std::vector<float> channel0) {
     // the items made again on a worker, a new generation once they are in
     // (the whole body's boxes are seconds of heights on one thread).
     rebuildItems(/*now=*/false);
+    baseItems_ = itemsAsked_;
 }
 
 float LandNode::overTree(float tree, int root, double x, double z) const {
@@ -883,6 +884,7 @@ void LandNode::rebuildItems(bool now) {
         buildItems(in, b.items, b.cells, b.chart);
         std::lock_guard<std::mutex> lock(inbox->mutex);
         inbox->done.push_back(std::move(b));
+        inbox->doneCv.notify_all();
     });
 }
 
@@ -910,6 +912,7 @@ void LandNode::refreshItems(std::vector<size_t> ks, uint64_t generation) {
             for (size_t i = 0; i < b.ks.size(); ++i) itemRange(in, cells, b.ks[i], b.lo[i], b.hi[i]);
             std::lock_guard<std::mutex> lock(inbox->mutex);
             inbox->done.push_back(std::move(b));
+            inbox->doneCv.notify_all();
         });
     }
 }
@@ -934,6 +937,20 @@ void LandNode::takeItems() {
         changed = true;
     }
     if (changed) ++itemsSerial_;
+}
+
+void LandNode::waitBaseItems() {
+    // (The batches up to the base's are applied in order: every one of them
+    // done, in the inbox or waiting on an earlier one.)
+    while (itemsApplied_ < baseItems_) {
+        {
+            std::unique_lock<std::mutex> lock(itemInbox_->mutex);
+            itemInbox_->doneCv.wait(lock, [&] {
+                return itemsApplied_ + itemReady_.size() + itemInbox_->done.size() >= baseItems_;
+            });
+        }
+        takeItems();
+    }
 }
 
 void LandNode::applyItems(ItemBatch& b) {
