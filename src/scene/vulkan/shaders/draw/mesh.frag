@@ -153,9 +153,14 @@ vec4 landCanopyAt(vec3 worldPos) {
 // their shaded sides and the shade between them). The shade is of all the
 // light off the leaves, their sheen as well as what they scatter (a
 // sward's tops are lit, the crowns' depths are not), and of the ground
-// between them in the same share.
-const float CANOPY_SHADE = 0.45;
-const float CANOPY_GRAZING = 0.32;
+// between them in the same share. (Set so the canopy is what the plants it
+// stands for are, the same land drawn both ways: the planet's woods from
+// 3 km straight down, 32.8 / 53.1 / 62.8 against its trees' 35.5 / 54.9 /
+// 62.2, and at 3 to 6 km along a line some 20 degrees down 56.8 / 81.5 /
+// 95.4 against 57.8 / 80.6 / 94.4; at 0.45 and 0.32 the canopy past the
+// plants' range was a fifth darker than they were, a dark slab beyond them.)
+const float CANOPY_SHADE = 0.75;
+const float CANOPY_GRAZING = 0.75;
 const float CANOPY_CELL = 6.0;
 const float CANOPY_MOTTLE = 0.15;
 float canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor, inout vec3 N,
