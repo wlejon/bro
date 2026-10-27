@@ -172,6 +172,13 @@ public:
     /// Read RGBA8 pixels of the LDR output (top-down row order).
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
 
+    /// Inspection (scene/vulkan/frame/scene_view_inspect.h): every render
+    /// from the next reads its depth and result back, and inspectFrame
+    /// compares the last render with the one inspected before it. `image` 0
+    /// none, 1 the change map, 2 the normals; false when there is nothing new.
+    void setInspect(bool on) { inspect_ = on; }
+    bool inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
+
     // --- Render settings (see SceneGraph for API docs) ---
 
     void setFog(float start, float end, float r, float g, float b) {
@@ -624,6 +631,7 @@ private:
     CullStats cullStats_;
 
     std::unique_ptr<vk::SceneVkBridge> vkBridge_;
+    bool inspect_ = false;   // setInspect
     static inline render::VulkanContext* defaultVulkanContext_ = nullptr;
 
     // --- SSAO ---

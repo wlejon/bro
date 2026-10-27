@@ -373,6 +373,9 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_setCanvasSize", BRO_NATIVE_FN(bro_scene_SceneGraph_setCanvasSize), "void", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapPixels", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapPixels), "u8[]", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapWidth", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapWidth), "i32", {}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_setInspect", BRO_NATIVE_FN(bro_scene_SceneGraph_setInspect), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_inspectFrame", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectFrame), "f64[]", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_inspectImage", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectImage), "u8[]", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapHeight", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapHeight), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createSkinnedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createSkinnedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&

@@ -202,6 +202,7 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_module_shaders.cpp
     vulkan/frame/scene_shader_warmup.cpp
     vulkan/frame/scene_view.cpp
+    vulkan/frame/scene_view_inspect.cpp
     vulkan/frame/scene_defaults.cpp
     vulkan/frame/scene_targets.cpp
     vulkan/frame/scene_gpu_timer.cpp

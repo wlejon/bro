@@ -2,6 +2,8 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_runtime.h"
+#include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
 #include "scene/nodes/land_node.h"
@@ -43,6 +45,7 @@ static thread_local std::vector<uint8_t> tl_tonemapPixels;
 // The size of the last readTonemapPixels: the render target, which is the
 // canvas size × renderScale × the display's device scale.
 static thread_local int32_t tl_tonemapW = 0, tl_tonemapH = 0;
+static thread_local std::vector<uint8_t> tl_inspectPixels;
 
 struct PickFrame {
     bromath::Vec3 bx, by, bz, bt;
@@ -568,6 +571,23 @@ void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* ou
     tl_tonemapW = w;
     tl_tonemapH = h;
     copyBuffer(tl_tonemapPixels.data(), static_cast<uint32_t>(tl_tonemapPixels.size()), out);
+}
+
+void bro_scene_SceneGraph_setInspect(void* self, bool on) {
+    if (auto* g = graphOf(self)) g->renderer().setInspect(on);
+}
+
+void bro_scene_SceneGraph_inspectFrame(void* self, int32_t image, bronze_native_buffer* out) {
+    // The frame a flush left pending is drawn first, as every read does.
+    if (auto* eng = hostEngine()) eng->renderPendingScenes(/*forRead=*/true);
+    std::vector<double> stats;
+    tl_inspectPixels.clear();
+    if (auto* g = graphOf(self)) g->renderer().inspectFrame(image, stats, tl_inspectPixels);
+    transferBuffer(std::move(stats), out);
+}
+
+void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out) {
+    copyBuffer(tl_inspectPixels.data(), static_cast<uint32_t>(tl_inspectPixels.size()), out);
 }
 
 int32_t bro_scene_SceneGraph_readTonemapWidth(void) { return tl_tonemapW; }

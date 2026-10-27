@@ -107,6 +107,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
 SceneVkBridge::~SceneVkBridge() {
     device_.waitIdle();
     allocator_.destroyBuffer(readbackBuffer_);
+    allocator_.destroyBuffer(inspectBuffer_);
     graph_.cleanup(gpu_);
     clouds_.cleanup(gpu_);
     probes_.cleanup(gpu_);
@@ -198,6 +199,20 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.joinCompute();
     cmd = frame.cmd;
 
+    // Inspection copies the render's result and depth out with it, with its
+    // camera on the body.
+    const bool inspectCopy = inspect_ && ensureInspectBuffer();
+    if (inspectCopy) {
+        recordInspectCopy(cmd);
+        inspectCamera_.invProj = frame.view.invProj;
+        inspectCamera_.relView = frame.view.relView;
+        inspectCamera_.relViewProj = frame.view.relViewProj;
+        inspectCamera_.eye[0] = frame.view.eye.x;
+        inspectCamera_.eye[1] = frame.view.eye.y;
+        inspectCamera_.eye[2] = frame.view.eye.z;
+        std::copy(frame.view.origin, frame.view.origin + 3, inspectCamera_.origin);
+        std::copy(graph.place().basis(), graph.place().basis() + 9, inspectCamera_.basis);
+    }
     // The result stays on the GPU for the compositor; it is copied out for
     // the CPU only when someone read the previous render's pixels.
     if (readbackInline && ensureReadbackBuffer()) {
@@ -219,6 +234,12 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         if (readbackInline && readbackBuffer_.isValid()) {
             readbackRecordedSerial_ = renderSerial_;
             readbackTicket_ = device_.lastFrameTicket();
+        }
+        if (inspectCopy) {
+            inspectSerial_ = renderSerial_;
+            inspectTicket_ = device_.lastFrameTicket();
+            inspectW_ = targets_.width();
+            inspectH_ = targets_.height();
         }
     }
     clock.step("submit");
@@ -291,6 +312,89 @@ void SceneVkBridge::recordReadback(VkCommandBuffer cmd) {
     render::cmdBufferBarrier(cmd, readbackBuffer_.buffer, 0, VK_WHOLE_SIZE, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
     SceneFrameGraph::transition(cmd, ldr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void SceneVkBridge::setInspect(bool on) {
+    if (inspect_ == on) return;
+    inspect_ = on;
+    inspector_.reset();
+    inspectedSerial_ = inspectSerial_;   // (a copy before the switch is not compared)
+    if (!on) releaseInspectBuffer();
+}
+
+// Once the last render that copied into it is done.
+void SceneVkBridge::releaseInspectBuffer() {
+    if (!inspectBuffer_.isValid()) return;
+    if (inspectTicket_ != 0) device_.context().queue().wait(inspectTicket_);
+    allocator_.destroyBuffer(inspectBuffer_);
+}
+
+bool SceneVkBridge::ensureInspectBuffer() {
+    const VkDeviceSize size = static_cast<VkDeviceSize>(targets_.width()) * targets_.height() * 8;
+    if (inspectBuffer_.isValid() && inspectBuffer_.size >= size) return true;
+    releaseInspectBuffer();
+    const auto& memProps = device_.context().memoryProperties();
+    constexpr VkMemoryPropertyFlags kCached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    const VkMemoryPropertyFlags flags = render::findMemoryType(memProps, ~0u, kCached)
+        ? kCached
+        : VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!allocator_.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, flags, inspectBuffer_) ||
+        !inspectBuffer_.mappedData) {
+        LOG_ERROR("SceneVkBridge: Failed creating the inspection buffer");
+        allocator_.destroyBuffer(inspectBuffer_);
+        return false;
+    }
+    return true;
+}
+
+// The LDR result, then the depth, into the inspection buffer; each image is
+// left in the layout it was in.
+void SceneVkBridge::recordInspectCopy(VkCommandBuffer cmd) {
+    SceneVkImage& ldr = targets_.ldr;
+    SceneVkImage& depth = targets_.depth;
+    const VkImageLayout ldrWas = ldr.currentLayout;
+    const VkImageLayout depthWas = depth.currentLayout;
+    SceneFrameGraph::transition(cmd, ldr, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    SceneFrameGraph::transition(cmd, depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    render::cmdBufferBarrier(cmd, inspectBuffer_.buffer, 0, VK_WHOLE_SIZE, VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_ACCESS_HOST_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy regions[2]{};
+    regions[0].bufferRowLength = ldr.width;
+    regions[0].bufferImageHeight = ldr.height;
+    regions[0].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    regions[0].imageExtent = {ldr.width, ldr.height, 1};
+    vkCmdCopyImageToBuffer(cmd, ldr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, inspectBuffer_.buffer, 1,
+                           &regions[0]);
+    regions[1].bufferOffset = static_cast<VkDeviceSize>(ldr.width) * ldr.height * 4;
+    regions[1].bufferRowLength = depth.width;
+    regions[1].bufferImageHeight = depth.height;
+    regions[1].imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    regions[1].imageExtent = {depth.width, depth.height, 1};
+    vkCmdCopyImageToBuffer(cmd, depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, inspectBuffer_.buffer, 1,
+                           &regions[1]);
+    render::cmdBufferBarrier(cmd, inspectBuffer_.buffer, 0, VK_WHOLE_SIZE, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+    if (ldrWas != VK_IMAGE_LAYOUT_UNDEFINED) SceneFrameGraph::transition(cmd, ldr, ldrWas);
+    if (depthWas != VK_IMAGE_LAYOUT_UNDEFINED) SceneFrameGraph::transition(cmd, depth, depthWas);
+}
+
+bool SceneVkBridge::inspect(ViewInspector::Image image, std::vector<double>& stats, std::vector<uint8_t>& pixels) {
+    stats.clear();
+    pixels.clear();
+    if (!inspect_ || inspectSerial_ == 0 || inspectSerial_ == inspectedSerial_ || !inspectBuffer_.isValid())
+        return false;
+    if (inspectTicket_ == 0 || !device_.context().queue().wait(inspectTicket_)) {
+        LOG_ERROR("SceneVkBridge: waiting for the inspection copy failed");
+        return false;
+    }
+    inspectedSerial_ = inspectSerial_;
+    const auto* base = static_cast<const uint8_t*>(inspectBuffer_.mappedData);
+    const auto* depth = reinterpret_cast<const float*>(base + static_cast<size_t>(inspectW_) * inspectH_ * 4);
+    inspector_.inspect(inspectCamera_, inspectW_, inspectH_, depth, base, image, stats, pixels);
+    return true;
 }
 
 std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) {

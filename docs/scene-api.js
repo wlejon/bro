@@ -1050,6 +1050,62 @@ class SceneGraph {
   captureFrame(width, height) {}
 
   /**
+   * Inspection: from the next render on, each render's depth and result are
+   * read back with it (in its own submission, no extra one) along with its
+   * camera on the body, for inspectFrame(). A tool for finding what changes
+   * on the world between frames that should not: pops, morphs, surfaces
+   * that vanish. Costs a readback a frame; off by default. Turning it on or
+   * off forgets the render compared against.
+   * @param {boolean} on
+   */
+  setInspect(on) {}
+
+  /**
+   * The last render compared with the one inspected before it. Every pixel's
+   * point on the body (from its depth and the render's camera) is carried to
+   * where it lands in the earlier render and compared there:
+   * - `same`: the earlier render saw that surface there (within ~2.5 pixel
+   *   footprints); its normal (from the depth) and luma are compared
+   *   (`normalDeg`, `normalMoved` past 15°, `luma`, `lumaMoved` past 0.08).
+   * - `rose`: something now stands in front of what was seen there;
+   *   `sank`: what was seen there is gone from in front (disocclusion too).
+   * - `appeared`: a surface where sky was; `vanished`: sky where a surface
+   *   was; `newView`: outside the earlier view; `sky`: sky in both
+   *   (`skyLuma`, its luma change: clouds against the sky).
+   * Fractions are of all the pixels. The camera's `turnDeg`, signed
+   * `rollDeg` and `travel` (m) between the two renders; `medianDist` (m) of
+   * the surfaces. `bands`: four bands top to bottom, each `moved`
+   * (rose + sank + appeared + vanished), `normalMoved` and `lumaMoved` as
+   * fractions of the band's pixels.
+   *
+   * With `image`, `.image` is that picture of the render (top-down RGBA,
+   * `width` x `height`):
+   * - `'change'`: over a dim copy of the frame, red = normal change (full
+   *   at 20°), green = luma change (full at 0.15), blue = rose, magenta =
+   *   sank, cyan = appeared, orange = vanished.
+   * - `'normals'`: the depth's normals in the camera's axes (x right, y up,
+   *   z toward the eye) as rgb = n * 0.5 + 0.5; sky black.
+   *
+   * Draws a frame a flush left pending first, like every read. null when
+   * inspection is off or nothing was rendered since the last call; the
+   * first call after setInspect has `compared` false.
+   * @param {{ image?: 'change' | 'normals' }} [opts]
+   * @returns {?{ width: number, height: number, compared: boolean, same: number,
+   *   rose: number, sank: number, appeared: number, vanished: number,
+   *   newView: number, sky: number, normalDeg: number, normalMoved: number,
+   *   luma: number, lumaMoved: number, skyLuma: number, turnDeg: number,
+   *   rollDeg: number, travel: number, medianDist: number,
+   *   bands: { moved: number, normalMoved: number, lumaMoved: number }[],
+   *   image?: Uint8Array }}
+   * @example
+   * scene.setInspect(true);
+   * // ... per frame, after advancing time:
+   * const s = scene.inspectFrame({ image: 'change' });
+   * if (s && s.compared && s.rose + s.sank > 0.02) console.log('a pop at', t);
+   */
+  inspectFrame(opts) {}
+
+  /**
    * @returns {Object}
    */
   asTexture() {}

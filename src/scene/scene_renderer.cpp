@@ -279,7 +279,18 @@ void SceneRenderer::render3D() {
     pendingExposureDt_ = 0.0f;
     prepareShadows(frameLights_);
 
+    vkBridge_->setInspect(inspect_);
     hasMeshContent_ = vkBridge_->render3D(graph_, *this, cullStats_);
+}
+
+bool SceneRenderer::inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels) {
+    stats.clear();
+    pixels.clear();
+    if (!vkBridge_) return false;
+    const auto kind = image == 2 ? vk::ViewInspector::Image::Normals
+                    : image == 1 ? vk::ViewInspector::Image::Change
+                                 : vk::ViewInspector::Image::None;
+    return vkBridge_->inspect(kind, stats, pixels);
 }
 
 render::LayerImage SceneRenderer::outputImage() const {

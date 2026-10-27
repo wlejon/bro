@@ -19,6 +19,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_view_inspect.h"
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "scene/vulkan/sky/scene_clouds.h"
@@ -76,6 +77,16 @@ public:
     /// the render itself once a caller has asked in the previous frame, so a
     /// compositor reading every frame pays no extra submission.
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
+    /// Copy each render's depth and LDR result out with it, for inspect().
+    /// Turning it on or off forgets the render compared against.
+    void setInspect(bool on);
+    bool inspecting() const { return inspect_; }
+    /// The last render against the one inspected before it
+    /// (scene_view_inspect.h): its stats (ViewInspector::Stat) and, unless
+    /// `image` is None, that image of it (top-down RGBA, the render's size).
+    /// Waits for the render; false when inspection is off, nothing was
+    /// rendered since the last call, or the copy failed.
+    bool inspect(ViewInspector::Image image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
     /// GPU milliseconds of the last render, waiting on its ticket; -1 when
     /// nothing was rendered (or timed) since the previous call. Not `wait`:
     /// the oldest render finished and not read yet (SceneGpuTimer::takeMs).
@@ -88,6 +99,9 @@ public:
 private:
     bool ensureReadbackBuffer();
     void recordReadback(VkCommandBuffer cmd);
+    bool ensureInspectBuffer();
+    void releaseInspectBuffer();
+    void recordInspectCopy(VkCommandBuffer cmd);
 
     SceneVkDevice device_;
     SceneVkAllocator allocator_;
@@ -116,6 +130,16 @@ private:
     bool skippedLastFrame_ = false;   // the last render skipped a draw for a pipeline not yet in
     uint64_t pixelsSerial_ = 0;
     std::vector<uint8_t> pixels_;
+
+    // Inspection (setInspect): the LDR result then the depth, each render's.
+    bool inspect_ = false;
+    SceneVkBuffer inspectBuffer_;
+    uint64_t inspectSerial_ = 0;     // the render whose copy the buffer holds
+    uint64_t inspectTicket_ = 0;
+    uint64_t inspectedSerial_ = 0;   // the render inspect() last compared
+    uint32_t inspectW_ = 0, inspectH_ = 0;
+    InspectCamera inspectCamera_;
+    ViewInspector inspector_;
 };
 
 }  // namespace bro::scene::vk

@@ -679,6 +679,30 @@
         }
         return { width: w, height: h, data };
     });
+    // Inspection (docs/scene-api.js): each render's depth and result read
+    // back with it, the last render compared with the one inspected before.
+    const INSPECT_STATS = ['width', 'height', 'compared', 'same', 'rose', 'sank', 'appeared', 'vanished',
+                           'newView', 'sky', 'normalDeg', 'normalMoved', 'luma', 'lumaMoved', 'skyLuma',
+                           'turnDeg', 'rollDeg', 'travel', 'medianDist'];
+    fn(SceneGraph.prototype, "setInspect", function setInspect(on) {
+        __bro_native.scene.SceneGraph_setInspect(this, !!on);
+    });
+    fn(SceneGraph.prototype, "inspectFrame", function inspectFrame(opts) {
+        const image = opts && opts.image === 'change' ? 1 : opts && opts.image === 'normals' ? 2 : 0;
+        const s = __bro_native.scene.SceneGraph_inspectFrame(this, image);
+        if (!s || s.length < INSPECT_STATS.length) return null;
+        const out = {};
+        for (let i = 0; i < INSPECT_STATS.length; i++) out[INSPECT_STATS[i]] = s[i];
+        out.compared = s[2] !== 0;
+        out.bands = [];
+        for (let b = 0, i = INSPECT_STATS.length; i + 2 < s.length; b++, i += 3)
+            out.bands.push({ moved: s[i], normalMoved: s[i + 1], lumaMoved: s[i + 2] });
+        if (image) {
+            const px = __bro_native.scene.SceneGraph_inspectImage();
+            out.image = px && px.length ? new Uint8Array(px.buffer, px.byteOffset, px.byteLength) : null;
+        }
+        return out;
+    });
     fn(SceneGraph.prototype, "captureFrame", function captureFrame(width, height) {
         if (width !== undefined && height !== undefined) {
             __bro_native.scene.SceneGraph_setCanvasSize(this, width, height);
