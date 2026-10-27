@@ -45,6 +45,7 @@ struct LandSunGpu {
 // air space (about the body's centre, the place frame's axes).
 struct CloudShadowGpu {
     vec4 params;   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w the levels' growth
+    vec4 deck;     // x the deck's bottom's radius, y its top's (body space)
     vec4 n[CL_SHADOW_LEVELS];    // xyz each level's plane's normal (the body's up under the eye as it was baked)
     vec4 e1[CL_SHADOW_LEVELS];   // xyz its first axis
     vec4 e2[CL_SHADOW_LEVELS];   // xyz its second
@@ -1185,6 +1186,26 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
     inscatter = mix(sky * clamp(share, 0.0, 1.0) * E, fL, froxels);
 }
 
+// How much of the sun the air between the eye and camera-relative `pos`
+// has under the cloud deck: the deck's shadow (sceneCloudSun, at the datum
+// under each) at four points along the ray, where the air there is under
+// the deck's bottom (over its top the clear sky's sun; between, eased). The
+// tables' air is all sunlit, so the haze over land in a deck's shadow was a
+// sunlit veil, bright blue over the dark land: navy.
+float sceneCloudAirSun(vec3 pos) {
+    if (lighting.cloudShadow.params.x < 0.5) return 1.0;
+    float s = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec3 q = pos * ((float(i) + 0.5) * 0.25);
+        float under = 1.0 - smoothstep(lighting.cloudShadow.deck.x, lighting.cloudShadow.deck.y, length(atmOrigin(q)));
+        s += under > 0.0 ? mix(1.0, sceneCloudSun(q), under) : 1.0;
+    }
+    return 0.25 * s;
+}
+// (The share of the low air's light that is the sun's, scattered once; the
+// rest the sky's, which the deck's shadow leaves.)
+const float CLOUD_AIR_SUN = 0.75;
+
 SceneAir sceneAir(vec3 pos, float camDist) {
     SceneAir air;
     air.transmittance = vec3(1.0);
@@ -1192,6 +1213,7 @@ SceneAir sceneAir(vec3 pos, float camDist) {
     air.fade = 0.0;
     if (sceneAtmosphereOn()) {
         sceneAtmosphereAir(pos, air.transmittance, air.inscatter);
+        air.inscatter *= 1.0 - CLOUD_AIR_SUN * (1.0 - sceneCloudAirSun(pos));
         return air;
     }
     float fog = fogFactorFor(camDist, pos.y + camera.eyeWorld.y);

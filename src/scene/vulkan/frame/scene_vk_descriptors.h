@@ -118,11 +118,12 @@ static_assert(sizeof(LandSunGpu) == 16 * (2 + LS_LEVELS));
 /// (vulkan/sky/scene_clouds.h). Directions in air space.
 struct alignas(16) CloudShadowGpu {
     alignas(16) float params[4];                 // x 1 when shown, y the datum's radius, z the finest level's texel (m), w growth
+    alignas(16) float deck[4];                   // x the deck's bottom's radius, y its top's
     alignas(16) float n[CL_SHADOW_LEVELS][4];    // each level's plane's normal (its nadir as it was baked)
     alignas(16) float e1[CL_SHADOW_LEVELS][4];   // its axes
     alignas(16) float e2[CL_SHADOW_LEVELS][4];
 };
-static_assert(sizeof(CloudShadowGpu) == 16 * (1 + 3 * CL_SHADOW_LEVELS));
+static_assert(sizeof(CloudShadowGpu) == 16 * (2 + 3 * CL_SHADOW_LEVELS));
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {

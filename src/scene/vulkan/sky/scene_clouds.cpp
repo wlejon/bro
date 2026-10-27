@@ -484,6 +484,8 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
     shadowBlock_.params[1] = R;
     shadowBlock_.params[2] = CL_SHADOW_TEXEL0;
     shadowBlock_.params[3] = CL_SHADOW_GROWTH;
+    shadowBlock_.deck[0] = block_.shell[0];
+    shadowBlock_.deck[1] = block_.shell[1];
     if (!held) {
         // (The block filled for the cover's face; nothing else of the deck.)
         on_ = shadowsOn_ = false;
