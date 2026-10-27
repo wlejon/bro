@@ -1,7 +1,7 @@
 #version 450
 // The land's tiles (scene_mesh_drawer_land.cpp): the world's land module
 // run over each texel of the tiles the world service granted this frame,
-// its heights into one array (with the canopy's top beside them), its
+// its heights into one array (with the canopy's top and flanks beside them), its
 // surface (albedo, herbs) into another, what covers it into the third, and
 // the canopy of the plants standing on it (their leaves' albedo, their
 // cover; world/plant_canopy.h) into the fourth, a slot an array layer. A
@@ -15,7 +15,7 @@
 
 layout(local_size_x = LF_GROUP, local_size_y = LF_GROUP) in;
 
-layout(set = 0, binding = 0, rg32f) uniform writeonly image2DArray landHeights;
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2DArray landHeights;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray landSurfaces;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2DArray landCovers;
 layout(set = 0, binding = 5, rgba16f) uniform writeonly image2DArray landCanopies;
@@ -182,7 +182,7 @@ void main() {
     p += fills[b + 6].zw;
     LandSurface s = landSurface(LandPoint(p, h, n, datum, up, t));
     vec3 leaves;
-    vec2 canopy = plantsCanopy(datum, leaves);
+    vec3 canopy = plantsCanopy(datum, leaves);
 #else
     float h = lfGround[ci];
     // The normal from central differences a texel apart.
@@ -191,11 +191,11 @@ void main() {
     vec3 n = normalize(vec3(hx0 - hx1, 2.0 * t, hz0 - hz1));
     LandSurface s = landSurface(LandPoint(p, h, n, vec3(p.x, 0.0, p.y), vec3(0.0, 1.0, 0.0), t));
     vec3 leaves;
-    vec2 canopy = plantsCanopy(p, leaves);
+    vec3 canopy = plantsCanopy(p, leaves);
 #endif
 
     ivec3 at = ivec3(texel, int(f.w));
-    imageStore(landHeights, at, vec4(h, max(canopy.y, 0.0), 0.0, 0.0));
+    imageStore(landHeights, at, vec4(h, max(canopy.y, 0.0), max(canopy.z, 0.0), 0.0));
     imageStore(landSurfaces, at, vec4(max(s.albedo, vec3(0.0)), clamp(s.herbs, 0.0, 1.0)));
     vec4 c = vec4(clamp(s.cover.xy, 0.0, 1.0), clamp(s.cover.z, 0.0, 2.0), clamp(s.cover.w, 0.0, 1.0));
     imageStore(landCovers, at, c);

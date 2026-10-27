@@ -13,11 +13,19 @@
 //     layers and species; the cover is 1 - e^-tau (a Poisson overlap);
 //   - the top (a plant's height at its size over the ground) and the
 //     leaves' albedo (the species' engine albedo) are their crowns'
-//     area-weighted means.
+//     area-weighted means;
+//   - the crowns' flanks a square metre, as tau is summed: each crown seen
+//     from the side (its depth, the height over its base, by its width; a
+//     round crown's ellipse, a cone's triangle). Seen along a line e over
+//     the level a crown covers its area plus its flank times cot e, so the
+//     cover the eye sees is 1 - e^-(tau + flanks cot e) (mesh.frag's
+//     landCanopyAt): a wood is whole from a low line where its crowns
+//     stand apart from overhead.
 //
 // The module defines
-//   vec2 plantsCanopy(vec2 p, out vec3 albedo)   x the cover, y the top (m)
-//   vec2 plantsCanopy(vec3 p, out vec3 albedo)   the same on a round body, p
+//   vec3 plantsCanopy(vec2 p, out vec3 albedo)   x the cover, y the top (m),
+//                                                z the flanks
+//   vec3 plantsCanopy(vec3 p, out vec3 albedo)   the same on a round body, p
 //                                                the datum's point (its
 //                                                fields' 3D trees, split
 //                                                about the fill's origin)

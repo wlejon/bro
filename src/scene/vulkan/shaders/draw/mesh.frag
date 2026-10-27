@@ -124,36 +124,42 @@ vec2 albedoUV() {
 // level its rings read there, so a forest's patches past the plants' range
 // are the tiles' texels, not the rings' cells: rgb its leaves' albedo, a
 // how much of it is shown (scene_land.glsl's landCanopyShown, as the
-// rings rise by it, mesh_land.vert's landRise).
+// rings rise by it, mesh_land.vert's landRise) times its cover along the
+// eye's line, its crowns' area and their flanks seen at its slant
+// (world/plant_canopy.h): a wood whose crowns stand apart from overhead is
+// whole along a low line, as its plants are.
 vec4 landCanopyAt(vec3 worldPos) {
     vec3 p = worldPos + camera.eyeWorld.xyz;
     if (!landHasCanopy()) return vec4(0.0);
     float shown = landCanopyShown(length(p - landEye3()), landCanopyRange());
     if (shown <= 0.0) return vec4(0.0);
-    float top;
+    vec2 crowns;
     vec2 m = landMapOf(p);
-    vec4 c = landSampleCanopy(m, landLevel(m), top);
-    return vec4(c.rgb, c.a * shown);
+    vec4 c = landSampleCanopy(m, landLevel(m), crowns);
+    float down = max(-worldPos.y / max(length(worldPos), 1e-3), 0.02);
+    float tau = -log(max(1.0 - c.a, 1e-4)) + crowns.y * sqrt(1.0 - down * down) / down;
+    return vec4(c.rgb, (1.0 - exp(-tau)) * shown);
 }
 #endif
 
 // A land's canopy (landCanopyAt): its leaves' albedo `albedo`
 // shown by `shown` over the surface, as the far plants are drawn (lit as a
-// sward, below): crowns in their own shade (CANOPY_SHADE: a crown's leaves
-// shade each other, as the trees' far daubs do), the more of it seen the
-// lower the eye's line to them (CANOPY_GRAZING where the line is under a
-// tenth of the vertical: their shaded sides and the shade between them),
-// facing up whatever the ground's slope, matte, and mottled a crown at a
-// time (CANOPY_CELL m) while a crown spans a few pixels, its mean beyond.
-// (Both shades measured against the plants drawn there, biomes' high view:
-// the canopy past 3 km against the plants at 3-4 km, past 6 km against
-// them at 6-9 km.)
-const float CANOPY_SHADE = 0.6;
+// sward, below), facing up whatever the ground's slope, matte, and
+// mottled a crown at a time (CANOPY_CELL m) while a crown spans a few
+// pixels, its mean beyond. Returns what its light is taken down by: crowns
+// in their own shade (CANOPY_SHADE: a crown's leaves shade each other, as
+// the trees' far daubs do), the more of it seen the lower the eye's line to
+// them (CANOPY_GRAZING where the line is under a tenth of the vertical:
+// their shaded sides and the shade between them). The shade is of all the
+// light off the leaves, their sheen as well as what they scatter (a
+// sward's tops are lit, the crowns' depths are not), and of the ground
+// between them in the same share.
+const float CANOPY_SHADE = 0.45;
 const float CANOPY_GRAZING = 0.32;
 const float CANOPY_CELL = 6.0;
 const float CANOPY_MOTTLE = 0.15;
-void canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor, inout vec3 N,
-                   inout float roughness) {
+float canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor, inout vec3 N,
+                    inout float roughness) {
     vec2 p = (worldPos.xz + camera.eyeWorld.xz) / CANOPY_CELL;
     vec2 c = floor(p);
     float h = fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
@@ -161,9 +167,10 @@ void canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor
     float mottle = 1.0 + CANOPY_MOTTLE * (2.0 * h - 1.0) * (1.0 - smoothstep(0.25, 0.5, footprint));
     float down = -worldPos.y / max(length(worldPos), 1e-3);
     float shade = CANOPY_SHADE * mix(CANOPY_GRAZING, 1.0, smoothstep(0.1, 0.4, down));
-    baseColor = mix(baseColor, albedo * shade * mottle, shown);
+    baseColor = mix(baseColor, albedo * mottle, shown);
     N = normalize(mix(N, normalize(N + vec3(0.0, 1.0, 0.0)), shown));
     roughness = mix(roughness, 1.0, shown);
+    return mix(1.0, shade, shown);
 }
 
 void main() {
@@ -461,8 +468,9 @@ void main() {
     if ((flags & MESH_CANOPY) != 0u) canopy = landCanopyAt(worldPos);
 #endif
     float canopyShown = canopy.a;
+    float canopyShade = 1.0;
     if (canopyShown > 0.0) {
-        canopySurface(worldPos, canopy.rgb, canopyShown, baseColor, N, roughness);
+        canopyShade = canopySurface(worldPos, canopy.rgb, canopyShown, baseColor, N, roughness);
 #ifdef SCENE_GROUND
         groundAO = mix(groundAO, 1.0, canopyShown);
         groundThin.w *= 1.0 - canopyShown;
@@ -542,6 +550,7 @@ void main() {
         alpha = dot(F0, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - s.roughness) * (1.0 - s.roughness);
     }
 
+    color *= canopyShade;
     color = color * air.transmittance + air.inscatter;
     indirect *= air.transmittance;
     alpha = mix(alpha, 0.0, air.fade);

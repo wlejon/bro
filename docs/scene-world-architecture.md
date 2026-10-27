@@ -408,7 +408,11 @@ at all.
   sum over placed plants. For each layer, its candidates' density (its
   chance over its spacing squared), each species' share (its weight over
   the sum), and the size field give the crowns' projected area per square
-  metre τ. The cover is 1 − e^(−τ), a Poisson overlap. The mean top height
+  metre τ. The cover from overhead is 1 − e^(−τ), a Poisson overlap; the
+  crowns' flanks a square metre (each crown seen from the side, its depth
+  by its width) are summed beside it, so the cover along a line e over the
+  level is 1 − e^(−(τ + flanks·cot e)): a wood whose crowns stand apart
+  from overhead is whole along a low line, as its drawn plants are. The mean top height
   and the leaves' albedo (the species' `albedo`, the same one the probes'
   medium uses) are weighted by crown area. This is written as GLSL from
   the rules and species (`plantCanopyModule`, scene/world/plant_canopy.h,
@@ -416,20 +420,23 @@ at all.
   maths and reaches as far as the land does.
 - **The land keeps it.** A land on which plants stand
   (`createPlants({ land })`) splices that module into its fill: a fourth
-  tile layer (the canopy's albedo and cover), and the top height beside
-  the ground's in the heights layer. It is made with the land's tiles, by
+  tile layer (the canopy's albedo and cover), and the top height and the
+  flanks beside the ground's in the heights layer. It is made with the land's tiles, by
   the same jobs.
 - **Past the plants' range, the land is the canopy.** In the plants'
   last tenth of range they dither out as the canopy comes in. The land's
   vertices rise by the top height times the cover, and the cover blends
   the canopy over the ground's own surface (mesh.frag's canopySurface).
   It is lit as a sward is, a layer of leaves too fine to resolve, facing
-  up whatever the slope. Its albedo is the leaves' in their own shade,
-  more of it seen the lower the eye's line (crown sides and the shade
-  between them). Both shades are measured against the plants drawn
-  there: biomes' high view (1.5 km up) with the canopy past 3 km is
-  within 2–10 levels of the plants at 3–4 km, forests and meadows, and
-  past 6 km within 2–9 of the plants drawn to 12 km.
+  up whatever the slope. All its light (what the leaves scatter, their
+  sheen, the ground between them) is taken down by the crowns' own
+  shade, more of it the lower the eye's line (crown sides and the shade
+  between them): a sward's tops are lit, a wood's depths are not. Measured
+  against the plants drawn there: the planet's ground shot from 1 km up,
+  the canopy past 400 m against the plants to 6 km, stands within 1–3
+  levels and meadows within 2–6; biomes' high view (1.5 km up), the
+  canopy past 3 km against the plants drawn to 12 km, every band of the
+  view within 1–6.
 - **Past the plants' cast range, the canopy shades through the land's
   sun** (below). A plant past its range casts nothing; the canopy stands
   in its place in the land's sun's march, so the plants' own crowns past

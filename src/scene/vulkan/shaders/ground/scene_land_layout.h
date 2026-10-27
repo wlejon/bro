@@ -6,8 +6,9 @@
 //   set 3, bindings 4..7: the tiles' heights, their surface, the page table,
 //            the canopy
 //
-//   land_fill.comp's set 0: binding 0 the heights (rg32f, an array layer a
-//            slot: the ground's, the canopy's top over it), 1 the surface
+//   land_fill.comp's set 0: binding 0 the heights (rgba32f, an array layer
+//            a slot: the ground's, the canopy's top over it, its crowns'
+//            flanks, 0), 1 the surface
 //            (rgba16f: albedo, herbs), 2 the fills (LF_TILE_WORDS a tile),
 //            3 the module's data (vec4s), 4 the cover (rgba16f), 5 the
 //            canopy (rgba16f: its leaves' albedo, its cover), 6 the

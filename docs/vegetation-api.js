@@ -322,7 +322,8 @@
  * the plants are its canopy. From the rules (each layer's chance, scale and
  * species weights, the species' height, radius and albedo) the land's tiles
  * take the cover the plants would make there (1 - e^-(crowns' area a square
- * metre)), their leaves' albedo and their top; past `range` the land rises
+ * metre), and along a low line their crowns' flanks as well: a wood is
+ * whole seen across), their leaves' albedo and their top; past `range` the land rises
  * by that top as far as they cover it and is drawn as their leaves (lit as
  * a sward is: a layer of leaves too fine to resolve), and past
  * `shadowRange` it shades the land and the plants as they would (the

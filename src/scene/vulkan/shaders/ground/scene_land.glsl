@@ -427,19 +427,20 @@ bool landHasCanopy() { return LAND_W(LD_CANOPY / 4).z > 0.5; }
 float landCanopyShown(float d, float range) { return smoothstep(0.9 * range, range, d); }
 
 // The canopy at map point `m` from the tiles of level `lambda`: rgb its
-// leaves' albedo, a its cover; `top` its top over the ground. None where no
-// level is resident.
-vec4 landSampleCanopy(vec2 m, float lambda, out float top) {
-    top = 0.0;
+// leaves' albedo, a its cover from overhead; `crowns` x its top over the
+// ground, y its crowns' flanks a square metre (world/plant_canopy.h). None
+// where no level is resident.
+vec4 landSampleCanopy(vec2 m, float lambda, out vec2 crowns) {
+    crowns = vec2(0.0);
     int s0, s1;
     vec2 uv0, uv1;
     float f;
     if (!landTexels(m, lambda, s0, uv0, s1, uv1, f)) return vec4(0.0);
     vec4 c = textureLod(landCanopies, vec3(uv0, float(s0)), 0.0);
-    top = textureLod(landHeights, vec3(uv0, float(s0)), 0.0).g;
+    crowns = textureLod(landHeights, vec3(uv0, float(s0)), 0.0).gb;
     if (s1 >= 0) {
         c = mix(c, textureLod(landCanopies, vec3(uv1, float(s1)), 0.0), f);
-        top = mix(top, textureLod(landHeights, vec3(uv1, float(s1)), 0.0).g, f);
+        crowns = mix(crowns, textureLod(landHeights, vec3(uv1, float(s1)), 0.0).gb, f);
     }
     return c;
 }

@@ -4,6 +4,7 @@
 
 #include "api/noise_glsl.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <map>
 
@@ -68,13 +69,18 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
         body += "        float chance = clamp(" + chance + ", 0.0, 1.0);\n";
         body += "        float s = max(" + scale + ", 0.0);\n";
         body += "        float s2 = s * s * " + num(1.0 + layer.scaleVariety * layer.scaleVariety / 3.0) + ";\n";
-        body += "        float sum = 0.0, area = 0.0, top = 0.0;\n";
+        body += "        float sum = 0.0, area = 0.0, top = 0.0, side = 0.0;\n";
         body += "        vec3 alb = vec3(0.0);\n";
         for (const PlacementLayer::Choice& c : layer.species) {
             if (c.species < 0 || c.species >= speciesCount) continue;
             const float* rec = species + static_cast<size_t>(c.species) * speciesFloats;
             const double height = rec[0], radius = rec[2];
             const double crown = 3.14159265358979 * radius * radius;
+            // (Its crown seen from the side: a round crown's ellipse, a
+            // cone's triangle, its depth under the top by its base.)
+            const double depth = height * (1.0 - std::clamp(double(rec[1]), 0.0, 1.0));
+            const double shape = std::clamp(double(rec[6]), 0.0, 1.0);
+            const double flank = (1.5707963267949 + (1.0 - 1.5707963267949) * shape) * radius * depth;
             std::string w;
             if (!term(c.weight, "1.0", w)) return false;
             body += "        {\n";
@@ -82,6 +88,7 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
             body += "            sum += w;\n";
             body += "            area += w * " + num(crown) + ";\n";
             body += "            top += w * " + num(crown * height) + ";\n";
+            body += "            side += w * " + num(flank) + ";\n";
             body += "            alb += w * " + num(crown) + " * vec3(" + num(rec[8]) + ", " + num(rec[9]) + ", " +
                     num(rec[10]) + ");\n";
             body += "        }\n";
@@ -91,6 +98,7 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
         body += "        float k = sum > 0.0 ? chance * s2 / (" + num(double(layer.spacing) * layer.spacing) +
                 " * sum) : 0.0;\n";
         body += "        tau += k * area;\n";
+        body += "        sides += k * side;\n";
         body += "        tops += k * top * s;\n";
         body += "        albs += k * alb;\n";
         body += "    }\n";
@@ -100,12 +108,12 @@ bool plantCanopyModule(const PlacementRules& rules, const float* species, int sp
     out += fields;
     // (At a point of the plane, and of a round body's datum.)
     for (const char* point : {"vec2", "vec3"}) {
-        out += std::string("vec2 plantsCanopy(") + point + " p, out vec3 albedo) {\n";
-        out += "    float tau = 0.0, tops = 0.0;\n";
+        out += std::string("vec3 plantsCanopy(") + point + " p, out vec3 albedo) {\n";
+        out += "    float tau = 0.0, tops = 0.0, sides = 0.0;\n";
         out += "    vec3 albs = vec3(0.0);\n";
         out += body;
         out += "    albedo = tau > 0.0 ? albs / tau : vec3(0.0);\n";
-        out += "    return vec2(1.0 - exp(-tau), tau > 0.0 ? tops / tau : 0.0);\n";
+        out += "    return vec3(1.0 - exp(-tau), tau > 0.0 ? tops / tau : 0.0, sides);\n";
         out += "}\n";
     }
     return true;

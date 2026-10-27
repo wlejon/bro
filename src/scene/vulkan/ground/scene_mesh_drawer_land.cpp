@@ -32,11 +32,12 @@ namespace bro::scene::vk {
 
 namespace {
 
-// The tiles' layers: the heights (and the canopy's top), the surface
-// (albedo, herbs), what covers it (LandSurface::cover; a grass node on the
-// land reads these three, scene_mesh_drawer_grass.cpp) and the canopy of
-// the plants standing on it (their leaves' albedo, their cover).
-constexpr VkFormat kLandFormats[4] = {VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+// The tiles' layers: the heights (and the canopy's top and its crowns'
+// flanks, world/plant_canopy.h), the surface (albedo, herbs), what covers
+// it (LandSurface::cover; a grass node on the land reads these three,
+// scene_mesh_drawer_grass.cpp) and the canopy of the plants standing on it
+// (their leaves' albedo, their cover).
+constexpr VkFormat kLandFormats[4] = {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
                                       VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
 // A storage buffer's offset alignment no device exceeds.
 constexpr VkDeviceSize kStorageAlign = 256;
