@@ -231,7 +231,10 @@
  * are in, the land reads them, the coarser field making up what they do not
  * cover (a level's edge, regions still to come), level by level down from
  * the global grid; the first `keep` channels are the regions' and the rest
- * the global grid's. The tiles, landGrid and the surface read it; the CPU's
+ * the global grid's. A region refines the coarser field and never replaces
+ * it: the components it `conserve`s (the ground's height) keep the coarser
+ * field's mean over each of its cells, whatever the passes did, so a region
+ * coming in moves the ground by its detail, never by a drift. The tiles, landGrid and the surface read it; the CPU's
  * heights read the same regions read back, blended the same way. The engine
  * streams them up to four of a level at a time, a frame's budget of steps
  * at a time (a band of init rows, a whole pass, or the finish, each over
@@ -360,6 +363,13 @@
  *   under the eye, in lattice steps (`cells - 2 apron` cells; 0: half a step).
  * @property {number} [keep=2] - channels the regions keep and are read for
  *   (the first `keep`; the others are the global grid's).
+ * @property {string[]} [conserve=['0.x']] - the kept channels' components a
+ *   region refines and never replaces ('c.x' .. 'c.w'): once its passes are
+ *   done, the engine takes out their drift from the coarser field (their
+ *   difference's mean under a tent as wide as the coarser field's cell), so
+ *   over each coarser cell their mean is the coarser field's and the region
+ *   adds detail only. The ground's height by default; a flow, an area or a
+ *   mask is not a mean and is left out. [] conserves nothing.
  * @example
  *   // The global grid's continents eroded again at 64 m cells under the eye.
  *   processes: { source, resolution: 512, channels: 4, passes: [...],

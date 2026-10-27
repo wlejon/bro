@@ -2,7 +2,9 @@
 // A land's regional grids (vulkan/ground/scene_land_regions.h): the world's
 // region kernels (ground/land_region_layer.glsl says what they may call) run
 // over one region's cells, one mode a dispatch: the regions' init, then each
-// pass's kernel its iterations, read from one image and written to the other.
+// pass's kernel its iterations, read from one image and written to the other;
+// then its conserved components' drift from the coarser field taken out
+// (scene/world/land_regions.h, CONSERVING).
 
 #include "ground/land_process_layout.h"
 #include "ground/land_grid_config.glsl"
@@ -23,6 +25,7 @@ const float LAND_GRID_RADIUS = 0.0;
 #define LAND_REGION_CELLS 16
 #define LAND_REGION_APRON 2
 #define LAND_REGION_KEEP 1
+#define LAND_REGION_CONSERVE 1u
 #define LAND_REGION_TABLE 64
 #define LAND_REGION_TABLE_BITS 6
 const float LAND_REGION_CELL0 = 1.0;
@@ -49,6 +52,33 @@ uvec4 landRegionEntry(uint i) { return regionTable.entries[i]; }
 #include "ground/land_process_module.glsl"
 #include "ground/land_region_dispatch.glsl"
 
+bool conserved(int ch, int i) { return ((LAND_REGION_CONSERVE >> uint(ch * 4 + i)) & 1u) != 0u; }
+
+// The conserved components: v less the coarser field (DRIFT), or, v being
+// that drift, v less its tent mean as wide each way as the coarser field's
+// cell, plus the coarser field (CONSERVE).
+void conserve(uint mode, inout vec4 v[PROC_CHANNELS]) {
+    int r = 0;
+    if (mode == LP_MODE_CONSERVE) r = clamp(int(round(procCoarseCellSize() / procCellSize())), 1, 8);
+    for (int ch = 0; ch < min(LAND_REGION_KEEP, PROC_CHANNELS); ++ch) {
+        if (((LAND_REGION_CONSERVE >> uint(ch * 4)) & 15u) == 0u) continue;
+        vec4 coarse = procCoarse(ch);
+        vec4 mean = vec4(0.0);
+        if (mode == LP_MODE_CONSERVE) {
+            float sum = 0.0;
+            for (int y = 1 - r; y < r; ++y)
+                for (int x = 1 - r; x < r; ++x) {
+                    float w = float((r - abs(x)) * (r - abs(y)));
+                    mean += w * procRead(ch, ivec2(x, y));
+                    sum += w;
+                }
+            mean /= sum;
+        }
+        for (int i = 0; i < 4; ++i)
+            if (conserved(ch, i)) v[ch][i] = mode == LP_MODE_DRIFT ? v[ch][i] - coarse[i] : v[ch][i] - mean[i] + coarse[i];
+    }
+}
+
 void main() {
     ivec2 cell = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, int(pc.words[LR_P_ROW]));
     if (any(greaterThanEqual(cell, ivec2(LAND_REGION_CELLS)))) return;
@@ -63,6 +93,8 @@ void main() {
         v[ch] = mode == LP_MODE_INIT ? vec4(0.0, ch == 0 ? 1.0 : 0.0, 0.0, 0.0) : procHere(ch);
     if (mode == LP_MODE_INIT)
         procRegionInit(v);
+    else if (mode == LP_MODE_DRIFT || mode == LP_MODE_CONSERVE)
+        conserve(mode, v);
     else
         procRegionRun(int(pc.words[LR_P_PASS]), v);
     for (int ch = 0; ch < PROC_CHANNELS; ++ch) imageStore(procOut, ivec3(cell, ch), v[ch]);

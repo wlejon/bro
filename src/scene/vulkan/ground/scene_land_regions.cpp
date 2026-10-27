@@ -400,47 +400,7 @@ void SceneLandRegions::record(SceneFrame& frame, LandNode& node, Land& land, VkI
     const size_t n = j.members.size();
     if (!land.hasJob || n == 0 || stepOf(C, j) != step) return;
     const uint32_t cells = static_cast<uint32_t>(C.cells);
-
-    if (step == Step::Finish) {
-        // Done: each region's kept channels into its slot, its channel 0 to
-        // the CPU.
-        if (freeReadbacks(land) < static_cast<int>(n) || budget <= 0) return;
-        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0,
-                             nullptr, 0, nullptr);
-        for (size_t m = 0; m < n; ++m) {
-            int buffer = 0;
-            while (land.readbackBusy[buffer]) ++buffer;
-            const SceneVkImage& out = land.run[m][j.current];
-            VkImageCopy copy{};
-            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, static_cast<uint32_t>(C.keep)};
-            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(j.members[m].slot * C.keep),
-                                   static_cast<uint32_t>(C.keep)};
-            copy.extent = {cells, cells, 1};
-            vkCmdCopyImage(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.slots.image, VK_IMAGE_LAYOUT_GENERAL, 1,
-                           &copy);
-            VkBufferImageCopy rb{};
-            rb.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            rb.imageExtent = {cells, cells, 1};
-            vkCmdCopyImageToBuffer(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.readbacks[buffer].buffer, 1, &rb);
-            render::cmdBufferBarrier(cmd, land.readbacks[buffer].buffer, 0, VK_WHOLE_SIZE,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                     VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-            land.readbackBusy[buffer] = true;
-            land.reading.push_back({j.members[m].key, buffer, 0, false});
-        }
-        VkMemoryBarrier a{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        a.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-        a.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &a, 0,
-                             nullptr, 0, nullptr);
-        land.hasJob = false;
-        land.job = Job{};
-        --budget;
-        return;   // (the next batch is begun by the next frame's prepare)
-    }
+    if (step == Step::Finish && (freeReadbacks(land) < static_cast<int>(n) || budget <= 0)) return;
 
     // Each region's two sets: sets[m][k] reads run[m][k ^ 1], writes run[m][k].
     VkDescriptorSet sets[kBatch][2];
@@ -491,6 +451,54 @@ void SceneLandRegions::record(SceneFrame& frame, LandNode& node, Land& land, VkI
         vkCmdDispatch(cmd, groups,
                       band < 0 ? groups : std::min(bandGroups, groups - static_cast<uint32_t>(band) * bandGroups), 1);
     };
+
+    if (step == Step::Finish) {
+        // The conserved components' drift from the coarser field taken out
+        // (land_regions.h, CONSERVING): into the other image and back, so
+        // the result is in run[m][current] as the passes left it.
+        if (C.conserve) {
+            for (size_t m = 0; m < n; ++m) dispatch(m, LP_MODE_DRIFT, j.current ^ 1, 0, 0, -1);
+            computeBarrier(cmd);
+            for (size_t m = 0; m < n; ++m) dispatch(m, LP_MODE_CONSERVE, j.current, 0, 0, -1);
+        }
+        // Done: each region's kept channels into its slot, its channel 0 to
+        // the CPU.
+        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0,
+                             nullptr, 0, nullptr);
+        for (size_t m = 0; m < n; ++m) {
+            int buffer = 0;
+            while (land.readbackBusy[buffer]) ++buffer;
+            const SceneVkImage& out = land.run[m][j.current];
+            VkImageCopy copy{};
+            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, static_cast<uint32_t>(C.keep)};
+            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(j.members[m].slot * C.keep),
+                                   static_cast<uint32_t>(C.keep)};
+            copy.extent = {cells, cells, 1};
+            vkCmdCopyImage(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.slots.image, VK_IMAGE_LAYOUT_GENERAL, 1,
+                           &copy);
+            VkBufferImageCopy rb{};
+            rb.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            rb.imageExtent = {cells, cells, 1};
+            vkCmdCopyImageToBuffer(cmd, out.image, VK_IMAGE_LAYOUT_GENERAL, land.readbacks[buffer].buffer, 1, &rb);
+            render::cmdBufferBarrier(cmd, land.readbacks[buffer].buffer, 0, VK_WHOLE_SIZE,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+            land.readbackBusy[buffer] = true;
+            land.reading.push_back({j.members[m].key, buffer, 0, false});
+        }
+        VkMemoryBarrier a{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        a.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        a.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &a, 0,
+                             nullptr, 0, nullptr);
+        land.hasJob = false;
+        land.job = Job{};
+        --budget;
+        return;   // (the next batch is begun by the next frame's prepare)
+    }
 
     // Each step over every region of the batch, then its one barrier (the
     // init's bands write apart, and only its last one is waited on).

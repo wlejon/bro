@@ -83,8 +83,18 @@ LandSurface landSurface(LandPoint q) {
                 throw new TypeError('createLand: `processes.regions.init` (the regions\' init kernel) is required');
             const rp = rg.passes || [];
             const num = (v, d) => (v !== undefined ? +v : d);
+            // (What a region conserves: 'c.x' channel c's component, as bits c * 4 + 0 .. 3.)
+            let conserve = 1;
+            if (rg.conserve !== undefined) {
+                conserve = 0;
+                for (const s of rg.conserve) {
+                    const m = /^(\d)\.([xyzw])$/.exec(String(s));
+                    if (!m) throw new TypeError(`createLand: \`processes.regions.conserve\`: '${s}' is not a channel's component ('0.x')`);
+                    conserve |= 1 << (+m[1] * 4 + 'xyzw'.indexOf(m[2]));
+                }
+            }
             params.push(num(rg.cells, 512), num(rg.apron, 32), num(rg.cell, 64), num(rg.ratio, 4), num(rg.levels, 3),
-                num(rg.reach, 1), num(rg.keep, 2));
+                num(rg.reach, 1), num(rg.keep, 2), conserve);
             for (const s of rp) params.push(s.iterations !== undefined ? +s.iterations : 1);
             names += '|' + String(rg.init) + '|' + rp.map((s) => String(s.fn)).join(',');
         }

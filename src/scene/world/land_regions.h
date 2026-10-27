@@ -30,6 +30,17 @@
 // The CPU (LandBase, land_grid.h) and the GPU (ground/land_regions.glsl) take
 // the same steps.
 //
+// CONSERVING. A level refines the coarser field and never replaces it: once
+// a region's passes are done, each component it conserves (`conserve`; the
+// ground's height, channel 0's x, by default) has the drift from the coarser
+// field taken out: e = v - coarse, and v = e - E + coarse, E the mean of e
+// under a tent as wide each way as the coarser field's cell (in this level's
+// cells). So whatever the world's kernels did, the region's mean over each of
+// the coarser field's cells is the coarser field's, and what it adds is
+// detail about it: a valley it cut is paid for by its banks, and a region
+// coming in late moves the ground by its detail, never by its drift. Before
+// the copy into its slot and the read-back, so the GPU and CPU read the same.
+//
 // PRESENCE. A level is read only in a disc about the eye that its regions
 // in cover whole: its cover is scaled by 1 - smoothstep(0.6 r, 0.9 r, d), d
 // the distance along the ground from the level's centre (LandRegionCentre)
@@ -102,6 +113,9 @@ struct LandRegionConfig {
     int levels = 3;
     int reach = 1;               // regions each way about the eye's, a level
     int keep = 2;                // channels kept and read (the first `keep`; the rest the global grid's)
+    /// The kept channels' components a region conserves (CONSERVING, above):
+    /// bit c * 4 + i is channel c's component i (x y z w). Channel 0's x.
+    uint32_t conserve = 1;
 
     bool active() const { return !init.empty() && levels > 0; }
     int iterations() const;

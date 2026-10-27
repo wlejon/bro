@@ -57,7 +57,7 @@ const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, c
     // The passes' functions, comma-separated, their iterations after the
     // resolution and channels; then (after a '|') the regions' init and
     // (after another) their passes, the regions' cells, apron, cell, ratio,
-    // levels, reach and keep after the global passes' iterations, their
+    // levels, reach, keep and conserve after the global passes' iterations, their
     // passes' iterations after those.
     const std::string all = passes ? std::string(passes) : std::string();
     const size_t bar1 = all.find('|');
@@ -85,6 +85,7 @@ const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, c
         r.levels = static_cast<int>(next(r.levels));
         r.reach = static_cast<int>(next(r.reach));
         r.keep = static_cast<int>(next(r.keep));
+        r.conserve = static_cast<uint32_t>(next(r.conserve));
         for (const std::string& n : region) r.passes.push_back({n, static_cast<int>(next(1.0))});
     }
     if (data && data_len) p.data.assign(data, data + data_len);

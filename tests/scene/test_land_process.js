@@ -237,10 +237,12 @@ void procInit(inout vec4 v[PROC_CHANNELS]) {
     // The global grid flat at 5 m; two levels of regions about the eye (4 m
     // and 16 m cells), each the coarser field plus its own band, a pass
     // setting each region's edge cells to the coarser field's (its
-    // boundary taken from it).
+    // boundary taken from it). Conserving nothing: the bands are far wider
+    // than the coarser cells, which a conserving region would take back out
+    // (below).
     land.setLand({ height: N('Constant', { Value: 0 }), surface: RED, processes: {
         resolution: CELLS,
-        regions: { init: 'rinit', cells: 64, apron: 8, cell: 4, ratio: 4, levels: 2, reach: 1, keep: 1,
+        regions: { init: 'rinit', cells: 64, apron: 8, cell: 4, ratio: 4, levels: 2, reach: 1, keep: 1, conserve: [],
                    passes: [{ fn: 'redge', iterations: 1 }] },
         source: `
 void procInit(inout vec4 v[PROC_CHANNELS]) { v[0].x = 5.0; }
@@ -277,6 +279,37 @@ void redge(inout vec4 v[PROC_CHANNELS]) { if (procBorder() == 0) v[0].x = procCo
     standsOn(land, 0, 0, 'regions: under the eye');
     standsOn(land, 31, -17, 'regions: a level 0 band');
     standsOn(land, -120, -35, 'regions: further out');
+
+    // Conserving the height (the default): each level drifts from the
+    // coarser field (+20 m on level 0, -10 m on level 1, as an erosion
+    // lowers or a lift raises a whole region) and adds detail finer than the
+    // coarser cell. The drift is taken out, the detail kept: the heights'
+    // mean is the global grid's 5 m, and they still stand about it.
+    land.setLand({ height: N('Constant', { Value: 0 }), surface: RED, processes: {
+        resolution: CELLS,
+        regions: { init: 'rinit', cells: 64, apron: 8, cell: 4, ratio: 4, levels: 2, reach: 1, keep: 1 },
+        source: `
+void procInit(inout vec4 v[PROC_CHANNELS]) { v[0].x = 5.0; }
+void rinit(inout vec4 v[PROC_CHANNELS]) {
+    vec3 p = procPoint();
+    float detail = procLevel() == 0 ? 2.0 * sin(p.x / 3.2) * cos(p.z / 2.9) : 0.0;
+    v[0] = vec4(procCoarse(0).x + (procLevel() == 0 ? 20.0 : -10.0) + detail, 1.0, 0.0, 0.0);
+}
+` } });
+    assert(untilReady(land), `conserving regions: ready (${JSON.stringify(land.landStats())})`);
+    look(0, 40, 0);
+    for (let i = 0; i < 400 && (!land.landStats().regions || land.landStats().regionsPending > 0); i++) frames(1);
+    frames(10);
+    let cmean = 0, crms = 0, cn = 0;
+    for (let z = -32; z <= 32; z += 0.5)
+        for (let x = -32; x <= 32; x += 0.5) {
+            const d = land.landHeight(x, z) - 5;
+            cmean += d; crms += d * d; cn++;
+        }
+    cmean /= cn;
+    crms = Math.sqrt(crms / cn);
+    assert(Math.abs(cmean) < 0.5, `conserving regions: their mean is the coarser field's, the drift out (mean ${cmean.toFixed(3)} m over 5)`);
+    assert(crms > 0.5, `conserving regions: their detail is kept (rms ${crms.toFixed(3)} m about 5)`);
     land.visible = false;
 
     // --- a round body: the six faces ----------------------------------------------

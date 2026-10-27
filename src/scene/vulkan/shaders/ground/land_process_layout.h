@@ -17,6 +17,8 @@
 #define LP_MODE_INIT        0     // procInit over every cell into the grid written
 #define LP_MODE_PASS        1     // pass LP_P_PASS over every cell, read to written
 #define LP_MODE_HALO        2     // the halo's copies within the grid written
+#define LP_MODE_DRIFT       3     // a region's conserved components less the coarser field's, read to written
+#define LP_MODE_CONSERVE    4     // a region's drift taken out of them, read to written (scene/world/land_regions.h)
 
 #define LP_P_MODE           0     // uint: LP_MODE_*
 #define LP_P_PASS           1     // uint: the pass (its index in the process's passes)
@@ -28,7 +30,7 @@
 // the region's cells read (rgba32f, a layer a channel), 1 written, 2 the
 // global grid (as land_fill.comp's), 3 the regions' slots, 4 their table
 // (uvec4: key, slot), 5 the process's data; push constants LR_P_*, its
-// modes LP_MODE_INIT and LP_MODE_PASS.
+// modes LP_MODE_INIT, LP_MODE_PASS, LP_MODE_DRIFT and LP_MODE_CONSERVE.
 #define LR_P_MODE           0     // uint: LP_MODE_*
 #define LR_P_PASS           1     // uint: the pass
 #define LR_P_ITERATION      2     // uint: its iteration

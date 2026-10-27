@@ -53,6 +53,7 @@ void LandRegionConfig::sanitize(int channels) {
     ratio = std::clamp(ratio, 2, 16);
     reach = std::clamp(reach, 0, 4);
     keep = std::clamp(keep, 1, std::max(channels, 1));
+    conserve &= keep >= 8 ? ~0u : (1u << (keep * 4)) - 1u;
     if (!(cell > 0.0)) cell = 64.0;
 }
 
@@ -425,11 +426,13 @@ std::string LandRegionLattice::glslConfig() const {
                   "#define LAND_REGION_CELLS %d\n"
                   "#define LAND_REGION_APRON %d\n"
                   "#define LAND_REGION_KEEP %d\n"
+                  "#define LAND_REGION_CONSERVE %uu\n"
                   "#define LAND_REGION_TABLE %d\n"
                   "#define LAND_REGION_TABLE_BITS %d\n"
                   "const float LAND_REGION_CELL0 = %.9g;\n"
                   "const float LAND_REGION_RATIO = %d.0;\n",
-                  config.levels, config.cells, config.apron, config.keep, tableSize(), bits, config.cell,
+                  config.levels, config.cells, config.apron, config.keep, config.conserve, tableSize(), bits,
+                  config.cell,
                   config.ratio);
     return buf;
 }
