@@ -76,16 +76,6 @@ vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
 }
 float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot).x; }
 
-// How much the view looks down into the deck (the sine of its slope below
-// the horizontal where it enters it, CL_DOWN_FROM .. TO): a cloud seen from
-// above, its sunlit top, the eye over the deck (all of it CL_DOWN_OVER of
-// the deck's thickness over its top). There the deep body's diffuse light
-// reaches the eye (clIntegrate); a view from below, across or within the
-// deck, at a base or a side, is as it was.
-const float CL_DOWN_FROM = 0.05, CL_DOWN_TO = 0.2;
-const float CL_DOWN_OVER = 0.25;
-float clDown = 0.0;
-
 // The forms at a point of the view.
 struct ClForms {
     float sigma;    // their extinction

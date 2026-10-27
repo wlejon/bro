@@ -290,8 +290,12 @@ void clCover(inout ClMarch m, vec3 L0, float T0, float cover) {
     m.T = T0 * mix(1.0, m.T / max(T0, 1e-6), cover);
 }
 
+// (How the deep body's diffuse light falls with the depth toward the sun:
+// 0.75 (1 - g). clIntegrate's `deep` is how much of that light the piece
+// takes: the sun over its horizon.)
+const float CL_DIFFUSE_FALL = 0.11;
 void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 tau, float about, vec3 s,
-                 float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow, float down) {
+                 float nu, float ph[6], float albedo, vec3 E, vec3 skyAbove, vec3 groundBelow, float deep) {
     float r = length(p);
     vec3 up = p / r;
     float h = clamp((r - clouds.shell.x) / (clouds.shell.y - clouds.shell.x), 0.0, 1.0);
@@ -316,12 +320,17 @@ void clIntegrate(inout ClMarch m,vec3 p, float tm, float dt, float sigma, vec2 t
         b *= 0.8;
     }
     // (The octaves past the sixth, b / (1 - 0.8) of the light, isotropic:
-    // the deep body's diffuse reflection, which leaves through the face the
-    // sun lights, so it reaches a view that looks down into the cloud, the
-    // sun over it (a heap's top seen from above, which the six octaves'
-    // forward lobes send back about half a white diffuser's light), and
-    // never one that looks up at its base or across at its side.)
-    ms += down * b / 0.2 * (0.25 / PI) * exp(-tau.x * a) * powder;
+    // the deep body's diffuse light, which a heap's top seen from above
+    // sends back (the six octaves' forward lobes about half a white
+    // diffuser's light) and its sides and base too, and which fills the
+    // cloud seen from within. It falls with the depth from the sun as
+    // diffusion does, not as the octaves' exponentials: a thick cloud lets
+    // through 1 / (1 + 0.75 (1 - g) tau) of the flux, g some 0.85, so 500 m
+    // under a heap's sunlit top the inside is a bright haze, as it is, and
+    // a base 2 km under it a grey a tenth of the top's. The sixth octave's
+    // exp(-0.05 tau) left the inside dark grey, so it was given only to
+    // views looking down from over the deck.)
+    ms += deep * b / 0.2 * (0.25 / PI) / (1.0 + CL_DIFFUSE_FALL * tau.x) * powder;
     // The sky's light, less what the cloud above hides (a floor for what
     // its body scatters about), and the ground's from below.
     float sees = mix(0.2, 1.0, exp(-0.15 * tau.y));
@@ -405,8 +414,6 @@ void main() {
     // the mean depth of what it sends; the march blended out over
     // CL_LAYER_FROM .. CL_LAYER_TO of the deck's thickness a pixel.
     float thick = clouds.shell.y - clouds.shell.x;
-    clDown = smoothstep(CL_DOWN_FROM, CL_DOWN_TO, -dot(rd, normalize(ro + rd * sp.x))) *
-             smoothstep(clouds.shell.y, clouds.shell.y + CL_DOWN_OVER * (clouds.shell.y - clouds.shell.x), length(ro));
     float wl =length(ro) > clouds.shell.y ? smoothstep(CL_LAYER_FROM, CL_LAYER_TO, pixel * sp.x / thick) : 0.0;
     ClMarch ml = ClMarch(vec3(0.0), 1.0, 0.0, 0.0);
     vec4 dbgLCol = vec4(0.0);
@@ -521,7 +528,7 @@ void main() {
                 vec3 ph0 = ro + rd * tH;
                 float muH = max(dot(normalize(ph0), s), 0.1);
                 clIntegrate(ml, ph0, tH, dtH, tauH / dtH, vec2(1.0 / muH, 0.0), aboutH, s, nu, ph, albedo, E * shadeH,
-                            skyAbove, groundBelow, clDown);
+                            skyAbove, groundBelow, smoothstep(0.0, 0.2, dot(normalize(ph0), s)));
             } else {
                 if (tauView < 1e-4) continue;
                 vec3 pl = ro + rd * at;
@@ -834,9 +841,8 @@ void main() {
         if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)
-        float down = clDown * smoothstep(0.0, 0.2, dot(s, normalize(ro + rd * x)));
         clIntegrate(m, ro + rd * x, x, L, sigma, tau, sigma * max(120.0, foot), s, nu, ph, albedo, E,
-                    skyAbove, groundBelow, down);
+                    skyAbove, groundBelow, smoothstep(0.0, 0.2, dot(s, normalize(ro + rd * x))));
         t += L;
         len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
     }
