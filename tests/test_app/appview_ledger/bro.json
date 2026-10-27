@@ -1,0 +1,6 @@
+{
+  "id": "org.bro.test.AppViewLedger",
+  "name": "AppView Ledger",
+  "version": "1.0.0",
+  "permissions": ["spawn"]
+}

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AppView Ledger</title>
+  <style>html, body { margin: 0; width: 100%; height: 100%; } canvas { width: 32px; height: 32px; }</style>
+</head>
+<body>
+  <canvas id="c2d" width="32" height="32"></canvas>
+  <canvas id="gl" width="32" height="32"></canvas>
+  <canvas id="scene" width="32" height="32"></canvas>
+  <terminal id="term" style="width: 120px; height: 40px"></terminal>
+  <script>
+    // An app that holds one of everything a stopped app must give back: a 2D
+    // canvas, a WebGL2 context, a 3D scene, a sounding oscillator, a Worker,
+    // an interval, a watcher on its own folder and a child process in a
+    // <terminal>. It tells the page what it opened; the page stops it and
+    // checks from outside that each was let go.
+    const fs = require('fs');
+    const out = { opened: [] };
+    const note = (what) => out.opened.push(what);
+
+    const g = document.getElementById('c2d').getContext('2d');
+    g.fillStyle = '#c33';
+    g.fillRect(0, 0, 32, 32);
+    note('canvas2d');
+
+    // A sub-document has no WebGL or 3D scene yet: both answer null.
+    const gl = document.getElementById('gl').getContext('webgl2');
+    if (gl) {
+      gl.clearColor(0.2, 0.4, 0.8, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      note('webgl2');
+    }
+    if (document.getElementById('scene').getContext('scene')) note('scene');
+
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    osc.connect(ctx.destination);
+    osc.start();
+    note('audio');
+
+    let ticks = 0;
+    setInterval(() => ticks++, 10);
+    note('interval');
+
+    fs.mkdirSync(bro.app.dataDir, { recursive: true });
+    out.watcher = fs.watch(bro.app.dataDir, () => {}) ? true : false;
+    note('watch');
+
+    out.heartbeat = bro.app.dataDir + '/heartbeat';
+    const worker = new Worker('worker.js');
+    worker.onmessage = () => {
+      note('worker');
+      const term = document.getElementById('term');
+      try {
+        term.spawn({ command: 'sleep', args: ['600'] });
+        out.pid = term.pid;
+        note('terminal');
+      } catch (e) {
+        out.terminal = e.message;
+      }
+      parent.postMessage(out);
+    };
+    worker.postMessage(out.heartbeat);
+    // The second way out: a listener that never returns, so the runtime
+    // terminates the app with all of the above still open.
+    document.body.addEventListener('click', () => {
+      for (;;) {}
+    });
+  </script>
+</body>
+</html>

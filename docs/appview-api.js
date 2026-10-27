@@ -30,6 +30,12 @@
  *     the page waits on it (an event dispatched into it, a function it handed
  *     the page), it must finish within a second, or bro stops it and fires
  *     `terminated` at the element with the reason; `start()` runs it again.
+ *   - What it held is let go when it stops (`stop()`, termination, removal):
+ *     its timers, Workers, sound, watchers and child processes
+ *     (`<terminal>`, `child_process`).
+ *
+ * Not yet in an app's view, as in any sub-document: `getContext('webgl2')`
+ * and `getContext('scene')` answer null.
  *
  * An `<iframe>` of the page's own folder is the page's own app, and reaches
  * and is reached as a same-origin frame is on the web (docs/iframe-api.js).

@@ -4,6 +4,7 @@
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
@@ -218,9 +219,13 @@ void installWorkerGlobals(engine::Engine& engine) {
             if (!workerScriptPath(url, script, err)) {
                 return ev::throwTypeError("new Worker('" + url + "'): " + err);
             }
-            std::string base = engine.appDir().empty() ? "." : engine.appDir();
-            // The script is read where the worker thread will read it (relative
-            // to the app's folder): the host's gate first (host_access.h).
+            // Relative to the document that made it: an <appview>'s worker is
+            // its app's script, not one from the page's folder.
+            const Compartment* comp = currentCompartment();
+            std::string base = comp && !comp->basePath.empty() ? comp->basePath : engine.appDir();
+            if (base.empty()) base = ".";
+            // The script is read where the worker thread will read it: the
+            // host's gate first (host_access.h).
             {
                 const std::filesystem::path sp(std::u8string(script.begin(), script.end()));
                 const std::filesystem::path full = sp.is_absolute() ? sp : std::filesystem::path(base) / sp;
@@ -235,6 +240,22 @@ void installWorkerGlobals(engine::Engine& engine) {
             }
             w->start();
             w->pinWrapper(g_workerClass.make(w, hostWorkerDtor));
+            // A sub-document's workers end with it: stopped, terminated or
+            // removed, the compartment terminates each it made that still runs
+            // (found again by id, as the wrapper's sweep may have freed it).
+            if (Compartment* owner = currentCompartment(); owner && owner->id != 0) {
+                owner->teardownHooks.push_back([wid] {
+                    WorkerInstance* found = nullptr;
+                    {
+                        std::lock_guard<std::mutex> lock(s_workersMutex);
+                        for (auto* a : s_activeWorkers)
+                            if (a->id() == wid) found = a;
+                    }
+                    if (!found) return;
+                    found->terminate();
+                    found->unpinWrapper();
+                });
+            }
             return w->pinnedWrapper();
         },
         [](ObjectBuilder& proto) {

@@ -43,6 +43,8 @@ public:
         terminate();
     }
 
+    uint64_t id() const { return workerId_; }
+
     void start() {
         alive_.store(true, std::memory_order_release);
         workerThread_ = std::thread(&WorkerInstance::threadFunc, this);

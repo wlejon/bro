@@ -600,6 +600,24 @@ What the design must keep possible, and what it still lacks for it:
      synchronous natives an app can reach (file I/O, model loads), which
      bro does when it adopts compartments.
 5. **Disconnects, the error card, and the ledger's per-resource tests.**
+   Begun (2026-10-26):
+   - **Teardown test** (`tests/appview/test_appview_teardown.js`, fixture
+     `tests/test_app/appview_ledger`). An app holding a 2D canvas, a
+     sounding oscillator, an interval, an `fs.watch` on its own folder, a
+     Worker writing a heartbeat file and a `<terminal>` child is stopped
+     three ways (`stop()`, terminated for not returning, removed); each
+     time, checked from outside, the child process is gone and the
+     heartbeat stops. Run on halo.
+   - **Workers are the compartment's.** A sub-document's `new Worker(url)`
+     resolves against its own document (it read the page's folder before),
+     and its compartment terminates the workers it made at teardown
+     (`host_worker.cpp`).
+   - **Still open:** WebGL and the 3D scene in a sub-document (both answer
+     null, so an inline app has neither); the error card; the exception
+     policy (open question 5); recurring overruns marked not responding;
+     per-kind tests for model handles and GPU objects once a sub-document
+     can hold them; brokit's `fs` / `fetch` relative paths resolve against
+     the process's app folder, not an appview's.
 6. **Install identity, helm's prompts and the Apps settings page.** Identity
    and the page are **built** (2026-10-26); helm's prompts are not:
    - `bro --install` writes `<root>/<id>.install.json` beside the installed
