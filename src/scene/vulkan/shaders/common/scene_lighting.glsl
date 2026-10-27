@@ -192,6 +192,55 @@ float sceneCloudSun(vec3 pos) {
     return sun + left;
 }
 
+// How much of the sky over camera-relative `pos` the deck covers (0 with
+// no clouds): the mean of its shadow about the point over some 12 km (nine
+// taps 4 km apart on the level of 1.9 km texels), the share of the sun the
+// clouds about take, so a broken deck's cover is its share and not the
+// shadow the point stands in.
+float sceneCloudCover(vec3 pos) {
+    if (lighting.cloudShadow.params.x < 0.5) return 0.0;
+    const int l = 5;
+    const float S = float(CL_SHADOW_SIDE);
+    vec3 d = normalize(atmOrigin(pos));
+    float texel = lighting.cloudShadow.params.z * pow(lighting.cloudShadow.params.w, float(l));
+    float cn = dot(d, lighting.cloudShadow.n[l].xyz);
+    if (cn < 0.05) return 0.0;
+    vec2 g = lighting.cloudShadow.params.y *
+             vec2(dot(d, lighting.cloudShadow.e1[l].xyz), dot(d, lighting.cloudShadow.e2[l].xyz)) / (cn * texel) +
+             0.5 * S;
+    if (min(min(g.x, g.y), min(S - g.x, S - g.y)) < 4.0) return 0.0;
+    float sun = 0.0;
+    for (int k = 0; k < 9; ++k) {
+        vec2 o = vec2(float(k % 3) - 1.0, float(k / 3) - 1.0) * 2.0;
+        sun += textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3((g + o) / S, float(l)), 0.0).r;
+    }
+    return clamp(1.0 - sun / 9.0, 0.0, 1.0);
+}
+
+// The sky's light at camera-relative `pos` (atmSkyLightSh's coefficients),
+// with the deck over it: where the clouds cover the sky, its light is
+// their bases', the sun they let through scattered (CLOUD_DIFFUSE of the
+// sun on a level surface above them, grey: many scatterings whiten it),
+// even over the upper half (an overcast sky is no brighter at its zenith
+// than the eye can tell), in place of the clear sky's in proportion.
+const float CLOUD_DIFFUSE = 0.3;
+void sceneSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
+    atmSkyLightSh(pos, c, frame);
+    float k = sceneCloudCover(pos);
+    if (k <= 0.0) return;
+    vec3 p = atmOrigin(pos);
+    float r = length(p);
+    float muS = dot(p, lighting.atm.sunDir.xyz) / r;
+    vec3 t = atmSunTransmittance(r, muS);
+    float grey = dot(t, vec3(0.2126, 0.7152, 0.0722));
+    vec3 L = ATM.sunIlluminance.rgb * (grey * max(muS, 0.0) * CLOUD_DIFFUSE / ATM_PI);
+    // (An even upper hemisphere's coefficients, z up in the sun's frame:
+    // Y00's integral 2 pi 0.282095, Y10's pi 0.488603; the rest none.)
+    for (int i = 0; i < 6; ++i) c[i] *= 1.0 - k;
+    c[0] += k * 1.772454 * L;
+    c[1] += k * 1.534990 * L;
+}
+
 // The sun's light at camera-relative `pos`, for a sun of 1 at the top of
 // the air: what the air, the planet's shadow and the cloud deck leave of it.
 vec3 sceneSunTransmittance(vec3 pos) {
@@ -205,7 +254,7 @@ vec3 sceneSunTransmittance(vec3 pos) {
 vec3 sceneSkyIrradiance(vec3 pos, vec3 n) {
     vec3 c[6];
     mat3 frame;
-    atmSkyLightSh(pos, c, frame);
+    sceneSkyLightSh(pos, c, frame);
     return atmShIrradiance(c, frame, n);
 }
 
@@ -1004,7 +1053,7 @@ vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
         // where no reflection probe covers the surface.
         vec3 c[6];
         mat3 frame;
-        atmSkyLightSh(s.position, c, frame);   // once, for both
+        sceneSkyLightSh(s.position, c, frame);   // once, for both
         vec3 irradiance = atmShIrradiance(c, frame, nI);
         vec3 sky = atmShRadiance(c, frame, R);
         // A smooth surface (water, glass) mirrors the sky itself, not the
