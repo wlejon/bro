@@ -131,7 +131,7 @@ float clHg(float nu, float g) {
 float clPhase(float nu, float k) { return mix(clHg(nu, 0.8 * k), clHg(nu, -0.3 * k), 0.2); }
 
 // The point as the cache sees it, the cache over a footprint and the forms
-// there (clAt, clCache, clBaseShows, clFormsAt, ...): shared with the
+// there (clAt, clCache, clBaseParts, clFormsAt, ...): shared with the
 // volume's bakes.
 #include "sky/cloud_forms_at.glsl"
 #include "sky/cloud_volume.glsl"
@@ -408,6 +408,11 @@ void main() {
 #endif
         discard;
     }
+    // (The far heaps' path by the view's slope where it meets the deck.)
+    {
+        float t0 = spanA.x < spanA.y ? spanA.x : spanB.x;
+        clHeapPath = cloudHeapsSharePath(abs(dot(rd, normalize(ro + rd * t0))));
+    }
 
     vec3 s = lighting.atm.sunDir.xyz;
     vec3 E = lighting.atm.sunIlluminance.rgb;
@@ -468,8 +473,7 @@ void main() {
             col = cloudCacheColumn(w.xy, k);
             if (k + 1 < CL_CACHE_LEVELS) col = mix(col, cloudCacheColumn(w.xy, k + 1), fract(lod));
         }
-        if (globe > 0.0) col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);
-        float len = q.y - q.x;
+        if (globe > 0.0) col = mix(col, clGlobeColumn(w.p, pixel * q.x), globe);        float len = q.y - q.x;
         // The heaps as themselves where they are a few pixels across or more
         // (their map's columns: the heaps the march draws nearer), over the
         // slabs' column (the cache's without them); where they are finer,
@@ -526,12 +530,19 @@ void main() {
         if (globe < 1.0) {
             ClAt wm = clAt(ro + rd * (q.x + len * (1.0 - col.z)));
             wm.h = col.z;
-            float base = clBase(wm, lod, footCell);
+            // (The slabs' base alone: the heaps' share has no surface to cut,
+            // and cut by the billows it was a mottled blanket over the land.)
+            float base = clBaseParts(wm, lod, cloudDrift(wm.p), footCell, footCell).x;
             vec3 pd = cloudDrift(wm.p);
             float footPixel = pixel * q.x;
             float shareCell = cloudFormsShare(cloudBillows(pd, footCell), base, footCell);
             float sharePixel = cloudFormsShare(cloudBillows(pd, footPixel), base, footPixel);
-            cut = mix(clamp(sharePixel / max(shareCell, 1e-3), 0.0, 4.0), 1.0, globe);
+            // (None of the cell's a surface, the column is the heaps' share,
+            // whose law is its own: no cut. Cut by a cell's nothing, a far
+            // field of heaps was gone wherever their share was under the
+            // surface's half.)
+            float c0 = shareCell > 1e-3 ? clamp(sharePixel / shareCell, 0.0, 4.0) : 1.0;
+            cut = mix(c0, 1.0, globe);
         }
         // The view's depth through the layer slanted `m` times its own: the
         // share of the view its clouds cover (col.x's over the depth within
@@ -539,8 +550,7 @@ void main() {
         // (Not col.x's slanted: a field of opaque clouds over a share of the
         // column slanted to the horizon is no white sheet.)
         float m = len / thick;
-        float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);
-        float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
+        float cv = clamp((1.0 - exp(-col.x)) / max(1.0 - exp(-col.w), 1e-4), 0.0, 1.0);        float tauView = -log(max(1.0 - cv * (1.0 - exp(-col.w * m)), 1e-4)) * cut;
         if (tauView < 1e-4 && tauH < 1e-4) continue;
         float at = q.x + len * clamp(col.y / max(col.x, 1e-4), 0.0, 1.0);
         if (!sky) {
@@ -809,7 +819,7 @@ void main() {
         // (Deep in the cloud, where the detail no longer shows, or where the
         // piece is as long as a cell, the volume's extinction there over a
         // cell about the piece's mean: one fetch.)
-        ClForms f = ClForms(0.0, -1.0, 0.0);
+        ClForms f = ClForms(0.0, -1.0, 0.0, 0.0);
         int kv = CL_VOL_LEVELS;
         vec3 v = clouds.volEye.xyz + dl * x;
         if (tFace >= 0.0 && (tauSeen > CL_IN_FORMS || foot >= clouds.volA.w)) kv = cloudVolLevel(v, max(foot, CL_PIECE_MEAN * L));
@@ -872,7 +882,7 @@ void main() {
         if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)
-        clIntegrate(m, ro + rd * x, x, L, sigma, tau, sigma * max(120.0, foot), s, nu, ph, albedo, E,
+        clIntegrate(m, ro + rd * x, x, L, sigma, tau, max(sigma * max(120.0, foot), f.within), s, nu, ph, albedo, E,
                     skyAbove, groundBelow, smoothstep(0.0, 0.2, dot(s, normalize(ro + rd * x))));
         t += L;
         len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);

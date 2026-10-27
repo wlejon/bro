@@ -152,7 +152,11 @@ void main() {
     CloudColumn layer = cloudColumnNone(), slabs = cloudColumnNone();
     for (int b = CL_CACHE_BINS - 1; b >= 0; --b) {
         float hb = (float(b) + 0.5) / float(CL_CACHE_BINS);
-        cloudColumnAdd(layer, sSigma[col][4][b] * clouds.cacheE1.w, hb, clouds.cacheE1.w, cloudShareLike(cell));
+        // (What the slabs leave of it the heaps', their share where the
+        // cells are shares.)
+        float q = cloudShareLike(cell);
+        float d = sSigma[col][4][b] * clouds.cacheE1.w;
+        cloudColumnAdd(layer, d, hb, clouds.cacheE1.w, q, q * max(d - sSlab[col][b] * clouds.cacheE1.w, 0.0));
         cloudColumnAdd(slabs, sSlab[col][b] * clouds.cacheE1.w, hb, clouds.cacheE1.w, cloudShareLike(cell));
     }
     imageStore(bandOut, ivec3(x, y, CL_CACHE_LEVELS + k), cloudColumnLayer(layer));

@@ -67,20 +67,39 @@ vec3 clCacheBase(ClAt w, float lod) {
 // over its base, and lit it through, a flat white blob over the shaded heap
 // behind it. Over a longer `foot` the heap's field ramps across that length:
 // the share of the piece within it.)
-vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen) {
+// (And apart: `own`, the heaps' own base, and `share`, their share of the
+// air, the cache's, which the forms draw by its own law where they are far,
+// cloudHeapsShareSigma.)
+vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen, out float own, out float share) {
     vec3 c = clCacheBase(w, lod);
+    share = c.z;
+    own = -1.0;
     if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
     float texel;
     float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), texel);
     float far = cloudHeapsFar(seen, texel);
-    float own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
-    return vec4(c.x, mix(own, c.z, far), c.y, far);
+    own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
+    // (Their share as the field, the bounds' and the face's: in cloud
+    // wherever it is any, over the surface's half, so the march goes in and
+    // draws it by its law; under 0 it is how far off they are, as the
+    // world gives it. As a base, a share of a few tenths was clear air the
+    // march stepped past.)
+    float sb = c.z > 0.0 ? 0.5 + 0.5 * min(c.z, 1.0) : c.z;
+    return vec4(c.x, mix(own, sb, far), c.y, far);
 }
-vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot, float seen) {
-    vec4 b = clBaseParts(w, lod, pd, foot, seen);
-    return vec2(max(b.x, b.y), b.z);
+vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen) {
+    float own, share;
+    return clBaseParts(w, lod, pd, foot, seen, own, share);
 }
-float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot, foot).x; }
+float clBase(ClAt w, float lod, float foot) {
+    vec4 b = clBaseParts(w, lod, cloudDrift(w.p), foot, foot);
+    return max(b.x, b.y);
+}
+
+// The path a view crosses one far heap in (cloudHeapsSharePath of the
+// view's slope through the deck; a heap's depth where no view is: the
+// volume's and the cache's bakes).
+float clHeapPath = CL_HEAP_SHARE_PATH;
 
 // The forms at a point of the view.
 struct ClForms {
@@ -88,6 +107,8 @@ struct ClForms {
     float face;     // their field less its surface's (cloudFieldOf): > 0 in cloud, < 0 out
     float cover;    // how much of the pixel they fill here (its share across the surface's ramp; all of
                     // it where the surface's blur is a cloud's edge or wider, as the share's extinction says)
+    float within;   // the depth within the clouds of what they send (the powder's), where more than the piece's own:
+                    // the far heaps' share is a veil as opaque as they cover, but what it sends is a heap's top's
 };
 
 // The forms at `w` (`lod` the cache's level there) over footprint `foot`,
@@ -95,12 +116,15 @@ struct ClForms {
 // (how much of the skin's move shows is the pixel's, not the length a
 // piece's mean is taken over: cloudSkinAt).
 ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
-    ClForms f = ClForms(0.0, -1.0, 0.0);
+    ClForms f = ClForms(0.0, -1.0, 0.0, 0.0);
     if (w.h <= 0.0 || w.h >= 1.0) return f;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
-    vec2 bs = clBaseShows(w, lod, pd, foot, seen);
+    float own, share;
+    vec4 bp = clBaseParts(w, lod, pd, foot, seen, own, share);
+    vec2 bs = vec2(max(bp.x, bp.y), bp.z);
     float base = max(bs.x, 0.0);
+    float far = bp.w;
     float wD = detail ? cloudDetailAt(foot) : 0.0;
     vec4 e = vec4(0.0);
     float inCloud = 0.5;
@@ -125,9 +149,22 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     // pixel, the turrets' slope with the base's: else where they are steep
     // it ramps in a sliver of a pixel and the silhouette steps.)
     float ramp = wB + cloudSkinBlur(slope, seen);
-    f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
+    // (Where the heaps are far, `far` of them their share by its own law,
+    // over the slabs': cloudHeapsShareSigma. The field, the face, the march's
+    // bounds read, is the base's as it was.)
+    if (far <= 0.0) {
+        f.sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
+    } else {
+        float near = far < 1.0 ? cloudSigmaOf(max(max(bp.x, own), 0.0), skin, wB, foot, ramp) : 0.0;
+        float slabs = cloudSigmaOf(max(bp.x, 0.0), skin, wB, foot, ramp);
+        float heaps = cloudHeapsShareSigma(share, clHeapPath);
+        f.sigma = mix(near, max(slabs, heaps), far);
+        // (Lit as the tops it stands for: a veil as thin as its sigma sent
+        // a wisp's light, so a far field of heaps came in dim, grey.)
+        if (heaps > slabs) f.within = far * clouds.forms.x * clHeapPath;
+    }
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
-    f.cover = f.sigma > 0.0 ? mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB) : 0.0;
+    f.cover = f.sigma > 0.0 ? mix(mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB), 1.0, far) : 0.0;
     return f;
 }

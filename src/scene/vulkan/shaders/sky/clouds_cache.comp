@@ -118,12 +118,19 @@ void main() {
         }
     }
 #endif
-    float near = hs > 0.0 ? 1.0 - smoothstep(0.15 * hs, 0.6 * hs, cell) : 0.0;
-    float heapShare = near < 1.0 ? cloudHeapsShareAt(q) : 0.0;
-    float heaps = mix(min(heapShare, 1.0), min(0.5 + heapIn / clouds.forms.w, 1.0), near);
+    float near = hs > 0.0 ? 1.0 - smoothstep(0.06 * hs, 0.2 * hs, cell) : 0.0;
+    // (The share in .a, what the march reads of them where they are finer
+    // than its pixel: scene_cloud_layer.glsl's cloudHeapsShareSigma.)
+    float heapShare = cloudHeapsShareAt(q);
+    float heaps = min(heapShare, 1.0);
     float baseRaw = slab;
-    // (The extinction the cell's mean, of slabs and heaps.)
-    float sigma = cloudForms(pd, max(max(slab, heaps), 0.0), 0.5, cell, false);
+    // (The extinction the cell's mean, of slabs and heaps: the heaps as
+    // themselves where the cell is finer than they are, their share's
+    // extinction where it is as wide.)
+    float sigma = 0.0;
+    if (near < 1.0) sigma = max(cloudForms(pd, max(slab, 0.0), 0.5, cell, false), cloudHeapsShareSigma(heapShare));
+    if (near > 0.0)
+        sigma = mix(sigma, cloudForms(pd, max(max(slab, min(0.5 + heapIn / clouds.forms.w, 1.0)), 0.0), 0.5, cell, false), near);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
     sBase[col][bin] = baseRaw;
     barrier();

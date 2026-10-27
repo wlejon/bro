@@ -47,10 +47,12 @@ void main() {
         // (The slabs' and the heaps' share, as the cache's coarse cells
         // have them: the globe read the slabs alone, so a field of heaps
         // was clear from orbit and came in as a field of white dots.)
-        float share = min(max(cloudDensity(q), cloudHeapsShareAt(q)), 1.0);
-        if (share <= 0.0) continue;
-        cloudColumnAdd(col, cloudForms(cloudDrift(q.p), share, 0.5, foot, false) * binH, h, binH,
-                       cloudShareLike(foot));
+        // (Their own law: cloudHeapsShareSigma.)
+        float slab = min(cloudDensity(q), 1.0), heaps = cloudHeapsShareAt(q);
+        if (slab <= 0.0 && heaps <= 0.0) continue;
+        float sSlab = slab > 0.0 ? cloudForms(cloudDrift(q.p), slab, 0.5, foot, false) : 0.0;
+        float sigma = max(sSlab, cloudHeapsShareSigma(heaps));
+        cloudColumnAdd(col, sigma * binH, h, binH, cloudShareLike(foot), (sigma - sSlab) * binH);
     }
     imageStore(globeOut, ivec3(x, y, f), cloudColumnLayer(col));
 }

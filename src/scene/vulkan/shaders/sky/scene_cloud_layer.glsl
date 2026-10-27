@@ -224,27 +224,38 @@ float cloudGlobeTexel() { return clouds.shell.x * 2.0 * CLOUD_QUARTER_PI / float
 // over a share of the column is that share of the view, opaque, not a thin
 // veil over all of it, which lit as one sent back a grey wash over the
 // sea.)
+// (`dh` of `d` the heaps' share, whose law is its own, cloudHeapsShareSigma:
+// a share over CL_HEAP_SHARE_PATH, and stacked as the heaps' profile is, so
+// its cover is its depth down the column, not its bins' most over an edge,
+// which took a field of heaps over a fifth of the land for a blanket over
+// half of it.)
+const float CL_HEAP_SHARE_PATH = 600.0;   // (cloudHeapsShareSigma)
+const float CL_HEAP_SHARE_WIDE = 4.0;
 struct CloudColumn {
-    float tau, took, depth, height, cover, inner;
+    float tau, took, depth, height, cover, inner, heaps;
 };
-CloudColumn cloudColumnNone() { return CloudColumn(0.0, 0.0, 0.0, 0.0, 0.0, 0.0); }
-void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH, float q) {
+CloudColumn cloudColumnNone() { return CloudColumn(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); }
+void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH, float q, float dh) {
     if (d <= 0.0) return;
     float wgt = exp(-c.tau) * (1.0 - exp(-d));
     c.took += wgt;
     c.depth += wgt * (c.tau + 0.5 * min(d, 1.0));
     c.height += wgt * h;
     c.tau += d;
-    float share = 1.0 - exp(-d / binH * clouds.forms.w);
+    dh = clamp(dh, 0.0, d);
+    float share = 1.0 - exp(-(d - dh) / binH * clouds.forms.w);
+    float heapShare = 1.0 - exp(-dh / binH * CL_HEAP_SHARE_PATH);
     c.cover = max(c.cover, share);
-    c.inner += mix(d, max(d, share * clouds.forms.x * binH), q);
+    c.heaps += dh;
+    c.inner += mix(d, max(d, max(share, heapShare) * clouds.forms.x * binH), q);
 }
+void cloudColumnAdd(inout CloudColumn c, float d, float h, float binH, float q) { cloudColumnAdd(c, d, h, binH, q, 0.0); }
 // The layer: x its optical depth (the view's, straight down), y the mean
 // depth from its top of what it sends, z the mean height of that, w the
 // depth within its clouds (what the light one of them sends has scattered
 // about in: the powder's).
 vec4 cloudColumnLayer(CloudColumn c) {
-    float cover = max(c.cover, 1e-4);
+    float cover = max(1.0 - (1.0 - c.cover) * exp(-c.heaps), 1e-4);
     float inner = min(c.inner / cover, 1e3);
     float tau = -log(max(1.0 - cover * (1.0 - exp(-inner)), 0.005));
     return c.took > 0.0 ? vec4(tau, c.depth / c.took, c.height / c.took, inner) : vec4(0.0, 0.0, 0.5, 0.0);
@@ -450,6 +461,29 @@ float cloudSigmaOf(float base, float skin, float w, float footprint, float ramp)
 float cloudSigmaOf(float base, float skin, float w, float footprint) {
     return cloudSigmaOf(base, skin, w, footprint, w);
 }
+// The extinction (1/m) of the heaps where they are their share `share` of
+// the air (the world's cloudHeapsShare): opaque at heart where they stand,
+// the sky between them through, over the path a view crosses one heap in,
+// CL_HEAP_SHARE_PATH, about as deep as one stands, so a column of them
+// seen from above or below covers what they cover, whatever the footprint.
+// (Not as a base: a share of a few tenths read as a surface field is under
+// its surface wherever the footprint is finer than a cloud's edge, and
+// solid where a clump lifts it over, so a far field of heaps was a few
+// white blobs over open sea; and the slabs' law, a cloud's edge long, read
+// a field of heaps a few hundred metres deep as a third of its cover.)
+// (`path`: the length a view crosses one in, CL_HEAP_SHARE_PATH straight
+// up or down and longer as the view slants, a heap being wider than it is
+// deep, CL_HEAP_SHARE_WIDE at most; so a field's cover is what it covers
+// from above at every slant up to that, not a blanket wherever a view
+// crosses the layer aslant.)
+float cloudHeapsSharePath(float slope) {
+    return CL_HEAP_SHARE_PATH * clamp(1.0 / max(slope, 1e-3), 1.0, CL_HEAP_SHARE_WIDE);
+}
+float cloudHeapsShareSigma(float share, float path) {
+    if (share <= 0.0) return 0.0;
+    return -log(max(1.0 - min(share, 1.0) * (1.0 - exp(-clouds.forms.x * path)), 1e-4)) / path;
+}
+float cloudHeapsShareSigma(float share) { return cloudHeapsShareSigma(share, CL_HEAP_SHARE_PATH); }
 float cloudFormsOf(vec4 n, vec4 e, float wD, float base, float inCloud, float footprint) {
     return cloudSigmaOf(base, cloudSkinOf(n, e, wD, inCloud, cloudSkinAt(footprint)), cloudSurfaceBlur(footprint), footprint);
 }
@@ -631,7 +665,7 @@ float cloudHeapMapIn(vec2 xy, float foot, float z, out float texel) {
 // coarsest texels, so past the map nothing changes.
 float cloudHeapsFar(float foot, float texel) {
     float hs = cloudHeapMapSide();
-    return max(smoothstep(0.25 * hs, 0.6 * hs, foot), smoothstep(0.4 * hs, 0.8 * hs, texel));
+    return max(smoothstep(0.04 * hs, 0.12 * hs, foot), smoothstep(0.4 * hs, 0.8 * hs, texel));
 }
 
 // --- The layer seen from above (clouds.frag) -------------------------------------

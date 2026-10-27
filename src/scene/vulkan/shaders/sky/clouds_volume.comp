@@ -122,7 +122,7 @@ void main() {
         most += 0.04 * abs(most) + 0.004;
         bool holds = cloudMayHold(most, footMax);
         if (holds) {
-            ClForms f = ClForms(0.0, -1.0, 0.0);
+            ClForms f = ClForms(0.0, -1.0, 0.0, 0.0);
             if (w.h > 0.0 && w.h < 1.0) f = clFormsAt(w, clLod(w, cell), cell, cell, true);
             o = vec4(f.sigma, 0.0, f.cover, 1.0);
         }
