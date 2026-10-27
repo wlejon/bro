@@ -109,14 +109,14 @@ ShadowPages::EntryView ShadowPages::entry(int index) const {
 int ShadowPages::mapOfEntry(int index, int& mip) const {
     mip = 0;
     const int clip = config_.levels * SP_LEVEL_ENTRIES;
-    if (index < clip) {
-        const int level = index / SP_LEVEL_ENTRIES;
-        return sun_.on && level < static_cast<int>(maps_.size()) ? level : -1;
-    }
-    if (isNext(index)) {
-        const int level = (index - clipFirst(true)) / SP_LEVEL_ENTRIES;
+    // (The maps run in the lights' order: a local light listed before the
+    // sun puts its faces before the sun's levels.)
+    if (index < clip || isNext(index)) {
+        const bool next = isNext(index);
+        const int level = (index - clipFirst(next)) / SP_LEVEL_ENTRIES;
         for (size_t m = 0; m < maps_.size(); ++m)
-            if (maps_[m].next && maps_[m].level == level) return static_cast<int>(m);
+            if (maps_[m].kind == SP_KIND_CLIPMAP && maps_[m].next == next && maps_[m].level == level)
+                return static_cast<int>(m);
         return -1;
     }
     const int slot = (index - clip) / SP_LOCAL_ENTRIES;
