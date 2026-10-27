@@ -1,6 +1,6 @@
 // Place natives: the body a scene stands on and its place frame
 // (scene/world/place.h), behind js/scene_graph.js's setBody, place, toBody,
-// toPlace, upAt, latLongAt, reanchorAt and the `reanchor` event.
+// toPlace, upAt, latLongAt, reanchorAt, the `reanchor` event and expect.
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
@@ -10,6 +10,7 @@
 #include "scene/world/place.h"
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <span>
 #include <vector>
@@ -101,6 +102,33 @@ bool bro_scene_SceneGraph_reanchorAt(void* self, const double* b, uint32_t b_len
     auto* g = graphOf(self);
     double in[3];
     return g && point(b, b_len, in) && g->reanchorAt(in);
+}
+
+// Where the eye is expected (scene/world/expected_eyes.h): an id, 0 when
+// ExpectedEyes::kMax are held. `within` is seconds (Infinity: unsaid).
+double bro_scene_SceneGraph_expect(void* self, const double* b, uint32_t b_len, double within) {
+    auto* g = graphOf(self);
+    double in[3];
+    if (!g || !point(b, b_len, in)) return 0.0;
+    return g->expected().add(in, std::isnan(within) ? std::numeric_limits<double>::infinity() : within);
+}
+
+bool bro_scene_SceneGraph_expectMove(void* self, double id, const double* b, uint32_t b_len, double within) {
+    auto* g = graphOf(self);
+    double in[3];
+    if (!g || !point(b, b_len, in)) return false;
+    return g->expected().move(static_cast<uint32_t>(id), in,
+                              std::isnan(within) ? std::numeric_limits<double>::infinity() : within);
+}
+
+void bro_scene_SceneGraph_expectCancel(void* self, double id) {
+    if (auto* g = graphOf(self)) g->expected().cancel(static_cast<uint32_t>(id));
+}
+
+// What is still to be made there; -1 until the world has looked.
+double bro_scene_SceneGraph_expectPending(void* self, double id) {
+    auto* g = graphOf(self);
+    return g ? g->expected().pending(static_cast<uint32_t>(id)) : -1.0;
 }
 
 // The handler is called with a Float64Array of 12: the move's rotation

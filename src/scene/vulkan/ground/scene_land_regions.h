@@ -122,6 +122,7 @@ private:
         int slot = -1;
         bool in = false;          // read back, in the table and the store
         uint64_t wanted = 0;      // the frame it was last wanted
+        uint64_t expected = 0;    // the frame it was last wanted where the eye is expected
     };
     struct Member {
         LandRegionKey key;
@@ -135,6 +136,7 @@ private:
         size_t pass = 0;
         int iteration = 0;
         int band = 0;   // the next band of the init
+        bool expected = false;   // made where the eye is expected only: what the budget leaves
     };
     struct Reading {
         LandRegionKey key;
@@ -158,6 +160,11 @@ private:
         uint64_t frame = 0;
         std::vector<LandRegionKey> wanted;   // this frame's, in the order they are made
         uint32_t pending = 0;
+        // Wanted where the eye is expected (scene/world/expected_eyes.h) and
+        // not about the eye, in the order they are made; and how many of
+        // each expected eye's are not in, by its id.
+        std::vector<LandRegionKey> expected;
+        std::unordered_map<uint32_t, int> expectedPending;
         // The table (device-local: every texel of every fill looks regions
         // up in it), written again when the regions in change.
         // Past its entries, each level's centre (land_regions.h, PRESENCE):
@@ -177,9 +184,13 @@ private:
     void drop(LandNode& node, Land& land, uint32_t packed);
     /// The next batch begun: the first region of `near` (those holding the
     /// ground under the eye), else of `wanted`, whose coarser regions are in,
-    /// and the regions of its level after it in `wanted` whose are too.
+    /// and the regions of its level after it in `wanted` whose are too; then
+    /// those of land.expected, in room no region in is wanted for.
     bool begin(LandNode& node, Land& land, const std::vector<LandRegionKey>& wanted,
                const std::vector<LandRegionKey>& near);
+    /// This frame's regions wanted where the eye is expected (land.expected),
+    /// and what each expected eye still waits on, told to the graph.
+    void expect(SceneFrame& frame, LandNode& node, Land& land, double focal);
     /// The batch's next step: its init's bands run, its passes run (the
     /// finish is all that is left), or neither.
     static Step stepOf(const LandRegionConfig& C, Job& job);

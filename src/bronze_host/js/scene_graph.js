@@ -312,6 +312,32 @@
     fn(SceneGraph.prototype, "reanchorAt", function reanchorAt(b) {
         return __bro_native.scene.SceneGraph_reanchorAt(this, point3(b, "reanchorAt"));
     });
+    // Where the eye is expected: a handle until it is cancelled.
+    const withinOf = (o, name) => {
+        const w = o && o.within !== undefined ? +o.within : Infinity;
+        if (Number.isNaN(w)) throw new TypeError(`${name}: \`within\` must be a number of seconds`);
+        return w;
+    };
+    fn(SceneGraph.prototype, "expect", function expect(b, opts) {
+        const graph = this;
+        const id = __bro_native.scene.SceneGraph_expect(graph, point3(b, "expect"), withinOf(opts, "expect"));
+        if (!id) throw new RangeError("expect: two expected eyes are held already; cancel one first");
+        let live = true;
+        const pending = () => (live ? __bro_native.scene.SceneGraph_expectPending(graph, id) : -1);
+        return {
+            move(b2, opts2) {
+                if (!live) throw new Error("expect: move on a cancelled expected eye");
+                __bro_native.scene.SceneGraph_expectMove(graph, id, point3(b2, "move"), withinOf(opts2, "move"));
+            },
+            cancel() {
+                if (!live) return;
+                live = false;
+                __bro_native.scene.SceneGraph_expectCancel(graph, id);
+            },
+            get pending() { return pending(); },
+            get ready() { return pending() === 0; },
+        };
+    });
     // The reanchor event: the move the graph made (new = rotation * old +
     // translation), for what a script keeps in its own variables.
     const reanchorListeners = new WeakMap();

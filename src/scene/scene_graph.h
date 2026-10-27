@@ -3,6 +3,7 @@
 #include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include "scene/scene_renderer.h"
+#include "scene/world/expected_eyes.h"
 #include "scene/world/place.h"
 
 #include <functional>
@@ -231,6 +232,9 @@ public:
     /// Called with each re-anchor's move once the graph has applied it, for
     /// what a script keeps in its own variables (the reanchor event).
     void setOnReanchor(std::function<void(const PlaceMove&)> fn) { onReanchor_ = std::move(fn); }
+    /// Where the eye is expected (world/expected_eyes.h): body points, so
+    /// they hold through re-anchors.
+    ExpectedEyes& expected() { return expected_; }
 
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     /// 3D nodes render through SceneRenderer's Vulkan passes; 2D nodes via CanvasScene.
@@ -678,6 +682,7 @@ private:
     Place place_;
     bool hasBody_ = false;
     std::function<void(const PlaceMove&)> onReanchor_;
+    ExpectedEyes expected_;
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;

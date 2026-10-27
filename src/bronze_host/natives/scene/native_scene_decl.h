@@ -562,6 +562,14 @@ void bro_scene_SceneGraph_latLongAt(void* self, const double* p, uint32_t p_len,
 bool bro_scene_SceneGraph_reanchorAt(void* self, const double* b, uint32_t b_len);
 void bro_scene_SceneGraph_onReanchor_set(void* self, uint64_t cbBits);
 
+// bro.scene.SceneGraph.prototype.expect and its handle's move / cancel /
+// pending (native_scene_place.cpp)
+//   registered at __bro_native.scene.SceneGraph_<name>
+double bro_scene_SceneGraph_expect(void* self, const double* b, uint32_t b_len, double within);
+bool bro_scene_SceneGraph_expectMove(void* self, double id, const double* b, uint32_t b_len, double within);
+void bro_scene_SceneGraph_expectCancel(void* self, double id);
+double bro_scene_SceneGraph_expectPending(void* self, double id);
+
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
 //   opts_pcfTaps_given: false when the value was not passed (no declared default)

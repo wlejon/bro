@@ -5,6 +5,8 @@
 #include "render/vulkan_util.h"
 #include "scene/nodes/land_node.h"
 #include "scene/nodes/world_module.h"
+#include "scene/scene_graph.h"
+#include "scene/world/expected_eyes.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
@@ -243,10 +245,14 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
     // read's reach), and on another root any (a face's lattice runs past its
     // edges onto the next).
     std::vector<LandRegionKey> missing;
-    for (const LandRegionKey& k : wanted) {
-        const auto r = land.resident.find(k.packed());
-        if (r == land.resident.end() || !r->second.in) missing.push_back(k);
-    }
+    const auto miss = [&](const std::vector<LandRegionKey>& keys) {
+        for (const LandRegionKey& k : keys) {
+            const auto r = land.resident.find(k.packed());
+            if (r == land.resident.end() || !r->second.in) missing.push_back(k);
+        }
+    };
+    miss(wanted);
+    miss(land.expected);
     // (Coarser region c is read by finer region k.)
     const auto reads = [&](const LandRegionKey& k, const LandRegionKey& c) {
         if (c.root != k.root) return true;
@@ -280,38 +286,53 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         if (urgent[i]) order.push_back(wanted[i]);
     for (size_t i = 0; i < wanted.size(); ++i)
         if (!urgent[i]) order.push_back(wanted[i]);
+    // (Then where the eye is expected: none of the eye's is startable before them.)
+    const size_t eyes = order.size();
+    order.insert(order.end(), land.expected.begin(), land.expected.end());
     // The first startable one so ordered, and the startable ones of its
     // level after it, up to a batch.
-    const LandRegionKey* first = nullptr;
-    for (const LandRegionKey& k : order)
-        if (startable(k)) {
-            first = &k;
+    size_t firstAt = order.size();
+    for (size_t i = 0; i < order.size(); ++i)
+        if (startable(order[i])) {
+            firstAt = i;
             break;
         }
-    if (!first) return false;
-    std::vector<LandRegionKey> picks{*first};
+    if (firstAt == order.size()) return false;
+    const LandRegionKey first = order[firstAt];
+    std::vector<LandRegionKey> picks{first};
     for (const LandRegionKey& k : order) {
         if (static_cast<int>(picks.size()) >= kBatch) break;
-        if (k.level == first->level && !(k == *first) && startable(k)) picks.push_back(k);
+        if (k.level == first.level && !(k == first) && startable(k)) picks.push_back(k);
     }
+    const auto isExpected = [&](const LandRegionKey& k) {
+        return std::find(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(eyes), k) ==
+               order.begin() + static_cast<std::ptrdiff_t>(eyes);
+    };
     Job job;
+    job.expected = firstAt >= eyes;
     for (const LandRegionKey& k : picks) {
+        const bool expected = isExpected(k);
         if (land.freeSlots.empty()) {
+            // Where the eye is expected, only in room nothing wants.
+            if (expected) break;
             // The longest unwanted region in (none that a region being made
-            // or read back stands on).
+            // or read back stands on): first one not wanted where the eye is
+            // expected either, else one that is (the eye takes it back).
             uint32_t victim = 0;
-            uint64_t oldest = land.frame;
-            int level = L.config.levels;
-            for (const auto& [packed, r] : land.resident) {
-                if (!r.in || r.wanted == land.frame) continue;
-                bool busy = false;
-                for (const auto& [k2, o] : land.resident)
-                    if (!o.in && o.key.level < r.key.level && landRegionsOverlap(L, r.key, o.key)) busy = true;
-                if (busy) continue;
-                if (r.wanted < oldest || (r.wanted == oldest && r.key.level < level)) {
-                    victim = packed;
-                    oldest = r.wanted;
-                    level = r.key.level;
+            for (int tier = 0; tier < 2 && !victim; ++tier) {
+                uint64_t oldest = land.frame;
+                int level = L.config.levels;
+                for (const auto& [packed, r] : land.resident) {
+                    if (!r.in || r.wanted == land.frame || (tier == 0 && r.expected == land.frame)) continue;
+                    bool busy = false;
+                    for (const auto& [k2, o] : land.resident)
+                        if (!o.in && o.key.level < r.key.level && landRegionsOverlap(L, r.key, o.key)) busy = true;
+                    if (busy) continue;
+                    if (r.wanted < oldest || (r.wanted == oldest && r.key.level < level)) {
+                        victim = packed;
+                        oldest = r.wanted;
+                        level = r.key.level;
+                    }
                 }
             }
             if (!victim) break;
@@ -321,7 +342,8 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
         Resident r;
         r.key = k;
         r.slot = land.freeSlots.back();
-        r.wanted = land.frame;
+        r.wanted = expected ? 0 : land.frame;
+        r.expected = expected ? land.frame : 0;
         land.freeSlots.pop_back();
         land.resident[k.packed()] = r;
         job.members.push_back({k, r.slot});
@@ -330,6 +352,49 @@ bool SceneLandRegions::begin(LandNode& node, Land& land, const std::vector<LandR
     land.job = std::move(job);
     land.hasJob = true;
     return true;
+}
+
+void SceneLandRegions::expect(SceneFrame& frame, LandNode& node, Land& land, double focal) {
+    const LandRegionLattice& L = node.regionLattice();
+    ExpectedEyes& eyes = frame.graph.expected();
+    land.expected.clear();
+    land.expectedPending.clear();
+    std::vector<LandRegionKey> keys;
+    for (const ExpectedEye& x : eyes.all()) {
+        // Its body direction and height over the ground, as the eye's.
+        double dir[3] = {0.0, 1.0, 0.0}, height = 0.0;
+        if (L.round()) {
+            const double r = std::sqrt(x.body[0] * x.body[0] + x.body[1] * x.body[1] + x.body[2] * x.body[2]);
+            for (int i = 0; i < 3; ++i) dir[i] = x.body[i] / std::max(r, 1.0);
+            height = r - L.radius - std::max(static_cast<double>(node.heightOver(dir)), 0.0);
+        } else {
+            double p[3];
+            node.place()->toPlace(x.body, p);
+            const float h = node.heightAt(static_cast<float>(p[0]), static_cast<float>(p[2]));
+            height = p[1] - (std::isfinite(h) ? h : 0.0);
+        }
+        keys.clear();
+        landRegionsWanted(L, dir, x.body[0], x.body[2], std::max(height, 1.0), focal * kLead, keys);
+        int pending = 0;
+        for (const LandRegionKey& k : keys) {
+            const auto r = land.resident.find(k.packed());
+            if (r != land.resident.end()) r->second.expected = land.frame;
+            if (r == land.resident.end() || !r->second.in) ++pending;
+            if (std::find(land.wanted.begin(), land.wanted.end(), k) == land.wanted.end() &&
+                std::find(land.expected.begin(), land.expected.end(), k) == land.expected.end())
+                land.expected.push_back(k);
+        }
+        land.expectedPending[x.id] = pending;
+    }
+    // Each one's over every land.
+    for (const ExpectedEye& x : eyes.all()) {
+        int pending = 0;
+        for (const auto& [id, other] : lands_) {
+            const auto it = other->expectedPending.find(x.id);
+            if (it != other->expectedPending.end()) pending += it->second;
+        }
+        eyes.setPending(x.id, pending);
+    }
 }
 
 SceneLandRegions::Step SceneLandRegions::stepOf(const LandRegionConfig& C, Job& j) {
@@ -603,6 +668,17 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
         if (r == land.resident.end() || !r->second.in) settled = false;
     }
     const bool nearIn = settled;
+    expect(frame, node, land, focal);
+    // The eye's own first: a batch made only where it is expected is let go
+    // once the eye wants a region not in (none of it is in a slot yet).
+    if (land.hasJob && land.job.expected && land.pending > 0) {
+        for (const Member& m : land.job.members) {
+            land.resident.erase(m.key.packed());
+            land.freeSlots.push_back(m.slot);
+        }
+        land.hasJob = false;
+        land.job = Job{};
+    }
 
     // Work while a region is being made or one can be begun; then the
     // table, after begin: a region it dropped for room stales the tiles over
@@ -655,10 +731,11 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     // left 250 m over the ground, a wall across the view for seconds.)
     const double cell = L.config.cellOf(j.members.front().key.level);
     o.error = static_cast<float>(cell * focal / std::max(height, cell));
-    o.urgent = !nearIn;
+    o.urgent = !nearIn && !j.expected;
     if (o.step == Step::Finish) {
         if (freeReadbacks(land) < o.regions) return {};
-        o.steps = o.required = 1;
+        o.steps = 1;
+        o.required = j.expected ? 0 : 1;
         return o;
     }
     int left = kBands - j.band;
@@ -671,7 +748,8 @@ SceneLandRegions::Offer SceneLandRegions::prepare(SceneFrame& frame, LandNode& n
     // already four of them, and two such of its dearest pass were a
     // millisecond a frame whatever the budget.)
     const int required = o.step == Step::Pass ? std::max(1, kRequiredSteps / std::max(o.regions, 1)) : 1;
-    o.required = o.urgent ? o.steps : std::min(o.steps, required);
+    // (Where the eye is expected only: what the budget leaves, none required.)
+    o.required = j.expected ? 0 : o.urgent ? o.steps : std::min(o.steps, required);
     return o;
 }
 

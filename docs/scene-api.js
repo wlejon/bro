@@ -799,6 +799,35 @@ class SceneGraph {
   reanchorAt(b) {}
 
   /**
+   * Says the eye is going to body point `b` (`toBody` of a place point): an
+   * autopilot's landing, a cutscene's next shot, a teleport. What the world
+   * makes about an eye is then made there ahead of it, so the eye arrives on
+   * ground already made rather than watching it come in. So far that is the
+   * land's regions (land-api.js, `processes.regions`): the regions an eye at
+   * `b` would want, made after the eye's own are all in, from what the frame's
+   * budget leaves (nothing of the eye's is held back for them), in slots no
+   * region the eye wants needs (the eye takes them back when it does). A
+   * batch begun for it is let go when the eye wants a region not in.
+   *
+   * At most two at once (a third throws a RangeError), the sooner `within`
+   * first. The handle holds until cancelled:
+   *
+   *     h.move(b, {within})   it is going somewhere else (pending starts over)
+   *     h.cancel()            no longer expected; its regions go as the eye needs room
+   *     h.pending             regions still to make there (-1 until the land has looked)
+   *     h.ready               pending is 0: the eye there would find them all in
+   *
+   * @param {number[]} b - a body point
+   * @param {{within?: number}} [opts] - seconds until the eye is there (orders two)
+   * @returns {{move: function, cancel: function, pending: number, ready: boolean}}
+   * @example
+   *   const landing = scene.expect(scene.toBody(target), { within: 25 });
+   *   // ... fly, pacing the descent on landing.ready ...
+   *   landing.cancel();
+   */
+  expect(b, opts) {}
+
+  /**
    * What the scene still prepares for its view, as of its newest render: one
    * line each (a land's processes not yet run, its regions and tiles still
    * to make, its tile boxes being made on the workers, plants still placed,

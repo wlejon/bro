@@ -192,6 +192,10 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_latLongAt", BRO_NATIVE_FN(bro_scene_SceneGraph_latLongAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_reanchorAt", BRO_NATIVE_FN(bro_scene_SceneGraph_reanchorAt), "bool", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_onReanchor_set", BRO_NATIVE_FN(bro_scene_SceneGraph_onReanchor_set), "void", {"__bro_native.scene.SceneGraph", "dynamic"}, error) &&
+        fn("__bro_native.scene.SceneGraph_expect", BRO_NATIVE_FN(bro_scene_SceneGraph_expect), "f64", {"__bro_native.scene.SceneGraph", "f64[]", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_expectMove", BRO_NATIVE_FN(bro_scene_SceneGraph_expectMove), "bool", {"__bro_native.scene.SceneGraph", "f64", "f64[]", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_expectCancel", BRO_NATIVE_FN(bro_scene_SceneGraph_expectCancel), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_expectPending", BRO_NATIVE_FN(bro_scene_SceneGraph_expectPending), "f64", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", BRO_NATIVE_FN(bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
