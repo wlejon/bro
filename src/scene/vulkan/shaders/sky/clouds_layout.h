@@ -105,6 +105,14 @@
 #define CL_VIEW_HEAP_STEPS  4        // the heaps' share's heights a bin
 #define CL_VIEW_HEAPS_AT    800.0    // m up the deck where a texel reads the heaps as themselves
 #define CL_VIEW_HEAPS_LEAST 300.0    // m: a heap's rim's least height there
+// A debug switch: -1 as drawn; 0 the heaps everywhere their share, 1 every
+// texel the heaps as themselves, so a view's two looks can be compared on
+// one frame (their means should agree: the share is the heaps' mean).
+#define CL_VIEW_FORCE       -1
+// How far in from a heap's outline its billowed surface lies on the mean
+// (m): the march draws the billows' skin, mostly in from the outline, and
+// the view's heaps as themselves must cover what the march's cover.
+#define CL_VIEW_HEAP_INSET  250.0
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 

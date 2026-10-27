@@ -486,6 +486,9 @@ void main() {
             float texelV = pixel * q.x * clouds.viewSize.w;
             float side = cloudHeapMapSide();
             float real = side > 0.0 ? 1.0 - smoothstep(0.3 * side, 0.6 * side, texelV) : 0.0;
+#if CL_VIEW_FORCE >= 0
+            real = side > 0.0 ? 1.0 : 0.0;   // (the view's columns wherever the layer is read: they hold the forced look)
+#endif
             wv = cloudViewWeight(pixel * q.x, texelV, footCell, max(globe, real));
             if (wv > 0.0) {
                 vec2 uv = clamp(gl_FragCoord.xy / clouds.viewSize.w, vec2(0.5), clouds.viewSize.xy - 0.5);
