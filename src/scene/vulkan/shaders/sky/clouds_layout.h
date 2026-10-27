@@ -111,8 +111,11 @@
 #define CL_VIEW_FORCE       -1
 // How far in from a heap's outline its billowed surface lies on the mean
 // (m): the march draws the billows' skin, mostly in from the outline, and
-// the view's heaps as themselves must cover what the march's cover.
-#define CL_VIEW_HEAP_INSET  250.0
+// the view's heaps as themselves must cover what the march's cover. (Their
+// edge eased over two texels, a heap a few pixels across a soft puff, not a
+// hard white point; the inset is where that edge's middle covers what the
+// share does, 250 m with an edge one texel wide.)
+#define CL_VIEW_HEAP_INSET  650.0
 
 #define CL_MAX_DATA         64       // cloudData(i): vec4s
 

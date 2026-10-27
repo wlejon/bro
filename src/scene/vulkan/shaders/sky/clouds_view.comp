@@ -88,7 +88,7 @@ void main() {
         float dh = b * b - (dot(ro, ro) - rh * rh);
         float th = dh > 0.0 ? max(-b - sqrt(dh), t) : t;
         hc = cloudHeapColumn(normalize(cloudDrift(cloudToBody(ro + rd * th))));
-        float cov = clamp(0.5 + (hc.z - CL_VIEW_HEAP_INSET) * down / texelFoot, 0.0, 1.0);
+        float cov = clamp(0.5 + (hc.z - CL_VIEW_HEAP_INSET) * down / (2.0 * texelFoot), 0.0, 1.0);
         hDepth = -log(max(1.0 - cov, 1e-3));
         hc.y = max(hc.y, CL_VIEW_HEAPS_LEAST);
     }
