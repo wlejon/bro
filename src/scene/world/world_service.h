@@ -89,6 +89,16 @@
 // steps cost unlike (a region's init bands, its passes, its finish) is
 // several kinds, each priced by its own spans, so a grant is what it spends.
 //
+// Over the target. A frame whose own need is over the target (the planet's
+// ground at 4-7 ms) gives the world floorShare of that need, so it is not
+// starved for a tenth of a millisecond more; and the more the more a
+// catch-up kind is behind: floorShare times 1 + log2 of the worst it left
+// queued over catchUpError, up to the whole need. The planet's landing at
+// 0.5 ms a frame left a thousand tiles queued, the worst 2000 px off, for
+// three seconds: the land made when the regional grids were not in stood
+// hundreds of metres over the land made since, a cliff across the view.
+// A frame or two at twice the time is less wrong than that.
+//
 // A cut (cut(): the view jumped) forgets the slack, since a frame's cost is
 // its view's and the old view's says nothing of the new one's, and lets the
 // new view settle: its budget is at least settleMs until it has left
@@ -154,7 +164,7 @@ struct WorldJob {
 struct WorldServiceConfig {
     float targetMs = 2.78f;   // the frame's GPU target (the 4090 at 360 fps)
     float floorMs = 0.1f;     // the least budget a frame
-    float floorShare = 0.1f;  // and of the frame's own need over the short window, while over the target
+    float floorShare = 0.1f;  // and of the frame's own need over the short window, while over the target (see Over the target)
     int window = 4;           // frames whose need sets the slack
     float costRate = 0.25f;      // how far one measurement moves a kind's cost (the power of its ratio)
     float costQuantile = 0.9f;   // the weight of a dearer measurement's pull, the rest a cheaper one's
@@ -265,6 +275,7 @@ private:
     bool over_ = false;          // the last frame read ran over the target (the catch-up ceiling while behind)
     bool overTarget_ = false;    // the last frame read ran over the target
     bool behind_ = false;        // a catch-up kind left work worse than catchUpError queued last frame
+    float behindError_ = 0.0f;   // the worst a catch-up kind left queued last frame (pixels)
     int settle_ = 0;             // frames a cut has left to settle in
     int quiet_ = 0;              // frames running it has left nothing worse than settleError queued
     float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate

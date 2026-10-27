@@ -371,6 +371,24 @@ void testShareOverTarget() {
     u.observe(frameOf(1.0));
     u.beginFrame();
     check(u.budgetMs() > 1.0f, "under the target the slack, the share playing no part");
+    // A catch-up kind left behind: the share grows with how far, 1 + log2
+    // of the worst it left over catchUpError, up to the whole need.
+    for (float error : {64.0f, 2000.0f}) {
+        WorldService v;
+        c.catchUpError = 2.0f;
+        v.configure(c);
+        const int land = v.addKind({"land", WorldSchedule::Raster, 0.5f, false, true});
+        v.observe(frameOf(7.0));
+        v.beginFrame();
+        for (uint64_t i = 1; i <= 20; ++i) v.offer({i, 0, land, error, 1.0, false});
+        v.schedule();
+        check(v.catchingUp(), "twenty tiles at 0.5 ms on 0.7 ms: behind");
+        v.observe(frameOf(7.0));
+        v.beginFrame();
+        const double want = error < 100.0f ? 0.1 * (1.0 + std::log2(32.0)) * 7.0 : 7.0;
+        check(near(v.budgetMs(), want, 1e-3),
+              error < 100.0f ? "64 px behind: six tenths of the need (4.2 ms)" : "2000 px behind: all of it (7 ms)");
+    }
 }
 
 void testHeadroom() {

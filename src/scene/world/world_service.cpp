@@ -62,8 +62,12 @@ void WorldService::beginFrame() {
     // Over it whatever the world does: still a share of the frame, so a view
     // that costs past the target (the planet's 1-40 km at 4-7 ms) does not
     // starve its world, missing tiles and all, for 0.1 ms a frame more.
-    if (!need_.empty() && overTarget_)
-        budget = std::max(budget, static_cast<float>(config_.floorShare * worst(config_.window)));
+    if (!need_.empty() && overTarget_) {
+        float share = config_.floorShare;
+        if (behind_ && behindError_ > config_.catchUpError)
+            share = std::min(1.0f, share * (1.0f + std::log2(behindError_ / config_.catchUpError)));
+        budget = std::max(budget, static_cast<float>(share * worst(config_.window)));
+    }
     // Catching up: the ceiling, less the need over the longer catch-up
     // window (the frame's own spikes, a plant page placed or a pipeline
     // compiled every few dozen frames, fall between the short window's
@@ -117,6 +121,7 @@ void WorldService::schedule() {
     // what the jobs drawn at once that the carry kept out hold back for it.
     float now = 0.0f, next = 0.0f, held = 0.0f;
     bool behind = false;
+    float behindError = 0.0f;
     std::vector<bool> offered(kinds_.size(), false);
     for (const WorldJob& j : offers_) {
         Kind& kind = kinds_[static_cast<size_t>(j.kind)];
@@ -131,7 +136,10 @@ void WorldService::schedule() {
             stats_.worstError = std::max(stats_.worstError, j.error);
             ++kind.queued;
             kind.worstError = std::max(kind.worstError, j.error);
-            if (kind.desc.catchUp && j.error > config_.catchUpError) behind = true;
+            if (kind.desc.catchUp && j.error > config_.catchUpError) {
+                behind = true;
+                behindError = std::max(behindError, j.error);
+            }
             continue;
         }
         (kind.desc.nextFrame ? next : now) += c;
@@ -150,6 +158,7 @@ void WorldService::schedule() {
         if (quiet_ >= config_.settleQuiet) settle_ = 0;
     }
     behind_ = behind;
+    behindError_ = behindError;
     stats_.catchingUp = behind;
     stats_.spentMs = now + next;
     stats_.carriedMs = carried_;
