@@ -183,6 +183,15 @@ GroundBake groundBake(vec2 xz, GroundData g, float fp) {
 #ifndef GROUND_LAYER_FILL
 #include "ground/scene_ground_layers.glsl"
 
+// The sine of the eye's line down past which the turf's sward is lit as
+// level ground, all of it straight down: as the land past the turf is lit
+// (mesh.frag), its albedo the meadow's as seen from above. Lit as the
+// blades' shaded depth (SceneSurface::sward) all the way down, a meadow
+// seen straight down was a stop darker than the land it hands over to
+// (TURF_FAR_FROM): the same ground brightening as the eye rose over it.
+// Along low lines the two agree.
+const float TURF_LEVEL_FROM = 0.5;
+
 // The ground at the cover's frame's point `xz` (scene_grass.glsl; a round
 // body's cell's, coverUse), the fragment camera-relative at `rel` with the
 // footprint `fp`: its patterns `b` from the surface layer where `baked`,
@@ -283,14 +292,16 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
         // and a gust lifts the sheen of what it bends.
         vec4 lay = swardLay(xz, coverUnturn(N));
         lay.xyz = coverTurn(lay.xyz);
-        N = normalize(mix(N, grassCanopyNormal(lay.xyz, normalize(-rel)), asBlades));
+        // (Steeply down, level ground: TURF_LEVEL_FROM.)
+        float level = smoothstep(TURF_LEVEL_FROM, 1.0, steepT);
+        N = normalize(mix(N, grassCanopyNormal(lay.xyz, normalize(-rel)), asBlades * (1.0 - level)));
         // Past the blades the sun on it is all the sward's, as on the far
         // blades (their weight 1 from 12 m): the share left to the canopy
         // normal, which faces the eye, lit it by the eye's line, not the
         // sun's. Where the sward thins out to bare ground the share goes with
         // it: all of it on any cover drew a hard line where the cover ends
         // (a planet's grass line along its hills, seen from their height).
-        swardLight = vec4(lay.xyz, mix(asBlades, 1.0, topSeen) * smoothstep(0.0, 0.25, cover));
+        swardLight = vec4(lay.xyz, mix(asBlades, 1.0, topSeen) * smoothstep(0.0, 0.25, cover) * (1.0 - level));
         color *= 1.0 + lay.w * asBlades;
     }
     ao *= mix(litterAo, 1.0, cover) * mix(1.0, 0.8, asBlades);   // (a far blade's ao)
