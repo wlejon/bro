@@ -44,7 +44,6 @@ bool getter(const char* path, void* f, const char* ret, std::string* error) {
 bool registerNatives_paths(std::string* error) {
     const bool ok =
         getter("__bro_native.paths.appDir", BRO_NATIVE_FN(bro_paths_appDir_get), "str", error) &&
-        getter("__bro_native.paths.userDataDir", BRO_NATIVE_FN(bro_paths_userDataDir_get), "str", error) &&
         fn("__bro_native.paths.resolvePath", BRO_NATIVE_FN(bro_paths_resolvePath), "str", {"str"}, error) &&
         fn("__bro_native.paths.resolveWritePath", BRO_NATIVE_FN(bro_paths_resolveWritePath), "str", {"str"}, error);
     if (!ok) return false;

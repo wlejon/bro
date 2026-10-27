@@ -38,10 +38,6 @@ extern "C" {
 //   registered as a namespace property (getter) at __bro_native.paths.appDir
 const char* bro_paths_appDir_get(void);
 
-// bro.userDataDir read
-//   registered as a namespace property (getter) at __bro_native.paths.userDataDir
-const char* bro_paths_userDataDir_get(void);
-
 // bro.resolvePath
 //   registered at __bro_native.paths.resolvePath
 const char* bro_paths_resolvePath(const char* path);

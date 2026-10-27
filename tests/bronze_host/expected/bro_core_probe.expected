@@ -9,7 +9,6 @@ APP time.now.type=number
 APP time.alias=true
 APP time.keys=now,paused,scale
 APP paths.appDir.type=string,true
-APP paths.userDataDir.type=string,true
 APP paths.resolvePath.underAppDir=true
 APP paths.resolvePath.tail=x.txt
 APP paths.resolvePath.typeError=true

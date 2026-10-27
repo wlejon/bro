@@ -1,6 +1,6 @@
 /**
  * =============================================================================
- * bro.appDir / bro.userDataDir / bro.resolvePath — Filesystem Path Resolution
+ * bro.appDir / bro.resolvePath — Filesystem Path Resolution
  * =============================================================================
  *
  * Resolves virtual asset mount paths and relative application asset paths into
@@ -24,13 +24,6 @@
  * @type {string}
  */
 bro.appDir;
-
-/**
- * Absolute native filesystem path for user data / save directory.
- * @readonly
- * @type {string}
- */
-bro.userDataDir;
 
 /**
  * Resolves a virtual mount path or relative application path to an absolute native filesystem path.

@@ -12,19 +12,6 @@ namespace bro::util {
 /// which is wrong but writable.
 std::string userDataDir();
 
-/// The directory an app should keep its own persistent data in — saves,
-/// caches, per-user state — `<userDataDir()>/apps/<name>`, where `<name>` is
-/// the app directory's folder name reduced to `[A-Za-z0-9._-]`. Empty when
-/// `appDir` is empty (a bare `bro-headless -e` session has no app).
-///
-/// The alternative, and what localStorage does, is to write next to
-/// `index.html`. That works for a project checked out from git and fails for
-/// every other way an app reaches a user: an install directory the user cannot
-/// write to, a read-only zip mount, a shared app folder with several users on
-/// the machine. Nothing is created here; the caller decides when a directory
-/// should come into existence (the JS binding creates it on first read).
-std::string appUserDataDir(const std::string& appDir);
-
 /// The per-user directory for data bro can always rebuild — the compiled-code
 /// cache — and so the one place that should neither roam with a Windows
 /// profile nor be backed up: `%LOCALAPPDATA%\bro` on Windows,

@@ -1,5 +1,5 @@
 // bro_core.js — the public shapes of `bro.time`, `bro.window`,
-// `bro.settings`, `bro.appDir` / `bro.userDataDir` / `bro.resolvePath` and
+// `bro.settings`, `bro.appDir` / `bro.resolvePath` and
 // the system panels' `__bro.*`, assembled over the natives under
 // `__bro_native` (src/bronze_host/host_natives.h states the convention;
 // native_*.cpp register the pieces).
@@ -30,9 +30,8 @@
     accessor(bro.time, 'paused', () => __bro_native.time.paused, (v) => { __bro_native.time.paused = !!v; });
     accessor(bro.time, 'now', () => __bro_native.time.now, undefined);
 
-    // ---- bro.appDir / bro.userDataDir / bro.resolvePath --------------------
+    // ---- bro.appDir / bro.resolvePath ---------------------------------------
     accessor(bro, 'appDir', () => __bro_native.paths.appDir, undefined);
-    accessor(bro, 'userDataDir', () => __bro_native.paths.userDataDir, undefined);
     fn(bro, 'resolvePath', function resolvePath(path) {
         if (path === undefined) throw new TypeError('bro.resolvePath: path required');
         return __bro_native.paths.resolvePath(String(path));

@@ -17,7 +17,9 @@ assert(path.resolve(cwd) !== path.dirname(path.resolve(script)), 'the cwd is els
 
 for (const form of ['absolute', 'relative']) {
     const arg = form === 'absolute' ? script : path.relative(cwd, script);
-    const r = cp.spawnSync(exe, [process.env.BRO_APP_DIR, arg], { encoding: 'utf8', env: process.env, cwd });
+    // The script's folder is outside the app's, and under the home folder
+    // on Linux (a checkout in ~/projects), which needs `files`.
+    const r = cp.spawnSync(exe, ['--grant', 'files', process.env.BRO_APP_DIR, arg], { encoding: 'utf8', env: process.env, cwd });
     const out = (r.stdout || '') + (r.stderr || '');
     const line = out.split(/\r?\n/).find((l) => l.includes('REQUIRE_DIR'));
     assert(r.status === 0 && line && line.includes('require_dir/helper.js require_dir/data.json'),

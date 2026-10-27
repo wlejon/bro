@@ -4,7 +4,7 @@
 //
 // THREE PLAIN OBJECTS are registered as host globals here. `bro` carries the
 // public namespaces the wrapper fills (time, window, settings) and the bare
-// path members (appDir, userDataDir, resolvePath); `__bro` the system
+// path members (appDir, resolvePath); `__bro` the system
 // panels' namespaces; `__bro_native` one empty object per native namespace,
 // so a DYNAMIC read of `__bro_native.perf` — the one the wrapper makes to
 // ask whether the 3D counters exist — lands on an object rather than

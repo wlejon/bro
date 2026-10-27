@@ -1,5 +1,5 @@
 // The bro core probe: `bro` and `__bro` on bronze's native mechanism —
-// bro.time, bro.appDir / bro.userDataDir / bro.resolvePath, bro.window,
+// bro.time, bro.appDir / bro.resolvePath, bro.window,
 // bro.settings, and the panels' __bro.* — as a COMPILED app reads them.
 //
 // Every `bro.time.scale` here is an ordinary property read of a plain object
@@ -38,10 +38,9 @@ say('time.alias', t.scale === 1 && t.paused === false);
 say('time.keys', Object.keys(bro.time).sort().join(','));
 
 // ---------------------------------------------------------------------------
-// bro.appDir / bro.userDataDir / bro.resolvePath
+// bro.appDir / bro.resolvePath
 // ---------------------------------------------------------------------------
 say('paths.appDir.type', typeof bro.appDir + ',' + (bro.appDir.length > 0));
-say('paths.userDataDir.type', typeof bro.userDataDir + ',' + (bro.userDataDir.length > 0));
 say('paths.resolvePath.underAppDir', bro.resolvePath('x.txt').indexOf(bro.appDir) === 0);
 say('paths.resolvePath.tail', bro.resolvePath('x.txt').slice(-5));
 let pathsErr = null;

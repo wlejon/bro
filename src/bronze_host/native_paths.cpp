@@ -23,16 +23,6 @@ const char* bro_paths_appDir_get(void) {
     return bro::bronze_host::natives::strResult(std::move(dir));
 }
 
-const char* bro_paths_userDataDir_get(void) {
-    auto* eng = bro::bronze_host::hostEngine();
-    const std::string base = eng ? eng->appDir() : std::string();
-    std::string dir = bro::util::appUserDataDir(base);
-    if (dir.empty()) return bro::bronze_host::natives::strResult(std::string());
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    return bro::bronze_host::natives::strResult(std::filesystem::path(dir).make_preferred().string());
-}
-
 const char* bro_paths_resolvePath(const char* path) {
     const std::string resolved = bro::util::resolveAssetPath(path ? path : "");
     return bro::bronze_host::natives::strResult(std::filesystem::path(resolved).make_preferred().string());
