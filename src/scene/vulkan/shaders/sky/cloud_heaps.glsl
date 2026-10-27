@@ -53,6 +53,16 @@ ivec3 cloudHeapOwn(ivec3 id) {
     return cloudHeapCellOf(cloudHeapMiddle(id));
 }
 
+// A cell's least width (m) at the deck's base: an equal-angle cell is the
+// nominal side at a face's middle and 0.71 of it at a face edge's middle,
+// |d dir / d e| along each of the chart's axes there.
+float cloudHeapLeast(ivec2 ij) {
+    int n = cloudHeapCells();
+    vec2 a = tan(((vec2(ij) + 0.5) / float(n) * 2.0 - 1.0) * CLOUD_QUARTER_PI);
+    vec2 k = (1.0 + a * a) * sqrt(1.0 + a.yx * a.yx) / (1.0 + dot(a, a));
+    return clouds.shell.x * CLOUD_QUARTER_PI * 2.0 / float(n) * min(k.x, k.y);
+}
+
 uvec3 cloudHeapPcg(uvec3 v) {
     v = v * 1664525u + 1013904223u;
     v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
@@ -69,7 +79,7 @@ CloudHeapCell cloudHeapCell(ivec3 id) {
     c.north = cross(c.up, c.east);
     c.hash = vec3(cloudHeapPcg(uvec3(id.yz, uint(id.x) * 7919u + 17u)) >> 8u) / 16777216.0;
     c.cover = cloudCoverAt(c.up);
-    c.side = cloudHeapSide();
+    c.side = cloudHeapLeast(id.yz);
     return c;
 }
 
@@ -93,13 +103,15 @@ float cloudHeapIn(CloudHeap h, vec2 v, float z) {
 }
 
 // (The cell about direction `up`: its face, where on it, and how far its
-// nearest wall is, of a cell.)
-void cloudHeapAbout(vec3 up, out vec3 fe, out ivec2 c0, out float wall) {
+// nearest wall is, in metres by the cell's least width, and that width: a
+// cell's neighbours are within a few percent of it.)
+void cloudHeapAbout(vec3 up, out vec3 fe, out ivec2 c0, out float wall, out float side) {
     fe = cloudHeapFace(up);
     vec2 g = (fe.xy * 0.5 + 0.5) * float(cloudHeapCells());
     c0 = ivec2(floor(g));
     vec2 fr = g - vec2(c0);
-    wall = max(min(min(fr.x, 1.0 - fr.x), min(fr.y, 1.0 - fr.y)), 0.02);
+    side = cloudHeapLeast(c0);
+    wall = max(min(min(fr.x, 1.0 - fr.x), min(fr.y, 1.0 - fr.y)), 0.02) * side;
 }
 
 // The heaps' column over drifted body direction `up` (the heaps' map's
@@ -123,10 +135,10 @@ vec4 cloudHeapColumn(vec3 up) {
     if (cloudHeapSide() <= 0.0) return vec4(0.0, 0.0, -1e5, 1.0);
     vec3 fe;
     ivec2 c0;
-    float wall;
-    cloudHeapAbout(up, fe, c0, wall);
+    float wall, side;
+    cloudHeapAbout(up, fe, c0, wall, side);
     float rb = clouds.shell.x;
-    float dIn = -(1.0 + wall) * cloudHeapSide(), zNear = 0.0, cNear = 1.0;
+    float dIn = -(side + wall), zNear = 0.0, cNear = 1.0;
     // (The rate under the top: the lobes' over the texel, each weighed by
     // how near its top is to the highest, by CL_HEAP_RATE_NEAR metres, and
     // how far within its outline the texel is, so it changes smoothly from
@@ -216,11 +228,11 @@ float cloudHeapsIn(vec3 pd, float z) {
     vec3 up = normalize(pd);
     vec3 fe;
     ivec2 c0;
-    float wall;
-    cloudHeapAbout(up, fe, c0, wall);
+    float wall, side;
+    cloudHeapAbout(up, fe, c0, wall, side);
     // (Lobes reach a cell from their middle, so a heap of a cell past the
     // 3 x 3 about the point's is at least its nearest wall's distance away.)
-    float best = -wall * cloudHeapSide();
+    float best = -wall;
     float rb = clouds.shell.x;
     for (int k = 0; k < 9; ++k) {
         ivec3 id = cloudHeapOwn(ivec3(int(fe.z), c0 + ivec2(k % 3, k / 3) - 1));

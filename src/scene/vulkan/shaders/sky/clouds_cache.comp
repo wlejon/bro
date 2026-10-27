@@ -93,9 +93,9 @@ void main() {
         if (bin < 9) {
             vec3 fe;
             ivec2 c0;
-            float wall;
+            float wall, side;
             vec3 upd = normalize(cloudDrift(up * mix(clouds.shell.x, clouds.shell.y, 0.5)));
-            cloudHeapAbout(upd, fe, c0, wall);
+            cloudHeapAbout(upd, fe, c0, wall, side);
             if (bin == 0) sWall[col] = wall;
             CloudHeapCell hc = cloudHeapCell(cloudHeapOwn(ivec3(int(fe.z), c0 + ivec2(bin % 3, bin / 3) - 1)));
             CloudHeap hh;
@@ -108,7 +108,7 @@ void main() {
         }
         barrier();
         vec3 upd = normalize(pd);
-        heapIn = -sWall[col] * hs;
+        heapIn = -sWall[col];
         for (int n = 0; n < 9; ++n) {
             vec4 cu = sCell[col][n][0];
             if (cu.w < 0.5) continue;

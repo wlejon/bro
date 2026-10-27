@@ -121,7 +121,10 @@ struct CloudHeapCell {
     vec3 north;
     vec3 hash;     // three uniform draws of its own, 0 .. 1
     vec4 cover;    // cloudCoverAt(up)
-    float side;    // its width (m, at the deck's bottom)
+    float side;    // its least width (m, at the deck's bottom): the cells
+                   // are equal-angle, from the nominal side at a face's
+                   // middle to 0.71 of it; a heap within `side` of `up`
+                   // is wholly within the cells searched about any point
 };
 
 // The world's (defined by its module, after this file).

@@ -317,7 +317,10 @@ SceneGraph.prototype.cloudCoverAt = function (dirs) {};
  *   bool cloudHeap(CloudHeapCell c, out CloudHeap h)
  *       The heap cell `c` of the engine's lattice holds (setClouds' heaps):
  *       up to four lobes, half-ellipsoids on flat bases, all of them within
- *       a cell of the cell's middle; false none. Asked once a cell by the
+ *       c.side metres of the cell's middle (its least width: the cells are
+ *       equal-angle on the cube, from the setClouds side at a face's middle
+ *       to 0.71 of it, and a lobe past c.side is cut where the engine's
+ *       search of the cells about a point ends); false none. Asked once a cell by the
  *       heaps' map's bake and the cache's, never per pixel.
  *   float cloudHeapsShare(CloudPoint q)
  *       The share of the air the heaps fill at `q` on the mean over its
