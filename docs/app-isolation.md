@@ -279,7 +279,10 @@ What the design must keep possible, and what it still lacks for it:
    attribution, and what a budget means at collection.
 3. Can the interpreter tier poll for time slices cheaply, and do brass's
    tier-1 and tier-2 code poll at every loop backedge today or only where
-   OSR and GC need it?
+   OSR and GC need it? *Answered (step 4):* every tier polls at every loop
+   backedge now (brass's module interrupt poll), and function entries poll
+   through the prologue's existing stack-limit check. The cost is below noise:
+   one load and one compare per backedge (measurements under step 4).
 4. Network granularity: on or off, or per host?
 5. The exception policy: continue or disconnect.
 6. The cost of freezing intrinsics at boot, and checking certificates in
@@ -449,7 +452,59 @@ What the design must keep possible, and what it still lacks for it:
      (its prototypes are its own, not the builtins').
 3. **Compartment = Realm + document + ledger;** host objects owned by their
    compartment; `<appview>`.
-4. **Fiber scheduling and time slices.**
+4. **Fiber scheduling and time slices.** The engine half is **built**
+   (2026-10-26), in bronze and brass. bro does not use it yet; that comes
+   with step 3's `<appview>`. bronze's `docs/internals.md` ("Realm
+   ownership", "Compartments") describes the mechanism.
+   - **The API.** `embed::createCompartment(realm, {sliceMs, stackBytes,
+     name})` gives a realm a fiber. `runInCompartment(c, job)` runs one entry
+     there, then that fiber's own microtasks, and returns `Idle`, `Yielded` or
+     `Terminated`. `resumeCompartment` continues a yielded entry with a fresh
+     slice, and `terminateCompartment(c, reason)` ends the compartment.
+   - **Where it yields.** Loop backedges in every tier (brass
+     `Module::set_interrupt_poll`, on the TLS block's stack-limit word), and
+     function entries (the prologue's existing stack-limit check).
+   - **Who arms it.** One watchdog thread arms the running compartment's
+     thread once its slice deadline passes.
+   - **Termination** is brass's `TerminationException`, which no guest
+     `catch` or `finally` takes. It unwinds the fiber to its entry, and every
+     later job is refused.
+   - **Per-stack state.** The runtime state that follows one stack's frames
+     is saved and restored per fiber (brass stack locals): the shadow stack,
+     the realm stack, the handle scopes, the microtask queue, and native call
+     scratch. A suspended compartment's frames stay roots.
+   - **Realm ownership** (pulled forward from step 3). A function enters
+     its own realm when the host calls it. A native handle unwraps only in
+     the realm that made it, so another app's handle reaches a native as a
+     TypeError. Each realm has its own instance of a compiled module's
+     data.
+   - **What is not preempted.** A native runs to its end, and how far it
+     overran the slice is recorded, with the stack it was called from.
+     Outlined parallel loop kernels are not polled; they are counted ranges
+     on worker threads. `embed::NoYieldScope` holds yields off for host code
+     that must not be re-entered.
+   - **Tests.** bronze `eval_compartment_test`: in each tier, a runaway loop
+     yields and is terminated, a long job finishes slice by slice, and
+     termination skips `catch` and `finally`. It also checks that each
+     compartment drains its own microtasks, that an uncaught error leaves
+     the compartment alive, and that sixteen suspended compartments survive
+     full collections. bronze `embed_realm_test` covers handle ownership.
+     brass `test_interrupt_poll` covers the poll in each tier.
+   - **Measured** (Windows, Release; bronze's bench kernels on the JIT path,
+     median compute ms of 7 runs, interleaved with a build that has no
+     poll):
+     - Tier 2: within 1.5% everywhere (mat4_kernel 1438 against 1417,
+       numeric_loop 28.5 against 28.4, dynamic_bitwise 2618 against 2632).
+     - Auto: within noise (three_math 264.6 against 264.1,
+       typed_array_crunch 115.5 against 110.6).
+     - Tier 1 and the interpreter: as often faster as slower.
+     - Writing the interpreter's check as one load also made it faster than
+       before the poll existed (brass's ratchet: interp_fib_iter_40 5.4x
+       against a golden of 7.4x).
+   - **Still open:** polls inside long builtins (a 100 M-element
+     `Array.prototype.fill` runs to its end), and the async split of
+     synchronous natives an app can reach (file I/O, model loads), which
+     bro does when it adopts compartments.
 5. **Disconnects, the error card, and the ledger's per-resource tests.**
 6. **Install identity, helm's prompts and the Apps settings page.** Identity
    and the page are **built** (2026-10-26); helm's prompts are not:
