@@ -317,26 +317,19 @@ void main() {
     // whatever the tiles' texels. The water is flat, the seabed through it
     // dimmed along the light's way down and back (refracted into the water,
     // n 1.33) over the colour deep water sends back.
-    //
-    // Its sward is lit as the turf lights it from afar, its blades' shaded
-    // depth (landSwardShare), not as level ground: lit as ground the land
-    // past the turf was a stop brighter than the turf it hands over from,
-    // the same meadow brightening as the eye rose.
     float landWet = 0.0;
-    vec4 landSward = vec4(0.0);
     {
         vec2 dm = max(abs(dFdx(inUV)), abs(dFdy(inUV)));
         float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
-        float lh, lsw;
+        float lh;
         vec3 ln;
         vec4 ls;
-        bool landIn = landSampleNormal(inUV, lambda, lh, ln, ls, lsw);
+        bool landIn = landSampleNormal(inUV, lambda, lh, ln, ls);
         float lhStep = fwidth(lh);   // (in uniform control flow)
         if (landIn) {
             baseColor = push.baseColor.rgb * ls.rgb;
             N = ln;
             landWet = landSeaWet(lh, lhStep);
-            landSward = vec4(landUp(inUV), landSwardShare(lsw) * (1.0 - landWet));
             if (landWet > 0.0) {
                 baseColor = mix(baseColor, landSeaWater(inUV, lh, worldPos, baseColor), landWet);
                 N = normalize(mix(N, landUp(inUV), landWet));
@@ -352,28 +345,26 @@ void main() {
     // And where a pixel is tens of metres of ground every pattern the turf
     // works out (its blades' tops, tussocks, mottling, flowers) is far under
     // it: there the ground is what the land says it is, its surface's albedo
-    // and normal, its sward still lit as the blades' from afar (the land's,
-    // landSwardShare), handed over by the pixel's footprint.
+    // and normal lit as ground, handed over by the pixel's footprint. (The
+    // sward lit as its blades seen from far above is their shaded depth, a
+    // quarter as bright as the ground the land's albedo means.)
     float landWet = 0.0, landFar = 0.0;
     float groundFp = max(length(fwidth(worldPos)), 1e-4);
     vec2 landM = landMapOf(worldPos + landEye3());
     LandChart landC = landChartOf(landM);   // (the land's and the turf's)
     vec3 landWater = vec3(0.0), landAlbedo = vec3(0.0), landN = N;
-    // (The land's sward, lit as the turf's from afar: SCENE_LAND's.)
-    vec4 landSward = vec4(0.0);
     {
         vec2 dm = max(abs(dFdx(landM)), abs(dFdy(landM)));
         float lambda = max(log2(max(dm.x, dm.y) / (0.5 * landCell0())), 0.0);
-        float lh, lsw;
+        float lh;
         vec4 ls;
-        bool landIn = landSampleNormal(landM, landPosOf(landM, landC), lambda, lh, landN, ls, lsw);
+        bool landIn = landSampleNormal(landM, landPosOf(landM, landC), lambda, lh, landN, ls);
         float lhStep = fwidth(lh);   // (in uniform control flow)
         // (The pixel's angle at the eye's distance: smooth, where a
         // triangle's own footprint would hand over a ring's facets.)
         float fp = camDist * length(fwidth(worldPos / max(camDist, 1e-6)));
         if (landIn) {
             landAlbedo = push.baseColor.rgb * ls.rgb;
-            landSward = vec4(landUp(landM), landSwardShare(lsw));
             landFar = smoothstep(TURF_FAR_FROM, TURF_FAR_TO, fp);
             landWet = landSeaWet(lh, lhStep);
             if (landWet > 0.0) landWater = landSeaWater(landM, lh, worldPos, landAlbedo);
@@ -456,7 +447,7 @@ void main() {
         roughness = mix(roughness, landRoughness, landFar);
         groundAO = mix(groundAO, 1.0, landFar);
         groundThin.w *= 1.0 - landFar;
-        groundSward = mix(groundSward, landSward, landFar);
+        groundSward.w *= 1.0 - landFar;
     }
     if (landWet > 0.0) {
         baseColor = mix(baseColor, landWater, landWet);
@@ -513,9 +504,6 @@ void main() {
 #endif
     s.thinNormal = vec3(0.0);
     s.sward = vec4(0.0);
-#ifdef SCENE_LAND
-    s.sward = landSward;
-#endif
 #ifdef SCENE_HERB
     s.translucency = herb.translucency >= 0.0 ? herb.translucency : s.translucency * -herb.translucency;
     s.sward = herb.sward;
