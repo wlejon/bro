@@ -122,6 +122,12 @@ size_t PlantsNode::placementPending() const {
     return rulesRef_ && hold_ ? 1 : 0;
 }
 
+float PlantsNode::drawReach() const {
+    // (Placed by fixed records alone, with no rules: all of it is there.)
+    if (!rulesRef_) return params_.range;
+    return placement_ ? std::min(params_.range, static_cast<float>(placement_->reach())) : 0.0f;
+}
+
 void PlantsNode::pendingWork(std::vector<std::string>& out) const {
     if (const size_t n = placementPending())
         out.push_back("plants: " + std::to_string(n) + " placements pending");

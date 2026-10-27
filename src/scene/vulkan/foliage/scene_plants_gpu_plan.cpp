@@ -314,8 +314,9 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
     const float focal = std::fabs(view.proj.at(1, 1)) * 0.5f * static_cast<float>(view.height);
     w[PP_P_FOCAL] = bitsOf(focal);
     // (A plant not drawn casts nothing: past their range, their land's canopy
-    // casts for them.)
-    const float detail[] = {p.pixels, p.minElements, p.woodRange, p.range, p.shadowTexels,
+    // casts for them. Drawn to where they are all placed, drawReach: the
+    // canopy stands for them past it.)
+    const float detail[] = {p.pixels, p.minElements, p.woodRange, node.drawReach(), p.shadowTexels,
                             std::min(p.shadowRange, p.range)};
     for (int i = 0; i < PlantsNode::kParamCount; ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
     w[PP_P_STILL_PENUMBRA] = bitsOf(plan.stillPenumbra);

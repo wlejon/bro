@@ -136,6 +136,12 @@ public:
     /// Leaves wanted and not yet placed (posted or waiting); before the
     /// first update, 1 (the look about the eye still to come).
     size_t pending() const;
+    /// How far from the eye (as a leaf's distance, its height with it)
+    /// every wanted leaf is placed: the nearest pending leaf's, the range
+    /// when none is pending, 0 before the first update. Within it the
+    /// placed plants are all there is; past it the land's canopy stands
+    /// for them (the plants' draw and the land's hand over at it).
+    double reach() const { return reach_; }
     /// The work kept posted, in ms of each pool thread's time at the jobs'
     /// cost learned as they run: enough to keep the pool busy from one
     /// update to the next (the last interval between updates, a frame, a
@@ -189,6 +195,7 @@ private:
     CellKey eyeLeaf_;
     double eyeLift_ = 0.0;
     Eyes wanted_;   // the eye at the last look
+    double reach_ = 0.0;
     std::chrono::steady_clock::time_point lastUpdate_{};   // (epoch: none yet)
 };
 

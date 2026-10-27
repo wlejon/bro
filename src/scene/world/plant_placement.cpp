@@ -473,6 +473,11 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
             inbox->costMs = inbox->costMs > 0.0 ? inbox->costMs + 0.1 * (ms - inbox->costMs) : ms;
         });
     }
+    // The reach: the nearest leaf still to come, posted or queued (the
+    // queue's nearest at its back, as of the last look).
+    double near2 = queue_.empty() ? std::numeric_limits<double>::infinity() : distance2(e, queue_.back());
+    for (const uint64_t k : posted_) near2 = std::min(near2, distance2(e, CellKey::unpacked(k)));
+    reach_ = std::min(std::sqrt(near2), static_cast<double>(rules_->range));
 }
 
 }  // namespace bro::scene

@@ -154,6 +154,13 @@ public:
     /// How far `eye` is from the nearest leaf's bounds (0 inside one; huge
     /// with no plants): past `params().range` nothing is drawn or cast.
     float nearest(const bromath::Vec3& eye) const;
+    /// How far from the eye its plants are drawn this frame: `params().range`,
+    /// nearer while leaves within it are still to be placed (the nearest of
+    /// them, PlantPlacement::reach; 0 while held for its ground). Its
+    /// land's canopy stands for the plants past it, so a view outrunning the
+    /// placement sees the woods' canopy, not bare ground, where they are
+    /// still to come.
+    float drawReach() const;
 
     /// Moves when the cells change (a leaf placed, dropped or set, the
     /// species).

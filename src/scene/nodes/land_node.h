@@ -151,7 +151,12 @@ public:
     const std::string& canopySource() const { return canopy_; }
     uint64_t canopySourceHash() const { return canopyHash_; }
     float canopyTop() const { return canopyTop_; }
-    float canopyRange() const { return canopyRange_; }
+    /// Where its canopy comes in for the plants: their range, or nearer
+    /// where they are still to be placed (setCanopyReach).
+    float canopyRange() const { return std::min(canopyRange_, canopyReach_); }
+    /// How far from the eye the plants are drawn this frame
+    /// (PlantsNode::drawReach), set by them each frame they follow the eye.
+    void setCanopyReach(float reach) { canopyReach_ = reach; }
     float canopyCastRange() const { return canopyCastRange_; }
 
     /// Its sea: water filling the land up to `level` (m over the datum)
@@ -349,6 +354,7 @@ private:
     uint64_t canopyHash_ = 0;
     float canopyTop_ = 0.0f;
     float canopyRange_ = 0.0f, canopyCastRange_ = 0.0f;
+    float canopyReach_ = std::numeric_limits<float>::infinity();
     FieldRef height_;
     LandProcess process_;
     LandGrid grid_;

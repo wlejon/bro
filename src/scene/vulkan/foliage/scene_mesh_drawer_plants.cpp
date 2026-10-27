@@ -113,13 +113,15 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     // On the land they stand on as its processes have it (and nothing
     // placed until they have run), then the cells placed about the
     // camera's eye.
-    const LandNode* land = nullptr;
+    LandNode* land = nullptr;
     if (node.land()) {
         SceneNode* n = frame.graph.findById(node.land());
         land = n && n->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(n)->asLand() : nullptr;
         if (land) node.setGround(land->groundBase(), !land->groundReady());
     }
     node.follow(frame.world.eye, land);   // (placement is keyed on the body)
+    // (Its canopy on the land comes in where the plants are still to come.)
+    if (land) land->setCanopyReach(node.drawReach());
     const PlantShaders* shaders = plantShaders(node);
     // (Nor planned when every plant is past its range: a planet's from orbit.)
     if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit() ||
