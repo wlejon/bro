@@ -364,6 +364,15 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
         std::nth_element(dists.begin(), dists.begin() + dists.size() / 2, dists.end());
         stats[kMedianDist] = dists[dists.size() / 2];
     }
+    {
+        double sum = 0.0, sum2 = 0.0;
+        for (const float l : c.luma) {
+            sum += l;
+            sum2 += static_cast<double>(l) * l;
+        }
+        const double mean = sum / total;
+        stats[kLumaSpread] = std::sqrt(std::max(sum2 / total - mean * mean, 0.0));
+    }
 
     if (compare) {
         // The camera's turn, then its roll: the previous up carried by the

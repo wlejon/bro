@@ -60,6 +60,7 @@ public:
         kTravel,        // the eye moved (m)
         kMedianDist,    // the median surface distance (m), 0 when all sky
         kNearDist,      // the surfaces' tenth nearest (m): a tenth of them nearer, 0 when all sky
+        kLumaSpread,    // the frame's luma's standard deviation (0..0.5): near 0 a blank view (inside a cloud, a fog)
         kBands,        // then 4 bands, top to bottom: moved (rose+sank+appeared+vanished),
                         // normalMoved and lumaMoved, each a fraction of the band's pixels
         kStatCount = kBands + 12,
