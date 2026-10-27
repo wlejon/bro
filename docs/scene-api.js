@@ -1103,7 +1103,9 @@ class SceneGraph {
    *   (`skyLuma`, its luma change: clouds against the sky).
    * Fractions are of all the pixels. The camera's `turnDeg`, signed
    * `rollDeg` and `travel` (m) between the two renders; `medianDist` (m) of
-   * the surfaces. `bands`: four bands top to bottom, each `moved`
+   * the surfaces, and `nearDist` (m) their tenth nearest (a tenth of them
+   * nearer: how cluttered the view is close by). `bands`: four bands top
+   * to bottom, each `moved`
    * (rose + sank + appeared + vanished), `normalMoved` and `lumaMoved` as
    * fractions of the band's pixels.
    *
@@ -1123,7 +1125,7 @@ class SceneGraph {
    *   rose: number, sank: number, appeared: number, vanished: number,
    *   newView: number, sky: number, normalDeg: number, normalMoved: number,
    *   luma: number, lumaMoved: number, skyLuma: number, turnDeg: number,
-   *   rollDeg: number, travel: number, medianDist: number,
+   *   rollDeg: number, travel: number, medianDist: number, nearDist: number,
    *   bands: { moved: number, normalMoved: number, lumaMoved: number }[],
    *   image?: Uint8Array }}
    * @example

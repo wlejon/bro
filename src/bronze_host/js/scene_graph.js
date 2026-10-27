@@ -709,7 +709,7 @@
     // back with it, the last render compared with the one inspected before.
     const INSPECT_STATS = ['width', 'height', 'compared', 'same', 'rose', 'sank', 'appeared', 'vanished',
                            'newView', 'sky', 'normalDeg', 'normalMoved', 'luma', 'lumaMoved', 'skyLuma',
-                           'turnDeg', 'rollDeg', 'travel', 'medianDist'];
+                           'turnDeg', 'rollDeg', 'travel', 'medianDist', 'nearDist'];
     fn(SceneGraph.prototype, "setInspect", function setInspect(on) {
         __bro_native.scene.SceneGraph_setInspect(this, !!on);
     });

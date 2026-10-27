@@ -358,6 +358,9 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
         for (int k = 0; k < 3; ++k)
             stats[kBands + b * 3 + k] = bandPixels[b] > 0.0 ? band[b][k] / bandPixels[b] : 0.0;
     if (!dists.empty()) {
+        const size_t tenth = dists.size() / 10;
+        std::nth_element(dists.begin(), dists.begin() + tenth, dists.end());
+        stats[kNearDist] = dists[tenth];
         std::nth_element(dists.begin(), dists.begin() + dists.size() / 2, dists.end());
         stats[kMedianDist] = dists[dists.size() / 2];
     }

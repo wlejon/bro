@@ -59,7 +59,8 @@ public:
         kRollDeg,       // its up turned about the forward (degrees, signed)
         kTravel,        // the eye moved (m)
         kMedianDist,    // the median surface distance (m), 0 when all sky
-        kBands,         // then 4 bands, top to bottom: moved (rose+sank+appeared+vanished),
+        kNearDist,      // the surfaces' tenth nearest (m): a tenth of them nearer, 0 when all sky
+        kBands,        // then 4 bands, top to bottom: moved (rose+sank+appeared+vanished),
                         // normalMoved and lumaMoved, each a fraction of the band's pixels
         kStatCount = kBands + 12,
     };
