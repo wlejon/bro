@@ -586,6 +586,12 @@ void bro_scene_SceneGraph_inspectFrame(void* self, int32_t image, bronze_native_
     transferBuffer(std::move(stats), out);
 }
 
+void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t dirs_len, bronze_native_buffer* out) {
+    std::vector<float> cover;
+    if (auto* g = graphOf(self)) g->renderer().cloudCoverAt(dirs, dirs_len / 3, cover);
+    transferBuffer(std::vector<double>(cover.begin(), cover.end()), out);
+}
+
 void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out) {
     copyBuffer(tl_inspectPixels.data(), static_cast<uint32_t>(tl_inspectPixels.size()), out);
 }

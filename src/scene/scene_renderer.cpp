@@ -283,6 +283,24 @@ void SceneRenderer::render3D() {
     hasMeshContent_ = vkBridge_->render3D(graph_, *this, cullStats_);
 }
 
+bool SceneRenderer::cloudCoverAt(const double* dirs, size_t count, std::vector<float>& out) {
+    out.clear();
+    if (!vkBridge_ || !cloudStats_.covered) return false;
+    if (coverCube_.empty() || coverCubeGeneration_ != cloudStats_.generation) {
+        if (!vkBridge_->readCloudCover(coverCube_)) return false;
+        coverCubeGeneration_ = cloudStats_.generation;
+    }
+    out.resize(count * 4);
+    for (size_t i = 0; i < count; ++i) {
+        double d[3] = {dirs[i * 3], dirs[i * 3 + 1], dirs[i * 3 + 2]};
+        const double l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (l > 0.0)
+            for (double& c : d) c /= l;
+        vk::SceneClouds::coverAt(coverCube_, d, out.data() + i * 4);
+    }
+    return true;
+}
+
 bool SceneRenderer::inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels) {
     stats.clear();
     pixels.clear();

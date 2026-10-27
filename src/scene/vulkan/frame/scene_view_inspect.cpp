@@ -156,6 +156,26 @@ double ViewInspector::lumaChange(float luma, int px, int py) const {
     return best;
 }
 
+// The least turn (degrees) against the previous render's normals about
+// (px, py), as lumaChange: detail finer than a pixel (grass) gives each
+// pixel another blade's normal from frame to frame, which is no change of
+// the surface.
+double ViewInspector::normalChange(const bromath::Vec3& normal, int px, int py) const {
+    const Frame& f = prev_;
+    double n[3];
+    loadVec(normal, n);
+    double best = -2.0;
+    for (int y = std::max(py - 1, 0); y <= std::min(py + 1, static_cast<int>(f.h) - 1); ++y)
+        for (int x = std::max(px - 1, 0); x <= std::min(px + 1, static_cast<int>(f.w) - 1); ++x) {
+            const bromath::Vec3& q = f.normal[static_cast<size_t>(y) * f.w + x];
+            if (!hasNormal(q)) continue;
+            double m[3];
+            loadVec(q, m);
+            best = std::max(best, dot3(n, m));
+        }
+    return best < -1.5 ? 0.0 : std::acos(std::clamp(best, -1.0, 1.0)) * kRadToDeg;
+}
+
 bool ViewInspector::projectPrev(const double bodyPoint[3], bool direction, int& px, int& py) const {
     const Frame& f = prev_;
     double rel[3];
@@ -259,12 +279,7 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
                             }
                             if (len3(delta) <= kSameFootprints * footprint / std::max(facing, 0.25)) {
                                 cls = kClsSame;
-                                if (hasNormal(c.normal[i]) && hasNormal(p.normal[j])) {
-                                    double a[3], bb[3];
-                                    loadVec(c.normal[i], a);
-                                    loadVec(p.normal[j], bb);
-                                    angleDeg = std::acos(std::clamp(dot3(a, bb), -1.0, 1.0)) * kRadToDeg;
-                                }
+                                if (hasNormal(c.normal[i])) angleDeg = normalChange(c.normal[i], qx, qy);
                                 dl = lumaChange(c.luma[i], qx, qy);
                                 normalSum += angleDeg;
                                 lumaSum += dl;

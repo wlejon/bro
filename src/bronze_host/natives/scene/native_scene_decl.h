@@ -970,6 +970,7 @@ int32_t bro_scene_SceneGraph_readTonemapWidth(void);
 void bro_scene_SceneGraph_setInspect(void* self, bool on);
 void bro_scene_SceneGraph_inspectFrame(void* self, int32_t image, bronze_native_buffer* out);
 void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out);
+void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t dirs_len, bronze_native_buffer* out);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);

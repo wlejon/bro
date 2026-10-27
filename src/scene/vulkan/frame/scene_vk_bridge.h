@@ -71,6 +71,8 @@ public:
     bool readAtmosphereTables(AtmosphereTables& out) { return ready_ && atmosphere_.read(gpu_, out); }
     /// The probe grid's world of the last render (SceneProbeGrid::read).
     bool readProbeGrid(ProbeGridTables& out) { return ready_ && probes_.read(gpu_, out); }
+    /// The clouds' cover cube (SceneClouds::readCover).
+    bool readCloudCover(std::vector<float>& out) { return ready_ && clouds_.readCover(gpu_, out); }
 
     /// The last render's tonemapped result as top-down RGBA. Waits for that
     /// render (its own ticket, never the device); the copy is recorded into

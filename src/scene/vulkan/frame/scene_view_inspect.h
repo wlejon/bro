@@ -92,6 +92,7 @@ private:
     // The previous render's pixel of a body point (false outside its view).
     bool projectPrev(const double bodyPoint[3], bool direction, int& px, int& py) const;
     double lumaChange(float luma, int px, int py) const;
+    double normalChange(const bromath::Vec3& normal, int px, int py) const;
 
     Frame cur_, prev_;
     uint32_t prevW_ = 0, prevH_ = 0;

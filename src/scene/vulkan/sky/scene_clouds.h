@@ -116,6 +116,14 @@ public:
     /// The march, in the HDR scope over the opaque surfaces (PassClouds).
     void recordDraw(SceneFrame& frame);
 
+    /// The cover's cube as baked whole (a debugging read; waits for the
+    /// GPU): CL_COVER_SIDE texels a face with its border, six faces, rgba.
+    /// False before the cover is baked once.
+    bool readCover(SceneGpu& gpu, std::vector<float>& out);
+    /// The cover at body direction `up` in a cube readCover gave, bilinear
+    /// as the shaders read it (sky/scene_cloud_layer.glsl's cloudCoverAt).
+    static void coverAt(const std::vector<float>& cube, const double up[3], float out[4]);
+
     /// The clouds' block (std140) — CloudsUBO in sky/scene_cloud_layer.glsl.
     struct alignas(16) Block {
         float toBody[3][4];

@@ -1057,4 +1057,90 @@ void SceneClouds::recordDraw(SceneFrame& frame) {
     frame.drewContent = true;
 }
 
+namespace {
+float coverHalf(uint16_t h) {
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    const uint32_t exp = (h >> 10) & 0x1Fu;
+    const uint32_t man = h & 0x3FFu;
+    if (exp == 0) return (sign ? -1.0f : 1.0f) * std::ldexp(static_cast<float>(man), -24);
+    if (exp == 31) return std::bit_cast<float>(sign | 0x7F800000u | (man << 13));
+    return std::bit_cast<float>(sign | ((exp + 112u) << 23) | (man << 13));
+}
+}  // namespace
+
+bool SceneClouds::readCover(SceneGpu& gpu, std::vector<float>& out) {
+    if (!cover_.isValid() || !coverHeld_) return false;
+    SceneVkDevice& device = gpu.device;
+    device.waitIdle();
+    const size_t texels = static_cast<size_t>(CL_COVER_SIDE) * CL_COVER_SIDE * 6;
+    SceneVkBuffer buffer;
+    if (!gpu.allocator.createBuffer(texels * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                    buffer) ||
+        !buffer.mappedData) {
+        gpu.allocator.destroyBuffer(buffer);
+        return false;
+    }
+    VkCommandBuffer cmd = device.frames().beginCommands();
+    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 6};
+    region.imageExtent = {static_cast<uint32_t>(CL_COVER_SIDE), static_cast<uint32_t>(CL_COVER_SIDE), 1};
+    vkCmdCopyImageToBuffer(cmd, cover_.image, VK_IMAGE_LAYOUT_GENERAL, buffer.buffer, 1, &region);
+    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+    const uint64_t ticket = device.frames().submit(cmd);
+    const bool ok = ticket != 0 && device.context().queue().wait(ticket);
+    if (ok) {
+        const auto* src = static_cast<const uint16_t*>(buffer.mappedData);
+        out.resize(texels * 4);
+        for (size_t i = 0; i < texels * 4; ++i) out[i] = coverHalf(src[i]);
+    }
+    gpu.allocator.destroyBuffer(buffer);
+    return ok;
+}
+
+void SceneClouds::coverAt(const std::vector<float>& cube, const double up[3], float out[4]) {
+    out[0] = out[1] = out[2] = out[3] = 0.0f;
+    constexpr int S = CL_COVER_SIDE;
+    if (cube.size() < static_cast<size_t>(S) * S * 6 * 4) return;
+    // (sky/scene_cloud_layer.glsl's cloudCubeCoord.)
+    const double ax = std::abs(up[0]), ay = std::abs(up[1]), az = std::abs(up[2]);
+    int f;
+    double u, v, n;
+    if (ax >= ay && ax >= az) {
+        f = up[0] >= 0.0 ? 0 : 1;
+        u = up[0] >= 0.0 ? -up[2] : up[2];
+        v = up[1];
+        n = ax;
+    } else if (ay >= az) {
+        f = up[1] >= 0.0 ? 2 : 3;
+        u = up[0];
+        v = up[1] >= 0.0 ? up[2] : -up[2];
+        n = ay;
+    } else {
+        f = up[2] >= 0.0 ? 4 : 5;
+        u = up[2] >= 0.0 ? up[0] : -up[0];
+        v = up[1];
+        n = az;
+    }
+    if (!(n > 0.0)) return;
+    constexpr double kQuarterPi = 0.78539816339744831;
+    const double eu = std::atan(u / n) / kQuarterPi, ev = std::atan(v / n) / kQuarterPi;
+    // Texel space, centres at i + 0.5, bilinear as textureLod.
+    const double tx = (eu * 0.5 + 0.5) * (S - 2.0) + 1.0 - 0.5;
+    const double ty = (ev * 0.5 + 0.5) * (S - 2.0) + 1.0 - 0.5;
+    const int x0 = std::clamp(static_cast<int>(std::floor(tx)), 0, S - 2);
+    const int y0 = std::clamp(static_cast<int>(std::floor(ty)), 0, S - 2);
+    const double fx = std::clamp(tx - x0, 0.0, 1.0), fy = std::clamp(ty - y0, 0.0, 1.0);
+    const float* face = cube.data() + static_cast<size_t>(f) * S * S * 4;
+    for (int c = 0; c < 4; ++c) {
+        auto at = [&](int x, int y) { return static_cast<double>(face[(static_cast<size_t>(y) * S + x) * 4 + c]); };
+        const double top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
+        const double bot = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
+        out[c] = static_cast<float>(top * (1.0 - fy) + bot * fy);
+    }
+}
+
 }  // namespace bro::scene::vk

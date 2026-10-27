@@ -703,6 +703,11 @@
         }
         return out;
     });
+    fn(SceneGraph.prototype, "cloudCoverAt", function cloudCoverAt(dirs) {
+        const flat = dirs instanceof Float64Array ? dirs : Float64Array.from(dirs.flat ? dirs.flat() : dirs);
+        const out = __bro_native.scene.SceneGraph_cloudCoverAt(this, flat);
+        return out && out.length ? out : null;
+    });
     fn(SceneGraph.prototype, "captureFrame", function captureFrame(width, height) {
         if (width !== undefined && height !== undefined) {
             __bro_native.scene.SceneGraph_setCanvasSize(this, width, height);

@@ -271,6 +271,21 @@ SceneGraph.prototype.setClouds = function (opts) {};
  */
 SceneGraph.prototype.cloudStats = function () {};
 
+/**
+ * The cover as baked (the module's cloudCover over the cube, bilinear as
+ * the shaders read it) at body directions: a debugging read, to map where
+ * the weather's systems lie (a map about a flight's path, say). The cube is
+ * read back from the GPU once a cloud generation (waits for the GPU; some
+ * 50 MB), then sampled on the CPU.
+ * @param {Float64Array|number[]|number[][]} dirs  body directions, xyz each
+ *   (flat or as triples; need not be unit)
+ * @returns {?Float64Array} rgba each (x the share covered, y z w the
+ *   world's own), or null before the cover is baked
+ * @example
+ * const c = scene.cloudCoverAt([up.x, up.y, up.z]);   // c[0] the cover there
+ */
+SceneGraph.prototype.cloudCoverAt = function (dirs) {};
+
 /*
  * THE MODULE CONTRACT (GLSL; src/scene/vulkan/shaders/sky/scene_cloud_layer.glsl)
  *

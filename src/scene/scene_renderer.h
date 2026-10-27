@@ -177,6 +177,11 @@ public:
     /// compares the last render with the one inspected before it. `image` 0
     /// none, 1 the change map, 2 the normals; false when there is nothing new.
     void setInspect(bool on) { inspect_ = on; }
+
+    /// The clouds' cover (the module's cloudCover as baked) at `count` body
+    /// directions (xyz each), rgba each into `out`; read back once a cloud
+    /// generation. False before the cover is baked.
+    bool cloudCoverAt(const double* dirs, size_t count, std::vector<float>& out);
     bool inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
 
     // --- Render settings (see SceneGraph for API docs) ---
@@ -632,6 +637,8 @@ private:
 
     std::unique_ptr<vk::SceneVkBridge> vkBridge_;
     bool inspect_ = false;   // setInspect
+    std::vector<float> coverCube_;   // cloudCoverAt's read of the cover
+    uint64_t coverCubeGeneration_ = 0;
     static inline render::VulkanContext* defaultVulkanContext_ = nullptr;
 
     // --- SSAO ---
