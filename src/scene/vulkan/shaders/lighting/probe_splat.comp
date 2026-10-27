@@ -11,10 +11,11 @@
 // falls in, so the sum a voxel holds is the extinction times the share of
 // it the crowns fill.
 //
-// The points are drawn uniform through the crown's block (its widest
-// radius about its axis, its height) cut to the job's box, and those outside
-// the crown (the disc of radius plantCrownWidth(v) at its height v, -1 the
-// foot .. 1 the top) dropped: a box that is a strip of a cascade (what a
+// A crown wholly in the box draws its points uniform through the cylinder
+// of its widest radius; one the box cuts draws them uniform through its
+// block (that radius about its axis, its height) cut to the box. Those
+// outside the crown (the disc of radius plantCrownWidth(v) at its height v,
+// -1 the foot .. 1 the top) are dropped: a box that is a strip of a cascade (what a
 // step of the eye leaves stale) spends its points on the slice of the crown
 // it holds, not on the whole crown for the slice. (Drawn through the whole
 // crown, a strip of the finest cascade spent 0.2 ms on 400 plants.) A crown
@@ -43,12 +44,22 @@ void deposit(int idx, vec4 v) {
 
 shared uint kept;
 
-// Point q of K in the block from lo to hi (xz, relative to the crown's
-// middle): its place, or false when it falls outside the crown.
-bool crownPoint(PlantCrown cr, vec3 turn, int q, vec2 lo, vec2 hi, out vec3 at) {
+// Point q of K: in the disc of radius reach about the crown's middle when the
+// crown is whole, else in the block from lo to hi (xz, relative to its
+// middle); its place, or false when it falls outside the crown. (Drawn
+// through the square block, a whole crown kept points by three of the
+// sequence's coordinates at once, where the disc keeps them by two: the
+// coarsest cascade's 64 points stood the crowns' mass half a layer low.)
+bool crownPoint(PlantCrown cr, vec3 turn, int q, bool whole, float reach, vec2 lo, vec2 hi, out vec3 at) {
     vec3 u = fract(turn + float(q + 1) * vec3(0.8191725134, 0.6710436067, 0.5497004779));
-    float v = 2.0 * u.y - 1.0;
-    at = vec3(mix(lo.x, hi.x, u.x), v * cr.radii.y, mix(lo.y, hi.y, u.z));
+    float v = 2.0 * u.x - 1.0;
+    if (whole) {
+        float r = sqrt(u.y) * reach;
+        float a = 2.0 * PI * u.z;
+        at = vec3(cos(a) * r, v * cr.radii.y, sin(a) * r);
+        return r <= plantCrownWidth(cr, v) * cr.radii.x;
+    }
+    at = vec3(mix(lo.x, hi.x, u.y), v * cr.radii.y, mix(lo.y, hi.y, u.z));
     return length(at.xz) <= plantCrownWidth(cr, v) * cr.radii.x;
 }
 
@@ -103,14 +114,14 @@ void main() {
         barrier();
         uint mine = 0u;
         for (int q = int(gl_LocalInvocationIndex); q < K; q += 64)
-            if (crownPoint(cr, turn, q, from, to, at)) ++mine;
+            if (crownPoint(cr, turn, q, true, reach, from, to, at)) ++mine;
         atomicAdd(kept, mine);
         barrier();
         share = volume / float(max(kept, 1u));
     }
     share *= s.density / voxVol;
     for (int q = int(gl_LocalInvocationIndex); q < K; q += 64) {
-        if (!crownPoint(cr, turn, q, from, to, at)) continue;
+        if (!crownPoint(cr, turn, q, whole, reach, from, to, at)) continue;
         vec3 pt = center + at;
         float ground = pgBase(pgGround(c, pt.xz));
         float h = pt.y - ground;
