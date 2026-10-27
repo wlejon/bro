@@ -7,8 +7,9 @@
 // cover: cloudSigmaOf), and the column as a layer of that, as the cache's
 // columns are (sky/clouds_light.comp; cloudColumnAdd): its depth seen from
 // above, and the mean depth from its top and the mean height of what it
-// sends. The share is the world's own, never cut into the engine's clouds:
-// from as far as the globe is read, they are finer than a pixel.
+// sends. The share is the world's own (its slabs' and its heaps'), never
+// cut into the engine's clouds: from as far as the globe is read, they are
+// finer than a pixel.
 
 #define CLOUD_SET 0
 #include "sky/scene_cloud_layer.glsl"
@@ -24,6 +25,7 @@ layout(push_constant) uniform Push {
 vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
 
 #include "sky/cloud_module.glsl"
+#include "sky/cloud_heaps.glsl"
 
 void main() {
     int x = int(gl_GlobalInvocationID.x);
@@ -42,7 +44,10 @@ void main() {
         float h = (float(b) + 0.5) / float(CL_GLOBE_BINS);
         float r = mix(clouds.shell.x, clouds.shell.y, h);
         CloudPoint q = CloudPoint(up * r, up, h, r - clouds.shell.z, cover, foot, clouds.shell.w);
-        float share = min(cloudDensity(q), 1.0);
+        // (The slabs' and the heaps' share, as the cache's coarse cells
+        // have them: the globe read the slabs alone, so a field of heaps
+        // was clear from orbit and came in as a field of white dots.)
+        float share = min(max(cloudDensity(q), cloudHeapsShareAt(q)), 1.0);
         if (share <= 0.0) continue;
         cloudColumnAdd(col, cloudForms(cloudDrift(q.p), share, 0.5, foot, false) * binH, h, binH,
                        cloudShareLike(foot));
