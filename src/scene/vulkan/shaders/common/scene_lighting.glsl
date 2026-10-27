@@ -1159,15 +1159,19 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
     vec3 pp = ro + pos;
     float r0 = length(ro), r1 = length(pp);
     float mu0 = dot(ro, rd) / r0, mu1 = dot(pp, rd) / r1;
-    bool ground = atmGroundHit(ro, rd) >= 0.0;
+    float tGround = atmGroundHit(ro, rd);
+    bool ground = tGround >= 0.0;
     vec3 tFull, tRay;
     if (ground) {
         // Toward the ground: the reversed ray, from the point back up past
-        // the eye (a = T(point..eye) * b).
+        // the eye (a = T(point..eye) * b); the sky view's ray ends at the
+        // ground, so its air is the eye's to there (tFull), not all of it.
         vec3 a = atmTransmittanceToTop(r1, -mu1);
         vec3 b = atmTransmittanceToTop(r0, -mu0);
+        vec3 pg = ro + rd * tGround;
+        vec3 g = atmTransmittanceToTop(ATM_RB, -dot(pg, rd) / length(pg));
         tRay = clamp(a / max(b, vec3(1e-6)), 0.0, 1.0);
-        tFull = vec3(0.0);
+        tFull = clamp(g / max(b, vec3(1e-6)), 0.0, 1.0);
     } else {
         vec3 a = atmTransmittanceToTop(r0, mu0);
         vec3 b = atmTransmittanceToTop(r1, mu1);
