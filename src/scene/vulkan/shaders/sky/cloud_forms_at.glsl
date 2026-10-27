@@ -61,20 +61,26 @@ vec3 clCacheBase(ClAt w, float lod) {
 // skin's move shows, w how much of the heaps' is their share (cloudHeapsFar):
 // the heaps' own field changes no faster than a metre's distance a metre,
 // where the slabs' may rise CLOUD_EDGE_STEEPEST times that (clouds.frag's clBaseClearParts).
-vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot) {
+// (Whether the heaps are themselves or their share is the pixel's, `seen`,
+// not the length a mean is taken over: a piece of the sun's ray a few
+// hundred metres long read a small heap as its share, which is all but none
+// over its base, and lit it through, a flat white blob over the shaded heap
+// behind it. Over a longer `foot` the heap's field ramps across that length:
+// the share of the piece within it.)
+vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen) {
     vec3 c = clCacheBase(w, lod);
     if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
     float texel;
-    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), foot, w.h * (clouds.shell.y - clouds.shell.x), texel);
-    float far = cloudHeapsFar(foot, texel);
-    float own = far < 1.0 ? min(0.5 + in_ / clouds.forms.w, 1.0) : 0.0;
+    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), texel);
+    float far = cloudHeapsFar(seen, texel);
+    float own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
     return vec4(c.x, mix(own, c.z, far), c.y, far);
 }
-vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot) {
-    vec4 b = clBaseParts(w, lod, pd, foot);
+vec2 clBaseShows(ClAt w, float lod, vec3 pd, float foot, float seen) {
+    vec4 b = clBaseParts(w, lod, pd, foot, seen);
     return vec2(max(b.x, b.y), b.z);
 }
-float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot).x; }
+float clBase(ClAt w, float lod, float foot) { return clBaseShows(w, lod, cloudDrift(w.p), foot, foot).x; }
 
 // The forms at a point of the view.
 struct ClForms {
@@ -93,7 +99,7 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
     if (w.h <= 0.0 || w.h >= 1.0) return f;
     vec3 pd = cloudDrift(w.p);
     vec4 n = cloudBillows(pd, foot);
-    vec2 bs = clBaseShows(w, lod, pd, foot);
+    vec2 bs = clBaseShows(w, lod, pd, foot, seen);
     float base = max(bs.x, 0.0);
     float wD = detail ? cloudDetailAt(foot) : 0.0;
     vec4 e = vec4(0.0);

@@ -185,20 +185,52 @@ float clBaseClearParts(vec4 b, float foot, float vs) {
 // with the eye; nor the volume's extinction for the two further pieces,
 // which shaded the heaps unlike the forms they were baked from.)
 const int CL_SUN_PIECES = 3;
-float clSunDepth(vec3 a, vec3 s, float foot, bool detail) {
+// The heaps' own depth from `a` toward the sun `s` (their map's columns at
+// footprint `foot`): the length of the way within them, traced by their
+// distance (inside, a step as long as the way is sure to stay in; outside,
+// as long as it is sure to meet none), CL_HEAP_SUN_STEPS steps at most.
+// What a heap's body lets through is no more than this, whatever the
+// cache's cells make of it: past the pieces they read a heap at its base,
+// its core, as its share, all but none there, and lit the low middle of a
+// heap's shaded side as if it faced the sun, a bright disc a few hundred
+// metres across in every large heap a few kilometres off.
+const int CL_HEAP_SUN_STEPS = 6;
+const float CL_HEAP_SUN_LEAST = 40.0;   // the least step (m)
+float clHeapSunDepth(vec3 a, vec3 s, float foot) {
+    if (cloudHeapMapSide() <= 0.0) return 0.0;
+    float thick = clouds.shell.y - clouds.shell.x;
+    float at = 0.0, inside = 0.0;
+    for (int i = 0; i < CL_HEAP_SUN_STEPS; ++i) {
+        ClAt w = clAt(a + s * at);
+        if (w.h <= 0.0 || w.h >= 1.0) break;
+        float texel;
+        float d = cloudHeapMapIn(cloudChartAt(normalize(cloudDrift(w.p))), foot, w.h * thick, texel);
+        if (d < -1e4) break;   // (past the map)
+        if (i == 0 && d < -clouds.forms.w) break;   // (a face not a heap's: the slabs' light is the cache's)
+        float step = max(abs(d), CL_HEAP_SUN_LEAST);
+        if (d > 0.0) inside += step;
+        at += step;
+    }
+    return clouds.forms.x * inside;
+}
+// (The heaps' own depth at a face only, `face`: deeper in, where the sun's
+// depth is taken again, the cloud before it already hides most of what it
+// lights, and the trace there cost a quarter of the clouds' time.)
+float clSunDepth(vec3 a, vec3 s, float foot, bool detail, bool face) {
     float sc = max(1.0, foot / 15.0);
     float tau = 0.0, at = 0.0, len = 25.0 * sc;
+    float heaps = face ? clHeapSunDepth(a, s, foot) : 0.0;
     for (int i = 0; i < CL_SUN_PIECES; ++i) {
         ClAt w = clAt(a + s * (at + 0.5 * len));
-        if (w.h >= 1.0) return tau;   // (out through the deck's top)
+        if (w.h >= 1.0) return max(tau, heaps);   // (out through the deck's top)
         float f = max(foot, 3.0 * len);
         tau += clFormsAt(w, clLod(w, f), f, foot, detail && i == 0).sigma * len;
         at += len;
         len *= 2.8;
     }
     ClAt w = clAt(a + s * at);
-    if (w.h <= 0.0 || w.h >= 1.0) return tau;
-    return tau + clCache(w, clLod(w, foot)).y;
+    if (w.h <= 0.0 || w.h >= 1.0) return max(tau, heaps);
+    return max(tau + clCache(w, clLod(w, foot)).y, heaps);
 }
 
 // The globe's column at body point `p` over a pixel's footprint `foot` (m):
@@ -663,7 +695,7 @@ void main() {
             int kc = min(k + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
             if (kc > k) dFree = max(dFree, clFree(w, kc));
             float vs = abs(dot(rd, normalize(a)));
-            float dB = clBaseClearParts(clBaseParts(w, lod, cloudDrift(w.p), foot), foot, vs);
+            float dB = clBaseClearParts(clBaseParts(w, lod, cloudDrift(w.p), foot, foot), foot, vs);
             // (A step rises by at most CL_SKIN_RISE pixels' footprint: a
             // view looking down crossed eight in one, as deep as a heap
             // under a high eye is thick, and of the heaps it fell through
@@ -818,12 +850,12 @@ void main() {
             coverT = m.T;
             cover = coverLast = 0.0;
             tFace = t;
-            tauFace = clSunDepth(ro + rd * t, s, pixel * t, m.T > CL_DETAIL_SEEN);
+            tauFace = clSunDepth(ro + rd * t, s, pixel * t, m.T > CL_DETAIL_SEEN, true);
             tauUp = clCache(w, lod).z;
             tauIn = tauSeen = 0.0;
         } else if (m.T > CL_SUN_AGAIN_SEEN && x - tFace > CL_SUN_AGAIN * max(1.0, foot / 15.0)) {
             tFace = x;
-            tauFace = clSunDepth(ro + rd * x, s, foot, m.T > CL_DETAIL_SEEN);
+            tauFace = clSunDepth(ro + rd * x, s, foot, m.T > CL_DETAIL_SEEN, false);
             tauUp = clCache(w, lod).z;
             tauIn = -0.5 * sigma * L;
         }
