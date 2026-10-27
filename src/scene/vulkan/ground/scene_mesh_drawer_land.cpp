@@ -245,6 +245,16 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_EYE + 1] = eye.y;
     words[LD_EYE + 2] = eye.z;
     words[LD_BODY + 1] = static_cast<float>(lt.firstRing);
+    // Whether grass stands on it this frame: its sward then lit as the
+    // turf's from afar (scene_land.glsl's landSwardShare).
+    for (SceneNode* n : frame.lists.nodes) {
+        if (n->type() != SceneNode::Type::Mesh) continue;
+        const GrassNode* grass = static_cast<MeshNode*>(n)->asGrass();
+        if (grass && grass->ground() == node.id()) {
+            words[LD_BODY + 2] = 1.0f;
+            break;
+        }
+    }
     if (node.round()) {
         // Each cube face's axes in the place frame (its basis' transpose
         // takes the body's to it) and where the anchor (the place's up) lies

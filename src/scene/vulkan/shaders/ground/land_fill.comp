@@ -1,7 +1,8 @@
 #version 450
 // The land's tiles (scene_mesh_drawer_land.cpp): the world's land module
 // run over each texel of the tiles the world service granted this frame,
-// its heights into one array (with the canopy's top and flanks beside them), its
+// its heights into one array (with the canopy's top and flanks and the
+// sward's density beside them: the land far off lit as its sward), its
 // surface (albedo, herbs) into another, what covers it into the third, and
 // the canopy of the plants standing on it (their leaves' albedo, their
 // cover; world/plant_canopy.h) into the fourth, a slot an array layer. A
@@ -195,7 +196,7 @@ void main() {
 #endif
 
     ivec3 at = ivec3(texel, int(f.w));
-    imageStore(landHeights, at, vec4(h, max(canopy.y, 0.0), max(canopy.z, 0.0), 0.0));
+    imageStore(landHeights, at, vec4(h, max(canopy.y, 0.0), max(canopy.z, 0.0), clamp(s.cover.x, 0.0, 1.0)));
     imageStore(landSurfaces, at, vec4(max(s.albedo, vec3(0.0)), clamp(s.herbs, 0.0, 1.0)));
     vec4 c = vec4(clamp(s.cover.xy, 0.0, 1.0), clamp(s.cover.z, 0.0, 2.0), clamp(s.cover.w, 0.0, 1.0));
     imageStore(landCovers, at, c);

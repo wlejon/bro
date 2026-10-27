@@ -324,7 +324,8 @@ bool landTexels(vec2 m, float lambda, out int s0, out vec2 uv0, out int s1, out 
 // The height at `uv` of slot `s` and its slope (dh/dx, dh/dz) from the
 // heights a texel either way (inside the tile: its border is two texels),
 // the tile's level `level`.
-float landSlope(int s, vec2 uv, int level, out vec2 slope) {
+// (And the sward's density there, the heights' fourth channel.)
+float landSlope(int s, vec2 uv, int level, out vec2 slope, out float sward) {
     vec4 tiles = LAND_W(LD_TILES / 4);
     float du = 1.0 / (tiles.y + 2.0 * tiles.z);
     float texel = tiles.x * exp2(float(level)) / tiles.y;
@@ -334,7 +335,24 @@ float landSlope(int s, vec2 uv, int level, out vec2 slope) {
     float hz0 = textureLod(landHeights, vec3(uv - vec2(0.0, du), l), 0.0).r;
     float hz1 = textureLod(landHeights, vec3(uv + vec2(0.0, du), l), 0.0).r;
     slope = vec2(hx1 - hx0, hz1 - hz0) / (2.0 * texel);
-    return textureLod(landHeights, vec3(uv, l), 0.0).r;
+    vec4 here = textureLod(landHeights, vec3(uv, l), 0.0);
+    sward = here.a;
+    return here.r;
+}
+float landSlope(int s, vec2 uv, int level, out vec2 slope) {
+    float sward;
+    return landSlope(s, uv, level, slope, sward);
+}
+
+// The share of the light on the land that its sward takes, lit as its
+// blades are from afar (SceneSurface::sward), by the sward's density: the
+// turf's (scene_ground.glsl's groundShade), so the land past the turf is
+// lit as the turf it stands for rather than as level ground a stop
+// brighter.
+// None where no grass stands on the land: there its cover grows nothing
+// drawn.
+float landSwardShare(float density) {
+    return LAND_W(LD_BODY / 4).z > 0.5 ? smoothstep(0.0, 0.25, density) : 0.0;
 }
 
 
@@ -361,24 +379,36 @@ bool landSample(vec2 m, float lambda, out float height, out vec4 surface) {
 // with its normal in the land's frame (from the heights a texel of the
 // level read either way, landSlope, as the fill's) and its surface. Level
 // ground where no level is resident. `q` is m on the tiles (landPosOf).
-bool landSampleNormal(vec2 m, LandPos q, float lambda, out float height, out vec3 normal, out vec4 surface) {
+// (`sward` the sward's density there.)
+bool landSampleNormal(vec2 m, LandPos q, float lambda, out float height, out vec3 normal, out vec4 surface,
+                      out float sward) {
     height = 0.0;
     normal = landUp(m);
     surface = vec4(0.18, 0.18, 0.18, 0.0);
+    sward = 0.0;
     int s0, s1, level;
     vec2 uv0, uv1, g;
     float f;
     if (!landTexels(q, lambda, s0, uv0, s1, uv1, f, level)) return false;
-    height = landSlope(s0, uv0, level, g);
+    height = landSlope(s0, uv0, level, g, sward);
     surface = textureLod(landSurfaces, vec3(uv0, float(s0)), 0.0);
     if (s1 >= 0) {
         vec2 g1;
-        height = mix(height, landSlope(s1, uv1, level + 1, g1), f);
+        float sward1;
+        height = mix(height, landSlope(s1, uv1, level + 1, g1, sward1), f);
         g = mix(g, g1, f);
+        sward = mix(sward, sward1, f);
         surface = mix(surface, textureLod(landSurfaces, vec3(uv1, float(s1)), 0.0), f);
     }
     normal = landNormal(m, q, g);
     return true;
+}
+bool landSampleNormal(vec2 m, LandPos q, float lambda, out float height, out vec3 normal, out vec4 surface) {
+    float sward;
+    return landSampleNormal(m, q, lambda, height, normal, surface, sward);
+}
+bool landSampleNormal(vec2 m, float lambda, out float height, out vec3 normal, out vec4 surface, out float sward) {
+    return landSampleNormal(m, landPosOf(m), lambda, height, normal, surface, sward);
 }
 bool landSampleNormal(vec2 m, float lambda, out float height, out vec3 normal, out vec4 surface) {
     return landSampleNormal(m, landPosOf(m), lambda, height, normal, surface);
