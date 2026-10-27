@@ -41,9 +41,17 @@ float cloudHeapsLeave(vec3 e, vec3 sb, float sinE, float texel) {
         float z = length(p) - clouds.shell.x;
         if (z >= thick) break;
         float mt;
-        vec4 col = cloudHeapMapColumn(cloudChartAt(normalize(cloudDrift(p))), texel, mt);
+        vec3 pd = cloudDrift(p);
+        vec4 col = cloudHeapMapColumn(cloudChartAt(normalize(pd)), texel, mt);
         float in_ = cloudHeapColumnIn(col, z);
-        tau += clouds.forms.x * len * smoothstep(-0.5, 0.5, in_ / max(max(texel, mt), 1.0));
+        // (Its outline the heap's as drawn, the billows' lobes over the base
+        // (cloudFormsShare), and its heart thinner within the skin: the
+        // column's own outline was a crisp ellipse, a dark disc on the land
+        // under a heap as ragged as the billows make it.)
+        float own = min(0.5 + in_ / max(clouds.forms.w, mt), 1.0);
+        if (own <= 0.0) continue;
+        float share = cloudFormsShare(cloudBillows(pd, max(texel, mt)), own, max(texel, mt));
+        tau += clouds.forms.x * len * share * mix(0.35, 1.0, smoothstep(0.5, 0.5 + CLOUD_SKIN, own));
         if (tau > 12.0) break;
     }
     // (And the sun it scatters through, forward and out of its base into
