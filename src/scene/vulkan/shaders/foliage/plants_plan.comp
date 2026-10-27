@@ -173,7 +173,18 @@ Pick pick(PlantInfo pl, uint v) {
     } else {
         uint t = v - 1u;
         uint at = PP_P_TILE + t * PP_TILE_WORDS;
-        if (d - pl.radius > pf(PP_P_SHADOW_RANGE) || beyondRange(pl, d, pf(PP_P_SHADOW_RANGE)) ||
+        // The sun's pages are cached and read again as the eye moves: what
+        // one holds is the page's, not the eye's when it was drawn. Its
+        // plants are those drawn, if its texel is one the receivers within
+        // shadowRange read (their footprint, a pixel at that distance);
+        // cast by their distance from the eye, a page drawn low kept its
+        // trees' shadows once the eye had climbed past the range, and one
+        // drawn there had none: the same view darker on the way up than
+        // the way down. A local light's views are drawn each frame.
+        bool ortho = params.w[at + PP_TILE_ORTHO] != 0u;
+        bool casts = ortho ? pf(at + PP_TILE_TEXEL_CONST) <= pf(PP_P_SHADOW_RANGE) / pf(PP_P_FOCAL)
+                           : !(d - pl.radius > pf(PP_P_SHADOW_RANGE) || beyondRange(pl, d, pf(PP_P_SHADOW_RANGE)));
+        if (!casts || (ortho && (d - pl.radius > pf(PP_P_RANGE) || beyondRange(pl, d, pf(PP_P_RANGE)))) ||
             !intersects(at + PP_TILE_FRUSTUM, bmin, bmax))
             return k;
         // The sun's views part the crowns: one whose penumbra on the ground

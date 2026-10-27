@@ -307,7 +307,11 @@
  *
  * Casting (`castsShadow`): each shadow view drawn this frame (the shadow
  * pages being drawn, lighting-api.js) gets its own casters, the plants in
- * its frustum (in view or not) within `shadowRange`, each kept to
+ * its frustum (in view or not): for a local light those within
+ * `shadowRange` of the eye; for the sun, every plant drawn, on the levels
+ * whose texel is one the receivers within `shadowRange` read (a pixel's
+ * footprint there), so a cached page holds the same plants however the eye
+ * came to it; each kept to
  * `shadowTexels` of the page's texels an element; a crown only a few of
  * those across casts its outline, a disc square to the light. So a coarse
  * level's thousands of trees cost a disc each. The pages are cached: a
