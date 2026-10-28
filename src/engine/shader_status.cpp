@@ -13,24 +13,44 @@
 
 #include "dom/document.h"
 #include "dom/element.h"
+#if BRO_WITH_3D
 #include "scene/vulkan/frame/scene_shader_warmup.h"
+#endif
 
 #include <cmath>
 #include <string>
 
+#if BRO_WITH_3D
 // (Declared in scene_vk_target_format.h, which needs the scene's Vulkan
 // function table; this is the one function the engine reads from it.)
 namespace bro::scene::vk::pipeline_async {
 int inFlight();
 }
+#endif
 
 namespace bro::engine {
 
 namespace {
 
-std::string workText(bool compiling, double compileProgress) {
+// The scene's counts; a build without the scene compiles nothing.
+struct SceneWork {
+    int shaders = 0, shadersDone = 0, building = 0;
+};
+
+SceneWork sceneWork() {
+    SceneWork w;
+#if BRO_WITH_3D
     const auto sp = scene::vk::shader_warmup::progress();
-    const int building = scene::vk::pipeline_async::inFlight();
+    w.shaders = sp.shaders;
+    w.shadersDone = sp.shadersDone;
+    w.building = scene::vk::pipeline_async::inFlight();
+#endif
+    return w;
+}
+
+std::string workText(bool compiling, double compileProgress) {
+    const SceneWork sp = sceneWork();
+    const int building = sp.building;
     std::string out;
     auto add = [&](const std::string& s) {
         if (!out.empty()) out += "   ";
@@ -63,8 +83,8 @@ void writeWork(SystemDocument* doc, std::string& last, const std::string& text) 
 }  // namespace
 
 bool Engine::backgroundWorkPending() const {
-    const auto sp = scene::vk::shader_warmup::progress();
-    return sp.shadersDone < sp.shaders || scene::vk::pipeline_async::inFlight() > 0;
+    const SceneWork sp = sceneWork();
+    return sp.shadersDone < sp.shaders || sp.building > 0;
 }
 
 void Engine::tickWorkStatus(double nowMs) {
