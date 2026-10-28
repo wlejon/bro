@@ -95,9 +95,14 @@ if (!gl) {
     gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, 0);
     const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
+    // (On frames that take real time: a slow GPU, the runners' paravirtual
+    // one, does not finish within 200 frames a fraction of a millisecond
+    // each.)
     let frames = 0;
-    while (gl.clientWaitSync(fence, 0, 0) === gl.TIMEOUT_EXPIRED && frames < 200) {
+    const until = perf.now() + 5000;
+    while (gl.clientWaitSync(fence, 0, 0) === gl.TIMEOUT_EXPIRED && (frames < 200 || perf.now() < until)) {
         advanceTime(16);
+        if (frames >= 10) wallSleep(2);
         frames++;
     }
     const status = gl.clientWaitSync(fence, 0, 0);

@@ -100,10 +100,15 @@ if (!gl) {
         assert(gl.getError() === gl.INVALID_OPERATION, 'a TIMESTAMP_EXT query cannot become TIME_ELAPSED_EXT');
 
         // --- poll on later frames, as an app would ----------------------------
+        // (On frames that take real time: a slow GPU, the runners'
+        // paravirtual one, does not finish within 200 frames a fraction of
+        // a millisecond each.)
         let frames = 0;
+        const until = perf.now() + 5000;
         const ready = (x) => gl.getQueryParameter(x, gl.QUERY_RESULT_AVAILABLE);
-        while (!(ready(q) && ready(empty) && ready(t0) && ready(t1)) && frames < 200) {
+        while (!(ready(q) && ready(empty) && ready(t0) && ready(t1)) && (frames < 200 || perf.now() < until)) {
             advanceTime(16);
+            if (frames >= 10) wallSleep(2);
             frames++;
         }
         assert(ready(q) && ready(empty) && ready(t0) && ready(t1),
