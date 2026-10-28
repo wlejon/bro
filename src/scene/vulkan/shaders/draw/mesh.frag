@@ -190,36 +190,82 @@ float landCanopyGround(vec3 worldPos) {
 
 // A land's canopy (landCanopyAt): its leaves' albedo `albedo`
 // shown by `shown` over the surface, as the far plants are drawn (lit as a
-// sward, below), facing up whatever the ground's slope, matte, and
-// mottled a crown at a time (CANOPY_CELL m) while a crown spans a few
-// pixels, its mean beyond. Returns what its light is taken down by: crowns
-// in their own shade (CANOPY_SHADE: a crown's leaves shade each other, as
-// the trees' far daubs do), the more of it seen the lower the eye's line to
-// them (CANOPY_GRAZING where the line is under a tenth of the vertical:
-// their shaded sides and the shade between them). The shade is of all the
-// light off the leaves, their sheen as well as what they scatter (a
-// sward's tops are lit, the crowns' depths are not), and of the ground
-// between them in the same share. (Set so the canopy is what the plants it
-// stands for are, the same land drawn both ways: the planet's woods from
-// 3 km straight down, 32.8 / 53.1 / 62.8 against its trees' 35.5 / 54.9 /
-// 62.2, and at 3 to 6 km along a line some 20 degrees down 56.8 / 81.5 /
-// 95.4 against 57.8 / 80.6 / 94.4; at 0.45 and 0.32 the canopy past the
-// plants' range was a fifth darker than they were, a dark slab beyond them.)
-const float CANOPY_SHADE = 0.75;
-const float CANOPY_GRAZING = 0.75;
+// sward, below), facing up whatever the ground's slope, matte, and painted
+// a crown at a time as the plants' painted crowns it takes over from are:
+// a dome in each CANOPY_CELL m cell, set off its middle by the cell's
+// hash, brighter at its top and darker in the gaps between (its tone about
+// its own mean, so the canopy's light is what it was), its normal leaning
+// out from its middle; while a crown spans a few pixels, its mean beyond.
+// Returns what its light is taken down by: crowns in their own shade
+// (CANOPY_SHADE: a crown's leaves shade each other, as the trees' far daubs
+// do), the more of it seen the lower the eye's line to them (down to
+// CANOPY_GRAZING where the line is under a tenth of the vertical, from all
+// of it straight down: their shaded sides and the shade between them). The
+// shade is of all the light off the leaves, their sheen as well as what
+// they scatter (a sward's tops are lit, the crowns' depths are not), and
+// of the ground between them in the same share. (Set so the canopy is what
+// the plants it stands for are, the same land drawn both ways, the
+// planet's ladder.js twin: straight down from 1 to 3 km the canopy reads
+// -0.07 to +0.03 stop against its plants, and 20 degrees down from 600 m
+// and 1.2 km (tilt=70) +0.04 to +0.12, where its real plants and its
+// painted crowns agree within 0.01; at 0.75 and 0.75 from a tenth to 0.4
+// of the vertical it read 0.1 to 0.15 dark straight down and 0.3 to 0.47
+// bright along the slant, a bright band where the land took over.)
+const float CANOPY_SHADE = 0.87;
+const float CANOPY_GRAZING = 0.46;
 const float CANOPY_CELL = 6.0;
 const float CANOPY_MOTTLE = 0.15;
+const float CANOPY_DOME = 0.45;     // a crown's radius, of its cell
+const float CANOPY_RELIEF = 0.9;    // its tone's swing about its mean
+// (The dome's mean over its cell: its disc's share, pi r^2, by a dome's
+// mean height over its disc, 2/3.)
+const float CANOPY_DOME_MEAN = 3.14159265 * CANOPY_DOME * CANOPY_DOME * (2.0 / 3.0);
 float canopySurface(vec3 worldPos, vec3 albedo, float shown, inout vec3 baseColor, inout vec3 N,
                     inout float roughness) {
     vec2 p = (worldPos.xz + camera.eyeWorld.xz) / CANOPY_CELL;
     vec2 c = floor(p);
     float h = fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+    float h2 = fract(sin(dot(c, vec2(269.5, 183.3))) * 43758.5453);
+    float h3 = fract(sin(dot(c, vec2(419.2, 371.9))) * 43758.5453);
     float footprint = max(length(dFdx(p)), length(dFdy(p)));
-    float mottle = 1.0 + CANOPY_MOTTLE * (2.0 * h - 1.0) * (1.0 - smoothstep(0.25, 0.5, footprint));
+    float seen = 1.0 - smoothstep(0.25, 0.5, footprint);
+    // A crown stands in the cell or does not, as a plant does, by the share
+    // of the canopy shown there (its cover along the eye's line): the same
+    // share of the cells as of the ground, the gaps between the stands'
+    // crowns the ground's colour. (Its colour and its own shade only: the
+    // ground's shade among the crowns, its AO and its sun, take the share,
+    // as they did, or the gaps took all of the shade between crowns and the
+    // woods read half a stop dark.)
+    // Past where a cell spans half a pixel, the crowns a pixel holds: a
+    // block of n cells holds a share of them that strays from the mean by
+    // sqrt(s (1 - s) / n), drawn per block on the world (blocks of 2^k
+    // cells, two sizes blended by the footprint), so the woods keep the
+    // speckle of their crowns there rather than going smooth, and nothing
+    // crawls as the eye moves.
+    float s = shown;
+    float lv = log2(max(2.0 * footprint, 1.0));
+    float k0 = floor(lv);
+    float spread = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        float k = k0 + float(i);
+        float size = exp2(k);
+        vec2 b = floor(p / size);
+        float u = fract(sin(dot(b, vec2(157.3, 113.1)) + 17.0 * k) * 43758.5453);
+        spread += (i == 0 ? 1.0 - (lv - k0) : lv - k0) * 1.7320508 * (2.0 * u - 1.0) / size;
+    }
+    float far_ = clamp(s + sqrt(max(s * (1.0 - s), 0.0)) * spread, 0.0, 1.0);
+    shown = mix(far_, h3 < shown ? 1.0 : 0.0, seen);
+    // The cell's crown: its middle off the cell's by its hash, within it.
+    vec2 off = p - c - (0.5 + (1.0 - 2.0 * CANOPY_DOME) * (vec2(h, h2) - 0.5));
+    float rr = dot(off, off) / (CANOPY_DOME * CANOPY_DOME);
+    float dome = sqrt(max(1.0 - rr, 0.0));
+    float mottle = (1.0 + CANOPY_MOTTLE * (2.0 * h - 1.0)) * (1.0 + CANOPY_RELIEF * (dome - CANOPY_DOME_MEAN));
+    mottle = mix(1.0, mottle, seen);
+    vec3 lean = rr < 1.0 ? vec3(off.x, 0.0, off.y) / CANOPY_DOME : vec3(0.0);
     float down = -worldPos.y / max(length(worldPos), 1e-3);
-    float shade = CANOPY_SHADE * mix(CANOPY_GRAZING, 1.0, smoothstep(0.1, 0.4, down));
+    float shade = CANOPY_SHADE * mix(CANOPY_GRAZING, 1.0, smoothstep(0.1, 0.9, down));
     baseColor = mix(baseColor, albedo * mottle, shown);
-    N = normalize(mix(N, normalize(N + vec3(0.0, 1.0, 0.0)), shown));
+    N = normalize(mix(N, normalize(N + vec3(0.0, 1.0, 0.0) + lean * seen), shown));
     roughness = mix(roughness, 1.0, shown);
     return mix(1.0, shade, shown);
 }
