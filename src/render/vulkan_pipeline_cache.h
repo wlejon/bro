@@ -49,6 +49,7 @@ public:
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;
+    VkPhysicalDeviceProperties props_{};
     VkPipelineCache cache_ = VK_NULL_HANDLE;
     std::string path_;
     size_t loadedSize_ = 0;

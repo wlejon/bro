@@ -69,6 +69,7 @@ bool headerMatches(const std::vector<char>& data, const VkPhysicalDeviceProperti
 
 void VulkanPipelineCache::init(VkDevice device, const VkPhysicalDeviceProperties& props) {
     device_ = device;
+    props_ = props;
     const std::string dir = cacheDirectory();
     if (!dir.empty()) path_ = dir + "/" + cacheFileName(props);
 
@@ -124,9 +125,16 @@ void VulkanPipelineCache::shutdown() {
     if (!path_.empty() && vkGetPipelineCacheData(device_, cache_, &size, nullptr) == VK_SUCCESS &&
         size > loadedSize_ && size <= kMaxPersistedBytes) {
         std::vector<char> data(size);
-        if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS &&
-            !writeCacheFile(path_, data.data(), size))
-            LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
+        // A blob that fails the header check init applies is not written: the
+        // next launch would only drop it (lavapipe 26.2 hands back 20 bytes of
+        // a 32-byte header).
+        if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS) {
+            data.resize(size);
+            if (!headerMatches(data, props_))
+                LOG_INFO("Vulkan: the driver's pipeline cache data is malformed; not persisted");
+            else if (!writeCacheFile(path_, data.data(), size))
+                LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
+        }
     }
 
     vkDestroyPipelineCache(device_, cache_, nullptr);
