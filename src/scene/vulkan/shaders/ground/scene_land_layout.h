@@ -53,7 +53,8 @@
                                   // y how far they cast, z 1 when the land carries their canopy, w unused
 #define LD_BODY             20    // x the body's radius (m; 0 flat), y the ring ring 0 is drawn as (LandNode::
                                   // firstRing), zw unused
-#define LD_EYE              24    // xyz the frame's eye in the land's frame (SceneView::world), w unused
+#define LD_EYE              24    // xyz the frame's eye in the land's frame (SceneView::world), w where the
+                                  // scene's painted band ends (m; Bands::painted)
 #define LD_FACE             28    // a round body's six cube faces, LD_FACE_WORDS each: its n, u and v in the
                                   // place frame (xyz), then the anchor's chart on it (x, z) in level-0 tiles,
                                   // whole (xy) and fraction (zw)

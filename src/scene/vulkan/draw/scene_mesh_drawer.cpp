@@ -350,6 +350,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // SCENE_GROUND), so the other meshes' carries none of its work.
     const bool ground = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Land) &&
                         (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
+    // A land's blocks past the painted band, the build without the turf's patterns.
+    const bool groundFar = ground && (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGroundFar) != 0u;
     // And a grass node's herb plants, a grass draw with its own stages.
     const bool herb = draw.kind == MeshKind::Grass &&
                       (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kHerb) != 0u;
@@ -374,7 +376,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     const bool async = !(ground && target.colorCount == 4);
     const uint32_t block = static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
-                             (ground ? 1u * block : 0u) + (herb ? 2u * block : 0u) + (coverFar ? 3u * block : 0u);
+                             (ground ? 1u * block : 0u) + (herb ? 2u * block : 0u) + (coverFar ? 3u * block : 0u) +
+                             (groundFar ? 3u * block : 0u);
     return (covered ? cover.pipelines : builtin_).get(variant, target, [&] {
         const bool indirect = SceneTargets::carriesIndirect(target);
         if (render::pipelineStatsEnabled()) {
@@ -396,6 +399,7 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
         if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
         if (draw.kind == MeshKind::Land) fs = indirect ? fsLandIndirect_ : fsLand_;
         if (ground) fs = cover[indirect ? CoverShaders::GroundIndirectFrag : CoverShaders::GroundFrag];
+        if (groundFar) fs = cover[indirect ? CoverShaders::GroundFarIndirectFrag : CoverShaders::GroundFarFrag];
         // (A surface layer tile's fill draws the turf into its four layers.)
         if (ground && target.colorCount == 4) fs = cover[CoverShaders::GroundFill];
         if (draw.kind == MeshKind::Grass) {

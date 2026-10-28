@@ -26,6 +26,7 @@ layout(set = 3, binding = 7) uniform sampler2DArray landCanopies;
 float landReach() { return LAND_W(LD_LAND / 4).x; }
 vec2 landEye() { return LAND_W(LD_LAND / 4).yz; }
 vec3 landEye3() { return LAND_W(LD_EYE / 4).xyz; }
+float landPainted() { return LAND_W(LD_EYE / 4).w; }
 float landCell0() { return LAND_W(LD_RINGS / 4).x; }
 float landInvK() { return LAND_W(LD_RINGS / 4).y; }
 float landRingHalf() { return LAND_W(LD_RINGS / 4).w; }

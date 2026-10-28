@@ -97,19 +97,20 @@ void buildDrawLists(SceneFrame& frame) {
                 continue;
             }
             if (LandNode* land = static_cast<MeshNode*>(node)->asLand()) {
-                // Land: its rings about the eye, over the whole land (never culled).
-                MeshDraw draw;
-                bool prepared;
+                // Land: its rings about the eye, over the whole land (never
+                // culled), its blocks past the painted band a draw apart.
+                std::vector<MeshDraw> draws;
                 {
                     stalls::Part part("land draws");
-                    prepared = drawer.prepareLand(frame, *land, draw);
+                    drawer.prepareLand(frame, *land, draws);
                 }
-                if (!prepared) continue;
-                placeDraw(frame, node, frame.view.toPlace(land->bounds()), draw);
-                const auto index = static_cast<uint32_t>(lists.meshes.size());
-                lists.meshes.push_back(draw);
-                stats.meshDrawn++;
-                lists.opaque.push_back(index);
+                for (MeshDraw& draw : draws) {
+                    placeDraw(frame, node, frame.view.toPlace(land->bounds()), draw);
+                    const auto index = static_cast<uint32_t>(lists.meshes.size());
+                    lists.meshes.push_back(draw);
+                    lists.opaque.push_back(index);
+                }
+                if (!draws.empty()) stats.meshDrawn++;   // (one mesh, however many draws)
                 continue;
             }
             if (PlantsNode* plants = static_cast<MeshNode*>(node)->asPlants()) {

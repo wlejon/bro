@@ -28,7 +28,9 @@ public:
         FarVert,              // mesh_cover_far.vert
         GroundFrag,           // mesh.frag's SCENE_GROUND build
         GroundIndirectFrag,
-        GroundFill,           // ground_layer_fill.frag
+        GroundFarFrag,        // its SCENE_GROUND_FAR build (a land's blocks past the painted band)
+        GroundFarIndirectFrag,
+        GroundFill,          // ground_layer_fill.frag
         GroundChartFill,      // its GROUND_LAYER_CHART build (a round body's tiles)
         kStages
     };
@@ -39,6 +41,7 @@ public:
         BuiltinSceneShader::MeshHerbVert,      BuiltinSceneShader::MeshHerbFrag,
         BuiltinSceneShader::MeshHerbIndirectFrag, BuiltinSceneShader::MeshCoverFarVert,
         BuiltinSceneShader::MeshGroundFrag,    BuiltinSceneShader::MeshGroundIndirectFrag,
+        BuiltinSceneShader::MeshGroundFarFrag, BuiltinSceneShader::MeshGroundFarIndirectFrag,
         BuiltinSceneShader::GroundLayerFillFrag, BuiltinSceneShader::GroundChartFillFrag,
     };
 

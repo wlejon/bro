@@ -29,6 +29,8 @@ const uint MESH_HAS_TANGENTS        = 4096u;
 // A draw into a 4x MSAA target: a cut card's cover splits samples
 // (scene_cover_mask.glsl's coverSampleMask).
 const uint MESH_MSAA                = 32768u;
+// (262144, a land's blocks past the painted band, picks mesh.frag's
+// SCENE_GROUND_FAR build: never read here.)
 // A grass node's herb plants (mesh_herb.vert, mesh.frag's SCENE_HERB build).
 const uint MESH_HERB                = 2097152u;
 // The cover's far tier (mesh_cover_far.vert, cover_far.frag).

@@ -244,6 +244,7 @@ void SceneMeshDrawer::landWords(const SceneFrame& frame, const LandNode& node, c
     words[LD_EYE + 0] = eye.x;
     words[LD_EYE + 1] = eye.y;
     words[LD_EYE + 2] = eye.z;
+    words[LD_EYE + 3] = frame.graph.bands().painted;
     words[LD_BODY + 1] = static_cast<float>(lt.firstRing);
     if (node.round()) {
         // Each cube face's axes in the place frame (its basis' transpose
@@ -315,7 +316,8 @@ bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, Gra
     return true;
 }
 
-bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& out) {
+bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, std::vector<MeshDraw>& draws) {
+    MeshDraw out;
     const LandShaders* shaders = landShaders(node);
     LandTiles* lt = shaders && !node.effectiveUnlit() ? landTiles(frame, node) : nullptr;
     if (!lt) {
@@ -355,12 +357,24 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     stalls::Part ringPart("land draw blocks");
     lt->firstRing = node.firstRing(eye, 0.5f * static_cast<float>(std::max(view.height, 1u)) *
                                             std::fabs(view.proj.at(1, 1)) / kFirstRingPixels);
+    // As turf, the blocks wholly past half as far again as the painted band
+    // apart: there every fragment is the land's surface lit as the sward
+    // (mesh.frag's landFar 1), and the build without the turf's patterns
+    // draws them (kGroundFar).
+    const bool ground = (static_cast<uint32_t>(out.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
+    const float farFrom = ground ? 1.5f * frame.graph.bands().painted : 0.0f;
     lt->chunks.clear();
+    lt->farChunks.clear();
     for (const LandNode::Block& b : node.blocks()) {
         if (!LandNode::blockDrawn(b, lt->firstRing)) continue;
         bool hidden = false;
         const bromath::AABB3 box = node.blockBounds(b, eye, lt->firstRing, &hidden);
-        if (!hidden) lt->chunks.push_back({b.firstIndex, b.indexCount, box});
+        if (hidden) continue;
+        const float dx = std::max({box.min.x - eye.x, eye.x - box.max.x, 0.0f});
+        const float dy = std::max({box.min.y - eye.y, eye.y - box.max.y, 0.0f});
+        const float dz = std::max({box.min.z - eye.z, eye.z - box.max.z, 0.0f});
+        const bool far = farFrom > 0.0f && dx * dx + dy * dy + dz * dz >= farFrom * farFrom;
+        (far ? lt->farChunks : lt->chunks).push_back({b.firstIndex, b.indexCount, box});
     }
     out.chunks = &lt->chunks;
     out.chunkIndices = out.indices;
@@ -388,7 +402,14 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& o
     // tiles a fragment at a time (mesh.frag's landCanopyAt).
     if (node.canopySourceHash() != 0)
         out.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(out.push.pbrParams[3]) | mesh_flags::kCanopy);
-    return true;
+    if (!lt->farChunks.empty()) {
+        MeshDraw far = out;
+        far.chunks = &lt->farChunks;
+        far.push.pbrParams[3] = static_cast<float>(static_cast<uint32_t>(far.push.pbrParams[3]) | mesh_flags::kGroundFar);
+        draws.push_back(far);
+    }
+    if (!lt->chunks.empty()) draws.push_back(out);
+    return !draws.empty();
 }
 
 void SceneMeshDrawer::offerLand(SceneFrame& frame, WorldService& service) {

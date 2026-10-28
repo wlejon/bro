@@ -157,6 +157,10 @@ BRO_SCENE_SHADER(MeshBarkIndirectFrag,     "mesh_bark_indirect.frag",     "draw/
 // (scene_ground.glsl), set 4 the grass node's field.
 BRO_SCENE_SHADER(MeshGroundFrag,           "mesh_ground.frag",            "draw/mesh.frag",                     "frag", "SCENE_GROUND")
 BRO_SCENE_SHADER(MeshGroundIndirectFrag,   "mesh_ground_indirect.frag",   "draw/mesh.frag",                     "frag", "SCENE_GROUND SCENE_INDIRECT_OUTPUT")
+// Its land's blocks wholly past the painted band: the land's surface lit as
+// the sward it stands for, none of the turf's patterns worked out.
+BRO_SCENE_SHADER(MeshGroundFarFrag,        "mesh_ground_far.frag",        "draw/mesh.frag",                     "frag", "SCENE_GROUND SCENE_GROUND_FAR")
+BRO_SCENE_SHADER(MeshGroundFarIndirectFrag, "mesh_ground_far_indirect.frag", "draw/mesh.frag",                   "frag", "SCENE_GROUND SCENE_GROUND_FAR SCENE_INDIRECT_OUTPUT")
 // A tile of the turf's surface layer, the ground drawn straight down into it
 // (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
 BRO_SCENE_SHADER(GroundLayerFillFrag,      "ground_layer_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "")

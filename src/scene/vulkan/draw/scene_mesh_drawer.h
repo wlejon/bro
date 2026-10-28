@@ -89,6 +89,8 @@ constexpr uint32_t kTwoSided = 512;
 constexpr uint32_t kHasTangents = 4096;
 constexpr uint32_t kMsaa = 32768;           // a draw into a 4x MSAA target: a cut card's cover splits samples
 constexpr uint32_t kGround = 131072;        // turf: a static mesh shaded as its grass node's ground (set 4)
+constexpr uint32_t kGroundFar = 262144;     // with kGround, a land's blocks past the painted band: the SCENE_GROUND_FAR
+                                            // build (picks the pipeline; mesh.frag never reads it)
 constexpr uint32_t kHerb = 2097152;         // a grass node's herb plants (a Grass draw): mesh_herb.vert, SCENE_HERB
 constexpr uint32_t kCoverFar = 4194304;     // the cover's far tier (a Grass draw): mesh_cover_far.vert, cover_far.frag
 constexpr uint32_t kCanopy = 8388608;       // a land carrying its plants' canopy (mesh.frag's landCanopyAt)
@@ -237,7 +239,9 @@ public:
     /// A land node's draw: its rings, placed from its tiles
     /// (scene_mesh_drawer_land.cpp). False while it has no module that
     /// compiles or no tile yet.
-    bool prepareLand(SceneFrame& frame, LandNode& node, MeshDraw& out);
+    /// A land's draws: its blocks, and as turf those wholly past the painted
+    /// band apart (kGroundFar), each a draw of its own.
+    bool prepareLand(SceneFrame& frame, LandNode& node, std::vector<MeshDraw>& out);
     /// The plants' plans and the leaf poses their draws read (queued by
     /// preparePlants) into the frame's compute stream (SceneFrame::
     /// computeStream), and the grass rings' (queued by prepareGrass) into
@@ -450,6 +454,7 @@ private:
         const LandShaders* shaders = nullptr;   // this frame's
         VkImageView grid = VK_NULL_HANDLE;      // its processes' grid as its fills read it, this frame's
         std::vector<MeshChunk> chunks;          // its ring blocks where this frame's eye puts them
+        std::vector<MeshChunk> farChunks;       // those of them wholly past the painted band (kGroundFar)
     };
     /// The lands' processes (scene_land_process.h), run in offerLand.
     SceneLandProcesses landProcesses_;

@@ -425,4 +425,47 @@ void groundSurface(vec3 rel, float fp, vec4 vdata, LandChart lc, inout vec3 colo
     swardLight = sSum;
     farMean = fSum;
 }
+
+// The ground's light where the land stands for the turf (mesh.frag past it,
+// landFar), at the frame's point `xz`: the colour (the land's
+// albedo) lit as groundShade lights the blades' tops seen past all their
+// patterns, every pattern at its mean and the tops all that is seen: their
+// lay's normal and sheen, the sward's light, a far blade's occlusion and
+// roughness, the low sun through them. Lit as level ground instead, the
+// land past the turf was a fifth to a third of a stop brighter than the
+// turf it hands over to, seen from 1.5 km up 4 to 15 km off (capture.js
+// compare's looks), and its dry meadows stood out pale where the turf's
+// were green.
+void groundFarShade(vec2 xz, vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness,
+                    inout float ao, out vec4 thin, out vec4 swardLight) {
+    GroundData g = groundData(xz, vdata);
+    vec3 soil = vec3(0.065, 0.048, 0.03);
+    float cover = swardTurf(SwardTurfIn(xz, rel, 1e6, g.density, g.dry, swardBake(xz, 1e6), 1e6, 1.0, 0.0, soil)).cover;
+    swardLight = vec4(0.0);
+    if (cover > 0.0) {
+        // (The sward's lay at its mean, standing up from the ground: its
+        // gusts are far under a pixel here, and read through swardLay they
+        // changed no 32 px block of the planet's low or region shot.)
+        vec3 lay = N;
+        float steepT = -rel.y / max(length(rel), 1e-3);
+        float level = smoothstep(TURF_LEVEL_FROM, 1.0, steepT);
+        N = normalize(mix(N, grassCanopyNormal(lay, normalize(-rel)), cover * (1.0 - level)));
+        swardLight = vec4(lay, smoothstep(0.0, 0.25, cover) * (1.0 - level));
+    }
+    ao *= mix(1.0, 0.8, cover);
+    roughness = mix(1.0, 0.9, cover);
+    vec3 faceEye = normalize(vec3(-rel.x, 0.3 * length(rel.xz), -rel.z));
+    thin = vec4(faceEye * sqrt(GRASS_TURF_GLOW_SHARE), GRASS_TURF_TRANSLUCENCY * cover);
+}
+
+// groundFarShade at a fragment. Not in a round body's lattice cell's frame
+// as groundSurface takes groundShade: nothing it reads there has a pattern
+// a cell's frame places (the grass node's field never reaches the land
+// past the turf, the sward is read at its mean), and finding the cells
+// and their blend was three fifths of its cost (0.31 ms of the planet's
+// land from a region's height) for no 32 px block changed.
+void groundSurfaceFar(vec3 rel, vec4 vdata, inout vec3 color, inout vec3 N, inout float roughness, inout float ao,
+                      out vec4 thin, out vec4 swardLight) {
+    groundFarShade(rel.xz + camera.eyeWorld.xz, rel, vdata, color, N, roughness, ao, thin, swardLight);
+}
 #endif  // GROUND_LAYER_FILL

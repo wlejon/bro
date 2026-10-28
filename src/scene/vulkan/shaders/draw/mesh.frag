@@ -437,9 +437,11 @@ void main() {
     // And where a pixel is tens of metres of ground every pattern the turf
     // works out (its blades' tops, tussocks, mottling, flowers) is far under
     // it: there the ground is what the land says it is, its surface's albedo
-    // and normal lit as ground, handed over by the pixel's footprint. (The
-    // sward lit as its blades seen from far above is their shaded depth, a
-    // quarter as bright as the ground the land's albedo means.) Nearer, the
+    // and normal lit as the sward it stands for (scene_ground.glsl's
+    // groundFarShade), handed over by the pixel's footprint and past the
+    // scene's painted band by the distance. (The sward lit as its blades
+    // seen from far above is their shaded depth, a quarter as bright as the
+    // ground the land's albedo means.) Nearer, the
     // turf's patterns refine the land's colour, with no mean of their own:
     // the turf is scaled by the land's albedo over its own far look
     // (scene_ground.glsl's groundFarMean), so the land is what it hands
@@ -466,10 +468,17 @@ void main() {
             landSurface = ls.rgb;
             landAlbedo = push.baseColor.rgb * ls.rgb;
             landFar = smoothstep(TURF_FAR_FROM, TURF_FAR_TO, fp);
+            // And past the scene's painted band, over half as far again:
+            // the land's blocks past it draw the SCENE_GROUND_FAR build.
+            float painted = landPainted();
+            if (painted > 0.0) landFar = max(landFar, smoothstep(painted, 1.5 * painted, camDist));
             landWet = landSeaWet(lh, lhStep);
             if (landWet > 0.0) landWater = landSeaWater(landM, lh, worldPos, landAlbedo);
         }
     }
+#ifdef SCENE_GROUND_FAR
+    landFar = 1.0;
+#endif
 #endif
     if ((flags & (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) == (MESH_NORMAL_MAP | MESH_HAS_TANGENTS)) {
         vec3 nTS = texture(texNormal, inUV).xyz * 2.0 - 1.0;
@@ -545,12 +554,18 @@ void main() {
         baseColor *= push.baseColor.rgb;
     }
     if (landFar > 0.0) {
-        baseColor = mix(baseColor, landAlbedo, landFar);
-        N = normalize(mix(N, landN, landFar));
-        roughness = mix(roughness, landRoughness, landFar);
-        groundAO = mix(groundAO, 1.0, landFar);
-        groundThin.w *= 1.0 - landFar;
-        groundSward.w *= 1.0 - landFar;
+        // (Past the turf the land's albedo, lit as the sward it stands for:
+        // scene_ground.glsl's groundFarShade.)
+        vec3 farColor = landAlbedo, farN = landN;
+        float farRoughness = landRoughness, farAO = 1.0;
+        vec4 farThin, farSward;
+        groundSurfaceFar(worldPos, inColor, farColor, farN, farRoughness, farAO, farThin, farSward);
+        baseColor = mix(baseColor, farColor, landFar);
+        N = normalize(mix(N, farN, landFar));
+        roughness = mix(roughness, farRoughness, landFar);
+        groundAO = mix(groundAO, farAO, landFar);
+        groundThin = mix(groundThin, farThin, landFar);
+        groundSward = mix(groundSward, farSward, landFar);
     }
     if (landWet > 0.0) {
         baseColor = mix(baseColor, landWater, landWet);

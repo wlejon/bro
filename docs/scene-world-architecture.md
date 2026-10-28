@@ -2195,3 +2195,21 @@ place drifted with the wind at the deck's height, its forms the march's.
 At 2560x1364 the planet's low shot costs 5.57 ms against 6.61 (clouds
 2.6 + shells 0.9 against 4.6), the flight shot 3.62 against 4.05. To
 come: the sky map; shells from over the deck.
+
+The land past the painted band: the turf (a land drawn as its grass node's
+ground) hands over to the land's own surface by the pixel's footprint and,
+past `Bands::painted`, by the distance (over half as far again; the land's
+words carry the band, LD_EYE.w). There it is the land's albedo lit as the
+sward it stands for (scene_ground.glsl's groundFarShade: the blades' tops
+at their mean, their canopy normal toward the eye, the sward's light, a far
+blade's occlusion and the low sun through them), not as level ground: lit
+as level ground it was a fifth to a third of a stop brighter than the turf
+it took over from, and its dry meadows stood out pale where the turf's were
+green (capture.js compare's looks, the planet from 1.5 km up). Its blocks
+wholly past the hand-over are a draw of their own (kGroundFar) with
+mesh.frag's SCENE_GROUND_FAR build, none of the turf's patterns in it.
+Against the turf the far ground reads +0.01 stop seen from 1.5 km (the low
+shot); from a region's height, past the old footprint hand-over, 0.19 stop
+darker than it was, now as the turf would show it. The low shot's land
+1.46 -> 1.15 ms (the flight shot's 0.69 -> 0.48), the region shot's
+unchanged.
