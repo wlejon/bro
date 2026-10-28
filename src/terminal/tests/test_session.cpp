@@ -216,13 +216,19 @@ void testSynchronizedOutput() {
         TermSession s(40, 6);
         s.feed("before");
         CHECK(waitFor([&] { return contains(presented(s), "before"); }));
+        // (Held until kSyncTimeout from the feed at the earliest: a read
+        // later than that, the 60 ms overslept on a loaded machine, may
+        // rightly see the update shown.)
+        const auto fed = Clock::now();
         s.feed("\x1b[?2026h\r\nhalf drawn");
         std::this_thread::sleep_for(60ms);
-        CHECK_MSG(!contains(presented(s), "half"), presented(s));
+        const std::string shown = presented(s);
+        const bool inTime = Clock::now() - fed < TermSession::kSyncTimeout;
+        if (inTime) CHECK_MSG(!contains(shown, "half"), shown);
         CHECK(contains(s.screenText(), "half drawn"));  // parsed, just not presented
         s.feed(" and done\x1b[?2026l");
         CHECK(waitFor([&] { return contains(presented(s), "half drawn and done"); }, 1s));
-        CHECK(s.stats().syncHolds == 1 && s.stats().syncTimeouts == 0);
+        CHECK(s.stats().syncHolds == 1 && (s.stats().syncTimeouts == 0 || !inTime));
     }
     {
         // Back to back: each finished update is presented, never the next one
