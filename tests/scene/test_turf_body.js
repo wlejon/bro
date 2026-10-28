@@ -23,7 +23,9 @@ LandSurface landSurface(LandPoint q) {
 }
 `;
 
-// No blades; the turf a wave across the cover's frame, green to white.
+// No blades; the turf a wave across the cover's frame, green to white
+// (faded to its mean where a pixel spans its wavelength, as a module's
+// detail is: the turf refines the land by it over that mean).
 const SWARD = {
     height: 0.35,
     source: `
@@ -32,7 +34,7 @@ float swardDensity(inout SwardCell s) { return 0.0; }
 SwardFarLook swardFarLook(SwardCell s, vec4 h) { return SwardFarLook(grassSwardHeight(), 0.0, vec3(0.1)); }
 vec3 swardBake(vec2 xz, float fp) { return vec3(0.5); }
 SwardTurf swardTurf(SwardTurfIn t) {
-    float w = 0.5 + 0.45 * sin(t.xz.x * 0.647 + t.xz.y * 0.31);
+    float w = 0.5 + 0.45 * sin(t.xz.x * 0.647 + t.xz.y * 0.31) * clamp((10.0 - t.fp) / 5.0, 0.0, 1.0);
     vec3 c = mix(vec3(0.05, 0.5, 0.05), vec3(0.9), w);
     return SwardTurf(c, c, 1.0);
 }

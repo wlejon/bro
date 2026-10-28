@@ -120,7 +120,10 @@
  *   - `vec3 swardBake(vec2 xz, float fp)`: the turf's surface layer's three
  *     channels of the sward's patterns, band-limited to a footprint;
  *   - `SwardTurf swardTurf(SwardTurfIn t)`: the sward as one surface where
- *     the turf stands in for it (its tops, its roots, its cover);
+ *     the turf stands in for it (its tops, its roots, its cover), detail
+ *     finer than `t.fp` faded to its mean: called with a footprint of 1e6
+ *     it is the turf's far look, which the land's albedo means (the turf
+ *     refines the land's colour, shadeGround);
  *   - `vec4 swardLay(vec2 xz, vec3 gn)`: the way its blades stand there, and
  *     a gust's lift of its sheen;
  *   - under `SWARD_BUILD` (the vertex stages, the shadow casters' too):
@@ -687,7 +690,13 @@ class SceneNode {
    * litter, twigs, damp soil and moss. Past the land it takes the same data
    * from a mesh's vertex colour: r the grass density, g the dryness, b the
    * canopy. Every pattern is band-limited (finer than about two pixels
-   * fades to its mean), so it reads from standing height to far above.
+   * fades to its mean), so it reads from standing height to far above. On
+   * a land the turf refines the land's colour: it is scaled by the land's
+   * albedo over its own far look there (every pattern at its mean, the
+   * herbs' at theirs), so where a pixel is tens of metres of ground and the
+   * land's surface takes over, nothing changes: the land's albedo is what
+   * the ground looks like from afar (a wood's floor as dark as the land
+   * says), the turf what it is made of near.
    * @example
    *   scene.createGrass({ ground: land, sward, turf: true });
    * @param {SceneNode} mesh

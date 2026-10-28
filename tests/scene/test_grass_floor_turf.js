@@ -11,7 +11,9 @@
 //   - `turf` / shadeGround shade the land as the grass's ground: the sward
 //     where the grass grows (green, textured; SWARD below, a sward module of
 //     turf alone), the litter where the floor is closed (brown, textured),
-//     and shadeGround(land, false) gives the land its own colour back
+//     each refining the land's colour (a sward's green, litter's brown)
+//     with no mean of its own, and shadeGround(land, false) gives the land
+//     its own colour back, untextured, as light as its turf was
 
 function patchStats(img, x0, y0, x1, y1) {
     let r = 0, g = 0, b = 0, l = 0, l2 = 0, n = 0;
@@ -41,17 +43,18 @@ const N = (type, props = {}) => {
 
 const GROUND = `
 LandSurface landSurface(LandPoint q) {
-    LandSurface s = landSurfaceOf(vec3(0.45));
     vec4 d = landData(0);
     bool west = q.p.x < 0.0;
+    LandSurface s = landSurfaceOf(mix(vec3(0.45), west ? vec3(0.08, 0.15, 0.035) : vec3(0.1, 0.07, 0.045), landData(1).y));
     s.cover = vec4(west ? d.x : d.y, 0.0, 1.0, west ? d.z : d.w);
     s.herbs = landData(1).x;
     return s;
 }
 `;
 // The land's data: the sward's density west and east, the canopy west and
-// east, the herbs.
-const cover = (densW, densE, canW, canE, herbs) => [densW, densE, canW, canE, herbs, 0, 0, 0];
+// east, the herbs, and whether its colour is the ground's (a sward's green
+// west, litter's brown east) rather than grey.
+const cover = (densW, densE, canW, canE, herbs, tinted = 0) => [densW, densE, canW, canE, herbs, tinted, 0, 0];
 
 // A herb module: in a cell as the land's herb density says, one upright leaf a
 // plant (a card of the ring's), green; from afar a green cover.
@@ -176,7 +179,7 @@ if (!scn) {
     // ground; the camera high enough that the ground shows.
     grass.setHerbs({ source: '' });
     grass.setSward(SWARD);
-    floor.setLand({ data: cover(1, 0, 0, 1, 0) });
+    floor.setLand({ data: cover(1, 0, 0, 1, 0, 1) });
     grass.shadeGround(floor);
     scn.setCamera({ fov: 55, near: 0.05, far: 300, position: [0, 30, 20], target: [0, 0, -10] });
     frames(8);
@@ -195,6 +198,9 @@ if (!scn) {
     frames();
     const plain = scn.captureFrame();
     const back = patchStats(plain, 112, 90, 182, 150);
-    assert(Math.abs(back.r - back.b) < 4 && back.sd < sward.sd, `shadeGround(mesh, false) gives the mesh its own colour (${back.r.toFixed(0)}, ${back.b.toFixed(0)}, sd ${back.sd.toFixed(2)})`);
+    // (The litter's leaves near the eye lie in each other's shade, which its
+    // far look does not hold: 42 against the land's 53.5, a third of a stop.)
+    assert(back.sd < 0.5 * litter.sd && Math.abs(back.lum - litter.lum) < 0.35 * litter.lum,
+        `shadeGround(mesh, false) gives the mesh its own colour, untextured, as light as its turf (lum ${back.lum.toFixed(1)} vs ${litter.lum.toFixed(1)}, sd ${back.sd.toFixed(2)} vs ${litter.sd.toFixed(2)})`);
     if (globalThis.__turfShot) screenshot(globalThis.__turfShot);
 }

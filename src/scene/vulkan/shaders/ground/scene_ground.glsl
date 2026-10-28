@@ -192,12 +192,35 @@ GroundBake groundBake(vec2 xz, GroundData g, float fp) {
 // Along low lines the two agree.
 const float TURF_LEVEL_FROM = 0.5;
 
+// The turf's far look at `xz` (groundShade's, its data `g`): what a pixel
+// past all its patterns sees of the ground there, the blades' tops over
+// their depth, bare soil or the land's surface where nothing grows, the
+// litter where a canopy closes, every pattern at its mean (the mottling's
+// factors 1 there, its bleaching none), and (groundShade adds them) the
+// herbs at their mean, as though none of their plants were drawn. The
+// land's surface past the turf is this ground as such a pixel sees it, so
+// mesh.frag scales the turf by the land's albedo over this: the turf adds
+// its patterns to the land's colour, with no mean of their own, and hands
+// over to the land with nothing to change.
+vec3 groundFarMean(vec2 xz, vec3 rel, GroundData g, vec3 soil, float steepT) {
+    SwardTurf st = swardTurf(SwardTurfIn(xz, rel, 1e6, g.density, g.dry, swardBake(xz, 1e6), 1e6, 1.0, 0.0, soil));
+    vec3 floorC = mix(soil, g.surface, (1.0 - smoothstep(0.0, 0.15, g.density)) * g.inside);
+    if (g.under > 0.0) {
+        vec3 litter = vec3(0.095, 0.07, 0.048);
+        litter = mix(litter * vec3(0.85, 0.9, 1.0), litter * vec3(1.25, 1.0, 0.75), 0.5);
+        floorC = mix(floorC, litter, smoothstep(0.0, 0.3, g.under));
+    }
+    return mix(floorC, mix(st.roots, st.tops, 1.0 - 0.9 * steepT), st.cover);
+}
+
 // The ground at the cover's frame's point `xz` (scene_grass.glsl; a round
 // body's cell's, coverUse), the fragment camera-relative at `rel` with the
 // footprint `fp`: its patterns `b` from the surface layer where `baked`,
-// else worked out here.
+// else worked out here. `farMean`: the turf's far look here, every pattern
+// at its mean (groundFarMean), which the colour refines.
 void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake b, inout vec3 color,
-                 inout vec3 N, inout float roughness, inout float ao, out vec4 thin, out vec4 swardLight) {
+                 inout vec3 N, inout float roughness, inout float ao, out vec4 thin, out vec4 swardLight,
+                 out vec3 farMean) {
     GroundData g = groundData(xz, vdata);
     float density = g.density, dry = g.dry, under = g.under, herbs = g.herbs, inside = g.inside;
     if (!baked) b = groundBake(xz, g, fp);
@@ -319,11 +342,17 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
     // (A module's mean is cheap, a table by the canopy: weighing every
     // species here per pixel cost the turf's whole pass a tenth of a
     // millisecond, even where no herbs grow.)
+    farMean = groundFarMean(xz, rel, g, soil, steepT);
     if (grass.herbInfo.x > 0.5 && herbs > 0.0) {
         float tanView = -rel.y / max(length(rel.xz), 1e-3);
         float stand = 1.0 - herbPlantsDrawn(d, grass.lod.w / max(length(rel.xz), 1e-3)) * inside;
+        HerbMix hm = herbFarMean(under, herbs, tanView);
+        {
+            float leaves = hm.cover * (1.0 - hm.bloomShare) * GRASS_HERB_LEAF_SEEN;
+            float blooms = min(hm.cover * min(hm.bloomShare, 0.95), 1.0) * GRASS_HERB_BLOOM_SEEN * GRASS_TURF_BLOOMS;
+            farMean = mix(mix(farMean, hm.leaf, leaves), hm.bloom, blooms);
+        }
         if (stand > 0.0) {
-            HerbMix hm = herbFarMean(under, herbs, tanView);
             // The blooms patch by patch (herbFarLocal): a colony's colour
             // where it grows, more of them inside it, none between. As much
             // of them as of the far blades (scene_grass.glsl), between and
@@ -351,14 +380,15 @@ void groundShade(vec2 xz, vec3 rel, float fp, vec4 vdata, bool baked, GroundBake
 // in the frame of the lattice cell holding it, across a cell's edge the
 // cells either side blended (scene_grass.glsl's coverTurfCells). `lc` is the
 // chart place of its map point, landChartOf(landMapOf(rel + landEye3())),
-// the caller's (it reads the land there too).
+// the caller's (it reads the land there too). `farMean` the colour's far
+// look (groundFarMean).
 void groundSurface(vec3 rel, float fp, vec4 vdata, LandChart lc, inout vec3 color, inout vec3 N, inout float roughness,
-                   inout float ao, out vec4 thin, out vec4 swardLight) {
+                   inout float ao, out vec4 thin, out vec4 swardLight, out vec3 farMean) {
     GroundBake b;
     if (!landRound()) {
         vec2 xz = rel.xz + camera.eyeWorld.xz;
         bool baked = groundLayerSample(groundPosOf(xz), fp, b);
-        groundShade(xz, rel, fp, vdata, baked, b, color, N, roughness, ao, thin, swardLight);
+        groundShade(xz, rel, fp, vdata, baked, b, color, N, roughness, ao, thin, swardLight, farMean);
         return;
     }
     vec3 p = rel + landEye3();
@@ -369,15 +399,17 @@ void groundSurface(vec3 rel, float fp, vec4 vdata, LandChart lc, inout vec3 colo
     vec3 c0 = color, n0 = N, cSum = vec3(0.0), nSum = vec3(0.0);
     float r0 = roughness, a0 = ao, rSum = 0.0, aSum = 0.0;
     vec4 tSum = vec4(0.0), sSum = vec4(0.0);
+    vec3 fSum = vec3(0.0);
     for (int i = 0; i < n; ++i) {
         vec4 rows[4];
         coverCellFrame(cells[i], rows);
         coverUse(rows);
-        vec3 c = c0, nn = n0;
+        vec3 c = c0, nn = n0, f;
         float r = r0, a = a0;
         vec4 t, s;
-        groundShade(coverFlatOf(rows, p).xz, rel, fp, vdata, baked, b, c, nn, r, a, t, s);
+        groundShade(coverFlatOf(rows, p).xz, rel, fp, vdata, baked, b, c, nn, r, a, t, s, f);
         cSum += w[i] * c;
+        fSum += w[i] * f;
         nSum += w[i] * nn;
         rSum += w[i] * r;
         aSum += w[i] * a;
@@ -391,5 +423,6 @@ void groundSurface(vec3 rel, float fp, vec4 vdata, LandChart lc, inout vec3 colo
     ao = aSum;
     thin = tSum;
     swardLight = sSum;
+    farMean = fSum;
 }
 #endif  // GROUND_LAYER_FILL

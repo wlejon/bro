@@ -393,8 +393,15 @@ void main() {
     // it: there the ground is what the land says it is, its surface's albedo
     // and normal lit as ground, handed over by the pixel's footprint. (The
     // sward lit as its blades seen from far above is their shaded depth, a
-    // quarter as bright as the ground the land's albedo means.)
+    // quarter as bright as the ground the land's albedo means.) Nearer, the
+    // turf's patterns refine the land's colour, with no mean of their own:
+    // the turf is scaled by the land's albedo over its own far look
+    // (scene_ground.glsl's groundFarMean), so the land is what it hands
+    // over to. (Its own colours were the meadow's in a wood, whose land is
+    // the forest's: from 2 to 8 km straight down the planet's woods
+    // darkened 0.6 of a stop as the land took over the turf.)
     float landWet = 0.0, landFar = 0.0;
+    vec3 landSurface = vec3(-1.0);
     float groundFp = max(length(fwidth(worldPos)), 1e-4);
     vec2 landM = landMapOf(worldPos + landEye3());
     LandChart landC = landChartOf(landM);   // (the land's and the turf's)
@@ -410,6 +417,7 @@ void main() {
         // triangle's own footprint would hand over a ring's facets.)
         float fp = camDist * length(fwidth(worldPos / max(camDist, 1e-6)));
         if (landIn) {
+            landSurface = ls.rgb;
             landAlbedo = push.baseColor.rgb * ls.rgb;
             landFar = smoothstep(TURF_FAR_FROM, TURF_FAR_TO, fp);
             landWet = landSeaWet(lh, lhStep);
@@ -484,7 +492,10 @@ void main() {
     vec4 groundThin = vec4(0.0), groundSward = vec4(0.0);
     float landRoughness = roughness;
     if (landFar < 1.0) {
-        groundSurface(worldPos, groundFp, inColor, landC, baseColor, N, roughness, groundAO, groundThin, groundSward);
+        vec3 farMean;
+        groundSurface(worldPos, groundFp, inColor, landC, baseColor, N, roughness, groundAO, groundThin, groundSward,
+                      farMean);
+        if (landSurface.x >= 0.0) baseColor *= clamp(landSurface / max(farMean, vec3(1e-3)), 0.0, 8.0);
         baseColor *= push.baseColor.rgb;
     }
     if (landFar > 0.0) {
