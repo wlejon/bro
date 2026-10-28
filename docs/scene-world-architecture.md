@@ -2176,5 +2176,22 @@ fall where the real leaves do). Past the crowns the land's canopy paints
 the same (mesh.frag's canopySurface): each crown cell a dome, shown or not
 by its share of cover while a crown spans pixels and its mean beyond, its
 own shade set so it reads within about 0.1 stop of the plants both
-straight down and 20 degrees down (the ladder's `tilt=70 twin`). To come:
-the sky map, the cloud shells.
+straight down and 20 degrees down (the ladder's `tilt=70 twin`).
+
+The cloud shells: past `heaps.shells` (10 km by default), while the eye is
+under the deck's top, each heap in view is drawn as itself rather than
+marched. A plan (clouds_shells.comp, the world's module) walks the heap
+lattice's cells in the view's cap, asks cloudHeap for each in reach and in
+the frustum, and lists it; a sort lays them out far first by distance bins
+for one indirect draw of boxes about their lobes (cloud_shells.vert). Each
+pixel traces that heap alone (cloud_shells.frag): its lobes' column, as the
+heaps' map holds it, cut by the engine's skin at the cache's band, through
+clear air by the field's bound (the column's alone where even the skin's
+most out cannot reach), inside in growing pieces; lit once where the view
+meets it as the march lights a face (cloud_light.glsl). The march leaves
+the heaps out across the hand-over (1 to 1.5 times the distance) and
+marches the slabs alone there. A heap is the same heap on both sides: its
+place drifted with the wind at the deck's height, its forms the march's.
+At 2560x1364 the planet's low shot costs 5.57 ms against 6.61 (clouds
+2.6 + shells 0.9 against 4.6), the flight shot 3.62 against 4.05. To
+come: the sky map; shells from over the deck.

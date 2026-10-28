@@ -43,6 +43,10 @@ struct CloudSettings {
     /// The heaps' lattice cell (m at the deck's bottom; 0: the world has no
     /// heaps): sky/cloud_heaps.glsl, docs/clouds-api.js.
     float heapCell = 0.0f;
+    /// How far off (m) the heaps begin to be drawn as shells, each as
+    /// itself past the march (vulkan/shaders/sky/clouds_layout.h's
+    /// CL_SHELL_*), all of them from CL_SHELL_BAND times that; 0 never.
+    float heapShells = 10000.0f;
     /// cloudData(i): at most kMaxData vec4s, as floats.
     std::vector<float> data;
     static constexpr size_t kMaxData = 64;

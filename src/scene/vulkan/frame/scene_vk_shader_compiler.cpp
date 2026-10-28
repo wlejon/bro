@@ -78,6 +78,7 @@
 #include "clouds_globe.comp.src.h"
 #include "clouds_heaps.comp.src.h"
 #include "clouds_view.comp.src.h"
+#include "clouds_shells.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -231,6 +232,7 @@ const char* embeddedInclude(const std::string& name) {
         {"sky/clouds_globe.comp", kVkCloudsGlobeCompSrc},
         {"sky/clouds_heaps.comp", kVkCloudsHeapsCompSrc},
         {"sky/clouds_view.comp", kVkCloudsViewCompSrc},
+        {"sky/clouds_shells.comp", kVkCloudsShellsCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

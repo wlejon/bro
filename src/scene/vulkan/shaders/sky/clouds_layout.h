@@ -55,6 +55,8 @@
 //     CL_B_HEAPS_OUT  the same, written by its bake (rgba16f storage)
 //     CL_B_VIEW       the view's columns, sampled (below: sky/clouds_view.comp)
 //     CL_B_VIEW_OUT   the same, written by its bake (rgba16f storage)
+//     CL_B_SHELLS     the heaps drawn as shells past the march (a storage
+//                     buffer, below: sky/clouds_shells.comp)
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -89,6 +91,7 @@
 #define CL_B_HEAPS_OUT      24
 #define CL_B_VIEW           25
 #define CL_B_VIEW_OUT       26
+#define CL_B_SHELLS         27
 
 // The view's columns (sky/clouds_view.comp): where the layer draws the deck
 // from above, a pixel is far finer than the cache's cell there (its windows
@@ -195,6 +198,33 @@
 #define CL_HEAP_TEXEL0      16.0
 #define CL_HEAP_MARGIN      480.0    // texels about the nadir a level's lookups stay within
 #define CL_HEAP_GROUP       8
+
+// The shells: the heaps past the march (setClouds' heaps.shells metres off,
+// handed over across CL_SHELL_BAND times that), each drawn as itself: its
+// lobes traced as solids at each pixel of a box about them, lit as the
+// march lights a face (sky/cloud_shells.vert, .frag). Each frame the plan
+// (sky/clouds_shells.comp, the world's module) lists the lattice's cells in
+// view past the hand-over that hold a heap, CL_SHELL_VEC4S vec4s a heap,
+// binned by distance (CL_SHELL_PER_OCTAVE bins each doubling of it, from the
+// hand-over out), and the sort (sky/clouds_shells_sort.comp) lays them out
+// farthest first, so each is drawn over those behind it. The buffer: a head
+// of CL_SHELL_HEAD uints (the count; the draw's arguments; each bin's count,
+// first slot and cursor), then CL_SHELL_MOST heaps in the order drawn, then
+// as many as the plan wrote them.
+#define CL_SHELL_MOST       32768
+#define CL_SHELL_VEC4S      9
+#define CL_SHELL_BINS       128
+#define CL_SHELL_PER_OCTAVE 24.0
+#define CL_SHELL_BAND       1.5
+#define CL_SHELL_GROUP      8
+#define CL_SHELL_SORT_GROUP 64
+#define CL_SHELL_H_COUNT    0
+#define CL_SHELL_H_ARGS     4        // VkDrawIndirectCommand
+#define CL_SHELL_H_BIN      8
+#define CL_SHELL_H_START    (CL_SHELL_H_BIN + CL_SHELL_BINS)
+#define CL_SHELL_H_CURSOR   (CL_SHELL_H_START + CL_SHELL_BINS)
+#define CL_SHELL_HEAD       (CL_SHELL_H_CURSOR + CL_SHELL_BINS)
+#define CL_SHELL_VERTS      36       // a box's triangles
 
 // The globe: the deck's columns over the whole body, for the layer the
 // march reads from far over the deck where the cache's cells are coarser

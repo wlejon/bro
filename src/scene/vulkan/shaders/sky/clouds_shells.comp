@@ -1,0 +1,74 @@
+#version 450
+// The shells' plan (vulkan/sky/scene_clouds.cpp; sky/clouds_layout.h's
+// CL_SHELL_*): for cells `i0` .. `i0 + ni - 1` and `j0` .. `j0 + nj - 1` of
+// face `face` of the heaps' lattice (the box about the eye's drifted nadir
+// the deck can be seen over, a face at a time), each cell in view past the
+// hand-over (its middle's distance from the eye, at the deck's bottom) that
+// holds a heap (the world's cloudHeap): its frame and lobes appended to the
+// plan's list, and counted in its distance's bin, for the sort to lay out.
+// The heaps drift with the wind: a cell's middle is the drifted frame's, the
+// body's point the wind's carry from it.
+
+#define CLOUD_SET 0
+#include "sky/scene_cloud_layer.glsl"
+
+layout(local_size_x = CL_SHELL_GROUP, local_size_y = CL_SHELL_GROUP) in;
+
+layout(std430, set = 0, binding = CL_B_SHELLS) buffer Shells {
+    uint head[CL_SHELL_HEAD];
+    vec4 rec[];
+} shells;
+
+layout(push_constant) uniform Push {
+    ivec4 cells;   // x the face, y the first column, z the first row
+    ivec4 count;   // x the columns, y the rows
+} push;
+
+vec4 cloudLandGrid(int c, vec3 up) { return vec4(0.0); }
+
+#include "sky/cloud_module.glsl"
+#include "sky/cloud_heaps.glsl"
+
+// A body-frame direction or offset in air space (toBody's rows turned back).
+vec3 clAirOf(vec3 b) {
+    return clouds.toBody[0].xyz * b.x + clouds.toBody[1].xyz * b.y + clouds.toBody[2].xyz * b.z;
+}
+
+void main() {
+    if (int(gl_GlobalInvocationID.x) >= push.count.x || int(gl_GlobalInvocationID.y) >= push.count.y) return;
+    int n = cloudHeapCells();
+    ivec2 ij = push.cells.yz + ivec2(gl_GlobalInvocationID.xy);
+    if (any(lessThan(ij, ivec2(0))) || any(greaterThanEqual(ij, ivec2(n)))) return;
+    ivec3 id = ivec3(push.cells.x, ij);
+    vec3 up = cloudHeapMiddle(id);
+    // (Drifted with the wind across the deck, at the deck's height: the
+    // march reads a heap's heights where it is, not where it drifted from.)
+    vec3 rel = clAirOf(normalize(up * clouds.shell.x + clouds.wind.xyz * clouds.shell.w) * clouds.shell.x)
+             - clouds.shellEye.xyz;
+    float d = length(rel);
+    // (Its lobes lie within a cell of its middle and the deck's height over
+    // it: in view if that sphere is.)
+    float side = cloudHeapLeast(ij);
+    float reach = 1.5 * side + (clouds.shell.y - clouds.shell.x);
+    if (d <= clouds.shellEye.w || d > clouds.shellParams.y + reach) return;
+    for (int k = 0; k < 4; ++k)
+        if (dot(clouds.shellPlanes[k].xyz, rel) < -reach) return;
+#ifndef CLOUD_HEAPS
+    return;
+#else
+    CloudHeapCell c = cloudHeapCell(id);
+    CloudHeap h;
+    if (!cloudHeap(c, h)) return;
+    uint slot = atomicAdd(shells.head[CL_SHELL_H_COUNT], 1u);
+    if (slot >= uint(CL_SHELL_MOST)) return;
+    int bin = clamp(int(log2(d / clouds.shellEye.w) * CL_SHELL_PER_OCTAVE), 0, CL_SHELL_BINS - 1);
+    atomicAdd(shells.head[CL_SHELL_H_BIN + bin], 1u);
+    uint o = uint(CL_SHELL_MOST + int(slot)) * uint(CL_SHELL_VEC4S);
+    shells.rec[o + 0u] = vec4(rel, d);
+    shells.rec[o + 1u] = vec4(clAirOf(c.east), 0.0);
+    shells.rec[o + 2u] = vec4(clAirOf(c.north), intBitsToFloat(bin));
+    for (int l = 0; l < CL_HEAP_LOBES; ++l) shells.rec[o + 3u + uint(l)] = h.lobe[l];
+    shells.rec[o + 7u] = h.middle;
+    shells.rec[o + 8u] = h.base;
+#endif
+}

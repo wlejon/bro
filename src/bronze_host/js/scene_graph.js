@@ -471,7 +471,7 @@
                         o.shadows === undefined ? 1 : (o.shadows ? 1 : 0), land | 0,
                         num(f.extinction, 0.06), num(f.billowScale, 4000), num(f.detailScale, 1200),
                         num(f.edge, 600), num(wind[0], 0), num(wind[1], 0), num(wind[2], 0),
-                        num(o.heaps && o.heaps.cell, 0)];
+                        num(o.heaps && o.heaps.cell, 0), num(o.heaps && o.heaps.shells, 10000)];
         const err = __bro_native.scene.SceneGraph_setClouds(this, source, toF64(params),
             o.data ? Float32Array.from(o.data) : new Float32Array(0));
         if (err) throw new TypeError('setClouds: ' + err);

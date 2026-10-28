@@ -137,6 +137,7 @@ embed_vk_shader(sky/clouds_cache.comp          kVkCloudsCacheCompSrc)
 embed_vk_shader(sky/clouds_globe.comp          kVkCloudsGlobeCompSrc)
 embed_vk_shader(sky/clouds_heaps.comp          kVkCloudsHeapsCompSrc)
 embed_vk_shader(sky/clouds_view.comp           kVkCloudsViewCompSrc)
+embed_vk_shader(sky/clouds_shells.comp         kVkCloudsShellsCompSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)

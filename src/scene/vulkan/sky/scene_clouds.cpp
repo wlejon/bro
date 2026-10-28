@@ -26,7 +26,7 @@
 namespace bro::scene::vk {
 
 static_assert(sizeof(SceneClouds::Block) ==
-              16 * (3 + 3 + 3 + 3 * CL_SHADOW_LEVELS + 4 + CL_CACHE_LEVELS + 2 + 1 + CL_HEAP_LEVELS + CL_MAX_DATA + 5 + CL_VOL_LEVELS + 3 + 4 + 2));
+              16 * (3 + 3 + 3 + 3 * CL_SHADOW_LEVELS + 4 + CL_CACHE_LEVELS + 2 + 1 + CL_HEAP_LEVELS + CL_MAX_DATA + 5 + CL_VOL_LEVELS + 3 + 4 + 2 + 6));
 static_assert(CL_HEAP_SIDE % CL_HEAP_GROUP == 0 && (CL_HEAP_SIDE & (CL_HEAP_SIDE - 1)) == 0);
 static_assert(CloudSettings::kMaxData == CL_MAX_DATA);
 static_assert(CL_CACHE_LEVELS == 13 && CL_CACHE_SIDE % (CL_CACHE_GROUP * CL_CACHE_SLICES) == 0);
@@ -42,7 +42,12 @@ constexpr VkFormat kShadowFormat = VK_FORMAT_R32_SFLOAT;   // what is left of th
 constexpr VkFormat kGridFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 // (Half floats: the mips' variance, E[x^2] - E[x]^2, is a small difference.)
 constexpr VkFormat kNoiseFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+constexpr VkShaderStageFlags kStages =
+    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+// The shells' buffer (sky/clouds_layout.h): the head, the heaps as drawn and as listed.
+constexpr VkDeviceSize kShellBytes =
+    CL_SHELL_HEAD * sizeof(uint32_t) + 2ull * CL_SHELL_MOST * CL_SHELL_VEC4S * 4 * sizeof(float);
+constexpr VkDeviceSize kShellHeadBytes = CL_SHELL_HEAD * sizeof(uint32_t);
 
 uint64_t mixBits(uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); }
 
@@ -103,6 +108,7 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     set.addBinding(CL_B_VOLUME_CHECK, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages);
     set.addBinding(CL_B_HEAPS, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, kStages);
     set.addBinding(CL_B_HEAPS_OUT, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, kStages);
+    set.addBinding(CL_B_SHELLS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages);
     setLayout_ = set.build(dev);
     SceneVkDescriptorLayoutBuilder noise;
     noise.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -120,6 +126,10 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     lightCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsLightComp);
     shadowCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsShadowComp);
     distCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsDistComp);
+    shellsSortCs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudsShellsSortComp);
+    shellsVs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudShellsVert);
+    shellsFs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::CloudShellsFrag);
+    if (shellsSortCs_ && computeLayout_) shellsSortPipeline_.start(dev, shellsSortCs_, computeLayout_, "clouds shells sort");
     // (Built off the frame thread; the deck is drawn once they are in.)
     if (noiseCs_ && noiseLayout_) noisePipeline_.start(dev, noiseCs_, noiseLayout_, "clouds noise");
     if (lightCs_ && computeLayout_) lightPipeline_.start(dev, lightCs_, computeLayout_, "clouds light");
@@ -140,7 +150,8 @@ bool SceneClouds::setup(SceneGpu& gpu) {
     if (vkCreateSampler(dev, &s, nullptr, &cacheSampler_) != VK_SUCCESS) cacheSampler_ = VK_NULL_HANDLE;
     // What binding 24 of the lighting set holds with no clouds (never read).
     if (!marchLayout_ || !computeLayout_ || !noiseLayout_ || !skyVs_ || !marchFs_ || !noisePipeline_.usable() ||
-        !lightPipeline_.usable() || !distPipeline_.usable() || !shadowPipeline_.usable() || !noiseSampler_ ||
+        !lightPipeline_.usable() || !distPipeline_.usable() || !shadowPipeline_.usable() ||
+        !shellsSortPipeline_.usable() || !shellsVs_ || !shellsFs_ || !noiseSampler_ ||
         !coverSampler_ || !cacheSampler_ || !volume_.setup(gpu, computeLayout_) ||
         !gpu.allocator.createStorageImage(1, 1, 1, kShadowFormat, shadowNone_, false, 1)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' pipelines");
@@ -154,7 +165,7 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
     for (auto& s : sets_) {
         if (!s) continue;
         s->pipelines.destroy(gpu.device);
-        for (AsyncComputePipeline* p : {&s->cover, &s->cache, &s->globe, &s->heaps, &s->view}) p->destroy(dev);
+        for (AsyncComputePipeline* p : {&s->cover, &s->cache, &s->globe, &s->heaps, &s->view, &s->shells}) p->destroy(dev);
         s->destroy(dev);
     }
     sets_.clear();
@@ -174,6 +185,8 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
          {&cover_, &shadow_, &coverNone_, &shadowNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_,
           &distB_, &cacheHolds_, &globe_, &heaps_, &view_})
         if (i->isValid()) gpu.allocator.destroyImage(*i);
+    if (shells_.isValid()) gpu.allocator.destroyBuffer(shells_);
+    shellBoxes_.clear();
     globeKey_ = 0;
     volume_.cleanup(gpu);
     if (noise_.image) {
@@ -184,7 +197,13 @@ void SceneClouds::cleanup(SceneGpu& gpu) {
         if (noise_.allocId) gpu.device.context().memoryPool().free(dev, noise_.allocId);
     }
     noise_ = Noise{};
-    for (AsyncComputePipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_}) p->destroy(dev);
+    for (AsyncComputePipeline* p : {&noisePipeline_, &lightPipeline_, &distPipeline_, &shadowPipeline_, &shellsSortPipeline_})
+        p->destroy(dev);
+    shellPipelines_.destroy(gpu.device);
+    SceneVkShaderModule::destroy(dev, shellsSortCs_);
+    SceneVkShaderModule::destroy(dev, shellsVs_);
+    SceneVkShaderModule::destroy(dev, shellsFs_);
+    shellsSortCs_ = shellsVs_ = shellsFs_ = VK_NULL_HANDLE;
     SceneVkShaderModule::destroy(dev, noiseCs_);
     SceneVkShaderModule::destroy(dev, lightCs_);
     SceneVkShaderModule::destroy(dev, distCs_);
@@ -250,6 +269,7 @@ CloudShaders* SceneClouds::shaders(SceneFrame& frame) {
         set->globe.start(dev, (*set)[CloudShaders::Globe], computeLayout_, "clouds globe");
         set->heaps.start(dev, (*set)[CloudShaders::Heaps], computeLayout_, "clouds heaps");
         set->view.start(dev, (*set)[CloudShaders::View], computeLayout_, "clouds view");
+        set->shells.start(dev, (*set)[CloudShaders::Shells], computeLayout_, "clouds shells");
     }
     if (st == ModuleShaders::State::Failed || pipelinesReady(*set) == Readiness::Failed) {
         if (err.empty()) err = "its compute pipelines could not be made";
@@ -264,8 +284,8 @@ SceneClouds::Readiness SceneClouds::pipelinesReady(CloudShaders& set) {
     if (set.state() == ModuleShaders::State::Pending) return Readiness::Building;
     if (set.state() != ModuleShaders::State::Ready) return Readiness::Failed;
     Readiness r = Readiness::Ready;
-    for (AsyncComputePipeline* p : {&set.cover, &set.cache, &set.globe, &set.heaps, &set.view, &noisePipeline_, &lightPipeline_,
-                                    &distPipeline_, &shadowPipeline_}) {
+    for (AsyncComputePipeline* p : {&set.cover, &set.cache, &set.globe, &set.heaps, &set.view, &set.shells, &noisePipeline_,
+                                    &lightPipeline_, &distPipeline_, &shadowPipeline_, &shellsSortPipeline_}) {
         if (!p->get()) {
             if (!p->usable()) return Readiness::Failed;
             r = Readiness::Building;
@@ -296,12 +316,16 @@ bool SceneClouds::ensureImages(SceneGpu& gpu) {
         !a.createStorageImage(CL_HEAP_SIDE, CL_HEAP_SIDE, 1, kHeapFormat, heaps_, false, CL_HEAP_LEVELS) ||
         !a.createStorageImage(CL_VIEW_W, CL_VIEW_H, 1, kCacheFormat, view_, false, 1) ||
         !a.createStorageImage(1, 1, 1, kCoverFormat, coverNone_, false, 1) ||
-        !a.createStorageImage(1, 1, 1, kGridFormat, gridNone_, false, 1) || !createNoise(gpu)) {
+        !a.createStorageImage(1, 1, 1, kGridFormat, gridNone_, false, 1) ||
+        !a.createBuffer(kShellBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shells_) ||
+        !createNoise(gpu)) {
         LOG_ERROR("SceneClouds: failed creating the clouds' images");
         for (SceneVkImage* i :
              {&cover_, &shadow_, &coverNone_, &gridNone_, &cacheSigma_, &cacheLight_, &cacheBand_, &distA_, &distB_,
               &cacheHolds_, &globe_, &heaps_, &view_})
             if (i->isValid()) a.destroyImage(*i);
+        if (shells_.isValid()) a.destroyBuffer(shells_);
         return false;
     }
     return true;
@@ -539,6 +563,7 @@ void SceneClouds::beginFrame(SceneFrame& frame) {
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j) block_.viewInvProj[i][j] = frame.view.invProj.at(i, j);
     }
+    placeShells(frame, eye);
 }
 
 // The shadow's levels baked every frame; the coarser ones a level a frame
@@ -942,6 +967,7 @@ VkDescriptorSet SceneClouds::writeSet(SceneFrame& frame, bool march, bool bake) 
     w.writeImage(CL_B_HEAPS, heaps_.view, cacheSampler_, VK_IMAGE_LAYOUT_GENERAL);
     w.writeImage(CL_B_HEAPS_OUT, heaps_.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    w.writeBuffer(CL_B_SHELLS, shells_.buffer, kShellBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     volume_.write(w);
     w.updateSet(device_->device(), set);
     return set;
@@ -999,6 +1025,7 @@ void SceneClouds::recordPrepare(SceneFrame& frame) {
     recordCache(frame);
     recordGlobe(frame);
     recordView(frame);
+    recordShells(frame);
 
     if (shadowsOn_ && shadowBakes_ > 0) {
         VkDescriptorSet set = writeSet(frame, false, false);
@@ -1099,6 +1126,202 @@ void SceneClouds::recordView(SceneFrame& frame) {
     if (frame.timer) frame.timer->mark(cmd, "clouds:view");
 }
 
+namespace {
+
+// Body direction `u` on face `f`'s equal-angle chart (-1 .. 1 within it;
+// sky/cloud_heaps.glsl's cloudHeapFace, carried past the face's edges for a
+// direction in its half of the sphere): false where `u` is not.
+bool shellFaceAt(int f, const double u[3], double& e1, double& e2) {
+    constexpr double q = 0.78539816339744831;
+    const int axis = f / 2;
+    const double a = f % 2 == 0 ? u[axis] : -u[axis];
+    if (a < 0.05) return false;
+    double x = 0.0, y = 0.0;
+    switch (f) {
+    case 0: x = -u[2]; y = u[1]; break;
+    case 1: x = u[2]; y = u[1]; break;
+    case 2: x = u[0]; y = u[2]; break;
+    case 3: x = u[0]; y = -u[2]; break;
+    case 4: x = u[0]; y = u[1]; break;
+    default: x = -u[0]; y = u[1]; break;
+    }
+    e1 = std::atan(x / a) / q;
+    e2 = std::atan(y / a) / q;
+    return true;
+}
+
+// The face body direction `u` lies on (cloudHeapFace's).
+int shellFaceOf(const double u[3]) {
+    const double ax = std::fabs(u[0]), ay = std::fabs(u[1]), az = std::fabs(u[2]);
+    if (ax >= ay && ax >= az) return u[0] >= 0.0 ? 0 : 1;
+    if (ay >= az) return u[1] >= 0.0 ? 2 : 3;
+    return u[2] >= 0.0 ? 4 : 5;
+}
+
+}  // namespace
+
+void SceneClouds::placeShells(SceneFrame& frame, const float eye[3]) {
+    const CloudSettings& c = frame.renderer.clouds();
+    shellBoxes_.clear();
+    std::memset(block_.shellEye, 0, sizeof(block_.shellEye));
+    std::memset(block_.shellPlanes, 0, sizeof(block_.shellPlanes));
+    std::memset(block_.shellParams, 0, sizeof(block_.shellParams));
+    // (From under the deck's top: over it the march's layer draws the deck.)
+    const double Rg = block_.shell[2], Rb = block_.shell[0], Rt = block_.shell[1];
+    if (c.heapCell <= 0.0f || c.heapShells <= 0.0f || eyeRadius_ >= Rt || !shellsReady_) return;
+    for (int i = 0; i < 3; ++i) block_.shellEye[i] = eye[i];
+    block_.shellEye[3] = c.heapShells;
+    block_.shellParams[0] = c.heapShells * static_cast<float>(CL_SHELL_BAND);
+    // The farthest a heap's top is seen: over the horizon from the eye and
+    // from the deck's top, the body's ground between.
+    const double Re = std::max(static_cast<double>(eyeRadius_), Rg);
+    const double horizon = std::sqrt(Re * Re - Rg * Rg) + std::sqrt(Rt * Rt - Rg * Rg);
+    block_.shellParams[1] = static_cast<float>(horizon);
+
+    // The view's sides, through its corners (air space's axes), inward.
+    double corner[4][3];
+    const float ndc[4][2] = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f}};
+    double fwd[3] = {0.0, 0.0, 0.0};
+    for (int k = 0; k < 4; ++k) {
+        float v[4];
+        for (int i = 0; i < 4; ++i)
+            v[i] = frame.view.invProj.at(i, 0) * ndc[k][0] + frame.view.invProj.at(i, 1) * ndc[k][1] +
+                   frame.view.invProj.at(i, 2) + frame.view.invProj.at(i, 3);
+        for (int i = 0; i < 3; ++i) {
+            corner[k][i] = 0.0;
+            for (int j = 0; j < 3; ++j) corner[k][i] += frame.view.invRelView.at(i, j) * (v[j] / v[3]);
+            fwd[i] += corner[k][i];
+        }
+    }
+    for (int k = 0; k < 4; ++k) {
+        const double* a = corner[k];
+        const double* b = corner[(k + 1) % 4];
+        double n[3] = {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+        const double l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const double side = n[0] * fwd[0] + n[1] * fwd[1] + n[2] * fwd[2];
+        for (int i = 0; i < 3; ++i) block_.shellPlanes[k][i] = static_cast<float>(n[i] / l * (side < 0.0 ? -1.0 : 1.0));
+    }
+
+    // The cells the deck can be seen over: a cap about the drifted nadir as
+    // wide as the body's angle to that horizon, a face's box of cells for
+    // each face the cap reaches (its rim sampled; past a face's edge on the
+    // face's chart carried on).
+    double nd[3];
+    for (int i = 0; i < 3; ++i) {
+        double b = 0.0;
+        for (int j = 0; j < 3; ++j) b += static_cast<double>(block_.toBody[i][j]) * eye[j];
+        nd[i] = b / Re * Rb - static_cast<double>(block_.wind[i]) * block_.shell[3];
+    }
+    const double nl = std::sqrt(nd[0] * nd[0] + nd[1] * nd[1] + nd[2] * nd[2]);
+    for (double& v : nd) v /= nl;
+    const double psi = std::min(std::acos(std::min(Rg / Re, 1.0)) + std::acos(std::min(Rg / Rt, 1.0)), 0.6);
+    double a1[3] = {1.0, 0.0, 0.0};
+    if (std::fabs(nd[0]) > 0.9) a1[0] = 0.0, a1[1] = 1.0;
+    const double an = a1[0] * nd[0] + a1[1] * nd[1] + a1[2] * nd[2];
+    for (int i = 0; i < 3; ++i) a1[i] -= an * nd[i];
+    const double l1 = std::sqrt(a1[0] * a1[0] + a1[1] * a1[1] + a1[2] * a1[2]);
+    for (double& v : a1) v /= l1;
+    const double a2[3] = {nd[1] * a1[2] - nd[2] * a1[1], nd[2] * a1[0] - nd[0] * a1[2], nd[0] * a1[1] - nd[1] * a1[0]};
+    constexpr int kRim = 128;
+    double pts[kRim + 1][3];
+    for (int i = 0; i < 3; ++i) pts[kRim][i] = nd[i];
+    for (int k = 0; k < kRim; ++k) {
+        const double th = 6.283185307179586 * k / kRim;
+        for (int i = 0; i < 3; ++i)
+            pts[k][i] = std::cos(psi) * nd[i] + std::sin(psi) * (std::cos(th) * a1[i] + std::sin(th) * a2[i]);
+    }
+    const int n = std::max(static_cast<int>(std::floor(Rb * 1.5707963 / std::max(c.heapCell, 1.0f) + 0.5)), 1);
+    for (int f = 0; f < 6; ++f) {
+        bool reached = false;
+        double lo[2] = {1.0, 1.0}, hi[2] = {-1.0, -1.0};
+        for (const auto& p : pts) {
+            if (shellFaceOf(p) == f) reached = true;
+            double e1, e2;
+            if (!shellFaceAt(f, p, e1, e2)) continue;
+            lo[0] = std::min(lo[0], e1), hi[0] = std::max(hi[0], e1);
+            lo[1] = std::min(lo[1], e2), hi[1] = std::max(hi[1], e2);
+        }
+        if (!reached) continue;
+        int i0 = static_cast<int>(std::floor((std::max(lo[0], -1.0) * 0.5 + 0.5) * n)) - 2;
+        int j0 = static_cast<int>(std::floor((std::max(lo[1], -1.0) * 0.5 + 0.5) * n)) - 2;
+        int i1 = static_cast<int>(std::floor((std::min(hi[0], 1.0) * 0.5 + 0.5) * n)) + 2;
+        int j1 = static_cast<int>(std::floor((std::min(hi[1], 1.0) * 0.5 + 0.5) * n)) + 2;
+        i0 = std::max(i0, 0), j0 = std::max(j0, 0), i1 = std::min(i1, n - 1), j1 = std::min(j1, n - 1);
+        if (i1 >= i0 && j1 >= j0) shellBoxes_.push_back({f, i0, j0, i1 - i0 + 1, j1 - j0 + 1});
+    }
+}
+
+void SceneClouds::recordShells(SceneFrame& frame) {
+    if (block_.shellEye[3] <= 0.0f || !current_->shells.get() || !shellsSortPipeline_.get()) return;
+    VkCommandBuffer cmd = frame.cmd;
+    // What the last frame drew from it is done with; its head cleared.
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    vkCmdFillBuffer(cmd, shells_.buffer, 0, kShellHeadBytes, 0);
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    VkDescriptorSet set = writeSet(frame, false, false);
+    if (!set) return;
+    // The plan, a face's box of cells a dispatch.
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, current_->shells.get());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
+    for (const ShellBox& b : shellBoxes_) {
+        const int32_t push[8] = {b.face, b.i0, b.j0, 0, b.ni, b.nj, 0, 0};
+        vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, static_cast<uint32_t>((b.ni + CL_SHELL_GROUP - 1) / CL_SHELL_GROUP),
+                      static_cast<uint32_t>((b.nj + CL_SHELL_GROUP - 1) / CL_SHELL_GROUP), 1);
+    }
+    // The sort: the bins laid out, then each heap moved into its bin.
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shellsSortPipeline_.get());
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_, 0, 1, &set, 0, nullptr);
+    for (int mode = 0; mode < 2; ++mode) {
+        memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        const int32_t push[8] = {mode, 0, 0, 0, 0, 0, 0, 0};
+        vkCmdPushConstants(cmd, computeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        vkCmdDispatch(cmd, mode == 0 ? 1u : static_cast<uint32_t>(CL_SHELL_MOST / CL_SHELL_SORT_GROUP), 1, 1);
+    }
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
+    if (frame.timer) frame.timer->mark(cmd, "clouds:shells-plan");
+}
+
+void SceneClouds::drawShells(SceneFrame& frame, VkDescriptorSet set) {
+    // (Asked for every frame the deck is drawn, so the shells are on, and
+    // the march hands its heaps over, only once all of theirs are in.)
+    VkPipeline pipeline = shellPipelines_.get(0, frame.hdrTarget, [&] {
+        // Premultiplied over what is drawn, as the march.
+        VkPipelineColorBlendAttachmentState over{};
+        over.blendEnable = VK_TRUE;
+        over.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        over.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        over.colorBlendOp = VK_BLEND_OP_ADD;
+        over.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        over.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        over.alphaBlendOp = VK_BLEND_OP_ADD;
+        over.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                              VK_COLOR_COMPONENT_A_BIT;
+        SceneVkPipelineBuilder b;
+        b.setShaderStages(shellsVs_, shellsFs_)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(frame.hdrTarget)
+         .disableBlending(frame.hdrTarget.colorCount)
+         .setColorBlendAttachment(0, over)
+         .disableDepthTest();
+        return b.build(device_->device(), marchLayout_);
+    }, /*async=*/true);
+    shellsReady_ = pipeline && current_->shells.get() && shellsSortPipeline_.get();
+    if (!shellsReady_ || block_.shellEye[3] <= 0.0f || shellBoxes_.empty()) return;
+    const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, marchLayout_, 0, 3, sets, 0, nullptr);
+    vkCmdDrawIndirect(frame.cmd, shells_.buffer, CL_SHELL_H_ARGS * sizeof(uint32_t), 1, sizeof(VkDrawIndirectCommand));
+    frame.drewContent = true;
+    if (frame.timer) frame.timer->mark(frame.cmd, "clouds:shells");
+}
+
 void SceneClouds::recordDraw(SceneFrame& frame) {
     if (!on_ || !current_) return;
     // (The debug variant, sky/cloud_volume_debug.glsl, under BRO_CLOUD_VOLUME_DEBUG.)
@@ -1126,7 +1349,9 @@ void SceneClouds::recordDraw(SceneFrame& frame) {
         return b.build(device_->device(), marchLayout_);
     }, /*async=*/true);
     VkDescriptorSet set = writeSet(frame, true, false);
-    if (!pipeline || !set) return;
+    if (!set) return;
+    drawShells(frame, set);
+    if (!pipeline) return;
     const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
     bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, marchLayout_, 0, 3, sets, 0, nullptr);

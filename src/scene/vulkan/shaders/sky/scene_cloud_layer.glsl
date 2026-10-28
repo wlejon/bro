@@ -85,6 +85,10 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     vec4 viewInvProj[4];   // rows of its projection's inverse
     vec4 viewEye;          // xyz the eye (air space)
     vec4 viewSize;         // xy the texels made, z 1 when they are this frame's, w pixels a texel
+    // The shells (sky/clouds_layout.h's CL_SHELL_*).
+    vec4 shellEye;         // xyz the eye (air space), w where the heaps begin to be shells (m; 0 none)
+    vec4 shellPlanes[4];   // the view's sides, xyz inward (air space's axes, through the eye)
+    vec4 shellParams;      // x where they are shells alone (m), y the farthest a heap is seen (m)
 } clouds;
 
 layout(set = CLOUD_SET, binding = CL_B_COVER) uniform sampler2DArray cloudCoverMap;

@@ -84,10 +84,18 @@ float clCacheSigma(ClAt w, float lod) {
 // bound asks only how far off the forms are, and read over both levels its
 // four lookups more a step were a sixth of a view up through the heaps.)
 bool clBaseBound = false;
+// (How much of the heaps the march draws where it reads: 1 nearer than the
+// shells, falling to 0 across their hand-over, past which they are the
+// shells' alone and the march's forms are the slabs': clouds.frag's.)
+float clHeapsKeep = 1.0;
 vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen, out float own, out float share) {
     vec3 c = clCacheBase(w, clBaseBound ? floor(lod) : lod);
     share = c.z;
     own = -1.0;
+    if (clHeapsKeep <= 0.0) {
+        share = 0.0;
+        return vec4(c.x, -1.0, c.y, 0.0);
+    }
     if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
     float texel;
     float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), !clBaseBound, texel);
@@ -177,6 +185,9 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
         // a wisp's light, so a far field of heaps came in dim, grey.)
         if (heaps > slabs) f.within = far * clouds.forms.x * clHeapPath;
     }
+    // (Handed over to the shells as much as they are drawn: the slabs' and
+    // this much of the heaps' with them.)
+    if (clHeapsKeep < 1.0) f.sigma = mix(cloudSigmaOf(max(bp.x, 0.0), skin, wB, foot, ramp), f.sigma, clHeapsKeep);
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
     f.cover = f.sigma > 0.0 ? mix(mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB), 1.0, far) : 0.0;

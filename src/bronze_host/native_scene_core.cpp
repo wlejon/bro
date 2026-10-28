@@ -636,7 +636,8 @@ const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const
     auto* g = graphOf(self);
     if (!g) return tl_error.c_str();
     // [enabled, bottom, top, albedo, shadows, land id, extinction, billow scale,
-    // detail scale, detail, wind x, y, z] (js/scene_graph.js's setClouds).
+    // detail scale, detail, wind x, y, z, heaps' cell, heaps' shells]
+    // (js/scene_graph.js's setClouds).
     auto at = [&](uint32_t i, double d) { return params && i < params_len && std::isfinite(params[i]) ? params[i] : d; };
     scene::CloudSettings c;
     c.enabled = at(0, 0.0) > 0.5;
@@ -666,6 +667,7 @@ const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const
             tl_error = "heaps.cell must be 100 m or more (0: no heaps)";
             return tl_error.c_str();
         }
+        c.heapShells = static_cast<float>(std::max(at(14, 10000.0), 0.0));
         const size_t floats = std::min<size_t>(data ? data_len : 0, scene::CloudSettings::kMaxData * 4);
         if (floats) c.data.assign(data, data + floats);
     }

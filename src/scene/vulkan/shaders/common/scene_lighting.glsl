@@ -1155,7 +1155,9 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
         float d = length(p);
         float nearWeight;
         float w = atmFroxelW(lighting.atm.froxel.w, d, nearWeight);
+#ifndef SCENE_VERTEX_STAGE   // (a vertex shader's: no dither)
         w += (atmNoise(gl_FragCoord.xy) - 0.5) * lighting.atm.skyView.z / ATM_FROXEL_SLICES;
+#endif
         vec3 uvw = vec3(ndc * 0.5 + 0.5, clamp(w, 0.5 / ATM_FROXEL_SLICES, 1.0 - 0.5 / ATM_FROXEL_SLICES));
         vec3 L = textureLod(texAtmInscatter, uvw, 0.0).rgb;
         vec3 T = textureLod(texAtmAirTransmittance, uvw, 0.0).rgb;

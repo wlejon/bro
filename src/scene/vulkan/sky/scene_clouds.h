@@ -73,11 +73,12 @@ public:
         Globe,    // clouds_globe.comp
         Heaps,    // clouds_heaps.comp
         View,     // clouds_view.comp
+        Shells,   // clouds_shells.comp
         kStages
     };
     static constexpr BuiltinSceneShader kBuiltin[kStages] = {
         BuiltinSceneShader::CloudsCoverComp, BuiltinSceneShader::CloudsCacheComp, BuiltinSceneShader::CloudsGlobeComp,
-        BuiltinSceneShader::CloudsHeapsComp, BuiltinSceneShader::CloudsViewComp};
+        BuiltinSceneShader::CloudsHeapsComp, BuiltinSceneShader::CloudsViewComp, BuiltinSceneShader::CloudsShellsComp};
 
     /// The set with `module` as cloud_module.glsl and `grid` (or none, "")
     /// as land_grid_config.glsl, compiled off the frame thread (poll).
@@ -89,7 +90,7 @@ public:
 
     VkShaderModule operator[](Stage s) const { return module(s); }
     // Started once the modules are made.
-    AsyncComputePipeline cover, cache, globe, heaps, view;
+    AsyncComputePipeline cover, cache, globe, heaps, view, shells;
 };
 
 class SceneClouds {
@@ -150,6 +151,9 @@ public:
         float viewInvProj[4][4];
         float viewEye[4];
         float viewSize[4];
+        float shellEye[4];         // the shells (sky/clouds_layout.h's CL_SHELL_*)
+        float shellPlanes[4][4];
+        float shellParams[4];
     };
 
     /// The volume about the eye's bakes, into the graphics stream after
@@ -183,6 +187,14 @@ private:
     /// bakes (before the cache's).
     void placeHeaps(SceneFrame& frame, const double nadir[3]);
     void recordHeaps(SceneFrame& frame);
+    /// The shells this frame (sky/clouds_layout.h's CL_SHELL_*): where the
+    /// heaps are handed over, the view's sides, and the boxes of the
+    /// lattice's cells the deck can be seen over about the drifted nadir, a
+    /// face each (beginFrame, the eye `eye` in air space); the plan and the
+    /// sort (recordPrepare); and their draw, before the march's (recordDraw).
+    void placeShells(SceneFrame& frame, const float eye[3]);
+    void recordShells(SceneFrame& frame);
+    void drawShells(SceneFrame& frame, VkDescriptorSet set);
     /// Body direction `u` on the cache's chart (m): cloudChartAt's.
     void chartAt(const double u[3], double& x, double& y) const;
 
@@ -278,6 +290,18 @@ private:
     };
     SceneVkImage heaps_;
     std::vector<HeapBake> heapBakes_;
+
+    // The shells: the buffer (sky/clouds_layout.h), the sort, the draw, and
+    // this frame's boxes of cells (none: no shells).
+    SceneVkBuffer shells_;
+    VkShaderModule shellsSortCs_ = VK_NULL_HANDLE;
+    VkShaderModule shellsVs_ = VK_NULL_HANDLE;
+    VkShaderModule shellsFs_ = VK_NULL_HANDLE;
+    AsyncComputePipeline shellsSortPipeline_;
+    PipelineVariants shellPipelines_;
+    struct ShellBox { int face, i0, j0, ni, nj; };
+    std::vector<ShellBox> shellBoxes_;
+    bool shellsReady_ = false;   // their pipelines are in (drawShells, the frame before)
     long long heapCentre_[CL_HEAP_LEVELS][2] = {};
     bool heapBaked_ = false;        // the map holds the deck's heaps (its first bake is whole)
     uint32_t heapPending_ = 0;      // levels still to be baked again, a level a frame

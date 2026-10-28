@@ -168,7 +168,7 @@
  * @property {ArrayLike<number>} [wind=[0,0,0]]  the wind (m/s, the body's
  *     frame) the forms drift with; a module that moves its base reads
  *     cloudDrift(p) to move with them
- * @property {{cell: number}} [heaps]  the heaps' lattice: the engine lays
+ * @property {{cell: number, shells?: number}} [heaps]  the heaps' lattice: the engine lays
  *     cells `cell` metres wide (100 or more) on the cover's cube at the
  *     deck's bottom, drifting with the wind, and asks the module's
  *     cloudHeap (with `#define CLOUD_HEAPS`) for the heap each holds: its
@@ -178,7 +178,14 @@
  *     footprint; cloudDensity then gives the rest (slabs) at every
  *     footprint (THE HEAPS). One heap at every distance: the one a view
  *     from far off sees is the one flown through. Without it (or 0) the
- *     module's cloudDensity is all.
+ *     module's cloudDensity is all. `shells` (metres, 10000 by default, 0
+ *     none): while the eye is under the deck's top, each heap past that
+ *     distance in view is drawn as itself, a box about its lobes whose
+ *     pixels trace that one heap's forms (its lobes' column, the engine's
+ *     skin, lit as the march lights a face), and the march leaves it out
+ *     there, handing over across half as far again: the march's cost is
+ *     its views' length, and a view toward the horizon crosses tens of
+ *     kilometres of heaps.
  * @property {boolean} [shadows=true]  the deck shadows what the sun lights
  * @property {LandNode|number} [land]  a round land whose processes' grid the
  *     cover's bake reads (cloudLandGrid); without one it reads zero
