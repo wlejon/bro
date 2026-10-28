@@ -33,7 +33,8 @@ assert(path.join(dir, names[0]) === dir + path.sep + names[0], 'join: ' + path.j
 assert(path.resolve(dir, '..', names[0]) === path.dirname(dir) + path.sep + names[0], 'resolve');
 
 assert(join < 1.0, 'path.join costs ' + join.toFixed(2) + ' us a call (was ~7; limit 1.0)');
-assert(normalize < 1.0, 'path.normalize costs ' + normalize.toFixed(2) + ' us (was ~4.5; limit 1.0)');
+// (2.0: a macOS CI runner's VM measured 1.44; the script version is ~4.5.)
+assert(normalize < 2.0, 'path.normalize costs ' + normalize.toFixed(2) + ' us (was ~4.5; limit 2.0)');
 assert(resolve < 2.5, 'path.resolve costs ' + resolve.toFixed(2) + ' us (was ~22; limit 2.5)');
 assert(dirname < 0.8 && basename < 0.8, 'dirname / basename under 0.8 us (were ~2)');
 
