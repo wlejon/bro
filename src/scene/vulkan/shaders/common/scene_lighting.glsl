@@ -619,6 +619,17 @@ float lightShadow(int i, vec3 pos, float camDist, float lightDist, vec3 N, float
     if (int(light.position.w) == 0) {
         float lf = log2(max(footprint / lighting.shadowView.z, 1e-9));
         SunProbe sp = sunProbe(first, pos, N, NdotL);
+        // Past the coarsest level's window (every finer one inside it) no
+        // level holds the point, which the walk below found after looking
+        // at every one of them twice: from 90 km up, most of the land seen
+        // (0.4 ms of its 1.27 at 2560 x 1364). Asked without the normal
+        // offset, which moves a point less than a page of that level.
+        {
+            float scale = exp2(-float(count - 1));
+            vec2 pc = (sp.p.xy * scale + (lighting.shadowMaps[first + count - 1].matrix[3].xy -
+                                          scale * lighting.shadowMaps[first].matrix[3].xy)) * float(SP_WINDOW);
+            if (any(lessThan(pc, vec2(-1.0))) || any(greaterThan(pc, vec2(float(SP_WINDOW + 1))))) return 1.0;
+        }
         int search = int(lighting.shadowSoft.z);
         if (search >= 0 && search < count && lf < float(search) && sunLocate(first, search, sp, hit, ref) &&
             (hit.page & SP_RESIDENT) != 0u) {
