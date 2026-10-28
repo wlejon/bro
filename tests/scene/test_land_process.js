@@ -140,10 +140,11 @@ void blur(inout vec4 v[PROC_CHANNELS]) {
     // They stand on the land's heights (its processes' with their rules'
     // ground: bro_plant_placement_test), so none is placed while it is not
     // ready, and they are once it is.
+    scn.setBands({ real: 150 });
     const plants = scn.createPlants({
         species: [{ height: 8, radius: 1, albedo: [0.02, 0.4, 0.02] }],
         rules: { ground: N('Constant', { Value: 0 }), range: 150, layers: [{ spacing: 6, chance: 1, species: [0] }] },
-        range: 150, land,
+        land,
     });
     // (From 100 m up: the eye's height over the land counts in the range,
     // so from 200 m none of a 150 m range is placed.)
