@@ -626,7 +626,8 @@ void SceneClouds::placeCache(SceneFrame& frame) {
     const uint64_t key = mixBits(mixBits(currentKey_, c.generation), shaderSetBakeEpoch());
     bool all = !chartValid_ || key != cacheKey_ || coverDone_;
     // (A frame's jump in the wind's time: a deck that moved, not drifted.)
-    all = all || std::fabs(block_.shell[3] - cacheTime_) > 0.25f;
+    const float windStep = block_.shell[3] - cacheTime_;
+    all = all || std::fabs(windStep) > 0.25f;
     cacheTime_ = block_.shell[3];
     // The chart: about the nadir, again when the nadir is far from its
     // centre (the chart's cells stretch away from it).
@@ -706,18 +707,43 @@ void SceneClouds::placeCache(SceneFrame& frame) {
             cachePending_ &= ~(1u << k);
             bakes_.push_back(CacheBake::level(k, 1));
         }
-        CacheBake slice = CacheBake::level(0, CL_CACHE_LEVELS);
-        slice.y0 = static_cast<int>(cacheFrame_ % CL_CACHE_SLICES);
-        slice.yStep = CL_CACHE_SLICES;
-        slice.ny = CL_CACHE_SIDE / CL_CACHE_SLICES;
-        bakes_.push_back(slice);
+        // The wind's drift: a slice of a level a unit, coarsest first, as
+        // many a frame as the wind's time since owes (every row of every
+        // level each CL_CACHE_REFRESH seconds of it), so a frame's share
+        // falls as the frame rate rises and none is made while the wind's
+        // time stands. (A slice of every level a frame cost 0.3 ms a frame
+        // at the ground at 30 frames a second and the same at 360, twelve
+        // times the drift's need.) A frame's units of one slice, levels in
+        // a run, are one bake.
+        constexpr int kUnits = CL_CACHE_SLICES * CL_CACHE_LEVELS;
+        cacheDebt_ = std::min(cacheDebt_ + std::max(windStep, 0.0f) / CL_CACHE_REFRESH * kUnits,
+                              static_cast<double>(kUnits));
+        for (; cacheDebt_ >= 1.0; cacheDebt_ -= 1.0) {
+            const uint32_t u = cacheUnit_++ % kUnits;
+            const int k = CL_CACHE_LEVELS - 1 - static_cast<int>(u % CL_CACHE_LEVELS);
+            const int y0 = static_cast<int>(u / CL_CACHE_LEVELS);
+            if (!bakes_.empty() && bakes_.back().yStep == CL_CACHE_SLICES && bakes_.back().y0 == y0 &&
+                bakes_.back().first == k + 1) {
+                --bakes_.back().first;
+                ++bakes_.back().levels;
+            } else {
+                CacheBake slice = CacheBake::level(k, 1);
+                slice.y0 = y0;
+                slice.yStep = CL_CACHE_SLICES;
+                slice.ny = CL_CACHE_SIDE / CL_CACHE_SLICES;
+                bakes_.push_back(slice);
+            }
+            unitRun_ = std::min(unitRun_ + 1, kUnits);
+        }
+        // (Nothing drifts while the wind's time stands: no slice is owed.)
+        if (windStep <= 0.0f) unitRun_ = kUnits;
     }
-    ++cacheFrame_;
     // What is still to come of it for this view (the settle state): the
     // levels to bake again, and the slices since the last whole change.
-    sliceRun_ = all ? 0 : std::min(sliceRun_ + 1, CL_CACHE_SLICES);
+    if (all) unitRun_ = 0;
     CloudStats stats = frame.renderer.cloudStats();
-    stats.cachePending = std::popcount(cachePending_) + (CL_CACHE_SLICES - sliceRun_);
+    stats.cachePending = std::popcount(cachePending_) +
+                         (CL_CACHE_SLICES * CL_CACHE_LEVELS - unitRun_ + CL_CACHE_LEVELS - 1) / CL_CACHE_LEVELS;
     frame.renderer.setCloudStats(stats);
     placeHeaps(frame, nb);
 }

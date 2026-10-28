@@ -163,14 +163,16 @@
 // straight up, w how far (m) the nearest cloud is, out to CL_CACHE_REACH
 // cells across and the column up (sky/clouds_dist.comp). A level is baked
 // whole when its window moves, every level when the deck, the chart or the
-// time jumps, and otherwise every CL_CACHE_SLICES-th row of each a frame (the wind, the
-// sun's motion).
+// time jumps, and otherwise every CL_CACHE_SLICES-th row of a level at a
+// time, as many a frame as the wind's time since owes, each row again every
+// CL_CACHE_REFRESH seconds of it (the wind, the sun's motion).
 #define CL_CACHE_LEVELS     13
 #define CL_CACHE_SIDE       128
 #define CL_CACHE_BINS       32
 #define CL_CACHE_TEXEL0     62.5
 #define CL_CACHE_MARGIN     62.0     // cells about the nadir a level's lookups stay within
 #define CL_CACHE_SLICES     16
+#define CL_CACHE_REFRESH    0.5333   // (16 frames at 30 a second, as when a frame made a slice of every level)
 #define CL_CACHE_REACH      8        // cells across the distance to cloud is sought over
 #define CL_CACHE_GROUP      8
 

@@ -264,7 +264,8 @@ private:
     uint64_t cacheKey_ = 0;      // the deck the cache holds (its module, generation)
     float cacheTime_ = 0.0f;     // the wind's time it was last baked at
     float cacheSun_[3] = {};     // and the sun (the body's frame)
-    uint32_t cacheFrame_ = 0;
+    uint32_t cacheUnit_ = 0;     // the next of the drift's units (a slice of a level)
+    double cacheDebt_ = 0.0;     // the units the wind's time owes
     float volumeTime_ = 0.0f;    // the wind's time the volume was last placed at
     uint32_t chartSerial_ = 0;   // moved each time the chart is laid about a new centre
 
@@ -307,7 +308,7 @@ private:
     uint64_t bakedHash_ = 0;
     uint64_t bakedEpoch_ = 0;    // the shader sets' bake epoch it was baked in
     uint64_t bakingKey_ = 0;     // what the bake under way is of (0: none)
-    int sliceRun_ = 0;           // the cache's slices made since its last whole change
+    int unitRun_ = 0;            // the cache's drift units made since its last whole change
 };
 
 }  // namespace bro::scene::vk
