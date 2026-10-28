@@ -2172,5 +2172,9 @@ view (the ladder's `real=400 twinpaint`, straight down at 60 and 150 m):
 the light within 0.1 stop, the pattern's spread the real one's, r 0.84 to
 0.88 at 10 m blocks and 0.36 to 0.46 at the finest (smooth discs scored
 0.7 there, half a stop dark and with too little spread: the clumps cannot
-fall where the real leaves do). To come: the canopy as painted crowns on
-the land, the sky map, the cloud shells.
+fall where the real leaves do). Past the crowns the land's canopy paints
+the same (mesh.frag's canopySurface): each crown cell a dome, shown or not
+by its share of cover while a crown spans pixels and its mean beyond, its
+own shade set so it reads within about 0.1 stop of the plants both
+straight down and 20 degrees down (the ladder's `tilt=70 twin`). To come:
+the sky map, the cloud shells.
