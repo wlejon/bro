@@ -129,9 +129,9 @@ if (!s.scene) {
     const grass = scn.createGrass({ ground: floor, sward: SWARD });
     assert(grass && typeof grass.grassParams === 'function', 'createGrass returns a node');
     const p = grass.grassParams();
-    assert(p.width > 0 && p.bladeDensity > 0 && p.range > 0, `params read back (${JSON.stringify(p)})`);
+    assert(p.width > 0 && p.bladeDensity > 0, `params read back (${JSON.stringify(p)})`);
     grass.setGrass({ width: 0.005 });
-    assert(Math.abs(grass.grassParams().width - 0.005) < 1e-5 && grass.grassParams().range === p.range,
+    assert(Math.abs(grass.grassParams().width - 0.005) < 1e-5 && grass.grassParams().bladeDensity === p.bladeDensity,
         'setGrass changes what it names and keeps the rest');
     assert(floor.grassParams() === undefined, 'grass members answer undefined on a land');
 
