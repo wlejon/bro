@@ -750,7 +750,9 @@ void main() {
             int kc = min(k + CL_FREE_LEVELS, CL_CACHE_LEVELS - 1);
             if (kc > k) dFree = max(dFree, clFree(w, kc));
             float vs = abs(dot(rd, normalize(a)));
+            clBaseBound = true;
             float dB = clBaseClearParts(clBaseParts(w, lod, cloudDrift(w.p), foot, foot), foot, vs);
+            clBaseBound = false;
             // (A step rises by at most CL_SKIN_RISE pixels' footprint: a
             // view looking down crossed eight in one, as deep as a heap
             // under a high eye is thick, and of the heaps it fell through

@@ -654,16 +654,19 @@ float cloudHeapMapLevelIn(vec2 xy, int k, float z) {
     float d = cloudHeapColumnIn(texelFetch(cloudHeapMap, ivec3((i + ivec2(1, 1)) & M, k), 0), z);
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-float cloudHeapMapIn(vec2 xy, float foot, float z, out float texel) {
+// (`blend` false: the finer level alone, for a bound that only needs to
+// say how far off they are, not their smooth change across levels.)
+float cloudHeapMapIn(vec2 xy, float foot, float z, bool blend, out float texel) {
     float lod = cloudHeapLod(xy, foot);
     int k = int(lod);
     texel = cloudHeapTexel(min(k, CL_HEAP_LEVELS - 1)) * exp2(fract(lod));
     if (clouds.heapNadir.z < 0.5 || k >= CL_HEAP_LEVELS) return -1e5;
     float v = cloudHeapMapLevelIn(xy, k, z);
-    float f = fract(lod);
+    float f = blend ? fract(lod) : 0.0;
     if (k + 1 < CL_HEAP_LEVELS && f > 0.0) v = mix(v, cloudHeapMapLevelIn(xy, k + 1, z), f);
     return v;
 }
+float cloudHeapMapIn(vec2 xy, float foot, float z, out float texel) { return cloudHeapMapIn(xy, foot, z, true, texel); }
 // How much of the heaps a footprint `foot` (or the heaps' map's texel
 // `texel` read for it) sees as their share, not as themselves: where they
 // are a few pixels across or less, their share (the cache's), so a field of

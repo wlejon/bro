@@ -80,13 +80,17 @@ float clCacheSigma(ClAt w, float lod) {
 // (And apart: `own`, the heaps' own base, and `share`, their share of the
 // air, the cache's, which the forms draw by its own law where they are far,
 // cloudHeapsShareSigma.)
+// (Where `clBaseBound`, the finer of each map's levels alone: the march's
+// bound asks only how far off the forms are, and read over both levels its
+// four lookups more a step were a sixth of a view up through the heaps.)
+bool clBaseBound = false;
 vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen, out float own, out float share) {
-    vec3 c = clCacheBase(w, lod);
+    vec3 c = clCacheBase(w, clBaseBound ? floor(lod) : lod);
     share = c.z;
     own = -1.0;
     if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
     float texel;
-    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), texel);
+    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), !clBaseBound, texel);
     float far = cloudHeapsFar(seen, texel);
     own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
     // (Their share as the field, the bounds' and the face's: in cloud
