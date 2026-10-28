@@ -48,7 +48,14 @@ SurfaceLayerConfig groundConfig() {
     c.border = 1;
     c.slots = 1024;
     c.pageSize = 256;
-    c.maxLevels = 20;
+    // Enough that a round body's cube face (its chart's side a quarter of
+    // the great circle: 10,000 km for the Earth's) is a coarsest tile or
+    // two. At 20 the coarsest of a metre's tiles were 524 km: the planet's
+    // faces 2,400 of them, all kept whatever the view, more than the
+    // slots, so none refined and a fragment either read a 524 km tile's
+    // texel (every pattern at its mean) or, where none was held, worked
+    // all of them out itself (a fifth of the turf's cost seen from 2 km).
+    c.maxLevels = 26;
     c.texelPixels = 1.5f;
     return c;
 }
