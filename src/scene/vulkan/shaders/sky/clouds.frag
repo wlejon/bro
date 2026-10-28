@@ -106,7 +106,8 @@ const int CL_FACES = 3;            // faces a view halves for at most
 const float CL_IN_PIXELS = 2.0;    // the first piece inside, in pixels
 const float CL_IN_FIRST = 20.0; // and in metres, at least
 const float CL_IN_GROWTH = 2.0;  // each the last's times this
-const float CL_IN_LONGEST = 400.0;
+const float CL_IN_LONGEST = 400.0;   // and the longest, in metres,
+const float CL_IN_LONGEST_PIXELS = 8.0;   // or in pixels where that is more
 const float CL_SUN_AGAIN = 60.0;   // how far (m, more over a coarse pixel) a view inside goes before its sun depth is taken again
 const float CL_SUN_AGAIN_SEEN = 0.0;   // while more than this much of the view is left
 const float CL_PIECE_MEAN = 0.5;   // a piece's forms read over this much of its length at least
@@ -942,7 +943,11 @@ void main() {
         clIntegrate(m, ro + rd * x, x, L, sigma, tau, max(sigma * max(120.0, foot), f.within), s, nu, ph, albedo, E,
                     skyAbove, groundBelow, smoothstep(0.0, 0.2, dot(s, normalize(ro + rd * x))));
         t += L;
-        len = min(len * CL_IN_GROWTH, CL_IN_LONGEST);
+        // (Far off, a piece a few pixels long at least: held to 400 m, a
+        // view from 90 km into the far deck's veil of heaps lit 12 to 35
+        // pieces over its tens of kilometres, each read over half its length
+        // anyway, CL_PIECE_MEAN.)
+        len = min(len * CL_IN_GROWTH, max(CL_IN_LONGEST, CL_IN_LONGEST_PIXELS * foot));
     }
     if (tFace >= 0.0) clCover(m, coverL, coverT, cover);
     if (wl > 0.0) {
