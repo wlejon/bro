@@ -98,8 +98,9 @@ const float CL_BASE_PAD = 0.004;   // bounds it along the step
 const float CL_SKIN_PIXELS = 8.0;// a step across a cloud's skin, in pixels
 const float CL_SKIN_RISE = 1.0;    // and how far it rises or falls at most, in pixels (a heap's top from above)
 const float CL_SKIN_LEAST = 1.0 / 16.0;   // and the least, of the forms' finest cells (near the eye)
-const float CL_FACE_PIXELS = 1.5;  // how closely (pixels) a face is found
-const int CL_FACE_HALVINGS = 4;    // at most
+const float CL_FACE_PIXELS = 1.5;  // how closely (pixels) a face is found,
+const float CL_FACE_DEPTH = 0.5;   // and at most this much of a cloud's heart's optical depth
+const int CL_FACE_HALVINGS = 6;    // at most
 const int CL_FACES = 3;            // faces a view halves for at most
 const float CL_IN_PIXELS = 2.0;    // the first piece inside, in pixels
 const float CL_IN_FIRST = 20.0; // and in metres, at least
@@ -121,6 +122,14 @@ const float CL_AMBIENT = 1.0 / PI;
 const int CL_TRACE = 0;  // through clear air, or across a skin
 const int CL_HALVE = 1;   // halving toward a face
 const int CL_INSIDE = 2;  // through a cloud
+
+// How closely a face is found over footprint `foot`: CL_FACE_PIXELS of it,
+// and no more than CL_FACE_DEPTH of a heart's optical depth, as a far
+// pixel's footprints are tens of metres. (A face's piece is lit by the
+// depths taken where it begins, and a dense top a footprint in is optical
+// depths down: from 100 km, found to a pixel and a half, a heap's dome
+// stood in rings, the face's error growing and falling with its slope.)
+float clFaceTol(float foot) { return min(CL_FACE_PIXELS * foot, CL_FACE_DEPTH / clouds.forms.x); }
 
 float clHg(float nu, float g) {
     float g2 = g * g;
@@ -207,8 +216,13 @@ float clHeapSunDepth(vec3 a, vec3 s, float foot) {
         float d = cloudHeapMapIn(cloudChartAt(normalize(cloudDrift(w.p))), foot, w.h * thick, texel);
         if (d < -1e4) break;   // (past the map)
         if (i == 0 && d < -clouds.forms.w) break;   // (a face not a heap's: the slabs' light is the cache's)
+        // (A step in at its start by d: within it all if d is as long as
+        // half of it, none if out by as much, between by d. Counted whole
+        // where d was over 0, the depth jumped by a step wherever a step's
+        // start crossed the surface: a heap's walls lit in bands, rings
+        // about its rim seen from under it and from 100 km.)
         float step = max(abs(d), CL_HEAP_SUN_LEAST);
-        if (d > 0.0) inside += step;
+        inside += clamp(d + 0.5 * step, 0.0, step);
         at += step;
     }
     return clouds.forms.x * inside;
@@ -788,7 +802,7 @@ void main() {
             fLo = hLo == clearAt ? clearFace : 0.0;
             fHi = f.face;
             halvings = faces < CL_FACES
-                         ? clamp(int(ceil(log2(max((hHi - hLo) / (CL_FACE_PIXELS * foot), 1.0)))), 0, CL_FACE_HALVINGS)
+                         ? clamp(int(ceil(log2(max((hHi - hLo) / clFaceTol(foot), 1.0)))), 0, CL_FACE_HALVINGS)
                          : 0;
             ++faces;
             if (halvings > 0) {
@@ -803,7 +817,7 @@ void main() {
             // The face by false position on the forms' signed field (where
             // its value at the near end is known; halving else), each end
             // that stays put twice halved in weight (Illinois), to
-            // CL_FACE_PIXELS footprints.
+            // clFaceTol.
             ++dbgHalve;
             float s = fLo < 0.0 ? clamp(fLo / (fLo - fHi), 0.1, 0.9) : 0.5;
             float x = mix(hLo, hHi, s);
@@ -821,7 +835,7 @@ void main() {
                 if (side == -1) fHi *= 0.5;
                 side = -1;
             }
-            if (--halvings <= 0 || hHi - hLo < CL_FACE_PIXELS * foot) {
+            if (--halvings <= 0 || hHi - hLo < clFaceTol(foot)) {
                 t = fLo < 0.0 ? mix(hLo, hHi, clamp(fLo / (fLo - fHi), 0.0, 1.0)) : 0.5 * (hLo + hHi);
                 side = 0;
                 mode = CL_INSIDE;
