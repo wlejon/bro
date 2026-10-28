@@ -65,6 +65,10 @@ if (bro.flora && bro.flora.available === false) {
 }
 
 function run(scene) {
+    // A target no device misses: the shadow's pages are built from what a
+    // frame leaves under it, and on a software rasterizer (CI's lavapipe)
+    // a page was still being built in the swaying frames.
+    scene.setFrameTarget(1000);
     // ── The records ──────────────────────────────────────────────────────
     const world = growTree();
     const bark = world.emitMesh(6);
