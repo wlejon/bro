@@ -20,12 +20,15 @@
 //     the level a crown covers its area plus its flank times cot e, so the
 //     cover the eye sees is 1 - e^-(tau + flanks cot e) (mesh.frag's
 //     landCanopyAt): a wood is whole from a low line where its crowns
-//     stand apart from overhead.
+//     stand apart from overhead;
+//   - the crowns' base (a plant's trunk under its crown over the ground),
+//     their area-weighted mean as the top is: how far a line climbs
+//     before it meets a crown (mesh.frag's landCanopyGround).
 //
 // The module defines
-//   vec3 plantsCanopy(vec2 p, out vec3 albedo)   x the cover, y the top (m),
-//                                                z the flanks
-//   vec3 plantsCanopy(vec3 p, out vec3 albedo)   the same on a round body, p
+//   vec4 plantsCanopy(vec2 p, out vec3 albedo)   x the cover, y the top (m),
+//                                                z the flanks, w the base (m)
+//   vec4 plantsCanopy(vec3 p, out vec3 albedo)   the same on a round body, p
 //                                                the datum's point (its
 //                                                fields' 3D trees, split
 //                                                about the fill's origin)

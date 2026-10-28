@@ -133,12 +133,58 @@ vec4 landCanopyAt(vec3 worldPos) {
     if (!landHasCanopy()) return vec4(0.0);
     float shown = landCanopyShown(length(p - landEye3()), landCanopyRange());
     if (shown <= 0.0) return vec4(0.0);
-    vec2 crowns;
+    vec3 crowns;
     vec2 m = landMapOf(p);
     vec4 c = landSampleCanopy(m, landLevel(m), crowns);
     float down = max(-worldPos.y / max(length(worldPos), 1e-3), 0.02);
     float tau = -log(max(1.0 - c.a, 1e-4)) + crowns.y * sqrt(1.0 - down * down) / down;
     return vec4(c.rgb, (1.0 - exp(-tau)) * shown);
+}
+
+// The sun the ground keeps among a land's plants past their cast range at
+// `worldPos` (camera-relative): the shadow pages hold none of them there,
+// and the land's sun holds their canopy as a sheet (land_sun.comp), whose
+// shade reaches only a texel or two past a stand's edge under a high sun,
+// while its gaps are finer than its texels. Their crowns as the canopy has
+// them (world/plant_canopy.h: tau0 their area a square metre, their flanks
+// a square metre, top and base). Ground the eye sees between the crowns:
+// no crown stands within a crown's radius r of the eye's line, and the
+// sun's line, leaning from it by `apart` a metre climbed, passes the crowns
+// from base * apart to top * apart off it. What shades it is the crowns
+// the sun's line meets, tau0 plus the flanks it sweeps, less those about
+// the eye's line, a lens of two discs base * apart apart (a sun behind the
+// eye shades no gap it sees, a low one past a tall trunk shades it as any
+// ground). r is the crowns' own: a crown's flank is its radius by its
+// depth by CANOPY_FLANK (a cone's 1 to a round crown's pi/2). Ground the
+// eye sees through a crown, its leaves' holes (CANOPY_THROUGH of what it
+// sees), is shaded as any ground is, by tau0 plus the flanks the sun's
+// line sweeps. The shade comes in over the cast range's last tenth as the
+// casters go. (Set so the ground is what it is under its plants cast into
+// the shadow pages, the same land both ways: the planet's woods from 2 km
+// straight down, their leaves unlit, 9.94 stops with the plants cast,
+// 10.35 between the crowns alone, 8.87 as any ground.)
+const float CANOPY_FLANK = 1.3;
+const float CANOPY_THROUGH = 0.4;
+float landCanopyGround(vec3 worldPos) {
+    if (!landHasCanopy()) return 1.0;
+    vec3 p = worldPos + camera.eyeWorld.xyz;
+    float past = landCanopyShown(length(p - landEye3()), landCanopyCastRange());
+    vec3 L = -lighting.sunDirection.xyz;
+    if (past <= 0.0 || lighting.sunDirection.w < 0.5 || L.y <= 0.0) return 1.0;
+    vec3 crowns;
+    vec2 m = landMapOf(p);
+    vec4 c = landSampleCanopy(m, landLevel(m), crowns);
+    if (c.a <= 0.0 || crowns.y <= 0.0) return 1.0;
+    float tau0 = -log(max(1.0 - c.a, 1e-4));
+    float r = CANOPY_FLANK * max(crowns.x - crowns.z, 0.0) * tau0 / (3.14159265 * crowns.y);
+    vec3 V = normalize(-worldPos);
+    vec2 sunLean = L.xz / L.y;
+    float apart = length(sunLean - V.xz / max(V.y, 0.02));
+    float q = clamp(crowns.z * apart / max(2.0 * r, 1e-3), 0.0, 1.0);
+    float lens = (acos(q) - q * sqrt(1.0 - q * q)) / 1.57079633;
+    float any = tau0 + crowns.y * length(sunLean);
+    float gap = min(tau0 * (1.0 - lens) + crowns.y * apart, any);
+    return mix(1.0, mix(exp(-gap), exp(-any), CANOPY_THROUGH), past);
 }
 #endif
 
@@ -504,6 +550,12 @@ void main() {
 #endif
     s.thinNormal = vec3(0.0);
     s.sward = vec4(0.0);
+    s.landShade = 1.0;
+#if defined(SCENE_LAND) || defined(SCENE_GROUND)
+    // The ground among the plants past their cast range, as much of it as
+    // shows past the canopy.
+    if ((flags & MESH_CANOPY) != 0u) s.landShade = mix(landCanopyGround(worldPos), 1.0, canopyShown);
+#endif
 #ifdef SCENE_HERB
     s.translucency = herb.translucency >= 0.0 ? herb.translucency : s.translucency * -herb.translucency;
     s.sward = herb.sward;

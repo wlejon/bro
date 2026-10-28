@@ -689,6 +689,10 @@ struct SceneSurface {
     // by the wind's lay), w how much of the direct light is the sward's
     // (sceneSwardLight) rather than the shading normal's (0: none).
     vec4 sward;
+    // What more of the dominant sun the land leaves here than its sun's
+    // levels hold (a wood's gaps past the plants' cast range, mesh.frag's
+    // landCanopyGround); 1: nothing more.
+    float landShade;
 };
 
 // The direct light on a sward seen from afar, as a canopy of thin blades
@@ -892,7 +896,8 @@ vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
         // The sun's shade of the land (the land's sun and the probe grid's),
         // over its shadow pages'.
-        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1 ? sceneLandSun(s.position, probe) : 1.0;
+        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1
+                         ? sceneLandSun(s.position, probe) * s.landShade : 1.0;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {

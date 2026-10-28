@@ -132,6 +132,7 @@ void main() {
     // Leaves and blades lit as the sward they stand in; blooms as
     // themselves, on top.
     s.sward = vec4(gn, 1.0 - bloomShare);
+    s.landShade = 1.0;
 
     SceneProbe probe = sceneProbe(worldPos);
     vec3 indirect = sceneAmbient(s, probe) * ao;

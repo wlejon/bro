@@ -71,7 +71,7 @@ float landRise(vec2 xz, float lambda, float h) {
     if (!landHasCanopy()) return 0.0;
     float shown = landCanopyShown(length(landPoint(xz, h) - landEye3()), landCanopyRange());
     if (shown <= 0.0) return 0.0;
-    vec2 crowns;
+    vec3 crowns;
     vec4 c = landSampleCanopy(xz, lambda, crowns);
     return crowns.x * c.a * shown;
 #endif

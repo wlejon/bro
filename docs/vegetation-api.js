@@ -331,7 +331,10 @@
  * by that top as far as they cover it and is drawn as their leaves (lit as
  * a sward is: a layer of leaves too fine to resolve), and past
  * `shadowRange` it shades the land and the plants as they would (the
- * land's sun, land-api.js), long shade at a low sun. Both come in over the range's last tenth as
+ * land's sun, land-api.js), long shade at a low sun, and the ground among
+ * them takes the shade their crowns would cast on what the eye sees of it
+ * (from their cover, flanks, top and crown base), the shade in a wood's
+ * gaps finer than the land's sun holds. Both come in over the range's last tenth as
  * the plants there go, a growing share of them picked by where they stand.
  * So a forest reaches the horizon at no cost past the land's own. A plant
  * past `range` casts nothing (`shadowRange` is at most `range`).
