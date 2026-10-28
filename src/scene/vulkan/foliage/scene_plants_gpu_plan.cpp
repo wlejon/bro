@@ -317,8 +317,8 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
     // casts for them. Drawn to where they are all placed, drawReach: the
     // canopy stands for them past it.)
     const float detail[] = {p.pixels, p.minElements, p.woodRange, node.drawReach(), p.shadowTexels,
-                            std::min(p.shadowRange, p.range)};
-    for (int i = 0; i < PlantsNode::kParamCount; ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
+                            std::min(p.shadowRange, node.real())};
+    for (size_t i = 0; i < std::size(detail); ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
     w[PP_P_STILL_PENUMBRA] = bitsOf(plan.stillPenumbra);
     putPlanes(w.data() + PP_P_FRUSTUM, view.frustum);
     // The cell pass's views, the plan's own: the camera, then each tile,

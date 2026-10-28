@@ -38,6 +38,7 @@
 // out of raycasts and bounds.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/bands.h"
 #include "scene/world/place.h"
 
 #include <cstdint>
@@ -58,9 +59,15 @@ public:
     struct Params {
         float width = 0.004f;       // blade width near the camera (m); the outer rings' are multiples of it
         float density = 1.0f;       // blades per area, x the default (cells shrink by sqrt)
-        float range = 150.0f;       // the far edge of the outermost ring (m)
     };
-    static constexpr int kParamCount = 3;
+    static constexpr int kParamCount = 2;
+    /// The scene's real band (SceneGraph::Bands::real, m; at most 150 m,
+    /// past which a blade is under a pixel): the far edge of the outermost
+    /// ring and of the herbs' far plants (their whole plants to a third of
+    /// it), past which the land's cover stands for them. Its
+    /// drawer sets it each frame from the scene it is drawn in.
+    void setReal(float m);
+    float real() const { return real_; }
     void setParams(const Params& p);
     const Params& params() const { return params_; }
     /// The params as the flat list the bindings pass (setParams' order).
@@ -113,12 +120,10 @@ public:
     static constexpr int kHerbDataVec4s = 256;   // scene_herb_layer.glsl's GRASS_HERB_DATA
     /// The module's GLSL and its data (at most kHerbDataVec4s vec4s; read as
     /// herbData(i)); `height` the tallest its plants stand (m), which the
-    /// rings' culling boxes take. The whole plants are drawn to `range` m,
-    /// their far form to `far` m (0 keeps the current; a new range with no
-    /// far puts it at 3 x the range), handing over to the turf through the
-    /// last quarter of it. An empty source: no herbs.
-    void setHerbs(std::string source, const float* data, size_t floats, float height, float range = 0.0f,
-                  float far = 0.0f);
+    /// rings' culling boxes take. The whole plants are drawn to a third of
+    /// the real band, their far form to its edge (setReal), handing over to
+    /// the turf through the last quarter of it. An empty source: no herbs.
+    void setHerbs(std::string source, const float* data, size_t floats, float height);
     const std::string& herbSource() const { return herbSource_; }
     /// A hash of herbSource() (0: none), which keys its compiled shaders.
     uint64_t herbSourceHash() const { return herbSourceHash_; }
@@ -261,8 +266,9 @@ private:
     uint64_t herbSourceHash_ = 0;
     std::vector<float> herbData_;
     float herbHeight_ = 0.0f;
-    float herbRange_ = 30.0f;
-    float herbFar_ = 90.0f;
+    float real_ = Bands::kRealDefault;
+    float herbRange_ = Bands::kRealDefault / 3.0f;
+    float herbFar_ = Bands::kRealDefault;
     bromesh::MeshData herbMeshes_[kHerbRings];
     uint32_t herbDrawn_[kHerbRings] = {};
 

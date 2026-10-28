@@ -110,6 +110,8 @@ const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
 
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
+    // (Drawn and cast within the scene's real band.)
+    node.setReal(frame.graph.bands().real);
     // On the land they stand on as its processes have it (and nothing
     // placed until they have run), then the cells placed about the
     // camera's eye.
@@ -121,11 +123,11 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     }
     node.follow(frame.world.eye, land);   // (placement is keyed on the body)
     // (Its canopy on the land comes in where the plants are still to come.)
-    if (land) land->setCanopyReach(node.drawReach());
+    if (land) land->setCanopyReach(node.drawReach(), std::min(node.params().shadowRange, node.real()));
     const PlantShaders* shaders = plantShaders(node);
     // (Nor planned when every plant is past its range: a planet's from orbit.)
     if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit() ||
-        node.nearest(frame.world.eye) > node.params().range) {
+        node.nearest(frame.world.eye) > node.real()) {
         node.setStats({});
         return;
     }

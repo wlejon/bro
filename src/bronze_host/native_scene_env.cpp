@@ -220,6 +220,21 @@ void bro_scene_SceneGraph_setFrameTarget(void* self, double ms) {
     if (g) g->setFrameTarget(static_cast<float>(ms));
 }
 
+void bro_scene_SceneGraph_setBands(void* self, double real, double painted) {
+    auto* g = graphOf(self);
+    if (!g) return;
+    scene::Bands b = g->bands();
+    if (std::isfinite(real)) b.real = static_cast<float>(real);
+    if (std::isfinite(painted)) b.painted = static_cast<float>(painted);
+    g->setBands(b);
+}
+
+void bro_scene_SceneGraph_bands(void* self, bronze_native_buffer* out) {
+    auto* g = graphOf(self);
+    if (!g) { transferBuffer(std::vector<double>{}, out); return; }
+    transferBuffer(std::vector<double>{g->bands().real, g->bands().painted}, out);
+}
+
 void bro_scene_SceneGraph_setRenderScale(void* self, double scale) {
     auto* g = graphOf(self);
     if (g) g->setRenderScale(static_cast<float>(scale));

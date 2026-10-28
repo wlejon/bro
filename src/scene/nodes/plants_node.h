@@ -34,6 +34,7 @@
 // raycasts and bounds.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/bands.h"
 #include "scene/world/cell_store.h"
 #include "scene/world/land_grid.h"
 #include "scene/world/place.h"
@@ -137,13 +138,17 @@ public:
         float pixels = 14.0f;      // the size on screen (px) an element is kept to past full detail
         float minElements = 12.0f; // the fewest a plant is drawn with
         float woodRange = 220.0f;  // past this (m) no trunks or limbs are drawn
-        float range = 6000.0f;     // past this (m) no plant is drawn
         float shadowTexels = 12.0f; // as `pixels`, in a shadow page's texels, for its casters
-        float shadowRange = 1500.0f; // past this (m), or `range`, no plant casts (the shadow views cut nearer)
+        float shadowRange = 1500.0f; // past this (m), or the real band, no plant casts (the shadow views cut nearer)
     };
-    static constexpr int kParamCount = 6;
+    static constexpr int kParamCount = 5;
     void setParams(const Params& p);
     const Params& params() const { return params_; }
+    /// The scene's real band (SceneGraph::Bands::real, m): past it no plant
+    /// is drawn or cast, the land's canopy standing for them. Its drawer
+    /// sets it each frame from the scene it is drawn in.
+    void setReal(float m) { real_ = m; }
+    float real() const { return real_; }
 
     /// The plants' cells (world_cells.h): each leaf's run of the pool,
     /// bounded by its plants' bounding spheres' boxes (a little wider: the
@@ -262,6 +267,7 @@ private:
     const Place* place_ = nullptr;
     double radius_ = 0.0;   // the body's the plants were placed on (0 the plane)
     Params params_;
+    float real_ = Bands::kRealDefault;
     uint64_t generation_ = 0;
     struct Change {
         uint64_t generation;

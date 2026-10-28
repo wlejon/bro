@@ -57,12 +57,11 @@ int32_t bro_scene_SceneNode_setGrassGround(void* self, void* land) {
 }
 
 void bro_scene_SceneNode_setGrassHerbs(void* self, const char* source, const float* data, uint32_t data_len,
-                                       double height, double range, double far) {
+                                       double height) {
     auto* gr = grassOf(self);
     if (!gr) return;
     const auto finite = [](double v) { return std::isfinite(v) ? static_cast<float>(v) : 0.0f; };
-    gr->setHerbs(source ? std::string(source) : std::string(), data, data_len, finite(height), finite(range),
-                 finite(far));
+    gr->setHerbs(source ? std::string(source) : std::string(), data, data_len, finite(height));
 }
 
 void bro_scene_SceneNode_setGrassSward(void* self, const char* source, const float* data, uint32_t data_len,

@@ -987,6 +987,28 @@ class SceneGraph {
   setFrameTarget(ms) {}
 
   /**
+   * The world's bands (docs/scene-world-architecture.md §14): how far from
+   * the eye each way of drawing it reaches. Within `real` (m) the world is
+   * drawn as itself: every plant's elements to it, the grass's rings and
+   * the herbs to it (at most 150 m, past which a blade is under a pixel);
+   * past it the land's canopy and cover stand for them, every node handing
+   * over at the same place. `painted` (m, at least `real`) is where the
+   * painted band ends and the sky map's painting takes over. 40 m by
+   * default: the frame the 360 fps target is set for; a world may widen it
+   * as far as it can afford. A band left out keeps its value.
+   *
+   * @example scene.setBands({ real: 12000 });   // the plants drawn as themselves to 12 km
+   * @param {{real?: number, painted?: number}} bands
+   */
+  setBands(bands) {}
+
+  /**
+   * The world's bands as set (`setBands`).
+   * @returns {{real: number, painted: number}}
+   */
+  bands() {}
+
+  /**
    * @param {number} scale
    */
   setRenderScale(scale) {}

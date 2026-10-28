@@ -548,6 +548,17 @@
         if (ms === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setFrameTarget: ms is required");
         __bro_native.scene.SceneGraph_setFrameTarget(this, +ms || 0);
     });
+    // The world's bands (docs/scene-api.js): where its real drawing ends
+    // and its painted drawing hands over to the sky map's, in metres.
+    fn(SceneGraph.prototype, "setBands", function setBands(opts) {
+        const o = opts || {};
+        __bro_native.scene.SceneGraph_setBands(this, typeof o.real === 'number' ? o.real : NaN,
+            typeof o.painted === 'number' ? o.painted : NaN);
+    });
+    fn(SceneGraph.prototype, "bands", function bands() {
+        const a = __bro_native.scene.SceneGraph_bands(this);
+        return a.length === 2 ? { real: a[0], painted: a[1] } : undefined;
+    });
     fn(SceneGraph.prototype, "setRenderScale", function setRenderScale(scale) {
         if (scale === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setRenderScale: scale is required");
         __bro_native.scene.SceneGraph_setRenderScale(this, scale);

@@ -8,7 +8,8 @@
 //   - the node draws: a tree in view turns its patch of the frame green, its
 //     elements and limbs counted in plantStats
 //   - the detail falls with distance (fewer elements far off), never under
-//     minElements, and a plant out of view or past `range` draws nothing
+//     minElements, and a plant out of view or past the scene's real band
+//     (scene.setBands) draws nothing
 //   - setPlants replaces the records; params set through setPlants change
 //     the count
 //   - casting: the shadow tiles' casters are counted, and the ground under a
@@ -103,6 +104,9 @@ if (!scn) {
     // brown, the lobes' size.
     const species = [{ height: 8, base: 0.25, radius: 3, limbs: 12, leafLength: 0.3, elements: 2000,
                        albedo: [0.1, 0.25, 0.04], data: [0.1, 0.3, 0.05, 0.45, 0.15, 0.1, 0.07, 0.2] }];
+    // (Drawn as themselves to 6 km: the views below reach 400 m out.)
+    scn.setBands({ real: 6000 });
+    assert(scn.bands().real === 6000, `the real band as set (${JSON.stringify(scn.bands())})`);
     const plants = scn.createPlants({ species, plants: [{ x: 0, y: 0, z: 0, seed: 7 }] });
     assert(plants && typeof plants.plantStats === 'function', 'createPlants returns a plants node');
     // A few frames drawn, then the stats of the newest the GPU finished.
@@ -157,10 +161,10 @@ if (!scn) {
            `elements fall with distance, never to none (${near}, ${mid}, ${st.elements})`);
     assert(st.limbs <= 1, `far off, the trunk alone (${st.limbs})`);
 
-    // Past `range`, or out of view: nothing.
-    plants.setPlants({ range: 100 });
-    assert(drawn().visible === 0, 'past range, not drawn');
-    plants.setPlants({ range: 6000 });
+    // Past the real band, or out of view: nothing.
+    scn.setBands({ real: 100 });
+    assert(drawn().visible === 0, 'past the real band, not drawn');
+    scn.setBands({ real: 6000 });
     scn.setCamera({ fov: 50, near: 0.1, far: 2000, position: [0, 4, 400], target: [0, 4, 800] });
     assert(drawn().visible === 0, 'behind the eye, not drawn');
 
@@ -278,7 +282,7 @@ if (!scn) {
     const ground = scn.createLand({ height: N('Constant', { Value: 0 }), extent: 2048 });
     const grove = [];
     for (let x = -150; x <= 150; x += 20) for (let z = -600; z >= -1000; z -= 20) grove.push({ x, z, seed: grove.length });
-    plants.setPlants({ plants: grove, range: 6000 });
+    plants.setPlants({ plants: grove });
     const view = (y) => {
         scn.setCamera({ fov: 50, near: 0.1, far: 5000, position: [0, y, 0], target: [0, y, -100] });
         flush();

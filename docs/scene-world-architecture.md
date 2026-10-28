@@ -2120,3 +2120,34 @@ the sky past the pages land with step 9. The canopy's density landed with the pr
 
 The visibility pass (§3) joins when a measurement shows foliage shading, not
 its count, is what the frame is spent on.
+
+## 14. Bands: the way of drawing changes with distance
+
+The world is drawn three ways, each the mean of the nearer one, blended
+deep rather than at an edge:
+
+- **Real**, within `Bands::real` (world/bands.h, `scene.setBands`): the
+  world as itself, every plant's elements, the grass's blades, the herbs.
+  40 m by default, the frame the 360 fps target is set for; a world widens
+  it as far as it affords.
+- **Painted**, out to `Bands::painted`: each thing drawn in a style that is
+  recognisable and costs next to nothing (a tree one painted crown at its
+  place, its colour and size the real crown's mean; canopy, meadow and
+  cloud as lit painted surfaces). What it looks like is the world's
+  module's; that it keeps the real band's places, colours and sizes is the
+  engine's.
+- **The sky map's painting** past it: the far world baked now and then into
+  a map about the eye with its depth, painted as it is baked, reprojected
+  each frame; redone when the eye has moved a share of the band's inner
+  radius.
+
+One setting every node reads, so all of them hand over at the same place;
+each hands over per object (a hash of where it stands), not at a radius, so
+no sphere shows. A node whose own detail ends nearer keeps its own limit
+(the grass's rings end at 150 m whatever the band, where a blade is under a
+pixel). The hand-overs are judged with the planet's ladder.js: per band of
+the pattern, r against its ceiling, and the light within 0.1 stop.
+
+Built: the bands and the real band's hand-over (the plants, the grass's
+rings and herbs, the land's canopy past them). To come: the painted crowns,
+the canopy as painted crowns on the land, the sky map, the cloud shells.

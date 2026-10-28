@@ -108,7 +108,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                 // eye touch. Those in its shadow range price the pages they
                 // cast into (addLoad).
                 const PlantsNode* p = m->asPlants();
-                const float castRange = std::min(p->params().shadowRange, p->params().range);
+                const float castRange = std::min(p->params().shadowRange, p->real());
                 const int castFrom = pages.swayLevel() + 1;
                 float elements[SP_MAX_LEVELS] = {};
                 bromath::AABB3 all = bromath::aempty3();

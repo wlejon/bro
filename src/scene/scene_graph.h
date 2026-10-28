@@ -3,9 +3,11 @@
 #include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include "scene/scene_renderer.h"
+#include "scene/world/bands.h"
 #include "scene/world/expected_eyes.h"
 #include "scene/world/place.h"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -515,6 +517,14 @@ public:
     void setFrameTarget(float ms) { renderer_.setFrameTargetMs(ms); }
     float frameTarget() const { return renderer_.frameTargetMs(); }
 
+    /// The world's bands (world/bands.h): where every node's real drawing
+    /// hands over to the painted and the painted to the sky map's.
+    void setBands(const Bands& b) {
+        bands_.real = std::clamp(b.real, 5.0f, 20000.0f);
+        bands_.painted = std::max(b.painted, bands_.real);
+    }
+    const Bands& bands() const { return bands_; }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
@@ -758,6 +768,8 @@ private:
     // JS-wrapper liveness token (created in the constructor; see
     // livenessToken()). Wrappers hold weak_ptrs only.
     std::shared_ptr<LivenessToken> liveToken_;
+
+    Bands bands_;
 
     // The 3D renderer and its GPU state. The renderer
     // never touches graph state in its destructor, so member order is not

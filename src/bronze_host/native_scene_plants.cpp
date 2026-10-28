@@ -87,7 +87,7 @@ const char* bro_scene_SceneNode_setPlantLand(void* self, void* landSelf, bool on
     auto* land = n && n->type() == scene::SceneNode::Type::Mesh ? static_cast<scene::MeshNode*>(n)->asLand() : nullptr;
     if (!pl || !land) return tl_error.c_str();
     if (!on) {
-        land->setCanopy({}, 0.0f, 0.0f, 0.0f);
+        land->setCanopy({}, 0.0f);
         if (pl->land() == land->id()) {
             pl->setLand(0);
             pl->setGround(nullptr, false);
@@ -106,8 +106,7 @@ const char* bro_scene_SceneNode_setPlantLand(void* self, void* landSelf, bool on
         // past 1.)
         for (int s = 0; s < pl->speciesCount(); ++s) top = std::max(top, 2.0f * pl->species(s)[0]);
     }
-    const auto& p = pl->params();
-    land->setCanopy(std::move(module), top, p.range, std::min(p.shadowRange, p.range));
+    land->setCanopy(std::move(module), top);
     return tl_error.c_str();
 }
 
@@ -123,7 +122,7 @@ void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32
     auto* pl = plantsOf(self);
     if (!pl) return;
     scene::PlantsNode::Params p = pl->params();
-    float* fields[scene::PlantsNode::kParamCount] = {&p.pixels, &p.minElements, &p.woodRange, &p.range,
+    float* fields[scene::PlantsNode::kParamCount] = {&p.pixels, &p.minElements, &p.woodRange,
                                                          &p.shadowTexels, &p.shadowRange};
     for (uint32_t i = 0; i < params_len && i < static_cast<uint32_t>(scene::PlantsNode::kParamCount); ++i)
         if (std::isfinite(params[i])) *fields[i] = static_cast<float>(params[i]);

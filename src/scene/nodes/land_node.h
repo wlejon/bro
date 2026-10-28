@@ -41,6 +41,7 @@
 // view) and receives them.
 
 #include "scene/nodes/mesh_node.h"
+#include "scene/world/bands.h"
 #include "scene/world/body_surface_map.h"
 #include "scene/world/fields.h"
 #include "scene/world/land_grid.h"
@@ -142,21 +143,25 @@ public:
     float heightOver(const double dir[3]) const;
 
     /// The canopy of the plants standing on the land (world/plant_canopy.h's
-    /// module, "" none), the tallest they stand (m) and how far from the eye
-    /// they are drawn and cast: kept in the tiles beside the ground, drawn
-    /// as the land past the plants' range, and shading the land's sun past
-    /// their cast range (docs/scene-world-architecture.md §5, "the canopy
-    /// layer" and "the land's sun").
-    void setCanopy(std::string source, float top, float range, float castRange);
+    /// module, "" none) and the tallest they stand (m): kept in the tiles
+    /// beside the ground, drawn as the land past where the plants are
+    /// drawn, and shading the land's sun past where they cast
+    /// (docs/scene-world-architecture.md §5, "the canopy layer" and "the
+    /// land's sun").
+    void setCanopy(std::string source, float top);
     const std::string& canopySource() const { return canopy_; }
     uint64_t canopySourceHash() const { return canopyHash_; }
     float canopyTop() const { return canopyTop_; }
-    /// Where its canopy comes in for the plants: their range, or nearer
-    /// where they are still to be placed (setCanopyReach).
-    float canopyRange() const { return std::min(canopyRange_, canopyReach_); }
+    /// Where its canopy comes in for the plants: the scene's real band, or
+    /// nearer where they are still to be placed (setCanopyReach).
+    float canopyRange() const { return canopyReach_; }
     /// How far from the eye the plants are drawn this frame
-    /// (PlantsNode::drawReach), set by them each frame they follow the eye.
-    void setCanopyReach(float reach) { canopyReach_ = reach; }
+    /// (PlantsNode::drawReach) and cast, set by them each frame they
+    /// follow the eye.
+    void setCanopyReach(float reach, float cast) {
+        canopyReach_ = reach;
+        canopyCastRange_ = cast;
+    }
     float canopyCastRange() const { return canopyCastRange_; }
 
     /// Its sea: water filling the land up to `level` (m over the datum)
@@ -353,8 +358,7 @@ private:
     std::string canopy_;
     uint64_t canopyHash_ = 0;
     float canopyTop_ = 0.0f;
-    float canopyRange_ = 0.0f, canopyCastRange_ = 0.0f;
-    float canopyReach_ = std::numeric_limits<float>::infinity();
+    float canopyReach_ = Bands::kRealDefault, canopyCastRange_ = Bands::kRealDefault;
     FieldRef height_;
     LandProcess process_;
     LandGrid grid_;

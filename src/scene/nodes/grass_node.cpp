@@ -150,14 +150,23 @@ GrassNode::~GrassNode() = default;
 void GrassNode::setParams(const Params& p) {
     params_.width = std::max(p.width, 0.0f);
     params_.density = std::clamp(p.density, 0.05f, 4.0f);
-    params_.range = std::clamp(p.range, 5.0f, 2000.0f);
+    bumpChangeGeneration();
+}
+
+void GrassNode::setReal(float m) {
+    // (No farther than kRangeRef however wide the band: past it a blade is
+    // under a pixel and the turf is what shows.)
+    m = std::clamp(m, 5.0f, kRangeRef);
+    if (m == real_) return;
+    real_ = m;
+    herbRange_ = m / 3.0f;
+    herbFar_ = m;
     bumpChangeGeneration();
 }
 
 void GrassNode::paramsToArray(float (&o)[kParamCount]) const {
     o[0] = params_.width;
     o[1] = params_.density;
-    o[2] = params_.range;
 }
 
 void GrassNode::paramsFromArray(const double* v, size_t n) {
@@ -166,18 +175,22 @@ void GrassNode::paramsFromArray(const double* v, size_t n) {
     for (size_t i = 0; i < n && i < static_cast<size_t>(kParamCount); ++i) {
         if (!std::isnan(v[i])) a[i] = static_cast<float>(v[i]);
     }
-    setParams({a[0], a[1], a[2]});
+    setParams({a[0], a[1]});
 }
 
 GrassNode::Ring GrassNode::ring(int i) const {
     Ring r;
     i = std::clamp(i, 0, kRings - 1);
     const RingSpec& s = kRingSpec[i];
-    const float scale = params_.range / kRangeRef;
+    // Each ring's edge its own, or a share of the real band where that is
+    // nearer (a quarter, a half, three quarters, all of it): a close band
+    // keeps the fine near rings where they are and ends the coarse ones
+    // at it, rather than bringing the coarse blades in to the eye.
+    const auto edge = [&](int k) { return std::min(kRingSpec[k].edge, real_ * 0.25f * static_cast<float>(k + 1)); };
     const float cellScale = 1.0f / std::sqrt(params_.density);
     r.cell = s.cell * cellScale;
-    r.inner = i == 0 ? 0.0f : kRingSpec[i - 1].edge * scale;
-    r.outer = s.edge * scale;
+    r.inner = i == 0 ? 0.0f : edge(i - 1);
+    r.outer = edge(i);
     const auto band = [](float edge) { return std::max(1.5f, edge * 0.12f); };
     r.bandIn = i == 0 ? 0.0f : band(r.inner);
     r.bandOut = band(r.outer);
@@ -220,17 +233,11 @@ void GrassNode::setSward(std::string source, const float* data, size_t floats, f
     bumpChangeGeneration();
 }
 
-void GrassNode::setHerbs(std::string source, const float* data, size_t floats, float height, float range,
-                         float far) {
+void GrassNode::setHerbs(std::string source, const float* data, size_t floats, float height) {
     herbSource_ = std::move(source);
     herbSourceHash_ = moduleSourceHash(herbSource_);
     herbData_ = moduleData(herbSource_, data, floats, kHerbDataVec4s);
     herbHeight_ = std::isfinite(height) ? std::clamp(height, 0.0f, 20.0f) : 0.0f;
-    if (range > 0.0f) herbRange_ = std::clamp(range, 4.0f, 200.0f);
-    if (far > 0.0f) herbFar_ = far;
-    else if (range > 0.0f) herbFar_ = 3.0f * herbRange_;
-    // The far ring is at least as wide as its hand-over band at either end.
-    herbFar_ = std::clamp(herbFar_, herbRange_ * 1.4f, 800.0f);
     bumpChangeGeneration();
 }
 

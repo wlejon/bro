@@ -298,12 +298,9 @@ float LandNode::overTree(float tree, int root, double x, double z) const {
     return base_ ? base_->over(tree, root, x, z) : tree;
 }
 
-void LandNode::setCanopy(std::string source, float top, float range, float castRange) {
+void LandNode::setCanopy(std::string source, float top) {
     const uint64_t hash = source.empty() ? 0 : scene::moduleSourceHash(source);
     top = source.empty() ? 0.0f : std::max(top, 0.0f);
-    // (The ranges are the draw's alone: the tiles stay.)
-    canopyRange_ = range;
-    canopyCastRange_ = castRange;
     if (hash == canopyHash_ && top == canopyTop_) return;
     canopy_ = std::move(source);
     canopyHash_ = hash;

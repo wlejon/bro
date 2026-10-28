@@ -120,14 +120,15 @@ if (!scn) {
     // --- the plants' canopy past their range ------------------------------------
     // A wood of green crowns 20 m tall on the 50 m land, closed (each 4 m
     // across on a 4 m grid: 1 - e^-pi of it covered). Seen from 300 m up,
-    // past a 30 m range the land is their canopy; drawn to 10 km but placed
-    // only within 200 m of the eye (none from up here), still their canopy
-    // (it stands for the plants wherever they are still to be placed:
-    // PlantsNode::drawReach); without the land, the land's own red.
+    // past a 30 m real band the land is their canopy; drawn to 10 km but
+    // placed only within 200 m of the eye (none from up here), still their
+    // canopy (it stands for the plants wherever they are still to be
+    // placed: PlantsNode::drawReach); without the land, the land's own red.
+    scn.setBands({ real: 30 });
     const plants = scn.createPlants({
         species: [{ height: 20, radius: 2, albedo: [0.02, 0.5, 0.02] }],
         rules: { ground: N('Constant', { Value: 50 }), range: 200, layers: [{ spacing: 2, chance: 1, species: [0] }] },
-        range: 30, land,
+        land,
     });
     down(10, 350, 10);
     frames(6);
@@ -137,11 +138,12 @@ if (!scn) {
     };
     const [cr, cg] = colour();
     assert(cg > 8 && cg > 3 * cr, `past the plants' range, their canopy's green (r ${cr.toFixed(1)} g ${cg.toFixed(1)})`);
-    plants.setPlants({ range: 10000 });
+    scn.setBands({ real: 10000 });
     frames(6);
     const [nr, ng] = colour();
     assert(ng > 8 && ng > 3 * nr, `drawn but not placed, their canopy's green (r ${nr.toFixed(1)} g ${ng.toFixed(1)})`);
-    plants.setPlants({ range: 30, land: null });
+    scn.setBands({ real: 30 });
+    plants.setPlants({ land: null });
     frames(6);
     const [lr, lg] = colour();
     assert(lr > 40 && lr > 4 * lg, `without the land, the land's own (r ${lr.toFixed(1)} g ${lg.toFixed(1)})`);

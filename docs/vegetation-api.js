@@ -23,9 +23,10 @@
  * "worlds as code"); the engine owns where and how they are drawn.
  *
  * The engine: a grid of 0.35 m cells, each holding at most one plant; near
- * the eye (two rings, to `range`) each plant is a few cards, an instance a
- * plant the cover's plan lists, dithered through the rings' hand-overs;
- * past `range` to `far` the same plants with fewer cards, fewer of them
+ * the eye (two rings, to a third of the scene's real band, scene.setBands)
+ * each plant is a few cards, an instance a plant the cover's plan lists,
+ * dithered through the rings' hand-overs; from there to the band's edge
+ * (at most 150 m) the same plants with fewer cards, fewer of them
  * with distance (each widened to keep the cover), and seen from well above
  * left to the turf; past them the far tier's elements (one a cell, the
  * plant's variety as a mound of its leaves and blooms) and the turf, which
@@ -69,19 +70,16 @@
  * cantilevers, the stand shading itself.
  * @example
  *   import { herbModule } from "/lib/herbs/index.js";
- *   scene.createGrass({ ground: land, turf: true, herbs: {
- *     ...herbModule({ species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }] }),
- *     range: 24,
- *   } });
+ *   scene.createGrass({ ground: land, turf: true,
+ *     herbs: herbModule({ species: ['bracken', 'woodsorrel', { preset: 'daisy', abundance: 2 }] }) });
  * @typedef {Object} GrassHerbOptions
  * @property {string} source - the module's GLSL ('' draws no herbs).
  * @property {Float32Array|Array<number>} [data] - what its herbData(i)
  *   reads, vec4 i at floats 4i..4i+3 (at most 1024 floats).
  * @property {number} [height=0.4] - its tallest plant (m): how high the
  *   grass's bounds and the far tier reach for them.
- * @property {number} [range=30] - how far the whole plants are drawn (m, 4..200).
- * @property {number} [far=3*range] - where the far plants end and the turf
- *   alone stands in (m, 1.4 x range .. 800).
+ * (How far they are drawn is the scene's real band, scene.setBands: a
+ * `range` or `far` here throws.)
  */
 
 /**
@@ -94,7 +92,7 @@
  * grows no blades (its herbs and turf still draw).
  *
  * The engine: four rings of cells around the camera, each cell an instance
- * of several candidate blades (14 near, to 7 m at the default range); further
+ * of several candidate blades (14 near, to 7 m with the rings at 150 m); further
  * out fewer candidates over bigger cells, the module asked for wider blades
  * so the cover holds while the work falls. Within a ring the far half keeps
  * fewer, widened to match the next ring, and rings cross-fade through a
@@ -204,7 +202,8 @@
  *   distance.
  * @property {number} [bladeDensity=1] - candidate blades per area, x the
  *   default (14 a 10 cm cell near the camera, before the module's density).
- * @property {number} [range=150] - the far edge of the outermost ring (m).
+ * (The outermost ring's far edge is the scene's real band, scene.setBands,
+ * at most 150 m: a `range` here throws.)
  * @property {Array<number>|string} [color] - the node colour, multiplied in (default white).
  * @property {number} [roughness=0.7]
  * @property {boolean} [castsShadow=false] - the near ring's blades cast, a
@@ -324,6 +323,9 @@
  * shadow the sun's penumbra blurs wider than half a metre (a tall tree
  * under a low sun) hides its sway too: it is cached at every level, cast
  * as coarse as its penumbra.
+ *
+ * How far they are drawn as themselves is the scene's real band
+ * (scene.setBands, `real`); the rest of this calls it `range`.
  *
  * The land (`land`, a scene.createLand node they stand on): past `range`
  * the plants are its canopy. From the rules (each layer's chance, scale and
@@ -477,7 +479,7 @@
  * @property {number} [pixels=14] - the size on screen (px) an element is kept to past full detail.
  * @property {number} [minElements=12] - the fewest a plant is drawn with.
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
- * @property {number} [range=6000] - past this (m) no plant is drawn.
+ * (Past the scene's real band, scene.setBands, no plant is drawn: a `range` here throws.)
  * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
  * @property {number} [shadowRange=1500] - past this (m), or `range`, no plant casts.
  * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `range` (above); null none.
@@ -644,10 +646,10 @@ class SceneNode {
   // ── Grass (scene.createGrass) ──
 
   /**
-   * Grass: change the rings (`width`, `bladeDensity`, `range`), the sward
+   * Grass: change the rings (`width`, `bladeDensity`), the sward
    * or herb module (`sward`, `herbs`) or the material (`color`,
    * `roughness`, shadows); what it leaves out keeps its value.
-   * @example grass.setGrass({ range: 220, bladeDensity: 0.8 });
+   * @example grass.setGrass({ bladeDensity: 0.8 });
    * @param {GrassNodeOptions} opts
    * @returns {SceneNode}
    */
@@ -662,9 +664,8 @@ class SceneNode {
   setGround(land) {}
 
   /**
-   * Grass: replace the herb module and its data (and with `range` and
-   * `far`, how far the herbs are drawn); how thickly they grow stays the
-   * land's. `source: ''` draws none.
+   * Grass: replace the herb module and its data; how thickly they grow
+   * stays the land's. `source: ''` draws none.
    * @example grass.setHerbs(herbModule({ species: ['poppy', 'daisy'] }));
    * @param {GrassHerbOptions} herbs
    * @returns {SceneNode}
@@ -706,7 +707,7 @@ class SceneNode {
   shadeGround(mesh, on) {}
 
   /**
-   * Grass: the rings as set: `{width, bladeDensity, range}`.
+   * Grass: the rings as set: `{width, bladeDensity}`.
    * Undefined on any other node.
    * @returns {Object|undefined}
    */

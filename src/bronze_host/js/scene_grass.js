@@ -23,12 +23,14 @@
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
 
     // The params, in GrassNode::paramsFromArray's order. What the blades are
-    // (their shape, colour, where they stand) is the world's sward module.
-    const PARAMS = ['width', 'density', 'range'];
-    const PARAM_COUNT = 3;
+    // (their shape, colour, where they stand) is the world's sward module;
+    // how far they reach, the scene's real band (scene.setBands).
+    const PARAMS = ['width', 'density'];
+    const PARAM_COUNT = 2;
 
     // opts -> the flat list, NaN where opts says nothing.
     function paramArray(opts) {
+        if (opts.range !== undefined) throw new TypeError('grass: how far it reaches is the scene\'s real band: scene.setBands({ real })');
         const a = new Float64Array(PARAM_COUNT).fill(NaN);
         PARAMS.forEach((name, i) => { if (typeof opts[name] === 'number') a[i] = opts[name]; });
         return a;
@@ -48,8 +50,9 @@
         const data = herbs.data instanceof Float32Array ? herbs.data
             : new Float32Array(Array.isArray(herbs.data) ? herbs.data : 0);
         __bro_native.scene.SceneNode_setGrassHerbs(node, typeof herbs.source === 'string' ? herbs.source : '', data,
-            typeof herbs.height === 'number' ? herbs.height : 0.4,
-            typeof herbs.range === 'number' ? herbs.range : 0, typeof herbs.far === 'number' ? herbs.far : 0);
+            typeof herbs.height === 'number' ? herbs.height : 0.4);
+        if (herbs.range !== undefined || herbs.far !== undefined)
+            throw new TypeError('grass herbs: how far they are drawn is the scene\'s real band: scene.setBands({ real })');
     }
 
     // The blades: a world's sward module (GLSL, docs/vegetation-api.js
@@ -127,7 +130,7 @@
     fn(P, 'grassParams', function grassParams() {
         const a = __bro_native.scene.SceneNode_grassParams(this);
         if (a.length !== PARAM_COUNT) return undefined;
-        return { width: a[0], bladeDensity: a[1], range: a[2] };
+        return { width: a[0], bladeDensity: a[1] };
     });
     fn(P, 'addMover', function addMover(target, mopts) {
         if (!isGrass(this) || !(target instanceof SceneNode)) return this;

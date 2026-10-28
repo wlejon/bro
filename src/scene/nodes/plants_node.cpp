@@ -134,8 +134,8 @@ size_t PlantsNode::placementPending() const {
 
 float PlantsNode::drawReach() const {
     // (Placed by fixed records alone, with no rules: all of it is there.)
-    if (!rulesRef_) return params_.range;
-    return placement_ ? std::min(params_.range, static_cast<float>(placement_->reach())) : 0.0f;
+    if (!rulesRef_) return real_;
+    return placement_ ? std::min(real_, static_cast<float>(placement_->reach())) : 0.0f;
 }
 
 void PlantsNode::pendingWork(std::vector<std::string>& out, double within) const {
@@ -146,7 +146,7 @@ void PlantsNode::pendingWork(std::vector<std::string>& out, double within) const
     // (Within a distance, placed out to it: past where they are placed the
     // land's canopy stands for them, drawReach.)
     const double reach = drawReach();
-    if (std::isinf(within) || reach < std::min(within, static_cast<double>(params_.range)))
+    if (std::isinf(within) || reach < std::min(within, static_cast<double>(real_)))
         out.push_back("plants: " + std::to_string(n) + " placements pending, placed out to " +
                       std::to_string(static_cast<int>(reach)) + " m");
 }

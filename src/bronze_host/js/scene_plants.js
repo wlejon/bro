@@ -29,7 +29,8 @@
         ['leafLength', 1, 0.22], ['limbs', 1, 18], ['shape', 1, 0], ['density', 1, 0.6],
         ['albedo', 3, [0.18, 0.27, 0.07]], [null, 1, 0],
     ];
-    const PARAMS = ['pixels', 'minElements', 'woodRange', 'range', 'shadowTexels', 'shadowRange'];
+    // (How far they are drawn is the scene's real band, scene.setBands.)
+    const PARAMS = ['pixels', 'minElements', 'woodRange', 'shadowTexels', 'shadowRange'];
 
     function parseColor(c) {
         if (typeof c === 'string' && c[0] === '#') {
@@ -141,6 +142,7 @@
             const err = __bro_native.scene.SceneNode_setPlantRules(node, o.rules ? rulesJson(o.rules) : '');
             if (err) throw new TypeError(err);
         }
+        if (o.range !== undefined) throw new TypeError('plants: how far they are drawn is the scene\'s real band: scene.setBands({ real })');
         const params = PARAMS.map((k) => (typeof o[k] === 'number' ? o[k] : NaN));
         if (params.some((v) => !Number.isNaN(v)))
             __bro_native.scene.SceneNode_setPlantParams(node, new Float64Array(params));

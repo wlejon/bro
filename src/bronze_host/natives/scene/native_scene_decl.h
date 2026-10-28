@@ -650,6 +650,14 @@ void bro_scene_SceneGraph_setDither(void* self, bool enabled);
 //   registered at __bro_native.scene.SceneGraph_setFrameTarget
 void bro_scene_SceneGraph_setFrameTarget(void* self, double ms);
 
+// bro.scene.SceneGraph.prototype.setBands (NaN keeps a band as it is)
+//   registered at __bro_native.scene.SceneGraph_setBands
+void bro_scene_SceneGraph_setBands(void* self, double real, double painted);
+
+// bro.scene.SceneGraph.prototype.bands: [real, painted]
+//   registered at __bro_native.scene.SceneGraph_bands
+void bro_scene_SceneGraph_bands(void* self, bronze_native_buffer* out);
+
 // bro.scene.SceneGraph.prototype.setRenderScale
 //   registered at __bro_native.scene.SceneGraph_setRenderScale
 void bro_scene_SceneGraph_setRenderScale(void* self, double scale);
@@ -861,11 +869,11 @@ void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32
 void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out);
 
 // grass herbs: a herb module's GLSL ("" clears them), the data its
-// herbData(i) reads (at most 1024 floats), its tallest plant (m), the range
-// the whole plants are drawn to and the far plants' (m; 0 keeps it)
+// herbData(i) reads (at most 1024 floats) and its tallest plant (m); how far
+// they are drawn is the scene's real band
 //   registered at __bro_native.scene.SceneNode_setGrassHerbs
 void bro_scene_SceneNode_setGrassHerbs(void* self, const char* source, const float* data, uint32_t data_len,
-                                       double height, double range, double far);
+                                       double height);
 
 // grass sward: a sward module's GLSL ("" clears it), the data its swardData(i)
 // reads (at most 256 floats), its blades' mean height, the tallest blade and

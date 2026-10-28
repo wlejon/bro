@@ -446,6 +446,8 @@ const CoverShaders& SceneMeshDrawer::coverShaders(const GrassNode& node, bool* p
 
 void SceneMeshDrawer::prepareGrass(SceneFrame& frame, GrassNode& node, std::vector<MeshDraw>& out) {
     out.clear();
+    // (Its rings and herbs reach to the scene's real band.)
+    node.setReal(frame.graph.bands().real);
     // The cover is keyed on the body: its cells, its tiles and its pushes.
     const SceneView& view = frame.world;
     node.stamp(frame.graph, frame.renderer.windTime(), view.eye.x, view.eye.z);
