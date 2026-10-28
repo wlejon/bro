@@ -496,6 +496,10 @@ void buildTraceScene(scene::SceneGraph& graph, const TraceScene& s) {
     graph.renderer().setAmbient(s.ambient, s.ambient, s.ambient);
     graph.renderer().setGroundBounce(s.albedo, s.albedo, s.albedo);
     graph.renderer().setProbeGrid(true);
+    // The refreshes the settle counts on, whatever the device: under the
+    // 2.78 ms target a slower GPU than a 4090 (an M2) is granted cascade 0's
+    // slices and too few of cascade 1's, its ground light 5% short.
+    graph.renderer().setFrameTargetMs(50.0f);
 }
 
 /// A probe's SH, a channel: (c0, cx, cy, cz).
