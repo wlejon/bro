@@ -393,8 +393,10 @@ private:
     uint32_t rasterVariant(const MeshDraw& draw) const;
     VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target, CoverPass pass = CoverPass::None);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
+    /// `streams` false: no vertex input, whatever `kind` (a vertex stage that
+    /// reads only gl_VertexIndex).
     VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
-                             const TargetFormat& target);
+                             const TargetFormat& target, bool streams = true);
     /// The fill of a round body's turf tile (ground_layer_fill.frag's
     /// GROUND_LAYER_CHART build) with `cover`'s modules.
     VkPipeline chartFillPipeline(CoverShaders& cover, const TargetFormat& target);

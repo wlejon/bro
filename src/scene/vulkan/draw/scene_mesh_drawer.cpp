@@ -292,10 +292,10 @@ uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
-                                          const TargetFormat& target) {
+                                          const TargetFormat& target, bool streams) {
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
-    vertexInput(kind, bindings, attributes);
+    if (streams) vertexInput(kind, bindings, attributes);
 
     const bool lines = (rasterBits & raster::kLines) != 0;
     const bool cullBack = (rasterBits & (raster::kTwoSided | raster::kLines)) == 0;
@@ -412,11 +412,12 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
 }
 
 VkPipeline SceneMeshDrawer::chartFillPipeline(CoverShaders& cover, const TargetFormat& target) {
-    // (Past builtinPipeline's variants; streamless, as a land's.)
+    // (Past builtinPipeline's variants. One triangle from gl_VertexIndex, no
+    // vertex buffer bound: no vertex input either.)
     const uint32_t variant = 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
     return cover.pipelines.get(variant, target, [&] {
         return buildPipeline(vsChartFill_, cover[CoverShaders::GroundChartFill], MeshKind::Land, raster::kTwoSided,
-                             target);
+                             target, false);
     });
 }
 
