@@ -57,10 +57,6 @@ void main() {
         bloom = look.bloom;
         bloomShare = clamp(look.bloomShare, 0.0, 1.0);
     }
-    // Widened to keep the cover it stands for, shrinking as it is let go.
-    wd *= coverWiden(e.lam) * e.size;
-    ht *= mix(1.0, 0.4, 1.0 - e.size);
-
     // Upright where the eye looks across the ground, a blob as wide as it is
     // long where it looks down on it: its length along the screen's up runs
     // from the width (from above) to the height (seen across).
@@ -72,6 +68,14 @@ void main() {
     side = dot(side, side) > 1e-6 ? normalize(side) : vec3(1.0, 0.0, 0.0);
     vec3 up = cross(toEye, side);
     float across = clamp(up.y, 0.0, 1.0);
+
+    // Widened to keep the cover it stands for, shrinking as it is let go.
+    // (No wider than COVER_FAR_WIDEN where the eye looks across the ground,
+    // where they overlap anyway; looked down on they do not, and capped
+    // there the herbs' cover fell as they thinned: straight down on a
+    // meadow from 450 to 600 m the ground brightened 0.3 of a stop.)
+    wd *= min(exp2(e.lam), mix(exp2(float(COVER_FAR_LEVELS)), COVER_FAR_WIDEN, across)) * e.size;
+    ht *= mix(1.0, 0.4, 1.0 - e.size);
     // (Never under 0.4 of its width: widened far off to keep the cover, it
     // would be a flat bar, the ground in slivers between, where the sward
     // it stands for is a patch.)
