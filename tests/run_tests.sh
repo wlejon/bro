@@ -475,6 +475,10 @@ run_one_test() {
                 return 2 ;;
             *)
                 echo "  FAIL  $REL  (exit $STATUS)"
+                # The failed checks wherever they printed (a long run's
+                # tail may hold none of them), then the tail.
+                echo "$OUTPUT" | grep -E "FAIL|Assertion" | head -20 | cut -c1-400 | sed 's/^/        /'
+                echo "        ..."
                 echo "$OUTPUT" | tail -40 | sed 's/^/        /'
                 return 1 ;;
         esac
