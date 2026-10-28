@@ -147,8 +147,11 @@ bro_dependency(brokit)
 bro_dependency(htmlayout)
 
 # --- SDL3 ---
+# No KMSDRM video driver: bro's own DRM backend (src/platform) drives the
+# display under --drm. SDL's driver went unresolved at link on GitHub's
+# ubuntu-24.04 image from 20261021 on (KMSDRM_bootstrap undefined).
 bro_dependency(SDL TARGET SDL3-static
-               OPTIONS SDL_SHARED=OFF SDL_STATIC=ON SDL_TEST_LIBRARY=OFF)
+               OPTIONS SDL_SHARED=OFF SDL_STATIC=ON SDL_TEST_LIBRARY=OFF SDL_KMSDRM=OFF)
 
 # --- broaudio (audio engine library) ---
 bro_dependency(broaudio)

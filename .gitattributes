@@ -10,3 +10,8 @@ Dockerfile* text eol=lf
 # BRO_SCENE_SHADER_SOURCE compile at run time. They stay LF on every
 # platform, so the embedded bytes are the same on every checkout.
 src/scene/vulkan/shaders/** text eol=lf
+
+# Patches apply to upstream sources byte for byte: a CRLF checkout turns a
+# blank context line into "\r" and git apply calls the patch corrupt (the
+# libvpx overlay port broke every Windows nightly that way).
+*.patch     -text
