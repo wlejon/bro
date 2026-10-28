@@ -108,7 +108,6 @@ void main() {
         }
         barrier();
         vec3 upd = normalize(pd);
-        heapIn = -sWall[col];
         for (int n = 0; n < 9; ++n) {
             vec4 cu = sCell[col][n][0];
             if (cu.w < 0.5) continue;
@@ -117,6 +116,16 @@ void main() {
             heapIn = max(heapIn, cloudHeapIn(sHeap[col][n], vec2(dot(v3, e), dot(v3, nn)), h * thick));
         }
     }
+#endif
+    // (The nearest wall of the cells searched bounds how far off a heap
+    // beyond them may be, for whether the cell may hold one; the heaps'
+    // forms are those searched alone, as no heap reaches past a cell from
+    // its own. As the forms' base too, the bound came up to the surface at
+    // every wall: under a deck whose top was near its surface, a ridge
+    // along each wall of the lattice, a grid of 2.5 km cells across it.)
+    float heapNear = heapIn;
+#ifdef CLOUD_HEAPS
+    if (lattice) heapIn = max(heapIn, -sWall[col]);
 #endif
     float near = hs > 0.0 ? 1.0 - smoothstep(0.06 * hs, 0.2 * hs, cell) : 0.0;
     // (The share in .a, what the march reads of them where they are finer
@@ -130,7 +139,7 @@ void main() {
     float sigma = 0.0;
     if (near < 1.0) sigma = max(cloudForms(pd, max(slab, 0.0), 0.5, cell, false), cloudHeapsShareSigma(heapShare));
     if (near > 0.0)
-        sigma = mix(sigma, cloudForms(pd, max(max(slab, min(0.5 + heapIn / clouds.forms.w, 1.0)), 0.0), 0.5, cell, false), near);
+        sigma = mix(sigma, cloudForms(pd, max(max(slab, min(0.5 + heapNear / clouds.forms.w, 1.0)), 0.0), 0.5, cell, false), near);
     ivec3 at = ivec3(x, y, k * CL_CACHE_BINS + bin);
     sBase[col][bin] = baseRaw;
     barrier();
