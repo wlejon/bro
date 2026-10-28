@@ -1166,17 +1166,22 @@ void SceneClouds::placeShells(SceneFrame& frame, const float eye[3]) {
     std::memset(block_.shellEye, 0, sizeof(block_.shellEye));
     std::memset(block_.shellPlanes, 0, sizeof(block_.shellPlanes));
     std::memset(block_.shellParams, 0, sizeof(block_.shellParams));
-    // (From under the deck's top: over it the march's layer draws the deck.)
     const double Rg = block_.shell[2], Rb = block_.shell[0], Rt = block_.shell[1];
-    if (c.heapCell <= 0.0f || c.heapShells <= 0.0f || eyeRadius_ >= Rt || !shellsReady_) return;
+    if (c.heapCell <= 0.0f || c.heapShells <= 0.0f || !shellsReady_) return;
     for (int i = 0; i < 3; ++i) block_.shellEye[i] = eye[i];
     block_.shellEye[3] = c.heapShells;
     block_.shellParams[0] = c.heapShells * static_cast<float>(CL_SHELL_BAND);
     // The farthest a heap's top is seen: over the horizon from the eye and
-    // from the deck's top, the body's ground between.
+    // from the deck's top, the body's ground between; and no farther than
+    // where a heap is a few pixels across, past which it is the heaps' share
+    // (scene_cloud_layer.glsl's cloudHeapsFar, its footprint's end).
     const double Re = std::max(static_cast<double>(eyeRadius_), Rg);
-    const double horizon = std::sqrt(Re * Re - Rg * Rg) + std::sqrt(Rt * Rt - Rg * Rg);
+    const double own = 0.12 * c.heapCell / std::max(block_.params[1], 1e-6f);
+    const double horizon = std::min(std::sqrt(Re * Re - Rg * Rg) + std::sqrt(Rt * Rt - Rg * Rg), own);
     block_.shellParams[1] = static_cast<float>(horizon);
+    // (The sort's bins from the nearest a heap can be: from over the deck,
+    // the eye's height over its top.)
+    block_.shellParams[2] = std::max(c.heapShells, static_cast<float>(eyeRadius_ - Rt));
 
     // The view's sides, through its corners (air space's axes), inward.
     double corner[4][3];
@@ -1214,7 +1219,10 @@ void SceneClouds::placeShells(SceneFrame& frame, const float eye[3]) {
     }
     const double nl = std::sqrt(nd[0] * nd[0] + nd[1] * nd[1] + nd[2] * nd[2]);
     for (double& v : nd) v /= nl;
-    const double psi = std::min(std::acos(std::min(Rg / Re, 1.0)) + std::acos(std::min(Rg / Rt, 1.0)), 0.6);
+    // (Or as wide as the farthest a heap is drawn: a point of the deck that
+    // far round is at least that far off.)
+    const double psi = std::min({std::acos(std::min(Rg / Re, 1.0)) + std::acos(std::min(Rg / Rt, 1.0)), 0.6,
+                                 (horizon + 2.0 * c.heapCell) / Rb});
     double a1[3] = {1.0, 0.0, 0.0};
     if (std::fabs(nd[0]) > 0.9) a1[0] = 0.0, a1[1] = 1.0;
     const double an = a1[0] * nd[0] + a1[1] * nd[1] + a1[2] * nd[2];

@@ -16,6 +16,7 @@ struct ClShell {
     vec3 east;      // the plane tangent there
     vec3 north;
     vec3 up;
+    float own;      // how much of it is drawn as itself, not as the heaps' share (1 - cloudHeapsFar)
     vec4 lobe[CL_HEAP_LOBES];
     vec4 middle;
     vec4 base;
@@ -28,6 +29,7 @@ ClShell clShell(int i) {
     h.centre = r0.xyz;
     h.dist = r0.w;
     h.east = shells.rec[o + 1u].xyz;
+    h.own = shells.rec[o + 1u].w;
     h.north = shells.rec[o + 2u].xyz;
     h.up = cross(h.east, h.north);
     for (int l = 0; l < CL_HEAP_LOBES; ++l) h.lobe[l] = shells.rec[o + 3u + uint(l)];
@@ -37,9 +39,11 @@ ClShell clShell(int i) {
 }
 
 // How much of a heap is drawn as its shell: none where it begins to be
-// handed over, all where it is wholly (the march's heaps the other way
-// across the same distances, clouds.frag's clShellsFade).
-float clShellWeight(float d) { return smoothstep(clouds.shellEye.w, clouds.shellParams.x, d); }
+// handed over, all where it is wholly (the march's heaps, and the layer's
+// tops, the other way across the same distances: clouds.frag's
+// clHeapsKeep); as much of that as it is itself, not the heaps' share (the
+// march's and the layer's where it is a few pixels across or less).
+float clShellWeight(ClShell h) { return smoothstep(clouds.shellEye.w, clouds.shellParams.x, h.dist) * h.own; }
 
 // How far out of its lobes' outlines a heap seen from `dist` may reach (m):
 // the skin's most out, and half the surface's blur over a pixel there.

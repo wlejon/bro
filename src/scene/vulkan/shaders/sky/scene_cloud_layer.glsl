@@ -88,7 +88,8 @@ layout(std140, set = CLOUD_SET, binding = CL_B_UBO) uniform CloudsUBO {
     // The shells (sky/clouds_layout.h's CL_SHELL_*).
     vec4 shellEye;         // xyz the eye (air space), w where the heaps begin to be shells (m; 0 none)
     vec4 shellPlanes[4];   // the view's sides, xyz inward (air space's axes, through the eye)
-    vec4 shellParams;      // x where they are shells alone (m), y the farthest a heap is seen (m)
+    vec4 shellParams;      // x where they are shells alone (m), y the farthest a heap is seen (m),
+                           // z the nearest one can be (m; the sort's bins from there)
 } clouds;
 
 layout(set = CLOUD_SET, binding = CL_B_COVER) uniform sampler2DArray cloudCoverMap;
@@ -606,6 +607,11 @@ float cloudHeapLod(vec2 xy, float foot) {
     vec2 dn = abs(xy - clouds.heapNadir.xy);
     float far = max(dn.x, dn.y) / (CL_HEAP_MARGIN * CL_HEAP_TEXEL0);
     return max(max(log2(max(foot, 1e-3) / CL_HEAP_TEXEL0), log2(max(far, 1e-6)) + 1.0), 0.0);
+}
+// The texel the map is read over there (cloudHeapMapColumn's), unread.
+float cloudHeapMapTexel(vec2 xy, float foot) {
+    float lod = cloudHeapLod(xy, foot);
+    return cloudHeapTexel(min(int(lod), CL_HEAP_LEVELS - 1)) * exp2(fract(lod));
 }
 
 // The heaps' column (sky/cloud_heaps.glsl's cloudHeapColumn) at the

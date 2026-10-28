@@ -92,21 +92,25 @@ vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen, out float o
     vec3 c = clCacheBase(w, clBaseBound ? floor(lod) : lod);
     share = c.z;
     own = -1.0;
-    if (clHeapsKeep <= 0.0) {
-        share = 0.0;
-        return vec4(c.x, -1.0, c.y, 0.0);
-    }
     if (cloudHeapMapSide() <= 0.0) return vec4(c.x, -1.0, c.y, 1.0);
-    float texel;
-    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), !clBaseBound, texel);
-    float far = cloudHeapsFar(seen, texel);
-    own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
     // (Their share as the field, the bounds' and the face's: in cloud
     // wherever it is any, over the surface's half, so the march goes in and
     // draws it by its law; under 0 it is how far off they are, as the
     // world gives it. As a base, a share of a few tenths was clear air the
     // march stepped past.)
     float sb = c.z > 0.0 ? 0.5 + 0.5 * min(c.z, 1.0) : c.z;
+    // (Handed over to the shells, the heaps as themselves are theirs; their
+    // share where they are far stays the march's, as the shells leave it.)
+    if (clHeapsKeep <= 0.0) {
+        vec2 xy = cloudChartAt(normalize(pd));
+        float far = cloudHeapsFar(seen, cloudHeapMapTexel(xy, seen));
+        if (far <= 0.0) share = 0.0;
+        return vec4(c.x, far > 0.0 ? mix(-1.0, sb, far) : -1.0, c.y, far);
+    }
+    float texel;
+    float in_ = cloudHeapMapIn(cloudChartAt(normalize(pd)), seen, w.h * (clouds.shell.y - clouds.shell.x), !clBaseBound, texel);
+    float far = cloudHeapsFar(seen, texel);
+    own = far < 1.0 ? min(0.5 + in_ / max(clouds.forms.w, foot - seen), 1.0) : 0.0;
     return vec4(c.x, mix(own, sb, far), c.y, far);
 }
 vec4 clBaseParts(ClAt w, float lod, vec3 pd, float foot, float seen) {
@@ -186,8 +190,12 @@ ClForms clFormsAt(ClAt w, float lod, float foot, float seen, bool detail) {
         if (heaps > slabs) f.within = far * clouds.forms.x * clHeapPath;
     }
     // (Handed over to the shells as much as they are drawn: the slabs' and
-    // this much of the heaps' with them.)
-    if (clHeapsKeep < 1.0) f.sigma = mix(cloudSigmaOf(max(bp.x, 0.0), skin, wB, foot, ramp), f.sigma, clHeapsKeep);
+    // this much of the heaps as themselves with them, their share as is.)
+    if (clHeapsKeep < 1.0 && clHeapsKeep > 0.0) {
+        float slabs = cloudSigmaOf(max(bp.x, 0.0), skin, wB, foot, ramp);
+        float asShare = far > 0.0 ? mix(slabs, max(slabs, cloudHeapsShareSigma(share, clHeapPath)), far) : slabs;
+        f.sigma = mix(asShare, f.sigma, clHeapsKeep);
+    }
     float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
     f.face = f.sigma > 0.0 ? max(face, 1e-5) : min(face, -1e-5);
     f.cover = f.sigma > 0.0 ? mix(mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB), 1.0, far) : 0.0;

@@ -33,6 +33,7 @@ const float CL_SHELL_STEP_LEAST = 10.0; // or metres
 const float CL_SHELL_IN_FIRST = 20.0;   // the first piece inside (m, or two pixels)
 const float CL_SHELL_OPAQUE = 0.02;     // what is left of the view that ends it
 const int CL_SHELL_SUN_PIECES = 4;      // pieces toward the sun read by the forms
+const float CL_SHELL_COVER_WHOLE = 0.9; // a cover within a tenth of the whole is the whole (clouds.frag's)
 
 // The forms at frame point `q` (camera-relative `p`) over footprint `foot`,
 // as the march draws a heap (sky/cloud_forms_at.glsl's clFormsAt): the
@@ -40,8 +41,9 @@ const int CL_SHELL_SUN_PIECES = 4;      // pieces toward the sun read by the for
 // moved by the engine's skin, the billows' and (where it shows) the
 // detail's, by the cache's column's band (the height in the cloud: wisps
 // under, cauliflower over) and how much of the skin's move it shows. x the
-// extinction, y the field (> 0 in cloud).
-vec2 clShellForms(ClShell h, vec3 q, vec3 p, float foot) {
+// extinction, y the field (> 0 in cloud), z the share of the pixel it fills
+// there (clFormsAt's cover: across the surface's ramp over the pixel).
+vec3 clShellForms(ClShell h, vec3 q, vec3 p, float foot) {
     float in_ = cloudHeapColumnIn(clShellColumn(h, q.xy), q.z);
     float base = clamp(0.5 + in_ / clouds.forms.w, 0.0, 1.0);
     // (Clear by the column alone where even the skin's most out, blurred,
@@ -49,7 +51,7 @@ vec2 clShellForms(ClShell h, vec3 q, vec3 p, float foot) {
     float shows = cloudSkinAt(foot);
     float wB = min(cloudBlur(foot) + CLOUD_SKIN_BLUR * (1.0 - shows), 1.0);
     float most = base + 0.55 * CLOUD_SKIN * (1.0 - wB) - 0.5 + 0.5 * wB;
-    if (most < 0.0) return vec2(0.0, most);
+    if (most < 0.0) return vec3(0.0, most, 0.0);
     ClAt w = clAt(atmOrigin(p));
     float lod = clLod(w, foot);
     float skinShows = clCacheBase(w, lod).y;
@@ -66,8 +68,10 @@ vec2 clShellForms(ClShell h, vec3 q, vec3 p, float foot) {
     float moves = mix(skinShows, max(skinShows, smoothstep(0.04, 0.12, inCloud)), wD);
     float slope;
     float skin = cloudSkinOf(n, e, wD, inCloud, shows * moves, slope);
-    float sigma = cloudSigmaOf(base, skin, wB, foot, wB + cloudSkinBlur(slope, foot));
-    return vec2(sigma, cloudFieldOf(base, skin, wB) + 0.5 * wB);
+    float ramp = wB + cloudSkinBlur(slope, foot);
+    float sigma = cloudSigmaOf(base, skin, wB, foot, ramp);
+    float face = cloudFieldOf(base, skin, wB) + 0.5 * wB;
+    return vec3(sigma, face, sigma > 0.0 ? mix(clamp(face / ramp, 0.0, 1.0), 1.0, wB) : 0.0);
 }
 
 void main() {
@@ -75,7 +79,7 @@ void main() {
     float tFrag = length(inPos);
     vec3 rd = inPos / tFrag;
     vec3 o = clShellPoint(h, vec3(0.0)), d = clShellDir(h, rd);
-    float weight = clShellWeight(h.dist);
+    float weight = clShellWeight(h);
     // (The box's near face only: where the view enters it.)
     {
         vec3 lo, hi;
@@ -115,25 +119,47 @@ void main() {
 
     // The trace.
     float pixel = clouds.params.y;
-    float t = tA, T = 1.0, len = 0.0, tFace = -1.0;
+    float t = tA, T = 1.0, len = 0.0, tFace = -1.0, tClear = -1.0, fClear = 0.0;
+    float cover = 0.0, coverLast = 0.0;
     for (int i = 0; i < CL_SHELL_STEPS && t < tB && T > CL_SHELL_OPAQUE; ++i) {
         float foot = pixel * t;
-        vec2 f = clShellForms(h, o + d * t, rd * t, foot);
+        vec3 f = clShellForms(h, o + d * t, rd * t, foot);
         if (f.x <= 0.0) {
             // Clear: on by how far the surface is at least (the base rises a
             // unit over an edge's metres, the skin within it).
-            t += max(-f.y * edge * 0.5, max(CL_SHELL_STEP_PIXELS * foot, CL_SHELL_STEP_LEAST));
+            tClear = t;
+            fClear = f.y;
+            t +=max(-f.y * edge * 0.5, max(CL_SHELL_STEP_PIXELS * foot, CL_SHELL_STEP_LEAST));
             len = 0.0;
             continue;
         }
-        if (tFace < 0.0) tFace = t;
+        if (tFace < 0.0) {
+            // The face by false position on the field across the step
+            // through clear air (lit where the view met it, not as deep as
+            // the step went in; a column's bound there, more out than the
+            // field, leaves it nearer the step's end).
+            if (tClear >= 0.0 && fClear < 0.0) {
+                float back = (t - tClear) * clamp(f.y / (f.y - fClear), 0.0, 1.0);
+                t -= back;
+                len = back;   // (the first piece the stretch to where it was read)
+            }
+            tFace = t;
+        }
+        // (The most of the pixel it has filled, as the march's clCover: a
+        // view that goes in deep is the pixel's whole, one that grazes a
+        // rim the share of the pixel the rim fills.)
+        float c = min(f.z / CL_SHELL_COVER_WHOLE, 1.0);
+        if (T <= CL_SHELL_OPAQUE && c >= coverLast) c = 1.0;
+        coverLast = c;
+        cover = max(cover, c);
         if (len <= 0.0) len = max(CL_SHELL_IN_FIRST, 2.0 * foot);
         float dt = min(len, tB - t);
         T *= exp(-f.x * dt);
         t += dt;
         len *= 2.0;
     }
-    float alpha = 1.0 - T;
+    if (T <= CL_SHELL_OPAQUE && coverLast >= cover) cover = 1.0;
+    float alpha = cover * (1.0 - T);
     if (tFace < 0.0 || alpha < 1.0 / 1024.0) discard;
 
     // Lit where the view met it.
@@ -176,6 +202,6 @@ void main() {
                 clouds.params.x, E, skyAbove, groundBelow, smoothstep(0.0, 0.2, dot(s, normalize(pa))));
     vec3 airT, airL;
     sceneAtmosphereAir(p, airT, airL);
-    vec3 col = (m.L * airT + alpha * airL) * weight;
+    vec3 col = (cover * m.L * airT + alpha * airL) * weight;
     outColor = vec4(min(col, vec3(SCENE_HDR_MAX)), alpha * weight);
 }

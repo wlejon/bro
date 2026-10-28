@@ -42,10 +42,11 @@
 // every frame. At most CL_VIEW_STEPS iterations a pixel, each one lookup
 // of the forms, of the bounds or of the volume.
 //
-// Past the heaps' shells' distance (setClouds' heaps.shells, under the
-// deck's top) the heaps are drawn as themselves before the march (sky/
-// cloud_shells.frag), and the march leaves them out (clHeapsKeep, across
-// shellEye.w .. shellParams.x), marching the slabs alone there.
+// Past the heaps' shells' distance (setClouds' heaps.shells) the heaps are
+// drawn as themselves before the march (sky/cloud_shells.frag), and the
+// march leaves them out (clHeapsKeep, across shellEye.w .. shellParams.x),
+// marching the slabs and the far heaps' share alone there; from above, the
+// layer leaves out their tops the same way.
 //
 // From above, where a pixel spans CL_LAYER_TO of the deck's thickness or
 // more (orbit, the limb, a climb from a region's height), no march: each
@@ -453,7 +454,11 @@ void main() {
             float texel;
             vec4 hc = cloudHeapMapColumn(cloudChartAt(normalize(cloudDrift(w.p))), pixel * q.x, texel);
             seeH = 1.0 - cloudHeapsFar(pixel * q.x, texel);
-            if (seeH > 0.0) {
+            // (The tops the shells' where they draw the heaps, the slabs'
+            // column under them the layer's still: sky/cloud_shells.glsl's
+            // clShellWeight, its `own` this seeH.)
+            float tops = clouds.shellEye.w > 0.0 ? 1.0 - smoothstep(clouds.shellEye.w, clouds.shellParams.x, q.x) : 1.0;
+            if (seeH > 0.0 && tops > 0.0) {
                 vec3 up0 = normalize(ro + rd * q.x);
                 float down = max(-dot(rd, up0), 0.05);
                 tH = clamp(q.x + (thick - hc.x - hc.y) / down, q.x, q.y);
@@ -464,7 +469,7 @@ void main() {
                 // (The share of the pixel the heap fills as the march draws
                 // it nearer: its outline the base, the billows its skin.)
                 float own = min(0.5 + hc.z / clouds.forms.w, 1.0);
-                float cov = seeH * step(1.0, hc.y) * cloudFormsShare(cloudBillows(pdh, footH), own, footH);
+                float cov = tops * seeH * step(1.0, hc.y) * cloudFormsShare(cloudBillows(pdh, footH), own, footH);
                 if (cov > 0.0) {
                     vec3 uph = normalize(wh.p);
                     vec3 sb = normalize(cloudToBody(s));
@@ -485,6 +490,8 @@ void main() {
                     tauH = -log(max(1.0 - cov * (1.0 - exp(-clouds.forms.x * dtH)), 1e-4));
                     aboutH = clouds.forms.x * hc.y;
                 }
+            }
+            if (seeH > 0.0) {
                 vec4 cs = cloudCacheSlabColumn(w.xy, min(k, CL_CACHE_LEVELS - 1));
                 if (k + 1 < CL_CACHE_LEVELS) cs = mix(cs, cloudCacheSlabColumn(w.xy, k + 1), fract(lod));
                 col = mix(col, cs, seeH);

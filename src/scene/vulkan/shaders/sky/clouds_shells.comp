@@ -56,16 +56,22 @@ void main() {
 #ifndef CLOUD_HEAPS
     return;
 #else
+    // (Drawn as itself as much as the march and the layer would: where it is
+    // a few pixels across or less, or the heaps' map's texel there is as
+    // wide, theirs is the heaps' share, cloudHeapsFar.)
+    float foot = clouds.params.y * d;
+    float far = cloudHeapsFar(foot, cloudHeapMapTexel(cloudChartAt(up), foot));
+    if (far >= 1.0) return;
     CloudHeapCell c = cloudHeapCell(id);
     CloudHeap h;
     if (!cloudHeap(c, h)) return;
     uint slot = atomicAdd(shells.head[CL_SHELL_H_COUNT], 1u);
     if (slot >= uint(CL_SHELL_MOST)) return;
-    int bin = clamp(int(log2(d / clouds.shellEye.w) * CL_SHELL_PER_OCTAVE), 0, CL_SHELL_BINS - 1);
+    int bin = clamp(int(log2(d / clouds.shellParams.z) * CL_SHELL_PER_OCTAVE), 0, CL_SHELL_BINS - 1);
     atomicAdd(shells.head[CL_SHELL_H_BIN + bin], 1u);
     uint o = uint(CL_SHELL_MOST + int(slot)) * uint(CL_SHELL_VEC4S);
     shells.rec[o + 0u] = vec4(rel, d);
-    shells.rec[o + 1u] = vec4(clAirOf(c.east), 0.0);
+    shells.rec[o + 1u] = vec4(clAirOf(c.east), 1.0 - far);
     shells.rec[o + 2u] = vec4(clAirOf(c.north), intBitsToFloat(bin));
     for (int l = 0; l < CL_HEAP_LOBES; ++l) shells.rec[o + 3u + uint(l)] = h.lobe[l];
     shells.rec[o + 7u] = h.middle;

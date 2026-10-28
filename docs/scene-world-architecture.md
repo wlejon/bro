@@ -2178,9 +2178,8 @@ by its share of cover while a crown spans pixels and its mean beyond, its
 own shade set so it reads within about 0.1 stop of the plants both
 straight down and 20 degrees down (the ladder's `tilt=70 twin`).
 
-The cloud shells: past `heaps.shells` (10 km by default), while the eye is
-under the deck's top, each heap in view is drawn as itself rather than
-marched. A plan (clouds_shells.comp, the world's module) walks the heap
+The cloud shells: past `heaps.shells` (10 km by default), from under the
+deck or over it, each heap in view is drawn as itself rather than marched. A plan (clouds_shells.comp, the world's module) walks the heap
 lattice's cells in the view's cap, asks cloudHeap for each in reach and in
 the frustum, and lists it; a sort lays them out far first by distance bins
 for one indirect draw of boxes about their lobes (cloud_shells.vert). Each
@@ -2193,8 +2192,28 @@ the heaps out across the hand-over (1 to 1.5 times the distance) and
 marches the slabs alone there. A heap is the same heap on both sides: its
 place drifted with the wind at the deck's height, its forms the march's.
 At 2560x1364 the planet's low shot costs 5.57 ms against 6.61 (clouds
-2.6 + shells 0.9 against 4.6), the flight shot 3.62 against 4.05. To
-come: the sky map; shells from over the deck.
+2.6 + shells 0.9 against 4.6), the flight shot 3.62 against 4.05.
+
+From over the deck the march was still the heaps' cost: at the region
+shot's 90 km a pixel spans under the layer's CL_LAYER_FROM of the deck, so
+the near deck was marched, and nine tenths of that was the heaps (3.4 of
+the clouds' 3.6 ms). The shells now draw them there too, out to where a
+heap is a few pixels across or the heaps' map's texel as wide
+(cloudHeapsFar, rated once a heap by the plan, its `own`); past that a
+heap is the heaps' share, which the march keeps where it hands the heaps
+over and the layer draws, and the shells fade out across the same
+footprints. The layer from above leaves out its heaps' tops where the
+shells draw them. A shell finds its face by false position on the field
+across the last step through clear air (no read more: halving for it cost
+the low shot's shells 0.33 ms), and takes the pixel's cover where a view
+grazes a rim, as the march does (else from above a step's overshoot lit
+it deep, a grey streak, and its rim was a hard edge). From the region
+shot the shells' heaps are the heaps' own lobes where the march read them
+through the map's coarse far texels as soft half-clear blobs: the near
+third reads 0.25 stop brighter, its heaps 15% more of it. At 2560x1364
+the region shot costs 3.36 ms against 5.20 with no shells (clouds 1.13 +
+shells 0.65 against 3.59); the low and flight shots are as they were
+(within 0.1 ms, their looks within 0.04 stop).
 
 The land past the painted band: the turf (a land drawn as its grass node's
 ground) hands over to the land's own surface by the pixel's footprint and,

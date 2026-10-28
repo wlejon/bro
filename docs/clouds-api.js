@@ -179,13 +179,15 @@
  *     footprint (THE HEAPS). One heap at every distance: the one a view
  *     from far off sees is the one flown through. Without it (or 0) the
  *     module's cloudDensity is all. `shells` (metres, 10000 by default, 0
- *     none): while the eye is under the deck's top, each heap past that
- *     distance in view is drawn as itself, a box about its lobes whose
- *     pixels trace that one heap's forms (its lobes' column, the engine's
- *     skin, lit as the march lights a face), and the march leaves it out
- *     there, handing over across half as far again: the march's cost is
- *     its views' length, and a view toward the horizon crosses tens of
- *     kilometres of heaps.
+ *     none): each heap past that distance in view, from under the deck or
+ *     over it, is drawn as itself, a box about its lobes whose pixels trace
+ *     that one heap's forms (its lobes' column, the engine's skin, lit as
+ *     the march lights a face), and the march (and from above the layer's
+ *     tops) leaves it out there, handing over across half as far again:
+ *     the march's cost is its views' length, and a view toward the horizon,
+ *     or down through the deck from a region's height, crosses tens of
+ *     kilometres of heaps. Out to where a heap is a few pixels across; past
+ *     that it is the heaps' share, the march's and the layer's.
  * @property {boolean} [shadows=true]  the deck shadows what the sun lights
  * @property {LandNode|number} [land]  a round land whose processes' grid the
  *     cover's bake reads (cloudLandGrid); without one it reads zero
