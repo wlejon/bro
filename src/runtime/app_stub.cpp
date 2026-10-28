@@ -22,6 +22,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -104,6 +105,41 @@ void fail(const std::string& msg) {
 void fail(const std::string& msg) { std::fprintf(stderr, "%s\n", msg.c_str()); }
 #endif
 
+#ifdef __linux__
+// bronze's shared runtime keeps its thread-locals in the initial-exec model
+// (STATIC_TLS: a read is one instruction off the thread pointer), which a
+// library loaded at startup may do and a dlopen'd one may not: glibc has a
+// few hundred bytes of static TLS to spare after startup, the runtime needs
+// hundreds of KB, and the dlopen fails. So the stub runs itself once more
+// with the engine in LD_PRELOAD, where it loads with the executable, and the
+// dlopen below finds it loaded. The launcher's LD_PRELOAD is put back first
+// thing, so nothing the app starts inherits the engine.
+constexpr const char* kPreloadVar = "BRO_APP_STUB_PRELOAD";
+
+void preloadEngine(const std::string& libbro, char** argv) {
+    if (const char* saved = std::getenv(kPreloadVar)) {
+        // "=" then the launcher's own value, or nothing for none.
+        const std::string prev = saved[0] == '=' ? saved + 1 : "";
+        if (saved[0] == '=') setenv("LD_PRELOAD", prev.c_str(), 1);
+        else unsetenv("LD_PRELOAD");
+        unsetenv(kPreloadVar);
+        return;
+    }
+    // LD_PRELOAD splits on spaces and colons; such a path, or no engine
+    // there, goes to the dlopen as it is (and from there to the stock bro).
+    if (libbro.empty() || libbro.find_first_of(" :") != std::string::npos || access(libbro.c_str(), R_OK) != 0)
+        return;
+    const char* prev = std::getenv("LD_PRELOAD");
+    setenv(kPreloadVar, prev ? (std::string("=") + prev).c_str() : "-", 1);
+    setenv("LD_PRELOAD", prev && *prev ? (libbro + ":" + prev).c_str() : libbro.c_str(), 1);
+    execv("/proc/self/exe", argv);
+    // Not re-run: as we were.
+    if (prev) setenv("LD_PRELOAD", prev, 1);
+    else unsetenv("LD_PRELOAD");
+    unsetenv(kPreloadVar);
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -154,6 +190,9 @@ int main(int argc, char** argv) {
          " (error " + std::to_string(GetLastError()) + "). Reinstall the app with `bro --install`.");
     return 127;
 #else
+#ifdef __linux__
+    preloadEngine(libbro, argv);
+#endif
     // RTLD_GLOBAL: the engine's symbols are the process's, as when an
     // executable links it.
     void* lib = dlopen(libbro.c_str(), RTLD_NOW | RTLD_GLOBAL);
