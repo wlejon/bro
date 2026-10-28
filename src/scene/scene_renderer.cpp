@@ -183,7 +183,8 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out, double within) co
     }
     if (s.groundLayerMissing)
         out.push_back("ground layers: " + std::to_string(s.groundLayerMissing) + " tiles missing");
-    if (clouds_.enabled && clouds_.sourceHash) {
+    // (The deck is drawn in the air only: with none, nothing of it is to come.)
+    if (clouds_.enabled && clouds_.sourceHash && atmosphere_.enabled) {
         if (!cloudStats_.compiled && !cloudStats_.failed) out.push_back("clouds: not yet compiled");
         else if (cloudStats_.compiled && (!cloudStats_.covered || cloudStats_.generation != clouds_.generation))
             out.push_back("clouds: cover not baked");
