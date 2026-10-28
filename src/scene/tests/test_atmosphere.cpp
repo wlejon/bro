@@ -88,6 +88,14 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kHorizonBand = 0.1 * kPi / 180.0;
 int failures = 0;
 
+// A frame begun as the engine's are (Engine::beginGpuFrame): its slot of the
+// frame ring recycled, so what the scenes of earlier cases deferred is
+// destroyed (MoltenVK makes no more than some 32 timestamp pools at once).
+void renderFrame(scene::SceneGraph& graph) {
+    scene::SceneRenderer::defaultVulkanContext()->frames().beginFrame();
+    graph.render();
+}
+
 double luminance(const double c[3]) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
 
 // A table sampled as a linear, clamp-to-edge sampler does, at (u, v) in [0, 1].
@@ -185,8 +193,8 @@ void checkAir(double turbidity, std::initializer_list<double> altitudes, std::in
             a.mieScattering = static_cast<float>(rp.mieS);
             a.mieAbsorption = static_cast<float>(rp.mieA);
             graph.setAtmosphere(a);
-            graph.render();
-            graph.render();   // the view-independent tables are the world service's, granted on the first
+            renderFrame(graph);
+            renderFrame(graph);   // the view-independent tables are the world service's, granted on the first
             scene::vk::AtmosphereTables tables;
             if (!graph.renderer().readAtmosphereTables(tables)) {
                 std::printf("    FAILED: no tables read back\n");
@@ -360,8 +368,8 @@ void checkAir(double turbidity, std::initializer_list<double> altitudes, std::in
                     scene::ExposureSettings e;
                     e.ev100 = static_cast<float>(std::log2(1.0 / (1.2 * scale)));
                     g2.setExposure(e);
-                    g2.render();
-                    g2.render();
+                    renderFrame(g2);
+                    renderFrame(g2);
                     int w = 0, h = 0;
                     const std::vector<uint8_t> px = g2.readTonemapPixelsRGBA(w, h);
                     if (w != W || h != H) {
