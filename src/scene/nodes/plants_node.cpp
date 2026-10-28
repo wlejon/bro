@@ -141,6 +141,8 @@ float PlantsNode::drawReach() const {
 void PlantsNode::pendingWork(std::vector<std::string>& out, double within) const {
     const size_t n = placementPending();
     if (!n) return;
+    if (const size_t again = placement_ ? placement_->replacing() : 0)
+        out.push_back("plants: " + std::to_string(again) + " leaves placed again over finer land");
     // (Within a distance, placed out to it: past where they are placed the
     // land's canopy stands for them, drawReach.)
     const double reach = drawReach();

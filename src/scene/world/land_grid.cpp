@@ -154,6 +154,26 @@ void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* 
         lattice.blendAt(*in, p.x, p.z, out);
 }
 
+int LandBase::finestWhole(const double dir[3], double x, double z, double margin) const {
+    if (!regions || !lattice.config.active()) return 0;
+    const auto set = regions->snapshot();
+    const int levels = lattice.config.levels;
+    const double R = grid.round() ? grid.body().radius : 0.0;
+    for (int l = 0; l < levels; ++l) {
+        const LandRegionCentre& c = set->centre[l];
+        if (!c.active) continue;
+        double d;
+        if (grid.round()) {
+            const double dx = dir[0] - c.at.dir[0], dy = dir[1] - c.at.dir[1], dz = dir[2] - c.at.dir[2];
+            d = 2.0 * R * std::asin(std::min(0.5 * std::sqrt(dx * dx + dy * dy + dz * dz), 1.0));
+        } else {
+            d = std::hypot(x - c.at.x, z - c.at.z);
+        }
+        if (d + margin <= c.inner) return l;
+    }
+    return levels;
+}
+
 std::string LandGrid::glslConfig(int channels) const {
     char buf[512];
     std::snprintf(buf, sizeof(buf),

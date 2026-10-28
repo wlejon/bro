@@ -127,6 +127,14 @@ struct LandBase {
     void field(int root, double x, double z, float out[4], const LandRegionSet* set = nullptr) const;
     void fieldDir(const double dir[3], float out[4], const LandRegionSet* set = nullptr) const;
 
+    /// The finest regional level that reads all of the ground within
+    /// `margin` (m) of a round body's direction `dir` (unit), or of a flat
+    /// body's (x, z): the point that far inside its disc's inner radius
+    /// (PRESENCE, land_regions.h). The levels' count where none does (the
+    /// global grid's there, or a blend), 0 with no regions (the field there
+    /// is all there is).
+    int finestWhole(const double dir[3], double x, double z, double margin) const;
+
     /// The world's own value k (0 z, 1 w) at a root's chart point, at a
     /// round body's direction (unit).
     float ownAt(int k, int root, double x, double z) const {

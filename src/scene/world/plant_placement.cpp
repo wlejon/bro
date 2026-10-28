@@ -134,6 +134,21 @@ void placementOrigin(const Body& body, const CellGrid& grid, const CellKey& key,
     for (int i = 0; i < 3; ++i) out[i] = body.radius * d[i];
 }
 
+namespace {
+
+/// Leaf `key`'s finest regional level read whole (LandBase::finestWhole
+/// over its square), 0 off a land.
+int leafWholeOf(const PlacementRules& rules, const CellGrid& grid, const CellKey& key, const Body* body) {
+    if (!rules.base) return 0;
+    const double side = static_cast<double>(grid.leaf) * static_cast<double>(int64_t{1} << key.level);
+    const double x = (key.x + 0.5) * side, z = (key.z + 0.5) * side;
+    double d[3] = {0.0, 1.0, 0.0};
+    if (body && !body->flat()) dirOf(*body, {key.root, x, z}, d);
+    return rules.base->finestWhole(d, x, z, 0.75 * side);
+}
+
+}  // namespace
+
 std::vector<float> placeCell(const PlacementRules& rules, const CellGrid& grid, const CellKey& key, const Body* body) {
     std::vector<float> out;
     const bool round = body && !body->flat();
@@ -312,7 +327,7 @@ PlantPlacement::~PlantPlacement() = default;
 size_t PlantPlacement::pending() const {
     // (Before the first update, the look about the eye is what is pending.)
     if (!looked_) return 1;
-    return queue_.size() + posted_.size();
+    return queue_.size() + posted_.size() + stale_.size() + (scan_.empty() && !rescan_ ? 0 : 1);
 }
 
 void PlantPlacement::eyes(const double eye[3], Eyes& out, CellKey& leaf) const {
@@ -426,6 +441,7 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
             const CellKey k = CellKey::unpacked(*it);
             if (distance2(e, k) > keep * keep) {
                 dropped.push_back(k);
+                whole_.erase(*it);
                 it = resident_.erase(it);
             } else {
                 ++it;
@@ -440,11 +456,22 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
         done.swap(inbox_->done);
     }
     for (Placed& p : done) {
-        posted_.erase(p.key.packed());
-        if (distance2(e, p.key) > keep * keep) continue;
-        resident_.insert(p.key.packed());
+        const uint64_t packed = p.key.packed();
+        posted_.erase(packed);
+        const bool again = replacing_.erase(packed) > 0;
+        if (distance2(e, p.key) > keep * keep) {
+            // (One placed again and gone too far meanwhile: dropped now.)
+            if (again && resident_.erase(packed)) {
+                whole_.erase(packed);
+                dropped.push_back(p.key);
+            }
+            continue;
+        }
+        resident_.insert(packed);
+        whole_[packed] = p.whole;
         placed.push_back(std::move(p));
     }
+    if (post) findStale();
     // The next jobs, the nearest first: before a job's cost is known, one a
     // thread.
     double cost;
@@ -461,13 +488,26 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
     const double threads = workers_.threads();
     const size_t limit = static_cast<size_t>(
         std::clamp(cost > 0.0 ? threads * span / cost : (span > 0.0 ? threads : 1.0), 1.0, 4096.0));
-    while (post && !queue_.empty() && posted_.size() < limit) {
-        const CellKey k = queue_.back();
-        queue_.pop_back();
+    // (The leaves still to come first, then those placed again.)
+    while (post && (!queue_.empty() || !stale_.empty()) && posted_.size() < limit) {
+        CellKey k;
+        if (!queue_.empty()) {
+            k = queue_.back();
+            queue_.pop_back();
+        } else {
+            k = stale_.back();
+            stale_.pop_back();
+            const auto w = whole_.find(k.packed());
+            if (w == whole_.end() || posted_.count(k.packed()) || leafWhole(k) >= w->second) continue;
+            replacing_.insert(k.packed());
+        }
         posted_.insert(k.packed());
         workers_.post([rules = rules_, grid = grid_, k, inbox = inbox_, body = body_, round = round_] {
             const auto t0 = std::chrono::steady_clock::now();
-            Placed p{k, placeCell(*rules, grid, k, round ? &body : nullptr)};
+            // (How whole the regions are taken before they are read: one
+            // that comes in meanwhile has the leaf placed again.)
+            const int whole = leafWholeOf(*rules, grid, k, round ? &body : nullptr);
+            Placed p{k, placeCell(*rules, grid, k, round ? &body : nullptr), whole};
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             std::lock_guard<std::mutex> lock(inbox->mutex);
             inbox->done.push_back(std::move(p));
@@ -477,8 +517,37 @@ void PlantPlacement::update(const double eye[3], double lift, std::vector<Placed
     // The reach: the nearest leaf still to come, posted or queued (the
     // queue's nearest at its back, as of the last look).
     double near2 = queue_.empty() ? std::numeric_limits<double>::infinity() : distance2(e, queue_.back());
-    for (const uint64_t k : posted_) near2 = std::min(near2, distance2(e, CellKey::unpacked(k)));
+    for (const uint64_t k : posted_)
+        if (!replacing_.count(k)) near2 = std::min(near2, distance2(e, CellKey::unpacked(k)));
     reach_ = std::min(std::sqrt(near2), static_cast<double>(rules_->range));
+}
+
+int PlantPlacement::leafWhole(const CellKey& k) const {
+    return leafWholeOf(*rules_, grid_, k, round_ ? &body_ : nullptr);
+}
+
+void PlantPlacement::findStale() {
+    if (!rules_->base || !rules_->base->regions) return;
+    // Looked over again whenever the regions change (their discs grow as
+    // they come in, and follow the eye), a slice of the leaves an update.
+    auto set = rules_->base->regions->snapshot();
+    if (set != regionsSeen_) {
+        regionsSeen_ = std::move(set);
+        rescan_ = true;
+    }
+    if (scan_.empty() && rescan_) {
+        rescan_ = false;
+        scan_.assign(resident_.begin(), resident_.end());
+    }
+    constexpr size_t kSlice = 4096;
+    for (size_t n = 0; n < kSlice && !scan_.empty(); ++n) {
+        const uint64_t packed = scan_.back();
+        scan_.pop_back();
+        const auto w = whole_.find(packed);
+        if (w == whole_.end() || w->second == 0 || posted_.count(packed) || !resident_.count(packed)) continue;
+        const CellKey k = CellKey::unpacked(packed);
+        if (leafWhole(k) < w->second) stale_.push_back(k);
+    }
 }
 
 }  // namespace bro::scene

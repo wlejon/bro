@@ -111,6 +111,7 @@ public:
     struct Placed {
         CellKey key;
         std::vector<float> records;
+        int whole = 0;   // the finest of the land's regional levels read whole over it (LandBase::finestWhole)
     };
 
     /// On `body` (flat or null: the plane).
@@ -139,6 +140,14 @@ public:
     /// Leaves wanted and not yet placed (posted or waiting); before the
     /// first update, 1 (the look about the eye still to come).
     size_t pending() const;
+    /// Of those, the leaves placed again: on a land with regional levels, a
+    /// leaf placed where a level's disc did not yet read all of it (the
+    /// coarser field's woods there, which cannot hold a clearing a few
+    /// hundred metres across) is placed again once a finer level's does,
+    /// its plants kept till then. (Placed under a 1.9 km eye and kept, a
+    /// wood stood where the eye, landing, found a meadow when it came
+    /// straight there.) Not counted in the reach: they are placed.
+    size_t replacing() const { return replacing_.size() + stale_.size() + (scan_.empty() && !rescan_ ? 0 : 1); }
     /// How far from the eye (as a leaf's distance, its height with it)
     /// every wanted leaf is placed: the nearest pending leaf's, the range
     /// when none is pending, 0 before the first update. Within it the
@@ -192,7 +201,18 @@ private:
     bool round_ = false;
     double half_ = 0.0;   // a face's half-width (round)
     std::shared_ptr<Inbox> inbox_ = std::make_shared<Inbox>();
+    /// Placed leaf `k`'s finest regional level read whole (placed on no land: 0).
+    int leafWhole(const CellKey& k) const;
+    /// The resident leaves a finer level now reads whole: queued again.
+    void findStale();
+
     std::unordered_set<uint64_t, KeyHash> resident_, posted_;
+    std::unordered_map<uint64_t, int, KeyHash> whole_;   // a resident leaf's Placed::whole
+    std::unordered_set<uint64_t, KeyHash> replacing_;    // posted again (of posted_)
+    std::vector<CellKey> stale_;                         // to post again
+    std::shared_ptr<const LandRegionSet> regionsSeen_;           // the regions' snapshot the leaves were last looked over at
+    std::vector<uint64_t> scan_;                         // resident leaves still to look over at it
+    bool rescan_ = false;
     std::vector<CellKey> queue_;   // wanted, not posted: the farthest first (taken from the back)
     bool looked_ = false;
     CellKey eyeLeaf_;
