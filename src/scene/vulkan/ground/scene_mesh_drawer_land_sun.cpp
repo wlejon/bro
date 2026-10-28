@@ -94,16 +94,30 @@ void SceneMeshDrawer::cleanupLandSun(SceneGpu& gpu) {
     landSun_.forget();
 }
 
+// A level is shown, and made, only where it is about as coarse as the land
+// drawn: a receiver is the land's mesh, its finest cell some 4 px under the
+// eye (prepareLand's firstRing), and a level finer than that holds a land
+// the view does not draw. From 4 km up the mesh's 32 m cells smoothed a
+// stand's edge that level 0's 2 m texels kept, the drawn canopy stood
+// under the crowns a texel toward the sun, and it shaded itself: blots of
+// full shade about the eye's nadir in the planet's woods, in no view
+// nearer, and none further than level 0 reached. The coarsest is always
+// shown (nothing else holds the land's long shade).
+bool SceneMeshDrawer::landSunShown(int l) const {
+    return l == LS_LEVELS - 1 || 2.0f * LandSun::kTexel0 * std::ldexp(1.0f, l) >= landSunCell_;
+}
+
 void SceneMeshDrawer::fillLandSun(LandSunGpu& out, const bromath::Vec3& eye) const {
     out = LandSunGpu{};
     bool any = false;
     for (int l = 0; l < LS_LEVELS; ++l) {
         const LandSun::Level& lv = landSun_.level(l);
+        const int layer = landSunShown(l) ? lv.layer : -1;
         out.level[l][0] = static_cast<float>(lv.x0 - eye.x);
         out.level[l][1] = static_cast<float>(lv.z0 - eye.z);
         out.level[l][2] = lv.texel;
-        out.level[l][3] = static_cast<float>(lv.layer);
-        any = any || lv.layer >= 0;
+        out.level[l][3] = static_cast<float>(layer);
+        any = any || layer >= 0;
     }
     out.params[0] = any && landSunImage_.isValid() ? 1.0f : 0.0f;
     out.params[1] = eye.y;
@@ -144,7 +158,11 @@ void SceneMeshDrawer::offerLandSun(SceneFrame& frame, WorldService& service) {
     const float over = std::max(view.eye.y - land->chartBounds().max.y, 1.0f);
     landSun_.update(view.eye, {-d[0], -d[1], -d[2]}, generation, tiles, focal / over, over,
                     land->canopySourceHash() ? land->canopyCastRange() : 0.0f);
+    // (The finest cell its mesh draws, as prepareLand last laid it out.)
+    const auto drawn = lands_.find(land->id());
+    landSunCell_ = drawn != lands_.end() ? land->rings().cellSize * std::exp2(static_cast<float>(drawn->second->firstRing)) : 0.0f;
     for (const LandSun::Want& w : landSun_.wants()) {
+        if (!landSunShown(w.level)) continue;
         const double side = static_cast<double>(LS_SIDE) * LandSun::kTexel0 * std::ldexp(1.0, w.level);
         service.offer({static_cast<uint64_t>(w.level), land->id(), landSunKind_, w.error, side, w.required});
     }

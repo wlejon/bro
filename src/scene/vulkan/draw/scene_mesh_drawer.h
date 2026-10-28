@@ -513,6 +513,8 @@ private:
     SceneVkImage landSunImage_;
     SceneVkImage landSunNone_;
     double landSunRadius_ = 0.0;   // its land's body's (0 flat): its heights are over the datum
+    float landSunCell_ = 0.0f;     // its land's finest drawn cell (m): a level finer than half of it is not shown
+    bool landSunShown(int l) const;
     int landSunKind_ = -1;
     bool landSunTiles_ = false;   // tiles filled since the land's sun was last offered
     VkShaderModule landSunModule_ = VK_NULL_HANDLE;
