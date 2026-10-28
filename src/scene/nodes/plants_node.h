@@ -140,7 +140,7 @@ public:
         float woodRange = 220.0f;  // past this (m) no trunks or limbs are drawn
         float shadowTexels = 12.0f; // as `pixels`, in a shadow page's texels, for its casters
         float shadowRange = 1500.0f; // past this (m), or the real band, no plant casts (the shadow views cut nearer)
-        float crowns = 400.0f;     // past the real band to this (m, within the painted band) a plant is painted: one crown
+        float crowns = 1e9f;       // past the real band to this (m, within the painted band: by default all of it) a plant is painted: one crown
     };
     static constexpr int kParamCount = 6;
     void setParams(const Params& p);

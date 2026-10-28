@@ -206,15 +206,20 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     far.indices = casterIx->indices.buffer;
     far.indexCount = kLeavesPerChunk * kCasterLeafVerts;
     out.push_back(far);
-    // Its painted crowns, past the real band: a fan a plant, the camera's
-    // alone (the land's canopy casts for them).
-    MeshDraw painted = draw;
-    painted.push.extra[0] = 2.0f;
-    painted.push.extra[2] = 2.0f;
-    painted.indexCount = PP_PAINT_VERTS;
-    painted.indirectOffset = plants::paintOffset();
-    painted.timerLabel = "plants:painted";
-    out.push_back(painted);
+    // Its painted crowns, past the real band: a fan a plant (extra.y its
+    // sides: the near list's, then the far's few), the camera's alone (the
+    // land's canopy casts for them).
+    for (uint32_t list = 0; list < 2; ++list) {
+        const int sides = list == 0 ? PP_PAINT_SIDES : PP_PAINT_FAR_SIDES;
+        MeshDraw painted = draw;
+        painted.push.extra[0] = 2.0f;
+        painted.push.extra[1] = static_cast<float>(sides);
+        painted.push.extra[2] = 2.0f;
+        painted.indexCount = static_cast<uint32_t>(3 * sides);
+        painted.indirectOffset = plants::paintOffset(list);
+        painted.timerLabel = "plants:painted";
+        out.push_back(painted);
+    }
 }
 
 }  // namespace bro::scene::vk

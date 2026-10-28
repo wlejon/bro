@@ -2152,14 +2152,18 @@ Built: the bands and the real band's hand-over (the plants, the grass's
 rings and herbs, the land's canopy past them); the plants' painted crowns.
 Past the real band, by the same per-plant pick, the plants node's plan
 (plants_plan.comp) lists each plant in view as one record, and plants.vert
-draws it as a flat, ragged disc of 24 sides facing the eye, halfway to the
+draws it as a flat, ragged disc of 24 sides facing the eye (6, the plan's
+far list, a crown under 6 px of radius on screen, as large as the circle
+it stands for), halfway to the
 crown envelope's near side, its rim the envelope's outline, lit as a dome
 (its normal per pixel from the disc's point), its species' colour. What it
 looks like within the disc is the module's: plantSurface gets it as a
 PlantFragment with `painted` set and `uv` its point across the disc in the
 crown's radii (the trees library paints clumps there, darker in their
-hollows). They reach the node's `crowns` (400 m by default, within the
-painted band), where the land's canopy comes in by the same pick; past the
+hollows). They reach the node's `crowns` (by default all of the painted
+band: cheaper than the land's canopy they stand for, the planet's flight
+shot 4.27 ms painting to 4 km against 4.72 to 400 m), where the land's
+canopy comes in by the same pick; past the
 real band the canopy casts for them, so a disc sunk into its crown would
 stand in the canopy's shadow. (Flat, because fans coned toward the eye cut
 through each other in wedges; halfway, because a disc at the near side

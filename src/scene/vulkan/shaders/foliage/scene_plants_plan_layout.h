@@ -90,13 +90,15 @@
 #define PP_N_PACK_FIT           (PP_N_PACK + 4 * PP_PACK_WORDS)     // its records that fit in CHUNKS
 #define PP_N_STATS              (PP_N_PACK + 5 * PP_PACK_WORDS)     // PP_S_WORDS, read back
 // The camera's painted plants (one record each, the plant: plants.vert's
-// painted crown): their count, the place stage's cursor, their first
-// record and those that fit in CHUNKS.
+// painted crown), in two lists, the near (PP_PAINT_SIDES a fan) and the
+// far (PP_PAINT_FAR_SIDES: a crown under PP_PAINT_FAR_PIXELS of radius on
+// screen): each list's count, the place stage's cursor, its first record
+// and those that fit in CHUNKS, list-major (PP_N_PAINT + 4 * list).
 #define PP_N_PAINT              (PP_N_STATS + PP_S_WORDS)
 #define PP_N_PAINT_CURSOR       (PP_N_PAINT + 1)
 #define PP_N_PAINT_START        (PP_N_PAINT + 2)
 #define PP_N_PAINT_FIT          (PP_N_PAINT + 3)
-#define PP_N_WORDS              (PP_N_PAINT + 4)
+#define PP_N_WORDS              (PP_N_PAINT + 8)
 // The stats (PlantsNode::Stats, and the room asked for).
 #define PP_S_PLANTS             0
 #define PP_S_ELEMENTS           1
@@ -112,11 +114,14 @@
 #define PP_A_COMMANDS           4     // the draws' commands, PP_A_COMMAND_WORDS each:
 #define PP_A_COMMAND_WORDS      8     //   2v a view's leaves (indexed), 2v + 1 its wood (view 0 the camera, 1 + t tile t)
 #define PP_A_FAR_LEAVES         (2 * (1 + PP_MAX_TILES))   // then the camera's far bands' leaves (indexed, coarse)
-#define PP_A_PAINT              (PP_A_FAR_LEAVES + 1)      // then its painted crowns (PP_PAINT_VERTS an instance)
-#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_PAINT + 1))
+#define PP_A_PAINT              (PP_A_FAR_LEAVES + 1)      // then its painted crowns, near then far (non-indexed)
+#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_PAINT + 2))
 // A painted crown: a fan of PP_PAINT_SIDES triangles about its middle
-// (plants.vert), drawn as a list.
+// (plants.vert), drawn as a list; one under PP_PAINT_FAR_PIXELS of radius
+// on screen, of PP_PAINT_FAR_SIDES (its outline's lumps are under a pixel
+// or two there).
 #define PP_PAINT_SIDES          24
-#define PP_PAINT_VERTS          (3 * PP_PAINT_SIDES)
+#define PP_PAINT_FAR_SIDES      6
+#define PP_PAINT_FAR_PIXELS     6.0
 
 #endif

@@ -480,8 +480,9 @@
  * @property {number} [minElements=12] - the fewest a plant is drawn with.
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
  * (Within the scene's real band, scene.setBands, a plant is drawn as itself: a `range` here throws.)
- * @property {number} [crowns=400] - past the real band to this (m, within the painted band) a plant is
- *   painted: one crown, a lobed disc facing the eye, its species' colour; past it the land's canopy.
+ * @property {number} [crowns=1e9] - past the real band to this (m, within the painted band: by default all of
+ *   it) a plant is painted: one crown, a ragged disc facing the eye, its species' colour (its look within the
+ *   disc the module's plantSurface, PlantFragment.painted); past it the land's canopy.
  * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
  * @property {number} [shadowRange=1500] - past this (m), or the real band, no plant casts (the land's canopy casts past it).
  * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `crowns` (above); null none.

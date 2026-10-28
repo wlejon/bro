@@ -59,9 +59,10 @@ constexpr VkDeviceSize commandOffset(uint32_t view, bool wood) {
 constexpr VkDeviceSize farLeavesOffset() {
     return VkDeviceSize{PP_A_COMMANDS + PP_A_FAR_LEAVES * PP_A_COMMAND_WORDS} * 4u;
 }
-/// The camera's painted crowns' (non-indexed, PP_PAINT_VERTS an instance).
-constexpr VkDeviceSize paintOffset() {
-    return VkDeviceSize{PP_A_COMMANDS + PP_A_PAINT * PP_A_COMMAND_WORDS} * 4u;
+/// The camera's painted crowns', the near list's (0) or the far's (1)
+/// (non-indexed, three vertices a side an instance).
+constexpr VkDeviceSize paintOffset(uint32_t list) {
+    return VkDeviceSize{PP_A_COMMANDS + (PP_A_PAINT + list) * PP_A_COMMAND_WORDS} * 4u;
 }
 
 class GpuPlanner {
