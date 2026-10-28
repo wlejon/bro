@@ -27,6 +27,10 @@ bool PassCoverDepth::active(const SceneFrame& frame) const {
 
 void PassCoverDepth::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr({.mark = true, .indirect = frame.ssao});
+    // (Its draws bind the lighting set, the shadow pages' pool and overlays
+    // in it, as the opaque pass's do.)
+    io.sample(frame.gpu.shadows.pool);
+    io.sample(frame.gpu.shadows.scratch);
 }
 
 void PassCoverDepth::record(SceneFrame& frame) {
@@ -71,8 +75,11 @@ bool PassTranslucent::active(const SceneFrame& frame) const {
     return !frame.lists.translucent.empty();
 }
 
-void PassTranslucent::declare(const SceneFrame&, PassIO& io) const {
+void PassTranslucent::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr();
+    // (Its draws light through the shadow pages' pool and overlays.)
+    io.sample(frame.gpu.shadows.pool);
+    io.sample(frame.gpu.shadows.scratch);
 }
 
 void PassTranslucent::record(SceneFrame& frame) {
