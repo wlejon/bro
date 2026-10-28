@@ -106,7 +106,11 @@ void GpuPlanner::Node::poll() {
     have_ = true;
     readSerial_ = ring_[best].serial;
     // Each frame read back, the newest and those before it: one that asked
-    // for more than its room drew short.
+    // for more than its room drew short. The casters are the newest of
+    // them that drew any: the shadow's pages are cached, drawn on the
+    // frames that build one, and such a frame finished with a later one
+    // would otherwise never be read.
+    uint64_t castSerial = 0;
     for (int i = 0; i < kRing; ++i) {
         Slot& slot = ring_[i];
         if (slot.state != Slot::Submitted || slot.serial > readSerial_ || !slot.queue->isComplete(slot.ticket))
@@ -114,6 +118,10 @@ void GpuPlanner::Node::poll() {
         const auto* r = static_cast<const uint32_t*>(readback_.mappedData) + i * PP_S_WORDS;
         if (r[PP_S_RECORDS] > slot.roomRecords || r[PP_S_LEAF_CHUNKS] > slot.roomLeaves)
             short_.push_back(slot.shadowSerial);
+        if (r[PP_S_SHADOW_ELEMENTS] > 0 && slot.serial >= castSerial) {
+            castSerial = slot.serial;
+            newest_.shadowElements = r[PP_S_SHADOW_ELEMENTS];
+        }
         slot.state = Slot::Free;
     }
 }

@@ -773,7 +773,9 @@ class SceneNode {
   /**
    * Plants: what a recent frame drew: `plants` (all of them), `visible`
    * (in the camera's view), `elements` and `limbs` (the camera's), and
-   * `shadowElements` (every shadow view's casters summed, a disc one), and
+   * `shadowElements` (every shadow view's casters summed, a disc one; the
+   * shadow's pages are cached, drawn on the frames that build one, so of
+   * the frames read back together it is the newest that drew any), and
    * `painted` (the camera's painted crowns, past the real band). The
    * plan's counts are read back from the GPU a frame or two late: after a
    * change, draw a few frames (`advanceTime`) before reading them.
