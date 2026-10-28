@@ -100,6 +100,7 @@ void GpuPlanner::Node::poll() {
     newest_.elements = w[PP_S_ELEMENTS];
     newest_.limbs = w[PP_S_LIMBS];
     newest_.shadowElements = w[PP_S_SHADOW_ELEMENTS];
+    newest_.painted = w[PP_S_PAINTED];
     askedRecords_ = w[PP_S_RECORDS];
     askedLeaves_ = w[PP_S_LEAF_CHUNKS];
     have_ = true;
@@ -320,6 +321,7 @@ bool GpuPlanner::add(SceneFrame& frame, Node& n, const PlantsNode& node, const S
                             std::min(p.shadowRange, node.real())};
     for (size_t i = 0; i < std::size(detail); ++i) w[PP_P_PIXELS + i] = bitsOf(detail[i]);
     w[PP_P_STILL_PENUMBRA] = bitsOf(plan.stillPenumbra);
+    w[PP_P_PAINTED] = bitsOf(node.paintReach());
     putPlanes(w.data() + PP_P_FRUSTUM, view.frustum);
     // The cell pass's views, the plan's own: the camera, then each tile,
     // each with its pixel scale.

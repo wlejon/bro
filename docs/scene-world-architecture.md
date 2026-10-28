@@ -2149,5 +2149,17 @@ pixel). The hand-overs are judged with the planet's ladder.js: per band of
 the pattern, r against its ceiling, and the light within 0.1 stop.
 
 Built: the bands and the real band's hand-over (the plants, the grass's
-rings and herbs, the land's canopy past them). To come: the painted crowns,
-the canopy as painted crowns on the land, the sky map, the cloud shells.
+rings and herbs, the land's canopy past them); the plants' painted crowns.
+Past the real band, by the same per-plant pick, the plants node's plan
+(plants_plan.comp) lists each plant in view as one record, and plants.vert
+draws it as a lobed fan facing the eye: its middle on the crown envelope's
+near side, its rim the envelope's outline, lit as a dome, its species'
+colour. They reach the node's `crowns` (400 m by default, within the
+painted band), where the land's canopy comes in by the same pick; past the
+real band the canopy casts for them, so a fan sunk into its crown would
+stand in the canopy's shadow. Against the real plants in the same view
+(the ladder's `real=400 twinpaint`) they keep the woods' pattern at the
+finest blocks (r 0.7 to 0.8, where the canopy had 0.3) and read about half
+a stop dark. To come: the crown's mean light measured by the engine, the
+module's own painted style, the canopy as painted crowns on the land, the
+sky map, the cloud shells.

@@ -58,6 +58,7 @@
 #define PP_P_SHADOW_TEXELS      12
 #define PP_P_SHADOW_RANGE       13
 #define PP_P_STILL_PENUMBRA     14    // ShadowPlan::stillPenumbra
+#define PP_P_PAINTED            15    // past the real band (PP_P_RANGE) to this (m), a plant painted (PlantsNode::paintReach)
 #define PP_P_FRUSTUM            16    // the camera's six planes (normal xyz, d)
 #define PP_P_TILE               40    // per tile, PP_TILE_WORDS
 #define PP_TILE_WORDS           29
@@ -88,7 +89,14 @@
 #define PP_N_PACK_CHUNK         (PP_N_PACK + 3 * PP_PACK_WORDS)     // its first chunk (after the slot's leaf chunks)
 #define PP_N_PACK_FIT           (PP_N_PACK + 4 * PP_PACK_WORDS)     // its records that fit in CHUNKS
 #define PP_N_STATS              (PP_N_PACK + 5 * PP_PACK_WORDS)     // PP_S_WORDS, read back
-#define PP_N_WORDS              (PP_N_STATS + PP_S_WORDS)
+// The camera's painted plants (one record each, the plant: plants.vert's
+// painted crown): their count, the place stage's cursor, their first
+// record and those that fit in CHUNKS.
+#define PP_N_PAINT              (PP_N_STATS + PP_S_WORDS)
+#define PP_N_PAINT_CURSOR       (PP_N_PAINT + 1)
+#define PP_N_PAINT_START        (PP_N_PAINT + 2)
+#define PP_N_PAINT_FIT          (PP_N_PAINT + 3)
+#define PP_N_WORDS              (PP_N_PAINT + 4)
 // The stats (PlantsNode::Stats, and the room asked for).
 #define PP_S_PLANTS             0
 #define PP_S_ELEMENTS           1
@@ -96,6 +104,7 @@
 #define PP_S_SHADOW_ELEMENTS    3
 #define PP_S_RECORDS            4     // chunk records the frame asked for
 #define PP_S_LEAF_CHUNKS        5     // leaf chunks (and disc chunks): the poses' slots asked
+#define PP_S_PAINTED            6     // plants painted (the camera's)
 #define PP_S_WORDS              8
 
 // --- ARGS ---
@@ -103,6 +112,11 @@
 #define PP_A_COMMANDS           4     // the draws' commands, PP_A_COMMAND_WORDS each:
 #define PP_A_COMMAND_WORDS      8     //   2v a view's leaves (indexed), 2v + 1 its wood (view 0 the camera, 1 + t tile t)
 #define PP_A_FAR_LEAVES         (2 * (1 + PP_MAX_TILES))   // then the camera's far bands' leaves (indexed, coarse)
-#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_FAR_LEAVES + 1))
+#define PP_A_PAINT              (PP_A_FAR_LEAVES + 1)      // then its painted crowns (PP_PAINT_VERTS an instance)
+#define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_PAINT + 1))
+// A painted crown: a fan of PP_PAINT_SIDES triangles about its middle
+// (plants.vert), drawn as a list.
+#define PP_PAINT_SIDES          12
+#define PP_PAINT_VERTS          (3 * PP_PAINT_SIDES)
 
 #endif

@@ -110,8 +110,8 @@ const PlantShaders* SceneMeshDrawer::plantShaders(const PlantsNode& node) {
 
 void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::vector<MeshDraw>& out) {
     out.clear();
-    // (Drawn and cast within the scene's real band.)
-    node.setReal(frame.graph.bands().real);
+    // (Drawn and cast within the scene's real band, painted past it.)
+    node.setBands(frame.graph.bands());
     // On the land they stand on as its processes have it (and nothing
     // placed until they have run), then the cells placed about the
     // camera's eye.
@@ -122,12 +122,13 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
         if (land) node.setGround(land->groundBase(), !land->groundReady());
     }
     node.follow(frame.world.eye, land);   // (placement is keyed on the body)
-    // (Its canopy on the land comes in where the plants are still to come.)
-    if (land) land->setCanopyReach(node.drawReach(), std::min(node.params().shadowRange, node.real()));
+    // (Its canopy on the land comes in past the painted crowns, and where
+    // the plants are still to come; it casts for them past the real band.)
+    if (land) land->setCanopyReach(node.paintReach(), std::min(node.params().shadowRange, node.real()));
     const PlantShaders* shaders = plantShaders(node);
     // (Nor planned when every plant is past its range: a planet's from orbit.)
     if (!shaders || node.plantCount() == 0 || node.speciesCount() == 0 || node.effectiveUnlit() ||
-        node.nearest(frame.world.eye) > node.real()) {
+        node.nearest(frame.world.eye) > std::max(node.real(), node.paintReach())) {
         node.setStats({});
         return;
     }
@@ -205,6 +206,15 @@ void SceneMeshDrawer::preparePlants(SceneFrame& frame, PlantsNode& node, std::ve
     far.indices = casterIx->indices.buffer;
     far.indexCount = kLeavesPerChunk * kCasterLeafVerts;
     out.push_back(far);
+    // Its painted crowns, past the real band: a fan a plant, the camera's
+    // alone (the land's canopy casts for them).
+    MeshDraw painted = draw;
+    painted.push.extra[0] = 2.0f;
+    painted.push.extra[2] = 2.0f;
+    painted.indexCount = PP_PAINT_VERTS;
+    painted.indirectOffset = plants::paintOffset();
+    painted.timerLabel = "plants:painted";
+    out.push_back(painted);
 }
 
 }  // namespace bro::scene::vk

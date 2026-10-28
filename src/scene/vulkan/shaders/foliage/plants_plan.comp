@@ -113,6 +113,7 @@ struct Pick {
     uint slot;
     float elements;
     bool disc;
+    bool paint;     // the camera's, past the real band: one painted crown (PP_N_PAINT)
     uint pack;
     uint leafChunks, woodChunks, limbs;
 };
@@ -147,6 +148,7 @@ Pick pick(PlantInfo pl, uint v) {
     k.on = false;
     k.slot = 0u;
     k.disc = false;
+    k.paint = false;
     k.pack = 0u;
     k.elements = 0.0;
     k.leafChunks = k.woodChunks = k.limbs = 0u;
@@ -158,9 +160,18 @@ Pick pick(PlantInfo pl, uint v) {
     float minElements = pf(PP_P_MIN_ELEMENTS);
     bool wood = d - pl.radius < woodRange;
     if (v == 0u) {
-        if (d - pl.radius > pf(PP_P_RANGE) || beyondRange(pl, d, pf(PP_P_RANGE)) ||
-            !intersects(PP_P_FRUSTUM, bmin, bmax))
+        if (!intersects(PP_P_FRUSTUM, bmin, bmax)) return k;
+        // Past the real band, by the same pick (each plant's own hash over
+        // the band's last tenth), painted: one crown, out to the painted
+        // band's edge, which hands over to the land's canopy the same way.
+        // The two picks are each other's complement, so no plant is drawn
+        // twice or left out.
+        if (d - pl.radius > pf(PP_P_RANGE) || beyondRange(pl, d, pf(PP_P_RANGE))) {
+            if (d - pl.radius > pf(PP_P_PAINTED) || beyondRange(pl, d, pf(PP_P_PAINTED))) return k;
+            k.on = true;
+            k.paint = true;
             return k;
+        }
         // Pixels across a metre at the plant's near side; never fewer than
         // minElements, nor than it takes elements `pixels` across to cover
         // its crown on screen (a tree at the horizon: one).
@@ -228,9 +239,11 @@ Pick pick(PlantInfo pl, uint v) {
 #if defined(PLANTS_COUNT)
 shared uint sLeaf[PP_SLOTS], sWood[PP_SLOTS], sDisc[PP_MAX_TILES], sPack[PP_PACK_WORDS];
 shared uint sStats[4];
+shared uint sPaint;
 
 void main() {
     uint lid = gl_LocalInvocationID.x;
+    if (lid == 0u) sPaint = 0u;
     for (uint i = lid; i < uint(PP_SLOTS); i += uint(PP_GROUP_SIZE)) {
         sLeaf[i] = 0u;
         sWood[i] = 0u;
@@ -248,6 +261,10 @@ void main() {
             if (!seenBy(mask, v)) continue;
             Pick k = pick(pl, v);
             if (!k.on) continue;
+            if (k.paint) {
+                atomicAdd(sPaint, 1u);
+                continue;
+            }
             if (k.disc) {
                 atomicAdd(sDisc[k.slot - uint(PP_BANDS)], 1u);
                 atomicAdd(sStats[3], 1u);
@@ -276,6 +293,7 @@ void main() {
     for (uint i = lid; i < uint(PP_PACK_WORDS); i += uint(PP_GROUP_SIZE))
         if (sPack[i] > 0u) atomicAdd(work.w[PP_N_PACK + i], sPack[i]);
     if (lid < 4u && sStats[lid] > 0u) atomicAdd(work.w[PP_N_STATS + lid], sStats[lid]);
+    if (lid == 0u && sPaint > 0u) atomicAdd(work.w[PP_N_PAINT], sPaint);
 }
 
 #elif defined(PLANTS_LAYOUT)
@@ -358,6 +376,11 @@ void main() {
         work.w[PP_N_PACK_FIT + i] = fits(at, work.w[PP_N_PACK + i], chunkCap);
         at += work.w[PP_N_PACK + i];
     }
+    // The painted plants' records, those that fit.
+    work.w[PP_N_PAINT_START] = at;
+    work.w[PP_N_PAINT_FIT] = fits(at, work.w[PP_N_PAINT], chunkCap);
+    at += work.w[PP_N_PAINT];
+    work.w[PP_N_STATS + PP_S_PAINTED] = work.w[PP_N_PAINT];
     work.w[PP_N_STATS + PP_S_RECORDS] = at;
     work.w[PP_N_STATS + PP_S_LEAF_CHUNKS] = leafArea;
 
@@ -372,6 +395,14 @@ void main() {
     putIndexed(uint(PP_A_FAR_LEAVES), nearLeaves, fits(nearLeaves, cameraLeaves - nearLeaves, leafCap),
                uint(PP_CASTER_INDICES));
     putDraw(1u, leafArea, fits(leafArea, cameraWood, chunkCap));
+    // Its painted crowns: an instance a record.
+    {
+        uint a = PP_A_COMMANDS + uint(PP_A_PAINT) * PP_A_COMMAND_WORDS;
+        args.w[a] = uint(PP_PAINT_VERTS);
+        args.w[a + 1u] = work.w[PP_N_PAINT_FIT];
+        args.w[a + 2u] = 0u;
+        args.w[a + 3u] = work.w[PP_N_PAINT_START];
+    }
     for (uint t = 0u; t < uint(PP_MAX_TILES); ++t) {
         uint s = tileSlot(t);
         uint leaves = 0u, first = 0u, woodFirst = 0u, wood = 0u;
@@ -393,6 +424,7 @@ void main() {
 // place in each slot: the camera's bands, or a tile's one (index 0).
 shared uint sLeaf[PP_BANDS], sWood[PP_BANDS], sDisc;
 shared uint sPack[PP_BANDS * PP_PACK_CLASSES];   // a band's (a tile's: band 0's) classes
+shared uint sPaint;
 
 // Write chunk record `index` if it lies in its slot's run [start, end) and
 // under `cap` (a pick a bit apart from the count's never spills into the
@@ -420,7 +452,10 @@ void main() {
             sLeaf[lid] = 0u;
             sWood[lid] = 0u;
         }
-        if (lid == 0u) sDisc = 0u;
+        if (lid == 0u) {
+            sDisc = 0u;
+            sPaint = 0u;
+        }
         uint packs = (v == 0u ? uint(PP_BANDS) : 1u) * uint(PP_PACK_CLASSES);
         for (uint i = lid; i < packs; i += uint(PP_GROUP_SIZE)) sPack[i] = 0u;
         barrier();
@@ -428,11 +463,14 @@ void main() {
         k.on = false;
         k.slot = 0u;
         k.pack = 0u;
+        k.paint = false;
         if (any && seenBy(mask, v)) k = pick(pl, v);
         uint band = v == 0u ? k.slot : 0u;
-        uint myLeaf = 0u, myWood = 0u, myDisc = 0u, myPack = 0u;
+        uint myLeaf = 0u, myWood = 0u, myDisc = 0u, myPack = 0u, myPaint = 0u;
         if (k.on) {
-            if (k.disc) {
+            if (k.paint) {
+                myPaint = atomicAdd(sPaint, 1u);
+            } else if (k.disc) {
                 myDisc = atomicAdd(sDisc, 1u);
             } else {
                 if (k.pack > 0u) myPack = atomicAdd(sPack[band * uint(PP_PACK_CLASSES) + k.pack - 1u], 1u);
@@ -447,6 +485,7 @@ void main() {
             if (sLeaf[lid] > 0u) sLeaf[lid] = atomicAdd(work.w[PP_N_CURSOR + s], sLeaf[lid]);
             if (sWood[lid] > 0u) sWood[lid] = atomicAdd(work.w[PP_N_CURSOR + PP_SLOTS + s], sWood[lid]);
             if (lid == 0u && v > 0u && sDisc > 0u) sDisc = atomicAdd(work.w[PP_N_CURSOR + 2 * PP_SLOTS + s], sDisc);
+            if (lid == 0u && sPaint > 0u) sPaint = atomicAdd(work.w[PP_N_PAINT_CURSOR], sPaint);
         }
         for (uint i = lid; i < packs; i += uint(PP_GROUP_SIZE)) {
             uint s = v == 0u ? cameraSlot(i / uint(PP_PACK_CLASSES)) : tileSlot(v - 1u);
@@ -454,7 +493,11 @@ void main() {
             if (sPack[i] > 0u) sPack[i] = atomicAdd(work.w[PP_N_PACK_CURSOR + g], sPack[i]);
         }
         barrier();
-        if (k.on) {
+        if (k.on && k.paint) {
+            uint d = sPaint + myPaint;
+            if (d < work.w[PP_N_PAINT_FIT])
+                chunks.c[work.w[PP_N_PAINT_START] + d] = vec4(uintBitsToFloat(plant), 0.0, 0.0, 0.0);
+        } else if (k.on) {
             uint s = k.slot;
             float caster = v == 0u ? 0.0 : 1.0;
             if (k.pack > 0u) {

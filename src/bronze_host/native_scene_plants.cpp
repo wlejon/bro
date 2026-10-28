@@ -114,7 +114,8 @@ void bro_scene_SceneNode_plantPlacement(void* self, bronze_native_buffer* out) {
     auto* pl = plantsOf(self);
     if (!pl) { transferBuffer(std::vector<double>{}, out); return; }
     transferBuffer(std::vector<double>{static_cast<double>(pl->cells().size()),
-                                       static_cast<double>(pl->placementPending())},
+                                       static_cast<double>(pl->placementPending()),
+                                       static_cast<double>(pl->drawReach()), static_cast<double>(pl->paintReach())},
                    out);
 }
 
@@ -123,7 +124,7 @@ void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32
     if (!pl) return;
     scene::PlantsNode::Params p = pl->params();
     float* fields[scene::PlantsNode::kParamCount] = {&p.pixels, &p.minElements, &p.woodRange,
-                                                         &p.shadowTexels, &p.shadowRange};
+                                                         &p.shadowTexels, &p.shadowRange, &p.crowns};
     for (uint32_t i = 0; i < params_len && i < static_cast<uint32_t>(scene::PlantsNode::kParamCount); ++i)
         if (std::isfinite(params[i])) *fields[i] = static_cast<float>(params[i]);
     pl->setParams(p);
@@ -137,6 +138,6 @@ void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out) {
     const scene::PlantsNode::Stats& s = pl->stats();
     transferBuffer(std::vector<double>{static_cast<double>(pl->plantCount()), static_cast<double>(s.plants),
                                        static_cast<double>(s.elements), static_cast<double>(s.limbs),
-                                       static_cast<double>(s.shadowElements)},
+                                       static_cast<double>(s.shadowElements), static_cast<double>(s.painted)},
                    out);
 }

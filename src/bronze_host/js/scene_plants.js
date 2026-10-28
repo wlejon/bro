@@ -29,8 +29,9 @@
         ['leafLength', 1, 0.22], ['limbs', 1, 18], ['shape', 1, 0], ['density', 1, 0.6],
         ['albedo', 3, [0.18, 0.27, 0.07]], [null, 1, 0],
     ];
-    // (How far they are drawn is the scene's real band, scene.setBands.)
-    const PARAMS = ['pixels', 'minElements', 'woodRange', 'shadowTexels', 'shadowRange'];
+    // (How far they are drawn is the scene's real band, scene.setBands;
+    // `crowns`, how far past it they are painted, within its painted band.)
+    const PARAMS = ['pixels', 'minElements', 'woodRange', 'shadowTexels', 'shadowRange', 'crowns'];
 
     function parseColor(c) {
         if (typeof c === 'string' && c[0] === '#') {
@@ -174,11 +175,11 @@
     fn(P, 'plantPlacement', function plantPlacement() {
         const a = __bro_native.scene.SceneNode_plantPlacement(this);
         if (a.length < 2) return undefined;
-        return { cells: a[0], pending: a[1] };
+        return { cells: a[0], pending: a[1], drawn: a[2], painted: a[3] };
     });
     fn(P, 'plantStats', function plantStats() {
         const a = __bro_native.scene.SceneNode_plantStats(this);
         if (a.length < 4) return undefined;
-        return { plants: a[0], visible: a[1], elements: a[2], limbs: a[3], shadowElements: a[4] };
+        return { plants: a[0], visible: a[1], elements: a[2], limbs: a[3], shadowElements: a[4], painted: a[5] };
     });
 })();

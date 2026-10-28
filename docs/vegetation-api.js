@@ -479,10 +479,12 @@
  * @property {number} [pixels=14] - the size on screen (px) an element is kept to past full detail.
  * @property {number} [minElements=12] - the fewest a plant is drawn with.
  * @property {number} [woodRange=220] - past this (m) no trunks or limbs.
- * (Past the scene's real band, scene.setBands, no plant is drawn: a `range` here throws.)
+ * (Within the scene's real band, scene.setBands, a plant is drawn as itself: a `range` here throws.)
+ * @property {number} [crowns=400] - past the real band to this (m, within the painted band) a plant is
+ *   painted: one crown, a lobed disc facing the eye, its species' colour; past it the land's canopy.
  * @property {number} [shadowTexels=12] - as `pixels`, in a shadow page's texels, for its casters.
- * @property {number} [shadowRange=1500] - past this (m), or `range`, no plant casts.
- * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `range` (above); null none.
+ * @property {number} [shadowRange=1500] - past this (m), or the real band, no plant casts (the land's canopy casts past it).
+ * @property {SceneNode|null} [land] - the land they stand on, which is their canopy past `crowns` (above); null none.
  *   A land with processes (docs/land-api.js) adds its grid's height to the rules' ground, and until the land is ready
  *   no plant is placed (plantPlacement().pending stays above 0).
  * @property {boolean} [castsShadow=false]
@@ -770,10 +772,11 @@ class SceneNode {
   /**
    * Plants: what a recent frame drew: `plants` (all of them), `visible`
    * (in the camera's view), `elements` and `limbs` (the camera's), and
-   * `shadowElements` (every shadow view's casters summed, a disc one). The
+   * `shadowElements` (every shadow view's casters summed, a disc one), and
+   * `painted` (the camera's painted crowns, past the real band). The
    * plan's counts are read back from the GPU a frame or two late: after a
    * change, draw a few frames (`advanceTime`) before reading them.
-   * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number}|undefined}
+   * @returns {{plants: number, visible: number, elements: number, limbs: number, shadowElements: number, painted: number}|undefined}
    */
   plantStats() {}
 
@@ -781,9 +784,12 @@ class SceneNode {
    * Plants: the rules' placement now: `cells` placed and `pending` (wanted
    * and not yet placed; 1 before the first frame has looked about the
    * eye). A script waiting for the world in reach draws frames until
-   * `pending` is 0.
+   * `pending` is 0. `drawn` and `painted`: how far from the eye the
+   * plants are drawn as themselves and painted this frame (the real band
+   * and `crowns` within the painted band, nearer while leaves within them
+   * are still to be placed; the land's canopy stands for them past it).
    * @example for (let i = 0; i < 600 && plants.plantPlacement().pending > 0; i++) advanceTime(16);
-   * @returns {{cells: number, pending: number}|undefined}
+   * @returns {{cells: number, pending: number, drawn: number, painted: number}|undefined}
    */
   plantPlacement() {}
 

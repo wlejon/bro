@@ -140,15 +140,18 @@ public:
         float woodRange = 220.0f;  // past this (m) no trunks or limbs are drawn
         float shadowTexels = 12.0f; // as `pixels`, in a shadow page's texels, for its casters
         float shadowRange = 1500.0f; // past this (m), or the real band, no plant casts (the shadow views cut nearer)
+        float crowns = 400.0f;     // past the real band to this (m, within the painted band) a plant is painted: one crown
     };
-    static constexpr int kParamCount = 5;
+    static constexpr int kParamCount = 6;
     void setParams(const Params& p);
     const Params& params() const { return params_; }
-    /// The scene's real band (SceneGraph::Bands::real, m): past it no plant
-    /// is drawn or cast, the land's canopy standing for them. Its drawer
-    /// sets it each frame from the scene it is drawn in.
-    void setReal(float m) { real_ = m; }
-    float real() const { return real_; }
+    /// The scene's bands (SceneGraph::Bands): within the real band a plant
+    /// is drawn as itself and cast; past it, to `crowns` (no farther than
+    /// the painted band), painted, one crown a plant, cast by the land's
+    /// canopy; past that the canopy stands for them. Its drawer sets them
+    /// each frame from the scene it is drawn in.
+    void setBands(const Bands& b) { bands_ = b; }
+    float real() const { return bands_.real; }
 
     /// The plants' cells (world_cells.h): each leaf's run of the pool,
     /// bounded by its plants' bounding spheres' boxes (a little wider: the
@@ -166,6 +169,11 @@ public:
     /// placement sees the woods' canopy, not bare ground, where they are
     /// still to come.
     float drawReach() const;
+    /// How far its plants are painted this frame: `crowns` within the
+    /// painted band (never nearer than the real band), nearer while leaves
+    /// within it are still to be placed, as drawReach. The land's canopy
+    /// comes in at it.
+    float paintReach() const;
 
     /// Moves when the cells change (a leaf placed, dropped or set, the
     /// species).
@@ -189,6 +197,7 @@ public:
         uint32_t elements = 0;   // leaf elements drawn
         uint32_t limbs = 0;      // trunks and limbs drawn
         uint32_t shadowElements = 0;   // leaf elements cast, every shadow view's summed
+        uint32_t painted = 0;    // plants painted (one crown each) in view
     };
     /// Where the stats come from: the drawer plans the node on the GPU
     /// (scene_plants_gpu_plan.cpp), a frame's read back once the GPU has
@@ -267,7 +276,7 @@ private:
     const Place* place_ = nullptr;
     double radius_ = 0.0;   // the body's the plants were placed on (0 the plane)
     Params params_;
-    float real_ = Bands::kRealDefault;
+    Bands bands_;
     uint64_t generation_ = 0;
     struct Change {
         uint64_t generation;
