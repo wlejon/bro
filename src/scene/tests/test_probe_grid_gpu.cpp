@@ -498,8 +498,9 @@ void buildTraceScene(scene::SceneGraph& graph, const TraceScene& s) {
     graph.renderer().setProbeGrid(true);
     // The refreshes the settle counts on, whatever the device: under the
     // 2.78 ms target a slower GPU than a 4090 (an M2) is granted cascade 0's
-    // slices and too few of cascade 1's, its ground light 5% short.
-    graph.renderer().setFrameTargetMs(50.0f);
+    // slices and too few of cascade 1's, its ground light 5% short; CI's
+    // lavapipe runs over even 50 ms.
+    graph.renderer().setFrameTargetMs(1000.0f);
 }
 
 /// A probe's SH, a channel: (c0, cx, cy, cz).

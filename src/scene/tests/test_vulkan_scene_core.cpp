@@ -557,7 +557,10 @@ int main() {
             context.frames().beginFrame();
             VkCommandBuffer cmd = device.beginFrame();
             timer.begin(cmd);
-            world.beginFrame(&timer, 2.78f);
+            // A target no device misses: on a software rasterizer (CI's
+            // lavapipe) the frames run far over 2.78 ms, the budget sits at
+            // its floor and nothing is granted. The grants are the subject.
+            world.beginFrame(&timer, 1000.0f);
             for (uint64_t k = 0; k < 4; ++k) world.policy().offer({k, 0, kind, 10.0f - k, 1.0, false});
             world.policy().schedule();
             assert(!world.policy().granted(kind).empty());
