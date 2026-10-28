@@ -2,7 +2,9 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "util/log.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -50,6 +52,7 @@ std::unordered_map<VkPipeline, PipelineRecord>& pipelines() {
 std::atomic<int> s_active{0};
 uint64_t s_generation = 0;     // set B's load, counted from 1; 0 = none loaded
 std::string s_dirB;
+std::vector<std::string> s_definesB;
 thread_local bool t_compilingB = false;
 thread_local bool t_buildingTwin = false;
 
@@ -152,6 +155,11 @@ const std::string& setBSourceDir() {
     return t_compilingB ? s_dirB : s_none;
 }
 
+const std::vector<std::string>& setBDefines() {
+    static const std::vector<std::string> s_none;
+    return t_compilingB ? s_definesB : s_none;
+}
+
 void noteModule(VkShaderModule module, const uint32_t* code, size_t sizeBytes) {
     if (!module || !code) return;
     const size_t n = sizeBytes / sizeof(uint32_t);
@@ -208,7 +216,16 @@ void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModul
 
 } // namespace shader_sets
 
-bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* error) {
+bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* error,
+                    const std::vector<std::string>& defines) {
+    for (const std::string& d : defines) {
+        const bool ident = !d.empty() && !std::isdigit(static_cast<unsigned char>(d[0])) &&
+                           std::all_of(d.begin(), d.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+        if (!ident) {
+            if (error) *error = "shader set: define '" + d + "' is not an identifier";
+            return false;
+        }
+    }
     std::string dir = dirIn;
     for (char& c : dir)
         if (c == '\\') c = '/';
@@ -220,8 +237,11 @@ bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* 
     std::lock_guard<std::recursive_mutex> g(lock());
     destroyTwins();
     s_dirB = dir;
+    s_definesB = defines;
     ++s_generation;
-    LOG_INFO("Shader set B: %s", dir.c_str());
+    std::string named;
+    for (const std::string& d : defines) named += " " + d;
+    LOG_INFO("Shader set B: %s%s%s", dir.c_str(), named.empty() ? "" : ", defining", named.c_str());
     for (auto& [p, rec] : pipelines()) buildTwin(rec);
     if (info) *info = shaderSetInfo();
     return true;

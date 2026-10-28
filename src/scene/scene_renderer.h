@@ -158,7 +158,9 @@ public:
         int shaders = 0, differing = 0, pipelines = 0, twinned = 0;
         std::vector<std::string> failed;
     };
-    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error);
+    /// `defines`: names every shader of set B is compiled with (#define NAME 1).
+    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error,
+                              const std::vector<std::string>& defines = {});
     /// 0 (A) or 1 (B, once loaded); false when it cannot be. `rebake`: the
     /// bakes kept across frames are made again by it (for a still).
     static bool useShaderSet(int set, bool rebake = false);

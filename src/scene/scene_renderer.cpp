@@ -220,9 +220,10 @@ SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
 }
 } // namespace
 
-bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error) {
+bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error,
+                                  const std::vector<std::string>& defines) {
     vk::ShaderSetInfo info;
-    if (!vk::loadShaderSetB(dir, &info, error)) return false;
+    if (!vk::loadShaderSetB(dir, &info, error, defines)) return false;
     out = summaryOf(info);
     return true;
 }

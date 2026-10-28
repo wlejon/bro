@@ -52,6 +52,10 @@ void noteSpirv(std::shared_ptr<ShaderRecipe> recipe);
 bool compilingSetB();
 /// The tree set B's compiles read their sources from ("" otherwise).
 const std::string& setBSourceDir();
+/// The names set B's compiles define (each `#define NAME 1` after the
+/// #version line; none otherwise): one tree with its parts guarded
+/// `#ifndef NAME` loaded once a name, to time each part as knocked out.
+const std::vector<std::string>& setBDefines();
 
 /// SceneVkShaderModule notes each module it makes and forgets it at destroy.
 void noteModule(VkShaderModule module, const uint32_t* code, size_t sizeBytes);
@@ -76,9 +80,11 @@ struct ShaderSetInfo {
 };
 
 /// Load set B from the shader tree at `dir` (it must hold
-/// builtin_shaders.def), replacing a set loaded before. False with the
-/// reason in *error when the tree is not one.
-bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error);
+/// builtin_shaders.def), replacing a set loaded before, every shader of it
+/// compiled with `defines` (names, setBDefines). False with the reason in
+/// *error when the tree is not one or a name is not an identifier.
+bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error,
+                    const std::vector<std::string>& defines = {});
 /// The set the scene binds from now on: 0 (A) or 1 (B; only once loaded).
 /// `rebake`: the bakes the scene keeps across frames (the clouds' cover,
 /// cache and globe) are made again, by the set now active, as for a new

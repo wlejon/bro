@@ -377,6 +377,14 @@ std::vector<uint32_t> compileGlslImpl(const std::string& glslSource, VkShaderSta
         if (errOut) *errOut = std::move(log);
         return {};
     }
+    // (Shader set B's defines, after the #version line.)
+    if (!shader_sets::setBDefines().empty()) {
+        const size_t version = source.find("#version");
+        const size_t lineEnd = version == std::string::npos ? std::string::npos : source.find('\n', version);
+        std::string lines;
+        for (const std::string& d : shader_sets::setBDefines()) lines += "#define " + d + " 1\n";
+        if (lineEnd != std::string::npos) source.insert(lineEnd + 1, lines);
+    }
     const std::string cachePath = spirvCachePath(source, stage);
     if (!cachePath.empty()) {
         std::vector<uint32_t> cached = readSpirvCache(cachePath);
@@ -499,6 +507,7 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileBuiltinFromSource(BuiltinSce
     std::vector<std::string> defines;
     std::istringstream words(info->defines);
     for (std::string d; words >> d;) defines.push_back(d);
+    for (const std::string& d : shader_sets::setBDefines()) defines.push_back(d);
     std::string text, err;
     if (!render::preprocessGlslFile(path, defines, text, nullptr, &err, dir)) {
         if (errOut) *errOut = std::move(err);

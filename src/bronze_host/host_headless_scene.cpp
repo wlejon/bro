@@ -69,6 +69,21 @@ std::string optString(Value opts, const char* key) {
     return ev::isString(v) ? ev::toUtf8(v) : std::string();
 }
 
+// A `defines` option: names split at spaces and commas ("KO_SUN KO_FORMS").
+std::vector<std::string> optNames(Value opts, const char* key) {
+    std::vector<std::string> names;
+    std::string cur;
+    for (char c : optString(opts, key) + " ") {
+        if (c == ' ' || c == ',') {
+            if (!cur.empty()) names.push_back(std::move(cur));
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    return names;
+}
+
 Value fromJson(const nlohmann::json& j) {
     ev::CallResult r = ev::parseJson(j.dump());
     return r.thrown ? ev::undefined() : r.value;
@@ -226,15 +241,16 @@ void installHeadlessScenePerf(engine::Engine& engine,
             if (!a.empty() && !ev::isUndefined(a[0])) scene::SceneRenderer::setAsyncShaders(ev::toBool(a[0]));
             return ev::fromBool(scene::SceneRenderer::asyncShaders());
         });
-    // perf.loadShaderSet(dir): set B from a shader tree.
-    setPerfFn("loadShaderSet", 1,
+    // perf.loadShaderSet(dir, { defines }): set B from a shader tree, its
+    // shaders compiled with `defines` ("A B": #define A 1 ...).
+    setPerfFn("loadShaderSet", 2,
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty() || !ev::isString(a[0])) return ev::throwTypeError("loadShaderSet(dir) requires a directory");
             scene::SceneRenderer::ShaderSetSummary s;
             std::string err;
             const std::string dir = absoluteDir(ev::toUtf8(a[0]));
             requireHarnessPathAccess(engine, dir, false);  // the harness's, not the app's (host_access.h)
-            if (!scene::SceneRenderer::loadShaderSet(dir, s, &err))
+            if (!scene::SceneRenderer::loadShaderSet(dir, s, &err, optNames(a.size() > 1 ? a[1] : ev::undefined(), "defines")))
                 return ev::throwTypeError(err.c_str());
             return fromJson(summaryJson(s));
         });
