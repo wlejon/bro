@@ -12,7 +12,7 @@ layout(location = 3) out vec3 outAlbedo;
 layout(location = 4) flat out int outSpecies;
 layout(location = 5) out vec4 outCrown;
 layout(location = 6) out vec2 outShade;
-layout(location = 7) out vec3 outInfo;   // x far, y wood, z the outline's detail
+layout(location = 7) out vec3 outInfo;   // x far, y 1 wood (2 a painted crown), z the outline's detail
 layout(location = 8) out vec2 outLeafUV;
 
 #include "common/scene_camera.glsl"
@@ -26,16 +26,11 @@ layout(location = 8) out vec2 outLeafUV;
 // by the plant's own seed. Lit as a dome: its middle toward the eye, its
 // rim outward; coloured its species' mean, shifted by its tint, a daub
 // standing for the whole crown.
-#define PLANT_PAINT_SIDES 12
-#ifndef PLANT_PAINT_FILL
+#define PLANT_PAINT_SIDES 24   // PP_PAINT_SIDES
+// (Its rim a little within the envelope's outline: a crown's foliage leaves
+// the ground showing at its edge, and a disc to the whole outline covered
+// more than the real crown and read the woods' pattern worse.)
 #define PLANT_PAINT_FILL 0.9
-#endif
-#ifndef PLANT_PAINT_NEAR
-#define PLANT_PAINT_NEAR 1.0
-#endif
-#ifndef PLANT_PAINT_RIM
-#define PLANT_PAINT_RIM 0.75
-#endif
 
 // The envelope's support in unit direction u (plant frame, y up, about its
 // centre): how far it reaches along u. Across the view it is the outline's
@@ -62,17 +57,28 @@ bool plantPainted(int pi, int v, out PlantVertex o) {
     right = dot(right, right) > 1e-6 ? normalize(right) : vec3(1.0, 0.0, 0.0);
     vec3 up = cross(toEye, right);
     int tri = v / 3, corner = v % 3;
-    // (Its middle on the envelope's near side, so the disc is the crown's
-    // face toward the eye, lit as its skin, not as its core. The yaw turns
-    // neither support: the envelope is round about its axis.)
+    // (Flat, halfway to the envelope's near side, so the disc is lit as the
+    // crown's skin more than its core, and never stands much before the
+    // crown, before the real plants nearer; flat, so two crowns overlapping
+    // stack one before the other, where fans coned toward the eye cut
+    // through each other in wedges. The yaw turns neither support: the
+    // envelope is round about its axis.)
     vec3 n = toEye;
-    vec3 pos = centre + toEye * (PLANT_PAINT_NEAR * plantCrownSupport(cr, toEye));
+    vec3 front = centre + toEye * (0.5 * plantCrownSupport(cr, toEye));
+    vec3 pos = front;
     if (corner > 0) {
         float t = 6.2831853 * float(tri + corner - 1) / float(PLANT_PAINT_SIDES);
         vec3 w = cos(t) * right + sin(t) * up;
         float a = 6.2831853 * plantRand(p.seed, 31u), b = 6.2831853 * plantRand(p.seed, 32u);
-        float lumps = 1.0 + 0.12 * sin(3.0 * t + a) + 0.08 * sin(5.0 * t + b);
-        pos = centre + w * (PLANT_PAINT_FILL * plantCrownSupport(cr, w) * lumps);
+        // (Its outline lobed, then ragged: a crown's rim is clumps, not an
+        // arc. Its 24 sides keep a near crown's edges from reading straight.)
+        float lumps = 1.0 + 0.12 * sin(3.0 * t + a) + 0.08 * sin(5.0 * t + b) + 0.06 * sin(9.0 * t + a + b) +
+                      0.05 * (plantRand(p.seed, uint(tri + corner - 1) % uint(PLANT_PAINT_SIDES) + 40u) - 0.5);
+        float reach = PLANT_PAINT_FILL * plantCrownSupport(cr, w) * lumps;
+        pos = front + w * reach;
+        // (Across the disc in the crown's horizontal radii, so the same on
+        // every triangle: a point's uv is where it is, not which spoke.)
+        o.leafUV = vec2(cos(t), sin(t)) * (reach / max(cr.radii.x, 1e-3));
         n = normalize(PLANT_PAINT_RIM * w + toEye);
     }
     o.pos = pos;
@@ -113,7 +119,7 @@ void main() {
     outSpecies = o.species;
     outCrown = o.crown;
     outShade = o.shade;
-    outInfo = vec3(o.far, wood ? 1.0 : 0.0, o.outline);
+    outInfo = vec3(o.far, mode == 2 ? 2.0 : wood ? 1.0 : 0.0, o.outline);
     outLeafUV = o.leafUV;
 }
 

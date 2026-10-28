@@ -116,7 +116,7 @@
 #define PP_A_WORDS              (PP_A_COMMANDS + PP_A_COMMAND_WORDS * (PP_A_PAINT + 1))
 // A painted crown: a fan of PP_PAINT_SIDES triangles about its middle
 // (plants.vert), drawn as a list.
-#define PP_PAINT_SIDES          12
+#define PP_PAINT_SIDES          24
 #define PP_PAINT_VERTS          (3 * PP_PAINT_SIDES)
 
 #endif

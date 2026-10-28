@@ -18,8 +18,8 @@ layout(location = 3) in vec3 inAlbedo;
 layout(location = 4) flat in int inSpecies;
 layout(location = 5) in vec4 inCrown;
 layout(location = 6) in vec2 inShade;    // the crown's height radius, how deep in it
-layout(location = 7) in vec3 inInfo;    // x far, y wood, z the outline's detail
-layout(location = 8) in vec2 inLeafUV;   // across, along the element
+layout(location = 7) in vec3 inInfo;    // x far, y 1 wood (2 a painted crown), z the outline's detail
+layout(location = 8) in vec2 inLeafUV;   // across, along the element; a painted crown's point on its disc
 
 layout(location = 0) out vec4 outColor;
 // (mesh.frag's: the opaque scope's sub-pixel mark; a plant is a surface
@@ -49,15 +49,26 @@ void main() {
     vec3 pos = inWorldPos;
     float camDist = max(length(pos), 1e-4);
     vec3 V = -pos / camDist;
-    bool wood = inInfo.y > 0.5;
+    bool painted = inInfo.y > 1.5;
+    bool wood = inInfo.y > 0.5 && !painted;
     float far = inInfo.x;
     // How deep in its lobe (0 skin .. 1 core); a daub standing for many
     // leaves, their mean.
     float depth = mix(inShade.y, 0.35, far);
 
     vec3 nLeaf = normalize(inLeafNormal);
-    if (!wood && !gl_FrontFacing) nLeaf = -nLeaf;
+    if (!wood && !painted && !gl_FrontFacing) nLeaf = -nLeaf;
     vec3 nForm = normalize(inCrownNormal);
+    if (painted) {
+        // A painted crown's dome, from its point on the disc (plants.vert's
+        // basis about the crown's middle, its rim's normal as there): smooth
+        // across its triangles' spokes, where the vertices' normals creased.
+        vec3 toEye = -normalize(inCrown.xyz);
+        vec3 right = cross(vec3(0.0, 1.0, 0.0), toEye);
+        right = dot(right, right) > 1e-6 ? normalize(right) : vec3(1.0, 0.0, 0.0);
+        vec3 up = cross(toEye, right);
+        nForm = nLeaf = normalize(PLANT_PAINT_RIM * (inLeafUV.x * right + inLeafUV.y * up) + toEye);
+    }
     // A near leaf as a leaf: how many pixels it spans (its detail fades in
     // from 3 to 12 along it, so a canopy at 20 m and on holds its mean and
     // never shimmers), its blade cupped across its midrib and arched along
@@ -65,7 +76,7 @@ void main() {
     // the element's frame, from the point's derivatives), and how near the
     // blade's edge a point lies (thinner there, so more light through).
     float leafDetail = 0.0, edge = 0.0;
-    if (!wood) {
+    if (!wood && !painted) {
         vec2 dux = dFdx(inLeafUV), duy = dFdy(inLeafUV);
         vec3 dpx = dFdx(pos), dpy = dFdy(pos);
         float span = 1.0 / max(max(length(vec2(dux.y, duy.y)), length(vec2(dux.x, duy.x))), 1e-4);
@@ -92,7 +103,7 @@ void main() {
             nLeaf = normalize(nLeaf - bend * leafDetail);
         }
     }
-    PlantSurface surf = plantSurface(PlantFragment(pos, nLeaf, nForm, inAlbedo, inLeafUV, far, depth, wood, inSpecies));
+    PlantSurface surf = plantSurface(PlantFragment(pos, nLeaf, nForm, inAlbedo, inLeafUV, far, depth, wood, inSpecies, painted));
     vec3 N = surf.normal;
     vec3 albedo = surf.albedo;
     float density = plantSpecies(inSpecies).density;
@@ -171,7 +182,8 @@ void main() {
         indirect += sceneAmbientIrradiance(pos, probe, reflect(-V, nLeaf)) / PI * F * crowd * nearW;
     }
 
-    vec3 color = direct + through + indirect;    SceneAir air = sceneAir(pos, camDist);
+    vec3 color = direct + through + indirect;
+    SceneAir air = sceneAir(pos, camDist);
     color = color * air.transmittance + air.inscatter;
     indirect *= air.transmittance;
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), mix(1.0, 0.0, air.fade));

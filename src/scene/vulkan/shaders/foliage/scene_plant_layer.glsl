@@ -30,8 +30,9 @@
 //   plantLimb      tube `limb` of a plant (0 its trunk, then its limbs): its
 //                  ends, radii and colour.
 //   plantSway      the wind's push on a point of a plant.
-//   plantSurface   (PLANT_SHADE) what a fragment of an element or a tube is:
-//                  its colour, the normal it is lit by, the light through it.
+//   plantSurface   (PLANT_SHADE) what a fragment of an element, a tube or a
+//                  painted crown is: its colour, the normal it is lit by,
+//                  the light through it.
 
 #define PLANT_MAX_LIMBS 48   // PP_MAX_LIMBS
 
@@ -75,12 +76,20 @@ struct PlantFragment {
     vec3 normal;        // its own face, toward the eye's side
     vec3 crownNormal;
     vec3 albedo;        // as built
-    vec2 uv;            // an element's (plantLeafPoint's); a tube's 0
+    vec2 uv;            // an element's (plantLeafPoint's); a tube's 0; a painted crown's point on its disc
     float far;
     float depth;
     bool wood;
     int species;
+    // A painted crown (past the scene's real band: the whole plant one disc
+    // facing the eye, lit as a dome; far 1): uv its point across the disc
+    // seen from the eye in the crown's horizontal radii, (0, 0) its middle
+    // (about 1 at its rim), x to the eye's right and y up. What it looks like within the disc (its clumps,
+    // their shade) is the module's.
+    bool painted;
 };
+// (A painted crown's dome: its rim's normal this much outward of the eye's.)
+#define PLANT_PAINT_RIM 0.75
 
 // What a fragment is. The engine lights it: the sun through the crown's
 // envelope (its density), wrapped about `normal`; `glow` the light the sun
