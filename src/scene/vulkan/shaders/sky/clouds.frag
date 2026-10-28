@@ -672,6 +672,15 @@ void main() {
     // left of the pixel past a rim it grazed is what lies behind it.)
     while (wl < 1.0 && steps < CL_VIEW_STEPS && (m.T > CL_OPAQUE || cover < 1.0)) {
         ++steps;
+        // Each mode picks where the forms are read (if at all) and then
+        // takes what they say: one read a step, whatever mode each of a
+        // warp's views is in. (Read in each mode's own branch, a warp with
+        // views tracing, halving and inside read them three times a step.)
+        ClForms f = ClForms(0.0, -1.0, 0.0, 0.0);
+        bool wantForms = false;
+        ClAt w;
+        float x = 0.0, L = 0.0, foot = 0.0, lod = 0.0, fMean = 0.0, skin = 0.0;
+        int kv = CL_VOL_LEVELS;
         if (mode == CL_TRACE) {
             if (t >= sp.y) {
                 if (span == 1 || spanB.x >= spanB.y) break;
@@ -680,7 +689,7 @@ void main() {
                 t = probeEnd = xPrev = sp.x;
             }
             vec3 a = ro + rd * t;
-            ClAt w = clAt(a);
+            w = clAt(a);
             int k = cloudCacheLevel(w.xy, pixel * t);
             if (k >= CL_CACHE_LEVELS) {   // (past the cache: nothing held)
                 t = xPrev = sp.y;
@@ -741,8 +750,8 @@ void main() {
                     }
                 }
             }
-            float foot = pixel * t;
-            float lod = clLod(w, foot);
+            foot = pixel * t;
+            lod = clLod(w, foot);
             // How far the view is sure to meet no cloud: the cache's distance
             // (this level's, or a coarser one's where that says more), and
             // the base's own: how far it must still rise before even the
@@ -764,7 +773,7 @@ void main() {
             // metre apart near it, finer than any of them, and spent every
             // view's steps in its first hundred metres: every cloud past
             // them was gone until the eye left the reach.)
-            float skin = max(min(foot * CL_SKIN_PIXELS, max(foot * CL_SKIN_RISE, CL_SKIN_RISE_LEAST) / max(vs, 1e-3)), skinLeast);
+            skin = max(min(foot * CL_SKIN_PIXELS, max(foot * CL_SKIN_RISE, CL_SKIN_RISE_LEAST) / max(vs, 1e-3)), skinLeast);
             float d = max(max(dFree, dB), skip);
             if (d > skin) {
                 if (d == dFree) ++dbgFree; else if (d == dB) ++dbgB; else ++dbgSkip;
@@ -784,7 +793,56 @@ void main() {
                 t += skin;
                 continue;
             }
-            ClForms f = clFormsAt(w, lod, foot, foot, m.T > CL_DETAIL_SEEN);
+            fMean = foot;
+            wantForms = true;
+        } else if (mode == CL_HALVE) {
+            // The face by false position on the forms' signed field (where
+            // its value at the near end is known; halving else), each end
+            // that stays put twice halved in weight (Illinois), to
+            // clFaceTol.
+            ++dbgHalve;
+            float s = fLo < 0.0 ? clamp(fLo / (fLo - fHi), 0.1, 0.9) : 0.5;
+            x = mix(hLo, hHi, s);
+            w = clAt(ro + rd * x);
+            foot = pixel * x;
+            lod = clLod(w, foot);
+            fMean = foot;
+            wantForms = true;
+        } else {
+            // Inside: the next piece, sampled at its middle.
+            if (t >= sp.y) {
+                clCover(m, coverL, coverT, cover);
+                cover = 1.0;
+                mode = CL_TRACE;
+                tFace = -1.0;
+                continue;
+            }
+            ++dbgPiece;
+            L = min(len, sp.y - t);
+            x = t + 0.5 * L;
+            w = clAt(ro + rd * x);
+            foot = pixel * x;
+            lod = clLod(w, foot);
+            // (The forms' mean over the piece: it is taken as one, so what is
+            // finer than it along the view is its mean, not a point of it that
+            // the next pixel's piece misses.)
+            // (Deep in the cloud, where the detail no longer shows, or where the
+            // piece is as long as a cell, the volume's extinction there over a
+            // cell about the piece's mean: one fetch.)
+            vec3 v = clouds.volEye.xyz + dl * x;
+            if (tFace >= 0.0 && (tauSeen > CL_IN_FORMS || foot >= clouds.volA.w)) kv = cloudVolLevel(v, max(foot, CL_PIECE_MEAN * L));
+            if (kv < CL_VOL_LEVELS) {
+                // (Its cover its cell's, as wide as the pixel or finer.)
+                vec4 vs = cloudVolSample(kv, v);
+                f.sigma = vs.x;
+                f.cover = mix(vs.z, 1.0, cloudSurfaceBlur(foot));
+            } else {
+                fMean = max(foot, CL_PIECE_MEAN * L);
+                wantForms = true;
+            }
+        }
+        if (wantForms) f = clFormsAt(w, lod, fMean, foot, m.T > CL_DETAIL_SEEN);
+        if (mode == CL_TRACE) {
             if (f.sigma <= 0.0) ++dbgSkin; else ++dbgIn;
             if (f.sigma <= 0.0) {
                 clearAt = xPrev = t;
@@ -818,16 +876,6 @@ void main() {
             continue;
         }
         if (mode == CL_HALVE) {
-            // The face by false position on the forms' signed field (where
-            // its value at the near end is known; halving else), each end
-            // that stays put twice halved in weight (Illinois), to
-            // clFaceTol.
-            ++dbgHalve;
-            float s = fLo < 0.0 ? clamp(fLo / (fLo - fHi), 0.1, 0.9) : 0.5;
-            float x = mix(hLo, hHi, s);
-            ClAt w = clAt(ro + rd * x);
-            float foot = pixel * x;
-            ClForms f = clFormsAt(w, clLod(w, foot), foot, foot, m.T > CL_DETAIL_SEEN);
             if (f.sigma > 0.0) {
                 hHi = x;
                 fHi = f.face;
@@ -847,38 +895,7 @@ void main() {
             }
             continue;
         }
-        // Inside: the next piece, sampled at its middle.
-        if (t >= sp.y) {
-            clCover(m, coverL, coverT, cover);
-            cover = 1.0;
-            mode = CL_TRACE;
-            tFace = -1.0;
-            continue;
-        }
-        ++dbgPiece;
-        float L = min(len, sp.y - t);
-        float x = t + 0.5 * L;
-        ClAt w = clAt(ro + rd * x);
-        float foot = pixel * x;
-        float lod = clLod(w, foot);
-        // (The forms' mean over the piece: it is taken as one, so what is
-        // finer than it along the view is its mean, not a point of it that
-        // the next pixel's piece misses.)
-        // (Deep in the cloud, where the detail no longer shows, or where the
-        // piece is as long as a cell, the volume's extinction there over a
-        // cell about the piece's mean: one fetch.)
-        ClForms f = ClForms(0.0, -1.0, 0.0, 0.0);
-        int kv = CL_VOL_LEVELS;
-        vec3 v = clouds.volEye.xyz + dl * x;
-        if (tFace >= 0.0 && (tauSeen > CL_IN_FORMS || foot >= clouds.volA.w)) kv = cloudVolLevel(v, max(foot, CL_PIECE_MEAN * L));
-        if (kv < CL_VOL_LEVELS) {
-            // (Its cover its cell's, as wide as the pixel or finer.)
-            vec4 vs = cloudVolSample(kv, v);
-            f.sigma = vs.x;
-            f.cover = mix(vs.z, 1.0, cloudSurfaceBlur(foot));
-        } else {
-            f = clFormsAt(w, lod, max(foot, CL_PIECE_MEAN * L), foot, m.T > CL_DETAIL_SEEN);
-        }
+        // Inside: the piece read.
         float sigma = f.sigma;
         if (sigma <= 0.0) {
             // Out of the cloud: traced on from here.
