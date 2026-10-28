@@ -6,15 +6,21 @@
 // node's own three (scene_mesh_drawer_grass.cpp's groundSet).
 
 // A slot an array layer, each a tile with its border: GroundBake's a, b, c, d.
-layout(set = 4, binding = 4) uniform sampler2DArray groundLayerA;
-layout(set = 4, binding = 5) uniform sampler2DArray groundLayerB;
-layout(set = 4, binding = 6) uniform sampler2DArray groundLayerC;
-layout(set = 4, binding = 7) uniform sampler2DArray groundLayerD;
+// (Bare images, through scene_grass.glsl's customSamplers.)
+layout(set = 4, binding = 4) uniform texture2DArray groundLayerAImage;
+layout(set = 4, binding = 5) uniform texture2DArray groundLayerBImage;
+layout(set = 4, binding = 6) uniform texture2DArray groundLayerCImage;
+layout(set = 4, binding = 7) uniform texture2DArray groundLayerDImage;
+#define groundLayerA sampler2DArray(groundLayerAImage, customSamplers[CS_LINEAR])
+#define groundLayerB sampler2DArray(groundLayerBImage, customSamplers[CS_LINEAR])
+#define groundLayerC sampler2DArray(groundLayerCImage, customSamplers[CS_LINEAR])
+#define groundLayerD sampler2DArray(groundLayerDImage, customSamplers[CS_LINEAR])
 // A level a layer, a root's levels together (root * grass.turf.w + level):
 // an entry per tile (x, z mod the entries a side), holding
 // its slot + 1 and the tile's x and z above the entry's own bits
 // (SurfaceLayers::encodePage), 0 for none.
-layout(set = 4, binding = 8) uniform usampler2DArray groundLayerPage;
+layout(set = 4, binding = 8) uniform utexture2DArray groundLayerPageImage;
+#define groundLayerPage usampler2DArray(groundLayerPageImage, customSamplers[CS_NEAREST])
 
 // The finest tile's texel, metres (0 without layers: everything is worked
 // out where it is drawn).

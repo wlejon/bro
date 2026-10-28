@@ -328,9 +328,7 @@ public:
     struct GrassGround {
         LandNode* land = nullptr;
         VkImageView layers[4] = {};   // heights, surface, cover, canopy
-        VkSampler sampler = VK_NULL_HANDLE;
         VkImageView page = VK_NULL_HANDLE;
-        VkSampler pageSampler = VK_NULL_HANDLE;
         float words[LD_WORDS] = {};   // its LandDraw (LD_WORDS) this frame
     };
 

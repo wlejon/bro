@@ -253,8 +253,10 @@ VkDescriptorPool VulkanFrames::createDescriptorPool() {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kDescriptorSetsPerPool * 2},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kDescriptorSetsPerPool},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kDescriptorSetsPerPool},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kDescriptorSetsPerPool * 8},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, kDescriptorSetsPerPool},
+        // (The scene's land and custom sets are bare images and a few
+        // samplers each.)
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kDescriptorSetsPerPool * 12},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, kDescriptorSetsPerPool * 3},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kDescriptorSetsPerPool / 2},
     };
     VkDescriptorPoolCreateInfo info{};

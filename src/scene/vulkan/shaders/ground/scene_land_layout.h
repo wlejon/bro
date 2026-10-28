@@ -4,7 +4,8 @@
 //   LandDraw (set 3, binding 0, std140): what mesh_land.vert reads,
 //            LD_WORDS words
 //   set 3, bindings 4..7: the tiles' heights, their surface, the page table,
-//            the canopy
+//            the canopy, bare images read through LD_B_LINEAR's sampler
+//            (the page table LD_B_NEAREST's)
 //
 //   land_fill.comp's set 0: binding 0 the heights (rgba32f, an array layer
 //            a slot: the ground's, the canopy's top over it, its crowns'
@@ -21,6 +22,25 @@
 
 #ifndef BRO_SCENE_LAND_LAYOUT_H
 #define BRO_SCENE_LAND_LAYOUT_H
+
+// --- set 3's samplers (frame/scene_defaults.cpp's boneLayout) ---
+#define LD_B_LINEAR         8
+#define LD_B_NEAREST        9
+
+// --- the custom set, set 4 of the lit pipelines (frame/scene_defaults.h) ---
+// Bare images 1 .. CS_IMAGES (a mesh's user textures, then a grass node's
+// land tiles) read through the samplers of binding CS_SAMPLERS: a handful
+// for the set however many images it holds, so the material's, the land's
+// and the lighting's samplers stay within the 16 a stage some devices take
+// (MoltenVK). A user texture's sampler is the custom block's
+// customSamplerModes, two bits a slot.
+#define CS_IMAGES           11
+#define CS_SAMPLERS         12
+#define CS_LINEAR           0   // linear, mips, clamped
+#define CS_REPEAT           1   // linear, mips, repeating
+#define CS_REPEAT_S         2   // linear, mips, repeating across (s), clamped in t
+#define CS_NEAREST          3   // nearest, clamped (integer images)
+#define CS_SAMPLER_COUNT    4
 
 // --- a grass node's set 4 (scene_mesh_drawer_grass.cpp's writeSet) ---
 #define LG_HEIGHTS          1

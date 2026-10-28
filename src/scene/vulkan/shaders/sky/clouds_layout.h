@@ -44,7 +44,10 @@
 //                     layer (sky/clouds_globe.comp)
 //     CL_B_GLOBE_OUT  the same, written by its bake (rgba16f storage)
 //     CL_B_VOLUME     the volume about the eye, sampled: CL_VOL_LEVELS 3D
-//                     images, a level each (below; sky/cloud_volume.glsl)
+//                     images, a level each (below; sky/cloud_volume.glsl),
+//                     bare, through CL_B_VOLUME_SAMPLER's sampler (one
+//                     sampler for the levels: a stage's count of samplers
+//                     is 16 on some devices, MoltenVK's)
 //     CL_B_VOLUME_OUT the same, written by its bakes (rgba16f storage)
 //     CL_B_VOLUME_DA/DB its distance transform's scratch (r16f storage, a
 //                     level each: sky/clouds_volume_dist.comp)
@@ -57,6 +60,7 @@
 //     CL_B_VIEW_OUT   the same, written by its bake (rgba16f storage)
 //     CL_B_SHELLS     the heaps drawn as shells past the march (a storage
 //                     buffer, below: sky/clouds_shells.comp)
+//     CL_B_VOLUME_SAMPLER the volume's levels' sampler
 //
 //   The lighting set's binding 24: the shadow's levels, sampled
 //   (CloudShadowGpu in the lighting block says where they lie).
@@ -92,6 +96,7 @@
 #define CL_B_VIEW           25
 #define CL_B_VIEW_OUT       26
 #define CL_B_SHELLS         27
+#define CL_B_VOLUME_SAMPLER 28
 
 // The view's columns (sky/clouds_view.comp): where the layer draws the deck
 // from above, a pixel is far finer than the cache's cell there (its windows

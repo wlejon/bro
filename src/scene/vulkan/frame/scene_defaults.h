@@ -24,10 +24,11 @@ public:
     // (binding 0) or a procedural draw's segment records or the plants'
     // records (binding 1, storage), and the plants' chunks and leaf poses this frame
     // (bindings 2 and 3, storage);
-    // set 4: custom shader UBO + MeshNode::kMaxUserTextures samplers, then
+    // set 4: custom shader UBO + MeshNode::kMaxUserTextures images, then
     // the land's surface, page table and canopy for a grass node standing
-    // on it (scene_land_layout.h's LG_*), through binding kCustomBindings. A
-    // set written for this layout fills every binding.
+    // on it (scene_land_layout.h's LG_*), through binding kCustomBindings,
+    // and the samplers they are read through (CS_SAMPLERS, immutable). A
+    // set written for this layout fills every image binding.
     static constexpr uint32_t kCustomBindings = 11;
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;
@@ -48,6 +49,8 @@ public:
     VkSampler cubeSampler = VK_NULL_HANDLE;  // linear mips, clamp to edge
     VkSampler nearestSampler = VK_NULL_HANDLE;   // nearest, clamp to edge (integer images)
     VkSampler repeatSampler = VK_NULL_HANDLE;    // linear, repeating (wrapped clipmaps)
+    VkSampler mipSampler = VK_NULL_HANDLE;       // linear, every mip, clamp to edge
+    VkSampler repeatSSampler = VK_NULL_HANDLE;   // linear, every mip, repeating in s, clamped in t
 
     /// Material set of all fallbacks (written once, never changes).
     VkDescriptorSet defaultMaterialSet = VK_NULL_HANDLE;

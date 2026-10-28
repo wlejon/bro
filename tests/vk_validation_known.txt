@@ -6,9 +6,3 @@
 
 # MoltenVK on macOS runners caps maxSamplerAllocationCount at 96; Ganesh + scene samplers exceed this until sampler pooling lands.
 VUID-vkCreateSampler-maxSamplerAllocationCount-04110
-
-# MoltenVK reports maxPerStageDescriptorSamplers 16 (M2 Pro and the runners' paravirtual device alike) and
-# the mesh (23), caster (20) and cloud (17) pipeline layouts exceed it; its argument buffers draw them, the
-# scene suite passing on an M2 without validation. Fixed when the material, user and land textures (sets 2-4)
-# and the cloud set share samplers as the lighting set does (scene_vk_descriptors.cpp createLightingLayout).
-VUID-VkPipelineLayoutCreateInfo-descriptorType-03016

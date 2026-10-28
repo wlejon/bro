@@ -15,10 +15,16 @@
 
 #ifndef LAND_W
 layout(set = 3, binding = 0) uniform LandDrawUBO { vec4 w[LD_WORDS / 4]; } landDraw;
-layout(set = 3, binding = 4) uniform sampler2DArray landHeights;
-layout(set = 3, binding = 5) uniform sampler2DArray landSurfaces;
-layout(set = 3, binding = 6) uniform usampler2DArray landPage;
-layout(set = 3, binding = 7) uniform sampler2DArray landCanopies;
+layout(set = 3, binding = 4) uniform texture2DArray landHeightsImage;
+layout(set = 3, binding = 5) uniform texture2DArray landSurfacesImage;
+layout(set = 3, binding = 6) uniform utexture2DArray landPageImage;
+layout(set = 3, binding = 7) uniform texture2DArray landCanopiesImage;
+layout(set = 3, binding = LD_B_LINEAR) uniform sampler landLinear;
+layout(set = 3, binding = LD_B_NEAREST) uniform sampler landNearest;
+#define landHeights sampler2DArray(landHeightsImage, landLinear)
+#define landSurfaces sampler2DArray(landSurfacesImage, landLinear)
+#define landPage usampler2DArray(landPageImage, landNearest)
+#define landCanopies sampler2DArray(landCanopiesImage, landLinear)
 #define LAND_W(i) landDraw.w[i]
 #define LAND_CANOPY
 #endif

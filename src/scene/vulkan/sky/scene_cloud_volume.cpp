@@ -141,8 +141,8 @@ bool SceneCloudVolume::ensureImages(SceneGpu& gpu) {
 
 void SceneCloudVolume::write(SceneVkDescriptorWriter& w) const {
     for (uint32_t k = 0; k < CL_VOL_LEVELS; ++k) {
-        w.writeImage(CL_B_VOLUME, vol_[k].view, sampler_, VK_IMAGE_LAYOUT_GENERAL,
-                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, k);
+        w.writeImage(CL_B_VOLUME, vol_[k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                     VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, k);
         w.writeImage(CL_B_VOLUME_OUT, vol_[k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, k);
         w.writeImage(CL_B_VOLUME_DA, distA_[k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
@@ -150,6 +150,7 @@ void SceneCloudVolume::write(SceneVkDescriptorWriter& w) const {
         w.writeImage(CL_B_VOLUME_DB, distB_[k].view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, k);
     }
+    w.writeImage(CL_B_VOLUME_SAMPLER, VK_NULL_HANDLE, sampler_, VK_IMAGE_LAYOUT_UNDEFINED, VK_DESCRIPTOR_TYPE_SAMPLER);
     w.writeBuffer(CL_B_VOLUME_CHECK, checkBuf_.buffer, kCheckBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
 }
 

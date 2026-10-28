@@ -14,7 +14,9 @@
 //     fragment and shadow stages agree on the offsets the node's values are
 //     written at;
 //   - each `sampler2D` / `sampler2DArray` takes a binding 1..kMaxSamplers of
-//     set 4;
+//     set 4, a bare image its name #defines into a sampler of the set's
+//     own (the texture's repeat and clampT pick it: the block's hidden
+//     customSamplerModes);
 //   - each custom varying (`out` in the vertex chunk, `in` in the fragment
 //     chunk) gets an explicit location after the engine's;
 //   - the GL names are #defines onto the Vulkan shaders' own.
@@ -60,6 +62,9 @@ public:
     const std::vector<Sampler>& samplers() const { return samplers_; }
     /// The block's size, a multiple of 16 and at least 16.
     uint32_t uboSize() const { return uboSize_; }
+    /// Where the block keeps each sampler's (scene_land_layout.h's CS_*,
+    /// two bits a sampler in declaration order), when there are samplers.
+    uint32_t samplerModesOffset() const { return samplerModesOffset_; }
 
 private:
     struct Varying {
@@ -83,6 +88,7 @@ private:
     bool hasVertex_ = false;
     bool hasFragment_ = false;
     uint32_t uboSize_ = 16;
+    uint32_t samplerModesOffset_ = 0;
 };
 
 class SceneVkCustomShader {

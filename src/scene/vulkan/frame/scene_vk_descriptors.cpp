@@ -16,7 +16,20 @@ void SceneVkDescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorTy
     b.stageFlags = stageFlags;
     b.pImmutableSamplers = nullptr;  // resolved in build(), once immutableSamplers_ stops growing
     bindings_.push_back(b);
-    immutableSamplers_.push_back(immutableSampler);
+    immutableSamplers_.emplace_back();
+    if (immutableSampler != VK_NULL_HANDLE) immutableSamplers_.back().push_back(immutableSampler);
+}
+
+void SceneVkDescriptorLayoutBuilder::addSamplers(uint32_t binding, std::initializer_list<VkSampler> samplers,
+                                                VkShaderStageFlags stageFlags) {
+    for ([[maybe_unused]] VkSampler s : samplers) assert(s != VK_NULL_HANDLE);
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = binding;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    b.descriptorCount = static_cast<uint32_t>(samplers.size());
+    b.stageFlags = stageFlags;
+    bindings_.push_back(b);
+    immutableSamplers_.emplace_back(samplers);
 }
 
 void SceneVkDescriptorLayoutBuilder::clear() {
@@ -26,8 +39,7 @@ void SceneVkDescriptorLayoutBuilder::clear() {
 
 VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::build(VkDevice device) {
     for (size_t i = 0; i < bindings_.size(); ++i)
-        bindings_[i].pImmutableSamplers =
-            immutableSamplers_[i] != VK_NULL_HANDLE ? &immutableSamplers_[i] : nullptr;
+        bindings_[i].pImmutableSamplers = immutableSamplers_[i].empty() ? nullptr : immutableSamplers_[i].data();
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings_.size());
@@ -146,6 +158,7 @@ void SceneVkDescriptorWriter::updateSet(VkDevice device, VkDescriptorSet set) {
             write.pBufferInfo = &bufferInfos_[bufIdx++];
         } else if (write.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||
                    write.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
+                   write.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER ||
                    write.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
             write.pImageInfo = &imageInfos_[imgIdx++];
         }

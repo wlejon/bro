@@ -1,6 +1,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/shaders/ground/scene_land_layout.h"
 
 #include <algorithm>
 #include <cstring>
@@ -212,6 +213,13 @@ bool CustomShaderInterface::parse(const std::string& vertexChunk, const std::str
     uint32_t offset = 0;
     if (!scan(vertexChunk, true, vertexBody_, offset, err) || !scan(fragmentChunk, false, fragmentBody_, offset, err))
         return false;
+    if (!samplers_.empty()) {
+        // Past the chunk's own: each sampler's CS_* (samplerModesOffset).
+        offset = (offset + 3) & ~3u;
+        samplerModesOffset_ = offset;
+        uniformDecls_.push_back("    uint customSamplerModes;\n");
+        offset += 4;
+    }
     uboSize_ = std::max<uint32_t>(16, (offset + 15) & ~15u);
     return true;
 }
@@ -223,9 +231,22 @@ std::string CustomShaderInterface::declarations(bool vertex) const {
         for (const std::string& d : uniformDecls_) s += d;
         s += "};\n";
     }
+    // Each sampler a bare image, read through the custom set's sampler its
+    // texture asks for (scene_land_layout.h's CS_*: two bits a slot of
+    // customSamplerModes).
+    const std::string set = "layout(set = " + std::to_string(kCustomSet) + ", binding = ";
+    if (!samplers_.empty()) {
+        s += "#ifndef CUSTOM_SAMPLERS_DECLARED\n#define CUSTOM_SAMPLERS_DECLARED\n" + set +
+             std::to_string(CS_SAMPLERS) + ") uniform sampler customSamplers[" + std::to_string(CS_SAMPLER_COUNT) +
+             "];\n#endif\n";
+    }
     for (size_t i = 0; i < samplers_.size(); ++i) {
-        s += "layout(set = " + std::to_string(kCustomSet) + ", binding = " + std::to_string(i + 1) + ") uniform " +
-             (samplers_[i].array ? "sampler2DArray " : "sampler2D ") + samplers_[i].name + ";\n";
+        const std::string& name = samplers_[i].name;
+        const char* image = samplers_[i].array ? "texture2DArray " : "texture2D ";
+        const char* sampler = samplers_[i].array ? "sampler2DArray" : "sampler2D";
+        s += set + std::to_string(i + 1) + ") uniform " + image + name + "_image;\n";
+        s += "#define " + name + " " + sampler + "(" + name + "_image, customSamplers[(customSamplerModes >> " +
+             std::to_string(2 * i) + "u) & 3u])\n";
     }
     for (const Varying& v : varyings_) {
         s += "layout(location = " + std::to_string(v.location) + ") ";

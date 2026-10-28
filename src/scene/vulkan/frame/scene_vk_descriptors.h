@@ -7,6 +7,7 @@
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <initializer_list>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -159,6 +160,8 @@ public:
     /// writes to that binding then supply only the image view.
     void addBinding(uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlags stageFlags,
                     VkSampler immutableSampler = VK_NULL_HANDLE);
+    /// A sampler array baked into the layout, an element each of `samplers`.
+    void addSamplers(uint32_t binding, std::initializer_list<VkSampler> samplers, VkShaderStageFlags stageFlags);
     void clear();
 
     VkDescriptorSetLayout build(VkDevice device);
@@ -181,7 +184,7 @@ public:
 
 private:
     std::vector<VkDescriptorSetLayoutBinding> bindings_;
-    std::vector<VkSampler> immutableSamplers_;  // parallel to bindings_
+    std::vector<std::vector<VkSampler>> immutableSamplers_;  // parallel to bindings_
 };
 
 /// Helper for recording and dispatching VkWriteDescriptorSet updates.

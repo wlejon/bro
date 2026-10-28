@@ -64,16 +64,27 @@ layout(set = 4, binding = 0) uniform GrassUBO {
 } grass;
 
 // rg: the bend (x, z) at stamp time, b: the trample then, a: the stamp time.
-layout(set = 4, binding = 2) uniform sampler2D grassPush;
+// (The set's images are bare, read through its samplers: CS_*.)
+#ifndef CUSTOM_SAMPLERS_DECLARED
+#define CUSTOM_SAMPLERS_DECLARED
+layout(set = 4, binding = CS_SAMPLERS) uniform sampler customSamplers[CS_SAMPLER_COUNT];
+#endif
+layout(set = 4, binding = 2) uniform texture2D grassPushImage;
+#define grassPush sampler2D(grassPushImage, customSamplers[CS_LINEAR])
 
 // The land's tiles (scene_land.glsl): what grows where is its surface
 // module's (scene_land_layer.glsl's LandSurface: the cover and the herbs),
 // and past the plants' range its canopy (the turf's fragments, mesh.frag).
-layout(set = 4, binding = LG_HEIGHTS) uniform sampler2DArray landHeights;
-layout(set = 4, binding = LG_COVERS) uniform sampler2DArray landCovers;
-layout(set = 4, binding = LG_SURFACES) uniform sampler2DArray landSurfaces;
-layout(set = 4, binding = LG_PAGE) uniform usampler2DArray landPage;
-layout(set = 4, binding = LG_CANOPY) uniform sampler2DArray landCanopies;
+layout(set = 4, binding = LG_HEIGHTS) uniform texture2DArray landHeightsImage;
+layout(set = 4, binding = LG_COVERS) uniform texture2DArray landCoversImage;
+layout(set = 4, binding = LG_SURFACES) uniform texture2DArray landSurfacesImage;
+layout(set = 4, binding = LG_PAGE) uniform utexture2DArray landPageImage;
+layout(set = 4, binding = LG_CANOPY) uniform texture2DArray landCanopiesImage;
+#define landHeights sampler2DArray(landHeightsImage, customSamplers[CS_LINEAR])
+#define landCovers sampler2DArray(landCoversImage, customSamplers[CS_LINEAR])
+#define landSurfaces sampler2DArray(landSurfacesImage, customSamplers[CS_LINEAR])
+#define landPage usampler2DArray(landPageImage, customSamplers[CS_NEAREST])
+#define landCanopies sampler2DArray(landCanopiesImage, customSamplers[CS_LINEAR])
 #define LAND_W(i) grass.land[i]
 #define LAND_COVERS
 #define LAND_CANOPY

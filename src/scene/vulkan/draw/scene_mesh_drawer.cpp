@@ -16,6 +16,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/shaders/ground/scene_land_layout.h"
 #include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
@@ -531,33 +532,43 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
             break;
         }
     }
+    // The images, bare: each read through the custom set's sampler its
+    // texture's addressing asks for (CS_*, the block's customSamplerModes).
+    SceneGpuResources& res = frame.gpu.resources;
+    VkImageView views[CustomShaderInterface::kMaxSamplers];
+    uint32_t modes = 0;
+    const auto& samplers = prog.iface.samplers();
+    for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i) {
+        const bool array = i < samplers.size() && samplers[i].array;
+        views[i] = array ? defaults_->zeroArray.view : defaults_->white.view;
+        if (!textures || i >= samplers.size()) continue;
+        for (auto& t : *textures) {
+            if (t.name != samplers[i].name || (t.layers > 0) != array) continue;
+            if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
+                views[i] = img->view;
+                const uint32_t mode = !t.repeat ? CS_LINEAR : t.clampT ? CS_REPEAT_S : CS_REPEAT;
+                modes |= mode << (2 * i);
+            }
+            break;
+        }
+    }
+    if (!samplers.empty() && prog.iface.samplerModesOffset() + 4 <= ubo.size())
+        std::memcpy(ubo.data() + prog.iface.samplerModesOffset(), &modes, 4);
     const VkDescriptorBufferInfo uboInfo = frame.gpu.device.frameUniform(ubo.data(), ubo.size());
 
-    SceneGpuResources& res = frame.gpu.resources;
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, uboInfo.buffer, uboInfo.range, uboInfo.offset);
-    const auto& samplers = prog.iface.samplers();
-    for (uint32_t i = 1; i <= CustomShaderInterface::kMaxSamplers; ++i) {
-        const bool array = i - 1 < samplers.size() && samplers[i - 1].array;
-        VkImageView view = array ? defaults_->zeroArray.view : defaults_->white.view;
-        VkSampler sampler = defaults_->sampler;
-        if (textures && i - 1 < samplers.size()) {
-            for (auto& t : *textures) {
-                if (t.name != samplers[i - 1].name || (t.layers > 0) != array) continue;
-                if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
-                    view = img->view;
-                    sampler = img->sampler;
-                }
-                break;
-            }
-        }
-        writer.writeImage(i, view, sampler);
-    }
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 1, defaults_->zeroArray.view, defaults_->sampler);
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 2, defaults_->zeroUintArray.view,
-                      defaults_->nearestSampler);
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 3, defaults_->zeroArray.view, defaults_->sampler);
+    constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    constexpr VkImageLayout kRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i)
+        writer.writeImage(i + 1, views[i], VK_NULL_HANDLE, kRead, kImage);
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 1, defaults_->zeroArray.view, VK_NULL_HANDLE, kRead,
+                      kImage);
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 2, defaults_->zeroUintArray.view, VK_NULL_HANDLE, kRead,
+                      kImage);
+    writer.writeImage(CustomShaderInterface::kMaxSamplers + 3, defaults_->zeroArray.view, VK_NULL_HANDLE, kRead,
+                      kImage);
     static_assert(CustomShaderInterface::kMaxSamplers + 3 == SceneDefaults::kCustomBindings);
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);

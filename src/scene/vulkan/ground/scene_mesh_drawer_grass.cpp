@@ -301,9 +301,7 @@ float eyeLift(const LandNode& land, const SceneView& view) {
 /// its four layers and its page table, or the empty fallbacks.
 struct GroundLayerBinding {
     VkImageView layers[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkSampler layerSampler = VK_NULL_HANDLE;
     VkImageView page = VK_NULL_HANDLE;
-    VkSampler pageSampler = VK_NULL_HANDLE;
 };
 
 VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults& defaults, const GrassUBO& u,
@@ -311,25 +309,30 @@ VkDescriptorSet writeSet(SceneFrame& frame, VkDevice device, const SceneDefaults
     const VkDescriptorBufferInfo ubo = frame.gpu.device.frameUniform(&u, sizeof(u));
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults.customLayout);
     if (set == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    // Bare images, read through the set's samplers (scene_grass.glsl's
+    // customSamplers).
+    constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    constexpr VkImageLayout kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+    constexpr VkImageLayout kRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
-    writer.writeImage(2, img.push->view, img.push->sampler);
+    writer.writeImage(2, img.push->view, VK_NULL_HANDLE, kRead, kImage);
     const SceneMeshDrawer::GrassGround& land = *img.ground;
-    writer.writeImage(LG_HEIGHTS, land.layers[0], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
-    writer.writeImage(LG_SURFACES, land.layers[1], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
-    writer.writeImage(LG_COVERS, land.layers[2], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
-    writer.writeImage(LG_PAGE, land.page, land.pageSampler);
-    writer.writeImage(LG_CANOPY, land.layers[3], land.sampler, VK_IMAGE_LAYOUT_GENERAL);
+    writer.writeImage(LG_HEIGHTS, land.layers[0], VK_NULL_HANDLE, kGeneral, kImage);
+    writer.writeImage(LG_SURFACES, land.layers[1], VK_NULL_HANDLE, kGeneral, kImage);
+    writer.writeImage(LG_COVERS, land.layers[2], VK_NULL_HANDLE, kGeneral, kImage);
+    writer.writeImage(LG_PAGE, land.page, VK_NULL_HANDLE, kRead, kImage);
+    writer.writeImage(LG_CANOPY, land.layers[3], VK_NULL_HANDLE, kGeneral, kImage);
     for (uint32_t b = 4; b <= 8; ++b) {
         const int i = static_cast<int>(b) - 4;
         if (ground && i < 4)
-            writer.writeImage(b, ground->layers[i] ? ground->layers[i] : defaults.zeroArray.view,
-                              ground->layers[i] ? ground->layerSampler : defaults.sampler);
+            writer.writeImage(b, ground->layers[i] ? ground->layers[i] : defaults.zeroArray.view, VK_NULL_HANDLE,
+                              kRead, kImage);
         else if (ground)
-            writer.writeImage(b, ground->page ? ground->page : defaults.zeroUintArray.view,
-                              ground->page ? ground->pageSampler : defaults.nearestSampler);
+            writer.writeImage(b, ground->page ? ground->page : defaults.zeroUintArray.view, VK_NULL_HANDLE, kRead,
+                              kImage);
         else
-            writer.writeImage(b, defaults.white.view, defaults.sampler);
+            writer.writeImage(b, defaults.white.view, VK_NULL_HANDLE, kRead, kImage);
     }
     static_assert(LG_HEIGHTS == 1 && LG_COVERS == 3 && LG_SURFACES == 9 && LG_PAGE == 10 &&
                   LG_CANOPY == static_cast<int>(SceneDefaults::kCustomBindings));
@@ -359,9 +362,7 @@ VkDescriptorSet SceneMeshDrawer::groundSet(SceneFrame& frame, GrassNode& node) {
     if (GroundLayers* gl = groundLayers(frame, node); gl && gl->tiles.configured()) {
         const SurfaceLayerConfig& c = gl->tiles.config();
         for (int i = 0; i < gl->atlas.layerCount() && i < 4; ++i) layers.layers[i] = gl->atlas.layerView(i);
-        layers.layerSampler = gl->atlas.layerSampler();
         layers.page = gl->atlas.pageView();
-        layers.pageSampler = gl->atlas.pageSampler();
         u.layer[0] = c.tileMetres;
         u.layer[1] = static_cast<float>(c.tileTexels);
         u.layer[2] = static_cast<float>(c.border);

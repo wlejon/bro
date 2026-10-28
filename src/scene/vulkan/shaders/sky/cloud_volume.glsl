@@ -3,7 +3,9 @@
 //
 // The includer has included sky/scene_cloud_layer.glsl.
 
-layout(set = CLOUD_SET, binding = CL_B_VOLUME) uniform sampler3D cloudVolMap[CL_VOL_LEVELS];
+layout(set = CLOUD_SET, binding = CL_B_VOLUME) uniform texture3D cloudVolImage[CL_VOL_LEVELS];
+layout(set = CLOUD_SET, binding = CL_B_VOLUME_SAMPLER) uniform sampler cloudVolSampler;
+#define cloudVolMap(k) sampler3D(cloudVolImage[k], cloudVolSampler)
 
 const ivec3 kCloudVolSide = ivec3(CL_VOL_SIDE, CL_VOL_SIDE, CL_VOL_DEPTH);
 
@@ -55,20 +57,20 @@ int cloudVolLevel(vec3 v, float foot) {
 // dynamically uniform.)
 vec4 cloudVolSample(int k, vec3 v) {
     vec3 uvw = v / (cloudVolCell(k) * vec3(kCloudVolSide));
-    if (k == 0) return textureLod(cloudVolMap[0], uvw, 0.0);
-    if (k == 1) return textureLod(cloudVolMap[1], uvw, 0.0);
-    if (k == 2) return textureLod(cloudVolMap[2], uvw, 0.0);
-    if (k == 3) return textureLod(cloudVolMap[3], uvw, 0.0);
-    return textureLod(cloudVolMap[4], uvw, 0.0);
+    if (k == 0) return textureLod(cloudVolMap(0), uvw, 0.0);
+    if (k == 1) return textureLod(cloudVolMap(1), uvw, 0.0);
+    if (k == 2) return textureLod(cloudVolMap(2), uvw, 0.0);
+    if (k == 3) return textureLod(cloudVolMap(3), uvw, 0.0);
+    return textureLod(cloudVolMap(4), uvw, 0.0);
 }
 // The texel of level `k`'s cell that holds `v`.
 vec4 cloudVolTexel(int k, vec3 v) {
     ivec3 i = ivec3(floor(v / cloudVolCell(k))) & (kCloudVolSide - 1);
-    if (k == 0) return texelFetch(cloudVolMap[0], i, 0);
-    if (k == 1) return texelFetch(cloudVolMap[1], i, 0);
-    if (k == 2) return texelFetch(cloudVolMap[2], i, 0);
-    if (k == 3) return texelFetch(cloudVolMap[3], i, 0);
-    return texelFetch(cloudVolMap[4], i, 0);
+    if (k == 0) return texelFetch(cloudVolMap(0), i, 0);
+    if (k == 1) return texelFetch(cloudVolMap(1), i, 0);
+    if (k == 2) return texelFetch(cloudVolMap(2), i, 0);
+    if (k == 3) return texelFetch(cloudVolMap(3), i, 0);
+    return texelFetch(cloudVolMap(4), i, 0);
 }
 // How far (m) a march at `v` (level `k`'s cell) may go sure to meet no
 // cloud the forms draw at any footprint up to the cell's: the cell's

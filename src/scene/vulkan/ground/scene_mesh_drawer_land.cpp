@@ -309,9 +309,7 @@ bool SceneMeshDrawer::grassGround(SceneFrame& frame, const GrassNode& grass, Gra
     if (lt.tiles.stats().resident == 0 || lt.generation != land->generation()) return false;
     out.land = land;
     for (int i = 0; i < 4; ++i) out.layers[i] = lt.atlas.layerView(i);
-    out.sampler = lt.atlas.layerSampler();
     out.page = lt.atlas.pageView();
-    out.pageSampler = lt.atlas.pageSampler();
     landWords(frame, *land, lt, out.words);
     return true;
 }
@@ -392,10 +390,12 @@ bool SceneMeshDrawer::prepareLand(SceneFrame& frame, LandNode& node, std::vector
     if (set == VK_NULL_HANDLE) return false;
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
-    writer.writeImage(4, lt->atlas.layerView(0), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
-    writer.writeImage(5, lt->atlas.layerView(1), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
-    writer.writeImage(6, lt->atlas.pageView(), lt->atlas.pageSampler());
-    writer.writeImage(7, lt->atlas.layerView(3), lt->atlas.layerSampler(), VK_IMAGE_LAYOUT_GENERAL);
+    // (Through the set's own samplers, LD_B_LINEAR and LD_B_NEAREST.)
+    constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writer.writeImage(4, lt->atlas.layerView(0), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, kImage);
+    writer.writeImage(5, lt->atlas.layerView(1), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, kImage);
+    writer.writeImage(6, lt->atlas.pageView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kImage);
+    writer.writeImage(7, lt->atlas.layerView(3), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, kImage);
     writer.updateSet(device_, set);
     out.vertexSet = set;
     // Past the plants' range its fragments are their canopy, read from the
