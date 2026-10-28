@@ -50,6 +50,16 @@ vec3 clCacheBase(ClAt w, float lod) {
     if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
     return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).gba, f);
 }
+// The cache's extinction at `w` (the forms' mean over a cell, what the
+// light and the shadow read), blended over the two levels about `lod`.
+float clCacheSigma(ClAt w, float lod) {
+    int k = int(lod);
+    if (k >= CL_CACHE_LEVELS) return 0.0;
+    float a = textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k), 0.0).r;
+    float f = fract(lod);
+    if (k + 1 >= CL_CACHE_LEVELS || f <= 0.0) return a;
+    return mix(a, textureLod(cloudSigmaMap, cloudCacheCoord(w.xy, w.h, k + 1), 0.0).r, f);
+}
 
 // The base the march reads at `w` (`pd` drifted) over footprint `foot`
 // (x), and how much of the skin's move shows (y): the most of the slabs'

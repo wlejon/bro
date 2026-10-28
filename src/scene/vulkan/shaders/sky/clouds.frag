@@ -238,7 +238,7 @@ float clSunDepth(vec3 a, vec3 s, float foot, bool detail, bool face) {
         ClAt w = clAt(a + s * (at + 0.5 * len));
         if (w.h >= 1.0) return max(tau, heaps);   // (out through the deck's top)
         float f = max(foot, 3.0 * len);
-        tau += clFormsAt(w, clLod(w, f), f, foot, detail && i == 0).sigma * len;
+        tau += (i == 0 ? clFormsAt(w, clLod(w, f), f, foot, detail).sigma : clCacheSigma(w, clLod(w, foot))) * len;
         at += len;
         len *= 2.8;
     }
