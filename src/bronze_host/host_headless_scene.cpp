@@ -13,11 +13,13 @@
 #include <json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <limits>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 #endif
 
@@ -202,6 +204,14 @@ void installHeadlessScenePerf(engine::Engine& engine,
                         some.push_back(std::move(r));
                 return some;
             };
+            // (SceneRenderer::pendingWork's reasons for them, whatever `kinds` says.)
+            const auto compiling = [&engine, within] {
+                for (const std::string& r : engine.scenePendingWork(within))
+                    if (r.rfind("shaders:", 0) == 0 ||
+                        (r.rfind("pipelines:", 0) == 0 && r.find("building") != std::string::npos))
+                        return true;
+                return false;
+            };
             HeldClock clock(engine, held);
             int frames = 0;
             // The frames each kind of work (a reason's text before its ':')
@@ -221,7 +231,15 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 if (held && exposure) engine.advanceSceneExposure(static_cast<float>(kFrameMs / 1000.0));
                 stepFrame(engine);
                 std::vector<std::string> now = pendingNow();
-                same = now == pending ? same + 1 : 0;
+                // (Shaders compiling and pipelines building finish in wall
+                // time, not frames: while they are under way an unchanged
+                // frame is no stall, and the next waits a moment for them.
+                // A kinds filter can hide them, as a land's processes wait
+                // on its fill pipeline.)
+                if (now == pending && compiling())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                else
+                    same = now == pending ? same + 1 : 0;
                 pending = std::move(now);
             }
             scene::SceneRenderer::settleAll(false);

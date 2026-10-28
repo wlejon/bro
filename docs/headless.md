@@ -346,7 +346,7 @@ The kinds now reported: `land processes` (the land's processes not yet run), `la
 - **Budgets.** While it waits, every world service spends at least its settle budget a frame (`WorldServiceConfig::settleMs`), as after a view cut: the frames run for their results, not to a frame time.
 - **`kinds`**: wait for those kinds only (`['land processes']`: the land made before a view that stands on it).
 - **`within`** (metres): the world whole that far from the eye, as a player's first view needs (a loading screen), the rest left to stream in as they move: the plants placed out to it (past it the land's canopy stands for them), the land's regions only those the ground under the eye reads (the rest refine what the coarser levels give); the view's own tiles, bakes and the exposure as without it. A flight measures from there whether the streaming keeps up (`perf.pendingWork()` frame by frame).
-- **Stalls.** Work whose reasons do not change for `stallFrames` frames is not coming in: the wait ends there, `stalled: true` and the reasons in `pending`.
+- **Stalls.** Work whose reasons do not change for `stallFrames` frames is not coming in: the wait ends there, `stalled: true` and the reasons in `pending`. Frames while shaders compile or pipelines build (wall-clock work, under `perf.asyncShaders(true)` the frames skip it) do not count: each waits a moment for them instead, whatever `kinds` hides.
 
 #### Shader A/B
 
