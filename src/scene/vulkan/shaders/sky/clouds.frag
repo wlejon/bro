@@ -906,9 +906,19 @@ void main() {
         if (m.T <= CL_OPAQUE && c >= coverLast) c = 1.0;
         coverLast = c;
         cover = max(cover, c);
-        vec2 tau = vec2(max(tauFace - (tauIn + 0.5 * sigma * L) * nu, 0.0), tauUp);
-        tauIn += sigma * L;
-        tauSeen += sigma * L;
+        // (The piece lit at the depth its light comes from, the mean of
+        // the view's depth into it weighted by what each part of it takes:
+        // its middle where it is thin, an optical depth of one where it is
+        // opaque. Lit at its middle, a piece some optical depths long, as a
+        // far pixel's first piece is, was lit from deep inside the top it
+        // shows: a deck's top seen from 200 km a grey under half a white
+        // diffuser's light, the same top seen near, whose pieces are short,
+        // white.)
+        float sL = sigma * L;
+        float mid = sL < 1e-3 ? 0.5 * sL : 1.0 - sL * exp(-sL) / max(1.0 - exp(-sL), 1e-6);
+        vec2 tau = vec2(max(tauFace - (tauIn + mid) * nu, 0.0), tauUp);
+        tauIn += sL;
+        tauSeen += sL;
         if (dbgTau < 0.0) dbgTau = tau.x;
         // (The powder's depth over the pixel's footprint, not the piece's
         // length, which grows from the face.)
