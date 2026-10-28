@@ -617,9 +617,25 @@ int main() {
         vkGetPhysicalDeviceQueueFamilyProperties(context.physicalDevice(), &familyCount, families.data());
         const int family = apart ? context.queueFamilies().computeFamily : context.queueFamilies().graphicsFamily;
         const bool stamps = timed && family >= 0 && families[static_cast<size_t>(family)].timestampValidBits > 0;
-        assert(world.policy().measured(kind) == stamps);
+        // A device whose stamps read no time across the jobs (the runners'
+        // paravirtual Apple GPU) leaves the kind unmeasured, as the policy
+        // takes no 0 ms sample: the last render's spans say which it was.
+        int spans = 0;
+        bool timeless = true;
+        {
+            std::vector<SceneGpuTimer::Frame> last;
+            timer.takeFrames(last);
+            for (const SceneGpuTimer::Frame& fr : last)
+                for (const SceneGpuTimer::Frame::Span& s : fr.spans) {
+                    ++spans;
+                    if (s.ms > 0.0) timeless = false;
+                }
+        }
+        const bool readNoTime = stamps && spans > 0 && timeless;
+        assert(world.policy().measured(kind) == (stamps && !readNoTime));
         std::cout << "PASSED (" << (apart ? "async compute queue" : "graphics stream") << ", a job "
-                  << world.policy().cost(kind) << " ms" << (stamps ? " measured" : " unmeasured") << ")"
+                  << world.policy().cost(kind) << " ms"
+                  << (readNoTime ? " unmeasured: the stamps read no time" : stamps ? " measured" : " unmeasured") << ")"
                   << std::endl;
 
         vkDestroyPipeline(device.device(), pipeline, nullptr);
