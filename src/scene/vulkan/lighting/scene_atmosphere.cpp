@@ -258,11 +258,16 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     const float muS = static_cast<float>((g.origin[0] * sunDir[0] + g.origin[1] * sunDir[1] +
                                           g.origin[2] * sunDir[2]) / rr);
     const float height = static_cast<float>(rr - Rb);
-    remakeSkyView_ = !slot.valid || slot.version != version_ ||
+    // (And once the tables it was made without are made: a sky view made
+    // the frame before them was black, and kept while neither the eye nor
+    // the sun moved, so a settled still under a held clock had no sky.)
+    const bool tables = made_ && madeHash_ == wantHash_;
+    remakeSkyView_ = !slot.valid || slot.version != version_ || (tables && !slot.tables) ||
                      std::fabs(r0 - slot.r) > std::max(1.0f, kSkyViewHeightShare * height) ||
                      std::fabs(muS - slot.muS) > kSkyViewMuS;
     if (remakeSkyView_) {
         slot.valid = true;
+        slot.tables = tables;
         slot.version = version_;
         slot.r = r0;
         slot.muS = muS;

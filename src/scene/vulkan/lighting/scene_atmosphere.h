@@ -120,6 +120,7 @@ private:
     struct Slot {
         SceneVkImage skyView, inscatter, transmittance;
         bool valid = false;
+        bool tables = false;   // made from the tables as they are now (not before they were)
         float r = 0.0f, muS = 0.0f;
         uint64_t version = 0;
     };
