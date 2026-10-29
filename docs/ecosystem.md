@@ -37,7 +37,7 @@ Each has a JavaScript binding, `<name>_api` under its own `src/api/`, that bro m
 |------|------|------------|----------|
 | [bromath](https://github.com/wlejon/bromath) | Header-only math: vectors, quaternions, matrices, transforms, colour, curves, RNG/hash, spatial hash | none | always |
 | [htmlayout](https://github.com/wlejon/htmlayout) | HTML5 parsing, CSS cascade and selectors, block/inline/flex/grid layout, hit testing | none | always |
-| [brokit](https://github.com/wlejon/brokit) | Web-standard and Node-style system APIs: fetch, streams, storage, fs, crypto, child_process; FastNoise2 trees as GLSL | bromath, broimage (codecs), FastNoise2, bronze, brass | always |
+| [brokit](https://github.com/wlejon/brokit) | Web-standard and Node-style system APIs: fetch, streams, storage, fs, crypto, child_process | bromath, broimage (codecs), FastNoise2, bronze, brass | always |
 | [FastNoise2](https://github.com/wlejon/FastNoise2) | The fork of Auburn's SIMD noise library (MIT) bro builds: positions relative to a double origin, so a field's fine octaves hold far from zero. Its default branch is `master`; no JavaScript binding of its own (brokit's `FastNoise`) | none | always (`FastNoise`) |
 | [broimage](https://github.com/wlejon/broimage) | Image decode/encode, geometric and colour ops, composable typed-buffer kernels, ML preprocessing | bromath, brotensor (optional), bronze, brass | always |
 | [broaudio](https://github.com/wlejon/broaudio) | Real-time audio engine: synthesis, effects, spatial mixing, MIDI, lock-free bus routing; device I/O on native PipeWire (Linux) or SDL3 | bromath, bronze, brass | `BRO_WITH_AUDIO` |
