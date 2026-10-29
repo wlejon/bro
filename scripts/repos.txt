@@ -10,7 +10,8 @@
 #   name       repository name (and directory name under the projects root)
 #   group      runtime | compiler | engine | terminal | desktop | app | tool
 #                runtime   bro itself
-#                compiler  bronze and brass, which run every app's JavaScript
+#                compiler  bronze and brass, which run every app's JavaScript, and the
+#                          languages over brass (brasslua, brokernel)
 #                engine    libraries bro links for its engine subsystems
 #                terminal  libraries bro links for the <terminal> element
 #                desktop   desktop-environment substrate libraries (bro mounts their JS bindings)
@@ -27,6 +28,7 @@ bro             runtime   self       public   win,linux,mac    bronze,brass,bras
 bronze          compiler  dep        public   win,linux,mac    brass
 brass           compiler  dep        public   win,linux,mac    -
 brasslua        compiler  dep        public   win,linux,mac    brass,bronze
+brokernel       compiler  -          public   win,linux,mac    brass,FastNoise2
 bromath         engine    dep        public   win,linux,mac    -
 brokit          engine    dep        public   win,linux,mac    bromath,broimage,bronze,brass,FastNoise2
 FastNoise2      engine    dep        public   win,linux,mac    -
