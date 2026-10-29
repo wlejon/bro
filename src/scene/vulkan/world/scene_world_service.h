@@ -19,12 +19,8 @@
 //    else the graphics stream itself at the same point, in the same order.
 // A kind's jobs are stamped as one span of the GPU timer (SceneGpuTimer::
 // beginSpan) around what its producer recorded, with the units of work it
-// held, so the kind's cost a unit is learned from the device.
-//
-// The compute queue at low priority (§6) is not made: the frame's compute
-// stream is the async queue the plants' plan runs on, and a world job there
-// shares its priority. A low-priority queue comes with the first compute
-// producer whose jobs are long enough to need it.
+// held, so the kind's cost a unit is learned from the device. A compute
+// kind's jobs share the async queue's one priority.
 
 #include "scene/world/world_service.h"
 
@@ -71,7 +67,7 @@ private:
     bool stamped_ = false;
 };
 
-/// A producer of world tiles: it offers its jobs each frame and records
+/// A producer of world work: it offers its jobs each frame and records
 /// the ones granted.
 class WorldProducer {
 public:
@@ -104,15 +100,11 @@ public:
     /// The view jumped between two renders: the view turned by more than half
     /// its vertical field of view (what lay at the centre of the screen,
     /// however far, has gone past its edge), or the eye moved more than
-    /// kCutMetres, past what a camera travels in a frame, and more than its
-    /// height over the ground (`above`, 0 with none) times the tangent of
-    /// that half (the ground looked down on from there, gone past the
-    /// screen's edge: from orbit a frame's hundred kilometres is a flight,
-    /// not a jump). A wrong cut costs a frame or two at the floor; a missed
-    /// one, a frame over the target.
+    /// kCutMetres, past what a camera travels in a frame. A wrong cut costs
+    /// a frame or two at the floor; a missed one, a frame over the target.
     static constexpr float kCutMetres = 10.0f;
     static bool viewCut(const bromath::Vec3& eye, const bromath::Vec3& forward, const bromath::Vec3& wasEye,
-                        const bromath::Vec3& wasForward, float halfFov, float above = 0.0f);
+                        const bromath::Vec3& wasForward, float halfFov);
     /// Kind `kind`'s granted jobs, recorded by `record` into the stream the
     /// kind's schedule names and stamped as the kind's span; the units it
     /// recorded.

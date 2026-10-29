@@ -96,7 +96,7 @@ void PassShadowMark::record(SceneFrame& frame) {
         ++count;
     }
     for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
-        shadowMapUniform(plan, plan.maps[m], frame.world.eye, u.maps[m]);   // (the pages are the body's)
+        shadowMapUniform(plan, plan.maps[m], frame.view.eye, u.maps[m]);
     // The sun's next clipmap, while it is built: one more sun, its levels
     // past the sampled maps.
     if (plan.nextCount > 0 && count < kSceneMaxLights) {
@@ -107,7 +107,7 @@ void PassShadowMark::record(SceneFrame& frame) {
         u.lights[count][3] = light >= 0 && light < ShadowPlan::kMaxLights ? plan.lightReach[light] : 0.0f;
         ++count;
         for (int m = 0; m < plan.nextCount; ++m)
-            shadowMapUniform(plan, plan.next[m], frame.world.eye, u.maps[kSceneMaxShadowMaps + m]);
+            shadowMapUniform(plan, plan.next[m], frame.view.eye, u.maps[kSceneMaxShadowMaps + m]);
     }
     u.grid[3] = static_cast<float>(count);
 

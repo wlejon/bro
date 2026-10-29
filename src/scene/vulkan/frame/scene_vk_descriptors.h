@@ -1,9 +1,6 @@
 #pragma once
 
-#include "scene/vulkan/shaders/ground/land_sun_layout.h"
-#include "scene/vulkan/shaders/lighting/probe_grid_layout.h"
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
-#include "scene/vulkan/shaders/sky/clouds_layout.h"
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
@@ -28,13 +25,6 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset, w = the oscillator clock (time mod kWindClockPeriod)
     alignas(16) float windField[4];  // xy = horizontal direction (x, z), z = steady speed, w = gust travel speed
     alignas(16) float windGust[4];   // x = gust amount, y = 1 / along scale, z = 1 / across scale
-    // The plant movers (plant_movers.h, scene_vegetation.glsl's vegMoverPush).
-    alignas(16) float plantMoverInfo[4];   // x = movers, y = trail samples a mover
-    // Two a mover: (camera-relative x, z now, the reach of its trail's push
-    // (m), its radius), (height, strength, 0, 0).
-    alignas(16) float plantMovers[8][4];
-    // kTrail a mover, oldest first: (camera-relative x, z, age (s), window).
-    alignas(16) float plantTrail[80][4];
 };
 
 /// The light and shadow-map capacity of the lighting block (SceneRenderer's
@@ -82,7 +72,7 @@ struct alignas(16) AtmosphereGpu {
     alignas(16) float rayleigh[4];        // rgb = scattering per metre at the ground, w = scale height
     alignas(16) float mie[4];             // x = scattering, y = absorption, z = g, w = scale height
     alignas(16) float ozone[4];           // rgb = absorption at the peak, w = the peak's altitude
-    alignas(16) float shell[4];           // x = planet radius, y = top radius, z = ozone half width, w = spherical
+    alignas(16) float shell[4];           // x = planet radius, y = top radius, z = ozone half width, w = 0
     alignas(16) float origin[4];          // xyz = the eye about the planet's centre
     alignas(16) float ground[4];          // rgb = ground albedo, w = lights[] index of the sun (-1: none)
     alignas(16) float skyView[4];         // x = r, y = mu_s the sky-view table was made at, z = jitter,
@@ -91,40 +81,6 @@ struct alignas(16) AtmosphereGpu {
     alignas(16) float froxelViewProj[16]; // relative to the froxel eye -> its clip space
 };
 static_assert(sizeof(AtmosphereGpu) == 10 * 16 + 64);
-
-/// The probe grid's block (std140) — ProbeGridGpu in
-/// shaders/lighting/scene_probe_grid.glsl; filled by SceneProbeGrid::fill
-/// (scene/vulkan/lighting/scene_probe_grid.h). Positions relative to the eye.
-struct alignas(16) ProbeGridGpu {
-    alignas(16) float params[4];                     // x on, y cascades, z the layers' top (m), w the lowest layer (m)
-    alignas(16) float eye[4];                        // xyz the eye in the world, w the layers' power
-    alignas(16) float sun[4];                        // xyz toward the sun
-    alignas(16) float cascade[PG_MAX_CASCADES][4];   // xy its world's corner (x, z), z spacing, w 1/spacing
-    alignas(16) float wrap[PG_MAX_CASCADES][4];      // xy where column 0 is stored
-};
-static_assert(sizeof(ProbeGridGpu) == 176);
-
-/// The land's sun's block (std140) — LandSunGpu in
-/// shaders/common/scene_lighting.glsl; filled by SceneMeshDrawer::fillLandSun
-/// (scene/world/land_sun.h). Positions relative to the eye.
-struct alignas(16) LandSunGpu {
-    alignas(16) float params[4];                 // x 1 when any level is shown, y the eye's world height
-    alignas(16) float body[4];                   // a round body's: xy the eye's world x and z, z 1 / (2 R); 0 flat
-    alignas(16) float level[LS_LEVELS][4];       // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
-};
-static_assert(sizeof(LandSunGpu) == 16 * (2 + LS_LEVELS));
-
-/// The cloud deck's shadow's block (std140) — CloudShadowGpu in
-/// shaders/common/scene_lighting.glsl; filled by SceneClouds::fill
-/// (vulkan/sky/scene_clouds.h). Directions in air space.
-struct alignas(16) CloudShadowGpu {
-    alignas(16) float params[4];                 // x 1 when shown, y the datum's radius, z the finest level's texel (m), w growth
-    alignas(16) float deck[4];                   // x the deck's bottom's radius, y its top's
-    alignas(16) float n[CL_SHADOW_LEVELS][4];    // each level's plane's normal (its nadir as it was baked)
-    alignas(16) float e1[CL_SHADOW_LEVELS][4];   // its axes
-    alignas(16) float e2[CL_SHADOW_LEVELS][4];
-};
-static_assert(sizeof(CloudShadowGpu) == 16 * (2 + 3 * CL_SHADOW_LEVELS));
 
 /// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
 struct alignas(16) SceneLightingUniforms {
@@ -147,9 +103,6 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float iblParams[4];     // x = enabled, y = intensity, z = rotation (rad), w = prefilter max LOD
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
-    ProbeGridGpu probeGrid;             // the probe grid (params[0] = 1 when on)
-    LandSunGpu landSun;                 // the land's sun (params[0] = 1 when shown)
-    CloudShadowGpu cloudShadow;         // the cloud deck's shadow (params[0] = 1 when shown)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);
 
@@ -174,13 +127,11 @@ public:
     /// (with `shadowCompareSampler` immutable — SceneVkDevice::
     /// shadowCompareSampler), reflection probe cubemap, tile shade map, then
     /// the environment's irradiance and prefiltered cubes, the BRDF LUT and
-    /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13)
-    /// and the shadow pages' page table (14), and the probe grid's (17 its
-    /// sampler, repeating across; 18-20 its SH, 21 the ground's height, 22
-    /// the sun's volume), the land's sun's levels (23) and the cloud
-    /// deck's shadow's levels (24).
+    /// the sky cube, the shared sampler (8), the atmosphere's tables (9-13),
+    /// the shadow pages' page table (14) and overlays (15) and the compare
+    /// sampler (16).
     static VkDescriptorSetLayout createLightingLayout(VkDevice device, VkSampler shadowCompareSampler,
-                                                      VkSampler linearSampler, VkSampler repeatSampler);
+                                                      VkSampler linearSampler);
 
 private:
     std::vector<VkDescriptorSetLayoutBinding> bindings_;

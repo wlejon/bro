@@ -16,9 +16,6 @@
 namespace bro::scene {
 
 class SkinnedMeshNode;
-class GrassNode;
-class PlantsNode;
-class LandNode;
 
 /// A renderable 3D mesh node: bromesh::MeshData plus a PBR material. The node
 /// holds CPU data only; the scene renderer keeps the GPU copies keyed by node
@@ -40,22 +37,6 @@ public:
     /// renderer routes them to the skinned program via this hook instead of
     /// a separate Type.
     virtual SkinnedMeshNode* asSkinnedMesh() { return nullptr; }
-
-    /// Downcast hook: non-null when this node is a GrassNode, which keeps
-    /// Type::Mesh for the material setters but draws through the grass path
-    /// and stays out of raycasts and bounds.
-    virtual GrassNode* asGrass() { return nullptr; }
-
-    /// Downcast hook: non-null when this node is a PlantsNode, which keeps
-    /// Type::Mesh for the material setters but draws through the plants
-    /// path and stays out of raycasts and bounds (it has no mesh).
-    virtual PlantsNode* asPlants() { return nullptr; }
-
-    /// Downcast hook: non-null when this node is a LandNode, which keeps
-    /// Type::Mesh for the material setters but draws through the land path;
-    /// its mesh is rings parked on the camera, so raycasts, heights and
-    /// bounds read the land instead.
-    virtual LandNode* asLand() { return nullptr; }
 
     // --- Draw mode ---
 
@@ -326,12 +307,6 @@ public:
     /// vertex-coloured meshes don't ripple. Flora meshes set this to 1.
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
-    /// Turf: this mesh is the ground under grass node `grassId` and shades as
-    /// its sward and forest floor (scene_ground.glsl), its vertex colour the
-    /// ground's data (density, dryness, canopy) where the grass's land does
-    /// not reach. 0 (the default) shades it as any mesh.
-    void setTurfGrass(uint32_t grassId) { turfGrass_ = grassId; }
-    uint32_t turfGrass() const { return turfGrass_; }
     /// A mesh carrying MeshData::vegetation bends in the scene's wind field
     /// (docs/vegetation-api.js "Vegetation records"); this is its tallest record's
     /// height (node space), how far the sway can reach.
@@ -565,7 +540,6 @@ private:
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
     float windMask_ = 0.0f;
-    uint32_t turfGrass_ = 0;
     float vegetationHeight_ = 0.0f;
 
     DrawMode drawMode_ = DrawMode::Triangles;

@@ -17,9 +17,6 @@ BRO_SCENE_SHADER(MeshSkinnedVert,          "mesh_skinned.vert",           "draw/
 BRO_SCENE_SHADER(MeshFrag,                 "mesh.frag",                   "draw/mesh.frag",                     "frag", "")
 // mesh.frag that also writes the indirect light, for the SSAO opaque pass.
 BRO_SCENE_SHADER(MeshIndirectFrag,         "mesh_indirect.frag",          "draw/mesh.frag",                     "frag", "SCENE_INDIRECT_OUTPUT")
-// mesh.frag for a land not covered by turf: it reads the land's tiles (set 3).
-BRO_SCENE_SHADER(MeshLandFrag,             "mesh_land.frag",              "draw/mesh.frag",                     "frag", "SCENE_LAND")
-BRO_SCENE_SHADER(MeshLandIndirectFrag,     "mesh_land_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_LAND SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shadow/shadow.vert",                 "vert", "")
 BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow/shadow_instanced.vert",       "vert", "")
 BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow/shadow_skinned.vert",         "vert", "")
@@ -44,36 +41,12 @@ BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "post/
 BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "post/ssr.frag",                      "frag", "")
 BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "post/dof.frag",                      "frag", "")
 BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "post/apply_ao.frag",                 "frag", "")
-BRO_SCENE_SHADER(SubpixelFrag,             "subpixel.frag",               "post/subpixel.frag",                 "frag", "")
 BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "draw/gaussian_splat.vert",           "vert", "")
 BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "draw/gaussian_splat.frag",           "frag", "")
 BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "lighting/sky.vert",                  "vert", "")
 BRO_SCENE_SHADER(SkyAtmosphereFrag,        "sky_atmosphere.frag",         "lighting/sky_atmosphere.frag",       "frag", "")
 BRO_SCENE_SHADER(SkyboxFrag,               "skybox.frag",                 "lighting/skybox.frag",               "frag", "")
 BRO_SCENE_SHADER(StarfieldFrag,            "starfield.frag",              "lighting/starfield.frag",            "frag", "")
-// The cloud deck (vulkan/sky/scene_clouds.h): the march, the cover's bake,
-// the cache's extinction and the globe's columns with the module of no clouds (a world's set
-// compiles them with its own); the cache's distance to cloud and light, the
-// shadow's levels and the engine's noise.
-BRO_SCENE_SHADER(CloudsFrag,               "clouds.frag",                 "sky/clouds.frag",                    "frag", "")
-BRO_SCENE_SHADER(CloudsCoverComp,          "clouds_cover.comp",           "sky/clouds_cover.comp",              "comp", "")
-BRO_SCENE_SHADER(CloudsCacheComp,          "clouds_cache.comp",           "sky/clouds_cache.comp",              "comp", "")
-BRO_SCENE_SHADER(CloudsGlobeComp,          "clouds_globe.comp",           "sky/clouds_globe.comp",              "comp", "")
-BRO_SCENE_SHADER(CloudsHeapsComp,          "clouds_heaps.comp",           "sky/clouds_heaps.comp",              "comp", "")
-BRO_SCENE_SHADER(CloudsViewComp,           "clouds_view.comp",            "sky/clouds_view.comp",               "comp", "")
-BRO_SCENE_SHADER(CloudsShellsComp,         "clouds_shells.comp",          "sky/clouds_shells.comp",             "comp", "")
-BRO_SCENE_SHADER(CloudsShellsSortComp,     "clouds_shells_sort.comp",     "sky/clouds_shells_sort.comp",        "comp", "")
-BRO_SCENE_SHADER(CloudShellsVert,          "cloud_shells.vert",           "sky/cloud_shells.vert",              "vert", "")
-BRO_SCENE_SHADER(CloudShellsFrag,          "cloud_shells.frag",           "sky/cloud_shells.frag",              "frag", "")
-BRO_SCENE_SHADER(CloudsDistComp,           "clouds_dist.comp",            "sky/clouds_dist.comp",               "comp", "")
-BRO_SCENE_SHADER(CloudsLightComp,         "clouds_light.comp",           "sky/clouds_light.comp",              "comp", "")
-BRO_SCENE_SHADER(CloudsShadowComp,         "clouds_shadow.comp",          "sky/clouds_shadow.comp",             "comp", "")
-BRO_SCENE_SHADER(CloudsNoiseComp,          "clouds_noise.comp",           "sky/clouds_noise.comp",              "comp", "")
-// The volume about the eye's bakes and check, and the march's debug views of it.
-BRO_SCENE_SHADER(CloudsVolumeComp,         "clouds_volume.comp",          "sky/clouds_volume.comp",             "comp", "")
-BRO_SCENE_SHADER(CloudsVolumeDistComp,     "clouds_volume_dist.comp",     "sky/clouds_volume_dist.comp",        "comp", "")
-BRO_SCENE_SHADER(CloudsVolumeCheckComp,    "clouds_volume_check.comp",    "sky/clouds_volume_check.comp",       "comp", "")
-BRO_SCENE_SHADER(CloudsVolumeFrag,         "clouds_volume_debug.frag",    "sky/clouds.frag",                    "frag", "CL_DEBUG_VOLUME")
 BRO_SCENE_SHADER(EnvConvertFrag,           "env_convert.frag",            "lighting/env_convert.frag",          "frag", "")
 BRO_SCENE_SHADER(IrradianceFrag,           "irradiance.frag",             "lighting/irradiance.frag",           "frag", "")
 BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "lighting/prefilter.frag",            "frag", "")
@@ -92,81 +65,10 @@ BRO_SCENE_SHADER(MeshVegIndirectFrag,      "mesh_veg_indirect.frag",      "draw/
 BRO_SCENE_SHADER(ShadowVegVert,            "shadow_veg.vert",             "shadow/shadow.vert",                 "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowInstancedVegVert,   "shadow_instanced_veg.vert",   "shadow/shadow_instanced.vert",       "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowScatterVert,        "shadow_scatter.vert",         "shadow/shadow_scatter.vert",         "vert", "")
-// Grass blades (scene_grass.glsl), drawn with mesh.frag's SCENE_GRASS build
-// (a leaf's fold, a flowering culm's head cut per pixel, the light through
-// a blade), so the vegetation build carries none of their work.
-BRO_SCENE_SHADER(MeshGrassVert,            "mesh_grass.vert",             "ground/mesh_grass.vert",             "vert", "")
-BRO_SCENE_SHADER(MeshGrassFrag,            "mesh_grass.frag",             "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_GRASS")
-BRO_SCENE_SHADER(MeshGrassIndirectFrag,    "mesh_grass_indirect.frag",    "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_GRASS SCENE_INDIRECT_OUTPUT")
-BRO_SCENE_SHADER(ShadowGrassVert,          "shadow_grass.vert",           "ground/shadow_grass.vert",           "vert", "")
-// The cover's plan (scene_cover_plan.cpp): the blades and herb plants a
-// grass node's rings draw.
-BRO_SCENE_SHADER(CoverPlanComp,            "cover_plan.comp",             "ground/cover_plan.comp",             "comp", "")
-// The land (scene_mesh_drawer_land.cpp): its rings placed from its tiles,
-// and its tiles' fill, built in with ground/land_module.glsl (no land); a
-// node fills with its own module's (ground/scene_land_shaders.h).
-BRO_SCENE_SHADER(MeshLandVert,             "mesh_land.vert",              "ground/mesh_land.vert",              "vert", "")
-BRO_SCENE_SHADER(ShadowLandVert,           "shadow_land.vert",            "ground/mesh_land.vert",              "vert", "LAND_CASTER")
-BRO_SCENE_SHADER(LandFillComp,             "land_fill.comp",              "ground/land_fill.comp",              "comp", "")
-// The land's processes (scene_land_process.h), built in with no process; a
-// land runs its own (ground/land_process_module.glsl's place).
-BRO_SCENE_SHADER(LandProcessComp,          "land_process.comp",           "ground/land_process.comp",           "comp", "")
-// The land's regional grids (scene_land_regions.h), built in with no regions;
-// a land runs its own (land_process_module.glsl's and land_region_dispatch.glsl's places).
-BRO_SCENE_SHADER(LandRegionComp,           "land_region.comp",            "ground/land_region.comp",            "comp", "")
-// The land's horizon about the eye (scene_world_horizon.h), from its tiles.
-BRO_SCENE_SHADER(LandHorizonComp,          "land_horizon.comp",           "ground/land_horizon.comp",           "comp", "")
-// The land's sun about the eye (scene/world/land_sun.h), a level from its tiles.
-BRO_SCENE_SHADER(LandSunComp,              "land_sun.comp",               "ground/land_sun.comp",               "comp", "")
-// The GPU cell pass (scene_world_cells_pass.cpp), its three steps.
-BRO_SCENE_SHADER(WorldCellsTopComp,        "world_cells_top.comp",        "world/world_cells_cull.comp",        "comp", "CELLS_TOP")
-BRO_SCENE_SHADER(WorldCellsLeafComp,       "world_cells_leaf.comp",       "world/world_cells_cull.comp",        "comp", "CELLS_LEAF")
-BRO_SCENE_SHADER(WorldCellsGatherComp,     "world_cells_gather.comp",     "world/world_cells_cull.comp",        "comp", "CELLS_GATHER")
-// Plants (scene_plants.glsl): every element, limb and trunk built from its
-// plant's and species' records by the world's plant module; opaque. Built
-// in with foliage/plant_module.glsl (no plants); a node draws with its own
-// module's set (foliage/scene_plant_shaders.h).
-BRO_SCENE_SHADER(PlantsVert,               "plants.vert",                 "foliage/plants.vert",                "vert", "")
-BRO_SCENE_SHADER(PlantsFrag,               "plants.frag",                 "foliage/plants.frag",                "frag", "")
-BRO_SCENE_SHADER(PlantsIndirectFrag,       "plants_indirect.frag",        "foliage/plants.frag",                "frag", "SCENE_INDIRECT_OUTPUT")
-BRO_SCENE_SHADER(ShadowPlantsVert,         "shadow_plants.vert",          "foliage/shadow_plants.vert",         "vert", "")
-BRO_SCENE_SHADER(PlantsPoseComp,           "plants_pose.comp",            "foliage/plants_pose.comp",           "comp", "")
-// The plants' GPU plan (scene_plants_gpu_plan.cpp): count, lay out, place.
-BRO_SCENE_SHADER(PlantsPlanCountComp,      "plants_plan_count.comp",      "foliage/plants_plan.comp",           "comp", "PLANTS_COUNT")
-BRO_SCENE_SHADER(PlantsPlanLayoutComp,     "plants_plan_layout.comp",     "foliage/plants_plan.comp",           "comp", "PLANTS_LAYOUT")
-BRO_SCENE_SHADER(PlantsPlanPlaceComp,      "plants_plan_place.comp",      "foliage/plants_plan.comp",           "comp", "PLANTS_PLACE")
-// Herb plants (scene_herb.glsl): a grass node's ferns, wildflowers and forbs,
-// a card strip a leaf, stem or bloom, cut by mesh.frag's SCENE_HERB build,
-// all of it the world's herb module (scene_herb_layer.glsl); built here with
-// the stub of none, a world's module at run time (scene_cover_shaders.h). A
-// Grass draw flagged mesh_flags::kHerb.
-BRO_SCENE_SHADER(MeshHerbVert,             "mesh_herb.vert",              "ground/mesh_herb.vert",              "vert", "")
-BRO_SCENE_SHADER(MeshHerbFrag,             "mesh_herb.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB")
-BRO_SCENE_SHADER(MeshHerbIndirectFrag,     "mesh_herb_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_HERB SCENE_INDIRECT_OUTPUT")
-// The cover's far tier (scene_cover_far.glsl): past the rings, a quad an
-// element of what grows on the ground, as many as the screen holds. A Grass
-// draw flagged mesh_flags::kCoverFar.
-BRO_SCENE_SHADER(MeshCoverFarVert,         "mesh_cover_far.vert",         "ground/mesh_cover_far.vert",         "vert", "")
-BRO_SCENE_SHADER(MeshCoverFarFrag,         "cover_far.frag",              "ground/cover_far.frag",              "frag", "")
-BRO_SCENE_SHADER(MeshCoverFarIndirectFrag, "cover_far_indirect.frag",     "ground/cover_far.frag",              "frag", "SCENE_INDIRECT_OUTPUT")
 // A tube's wood (createTubes): mesh.frag built with SCENE_BARK
 // (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
 BRO_SCENE_SHADER(MeshBarkFrag,             "mesh_bark.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_BARK")
 BRO_SCENE_SHADER(MeshBarkIndirectFrag,     "mesh_bark_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_BARK SCENE_INDIRECT_OUTPUT")
-// Turf: a ground mesh shaded as its grass node's sward and forest floor
-// (scene_ground.glsl), set 4 the grass node's field.
-BRO_SCENE_SHADER(MeshGroundFrag,           "mesh_ground.frag",            "draw/mesh.frag",                     "frag", "SCENE_GROUND")
-BRO_SCENE_SHADER(MeshGroundIndirectFrag,   "mesh_ground_indirect.frag",   "draw/mesh.frag",                     "frag", "SCENE_GROUND SCENE_INDIRECT_OUTPUT")
-// Its land's blocks wholly past the painted band: the land's surface lit as
-// the sward it stands for, none of the turf's patterns worked out.
-BRO_SCENE_SHADER(MeshGroundFarFrag,        "mesh_ground_far.frag",        "draw/mesh.frag",                     "frag", "SCENE_GROUND SCENE_GROUND_FAR")
-BRO_SCENE_SHADER(MeshGroundFarIndirectFrag, "mesh_ground_far_indirect.frag", "draw/mesh.frag",                   "frag", "SCENE_GROUND SCENE_GROUND_FAR SCENE_INDIRECT_OUTPUT")
-// A tile of the turf's surface layer, the ground drawn straight down into it
-// (scene_ground_layers.glsl; scene_mesh_drawer_ground.cpp).
-BRO_SCENE_SHADER(GroundLayerFillFrag,      "ground_layer_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "")
-// On a round body a tile is a square of the land's chart, filled whole.
-BRO_SCENE_SHADER(GroundChartFillVert,      "ground_chart_fill.vert",      "ground/ground_chart_fill.vert",      "vert", "")
-BRO_SCENE_SHADER(GroundChartFillFrag,      "ground_chart_fill.frag",      "ground/ground_layer_fill.frag",      "frag", "GROUND_LAYER_CHART")
 // The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
 // (transmittance, multiple scattering, the sky's light) and the per-frame
 // view tables (sky view, aerial-perspective froxels).
@@ -175,15 +77,6 @@ BRO_SCENE_SHADER(AtmosphereMultiScatterComp, "atmosphere_multiscatter.comp", "li
 BRO_SCENE_SHADER(AtmosphereSkyLightComp,   "atmosphere_skylight.comp",    "lighting/atmosphere_skylight.comp",  "comp", "")
 BRO_SCENE_SHADER(AtmosphereSkyViewComp,    "atmosphere_skyview.comp",     "lighting/atmosphere_skyview.comp",   "comp", "")
 BRO_SCENE_SHADER(AtmosphereAerialComp,     "atmosphere_aerial.comp",      "lighting/atmosphere_aerial.comp",    "comp", "")
-// The probe grid (scene_probe_grid.cpp): its world (the ground's heights
-// from the capture, the canopy splatted and resolved, the sun's light
-// through it), then its probes traced through it and blended in.
-BRO_SCENE_SHADER(ProbeHeightComp,          "probe_height.comp",           "lighting/probe_height.comp",         "comp", "")
-BRO_SCENE_SHADER(ProbeSplatComp,           "probe_splat.comp",            "lighting/probe_splat.comp",          "comp", "")
-BRO_SCENE_SHADER(ProbeResolveComp,         "probe_resolve.comp",          "lighting/probe_resolve.comp",        "comp", "")
-BRO_SCENE_SHADER(ProbeSunComp,             "probe_sun.comp",              "lighting/probe_sun.comp",            "comp", "")
-BRO_SCENE_SHADER(ProbeTraceComp,           "probe_trace.comp",            "lighting/probe_trace.comp",          "comp", "")
-BRO_SCENE_SHADER(ProbeBlendComp,           "probe_blend.comp",            "lighting/probe_blend.comp",          "comp", "")
 // Exposure (scene_exposure.cpp): the frame's luminance histogram, metered and
 // adapted by its last workgroup.
 BRO_SCENE_SHADER(ExposureComp,             "exposure.comp",               "post/exposure.comp",                 "comp", "")

@@ -133,7 +133,7 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
 /// A compute pipeline built on a thread of its own from when it is started
 /// (pipeline_async::inFlight counts it), so no frame waits on the driver's
 /// compile: get() is null until it is in where frames skip what is not
-/// ready (shader_warmup::async()), and waits for it where they do not.
+/// ready (pipeline_async::async()), and waits for it where they do not.
 class AsyncComputePipeline {
 public:
     /// `module` (start's second form) and `layout` outlive the build.

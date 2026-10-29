@@ -522,9 +522,8 @@ void Engine::tickSystemPanels(double nowMs) {
     if (splashVisible_) {
         constexpr double kMinDisplayMs = 1800.0;
         // Past its minimum and the page's compile, the splash waits for the
-        // scene's shaders and pipelines asked for so far (the warm-up record's
-        // sets, queued at boot, and what the first frames asked for), at most
-        // this long; what is left then shows in the status panel.
+        // scene's pipelines asked for so far (what the first frames asked
+        // for), at most this long; what is left then shows in the status panel.
         constexpr double kShaderWaitCapMs = 4000.0;
         double elapsed = nowMs - splashStartMs_;
         bool ready = false;

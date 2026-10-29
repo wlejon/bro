@@ -74,9 +74,8 @@ jobs:
       # run_tests.sh turns on wherever it is installed. Shaders need nothing
       # here: glslang is built from source in-process (cmake/glslang.cmake).
       # Lavapipe from kisak's Mesa PPA (26.x): noble's own 25.2.8 llvmpipe
-      # faults inside its JIT'd code on the land's region compute
-      # (test_land_process, test_expect), which GPU-assisted validation
-      # finds nothing wrong with and Mesa 26 runs.
+      # faulted inside its JIT'd code on long compute shaders that
+      # GPU-assisted validation found nothing wrong with and Mesa 26 runs.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |

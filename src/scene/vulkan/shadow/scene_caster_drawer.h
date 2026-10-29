@@ -5,9 +5,8 @@
 // vegetation sway and custom vertex chunks so the silhouette matches what is
 // drawn, and a textured static or instanced mesh with an alpha cutoff cut
 // by its base colour's alpha (scene_shadow_cutout.glsl). The shadow pass
-// draws its views' casters with it (pass_shadow.h); the probe grid captures
-// the ground's height from above with it (scene_probe_grid.h). One set of
-// pipelines, built on first use, shared by every user.
+// draws its views' casters with it (pass_shadow.h). One set of pipelines,
+// built on first use, shared by every user.
 //
 // A caster culls the faces turned toward its view, so the depth stored is
 // its far side and a closed mesh does not shadow itself; a two-sided one
@@ -53,30 +52,25 @@ private:
     struct alignas(16) Push {
         float lightViewProj[16];
         float modelRows[12];
-        float params[4];   // x wind mask (a plants caster's mode); yzw a cutout caster's
+        float params[4];   // x wind mask; yzw a cutout caster's
     };
     static_assert(sizeof(Push) == 128);
 
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
-    VkPipeline grassPipeline(const SceneGpu& gpu, uint32_t cover, bool twoSided);
-    VkPipeline plantsPipeline(const SceneGpu& gpu, uint32_t set, bool twoSided);
     VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
     VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    // None for Grass and Plants: their module set's shadow stage.
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;
-    // The built-in, cutout, grass and plants casters' pipelines, built off
-    // the frame thread (a caster is not drawn until its pipeline is in;
-    // the shadow pages it was skipped from are drawn again then): by
-    // variant, a kind's (kBuiltin | kind << 1 | two-sided), a cutout's
-    // (kCutout | instanced << 1 | two-sided), and the grass's and plants'
-    // by their module set (MeshDraw::moduleSet, their world's modules:
-    // kGrass / kPlants | set << 1 | two-sided).
-    static constexpr uint32_t kBuiltin = 0x0000, kCutout = 0x0100, kGrass = 0x4000, kPlants = 0x8000;
+    // The built-in and cutout casters' pipelines, built off the frame thread
+    // (a caster is not drawn until its pipeline is in; the shadow pages it
+    // was skipped from are drawn again then): by variant, a kind's
+    // (kBuiltin | kind << 1 | two-sided), a cutout's (kCutout | instanced << 1
+    // | two-sided).
+    static constexpr uint32_t kBuiltin = 0x0000, kCutout = 0x0100;
     PipelineVariants pipelines_;
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.

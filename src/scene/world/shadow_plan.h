@@ -67,7 +67,6 @@ struct ShadowViewPlan {
     bool dynamic = false;        // an overlay: what moves alone, sampled in place over the pages' cached depth
     ShadowPlants plants = ShadowPlants::None;   // the plants' casters that go in
     float penumbra = 0.0f;       // a sun view's penumbra a metre above the receiver (m): parts Swaying from Still
-    bool grass = false;          // the grass's casters go in (the near levels only)
     int scratchX = 0, scratchY = 0;   // the bordered rect's first texel in the scratch target
     int texelsW = 0, texelsH = 0;     // its size
     bromath::Mat4 relViewProj;   // relative to ShadowPlan::origin, cropped to the bordered rect
@@ -80,10 +79,8 @@ struct ShadowViewPlan {
 /// How a caster casts: still (in the pages' cached depth), moving (drawn
 /// each frame into the overlays over it), swaying (in the sway level's
 /// overlays, which it and the finer levels read, and the cached depth of
-/// the coarser levels, where its sway hides under the filter; the plants
-/// part their crowns by penumbra themselves, ShadowPlants), or as the grass
-/// (the sway level's overlays alone).
-enum class ShadowMotion : uint8_t { Still, Moving, Swaying, Grass };
+/// the coarser levels, where its sway hides under the filter).
+enum class ShadowMotion : uint8_t { Still, Moving, Swaying };
 
 /// Whether a caster of `motion` draws into view `v`.
 inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
@@ -91,7 +88,6 @@ inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
     case ShadowMotion::Still: return !v.dynamic;
     case ShadowMotion::Moving: return v.dynamic;
     case ShadowMotion::Swaying: return v.plants == ShadowPlants::Swaying || v.plants == ShadowPlants::All;
-    case ShadowMotion::Grass: return v.grass;
     }
     return false;
 }

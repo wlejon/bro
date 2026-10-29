@@ -184,23 +184,9 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setWindField", BRO_NATIVE_FN(bro_scene_SceneGraph_setWindField), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_windAt", BRO_NATIVE_FN(bro_scene_SceneGraph_windAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_windState", BRO_NATIVE_FN(bro_scene_SceneGraph_windState), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setBody", BRO_NATIVE_FN(bro_scene_SceneGraph_setBody), "void", {"__bro_native.scene.SceneGraph", "f64", "f64[]", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_place", BRO_NATIVE_FN(bro_scene_SceneGraph_place), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_toBody", BRO_NATIVE_FN(bro_scene_SceneGraph_toBody), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_toPlace", BRO_NATIVE_FN(bro_scene_SceneGraph_toPlace), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_upAt", BRO_NATIVE_FN(bro_scene_SceneGraph_upAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_latLongAt", BRO_NATIVE_FN(bro_scene_SceneGraph_latLongAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_reanchorAt", BRO_NATIVE_FN(bro_scene_SceneGraph_reanchorAt), "bool", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_onReanchor_set", BRO_NATIVE_FN(bro_scene_SceneGraph_onReanchor_set), "void", {"__bro_native.scene.SceneGraph", "dynamic"}, error) &&
-        fn("__bro_native.scene.SceneGraph_expect", BRO_NATIVE_FN(bro_scene_SceneGraph_expect), "f64", {"__bro_native.scene.SceneGraph", "f64[]", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_expectMove", BRO_NATIVE_FN(bro_scene_SceneGraph_expectMove), "bool", {"__bro_native.scene.SceneGraph", "f64", "f64[]", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_expectCancel", BRO_NATIVE_FN(bro_scene_SceneGraph_expectCancel), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_expectPending", BRO_NATIVE_FN(bro_scene_SceneGraph_expectPending), "f64", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowQuality", BRO_NATIVE_FN(bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", BRO_NATIVE_FN(bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAtmosphere", BRO_NATIVE_FN(bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setClouds", BRO_NATIVE_FN(bro_scene_SceneGraph_setClouds), "str", {"__bro_native.scene.SceneGraph", "str", "f64[]", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_cloudStats", BRO_NATIVE_FN(bro_scene_SceneGraph_cloudStats), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_setStarfield", BRO_NATIVE_FN(bro_scene_SceneGraph_setStarfield), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "f64", "bool", "f64", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_setTiltShift", BRO_NATIVE_FN(bro_scene_SceneGraph_setTiltShift), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setBloom", BRO_NATIVE_FN(bro_scene_SceneGraph_setBloom), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32"}, error) &&
@@ -210,11 +196,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_setColorLUT", BRO_NATIVE_FN(bro_scene_SceneGraph_setColorLUT), "bool", {"__bro_native.scene.SceneGraph", "str", "i32", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFXAA", BRO_NATIVE_FN(bro_scene_SceneGraph_setFXAA), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_setGroundBounce", BRO_NATIVE_FN(bro_scene_SceneGraph_setGroundBounce), "void", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setProbeGrid", BRO_NATIVE_FN(bro_scene_SceneGraph_setProbeGrid), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_setDither", BRO_NATIVE_FN(bro_scene_SceneGraph_setDither), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFrameTarget", BRO_NATIVE_FN(bro_scene_SceneGraph_setFrameTarget), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setBands", BRO_NATIVE_FN(bro_scene_SceneGraph_setBands), "void", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_bands", BRO_NATIVE_FN(bro_scene_SceneGraph_bands), "f64[]", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_setRenderScale", BRO_NATIVE_FN(bro_scene_SceneGraph_setRenderScale), "void", {"__bro_native.scene.SceneGraph", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setMSAA", BRO_NATIVE_FN(bro_scene_SceneGraph_setMSAA), "void", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setEnvironment", BRO_NATIVE_FN(bro_scene_SceneGraph_setEnvironment), "bool", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "bool"}, error) &&
@@ -233,35 +216,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_unprojectLocal", BRO_NATIVE_FN(bro_scene_SceneGraph_unprojectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_projectLocal", BRO_NATIVE_FN(bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", BRO_NATIVE_FN(bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
-        fn("__bro_native.scene.SceneGraph_detachAIWorld", BRO_NATIVE_FN(bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_createLand", BRO_NATIVE_FN(bro_scene_SceneGraph_createLand), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneNode_setLandModule", BRO_NATIVE_FN(bro_scene_SceneNode_setLandModule), "str", {"__bro_native.scene.SceneNode", "str", "f32[]", "str", "i32"}, error) &&
-        fn("__bro_native.scene.SceneNode_setLandProcess", BRO_NATIVE_FN(bro_scene_SceneNode_setLandProcess), "str", {"__bro_native.scene.SceneNode", "str", "str", "f64[]", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setLandRelief", BRO_NATIVE_FN(bro_scene_SceneNode_setLandRelief), "str", {"__bro_native.scene.SceneNode", "str", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setLandParams", BRO_NATIVE_FN(bro_scene_SceneNode_setLandParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_landParams", BRO_NATIVE_FN(bro_scene_SceneNode_landParams), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_landHeight", BRO_NATIVE_FN(bro_scene_SceneNode_landHeight), "f64", {"__bro_native.scene.SceneNode", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_landStats", BRO_NATIVE_FN(bro_scene_SceneNode_landStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneGraph_createPlants", BRO_NATIVE_FN(bro_scene_SceneGraph_createPlants), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlantModule", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantModule), "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlantSpecies", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantSpecies), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlants", BRO_NATIVE_FN(bro_scene_SceneNode_setPlants), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlantRules", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantRules), "str", {"__bro_native.scene.SceneNode", "str"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlantLand", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantLand), "str", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode", "bool"}, error) &&
-        fn("__bro_native.scene.SceneNode_plantPlacement", BRO_NATIVE_FN(bro_scene_SceneNode_plantPlacement), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_setPlantParams", BRO_NATIVE_FN(bro_scene_SceneNode_setPlantParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_plantStats", BRO_NATIVE_FN(bro_scene_SceneNode_plantStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneGraph_createGrass",BRO_NATIVE_FN(bro_scene_SceneGraph_createGrass), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassGround", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassGround), "i32", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassParams", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassParams), "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneNode_grassParams", BRO_NATIVE_FN(bro_scene_SceneNode_grassParams), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassMover", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassMover), "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_grassPush", BRO_NATIVE_FN(bro_scene_SceneNode_grassPush), "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_grassStats", BRO_NATIVE_FN(bro_scene_SceneNode_grassStats), "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassHerbs", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassHerbs), "void", {"__bro_native.scene.SceneNode", "str", "f32[]", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_setGrassSward", BRO_NATIVE_FN(bro_scene_SceneNode_setGrassSward), "void", {"__bro_native.scene.SceneNode", "str", "f32[]", "f64", "f64", "f64"}, error) &&
-        fn("__bro_native.scene.SceneNode_setTurfGrass", BRO_NATIVE_FN(bro_scene_SceneNode_setTurfGrass), "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneNode", "i32"}, error) &&
-        fn("__bro_native.scene.SceneNode_sampleHeights", BRO_NATIVE_FN(bro_scene_SceneNode_sampleHeights), "f32[]", {"__bro_native.scene.SceneNode", "f64", "f64", "f64", "i32", "i32"}, error);
+        fn("__bro_native.scene.SceneGraph_detachAIWorld", BRO_NATIVE_FN(bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error);
     if (!ok) return false;
     publishPrototype("scene", "__bro_native.scene.SceneNode", "SceneNodeProto");
     publishPrototype("scene", "__bro_native.scene.SceneGraph", "SceneGraphProto");
@@ -389,7 +344,6 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_inspectRecording", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecording), "f64[]", {"str", "i32", "f64[]"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_inspectRecordingError", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecordingError), "str", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_inspectRecordingImage", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecordingImage), "u8[]", {"i32"}, error) &&
-           natives::fn("__bro_native.scene.SceneGraph_cloudCoverAt", BRO_NATIVE_FN(bro_scene_SceneGraph_cloudCoverAt), "f64[]", {"__bro_native.scene.SceneGraph", "f64[]"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapHeight", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapHeight), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createSkinnedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createSkinnedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&

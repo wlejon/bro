@@ -11,13 +11,11 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
-#include "scene/vulkan/lighting/scene_probe_grid.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
-#include "scene/vulkan/sky/scene_clouds.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,7 +87,6 @@ void shadowSoftUniform(const SceneRenderer& renderer, float out[4]) {
 
 SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGpu& gpu, const SceneView& view) {
     const bromath::Vec3 eye = view.eye;
-    const bromath::Vec3 worldEye = view.world().eye;
     SceneLightingUniforms light{};
     const ShadowPlan& plan = renderer.shadowPlan();
     const std::vector<LightNode*>& lights = renderer.frameLights();
@@ -148,12 +145,9 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     light.shadowView[3] = overlays ? static_cast<float>(plan.swayLevel) : -1.0f;
     shadowSoftUniform(renderer, light.shadowSoft);
     for (int m = 0; m < plan.mapCount && m < kSceneMaxShadowMaps; ++m)
-        shadowMapUniform(plan, plan.maps[m], worldEye, light.shadowMaps[m]);
+        shadowMapUniform(plan, plan.maps[m], eye, light.shadowMaps[m]);
     gpu.environment.fillLighting(light, renderer);
-    gpu.atmosphere.fill(light.atm, worldEye);
-    gpu.probes.fill(light.probeGrid, worldEye);
-    gpu.meshes.fillLandSun(light.landSun, worldEye);
-    gpu.clouds.fill(light.cloudShadow);
+    gpu.atmosphere.fill(light.atm, eye);
     return light;
 }
 
@@ -184,11 +178,6 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     gpu.environment.writeBindings(writer, d);
     gpu.atmosphere.writeBindings(writer);
-    gpu.probes.writeBindings(writer);
-    writer.writeImage(23, gpu.meshes.landSunView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
-                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-    writer.writeImage(24, gpu.clouds.shadowView(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
-                      VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);

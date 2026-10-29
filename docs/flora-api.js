@@ -778,9 +778,6 @@ bro.flora.FloraWorld = FloraWorld;
  */
 bro.flora.speciesPresets = function() {};
 
-// The herbs the grass node draws (bro.flora.herbPresets, herbPreset,
-// herbRecords) are docs/vegetation-api.js "Herbs".
-
 /**
  * Leaf arrangement enum. Also exposed as `bro.flora.phyllotaxy`, and each
  * value has a lowercase alias (`alternate` ... `compoundPinnate`).

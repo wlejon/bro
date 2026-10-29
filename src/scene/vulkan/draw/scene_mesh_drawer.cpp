@@ -2,7 +2,6 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/depth_policy.h"
-#include "scene/nodes/grass_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
@@ -11,13 +10,9 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
-#include "scene/vulkan/foliage/scene_plants_gpu_plan.h"
-#include "scene/vulkan/ground/scene_cover_plan.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
-#include "scene/vulkan/shaders/ground/scene_land_layout.h"
-#include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
 
@@ -40,10 +35,7 @@ SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     case MeshKind::Static:
     case MeshKind::Vegetation:
     case MeshKind::Scatter:
-    case MeshKind::Tube:
-    case MeshKind::Grass:
-    case MeshKind::Plants:
-    case MeshKind::Land: break;
+    case MeshKind::Tube: break;
     }
     return SceneRenderer::CustomShaderTarget::Static;
 }
@@ -121,95 +113,23 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
-    vs_[static_cast<int>(MeshKind::Land)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandVert);
-    // (The blades' and the plants' stages are their node's module set's.)
     fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
     fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
     fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
     fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
     fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
-    fsLand_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandFrag);
-    fsLandIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshLandIndirectFrag);
-    fsCoverFar_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarFrag);
-    fsCoverFarIndirect_ =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshCoverFarIndirectFrag);
-    vsChartFill_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::GroundChartFillVert);
-    covers_.push_back(std::make_unique<CoverShaders>());
     bool vsAll = true;
-    for (int k = 0; k < kMeshKindCount; ++k)
-        vsAll = vsAll && (vs_[k] || k == static_cast<int>(MeshKind::Grass) || k == static_cast<int>(MeshKind::Plants));
-    if (!fsCoverFar_ || !fsCoverFarIndirect_ || !vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ ||
-        !fsLand_ || !fsLandIndirect_ || !vsChartFill_ || !covers_[0]->createBuiltin(device_)) {
+    for (int k = 0; k < kMeshKindCount; ++k) vsAll = vsAll && vs_[k];
+    if (!vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
-        return false;
-    }
-
-    // The plants' GPU planner.
-    plantPlanner_ = std::make_shared<plants::GpuPlanner>();
-    if (!plantPlanner_->setup(gpu)) {
-        LOG_ERROR("SceneMeshDrawer: Failed setting up the plants' GPU planner");
-        return false;
-    }
-    coverPlan_ = std::make_shared<CoverPlan>();
-    if (!coverPlan_->setup(gpu)) {
-        LOG_ERROR("SceneMeshDrawer: Failed setting up the cover's plan");
-        return false;
-    }
-    // The land's tiles and then the turf's surface layer fills are the world
-    // service's jobs (recorded in that order), a first guess at a fill's
-    // cost until the service measures one.
-    if (!setupLand(gpu)) return false;
-    if (turfKind_ < 0) turfKind_ = gpu.world.addKind(this, {"turf", WorldSchedule::Raster, 0.03f});
-    if (turfKind_ < 0) {
-        LOG_ERROR("SceneMeshDrawer: the world service has no room for the turf's fills");
         return false;
     }
     return true;
 }
 
-void SceneMeshDrawer::offer(SceneFrame& frame, WorldService& service) {
-    {
-        stalls::Part part("offer land");
-        offerLand(frame, service);
-    }
-    {
-        stalls::Part part("offer land sun");
-        offerLandSun(frame, service);
-    }
-    stalls::Part part("offer turf");
-    offerTurf(frame, service);
-}
-
-double SceneMeshDrawer::record(SceneFrame& frame, int kind, std::span<const WorldJob> granted, WorldStream& stream) {
-    if (kind == landKind_) return recordLand(frame, granted, stream);
-    if (kind == regionsKind_) return recordLandRegions(frame, SceneLandRegions::Step::Pass, granted, stream);
-    if (kind == regionInitsKind_) return recordLandRegions(frame, SceneLandRegions::Step::Init, granted, stream);
-    if (kind == regionFinishesKind_) return recordLandRegions(frame, SceneLandRegions::Step::Finish, granted, stream);
-    if (kind == horizonKind_) return recordLandHorizon(frame, granted, stream);
-    if (kind == landSunKind_) return recordLandSun(frame, granted, stream);
-    if (kind == turfKind_) return recordTurf(frame, granted, stream);
-    return 0;
-}
-
 void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
-    cleanupLand(gpu);
     builtin_.destroy(gpu.device);
-    for (auto& [id, layers] : groundLayers_) layers->atlas.destroy(gpu.device, gpu.allocator);
-    groundLayers_.clear();
-    for (auto& c : covers_) {
-        c->pipelines.destroy(gpu.device);
-        c->destroy(device_);
-    }
-    covers_.clear();
-    coverByModule_.clear();
-    for (auto& p : plantSets_) {
-        p->pipelines.destroy(gpu.device);
-        p->destroy(device_);
-    }
-    plantSets_.clear();
-    plantByModule_.clear();
     for (auto& [key, prog] : custom_) {
         prog->pipelines.destroy(gpu.device);
         for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect}) SceneVkShaderModule::destroy(device_, m);
@@ -225,19 +145,9 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsVegIndirect_);
     SceneVkShaderModule::destroy(device_, fsBark_);
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
-    SceneVkShaderModule::destroy(device_, fsCoverFar_);
-    SceneVkShaderModule::destroy(device_, fsCoverFarIndirect_);
-    SceneVkShaderModule::destroy(device_, fsLand_);
-    SceneVkShaderModule::destroy(device_, fsLandIndirect_);
-    SceneVkShaderModule::destroy(device_, vsChartFill_);
-    fsCoverFar_ = fsCoverFarIndirect_ = fsLand_ = fsLandIndirect_ = vsChartFill_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
-    if (plantPlanner_) plantPlanner_->cleanup(gpu);
-    plantPlanner_.reset();
-    if (coverPlan_) coverPlan_->cleanup(gpu);
-    coverPlan_.reset();
 }
 
 namespace raster {
@@ -248,39 +158,17 @@ constexpr uint32_t kMirrored = 8;
 constexpr uint32_t kNoDepth = 16;
 // It cuts pixels (a near clip or an alpha cutoff): mesh.frag's discards are
 // built in only then (MESH_CUTS). A fragment stage that can discard is
-// depth-tested after it shades, so every layer behind the nearest was shaded
-// too: the wilds' ground, three meshes over one another, its turf shaded
-// under the near tiles twice over.
+// depth-tested after it shades, so every layer behind the nearest is shaded
+// too.
 constexpr uint32_t kCuts = 32;
 // The frame has the atmosphere on: the lit stages are built with its code
 // (scene_lighting.glsl's SCENE_ATMOSPHERE), and without it when it is off.
 constexpr uint32_t kAtmosphere = 64;
-// The cover's two passes (CoverPass): its depth alone, then lit where its
-// depth is the nearest.
-constexpr uint32_t kCoverDepth = 128;
-constexpr uint32_t kCoverShade = 256;
-constexpr uint32_t kCount = 512;
+constexpr uint32_t kCount = 128;
 // mesh.frag's MESH_CUTS.
 constexpr uint32_t kCutsConstantId = 1;
 // scene_lighting.glsl's SCENE_ATMOSPHERE.
 constexpr uint32_t kAtmosphereConstantId = 2;
-// mesh.frag's MESH_COVER_DEPTH and MESH_COVER_SHADE.
-constexpr uint32_t kCoverDepthConstantId = 3;
-constexpr uint32_t kCoverShadeConstantId = 4;
-}
-
-bool SceneMeshDrawer::coverPrepassed(const MeshDraw& draw) const {
-    // The blades and herb plants (not the far tier's tufts) of an opaque
-    // draw that cuts nothing else; and the land (its turf), whose every
-    // pixel is dear (the turf's patterns, the sward's light) and whose hills
-    // and rings stand in front of one another: lit once a pixel, where
-    // nothing nearer (its own nearer hills, the plants and blades drawn
-    // before it) hides it. (Not a land with a shader of its own: the two
-    // passes are the built-in stages.)
-    if (rasterVariant(draw) & (raster::kTranslucent | raster::kLines | raster::kNoDepth | raster::kCuts)) return false;
-    if (draw.kind == MeshKind::Land) return draw.custom == nullptr;
-    return draw.kind == MeshKind::Grass &&
-           (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) == 0u;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
@@ -314,20 +202,8 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
      .setDepthBias(true)
      .setDynamicStates(dynamic)
      .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0)
-     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0)
-     .setSpecialization(raster::kCoverDepthConstantId, (rasterBits & raster::kCoverDepth) != 0)
-     .setSpecialization(raster::kCoverShadeConstantId, (rasterBits & raster::kCoverShade) != 0);
-    if (rasterBits & raster::kCoverDepth) {
-        // The depth alone.
-        b.disableBlending(target.colorCount).enableDepthTest(true);
-        for (uint32_t i = 0; i < target.colorCount; ++i) {
-            VkPipelineColorBlendAttachmentState none{};
-            b.setColorBlendAttachment(i, none);
-        }
-    } else if (rasterBits & raster::kCoverShade) {
-        // Lit where the prepass left its depth: depth-tested before shading.
-        b.disableBlending(target.colorCount).enableDepthTest(false, VK_COMPARE_OP_EQUAL);
-    } else if (rasterBits & raster::kTranslucent) {
+     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0);
+    if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {
             b.disableDepthTest();
@@ -343,82 +219,22 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
     return b.build(device_, layout_);
 }
 
-VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target, CoverPass pass) {
-    const uint32_t rasterBits = rasterVariant(draw) | (pass == CoverPass::Depth   ? raster::kCoverDepth
-                                                       : pass == CoverPass::Shade ? raster::kCoverShade
-                                                                                  : 0u);
-    // Turf has its own build of mesh.frag (a static mesh's or a land's:
-    // SCENE_GROUND), so the other meshes' carries none of its work.
-    const bool ground = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Land) &&
-                        (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
-    // A land's blocks past the painted band, the build without the turf's patterns.
-    const bool groundFar = ground && (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGroundFar) != 0u;
-    // And a grass node's herb plants, a grass draw with its own stages.
-    const bool herb = draw.kind == MeshKind::Grass &&
-                      (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kHerb) != 0u;
-    // And the cover's far tier, the same.
-    const bool coverFar = draw.kind == MeshKind::Grass &&
-                          (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kCoverFar) != 0u;
-    // The grass and turf take their node's shaders, and the set keeps their
-    // pipelines.
-    const bool covered = draw.kind == MeshKind::Grass || ground;
-    CoverShaders& cover = *covers_[covered && draw.moduleSet < covers_.size() ? draw.moduleSet : 0];
-    // The plants take their node's, likewise (prepared only with one).
-    if (draw.kind == MeshKind::Plants) {
-        PlantShaders& set = *plantSets_[draw.moduleSet];
-        return set.pipelines.get(rasterBits, target, [&] {
-            const bool indirect = SceneTargets::carriesIndirect(target);
-            return buildPipeline(set[PlantShaders::Vert], set[indirect ? PlantShaders::IndirectFrag : PlantShaders::Frag],
-                                 draw.kind, rasterBits, target);
-        }, true);
-    }
-    // Built off the frame thread (the draw skipped until it is in), but for
-    // a surface layer tile's fill: a tile is filled once, so that one waits.
-    const bool async = !(ground && target.colorCount == 4);
-    const uint32_t block = static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
-    const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits +
-                             (ground ? 1u * block : 0u) + (herb ? 2u * block : 0u) + (coverFar ? 3u * block : 0u) +
-                             (groundFar ? 3u * block : 0u);
-    return (covered ? cover.pipelines : builtin_).get(variant, target, [&] {
+VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
+    const uint32_t rasterBits = rasterVariant(draw);
+    // Built off the frame thread (the draw skipped until it is in).
+    const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
+    return builtin_.get(variant, target, [&] {
         const bool indirect = SceneTargets::carriesIndirect(target);
         if (render::pipelineStatsEnabled()) {
             render::setPipelineStatsLabel(std::string("mesh kind ") + std::to_string(static_cast<int>(draw.kind)) +
-                                          (ground ? " ground" : "") + (herb ? " herb" : "") +
-                                          (coverFar ? " cover far" : "") + (indirect ? " indirect" : "") +
-                                          " raster " + std::to_string(rasterBits));
+                                          (indirect ? " indirect" : "") + " raster " + std::to_string(rasterBits));
         }
-        if (herb)
-            return buildPipeline(cover[CoverShaders::HerbVert],
-                                 cover[indirect ? CoverShaders::HerbIndirectFrag : CoverShaders::HerbFrag], draw.kind,
-                                 rasterBits, target);
-        if (coverFar)
-            return buildPipeline(cover[CoverShaders::FarVert], indirect ? fsCoverFarIndirect_ : fsCoverFar_, draw.kind,
-                                 rasterBits, target);
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule vs = vs_[static_cast<int>(draw.kind)];
         VkShaderModule fs = indirect ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
-        if (draw.kind == MeshKind::Land) fs = indirect ? fsLandIndirect_ : fsLand_;
-        if (ground) fs = cover[indirect ? CoverShaders::GroundIndirectFrag : CoverShaders::GroundFrag];
-        if (groundFar) fs = cover[indirect ? CoverShaders::GroundFarIndirectFrag : CoverShaders::GroundFarFrag];
-        // (A surface layer tile's fill draws the turf into its four layers.)
-        if (ground && target.colorCount == 4) fs = cover[CoverShaders::GroundFill];
-        if (draw.kind == MeshKind::Grass) {
-            vs = cover[CoverShaders::GrassVert];
-            fs = cover[indirect ? CoverShaders::GrassIndirectFrag : CoverShaders::GrassFrag];
-        }
         return buildPipeline(vs, fs, draw.kind, rasterBits, target);
-    }, async);
-}
-
-VkPipeline SceneMeshDrawer::chartFillPipeline(CoverShaders& cover, const TargetFormat& target) {
-    // (Past builtinPipeline's variants. One triangle from gl_VertexIndex, no
-    // vertex buffer bound: no vertex input either.)
-    const uint32_t variant = 4u * static_cast<uint32_t>(kMeshKindCount) * raster::kCount;
-    return cover.pipelines.get(variant, target, [&] {
-        return buildPipeline(vsChartFill_, cover[CoverShaders::GroundChartFill], MeshKind::Land, raster::kTwoSided,
-                             target, false);
-    });
+    }, true);
 }
 
 SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState& cs, MeshKind kind) {
@@ -547,7 +363,9 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
             if (t.name != samplers[i].name || (t.layers > 0) != array) continue;
             if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
                 views[i] = img->view;
-                const uint32_t mode = !t.repeat ? CS_LINEAR : t.clampT ? CS_REPEAT_S : CS_REPEAT;
+                const uint32_t mode = !t.repeat     ? CustomShaderInterface::kLinear
+                                      : t.clampT    ? CustomShaderInterface::kRepeatS
+                                                    : CustomShaderInterface::kRepeat;
                 modes |= mode << (2 * i);
             }
             break;
@@ -564,13 +382,7 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     constexpr VkImageLayout kRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i)
         writer.writeImage(i + 1, views[i], VK_NULL_HANDLE, kRead, kImage);
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 1, defaults_->zeroArray.view, VK_NULL_HANDLE, kRead,
-                      kImage);
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 2, defaults_->zeroUintArray.view, VK_NULL_HANDLE, kRead,
-                      kImage);
-    writer.writeImage(CustomShaderInterface::kMaxSamplers + 3, defaults_->zeroArray.view, VK_NULL_HANDLE, kRead,
-                      kImage);
-    static_assert(CustomShaderInterface::kMaxSamplers + 3 == SceneDefaults::kCustomBindings);
+    static_assert(CustomShaderInterface::kMaxSamplers == SceneDefaults::kCustomImages);
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);
     return set;
@@ -697,9 +509,8 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     }
     // A big plain mesh (a ground, a mountain ring) in chunks, each pass
     // drawing those its view reaches. Not a custom shader's: its vertex
-    // chunk may move the points out of the chunks' bounds. Nor a land's:
-    // its ring blocks are its chunks (prepareLand).
-    if (out.kind == MeshKind::Static && !out.lines && !node.customShader() && !node.asLand()) {
+    // chunk may move the points out of the chunks' bounds.
+    if (out.kind == MeshKind::Static && !out.lines && !node.customShader()) {
         stalls::Part part("mesh chunks");
         const GpuMesh* c = frame.gpu.resources.chunked(node.id(), slot, node.geometryGeneration(), data);
         if (c && !c->chunks.empty()) {
@@ -727,20 +538,6 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
             out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
-    } else if (node.turfGrass() != 0u && (out.kind == MeshKind::Static || out.kind == MeshKind::Land) && !out.lines) {
-        // Turf: shaded as its grass node's ground, from that node's field.
-        SceneNode* g = frame.graph.findById(node.turfGrass());
-        MeshNode* gm = g && g->type() == SceneNode::Type::Mesh ? static_cast<MeshNode*>(g) : nullptr;
-        if (GrassNode* grass = gm ? gm->asGrass() : nullptr) {
-            // (Not drawn while its grass's modules compile: drawn with the
-            // built-in set's ground it would build pipelines never used.)
-            bool pending = false;
-            coverShaders(*grass, &pending);
-            if (pending) return false;
-            out.customSet = groundSet(frame, *grass);
-            out.moduleSet = coverShaders(*grass).index;
-            if (out.customSet) flags |= mesh_flags::kGround;
-        }
     }
 
     MaterialImages images = materialImages(frame.gpu.resources, node);
@@ -898,14 +695,10 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
 }
 
 void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                             VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull,
-                             CoverPass pass) {
+                             VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool custom = false;
-    if (pass != CoverPass::None) {
-        pipeline = builtinPipeline(draw, target, pass);
-        if (!pipeline) return;   // (still being built)
-    } else if (draw.custom && draw.customSet) {
+    if (draw.custom && draw.customSet) {
         if (CustomProgram* prog = program(*draw.custom, draw.kind)) {
             pipeline = customPipeline(*prog, draw, target);
             custom = pipeline != VK_NULL_HANDLE;
@@ -920,8 +713,7 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
-    const bool ground = (static_cast<uint32_t>(draw.push.pbrParams[3]) & mesh_flags::kGround) != 0u;
-    if (custom || ((draw.kind == MeshKind::Grass || ground) && draw.customSet))
+    if (custom)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(MeshPushConstants), &draw.push);
@@ -936,18 +728,6 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
 void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& draw, const ChunkCull* cull) {
     if (draw.kind == MeshKind::Tube) {
         vkCmdDraw(cmd, draw.indexCount, 1, 0, 0);
-        return;
-    }
-    if (draw.kind == MeshKind::Plants) {
-        // An instance a chunk of a plant's elements (scene_mesh_drawer_plants.cpp):
-        // the leaves indexed (each polygon point posed once), the wood not;
-        // the counts the GPU plan's, in its commands.
-        if (draw.indices != VK_NULL_HANDLE) {
-            vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
-        } else {
-            vkCmdDrawIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
-        }
         return;
     }
     VkBuffer buffers[3] = {draw.vertices, VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -976,10 +756,7 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         break;
     case MeshKind::Static:
     case MeshKind::Scatter:
-    case MeshKind::Tube:
-    case MeshKind::Grass:
-    case MeshKind::Plants:
-    case MeshKind::Land: break;
+    case MeshKind::Tube: break;
     }
     vkCmdBindVertexBuffers(cmd, 0, count, buffers, offsets);
     if (draw.chunks && draw.chunkIndices != VK_NULL_HANDLE && cull && cull->frustum) {
@@ -1015,11 +792,6 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         return;
     }
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
-    if (draw.indirect != VK_NULL_HANDLE) {
-        // A grass ring's draw: its instances the cover's plan's.
-        vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, 0);
-        return;
-    }
     vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
 }
 

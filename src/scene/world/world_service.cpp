@@ -30,19 +30,16 @@ void WorldService::observe(const WorldFrameTiming& timing) {
         k.measured = true;
     }
     if (timing.frameMs < 0.0) return;
-    over_ = timing.frameMs > ceiling();
-    overTarget_ = timing.frameMs > config_.targetMs;
-    // (The headroom is the surprise at the target: while behind, frames run
-    // over the target by design and say nothing of it; nor does a frame over
-    // the ceiling whatever the service did, its own need past it. A second
-    // of the planet's march at 3.3 ms from orbit raised the headroom 0.3 ms,
-    // and at its fall of 5e-5 a frame held the budget at its floor for the
-    // next twenty seconds, land tiles 16 px behind.)
+    over_ = timing.frameMs > config_.targetMs;
+    // (The headroom is the surprise at the target: a frame over it whatever
+    // the service did, its own need past it, says nothing of it. Raised by
+    // such frames, at its fall of 5e-5 a frame it held the budget at its
+    // floor for many seconds after.)
     const float q = config_.overRate;
-    if (!behind_ && !(over_ && timing.frameMs - service > ceiling()))
+    if (!(over_ && timing.frameMs - service > config_.targetMs))
         headroom_ = std::clamp(headroom_ + config_.headroomStep * (over_ ? 1.0f - q : -q), 0.0f, config_.targetMs);
     need_.push_back(std::max(timing.frameMs - service, 0.0));
-    const size_t window = static_cast<size_t>(std::max({config_.window, config_.catchUpWindow, 1}));
+    const size_t window = static_cast<size_t>(std::max(config_.window, 1));
     if (need_.size() > window) need_.erase(need_.begin(), need_.end() - static_cast<std::ptrdiff_t>(window));
 }
 
@@ -57,27 +54,13 @@ void WorldService::beginFrame() {
         return *std::max_element(need_.end() - static_cast<std::ptrdiff_t>(n), need_.end());
     };
     // Keeping up: the target, less the need over the short window.
-    if (!need_.empty() && !overTarget_)
+    if (!need_.empty() && !over_)
         budget = std::max(budget, static_cast<float>(config_.targetMs - headroom_ - worst(config_.window)));
     // Over it whatever the world does: still a share of the frame, so a view
-    // that costs past the target (the planet's 1-40 km at 4-7 ms) does not
-    // starve its world, missing tiles and all, for 0.1 ms a frame more.
-    if (!need_.empty() && overTarget_) {
-        float share = config_.floorShare;
-        if (behind_ && behindError_ > config_.catchUpError)
-            share = std::min(1.0f, share * (1.0f + std::log2(behindError_ / config_.catchUpError)));
-        budget = std::max(budget, static_cast<float>(share * worst(config_.window)));
-    }
-    // Catching up: the ceiling, less the need over the longer catch-up
-    // window (the frame's own spikes, a plant page placed or a pipeline
-    // compiled every few dozen frames, fall between the short window's
-    // frames, and the ceiling stacked on them ran frames to 8 ms). Never
-    // less than keeping up would spend: where those spikes reach most of
-    // the ceiling (the planet's region view, 3 ms of 3.9), the long window
-    // alone held the budget to 0.5 ms where keeping up spent 1.55, and its
-    // regions came in slower behind than they had in step.
-    if (behind_ && !need_.empty() && !over_)
-        budget = std::max(budget, static_cast<float>(ceiling() - headroom_ - worst(config_.catchUpWindow)));
+    // that costs past the target does not starve its world for 0.1 ms a
+    // frame more.
+    if (!need_.empty() && over_)
+        budget = std::max(budget, static_cast<float>(config_.floorShare * worst(config_.window)));
     if (settle_ > 0) {
         budget = std::max(budget, config_.settleMs);
         --settle_;
@@ -120,8 +103,6 @@ void WorldService::schedule() {
     // What is drawn at once (after the carry), what is drawn next frame, and
     // what the jobs drawn at once that the carry kept out hold back for it.
     float now = 0.0f, next = 0.0f, held = 0.0f;
-    bool behind = false;
-    float behindError = 0.0f;
     std::vector<bool> offered(kinds_.size(), false);
     for (const WorldJob& j : offers_) {
         Kind& kind = kinds_[static_cast<size_t>(j.kind)];
@@ -136,10 +117,6 @@ void WorldService::schedule() {
             stats_.worstError = std::max(stats_.worstError, j.error);
             ++kind.queued;
             kind.worstError = std::max(kind.worstError, j.error);
-            if (kind.desc.catchUp && j.error > config_.catchUpError) {
-                behind = true;
-                behindError = std::max(behindError, j.error);
-            }
             continue;
         }
         (kind.desc.nextFrame ? next : now) += c;
@@ -157,9 +134,6 @@ void WorldService::schedule() {
         quiet_ = stats_.worstError <= config_.settleError ? quiet_ + 1 : 0;
         if (quiet_ >= config_.settleQuiet) settle_ = 0;
     }
-    behind_ = behind;
-    behindError_ = behindError;
-    stats_.catchingUp = behind;
     stats_.spentMs = now + next;
     stats_.carriedMs = carried_;
     carried_ = next;

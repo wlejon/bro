@@ -24,6 +24,17 @@ namespace bro::scene::vk {
 /// its create-info to a thread of its own and returns null; `future` is the
 /// pipeline. (scene_vk_pipeline.cpp)
 namespace pipeline_async {
+/// Whether a frame skips what is not yet built (true) or waits for it
+/// (false). The engine turns it on for a window (no frame waits, so the
+/// window never stops answering) and leaves it off in headless, whose
+/// renders are read back at once (tests, stills) and must hold everything.
+/// BRO_ASYNC_SHADERS=1 / 0 overrides either: a headless run measuring boot
+/// frames as a window has them sets 1.
+void setAsync(bool on);
+/// The same, the environment not consulted (perf.asyncShaders: a test
+/// settling one scene each way in one process).
+void forceAsync(bool on);
+bool async();
 struct Capture {
     std::shared_future<VkPipeline> future;
     bool used = false;
@@ -31,9 +42,9 @@ struct Capture {
 Capture*& current();
 /// Pipelines being built off the frame thread now (pendingWork).
 int inFlight();
-/// Something was not drawn or baked this frame because its pipeline or its
-/// shader set is not in yet (PipelineVariants::get, ModuleShaders::poll,
-/// AsyncComputePipeline::get say it): the settle state counts the frame's
+/// Something was not drawn or baked this frame because its pipeline is not
+/// in yet (PipelineVariants::get, AsyncComputePipeline::get say it): the
+/// settle state counts the frame's
 /// (SceneRenderer::pendingWork), and what cached such a frame's drawing
 /// draws it again once nothing is skipped (the shadow pages).
 void noteSkip();
@@ -43,7 +54,7 @@ int takeSkips();
 }  // namespace pipeline_async
 
 struct TargetFormat {
-    static constexpr uint32_t kMaxColor = 4;   // (a surface layer tile's fill writes four)
+    static constexpr uint32_t kMaxColor = 4;
 
     VkFormat color[kMaxColor] = {VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED};
     uint32_t colorCount = 0;

@@ -549,27 +549,6 @@ void bro_scene_SceneGraph_windAt(void* self, double x, double z, bronze_native_b
 //   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out);
 
-// bro.scene.SceneGraph.prototype.setBody / place / toBody / toPlace / upAt /
-// latLongAt / reanchorAt and the reanchor event (native_scene_place.cpp)
-//   registered at __bro_native.scene.SceneGraph_<name>
-void bro_scene_SceneGraph_setBody(void* self, double radius, const double* spin, uint32_t spin_len, const double* at,
-                                  uint32_t at_len);
-void bro_scene_SceneGraph_place(void* self, bronze_native_buffer* out);
-void bro_scene_SceneGraph_toBody(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
-void bro_scene_SceneGraph_toPlace(void* self, const double* b, uint32_t b_len, bronze_native_buffer* out);
-void bro_scene_SceneGraph_upAt(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
-void bro_scene_SceneGraph_latLongAt(void* self, const double* p, uint32_t p_len, bronze_native_buffer* out);
-bool bro_scene_SceneGraph_reanchorAt(void* self, const double* b, uint32_t b_len);
-void bro_scene_SceneGraph_onReanchor_set(void* self, uint64_t cbBits);
-
-// bro.scene.SceneGraph.prototype.expect and its handle's move / cancel /
-// pending (native_scene_place.cpp)
-//   registered at __bro_native.scene.SceneGraph_<name>
-double bro_scene_SceneGraph_expect(void* self, const double* b, uint32_t b_len, double within);
-bool bro_scene_SceneGraph_expectMove(void* self, double id, const double* b, uint32_t b_len, double within);
-void bro_scene_SceneGraph_expectCancel(void* self, double id);
-double bro_scene_SceneGraph_expectPending(void* self, double id);
-
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
 //   opts_pcfTaps_given: false when the value was not passed (no declared default)
@@ -584,17 +563,6 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
 //   registered at __bro_native.scene.SceneGraph_setAtmosphere
 //   params: 32 f64, NaN = Earth's default (the layout in js/scene_graph.js's setAtmosphere)
 void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32_t params_len);
-
-// bro.scene.SceneGraph.prototype.setClouds
-//   registered at __bro_native.scene.SceneGraph_setClouds
-//   params: [enabled, bottom, top, albedo, shadows, land id]; returns an error ("" none)
-const char* bro_scene_SceneGraph_setClouds(void* self, const char* source, const double* params, uint32_t params_len,
-                                           const float* data, uint32_t data_len);
-
-// bro.scene.SceneGraph.prototype.cloudStats
-//   registered at __bro_native.scene.SceneGraph_cloudStats
-//   [enabled, compiled, failed, covered, generation]
-void bro_scene_SceneGraph_cloudStats(void* self, bronze_native_buffer* out);
 
 // bro.scene.SceneGraph.prototype.setStarfield
 //   registered at __bro_native.scene.SceneGraph_setStarfield
@@ -638,10 +606,6 @@ void bro_scene_SceneGraph_setFXAA(void* self, bool enabled);
 //   registered at __bro_native.scene.SceneGraph_setGroundBounce
 void bro_scene_SceneGraph_setGroundBounce(void* self, double r, double g, double b);
 
-// bro.scene.SceneGraph.prototype.setProbeGrid
-//   registered at __bro_native.scene.SceneGraph_setProbeGrid
-void bro_scene_SceneGraph_setProbeGrid(void* self, bool enabled);
-
 // bro.scene.SceneGraph.prototype.setDither
 //   registered at __bro_native.scene.SceneGraph_setDither
 void bro_scene_SceneGraph_setDither(void* self, bool enabled);
@@ -649,14 +613,6 @@ void bro_scene_SceneGraph_setDither(void* self, bool enabled);
 // bro.scene.SceneGraph.prototype.setFrameTarget
 //   registered at __bro_native.scene.SceneGraph_setFrameTarget
 void bro_scene_SceneGraph_setFrameTarget(void* self, double ms);
-
-// bro.scene.SceneGraph.prototype.setBands (NaN keeps a band as it is)
-//   registered at __bro_native.scene.SceneGraph_setBands
-void bro_scene_SceneGraph_setBands(void* self, double real, double painted);
-
-// bro.scene.SceneGraph.prototype.bands: [real, painted]
-//   registered at __bro_native.scene.SceneGraph_bands
-void bro_scene_SceneGraph_bands(void* self, bronze_native_buffer* out);
 
 // bro.scene.SceneGraph.prototype.setRenderScale
 //   registered at __bro_native.scene.SceneGraph_setRenderScale
@@ -739,165 +695,6 @@ void bro_scene_SceneGraph_bindAudioListenerToCamera(void* self, bool bind);
 // bro.scene.SceneGraph.prototype.detachAIWorld
 //   registered at __bro_native.scene.SceneGraph_detachAIWorld
 void bro_scene_SceneGraph_detachAIWorld(void* self);
-
-// ---- Grass (native_scene_grass.cpp, js/scene_grass.js) ----
-
-// bro.scene.SceneGraph.prototype.createGrass
-//   registered at __bro_native.scene.SceneGraph_createGrass
-void* bro_scene_SceneGraph_createGrass(void* self);
-
-// grass.setGround: the land node the grass stands on; 0 (and no change) when
-// `land` is not a land node
-//   registered at __bro_native.scene.SceneNode_setGrassGround
-int32_t bro_scene_SceneNode_setGrassGround(void* self, void* land);
-
-// grass params: width, density, range (GrassNode::paramsFromArray; a NaN keeps a value)
-//   registered at __bro_native.scene.SceneNode_setGrassParams
-void bro_scene_SceneNode_setGrassParams(void* self, const double* params, uint32_t params_len);
-
-//   registered at __bro_native.scene.SceneNode_grassParams
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_grassParams(void* self, bronze_native_buffer* out);
-
-// grass.addMover / removeMover (radius <= 0 removes); `height`: how high it
-// reaches into shrubs and low foliage (m above a plant's root)
-//   registered at __bro_native.scene.SceneNode_setGrassMover
-void bro_scene_SceneNode_setGrassMover(void* self, void* target, double radius, double strength, double trample,
-                                       double height);
-
-// grass.push: a one-off push this frame
-//   registered at __bro_native.scene.SceneNode_grassPush
-void bro_scene_SceneNode_grassPush(void* self, double x, double z, double radius, double vx, double vz,
-                                   double strength, double trample);
-
-// grass.stats: [blade rings n, ring 0 instances .. ring n-1, movers,
-//               herb ring 0 instances, herb ring 1, ...]
-//   registered at __bro_native.scene.SceneNode_grassStats
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_grassStats(void* self, bronze_native_buffer* out);
-
-// ---- Land (native_scene_land.cpp, js/scene_land.js) ----
-
-// bro.scene.SceneGraph.prototype.createLand
-//   registered at __bro_native.scene.SceneGraph_createLand
-void* bro_scene_SceneGraph_createLand(void* self);
-
-// land module: its GLSL ("" none: nothing drawn), the data its landData(i)
-// reads (at most 256 floats), its height's FastNoise2 encoded node tree and
-// seed (the CPU's heights). Returns "" or what was wrong.
-//   registered at __bro_native.scene.SceneNode_setLandModule
-const char* bro_scene_SceneNode_setLandModule(void* self, const char* source, const float* data, uint32_t data_len,
-                                              const char* heightTree, int32_t seed);
-
-// land processes (scene/world/land_grid.h): their GLSL ("" none), the
-// passes' functions comma-separated (then, for regional grids, '|' the
-// regions' init '|' their passes comma-separated), [resolution, channels,
-// then each pass's iterations; with regions then cells, apron, cell, ratio,
-// levels, reach, keep and each region pass's iterations], and the data
-// procData(i) reads (at most 256 floats).
-// Returns "" or what was wrong.
-//   registered at __bro_native.scene.SceneNode_setLandProcess
-const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, const char* passes,
-                                               const double* params, uint32_t params_len, const float* data,
-                                               uint32_t data_len);
-
-// land relief (scene/world/land_grid.h's LandBase::relief): each regional
-// level's FastNoise2 encoded tree, one a line ("" a level with none), and
-// [each one's seed]. Returns "" or what was wrong.
-//   registered at __bro_native.scene.SceneNode_setLandRelief
-const char* bro_scene_SceneNode_setLandRelief(void* self, const char* trees, const double* seeds, uint32_t seeds_len);
-
-// land params: extent, cellSize, resolution, levels (a NaN keeps a value)
-//   registered at __bro_native.scene.SceneNode_setLandParams
-void bro_scene_SceneNode_setLandParams(void* self, const double* params, uint32_t params_len);
-
-// land params: [extent, cellSize, resolution, levels]; empty for a node
-// that is not a land
-//   registered at __bro_native.scene.SceneNode_landParams
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_landParams(void* self, bronze_native_buffer* out);
-
-// land height at (x, z): NaN off the land (or not a land)
-//   registered at __bro_native.scene.SceneNode_landHeight
-double bro_scene_SceneNode_landHeight(void* self, double x, double z);
-
-// land stats: [tiles needed, resident, missing, filled this frame, levels,
-// shortfall, module compiled, ready (its processes in), regions in, regions
-// wanted and not yet in, ground ready (the regions under the eye in)]; empty for a node
-// that is not a land
-//   registered at __bro_native.scene.SceneNode_landStats
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_landStats(void* self, bronze_native_buffer* out);
-
-// ---- Plants (native_scene_plants.cpp, js/scene_plants.js) ----
-
-// bro.scene.SceneGraph.prototype.createPlants
-//   registered at __bro_native.scene.SceneGraph_createPlants
-void* bro_scene_SceneGraph_createPlants(void* self);
-
-// plants module: the world's plant module's GLSL ("" none: nothing drawn)
-//   registered at __bro_native.scene.SceneNode_setPlantModule
-void bro_scene_SceneNode_setPlantModule(void* self, const char* source);
-
-// plants species: PlantsNode::kSpeciesFloats floats a species
-//   registered at __bro_native.scene.SceneNode_setPlantSpecies
-void bro_scene_SceneNode_setPlantSpecies(void* self, const float* data, uint32_t data_len);
-
-// plants: PlantsNode::kPlantFloats floats a plant
-//   registered at __bro_native.scene.SceneNode_setPlants
-void bro_scene_SceneNode_setPlants(void* self, const float* data, uint32_t data_len);
-
-// plants rules: world/plant_placement.h's JSON (parsePlacementRules); empty
-// clears them. Returns "" or what was wrong with them.
-//   registered at __bro_native.scene.SceneNode_setPlantRules
-const char* bro_scene_SceneNode_setPlantRules(void* self, const char* json);
-
-// plants land: the land node the plants stand on takes their canopy (their
-// rules', species' and ranges' as they are now: world/plant_canopy.h), kept
-// and drawn as the land past the plants' ranges. Returns "" or what was
-// wrong (a rule's field with no GLSL).
-//   registered at __bro_native.scene.SceneNode_setPlantLand
-const char* bro_scene_SceneNode_setPlantLand(void* self, void* land, bool on);
-
-// plants placement: [leaves placed, leaves wanted and not yet placed]
-//   registered at __bro_native.scene.SceneNode_plantPlacement
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_plantPlacement(void* self, bronze_native_buffer* out);
-
-// plants params: pixels, minElements, woodRange, range (a NaN keeps a value)
-//   registered at __bro_native.scene.SceneNode_setPlantParams
-void bro_scene_SceneNode_setPlantParams(void* self, const double* params, uint32_t params_len);
-
-// plants stats: [plants, plants in view, elements drawn, limbs drawn]; empty
-// for a node that is not a plants node
-//   registered at __bro_native.scene.SceneNode_plantStats
-//   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneNode_plantStats(void* self, bronze_native_buffer* out);
-
-// grass herbs: a herb module's GLSL ("" clears them), the data its
-// herbData(i) reads (at most 1024 floats) and its tallest plant (m); how far
-// they are drawn is the scene's real band
-//   registered at __bro_native.scene.SceneNode_setGrassHerbs
-void bro_scene_SceneNode_setGrassHerbs(void* self, const char* source, const float* data, uint32_t data_len,
-                                       double height);
-
-// grass sward: a sward module's GLSL ("" clears it), the data its swardData(i)
-// reads (at most 256 floats), its blades' mean height, the tallest blade and
-// how far a blade reaches from its root (m)
-//   registered at __bro_native.scene.SceneNode_setGrassSward
-void bro_scene_SceneNode_setGrassSward(void* self, const char* source, const float* data, uint32_t data_len,
-                                       double height, double tallest, double reach);
-
-// mesh.turf: shade a mesh node as grass node `grass`'s ground (on 0: as itself)
-//   registered at __bro_native.scene.SceneNode_setTurfGrass
-void bro_scene_SceneNode_setTurfGrass(void* self, void* grass, int32_t on);
-
-// node.sampleHeights: a mesh node's top surface (world y) on a grid, NaN where
-// it has none; texel (i, j) at world (x0 + i * cell, z0 + j * cell)
-//   registered at __bro_native.scene.SceneNode_sampleHeights
-//   result: f32[] in *out; out->release set, the array is a view over it
-void bro_scene_SceneNode_sampleHeights(void* self, double x0, double z0, double cell, int32_t cols, int32_t rows,
-                                       bronze_native_buffer* out);
 
 // Registered in native_scene_register.cpp as well; the bodies are in the native_*.cpp files.
 void bro_scene_SceneGraph_attachTo(uint64_t sceneBits, uint64_t canvasBits);
@@ -999,7 +796,6 @@ void bro_scene_SceneGraph_inspectRecording(const char* path, int32_t image, cons
                                            bronze_native_buffer* out);
 const char* bro_scene_SceneGraph_inspectRecordingError(void);
 void bro_scene_SceneGraph_inspectRecordingImage(int32_t k, bronze_native_buffer* out);
-void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t dirs_len, bronze_native_buffer* out);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);

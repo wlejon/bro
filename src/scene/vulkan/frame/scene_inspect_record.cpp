@@ -13,9 +13,9 @@ namespace bro::scene::vk {
 
 namespace {
 
-constexpr char kMagic[8] = {'B', 'R', 'O', 'I', 'N', 'S', 'P', '1'};
-// A frame's camera: three matrices of 16 floats, then 15 doubles.
-constexpr size_t kCameraBytes = 3 * 16 * sizeof(float) + 15 * sizeof(double);
+constexpr char kMagic[8] = {'B', 'R', 'O', 'I', 'N', 'S', 'P', '2'};
+// A frame's camera: three matrices of 16 floats, then the eye's 3 doubles.
+constexpr size_t kCameraBytes = 3 * 16 * sizeof(float) + 3 * sizeof(double);
 
 template <typename T>
 void put(std::vector<uint8_t>& out, const T* v, size_t n) {
@@ -33,16 +33,12 @@ void putCamera(std::vector<uint8_t>& out, const InspectCamera& c) {
     put(out, c.relView.data, 16);
     put(out, c.relViewProj.data, 16);
     put(out, c.eye, 3);
-    put(out, c.origin, 3);
-    put(out, c.basis, 9);
 }
 void takeCamera(const uint8_t* at, InspectCamera& c) {
     at = take(at, c.invProj.data, 16);
     at = take(at, c.relView.data, 16);
     at = take(at, c.relViewProj.data, 16);
-    at = take(at, c.eye, 3);
-    at = take(at, c.origin, 3);
-    take(at, c.basis, 9);
+    take(at, c.eye, 3);
 }
 
 // A frame of the file: where its depth and luma start, its size.

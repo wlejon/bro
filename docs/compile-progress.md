@@ -33,13 +33,11 @@ code cache (docs/code-cache.md) skips most of the compile, so the loading
 state may show for only a frame or two.
 
 When the splash is up, it shows the same estimate itself (`compiling scripts
-42%`), and after the script, the scene's shader work: `compiling shaders 23 /
-61` while world shader sets compile on the warm-up workers, `building
-pipelines N` while graphics pipelines are built. Those counts come from
-`scene::vk::shader_warmup::progress()` and
-`scene::vk::pipeline_async::inFlight()`, as `scene.pendingWork()` reports them.
-The splash waits up to 4 s past the compile for the shaders asked for so far
-(the warm-up record's sets and the first frames'); work left after that, or
+42%`), and after the script, the scene's pipeline work: `building
+pipelines N` while graphics pipelines are built. That count comes from
+`scene::vk::pipeline_async::inFlight()`, as `scene.pendingWork()` reports it.
+The splash waits up to 4 s past the compile for the pipelines asked for so far
+(the first frames'); work left after that, or
 started later, shows in the corner status panel until it is done. See
 docs/system-panels.md "Background work".
 

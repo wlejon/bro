@@ -6,7 +6,6 @@
 #include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
-#include "scene/nodes/land_node.h"
 #include "scene/vulkan/frame/scene_inspect_record.h"
 #include "engine/scene_audio_sync.h"
 #include "util/asset_path.h"
@@ -205,11 +204,6 @@ void bro_scene_SceneGraph_setGroundBounce(void* self, double r, double g, double
     if (gr) gr->setGroundBounce(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b));
 }
 
-void bro_scene_SceneGraph_setProbeGrid(void* self, bool enabled) {
-    auto* g = graphOf(self);
-    if (g) g->renderer().setProbeGrid(enabled);
-}
-
 void bro_scene_SceneGraph_setDither(void* self, bool enabled) {
     auto* g = graphOf(self);
     if (g) g->setDither(enabled);
@@ -218,21 +212,6 @@ void bro_scene_SceneGraph_setDither(void* self, bool enabled) {
 void bro_scene_SceneGraph_setFrameTarget(void* self, double ms) {
     auto* g = graphOf(self);
     if (g) g->setFrameTarget(static_cast<float>(ms));
-}
-
-void bro_scene_SceneGraph_setBands(void* self, double real, double painted) {
-    auto* g = graphOf(self);
-    if (!g) return;
-    scene::Bands b = g->bands();
-    if (std::isfinite(real)) b.real = static_cast<float>(real);
-    if (std::isfinite(painted)) b.painted = static_cast<float>(painted);
-    g->setBands(b);
-}
-
-void bro_scene_SceneGraph_bands(void* self, bronze_native_buffer* out) {
-    auto* g = graphOf(self);
-    if (!g) { transferBuffer(std::vector<double>{}, out); return; }
-    transferBuffer(std::vector<double>{g->bands().real, g->bands().painted}, out);
 }
 
 void bro_scene_SceneGraph_setRenderScale(void* self, double scale) {
@@ -342,11 +321,6 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["shadowPagesEvicted"] = s.shadowPagesEvicted;
     j["shadowPagesBuilding"] = s.shadowPagesBuilding;
     j["shadowViews"] = s.shadowViews;
-    j["groundLayerNeeded"] = s.groundLayerNeeded;
-    j["groundLayerMissing"] = s.groundLayerMissing;
-    j["groundLayerFills"] = s.groundLayerFills;
-    j["groundLayerShortfall"] = s.groundLayerShortfall;
-    j["landFills"] = s.landFills;
     j["worldBudgetMs"] = s.worldBudgetMs;
     j["worldSpentMs"] = s.worldSpentMs;
     j["worldJobs"] = s.worldJobs;
@@ -424,25 +398,6 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
         if (!node || !node->visible()) return;
         if (node->type() == scene::SceneNode::Type::Mesh) {
             auto* mn = static_cast<scene::MeshNode*>(node);
-            if (mn->asGrass()) return;   // its mesh is one blade, not where the grass is
-            if (const scene::LandNode* land = mn->asLand()) {
-                // Its mesh is the rings, not where the land is: its heights,
-                // on the body (the ray is the place frame's).
-                double po[3];
-                g->placeOrigin(po);
-                const bromath::Vec3 bo{static_cast<float>(o.x + po[0]), static_cast<float>(o.y + po[1]),
-                                       static_cast<float>(o.z + po[2])};
-                float t = 0.0f;
-                bromath::Vec3 n;
-                if (land->raycast(bo, d, closestDist, t, n) && t < closestDist) {
-                    closestDist = t;
-                    closestWorldPoint = o + d * t;
-                    closestWorldNormal = n;
-                    closestNode = mn;
-                    closestInstance = -1;
-                }
-                return;
-            }
             const bromesh::MeshData& md = mn->mesh();
             if (md.positions.empty() || md.indices.empty()) return;
             auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };
@@ -600,12 +555,6 @@ void bro_scene_SceneGraph_inspectFrame(void* self, int32_t image, bronze_native_
     tl_inspectPixels.clear();
     if (auto* g = graphOf(self)) g->renderer().inspectFrame(image, stats, tl_inspectPixels);
     transferBuffer(std::move(stats), out);
-}
-
-void bro_scene_SceneGraph_cloudCoverAt(void* self, const double* dirs, uint32_t dirs_len, bronze_native_buffer* out) {
-    std::vector<float> cover;
-    if (auto* g = graphOf(self)) g->renderer().cloudCoverAt(dirs, dirs_len / 3, cover);
-    transferBuffer(std::vector<double>(cover.begin(), cover.end()), out);
 }
 
 void bro_scene_SceneGraph_inspectImage(bronze_native_buffer* out) {

@@ -3,12 +3,12 @@
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
-#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "util/log.h"
 
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <memory>
@@ -214,7 +214,15 @@ namespace pipeline_async {
 namespace {
 std::atomic<int> s_inFlight{0};
 std::atomic<int> s_skips{0};
+std::atomic<bool> s_async{false};
 }
+void setAsync(bool on) {
+    const char* v = std::getenv("BRO_ASYNC_SHADERS");
+    if (v && *v) on = std::strcmp(v, "0") != 0;
+    s_async.store(on, std::memory_order_relaxed);
+}
+void forceAsync(bool on) { s_async.store(on, std::memory_order_relaxed); }
+bool async() { return s_async.load(std::memory_order_relaxed); }
 Capture*& current() {
     thread_local Capture* c = nullptr;
     return c;
@@ -225,7 +233,7 @@ int takeSkips() { return s_skips.exchange(0, std::memory_order_relaxed); }
 }  // namespace pipeline_async
 
 VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layout) {
-    if (pipeline_async::Capture* c = pipeline_async::current(); c && !c->used && shader_warmup::async()) {
+    if (pipeline_async::Capture* c = pipeline_async::current(); c && !c->used && pipeline_async::async()) {
         // Built on a thread of its own from a copy of this builder (the
         // create-info points into it); that thread has no capture, so the
         // copy builds there as below.
@@ -392,7 +400,7 @@ void AsyncComputePipeline::start(VkDevice device, VkShaderModule module, VkPipel
 VkPipeline AsyncComputePipeline::get() {
     if (pipeline_ || !future_.valid()) return pipeline_;
     if (future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        if (shader_warmup::async()) {
+        if (pipeline_async::async()) {
             pipeline_async::noteSkip();
             return VK_NULL_HANDLE;
         }

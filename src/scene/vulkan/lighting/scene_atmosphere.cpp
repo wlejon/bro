@@ -145,16 +145,7 @@ void SceneAtmosphere::cleanup(SceneGpu& gpu) {
 void SceneAtmosphere::originFor(const bromath::Vec3& eye, float out[4]) const {
     const double Rb = block_.shell[0];
     out[3] = 0.0f;
-    if (block_.shell[3] > 0.5f) {
-        // Spherical: the eye about the planet's centre, kept a metre above its surface.
-        double d[3] = {static_cast<double>(eye.x) - center_[0], static_cast<double>(eye.y) - center_[1],
-                       static_cast<double>(eye.z) - center_[2]};
-        const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        const double r = std::max(len, Rb + 1.0);
-        for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(len > 1e-6 ? d[k] * r / len : (k == 1 ? r : 0.0));
-        return;
-    }
-    // Flat: the planet straight below the eye.
+    // The planet straight below the eye.
     out[0] = 0.0f;
     out[1] = static_cast<float>(std::max(static_cast<double>(eye.y) - seaLevel_, 1.0) + Rb);
     out[2] = 0.0f;
@@ -222,19 +213,7 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     std::copy(a.groundAlbedo, a.groundAlbedo + 3, g.ground);
     g.ground[3] = static_cast<float>(sunLight);
     seaLevel_ = a.seaLevel;
-    eye_ = frame.world.eye;   // its centre and sea level are the body's
-    // On a round body the air wraps the body: its radius, about its centre
-    // where the body's frame (the place's axes, its origin added) has it.
-    const Place& place = frame.graph.place();
-    if (!place.body().flat()) {
-        const double zero[3] = {0.0, 0.0, 0.0};
-        double c[3];
-        place.toPlace(zero, c);
-        for (int k = 0; k < 3; ++k) center_[k] = c[k] + frame.view.origin[k];
-        g.shell[0] = static_cast<float>(place.body().radius);
-        g.shell[1] = g.shell[0] + a.thickness;
-        g.shell[3] = 1.0f;
-    }
+    eye_ = frame.view.eye;
     originFor(eye_, g.origin);
 
     // The tables' inputs: a change remakes them (the world-service jobs).

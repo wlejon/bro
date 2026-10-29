@@ -75,7 +75,7 @@ void main() {
     vec4 albedo = (push.flags.x == 1) ? texture(uAlbedoTex, uv) : vec4(1.0);
     float a = albedo.a * fade;
 
-    vec3 ambient = sceneAmbientIrradiance(worldPos, sceneProbe(worldPos), nrm);
+    vec3 ambient = sceneOpenSkyIrradiance(worldPos, nrm);
     vec3 sunDir = lighting.sunDirection.xyz;
     vec3 sunCol = lighting.sunColor.rgb * lighting.sunColor.a;
     // The atmosphere's sun through the air.

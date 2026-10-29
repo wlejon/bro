@@ -514,9 +514,7 @@ public:
     /// The page's scenes' settle state (SceneRenderer::pendingWork) as of
     /// the newest render (a render a flush left pending is drawn first):
     /// what each still streams or converges for its view; empty: settled.
-    /// `within`: how far from the eye the world must be whole
-    /// (SceneNode::pendingWork); infinite, all of it.
-    std::vector<std::string> scenePendingWork(double within = std::numeric_limits<double>::infinity());
+    std::vector<std::string> scenePendingWork();
     /// Let the scenes' exposure adapt over `seconds` with their clock held
     /// (perf.settle: the exposure settles while the scene does not move).
     void advanceSceneExposure(float seconds);

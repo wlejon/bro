@@ -19,8 +19,6 @@
 #include "scene/vulkan/frame/pass_snapshot.h"
 #include "scene/vulkan/post/pass_ssao.h"
 #include "scene/vulkan/post/pass_ssr.h"
-#include "scene/vulkan/post/pass_subpixel.h"
-#include "scene/vulkan/sky/pass_clouds.h"
 #include "scene/vulkan/world/pass_world_service.h"
 #include "scene/vulkan/draw/scene_draw_list.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -37,62 +35,34 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : device_(context),
       allocator_(device_),
       resources_(allocator_),
-      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_, casters_, probes_, clouds_},
+      gpu_{device_, allocator_, defaults_, targets_, resources_, meshes_, environment_, world_, atmosphere_, shadows_, casters_},
       timer_(context) {
     // The frame, in order. A pass draws into the HDR scope or brings its own
     // targets; the graph does every shared transition (scene_frame_graph.h).
     // The shadow pages the frame draws are drawn into the scratch target,
     // the redrawn ones then copied into the pool; the overlays are sampled
-    // where they were drawn.
-    if (context.asyncComputeQueue()) {
-        // The plants' plans and the atmosphere's froxels run on the async
-        // compute queue: what needs neither goes first, beside them (the
-        // other casters, the frame's uniforms, the atmosphere's sky view and
-        // the sky, which opens the frame's first scope, and the cover's
-        // depth in it), and the graphics waits for the compute at its first
-        // reader (the planned casters, else the opaque meshes; the sky
-        // itself on a frame the world service remade the atmosphere's tables
-        // there). The probe stays after the planned casters: its faces are
-        // lit through the shadow pages, the plants' shadows included.
-        graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Unplanned));
-        graph_.add(std::make_unique<PassFrameUniforms>());
-        graph_.add(std::make_unique<PassWorldService>());
-        graph_.add(std::make_unique<PassAtmosphere>());
-        graph_.add(std::make_unique<PassCloudsPrepare>());
-        graph_.add(std::make_unique<PassCloudVolume>());
-        graph_.add(std::make_unique<PassEnvironment>());
-        graph_.add(std::make_unique<PassCoverDepth>());
-        graph_.add(std::make_unique<PassShadow>(PassShadow::Part::Planned));
-        graph_.add(std::make_unique<PassShadowCopy>());
-        graph_.add(std::make_unique<PassReflectionProbe>());
-    } else {
-        graph_.add(std::make_unique<PassShadow>());
-        graph_.add(std::make_unique<PassShadowCopy>());
-        graph_.add(std::make_unique<PassFrameUniforms>());
-        graph_.add(std::make_unique<PassWorldService>());
-        graph_.add(std::make_unique<PassAtmosphere>());
-        graph_.add(std::make_unique<PassCloudsPrepare>());
-        graph_.add(std::make_unique<PassCloudVolume>());
-        graph_.add(std::make_unique<PassReflectionProbe>());
-        graph_.add(std::make_unique<PassEnvironment>());
-        graph_.add(std::make_unique<PassCoverDepth>());
-    }
+    // where they were drawn. The atmosphere's froxels run on the async
+    // compute queue where there is one, and the graphics waits for them at
+    // their first reader (the opaque meshes; the sky itself on a frame the
+    // world service remade the atmosphere's tables).
+    graph_.add(std::make_unique<PassShadow>());
+    graph_.add(std::make_unique<PassShadowCopy>());
+    graph_.add(std::make_unique<PassFrameUniforms>());
+    graph_.add(std::make_unique<PassWorldService>());
+    graph_.add(std::make_unique<PassAtmosphere>());
+    graph_.add(std::make_unique<PassReflectionProbe>());
+    graph_.add(std::make_unique<PassEnvironment>());
     graph_.add(std::make_unique<PassOpaque>());
     // The pages the opaque surfaces' pixels need, for the next plans.
     graph_.add(std::make_unique<PassShadowMark>());
     graph_.add(std::make_unique<PassDepthSnapshot>());
     auto& ssao = static_cast<PassSSAO&>(graph_.add(std::make_unique<PassSSAO>()));
     graph_.add(std::make_unique<PassAoApply>(ssao));
-    // Detail finer than a pixel blended with its neighbours.
-    graph_.add(std::make_unique<PassSubpixelSnapshot>());
-    graph_.add(std::make_unique<PassSubpixel>());
     // Decals land on the opaque result and so in the reflections; SSR runs
     // before anything blended, which draws over both.
     graph_.add(std::make_unique<PassDecal>());
     graph_.add(std::make_unique<PassColorSnapshot>());
     graph_.add(std::make_unique<PassSSR>());
-    // The cloud deck over everything opaque, before anything blended.
-    graph_.add(std::make_unique<PassClouds>());
     graph_.add(std::make_unique<PassTranslucent>());
     graph_.add(std::make_unique<PassGaussianSplat>());
     graph_.add(std::make_unique<PassParticles>());
@@ -109,8 +79,6 @@ SceneVkBridge::~SceneVkBridge() {
     allocator_.destroyBuffer(readbackBuffer_);
     allocator_.destroyBuffer(inspectBuffer_);
     graph_.cleanup(gpu_);
-    clouds_.cleanup(gpu_);
-    probes_.cleanup(gpu_);
     casters_.cleanup(gpu_);
     shadows_.cleanup(gpu_);
     atmosphere_.cleanup(gpu_);
@@ -129,7 +97,7 @@ bool SceneVkBridge::init() {
     }
     if (!defaults_.setup(device_, allocator_) || !targets_.setup(device_, allocator_) || !meshes_.setup(gpu_) ||
         !environment_.setup(device_, allocator_, defaults_) || !atmosphere_.setup(gpu_) || !shadows_.setup(gpu_) ||
-        !casters_.setup(gpu_) || !probes_.setup(gpu_) || !clouds_.setup(gpu_) || !graph_.setup(gpu_)) {
+        !casters_.setup(gpu_) || !graph_.setup(gpu_)) {
         LOG_ERROR("SceneVkBridge: Failed setting up the scene renderer");
         return false;
     }
@@ -163,12 +131,10 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.stats = stats;
     frame.timer = &timer_;
     frame.view = SceneView::fromCamera(graph, width, height);
-    frame.world = frame.view.world();
     shadows_.beginFrame(gpu_, renderer);
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
     meshes_.setAtmosphere(atmosphere_.active());
-    clouds_.beginFrame(frame);
     clock.step("frame setup");
     frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
@@ -179,18 +145,8 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.fxaa = renderer.fxaaEnabled();
     clock.step("lighting");
     buildDrawLists(frame);
-    clock.step("draw lists");
-    // The sub-pixel resolve, on a frame with opaque draws that mark detail
-    // finer than a pixel: what grows on the ground (a grass node's).
-    frame.subpixel = std::any_of(frame.lists.opaque.begin(), frame.lists.opaque.end(),
-                                 [&](uint32_t i) { return frame.lists.meshes[i].kind == MeshKind::Grass; });
-    // The probe grid places itself once the draw lists hold its canopy; the
-    // frame's lighting (filled before) takes its block.
-    probes_.beginFrame(frame);
-    probes_.fill(frame.lighting.probeGrid, frame.world.eye);
     timer_.mark(cmd, "setup");
-    meshes_.recordPlans(frame);
-    clock.step("probes and plans");
+    clock.step("draw lists");
 
     graph_.run(frame);   // (each pass a step)
 
@@ -200,7 +156,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     cmd = frame.cmd;
 
     // Inspection copies the render's result and depth out with it, with its
-    // camera on the body.
+    // camera.
     const bool inspectCopy = (inspect_ || recorder_.isOpen()) && ensureInspectBuffer();
     if (inspectCopy) {
         recordInspectCopy(cmd);
@@ -210,8 +166,6 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         inspectCamera_.eye[0] = frame.view.eye.x;
         inspectCamera_.eye[1] = frame.view.eye.y;
         inspectCamera_.eye[2] = frame.view.eye.z;
-        std::copy(frame.view.origin, frame.view.origin + 3, inspectCamera_.origin);
-        std::copy(graph.place().basis(), graph.place().basis() + 9, inspectCamera_.basis);
     }
     // The result stays on the GPU for the compositor; it is copied out for
     // the CPU only when someone read the previous render's pixels.
@@ -227,10 +181,6 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
         timer_.submitted(device_.lastFrameTicket());
         graph_.submitted(gpu_, device_.lastFrameTicket());
         shadows_.submitted(device_.lastFrameTicket());
-        // The plans' read-backs count as done with the frame's graphics (which
-        // waited for them), not as soon as the compute is: read a frame late
-        // as on the graphics queue, not now and then the frame itself.
-        meshes_.plansSubmitted(device_.lastFrameTicket(), device_.context().queue());
         if (readbackInline && readbackBuffer_.isValid()) {
             readbackRecordedSerial_ = renderSerial_;
             readbackTicket_ = device_.lastFrameTicket();

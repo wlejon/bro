@@ -34,9 +34,6 @@ void bro_animation_main() {}
 void bro_scene_main() {}
 void bro_scene_graph_main() {}
 void bro_scene_extras_main() {}
-void bro_scene_grass_main() {}
-void bro_scene_plants_main() {}
-void bro_scene_land_main() {}
 void bro_lm_main() {}
 void bro_rave_main() {}
 void bro_motion_main() {}

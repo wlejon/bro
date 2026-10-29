@@ -71,15 +71,6 @@ Particles3DNode::Particles3DNode(const std::string& name) : SceneNode(name) {
     bounds_ = bromath::aempty3();
 }
 
-void Particles3DNode::placeMoved(const PlaceMove& m) {
-    if (space_ != SimSpace::World) return;
-    for (Particle& p : particles_) {
-        if (!p.alive) continue;
-        p.pos = m.apply(p.pos);
-        p.vel = m.turn(p.vel);
-    }
-}
-
 void Particles3DNode::setMaxParticles(int n) {
     if (n < 1) n = 1;
     particles_.assign(static_cast<size_t>(n), Particle{});

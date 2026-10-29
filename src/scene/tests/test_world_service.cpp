@@ -41,20 +41,20 @@ void testRankingAcrossProducers() {
     WorldServiceConfig c;
     c.floorMs = 0.375f;   // (costs and budgets in binary fractions: exact sums)
     s.configure(c);
-    const int turf = s.addKind({"turf", WorldSchedule::Raster, 0.125f});
+    const int tiles = s.addKind({"tiles", WorldSchedule::Raster, 0.125f});
     const int cards = s.addKind({"cards", WorldSchedule::Compute, 0.125f});
-    check(turf == 0 && cards == 1, "kinds are numbered as added");
+    check(tiles == 0 && cards == 1, "kinds are numbered as added");
     s.beginFrame();
     check(near(s.budgetMs(), 0.375), "before any frame is read the budget is the floor");
     // Errors interleaved between the two producers: what is most wrong goes
     // first, whoever offers it.
-    s.offer({1, 0, turf, 2.0f, 1.0, false});
+    s.offer({1, 0, tiles, 2.0f, 1.0, false});
     s.offer({2, 0, cards, 9.0f, 1.0, false});
-    s.offer({3, 0, turf, 7.0f, 1.0, false});
+    s.offer({3, 0, tiles, 7.0f, 1.0, false});
     s.offer({4, 0, cards, 1.0f, 1.0, false});
-    s.offer({5, 0, turf, 0.5f, 1.0, false});
+    s.offer({5, 0, tiles, 0.5f, 1.0, false});
     s.schedule();
-    const auto t = s.granted(turf), k = s.granted(cards);
+    const auto t = s.granted(tiles), k = s.granted(cards);
     check(k.size() == 1 && k[0].key == 2, "the worst job (another producer's) is granted");
     check(t.size() == 2 && t[0].key == 3 && t[1].key == 1, "then the next worst, across producers, in rank order");
     check(s.stats().granted == 3 && s.stats().queued == 2, "three fit 0.375 ms at 0.125 each; two are left");
@@ -63,13 +63,13 @@ void testRankingAcrossProducers() {
 
     // A required job goes whatever the budget, ahead of everything.
     s.beginFrame();
-    s.offer({10, 0, turf, 50.0f, 1.0, false});
-    s.offer({11, 0, turf, 0.1f, 64.0, true});
-    s.offer({12, 0, turf, 0.2f, 64.0, true});
-    s.offer({13, 0, turf, 0.3f, 64.0, true});
-    s.offer({14, 0, turf, 0.4f, 64.0, true});
+    s.offer({10, 0, tiles, 50.0f, 1.0, false});
+    s.offer({11, 0, tiles, 0.1f, 64.0, true});
+    s.offer({12, 0, tiles, 0.2f, 64.0, true});
+    s.offer({13, 0, tiles, 0.3f, 64.0, true});
+    s.offer({14, 0, tiles, 0.4f, 64.0, true});
     s.schedule();
-    check(s.granted(turf).size() == 4, "required jobs go whatever the budget, and leave none for the rest");
+    check(s.granted(tiles).size() == 4, "required jobs go whatever the budget, and leave none for the rest");
     check(s.stats().queued == 1 && near(s.stats().worstError, 50.0f), "the unrequired one waits");
 
     // A kind that does not fit leaves room for a cheaper one.
@@ -214,7 +214,7 @@ void testBudgetFollowsSlack() {
     c.floorMs = 0.1f;
     c.window = 4;
     s.configure(c);
-    const int k = s.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    const int k = s.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     // Frames of 1.8 ms, 0.3 of it the service's: the frame needs 1.5.
     for (int i = 0; i < 4; ++i) s.observe(frameOf(1.8, k, 6, 0.3));
     s.beginFrame();
@@ -292,11 +292,6 @@ void testViewCut() {
     check(!SceneWorldService::viewCut(eye, {0.2f, 0.0f, -1.0f}, eye, fwd, half), "a turn of 11 degrees is not a cut");
     check(SceneWorldService::viewCut(eye, {1.0f, 0.0f, -1.0f}, eye, fwd, half), "a turn of 45 degrees is a cut");
     check(SceneWorldService::viewCut({-300.0f, 420.0f, -300.0f}, fwd, eye, fwd, half), "a jump to the sky is a cut");
-    // From 1000 km up a frame's 100 km is a flight; from 2 m up it is a jump.
-    check(!SceneWorldService::viewCut({1e5f, 1e6f, 0.0f}, fwd, {0.0f, 1e6f, 0.0f}, fwd, half, 1e6f),
-          "a flight at altitude is not a cut");
-    check(SceneWorldService::viewCut({1e5f, 2.0f, 0.0f}, fwd, {0.0f, 2.0f, 0.0f}, fwd, half, 2.0f),
-          "the same move at eye level is a cut");
 }
 
 void testFloorOverTarget() {
@@ -306,7 +301,7 @@ void testFloorOverTarget() {
     c.floorMs = 0.12f;
     c.floorShare = 0.0f;   // (the floor alone; testShareOverTarget the share)
     s.configure(c);
-    const int k = s.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    const int k = s.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     for (int i = 0; i < 4; ++i) s.observe(frameOf(1.0));
     s.beginFrame();
     check(s.budgetMs() > 1.0f, "a light frame leaves a lot");
@@ -329,7 +324,7 @@ void testFloorOverTarget() {
     // service did: no headroom, the slack whole once they end.
     WorldService u;
     u.configure(c);
-    const int ku = u.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    const int ku = u.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     for (int i = 0; i < 30; ++i) u.observe(frameOf(3.4, ku, 1, 0.05));
     for (int i = 0; i < 4; ++i) u.observe(frameOf(1.0));
     u.beginFrame();
@@ -337,7 +332,7 @@ void testFloorOverTarget() {
     // Need past the target, though the frame read was under it: the floor.
     WorldService t;
     t.configure(c);
-    t.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    t.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     t.observe(frameOf(2.7));
     t.beginFrame();
     check(near(t.budgetMs(), 0.12), "slack under the floor is the floor");
@@ -350,7 +345,7 @@ void testShareOverTarget() {
     c.floorMs = 0.12f;
     c.floorShare = 0.1f;
     s.configure(c);
-    const int k = s.addKind({"land", WorldSchedule::Raster, 0.05f});
+    const int k = s.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     // A view that costs 7 ms whatever the world does: a tenth of its need.
     s.observe(frameOf(7.0, k, 4, 0.2));
     s.beginFrame();
@@ -361,34 +356,16 @@ void testShareOverTarget() {
     // A light frame over it by a little: the floor, as before.
     WorldService t;
     t.configure(c);
-    t.addKind({"land", WorldSchedule::Raster, 0.05f});
+    t.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     t.observe(frameOf(2.9));
     t.beginFrame();
     check(near(t.budgetMs(), 0.29), "just over, a tenth of 2.9");
     WorldService u;
     u.configure(c);
-    u.addKind({"land", WorldSchedule::Raster, 0.05f});
+    u.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     u.observe(frameOf(1.0));
     u.beginFrame();
     check(u.budgetMs() > 1.0f, "under the target the slack, the share playing no part");
-    // A catch-up kind left behind: the share grows with how far, 1 + log2
-    // of the worst it left over catchUpError, up to the whole need.
-    for (float error : {64.0f, 2000.0f}) {
-        WorldService v;
-        c.catchUpError = 2.0f;
-        v.configure(c);
-        const int land = v.addKind({"land", WorldSchedule::Raster, 0.5f, false, true});
-        v.observe(frameOf(7.0));
-        v.beginFrame();
-        for (uint64_t i = 1; i <= 20; ++i) v.offer({i, 0, land, error, 1.0, false});
-        v.schedule();
-        check(v.catchingUp(), "twenty tiles at 0.5 ms on 0.7 ms: behind");
-        v.observe(frameOf(7.0));
-        v.beginFrame();
-        const double want = error < 100.0f ? 0.1 * (1.0 + std::log2(32.0)) * 7.0 : 7.0;
-        check(near(v.budgetMs(), want, 1e-3),
-              error < 100.0f ? "64 px behind: six tenths of the need (4.2 ms)" : "2000 px behind: all of it (7 ms)");
-    }
 }
 
 void testHeadroom() {
@@ -401,7 +378,7 @@ void testHeadroom() {
     // Frames whose need varies about 2.0 by up to 0.3 ms, the service
     // spending the slack the last one left: without headroom about half of
     // them run over; with it overRate of them, at the quantile's level.
-    const int k = s.addKind({"turf", WorldSchedule::Raster, 0.01f});
+    const int k = s.addKind({"tiles", WorldSchedule::Raster, 0.01f});
     uint32_t seed = 12345u, over = 0, frames = 0;
     for (int i = 0; i < 4000; ++i) {
         seed = seed * 1664525u + 1013904223u;
@@ -425,7 +402,7 @@ void testCostLearning() {
     WorldServiceConfig c;
     c.costRate = 0.25f;
     s.configure(c);
-    const int k = s.addKind({"turf", WorldSchedule::Raster, 0.05f});
+    const int k = s.addKind({"tiles", WorldSchedule::Raster, 0.05f});
     const int q = s.addKind({"cards", WorldSchedule::Compute, 0.2f});
     check(near(s.cost(k), 0.05) && !s.measured(k), "a kind's cost is its guess until measured");
     s.observe(frameOf(1.0, k, 10, 0.2));

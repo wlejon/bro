@@ -27,25 +27,14 @@ VkRect2D viewRect(const ShadowViewPlan& v) {
 bool PassShadow::active(const SceneFrame& frame) const {
     // Pages that failed to allocate draw nothing.
     const ShadowPlan& plan = frame.renderer.shadowPlan();
-    if (!frame.gpu.shadows.ready() || plan.viewCount == 0) return false;
-    if (part_ == Part::All) return true;
-    // The unplanned part clears the overlays and draws their unplanned
-    // casters; the planned one theirs and every redrawn page.
-    bool overlays = false;
-    for (int v = 0; v < plan.viewCount; ++v) overlays = overlays || plan.views[v].dynamic;
-    if (part_ == Part::Unplanned) return overlays;
-    if (plan.staticPages > 0) return true;
-    for (const MeshDraw& draw : frame.lists.meshes)
-        if (draw.castsShadow && draw.indirect != VK_NULL_HANDLE && overlays) return true;
-    return false;
+    return frame.gpu.shadows.ready() && plan.viewCount > 0;
 }
 
 void PassShadow::declare(const SceneFrame& frame, PassIO& io) const {
     io.depthTarget(frame.gpu.shadows.scratch);
-    if (part_ == Part::Planned) io.readsCompute();
 }
 
-void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unplanned) {
+void PassShadow::drawView(SceneFrame& frame, int index) {
     VkCommandBuffer cmd = frame.cmd;
     const ShadowPlan& plan = frame.renderer.shadowPlan();
     const ShadowViewPlan& view = plan.views[index];
@@ -55,30 +44,21 @@ void PassShadow::drawView(SceneFrame& frame, int index, bool planned, bool unpla
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &rect);
     // The draws are relative to the frame's eye, the view to the plan's
-    // (the same eye unless a caller re-planned in between), both on the
-    // body, as the view's frustum is.
-    const bromath::Mat4 lightViewProj = toVulkanClip(rebased(view.relViewProj, frame.world.eye - plan.origin));
+    // (the same eye unless a caller re-planned in between).
+    const bromath::Mat4 lightViewProj = toVulkanClip(rebased(view.relViewProj, frame.view.eye - plan.origin));
     const bool culling = frame.renderer.cullingFrustum() != nullptr;
     // The timed passes' names: the overlays' casters by kind and the pages'
     // by kind, a run of draws under one name marked once as it ends.
     static constexpr const char* kOverlay[kMeshKindCount] = {
         "shadow:moving:static", "shadow:moving:instanced", "shadow:moving:skinned", "shadow:moving:scatter",
-        "shadow:moving:tube",   "shadow:moving:veg",       "shadow:moving:instancedVeg", "shadow:moving:grass",
-        "shadow:moving:plants", "shadow:moving:land"};
+        "shadow:moving:tube",   "shadow:moving:veg",       "shadow:moving:instancedVeg"};
     static constexpr const char* kPages[kMeshKindCount] = {
         "shadow:pages:static", "shadow:pages:instanced", "shadow:pages:skinned", "shadow:pages:scatter",
-        "shadow:pages:tube",   "shadow:pages:veg",       "shadow:pages:instancedVeg", "shadow:pages:grass",
-        "shadow:pages:plants", "shadow:pages:land"};
+        "shadow:pages:tube",   "shadow:pages:veg",       "shadow:pages:instancedVeg"};
     const char* run = nullptr;
     for (const MeshDraw& draw : frame.lists.meshes) {
-        if (!draw.castsShadow) continue;
-        const bool isPlanned = draw.indirect != VK_NULL_HANDLE;
-        if (isPlanned ? !planned : !unplanned) continue;
-        // A plants node's planned casters are its view's alone; any other
-        // goes where its motion does.
-        if (isPlanned ? draw.shadowView != index : !shadowCastsInto(view, draw.shadowMotion)) continue;
-        if (culling && draw.hasBounds && !isPlanned &&
-            !bromath::fintersects(view.frustum, frame.view.toBody(draw.bounds))) {
+        if (!draw.castsShadow || !shadowCastsInto(view, draw.shadowMotion)) continue;
+        if (culling && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) {
             frame.stats.shadowCulled++;
             continue;
         }
@@ -100,8 +80,7 @@ void PassShadow::record(SceneFrame& frame) {
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depth.imageView = scratch.view;
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    // Each view's rect is cleared as it is first drawn (an overlay's by the
-    // unplanned part, the planned part drawing over it).
+    // Each view's rect is cleared as it is drawn.
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingInfo info{};
@@ -119,21 +98,19 @@ void PassShadow::record(SceneFrame& frame) {
         const VkClearRect clearRect{viewRect(plan.views[v]), 0, 1};
         vkCmdClearAttachments(cmd, 1, &clear, 1, &clearRect);
     };
-    // The overlays: what moves, alone. Their unplanned casters beside the
-    // compute, the planned ones after the join.
-    const bool unplanned = part_ != Part::Planned, planned = part_ != Part::Unplanned;
+    // The overlays: what moves, alone.
     for (int v = 0; v < plan.viewCount; ++v) {
         if (!plan.views[v].dynamic) continue;
-        if (unplanned) clearView(v);
-        drawView(frame, v, planned, unplanned);
+        clearView(v);
+        drawView(frame, v);
     }
     if (frame.timer) frame.timer->mark(cmd, "shadow:moving");
 
-    // The pages redrawn into the cache, all their casters at once (after
-    // the join when there is one): the world service's jobs, each kind's
-    // views timed as its span with their pages' units (a page; a plants
-    // page's ShadowPageWant::units).
-    if (planned && plan.staticPages > 0) {
+    // The pages redrawn into the cache, all their casters at once: the
+    // world service's jobs, each kind's views timed as its span with their
+    // pages' units (a page; a page every plant draws into, its
+    // ShadowPageWant::units).
+    if (plan.staticPages > 0) {
         const auto drawKind = [&](int kind, bool plants, uint32_t pages, double units) {
             if (pages == 0) return;
             const bool stamped =
@@ -141,7 +118,7 @@ void PassShadow::record(SceneFrame& frame) {
             for (int v = 0; v < plan.viewCount; ++v) {
                 if (plan.views[v].dynamic || (plan.views[v].plants == ShadowPlants::All) != plants) continue;
                 clearView(v);
-                drawView(frame, v, true, true);
+                drawView(frame, v);
             }
             if (stamped) frame.timer->endSpan(cmd, static_cast<uint32_t>(kind), false, units);
         };

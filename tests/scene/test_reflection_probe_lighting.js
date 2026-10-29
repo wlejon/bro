@@ -5,7 +5,7 @@
 //     capture would show the walls' white base colour either way);
 //   - overlapping probes: a mesh takes the highest-priority probe whose box
 //     holds it, ties going to the smaller box;
-//   - the land is captured: a flat land under a lone sphere shows in the
+//   - the floor is captured: a plane under a lone sphere shows in the
 //     sphere's lower half once the probe captures it.
 // The mirror sphere is metallic with no IBL environment and no ambient, so
 // without a probe it is black and any colour it shows comes from a probe.
@@ -118,7 +118,7 @@ if (!probe.scene) {
     }
 
     // =====================================================================
-    // The land in the capture: a lit flat land and nothing else.
+    // The floor in the capture: a lit plane and nothing else.
     // =====================================================================
     {
         const s = freshScene(SIZE);
@@ -140,16 +140,13 @@ if (!probe.scene) {
         p.capture();
         const bare = lower(sc.captureFrame());
 
-        const flat = FastNoise.create('Constant');
-        flat.set('Value', -2);
-        sc.createLand({ height: flat, extent: 64,
-                        surface: 'LandSurface landSurface(LandPoint q) { LandSurface s; s.albedo = vec3(0.6); return s; }' });
-        sc.captureFrame();   // (its first tiles)
+        sc.createMesh({ mesh: 'plane', halfW: 32, halfD: 32, y: -2, color: [0.6, 0.6, 0.6, 1] });
+        flush();
         p.capture();
         const floor = lower(sc.captureFrame());
         const sum = (c) => c.r + c.g + c.b;
-        assert(sum(bare) < 30, `no land: the sphere's lower half reflects nothing ${fmt(bare)}`);
-        assert(sum(floor) > sum(bare) + 60, `the probe captures the land: ${fmt(bare)} -> ${fmt(floor)}`);
+        assert(sum(bare) < 30, `no floor: the sphere's lower half reflects nothing ${fmt(bare)}`);
+        assert(sum(floor) > sum(bare) + 60, `the probe captures the floor: ${fmt(bare)} -> ${fmt(floor)}`);
         dropScene(s);
     }
 

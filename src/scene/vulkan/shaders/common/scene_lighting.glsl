@@ -29,30 +29,9 @@ struct SceneLight {
 // lights' maps, each a set of cached pages in the one pool.
 #include "common/scene_shadow_pages.glsl"
 #include "common/scene_atmosphere_params.glsl"
-#include "lighting/scene_probe_grid.glsl"
-#include "ground/land_sun_layout.h"
-#include "sky/clouds_layout.h"
-
-// The land's sun (scene/world/land_sun.h): where each level lies, relative
-// to the eye, and the copy shown.
-struct LandSunGpu {
-    vec4 params;               // x 1 when any level is shown, y the eye's world height
-    vec4 body;                 // a round body's: xy the eye's world x and z, z 1 / (2 R); 0 flat
-    vec4 level[LS_LEVELS];     // xy its corner (x, z), z its texel (m), w the layer shown (-1: none)
-};
-
-// The cloud deck's shadow (vulkan/sky/scene_clouds.h): its levels' plane, in
-// air space (about the body's centre, the place frame's axes).
-struct CloudShadowGpu {
-    vec4 params;   // x 1 when shown, y the datum's radius, z the finest level's texel (m), w the levels' growth
-    vec4 deck;     // x the deck's bottom's radius, y its top's (body space)
-    vec4 n[CL_SHADOW_LEVELS];    // xyz each level's plane's normal (the body's up under the eye as it was baked)
-    vec4 e1[CL_SHADOW_LEVELS];   // xyz its first axis
-    vec4 e2[CL_SHADOW_LEVELS];   // xyz its second
-};
 
 layout(set = 1, binding = 0) uniform LightingUBO {
-    vec4 sunDirection;  // the dominant directional light (decals, the probe grid's sun), w its index + 1 (0: none)
+    vec4 sunDirection;  // the dominant directional light (decals), w its index + 1 (0: none)
     vec4 sunColor;      // rgb, a = intensity
     vec4 ambientColor;  // rgb flat ambient
     vec4 params;        // x light count, y PCF grid side (1/3/5), z 1/the pool's side (texels), w pool columns
@@ -70,9 +49,6 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 iblParams;     // x = enabled, y = intensity, z = rotation, w = prefilter max LOD
     vec4 groundBounce;  // rgb = the ground's bounce, as irradiance over pi and intensity (0: none)
     AtmosphereGpu atm;  // the atmosphere (scene/vulkan/lighting/scene_atmosphere.h), atm.sunDir.w = on
-    ProbeGridGpu probeGrid;   // the probe grid (scene/vulkan/lighting/scene_probe_grid.h), params.x = on
-    LandSunGpu landSun;       // the land's sun, params.x = shown
-    CloudShadowGpu cloudShadow;   // the cloud deck's shadow, params.x = shown
 } lighting;
 
 // The pool of shadow pages and the frame's overlays (the scratch target the
@@ -128,29 +104,6 @@ layout(set = 1, binding = 13) uniform texture3D texAtmSkyLightImage;
 #define ATM_SKYLIGHT_TEX texAtmSkyLight
 #include "common/scene_atmosphere.glsl"
 
-// The probe grid (scene/vulkan/lighting/scene_probe_grid.h): its probes' SH,
-// a colour channel each, through binding 17's sampler (which repeats across:
-// the columns wrap), the ground's height under its cascades and the sun's
-// volume (probe_sun.comp's: g the land's shade).
-layout(set = 1, binding = 17) uniform sampler probeGridSampler;
-layout(set = 1, binding = 18) uniform texture3D probeShRImage;
-layout(set = 1, binding = 19) uniform texture3D probeShGImage;
-layout(set = 1, binding = 20) uniform texture3D probeShBImage;
-layout(set = 1, binding = 21) uniform texture2D probeHeightImage;
-layout(set = 1, binding = 22) uniform texture3D probeSunImage;
-#define PG lighting.probeGrid
-#define PG_HEIGHT_LOAD(texel) texelFetch(sampler2D(probeHeightImage, lightingSampler), texel, 0).r
-#include "lighting/scene_probe_grid.glsl"
-
-// The land's sun (scene/world/land_sun.h; land_sun.comp's): each level's
-// two copies, a texel the world height a point must clear to see the sun
-// and how far off what shades it stands.
-layout(set = 1, binding = 23) uniform texture2DArray landSunImage;
-
-// The cloud deck's shadow's levels (sky/clouds_layout.h; CloudShadowGpu
-// above says where they lie): a level a layer, what the deck leaves of the sun.
-layout(set = 1, binding = 24) uniform texture2DArray cloudShadowImage;
-
 // Whether the pipeline was built for a frame with the atmosphere on (the
 // mesh drawer's kAtmosphere raster bit): without it the atmosphere's code is
 // not in the shader at all, so a scene that does not use it pays nothing.
@@ -159,95 +112,12 @@ layout(constant_id = 2) const bool SCENE_ATMOSPHERE = true;
 
 bool sceneAtmosphereOn() { return SCENE_ATMOSPHERE && lighting.atm.sunDir.w > 0.5; }
 
-// What the cloud deck leaves of the sun at camera-relative `pos` (1 with no
-// clouds): its shadow's levels (sky/clouds_shadow.comp), each about the
-// body's point under the eye as it was when the level was baked, on the
-// plane tangent to the body there, the finest level holding the point
-// (blended into the next over its last texels).
-// A point is taken at the datum under it: the deck's shadow on a hill is
-// the shadow on the ground under the hill.
-float sceneCloudSun(vec3 pos) {
-    if (lighting.cloudShadow.params.x < 0.5) return 1.0;
-    vec3 d = normalize(atmOrigin(pos));
-    const float S = float(CL_SHADOW_SIDE);
-    float texel = lighting.cloudShadow.params.z;
-    float sun = 0.0;
-    float left = 1.0;
-    for (int l = 0; l < CL_SHADOW_LEVELS; ++l) {
-        float cn = dot(d, lighting.cloudShadow.n[l].xyz);
-        vec2 g = lighting.cloudShadow.params.y *
-                 vec2(dot(d, lighting.cloudShadow.e1[l].xyz), dot(d, lighting.cloudShadow.e2[l].xyz)) /
-                 (max(cn, 0.05) * texel) + 0.5 * S;
-        texel *= lighting.cloudShadow.params.w;
-        if (cn < 0.05) continue;
-        float edge = min(min(g.x, g.y), min(S - g.x, S - g.y));
-        if (edge < 1.0) continue;
-        // (Blended over the outer 48 texels, a long way: two levels hold
-        // the same shadow at different sharpness, and a seam between them
-        // would be a line across the land.)
-        float w = left * clamp((edge - 1.0) / 48.0, 0.0, 1.0);
-        sun += w * textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3(g / S, float(l)), 0.0).r;
-        left -= w;
-        if (left <= 0.0) break;
-    }
-    return sun + left;
-}
-
-// How much of the sky over camera-relative `pos` the deck covers (0 with
-// no clouds): the mean of its shadow about the point over some 12 km (nine
-// taps 4 km apart on the level of 1.9 km texels), the share of the sun the
-// clouds about take, so a broken deck's cover is its share and not the
-// shadow the point stands in.
-float sceneCloudCover(vec3 pos) {
-    if (lighting.cloudShadow.params.x < 0.5) return 0.0;
-    const int l = 5;
-    const float S = float(CL_SHADOW_SIDE);
-    vec3 d = normalize(atmOrigin(pos));
-    float texel = lighting.cloudShadow.params.z * pow(lighting.cloudShadow.params.w, float(l));
-    float cn = dot(d, lighting.cloudShadow.n[l].xyz);
-    if (cn < 0.05) return 0.0;
-    vec2 g = lighting.cloudShadow.params.y *
-             vec2(dot(d, lighting.cloudShadow.e1[l].xyz), dot(d, lighting.cloudShadow.e2[l].xyz)) / (cn * texel) +
-             0.5 * S;
-    if (min(min(g.x, g.y), min(S - g.x, S - g.y)) < 4.0) return 0.0;
-    float sun = 0.0;
-    for (int k = 0; k < 9; ++k) {
-        vec2 o = vec2(float(k % 3) - 1.0, float(k / 3) - 1.0) * 2.0;
-        sun += textureLod(sampler2DArray(cloudShadowImage, lightingSampler), vec3((g + o) / S, float(l)), 0.0).r;
-    }
-    return clamp(1.0 - sun / 9.0, 0.0, 1.0);
-}
-
-// The sky's light at camera-relative `pos` (atmSkyLightSh's coefficients),
-// with the deck over it: where the clouds cover the sky, its light is
-// their bases', the sun they let through scattered (CLOUD_DIFFUSE of the
-// sun on a level surface above them, grey: many scatterings whiten it),
-// even over the upper half (an overcast sky is no brighter at its zenith
-// than the eye can tell), in place of the clear sky's in proportion.
-const float CLOUD_DIFFUSE = 0.3;
-void sceneSkyLightSh(vec3 pos, out vec3 c[6], out mat3 frame) {
-    atmSkyLightSh(pos, c, frame);
-    float k = sceneCloudCover(pos);
-    if (k <= 0.0) return;
-    vec3 p = atmOrigin(pos);
-    float r = length(p);
-    float muS = dot(p, lighting.atm.sunDir.xyz) / r;
-    vec3 t = atmSunTransmittance(r, muS);
-    float grey = dot(t, vec3(0.2126, 0.7152, 0.0722));
-    vec3 L = ATM.sunIlluminance.rgb * (grey * max(muS, 0.0) * CLOUD_DIFFUSE / ATM_PI);
-    // (An even upper hemisphere's coefficients, z up in the sun's frame:
-    // Y00's integral 2 pi 0.282095, Y10's pi 0.488603; the rest none.)
-    for (int i = 0; i < 6; ++i) c[i] *= 1.0 - k;
-    c[0] += k * 1.772454 * L;
-    c[1] += k * 1.534990 * L;
-}
-
 // The sun's light at camera-relative `pos`, for a sun of 1 at the top of
-// the air: what the air, the planet's shadow and the cloud deck leave of it.
+// the air: what the air and the planet's shadow leave of it.
 vec3 sceneSunTransmittance(vec3 pos) {
     vec3 p = atmOrigin(pos);
     float r = length(p);
-    return atmSunTransmittance(r,dot(p, lighting.atm.sunDir.xyz) / r) * sceneCloudSun(pos);
+    return atmSunTransmittance(r, dot(p, lighting.atm.sunDir.xyz) / r);
 }
 
 // The sky's irradiance over pi on a surface at `pos` facing `n` (the
@@ -255,7 +125,7 @@ vec3 sceneSunTransmittance(vec3 pos) {
 vec3 sceneSkyIrradiance(vec3 pos, vec3 n) {
     vec3 c[6];
     mat3 frame;
-    sceneSkyLightSh(pos, c, frame);
+    atmSkyLightSh(pos, c, frame);
     return atmShIrradiance(c, frame, n);
 }
 
@@ -284,109 +154,6 @@ vec3 sceneOpenSkyIrradiance(vec3 pos, vec3 n) {
         return (e + lighting.groundBounce.rgb * (0.5 - 0.5 * n.y)) * lighting.iblParams.y;
     }
     return lighting.ambientColor.rgb;
-}
-
-// The probe grid at camera-relative `pos`, from one walk over its cascades
-// (the finest holding it, blended into the next coarser over the outer
-// columns of its square, the ground under it read once a cascade): its SH
-// (a texel a colour channel), its land shade (its sun volume's g, 1 where
-// the grid is off or ends) and the spacing of its finest cascade there (m;
-// what is much larger than it, the probes resolve; 0 where off or ended).
-// Each lit shader reads it once a pixel and hands it to what lights it.
-struct SceneProbe {
-    bool on;   // the grid reaches pos
-    vec4 r, g, b;
-    float land;
-    float spacing;
-};
-SceneProbe sceneProbe(vec3 pos) {
-    SceneProbe p;
-    p.on = false;
-    p.r = p.g = p.b = vec4(0.0);
-    p.land = 1.0;
-    p.spacing = 0.0;
-    if (PG.params.x < 0.5) return p;
-    int c = pgCascadeAt(pos.xz, 0);
-    if (c < 0) return p;
-    p.on = true;
-    p.spacing = PG.cascade[c].z;
-    p.land = 0.0;
-    float left = 1.0;
-    for (int n = 0; n < 2 && c < pgCascades(); ++n, ++c) {
-        vec2 col = (pos.xz - PG.cascade[c].xy) * PG.cascade[c].w;
-        float edge = min(min(col.x, col.y), min(float(PG_COLUMNS) - col.x, float(PG_COLUMNS) - col.y));
-        float w = c + 1 < pgCascades() ? left * clamp((edge - 1.0) / 3.0, 0.0, 1.0) : left;
-        if (n == 1) w = left;
-        if (w <= 0.0) continue;
-        float h = pos.y - pgBase(pgGround(c, pos.xz));
-        vec3 uvw = pgProbeUvw(c, pos.xz, h);
-        p.r += w * textureLod(sampler3D(probeShRImage, probeGridSampler), uvw, 0.0);
-        p.g += w * textureLod(sampler3D(probeShGImage, probeGridSampler), uvw, 0.0);
-        p.b += w * textureLod(sampler3D(probeShBImage, probeGridSampler), uvw, 0.0);
-        p.land += w * textureLod(sampler3D(probeSunImage, probeGridSampler), pgVolumeUvw(c, pos.xz, h), 0.0).g;
-        left -= w;
-        if (left <= 0.0) break;
-    }
-    p.land += left;
-    return p;
-}
-
-// The land's sun at camera-relative `pos`: how much of the sun the land
-// (and the canopy past the plants' cast range) leaves there, from the
-// finest level whose square holds it, blended into the next over its last
-// LS_BLEND texels; 1 past them all. A point clears what shades it over a
-// height that widens with how far off that stands (the sun's disc,
-// widened as the probe grid's is), and its own ground clears the level's
-// heights by a share of a texel (a level's heights are bilinear between
-// its texels; the ground between them is not). The levels' heights are
-// over the datum: on a round body a point's world y falls below its height
-// by its distance from the place origin squared over 2R.
-const float LS_BLEND = 24.0;
-float landSunLevels(vec3 pos) {
-    if (lighting.landSun.params.x < 0.5) return 1.0;
-    vec2 at = lighting.landSun.body.xy + pos.xz;
-    float y = pos.y + lighting.landSun.params.y + dot(at, at) * lighting.landSun.body.z;
-    float sun = 0.0, left = 1.0;
-    for (int l = 0; l < LS_LEVELS; ++l) {
-        vec4 lv = lighting.landSun.level[l];
-        if (lv.w < 0.0) continue;
-        vec2 g = (pos.xz - lv.xy) / lv.z;
-        float edge = min(min(g.x, g.y), min(float(LS_SIDE) - g.x, float(LS_SIDE) - g.y));
-        if (edge < 1.0) continue;
-        float w = left * clamp((edge - 1.0) / LS_BLEND, 0.0, 1.0);
-        vec2 s = textureLod(sampler2DArray(landSunImage, lightingSampler), vec3(g / float(LS_SIDE), lv.w), 0.0).rg;
-        float soft = 0.25 * lv.z + 0.02 * s.y;
-        sun += w * smoothstep(s.x - soft, s.x + soft, y + 0.1 * lv.z);
-        left -= w;
-        if (left <= 0.0) break;
-    }
-    return sun + left;
-}
-
-// What the land leaves of the sun at camera-relative `pos`: the hills'
-// shade (and a canopy's past the plants' cast range), however far off they
-// stand and however low the sun (the shadow pages' depth offsets swallow a
-// slope that runs along a low sun's rays, and end at their reach). The
-// lesser of the land's sun and the probe grid's (`probe`, read at `pos`),
-// which see the same hills: the grid's ground is every mesh's that grounds
-// it, the land's sun the land node's alone.
-float sceneLandSun(vec3 pos, SceneProbe probe) { return min(landSunLevels(pos), probe.land); }
-
-// How much of the open sky's light a direction keeps among what stands about
-// (a specular's occlusion): the probes' irradiance facing it over the open
-// sky's, by luminance, at most 1.
-float sceneSkySeen(vec3 probed, vec3 open) {
-    const vec3 lum = vec3(0.2126, 0.7152, 0.0722);
-    return clamp(dot(probed, lum) / max(dot(open, lum), 1e-6), 0.0, 1.0);
-}
-
-// The ambient irradiance over pi on a surface at `pos` facing `n`: the
-// probe grid's (`probe`, read at `pos`) where it reaches (the sky through
-// the canopy and past the ground, the light the ground and the leaves send
-// back), else the open sky's.
-vec3 sceneAmbientIrradiance(vec3 pos, SceneProbe probe, vec3 n) {
-    if (probe.on) return pgShIrradiance(probe.r, probe.g, probe.b, n);
-    return sceneOpenSkyIrradiance(pos, n);
 }
 
 float distributionGGX(float NdotH, float roughness) {
@@ -689,189 +456,10 @@ struct SceneSurface {
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
-    // A thin surface's own face toward the eye, which the light through it
-    // follows when its shading normal is another (a grass blade lit as the
-    // ground it covers); zero: the shading normal. Shorter than unit (its
-    // squared length, at least a quarter), only that share of a sward's
-    // light through it comes in swardGlow's lobe, the rest evenly.
-    vec3 thinNormal;
-    // A sward too fine to resolve (far grass, the turf standing for it):
-    // xyz the way its blades stand on average (the ground's normal tipped
-    // by the wind's lay), w how much of the direct light is the sward's
-    // (sceneSwardLight) rather than the shading normal's (0: none).
-    vec4 sward;
-    // What more of the dominant sun the land leaves here than its sun's
-    // levels hold (a wood's gaps past the plants' cast range, mesh.frag's
-    // landCanopyGround); 1: nothing more.
-    float landShade;
 };
 
-// The direct light on a sward seen from afar, as a canopy of thin blades
-// lit by a distant light: what the eye sees is the blades nearest it along
-// its line, and of those the ones the light reaches.
-//
-//   - The blades it sees: at two tilts from `up` (an upright young leaf, an
-//     arching old one) and every way round, each weighted by how much of
-//     it the eye sees (the cosine of its face to the eye). A face turned to
-//     the light reflects by its cosine to it (Lambert); a face turned away
-//     lets through the light falling on its other side, by that cosine
-//     (a blade transmits about as diffusely as it reflects). Under a high
-//     sun the eye looking across sees blade sides lit at a slant and the
-//     undersides of those leaning away: a far meadow is darker than the
-//     level ground it covers. Under a low sun behind the eye it sees faces
-//     turned to it; looking toward the sun, the shaded sides with the light
-//     through them, a dim glow, not a sheet of lit faces.
-//   - The share of them in light, as the near blades it stands for show it
-//     at the same view: along a low line the eye sees the tops, all lit;
-//     from higher it sees deeper in, down to the blades' shaded feet and
-//     the ground between them, SWARD_LIT_TOP less the sine of the eye's
-//     line to the blades' way. The near blades show no shade of their
-//     neighbours that follows the sun (only their height's shade and the
-//     shadow map's), so neither does the sward: a turbid canopy's
-//     extinction along the sun's line as well (G 0.6 over its cosine each
-//     way, with Kuusk's hot spot) left the far meadow 10-16% darker than
-//     its near blades at one angle of view, golden and noon alike.
-//
-// The shadows of what stands over it come from the shadow map as for
-// anything else. Returns x the mean cosine of the lit faces the
-// eye sees (for the diffuse), y the mean cosine through the faces turned
-// away, z the mean of their cuticles' sheen (the specular term, cosine
-// included), all times the lit share.
-const float SWARD_TILT_A = 0.35;   // rad from upright
-const float SWARD_TILT_B = 1.0;
-// The ways round each tilt summed, evenly: the wind's lay is all in `up`
-// (the near blades' bend, scene_grass.glsl's grassSwardLay). A comb that
-// gathered the leans downwind as well, by the lay, made far more of a gust
-// than its blades show, and cost the far blades a tenth of a millisecond.
-const int SWARD_WAYS = 4;
-// The lit share seen straight along the blades' way is SWARD_LIT_TOP - 1
-// (meadowtone at 8, 30 and 60 degrees, noon and golden, against 3 m).
-const float SWARD_LIT_TOP = 1.25;
-// Blinn's exponent for a blade's cuticle (roughness about 0.42 gives 2 /
-// r^4 - 2 = 60), widened a little for the curl along a blade.
-const float SWARD_SHEEN_POWER = 40.0;   // sceneSwardLight raises to it by squaring (keep in step)
-// e^-x I0(x), the modified Bessel function scaled: the mean of
-// exp(x (cos - 1)) round a circle, x >= 0. Its ends (1 - x at 0, 1 /
-// sqrt(2 pi x) far out) with a rational between them fitted to within 1.9%
-// of it over 0..60, smooth and without a branch (Abramowitz & Stegun's two
-// polynomials and an exp cost the far blades a tenth of a millisecond).
-float swardBesselI0e(float x) {
-    const float P = 3.94802, Q = 1.80643, R = 6.34250;
-    float x2 = R * x * x;
-    return (1.0 + P * x + x2) / (1.0 + Q * x + x2) * inversesqrt(1.0 + 6.2831853 * x);
-}
-// I1(x) / I0(x), the mean cosine of that lobe (x / 2 small, 1 - 1 / 2x large).
-float swardBesselRatio(float x) { return x / (0.5 + sqrt(x * x + 2.25)); }
-// sceneSwardLight's frame (below): the eye, the light and the half-way in
-// it.
-struct SwardFrame { float vu, v1, lu, l1, l2, hu, hr; vec2 hdir; };
-// One tilt's blades, SWARD_WAYS ways round (turned `phase` of a step),
-// added to sums (sumW, sumD, sumT, sumS); `faces` 2 to take the sheen of
-// the faces turned from the eye as well as those turned to it.
-void swardTilt(SwardFrame f, float tilt, float phase, int faces, inout vec4 sums) {
-    float ca = cos(tilt), sa = sin(tilt);
-    float litF = 0.0, litB = 0.0;
-    for (int k = 0; k < SWARD_WAYS; ++k) {
-        float psi = (float(k) + phase) * (6.2831853 / float(SWARD_WAYS));
-        vec2 dir = vec2(cos(psi), sin(psi));
-        // A blade leaning `a` toward psi: its face's normal lies in the
-        // plane of its lean, square to it (the upper face: up and back).
-        // In the frame: n = up sa - (e1 cp + e2 sp) ca.
-        float nv = f.vu * sa - f.v1 * dir.x * ca;
-        float nl = f.lu * sa - (f.l1 * dir.x + f.l2 * dir.y) * ca;
-        // The face the eye sees.
-        float w = abs(nv);
-        float NL = nv < 0.0 ? -nl : nl;
-        float lit = w * max(NL, 0.0);
-        sums.xyz += vec3(w, lit, w * max(-NL, 0.0));
-        // The lit faces' share for the sheen, front and back faces apart.
-        if (nv >= 0.0) litF += lit; else litB += lit;
-    }
-    // Their cuticles' sheen (a Blinn lobe as wide as a near blade's,
-    // roughness about 0.42): where a gust bends the blades, the faces that
-    // catch the sun change, and the wave shows whichever way it runs across
-    // the view. The lobe is far narrower than the ways a tilt takes, so it
-    // is integrated round the blades' ways, not sampled at them (sampled,
-    // the half-way swinging past a way as a gust laid the sward drew a thin
-    // pale line round every band of the gusts). n.H = A - R cos(psi - psiH):
-    // the front faces' lobe peaks at psiH + pi (A + R), the back faces' at
-    // psiH (R - A, never over cos(tilt) with the half-way above the sward).
-    float A = f.hu * sa, R = ca * f.hr;
-    for (int s = 0; s < faces; ++s) {
-        float sg = s == 0 ? 1.0 : -1.0;
-        float P = R + sg * A;
-        // (0.8^40 is 1e-4: under a hundredth of the diffuse light.)
-        if (P <= 0.8) continue;
-        vec2 dir = -sg * f.hdir;
-        float nv = f.vu * sa - f.v1 * dir.x * ca;
-        float nl = f.lu * sa - (f.l1 * dir.x + f.l2 * dir.y) * ca;
-        // The lit face there, if it is the face the eye sees.
-        float atPeak = nv * sg > 0.0 ? abs(nv) * max(nl * sg, 0.0) : 0.0;
-        // The lobe round the ways: (n.H)^40 ~ P^40 exp(-x (1 - cos)),
-        // x = 40 R / P, whose mean is P^40 e^-x I0(x) and whose first moment
-        // I1 / I0 weighs the faces at its peak against the tilt's mean.
-        float x = SWARD_SHEEN_POWER * R / P;
-        float share = (s == 0 ? litF : litB) / float(SWARD_WAYS);
-        float g = share + swardBesselRatio(x) * (atPeak - share);
-        float p2 = P * P, p8 = p2 * p2; p8 *= p8;
-        float p32 = p8 * p8; p32 *= p32;
-        sums.w += float(SWARD_WAYS) * g * p32 * p8 * swardBesselI0e(x);
-    }
-}
-vec3 sceneSwardLight(vec3 up, vec3 V, vec3 L) {
-    // A frame about `up`, its first axis toward the eye (the set is
-    // symmetric across the view, so the mean is steady as the eye turns).
-    vec3 e1 = V - up * dot(V, up);
-    float l1 = dot(e1, e1);
-    e1 = l1 > 1e-8 ? e1 * inversesqrt(l1) : normalize(cross(up, vec3(0.0, 0.0, 1.0)) + vec3(1e-4, 0.0, 0.0));
-    vec3 e2 = cross(up, e1);
-    float vu = dot(V, up), v1 = dot(V, e1);
-    float lu = dot(L, up), l1L = dot(L, e1), l2 = dot(L, e2);
-    vec3 H = normalize(V + L);
-    float hu = dot(H, up), h1 = dot(H, e1), h2 = dot(H, e2);
-    // Where the wind lays the sward `up` is tipped off the vertical, and a
-    // gust running across the view swings the faces the eye sees between
-    // those turned to the light and those turned from it.
-    SwardFrame f;
-    f.vu = vu; f.v1 = v1; f.lu = lu; f.l1 = l1L; f.l2 = l2;
-    f.hu = hu; f.hr = sqrt(h1 * h1 + h2 * h2);
-    f.hdir = f.hr > 1e-5 ? vec2(h1, h2) / f.hr : vec2(1.0, 0.0);
-    vec4 sums = vec4(0.0);   // sumW, sumD, sumT, sumS
-    // The second tilt's ways turned half a step; its back faces' sheen peaks
-    // at cos(1.0)^40, nothing.
-    swardTilt(f, SWARD_TILT_A, 0.125, 2, sums);
-    swardTilt(f, SWARD_TILT_B, 0.625, 1, sums);
-    float sumW = sums.x, sumD = sums.y, sumT = sums.z, sumS = sums.w;
-    // The lit share of the blades seen: over 1 along a low line, the tops
-    // it sees lighter than the blades' mean shade the far blade and the
-    // turf carry (the world's sward module's).
-    float lit = lu > 0.0 ? max(SWARD_LIT_TOP - vu, 0.0) : 0.0;
-    // The sheen: normalised Blinn, Schlick's Fresnel from a cuticle's 0.04.
-    float vh = max(dot(V, H), 0.0);
-    float F = 0.04 + 0.96 * pow(1.0 - vh, 5.0);
-    float sheen = sumS * F * (SWARD_SHEEN_POWER + 8.0) / (8.0 * PI);
-    return vec3(sumD, sumT, sheen) * (lit / max(sumW, 1e-5));
-}
-// The colour of the light through a blade over its reflectance's: a thin
-// leaf lets through about as much as it reflects in the green (PROSPECT's
-// R ~ T), less in the blue, which the chlorophyll takes twice: yellower.
-const vec3 SWARD_TRANSMIT = vec3(0.95, 1.0, 0.45);
-// How the light through a blade spreads: SWARD_GLOW_SHARE of it in a lobe
-// about the sun's own way (cos^SWARD_GLOW_POWER of the angle between the
-// eye's line and the sun's, as much light in all as an even spread), the
-// rest even (Lambertian). Looking toward a low sun a meadow glows; looking
-// across it or down, the blades pass on only their even share.
-const float SWARD_GLOW_SHARE = 0.7;
-const float SWARD_GLOW_POWER = 4.0;
-float swardGlow(vec3 V, vec3 L) {
-    float c = max(dot(-V, L), 0.0);
-    float c2 = c * c;
-    return (1.0 - SWARD_GLOW_SHARE) + SWARD_GLOW_SHARE * (SWARD_GLOW_POWER + 1.0) * c2 * c2;
-}
-
-// The direct light of every scene light on `s`, the probe grid read at its
-// position `probe` (sceneProbe).
-vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
+// The direct light of every scene light on `s`.
+vec3 sceneDirectLight(SceneSurface s) {
     vec3 N = s.normal;
     vec3 V = s.view;
     float NdotV = max(dot(N, V), 1e-4);
@@ -905,10 +493,6 @@ vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
         // The atmosphere's sun is that light above the air: what reaches the
         // surface is what the air and the planet's shadow leave of it.
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
-        // The sun's shade of the land (the land's sun and the probe grid's),
-        // over its shadow pages'.
-        float land = s.receivesShadow && i == int(lighting.sunDirection.w) - 1
-                         ? sceneLandSun(s.position, probe) * s.landShade : 1.0;
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
@@ -928,48 +512,25 @@ vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
             // Four hardware-filtered taps as wide as nine point taps: leaves
             // are most of the frame's lit pixels, and a leaf's shadow is
             // soft (the sun's disc) whichever way it is filtered.
-            // (A hill's shade passes on nothing.)
-            float vis = land > 0.0 ? lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), -2.0) : 0.0;
-            leafShadow = (0.1 + 0.9 * vis) * land;
+            float vis = lightShadow(i, s.position, s.camDist, lightDist, tN, max(abs(NL), 0.2), -2.0);
+            leafShadow = 0.1 + 0.9 * vis;
         }
         // Leaf translucency: light passing through a leaf lit from behind,
         // strongest looking toward the light, a warm yellow-green, and
         // shadowed by the leaves between it and the light.
-        // A sward too fine to resolve: its blades' mean (sceneSwardLight),
-        // the light through them as diffuse as off them.
-        vec3 sward = s.sward.w > 0.0 ? sceneSwardLight(s.sward.xyz, V, L) : vec3(0.0);
-        bool thin = dot(s.thinNormal, s.thinNormal) > 0.25;
-        float glow = thin ? mix(1.0, swardGlow(V, L), min(dot(s.thinNormal, s.thinNormal), 1.0)) : 1.0;
-        vec3 swardThrough = s.baseColor * SWARD_TRANSMIT * (s.sward.w * sward.y * glow / PI);
-        if (leafy && s.sward.w < 1.0) {
-            if (thin) {
-                // A blade near the eye: what comes through its face as the
-                // sward's blades pass it on (as much as its face reflects,
-                // yellower), so near and far are one meadow; a leaf's art
-                // glow, four times this, left the far sward darker than the
-                // near by 7-19%.
-                float NLt = dot(s.thinNormal, L);
-                Lo += s.baseColor * SWARD_TRANSMIT * radiance *
-                      (max(-NLt, 0.0) * glow / PI * s.translucency * (1.0 - s.sward.w) * leafShadow);
-            } else {
-                float through = smoothstep(-0.3, 0.4, 0.3 - NL);
-                float back = pow(max(dot(-V, L), 0.0), 3.0);
-                float amount = s.translucency * through * (0.1 + 0.9 * back) * (1.0 - s.sward.w);
-                vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
-                Lo += tcol * radiance * amount * leafShadow;
-            }
+        if (leafy) {
+            float through = smoothstep(-0.3, 0.4, 0.3 - NL);
+            float back = pow(max(dot(-V, L), 0.0), 3.0);
+            float amount = s.translucency * through * (0.1 + 0.9 * back);
+            vec3 tcol = sqrt(max(s.baseColor, vec3(0.0))) * vec3(0.75, 0.95, 0.35) * 0.55;
+            Lo += tcol * radiance * amount * leafShadow;
         }
 
         // A leaf's diffuse light wraps a little past its edge-on angle, so a
         // leaf turning away from the sun dims rather than switching off.
         float NdotL = max(NL, 0.0);
         float diffNL = leafy ? clamp((NL + 0.3) / 1.3, 0.0, 1.0) : NdotL;
-        // A near blade's face the eye sees, where the sun is on it, is lit
-        // by its own slope to the sun, not by the softened bulk normal its
-        // shading takes (which a low sun barely reaches).
-        if (thin) diffNL = max(diffNL, max(dot(s.thinNormal, L), 0.0));
-        diffNL = mix(diffNL, sward.x, s.sward.w);
-        if (diffNL <= 0.0 && sward.y <= 0.0) continue;
+        if (diffNL <= 0.0) continue;
         vec3 H = normalize(V + L);
         float D = distributionGGX(max(dot(N, H), 0.0), s.roughness);
         float G = geometrySmith(NdotV, NdotL, s.roughness);
@@ -979,10 +540,8 @@ vec3 sceneDirectLight(SceneSurface s, SceneProbe probe) {
 
         float shadow = leafy ? leafShadow
                      : !s.receivesShadow ? 1.0
-                     : land > 0.0 ? land * lightShadow(i, s.position, s.camDist, lightDist, N, max(NdotL, 0.3 * s.sward.w), 1.0)
-                     : 0.0;
-        vec3 spec = mix(specular * NdotL, vec3(sward.z), s.sward.w);
-        Lo += shadow * (diffuse * diffNL + swardThrough + spec) * radiance;
+                     : lightShadow(i, s.position, s.camDist, lightDist, N, NdotL, 1.0);
+        Lo += shadow * (diffuse * diffNL + specular * NdotL) * radiance;
     }
     return Lo;
 }
@@ -1032,12 +591,9 @@ vec3 sceneSkyAlong(vec3 dir) {
 // which takes precedence over an environment; with an environment the
 // irradiance on the diffuse part and the prefiltered radiance times the BRDF
 // LUT on the specular, both turned by the environment's rotation; without
-// one the flat ambient on the diffuse part. Where the probe grid reaches, the
-// diffuse part is its irradiance, and the specular is dimmed as the probes
-// see less than the open sky along R. A bound reflection probe replaces the
-// global specular by its weight at the surface (probes are specular-only).
-// `probe` is the grid read at the surface's position (sceneProbe).
-vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
+// one the flat ambient on the diffuse part. A bound reflection probe replaces
+// the global specular by its weight at the surface (probes are specular-only).
+vec3 sceneAmbient(SceneSurface s) {
     // Leaves are lit through their crown's bulk normal, which turns edge-on
     // at the crown's outline; their own faces lie every way, so the sky they
     // mirror is a mean over angles, never the grazing sheen a solid's rim
@@ -1055,14 +611,7 @@ vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
         probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
     }
     vec3 kD = (1.0 - F) * (1.0 - s.metallic);
-    // A sward's blades see the sky only over the blades around them: the low
-    // sky and the ground beyond are hidden, so its sky light is what comes in
-    // at its top, the sky about the way its blades stand, however its faces
-    // turn (a far meadow lit by the horizon's glow behind the eye shone a
-    // half brighter than the grass at one's feet).
-    vec3 nI = s.sward.w > 0.0 ? normalize(mix(s.normal, s.sward.xyz, s.sward.w)) : s.normal;
-    vec4 pr = probe.r, pg = probe.g, pb = probe.b;
-    bool probed = probe.on;
+    vec3 nI = s.normal;
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
         // faces (the sky above, the lit ground below, through the air at
@@ -1070,17 +619,14 @@ vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
         // where no reflection probe covers the surface.
         vec3 c[6];
         mat3 frame;
-        sceneSkyLightSh(s.position, c, frame);   // once, for both
+        atmSkyLightSh(s.position, c, frame);   // once, for both
         vec3 irradiance = atmShIrradiance(c, frame, nI);
         vec3 sky = atmShRadiance(c, frame, R);
         // A smooth surface (water, glass) mirrors the sky itself, not the
         // SH's smooth mean of it: the sky-view table's, low in the air.
         float sharp = (1.0 - smoothstep(0.12, 0.4, s.roughness)) * lighting.atm.skyView.w;
-        if (sharp > 0.0) sky = mix(sky, sceneSkyAlong(R), sharp);        vec3 specular = sky * (F * brdf.x + brdf.y);
-        if (probed) {
-            irradiance = pgShIrradiance(pr, pg, pb, nI);
-            specular *= sceneSkySeen(pgShIrradiance(pr, pg, pb, R), atmShIrradiance(c, frame, R));
-        }
+        if (sharp > 0.0) sky = mix(sky, sceneSkyAlong(R), sharp);
+        vec3 specular = sky * (F * brdf.x + brdf.y);
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
@@ -1089,14 +635,9 @@ vec3 sceneAmbient(SceneSurface s, SceneProbe probe) {
         vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
         vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity;
-        if (probed) {
-            irradiance = pgShIrradiance(pr, pg, pb, nI);
-            specular *= sceneSkySeen(pgShIrradiance(pr, pg, pb, R), sceneOpenSkyIrradiance(s.position, R));
-        }
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
-    vec3 irradiance = probed ? pgShIrradiance(pr, pg, pb, nI) : lighting.ambientColor.rgb;
-    return irradiance * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
+    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:
@@ -1208,26 +749,6 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
     inscatter = mix(sky * clamp(share, 0.0, 1.0) * E, fL, froxels);
 }
 
-// How much of the sun the air between the eye and camera-relative `pos`
-// has under the cloud deck: the deck's shadow (sceneCloudSun, at the datum
-// under each) at four points along the ray, where the air there is under
-// the deck's bottom (over its top the clear sky's sun; between, eased). The
-// tables' air is all sunlit, so the haze over land in a deck's shadow was a
-// sunlit veil, bright blue over the dark land: navy.
-float sceneCloudAirSun(vec3 pos) {
-    if (lighting.cloudShadow.params.x < 0.5) return 1.0;
-    float s = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        vec3 q = pos * ((float(i) + 0.5) * 0.25);
-        float under = 1.0 - smoothstep(lighting.cloudShadow.deck.x, lighting.cloudShadow.deck.y, length(atmOrigin(q)));
-        s += under > 0.0 ? mix(1.0, sceneCloudSun(q), under) : 1.0;
-    }
-    return 0.25 * s;
-}
-// (The share of the low air's light that is the sun's, scattered once; the
-// rest the sky's, which the deck's shadow leaves.)
-const float CLOUD_AIR_SUN = 0.75;
-
 SceneAir sceneAir(vec3 pos, float camDist) {
     SceneAir air;
     air.transmittance = vec3(1.0);
@@ -1235,7 +756,6 @@ SceneAir sceneAir(vec3 pos, float camDist) {
     air.fade = 0.0;
     if (sceneAtmosphereOn()) {
         sceneAtmosphereAir(pos, air.transmittance, air.inscatter);
-        air.inscatter *= 1.0 - CLOUD_AIR_SUN * (1.0 - sceneCloudAirSun(pos));
         return air;
     }
     float fog = fogFactorFor(camDist, pos.y + camera.eyeWorld.y);

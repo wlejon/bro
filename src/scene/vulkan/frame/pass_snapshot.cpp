@@ -4,7 +4,6 @@
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_targets.h"
-#include "scene/vulkan/sky/scene_clouds.h"
 
 namespace bro::scene::vk {
 
@@ -22,7 +21,7 @@ void copyWhole(VkCommandBuffer cmd, const SceneVkImage& src, const SceneVkImage&
 }  // namespace
 
 bool PassDepthSnapshot::active(const SceneFrame& frame) const {
-    if (frame.ssao || frame.ssr || frame.dof || frame.subpixel || frame.gpu.clouds.active()) return true;
+    if (frame.ssao || frame.ssr || frame.dof) return true;
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() == SceneNode::Type::Decal) return true;
         if (node->type() == SceneNode::Type::Particles3D) {
@@ -52,19 +51,6 @@ void PassColorSnapshot::declare(const SceneFrame& frame, PassIO& io) const {
 }
 
 void PassColorSnapshot::record(SceneFrame& frame) {
-    copyWhole(frame.cmd, frame.gpu.targets.hdr, frame.gpu.targets.colorSnapshot, VK_IMAGE_ASPECT_COLOR_BIT);
-}
-
-bool PassSubpixelSnapshot::active(const SceneFrame& frame) const {
-    return frame.subpixel;
-}
-
-void PassSubpixelSnapshot::declare(const SceneFrame& frame, PassIO& io) const {
-    io.transferSrc(frame.gpu.targets.hdr);
-    io.transferDst(frame.gpu.targets.colorSnapshot);
-}
-
-void PassSubpixelSnapshot::record(SceneFrame& frame) {
     copyWhole(frame.cmd, frame.gpu.targets.hdr, frame.gpu.targets.colorSnapshot, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 

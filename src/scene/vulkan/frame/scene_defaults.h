@@ -5,6 +5,7 @@
 // 1x1 fallback images a set is filled with where a node has no texture, and
 // the default sampler.
 
+#include "scene/nodes/mesh_node.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 
@@ -21,15 +22,12 @@ public:
     // set 0: camera UBO; set 1: lighting UBO + shadow pages, then the probe
     // cube, shade map and IBL as bare images under one shared sampler; set 2: material (albedo, normal, metallic-roughness,
     // emissive, occlusion); set 3: per-draw vertex data, the bone palette UBO
-    // (binding 0) or a procedural draw's segment records or the plants'
-    // records (binding 1, storage), and the plants' chunks and leaf poses this frame
-    // (bindings 2 and 3, storage);
-    // set 4: custom shader UBO + MeshNode::kMaxUserTextures images, then
-    // the land's surface, page table and canopy for a grass node standing
-    // on it (scene_land_layout.h's LG_*), through binding kCustomBindings,
-    // and the samplers they are read through (CS_SAMPLERS, immutable). A
-    // set written for this layout fills every image binding.
-    static constexpr uint32_t kCustomBindings = 11;
+    // (binding 0) or a procedural draw's segment records (binding 1, storage);
+    // set 4: custom shader UBO + kCustomImages images (bindings 1 to
+    // kCustomImages), then the samplers they are read through
+    // (CustomShaderInterface::kSamplersBinding, immutable). A set written for
+    // this layout fills every image binding.
+    static constexpr uint32_t kCustomImages = MeshNode::kMaxUserTextures;
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;

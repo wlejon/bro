@@ -60,9 +60,6 @@ extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
 extern "C" void bro_scene_graph_main();
 extern "C" void bro_scene_extras_main();
-extern "C" void bro_scene_grass_main();
-extern "C" void bro_scene_plants_main();
-extern "C" void bro_scene_land_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_profiler_main();
@@ -228,12 +225,6 @@ void installSceneModule() {
     // native_scene_extras.cpp, and wraps the create* factories scene_graph.js
     // has just installed — so it runs last.
     bronze::embed::runEntry(bro_scene_extras_main);
-    // js/scene_grass.js: createGrass and the grass node's members.
-    bronze::embed::runEntry(bro_scene_grass_main);
-    // js/scene_plants.js: createPlants and the plants node's members.
-    bronze::embed::runEntry(bro_scene_plants_main);
-    // js/scene_land.js: createLand and the land node's members.
-    bronze::embed::runEntry(bro_scene_land_main);
 #if BRO_WITH_3D
     installSceneSdfExtensions();
 #endif

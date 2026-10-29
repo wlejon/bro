@@ -15,7 +15,6 @@
 const float SUN_LIMB_U = 0.6;
 
 void main() {
-    outMark = 0.0;
     outIndirect = vec4(0.0);
     vec3 rd = normalize(inWorldDir);
     vec3 E = lighting.atm.sunIlluminance.rgb;

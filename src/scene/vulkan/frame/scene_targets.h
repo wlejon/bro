@@ -7,21 +7,16 @@
 //   hdr / hdrMsaa            the HDR scene colour (RGBA16F). With MSAA the
 //                            passes draw into hdrMsaa and every scope resolves
 //                            into hdr, which is what later passes sample.
-//   mark / markMsaa          the opaque surfaces' sub-pixel mark (R8): how far
-//                            each pixel's surface is a cut card's detail too
-//                            fine to show, which PassSubpixel blends with its
-//                            neighbours. The opaque scope's second attachment.
 //   indirect / indirectMsaa  the opaque surfaces' indirect light, the opaque
-//                            scope's third attachment while SSAO is on
+//                            scope's second attachment while SSAO is on
 //                            (allocated on first use).
 //   depth / depthMsaa        scene depth; the MSAA depth resolves to the
 //                            nearest sample (depth::resolveNearest). The
 //                            shadow pages' marking pass samples depth.
 //   depthSnapshot            sampleable copy of the opaque depth (decals,
 //                            soft particles, SSAO, SSR, depth of field).
-//   colorSnapshot            sampleable copy of the opaque colour (the
-//                            sub-pixel resolve's source, then the lit opaque
-//                            colour SSR reflects).
+//   colorSnapshot            sampleable copy of the lit opaque colour, which
+//                            SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
 //
 // The shadow pages' pool and scratch target are not frame-sized: they are
@@ -41,11 +36,9 @@ public:
     static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    static constexpr VkFormat kMarkFormat = VK_FORMAT_R8_UNORM;
-    // The opaque scope's attachments, at these output locations of the
-    // shaders that draw in it (mesh.frag, plants.frag, cover_far.frag).
-    static constexpr uint32_t kMarkSlot = 1;
-    static constexpr uint32_t kIndirectSlot = 2;
+    // The opaque scope's indirect-light attachment, at this output location
+    // of the shaders that draw in it (mesh.frag, sky_common.glsl).
+    static constexpr uint32_t kIndirectSlot = 1;
 
     bool setup(SceneVkDevice& device, SceneVkAllocator& allocator);
     void cleanup(SceneVkAllocator& allocator);
@@ -69,24 +62,19 @@ public:
     VkResolveModeFlagBits depthResolve() const { return depthResolve_; }
 
     /// The HDR scope's attachment formats: the colour, then (the opaque
-    /// scope's) the mark and, with it, the indirect light.
-    TargetFormat hdrTarget(bool mark, bool indirect) const;
-    /// Whether a target carries the opaque scope's mark / indirect light.
-    static bool carriesMark(const TargetFormat& t) {
-        return t.colorCount > kMarkSlot && t.color[kMarkSlot] == kMarkFormat;
-    }
+    /// scope's, while SSAO is on) the indirect light.
+    TargetFormat hdrTarget(bool indirect) const;
+    /// Whether a target carries the opaque scope's indirect light.
     static bool carriesIndirect(const TargetFormat& t) {
-        return carriesMark(t) && t.colorCount > kIndirectSlot && t.color[kIndirectSlot] == kHdrFormat;
+        return t.colorCount > kIndirectSlot && t.color[kIndirectSlot] == kHdrFormat;
     }
 
     // Drawn into by the HDR scope (the MSAA images when msaa()).
     SceneVkImage& hdrDrawn() { return msaa() ? hdrMsaa : hdr; }
-    SceneVkImage& markDrawn() { return msaa() ? markMsaa : mark; }
     SceneVkImage& indirectDrawn() { return msaa() ? indirectMsaa : indirect; }
     SceneVkImage& depthDrawn() { return msaa() ? depthMsaa : depth; }
 
     SceneVkImage hdr, hdrMsaa;
-    SceneVkImage mark, markMsaa;
     SceneVkImage indirect, indirectMsaa;
     SceneVkImage depth, depthMsaa;
     SceneVkImage depthSnapshot;

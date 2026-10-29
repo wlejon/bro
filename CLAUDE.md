@@ -86,7 +86,7 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
 | Vulkan SDK | `Vulkan::Vulkan` | Vulkan 1.3 Core graphics & compute loader |
-| FastNoise2 | `FastNoise` | wlejon's fork of Auburn's SIMD noise, tracked like a sibling: positions about a double origin, exact at a planet's radius (brokit's `noise_glsl` matches it on the GPU) |
+| FastNoise2 | `FastNoise` | wlejon's fork of Auburn's SIMD noise, tracked like a sibling: positions about a double origin, so fine octaves hold far from zero |
 | stb_image / libjpeg-turbo | `stb_image` / `turbojpeg-static` | image IO / JPEG codec |
 
 ## JS API Documentation (docs/)
@@ -120,9 +120,9 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `events-api.js` | `Event`, `CustomEvent`, `UIEvent`, `MouseEvent`, `PointerEvent`, `TouchEvent`, `GestureEvent`: DOM event dispatch |
 | `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |
 | `text-api.js` | `bro.text`: render-layer text shaping (`shape`, `byteOffsetToX`, `xToByteOffset`, `clusterRange`, `cacheStats`) and UAX #9 bidi diagnostics |
-| `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo`; the body and its place frame (`setBody`, `toBody`, the `reanchor` event) |
+| `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo`, wind, the settle state (`pendingWork`) |
 | `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), per-type SceneNode members (shaders, LOD, instances, skeletal playback) |
-| `vegetation-api.js` | `bro.scene` what grows: `createPlants` (trees and shrubs planned and built on the GPU), `createGrass` (blades, herbs and `bro.flora.herbPreset`/`herbRecords`, turf, movers), vegetation records and their wind sway (`setVegetation`) |
+| `vegetation-api.js` | `bro.scene` vegetation records and their wind sway (`setVegetation`) |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |
 | `lighting-api.js` | PBR lighting: LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net`: game networking (host/connect/send) via GNS |
@@ -172,8 +172,6 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `brokit-api.js` | brokit runtime: Node modules (fs, path, os, child_process) + web globals |
 | `physics-api.js` | `Physics`: Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
-| `land-api.js` | `scene.createLand`: a world's ground to the horizon: height a FastNoise tree (GLSL on the GPU, FastNoise2 for the CPU's heights), surface GLSL, rings about the eye over tiles the world service makes; `processes`: the world's GLSL kernels over a global grid and over regional grids streamed under the eye (`procCoarse`/`procBorder`/`procLevel`), read by the GPU and the CPU's heights alike; the surface's `landGridCover` says how much of a level is in |
-| `clouds-api.js` | `scene.setClouds`: one volumetric cloud deck about the body: the world's GLSL cover (baked once to a cube, may read the land's grid) and low-frequency base (baked into a cache about the eye, never per pixel), engine-owned forms (billows, detail erosion, wind), native-res march with a column layer from above, sun/sky lighting, aerial perspective and cloud shadows on everything lit; `cloudStats` |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |
 | `dialogs-api.js` | native file/folder dialogs + alert/confirm/prompt; headless answers them from `setPickedFiles` / `setDialogAnswer` |
 | `menu-api.js` | `bro.menu`: native menu bar |

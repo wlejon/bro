@@ -57,8 +57,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [strength] -  Displacement amplitude in world units (default 0: no sway).
  * @property {number} [frequency] -  Oscillation frequency in rad/s (default 1.5).
  *
- * The wind field (what vegetation and grass bend with; see vegetation-api.js
- * "Vegetation records" and GrassNodeOptions). It blows along `direction`. Every field is optional and a
+ * The wind field (what vegetation bends with; see vegetation-api.js
+ * "Vegetation records"). It blows along `direction`. Every field is optional and a
  * field left out keeps its value; strength / frequency above do not touch it.
  * @property {number} [speed] -  Steady wind in m/s (default 2.5, a breeze; 0 with gust 0 is a calm). It breathes ±28 % over a few minutes.
  * @property {number} [gust] -  Gust amount: 0 none, 1 a gusty day (default), 2 a gale's.
@@ -87,7 +87,7 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 /**
  * The last frame's counters (`cullStats()`), and the world service's state.
  * The world service (scene/world/world_service.h) makes what does
- * not depend on the view (today the turf's surface layer tiles) in the time
+ * not depend on the view (shadow pages, the atmosphere's tables) in the time
  * the frame leaves under its target (`setFrameTarget`), most wrong on screen
  * first.
  * @typedef {Object} SceneCullStats
@@ -108,11 +108,6 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  *   about 0.1 degree), its needed pages not drawn yet; it is shown, every shadow moving at once,
  *   when this reaches 0
  * @property {number} [shadowViews]          the views (page rects) the shadow pass drew
- * @property {number} [groundLayerNeeded]   the turf's surface layer tiles the camera needs
- * @property {number} [groundLayerMissing]  of those, the ones not filled at their data's current generation
- * @property {number} [groundLayerFills]    tiles filled this frame
- * @property {number} [groundLayerShortfall]  how many times too coarse the worst tile the atlas had no
- *   room to refine is (1: none)
  * @property {number} [worldBudgetMs]   the world service's budget this frame: GPU ms the last frames left
  *   under the target (their heaviest of the last four, less the service's own share), never under a
  *   floor of 0.1 ms, and the floor after a frame over the target
@@ -121,10 +116,9 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {number} [worldJobs]       jobs granted this frame
  * @property {number} [worldQueued]     jobs left for a later frame
  * @property {number} [worldWorstError] the largest error left queued, in pixels on screen (what is shown
- *   in its place: a missing tile's coarser parent's texels); 0 when nothing waits
+ *   in its place); 0 when nothing waits
  * @property {Object<string, number>} [worldKindMs] each kind of job's GPU ms a unit by its name, as last
- *   measured (its guess until it is): `land` a land tile's making (its surface module run over every
- *   texel), `turf`, `land horizon`, `land sun`, `shadow pages`, ...
+ *   measured (its guess until it is): `shadow pages`, ...
  * @property {number} [exposureEv]      the exposure applied (EV100, `setExposure`), read back from the GPU a
  *   few frames late
  * @property {number} [meteredEv]       auto exposure: the EV100 that frame's histogram metered (fixed: the setting)
@@ -136,8 +130,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 /**
  * The members every node has. Node-type members (meshes, shaders, LOD,
  * instances, splats, audio emitters, skeletal playback, billboards) continue
- * this class in docs/scene-nodes-api.js, the plants', grass's and
- * vegetation records' in docs/vegetation-api.js.
+ * this class in docs/scene-nodes-api.js, the vegetation records' in
+ * docs/vegetation-api.js.
  */
 class SceneNode {
 
@@ -558,29 +552,6 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
-   * A sward of blades over a land (scene.createLand), the blades a world's
-   * sward module, where they grow, how thickly, dry and tall the land's
-   * surface module's cover; swaying in the wind field, parted by movers. See
-   * GrassNodeOptions and the grass members in docs/vegetation-api.js.
-   * @example scene.createGrass({ ground: land, sward: swardModule(), turf: true });
-   * @param {GrassNodeOptions} [opts]
-   * @returns {SceneNode}
-   */
-  createGrass(opts) {}
-
-  /**
-   * Plants: trees and shrubs built on the GPU by the world's plant module
-   * (GLSL) from a species table and a record a plant (where it stands, its
-   * turn, size, species and seed), nothing stored an element; each drawn
-   * with as many elements as its size on screen asks for. See
-   * PlantsNodeOptions and the plants members in docs/vegetation-api.js.
-   * @example scene.createPlants({ module: treeModule(), species: [treeSpecies({ height: 14 })], plants: [{ x: 0, z: 0 }] });
-   * @param {PlantsNodeOptions} [opts]
-   * @returns {SceneNode}
-   */
-  createPlants(opts) {}
-
-  /**
    * @param {ReflectionProbeNodeOptions} [opts]
    * @returns {SceneNode}
    */
@@ -601,16 +572,6 @@ class SceneGraph {
    * @returns {Terrain}
    */
   createTerrain(opts) {}
-
-  /**
-   * A world's ground to the horizon: its height a FastNoise tree, its
-   * surface GLSL, drawn as rings about the eye over tiles made as the view
-   * needs them. See LandOptions and the land members in docs/land-api.js.
-   * @example scene.createLand({ height: hills, seed: 1337, extent: 2048, surface: meadowSurface });
-   * @param {LandOptions} opts
-   * @returns {SceneNode}
-   */
-  createLand(opts) {}
 
   /**
    * @param {TileWorldConfig} [opts]
@@ -693,8 +654,7 @@ class SceneGraph {
    * The same call sets the wind field plants carrying vegetation records
    * sway in (`speed`, `gust`, `gustSpeed`, `gustScale`, `drift`): a steady
    * wind whose direction drifts slowly, with gusts that travel downwind as
-   * bands, so a gust visibly crosses a grove tree by tree (and a meadow of
-   * `createGrass` blade by blade, lightening what it bends). Until set it is a
+   * bands, so a gust visibly crosses a grove tree by tree. Until set it is a
    * light breeze (2.5 m/s, gusty) along +x; `setWind({speed: 0, gust: 0})`
    * stills it.
    *
@@ -732,108 +692,9 @@ class SceneGraph {
   wind() {}
 
   /**
-   * The body the scene stands on: a flat world (`radius` Infinity, the
-   * default) or a sphere of `radius` metres about its axis `spin` (the poles;
-   * +y by default). Its surface is cut into a lattice of 16 km cells
-   * (`place.lattice`; on a sphere, a tan-warped cube's faces) and the scene
-   * lives in a *place frame* anchored on the cell under the eye: every
-   * position the scene holds (nodes, the camera, physics) is the place
-   * frame's, small however far the world goes, while what is keyed on the
-   * world itself (the land, cover and grass, plants, shadow pages, the probe
-   * grid, wind) stays on the body. `at` is the body point the place anchors
-   * on first. Nothing moves when it is set.
-   *
-   * When the eye walks more than 2 km past its cell, the scene re-anchors on
-   * the eye's cell before the frame's scripts run: its root nodes, its camera,
-   * world-space particles and the physics world move into the new frame (a
-   * translation by whole cells on a flat body; a translation and a small
-   * rotation on a sphere, so the new place's up is the body's), the
-   * `reanchor` event fires, and the frame draws exactly as it would have.
-   * Positions a script keeps in its own variables it moves with the event.
-   *
-   * @example
-   *   scene.setBody({});                                    // a flat world
-   *   scene.setBody({ radius: 6371000, at: [0, 6371000, 0] });   // Earth, at the pole
-   *   scene.addEventListener('reanchor', (e) => {
-   *     target = e.apply(target);     // a point: rotate and translate
-   *     heading = e.turn(heading);    // a direction: rotate
-   *   });
-   * @param {{radius?: number, spin?: number[], at?: number[]}} opts
-   */
-  setBody(opts) {}
-
-  /**
-   * The place frame: `{hasBody, body: {radius, spin}, anchor: {face, x, z},
-   * origin, basis, serial, faceCells, lattice}`. `origin` is the place's
-   * origin on the body and `basis` its axes (9 numbers, row-major: column j
-   * is axis j); `serial` counts re-anchors; `anchor` names the lattice cell
-   * (face 0-5 of the cube and its cell, `faceCells` to a face's side).
-   * Without a body, `hasBody` is false and the place is the body's own frame.
-   * @type {Object}
-   */
-  place;
-
-  /**
-   * A place point on the body (`toBody`) and back (`toPlace`), in double.
-   * @param {number[]} p
-   * @returns {number[]}
-   */
-  toBody(p) {}
-  toPlace(b) {}
-
-  /**
-   * The body's up at a place point (the radial direction on a sphere), and
-   * the latitude and longitude there in radians about the spin axis
-   * (`{lat, lon}`; 0 on a flat body).
-   * @param {number[]} p
-   */
-  upAt(p) {}
-  latLongAt(p) {}
-
-  /**
-   * Re-anchors on the lattice cell holding body point `b` now (as the eye
-   * crossing a margin does on its own). Returns whether the place moved.
-   * @param {number[]} b
-   * @returns {boolean}
-   */
-  reanchorAt(b) {}
-
-  /**
-   * Says the eye is going to body point `b` (`toBody` of a place point): an
-   * autopilot's landing, a cutscene's next shot, a teleport. What the world
-   * makes about an eye is then made there ahead of it, so the eye arrives on
-   * ground already made rather than watching it come in. So far that is the
-   * land's regions (land-api.js, `processes.regions`): the regions an eye at
-   * `b` would want, made after the eye's own are all in, from what the frame's
-   * budget leaves (nothing of the eye's is held back for them), in slots no
-   * region the eye wants needs (the eye takes them back when it does). A
-   * batch begun for it is let go when the eye wants a region not in.
-   *
-   * At most two at once (a third throws a RangeError), the sooner `within`
-   * first. The handle holds until cancelled:
-   *
-   *     h.move(b, {within})   it is going somewhere else (pending starts over)
-   *     h.cancel()            no longer expected; its regions go as the eye needs room
-   *     h.pending             regions still to make there (-1 until the land has looked)
-   *     h.ready               pending is 0: the eye there would find them all in
-   *
-   * @param {number[]} b - a body point
-   * @param {{within?: number}} [opts] - seconds until the eye is there (orders two)
-   * @returns {{move: function, cancel: function, pending: number, ready: boolean}}
-   * @example
-   *   const landing = scene.expect(scene.toBody(target), { within: 25 });
-   *   // ... fly, pacing the descent on landing.ready ...
-   *   landing.cancel();
-   */
-  expect(b, opts) {}
-
-  /**
    * What the scene still prepares for its view, as of its newest render: one
-   * line each (a land's processes not yet run, its regions and tiles still
-   * to make, its tile boxes being made on the workers, plants still placed,
-   * the clouds' bakes, auto exposure still adapting, a world's shader sets
-   * still compiling and pipelines still being built off the frame thread —
-   * docs/code-cache.md "Shader warm-up" — ...). [] once what the
+   * line each (auto exposure still adapting, pipelines still being built off
+   * the frame thread, ...). [] once what the
    * view shows is ready. The heavy first-time work runs off the frame, so a
    * page shows its own progress from this and holds back views (or warms
    * them) until it empties; headless's perf.settle waits on the same list.
@@ -847,13 +708,10 @@ class SceneGraph {
   pendingWork() {}
 
   /**
-   * `'reanchor'`: the move a re-anchor made, `{rotation (9, row-major),
-   * translation, tilts, turn(d), apply(p)}`, new = rotation * old +
-   * translation.
    * `'ready'`: pendingWork() emptied (read each animation frame while a
    * listener waits), `{type: 'ready', pending: []}`; fired again each time
    * new work (a new view's) comes and goes.
-   * @param {'reanchor'|'ready'} type
+   * @param {'ready'} type
    * @param {function(Object)} listener
    */
   addEventListener(type, listener) {}
@@ -938,31 +796,11 @@ class SceneGraph {
    * ground is rarely the scene's (a sky-only one has none), and under a high
    * sun this bounce is most of the light in the shade on anything upright:
    * a trunk under its crown, a wall, a leaf's underside. Null or `[0, 0, 0]`
-   * (the default): none. Needs an environment (setEnvironment). With the
-   * probe grid on (setProbeGrid) and no atmosphere, it is the albedo of the
-   * ground the probes trace.
+   * (the default): none. Needs an environment (setEnvironment).
    *
    * @param {number[]|null} color
    */
   setGroundBounce(color) {}
-
-  /**
-   * The probe grid: irradiance probes about the eye, in cascades of columns
-   * at fixed heights above the ground, which light every lit surface's
-   * ambient instead of the open sky. Their rays are traced through a world
-   * made for them (the ground's height seen from above, the plants' crowns
-   * as a medium of leaves, the sun's light through it), so a forest's floor
-   * and a crown's inside take the sky that reaches them and the light the
-   * ground and the leaves send back; the specular is dimmed as the probes
-   * see less of the sky. The sky they see is the scene's (the atmosphere,
-   * the environment or the flat ambient); the ground's albedo is the
-   * atmosphere's `groundAlbedo`, else setGroundBounce's. Traced by the world
-   * service as the frame's budget
-   * allows (setFrameTarget). Off by default.
-   *
-   * @param {boolean} enabled
-   */
-  setProbeGrid(enabled) {}
 
   /**
    * Dither the tonemapped image as it is written at 8 bits a channel. On by
@@ -978,35 +816,13 @@ class SceneGraph {
   /**
    * The frame's GPU target in milliseconds: 2.78 by default (360 fps on an
    * RTX 4090), 16.7 for 60 fps. The world service spends what each frame
-   * leaves under it on world tiles (the turf's surface layers), and only its
-   * floor while frames run over it; `cullStats()`'s `world*` counters show
-   * its state. A value of 0 or less restores the default.
+   * leaves under it on world work (shadow pages, the atmosphere's tables),
+   * and only its floor while frames run over it; `cullStats()`'s `world*`
+   * counters show its state. A value of 0 or less restores the default.
    *
    * @param {number} ms
    */
   setFrameTarget(ms) {}
-
-  /**
-   * The world's bands (scene/world/bands.h): how far from
-   * the eye each way of drawing it reaches. Within `real` (m) the world is
-   * drawn as itself: every plant's elements to it, the grass's rings and
-   * the herbs to it (at most 150 m, past which a blade is under a pixel);
-   * past it the land's canopy and cover stand for them, every node handing
-   * over at the same place. `painted` (m, at least `real`) is where the
-   * painted band ends and the sky map's painting takes over. 40 m by
-   * default: the frame the 360 fps target is set for; a world may widen it
-   * as far as it can afford. A band left out keeps its value.
-   *
-   * @example scene.setBands({ real: 12000 });   // the plants drawn as themselves to 12 km
-   * @param {{real?: number, painted?: number}} bands
-   */
-  setBands(bands) {}
-
-  /**
-   * The world's bands as set (`setBands`).
-   * @returns {{real: number, painted: number}}
-   */
-  bands() {}
 
   /**
    * @param {number} scale

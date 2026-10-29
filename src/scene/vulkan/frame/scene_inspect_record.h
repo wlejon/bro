@@ -7,9 +7,9 @@
 // questions as wanted, the frames shared out over threads. The comparison
 // is the inspector's own, frame by frame against the one kept before.
 //
-// The file: "BROINSP1", u32 its scale; then each frame u32 width, u32
+// The file: "BROINSP2", u32 its scale; then each frame u32 width, u32
 // height, the camera (InspectCamera: three matrices' 16 floats each, the
-// eye, origin and basis as doubles), the depth (reversed-Z floats) and the
+// eye as doubles), the depth (reversed-Z floats) and the
 // luma (bytes), each width x height, top-down. A frame is the render cut
 // `scale` times each way: the depth of each block's middle pixel, the luma
 // its mean.

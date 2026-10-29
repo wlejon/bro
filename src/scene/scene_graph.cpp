@@ -6,9 +6,6 @@
 #include "scene/nodes/camera_node.h"
 #include "scene/nodes/decal_node.h"
 #include "scene/nodes/gaussian_splat_node.h"
-#include "scene/nodes/grass_node.h"
-#include "scene/nodes/plants_node.h"
-#include "scene/nodes/land_node.h"
 #include "scene/nodes/html_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/mesh_node.h"
@@ -170,60 +167,6 @@ CameraNode* SceneGraph::createCamera(const std::string& name) {
     return ptr;
 }
 
-GrassNode* SceneGraph::createGrass(const std::string& name) {
-    auto node = std::make_unique<GrassNode>(name);
-    auto* ptr = node.get();
-    grassIds_.push_back(ptr->id());
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
-}
-
-PlantsNode* SceneGraph::createPlants(const std::string& name) {
-    auto node = std::make_unique<PlantsNode>(name);
-    auto* ptr = node.get();
-    ptr->setPlace(&place_);
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
-}
-
-LandNode* SceneGraph::createLand(const std::string& name) {
-    auto node = std::make_unique<LandNode>(name);
-    auto* ptr = node.get();
-    ptr->setPlace(&place_);
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
-}
-
-void SceneGraph::updatePlantMovers() {
-    // Every grass node's movers move through the shrubs and low foliage too,
-    // their trails on the body (the plants are keyed on it).
-    double origin[3];
-    placeOrigin(origin);
-    std::vector<PlantMovers::Body> bodies;
-    for (auto it = grassIds_.begin(); it != grassIds_.end();) {
-        auto* g = dynamic_cast<GrassNode*>(resolveNode(*it));
-        if (!g) {
-            it = grassIds_.erase(it);
-            continue;
-        }
-        ++it;
-        for (const GrassNode::MoverInfo& m : g->moverInfo()) {
-            SceneNode* n = resolveNode(m.nodeId);
-            if (!n) continue;
-            const bromath::Mat4& w = n->worldMatrix();
-            PlantMovers::Body b;
-            b.id = m.nodeId;
-            b.x = static_cast<float>(w.at(0, 3) + origin[0]);
-            b.z = static_cast<float>(w.at(2, 3) + origin[2]);
-            b.radius = m.radius;
-            b.height = m.height;
-            b.strength = m.strength;
-            bodies.push_back(b);
-        }
-    }
-    renderer_.plantMovers().update(renderer_.windTimeExact(), bodies);
-}
-
 DecalNode* SceneGraph::createDecal(const std::string& name) {
     auto node = std::make_unique<DecalNode>(name);
     auto* ptr = node.get();
@@ -320,106 +263,7 @@ void SceneGraph::updateVisibilityGates() {
     }
 }
 
-void SceneGraph::setBody(const Body& body, const double bodyPoint[3]) {
-    // What the graph holds stays where it is in the place frame: a scene is
-    // built in the frame of the body it is given.
-    place_.setBody(body, bodyPoint);
-    hasBody_ = true;
-    // (A land on a new body is a new land; the plants are placed again.)
-    for (auto& [id, node] : nodes_)
-        if (node->type() == SceneNode::Type::Mesh) {
-            auto* mesh = static_cast<MeshNode*>(node.get());
-            if (LandNode* land = mesh->asLand()) land->setPlace(&place_);
-            if (PlantsNode* plants = mesh->asPlants()) plants->setPlace(&place_);
-        }
-}
-
-void SceneGraph::placeOrigin(double out[3]) const {
-    const bool flat = place_.body().flat();
-    for (int i = 0; i < 3; ++i) out[i] = flat ? place_.origin()[i] : 0.0;
-}
-
-bool SceneGraph::reanchorAt(const double bodyPoint[3]) {
-    PlaceMove m;
-    if (!hasBody_ || !place_.anchorAt(bodyPoint, m)) return false;
-    applyPlaceMove(m);
-    return true;
-}
-
-void SceneGraph::followPlace() {
-    PlaceMove m;
-    if (hasBody_ && place_.follow(cameraEye_, m)) applyPlaceMove(m);
-}
-
-void SceneGraph::applyPlaceMove(const PlaceMove& m) {
-    const bool tilts = m.tilts();
-    // The rotation as a quaternion (Shepperd's method, from rot's largest
-    // diagonal term), for the nodes' rotations and Jolt's.
-    const double* r = m.rot;
-    double q[4];   // x, y, z, w
-    const double tr = r[0] + r[4] + r[8];
-    if (tr > 0.0) {
-        const double s = 2.0 * std::sqrt(tr + 1.0);
-        q[3] = 0.25 * s;
-        q[0] = (r[7] - r[5]) / s;
-        q[1] = (r[2] - r[6]) / s;
-        q[2] = (r[3] - r[1]) / s;
-    } else if (r[0] > r[4] && r[0] > r[8]) {
-        const double s = 2.0 * std::sqrt(1.0 + r[0] - r[4] - r[8]);
-        q[3] = (r[7] - r[5]) / s;
-        q[0] = 0.25 * s;
-        q[1] = (r[1] + r[3]) / s;
-        q[2] = (r[2] + r[6]) / s;
-    } else if (r[4] > r[8]) {
-        const double s = 2.0 * std::sqrt(1.0 + r[4] - r[0] - r[8]);
-        q[3] = (r[2] - r[6]) / s;
-        q[0] = (r[1] + r[3]) / s;
-        q[1] = 0.25 * s;
-        q[2] = (r[5] + r[7]) / s;
-    } else {
-        const double s = 2.0 * std::sqrt(1.0 + r[8] - r[0] - r[4]);
-        q[3] = (r[3] - r[1]) / s;
-        q[0] = (r[2] + r[6]) / s;
-        q[1] = (r[5] + r[7]) / s;
-        q[2] = 0.25 * s;
-    }
-    const bromath::Quat turn = bromath::qnorm(
-        {static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]), static_cast<float>(q[3])});
-
-    // The root's children (a child of theirs rides its parent).
-    for (SceneNode* c : root_->children()) {
-        c->setPosition(m.apply(c->position()));
-        if (tilts) c->setRotation(bromath::qmul(turn, c->rotation()));
-    }
-    // The imperative camera: its eye moves; its view takes the new frame's
-    // points back to the old (view * move^-1, move^-1 = rot^T (p - t)).
-    cameraEye_ = m.apply(cameraEye_);
-    bromath::Mat4 inv = bromath::midentity();
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 3; ++j) inv.at(i, j) = static_cast<float>(r[j * 3 + i]);
-        inv.at(i, 3) = static_cast<float>(-(r[i] * m.t[0] + r[3 + i] * m.t[1] + r[6 + i] * m.t[2]));
-    }
-    viewMatrix_ = bromath::mmul(viewMatrix_, inv);
-    for (const auto& [id, node] : nodes_) {
-        if (node && node->type() == SceneNode::Type::Particles3D)
-            static_cast<Particles3DNode*>(node.get())->placeMoved(m);
-        if (node && node->type() == SceneNode::Type::Mesh) {
-            if (PlantsNode* plants = static_cast<MeshNode*>(node.get())->asPlants()) plants->placeMoved(m);
-            // (The movers' pushes are in the land's frame: the place frame
-            // on a sphere, the body's on a flat body, which a move leaves.)
-            if (GrassNode* grass = static_cast<MeshNode*>(node.get())->asGrass(); grass && !place_.body().flat())
-                grass->placeMoved(m);
-        }
-    }
-    if (physicsWorld_)
-        physicsWorld_->move(JPH::Quat(static_cast<float>(q[0]), static_cast<float>(q[1]), static_cast<float>(q[2]),
-                                      static_cast<float>(q[3])).Normalized(),
-                            JPH::Vec3(static_cast<float>(m.t[0]), static_cast<float>(m.t[1]), static_cast<float>(m.t[2])));
-    if (onReanchor_) onReanchor_(m);
-}
-
 void SceneGraph::tickAnimations(float dtSec) {
-    followPlace();
     if (dtSec <= 0.0f) return;
     // Tick the node table (independent of tree visibility, so off-screen /
     // parented-but-hidden particles still expire). Iterate an id snapshot —
@@ -507,7 +351,6 @@ void SceneGraph::tickAnimations(float dtSec) {
 
     advanceWindTime(dtSec);
     renderer_.advanceExposureTime(dtSec);
-    updatePlantMovers();
 
     // Derive the view from the active camera node AFTER animations/tweens,
     // so a tweened/parented camera is applied on the same tick it moved and

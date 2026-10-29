@@ -1,12 +1,8 @@
 #include "scene/vulkan/draw/scene_draw_list.h"
 
-#include "scene/nodes/grass_node.h"
-#include "scene/nodes/land_node.h"
-#include "scene/nodes/plants_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
-#include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_frame.h"
 
 #include <algorithm>
@@ -17,7 +13,7 @@ namespace {
 
 // The node's world bounds (the shadow pass and probe faces cull by them),
 // their centre (probe selection) and its view depth (translucent sorting),
-// all in the place frame (a node keyed on the world converts its own).
+// relative to nothing but the scene's own frame.
 void placeDraw(const SceneFrame& frame, SceneNode* node,
                const std::optional<bromath::AABB3>& bounds, MeshDraw& draw) {
     if (bounds) {
@@ -76,61 +72,6 @@ void buildDrawLists(SceneFrame& frame) {
         const SceneNode::Type type = node->type();
         if (type != SceneNode::Type::Mesh && type != SceneNode::Type::InstancedMesh) {
             continue;
-        }
-
-        if (type == SceneNode::Type::Mesh) {
-            if (GrassNode* grass = static_cast<MeshNode*>(node)->asGrass()) {
-                // Grass: a draw per ring, each cut to the cells in view.
-                std::vector<MeshDraw> rings;
-                {
-                    stalls::Part part("grass draws");
-                    drawer.prepareGrass(frame, *grass, rings);
-                }
-                for (MeshDraw& draw : rings) {
-                    placeDraw(frame, node, std::nullopt, draw);
-                    const auto index = static_cast<uint32_t>(lists.meshes.size());
-                    lists.meshes.push_back(draw);
-                    if (draw.shadowOnly) continue;   // its near ring's casters
-                    stats.meshDrawn++;
-                    lists.opaque.push_back(index);
-                }
-                continue;
-            }
-            if (LandNode* land = static_cast<MeshNode*>(node)->asLand()) {
-                // Land: its rings about the eye, over the whole land (never
-                // culled), its blocks past the painted band a draw apart.
-                std::vector<MeshDraw> draws;
-                {
-                    stalls::Part part("land draws");
-                    drawer.prepareLand(frame, *land, draws);
-                }
-                for (MeshDraw& draw : draws) {
-                    placeDraw(frame, node, frame.view.toPlace(land->bounds()), draw);
-                    const auto index = static_cast<uint32_t>(lists.meshes.size());
-                    lists.meshes.push_back(draw);
-                    lists.opaque.push_back(index);
-                }
-                if (!draws.empty()) stats.meshDrawn++;   // (one mesh, however many draws)
-                continue;
-            }
-            if (PlantsNode* plants = static_cast<MeshNode*>(node)->asPlants()) {
-                // Plants: their leaves and their wood, cut to the view, and
-                // their casters (never in the colour lists).
-                std::vector<MeshDraw> parts;
-                {
-                    stalls::Part part("plants draws");
-                    drawer.preparePlants(frame, *plants, parts);
-                }
-                for (MeshDraw& draw : parts) {
-                    placeDraw(frame, node, std::nullopt, draw);
-                    const auto index = static_cast<uint32_t>(lists.meshes.size());
-                    lists.meshes.push_back(draw);
-                    if (draw.shadowOnly) continue;
-                    stats.meshDrawn++;
-                    lists.opaque.push_back(index);
-                }
-                continue;
-            }
         }
 
         const auto bounds = frame.renderer.nodeWorldBounds(node);

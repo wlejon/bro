@@ -1,8 +1,6 @@
 #include "scene/scene_renderer.h"
 #include "scene/depth_policy.h"
-#include "scene/nodes/grass_node.h"
 #include "scene/nodes/instanced_mesh_node.h"
-#include "scene/nodes/plants_node.h"
 #include "scene/nodes/skinned_mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
@@ -19,34 +17,9 @@ using bromath::Vec3;
 // The shadow planner (see scene_renderer.h and world/shadow_pages.h).
 // ---------------------------------------------------------------------------
 
-namespace {
-
-bromath::AABB3 padded(const bromath::AABB3& b, float pad) {
-    return {b.min - Vec3{pad, pad, pad}, b.max + Vec3{pad, pad, pad}};
-}
-
-}  // namespace
-
 ShadowMotion SceneRenderer::shadowMotion(uint32_t nodeId) const {
     const auto it = shadowMotion_.find(nodeId);
     return it == shadowMotion_.end() ? ShadowMotion::Still : it->second;
-}
-
-bromath::Vec3 SceneRenderer::placeOriginF() const {
-    double o[3];
-    graph_.placeOrigin(o);
-    return {static_cast<float>(o[0]), static_cast<float>(o[1]), static_cast<float>(o[2])};
-}
-
-bromath::AABB3 SceneRenderer::bodyBox(const bromath::AABB3& b) const {
-    if (bromath::aisEmpty(b)) return b;
-    const Vec3 o = placeOriginF();
-    return {b.min + o, b.max + o};
-}
-
-std::optional<bromath::AABB3> SceneRenderer::bodyBox(const std::optional<bromath::AABB3>& b) const {
-    if (!b) return b;
-    return bodyBox(*b);
 }
 
 bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
@@ -77,18 +50,12 @@ bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
 
 void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
     ShadowPages& pages = shadowPages_;
-    const ShadowPagesConfig& config = pages.config();
-    // On the body, as the pages are (a node's bounds convert, bodyBox).
-    const Vec3 eye = graph_.cameraEye_ + placeOriginF();
     // Vegetation sways whenever the wind field moves at all; a wind-masked
     // mesh bends under the wind.
     const bool swaying = !windFieldCalm(windField());
     const bool windy = windStrength_ > 0.0f;
     shadowCasterStates_.begin();
     casterBounds = bromath::aempty3();
-    // How far from the eye the sway level, whose overlays carry what sways,
-    // reaches (its window's half side).
-    const float swayReach = std::ldexp(config.finestTexel, pages.swayLevel()) * SP_PAGE * (SP_WINDOW / 2);
 
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
@@ -96,54 +63,8 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             auto* m = static_cast<MeshNode*>(n);
             // Unlit meshes never cast (a custom shader suppresses unlit).
             const bool casts = m->castsShadow() && !m->effectiveUnlit();
-            if (casts && m->asGrass()) {
-                // The near ring's blades, around the eye wherever its field
-                // is: the sway level's overlays.
-                const float r = 256.0f;
-                pages.addDynamic({eye - Vec3{r, r, r}, eye + Vec3{r, r, r}}, true);
-                shadowMotion_[m->id()] = ShadowMotion::Grass;
-            } else if (casts && m->asPlants()) {
-                // In the cached depth, but for the sway level's overlays
-                // (which the finer levels read): those its cells near the
-                // eye touch. Those in its shadow range price the pages they
-                // cast into (addLoad).
-                const PlantsNode* p = m->asPlants();
-                const float castRange = std::min(p->params().shadowRange, p->real());
-                const int castFrom = pages.swayLevel() + 1;
-                float elements[SP_MAX_LEVELS] = {};
-                bromath::AABB3 all = bromath::aempty3();
-                for (const CellContent& c : p->cells()) {
-                    if (bromath::aisEmpty(c.bounds)) continue;
-                    const bromath::AABB3 b = padded(c.bounds, 1.0f);
-                    all = bromath::amerge(all, b);
-                    const float d = bromath::vlen(bromath::vmin(bromath::vmax(eye, b.min), b.max) - eye);
-                    if (d < swayReach) pages.addDynamic(b, true);
-                    if (d < castRange && castFrom < config.levels) {
-                        p->castElements(c.key, config.finestTexel, castFrom, config.levels, elements);
-                        pages.addLoad(b, elements);
-                    }
-                }
-                if (!bromath::aisEmpty(all)) {
-                    // (A cell past the plants' shadow range casts nothing:
-                    // its coming and going changes no page.)
-                    const float castReach = p->params().shadowRange;
-                    shadowCasterStates_.still(m->id(), p->generation(), all, pages,
-                                              [p, eye, castReach](uint64_t since, std::vector<bromath::AABB3>& boxes) {
-                                                  if (!p->changesSince(since, boxes)) return false;
-                                                  std::erase_if(boxes, [&](const bromath::AABB3& b) {
-                                                      const Vec3 near = bromath::vmin(bromath::vmax(eye, b.min), b.max);
-                                                      return bromath::vlen(near - eye) > castReach;
-                                                  });
-                                                  return true;
-                                              });
-                    // The frames whose plan ran out of room drew short.
-                    p->takePlanShort(shortSerials_);
-                    for (const uint64_t serial : shortSerials_) pages.redrawPlantsOf(serial);
-                    casterBounds = bromath::amerge(casterBounds, all);
-                }
-                shadowMotion_[m->id()] = ShadowMotion::Swaying;
-            } else if (casts && m->hasDrawableMesh() && !m->asGrass() && !m->asPlants()) {
-                if (const auto wb = bodyBox(nodeWorldBounds(m))) {
+            if (casts && m->hasDrawableMesh()) {
+                if (const auto wb = nodeWorldBounds(m)) {
                     auto* sm = m->asSkinnedMesh();
                     const bool skinned = sm && sm->skinReady();
                     // A custom vertex chunk displaces with no generation signal.
@@ -165,7 +86,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             const bool casts = m->castsShadow() &&
                                (procedural || (!m->effectiveUnlit() && !m->mesh().empty() && m->instanceCount() > 0));
             if (casts) {
-                if (const auto wb = bodyBox(nodeWorldBounds(m))) {
+                if (const auto wb = nodeWorldBounds(m)) {
                     const CustomShaderState* cs = m->customShader();
                     const bool chunk = cs && !cs->vertexChunk.empty();
                     const bool sways = swaying && m->hasVegetation();
@@ -193,11 +114,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     plan.pixelAngle = graph_.cameraIsPerspective_ ? 2.0f * std::tan(graph_.cameraFovY_ * 0.5f) / rows : 0.0f;
     plan.orthoPixel = graph_.cameraIsPerspective_ ? 0.0f : (graph_.cameraOrthoT_ - graph_.cameraOrthoB_) / rows;
     shadowMotion_.clear();
-    // The pages are the body's (a re-anchor redraws none of them): their
-    // eye, casters and lights convert from the place frame the graph holds.
     const Vec3 eye = graph_.cameraEye_;
-    const Vec3 origin = placeOriginF();
-    pages.beginFrame(eye + origin);
+    pages.beginFrame(eye);
 
     bool anyLight = false;
     for (auto* L : lights) anyLight = anyLight || (L && L->castsShadow());
@@ -241,8 +159,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             continue;
         }
         const Mat4& M = L->worldMatrix();
-        const Vec3 rel = Vec3{M.at(0, 3), M.at(1, 3), M.at(2, 3)} - eye;
-        const Vec3 pos = rel + eye + origin;   // on the body
+        const Vec3 pos = Vec3{M.at(0, 3), M.at(1, 3), M.at(2, 3)};
+        const Vec3 rel = pos - eye;
         const float far = std::max(L->range(), 0.5f);
         ShadowLocal local;
         local.lightId = L->id();
@@ -279,7 +197,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         pages.addLocal(local);
     }
     pages.endLights();
-    pages.setSeen(anyLight ? bodyBox(seenBounds(sunReach)) : bromath::aempty3());
+    pages.setSeen(anyLight ? seenBounds(sunReach) : bromath::aempty3());
 
     // What the marking passes read back since the last frame, then the plan.
     if (vkBridge_) vkBridge_->shadowRequests(pages);

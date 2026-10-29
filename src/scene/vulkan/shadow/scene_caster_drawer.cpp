@@ -43,7 +43,6 @@ void shadowVertexInput(MeshKind kind, bool custom, bool cutout, std::vector<VkVe
                 keep = a.location <= 1 || (a.location >= 8 && a.location <= 10) || veg;
                 break;
             case MeshKind::Scatter: keep = a.location == 0; break;
-            case MeshKind::Grass: keep = a.location <= 1; break;
             default: keep = a.location <= 3 || a.location == 5 || a.location == 6 || veg; break;
             }
         }
@@ -87,16 +86,12 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
     vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
-    vs_[static_cast<int>(MeshKind::Land)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowLandVert);
     fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
     vsCutout_[0] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutVert);
     vsCutout_[1] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedCutoutVert);
     fsCutout_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutFrag);
-    // (The blades and plants cast with their node's module set.)
-    for (int k = 0; k < kMeshKindCount; ++k) {
-        if (!vs_[k] && k != static_cast<int>(MeshKind::Grass) && k != static_cast<int>(MeshKind::Plants))
-            return false;
+    for (VkShaderModule m : vs_) {
+        if (!m) return false;
     }
     return fs_ != VK_NULL_HANDLE && vsCutout_[0] != VK_NULL_HANDLE && vsCutout_[1] != VK_NULL_HANDLE && fsCutout_ != VK_NULL_HANDLE;
 }
@@ -167,22 +162,6 @@ VkPipeline SceneCasterDrawer::builtinPipeline(MeshKind kind, bool twoSided) {
     }, /*async=*/true);
 }
 
-VkPipeline SceneCasterDrawer::grassPipeline(const SceneGpu& gpu, uint32_t cover, bool twoSided) {
-    const uint32_t variant = kGrass | cover << 1 | (twoSided ? 1u : 0u);
-    return pipelines_.get(variant, casterTarget(), [&] {
-        return buildPipeline(gpu.meshes.coverSet(cover)[CoverShaders::GrassShadowVert], MeshKind::Grass, false,
-                             twoSided, false);
-    }, /*async=*/true);
-}
-
-VkPipeline SceneCasterDrawer::plantsPipeline(const SceneGpu& gpu, uint32_t set, bool twoSided) {
-    const uint32_t variant = kPlants | set << 1 | (twoSided ? 1u : 0u);
-    return pipelines_.get(variant, casterTarget(), [&] {
-        return buildPipeline(gpu.meshes.plantSet(set)[PlantShaders::ShadowVert], MeshKind::Plants, false, twoSided,
-                             false);
-    }, /*async=*/true);
-}
-
 VkPipeline SceneCasterDrawer::cutoutPipeline(MeshKind kind, bool twoSided) {
     const int instanced = kind == MeshKind::Instanced ? 1 : 0;
     const uint32_t variant = kCutout | static_cast<uint32_t>(instanced) << 1 | (twoSided ? 1u : 0u);
@@ -234,10 +213,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     // (A custom chunk that does not build casts the undisplaced silhouette,
     // cut all the same. A pipeline still being built draws nothing.)
     if (!pipeline)
-        pipeline = cutout                           ? cutoutPipeline(draw.kind, twoSided)
-                   : draw.kind == MeshKind::Grass  ? grassPipeline(frame.gpu, draw.moduleSet, twoSided)
-                   : draw.kind == MeshKind::Plants ? plantsPipeline(frame.gpu, draw.moduleSet, twoSided)
-                                                   : builtinPipeline(draw.kind, twoSided);
+        pipeline = cutout ? cutoutPipeline(draw.kind, twoSided) : builtinPipeline(draw.kind, twoSided);
     if (!pipeline) return;
 
     bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -247,7 +223,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &draw.materialSet, 0, nullptr);
     if (draw.vertexSet)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 3, 1, &draw.vertexSet, 0, nullptr);
-    if (customBound || (draw.kind == MeshKind::Grass && draw.customSet))
+    if (customBound)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
 
     Push push{};
@@ -268,9 +244,8 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     }
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 
-    // A chunked caster draws the chunks inside the view (a caster's view,
-    // a shadow page's or a probe capture's, is the body's).
-    const SceneMeshDrawer::ChunkCull cull{frustum, frame.world.eye};
+    // A chunked caster draws the chunks inside the view.
+    const SceneMeshDrawer::ChunkCull cull{frustum, frame.view.eye};
     if (draw.shadowIndexCount != 0 && draw.shadowIndexCount < draw.indexCount) {
         MeshDraw cut = draw;
         cut.indexCount = draw.shadowIndexCount;

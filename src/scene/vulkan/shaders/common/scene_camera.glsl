@@ -23,10 +23,6 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     // The wind field (scene/world/wind_field.h): what vegetation bends with.
     vec4 windField;   // xy: horizontal direction (x, z; unit, drifting), z: steady speed (m/s), w: gust travel speed (m/s)
     vec4 windGust;    // x: gust amount, y: 1 / band length along the wind, z: 1 / across it, w: 0
-    // The plant movers (scene/nodes/plant_movers.h; scene_vegetation.glsl's vegMoverPush).
-    vec4 plantMoverInfo;   // x: movers, y: trail samples a mover
-    vec4 plantMovers[8];   // two a mover: (camera-relative x, z, its trail's reach, radius), (height, strength, 0, 0)
-    vec4 plantTrail[80];   // y samples a mover, oldest first: (camera-relative x, z, age (s), window)
 } camera;
 
 // The engine's wind uniforms under the names custom shader chunks use.
@@ -67,8 +63,7 @@ float sceneWindNoise(vec2 p) {
 }
 
 // Simplex gradient noise, about [-0.8, 0.8] (its spread is the value
-// noise's: standard deviation 0.43): the gusts and the sward's comb, the
-// fields seen whole from above as the sward's sheen. Value noise is flat at
+// noise's: standard deviation 0.43): the gusts. Value noise is flat at
 // every lattice point, so a band cut from it (the gusts' soft ramp) traces
 // the lattice: rounded rectangles in rows, staircase edges. A gradient
 // noise on the simplex grid has no plateaus and no square axes, so its

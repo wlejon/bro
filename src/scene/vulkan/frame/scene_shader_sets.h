@@ -86,13 +86,8 @@ struct ShaderSetInfo {
 bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error,
                     const std::vector<std::string>& defines = {});
 /// The set the scene binds from now on: 0 (A) or 1 (B; only once loaded).
-/// `rebake`: the bakes the scene keeps across frames (the clouds' cover,
-/// cache and globe) are made again, by the set now active, as for a new
-/// view; a still of a set wants it, a frame-by-frame timing does not.
-bool useShaderSet(int set, bool rebake = false);
+bool useShaderSet(int set);
 int activeShaderSet();
-/// Counts the switches made with `rebake`: what a kept bake keys on.
-uint64_t shaderSetBakeEpoch();
 /// Counts as now (live pipelines, twins) for a set loaded before.
 ShaderSetInfo shaderSetInfo();
 

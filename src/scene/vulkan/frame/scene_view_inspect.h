@@ -2,7 +2,7 @@
 
 // What changed on the world between two renders, measured rather than seen.
 // A render's depth and colour (read back with it, SceneVkBridge::setInspect)
-// and its camera put every pixel at a point on the body; each pixel of a
+// and its camera put every pixel at a point in the world; each pixel of a
 // render is carried to where that point lands in the render before, and the
 // two compared there:
 //
@@ -20,8 +20,7 @@
 //   new view  a point outside the previous render's view.
 //
 // The camera's own turn, roll and travel between the two renders come with
-// it. Positions are on the body (place origin + basis, scene/world/place.h),
-// so a re-anchor of the place frame between two renders changes nothing.
+// it.
 
 #include <bromath/mat.h>
 #include <bromath/vec.h>
@@ -34,11 +33,9 @@ namespace bro::scene::vk {
 /// One render as the inspector reads it.
 struct InspectCamera {
     bromath::Mat4 invProj;       // Vulkan clip -> view
-    bromath::Mat4 relView;       // camera-relative place point -> view
-    bromath::Mat4 relViewProj;   // camera-relative place point -> Vulkan clip
-    double eye[3] = {0.0, 0.0, 0.0};      // in the place frame
-    double origin[3] = {0.0, 0.0, 0.0};   // the place frame on the body
-    double basis[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // row-major, column j = axis j
+    bromath::Mat4 relView;       // camera-relative point -> view
+    bromath::Mat4 relViewProj;   // camera-relative point -> Vulkan clip
+    double eye[3] = {0.0, 0.0, 0.0};
 };
 
 class ViewInspector {
@@ -84,20 +81,19 @@ public:
 private:
     struct Frame {
         uint32_t w = 0, h = 0;
-        double eyeBody[3] = {0, 0, 0};
-        double basis[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        double eye[3] = {0, 0, 0};
         bromath::Mat4 relViewProj;
-        double right[3] = {1, 0, 0}, up[3] = {0, 1, 0}, fwd[3] = {0, 0, -1};   // body axes
-        std::vector<bromath::Vec3> off;     // the pixel's point less the eye, body axes
-        std::vector<bromath::Vec3> normal;  // body axes; zero where unknown
+        double right[3] = {1, 0, 0}, up[3] = {0, 1, 0}, fwd[3] = {0, 0, -1};
+        std::vector<bromath::Vec3> off;     // the pixel's point less the eye
+        std::vector<bromath::Vec3> normal;  // zero where unknown
         std::vector<float> luma;
         std::vector<uint8_t> sky;
     };
 
     void build(const InspectCamera& cam, uint32_t width, uint32_t height, const float* depth,
                const uint8_t* luma, Frame& f);
-    // The previous render's pixel of a body point (false outside its view).
-    bool projectPrev(const double bodyPoint[3], bool direction, int& px, int& py) const;
+    // The previous render's pixel of a point (false outside its view).
+    bool projectPrev(const double point[3], bool direction, int& px, int& py) const;
     double lumaChange(float luma, int px, int py) const;
     double normalChange(const bromath::Vec3& normal, int px, int py) const;
 

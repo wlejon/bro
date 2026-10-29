@@ -699,9 +699,8 @@ class FastNoise {
    * The node and every source under it as an encoded node tree: the string
    * `new FastNoise(encoded)` (or the FN2 Node Editor, or FastNoise2's
    * `NewFromEncodedNodeTree`) decodes to a tree making the same noise. A
-   * tree is data this way: kept in a file, handed to a Worker, or given to
-   * the engine (scene.createPlants' rules, vegetation-api.js), which samples
-   * its own copy on its own threads. Sources set after this node took them
+   * tree is data this way: kept in a file or handed to a Worker, which
+   * samples its own copy on its own thread. Sources set after this node took them
    * are encoded as they are now.
    *
    * @example
@@ -712,31 +711,6 @@ class FastNoise {
    * @throws {Error} when a source the tree needs is unset ("encode: the node tree has an unset source").
    */
   encode() {}
-
-  /**
-   * The node and every source under it as GLSL: the same field on the GPU
-   * that genSingle2D / genSingle3D give here, so a world's field is one
-   * tree on both sides (the CPU's queries exact, the GPU's to float
-   * rounding). Each node is ported from FastNoise2's own maths, one function
-   * a node and dimension; the source is self-contained (the shared noise
-   * maths behind an include guard, so several fields share a shader) and
-   * compiles to SPIR-V like any shader of a world module.
-   *
-   * Emits `float <name>(vec2 p, int seed)` and/or `float <name>(vec3 p, int seed)`.
-   * Not ported yet: SuperSimplex, the Cellular nodes, the domain warps and 4D
-   * (a 3D source under AddDimension); ConvertRGBA8 is not a field. A tree
-   * using one is refused with the node's name.
-   *
-   * @example
-   *   const land = FastNoise.create('FractalFBm');
-   *   land.set('Source', FastNoise.create('Value'));
-   *   const src = land.glsl({ name: 'landHeight' });   // float landHeight(vec2 p, int seed)
-   * @param {{name?: string, dims?: 2|3|Array<2|3>}} [options] - the function's
-   *   name (a GLSL identifier; default "field") and its dimensions (default 2).
-   * @returns {string}
-   * @throws {Error} when a source is unset or a node is not ported ("glsl: ...").
-   */
-  glsl(options) {}
 
   /**
    * Sample a single 2D noise value.

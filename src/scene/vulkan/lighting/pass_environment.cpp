@@ -11,7 +11,7 @@ bool PassEnvironment::active(const SceneFrame& frame) const {
 }
 
 void PassEnvironment::declare(const SceneFrame& frame, PassIO& io) const {
-    io.hdr({.mark = true, .indirect = frame.ssao});
+    io.hdr({.indirect = frame.ssao});
     // The atmosphere's sky reads its sky view (made in the graphics stream)
     // and the sky's light, which waits for the compute on a frame the world
     // service remade it there.

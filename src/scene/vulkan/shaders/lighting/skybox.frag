@@ -5,7 +5,6 @@
 #include "lighting/sky_common.glsl"
 
 void main() {
-    outMark = 0.0;
     outIndirect = vec4(0.0);
     vec3 d = rotateY(normalize(inWorldDir), lighting.iblParams.z);
     outColor = vec4(texture(texEnvironment, d).rgb * lighting.iblParams.y, 1.0);

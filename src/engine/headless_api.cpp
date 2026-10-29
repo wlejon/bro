@@ -567,12 +567,12 @@ bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
 #endif
 }
 
-std::vector<std::string> Engine::scenePendingWork(double within) {
+std::vector<std::string> Engine::scenePendingWork() {
     std::vector<std::string> out;
 #if BRO_WITH_3D
     renderPendingScenes(true);
     for (auto& sg : sceneGraphs_)
-        if (sg.graph) sg.graph->renderer().pendingWork(out, within);
+        if (sg.graph) sg.graph->renderer().pendingWork(out);
 #endif
     return out;
 }
@@ -630,11 +630,6 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.shadowPagesEvicted  += s.shadowPagesEvicted;
         sum.shadowPagesBuilding += s.shadowPagesBuilding;
         sum.shadowViews         += s.shadowViews;
-        sum.groundLayerNeeded   += s.groundLayerNeeded;
-        sum.groundLayerMissing  += s.groundLayerMissing;
-        sum.groundLayerFills    += s.groundLayerFills;
-        sum.groundLayerShortfall = std::max(sum.groundLayerShortfall, s.groundLayerShortfall);
-        sum.landFills           += s.landFills;
         sum.worldBudgetMs       += s.worldBudgetMs;
         sum.worldSpentMs        += s.worldSpentMs;
         sum.worldJobs           += s.worldJobs;

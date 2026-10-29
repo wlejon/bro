@@ -9,12 +9,10 @@
 #include "render/layer_image.h"
 #include "scene/exposure.h"
 #include "scene/world/atmosphere.h"
-#include "scene/world/clouds.h"
 #include "scene/nodes/light_node.h"
 #include "scene/world/shadow_casters.h"
 #include "scene/world/shadow_pages.h"
 #include "scene/world/shadow_plan.h"
-#include "scene/nodes/plant_movers.h"
 #include "scene/world/wind_field.h"
 
 #include <bromath/aabb.h>
@@ -35,7 +33,7 @@ namespace bro::render { class VulkanContext; }
 
 namespace bro::scene {
 
-namespace vk { class SceneVkBridge; struct AtmosphereTables; struct ProbeGridTables; }
+namespace vk { class SceneVkBridge; struct AtmosphereTables; }
 
 class SceneGraph;
 class SceneNode;
@@ -62,13 +60,6 @@ struct CullStats {
     // frames, pages taken from others, and the views (rects) drawn.
     int shadowPagesNeeded = 0, shadowPagesResident = 0, shadowPagesDrawn = 0, shadowPagesDynamic = 0;
     int shadowPagesWanted = 0, shadowPagesEvicted = 0, shadowViews = 0, shadowPagesBuilding = 0;
-    // The turf's surface layers (surface_layers.h): tiles the camera needs,
-    // those not filled at the current generation, fills issued; and the
-    // atlas's shortfall (SurfaceLayerStats::worstError: 1 when none).
-    int groundLayerNeeded = 0, groundLayerMissing = 0, groundLayerFills = 0;
-    float groundLayerShortfall = 1.0f;
-    // The land's tiles made this frame (land.stats() has the rest).
-    int landFills = 0;
     // The world service (world/world_service.h): this frame's budget (GPU
     // ms from the measured slack under frameTargetMs), the cost of the jobs
     // it granted, how many it granted and left queued, and the largest
@@ -77,7 +68,7 @@ struct CullStats {
     int worldJobs = 0, worldQueued = 0;
     float worldWorstError = 0.0f;
     // Each kind's GPU ms a unit, by its name, as last measured (its guess
-    // until it is): a land tile's making ("land"), a turf tile's, ...
+    // until it is): a shadow page's drawing, an atmosphere table's, ...
     std::vector<std::pair<std::string, float>> worldKindMs;
     // Each kind with jobs left queued: its name, how many and the largest
     // error among them (pixels).
@@ -133,18 +124,16 @@ public:
 
     /// The settle state: what the scene still has to stream or converge for
     /// the current view, one reason a kind of work (empty once settled).
-    /// Each node reports its own (SceneNode::pendingWork: the land's regions
-    /// and tiles, plant placement, ...), and the renderer its bakes (the
-    /// clouds' cover and cache), the world service's queue (where what it
-    /// left is over a pixel off), the turf's layers and the exposure's
-    /// distance from its meter, as of the newest frame rendered.
-    /// `within`: SceneNode::pendingWork's.
-    void pendingWork(std::vector<std::string>& out, double within = std::numeric_limits<double>::infinity()) const;
+    /// The pipelines still building (or whose draws the newest frame
+    /// skipped), the world service's queue (where what it left is over a
+    /// pixel off) and the exposure's distance from its meter, as of the
+    /// newest frame rendered.
+    void pendingWork(std::vector<std::string>& out) const;
     /// While on, every scene's world service spends at least its settle
     /// budget a frame (WorldService::settleAll): perf.settle's frames.
     static void settleAll(bool on);
-    /// Whether frames skip what is not yet compiled or built (a window's
-    /// policy) or wait for it (headless's): vk::shader_warmup::async(), set
+    /// Whether frames skip what is not yet built (a window's
+    /// policy) or wait for it (headless's): vk::pipeline_async::async(), set
     /// for this process from now on (perf.asyncShaders), the environment's
     /// BRO_ASYNC_SHADERS not consulted.
     static void setAsyncShaders(bool on);
@@ -161,9 +150,8 @@ public:
     /// `defines`: names every shader of set B is compiled with (#define NAME 1).
     static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error,
                               const std::vector<std::string>& defines = {});
-    /// 0 (A) or 1 (B, once loaded); false when it cannot be. `rebake`: the
-    /// bakes kept across frames are made again by it (for a still).
-    static bool useShaderSet(int set, bool rebake = false);
+    /// 0 (A) or 1 (B, once loaded); false when it cannot be.
+    static bool useShaderSet(int set);
     static int shaderSet();
     static ShaderSetSummary shaderSetSummary();
     /// The last timed render's GPU milliseconds pass by pass, added into
@@ -182,10 +170,6 @@ public:
     /// none, 1 the change map, 2 the normals; false when there is nothing new.
     void setInspect(bool on) { inspect_ = on; }
 
-    /// The clouds' cover (the module's cloudCover as baked) at `count` body
-    /// directions (xyz each), rgba each into `out`; read back once a cloud
-    /// generation. False before the cover is baked.
-    bool cloudCoverAt(const double* dirs, size_t count, std::vector<float>& out);
     bool inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
     /// Inspection as a recording (scene/vulkan/frame/scene_inspect_record.h):
     /// start one at `path` (renders cut `scale` times each way), keep the
@@ -301,14 +285,6 @@ public:
     float ssaoIntensity() const { return ssaoIntensity_; }
     float ssaoBias() const { return ssaoBias_; }
 
-    /// The probe grid (world/probe_grid.h): irradiance
-    /// probes about the eye, tracing a world made for them (the ground's
-    /// height, the plants' crowns as a medium, the sun through it).
-    void setProbeGrid(bool enabled) { probeGrid_ = enabled; }
-    bool probeGridEnabled() const { return probeGrid_; }
-    /// The probe grid's world of the last render (waits for the GPU).
-    bool readProbeGrid(vk::ProbeGridTables& out);
-
     /// Screen-space reflections on opaque surfaces. Runs right after the
     /// opaque passes, SSAO and decals (before translucents): a
     /// full-screen pass ray-marches the resolved opaque depth along the
@@ -401,9 +377,6 @@ public:
     void resetWindTime() { windTime_ = 0.0; }
     float windTime() const { return static_cast<float>(windTime_); }
     double windTimeExact() const { return windTime_; }
-    /// The bodies pushing through shrubs and low foliage (plant_movers.h).
-    PlantMovers& plantMovers() { return plantMovers_; }
-    const PlantMovers& plantMovers() const { return plantMovers_; }
     /// The oscillator clock: the wind clock modulo kWindClockPeriod, reduced
     /// in double (the camera block's windParams.w).
     float windClock() const { return static_cast<float>(std::fmod(windTime_, kWindClockPeriod)); }
@@ -489,17 +462,6 @@ public:
     void setAtmosphere(const AtmosphereParams& a) { atmosphere_ = a; }
     const AtmosphereParams& atmosphere() const { return atmosphere_; }
 
-    /// The cloud deck (scene/world/clouds.h; vulkan/sky/scene_clouds.h):
-    /// drawn with the atmosphere on. Each call is a new generation (its
-    /// cover baked again).
-    void setClouds(CloudSettings c) {
-        c.generation = clouds_.generation + 1;
-        clouds_ = std::move(c);
-    }
-    const CloudSettings& clouds() const { return clouds_; }
-    /// What the GPU side made of it (written as it renders).
-    const CloudStats& cloudStats() const { return cloudStats_; }
-    void setCloudStats(const CloudStats& s) { cloudStats_ = s; }
     /// Tables of the atmosphere, read back from the GPU (waits for the last
     /// render): bro_atmosphere_test's check of them against a reference.
     /// False when nothing has been rendered with the atmosphere on.
@@ -537,13 +499,6 @@ public:
     /// InstancedMesh, GaussianSplat, Particles3D, Decal). Returns nullopt when
     /// the node has no valid bounds — such nodes draw unconditionally.
     std::optional<bromath::AABB3> nodeWorldBounds(SceneNode* n) const;
-
-    /// The place frame's origin on the body (SceneGraph::placeOrigin), and a
-    /// box of the place frame moved onto the body: what is keyed on the
-    /// world (the shadow pages) takes the nodes' bounds that way.
-    bromath::Vec3 placeOriginF() const;
-    bromath::AABB3 bodyBox(const bromath::AABB3& b) const;
-    std::optional<bromath::AABB3> bodyBox(const std::optional<bromath::AABB3>& b) const;
 
     /// Camera-frustum test for the forward passes: true when the node is
     /// provably outside this frame's view and safe to skip. Never true while
@@ -631,7 +586,6 @@ private:
     float windFreq_ = 1.5f;
     double windTime_ = 0.0;   // double: the oscillators' phases stay exact after hours
     WindFieldParams windField_;
-    PlantMovers plantMovers_;
 
     // Editor affordance: render a marker icon per LightNode and include
     // them in raycast results.
@@ -647,14 +601,11 @@ private:
 
     std::unique_ptr<vk::SceneVkBridge> vkBridge_;
     bool inspect_ = false;   // setInspect
-    std::vector<float> coverCube_;   // cloudCoverAt's read of the cover
-    uint64_t coverCubeGeneration_ = 0;
     static inline render::VulkanContext* defaultVulkanContext_ = nullptr;
 
     // --- SSAO ---
     bool  ssaoEnabled_   = false;
     float ssaoRadius_    = 0.5f;
-    bool  probeGrid_     = false;
     float ssaoIntensity_ = 1.0f;
     float ssaoBias_      = 0.025f;
 
@@ -702,7 +653,6 @@ private:
     int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
     ShadowPages shadowPages_;
     ShadowCasters shadowCasterStates_;
-    std::vector<uint64_t> shortSerials_;   // (a plants node's plans out of room, reused)
     ShadowPlan shadowPlan_;
     // This frame's casters that are not still (ShadowMotion), by node id.
     std::unordered_map<uint32_t, ShadowMotion> shadowMotion_;
@@ -716,8 +666,6 @@ private:
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
     AtmosphereParams atmosphere_;
-    CloudSettings clouds_;
-    CloudStats cloudStats_;
     StarfieldParams starfield_;
 };
 

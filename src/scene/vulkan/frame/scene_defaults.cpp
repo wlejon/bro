@@ -1,7 +1,6 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 
-#include "scene/nodes/mesh_node.h"
-#include "scene/vulkan/shaders/ground/scene_land_layout.h"
+#include "scene/vulkan/draw/scene_vk_custom_shader.h"
 
 #include "util/log.h"
 
@@ -46,8 +45,6 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     sampler = makeSampler(dev, 0.0f);
     cubeSampler = makeSampler(dev, 16.0f);
     nearestSampler = makeSampler(dev, 0.0f, VK_FILTER_NEAREST);
-    // (Its mips for the clouds' noise, lighting binding 25; the probe grid's
-    // images through it have none.)
     repeatSampler = makeSampler(dev, VK_LOD_CLAMP_NONE, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     mipSampler = makeSampler(dev, VK_LOD_CLAMP_NONE);
     repeatSSampler = makeSampler(dev, VK_LOD_CLAMP_NONE, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -58,48 +55,24 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     }
 
     cameraLayout = SceneVkDescriptorLayoutBuilder::createCameraLayout(dev);
-    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler(), cubeSampler,
-                                                                          repeatSampler);
+    lightingLayout = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler(), cubeSampler);
     materialLayout = SceneVkDescriptorLayoutBuilder::createMaterialLayout(dev);
 
     SceneVkDescriptorLayoutBuilder bone;
-    // (A land's LandDraw, which its fragments read too: mesh.frag's
-    // SCENE_LAND build.)
     bone.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
-    // A procedural draw's segment records, or the plants' records; the
-    // plants' leaf pose pass (plants_pose.comp) reads them too, and their
-    // fragments (a species' crown and its module's data).
-    constexpr VkShaderStageFlags kVsCs = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs | VK_SHADER_STAGE_FRAGMENT_BIT);
-    // The plants' chunks this frame, written by their plan.
-    bone.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
-    // The plants' leaf poses this frame, written by the pose pass.
-    bone.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsCs);
-    // The land's tiles, heights, surface, page table and canopy (binding 0
-    // its LandDraw; ground/scene_land.glsl), read by its rings and its
-    // fragments: bare images, through the two samplers after them.
-    for (uint32_t b = 4; b <= 7; ++b)
-        bone.addBinding(b, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFs);
-    bone.addBinding(LD_B_LINEAR, VK_DESCRIPTOR_TYPE_SAMPLER, 1, kVsFs, sampler);
-    bone.addBinding(LD_B_NEAREST, VK_DESCRIPTOR_TYPE_SAMPLER, 1, kVsFs, nearestSampler);
+    // A procedural draw's segment records.
+    bone.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsFs);
     boneLayout = bone.build(dev);
 
-    // (A grass node's set is read by the cover's plan too, cover_plan.comp.)
     SceneVkDescriptorLayoutBuilder custom;
-    constexpr VkShaderStageFlags kVsFsCs = kVsFs | VK_SHADER_STAGE_COMPUTE_BIT;
-    custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFsCs);
-    for (uint32_t i = 1; i <= static_cast<uint32_t>(MeshNode::kMaxUserTextures); ++i)
-        custom.addBinding(i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFsCs);
-    // Past them, the land's tiles a grass node stands on (its surface, page
-    // table and canopy; its heights and cover take two of the node's own
-    // slots).
-    static_assert(LG_SURFACES == MeshNode::kMaxUserTextures + 1 && LG_PAGE == LG_SURFACES + 1 &&
-                  LG_CANOPY == kCustomBindings && CS_IMAGES == kCustomBindings);
-    for (uint32_t i = LG_SURFACES; i <= kCustomBindings; ++i)
-        custom.addBinding(i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFsCs);
-    // The images' samplers (scene_land_layout.h's CS_*), in CS_* order.
-    static_assert(CS_LINEAR == 0 && CS_REPEAT == 1 && CS_REPEAT_S == 2 && CS_NEAREST == 3 && CS_SAMPLER_COUNT == 4);
-    custom.addSamplers(CS_SAMPLERS, {mipSampler, repeatSampler, repeatSSampler, nearestSampler}, kVsFsCs);
+    custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
+    for (uint32_t i = 1; i <= kCustomImages; ++i)
+        custom.addBinding(i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFs);
+    // The images' samplers, in CustomShaderInterface::SamplerMode order.
+    using CS = CustomShaderInterface;
+    static_assert(CS::kLinear == 0 && CS::kRepeat == 1 && CS::kRepeatS == 2 && CS::kNearest == 3 &&
+                  CS::kSamplerModes == 4 && CS::kSamplersBinding == kCustomImages + 1);
+    custom.addSamplers(CS::kSamplersBinding, {mipSampler, repeatSampler, repeatSSampler, nearestSampler}, kVsFs);
     customLayout = custom.build(dev);
 
     SceneVkDescriptorLayoutBuilder empty;

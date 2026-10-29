@@ -14,11 +14,9 @@
 // radiance for a sun of illuminance 1; what reads it scales by
 // ATM.sunIlluminance, so a dimmer or redder sun is not a remade table.
 //
-// Air space: positions about the planet's centre. On a flat body the planet
-// sits straight below the eye (ATM.origin = (0, eye height above sea level +
-// radius, 0)) so the air's up is the world's +Y everywhere; on a round body
-// (ATM.shell.w 1) the planet is the body and ATM.origin is the eye less its
-// centre (scene/world/atmosphere.h).
+// Air space: positions about the planet's centre. The planet sits straight
+// below the eye (ATM.origin = (0, eye height above sea level + radius, 0)) so
+// the air's up is the world's +Y everywhere (scene/world/atmosphere.h).
 
 const float ATM_PI = 3.14159265359;
 #define ATM_RB (ATM.shell.x)

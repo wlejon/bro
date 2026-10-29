@@ -160,8 +160,6 @@ void ShadowPages::plan(ShadowPlan& out) {
         return;
     }
 
-    spreadLoads();
-
     // The overlays: the pages what moves touches that want one, the finest
     // first while overlayPages allows.
     markBase();
@@ -306,7 +304,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         if (a.dynamic != b.dynamic) return a.dynamic;
         return a.h > b.h;
     });
-    std::vector<uint8_t> inView(entries_.size(), 0), plantPage(entries_.size(), 0);
+    std::vector<uint8_t> inView(entries_.size(), 0);
     int shelfX = 0, shelfY = 0, shelfH = 0;
     const int scratch = config_.scratchSize;
     for (const Rect& r : rects) {
@@ -338,10 +336,8 @@ void ShadowPages::plan(ShadowPlan& out) {
             if (r.dynamic) v.plants = m.level == s ? ShadowPlants::Swaying : ShadowPlants::None;
             else v.plants = m.level > s ? ShadowPlants::All : ShadowPlants::Still;
             v.penumbra = sunOf(m.next).penumbra;
-            v.grass = r.dynamic && m.level == s;
         } else {
             v.plants = r.dynamic ? ShadowPlants::All : ShadowPlants::None;
-            v.grass = r.dynamic;
         }
         shelfX += tw;
         shelfH = std::max(shelfH, th);
@@ -372,10 +368,9 @@ void ShadowPages::plan(ShadowPlan& out) {
                 }
                 c.physical = e.physical;
                 c.plants = v.plants == ShadowPlants::All;
-                plantPage[static_cast<size_t>(i)] = v.plants != ShadowPlants::None;
                 ++out.staticPages;
                 out.plantPages += c.plants;
-                if (c.plants) out.plantUnits += plantUnits(i);
+                if (c.plants) out.plantUnits += kPlantUnits;
                 out.copyOut.push_back(c);
             }
     }
@@ -399,7 +394,6 @@ void ShadowPages::plan(ShadowPlan& out) {
         e.fresh = !e.drawn;
         e.drawn = true;
         e.dirty = false;
-        e.plantsDrawn = plantPage[static_cast<size_t>(i)] ? serial_ : 0;
         ++stats_.drawn;
     }
     for (const Map& m : maps_) {
@@ -460,7 +454,7 @@ void ShadowPages::plan(ShadowPlan& out) {
             w.size = std::ldexp(1.0, level);
             w.required = canRequire && !e.drawn && !neededAbove;
             w.plants = clip && level > sway;
-            if (w.plants) w.units = plantUnits(i);
+            if (w.plants) w.units = kPlantUnits;
             if (m.next) {
                 w.error = std::min(w.error, kNextError);
                 w.required = false;

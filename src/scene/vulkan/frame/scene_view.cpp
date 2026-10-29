@@ -57,37 +57,8 @@ SceneView SceneView::make(const bromath::Mat4& view, const bromath::Mat4& projec
 }
 
 SceneView SceneView::fromCamera(const SceneGraph& graph, uint32_t width, uint32_t height) {
-    SceneView v = make(graph.viewMatrix(), graph.projectionMatrix(), graph.cameraEye(),
-                       graph.cameraNearZ(), graph.cameraFarZ(), graph.cameraIsPerspective(), width, height);
-    graph.placeOrigin(v.origin);
-    return v;
-}
-
-SceneView SceneView::world() const {
-    SceneView w = *this;
-    if (origin[0] == 0.0 && origin[1] == 0.0 && origin[2] == 0.0) return w;
-    // view * T(-origin): the translation less R * origin, in double so the
-    // rotation's rounding is not scaled up by the origin.
-    for (int r = 0; r < 3; ++r) {
-        const double ro = view.at(r, 0) * origin[0] + view.at(r, 1) * origin[1] + view.at(r, 2) * origin[2];
-        w.view.at(r, 3) = static_cast<float>(static_cast<double>(view.at(r, 3)) - ro);
-    }
-    w.viewProj = bromath::mmul(w.proj, w.view);
-    w.frustum = makeFrustum(w.viewProj);
-    w.eye = {static_cast<float>(eye.x + origin[0]), static_cast<float>(eye.y + origin[1]),
-             static_cast<float>(eye.z + origin[2])};
-    w.origin[0] = w.origin[1] = w.origin[2] = 0.0;
-    return w;
-}
-
-bromath::AABB3 SceneView::toPlace(const bromath::AABB3& b) const {
-    const bromath::Vec3 o{static_cast<float>(origin[0]), static_cast<float>(origin[1]), static_cast<float>(origin[2])};
-    return {b.min - o, b.max - o};
-}
-
-bromath::AABB3 SceneView::toBody(const bromath::AABB3& b) const {
-    const bromath::Vec3 o{static_cast<float>(origin[0]), static_cast<float>(origin[1]), static_cast<float>(origin[2])};
-    return {b.min + o, b.max + o};
+    return make(graph.viewMatrix(), graph.projectionMatrix(), graph.cameraEye(), graph.cameraNearZ(),
+                graph.cameraFarZ(), graph.cameraIsPerspective(), width, height);
 }
 
 SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
@@ -97,12 +68,9 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
     std::memcpy(cam.viewProj, relViewProj.data, sizeof(cam.viewProj));
     std::memcpy(cam.invView, invRelView.data, sizeof(cam.invView));
     std::memcpy(cam.invProj, invProj.data, sizeof(cam.invProj));
-    // The eye on the body: a shader's absolute positions (its fields, its
-    // hashes) are the body's, so nothing it draws moves with a re-anchor.
-    const double bodyEye[3] = {eye.x + origin[0], eye.y + origin[1], eye.z + origin[2]};
-    cam.eyeWorld[0] = static_cast<float>(bodyEye[0]);
-    cam.eyeWorld[1] = static_cast<float>(bodyEye[1]);
-    cam.eyeWorld[2] = static_cast<float>(bodyEye[2]);
+    cam.eyeWorld[0] = eye.x;
+    cam.eyeWorld[1] = eye.y;
+    cam.eyeWorld[2] = eye.z;
     cam.viewport[0] = static_cast<float>(width);
     cam.viewport[1] = static_cast<float>(height);
     cam.viewport[2] = nearZ;
@@ -125,7 +93,7 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         cam.windParams[1] = fog->windFrequency();
         // The eye's share of the sway phase (windDelta in scene_camera.glsl),
         // reduced in double so a far eye does not round the phase away.
-        const double phase = 0.3 * bodyEye[0] + 0.5 * bodyEye[2];
+        const double phase = 0.3 * static_cast<double>(eye.x) + 0.5 * static_cast<double>(eye.z);
         cam.windParams[2] = static_cast<float>(std::fmod(phase, 2.0 * 3.14159265358979323846));
         cam.windParams[3] = fog->windClock();
         const WindFieldState wf = fog->windField();
@@ -136,44 +104,6 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         cam.windGust[0] = wf.gust;
         cam.windGust[1] = wf.invAlong;
         cam.windGust[2] = wf.invAcross;
-
-        // The plant movers: each one's trail, ages on the wind clock.
-        static_assert(PlantMovers::kMovers * 2 <= 8 && PlantMovers::kMovers * PlantMovers::kTrail <= 80,
-                      "the camera block's plant mover arrays");
-        const PlantMovers& pm = fog->plantMovers();
-        const double now = fog->windTimeExact();
-        const double span = PlantMovers::kTrail * PlantMovers::kStep;
-        int n = 0;
-        for (const PlantMovers::Track& t : pm.tracks()) {
-            if (n >= PlantMovers::kMovers) break;
-            // (The trails are on the body.)
-            const float cx = static_cast<float>(t.body.x - bodyEye[0]), cz = static_cast<float>(t.body.z - bodyEye[2]);
-            float reach = 0.0f;
-            int k = 0;
-            for (const PlantMovers::Sample& s : t.trail) {
-                const double age = now - s.time;
-                if (age < 0.0 || age >= span) continue;
-                float* o = cam.plantTrail[n * PlantMovers::kTrail + k++];
-                o[0] = static_cast<float>(s.x - bodyEye[0]);
-                o[1] = static_cast<float>(s.z - bodyEye[2]);
-                o[2] = static_cast<float>(age);
-                const double u = std::clamp((age - 0.6 * span) / (0.4 * span), 0.0, 1.0);
-                o[3] = static_cast<float>(1.0 - u * u * (3.0 - 2.0 * u));
-                reach = std::max(reach, std::hypot(o[0] - cx, o[1] - cz));
-            }
-            for (; k < PlantMovers::kTrail; ++k) cam.plantTrail[n * PlantMovers::kTrail + k][3] = 0.0f;
-            float* a = cam.plantMovers[n * 2];
-            a[0] = cx;
-            a[1] = cz;
-            a[2] = reach + 1.6f * t.body.radius;   // scene_vegetation.glsl's VEG_MOVER_REACH
-            a[3] = t.body.radius;
-            float* b = cam.plantMovers[n * 2 + 1];
-            b[0] = t.body.height;
-            b[1] = t.body.strength;
-            ++n;
-        }
-        cam.plantMoverInfo[0] = static_cast<float>(n);
-        cam.plantMoverInfo[1] = static_cast<float>(PlantMovers::kTrail);
     }
     return cam;
 }

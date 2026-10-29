@@ -35,6 +35,19 @@ namespace bro::scene::vk {
 class CustomShaderInterface {
 public:
     static constexpr uint32_t kMaxSamplers = MeshNode::kMaxUserTextures;
+    /// The set's samplers, an immutable array at the binding after the
+    /// images: a handful however many images the set holds, so the
+    /// material's, the custom set's and the lighting's samplers stay within
+    /// the 16 a stage some devices take (MoltenVK). A texture's is two bits
+    /// of the block's customSamplerModes, one of these.
+    static constexpr uint32_t kSamplersBinding = kMaxSamplers + 1;
+    enum SamplerMode : uint32_t {
+        kLinear = 0,    // linear, mips, clamped
+        kRepeat = 1,    // linear, mips, repeating
+        kRepeatS = 2,   // linear, mips, repeating across (s), clamped in t
+        kNearest = 3,   // nearest, clamped (integer images)
+        kSamplerModes = 4,
+    };
 
     struct Uniform {
         std::string type;
@@ -62,8 +75,8 @@ public:
     const std::vector<Sampler>& samplers() const { return samplers_; }
     /// The block's size, a multiple of 16 and at least 16.
     uint32_t uboSize() const { return uboSize_; }
-    /// Where the block keeps each sampler's (scene_land_layout.h's CS_*,
-    /// two bits a sampler in declaration order), when there are samplers.
+    /// Where the block keeps each sampler's mode (SamplerMode, two bits a
+    /// sampler in declaration order), when there are samplers.
     uint32_t samplerModesOffset() const { return samplerModesOffset_; }
 
 private:

@@ -3,12 +3,7 @@
 // The scene's meshes in the HDR scope, from this frame's draw lists
 // (scene_draw_list.h), drawn by SceneMeshDrawer:
 //
-//   PassCoverDepth   the cover's depth prepass (SceneMeshDrawer::CoverPass):
-//                    the grass's blades and herbs, depth alone. It reads
-//                    nothing of the frame's compute, so it runs before the
-//                    join, beside the plants' plan.
-//   PassOpaque       the opaque meshes (the cover lit where its depth
-//                    prepass left it). Always runs, so the frame's first
+//   PassOpaque       the opaque meshes. Always runs, so the frame's first
 //                    HDR scope (which clears) always exists. Carries the
 //                    indirect-light attachment while SSAO is on.
 //   PassTranslucent  alpha-blended meshes, far to near, after decals.
@@ -29,16 +24,6 @@
 #include <vector>
 
 namespace bro::scene::vk {
-
-class PassCoverDepth final : public ScenePass {
-public:
-    const char* name() const override { return "cover:depth"; }
-    bool setup(SceneGpu&) override { return true; }
-    bool active(const SceneFrame& frame) const override;
-    void declare(const SceneFrame& frame, PassIO& io) const override;
-    void record(SceneFrame& frame) override;
-    void cleanup(SceneGpu&) override {}
-};
 
 class PassOpaque final : public ScenePass {
 public:

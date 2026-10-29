@@ -6,7 +6,7 @@
 // shared layouts and fallbacks, the frame targets, the per-node resource
 // cache, the mesh drawer, the environment (IBL maps and the sky), the
 // world service, the atmosphere's tables, the shadow pages' pool, the
-// depth-only caster pipelines, the probe grid and the cloud deck. SceneFrame is one render: the command buffer,
+// depth-only caster pipelines. SceneFrame is one render: the command buffer,
 // the graph and its settings, the camera view, what is drawn, the lighting
 // and the counters the passes add to.
 
@@ -42,8 +42,6 @@ class SceneWorldService;
 class SceneAtmosphere;
 class SceneShadowPages;
 class SceneCasterDrawer;
-class SceneProbeGrid;
-class SceneClouds;
 struct SceneVkImage;
 
 struct SceneGpu {
@@ -58,8 +56,6 @@ struct SceneGpu {
     SceneAtmosphere& atmosphere;
     SceneShadowPages& shadows;
     SceneCasterDrawer& casters;
-    SceneProbeGrid& probes;
-    SceneClouds& clouds;
 };
 
 struct SceneFrame {
@@ -89,11 +85,8 @@ struct SceneFrame {
     VkCommandBuffer computeCmd = VK_NULL_HANDLE;   // computeStream's (null until used)
     bool computeJoined = false;
 
-    /// The camera: `view` in the place frame, what the scene graph's nodes
-    /// are drawn and culled in; `world` the same camera in the body's frame,
-    /// what is keyed on the world reads (SceneView::world).
+    /// The camera the scene graph's nodes are drawn and culled in.
     SceneView view;
-    SceneView world;
     SceneDrawLists lists;
     CullStats stats;
     /// Anything visible was drawn (the compositor shows the layer).
@@ -104,7 +97,6 @@ struct SceneFrame {
     // Effects that change the pass structure, decided once per frame.
     bool ssao = false;   // opaque scope carries the indirect attachment; AO applies
     bool ssr = false;    // opaque draws write the reflectance mask; SSR consumes it
-    bool subpixel = false;   // opaque draws mark detail too fine to show; PassSubpixel blends it
     bool dof = false;
     bool tilt = false;   // tilt-shift after the overlay
     bool fxaa = false;   // FXAA last

@@ -41,17 +41,13 @@ VkSampleCountFlagBits SceneTargets::supportedSamples(int requested) const {
     return VK_SAMPLE_COUNT_1_BIT;
 }
 
-TargetFormat SceneTargets::hdrTarget(bool withMark, bool withIndirect) const {
+TargetFormat SceneTargets::hdrTarget(bool withIndirect) const {
     TargetFormat t;
     t.color[0] = kHdrFormat;
     t.colorCount = 1;
-    if (withMark) {
-        t.color[kMarkSlot] = kMarkFormat;
-        t.colorCount = kMarkSlot + 1;
-        if (withIndirect) {
-            t.color[kIndirectSlot] = kHdrFormat;
-            t.colorCount = kIndirectSlot + 1;
-        }
+    if (withIndirect) {
+        t.color[kIndirectSlot] = kHdrFormat;
+        t.colorCount = kIndirectSlot + 1;
     }
     t.depth = kDepthFormat;
     t.samples = samples_;
@@ -84,7 +80,7 @@ bool SceneTargets::createAttachment(SceneVkAllocator& allocator, SceneVkImage& o
 }
 
 void SceneTargets::destroyFrameImages(SceneVkAllocator& allocator) {
-    for (SceneVkImage* img : {&hdr, &hdrMsaa, &mark, &markMsaa, &depth, &depthMsaa, &depthSnapshot, &colorSnapshot,
+    for (SceneVkImage* img : {&hdr, &hdrMsaa, &depth, &depthMsaa, &depthSnapshot, &colorSnapshot,
                               &dofHdr, &postLdr, &ldr}) {
         allocator.destroyImage(*img);
     }
@@ -105,7 +101,6 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
     constexpr VkImageUsageFlags kColor = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     constexpr VkImageUsageFlags kDepthUse = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     bool ok = createSampled(allocator, hdr, kHdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false) &&
-              createSampled(allocator, mark, kMarkFormat, kColor, true) &&
               createAttachment(allocator, depth, kDepthFormat,
                                kDepthUse | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                VK_SAMPLE_COUNT_1_BIT) &&
@@ -116,7 +111,6 @@ bool SceneTargets::ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t 
               createSampled(allocator, ldr, kLdrFormat, kColor | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, false);
     if (ok && msaa()) {
         ok = createAttachment(allocator, hdrMsaa, kHdrFormat, kColor, samples) &&
-             createAttachment(allocator, markMsaa, kMarkFormat, kColor, samples) &&
              createAttachment(allocator, depthMsaa, kDepthFormat, kDepthUse, samples);
     }
     if (ok && hadIndirect) ok = ensureIndirect(allocator);

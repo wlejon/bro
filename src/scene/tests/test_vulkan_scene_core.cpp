@@ -17,7 +17,7 @@
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_gpu_timer.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
-#include "scene/vulkan/shaders/sky/clouds_layout.h"
+#include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
 #include "scene/vulkan/world/scene_world_service.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_util.h"
@@ -464,14 +464,12 @@ int main() {
     assert(targets.msaa() == (samples != VK_SAMPLE_COUNT_1_BIT));
     assert(!targets.ensure(allocator, 32, 16, samples));   // unchanged: nothing recreated
     assert(targets.ensureIndirect(allocator) && targets.indirect.isValid());
-    const TargetFormat hdr = targets.hdrTarget(true, true);
-    assert(hdr.colorCount == 3 && hdr.samples == samples && hdr.depth == SceneTargets::kDepthFormat);
-    assert(SceneTargets::carriesMark(hdr) && SceneTargets::carriesIndirect(hdr));
-    const TargetFormat marked = targets.hdrTarget(true, false);
-    assert(marked.colorCount == 2 && SceneTargets::carriesMark(marked) && !SceneTargets::carriesIndirect(marked));
-    assert(!SceneTargets::carriesMark(targets.hdrTarget(false, false)));
-    assert(targets.hdrTarget(false, false).key() != marked.key() && marked.key() != hdr.key());
-    assert(targets.mark.isValid() && targets.mark.format == SceneTargets::kMarkFormat);
+    const TargetFormat hdr = targets.hdrTarget(true);
+    assert(hdr.colorCount == 2 && hdr.samples == samples && hdr.depth == SceneTargets::kDepthFormat);
+    assert(SceneTargets::carriesIndirect(hdr));
+    const TargetFormat plain = targets.hdrTarget(false);
+    assert(plain.colorCount == 1 && !SceneTargets::carriesIndirect(plain));
+    assert(plain.key() != hdr.key());
     targets.cleanup(allocator);
     std::cout << "PASSED" << std::endl;
 
@@ -661,7 +659,7 @@ int main() {
         fs::copy(srcDir, tmp, fs::copy_options::recursive, ec);
         assert(!ec);
         const auto setSide = [&](const char* from, const char* to) {
-            const fs::path f = tmp / "sky" / "clouds_layout.h";
+            const fs::path f = tmp / "shadow" / "shadow_pages_layout.h";
             std::ifstream in(f, std::ios::binary);
             std::stringstream ss;
             ss << in.rdbuf();
@@ -676,10 +674,10 @@ int main() {
         // A run-time compute shader that reads a constant of the tree's.
         const char* src =
             "#version 450\n"
-            "#include \"sky/clouds_layout.h\"\n"
+            "#include \"shadow/shadow_pages_layout.h\"\n"
             "layout(local_size_x = 1) in;\n"
             "layout(set = 0, binding = 0) buffer Out { uint v[]; } o;\n"
-            "void main() { o.v[0] = uint(CL_CACHE_SIDE); }\n";
+            "void main() { o.v[0] = uint(SP_LOCAL_ENTRIES); }\n";
         const auto spirv = SceneVkShaderCompiler::compileGlsl(src, VK_SHADER_STAGE_COMPUTE_BIT);
         assert(!spirv.empty());
         VkShaderModule cs = SceneVkShaderCompiler::createModule(device.device(), spirv);
@@ -723,7 +721,7 @@ int main() {
             context.queue().wait(device.lastFrameTicket());
             return *static_cast<const uint32_t*>(out.mappedData);
         };
-        assert(run() == CL_CACHE_SIDE);
+        assert(run() == SP_LOCAL_ENTRIES);
         assert(!useShaderSet(1));   // (no set B yet)
 
         // The identical tree: nothing differs, nothing twinned.
@@ -731,19 +729,18 @@ int main() {
         std::string err;
         assert(loadShaderSetB(tmp.string(), &info, &err));
         assert(info.differing == 0 && info.twinned == 0 && info.failed.empty());
-        assert(useShaderSet(1) && run() == CL_CACHE_SIDE);
+        assert(useShaderSet(1) && run() == SP_LOCAL_ENTRIES);
         assert(useShaderSet(0));
 
         // The constant changed in B's tree: the pipeline twinned, the switch
         // binds it, back to A binds A's.
-        setSide("#define CL_CACHE_SIDE       128", "#define CL_CACHE_SIDE       96");
+        setSide("#define SP_LOCAL_ENTRIES        85", "#define SP_LOCAL_ENTRIES        77");
         assert(loadShaderSetB(tmp.string(), &info, &err));
         assert(info.twinned >= 1 && info.differing >= 1 && info.failed.empty());
-        assert(run() == CL_CACHE_SIDE);
-        const uint64_t epoch = shaderSetBakeEpoch();
-        assert(useShaderSet(1, true) && shaderSetBakeEpoch() == epoch + 1);
-        assert(run() == 96u);
-        assert(useShaderSet(0) && run() == CL_CACHE_SIDE);
+        assert(run() == SP_LOCAL_ENTRIES);
+        assert(useShaderSet(1));
+        assert(run() == 77u);
+        assert(useShaderSet(0) && run() == SP_LOCAL_ENTRIES);
         assert(!loadShaderSetB((tmp / "none").string(), &info, &err) && !err.empty());
 
         const int twinned = shaderSetInfo().twinned;

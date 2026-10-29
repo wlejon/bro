@@ -10,8 +10,8 @@
 //
 // The graph itself — `SceneGraph`, the node hierarchy, transforms, cameras,
 // render settings, raycasts and capture — is docs/scene-api.js; the
-// `SceneNode` below continues the class declared there. What grows (the
-// plants and grass nodes, vegetation records) is docs/vegetation-api.js.
+// `SceneNode` below continues the class declared there. Vegetation records
+// (what sways in the wind field) are docs/vegetation-api.js.
 // Lighting configs are docs/lighting-api.js, clips / blend spaces / state
 // machines docs/animation-api.js, skeletons and skins docs/rigging-api.js.
 //
@@ -622,8 +622,7 @@ class SceneNode {
    */
   instanceCount;
 
-  // Vegetation records (setVegetation) and the plants and grass nodes'
-  // members are docs/vegetation-api.js.
+  // Vegetation records (setVegetation) are docs/vegetation-api.js.
 
   // ── Textures from pixels ────────────────────────────────────────────────
 
@@ -934,7 +933,7 @@ class SceneNode {
   /**
    * Mesh: the node's top surface (world y) on a grid, NaN where it has none:
    * texel (i, j) at world (x0 + i * cell, z0 + j * cell), row-major
-   * (`cols` per row). A land's are its heights (docs/land-api.js).
+   * (`cols` per row).
    * @param {number} x0
    * @param {number} z0
    * @param {number} cell

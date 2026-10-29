@@ -145,7 +145,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     const bool incident = metering && e.meter == ExposureSettings::Meter::Incident && air.active() &&
                           air.transmittanceView() != VK_NULL_HANDLE;
     AtmosphereGpu atm{};
-    if (incident) air.fill(atm, frame.world.eye);
+    if (incident) air.fill(atm, frame.view.eye);
 
     VkDescriptorSet set = device_->frameSet(setLayout_);
     SceneVkDescriptorWriter writer;

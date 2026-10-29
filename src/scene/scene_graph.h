@@ -3,9 +3,6 @@
 #include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include "scene/scene_renderer.h"
-#include "scene/world/bands.h"
-#include "scene/world/expected_eyes.h"
-#include "scene/world/place.h"
 
 #include <algorithm>
 #include <functional>
@@ -36,9 +33,6 @@ class LightNode;
 class ParticleNode;
 class Particles3DNode;
 class DecalNode;
-class GrassNode;
-class PlantsNode;
-class LandNode;
 class ReflectionProbeNode;
 class AgentBinding;
 class AIWorldTicker;
@@ -72,9 +66,6 @@ public:
     Particles3DNode* createParticles3D(const std::string& name = "");
     CameraNode* createCamera(const std::string& name = "");
     DecalNode* createDecal(const std::string& name = "");
-    GrassNode* createGrass(const std::string& name = "");
-    PlantsNode* createPlants(const std::string& name = "");
-    LandNode* createLand(const std::string& name = "");
     ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
@@ -204,37 +195,8 @@ public:
     /// node table and calls SceneNode::onTick(dt) on each entry, including the
     /// root and invisible nodes — invisible particles still need to expire.
     /// Headless drives this with the virtual-time step so screenshot tests
-    /// of effects are deterministic. It begins by following the camera with
-    /// the place frame (followPlace).
+    /// of effects are deterministic.
     void tickAnimations(float dtSec);
-
-    // --- The body and its place frame (world/place.h) ---
-    //
-    // What the graph holds (its nodes, its camera, its physics world) is in
-    // the place frame; what is keyed on the world (the land, the cover, the
-    // plants, the shadow pages, the probe grid) is on the body, and the
-    // renderer meets the two camera-relative (vulkan/frame/scene_view.h).
-    // A graph with no body set is a flat body's anchored at the origin
-    // that never re-anchors: its place frame is its world.
-
-    /// The body the scene stands on, the frame anchored on the cell holding
-    /// `bodyPoint`, and from then on re-anchoring as the camera goes. What
-    /// the graph holds is taken to be in that frame already (nothing moves).
-    void setBody(const Body& body, const double bodyPoint[3]);
-    bool hasBody() const { return hasBody_; }
-    const Place& place() const { return place_; }
-    /// The place frame's origin on the body: a flat body's translation. (A
-    /// sphere's frame also turns, and the world it keys on is its own.)
-    void placeOrigin(double out[3]) const;
-    /// Re-anchor now on the cell holding `bodyPoint` (a jump far off);
-    /// false when that is the anchor already.
-    bool reanchorAt(const double bodyPoint[3]);
-    /// Called with each re-anchor's move once the graph has applied it, for
-    /// what a script keeps in its own variables (the reanchor event).
-    void setOnReanchor(std::function<void(const PlaceMove&)> fn) { onReanchor_ = std::move(fn); }
-    /// Where the eye is expected (world/expected_eyes.h): body points, so
-    /// they hold through re-anchors.
-    ExpectedEyes& expected() { return expected_; }
 
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     /// 3D nodes render through SceneRenderer's Vulkan passes; 2D nodes via CanvasScene.
@@ -406,11 +368,6 @@ public:
     void setAtmosphere(const AtmosphereParams& a) { renderer_.setAtmosphere(a); }
     const AtmosphereParams& atmosphere() const { return renderer_.atmosphere(); }
 
-    /// The cloud deck (scene/world/clouds.h): drawn with the atmosphere on.
-    void setClouds(CloudSettings c) { renderer_.setClouds(std::move(c)); }
-    const CloudSettings& clouds() const { return renderer_.clouds(); }
-    const CloudStats& cloudStats() const { return renderer_.cloudStats(); }
-
     /// Additive starfield over the sky: invisible by day, stars above the air.
     void setStarfield(const StarfieldParams& s) { renderer_.setStarfield(s); }
     const StarfieldParams& starfield() const { return renderer_.starfield(); }
@@ -514,14 +471,6 @@ public:
     /// SceneRenderer::setFrameTargetMs.
     void setFrameTarget(float ms) { renderer_.setFrameTargetMs(ms); }
     float frameTarget() const { return renderer_.frameTargetMs(); }
-
-    /// The world's bands (world/bands.h): where every node's real drawing
-    /// hands over to the painted and the painted to the sky map's.
-    void setBands(const Bands& b) {
-        bands_.real = std::clamp(b.real, 5.0f, 20000.0f);
-        bands_.painted = std::max(b.painted, bands_.real);
-    }
-    const Bands& bands() const { return bands_; }
 
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
@@ -676,25 +625,8 @@ private:
     /// applyActiveCamera(), before the 3D passes.
     void updateVisibilityGates();
 
-    /// Feed the grass nodes' movers, where they are now, to the renderer's
-    /// plant movers (plant_movers.h). Each tick, after the wind clock.
-    void updatePlantMovers();
-
-    /// Re-anchor when the camera's nadir has left its anchor's cell.
-    void followPlace();
-    /// Move what the graph holds in the place frame by `m`: the root's
-    /// children, the imperative camera, the physics world; then tell the
-    /// script.
-    void applyPlaceMove(const PlaceMove& m);
-
-    Place place_;
-    bool hasBody_ = false;
-    std::function<void(const PlaceMove&)> onReanchor_;
-    ExpectedEyes expected_;
-
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
-    std::vector<uint32_t> grassIds_;   // the grass nodes created (pruned as they go)
 
     // AI integration. aiWorldPin_ keeps the attached world's JS wrapper alive
     // for the duration of the attachment (see attachAIWorld).
@@ -766,8 +698,6 @@ private:
     // JS-wrapper liveness token (created in the constructor; see
     // livenessToken()). Wrappers hold weak_ptrs only.
     std::shared_ptr<LivenessToken> liveToken_;
-
-    Bands bands_;
 
     // The 3D renderer and its GPU state. The renderer
     // never touches graph state in its destructor, so member order is not

@@ -11,7 +11,6 @@
 // keep what they use.
 
 #include "scene/nodes/mesh_node.h"
-#include "scene/world/cell_store.h"
 #include "scene/world/shade_map.h"
 #include "scene/texture_source.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
@@ -98,12 +97,6 @@ public:
     /// A node's RGBA8 image as a mipmapped, repeating texture; null when empty.
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);
 
-    /// A device-local storage buffer holding node `id`'s cell store (the
-    /// plants' records): the ranges changed since the last call copied in
-    /// (`changed` true then), or the whole store into a new buffer when its
-    /// layout moved or its log no longer reaches back.
-    const SceneVkBuffer* storage(uint32_t id, const CellStore& store, bool& changed);
-
     /// The skinned node's joint/weight vertex stream.
     VkBuffer skinAttributes(const SkinnedMeshNode& node, size_t vertexCount);
 
@@ -150,11 +143,6 @@ private:
     std::map<uint64_t, GpuMesh> meshes_;
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;
-    struct Storage {
-        SceneVkBuffer buffer;
-        uint64_t layout = 0, serial = 0;
-    };
-    std::unordered_map<uint32_t, Storage> storages_;
     std::unordered_map<uint32_t, std::unordered_map<std::string, UserTexture>> userTextures_;
     std::unordered_map<const uint8_t*, Texture> shadeMaps_;
 };

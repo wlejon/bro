@@ -132,8 +132,8 @@
  * A sun that turns is followed in steps of about 0.1 degree: the next
  * clipmap is drawn behind the shown one over the following frames and
  * shown when it is complete, every shadow moving by the step at once.
- * What moves every frame (skinned or moving nodes, swaying plants and
- * grass) is drawn each frame over the cached depth. There is nothing to
+ * What moves every frame (skinned or moving nodes, swaying plants) is
+ * drawn each frame over the cached depth. There is nothing to
  * size: resolution follows the screen. A custom vertex chunk that moves
  * geometry past a node's bounds needs its `cullMargin` set, or the pages
  * its shadow falls in are not found.
@@ -196,9 +196,9 @@
  * @property {number} [ozoneAltitude]  The ozone peak's altitude, metres (default 25000).
  * @property {number} [ozoneWidth]  Its half-width, metres (default 15000).
  * @property {Array<number>} [groundAlbedo]  The planet's surface, Lambertian [r, g, b] (default [0.3, 0.3, 0.3]): it lights the air and the lower half of every surface's sky light.
- * @property {number} [planetRadius]  Metres (default 6360000), on a flat body: on a round one (`scene.setBody`) the air wraps the body, its radius the body's.
+ * @property {number} [planetRadius]  Metres (default 6360000).
  * @property {number} [thickness]  The air's depth above the surface, metres (default 100000).
- * @property {number} [seaLevel]  On a flat body, the world y that sits on the planet's surface, which is placed under the eye (default 0).
+ * @property {number} [seaLevel]  The world y that sits on the planet's surface, which is placed under the eye (default 0).
  * @property {Array<number>} [sunDirection]  Pins the direction towards the sun, [x, y, z] (`sunPosition` is an alias).
  * @property {Array<number>} [sunColor]  With sunIntensity, pins the sun's illuminance above the air (sunColor * sunIntensity).
  * @property {number} [sunIntensity]

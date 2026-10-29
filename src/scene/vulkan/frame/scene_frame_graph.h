@@ -53,10 +53,8 @@ private:
 
     std::vector<std::unique_ptr<ScenePass>> passes_;
     bool scopeOpen_ = false;
-    bool scopeMark_ = false;
     bool scopeIndirect_ = false;
     bool firstScope_ = true;
-    bool markCleared_ = false;
     bool indirectCleared_ = false;
 };
 

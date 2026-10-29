@@ -80,8 +80,8 @@ public:
     void beginFrame(SceneFrame& frame);
     /// On this frame.
     bool active() const { return on_; }
-    /// This frame's planet radius (m) and the eye about its centre (air
-    /// space: the place frame's axes), as the lighting block has them.
+    /// This frame's planet radius (m) and the eye about its centre, as the
+    /// lighting block has them.
     float planetRadius() const { return block_.shell[0]; }
     void eyeAbout(const bromath::Vec3& eye, float out[4]) const { originFor(eye, out); }
     /// The block for a view whose eye is `eye` (the frame's own, or a
@@ -145,7 +145,6 @@ private:
     float froxelInv_[16] = {};
     bromath::Vec3 eye_{0.0f, 0.0f, 0.0f};
     double seaLevel_ = 0.0;
-    double center_[3] = {0.0, 0.0, 0.0};   // a round body's centre, in the body's frame
     uint32_t slot_ = 0;
     bool remakeSkyView_ = false;
     bool tablesOnCompute_ = false;

@@ -57,8 +57,8 @@ public:
                                              const IncludeOverrides& overrides = {});
 
     /// A built-in shader compiled at run time from its embedded source (or
-    /// BRO_SCENE_SHADER_SOURCE's) with its DEFINES and `overrides`: a kind's
-    /// shaders with a world's modules (frame/scene_module_shaders.h).
+    /// BRO_SCENE_SHADER_SOURCE's) with its DEFINES and `overrides` (shader
+    /// set B, scene_shader_sets.h).
     static std::vector<uint32_t> compileBuiltinWith(BuiltinSceneShader shader,
                                                     const IncludeOverrides& overrides,
                                                     std::string* errOut = nullptr);

@@ -13,7 +13,7 @@ struct AtmosphereGpu {
     vec4 rayleigh;        // rgb = scattering per metre at the ground, w = scale height
     vec4 mie;             // x = scattering, y = absorption per metre at the ground, z = g, w = scale height
     vec4 ozone;           // rgb = absorption per metre at the layer's peak, w = the peak's altitude
-    vec4 shell;           // x = planet radius, y = top of the air's radius, z = ozone half width, w = spherical
+    vec4 shell;           // x = planet radius, y = top of the air's radius, z = ozone half width, w = 0
     vec4 origin;          // xyz = the eye about the planet's centre, w = 0
     vec4 ground;          // rgb = ground albedo, w = the lights[] index of the sun (-1: none)
     vec4 skyView;         // x = r the sky-view table was made at, y = its mu_s, z = jitter on,

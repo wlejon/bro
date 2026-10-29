@@ -8,77 +8,15 @@
 #include "scene_lighting.glsl.src.h"
 #include "scene_atmosphere.glsl.src.h"
 #include "scene_atmosphere_params.glsl.src.h"
-#include "scene_probe_grid.glsl.src.h"
-#include "probe_grid_layout.h.src.h"
 #include "scene_mesh_push.glsl.src.h"
 #include "scene_shadow_push.glsl.src.h"
 #include "scene_shadow_pages.glsl.src.h"
 #include "shadow_pages_layout.h.src.h"
 #include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
-#include "scene_cover_mask.glsl.src.h"
-#include "scene_subpixel_mark.glsl.src.h"
 #include "scene_procedural.glsl.src.h"
 #include "scene_bark.glsl.src.h"
-#include "scene_grass.glsl.src.h"
-#include "scene_ground_noise.glsl.src.h"
-#include "scene_sward_layer.glsl.src.h"
-#include "sward_module.glsl.src.h"
-#include "scene_ground.glsl.src.h"
-#include "scene_ground_layers.glsl.src.h"
-#include "scene_cover_plan.glsl.src.h"
-#include "scene_cover_far.glsl.src.h"
-#include "scene_herb.glsl.src.h"
-#include "scene_herb_layer.glsl.src.h"
-#include "herb_module.glsl.src.h"
 #include "mesh.frag.src.h"
-#include "cover_plan.comp.src.h"
-#include "mesh_grass.vert.src.h"
-#include "mesh_herb.vert.src.h"
-#include "mesh_cover_far.vert.src.h"
-#include "shadow_grass.vert.src.h"
-#include "ground_layer_fill.frag.src.h"
-#include "ground_chart_fill.vert.src.h"
-#include "scene_plants.glsl.src.h"
-#include "scene_plant_records.glsl.src.h"
-#include "scene_plant_layer.glsl.src.h"
-#include "plant_module.glsl.src.h"
-#include "plants.vert.src.h"
-#include "plants.frag.src.h"
-#include "shadow_plants.vert.src.h"
-#include "plants_pose.comp.src.h"
-#include "scene_land_layout.h.src.h"
-#include "land_sun_layout.h.src.h"
-#include "scene_land.glsl.src.h"
-#include "scene_land_layer.glsl.src.h"
-#include "land_filters.glsl.src.h"
-#include "land_module.glsl.src.h"
-#include "land_canopy.glsl.src.h"
-#include "land_body.glsl.src.h"
-#include "land_trig.glsl.src.h"
-#include "land_fill.comp.src.h"
-#include "land_grid.glsl.src.h"
-#include "land_grid_config.glsl.src.h"
-#include "land_process_layout.h.src.h"
-#include "land_process_layer.glsl.src.h"
-#include "land_process_module.glsl.src.h"
-#include "land_process_dispatch.glsl.src.h"
-#include "land_process.comp.src.h"
-#include "land_regions.glsl.src.h"
-#include "land_region_config.glsl.src.h"
-#include "land_region_layer.glsl.src.h"
-#include "land_region_dispatch.glsl.src.h"
-#include "land_region.comp.src.h"
-#include "clouds_layout.h.src.h"
-#include "scene_cloud_layer.glsl.src.h"
-#include "cloud_heaps.glsl.src.h"
-#include "cloud_module.glsl.src.h"
-#include "clouds_cover.comp.src.h"
-#include "clouds_cache.comp.src.h"
-#include "clouds_globe.comp.src.h"
-#include "clouds_heaps.comp.src.h"
-#include "clouds_view.comp.src.h"
-#include "clouds_shells.comp.src.h"
 #include "util/user_dirs.h"
 
 #include <array>
@@ -161,78 +99,16 @@ const char* embeddedInclude(const std::string& name) {
         {"common/scene_lighting.glsl", kVkSceneLightingSrc},
         {"common/scene_atmosphere.glsl", kVkSceneAtmosphereSrc},
         {"common/scene_atmosphere_params.glsl", kVkSceneAtmosphereParamsSrc},
-        {"lighting/scene_probe_grid.glsl", kVkSceneProbeGridSrc},
-        {"lighting/probe_grid_layout.h", kVkProbeGridLayoutSrc},
         {"common/scene_mesh_push.glsl", kVkSceneMeshPushSrc},
         {"common/scene_shadow_push.glsl", kVkSceneShadowPushSrc},
         {"common/scene_shadow_pages.glsl", kVkSceneShadowPagesSrc},
         {"shadow/shadow_pages_layout.h", kVkShadowPagesLayoutSrc},
         {"shadow/scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"common/scene_vegetation.glsl", kVkSceneVegetationSrc},
-        {"common/scene_cover_mask.glsl", kVkSceneCoverMaskSrc},
-        {"common/scene_subpixel_mark.glsl", kVkSceneSubpixelMarkSrc},
         {"common/scene_procedural.glsl", kVkSceneProceduralSrc},
         {"draw/scene_bark.glsl", kVkSceneBarkSrc},
-        {"ground/scene_grass.glsl", kVkSceneGrassSrc},
-        {"ground/scene_ground_noise.glsl", kVkSceneGroundNoiseSrc},
-        {"ground/scene_sward_layer.glsl", kVkSceneSwardLayerSrc},
-        {"ground/sward_module.glsl", kVkSwardModuleSrc},
-        {"ground/scene_ground.glsl", kVkSceneGroundSrc},
-        {"ground/scene_ground_layers.glsl", kVkSceneGroundLayersSrc},
-        {"ground/scene_cover_plan.glsl", kVkSceneCoverPlanSrc},
-        {"ground/scene_cover_far.glsl", kVkSceneCoverFarSrc},
-        {"ground/scene_herb.glsl", kVkSceneHerbSrc},
-        {"ground/scene_herb_layer.glsl", kVkSceneHerbLayerSrc},
-        {"ground/herb_module.glsl", kVkHerbModuleSrc},
-        {"foliage/scene_plants.glsl", kVkScenePlantsSrc},
-        {"foliage/scene_plant_records.glsl", kVkScenePlantRecordsSrc},
-        {"foliage/scene_plant_layer.glsl", kVkScenePlantLayerSrc},
-        {"foliage/plant_module.glsl", kVkPlantModuleSrc},
-        {"ground/scene_land_layout.h", kVkSceneLandLayoutSrc},
-        {"ground/land_sun_layout.h", kVkLandSunLayoutSrc},
-        {"ground/scene_land.glsl", kVkSceneLandSrc},
-        {"ground/scene_land_layer.glsl", kVkSceneLandLayerSrc},
-        {"ground/land_filters.glsl", kVkLandFiltersSrc},
-        {"ground/land_module.glsl", kVkLandModuleSrc},
-        {"ground/land_canopy.glsl", kVkLandCanopySrc},
-        {"ground/land_body.glsl", kVkLandBodySrc},
-        {"ground/land_trig.glsl", kVkLandTrigSrc},
-        {"ground/land_grid.glsl", kVkLandGridSrc},
-        {"ground/land_grid_config.glsl", kVkLandGridConfigSrc},
-        {"ground/land_process_layout.h", kVkLandProcessLayoutSrc},
-        {"ground/land_process_layer.glsl", kVkLandProcessLayerSrc},
-        {"ground/land_process_module.glsl", kVkLandProcessModuleSrc},
-        {"ground/land_process_dispatch.glsl", kVkLandProcessDispatchSrc},
-        {"ground/land_regions.glsl", kVkLandRegionsSrc},
-        {"ground/land_region_config.glsl", kVkLandRegionConfigSrc},
-        {"ground/land_region_layer.glsl", kVkLandRegionLayerSrc},
-        {"ground/land_region_dispatch.glsl", kVkLandRegionDispatchSrc},
-        {"sky/clouds_layout.h", kVkCloudsLayoutSrc},
-        {"sky/scene_cloud_layer.glsl", kVkSceneCloudLayerSrc},
-        {"sky/cloud_heaps.glsl", kVkCloudHeapsSrc},
-        {"sky/cloud_module.glsl", kVkCloudModuleSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
-        {"ground/cover_plan.comp", kVkCoverPlanCompSrc},
-        {"ground/mesh_grass.vert", kVkMeshGrassVertSrc},
-        {"ground/mesh_herb.vert", kVkMeshHerbVertSrc},
-        {"ground/mesh_cover_far.vert", kVkMeshCoverFarVertSrc},
-        {"ground/shadow_grass.vert", kVkShadowGrassVertSrc},
-        {"ground/ground_layer_fill.frag", kVkGroundLayerFillFragSrc},
-        {"ground/ground_chart_fill.vert", kVkGroundChartFillVertSrc},
-        {"foliage/plants.vert", kVkPlantsVertSrc},
-        {"foliage/plants.frag", kVkPlantsFragSrc},
-        {"foliage/shadow_plants.vert", kVkShadowPlantsVertSrc},
-        {"foliage/plants_pose.comp", kVkPlantsPoseCompSrc},
-        {"ground/land_fill.comp", kVkLandFillCompSrc},
-        {"ground/land_process.comp", kVkLandProcessCompSrc},
-        {"ground/land_region.comp", kVkLandRegionCompSrc},
-        {"sky/clouds_cover.comp", kVkCloudsCoverCompSrc},
-        {"sky/clouds_cache.comp", kVkCloudsCacheCompSrc},
-        {"sky/clouds_globe.comp", kVkCloudsGlobeCompSrc},
-        {"sky/clouds_heaps.comp", kVkCloudsHeapsCompSrc},
-        {"sky/clouds_view.comp", kVkCloudsViewCompSrc},
-        {"sky/clouds_shells.comp", kVkCloudsShellsCompSrc},
     };
     for (const auto& inc : kIncludes) {
         if (name == inc.name) return inc.source;

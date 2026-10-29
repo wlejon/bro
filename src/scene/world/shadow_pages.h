@@ -38,11 +38,11 @@
 // pixels: what shows in its place is its coarsest drawn ancestor's depth
 // (2^k pixels for an ancestor k levels up), a stale page's is a pixel's; a
 // needed page with no needed ancestor is the top of its chain and required.
-// A page the plants draw into (a sun page past the sway level) is a job of
-// another kind than one they do not: biomes' cost a hundred times one of
-// the near levels', where only what stands still casts.
-// A view that needs more pages than the pool holds (a planet's land seen
-// across its hundreds of kilometres) takes its levels a level coarser for a
+// A page the swaying casters draw into (a sun page past the sway level) is a
+// job of another kind than one they do not, priced apart, since a dense
+// stand of vegetation costs many times what only what stands still does.
+// A view that needs more pages than the pool holds (a wide view of a large
+// world) takes its levels a level coarser for a
 // pixel (footprintScale()), and again while still short; finer once it
 // needs few. (Else what found no physical page waited forever, its grants
 // spent and undrawn every frame and every other producer's held back.)
@@ -59,7 +59,7 @@
 // swayTexel) up; a finer level reads its sway-level ancestor's, since a
 // leaf's shadow is softer than that texel (the sun's half degree across the
 // metres to the ground), so what moves near the eye costs one level's pages,
-// not the four or five finer ones' too. The plants and the grass are in the
+// not the four or five finer ones' too. What sways is in the
 // sway level's overlays alone and out of the cached depth of it and every
 // finer level; coarser, where their sway hides under the filter, they hold
 // still in the cached depth. What a caster's change invalidates is the
@@ -131,9 +131,8 @@ struct ShadowPageWant {
     float error = 0.0f;
     double size = 0.0;
     bool required = false;
-    bool plants = false;   // the plants' casters draw into it (a sun page past the sway level): the dearer kind
-    /// Its cost in its kind's units: a page; a plants page its texels and
-    /// the elements cast into it (addLoad), which cost about alike.
+    bool plants = false;   // the swaying casters draw into it (a sun page past the sway level): the dearer kind
+    /// Its cost in its kind's units: a page; a plants page its texels.
     double units = 1.0;
 };
 
@@ -169,21 +168,10 @@ public:
     /// for them).
     void invalidate(const bromath::AABB3& box);
     void invalidateAll();
-    /// The plants drawn into the pages of plan `serial` came up short (their
-    /// GPU plan ran out of room that frame): those pages still holding that
-    /// draw are missing again (their ancestors sampled until redrawn).
-    void redrawPlantsOf(uint64_t serial);
     /// Something moves inside `box` this frame: drawn into the overlays of
     /// the needed pages it touches, in every local map and the sun's levels
     /// from swayLevel() up (`sways`: that level alone).
     void addDynamic(const bromath::AABB3& box, bool sways = false);
-    /// Casters inside `box` that draw into the sun's plants pages (the
-    /// levels past swayLevel()), `elements[level]` of their elements at
-    /// each: spread evenly over the pages of each level its plane rect
-    /// touches, they price those pages (ShadowPageWant::units). A plants
-    /// page's cost follows the elements drawn into it, not its count: one a
-    /// forest's shadow falls on costs many a meadow's.
-    void addLoad(const bromath::AABB3& box, const float (&elements)[SP_MAX_LEVELS]);
     /// What the camera sees this frame (its frustum's bounds). Its base
     /// pages, which cover where a caster's shadow can fall in it (across the
     /// light, it and the casters overlap) at the sun's finest level spanning
@@ -257,7 +245,6 @@ private:
         bool dirty = false;
         bool fresh = false;      // first drawn this frame
         bool dynamic = false;    // overlaid this frame
-        uint64_t plantsDrawn = 0;   // the plan serial the plants were last drawn into it at (0: never)
     };
     struct Map {
         int kind = SP_KIND_CLIPMAP;
@@ -350,9 +337,6 @@ private:
     /// Calls f(entry) for each page of clipmap level map `m` the plane rect
     /// (padded by the border) touches.
     template <class F> void forLevelRect(const Map& m, const double rect[4], F&& f);
-    /// Each plants page's load (load_): the elements each addLoad casts at
-    /// its level, spread over the pages there its plane rect touches.
-    void spreadLoads();
     /// Flag the pages the frame's moving bounds touch that want an overlay:
     /// needed ones, and the sway level's over a needed finer page.
     void markDynamic();
@@ -376,16 +360,8 @@ private:
     std::vector<Map> maps_;           // this frame's: the sun's levels, then local faces
     std::vector<Dynamic> dynamic_;
     std::vector<bromath::AABB3> invalid_;   // invalidate()s met before endLights(), applied there
-    struct Load {
-        bromath::AABB3 box;
-        float elements[SP_MAX_LEVELS];
-    };
-    std::vector<Load> loads_;
-    std::vector<float> load_;         // each entry's elements this frame (plan())
-    /// A plants page's units: its texels and the elements cast into it.
-    double plantUnits(int entry) const {
-        return static_cast<double>(SP_PAGE) * SP_PAGE + static_cast<double>(load_[static_cast<size_t>(entry)]);
-    }
+    /// A plants page's units: its texels.
+    static constexpr double kPlantUnits = static_cast<double>(SP_PAGE) * SP_PAGE;
     bool lightsSet_ = false;
     bromath::AABB3 seen_ = bromath::aempty3();
     History history_[8];

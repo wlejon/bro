@@ -57,16 +57,14 @@ struct AtmosphereParams {
     // multiple scattering) and the lower hemisphere of everything on it.
     float groundAlbedo[3] = {0.3f, 0.3f, 0.3f};
 
-    // World Y that sits on the planet's surface on a flat body. Terrain built
-    // around y = 0 wants 0; a world whose ground sits at 1200 m wants 1200.
+    // World Y that sits on the planet's surface. Terrain built around y = 0
+    // wants 0; a world whose ground sits at 1200 m wants 1200.
     //
-    // The model is always spherical; the scene's body says where the planet
-    // is. On a flat body (scene/world/place.h) the world is a height field
-    // whose up is +Y everywhere, so the planet is placed directly beneath the
+    // The model is always spherical, but the world is a height field whose
+    // up is +Y everywhere, so the planet is placed directly beneath the
     // viewer (anchoring it anywhere fixed would tilt the air's vertical away
     // from the terrain's as the viewer travelled, drawing a second sloping
-    // horizon across the sky). On a round body the air wraps the body, its
-    // radius the body's (planetRadius is the flat body's).
+    // horizon across the sky).
     float seaLevel = 0.0f;
 };
 

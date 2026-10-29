@@ -271,88 +271,6 @@
             time: r[10], now: { direction: [r[11], 0, r[12]], speed: r[13] },
         };
     });
-    // ---- The body and its place frame (scene/world/place.h) ----------------
-    // Positions a scene holds (its nodes, its camera, its physics) are the
-    // place frame's; a body point is in double, in the body's frame.
-    const point3 = (p, what) => {
-        if (!p || p.length < 3) throw new TypeError("bro.scene.SceneGraph.prototype." + what + ": a point [x, y, z] is required");
-        return toF64([+p[0], +p[1], +p[2]]);
-    };
-    fn(SceneGraph.prototype, "setBody", function setBody(opts) {
-        const o = opts || {};
-        const radius = o.radius === undefined || o.radius === Infinity ? 0 : +o.radius;
-        __bro_native.scene.SceneGraph_setBody(this, radius, toF64(o.spin ? [+o.spin[0], +o.spin[1], +o.spin[2]] : []),
-                                             toF64(o.at ? [+o.at[0], +o.at[1], +o.at[2]] : []));
-    });
-    accessor(SceneGraph.prototype, "place", function () {
-        const r = __bro_native.scene.SceneGraph_place(this);
-        if (r.length < 23) return null;
-        return {
-            hasBody: r[0] !== 0,
-            body: { radius: r[1] === 0 ? Infinity : r[1], spin: [r[2], r[3], r[4]] },
-            anchor: { face: r[5], x: r[6], z: r[7] },
-            origin: [r[8], r[9], r[10]],
-            basis: Array.from(r.subarray ? r.subarray(11, 20) : r.slice(11, 20)),
-            serial: r[20], faceCells: r[21], lattice: r[22],
-        };
-    }, undefined);
-    fn(SceneGraph.prototype, "toBody", function toBody(p) {
-        return Array.from(__bro_native.scene.SceneGraph_toBody(this, point3(p, "toBody")));
-    });
-    fn(SceneGraph.prototype, "toPlace", function toPlace(b) {
-        return Array.from(__bro_native.scene.SceneGraph_toPlace(this, point3(b, "toPlace")));
-    });
-    fn(SceneGraph.prototype, "upAt", function upAt(p) {
-        return Array.from(__bro_native.scene.SceneGraph_upAt(this, point3(p, "upAt")));
-    });
-    fn(SceneGraph.prototype, "latLongAt", function latLongAt(p) {
-        const r = __bro_native.scene.SceneGraph_latLongAt(this, point3(p, "latLongAt"));
-        return r.length < 2 ? null : { lat: r[0], lon: r[1] };
-    });
-    fn(SceneGraph.prototype, "reanchorAt", function reanchorAt(b) {
-        return __bro_native.scene.SceneGraph_reanchorAt(this, point3(b, "reanchorAt"));
-    });
-    // Where the eye is expected: a handle until it is cancelled.
-    const withinOf = (o, name) => {
-        const w = o && o.within !== undefined ? +o.within : Infinity;
-        if (Number.isNaN(w)) throw new TypeError(`${name}: \`within\` must be a number of seconds`);
-        return w;
-    };
-    fn(SceneGraph.prototype, "expect", function expect(b, opts) {
-        const graph = this;
-        const id = __bro_native.scene.SceneGraph_expect(graph, point3(b, "expect"), withinOf(opts, "expect"));
-        if (!id) throw new RangeError("expect: two expected eyes are held already; cancel one first");
-        let live = true;
-        const pending = () => (live ? __bro_native.scene.SceneGraph_expectPending(graph, id) : -1);
-        return {
-            move(b2, opts2) {
-                if (!live) throw new Error("expect: move on a cancelled expected eye");
-                __bro_native.scene.SceneGraph_expectMove(graph, id, point3(b2, "move"), withinOf(opts2, "move"));
-            },
-            cancel() {
-                if (!live) return;
-                live = false;
-                __bro_native.scene.SceneGraph_expectCancel(graph, id);
-            },
-            get pending() { return pending(); },
-            get ready() { return pending() === 0; },
-        };
-    });
-    // The reanchor event: the move the graph made (new = rotation * old +
-    // translation), for what a script keeps in its own variables.
-    const reanchorListeners = new WeakMap();
-    const reanchorEvent = (m) => {
-        const rot = Array.from(m.subarray(0, 9)), t = [m[9], m[10], m[11]];
-        const turn = (d) => [rot[0] * d[0] + rot[1] * d[1] + rot[2] * d[2],
-                             rot[3] * d[0] + rot[4] * d[1] + rot[5] * d[2],
-                             rot[6] * d[0] + rot[7] * d[1] + rot[8] * d[2]];
-        return {
-            type: 'reanchor', rotation: rot, translation: t,
-            tilts: rot[0] !== 1 || rot[4] !== 1 || rot[8] !== 1,
-            turn,
-            apply: (p) => { const r = turn(p); return [r[0] + t[0], r[1] + t[1], r[2] + t[2]]; },
-        };
-    };
     // What the scene still prepares (its nodes' and renderer's settle state
     // as of the newest render): [] once what the view shows is ready.
     fn(SceneGraph.prototype, "pendingWork", function pendingWork() {
@@ -383,30 +301,13 @@
                 watchReady(this, set);
             }
             set.add(listener);
-            return;
         }
-        if (type !== 'reanchor' || typeof listener !== 'function') return;
-        let set = reanchorListeners.get(this);
-        if (!set) {
-            set = new Set();
-            reanchorListeners.set(this, set);
-            const listeners = set;
-            __bro_native.scene.SceneGraph_onReanchor_set(this, (m) => {
-                const e = reanchorEvent(m);
-                for (const l of Array.from(listeners)) l(e);
-            });
-        }
-        set.add(listener);
     });
     fn(SceneGraph.prototype, "removeEventListener", function removeEventListener(type, listener) {
         if (type === 'ready') {
             const ready = readyListeners.get(this);
             if (ready) ready.delete(listener);
-            return;
         }
-        if (type !== 'reanchor') return;
-        const set = reanchorListeners.get(this);
-        if (set) set.delete(listener);
     });
 
     fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts) {
@@ -453,41 +354,6 @@
         }
         v[31] = num(o.sunAngularRadius);
         __bro_native.scene.SceneGraph_setAtmosphere(this, toF64(v));
-    });
-    // The cloud deck (docs/clouds-api.js): the world's module (GLSL defining
-    // cloudCover and cloudDensity), the deck's bottom and top over the
-    // datum, its data, the land whose processes' grid the cover reads.
-    // Every call replaces the whole deck; null or {enabled: false} removes it.
-    fn(SceneGraph.prototype, "setClouds", function setClouds(opts) {
-        const o = opts == null ? { enabled: false } : opts;
-        const on = o.enabled === undefined ? true : !!o.enabled;
-        const source = on ? (typeof o.module === 'string' ? o.module : (o.module && o.module.source) || '') : '';
-        if (on && !source) throw new TypeError("setClouds: `module` (GLSL defining cloudCover and cloudDensity) is required");
-        const num = (v, d) => (v === undefined || v === null) ? d : +v;
-        const land = o.land == null ? 0 : (typeof o.land === 'number' ? o.land : o.land.id);
-        const f = o.forms || {};
-        const wind = o.wind || [0, 0, 0];
-        const params = [on ? 1 : 0, num(o.bottom, 1500), num(o.top, 8000), num(o.albedo, 0.98),
-                        o.shadows === undefined ? 1 : (o.shadows ? 1 : 0), land | 0,
-                        num(f.extinction, 0.06), num(f.billowScale, 4000), num(f.detailScale, 1200),
-                        num(f.edge, 600), num(wind[0], 0), num(wind[1], 0), num(wind[2], 0),
-                        num(o.heaps && o.heaps.cell, 0), num(o.heaps && o.heaps.shells, 10000)];
-        const err = __bro_native.scene.SceneGraph_setClouds(this, source, toF64(params),
-            o.data ? Float32Array.from(o.data) : new Float32Array(0));
-        if (err) throw new TypeError('setClouds: ' + err);
-    });
-    fn(SceneGraph.prototype, "cloudStats", function cloudStats() {
-        const a = __bro_native.scene.SceneGraph_cloudStats(this);
-        if (a.length < 5) return undefined;
-        const s = { enabled: a[0] > 0, compiled: a[1] > 0, failed: a[2] > 0, covered: a[3] > 0, generation: a[4] };
-        if (a.length >= 23) {
-            s.volume = { levels: a[5], side: a[6], depth: a[7], cell: a[8], pending: a[9], bytes: a[10],
-                         cellsBaked: a[11], slack: a[12] };
-            if (a[13] > 0)
-                s.volume.check = { serial: a[13], rays: a[14], compared: a[15], meanAbsError: a[16], meanSigma: a[17],
-                                   mostSigma: a[18], inside: a[19], violations: a[20], jumps: a[21], meanJump: a[22] };
-        }
-        return s;
     });
     fn(SceneGraph.prototype, "setStarfield", function setStarfield(opts) {
         const d_opts = opts === undefined ? {} : opts;
@@ -536,10 +402,6 @@
         const c = color && typeof color.length === "number" && color.length >= 3 ? color : [0, 0, 0];
         __bro_native.scene.SceneGraph_setGroundBounce(this, +c[0] || 0, +c[1] || 0, +c[2] || 0);
     });
-    fn(SceneGraph.prototype, "setProbeGrid", function setProbeGrid(enabled) {
-        if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setProbeGrid: enabled is required");
-        __bro_native.scene.SceneGraph_setProbeGrid(this, !!enabled);
-    });
     fn(SceneGraph.prototype, "setDither", function setDither(enabled) {
         if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setDither: enabled is required");
         __bro_native.scene.SceneGraph_setDither(this, !!enabled);
@@ -547,17 +409,6 @@
     fn(SceneGraph.prototype, "setFrameTarget", function setFrameTarget(ms) {
         if (ms === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setFrameTarget: ms is required");
         __bro_native.scene.SceneGraph_setFrameTarget(this, +ms || 0);
-    });
-    // The world's bands (docs/scene-api.js): where its real drawing ends
-    // and its painted drawing hands over to the sky map's, in metres.
-    fn(SceneGraph.prototype, "setBands", function setBands(opts) {
-        const o = opts || {};
-        __bro_native.scene.SceneGraph_setBands(this, typeof o.real === 'number' ? o.real : NaN,
-            typeof o.painted === 'number' ? o.painted : NaN);
-    });
-    fn(SceneGraph.prototype, "bands", function bands() {
-        const a = __bro_native.scene.SceneGraph_bands(this);
-        return a.length === 2 ? { real: a[0], painted: a[1] } : undefined;
     });
     fn(SceneGraph.prototype, "setRenderScale", function setRenderScale(scale) {
         if (scale === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setRenderScale: scale is required");
@@ -775,11 +626,6 @@
             }
         }
         return out;
-    });
-    fn(SceneGraph.prototype, "cloudCoverAt", function cloudCoverAt(dirs) {
-        const flat = dirs instanceof Float64Array ? dirs : Float64Array.from(dirs.flat ? dirs.flat() : dirs);
-        const out = __bro_native.scene.SceneGraph_cloudCoverAt(this, flat);
-        return out && out.length ? out : null;
     });
     fn(SceneGraph.prototype, "captureFrame", function captureFrame(width, height) {
         if (width !== undefined && height !== undefined) {

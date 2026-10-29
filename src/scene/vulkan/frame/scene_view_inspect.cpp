@@ -20,14 +20,6 @@ void cross3(const double a[3], const double b[3], double out[3]) {
     out[1] = a[2] * b[0] - a[0] * b[2];
     out[2] = a[0] * b[1] - a[1] * b[0];
 }
-// basis * v (column j of the row-major basis is axis j).
-void toBodyAxes(const double basis[9], const double v[3], double out[3]) {
-    for (int r = 0; r < 3; ++r) out[r] = basis[r * 3] * v[0] + basis[r * 3 + 1] * v[1] + basis[r * 3 + 2] * v[2];
-}
-// basisᵀ * v.
-void toPlaceAxes(const double basis[9], const double v[3], double out[3]) {
-    for (int c = 0; c < 3; ++c) out[c] = basis[c] * v[0] + basis[3 + c] * v[1] + basis[6 + c] * v[2];
-}
 void loadVec(const bromath::Vec3& v, double out[3]) {
     out[0] = v.x;
     out[1] = v.y;
@@ -43,22 +35,18 @@ void ViewInspector::build(const InspectCamera& cam, uint32_t width, uint32_t hei
                           const uint8_t* luma, Frame& f) {
     f.w = width;
     f.h = height;
-    toBodyAxes(cam.basis, cam.eye, f.eyeBody);
-    for (int i = 0; i < 3; ++i) f.eyeBody[i] += cam.origin[i];
-    std::copy(cam.basis, cam.basis + 9, f.basis);
+    std::copy(cam.eye, cam.eye + 3, f.eye);
     f.relViewProj = cam.relViewProj;
-    // The view's rows are the camera's right, up and back in place axes.
+    // The view's rows are the camera's right, up and back.
     double rowR[3], rowU[3], rowB[3];
     for (int c = 0; c < 3; ++c) {
         rowR[c] = cam.relView.at(0, c);
         rowU[c] = cam.relView.at(1, c);
         rowB[c] = cam.relView.at(2, c);
     }
-    toBodyAxes(f.basis, rowR, f.right);
-    toBodyAxes(f.basis, rowU, f.up);
-    double back[3];
-    toBodyAxes(f.basis, rowB, back);
-    for (int i = 0; i < 3; ++i) f.fwd[i] = -back[i];
+    std::copy(rowR, rowR + 3, f.right);
+    std::copy(rowU, rowU + 3, f.up);
+    for (int i = 0; i < 3; ++i) f.fwd[i] = -rowB[i];
 
     const size_t n = static_cast<size_t>(width) * height;
     f.off.assign(n, {});
@@ -86,15 +74,13 @@ void ViewInspector::build(const InspectCamera& cam, uint32_t width, uint32_t hei
             const double vx = v[0] / v[3], vy = v[1] / v[3], vz = v[2] / v[3];
             double rel[3];
             for (int c = 0; c < 3; ++c) rel[c] = rowR[c] * vx + rowU[c] * vy + rowB[c] * vz;
-            double body[3];
-            toBodyAxes(f.basis, rel, body);
             if (sky) {
-                const double l = len3(body);
+                const double l = len3(rel);
                 if (l > 0.0)
-                    for (double& c : body) c /= l;
+                    for (double& c : rel) c /= l;
                 f.sky[i] = 1;
             }
-            f.off[i] = {static_cast<float>(body[0]), static_cast<float>(body[1]), static_cast<float>(body[2])};
+            f.off[i] = {static_cast<float>(rel[0]), static_cast<float>(rel[1]), static_cast<float>(rel[2])};
         }
     }
 
@@ -175,15 +161,10 @@ double ViewInspector::normalChange(const bromath::Vec3& normal, int px, int py) 
     return best < -1.5 ? 0.0 : std::acos(std::clamp(best, -1.0, 1.0)) * kRadToDeg;
 }
 
-bool ViewInspector::projectPrev(const double bodyPoint[3], bool direction, int& px, int& py) const {
+bool ViewInspector::projectPrev(const double point[3], bool direction, int& px, int& py) const {
     const Frame& f = prev_;
     double rel[3];
-    if (direction) {
-        toPlaceAxes(f.basis, bodyPoint, rel);
-    } else {
-        const double d[3] = {bodyPoint[0] - f.eyeBody[0], bodyPoint[1] - f.eyeBody[1], bodyPoint[2] - f.eyeBody[2]};
-        toPlaceAxes(f.basis, d, rel);
-    }
+    for (int k = 0; k < 3; ++k) rel[k] = direction ? point[k] : point[k] - f.eye[k];
     const double w1 = direction ? 0.0 : 1.0;
     double clip[4];
     for (int r = 0; r < 4; ++r)
@@ -252,7 +233,7 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
                     }
                 } else {
                     double point[3];
-                    for (int k = 0; k < 3; ++k) point[k] = c.eyeBody[k] + off[k];
+                    for (int k = 0; k < 3; ++k) point[k] = c.eye[k] + off[k];
                     if (!projectPrev(point, false, qx, qy)) {
                         cls = kClsNew;
                     } else {
@@ -264,7 +245,7 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
                             loadVec(p.off[j], prevOff);
                             double delta[3], fromPrevEye[3];
                             for (int k = 0; k < 3; ++k) {
-                                fromPrevEye[k] = point[k] - p.eyeBody[k];
+                                fromPrevEye[k] = point[k] - p.eye[k];
                                 delta[k] = fromPrevEye[k] - prevOff[k];
                             }
                             const double distCur = len3(off);
@@ -395,7 +376,7 @@ void ViewInspector::inspect(const InspectCamera& cam, uint32_t width, uint32_t h
         cross3(up, c.up, turned);
         stats[kRollDeg] = std::atan2(dot3(turned, c.fwd), std::clamp(dot3(up, c.up), -1.0, 1.0)) * kRadToDeg;
         double moved[3];
-        for (int k = 0; k < 3; ++k) moved[k] = c.eyeBody[k] - p.eyeBody[k];
+        for (int k = 0; k < 3; ++k) moved[k] = c.eye[k] - p.eye[k];
         stats[kTravel] = len3(moved);
     }
 

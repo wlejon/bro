@@ -196,8 +196,6 @@ if(BRO_WITH_3D)
         native_scene_lights.cpp
         native_scene_shaders.cpp
         native_scene_extras.cpp
-        native_scene_grass.cpp
-        native_scene_plants.cpp
         native_scene_attach.cpp
         native_scene_core.cpp
         native_scene_camera.cpp
@@ -205,8 +203,6 @@ if(BRO_WITH_3D)
         native_scene_factories.cpp
         native_scene_particles.cpp
         native_scene_terrain.cpp
-        native_scene_land.cpp
-        native_scene_place.cpp
         native_scene_tile.cpp
         native_scene_tile_ops.cpp
         native_scene_tile_objects.cpp
@@ -658,9 +654,6 @@ else()
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene_graph bro_scene_graph_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene_extras bro_scene_extras_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(scene_grass bro_scene_grass_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(scene_plants bro_scene_plants_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(scene_land bro_scene_land_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(server     bro_server_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(profiler   bro_profiler_main   NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

@@ -39,8 +39,8 @@ void stepFrame(engine::Engine& engine) {
     drainMicrotasksAndLocalFetches();
 }
 
-// The scene's clock held (bro.time.scale 0) while it lives: the land's and
-// plants' work goes on frame by frame, the wind, sway and drift do not.
+// The scene's clock held (bro.time.scale 0) while it lives: the scene's
+// work goes on frame by frame, the wind, sway and drift do not.
 struct HeldClock {
     engine::Engine& engine;
     double scale;
@@ -162,27 +162,22 @@ std::map<std::string, double> framePasses(engine::Engine& engine) {
 
 void installHeadlessScenePerf(engine::Engine& engine,
                               const std::function<void(const char*, uint32_t, ev::NativeFn)>& setPerfFn) {
-    // perf.pendingWork({ within }): the scene's settle state, [] once settled.
-    setPerfFn("pendingWork", 1,
-        [&engine](Value, std::span<const Value> a) -> Value {
-            const Value opts = a.empty() ? ev::undefined() : a[0];
-            const double within = optNumber(opts, "within", std::numeric_limits<double>::infinity());
-            return fromJson(nlohmann::json(engine.scenePendingWork(within)));
+    // perf.pendingWork(): the scene's settle state, [] once settled.
+    setPerfFn("pendingWork", 0,
+        [&engine](Value, std::span<const Value>) -> Value {
+            return fromJson(nlohmann::json(engine.scenePendingWork()));
         });
-    // perf.settle({ maxFrames, held, exposure, kinds, within }): frames until settled.
+    // perf.settle({ maxFrames, held, exposure, kinds }): frames until settled.
     setPerfFn("settle", 1,
         [&engine](Value, std::span<const Value> a) -> Value {
             const Value opts = a.empty() ? ev::undefined() : a[0];
             const int maxFrames = static_cast<int>(std::max(0.0, optNumber(opts, "maxFrames", 4000)));
-            // { within: m }: the world whole that far from the eye, as a
-            // player's first view needs; past it, it streams in as they go.
-            const double within = optNumber(opts, "within", std::numeric_limits<double>::infinity());
             const bool held = optBool(opts, "held", true);
             const bool exposure = optBool(opts, "exposure", true);
             // Work whose reasons have not changed for this many frames is
             // stalled (not coming in): the wait ends there.
             const int stallFrames = static_cast<int>(std::max(1.0, optNumber(opts, "stallFrames", 600)));
-            // { kinds: ['land processes', ...] }: wait for those kinds only.
+            // { kinds: ['world service', ...] }: wait for those kinds only.
             std::vector<std::string> kinds;
             if (ev::isObject(opts)) {
                 // (Rooted: the reads below may allocate.)
@@ -195,8 +190,8 @@ void installHeadlessScenePerf(engine::Engine& engine,
                     }
                 }
             }
-            const auto pendingNow = [&engine, &kinds, within] {
-                std::vector<std::string> all = engine.scenePendingWork(within);
+            const auto pendingNow = [&engine, &kinds] {
+                std::vector<std::string> all = engine.scenePendingWork();
                 if (kinds.empty()) return all;
                 std::vector<std::string> some;
                 for (std::string& r : all)
@@ -205,11 +200,9 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 return some;
             };
             // (SceneRenderer::pendingWork's reasons for them, whatever `kinds` says.)
-            const auto compiling = [&engine, within] {
-                for (const std::string& r : engine.scenePendingWork(within))
-                    if (r.rfind("shaders:", 0) == 0 ||
-                        (r.rfind("pipelines:", 0) == 0 && r.find("building") != std::string::npos))
-                        return true;
+            const auto building = [&engine] {
+                for (const std::string& r : engine.scenePendingWork())
+                    if (r.rfind("pipelines:", 0) == 0 && r.find("building") != std::string::npos) return true;
                 return false;
             };
             HeldClock clock(engine, held);
@@ -231,12 +224,10 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 if (held && exposure) engine.advanceSceneExposure(static_cast<float>(kFrameMs / 1000.0));
                 stepFrame(engine);
                 std::vector<std::string> now = pendingNow();
-                // (Shaders compiling and pipelines building finish in wall
-                // time, not frames: while they are under way an unchanged
-                // frame is no stall, and the next waits a moment for them.
-                // A kinds filter can hide them, as a land's processes wait
-                // on its fill pipeline.)
-                if (now == pending && compiling())
+                // (Pipelines building finish in wall time, not frames: while
+                // they are under way an unchanged frame is no stall, and the
+                // next waits a moment for them, whatever a kinds filter hides.)
+                if (now == pending && building())
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 else
                     same = now == pending ? same + 1 : 0;
@@ -272,13 +263,12 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 return ev::throwTypeError(err.c_str());
             return fromJson(summaryJson(s));
         });
-    // perf.useShaderSet('a' | 'b', { rebake }): the set the scene binds.
-    setPerfFn("useShaderSet", 2,
+    // perf.useShaderSet('a' | 'b'): the set the scene binds.
+    setPerfFn("useShaderSet", 1,
         [](Value, std::span<const Value> a) -> Value {
             const std::string which = a.empty() || !ev::isString(a[0]) ? std::string() : ev::toUtf8(a[0]);
             if (which != "a" && which != "b") return ev::throwTypeError("useShaderSet('a' | 'b')");
-            const bool rebake = optBool(a.size() > 1 ? a[1] : ev::undefined(), "rebake", false);
-            if (!scene::SceneRenderer::useShaderSet(which == "b" ? 1 : 0, rebake))
+            if (!scene::SceneRenderer::useShaderSet(which == "b" ? 1 : 0))
                 return ev::throwTypeError("useShaderSet('b'): no shader set B is loaded (perf.loadShaderSet)");
             return ev::undefined();
         });

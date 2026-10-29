@@ -134,7 +134,6 @@ void ShadowPages::beginFrame(const bromath::Vec3& eye) {
     eye_ = eye;
     maps_.clear();
     dynamic_.clear();
-    loads_.clear();
     lightsSet_ = false;
     invalid_.clear();
     sun_.on = false;
@@ -494,31 +493,6 @@ void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
         for (int64_t x = x0; x <= x1; ++x) f(m.first + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x)));
 }
 
-void ShadowPages::addLoad(const bromath::AABB3& box, const float (&elements)[SP_MAX_LEVELS]) {
-    Load& l = loads_.emplace_back();
-    l.box = box;
-    std::copy(elements, elements + SP_MAX_LEVELS, l.elements);
-}
-
-void ShadowPages::spreadLoads() {
-    load_.assign(entries_.size(), 0.0f);
-    if (!sun_.on) return;
-    const int sway = swayLevel();
-    for (const Load& l : loads_) {
-        double rect[4], nextRect[4];
-        planeRect(sun_, l.box, rect);
-        if (building_) planeRect(next_, l.box, nextRect);
-        for (const Map& m : maps_) {
-            if (m.kind != SP_KIND_CLIPMAP || m.level <= sway || l.elements[m.level] <= 0.0f) continue;
-            const double* r = m.next ? nextRect : rect;
-            int n = 0;
-            forLevelRect(m, r, [&](int) { ++n; });
-            const float each = l.elements[m.level] / static_cast<float>(std::max(n, 1));
-            forLevelRect(m, r, [&](int i) { load_[static_cast<size_t>(i)] += each; });
-        }
-    }
-}
-
 template <class F>
 void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f) {
     if (bromath::aisEmpty(box)) return;
@@ -584,14 +558,6 @@ void ShadowPages::invalidate(const bromath::AABB3& box) {
 void ShadowPages::invalidateAll() {
     for (Entry& e : entries_)
         if (e.drawn) e.dirty = true;
-}
-
-void ShadowPages::redrawPlantsOf(uint64_t serial) {
-    // Missing, not stale: a page short of its plants is a lit hole where
-    // their shadow is, so the lookup reads its drawn ancestor meanwhile and
-    // it waits as a missing page does.
-    for (size_t i = 0; i < entries_.size(); ++i)
-        if (entries_[i].drawn && entries_[i].plantsDrawn == serial) release(static_cast<int>(i));
 }
 
 int ShadowPages::swayLevel() const {

@@ -1,21 +1,17 @@
 // The scene's background work shown in the system panels: the splash's line of
-// what is still being made (the page's script compile, the world shader sets
-// compiling, the pipelines building), and after the splash the corner status
-// panel (system/status.html) that shows the same while it lasts and fades out
-// when it is done (docs/system-panels.md, docs/compile-progress.md).
+// what is still being made (the page's script compile, the pipelines
+// building), and after the splash the corner status panel
+// (system/status.html) that shows the same while it lasts and fades out when
+// it is done (docs/system-panels.md, docs/compile-progress.md).
 //
-// The counts are the scene's: shader_warmup::progress() (every world shader
-// set asked for in this process, the warm-up record's included) and
-// pipeline_async::inFlight() (graphics pipelines built off the frame thread),
-// the same that scene.pendingWork() reports.
+// The pipeline count is the scene's pipeline_async::inFlight() (graphics
+// pipelines built off the frame thread), the same that scene.pendingWork()
+// reports.
 
 #include "engine/engine.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
-#if BRO_WITH_3D
-#include "scene/vulkan/frame/scene_shader_warmup.h"
-#endif
 
 #include <cmath>
 #include <string>
@@ -32,25 +28,17 @@ namespace bro::engine {
 
 namespace {
 
-// The scene's counts; a build without the scene compiles nothing.
-struct SceneWork {
-    int shaders = 0, shadersDone = 0, building = 0;
-};
-
-SceneWork sceneWork() {
-    SceneWork w;
+// A build without the scene builds nothing.
+int pipelinesBuilding() {
 #if BRO_WITH_3D
-    const auto sp = scene::vk::shader_warmup::progress();
-    w.shaders = sp.shaders;
-    w.shadersDone = sp.shadersDone;
-    w.building = scene::vk::pipeline_async::inFlight();
+    return scene::vk::pipeline_async::inFlight();
+#else
+    return 0;
 #endif
-    return w;
 }
 
 std::string workText(bool compiling, double compileProgress) {
-    const SceneWork sp = sceneWork();
-    const int building = sp.building;
+    const int building = pipelinesBuilding();
     std::string out;
     auto add = [&](const std::string& s) {
         if (!out.empty()) out += "   ";
@@ -58,8 +46,6 @@ std::string workText(bool compiling, double compileProgress) {
     };
     if (compiling && compileProgress >= 0.0)
         add("compiling scripts " + std::to_string(static_cast<int>(std::lround(compileProgress * 100.0))) + "%");
-    if (sp.shadersDone < sp.shaders)
-        add("compiling shaders " + std::to_string(sp.shadersDone) + " / " + std::to_string(sp.shaders));
     if (building > 0) add("building pipelines " + std::to_string(building));
     return out;
 }
@@ -83,8 +69,7 @@ void writeWork(SystemDocument* doc, std::string& last, const std::string& text) 
 }  // namespace
 
 bool Engine::backgroundWorkPending() const {
-    const SceneWork sp = sceneWork();
-    return sp.shadersDone < sp.shaders || sp.building > 0;
+    return pipelinesBuilding() > 0;
 }
 
 void Engine::tickWorkStatus(double nowMs) {

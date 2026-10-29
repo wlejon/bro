@@ -1,7 +1,6 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/shaders/ground/scene_land_layout.h"
 
 #include <algorithm>
 #include <cstring>
@@ -232,12 +231,11 @@ std::string CustomShaderInterface::declarations(bool vertex) const {
         s += "};\n";
     }
     // Each sampler a bare image, read through the custom set's sampler its
-    // texture asks for (scene_land_layout.h's CS_*: two bits a slot of
-    // customSamplerModes).
+    // texture asks for (SamplerMode: two bits a slot of customSamplerModes).
     const std::string set = "layout(set = " + std::to_string(kCustomSet) + ", binding = ";
     if (!samplers_.empty()) {
         s += "#ifndef CUSTOM_SAMPLERS_DECLARED\n#define CUSTOM_SAMPLERS_DECLARED\n" + set +
-             std::to_string(CS_SAMPLERS) + ") uniform sampler customSamplers[" + std::to_string(CS_SAMPLER_COUNT) +
+             std::to_string(kSamplersBinding) + ") uniform sampler customSamplers[" + std::to_string(kSamplerModes) +
              "];\n#endif\n";
     }
     for (size_t i = 0; i < samplers_.size(); ++i) {

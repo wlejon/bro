@@ -185,7 +185,6 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
         SceneView::make(bromath::mlookAt(eye, eye + kFaceDirs[face], kFaceUps[face]),
                         toVulkanClip(makePerspective(3.14159265358979f * 0.5f, 1.0f, kFaceNear, farZ)), eye,
                         kFaceNear, farZ, true, res, res);
-    std::copy(std::begin(frame.view.origin), std::end(frame.view.origin), view.origin);   // the probe is in the place frame
     const SceneCameraUniforms cam = view.uniforms(&frame.renderer);
     const VkDescriptorBufferInfo camInfo = gpu.device.frameUniform(&cam, sizeof(cam));
     VkDescriptorSet cameraSet = gpu.device.frameSet(gpu.defaults.cameraLayout);
@@ -235,9 +234,6 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     const bool cull = frame.renderer.frustumCullingEnabled();
     for (const MeshDraw& draw : frame.lists.meshes) {
         if (draw.translucent) continue;   // no sorted translucent pass in a capture
-        // Grass rings and plants are cut to the camera's view and level
-        // of detail; shadow-only draws are casters.
-        if (cameraCut(draw.kind) || draw.shadowOnly) continue;
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;
         MeshDraw faceDraw = draw;
         faceDraw.mirrored = true;

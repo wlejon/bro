@@ -10,7 +10,6 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/vulkan/lighting/scene_environment.h"
-#include "scene/vulkan/lighting/scene_probe_grid.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
@@ -23,7 +22,6 @@
 #include "scene/vulkan/frame/scene_view_inspect.h"
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
-#include "scene/vulkan/sky/scene_clouds.h"
 #include "scene/vulkan/world/scene_world_service.h"
 
 #include <cstdint>
@@ -70,10 +68,6 @@ public:
 
     /// The atmosphere's tables of the last render (SceneAtmosphere::read).
     bool readAtmosphereTables(AtmosphereTables& out) { return ready_ && atmosphere_.read(gpu_, out); }
-    /// The probe grid's world of the last render (SceneProbeGrid::read).
-    bool readProbeGrid(ProbeGridTables& out) { return ready_ && probes_.read(gpu_, out); }
-    /// The clouds' cover cube (SceneClouds::readCover).
-    bool readCloudCover(std::vector<float>& out) { return ready_ && clouds_.readCover(gpu_, out); }
 
     /// The last render's tonemapped result as top-down RGBA. Waits for that
     /// render (its own ticket, never the device); the copy is recorded into
@@ -129,8 +123,6 @@ private:
     SceneAtmosphere atmosphere_;
     SceneShadowPages shadows_;
     SceneCasterDrawer casters_;
-    SceneProbeGrid probes_;
-    SceneClouds clouds_;
     SceneGpu gpu_;
     SceneFrameGraph graph_;
     SceneGpuTimer timer_;

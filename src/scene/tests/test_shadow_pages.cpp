@@ -212,29 +212,22 @@ void testStillCrowns() {
           "only the pages every plant draws into are the plants' kind");
 }
 
-void testLoads() {
-    // A plants page is priced by its texels and the elements cast into it;
-    // a still page is a page.
+void testUnits() {
+    // A plants page (past the sway level) is priced by its texels; a still
+    // page is a page.
     ShadowPages p;
     ShadowPlan plan;
     const Vec3 eye{0.0625f, 1.0f, 0.0625f};
-    const int s = p.swayLevel(), level = s + 1;
-    const Vec3 far = eye + Vec3{3.0f * static_cast<float>(p.pageSize(level)), 0.0f, 0.0f};
-    float elements[SP_MAX_LEVELS] = {};
-    elements[s] = 7000.0f;   // (no level the plants' pages are not)
-    elements[level] = 1000.0f;
+    const int s = p.swayLevel();
     p.beginFrame(eye);
     p.setSun(downSun());
     p.endLights();
-    const int loaded = entryAt(p, eye, level), empty = entryAt(p, far, level), still = entryAt(p, eye, s);
-    p.addLoad({eye - Vec3{0.5f, 0.5f, 0.5f}, eye + Vec3{0.5f, 0.5f, 0.5f}}, elements);
-    p.request(p.serial(), bitsOf(p, {loaded, empty, still}));
+    const int plants = entryAt(p, eye, s + 1), still = entryAt(p, eye, s);
+    p.request(p.serial(), bitsOf(p, {plants, still}));
     p.plan(plan);
-    const double page = static_cast<double>(SP_PAGE) * SP_PAGE;
-    ShadowPageWant a, b, c;
-    check(hasWant(p, loaded, &a) && hasWant(p, empty, &b) && hasWant(p, still, &c), "each page is wanted");
-    check(a.plants && a.units > page && a.units <= page + 1000.0, "a page a load falls on costs its share");
-    check(loaded != empty && b.plants && b.units == page, "one none does its texels");
+    ShadowPageWant a, c;
+    check(hasWant(p, plants, &a) && hasWant(p, still, &c), "each page is wanted");
+    check(a.plants && a.units == static_cast<double>(SP_PAGE) * SP_PAGE, "a plants page costs its texels");
     check(!c.plants && c.units == 1.0, "a still page is one page");
 }
 
@@ -498,8 +491,7 @@ void testOverlays() {
               ((os >> SP_OVERLAY_BITS) & SP_OVERLAY_MASK) == static_cast<uint32_t>(plan.views[0].scratchY + SP_BORDER),
           "the sway level's overlay word names its page's first texel in the scratch target");
     check(plan.table[i6 + 1] == 0u, "what sways has no overlay past the sway level");
-    check(plan.views[0].plants == ShadowPlants::Swaying && plan.views[0].grass,
-          "the sway level's overlay takes the swaying plants and the grass");
+    check(plan.views[0].plants == ShadowPlants::Swaying, "the sway level's overlay takes the swaying plants");
     check(shadowCastsInto(plan.views[0], ShadowMotion::Swaying), "and whatever else sways");
     // What moves (not sways) also overlays the coarser needed pages.
     moving(false, {l0, l6});
@@ -507,7 +499,7 @@ void testOverlays() {
           "what moves overlays the sway level and the coarser levels");
     for (int v = 0; v < plan.viewCount; ++v)
         if (plan.views[v].map == 6)
-            check(plan.views[v].plants == ShadowPlants::None && !plan.views[v].grass, "a coarser overlay takes no sway");
+            check(plan.views[v].plants == ShadowPlants::None, "a coarser overlay takes no sway");
     // The requests come back a frame or two late: a page needed one plan
     // ago is still needed.
     moving(true, {});
@@ -707,41 +699,13 @@ void testCasters() {
     check(p.entry(e).dirty && !casters.moving(5), "a still caster gone redraws its pages");
 }
 
-void testRedrawPlantsOf() {
-    // The plants drawn in one frame came up short (their plan out of room):
-    // the pages that frame drew are missing again, and only those.
-    ShadowPagesConfig c;
-    c.staleNow = 0;
-    ShadowPages p;
-    p.configure(c);
-    ShadowPlan plan;
-    const Vec3 eye{0.0625f, 1.0f, 0.0625f};
-    const int s = p.swayLevel();
-    const int first = entryAt(p, eye, s + 1), second = entryAt(p, eye, s + 2);
-    frame(p, plan, eye, {first});
-    frame(p, plan, eye, {first});   // drawn (granted last frame)
-    const uint64_t drewFirst = p.serial();
-    frame(p, plan, eye, {first, second});
-    frame(p, plan, eye, {first, second});
-    const uint64_t drewSecond = p.serial();
-    check(p.entry(first).drawn && p.entry(second).drawn && drewFirst != drewSecond, "each drawn in its own frame");
-    p.redrawPlantsOf(drewSecond + 7);
-    check(p.entry(first).drawn && p.entry(second).drawn, "a frame that drew no page leaves them all");
-    p.redrawPlantsOf(drewFirst);
-    check(!p.entry(first).drawn && p.entry(first).physical < 0 && p.entry(second).drawn,
-          "a short frame's page is missing again, another frame's is kept");
-    frame(p, plan, eye, {first, second});
-    ShadowPageWant w;
-    check(hasWant(p, first, &w) && w.error > 1.0f, "and waits as a missing page, not a stale one");
-}
-
 }  // namespace
 
 int main() {
     testAddressingAndSnapping();
     testRequestsWantsAndGrants();
     testStillCrowns();
-    testLoads();
+    testUnits();
     testWindowMoveAndLateRequests();
     testLruReuse();
     testPoolShort();
@@ -755,7 +719,6 @@ int main() {
     testCoverRects();
     testLocalMaps();
     testCasters();
-    testRedrawPlantsOf();
     std::printf("bro_shadow_pages_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

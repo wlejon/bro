@@ -101,7 +101,6 @@ void SceneFrameGraph::transition(VkCommandBuffer cmd, SceneVkImage& image, VkIma
 void SceneFrameGraph::run(SceneFrame& frame) {
     scopeOpen_ = false;
     firstScope_ = true;
-    markCleared_ = false;
     indirectCleared_ = false;
 
     for (size_t i = 0; i < passes_.size(); ++i) {
@@ -113,8 +112,7 @@ void SceneFrameGraph::run(SceneFrame& frame) {
         // The frame's first reader of its compute results: the graphics is
         // split here, the rest waiting for the compute (outside rendering).
         const bool join = io.readsComputeResults() && frame.computeApart() && !frame.computeJoined;
-        if (scopeOpen_ && (join || moves(io) || !io.drawsHdr() || io.scope().mark != scopeMark_ ||
-                           (io.scope().mark && io.scope().indirect) != scopeIndirect_))
+        if (scopeOpen_ && (join || moves(io) || !io.drawsHdr() || io.scope().indirect != scopeIndirect_))
             closeScope(frame);
         if (join) frame.joinCompute();
         for (const auto& use : io.uses()) transition(frame.cmd, *use.image, layoutFor(use.access));
@@ -150,11 +148,7 @@ void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
         transition(cmd, t.hdr, kColor);
         transition(cmd, t.depth, kDepth);
     }
-    const bool indirect = scope.mark && scope.indirect;
-    if (scope.mark) {
-        transition(cmd, t.markDrawn(), kColor);
-        if (msaa) transition(cmd, t.mark, kColor);
-    }
+    const bool indirect = scope.indirect;
     if (indirect) {
         transition(cmd, t.indirectDrawn(), kColor);
         if (msaa) transition(cmd, t.indirect, kColor);
@@ -164,16 +158,10 @@ void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
     VkClearValue clearDepth{};
     clearDepth.depthStencil = {depth::clearFar(), 0};
 
-    VkRenderingAttachmentInfo colors[3];
+    VkRenderingAttachmentInfo colors[2];
     colors[0] = attachment(t.hdrDrawn(), resolving ? &t.hdr : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT, kColor,
                            firstScope_, clearColor);
     uint32_t colorCount = 1;
-    if (scope.mark) {
-        colors[SceneTargets::kMarkSlot] = attachment(t.markDrawn(), resolving ? &t.mark : nullptr,
-                                                     VK_RESOLVE_MODE_AVERAGE_BIT, kColor, !markCleared_, clearColor);
-        colorCount = SceneTargets::kMarkSlot + 1;
-        markCleared_ = true;
-    }
     if (indirect) {
         colors[SceneTargets::kIndirectSlot] =
             attachment(t.indirectDrawn(), resolving ? &t.indirect : nullptr, VK_RESOLVE_MODE_AVERAGE_BIT, kColor,
@@ -198,9 +186,8 @@ void SceneFrameGraph::openScope(SceneFrame& frame, const HdrScope& scope) {
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    frame.hdrTarget = t.hdrTarget(scope.mark, indirect);
+    frame.hdrTarget = t.hdrTarget(indirect);
     scopeOpen_ = true;
-    scopeMark_ = scope.mark;
     scopeIndirect_ = indirect;
     firstScope_ = false;
 }

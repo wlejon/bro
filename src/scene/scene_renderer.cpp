@@ -6,11 +6,9 @@
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
-#include "scene/nodes/land_node.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
-#include "scene/vulkan/frame/scene_shader_warmup.h"
 #include "scene/world/world_service.h"
 #include "render/vulkan_context.h"
 #include "util/log.h"
@@ -64,10 +62,7 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
     switch (n->type()) {
     case SceneNode::Type::Mesh: {
         auto* m = static_cast<MeshNode*>(n);
-        // Grass stands around the camera wherever its field is: never culled.
-        if (!m->hasDrawableMesh() || m->asGrass()) return std::nullopt;
-        // The land's rings follow the eye over the land: its box is the land's.
-        if (const LandNode* land = m->asLand()) return land->bounds();
+        if (!m->hasDrawableMesh()) return std::nullopt;
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();
@@ -155,19 +150,13 @@ double SceneRenderer::takeGpuMs(bool wait) {
 
 void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
 
-void SceneRenderer::pendingWork(std::vector<std::string>& out, double within) const {
-    // The world shader sets still compiling (this scene's and the warm-up's
-    // of the last run: what this scene asks for next is among them).
-    if (const vk::shader_warmup::Progress sp = vk::shader_warmup::progress(); sp.shadersDone < sp.shaders)
-        out.push_back("shaders: compiling " + std::to_string(sp.shadersDone) + " / " + std::to_string(sp.shaders));
+void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
     if (const int building = vk::pipeline_async::inFlight(); building > 0)
         out.push_back("pipelines: " + std::to_string(building) + " building");
-    // (What the newest frame did not draw for them, built or compiled since
-    // or not: a frame that waits for nothing ends it.)
+    // (What the newest frame did not draw for them, built since or not: a
+    // frame that waits for nothing ends it.)
     else if (cullStats_.pipelineSkips > 0)
         out.push_back("pipelines: " + std::to_string(cullStats_.pipelineSkips) + " draws skipped last frame");
-    for (const auto& [id, node] : graph_.nodes())
-        if (node) node->pendingWork(out, within);
     const CullStats& s = cullStats_;
     // (The world service and the shadow pages run under budgets that may
     // leave work queued for good; their queues count only where what waits
@@ -181,18 +170,6 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out, double within) co
                       q.name.c_str(), q.worstError);
         out.push_back(buf);
     }
-    if (s.groundLayerMissing)
-        out.push_back("ground layers: " + std::to_string(s.groundLayerMissing) + " tiles missing");
-    // (The deck is drawn in the air only: with none, nothing of it is to come.)
-    if (clouds_.enabled && clouds_.sourceHash && atmosphere_.enabled) {
-        if (!cloudStats_.compiled && !cloudStats_.failed) out.push_back("clouds: not yet compiled");
-        else if (cloudStats_.compiled && (!cloudStats_.covered || cloudStats_.generation != clouds_.generation))
-            out.push_back("clouds: cover not baked");
-        else if (cloudStats_.cachePending)
-            out.push_back("clouds: " + std::to_string(cloudStats_.cachePending) + " cache bakes to come");
-        else if (cloudStats_.volumePending)
-            out.push_back("clouds: " + std::to_string(cloudStats_.volumePending) + " volume bakes to come");
-    }
     // (A tenth of a stop: what the eye does not see change.)
     if (hasMeshContent_ && exposure_.mode == ExposureSettings::Mode::Auto &&
         std::fabs(s.exposureEv - s.meteredEv) > 0.1f) {
@@ -204,8 +181,8 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out, double within) co
 
 void SceneRenderer::settleAll(bool on) { WorldService::settleAll(on); }
 
-void SceneRenderer::setAsyncShaders(bool on) { vk::shader_warmup::forceAsync(on); }
-bool SceneRenderer::asyncShaders() { return vk::shader_warmup::async(); }
+void SceneRenderer::setAsyncShaders(bool on) { vk::pipeline_async::forceAsync(on); }
+bool SceneRenderer::asyncShaders() { return vk::pipeline_async::async(); }
 
 namespace {
 SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
@@ -228,7 +205,7 @@ bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out,
     return true;
 }
 
-bool SceneRenderer::useShaderSet(int set, bool rebake) { return vk::useShaderSet(set, rebake); }
+bool SceneRenderer::useShaderSet(int set) { return vk::useShaderSet(set); }
 int SceneRenderer::shaderSet() { return vk::activeShaderSet(); }
 SceneRenderer::ShaderSetSummary SceneRenderer::shaderSetSummary() { return summaryOf(vk::shaderSetInfo()); }
 
@@ -283,24 +260,6 @@ void SceneRenderer::render3D() {
 
     vkBridge_->setInspect(inspect_);
     hasMeshContent_ = vkBridge_->render3D(graph_, *this, cullStats_);
-}
-
-bool SceneRenderer::cloudCoverAt(const double* dirs, size_t count, std::vector<float>& out) {
-    out.clear();
-    if (!vkBridge_ || !cloudStats_.covered) return false;
-    if (coverCube_.empty() || coverCubeGeneration_ != cloudStats_.generation) {
-        if (!vkBridge_->readCloudCover(coverCube_)) return false;
-        coverCubeGeneration_ = cloudStats_.generation;
-    }
-    out.resize(count * 4);
-    for (size_t i = 0; i < count; ++i) {
-        double d[3] = {dirs[i * 3], dirs[i * 3 + 1], dirs[i * 3 + 2]};
-        const double l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        if (l > 0.0)
-            for (double& c : d) c /= l;
-        vk::SceneClouds::coverAt(coverCube_, d, out.data() + i * 4);
-    }
-    return true;
 }
 
 bool SceneRenderer::inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels) {
@@ -474,6 +433,5 @@ bool SceneRenderer::readAtmosphereTables(vk::AtmosphereTables& out) {
     return vkBridge_ && vkBridge_->readAtmosphereTables(out);
 }
 
-bool SceneRenderer::readProbeGrid(vk::ProbeGridTables& out) { return vkBridge_ && vkBridge_->readProbeGrid(out); }
 
 }  // namespace bro::scene

@@ -1,6 +1,5 @@
 #include "scene/vulkan/world/scene_world_service.h"
 
-#include "scene/nodes/land_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -44,10 +43,9 @@ int SceneWorldService::addKind(WorldProducer* producer, const WorldJobKind& kind
 }
 
 bool SceneWorldService::viewCut(const bromath::Vec3& eye, const bromath::Vec3& forward, const bromath::Vec3& wasEye,
-                                const bromath::Vec3& wasForward, float halfFov, float above) {
+                                const bromath::Vec3& wasForward, float halfFov) {
     const bromath::Vec3 d = eye - wasEye;
-    const float far = std::max(kCutMetres, std::max(above, 0.0f) * std::tan(halfFov));
-    if (bromath::vdot(d, d) > far * far) return true;
+    if (bromath::vdot(d, d) > kCutMetres * kCutMetres) return true;
     const float n = std::sqrt(bromath::vdot(forward, forward) * bromath::vdot(wasForward, wasForward));
     return n > 0.0f && bromath::vdot(forward, wasForward) < n * std::cos(halfFov);
 }
@@ -88,20 +86,12 @@ double SceneWorldService::run(WorldStreams& streams, int kind, const std::functi
 
 void SceneWorldService::runFrame(SceneFrame& frame) {
     // The view's eye and forward (the camera looks down its -z), and whether
-    // it jumped since the last render (on the body: a re-anchor is no cut).
-    const SceneView& view = frame.world;
+    // it jumped since the last render.
+    const SceneView& view = frame.view;
     const bromath::Vec3 forward{-view.invRelView.at(0, 2), -view.invRelView.at(1, 2), -view.invRelView.at(2, 2)};
     const float halfFov = view.perspective ? std::atan(1.0f / std::max(std::fabs(view.proj.at(1, 1)), 1e-6f))
                                            : 0.5235988f;   // (an orthographic view: 30 degrees)
-    // (How high the eye stands: over the first land's ground.)
-    float above = 0.0f;
-    for (const auto& [id, node] : frame.graph.nodes())
-        if (node->type() == SceneNode::Type::Mesh)
-            if (const LandNode* land = static_cast<MeshNode*>(node.get())->asLand()) {
-                above = land->eyeAbove(view.eye);
-                break;
-            }
-    const bool cut = haveView_ && viewCut(view.eye, forward, eye_, forward_, halfFov, above);
+    const bool cut = haveView_ && viewCut(view.eye, forward, eye_, forward_, halfFov);
     eye_ = view.eye;
     forward_ = forward;
     haveView_ = true;

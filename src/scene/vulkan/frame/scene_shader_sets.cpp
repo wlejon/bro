@@ -247,20 +247,15 @@ bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* 
     return true;
 }
 
-std::atomic<uint64_t> s_bakeEpoch{0};
-
-bool useShaderSet(int set, bool rebake) {
+bool useShaderSet(int set) {
     if (set != 0 && set != 1) return false;
     std::lock_guard<std::recursive_mutex> g(lock());
     if (set == 1 && !s_generation) return false;
     s_active.store(set, std::memory_order_relaxed);
-    if (rebake) s_bakeEpoch.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
 int activeShaderSet() { return s_active.load(std::memory_order_relaxed); }
-
-uint64_t shaderSetBakeEpoch() { return s_bakeEpoch.load(std::memory_order_relaxed); }
 
 ShaderSetInfo shaderSetInfo() {
     std::lock_guard<std::recursive_mutex> g(lock());

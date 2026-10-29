@@ -44,8 +44,7 @@
 // the travelling gust field a vertex (the trunk's two, the limb's). Every
 // motion is smooth in time to its second derivative (the gust field's
 // quintic noise and hyperbolic threshold, vegSmoothAbs) and every
-// frequency is fixed (scene_camera.glsl's oscillator clock). Movers
-// (vegMoverPush) part the limbs and twigs within their reach. A limb's or
+// frequency is fixed (scene_camera.glsl's oscillator clock). A limb's or
 // a spray's bend has the shape of a loaded cantilever, s^2 (3 - s) / 2
 // along it, so the bend is at its outer end, and the levels add down the
 // hierarchy.
@@ -70,12 +69,7 @@ const vec2 VEG_LENGTH_RANGE = vec2(0.005, 200.0);
 const vec2 VEG_SHAPE_RANGE = vec2(1.0, 4.0);     // broflora's kSwayShapeRange
 const float VEG_TWO_PI = 6.28318530718;
 
-// The ringing of a herb's stalk (vegLevel; trees take vegTreeLevel below).
-// VEG_TURBULENCE: unresolved turbulence of 15% of the drag above 0.1 Hz
-// with a -5/3 spectrum, whose narrow-band resonant RMS is sigma sqrt(pi /
-// (4 * 6.76)) times the mean drag at 1 Hz and damping 1. VEG_GUST_KICK: the
-// share of a gust's change that rings.
-const float VEG_TURBULENCE = 0.051;
+// The share of a gust's change that rings a level (vegTreeLevel).
 const float VEG_GUST_KICK = 0.4;
 // A leaf's flutter about its petiole: lowest frequency and spread (Hz).
 const vec2 VEG_LEAF_FLUTTER_HZ = vec2(2.0, 2.5);
@@ -87,7 +81,7 @@ const vec2 VEG_LEAF_FLUTTER_HZ = vec2(2.0, 2.5);
 const vec2 VEG_NEAR_SHRINK = vec2(0.25, 1.0);
 
 // How much a limb and a twig rise and fall as they ring, against their
-// sway (vegLevel's `bob`): a broadleaf's.
+// sway (vegTreeLevel's `bob`): a broadleaf's.
 const float vegLimbBob = 0.6;
 const float vegTwigBob = 0.8;
 
@@ -228,51 +222,6 @@ float vegPixelsPerMetre(vec3 at) {
 }
 // The whole pose's reach (pixels) under which it holds still (vegPose).
 const vec2 VEG_STILL_PIXELS = vec2(1.0, 3.0);
-float vegFineKeep(vec3 at, float reach) {
-    return smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, reach * vegPixelsPerMetre(at));
-}
-
-// A herb stalk's tip deflection (world metres) as a forced, damped
-// oscillator, under drag `mean` (already lagged a quarter of its period)
-// and the gusts' change `kick`. `turbulence` is the share of unresolved
-// turbulence it feels (VEG_TURBULENCE),
-// `phase` in cycles; `bob` how much it rises and falls as it rings (limbs
-// and twigs; a trunk only leans).
-//
-// The ring: what sets it ringing, each as an RMS: the turbulence the gust
-// field does not resolve, at its resonance (narrow-band response to a -5/3
-// spectrum: mean drag times f^(-1/3) / sqrt(damping)); and the gusts' own
-// change over the last half period, which only a slow level rings at. A
-// lightly damped oscillator under broadband forcing answers as a narrow band
-// of width about 2 zeta f round its frequency, so the ring is two sinusoids
-// at f (1 -+ zeta): it swells and dies away over about 1 / (2 zeta f)
-// rather than ringing on as a pure tone. Every frequency is fixed (the
-// drag changes the ring's size, never its rate: scene_camera.glsl's
-// oscillator clock).
-vec3 vegLevelDrive(VegCantilever c, float zeta, float turbulence, float phase, float mean, float kick, VegWind w,
-                   float bob, float pxPerM, float ring) {
-    if (c.sway <= 0.0 || c.freq <= 0.0) return vec3(0.0);
-    float period = 1.0 / c.freq;
-    float turb = turbulence * mean * pow(max(c.freq, 0.1), -1.0 / 3.0) * inversesqrt(zeta);
-    float gust = VEG_GUST_KICK * kick * min(1.0, 1.25 * period);
-    float rms = sqrt(turb * turb + gust * gust) * ring;
-    if (pxPerM > 0.0) rms *= smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, 2.0 * rms * c.sway * c.len * pxPerM);
-    float a1 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 - zeta)) + phase);
-    float a2 = VEG_TWO_PI * (sceneWindCycles(c.freq * (1.0 + zeta)) + phase * 2.3) + 2.0;
-    float a3 = VEG_TWO_PI * (sceneWindCycles(c.freq * 1.13) + phase * 3.7) + 1.3;
-    float a4 = VEG_TWO_PI * (sceneWindCycles(c.freq * 0.97) + phase) + 2.1;
-    vec3 x = w.dir * (mean + rms * (sin(a1) + sin(a2))) + w.side * (0.85 * rms * sin(a3)) +
-             vec3(0.0, 1.41421 * bob * rms * sin(a4), 0.0);
-    return x * (c.sway * c.len);
-}
-
-// The same driven by the plant's trunk drag (a herb's stalk). `pxPerM` the
-// pixels a metre where it is (vegPixelsPerMetre): its ring fades as it
-// shrinks on screen (vegFineKeep), its lean kept; 0 keeps it whole. `ring`
-// scales the ring (1: all of it).
-vec3 vegLevel(VegCantilever c, float zeta, float phase, VegWind w, float bob, float pxPerM, float ring) {
-    return vegLevelDrive(c, zeta, VEG_TURBULENCE, phase, w.trunk, w.kick, w, bob, pxPerM, ring);
-}
 
 // --- Trees and shrubs: a held lean, damped by size ---------------------------
 //
@@ -337,7 +286,10 @@ vec2 vegBuffet(float phase, float seed) {
 // resonance (narrow band: mean f^-1/3 / sqrt(zeta)) and the gusts' change
 // `kick`. `seed`: the limb's (vegBuffet). `pxPerM` the pixels a metre
 // where it is (vegPixelsPerMetre): its ring and buffeting fade as they shrink
-// on screen (vegFineKeep), its lean kept; 0 keeps them whole.
+// on screen (VEG_FINE_PIXELS), its lean kept; 0 keeps them whole. A lightly
+// damped level under broadband forcing answers as a narrow band of width
+// about 2 zeta f round its frequency, so the ring is two sinusoids about f:
+// it swells and dies away rather than ringing on as a pure tone.
 vec3 vegTreeLevel(VegCantilever c, float zeta, float ring, float phase, float mean, float kick, VegWind w, float bob,
                   float buffet, float seed, float pxPerM) {
     if (c.sway <= 0.0 || c.freq <= 0.0) return vec3(0.0);
@@ -372,60 +324,6 @@ vec3 vegTreeLevel(VegCantilever c, float zeta, float ring, float phase, float me
     vec3 x = w.dir * (mean + b.x + rms * (a1 + a2)) + w.side * (b.y + 0.85 * rms * a3) +
              vec3(0.0, bob * (1.41421 * rms * a4 + 0.5 * b.y), 0.0);
     return x * (c.sway * c.len);
-}
-
-// The movers' push at camera-relative rest point `p`, `above` metres over
-// its plant's root (scene/nodes/plant_movers.h). Each sample of a mover's trail
-// pushes the point away from the body's axis as far as the body is deep in
-// it, through a damped spring's impulse response at the sample's age: the
-// plant parts as the body arrives, holds while it stays and swings back
-// past rest once after it goes. Horizontal, and a little down (a pushed
-// shoot bends down as it goes aside). A point feels the body from
-// VEG_MOVER_REACH of its radius (scene_view.cpp sizes each mover's bound
-// with it); a quicker, stiffer spring parted a shrub by a hand's breadth a
-// frame.
-const float VEG_MOVER_HZ = 1.0;
-const float VEG_MOVER_DAMPING = 0.4;
-const float VEG_MOVER_REACH = 1.6;
-const float VEG_MOVER_STEP = 0.1;   // PlantMovers::kStep
-// The damped spring's step response at time t (0 before it).
-float vegMoverStep(float t, float w, float z, float wd) {
-    if (t <= 0.0) return 0.0;
-    return 1.0 - exp(-z * w * t) * (cos(wd * t) + z * w / wd * sin(wd * t));
-}
-vec3 vegMoverPush(vec3 p, float above) {
-    int n = int(camera.plantMoverInfo.x + 0.5);
-    if (n <= 0) return vec3(0.0);
-    int K = int(camera.plantMoverInfo.y + 0.5);
-    float w = VEG_TWO_PI * VEG_MOVER_HZ, z = VEG_MOVER_DAMPING;
-    float wd = w * sqrt(1.0 - z * z);
-    vec2 acc = vec2(0.0);
-    for (int m = 0; m < n; ++m) {
-        vec4 a = camera.plantMovers[m * 2], b = camera.plantMovers[m * 2 + 1];
-        vec2 dm = p.xz - a.xy;
-        if (dot(dm, dm) > a.z * a.z || above > b.x) continue;
-        float R = a.w, reach = VEG_MOVER_REACH * R;
-        vec2 sum = vec2(0.0);
-        for (int k = 0; k < K; ++k) {
-            vec4 s = camera.plantTrail[m * K + k];
-            if (s.w <= 0.0) continue;
-            vec2 d = p.xz - s.xy;
-            float r = length(d);
-            if (r >= reach) continue;
-            vec2 dir = r > 1e-4 ? d / r : vec2(1.0, 0.0);
-            // The spring's response to the push over the sample's whole
-            // step (its step response at the age less a step earlier), not
-            // an impulse at its time: each new sample then starts the plant
-            // moving with no kick in its speed (an impulse's response rises
-            // at once, and a shrub jerked aside every 0.1 s as it parted).
-            // The trail's oldest half second fades so a sample leaves softly.
-            float h = vegMoverStep(s.z, w, z, wd) - vegMoverStep(s.z - VEG_MOVER_STEP, w, z, wd);
-            h *= 1.0 - smoothstep(1.5, 2.0, s.z);
-            sum += dir * (R * (1.0 - smoothstep(0.0, reach, r)) * h * s.w);
-        }
-        acc += sum * b.y * (1.0 - smoothstep(b.x - 0.3, b.x, above));
-    }
-    return vec3(acc.x, -0.25 * length(acc), acc.y);
 }
 
 // The bent shape of a cantilever s of the way along it, and its slope.
@@ -475,9 +373,6 @@ VegPose vegPoseMoving(VegPlant plant, VegLimb limb, VegWind w, vec3 rest, float 
     vec3 xl = vegTreeLevel(limb.limb, vegDamping(limb.limb, VEG_BOUGH_DAMPING, pl), VEG_CROWN_RING, limb.phase, pl,
                            w.kick, w, vegLimbBob, 1.0, limb.phase, pxPerM);
     o.offset += xl * vegBend(s);
-    // A body pushing through it moves its outer shoots and leaves aside
-    // (the wood near the trunk stays).
-    o.offset += vegMoverPush(rest, rest.y - plant.root.y) * smoothstep(0.15, 0.7, s);
     o.omega += cross(dir, xl) * (vegBendSlope(s) / max(limb.limb.len, 0.05));
 
     // Its twigs: the outer end of the limb, each on a phase of its own that

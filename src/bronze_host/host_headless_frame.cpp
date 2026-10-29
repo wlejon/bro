@@ -779,11 +779,6 @@ void installHeadlessFrame(engine::Engine& engine) {
                 snum("shadowPagesEvicted", s.shadowPagesEvicted);
                 snum("shadowPagesBuilding", s.shadowPagesBuilding);
                 snum("shadowViews", s.shadowViews);
-                snum("groundLayerNeeded", s.groundLayerNeeded);
-                snum("groundLayerMissing", s.groundLayerMissing);
-                snum("groundLayerFills", s.groundLayerFills);
-                snum("groundLayerShortfall", s.groundLayerShortfall);
-                snum("landFills", s.landFills);
                 snum("worldBudgetMs", s.worldBudgetMs);
                 snum("worldSpentMs", s.worldSpentMs);
                 snum("worldJobs", s.worldJobs);

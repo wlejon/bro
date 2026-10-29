@@ -19,53 +19,23 @@
 
 namespace bro::scene::vk {
 
-bool PassCoverDepth::active(const SceneFrame& frame) const {
-    for (uint32_t i : frame.lists.opaque)
-        if (frame.gpu.meshes.coverPrepassed(frame.lists.meshes[i])) return true;
-    return false;
-}
-
-void PassCoverDepth::declare(const SceneFrame& frame, PassIO& io) const {
-    io.hdr({.mark = true, .indirect = frame.ssao});
-    // (Its draws bind the lighting set, the shadow pages' pool and overlays
-    // in it, as the opaque pass's do.)
-    io.sample(frame.gpu.shadows.pool);
-    io.sample(frame.gpu.shadows.scratch);
-}
-
-void PassCoverDepth::record(SceneFrame& frame) {
-    const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
-    SceneMeshDrawer& meshes = frame.gpu.meshes;
-    for (uint32_t i : frame.lists.opaque) {
-        const MeshDraw& draw = frame.lists.meshes[i];
-        if (meshes.coverPrepassed(draw))
-            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull,
-                          SceneMeshDrawer::CoverPass::Depth);
-    }
-}
-
 void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
-    io.hdr({.mark = true, .indirect = frame.ssao});
+    io.hdr({.indirect = frame.ssao});
     // (Its draws light through the shadow pages' pool and overlays.)
     io.sample(frame.gpu.shadows.pool);
     io.sample(frame.gpu.shadows.scratch);
-    // The plants' planned draws read the plan's chunks and commands.
-    if (frame.computeApart()) io.readsCompute();
 }
 
 void PassOpaque::record(SceneFrame& frame) {
     // Each draw's own time when the passes are timed (SceneGpuTimer), by kind.
     static constexpr const char* kKind[kMeshKindCount] = {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
-        "opaque:vegetation", "opaque:instancedVegetation", "opaque:grass", "opaque:plants", "opaque:land"};
+        "opaque:vegetation", "opaque:instancedVegetation"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
-    using CoverPass = SceneMeshDrawer::CoverPass;
     SceneMeshDrawer& meshes = frame.gpu.meshes;
-    // (The cover's depth is drawn by now, PassCoverDepth: it is lit once a pixel.)
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
-        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull,
-                      meshes.coverPrepassed(draw) ? CoverPass::Shade : CoverPass::None);
+        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
         if (frame.timer)
             frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
