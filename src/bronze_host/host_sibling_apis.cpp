@@ -68,6 +68,9 @@
 #if BRO_WITH_FLORA
 #include <broflora/api/api.h>
 #endif
+#if BRO_WITH_KERNEL
+#include <brokernel/api.h>
+#endif
 #if BRO_WITH_3D
 #include <bromesh/api.h>
 #include "bronze_host/native_scene_internal.h"
@@ -463,6 +466,9 @@ void installSiblingApis(engine::Engine& engine) {
 #if BRO_WITH_FLORA
     broflora::api::installFlora();
     adoptGlobalProperty("FloraWorld");
+#endif
+#if BRO_WITH_KERNEL
+    brokernel::api::installKernel();
 #endif
     {
         // `bro.image` is ONE object with two sources: the kernels, codecs
@@ -911,6 +917,9 @@ void installWorkerSiblingApis() {
 #if BRO_WITH_FLORA
     broflora::api::installFlora();
     adoptGlobalProperty("FloraWorld");
+#endif
+#if BRO_WITH_KERNEL
+    brokernel::api::installKernel();
 #endif
     broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
     render::registerImageCodecs();

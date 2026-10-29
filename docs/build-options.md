@@ -47,6 +47,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | **on** | on | on | on | self-contained, no vcpkg; on in every profile because `<audio>`/Web Audio is core HTML |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | on | needs `3D` (bromesh) |
+| `BRO_WITH_KERNEL` | brokernel + its `bro.kernel` binding | off | on | on | on | over brass, which bro always has; no vcpkg |
 | `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). See [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
 | `BRO_WITH_WEBP` | libwebp decoder | **on** | **on** | on | on | compiled from the Skia source bundle alongside HarfBuzz, so `.webp` decodes the same on every platform. Off = `.webp` does not decode anywhere |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | off | on | on | **needs vcpkg** |

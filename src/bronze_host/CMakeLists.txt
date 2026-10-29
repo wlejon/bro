@@ -370,6 +370,10 @@ if(BRO_WITH_FLORA)
     target_link_libraries(bro_bronze_host PUBLIC broflora_api)
 endif()
 
+if(BRO_WITH_KERNEL)
+    target_link_libraries(bro_bronze_host PUBLIC brokernel brokernel_api)
+endif()
+
 if(BRO_WITH_TENSOR)
     target_link_libraries(bro_bronze_host PUBLIC brotensor_api)
 endif()

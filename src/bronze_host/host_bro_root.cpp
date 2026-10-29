@@ -212,6 +212,9 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_FLORA
     setUnavailable("flora", "BRO_WITH_FLORA");
 #endif
+#if !BRO_WITH_KERNEL
+    setUnavailable("kernel", "BRO_WITH_KERNEL");
+#endif
 #if !BRO_WITH_GAMEAI
     setUnavailable("ai", "BRO_WITH_GAMEAI");
 #endif
@@ -472,6 +475,9 @@ void installWorkerBroRoot() {
 #endif
 #if !BRO_WITH_FLORA
     setUnavailable("flora", "BRO_WITH_FLORA");
+#endif
+#if !BRO_WITH_KERNEL
+    setUnavailable("kernel", "BRO_WITH_KERNEL");
 #endif
 #if !BRO_WITH_GAMEAI
     setUnavailable("ai", "BRO_WITH_GAMEAI");

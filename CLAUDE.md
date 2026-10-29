@@ -81,6 +81,7 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | broremote | `broremote` | remote sessions behind `bro.remote` and `<remoteview>`: frames to a viewer (VA-API / Media Foundation / Raw), its input back (`BRO_WITH_REMOTE`; Windows/Linux) |
 | broconf · brokeys · broapps · brovfs · brothumb · broseat · brocred · brosys · brodisplays · broportal · brocompositor · browl · broa11y · brodmabuf · brodbus · brodecor · broclip · brompris · bropulse · broime | `<name>` / `<name>_api` | desktop substrate libraries (`bro.conf`, `bro.keys`, `bro.apps`, `bro.vfs`, `bro.thumb`, `bro.seat`, `bro.cred`, `bro.sys`, `bro.displays`, `bro.portal`, `bro.compositor`, `bro.wl`, `bro.a11y`, `bro.decor`, `bro.clip`, `bro.mpris`, `bro.pulse`, `bro.ime`; `brodmabuf` and `brodbus` are C++-only under Linux) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
+| brokernel | `brokernel` / `brokernel_api` | the kernel language for world code: one source through brass to SPIR-V and native code (`bro.kernel`, `BRO_WITH_KERNEL`) |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
@@ -107,6 +108,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `flora-api.js` | `bro.flora` ecosystem sim: prototypes, step, mesh/foliage/bloom emit, the vegetation records bro.scene sways |
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | global `FastNoise`, FastNoise2 SIMD noise |
+| `kernel-api.js` | `bro.kernel`: brokernel source compiled (`compile(source, {file, modules})`, no disk reads), point kernels `eval`ed and grid kernels `run` over typed arrays on the CPU; stores bounded (outside reads zero, writes nothing; a store accessed at the cells must cover the grid) |
 | `image-api.js` | `bro.image` typed-array kernels (CPU, broimage): decode/EXIF, encode/KTX2, geometry, color, preproc, presets |
 | `image-gpu-api.js` | `bro.image.gpu.*` WebGL2 renderer (bro-side JS): `colormap`, `fbm2D`, ranging, `viewRect` |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |

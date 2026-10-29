@@ -16,8 +16,8 @@ bro_dependency(libjpeg-turbo GITHUB libjpeg-turbo/libjpeg-turbo REF c85e6b905bf2
 # release has locked them (scripts/lock-deps.sh). Declaring them all here lets a
 # fresh configure resolve every head in one concurrent batch.
 bro_dependencies(
-    # The JavaScript and Lua toolchain.
-    bronze brass brasslua
+    # The JavaScript, Lua and kernel toolchain.
+    bronze brass brasslua brokernel
     # Engine libraries (FastNoise2 is the fork of Auburn's, its positions far
     # from the origin exact).
     bromath htmlayout brokit broimage broaudio bromesh broflora brotensor

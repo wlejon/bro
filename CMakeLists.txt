@@ -235,6 +235,7 @@ option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_
 option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_audio})
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
+option(BRO_WITH_KERNEL   "brokernel kernel language for world code (bro.kernel)" ${_d_render})
 option(BRO_WITH_TEXT_SHAPING "HarfBuzz text shaping + UAX#9 bidi (Skia modules)" ${_d_shaping})
 # Build the stock bro/bro-headless/bro-server executables. A host application
 # that embeds the engine (add_subdirectory(bro), link bro_engine, supply its
@@ -491,12 +492,13 @@ set(BROMPRIS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brom
 set(BROPULSE_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bropulse" FORCE)
 set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broime" FORCE)
 set(BROREMOTE_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broremote" FORCE)
+set(BROKERNEL_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for brokernel" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
-    3D PHYSICS AUDIO GAMEAI FLORA
+    3D PHYSICS AUDIO GAMEAI FLORA KERNEL
     NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
     DECOR CLIP MPRIS PULSE IME REMOTE
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
