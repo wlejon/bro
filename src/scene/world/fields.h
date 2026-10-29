@@ -1,5 +1,5 @@
 #pragma once
-// A field (docs/scene-world-architecture.md §10, §11): a value over the
+// A field: a value over the
 // ground, a FastNoise2 node tree with a seed. A tree comes as data, the
 // encoded string FastNoise2's own tools and bro's FastNoise binding
 // (node.encode()) write, so a world's fields are a table it can store,

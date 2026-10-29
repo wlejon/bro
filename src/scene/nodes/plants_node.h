@@ -7,8 +7,8 @@
 // species'.
 //
 // What a plant is is the world's: a MODULE, GLSL compiled into the plants'
-// shaders at run time (setModule, vulkan/shaders/foliage/scene_plant_layer.glsl;
-// docs/scene-world-architecture.md §13), which reads its share of each
+// shaders at run time (setModule, vulkan/shaders/foliage/scene_plant_layer.glsl),
+// which reads its share of each
 // species' record. A node with no module draws nothing. The engine's share
 // is the plant's size, its detail and its crown as the light sees it.
 //
@@ -18,7 +18,7 @@
 // continuous (vulkan/foliage/scene_plants_gpu_plan.cpp picks the counts each
 // frame, on the GPU).
 //
-// Where the plants are (docs/scene-world-architecture.md §10): placed by
+// Where the plants are: placed by
 // RULES (world/plant_placement.h), the leaves about the eye made from the
 // world's fields as it moves (follow(), each frame, the camera's eye) and
 // dropped behind it, so a world of any size costs what is in reach; and any

@@ -1,5 +1,4 @@
-// bro_atmosphere_test: the atmosphere's tables (docs/scene-world-architecture.md
-// §7) against a CPU reference (tests/atmosphere_reference.h).
+// bro_atmosphere_test: the atmosphere's tables (world/atmosphere.h) against a CPU reference (tests/atmosphere_reference.h).
 //
 // A scene renders with the atmosphere on, its eye at 2 m, 2 km, 30 km and
 // 400 km, its sun at noon (68 degrees up), 10 degrees and -4 degrees

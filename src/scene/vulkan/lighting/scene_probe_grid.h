@@ -1,7 +1,6 @@
 #pragma once
 
-// The probe grid's GPU half (docs/scene-world-architecture.md §7, "Design:
-// the probe grid"; the CPU half, where the cascades lie and what they need,
+// The probe grid's GPU half (the CPU half, where the cascades lie and what they need,
 // is scene/world/probe_grid.h; the numbers both and the shaders agree on
 // are shaders/lighting/probe_grid_layout.h). On when the renderer's setting
 // is (SceneRenderer::setProbeGrid).

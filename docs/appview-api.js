@@ -6,7 +6,7 @@
  * `<appview src="dir">` runs the folder app at `dir` inside this page, the way
  * helm runs its apps. The page hosts it as it hosts an `<iframe>` (its own
  * layer, input routed in, `width` / `height` / `reload()` / `capture()`), but
- * it is ANOTHER APP, a compartment of its own (docs/app-isolation.md):
+ * it is ANOTHER APP, a compartment of its own:
  *
  *   - It is who its `bro.json` says. `bro.app` inside it is its own (id, name,
  *     folders), and its grants are its own, settled from its manifest and the

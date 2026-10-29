@@ -1,4 +1,4 @@
-// Cached shadow pages (docs/scene-world-architecture.md §8): the numbers the
+// Cached shadow pages: the numbers the
 // CPU's paging (scene/world/shadow_pages.h), the marking pass
 // (shadow/shadow_mark.comp) and every lit shader's lookup
 // (common/scene_shadow_pages.glsl) agree on, for C++ and GLSL alike.

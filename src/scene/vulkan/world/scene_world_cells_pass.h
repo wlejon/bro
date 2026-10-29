@@ -1,5 +1,5 @@
 #pragma once
-// The GPU cell pass (docs/scene-world-architecture.md §1): a provider's
+// The GPU cell pass: a provider's
 // world cells (world_cells.h) culled against a frame's views, the camera's
 // frustum and its shadow views', top-down in three dependent dispatches
 // (world_cells_cull.comp: the tops; the leaves of the tops in view, a

@@ -34,8 +34,7 @@
  *     the land as they would, and a forest reaches the horizon.
  *
  * On a flat body the land is square: `extent` metres from the origin each
- * way. On a round body (`scene.setBody`, docs/scene-world-architecture.md
- * §11) it is the whole body: its tiles are keyed on the cube faces of the
+ * way. On a round body (`scene.setBody`) it is the whole body: its tiles are keyed on the cube faces of the
  * body's chart, its rings laid out about the eye in the map round it to the
  * antipode (more rings are added as it takes; the ones finer than a pixel
  * from the eye's height are not drawn), its height a 3D tree at the body's
@@ -45,7 +44,7 @@
  * a hill's across a valley or a far forest's across a meadow, comes from
  * the land's sun: the height a point must clear to see the sun, marched
  * over the land's tiles about the eye to 16 km (the first land offered;
- * docs/scene-world-architecture.md §5).
+ * scene/world/land_sun.h).
  *
  * THE SURFACE MODULE (scene_land_layer.glsl is the contract). GLSL that
  * defines

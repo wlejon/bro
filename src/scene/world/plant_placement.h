@@ -1,5 +1,5 @@
 #pragma once
-// Placement (docs/scene-world-architecture.md §10): a world's plants made
+// Placement: a world's plants made
 // where the eye is, from its fields and its rules, rather than stored.
 //
 // The rules are data: a ground field (heights) and layers, each a kind of

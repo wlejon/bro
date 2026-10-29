@@ -140,8 +140,7 @@ GroundData groundData(vec2 xz, vec4 vdata) {
     return g;
 }
 
-// What the turf's surface layer keeps (docs/scene-world-architecture.md
-// §5): every pattern of the turf that depends only on where it is, each
+// What the turf's surface layer keeps (scene/world/surface_layers.h): every pattern of the turf that depends only on where it is, each
 // band-limited to the footprint `fp` (a tile's texel as the tile is filled,
 // the pixel's where a fragment works them out itself), 0..1 each:
 //   a: xyz the sward module's (swardBake), w the big mottling;

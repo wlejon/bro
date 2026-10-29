@@ -1,5 +1,5 @@
 // An <appview> runs in time slices on a fiber of its own, so another app
-// cannot stall its host page (docs/app-isolation.md, step 4): a long job
+// cannot stall its host page (docs/appview-api.js): a long job
 // yields at its slice and finishes over later frames, and an app that does not
 // return where its page waits on it (an event) is stopped, with the reason, as
 // a `terminated` event at the element.

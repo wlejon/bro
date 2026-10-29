@@ -1,5 +1,4 @@
-// Cached shadow pages (world/shadow_pages.h, docs/scene-world-architecture.md
-// §8): a page's depth is kept until a caster or its light changes, so a
+// Cached shadow pages (world/shadow_pages.h): a page's depth is kept until a caster or its light changes, so a
 // still scene draws no shadow casters at all once its pages are in.
 //
 // Contract under test:

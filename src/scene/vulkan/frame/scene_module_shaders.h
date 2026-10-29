@@ -1,6 +1,5 @@
 #pragma once
-// A set of shaders that call a world's modules (docs/scene-world-architecture.md
-// §13, "worlds as code"): the built-in ones, compiled at build time with the
+// A set of shaders that call a world's modules (nodes/world_module.h): the built-in ones, compiled at build time with the
 // engine's module files (each a module of nothing), or the same shaders with
 // a world's modules in those files' places, compiled at run time. A kind's
 // set says which shaders call its modules (ground/scene_cover_shaders.h, the

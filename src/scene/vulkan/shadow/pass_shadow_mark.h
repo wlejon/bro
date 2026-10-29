@@ -1,6 +1,6 @@
 #pragma once
 
-// The shadow pages' marking (docs/scene-world-architecture.md §8): after the
+// The shadow pages' marking (scene/world/shadow_pages.h): after the
 // opaque surfaces, a compute pass over the depth target marks, for every
 // shadowed light, the page each pixel's lookup needs (shaders/shadow/
 // shadow_mark.comp): the sun's clipmap level its footprint wants (a texel a

@@ -428,7 +428,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     }
     // Freeze the builtins every realm on this thread shares before anything
     // runs over them — bro's own JS included, so no host module can lean on
-    // a patched intrinsic either (docs/app-isolation.md, step 2). What the
+    // a patched intrinsic either. What the
     // host installs below is not frozen: it is the realm's own.
     {
         const auto t0 = std::chrono::steady_clock::now();

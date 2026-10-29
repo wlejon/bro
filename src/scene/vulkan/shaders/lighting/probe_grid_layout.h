@@ -1,5 +1,4 @@
-// The probe grid (docs/scene-world-architecture.md §7, "Design: the probe
-// grid"): the numbers the CPU half (scene/world/probe_grid.h), the GPU half
+// The probe grid: the numbers the CPU half (scene/world/probe_grid.h), the GPU half
 // (scene/vulkan/lighting/scene_probe_grid.h) and its shaders
 // (lighting/scene_probe_grid.glsl) agree on, for C++ and GLSL alike.
 //

@@ -1,10 +1,9 @@
-// The land's module contract (docs/scene-world-architecture.md §13, "the
-// land"; scene/nodes/land_node.h). A world's land is GLSL that defines
+// The land's module contract (scene/nodes/land_node.h; docs/land-api.js). A world's land is GLSL that defines
 //
 //   float landHeight(vec2 p)
 //       the ground's height (m) at world (x, z) = p, on a flat body;
 //   float landHeight(vec3 p)
-//       on a round one (docs/scene-world-architecture.md §11): its height
+//       on a round one: its height
 //       over the datum at the datum's point p, relative to the fill's origin
 //       (a double point the fill sets per tile: a FastNoise2 tree's GLSL
 //       reads it as FN_ORIGIN3, so its fine octaves hold 6371 km out, and

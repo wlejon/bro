@@ -1,5 +1,5 @@
 #version 450
-// The sky's light on a surface (docs/scene-world-architecture.md §7): for
+// The sky's light on a surface (scene/world/atmosphere.h): for
 // each sun angle (mu_s) and altitude, the radiance arriving from every
 // direction, as l <= 2 spherical harmonics in the sun's frame (z up, x the
 // sun's horizontal direction; the six coefficients even across that plane,

@@ -1,5 +1,5 @@
 #pragma once
-// Surface layers (docs/scene-world-architecture.md §5): a surface's
+// Surface layers: a surface's
 // material, worked out once per tile and kept, instead of in every pixel
 // that shows it. This is the CPU half, the same for every provider: which
 // tiles a view needs, where they live, the fills it offers the world service
@@ -57,8 +57,7 @@
 //
 // Filling. Each frame the tiles a view needs but has not got (or got at an
 // older generation of the provider's data) are the layer's jobs (jobs()),
-// which the world service (world_service.h, docs/scene-world-architecture.md
-// §6) ranks against every other producer's and grants as the frame's slack
+// which the world service (world_service.h) ranks against every other producer's and grants as the frame's slack
 // allows; the granted ones are filled (commit()). A job's error is in
 // pixels, what the view shows while it is not made: a missing tile's texels
 // are its nearest resident ancestor's, 2^(levels between) times its own on

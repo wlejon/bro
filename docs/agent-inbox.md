@@ -208,77 +208,7 @@ the remote. Whoever can do that can ask any agent anything, and serve any
 free name. There is no second check today.
 
 The seam for one is `AgentInbox::admits(sender, agent)` (`src/engine/agent_inbox.cpp`),
-which every `ask` passes through and which now admits everything. Per-agent keys and
-capabilities would sit there:
-
-- **Keys.** An asker would present a key id (an `ask --key=`), checked
-  against keys the host trusts (`~/.config/bro/agent-keys`, an ssh-style
-  list of public keys with names). The key would be proved by signing the
-  request id with a nonce the inbox issues at `register` or per session.
-  The audit log would then record the key's name as well as the
-  transport's facts.
-- **Capabilities.** An agent would declare what it accepts at `register`
-  (`--accepts=summarize,files`), and a key would carry what it may ask
-  (`claude-win: summarize, review`). `admits` would refuse a request outside
-  both, with the reason, and log the refusal.
-
-Neither changes the wire contract: both are options on commands that exist.
-
-## Broadcast across machines (design, not built)
-
-The goal is a few halo-type boxes on one LAN (four or five), each running
-helm with agents in its inbox, where an agent on any box (or on Windows)
-broadcasts a request that any capable agent on any box may answer. Here is
-how it would sit on this contract.
-
-**Discovery.** Each box announces its inbox on the LAN with DNS-SD
-(`_bro-inbox._tcp`, TXT: host name, the ssh user, broremote socket, the
-names and abouts of its agents, a change counter), through avahi on Linux.
-The announcement only names a box. It grants nothing. Reaching a box is
-what reaching it is today: an ssh login as its user, through broremote's
-text lane (a `bro-ctl --remote BOX` agent process per box, already one ssh
-connection each). A box list in `~/.config/bro/inbox-peers` (host names
-the user has ssh keys for) is the fallback where mDNS is not wanted, and
-the allowlist where it is: a discovered box not on the list is shown, not
-used.
-
-**Fan-out.** A broadcast is a client-side operation over the per-box
-contract, not a new transport:
-`bro-ctl ask --broadcast CAPABILITY TEXT [--first | --all] [--wait SECS]`
-would:
-1. `agents --json` on every known box (in parallel, over each box's
-   agent connection), and pick the agents whose `about` (or, with
-   capabilities, whose declared `accepts`) matches;
-2. `ask --async` each of them, recording `<box>/<id>` per request;
-3. follow them with `inbox status --wait` on each box. `--first` takes the
-   first `done` and `inbox cancel`s the rest. `--all` gathers every reply,
-   with the box and agent named on each.
-
-A broadcast has an id of its own (`b-<random>`), carried on each request
-as `--broadcast=ID`, which the engine would add to the request's sender
-fields and the log. Each box's audit log then shows the same broadcast id,
-and the logs can be joined without a central server.
-
-**Identity across boxes.** Each hop keeps the facts it can see. Box A's
-inbox logs the asker's transport (`remote`, `j` from Windows'
-address). When the fan-out runs on box A (an agent there broadcasting), box
-B logs `remote` from A's address with A's declared `origin`. So "who" is
-the chain of declared `origin`s, each hop verified only as far as the ssh
-login it came through. With keys (above), the original asker's signature
-would travel with the request, so box B could check the original asker and
-not just the box in between.
-
-**Answering.** Nothing changes for a serving agent: a broadcast request is
-an ordinary request in its inbox (the `from` names the broadcast), answered
-the ordinary way. An agent that is not capable simply is not asked, because
-the asker filtered on `about` / `accepts`. A later `--accepts` makes that
-precise instead of a text match.
-
-**What would be built:** the DNS-SD announcement (a small service in
-bro, started where helm hosts the remote), the peers file, `ask
---broadcast` in bro-ctl (and `bro.inbox.broadcast` over the same per-box
-calls from a page, once a page can hold remote sessions of its own), and
-the `--broadcast` sender field.
+which every `ask` passes through and which admits everything.
 
 ## Headless tests
 

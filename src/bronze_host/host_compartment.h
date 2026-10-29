@@ -1,6 +1,6 @@
 #pragma once
 
-// Compartments (docs/app-isolation.md, step 3): one app's code, contained.
+// Compartments (docs/appview-api.js): one app's code, contained.
 //
 // A compartment is a real bronze Realm (its own global object, its own host
 // globals and host classes, its own module instances) bound to one document

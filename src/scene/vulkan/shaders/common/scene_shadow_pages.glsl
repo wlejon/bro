@@ -1,4 +1,4 @@
-// The cached shadow pages' addressing (docs/scene-world-architecture.md §8),
+// The cached shadow pages' addressing (scene/world/shadow_pages.h),
 // shared by the marking pass (shadow/shadow_mark.comp) and every lit
 // shader's lookup (common/scene_lighting.glsl): a virtual map as the frame
 // samples it, and which page-table entry holds the page under a point.

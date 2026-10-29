@@ -1,4 +1,4 @@
-// Grants change while the app runs (docs/apps.md, Permissions; docs/app-isolation.md):
+// Grants change while the app runs (docs/apps.md, Permissions):
 // a capability taken back through bro.permissions or from another process
 // (`bro --revoke-app`) is revoked at once, its calls throw an Error named
 // PermissionRevoked, a function kept from a gated namespace refuses too, dev

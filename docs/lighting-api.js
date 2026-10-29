@@ -123,7 +123,7 @@
  * The receivers' shadow filter (scene.setShadowQuality). Per-light shadow
  * settings (bias, normal bias, shadowDistance) live on the LightNode.
  *
- * Shadows are cached virtual pages (docs/scene-world-architecture.md §8):
+ * Shadows are cached virtual pages (scene/world/shadow_pages.h):
  * the sun's is a clipmap fixed in light space, its finest level about a
  * texel a screen pixel near the eye, each level twice the extent of the one
  * before; spots and points have their own maps on the same page pool. A

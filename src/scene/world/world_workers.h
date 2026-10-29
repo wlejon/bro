@@ -1,5 +1,5 @@
 #pragma once
-// The world's CPU workers (docs/scene-world-architecture.md §10): a fixed
+// The world's CPU workers: a fixed
 // pool of threads the world's systems hand jobs to (a cell's plants placed
 // from its fields now; field tiles and collision later), so nothing a frame
 // does waits on them. A job owns what it reads (immutable rules, its cell's

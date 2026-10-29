@@ -1,4 +1,4 @@
-// The turf's surface layer (docs/scene-world-architecture.md §5; the tiles
+// The turf's surface layer (the tiles
 // are scene/world/surface_layers.h's, filled by ground_layer_fill.frag): the
 // position-only patterns of scene_ground.glsl's GroundBake, kept in tiles a
 // fragment samples instead of working them out. Included by

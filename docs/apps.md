@@ -327,7 +327,6 @@ which installs them for its self-tests, gates them like `fs`.
 **Not gated yet:** a granted `spawn`, which runs programs with the user's
 full rights; and what a deputy opens for the app (an MPRIS player's
 `openUri`, the Steam overlay's web page, Steam networking).
-[app-isolation.md](app-isolation.md) is where this goes next.
 
 ## Installing, and how launchers find apps
 

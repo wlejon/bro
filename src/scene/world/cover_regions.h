@@ -1,7 +1,6 @@
 #pragma once
 
-// The cover's regions (docs/scene-world-architecture.md §11, "The cover on
-// the body"): what a grass node's blades, herbs and far tier are keyed on.
+// The cover's regions: what a grass node's blades, herbs and far tier are keyed on.
 //
 // A flat body's cover is keyed on the plane: one region, the land's own
 // frame. A sphere has no flat chart, so its cover is laid out on the cells

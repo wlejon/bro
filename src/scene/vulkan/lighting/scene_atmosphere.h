@@ -1,6 +1,6 @@
 #pragma once
 
-// The atmosphere's tables on the GPU (docs/scene-world-architecture.md §7;
+// The atmosphere's tables on the GPU (world/atmosphere.h;
 // Hillaire 2020; the model and the tables' parametrisations are
 // scene/world/atmosphere.h and shaders/common/scene_atmosphere.glsl).
 //

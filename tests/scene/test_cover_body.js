@@ -1,5 +1,4 @@
-// The cover on a round body (docs/scene-world-architecture.md §11, "The
-// cover on the body"; scene/world/cover_regions.h, scene_grass.glsl's
+// The cover on a round body (scene/world/cover_regions.h, scene_grass.glsl's
 // cover frame): a grass node's blades are laid out on the regions of the
 // body's lattice and stood on the body. Verifies, on an Earth-radius body:
 //   - the blades stand on the ground far from the place's anchor (9.5 km,

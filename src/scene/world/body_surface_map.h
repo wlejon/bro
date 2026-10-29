@@ -1,6 +1,5 @@
 #pragma once
-// A round body's surface map (surface_layers.h, "Roots and the map";
-// docs/scene-world-architecture.md §11): the six cube faces of the body's
+// A round body's surface map (surface_layers.h, "Roots and the map"): the six cube faces of the body's
 // chart (place.h) as the surface layers' roots, each chart square's box in
 // the place frame (where a sphere's land is drawn), how high the eye
 // stands over it, and whether the body's curve hides it.

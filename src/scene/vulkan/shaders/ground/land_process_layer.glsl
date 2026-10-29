@@ -1,5 +1,4 @@
-// The land's processes' contract (docs/scene-world-architecture.md §11,
-// "Processes"; scene/world/land_grid.h). A world's processes are GLSL that
+// The land's processes' contract (scene/world/land_grid.h; docs/land-api.js). A world's processes are GLSL that
 // defines
 //
 //   void procInit(inout vec4 v[PROC_CHANNELS])

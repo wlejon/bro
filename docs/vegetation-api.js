@@ -19,8 +19,7 @@
  * the low plants among its blades (ferns and wildflowers, pebbles, coral,
  * whatever a world grows), built where they stand, nothing stored per
  * plant. What they are is the world's HERB MODULE, GLSL compiled at run
- * time into the node's cover shaders (docs/scene-world-architecture.md §13,
- * "worlds as code"); the engine owns where and how they are drawn.
+ * time into the node's cover shaders; the engine owns where and how they are drawn.
  *
  * The engine: a grid of 0.35 m cells, each holding at most one plant; near
  * the eye (two rings, to a third of the scene's real band, scene.setBands)
@@ -87,7 +86,7 @@
  * (a meadow's leaves and culms, moss, kelp, crystal spines, whatever a world
  * grows), built where they stand, nothing stored per blade. What they are
  * is the world's SWARD MODULE, GLSL compiled at run time into the node's
- * cover shaders (docs/scene-world-architecture.md §13, "worlds as code");
+ * cover shaders;
  * the engine owns where and how they are drawn. A node with no sward module
  * grows no blades (its herbs and turf still draw).
  *
@@ -236,8 +235,7 @@
  * a world stands up) from `scene.createPlants(opts)`, every one built where
  * it stands on the GPU from its record, its species and its seed (nothing
  * is stored per element). What a plant is is the world's PLANT MODULE
- * (`module`), GLSL compiled at run time into the plants' shaders
- * (docs/scene-world-architecture.md §13, "worlds as code"); the engine owns
+ * (`module`), GLSL compiled at run time into the plants' shaders; the engine owns
  * where plants stand, how many elements each is drawn with, and the light.
  * A node with no module draws nothing.
  *

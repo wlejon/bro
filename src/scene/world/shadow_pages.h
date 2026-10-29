@@ -1,5 +1,5 @@
 #pragma once
-// Cached shadow pages (docs/scene-world-architecture.md §8): the paging
+// Cached shadow pages: the paging
 // policy, the CPU half, testable without a GPU (bro_shadow_pages_test). The
 // GPU half draws what it plans (vulkan/shadow/pass_shadow.h), marks the
 // pages each frame's pixels want (vulkan/shadow/pass_shadow_mark.h) and

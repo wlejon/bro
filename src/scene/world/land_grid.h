@@ -1,6 +1,5 @@
 #pragma once
-// A land's PROCESSES and the grid they run on (docs/scene-world-architecture.md
-// §11, "Processes"): GLSL compute kernels a world writes, iterated by the
+// A land's PROCESSES and the grid they run on (docs/land-api.js): GLSL compute kernels a world writes, iterated by the
 // engine over a grid of the body, whose result the land's height and
 // surface read (its first channel is the land's height over its tree: x
 // added, y the tree's scale). What runs them is vulkan/ground/scene_land_process.h; what a

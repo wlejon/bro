@@ -1,4 +1,4 @@
-// The turf's surface layers (docs/scene-world-architecture.md §5): each
+// The turf's surface layers: each
 // grass node's tiles, chosen for the camera (scene/world/surface_layers.h),
 // offered to the world service (§6, scene/vulkan/world/scene_world_service.h)
 // as fills, filled as it grants them by drawing the turf meshes straight

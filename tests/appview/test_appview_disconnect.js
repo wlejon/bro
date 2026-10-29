@@ -1,4 +1,4 @@
-// How an <appview>'s mistakes reach its page (docs/app-isolation.md, step 5):
+// How an <appview>'s mistakes reach its page (docs/appview-api.js):
 // an exception nothing caught is an `apperror` event and the app runs on; a
 // job that never finishes yields, and past kNotRespondingMs the page hears
 // `unresponsive` (`responding` false) and may stop it; an app the runtime

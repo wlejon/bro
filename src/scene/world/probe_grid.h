@@ -1,6 +1,5 @@
 #pragma once
-// The probe grid (docs/scene-world-architecture.md §7, "Design: the probe
-// grid"): irradiance probes about the eye, which light every lit surface's
+// The probe grid: irradiance probes about the eye, which light every lit surface's
 // ambient. This is the CPU half, testable without a GPU: where the cascades
 // lie, the heights of their probes, and the jobs they offer the world
 // service. The GPU half (scene/vulkan/lighting/scene_probe_grid.h) owns the

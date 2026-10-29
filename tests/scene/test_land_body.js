@@ -1,5 +1,4 @@
-// The land on a round body (docs/scene-world-architecture.md §11, "The land
-// on the body"; scene/nodes/land_node.h, world/body_surface_map.h): an
+// The land on a round body (scene/nodes/land_node.h, world/body_surface_map.h): an
 // Earth-sized sphere whose land is keyed on the cube faces of its chart and
 // drawn in rings on its map about the eye.
 // Verifies:

@@ -1,5 +1,5 @@
 #pragma once
-// World cells (docs/scene-world-architecture.md §1): one hierarchy of cells,
+// World cells: one hierarchy of cells,
 // from the ground up, that content hangs off, so a frame's work follows the
 // cells in view rather than everything in the world.
 //

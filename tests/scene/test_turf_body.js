@@ -1,5 +1,4 @@
-// The turf on a round body (docs/scene-world-architecture.md §11, "The
-// cover on the body"; scene_ground.glsl's groundSurface, scene_grass.glsl's
+// The turf on a round body (scene_ground.glsl's groundSurface, scene_grass.glsl's
 // coverTurfCells): the turf's patterns are the lattice cell's holding each
 // point, in its flat frame, and its tiles are the land's chart's. Verifies,
 // on an Earth-radius body, with a sward of no blades whose turf is a wave

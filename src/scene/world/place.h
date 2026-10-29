@@ -1,6 +1,6 @@
 #pragma once
 
-// The body and its place frame (docs/scene-world-architecture.md §11).
+// The body and its place frame (docs/scene-api.js, setBody).
 //
 // A BODY is the land's shape: a sphere of `radius` metres about its centre
 // with a spin axis, or, at an infinite radius, a flat world (the plane
@@ -44,8 +44,7 @@ struct CubeFace {
 };
 const CubeFace& cubeFace(int f);
 
-/// The body's CHART (docs/scene-world-architecture.md §11, "The land on the
-/// body"): where what is keyed on the ground is keyed. A flat body's is one
+/// The body's CHART: where what is keyed on the ground is keyed. A flat body's is one
 /// root, its plane's x and z. A sphere's is the cube's six faces, each a
 /// square of face metres: a direction d on face f is at x = R atan(d.u /
 /// d.n), z = R atan(d.v / d.n), [-πR/4, πR/4] each way (tan-warped: equal
@@ -127,7 +126,7 @@ public:
     /// left its cell; false when that is the anchor already.
     bool anchorAt(const double bodyPoint[3], PlaceMove& move);
 
-    /// The LAND'S FRAME and its MAP (docs/scene-world-architecture.md §11):
+    /// The LAND'S FRAME and its MAP:
     /// the ground is drawn in the land's frame (SceneView::world: the body's
     /// frame on a flat body, the place frame on a sphere), and reached by
     /// 2D map coordinates there. A flat body's map is the plane's x and z. A

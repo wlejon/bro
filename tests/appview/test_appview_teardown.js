@@ -1,5 +1,5 @@
-// A stopped app gives back everything it held (docs/app-isolation.md, step
-// 5): its canvases, its sound, its Worker, its timers, its
+// A stopped app gives back everything it held (docs/appview-api.js): its
+// canvases, its sound, its Worker, its timers, its
 // watchers and its child processes, whether its page stopped it with stop()
 // or the runtime terminated it for not returning. Checked from outside: the
 // child process is gone and the Worker's heartbeat file stops changing.

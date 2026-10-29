@@ -1,6 +1,5 @@
 #pragma once
-// The cached shadow pages' GPU state (docs/scene-world-architecture.md §8;
-// the paging is world/shadow_pages.h's, CPU-side in SceneRenderer):
+// The cached shadow pages' GPU state (the paging is world/shadow_pages.h's, CPU-side in SceneRenderer):
 //
 //   pool      the physical pages, ShadowPlan::poolColumns x poolRows pages
 //             of SP_STRIDE texels (a page and its border) in one D32 image,

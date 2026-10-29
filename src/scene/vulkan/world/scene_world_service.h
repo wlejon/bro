@@ -1,5 +1,5 @@
 #pragma once
-// The world service's executor (docs/scene-world-architecture.md §6): runs
+// The world service's executor: runs
 // the jobs the policy (scene/world/world_service.h) grants each frame, in
 // the stream each kind's schedule names, and times them, so the policy
 // spends milliseconds it measured rather than guessed.

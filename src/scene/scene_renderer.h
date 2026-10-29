@@ -301,7 +301,7 @@ public:
     float ssaoIntensity() const { return ssaoIntensity_; }
     float ssaoBias() const { return ssaoBias_; }
 
-    /// The probe grid (docs/scene-world-architecture.md §7): irradiance
+    /// The probe grid (world/probe_grid.h): irradiance
     /// probes about the eye, tracing a world made for them (the ground's
     /// height, the plants' crowns as a medium, the sun through it).
     void setProbeGrid(bool enabled) { probeGrid_ = enabled; }

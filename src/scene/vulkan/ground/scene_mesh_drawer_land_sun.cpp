@@ -1,5 +1,4 @@
-// The land's sun (scene/world/land_sun.h; docs/scene-world-architecture.md
-// §5, "The land's sun"): its levels about the eye, made from the first land
+// The land's sun (scene/world/land_sun.h): its levels about the eye, made from the first land
 // offered's tiles by land_sun.comp as the world service grants them, a
 // level a job, and read by every lit shader through the lighting set
 // (scene_lighting.glsl's sceneLandSun).

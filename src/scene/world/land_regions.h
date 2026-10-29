@@ -1,6 +1,5 @@
 #pragma once
-// A land's REGIONAL GRIDS (docs/scene-world-architecture.md §11, "As built:
-// regional grids"): finer grids of the land's processes, made under the eye
+// A land's REGIONAL GRIDS (docs/land-api.js, "REGIONAL GRIDS"): finer grids of the land's processes, made under the eye
 // as it moves and dropped behind it, each run with the world's own kernels
 // from the next coarser field (the global grid's, or the coarser level's
 // regions over it) and read where it is, so the shape a process makes (a

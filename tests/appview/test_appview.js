@@ -1,5 +1,5 @@
 // <appview src=dir>: another app running inline in this page, as a
-// compartment of its own (docs/app-isolation.md, step 3). It is who its
+// compartment of its own (docs/appview-api.js). It is who its
 // bro.json says, with its own grants, and nothing mutable crosses: the page
 // reaches it by message and by the functions it exposes, and the app reaches
 // the page the same way.

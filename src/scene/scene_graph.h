@@ -224,9 +224,7 @@ public:
     bool hasBody() const { return hasBody_; }
     const Place& place() const { return place_; }
     /// The place frame's origin on the body: a flat body's translation. (A
-    /// sphere's frame also turns, and the world it keys on is its own from
-    /// step 9c, docs/scene-world-architecture.md §11: until then a sphere's
-    /// keyed systems lie on its anchor's tangent plane, origin 0.)
+    /// sphere's frame also turns, and the world it keys on is its own.)
     void placeOrigin(double out[3]) const;
     /// Re-anchor now on the cell holding `bodyPoint` (a jump far off);
     /// false when that is the anchor already.
@@ -550,7 +548,7 @@ public:
 
     /// The receivers' filter: `pcfTaps` is 1 (single sample), 3 (3x3 PCF,
     /// default) or 5. The shadows themselves are cached pages sized to the
-    /// screen (docs/scene-world-architecture.md §8), with nothing to tune.
+    /// screen (world/shadow_pages.h), with nothing to tune.
     void setShadowQuality(int pcfTaps) { renderer_.setShadowQuality(pcfTaps); }
     int shadowPCFTaps() const { return renderer_.shadowPCFTaps(); }
 

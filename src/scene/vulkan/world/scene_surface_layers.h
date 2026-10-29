@@ -1,6 +1,6 @@
 #pragma once
-// The GPU half of a surface layer set (scene/world/surface_layers.h, docs/
-// scene-world-architecture.md §5): its tiles' atlas, one 2D-array image a
+// The GPU half of a surface layer set (scene/world/surface_layers.h): its
+// tiles' atlas, one 2D-array image a
 // layer with an array layer a slot (each slot a tile with its border), and
 // its page table, a 2D-array R32_UINT image with a layer a level. It moves
 // the slots a frame fills between sampling and being written, writes nothing

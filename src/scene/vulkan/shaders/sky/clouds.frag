@@ -1,6 +1,5 @@
 #version 450
-// The cloud deck (vulkan/sky/pass_clouds.h; docs/scene-world-architecture.md
-// §13 "volumes", §11 "going up"): each pixel's view marched through the
+// The cloud deck (vulkan/sky/pass_clouds.h; docs/clouds-api.js): each pixel's view marched through the
 // deck's shell, from below, inside and above it the same way, up to the
 // opaque surfaces' depth (a hill before a cloud hides it, a cloud before a
 // hill hides the hill), and blended over what is drawn.

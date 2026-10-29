@@ -1,5 +1,5 @@
-// What one realm does must not change what another calls (docs/app-isolation.md,
-// step 2). A frame is a realm of its own, but the builtins are one set per
+// What one realm does must not change what another calls (bronze
+// docs/internals.md, "Realms and lockdown"). A frame is a realm of its own, but the builtins are one set per
 // thread, so a frame that patched Array.prototype would patch the page's;
 // lockdown freezes them before the first script.
 // And each window has its own CustomElementRegistry: a frame defining <x-iso>

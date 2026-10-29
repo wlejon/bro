@@ -1,6 +1,5 @@
 // What stands as a plant: the trees and shrubs a plants node draws, as a
-// world writes them (docs/scene-world-architecture.md §13, "worlds as
-// code"). Included by scene_plants.glsl; needs scene_camera.glsl and
+// world writes them (scene/nodes/world_module.h). Included by scene_plants.glsl; needs scene_camera.glsl and
 // scene_plant_records.glsl.
 //
 // What a plant is is not the engine's: a world gives the plants node a

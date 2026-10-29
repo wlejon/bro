@@ -1,4 +1,4 @@
-// The cover's far tier (docs/scene-world-architecture.md §9): past the
+// The cover's far tier: past the
 // rings, what grows on the ground drawn as one small upright quad an
 // element, as many of them as the screen holds rather than as the ground
 // holds. Needs scene_camera.glsl and scene_grass.glsl.

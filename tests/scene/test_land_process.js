@@ -1,5 +1,4 @@
-// A land's processes (docs/scene-world-architecture.md §11, "Processes";
-// scene/world/land_grid.h, vulkan/ground/scene_land_process.h): kernels the
+// A land's processes (scene/world/land_grid.h, vulkan/ground/scene_land_process.h): kernels the
 // world writes, run over a grid of the land when it is made, whose first
 // channel is the land's height over its tree (x added, y the tree's scale).
 // Verifies:

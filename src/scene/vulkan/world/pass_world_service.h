@@ -1,6 +1,6 @@
 #pragma once
 
-// The world service's frame (docs/scene-world-architecture.md §6;
+// The world service's frame (scene/world/world_service.h;
 // SceneWorldService::runFrame): its producers' offers, the policy's grants
 // and the jobs, at the frame's head, outside any rendering, after the
 // frame's uniforms and before anything draws what the jobs make (the turf's

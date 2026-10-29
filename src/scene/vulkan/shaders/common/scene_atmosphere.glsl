@@ -1,4 +1,4 @@
-// The atmosphere's model on the GPU (docs/scene-world-architecture.md §7;
+// The atmosphere's model on the GPU (scene/world/atmosphere.h;
 // Hillaire 2020): its media, the geometry of the shell, and the tables'
 // parametrisations, word for word those of scene/world/atmosphere.h (the
 // CPU half, which bro_atmosphere_test checks the tables against).

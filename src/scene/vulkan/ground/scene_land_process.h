@@ -1,6 +1,5 @@
 #pragma once
-// The land's processes on the GPU (docs/scene-world-architecture.md §11,
-// "Processes"; scene/world/land_grid.h): each land's grid, two images of
+// The land's processes on the GPU (scene/world/land_grid.h): each land's grid, two images of
 // its cells (rgba32f, a layer a root's channel, each root with its halo)
 // written in turn, its processes' kernels run over it (land_process.comp,
 // the land's LandProcessShaders set) a frame's budget of dispatches at a

@@ -1,5 +1,4 @@
-// The cloud deck's module contract (docs/scene-world-architecture.md §13,
-// "volumes"; docs/clouds-api.js; scene/world/clouds.h). A world's clouds are
+// The cloud deck's module contract (docs/clouds-api.js; scene/world/clouds.h). A world's clouds are
 // GLSL that defines
 //
 //   vec4 cloudCover(vec3 up)

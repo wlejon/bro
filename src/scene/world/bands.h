@@ -1,6 +1,6 @@
 #pragma once
 // The world's BANDS: how far from the eye each way of drawing it reaches
-// (docs/scene-world-architecture.md §14). Within `real` (m) the world is
+// (docs/scene-api.js, setBands). Within `real` (m) the world is
 // drawn as itself: every plant's elements, the grass's blades and the
 // herbs; past it the land's canopy and cover stand for them. `painted` (m)
 // is where the painted band ends and the sky map's painting takes over;

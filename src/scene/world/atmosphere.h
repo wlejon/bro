@@ -1,7 +1,7 @@
 #pragma once
 
 // The atmosphere's parameters and the CPU half of its model
-// (docs/scene-world-architecture.md §7; Hillaire 2020, "A Scalable and
+// (Hillaire 2020, "A Scalable and
 // Production Ready Sky and Atmosphere Rendering Technique").
 //
 // One model from the ground to space: a spherical shell of air between

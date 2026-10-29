@@ -2,7 +2,7 @@
 
 // The capability catalogue: every power an app can be granted beyond its own
 // page and its own directories, in one table that every check reads
-// (docs/apps.md, Permissions; docs/app-isolation.md). Nothing else in bro
+// (docs/apps.md, Permissions). Nothing else in bro
 // names a capability that is not here, so the manifest's validation, the
 // prompts, the grant store, `bro --permissions` and the checks at the natives
 // cannot disagree about what exists.

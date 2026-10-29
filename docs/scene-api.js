@@ -86,7 +86,7 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 
 /**
  * The last frame's counters (`cullStats()`), and the world service's state.
- * The world service (docs/scene-world-architecture.md §6) makes what does
+ * The world service (scene/world/world_service.h) makes what does
  * not depend on the view (today the turf's surface layer tiles) in the time
  * the frame leaves under its target (`setFrameTarget`), most wrong on screen
  * first.
@@ -987,7 +987,7 @@ class SceneGraph {
   setFrameTarget(ms) {}
 
   /**
-   * The world's bands (docs/scene-world-architecture.md §14): how far from
+   * The world's bands (scene/world/bands.h): how far from
    * the eye each way of drawing it reaches. Within `real` (m) the world is
    * drawn as itself: every plant's elements to it, the grass's rings and
    * the herbs to it (at most 150 m, past which a blade is under a pixel);

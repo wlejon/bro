@@ -1,7 +1,7 @@
 #pragma once
 
-// The cloud deck on the GPU (scene/world/clouds.h; docs/clouds-api.js;
-// docs/scene-world-architecture.md §13 "volumes"): the world's module, its
+// The cloud deck on the GPU (scene/world/clouds.h; docs/clouds-api.js): the
+// world's module, its
 // cover, the engine's noise, the march and the shadow.
 //
 //   - The module's set (CloudShaders, a ModuleShaders set): the cover's

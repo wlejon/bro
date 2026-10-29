@@ -1,7 +1,6 @@
 #pragma once
 
-// The cloud deck (docs/scene-world-architecture.md §13, "volumes"; §11,
-// "going up"; docs/clouds-api.js): a shell about the body from `bottom` to
+// The cloud deck (docs/clouds-api.js): a shell about the body from `bottom` to
 // `top` metres over its datum, whose clouds are a world's MODULE, GLSL
 // compiled at run time (vulkan/shaders/sky/scene_cloud_layer.glsl says what
 // it defines): the cover over the body (baked once into a cube) and the

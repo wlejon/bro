@@ -92,8 +92,7 @@ layout(set = 4, binding = LG_CANOPY) uniform texture2DArray landCanopiesImage;
 
 // --- the cover's frame ---
 //
-// What the cover is keyed on (docs/scene-world-architecture.md §11, "The
-// cover on the body"). On a flat body the land's frame: the cells, the eye
+// What the cover is keyed on (scene/world/cover_regions.h). On a flat body the land's frame: the cells, the eye
 // and every point are its x, z and height. A round body has no flat chart,
 // so the cover is laid out on REGIONS, the cells of the place frame's
 // lattice: each region's own flat frame (its azimuthal map's x and z about

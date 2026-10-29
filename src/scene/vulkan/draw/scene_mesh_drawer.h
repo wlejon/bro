@@ -261,7 +261,7 @@ public:
     ///    first land drawn's tiles, when the eye has moved or they changed;
     ///  - the land's sun (scene/world/land_sun.h), its levels about the eye
     ///    from the same tiles, as the eye, the sun or the land move them;
-    ///  - the turf's surface layers (docs/scene-world-architecture.md §5;
+    ///  - the turf's surface layers (world/surface_layers.h;
     ///    scene_mesh_drawer_ground.cpp): for each grass node whose turf this
     ///    frame draws, likewise, its turf meshes drawn straight down into
     ///    the fills granted.
@@ -292,8 +292,7 @@ public:
     /// Bind and draw into the open target described by `target`, lit by
     /// the draw's probe lighting set when it has one, else `lightingSet`;
     /// a chunked draw cut to `cull` when given.
-    /// The cover's two passes in the opaque pass (docs/scene-world-architecture.md
-    /// §3): its blades' and herbs' depth alone (their cut decides it, nothing
+    /// The cover's two passes in the opaque pass: its blades' and herbs' depth alone (their cut decides it, nothing
     /// lit), then each lit where its depth is the nearest, so a fragment
     /// another blade hides is never lit. Elsewhere the cover draws in one
     /// pass, cutting as it shades.

@@ -1,7 +1,7 @@
 #pragma once
 
 // Land: the ground of a world, from underfoot to the horizon
-// (docs/scene-world-architecture.md §13, "the land"). What the land is is
+// (docs/land-api.js). What the land is is
 // the world's: a MODULE, GLSL compiled at run time
 // (vulkan/shaders/ground/scene_land_layer.glsl says what it defines): its
 // height at a point and its surface there (its albedo). The engine
@@ -29,8 +29,7 @@
 //
 // On a flat body the land is square, `extent` metres from the origin each
 // way; past it nothing is drawn. On a round body (world/place.h) it is the
-// whole body (docs/scene-world-architecture.md §11, "The land on the
-// body"): its tiles are keyed on the cube faces of the body's chart, its
+// whole body: its tiles are keyed on the cube faces of the body's chart, its
 // rings laid out in the land's map about the anchor, its height a 3D field
 // at the body's points, and its CPU calls take the land's frame (the place
 // frame there; SceneView::world everywhere). A LandNode is a MeshNode so the material setters
@@ -151,8 +150,7 @@ public:
     /// module, "" none) and the tallest they stand (m): kept in the tiles
     /// beside the ground, drawn as the land past where the plants are
     /// drawn, and shading the land's sun past where they cast
-    /// (docs/scene-world-architecture.md §5, "the canopy layer" and "the
-    /// land's sun").
+    /// (world/plant_canopy.h, world/land_sun.h).
     void setCanopy(std::string source, float top);
     const std::string& canopySource() const { return canopy_; }
     uint64_t canopySourceHash() const { return canopyHash_; }

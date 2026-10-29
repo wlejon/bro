@@ -1,5 +1,5 @@
 #version 450
-// The atmosphere's sky (docs/scene-world-architecture.md §7): the sky-view
+// The atmosphere's sky (scene/world/atmosphere.h): the sky-view
 // table's radiance along the view (made at the eye's height and sun this
 // frame, scene_atmosphere.cpp), the lookup dithered by a fraction of a texel
 // so its bilinear steps do not band; where the view meets the planet, the

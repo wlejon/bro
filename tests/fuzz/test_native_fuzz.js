@@ -1,5 +1,5 @@
 // Every native an app can reach refuses bad input with an error rather than
-// crash the process (docs/app-isolation.md, step 7: native preconditions).
+// crash the process.
 // Each bro.<ns> is fuzzed in a child bro-headless of its own
 // (fuzz_child.js) as an app with no capabilities; a child that dies, or
 // hangs, names the call it was in. FUZZ_NS=mesh,image runs only those.
@@ -42,7 +42,7 @@ function finish(ns, last, out, status, signal, hung, ms) {
     // A child still running at kChildMs is in one native call that has not
     // returned: work as large as the arguments asked for (a bake over a mesh
     // the earlier calls subdivided), or a loop that never ends. Natives run to
-    // completion (docs/app-isolation.md, scheduling), so it is reported, not
+    // completion, so it is reported, not
     // failed; the call is named so a real loop is found.
     if (hung) {
         slow.push(`bro.${ns} still in ${at || '(before the first call)'} after ${kChildMs / 1000} s`);

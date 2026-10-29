@@ -1,5 +1,5 @@
 // The sward: the blades a grass node grows over its land, as a world writes
-// them (docs/scene-world-architecture.md §13, "worlds as code"). Included by
+// them (scene/nodes/world_module.h). Included by
 // scene_grass.glsl; needs scene_camera.glsl.
 //
 // What the blades are is not the engine's: a world gives the grass node a

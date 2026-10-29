@@ -1,6 +1,5 @@
 #pragma once
-// The land's horizon about an eye (docs/scene-world-architecture.md §1;
-// shaders/world/world_horizon_layout.h): for each direction about the eye and
+// The land's horizon about an eye (shaders/world/world_horizon_layout.h): for each direction about the eye and
 // each distance, the steepest slope of the land out to there. The cell pass
 // (scene_world_cells_pass.h) leaves out of the camera's view the cells under
 // it, so an eye-level view plans and draws none of the forest the hills

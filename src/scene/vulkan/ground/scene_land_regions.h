@@ -1,6 +1,5 @@
 #pragma once
-// A land's regional grids on the GPU (docs/scene-world-architecture.md §11,
-// "As built: regional grids"; scene/world/land_regions.h): the regions wanted
+// A land's regional grids on the GPU (scene/world/land_regions.h): the regions wanted
 // about the eye (landRegionsWanted) made up to kBatch of a level at a time,
 // each in two images of a region's cells (rgba32f, a layer a channel), the
 // world's region kernels

@@ -2,7 +2,7 @@
 
 // What `bro --install` installed, recorded beside it so the grants the user
 // gives an installed app attach to exactly that content (docs/apps.md,
-// Permissions; docs/app-isolation.md, "Identity is the install record").
+// Permissions).
 //
 // The record is <install root>/<id>.install.json, in the install root no app
 // may write (app_permissions.cpp protects the roots):

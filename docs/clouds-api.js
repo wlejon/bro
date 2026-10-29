@@ -138,8 +138,6 @@
  * A scene without a deck pays nothing and renders exactly as before; a
  * module that does not compile reports `failed` (cloudStats) and the scene
  * draws as without one.
- *
- * Design: docs/scene-world-architecture.md §13 item 4, §7, §11 "Going up".
  */
 
 /**

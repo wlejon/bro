@@ -1,6 +1,5 @@
 #pragma once
-// The plants' canopy (docs/scene-world-architecture.md §5, "the canopy
-// layer"): what a plants node's rules grow at a point, as a function rather
+// The plants' canopy: what a plants node's rules grow at a point, as a function rather
 // than a sum over placed plants, so the land can carry it where no plant is
 // drawn or placed. Written as GLSL from the rules' fields (brokit's
 // noise_glsl), the placement's own maths (world/plant_placement.h):

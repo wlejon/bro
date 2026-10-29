@@ -1,7 +1,7 @@
 #pragma once
 
 // What the running app may do: the one authority every check asks
-// (docs/apps.md, Permissions; docs/app-isolation.md). One app per process, so
+// (docs/apps.md, Permissions). One app per process, so
 // one AppPermissions per process, settled by the Engine at startup and read
 // from every thread a realm runs on: the brokit access policy (fs,
 // child_process, the network), the terminal's spawn gate, the mic capture
@@ -195,7 +195,7 @@ bool envAlwaysVisible(std::string_view name);
 
 /// The grants of the code running now: the app's (processPermissions), or,
 /// when a host page runs another app inline (an <appview> compartment,
-/// docs/app-isolation.md step 3), that app's own. Every gate asks this, so a
+/// docs/appview-api.js), that app's own. Every gate asks this, so a
 /// check made while a compartment's code runs judges that compartment.
 AppPermissions& appPermissions();
 /// The process's own app: the one the engine was started for.

@@ -1,5 +1,5 @@
 #pragma once
-// The land's sun (docs/scene-world-architecture.md §5, "The land's sun"):
+// The land's sun:
 // how high a point must stand to see the sun, over the land about the eye,
 // where the shadow pages cannot say. A low sun runs along the land and
 // along a canopy's top, and the pages' depth offsets swallow a caster that

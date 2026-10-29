@@ -1,5 +1,5 @@
 #pragma once
-// The world service's policy (docs/scene-world-architecture.md §6): one queue
+// The world service's policy: one queue
 // of jobs across every producer of view-independent world work, ranked by
 // what is most wrong on screen, spent from a budget in milliseconds that the
 // frame's measured slack sets. This is the CPU half, testable without a GPU;

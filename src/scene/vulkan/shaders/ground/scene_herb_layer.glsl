@@ -1,6 +1,5 @@
 // The herb layer: the low plants a grass node grows among its blades, as a
-// world writes them (docs/scene-world-architecture.md §13, "worlds as
-// code"). Included by scene_grass.glsl; needs scene_camera.glsl.
+// world writes them (scene/nodes/world_module.h). Included by scene_grass.glsl; needs scene_camera.glsl.
 //
 // What the plants are is not the engine's: a world gives the grass node a
 // MODULE, GLSL compiled into the cover's shaders at run time (GrassNode::

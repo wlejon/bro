@@ -1,5 +1,5 @@
 #pragma once
-// A world's module (docs/scene-world-architecture.md §13): GLSL a node is
+// A world's module: GLSL a node is
 // given, compiled into its kind's shaders at run time. Nodes key their
 // compiled shader sets by its source's hash.
 

@@ -1,5 +1,4 @@
-// The land (scene/nodes/land_node.h; docs/scene-world-architecture.md §13,
-// "the land"): each land node's tiles, chosen for the camera
+// The land (scene/nodes/land_node.h): each land node's tiles, chosen for the camera
 // (scene/world/surface_layers.h), offered to the world service (§6) as
 // fills, made as it grants them by its module in a compute pass
 // (land_fill.comp, the node's LandShaders set), and its rings drawn over
