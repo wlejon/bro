@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/vulkan_compute.h"
 #include "render/vulkan_frames.h"
 #include "render/vulkan_memory_pool.h"
 #include "render/vulkan_pipeline_cache.h"
@@ -28,6 +29,26 @@ struct VulkanQueueFamilyIndices {
     bool isComplete(bool needPresent = true) const {
         return graphicsFamily >= 0 && (!needPresent || presentFamily >= 0);
     }
+};
+
+/// What compute shaders compiled outside bro (brokernel's SPIR-V) may use:
+/// the device features behind their capabilities, each enabled where the
+/// device has it, and the limits a pipeline is checked against.
+struct VulkanComputeFeatures {
+    bool bufferDeviceAddress = false;   // PhysicalStorageBufferAddresses: buffers reached by address
+    bool shaderInt64 = false;
+    bool shaderFloat64 = false;
+    bool shaderInt16 = false;
+    bool storageBuffer8Bit = false;
+    bool storageBuffer16Bit = false;
+    bool bufferInt64Atomics = false;
+    bool sharedInt64Atomics = false;
+    bool bufferFloat32AtomicAdd = false;  // VK_EXT_shader_atomic_float
+    bool sharedFloat32AtomicAdd = false;
+    bool bufferFloat64AtomicAdd = false;
+    bool subgroupBasic = false;           // in the compute stage
+    bool subgroupShuffle = false;
+    uint32_t subgroupSize = 0;
 };
 
 /// Configuration parameters for VulkanContext initialization.
@@ -101,6 +122,11 @@ public:
     /// Depth-compare samplers (false only on portability-subset devices
     /// without mutableComparisonSamplers).
     bool comparisonSamplers() const { return mutableComparisonSamplers_; }
+    /// The compute features that were enabled (VulkanComputeFeatures).
+    const VulkanComputeFeatures& computeFeatures() const { return computeFeatures_; }
+    /// The device address of `buffer` (made with
+    /// VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT); 0 without bufferDeviceAddress.
+    uint64_t bufferAddress(VkBuffer buffer) const;
 
     VulkanQueue& queue() { return queue_; }
     /// The queue owner of the transfer family (the copy engine) when the
@@ -119,6 +145,9 @@ public:
     /// image moves by release on one family and acquire on the other.
     VulkanQueue* asyncComputeQueue() { return hasAsyncCompute_ ? &asyncCompute_ : nullptr; }
     VulkanFrames& frames() { return frames_; }
+    /// Compute work in the graphics stream over buffers reached by address
+    /// (VulkanCompute): what runs kernels compiled outside bro.
+    VulkanCompute& compute() { return compute_; }
     /// The device's pipeline cache, persisted across runs; pass it to every
     /// vkCreate*Pipelines.
     VkPipelineCache pipelineCache() const { return pipelineCache_.handle(); }
@@ -245,6 +274,7 @@ private:
     bool listRestart_ = false;
     bool imageView2DOn3D_ = true;
     bool mutableComparisonSamplers_ = true;
+    VulkanComputeFeatures computeFeatures_;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;  // single-time commands, guarded below
     mutable std::mutex commandPoolMutex_;
@@ -259,6 +289,7 @@ private:
     bool hasAsyncCompute_ = false;
     uint32_t computeQueueIndex_ = 0;     // in its family (1 when it shares the transfer family)
     VulkanFrames frames_;
+    VulkanCompute compute_;
     VulkanPipelineCache pipelineCache_;
 };
 

@@ -108,7 +108,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `flora-api.js` | `bro.flora` ecosystem sim: prototypes, step, mesh/foliage/bloom emit, the vegetation records bro.scene sways |
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | global `FastNoise`, FastNoise2 SIMD noise |
-| `kernel-api.js` | `bro.kernel`: brokernel source compiled (`compile(source, {file, modules})`, no disk reads), point kernels `eval`ed and grid kernels `run` over typed arrays on the CPU; stores bounded (outside reads zero, writes nothing; a store accessed at the cells must cover the grid) |
+| `kernel-api.js` | `bro.kernel`: brokernel source compiled (`compile(source, {file, modules})`, no disk reads), point kernels `eval`ed and grid kernels `run` over typed arrays on the CPU, `dispatch`ed over `KernelBuffer`s (`createBuffer`, `read`/`write`) on the engine's GPU (`render::VulkanCompute`, the graphics stream); stores bounded (outside reads zero, writes nothing; a store accessed at the cells must cover the grid) |
 | `image-api.js` | `bro.image` typed-array kernels (CPU, broimage): decode/EXIF, encode/KTX2, geometry, color, preproc, presets |
 | `image-gpu-api.js` | `bro.image.gpu.*` WebGL2 renderer (bro-side JS): `colormap`, `fbm2D`, ranging, `viewRect` |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |

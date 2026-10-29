@@ -6,13 +6,16 @@
  * language for world code: f64 positions, grids, stencils and typed stores
  * as constructs, FastNoise2's nodes as `std::noise`) and runs its kernels on
  * the CPU: a point kernel per call (a height for physics, the camera,
- * placement), a grid kernel over a grid of cells into typed arrays. One
- * source compiles for the CPU and the GPU together; they compute the same
- * values (the language's rules, brokernel README.md).
+ * placement), a grid kernel over a grid of cells into typed arrays; and on
+ * the GPU: a grid kernel dispatched on the engine's own Vulkan device over
+ * KernelBuffers (section 6). One source compiles for the CPU and the GPU
+ * together; they compute the same values (the language's rules, brokernel
+ * README.md).
  *
  * Mounted in every realm (the page's and a Worker's) when `BRO_WITH_KERNEL`
  * is enabled (the app, desktop and full profiles); a build without it has
- * `bro.kernel.available === false`.
+ * `bro.kernel.available === false`. The GPU half is the main thread's only:
+ * a Worker has `bro.kernel.gpu === false`.
  */
 
 console.log('brokernel', bro.kernel.version);
@@ -130,3 +133,43 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 // of the wrong element type for a store throws a TypeError; eval() of a grid
 // kernel or run() of a point kernel throws a TypeError naming the other; a
 // store too small for the grid throws an Error.
+
+// ============================================================================
+// 6. The GPU: bro.kernel.createBuffer() and kernel.dispatch(grid, ...args)
+// ============================================================================
+//
+// `bro.kernel.gpu` is true once the engine's Vulkan device is up (it can
+// reach buffers by address and compute in 64-bit integers; f64 kernels also
+// need shaderFloat64). The work runs in the engine's graphics stream, in the
+// order it is asked for, before any later frame's draws.
+//
+// bro.kernel.createBuffer(byteLength | typedArray) -> KernelBuffer: GPU
+// memory, reading zero, or holding the typed array's bytes. A KernelBuffer is
+// untyped bytes; a store's elements are its byteLength / the element size.
+//   buffer.byteLength
+//   buffer.write(typedArray, byteOffset = 0)   // copied now, lands before later dispatches
+//   buffer.read(typedArray, byteOffset = 0)    // fills it after every dispatch so far
+//                                              // (blocks until they are done); returns it
+//
+// kernel.dispatch(grid, ...args) takes run()'s arguments with a KernelBuffer
+// for each store. A kernel that returns a value returns a new KernelBuffer of
+// one value per cell, laid out as run()'s typed array; one that returns
+// nothing returns undefined. Stores are bounded as on the CPU (section 5).
+
+if (bro.kernel.gpu) {
+    const fieldBuf = bro.kernel.createBuffer(field);          // its bytes, on the GPU
+    const smoothBuf = bro.kernel.createBuffer(W * H * 4);     // reads zero
+    const smooth = mod.kernel('k_smooth');
+    smooth.dispatch([W, H], fieldBuf, smoothBuf);
+    smooth.dispatch([W, H], smoothBuf, fieldBuf);             // runs after the first
+    fieldBuf.read(smoothed);                                  // both done
+
+    const looked = mod.kernel('k_lookup').dispatch(4,
+        bro.kernel.createBuffer(new Float32Array([5, 6, 7])),
+        bro.kernel.createBuffer(new Int32Array([2, 0, 9, -1])));
+    looked.read(new Float32Array(4));                         // [7, 5, 0, 0]
+}
+
+// Errors: a typed array where a KernelBuffer goes, dispatch() of a point
+// kernel, or a read / write outside the buffer (RangeError) throws; a kernel
+// the device cannot run (a capability it lacks) throws an Error naming it.

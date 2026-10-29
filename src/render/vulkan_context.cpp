@@ -181,6 +181,7 @@ bool VulkanContext::init(platform::Window* presentTarget) {
         }
     }
     pipelineCache_.init(device_, deviceProperties_);
+    compute_.init(*this);
 
     LOG_INFO("Vulkan: Initialized successfully on device: %s (Driver %u.%u.%u), API %u.%u%s",
              deviceProperties_.deviceName,
@@ -195,6 +196,7 @@ bool VulkanContext::init(platform::Window* presentTarget) {
 void VulkanContext::cleanup() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
+        compute_.shutdown();
         pipelineCache_.shutdown();
         frames_.shutdown();
         uploadQueue_.shutdown();
@@ -675,10 +677,54 @@ bool VulkanContext::createLogicalDevice() {
     vulkan13Features.dynamicRendering = VK_TRUE;
     vulkan13Features.synchronization2 = synchronization2_ ? VK_TRUE : VK_FALSE;
 
+    // Compute features (VulkanComputeFeatures): what SPIR-V compiled outside
+    // bro asks for (brokernel's kernels reach their buffers by address and
+    // compute in 64-bit), each enabled where the device has it.
+    VkPhysicalDeviceVulkan12Features have12{};
+    have12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceVulkan11Features have11{};
+    have11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    have11.pNext = &have12;
+    VkPhysicalDeviceFeatures2 have{};
+    have.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    have.pNext = &have11;
+    vkGetPhysicalDeviceFeatures2(physicalDevice_, &have);
+
     VkPhysicalDeviceVulkan12Features vulkan12Features{};
     vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vulkan12Features.timelineSemaphore = VK_TRUE;
+    vulkan12Features.bufferDeviceAddress = have12.bufferDeviceAddress;
+    vulkan12Features.storageBuffer8BitAccess = have12.storageBuffer8BitAccess;
+    vulkan12Features.shaderBufferInt64Atomics = have12.shaderBufferInt64Atomics;
+    vulkan12Features.shaderSharedInt64Atomics = have12.shaderSharedInt64Atomics;
     vulkan12Features.pNext = &vulkan13Features;
+
+    VkPhysicalDeviceVulkan11Features vulkan11Features{};
+    vulkan11Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    vulkan11Features.storageBuffer16BitAccess = have11.storageBuffer16BitAccess;
+    vulkan11Features.pNext = &vulkan12Features;
+
+    VulkanComputeFeatures compute;
+    compute.bufferDeviceAddress = have12.bufferDeviceAddress == VK_TRUE;
+    compute.storageBuffer8Bit = have12.storageBuffer8BitAccess == VK_TRUE;
+    compute.storageBuffer16Bit = have11.storageBuffer16BitAccess == VK_TRUE;
+    compute.bufferInt64Atomics = have12.shaderBufferInt64Atomics == VK_TRUE;
+    compute.sharedInt64Atomics = have12.shaderSharedInt64Atomics == VK_TRUE;
+    compute.shaderInt64 = deviceFeatures_.shaderInt64 == VK_TRUE;
+    compute.shaderFloat64 = deviceFeatures_.shaderFloat64 == VK_TRUE;
+    compute.shaderInt16 = deviceFeatures_.shaderInt16 == VK_TRUE;
+    {
+        VkPhysicalDeviceSubgroupProperties subgroup{};
+        subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 props{};
+        props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        props.pNext = &subgroup;
+        vkGetPhysicalDeviceProperties2(physicalDevice_, &props);
+        const bool inCompute = (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+        compute.subgroupBasic = inCompute && (subgroup.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT);
+        compute.subgroupShuffle = inCompute && (subgroup.supportedOperations & VK_SUBGROUP_FEATURE_SHUFFLE_BIT);
+        compute.subgroupSize = subgroup.subgroupSize;
+    }
 
     // Optional core features, each enabled where the device has it; the
     // accessors report what was enabled. WebGL is their main consumer:
@@ -703,11 +749,14 @@ bool VulkanContext::createLogicalDevice() {
     // land's rg32f fill.
     deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
     deviceFeatures.shaderStorageImageExtendedFormats = VK_TRUE;
+    deviceFeatures.shaderInt64 = available.shaderInt64;
+    deviceFeatures.shaderFloat64 = available.shaderFloat64;
+    deviceFeatures.shaderInt16 = available.shaderInt16;
     deviceFeatures_ = deviceFeatures;
 
     // Instanced-attribute divisors other than 0 and 1, and primitive restart
     // for list topologies (WebGL 2 restarts every indexed draw).
-    void* chain = &vulkan12Features;
+    void* chain = &vulkan11Features;
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures{};
     divisorFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT restartFeatures{};
@@ -757,6 +806,24 @@ bool VulkanContext::createLogicalDevice() {
             chain = statsFeatures.pNext;
         }
     }
+    // Float atomic adds in compute (VulkanComputeFeatures).
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatFeatures{};
+    atomicFloatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+    if (hasExtension(availExts, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)) {
+        probe(atomicFloatFeatures);
+        compute.bufferFloat32AtomicAdd = atomicFloatFeatures.shaderBufferFloat32AtomicAdd == VK_TRUE;
+        compute.sharedFloat32AtomicAdd = atomicFloatFeatures.shaderSharedFloat32AtomicAdd == VK_TRUE;
+        compute.bufferFloat64AtomicAdd = atomicFloatFeatures.shaderBufferFloat64AtomicAdd == VK_TRUE;
+        if (compute.bufferFloat32AtomicAdd || compute.sharedFloat32AtomicAdd || compute.bufferFloat64AtomicAdd) {
+            enabledExtensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        } else {
+            chain = atomicFloatFeatures.pNext;
+        }
+    }
+    computeFeatures_ = compute;
+    // Buffer memory carries device addresses, so any buffer made with
+    // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT has one.
+    memoryPool_.setBufferDeviceAddress(compute.bufferDeviceAddress);
     if (hasExtension(availExts, "VK_KHR_portability_subset")) {
         probe(portabilityFeatures);
         imageView2DOn3D_ = portabilityFeatures.imageView2DOn3DImage == VK_TRUE;

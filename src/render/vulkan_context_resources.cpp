@@ -114,6 +114,14 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     return true;
 }
 
+uint64_t VulkanContext::bufferAddress(VkBuffer buffer) const {
+    if (!computeFeatures_.bufferDeviceAddress || buffer == VK_NULL_HANDLE) return 0;
+    VkBufferDeviceAddressInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(device_, &info);
+}
+
 void VulkanContext::destroyBuffer(VkBuffer buffer, uint64_t allocId) {
     std::lock_guard<std::mutex> lock(resourceMutex_);
     if (buffer != VK_NULL_HANDLE) {

@@ -69,6 +69,7 @@
 #include <broflora/api/api.h>
 #endif
 #if BRO_WITH_KERNEL
+#include "bronze_host/host_kernel_gpu.h"
 #include <brokernel/api.h>
 #endif
 #if BRO_WITH_3D
@@ -468,6 +469,9 @@ void installSiblingApis(engine::Engine& engine) {
     adoptGlobalProperty("FloraWorld");
 #endif
 #if BRO_WITH_KERNEL
+    // bro's half first: the engine's GPU device, which installKernel mounts
+    // as the GPU half (host_kernel_gpu.h).
+    installKernelGpu(engine);
     brokernel::api::installKernel();
 #endif
     {

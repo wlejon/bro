@@ -49,6 +49,7 @@ add_library(bro_render STATIC
     skia_gpu.cpp
     skia_gpu_upload.cpp
     skia_persistent_cache.cpp
+    vulkan_compute.cpp
     vulkan_context.cpp
     vulkan_context_resources.cpp
     vulkan_debug.cpp

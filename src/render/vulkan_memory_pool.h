@@ -79,7 +79,13 @@ public:
 
     VulkanAllocatorStats stats() const;
 
+    /// Buffer memory is allocated with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
+    /// (the device has bufferDeviceAddress enabled). Set before the first
+    /// allocation.
+    void setBufferDeviceAddress(bool on) { bufferDeviceAddress_ = on; }
+
 private:
+    bool bufferDeviceAddress_ = false;
     mutable std::mutex mutex_;
     uint64_t nextAllocId_ = 0;
     std::unordered_map<uint32_t, VulkanBlockPool> pools_;

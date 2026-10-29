@@ -69,10 +69,17 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
 
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Buffer memory carries device addresses when the device has them.
+    VkMemoryAllocateFlagsInfo addressFlags{};
+    addressFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    addressFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    const void* allocNext = (bufferDeviceAddress_ && !isImage) ? &addressFlags : nullptr;
+
     // Dedicated allocation for large resources
     if (size >= kDedicatedThreshold) {
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.pNext = allocNext;
         allocInfo.allocationSize = size;
         allocInfo.memoryTypeIndex = memoryTypeIndex;
 
@@ -144,6 +151,7 @@ bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize
         VkDeviceSize blockSize = std::max(kDefaultBlockSize, size);
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.pNext = allocNext;
         allocInfo.allocationSize = blockSize;
         allocInfo.memoryTypeIndex = memoryTypeIndex;
 
