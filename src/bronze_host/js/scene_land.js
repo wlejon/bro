@@ -34,28 +34,63 @@ LandSurface landSurface(LandPoint q) {
     // The tree: the height's GLSL as landNoise and landTree over it at the
     // seed (in 2D for a flat body, in 3D at the datum's points for a round
     // one). The land's module and its processes both start with it.
-    function treeOf(height, seed) {
-        return height.glsl({ name: 'landNoise', dims: [2, 3] }) +
+    // Then the regional levels' relief (processes.regions.relief, a tree a
+    // level): landRelief(L, p), each tree written once, LAND_RELIEF_LEVELS of
+    // them.
+    function treeOf(height, seed, relief) {
+        let src = height.glsl({ name: 'landNoise', dims: [2, 3] }) +
             '\nconst int LAND_SEED = ' + (seed | 0) + ';\n' +
             'float landTree(vec2 p) { return landNoise(p, LAND_SEED); }\n' +
             'float landTree(vec3 p) { return landNoise(p, LAND_SEED); }\n';
+        const rl = relief || [];
+        for (let L = 0; L < rl.length; ++L) src += rl[L].noise.glsl({ name: 'landReliefN' + L, dims: [2, 3] });
+        src += '\nconst int LAND_RELIEF_LEVELS = ' + rl.length + ';\n';
+        for (const t of ['vec2', 'vec3']) {
+            src += `float landRelief(int L, ${t} p) {\n`;
+            for (let L = 0; L < rl.length; ++L) src += `    if (L == ${L}) return landReliefN${L}(p, ${rl[L].seed | 0});\n`;
+            src += '    return 0.0;\n}\n';
+        }
+        return src;
+    }
+
+    // processes.regions.relief as [{ noise, seed }], a level each from level 0
+    // (a bare FastNoise node takes the land's seed).
+    function reliefOf(processes, seed) {
+        const r = processes && processes.regions && processes.regions.relief;
+        if (!r) return [];
+        if (!Array.isArray(r)) throw new TypeError('createLand: `processes.regions.relief` is an array, a level\'s tree each');
+        return r.map((e, L) => {
+            const noise = e && typeof e.glsl === 'function' ? e : e && e.noise;
+            if (!noise || typeof noise.glsl !== 'function')
+                throw new TypeError(`createLand: \`processes.regions.relief[${L}]\` is a FastNoise node or { noise, seed }`);
+            return { noise, seed: e.noise && e.seed !== undefined ? e.seed | 0 : seed | 0 };
+        });
     }
 
     // The module: the tree, landHeight the processes' height over it
-    // (landGrid's channel 0: x added, y the tree's scale; the tree alone
-    // with none), then the surface (which may call any of them).
-    const HEIGHT = (p) =>
+    // (landGrid's channel 0: x added, y the tree's scale, by which the tree
+    // and each regional level's relief where that level's regions are not
+    // in; the tree alone with none), then the surface (which may call any
+    // of them).
+    const HEIGHT = (p, relief) =>
         `float landHeight(${p} p) {\n` +
         '#ifdef LAND_GRID\n' +
         '    vec4 g = landGrid(0, p);\n' +
-        '    return g.x + g.y * landTree(p);\n' +
+        '    float t = landTree(p);\n' +
+        (relief ?
+            '    for (int L = 0; L < LAND_LOOP_N(LAND_RELIEF_LEVELS); ++L) {\n' +
+            '        float r = landReliefRest(L);\n' +
+            '        if (r > 0.0) t += r * landRelief(L, p);\n' +
+            '    }\n' : '') +
+        '    return g.x + g.y * t;\n' +
         '#else\n' +
         '    return landTree(p);\n' +
         '#endif\n' +
         '}\n';
-    function moduleOf(height, seed, surface) {
+    function moduleOf(height, seed, surface, relief) {
         const src = typeof surface === 'string' ? surface : (surface && surface.source) || BARE;
-        return treeOf(height, seed) + HEIGHT('vec2') + HEIGHT('vec3') + src;
+        const any = relief.length > 0;
+        return treeOf(height, seed, relief) + HEIGHT('vec2', any) + HEIGHT('vec3', any) + src;
     }
 
     const isLand = (n) => n instanceof SceneNode && __bro_native.scene.SceneNode_landParams(n).length > 0;
@@ -98,7 +133,7 @@ LandSurface landSurface(LandPoint q) {
             for (const s of rp) params.push(s.iterations !== undefined ? +s.iterations : 1);
             names += '|' + String(rg.init) + '|' + rp.map((s) => String(s.fn)).join(',');
         }
-        const err = __bro_native.scene.SceneNode_setLandProcess(node, treeOf(p.height, p.seed) + pr.source,
+        const err = __bro_native.scene.SceneNode_setLandProcess(node, treeOf(p.height, p.seed, p.relief) + pr.source,
             names, new Float64Array(params),
             pr.data ? Float32Array.from(pr.data) : new Float32Array(0));
         if (err) throw new TypeError('createLand: ' + err);
@@ -116,9 +151,18 @@ LandSurface landSurface(LandPoint q) {
                 processes: o.processes !== undefined ? o.processes : was.processes,
             };
             if (!p.height) throw new TypeError('createLand: `height` (a FastNoise node) is what the land is');
-            if (tree || o.surface !== undefined || o.data !== undefined) {
-                const err = __bro_native.scene.SceneNode_setLandModule(node, moduleOf(p.height, p.seed, p.surface),
+            // (The regional levels' relief: part of the module's height and the CPU's.)
+            p.relief = reliefOf(p.processes, p.seed);
+            p.reliefKey = p.relief.map((r) => r.noise.encode() + ':' + r.seed).join('\n');
+            const relief = p.reliefKey !== (was.reliefKey || '');
+            if (tree || o.surface !== undefined || o.data !== undefined || relief) {
+                const err = __bro_native.scene.SceneNode_setLandModule(node, moduleOf(p.height, p.seed, p.surface, p.relief),
                     p.data ? Float32Array.from(p.data) : new Float32Array(0), p.height.encode(), p.seed);
+                if (err) throw new TypeError('createLand: ' + err);
+            }
+            if (relief) {
+                const err = __bro_native.scene.SceneNode_setLandRelief(node, p.relief.map((r) => r.noise.encode()).join('\n'),
+                    new Float64Array(p.relief.map((r) => r.seed)));
                 if (err) throw new TypeError('createLand: ' + err);
             }
             // (The processes read the tree: a new one runs them again.)

@@ -200,9 +200,11 @@ struct LandRegionLattice {
     int faces(int level, const double dir[3], int root[3], double w[3], double chart[3][2]) const;
     /// Channel 0 of the regions of `set` blended over `coarse` (four floats,
     /// the global grid's there) at body direction `dir` (round) or chart
-    /// point (x, z) (flat): the blending above, level by level.
-    void blendDir(const LandRegionSet& set, const double dir[3], float coarse[4]) const;
-    void blendAt(const LandRegionSet& set, double x, double z, float coarse[4]) const;
+    /// point (x, z) (flat): the blending above, level by level. `rests`
+    /// (config.levels floats, or null): after each level the share of the
+    /// value still the coarser field's, which lacks that level's relief.
+    void blendDir(const LandRegionSet& set, const double dir[3], float coarse[4], float* rests = nullptr) const;
+    void blendAt(const LandRegionSet& set, double x, double z, float coarse[4], float* rests = nullptr) const;
     /// How much of a level is read at direction `dir` (round) or chart point
     /// (x, z) (flat) about its centre `c` (PRESENCE); 1 with none.
     double presence(const LandRegionCentre& c, const double dir[3], double x, double z) const;

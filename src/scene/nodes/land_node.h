@@ -95,6 +95,11 @@ public:
     /// (it draws nothing and its heights are NaN) until they have run and
     /// been read back (vulkan/ground/scene_land_process.h).
     bool setProcess(LandProcess process, std::string& err);
+    /// Each regional level's relief (LandBase::relief): FastNoise2 encoded
+    /// trees ("" none) and their seeds, the CPU's half of the processes'
+    /// `regions.relief` (the GLSL's is in the module and the processes'
+    /// source). False with `err` when a tree does not decode.
+    bool setRelief(const std::vector<std::string>& trees, const std::vector<int>& seeds, std::string& err);
     const LandProcess& process() const { return process_; }
     const LandGrid& grid() const { return grid_; }
     /// Moved whenever the grid must be run again (its processes, extent or body).
@@ -307,8 +312,8 @@ public:
         Body body;
         bool round = false;
         float extent = 0.0f;
-        float overTree(float tree, int root, double x, double z) const {
-            return base ? base->over(tree, root, x, z, regions.get()) : tree;
+        float overTree(float tree, int root, double x, double z, const float* relief = nullptr) const {
+            return base ? base->over(tree, root, x, z, regions.get(), relief) : tree;
         }
     };
 
@@ -360,6 +365,7 @@ private:
     float canopyTop_ = 0.0f;
     float canopyReach_ = Bands::kRealDefault, canopyCastRange_ = Bands::kRealDefault;
     FieldRef height_;
+    std::vector<FieldRef> relief_;
     LandProcess process_;
     LandGrid grid_;
     uint64_t gridSerial_ = 1, baseSerial_ = 0;

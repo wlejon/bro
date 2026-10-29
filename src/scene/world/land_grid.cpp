@@ -114,24 +114,65 @@ void LandBase::global(int root, double x, double z, float out[4]) const {
     out[3] = own[1].empty() ? 0.0f : grid.sample(own[1].data(), root, x, z);
 }
 
-void LandBase::field(int root, double x, double z, float out[4], const LandRegionSet* in) const {
+void LandBase::field(int root, double x, double z, float out[4], const LandRegionSet* in, float* rests) const {
     if (grid.round()) {
         double d[3];
         dirOf(grid.body(), {root, x, z}, d);
-        fieldDir(d, out, in);
+        fieldDir(d, out, in, rests);
         return;
     }
     global(root, x, z, out);
+    if (rests) std::fill(rests, rests + LandRegionConfig::kMaxLevels, 1.0f);
     if (!regions || !lattice.config.active()) return;
     if (in) {
-        lattice.blendAt(*in, x, z, out);
+        lattice.blendAt(*in, x, z, out, rests);
         return;
     }
     const auto set = regions->snapshot();
-    lattice.blendAt(*set, x, z, out);
+    lattice.blendAt(*set, x, z, out, rests);
 }
 
-void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* in) const {
+float LandBase::standIn(const double dir[3], const float* rests, const float* values) const {
+    const double R = grid.body().radius;
+    float s = 0.0f;
+    for (size_t L = 0; L < relief.size() && L < static_cast<size_t>(LandRegionConfig::kMaxLevels); ++L) {
+        if (!relief[L] || !(rests[L] > 0.0f)) continue;
+        s += rests[L] * (values ? values[L] : relief[L]->at(R * dir[0], R * dir[1], R * dir[2]));
+    }
+    return s;
+}
+
+float LandBase::standInAt(double x, double z, const float* rests) const {
+    float s = 0.0f;
+    for (size_t L = 0; L < relief.size() && L < static_cast<size_t>(LandRegionConfig::kMaxLevels); ++L)
+        if (relief[L] && rests[L] > 0.0f) s += rests[L] * relief[L]->at(static_cast<float>(x), static_cast<float>(z));
+    return s;
+}
+
+float LandBase::over(float tree, int root, double x, double z, const LandRegionSet* set, const float* values) const {
+    float v[4], rests[LandRegionConfig::kMaxLevels];
+    if (grid.round()) {
+        double d[3];
+        dirOf(grid.body(), {root, x, z}, d);
+        fieldDir(d, v, set, rests);
+        return v[0] + v[1] * (tree + (hasRelief() ? standIn(d, rests, values) : 0.0f));
+    }
+    field(root, x, z, v, set, rests);
+    return v[0] + v[1] * (tree + (hasRelief() ? standInAt(x, z, rests) : 0.0f));
+}
+
+float LandBase::overDir(float tree, const double dir[3], const float* values) const {
+    float v[4], rests[LandRegionConfig::kMaxLevels];
+    fieldDir(dir, v, nullptr, rests);
+    if (!hasRelief()) return v[0] + v[1] * tree;
+    if (!grid.round()) {
+        const ChartPoint p = chartOf(grid.body(), dir);
+        return v[0] + v[1] * (tree + standInAt(p.x, p.z, rests));
+    }
+    return v[0] + v[1] * (tree + standIn(dir, rests, values));
+}
+
+void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* in, float* rests) const {
     const ChartPoint p = chartOf(grid.body(), dir);
     if (grid.round()) {
         // (The faces cross-faded at their edges, as the GPU's landGridAtDir.)
@@ -142,6 +183,7 @@ void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* 
     } else {
         global(p.root, p.x, p.z, out);
     }
+    if (rests) std::fill(rests, rests + LandRegionConfig::kMaxLevels, 1.0f);
     if (!regions || !lattice.config.active()) return;
     std::shared_ptr<const LandRegionSet> held;
     if (!in) {
@@ -149,9 +191,9 @@ void LandBase::fieldDir(const double dir[3], float out[4], const LandRegionSet* 
         in = held.get();
     }
     if (grid.round())
-        lattice.blendDir(*in, dir, out);
+        lattice.blendDir(*in, dir, out, rests);
     else
-        lattice.blendAt(*in, p.x, p.z, out);
+        lattice.blendAt(*in, p.x, p.z, out, rests);
 }
 
 int LandBase::finestWhole(const double dir[3], double x, double z, double margin) const {

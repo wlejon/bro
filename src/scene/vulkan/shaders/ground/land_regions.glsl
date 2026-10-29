@@ -22,6 +22,8 @@
 //   float landFieldCoverDir(int level, vec3 d, vec3 p) / landFieldCoverAt(level, x)
 //                                         the share of the value from levels 0 to
 //                                         `level` (0 where none is in)
+//   float landReliefRest(int L)           level L's share the last read lacks
+//                                         (1 with no regions)
 
 #ifdef LAND_GRID
 
@@ -99,6 +101,15 @@ float landRegionFade(int L) {
 // PRESENCE): the land's reads; a region's run reads the coarser field
 // without it (land_region_layer.glsl clears it).
 bool landFieldPresence = true;
+
+// Each level's share the last read of the field lacks (landFieldDirLevels /
+// landFieldAtLevels): 1 where none of the level's regions is under the
+// point (or the reader's texel is too coarse for them), 0 where they or a
+// finer level's are whole; 0 for a level below the read's first. The
+// land's height adds each level's relief by it (landReliefRest), as the
+// CPU's LandBase::standIn does by LandRegionLattice::blendDir's rests.
+float landLevelRest[LAND_REGION_LEVELS];
+float landReliefRest(int L) { return L < LAND_REGION_LEVELS ? landLevelRest[L] : 1.0; }
 
 // Level L's centre, from the words past the table's entries: two a level,
 // (its body direction, 1 when it has one) and (inner, outer, its chart x, z).
@@ -224,7 +235,9 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
     float m0 = max(abs(x0.x), abs(x0.y));
     vec4 acc = vec4(0.0);
     rest = 1.0;   // the share still the coarser levels'
+    for (int L = 0; L < LAND_REGION_LEVELS; ++L) landLevelRest[L] = 0.0;
     for (int L = minLevel; L < min(endLevel, LAND_LOOP_N(LAND_REGION_LEVELS)) && rest > 0.0; ++L) {
+        landLevelRest[L] = rest;
         float fade = landRegionFade(L) * landRegionPresence(L, d, vec2(0.0));
         if (fade <= 0.0) continue;
         float band = float(LAND_REGION_APRON) * landRegionCell(L);
@@ -253,6 +266,7 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
             acc += rest * fade * sum / wsum;
             rest *= 1.0 - cover * fade / wsum;
         }
+        landLevelRest[L] = max(rest, 0.0);
     }
     return acc;
 }
@@ -277,7 +291,9 @@ float landFieldCoverDir(int level, vec3 d, vec3 p) {
 vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest) {
     vec4 acc = vec4(0.0);
     rest = 1.0;
+    for (int L = 0; L < LAND_REGION_LEVELS; ++L) landLevelRest[L] = 0.0;
     for (int L = minLevel; L < min(endLevel, LAND_LOOP_N(LAND_REGION_LEVELS)) && rest > 0.0; ++L) {
+        landLevelRest[L] = rest;
         float fade = landRegionFade(L) * landRegionPresence(L, vec3(0.0), x);
         if (fade <= 0.0) continue;
         vec4 sum = vec4(0.0);
@@ -285,6 +301,7 @@ vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest
         landRegionLevel(c, L, 0, vec4(x + LAND_GRID_HALF, 0.0, 0.0), 1.0, sum, cover);
         acc += rest * fade * sum;
         rest *= 1.0 - cover * fade;
+        landLevelRest[L] = max(rest, 0.0);
     }
     return acc;
 }
@@ -304,6 +321,8 @@ float landFieldCoverAt(int level, vec2 x) {
 #endif
 
 #else   // no regions: the global grid alone
+
+float landReliefRest(int L) { return 1.0; }
 
 #ifdef LAND_GRID_ROUND
 vec4 landFieldDirFrom(int c, vec3 d, vec3 p, int minLevel) { return landGridReadDir(c, d); }

@@ -281,6 +281,50 @@ void redge(inout vec4 v[PROC_CHANNELS]) { if (procBorder() == 0) v[0].x = procCo
     standsOn(land, 31, -17, 'regions: a level 0 band');
     standsOn(land, -120, -35, 'regions: further out');
 
+    // The levels' relief (processes.regions.relief): each level's band a
+    // tree, laid down by its regions (landRelief) and, wherever they are
+    // not in, by the land's height itself (times channel 0's y), on the GPU
+    // and the CPU alike: the land past the regions has the bands it has
+    // under the eye, and nothing steps between the two.
+    const RSEED = 9;
+    const relief = [N('Multiply', { LHS: N('Simplex', { 'Feature Scale': 120 }), RHS: 6 }),
+                    { noise: N('Multiply', { LHS: N('Simplex', { 'Feature Scale': 400 }), RHS: 3 }), seed: 4 }];
+    land.setLand({ height: N('Constant', { Value: 0 }), seed: RSEED, surface: RED, processes: {
+        resolution: CELLS,
+        regions: { init: 'rinit', cells: 64, apron: 8, cell: 4, ratio: 4, levels: 2, reach: 1, keep: 1, conserve: [],
+                   relief },
+        source: `
+void procInit(inout vec4 v[PROC_CHANNELS]) { v[0] = vec4(5.0, 1.0, 0.0, 0.0); }
+void rinit(inout vec4 v[PROC_CHANNELS]) {
+    vec4 c = procCoarse(0);
+    int L = procLevel();
+    vec3 p = procPoint();
+    for (int k = L + 1; k < LAND_RELIEF_LEVELS; ++k) c.x += c.y * landReliefRest(k) * landRelief(k, p.xz);
+    v[0] = vec4(c.x + c.y * landRelief(L, p.xz), c.y, 0.0, 0.0);
+}
+` } });
+    assert(untilReady(land), `relief: ready (${JSON.stringify(land.landStats())})`);
+    look(0, 40, 0);
+    for (let i = 0; i < 400 && (!land.landStats().regions || land.landStats().regionsPending > 0); i++) frames(1);
+    frames(10);
+    const reliefAt = (x, z) => 5 + relief[0].genSingle2D(x, z, RSEED) + relief[1].noise.genSingle2D(x, z, 4);
+    let fworst = 0, fat = '';
+    for (const [x, z] of [[0, 0], [31, -17], [-60, 44], [900, 0], [-700, 800], [400, -950]]) {
+        const e = Math.abs(land.landHeight(x, z) - reliefAt(x, z));
+        if (e > fworst) { fworst = e; fat = `${x}, ${z}`; }
+    }
+    assert(fworst < 0.25, `relief: the CPU's heights are the bands under the eye and past the regions (worst ${fworst.toFixed(3)} m at ${fat})`);
+    let fstep = 0, prevF = null;
+    for (let x = 0; x <= 1000; x += 0.5) {
+        const h = land.landHeight(x, 0.37 * x);
+        if (prevF !== null) fstep = Math.max(fstep, Math.abs(h - prevF));
+        prevF = h;
+    }
+    assert(fstep < 0.6, `relief: no step out of the regions, half a metre at a time (largest ${fstep.toFixed(3)} m)`);
+    standsOn(land, 0, 0, 'relief: under the eye');
+    standsOn(land, 900, 0, 'relief: past the regions');
+    standsOn(land, -700, 800, 'relief: past the regions, elsewhere');
+
     // Conserving the height (the default): each level drifts from the
     // coarser field (+20 m on level 0, -10 m on level 1, as an erosion
     // lowers or a lift raises a whole region) and adds detail finer than the

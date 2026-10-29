@@ -370,6 +370,22 @@
  *   over each coarser cell their mean is the coarser field's and the region
  *   adds detail only. The ground's height by default; a flow, an area or a
  *   mask is not a mean and is left out. [] conserves nothing.
+ * @property {Array<FastNoiseNode|{noise: FastNoiseNode, seed?: number}>} [relief] -
+ *   each level's band of relief as a node tree (level 0 first; a bare node at
+ *   the land's seed), in the tree's units: what the level's regions lay
+ *   down, and what the land stands in for them where they are not in. Every
+ *   kernel may call `float landRelief(int L, vec2|vec3 p)` (0 past
+ *   `LAND_RELIEF_LEVELS`), so `init` adds its level's (`c.y *
+ *   landRelief(procLevel(), p)`, p as landTree's) and erodes it; and
+ *   `float landReliefRest(int L)`, level L's share the last `procCoarse`
+ *   lacks (1 on the global grid), for the coarser levels' bands where their
+ *   regions are not in. Wherever a level's regions are not read (away from
+ *   the eye, or by a tile whose texel is wider than their cells), the land's
+ *   height adds that level's tree times channel 0's y, uneroded, on the GPU
+ *   and the CPU alike: the land seen from far has the hills it has
+ *   underfoot. (A region conserving the height high-passes its band about
+ *   the coarser field's cell, which the stand-in does not: a band's octaves
+ *   no wider than that cell come in unchanged.)
  * @example
  *   // The global grid's continents eroded again at 64 m cells under the eye.
  *   processes: { source, resolution: 512, channels: 4, passes: [...],

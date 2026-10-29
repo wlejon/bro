@@ -21,6 +21,7 @@
 // a cube face's to within the halo's one cell); the CPU (sample()) and the
 // GPU (shaders/ground/land_grid.glsl) take the same steps.
 
+#include "scene/world/fields.h"
 #include "scene/world/land_regions.h"
 #include "scene/world/place.h"
 
@@ -119,13 +120,30 @@ struct LandBase {
     std::vector<float> own[2];   // channel 0's z and w, grid.texels() each (none: 0)
     LandRegionLattice lattice;                        // the regions' (config.active() false: none)
     std::shared_ptr<const LandRegionStore> regions;   // the regions in (null: none)
+    /// Each regional level's relief (land_regions.h's RELIEF; none past
+    /// the vector, or null): the tree the level lays down on its regions,
+    /// which the height takes in their place, times the tree's scale, as
+    /// far as the level is not in (the share `rests` says).
+    std::vector<FieldRef> relief;
 
     /// Channel 0 (x the height added, y the tree's scale, z and w the world's
     /// own) at a root's chart point, at a round body's direction (unit): the
     /// global grid's, the regions' blended over it.
-    /// `set`: the regions as of one snapshot of them (null: as they are now).
-    void field(int root, double x, double z, float out[4], const LandRegionSet* set = nullptr) const;
-    void fieldDir(const double dir[3], float out[4], const LandRegionSet* set = nullptr) const;
+    /// `set`: the regions as of one snapshot of them (null: as they are now);
+    /// `rests` (LandRegionConfig::kMaxLevels floats, or null): after each
+    /// level, the share of the value still the coarser field's (1 past the
+    /// regions).
+    void field(int root, double x, double z, float out[4], const LandRegionSet* set = nullptr,
+               float* rests = nullptr) const;
+    void fieldDir(const double dir[3], float out[4], const LandRegionSet* set = nullptr, float* rests = nullptr) const;
+
+    /// The levels' relief the field lacks at a point (the trees' sum, each
+    /// times its level's rest): at a round body's direction, at a flat
+    /// body's (x, z); `values` each level's tree there, when the caller has
+    /// them (a batch), else the trees are read.
+    float standIn(const double dir[3], const float* rests, const float* values = nullptr) const;
+    float standInAt(double x, double z, const float* rests) const;
+    bool hasRelief() const { return !relief.empty(); }
 
     /// The finest regional level that reads all of the ground within
     /// `margin` (m) of a round body's direction `dir` (unit), or of a flat
@@ -151,16 +169,10 @@ struct LandBase {
     /// The land's height over the tree's `tree` at a flat body's (x, z),
     /// at a round body's root and chart point, at its direction (unit).
     float over(float tree, double x, double z) const { return over(tree, 0, x, z); }
-    float over(float tree, int root, double x, double z, const LandRegionSet* set = nullptr) const {
-        float v[4];
-        field(root, x, z, v, set);
-        return v[0] + v[1] * tree;
-    }
-    float overDir(float tree, const double dir[3]) const {
-        float v[4];
-        fieldDir(dir, v);
-        return v[0] + v[1] * tree;
-    }
+    float over(float tree, int root, double x, double z, const LandRegionSet* set = nullptr,
+               const float* values = nullptr) const;
+    /// `values`: each level's relief tree at dir, when the caller has them.
+    float overDir(float tree, const double dir[3], const float* values = nullptr) const;
 
 private:
     void global(int root, double x, double z, float out[4]) const;

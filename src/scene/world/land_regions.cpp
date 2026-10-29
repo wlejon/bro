@@ -140,7 +140,8 @@ void levelAt(const LandRegionLattice& L, const LandRegionSet& set, int level, in
 
 // (Worked from the finest level out, as the GLSL is: value = Σ rest_L sum_L
 // + rest coarse, rest the product of the finer levels' 1 - cover.)
-void LandRegionLattice::blendDir(const LandRegionSet& set, const double dir[3], float coarse[4]) const {
+void LandRegionLattice::blendDir(const LandRegionSet& set, const double dir[3], float coarse[4], float* rests) const {
+    if (rests) std::fill(rests, rests + config.levels, set.empty() ? 1.0f : 0.0f);
     if (set.empty()) return;
     double acc[4] = {0.0, 0.0, 0.0, 0.0}, rest = 1.0;
     for (int level = 0; level < config.levels && rest > 0.0; ++level) {
@@ -152,11 +153,13 @@ void LandRegionLattice::blendDir(const LandRegionSet& set, const double dir[3], 
         const double p = presence(set.centre[level], dir, 0.0, 0.0);
         for (int c = 0; c < 4; ++c) acc[c] += rest * p * sum[c];
         rest *= 1.0 - p * cover;
+        if (rests) rests[level] = static_cast<float>(std::max(rest, 0.0));
     }
     for (int c = 0; c < 4; ++c) coarse[c] = static_cast<float>(acc[c] + std::max(rest, 0.0) * coarse[c]);
 }
 
-void LandRegionLattice::blendAt(const LandRegionSet& set, double x, double z, float coarse[4]) const {
+void LandRegionLattice::blendAt(const LandRegionSet& set, double x, double z, float coarse[4], float* rests) const {
+    if (rests) std::fill(rests, rests + config.levels, set.empty() ? 1.0f : 0.0f);
     if (set.empty()) return;
     double acc[4] = {0.0, 0.0, 0.0, 0.0}, rest = 1.0;
     for (int level = 0; level < config.levels && rest > 0.0; ++level) {
@@ -165,6 +168,7 @@ void LandRegionLattice::blendAt(const LandRegionSet& set, double x, double z, fl
         const double p = presence(set.centre[level], nullptr, x, z);
         for (int c = 0; c < 4; ++c) acc[c] += rest * p * sum[c];
         rest *= 1.0 - p * cover;
+        if (rests) rests[level] = static_cast<float>(std::max(rest, 0.0));
     }
     for (int c = 0; c < 4; ++c) coarse[c] = static_cast<float>(acc[c] + std::max(rest, 0.0) * coarse[c]);
 }

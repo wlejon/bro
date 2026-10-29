@@ -801,6 +801,12 @@ const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, c
                                                const double* params, uint32_t params_len, const float* data,
                                                uint32_t data_len);
 
+// land relief (scene/world/land_grid.h's LandBase::relief): each regional
+// level's FastNoise2 encoded tree, one a line ("" a level with none), and
+// [each one's seed]. Returns "" or what was wrong.
+//   registered at __bro_native.scene.SceneNode_setLandRelief
+const char* bro_scene_SceneNode_setLandRelief(void* self, const char* trees, const double* seeds, uint32_t seeds_len);
+
 // land params: extent, cellSize, resolution, levels (a NaN keeps a value)
 //   registered at __bro_native.scene.SceneNode_setLandParams
 void bro_scene_SceneNode_setLandParams(void* self, const double* params, uint32_t params_len);

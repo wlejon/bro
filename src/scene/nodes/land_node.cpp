@@ -77,6 +77,41 @@ bool LandNode::setModule(std::string source, const float* data, size_t floats, c
     return true;
 }
 
+bool LandNode::setRelief(const std::vector<std::string>& trees, const std::vector<int>& seeds, std::string& err) {
+    if (trees.size() > static_cast<size_t>(LandRegionConfig::kMaxLevels)) {
+        err = "a relief for more levels than the regions may have (" + std::to_string(LandRegionConfig::kMaxLevels) +
+              ")";
+        return false;
+    }
+    std::vector<FieldRef> relief;
+    for (size_t L = 0; L < trees.size(); ++L) {
+        if (trees[L].empty()) {
+            relief.emplace_back();
+            continue;
+        }
+        relief.push_back(Field::make(trees[L], L < seeds.size() ? seeds[L] : 0));
+        if (!relief.back()) {
+            err = "level " + std::to_string(L) + "'s relief's node tree does not decode";
+            return false;
+        }
+    }
+    const auto same = [](const FieldRef& a, const FieldRef& b) {
+        return (!a && !b) || (a && b && a->encoded() == b->encoded() && a->seed() == b->seed());
+    };
+    if (relief.size() == relief_.size() && std::equal(relief.begin(), relief.end(), relief_.begin(), same)) return true;
+    relief_ = std::move(relief);
+    // (The heights are the base's: a new one with the relief, the tiles'
+    // boxes made again.)
+    if (base_) {
+        LandBase b = *base_;
+        b.relief = relief_;
+        base_ = std::make_shared<const LandBase>(std::move(b));
+        rebuildItems(/*now=*/false);
+    }
+    ++generation_;
+    return true;
+}
+
 bool LandNode::setProcess(LandProcess process, std::string& err) {
     const auto identifier = [](const std::string& s) {
         if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
@@ -285,6 +320,7 @@ void LandNode::setGridBase(uint64_t serial, std::vector<float> channel0) {
     }
     b.lattice = lattice_;
     b.regions = regionStore_;
+    b.relief = relief_;
     base_ = std::make_shared<const LandBase>(std::move(b));
     baseSerial_ = serial;
     // Its heights (and so its tiles' boxes) are the tree's over the base:
@@ -435,8 +471,19 @@ void LandNode::sampleHeights(float x0, float z0, float cell, int cols, int rows,
                 height_->sample(bx.data(), by.data(), bz.data(), static_cast<int>(n), o, out);
             else
                 std::fill(out, out + n, 0.0f);
-            if (base_)
-                for (size_t k = 0; k < n; ++k) out[k] = base_->overDir(out[k], &dirs[k * 3]);
+            if (base_) {
+                // (The levels' relief too, each a batch: LandBase::standIn.)
+                const size_t levels = std::min<size_t>(base_->relief.size(), LandRegionConfig::kMaxLevels);
+                std::vector<float> rv(levels * n, 0.0f);
+                for (size_t L = 0; L < levels; ++L)
+                    if (const FieldRef& r = base_->relief[L])
+                        r->sample(bx.data(), by.data(), bz.data(), static_cast<int>(n), o, rv.data() + L * n);
+                for (size_t k = 0; k < n; ++k) {
+                    float values[LandRegionConfig::kMaxLevels] = {};
+                    for (size_t L = 0; L < levels; ++L) values[L] = rv[L * n + k];
+                    out[k] = base_->overDir(out[k], &dirs[k * 3], levels ? values : nullptr);
+                }
+            }
             for (size_t k = 0; k < n; ++k) y[k] = groundY(R, out[k], xs[k], zs[k]);
         }
         for (size_t k = 0; k < n; ++k) out[k] = static_cast<float>(y[k]);
@@ -761,12 +808,15 @@ void buildFaceItems(const LandNode::ItemInputs& in, std::vector<SurfaceItem>& it
     const double step = side / (per - 1);
     const size_t n = static_cast<size_t>(cols) * cols;
     std::vector<float> h(n, 0.0f), xs(n), ys(n), zs(n);
+    // (The levels' relief too, each a batch over the face: LandBase::standIn.)
+    const size_t levels = in.base ? std::min<size_t>(in.base->relief.size(), LandRegionConfig::kMaxLevels) : 0;
+    std::vector<float> rv(levels * n, 0.0f);
     chartBounds_ = bromath::aempty3();
     items_.reserve(static_cast<size_t>(cells) * cells * 6);
     for (int f = 0; f < 6; ++f) {
         // The face's samples on its datum, relative to the face's centre.
         if (!height_) std::fill(h.begin(), h.end(), 0.0f);
-        if (height_) {
+        if (height_ || levels) {
             const CubeFace& F = cubeFace(f);
             const double o[3] = {R * F.n[0], R * F.n[1], R * F.n[2]};
             for (int j = 0; j < cols; ++j)
@@ -778,13 +828,18 @@ void buildFaceItems(const LandNode::ItemInputs& in, std::vector<SurfaceItem>& it
                     ys[k] = static_cast<float>(R * d[1] - o[1]);
                     zs[k] = static_cast<float>(R * d[2] - o[2]);
                 }
-            height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+            if (height_) height_->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+            for (size_t L = 0; L < levels; ++L)
+                if (const FieldRef& r = in.base->relief[L])
+                    r->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, rv.data() + L * n);
         }
         if (in.base)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < cols; ++i) {
-                    float& v = h[static_cast<size_t>(j) * cols + i];
-                    v = in.overTree(v, f, -e + i * step, -e + j * step);
+                    const size_t k = static_cast<size_t>(j) * cols + i;
+                    float values[LandRegionConfig::kMaxLevels] = {};
+                    for (size_t L = 0; L < levels; ++L) values[L] = rv[L * n + k];
+                    h[k] = in.overTree(h[k], f, -e + i * step, -e + j * step, levels ? values : nullptr);
                 }
         for (int cz = 0; cz < cells; ++cz)
             for (int cx = 0; cx < cells; ++cx) {
@@ -816,6 +871,10 @@ void itemRange(const LandNode::ItemInputs& in, int cells, size_t k, float& lo, f
     const double e = in.round ? faceHalf(in.body) : static_cast<double>(in.extent);
     const double side = 2.0 * e / cells, step = side / (per - 1);
     const double ox = -e + cx * side, oz = -e + cz * side;
+    // (The levels' relief too, each a batch: LandBase::standIn.)
+    const size_t levels =
+        in.round && in.base ? std::min<size_t>(in.base->relief.size(), LandRegionConfig::kMaxLevels) : 0;
+    std::vector<float> rv(levels * n, 0.0f);
     if (in.round) {
         const Body& body = in.body;
         const double R = body.radius;
@@ -831,6 +890,9 @@ void itemRange(const LandNode::ItemInputs& in, int cells, size_t k, float& lo, f
                 zs[s] = static_cast<float>(R * d[2] - o[2]);
             }
         if (in.height) in.height->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, h.data());
+        for (size_t L = 0; L < levels; ++L)
+            if (const FieldRef& r = in.base->relief[L])
+                r->sample(xs.data(), ys.data(), zs.data(), static_cast<int>(n), o, rv.data() + L * n);
     } else {
         for (int j = 0; j < per; ++j)
             for (int i = 0; i < per; ++i) {
@@ -843,7 +905,10 @@ void itemRange(const LandNode::ItemInputs& in, int cells, size_t k, float& lo, f
     hi = -lo;
     for (int j = 0; j < per; ++j)
         for (int i = 0; i < per; ++i) {
-            const float v = in.overTree(h[static_cast<size_t>(j) * per + i], root, ox + i * step, oz + j * step);
+            const size_t s = static_cast<size_t>(j) * per + i;
+            float values[LandRegionConfig::kMaxLevels] = {};
+            for (size_t L = 0; L < levels; ++L) values[L] = rv[L * n + s];
+            const float v = in.overTree(h[s], root, ox + i * step, oz + j * step, levels ? values : nullptr);
             lo = std::min(lo, v);
             hi = std::max(hi, v);
         }

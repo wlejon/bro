@@ -45,10 +45,14 @@
 //   float procCoarseCellSize()        a regional grid's (ground/land_region_layer.glsl):
 //                                     on the global grid -1, 2^20, procHere(c)
 //                                     and procCellSize()
+//   float landReliefRest(int L)       level L's share of its relief the last
+//                                     procCoarse lacks (ground/land_regions.glsl;
+//                                     1 on the global grid)
 //
 // and every other function a world writes; the land's tree is landTree(p)
 // (its noise at the land's seed: 2D at a flat body's (x, z), 3D at a round
-// body's datum point).
+// body's datum point), and each regional level's relief landRelief(L, p)
+// (processes.regions.relief; 0 past LAND_RELIEF_LEVELS of them).
 
 #define PROC_CHANNELS LAND_GRID_CHANNELS
 
@@ -87,6 +91,7 @@ int procLevel() { return -1; }
 int procBorder() { return 1 << 20; }
 vec4 procCoarse(int c) { return procHere(c); }
 float procCoarseCellSize() { return procCellSize(); }
+float landReliefRest(int L) { return 1.0; }
 
 int procIteration() { return int(pc.words[LP_P_ITERATION]); }
 vec4 procData(int i) { return procDataBuffer.words[clamp(i, 0, 63)]; }

@@ -43,6 +43,25 @@ const char* bro_scene_SceneNode_setLandModule(void* self, const char* source, co
     return tl_error.c_str();
 }
 
+const char* bro_scene_SceneNode_setLandRelief(void* self, const char* trees, const double* seeds, uint32_t seeds_len) {
+    static thread_local std::string tl_error;
+    tl_error.clear();
+    auto* land = landOf(self);
+    if (!land) return tl_error.c_str();
+    // (One tree a line, a level each.)
+    std::vector<std::string> list;
+    const std::string all = trees ? std::string(trees) : std::string();
+    for (size_t at = 0; !all.empty() && at <= all.size();) {
+        const size_t nl = std::min(all.find('\n', at), all.size());
+        list.push_back(all.substr(at, nl - at));
+        at = nl + 1;
+    }
+    std::vector<int> s;
+    for (uint32_t k = 0; k < seeds_len; ++k) s.push_back(static_cast<int>(seeds[k]));
+    land->setRelief(list, s, tl_error);
+    return tl_error.c_str();
+}
+
 const char* bro_scene_SceneNode_setLandProcess(void* self, const char* source, const char* passes,
                                                const double* params, uint32_t params_len, const float* data,
                                                uint32_t data_len) {
