@@ -23,6 +23,13 @@ layout(std430, set = 0, binding = 2) readonly buffer LandFills { vec4 fills[]; }
 layout(std430, set = 0, binding = 3) readonly buffer LandData { vec4 words[]; } landDataBuffer;
 layout(push_constant) uniform LandFillPush { uint words[LF_P_WORDS]; } pc;
 
+// The land's reads inline at every call, the world's surface reads them
+// tens of times, and a driver unrolls their loops of a known count at every
+// one (a fill took the 4090's 34 s to compile): their counts here are plus
+// a zero it cannot know (set first in main), so each stays one loop.
+int lfZero = 0;
+#define LAND_LOOP_N(n) ((n) + lfZero)
+
 // The land's processes' grid (scene_land_process.h), its layout the land's
 // (ground/land_grid_config.glsl); with no processes, never read.
 #include "ground/land_grid_config.glsl"
@@ -125,6 +132,7 @@ shared float lfGround[LF_SHARED * LF_SHARED];
 #endif
 
 void main() {
+    lfZero = min(int(pc.words[LF_P_TILES]), 0);
     uint stride = pc.words[LF_P_STRIDE];
     uint tile = gl_WorkGroupID.z;
     if (tile >= pc.words[LF_P_TILES]) return;   // (the whole group)

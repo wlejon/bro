@@ -19,6 +19,11 @@
 // Each reads at a scale clamped to at least the footprint, so what the
 // texel cannot hold is its mean, and what that mean hides is the spread.
 
+// (A loop the land's fill keeps a loop: ground/land_grid.glsl.)
+#ifndef LAND_LOOP_N
+#define LAND_LOOP_N(n) (n)
+#endif
+
 struct LandStat {
     float mean;
     float spread;   // the standard deviation about the mean over the footprint (>= 0)
@@ -74,11 +79,16 @@ vec4 landGridMean(int c, vec3 p, float w, out vec4 spread) {
     w = 2.0 * landFootprint;
     vec3 up, e, n;
     landFrame(p, up, e, n);
-    vec3 a = 0.25 * w * (e + n), b = 0.25 * w * (e - n);
-    vec4 v0 = landGrid(c, p + a), v1 = landGrid(c, p - a), v2 = landGrid(c, p + b), v3 = landGrid(c, p - b);
+    // (One read in a loop, the four corners: a read is inlined whole.)
+    vec4 s1 = vec4(0.0), s2 = vec4(0.0);
+    for (int k = 0; k < LAND_LOOP_N(4); ++k) {
+        vec4 v = landGrid(c, p + 0.25 * w * ((k & 1) == 0 ? 1.0 : -1.0) * (k < 2 ? e + n : e - n));
+        s1 += v;
+        s2 += v * v;
+    }
     lfSetFootprint(old);
-    vec4 m = 0.25 * (v0 + v1 + v2 + v3);
-    vec4 q = 0.25 * (v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3) - m * m;
+    vec4 m = 0.25 * s1;
+    vec4 q = 0.25 * s2 - m * m;
     spread = sqrt(max(q * (4.0 / 3.0), vec4(0.0)));
     return m;
 }
@@ -86,11 +96,15 @@ vec4 landGridMean(int c, vec3 p, float w, out vec4 spread) {
 vec4 landGridMean(int c, vec2 p, float w, out vec4 spread) {
     float old = lfSetFootprint(0.5 * max(w, landFootprint));
     w = 2.0 * landFootprint;
-    vec2 a = vec2(0.25 * w), b = vec2(0.25 * w, -0.25 * w);
-    vec4 v0 = landGrid(c, p + a), v1 = landGrid(c, p - a), v2 = landGrid(c, p + b), v3 = landGrid(c, p - b);
+    vec4 s1 = vec4(0.0), s2 = vec4(0.0);
+    for (int k = 0; k < LAND_LOOP_N(4); ++k) {
+        vec4 v = landGrid(c, p + 0.25 * w * ((k & 1) == 0 ? 1.0 : -1.0) * (k < 2 ? vec2(1.0, 1.0) : vec2(1.0, -1.0)));
+        s1 += v;
+        s2 += v * v;
+    }
     lfSetFootprint(old);
-    vec4 m = 0.25 * (v0 + v1 + v2 + v3);
-    vec4 q = 0.25 * (v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3) - m * m;
+    vec4 m = 0.25 * s1;
+    vec4 q = 0.25 * s2 - m * m;
     spread = sqrt(max(q * (4.0 / 3.0), vec4(0.0)));
     return m;
 }
@@ -109,7 +123,7 @@ float landGridCell(vec2 p)
 #ifdef LAND_GRID
     float cell = landGridCell();
 #ifdef LAND_REGIONS
-    for (int L = LAND_REGION_LEVELS - 1; L >= 0; --L) cell = mix(cell, landRegionCell(L), landGridCover(L, p));
+    for (int L = LAND_LOOP_N(LAND_REGION_LEVELS - 1); L >= 0; --L) cell = mix(cell, landRegionCell(L), landGridCover(L, p));
 #endif
     return cell;
 #else
@@ -161,16 +175,26 @@ LandTerrain landTerrain(LandPoint q, float scale, float base) {
     t.north = vec3(0.0, 0.0, 1.0);
 #endif
     float old = lfSetFootprint(max(0.5 * s, q.footprint));
-    float hc = lfHeightAt(q, t.east, t.north, vec2(0.0), base);
-    float hE = lfHeightAt(q, t.east, t.north, vec2(s, 0.0), base), hW = lfHeightAt(q, t.east, t.north, vec2(-s, 0.0), base);
-    float hN = lfHeightAt(q, t.east, t.north, vec2(0.0, s), base), hS = lfHeightAt(q, t.east, t.north, vec2(0.0, -s), base);
+    // The centre and the four a scale east, west, north and south of it,
+    // one height read in a loop (a read is the world's whole tree: five
+    // inlined, twice a surface, were most of a fill's compile).
+    float hc = 0.0, ring = 0.0, sum2 = 0.0;
+    vec2 rise = vec2(0.0);
+    for (int i = 0; i < LAND_LOOP_N(5); ++i) {
+        vec2 dir = i == 0 ? vec2(0.0) : i == 1 ? vec2(1.0, 0.0) : i == 2 ? vec2(-1.0, 0.0) : i == 3 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+        float hi = lfHeightAt(q, t.east, t.north, s * dir, base);
+        if (i == 0) hc = hi;
+        else ring += hi;
+        rise += hi * dir;
+        sum2 += hi * hi;
+    }
     lfSetFootprint(old);
-    t.slope = vec2(hE - hW, hN - hS) / (2.0 * s);
+    t.slope = rise / (2.0 * s);
     t.grade = length(t.slope);
     float k = scale / s;
-    t.hollow = (0.25 * (hE + hW + hN + hS) - hc) * k * k;
-    float m = 0.2 * (hc + hE + hW + hN + hS);
-    float v = 0.2 * (hc * hc + hE * hE + hW * hW + hN * hN + hS * hS) - m * m;
+    t.hollow = (0.25 * ring - hc) * k * k;
+    float m = 0.2 * (hc + ring);
+    float v = 0.2 * sum2 - m * m;
     // (Less the plane the slope accounts for: the spread is the relief
     // about the ground's slope, not the slope's rise across the read.)
     v -= 0.4 * dot(t.slope, t.slope) * s * s;
@@ -218,7 +242,7 @@ vec3 landBodyPoint(vec2 p) { return vec3(p.x, 0.0, p.y); }
 LandStat landGrain(vec3 P, float seed, float wavelength, int octaves, float lacunarity, float gain, float scale) {
     float fp = max(landFootprint, scale);
     float s = 0.0, l = wavelength, a = 1.0, vr = 0.0, vt = 0.0;
-    for (int k = 0; k < octaves; ++k) {
+    for (int k = 0; k < LAND_LOOP_N(octaves); ++k) {
         float w = 1.0 - smoothstep(0.3 * l, 0.6 * l, fp);
         if (w > 0.0) s += a * w * landValueNoise(P / l + seed + float(k) * 23.9);
         vr += a * a * (1.0 - w * w);

@@ -52,7 +52,7 @@ uint landRegionKey(int L, int root, int i, int j) {
 // The region's slot (-1: not in).
 int landRegionSlot(uint key) {
     uint h = (key * 2654435761u) >> (32 - LAND_REGION_TABLE_BITS);
-    for (int k = 0; k < 16; ++k) {
+    for (int k = 0; k < LAND_LOOP_N(16); ++k) {
         uvec4 e = landRegionEntry((h + uint(k)) & uint(LAND_REGION_TABLE - 1));
         if (e.x == key) return int(e.y);
         if (e.x == 0u) return -1;
@@ -140,7 +140,7 @@ vec4 landRegionCubic(int slot, int c, vec2 t) {
     int layer = slot * LAND_REGION_KEEP + c;
     ivec4 xs = clamp(i.x + ivec4(-1, 0, 1, 2), 0, LAND_REGION_CELLS - 1);
     vec4 sum = vec4(0.0);
-    for (int b = 0; b < 4; ++b) {
+    for (int b = 0; b < LAND_LOOP_N(4); ++b) {
         int y = clamp(i.y - 1 + b, 0, LAND_REGION_CELLS - 1);
         sum += wy[b] * (wx.x * landRegionLoad(ivec3(xs.x, y, layer)) + wx.y * landRegionLoad(ivec3(xs.y, y, layer)) +
                         wx.z * landRegionLoad(ivec3(xs.z, y, layer)) + wx.w * landRegionLoad(ivec3(xs.w, y, layer)));
@@ -154,10 +154,13 @@ vec4 landRegionCubic(int slot, int c, vec2 t) {
 // the one its centre lands on (a river a cell wide read every few cells
 // was dotted).
 vec4 landRegionTexel(int slot, int c, vec2 t, float q) {
-    if (q <= 1.0) return landRegionCubic(slot, c, t);
-    float o = 0.25 * q;
-    return 0.25 * (landRegionCubic(slot, c, t + vec2(-o, -o)) + landRegionCubic(slot, c, t + vec2(o, -o)) +
-                   landRegionCubic(slot, c, t + vec2(-o, o)) + landRegionCubic(slot, c, t + vec2(o, o)));
+    // (One read in a loop, once or four times.)
+    int n = q <= 1.0 ? 1 : 4;
+    float o = n == 1 ? 0.0 : 0.25 * q;
+    vec4 sum = vec4(0.0);
+    for (int k = 0; k < n + LAND_LOOP_N(0); ++k)
+        sum += landRegionCubic(slot, c, t + o * vec2((k & 1) == 0 ? -1.0 : 1.0, k < 2 ? -1.0 : 1.0));
+    return sum / float(n);
 }
 
 // Level L of one root at chart point s: its regions' weighted values (times
@@ -174,10 +177,10 @@ void landRegionLevel(int c, int L, int root, vec4 s, float wf, inout vec4 sum, i
     landRegionRange(L, lo, hi);
     float q = landFieldFootprint / cell;
     ivec2 l = max(ivec2(floor(u - a)), ivec2(lo)), h = min(ivec2(floor(u + a)), ivec2(hi));
-    for (int dj = 0; dj < 2; ++dj) {
+    for (int dj = 0; dj < LAND_LOOP_N(2); ++dj) {
         int j = l.y + dj;
         if (j > h.y) break;
-        for (int di = 0; di < 2; ++di) {
+        for (int di = 0; di < LAND_LOOP_N(2); ++di) {
             int i = l.x + di;
             if (i > h.x) break;
             int slot = landRegionSlot(landRegionKey(L, root, i, j));
@@ -221,7 +224,7 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
     float m0 = max(abs(x0.x), abs(x0.y));
     vec4 acc = vec4(0.0);
     rest = 1.0;   // the share still the coarser levels'
-    for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
+    for (int L = minLevel; L < min(endLevel, LAND_LOOP_N(LAND_REGION_LEVELS)) && rest > 0.0; ++L) {
         float fade = landRegionFade(L) * landRegionPresence(L, d, vec2(0.0));
         if (fade <= 0.0) continue;
         float band = float(LAND_REGION_APRON) * landRegionCell(L);
@@ -232,7 +235,7 @@ vec4 landFieldDirLevels(int c, vec3 d, vec3 p, int minLevel, int endLevel, int f
         // fill inlines this at every read.)
         float wsum = 0.0;
         int first = m0 < LAND_GRID_HALF - band ? 6 : 0;
-        for (int k = first; k < 7; ++k) {
+        for (int k = first; k < LAND_LOOP_N(7); ++k) {
             int f = k == 6 ? f0 : k;
             if (k < 6 && (f == f0 || dot(d, kLandFaceN[f]) < 0.2)) continue;
             vec2 x = f == f0 ? x0 : landGridChart(d, f);
@@ -274,7 +277,7 @@ float landFieldCoverDir(int level, vec3 d, vec3 p) {
 vec4 landFieldAtLevels(int c, vec2 x, int minLevel, int endLevel, out float rest) {
     vec4 acc = vec4(0.0);
     rest = 1.0;
-    for (int L = minLevel; L < min(endLevel, LAND_REGION_LEVELS) && rest > 0.0; ++L) {
+    for (int L = minLevel; L < min(endLevel, LAND_LOOP_N(LAND_REGION_LEVELS)) && rest > 0.0; ++L) {
         float fade = landRegionFade(L) * landRegionPresence(L, vec3(0.0), x);
         if (fade <= 0.0) continue;
         vec4 sum = vec4(0.0);
