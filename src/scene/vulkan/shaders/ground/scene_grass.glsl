@@ -155,7 +155,7 @@ vec3 coverFlatOf(vec4 rows[4], vec3 p) {
     vec3 q = d.x * rows[0].xyz + d.y * rows[1].xyz + d.z * rows[2].xyz;
     float R = landRadius();
     float rho = length(q.xz);
-    vec2 xz = rho > 0.0 ? q.xz * (R * atan(rho, R + q.y) / rho) : vec2(0.0);
+    vec2 xz = rho > 0.0 ? q.xz * (R * landAtan(rho, R + q.y) / rho) : vec2(0.0);
     // (|q + (0, R, 0)| - R, taken apart so a float of R loses nothing.)
     float h = (dot(q, q) + 2.0 * R * q.y) / (length(q + vec3(0.0, R, 0.0)) + R);
     return vec3(xz.x, h, xz.y);

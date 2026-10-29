@@ -71,7 +71,7 @@ vec4 landChartExact(int f, vec3 d, vec3 p) {
     vec2 a0 = vec2(dot(U, oh), dot(V, oh)) / nO;
     // a - a0 = (u.q - a0 n.q) / (n.O + n.q)
     vec2 da = (vec2(dot(U, q), dot(V, q)) - a0 * nq) / (nO + nq);
-    vec2 dx = LAND_GRID_RADIUS * atan(da / (1.0 + a0 * (a0 + da)));
+    vec2 dx = LAND_GRID_RADIUS * landAtan(da / (1.0 + a0 * (a0 + da)));
     vec4 ref = fills[lfTile + 7u + uint(f)];
     return vec4(ref.xy, ref.zw + dx);
 }
@@ -91,7 +91,7 @@ struct RoundTile {
 vec3 roundDatum(RoundTile T, vec2 o, out vec3 d) {
     vec2 a = o / T.R;
     // tan(x_c + a) - tan(x_c) = sin(a) / (cos(x_c + a) cos(x_c))
-    vec2 c = vec2(cos(atan(T.mid.x) + a.x), cos(atan(T.mid.y) + a.y));
+    vec2 c = vec2(cos(landAtan(T.mid.x) + a.x), cos(landAtan(T.mid.y) + a.y));
     vec2 dt = landSin(a) / (c * T.mid.zw);
     vec3 wc = T.n + T.mid.x * T.u + T.mid.y * T.v;
     vec3 dw = dt.x * T.u + dt.y * T.v;

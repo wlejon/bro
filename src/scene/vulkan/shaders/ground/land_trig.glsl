@@ -7,6 +7,12 @@
 // drawn, the eroded ground's slopes a staircase of treads and risers. Under
 // 0.02 rad (127 km at the Earth's radius) each is its series, exact in a
 // float; past it the built-in, whose error is then a float's own.
+//
+// atan is never the built-in where it matters: Mesa's (RADV, lavapipe) is
+// a polynomial good to a relative 2e-5 even at the smallest angles (its
+// first coefficient is 0.99998), so R atan of a point 9.5 km out was 20 cm
+// off, and off by another 20 cm in another anchor's frame: a re-anchor
+// moved the turf (test_turf_body). NVIDIA's and Apple's are a float's own.
 #ifndef LAND_TRIG_GLSL
 #define LAND_TRIG_GLSL
 
@@ -30,4 +36,20 @@ float landVersin(float x) {
     return 2.0 * s * s;
 }
 
+// atan(y / x), for x > 0 and |y| <= x, halved, as atan t = 2 atan(t / (1 +
+// sqrt(1 + t^2))), until its series is exact in a float (three halvings at
+// most, none under a tenth); elsewhere the built-in.
+float landAtan(float y, float x) {
+    if (!(x > 0.0) || abs(y) > x) return atan(y, x);
+    float t = y / x, k = 1.0;
+    while (abs(t) > 0.1) {
+        t /= 1.0 + sqrt(1.0 + t * t);
+        k *= 2.0;
+    }
+    float t2 = t * t;
+    return k * t * (1.0 - t2 * (1.0 / 3.0 - t2 * (1.0 / 5.0 - t2 * (1.0 / 7.0 - t2 * (1.0 / 9.0)))));
+}
+vec2 landAtan(vec2 y, vec2 x) { return vec2(landAtan(y.x, x.x), landAtan(y.y, x.y)); }
+vec2 landAtan(vec2 t) { return landAtan(t, vec2(1.0)); }
+float landAtan(float t) { return landAtan(t, 1.0); }
 #endif

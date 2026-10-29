@@ -112,7 +112,7 @@ vec2 landMapOf(vec3 p) {
     if (!landRound()) return p.xz;
     float R = landRadius();
     float rho = length(p.xz);
-    return rho > 0.0 ? p.xz * (R * atan(rho, R + p.y) / rho) : vec2(0.0);
+    return rho > 0.0 ? p.xz * (R * landAtan(rho, R + p.y) / rho) : vec2(0.0);
 }
 
 // The ring cell wanted at map point `m` (mesh_land.vert). From the frame's
@@ -182,11 +182,11 @@ bool landChartOff(vec2 m, out int f, out vec2 off) {
         // x = R atan(d.u / d.n): the anchor's x plus R atan of the tangent
         // of the difference, whose numerator is the difference's own.
         float ddn = dot(dd, n);
-        off = R * vec2(atan(dot(dd, u) * an - u.y * ddn, dn * an + dot(d, u) * u.y),
-                       atan(dot(dd, v) * an - v.y * ddn, dn * an + dot(d, v) * v.y));
+        off = R * vec2(landAtan(dot(dd, u) * an - u.y * ddn, dn * an + dot(d, u) * u.y),
+                       landAtan(dot(dd, v) * an - v.y * ddn, dn * an + dot(d, v) * v.y));
         return true;
     }
-    off = R * vec2(atan(dot(d, u), dn), atan(dot(d, v), dn));
+    off = R * vec2(landAtan(dot(d, u), dn), landAtan(dot(d, v), dn));
     return false;
 }
 
@@ -211,7 +211,7 @@ vec2 landChartMap(int f, vec2 off, bool near) {
         w = landFaceN(f) + t.x * u + t.y * v;
     }
     float rho = length(w.xz);
-    return rho > 0.0 ? w.xz * (R * atan(rho, w.y) / rho) : vec2(0.0);
+    return rho > 0.0 ? w.xz * (R * landAtan(rho, w.y) / rho) : vec2(0.0);
 }
 
 // Map point `m`'s place on a round body's charts (landChartOff's face,
