@@ -161,6 +161,9 @@ public:
     /// Wanted tiles not ready yet.
     uint32_t pending() const;
     uint32_t wanted() const { return static_cast<uint32_t>(wanted_.size()); }
+    /// Tiles the tree keeps nodes for (wanted, resident, ranged, or above
+    /// one that is): bounded by a few capacities.
+    uint32_t known() const { return static_cast<uint32_t>(index_.size()); }
     uint32_t resident() const { return config_.capacity - static_cast<uint32_t>(freeSlots_.size()); }
     const Stats& stats() const { return stats_; }
 
@@ -172,7 +175,9 @@ public:
     HeightRange range(const TileId& id) const;
     /// What the surface of `id` and every tile below it lies within, as its
     /// producer measured it: narrows the bounds selection and culling use for
-    /// it and its descendants. Kept while the tree lives (cleared by clear()).
+    /// it and its descendants from the next select. Kept while the tree keeps
+    /// the tile (cleared by clear(); a tile pruned once the tree outgrows a
+    /// few capacities falls back to its ancestor's).
     void setRange(const TileId& id, HeightRange r);
     /// The slot of a ready tile, or -1.
     int32_t slotOf(const TileId& id) const;
@@ -182,48 +187,83 @@ public:
 
 private:
     enum class State : uint8_t { Missing, Producing, Ready };
-    struct Entry {
-        TileId id;
-        int32_t slot = -1;
-        State state = State::Missing;
-        uint64_t lastWanted = 0;
-    };
-    struct Wanted {
-        TileId id;
-        double error = 0;   // > 1: its cells project larger than pixelsPerCell
-        bool leaf = true;
-        bool visible = true;
-    };
 
-    // A tile's base footprint (fixed) and the range last resolved for it.
-    struct Footprint {
+    // A tile the tree knows: wanted, resident, holding a range, or above one
+    // that is. Nodes link to their parent and children by index, so selection
+    // and the draw set walk the tree without a lookup; `index_` finds a node
+    // by id for the calls that name one.
+    struct Node {
+        TileId id;
+        int32_t parent = -1;
+        int32_t child[4] = {-1, -1, -1, -1};
+        // The base footprint, fixed for the tile.
         Vec3d center;        // base surface at (0.5, 0.5)
         Vec3d normal;        // the base normal there
         double radius = 0;   // the farthest base point from center
         double sag = 0;      // how far the base falls below its tangent plane at center
+        double cell = 0;     // a cell's edge on the base surface
+        // Its own range once set; `range` is the one it is selected by (its
+        // own, else its parent's), resolved top-down as selection reaches it.
+        HeightRange own;
+        bool hasOwn = false;
         HeightRange range;
-        uint64_t rangeGen = 0;
+        // Residency.
+        int32_t slot = -1;
+        State state = State::Missing;
+        uint64_t lastWanted = 0;   // == frame_: wanted by the last select
+        // The last select's verdict.
+        double error = 0;    // > 1: its cells project larger than pixelsPerCell
+        bool leaf = true;
+        bool visible = true;
+        bool live = false;   // false: on the free list
     };
-    const Footprint& footprint(const TileId& id) const;
+
+    void footprintOf(Node& n) const;
+    int32_t find(const TileId& id) const;
+    /// The node for `id`, made (with its ancestors) if the tree lacks it.
+    int32_t ensure(const TileId& id);
+    int32_t ensureChild(int32_t parent, uint32_t i);
+    int32_t makeNode(const TileId& id, int32_t parent);
+    /// range from the node's own, else its parent's resolved range.
+    void resolve(Node& n) const;
+    /// Drops the nodes nothing needs (not wanted, not resident, no child
+    /// kept) once the tree holds far more than its capacity.
+    void prune();
+    Bounds bounds(const Node& n, const HeightRange& r) const;
     /// The tight sphere selection and culling use: about the middle of the
     /// tile's range rather than its base.
-    Bounds tightBounds(const Footprint& f) const;
+    Bounds tightBounds(const Node& n) const;
+    // What culling needs of a view, worked out once a select.
+    struct Cull {
+        double cx = 1, cy = 1;      // the side planes' unit-normal scales
+        bool horizon = false;       // the eye is above the lowest surface
+        double r0 = 0;              // that surface's radius
+        double eyeReach = 0;        // the eye's tangent length to it
+    };
+    Cull cullFor(const View& view) const;
     /// `top`: the tile's highest surface above its base (its range's hi).
-    bool visible(const Bounds& b, double top, const View& view) const;
+    bool visible(const Bounds& b, double top, const View& view, const Cull& cull) const;
     /// 0 for a tile the view culls.
-    double error(const TileId& id, const View& view, bool* seen) const;
-    bool isReady(const TileId& id) const;
-    bool allocate(Entry& e);
-    void coverInto(const TileId& id, std::vector<DrawTile>& out, bool& ok) const;
+    double error(const Node& n, const View& view, const Cull& cull, bool* seen) const;
+    bool wantedNow(const Node& n) const { return n.lastWanted == frame_; }
+    void evict(Node& n);
+    void coverInto(int32_t node, std::vector<DrawTile>& out, bool& ok) const;
 
     Config config_;
     uint64_t frame_ = 0;
-    std::unordered_map<uint64_t, Entry> entries_;
-    std::unordered_map<uint64_t, Wanted> wanted_;
+    std::vector<Node> nodes_;
+    std::vector<int32_t> freeNodes_;
+    std::unordered_map<uint64_t, int32_t> index_;
+    std::vector<int32_t> wanted_;     // the last select's tiles, in the order it chose them
+    std::vector<int32_t> slotNode_;   // the node holding each slot, or -1
     std::vector<uint32_t> freeSlots_;
-    mutable std::unordered_map<uint64_t, Footprint> footprints_;
-    std::unordered_map<uint64_t, HeightRange> ranges_;
-    uint64_t rangeGen_ = 1;   // advanced by every setRange: resolved ranges are stale
+    struct Open {
+        double error;
+        uint64_t key;
+        int32_t node;
+    };
+    std::vector<Open> open_;          // select's heap, kept for its storage
+    size_t pruneCursor_ = 0;          // where prune()'s next sweep starts
     Stats stats_;
 };
 

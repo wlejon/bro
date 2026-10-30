@@ -282,6 +282,37 @@ void testRanges() {
     check(deepest >= 18, "and the ground below still refines (level " + std::to_string(deepest) + ")");
 }
 
+// A long flight: the tree keeps nodes only for what it still needs, so the
+// tiles it knows stay within a few capacities however far the view goes, and
+// the draw set covers the domain at every step.
+void testLongFlight() {
+    Config c = planeConfig(256);
+    c.domain.size = 1 << 20;
+    c.domain.origin[0] = c.domain.origin[1] = -(1 << 19);
+    c.maxLevel = 18;
+    TileTree tree(c);
+    bool parentFirst = true, covered = true;
+    uint32_t mostKnown = 0;
+    for (int step = 0; step < 400; ++step) {
+        const double x = -400000 + step * 2000.0;
+        tree.select(viewAt(x, 30, 0.37 * x));
+        produceAll(tree, 24, parentFirst);
+        for (const DrawTile& d : tree.drawSet()) tree.setRange(d.id, {0, 1});
+        mostKnown = std::max(mostKnown, tree.known());
+        if (step % 50 == 0) {
+            double area = 0;
+            for (const DrawTile& d : tree.drawSet()) area += std::ldexp(1.0, -2 * static_cast<int>(d.id.level));
+            covered = covered && std::fabs(area - 1) < 1e-9;
+        }
+    }
+    check(parentFirst, "a long flight produces parents first");
+    check(covered, "a long flight's draw set covers the plane at every check");
+    check(mostKnown <= 6 * c.capacity, "the tree knows at most a few capacities of tiles over a long flight (" +
+                                           std::to_string(mostKnown) + " for capacity " +
+                                           std::to_string(c.capacity) + ")");
+    check(tree.stats().evicted > 1000, "and evicted as it went (" + std::to_string(tree.stats().evicted) + ")");
+}
+
 } // namespace
 
 int main() {
@@ -290,6 +321,7 @@ int main() {
     testCubeSphere();
     testFrustum();
     testRanges();
+    testLongFlight();
     std::printf("bro_tilecache_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

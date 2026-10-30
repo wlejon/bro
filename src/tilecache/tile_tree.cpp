@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <queue>
 
 namespace bro::tilecache {
 
@@ -17,6 +16,9 @@ Vec3d unit(const Vec3d& v) {
     const double l = length(v);
     return l > 0 ? Vec3d{v.x / l, v.y / l, v.z / l} : v;
 }
+
+// Which child of its parent a tile is: child(i) of TileId.
+uint32_t quadrant(const TileId& t) { return (t.x & 1u) + 2 * (t.y & 1u); }
 
 } // namespace
 
@@ -71,87 +73,161 @@ TileTree::TileTree(const Config& config) : config_(config) {
 }
 
 void TileTree::clear() {
-    entries_.clear();
+    nodes_.clear();
+    freeNodes_.clear();
+    index_.clear();
     wanted_.clear();
+    pruneCursor_ = 0;
+    slotNode_.assign(config_.capacity, -1);
     freeSlots_.clear();
     for (uint32_t s = config_.capacity; s-- > 0;) freeSlots_.push_back(s);   // slot 0 handed out first
-    ranges_.clear();
-    ++rangeGen_;
+    // The roots: nodes 0 to rootCount - 1, never pruned.
+    for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) makeNode({r, 0, 0, 0}, -1);
 }
 
-const TileTree::Footprint& TileTree::footprint(const TileId& id) const {
-    // A tile's base footprint never changes; selection asks for every
-    // candidate's each frame, so footprints are kept (and dropped wholesale
-    // past a few capacities' worth, which a moving view refills). The range
-    // is resolved again only after a setRange.
-    auto it = footprints_.find(id.key());
-    if (it == footprints_.end()) {
-        if (footprints_.size() > 8 * static_cast<size_t>(config_.capacity)) footprints_.clear();
-        Footprint f;
-        f.center = config_.domain.point(id, 0.5, 0.5);
-        f.normal = config_.domain.kind == Domain::Kind::Plane ? Vec3d{0, 1, 0}
-                                                              : unit(sub(f.center, config_.domain.center));
-        static constexpr double kSamples[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 1}, {0, 0.5}, {1, 0.5}};
-        for (const auto& s : kSamples) {
-            const Vec3d d = sub(config_.domain.point(id, s[0], s[1]), f.center);
-            f.radius = std::max(f.radius, length(d));
-            f.sag = std::max(f.sag, -dot(d, f.normal));
-        }
-        it = footprints_.emplace(id.key(), f).first;
+void TileTree::footprintOf(Node& n) const {
+    n.center = config_.domain.point(n.id, 0.5, 0.5);
+    n.normal = config_.domain.kind == Domain::Kind::Plane ? Vec3d{0, 1, 0}
+                                                          : unit(sub(n.center, config_.domain.center));
+    static constexpr double kSamples[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 1}, {0, 0.5}, {1, 0.5}};
+    n.radius = 0;
+    n.sag = 0;
+    for (const auto& s : kSamples) {
+        const Vec3d d = sub(config_.domain.point(n.id, s[0], s[1]), n.center);
+        n.radius = std::max(n.radius, length(d));
+        n.sag = std::max(n.sag, -dot(d, n.normal));
     }
-    Footprint& f = it->second;
-    if (f.rangeGen != rangeGen_) {
-        f.range = {config_.minHeight, config_.maxHeight};
-        for (TileId t = id;; t = t.parent()) {
-            if (const auto r = ranges_.find(t.key()); r != ranges_.end()) {
-                f.range = r->second;
-                break;
-            }
-            if (t.level == 0) break;
-        }
-        f.rangeGen = rangeGen_;
-    }
-    return f;
+    n.cell = config_.domain.tileExtent(n.id) / std::max<uint32_t>(config_.tileSize, 1);
 }
 
-HeightRange TileTree::range(const TileId& id) const { return footprint(id).range; }
+int32_t TileTree::find(const TileId& id) const {
+    const auto it = index_.find(id.key());
+    return it == index_.end() ? -1 : it->second;
+}
+
+int32_t TileTree::makeNode(const TileId& id, int32_t parent) {
+    int32_t i;
+    if (!freeNodes_.empty()) {
+        i = freeNodes_.back();
+        freeNodes_.pop_back();
+        nodes_[i] = Node{};
+    } else {
+        i = static_cast<int32_t>(nodes_.size());
+        nodes_.emplace_back();
+    }
+    Node& n = nodes_[i];
+    n.id = id;
+    n.parent = parent;
+    n.live = true;
+    footprintOf(n);
+    resolve(n);
+    index_.emplace(id.key(), i);
+    return i;
+}
+
+int32_t TileTree::ensureChild(int32_t parent, uint32_t i) {
+    if (const int32_t c = nodes_[parent].child[i]; c >= 0) return c;
+    const int32_t c = makeNode(nodes_[parent].id.child(i), parent);   // may move nodes_
+    nodes_[parent].child[i] = c;
+    return c;
+}
+
+int32_t TileTree::ensure(const TileId& id) {
+    if (const int32_t i = find(id); i >= 0) return i;
+    return ensureChild(ensure(id.parent()), quadrant(id));   // roots are always there
+}
+
+void TileTree::resolve(Node& n) const {
+    n.range = n.hasOwn ? n.own
+            : n.parent >= 0 ? nodes_[n.parent].range
+                            : HeightRange{config_.minHeight, config_.maxHeight};
+}
+
+HeightRange TileTree::range(const TileId& id) const {
+    TileId t = id;
+    int32_t i = find(t);
+    while (i < 0 && t.level > 0) {
+        t = t.parent();
+        i = find(t);
+    }
+    for (; i >= 0; i = nodes_[i].parent)
+        if (nodes_[i].hasOwn) return nodes_[i].own;
+    return {config_.minHeight, config_.maxHeight};
+}
 
 void TileTree::setRange(const TileId& id, HeightRange r) {
     if (!(r.lo <= r.hi)) return;   // NaN or inverted: not a range
-    // A tree that has seen more tiles than it can hold many times over keeps
-    // the ranges of the tiles it still knows (a dropped one falls back to its
-    // ancestor's).
-    if (ranges_.size() > 16 * static_cast<size_t>(config_.capacity)) {
-        for (auto it = ranges_.begin(); it != ranges_.end();) {
-            if (entries_.count(it->first)) ++it;
-            else it = ranges_.erase(it);
-        }
-    }
-    ranges_[id.key()] = r;
-    ++rangeGen_;
+    Node& n = nodes_[ensure(id)];
+    n.own = r;
+    n.hasOwn = true;
+    n.range = r;   // its descendants take it up as the next select reaches them
 }
 
-Bounds TileTree::bounds(const TileId& id) const {
-    const Footprint& f = footprint(id);
-    const double h = std::max(std::abs(f.range.lo), std::abs(f.range.hi));
+void TileTree::prune() {
+    // A moving view leaves behind tiles nothing needs any more: a slice of
+    // the nodes is swept each select once the tree holds a few capacities,
+    // so no one select pays for all of them. A childless node that is not
+    // wanted and holds no slot goes (and its range with it); its parent may
+    // go on a later sweep.
+    if (index_.size() <= 4 * static_cast<size_t>(config_.capacity)) return;
+    const size_t total = nodes_.size();
+    for (size_t k = 0; k < std::min<size_t>(total, 2048); ++k) {
+        if (pruneCursor_ >= total) pruneCursor_ = 0;
+        const int32_t i = static_cast<int32_t>(pruneCursor_++);
+        Node& n = nodes_[i];
+        if (!n.live || n.parent < 0 || wantedNow(n) || n.slot >= 0) continue;
+        if (n.child[0] >= 0 || n.child[1] >= 0 || n.child[2] >= 0 || n.child[3] >= 0) continue;
+        nodes_[n.parent].child[quadrant(n.id)] = -1;
+        index_.erase(n.id.key());
+        n.live = false;
+        freeNodes_.push_back(i);
+    }
+}
+
+Bounds TileTree::bounds(const Node& n, const HeightRange& r) const {
+    const double h = std::max(std::abs(r.lo), std::abs(r.hi));
     // A plane's surface leaves its base square to it; a sphere's along each
     // point's own normal, which a sphere about the base center bounds at
     // radius + |h|.
-    if (config_.domain.kind == Domain::Kind::Plane) return {f.center, std::sqrt(f.radius * f.radius + h * h)};
-    return {f.center, f.radius + h};
+    if (config_.domain.kind == Domain::Kind::Plane) return {n.center, std::sqrt(n.radius * n.radius + h * h)};
+    return {n.center, n.radius + h};
 }
 
-Bounds TileTree::tightBounds(const Footprint& f) const {
-    const double mid = 0.5 * (f.range.lo + f.range.hi), half = 0.5 * (f.range.hi - f.range.lo);
-    const Vec3d c = {f.center.x + f.normal.x * mid, f.center.y + f.normal.y * mid, f.center.z + f.normal.z * mid};
-    if (config_.domain.kind == Domain::Kind::Plane) return {c, std::sqrt(f.radius * f.radius + half * half)};
+Bounds TileTree::bounds(const TileId& id) const {
+    if (const int32_t i = find(id); i >= 0) return bounds(nodes_[i], range(id));
+    Node n;
+    n.id = id;
+    footprintOf(n);
+    return bounds(n, range(id));
+}
+
+Bounds TileTree::tightBounds(const Node& n) const {
+    const HeightRange& r = n.range;
+    const double mid = 0.5 * (r.lo + r.hi), half = 0.5 * (r.hi - r.lo);
+    const Vec3d c = {n.center.x + n.normal.x * mid, n.center.y + n.normal.y * mid, n.center.z + n.normal.z * mid};
+    if (config_.domain.kind == Domain::Kind::Plane) return {c, std::sqrt(n.radius * n.radius + half * half)};
     // A base point b at height h sits at b + u_b h, u_b its own normal:
     // |b + u_b h - (c + n mid)| <= |b - c| + |h - mid| + |mid| |u_b - n|, and
     // |u_b - n| = |b - c| / radius on the sphere.
-    return {c, f.radius * (1 + std::abs(mid) / config_.domain.radius) + half};
+    return {c, n.radius * (1 + std::abs(mid) / config_.domain.radius) + half};
 }
 
-bool TileTree::visible(const Bounds& b, double top, const View& view) const {
+TileTree::Cull TileTree::cullFor(const View& view) const {
+    Cull c;
+    c.cx = 1 / std::sqrt(1 + view.tanHalfX * view.tanHalfX);
+    c.cy = 1 / std::sqrt(1 + view.tanHalfY * view.tanHalfY);
+    if (view.frustum && config_.domain.kind == Domain::Kind::CubeSphere) {
+        c.r0 = std::max(config_.domain.radius + config_.minHeight, 0.0);
+        const double d = length(sub(view.position, config_.domain.center));
+        if (d > c.r0) {
+            c.horizon = true;
+            c.eyeReach = std::sqrt(d * d - c.r0 * c.r0);
+        }
+    }
+    return c;
+}
+
+bool TileTree::visible(const Bounds& b, double top, const View& view, const Cull& cull) const {
     const Vec3d rel = sub(b.center, view.position);
     if (view.frustum) {
         const double z = dot(rel, view.forward);
@@ -159,195 +235,192 @@ bool TileTree::visible(const Bounds& b, double top, const View& view) const {
         // Each side plane through the eye, its normal's tangent-space form
         // scaled to unit length: a sphere beyond any of them is outside.
         const double x = std::abs(dot(rel, view.right)), y = std::abs(dot(rel, view.up));
-        const double cx = 1 / std::sqrt(1 + view.tanHalfX * view.tanHalfX);
-        const double cy = 1 / std::sqrt(1 + view.tanHalfY * view.tanHalfY);
-        if ((x - z * view.tanHalfX) * cx > b.radius) return false;
-        if ((y - z * view.tanHalfY) * cy > b.radius) return false;
+        if ((x - z * view.tanHalfX) * cull.cx > b.radius) return false;
+        if ((y - z * view.tanHalfY) * cull.cy > b.radius) return false;
     }
-    if (view.frustum && config_.domain.kind == Domain::Kind::CubeSphere) {
+    if (cull.horizon) {
         // Beyond the horizon of the lowest surface (radius + minHeight): a
         // point h above it is seen no farther than the two tangent lengths
         // sqrt(d^2 - r0^2) + sqrt((r0 + h)^2 - r0^2), and no point of the tile
         // is more than its range's top above it.
-        const double r0 = std::max(config_.domain.radius + config_.minHeight, 0.0);
-        const double d = length(sub(view.position, config_.domain.center));
-        if (d > r0) {
-            const double h = std::max(top - config_.minHeight, 0.0);
-            const double reach = std::sqrt(d * d - r0 * r0) + std::sqrt(h * (2 * r0 + h));
-            if (length(rel) - b.radius > reach) return false;
-        }
+        const double h = std::max(top - config_.minHeight, 0.0);
+        const double reach = cull.eyeReach + std::sqrt(h * (2 * cull.r0 + h));
+        if (length(rel) - b.radius > reach) return false;
     }
     return true;
 }
 
-double TileTree::error(const TileId& id, const View& view, bool* seen) const {
-    const Footprint& f = footprint(id);
-    const Bounds b = tightBounds(f);
-    *seen = visible(b, f.range.hi, view);
+double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* seen) const {
+    const Bounds b = tightBounds(n);
+    *seen = visible(b, n.range.hi, view, cull);
     if (!*seen) return 0;
-    const double cell = config_.domain.tileExtent(id) / std::max<uint32_t>(config_.tileSize, 1);
     // Two lower bounds on the distance to the tile, the larger kept: to its
     // bounding sphere, and to its slab (the base footprint's disc, extruded
     // over its height range along the base normal, the bottom lowered by the
     // base's own curvature). The sphere alone reads a camera within the
     // range's height of the base as touching every tile that near.
-    const Vec3d rel = sub(view.position, f.center);
-    const Vec3d& n = f.normal;
-    const double up = dot(rel, n);
-    const double across = length(sub(rel, {n.x * up, n.y * up, n.z * up}));
-    const double dh = std::max(across - f.radius, 0.0);
-    const double bottom = f.range.lo - f.sag;
-    const double dv = up > f.range.hi ? up - f.range.hi : (up < bottom ? bottom - up : 0.0);
+    const Vec3d rel = sub(view.position, n.center);
+    const Vec3d& nn = n.normal;
+    const double up = dot(rel, nn);
+    const double across = length(sub(rel, {nn.x * up, nn.y * up, nn.z * up}));
+    const double dh = std::max(across - n.radius, 0.0);
+    const double bottom = n.range.lo - n.sag;
+    const double dv = up > n.range.hi ? up - n.range.hi : (up < bottom ? bottom - up : 0.0);
     const double sphere = length(sub(view.position, b.center)) - b.radius;
-    const double dist = std::max({sphere, std::sqrt(dh * dh + dv * dv), cell * 1e-3});
-    return cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
+    const double dist = std::max({sphere, std::sqrt(dh * dh + dv * dv), n.cell * 1e-3});
+    return n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
 }
 
 void TileTree::select(const View& view) {
     ++frame_;
     wanted_.clear();
+    open_.clear();
     // Split the largest-error tile first, while it projects too large and the
-    // wanted tree (every tile in it holds a slot) still fits.
-    auto cmp = [](const Wanted& a, const Wanted& b) {
-        return a.error != b.error ? a.error < b.error : a.id.key() > b.id.key();
-    };
-    std::priority_queue<Wanted, std::vector<Wanted>, decltype(cmp)> open(cmp);
-    auto offer = [&](const TileId& id) {
-        Wanted w{id};
-        w.error = error(id, view, &w.visible);
-        open.push(w);
-    };
-    for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) offer({r, 0, 0, 0});
-    uint32_t count = config_.domain.rootCount();
-    while (!open.empty()) {
-        Wanted w = open.top();
-        open.pop();
-        if (w.error > 1.0 && w.id.level < config_.maxLevel && count + 4 <= config_.capacity) {
-            w.leaf = false;
-            count += 4;
-            for (uint32_t i = 0; i < 4; ++i) offer(w.id.child(i));
+    // wanted tree (every tile in it holds a slot) still fits. A tile is
+    // reached after its parent, so its range resolves from the parent's.
+    // Only a tile that would split waits in the heap for its turn; one that
+    // would not is a leaf whatever the order.
+    const Cull cull = cullFor(view);
+    auto cmp = [](const Open& a, const Open& b) { return a.error != b.error ? a.error < b.error : a.key > b.key; };
+    auto offer = [&](int32_t i) {
+        Node& n = nodes_[i];
+        resolve(n);
+        n.error = error(n, view, cull, &n.visible);
+        n.leaf = true;
+        n.lastWanted = frame_;
+        wanted_.push_back(i);
+        if (n.error > 1.0 && n.id.level < config_.maxLevel) {
+            open_.push_back({n.error, n.id.key(), i});
+            std::push_heap(open_.begin(), open_.end(), cmp);
         }
-        wanted_[w.id.key()] = w;
+    };
+    const uint32_t roots = config_.domain.rootCount();
+    for (uint32_t r = 0; r < roots; ++r) offer(static_cast<int32_t>(r));
+    uint32_t count = roots;
+    while (!open_.empty() && count + 4 <= config_.capacity) {
+        std::pop_heap(open_.begin(), open_.end(), cmp);
+        const int32_t i = open_.back().node;
+        open_.pop_back();
+        nodes_[i].leaf = false;
+        count += 4;
+        for (uint32_t k = 0; k < 4; ++k) offer(ensureChild(i, k));
     }
-    for (const auto& [key, w] : wanted_) {
-        Entry& e = entries_[key];
-        e.id = w.id;
-        e.lastWanted = frame_;
-    }
-    // Entries holding nothing that no view wants are dropped.
-    for (auto it = entries_.begin(); it != entries_.end();) {
-        if (it->second.slot < 0 && it->second.lastWanted != frame_) it = entries_.erase(it);
-        else ++it;
-    }
-}
-
-bool TileTree::isReady(const TileId& id) const {
-    auto it = entries_.find(id.key());
-    return it != entries_.end() && it->second.state == State::Ready;
+    prune();
 }
 
 int32_t TileTree::slotOf(const TileId& id) const {
-    auto it = entries_.find(id.key());
-    return it != entries_.end() && it->second.state == State::Ready ? it->second.slot : -1;
+    const int32_t i = find(id);
+    return i >= 0 && nodes_[i].state == State::Ready ? nodes_[i].slot : -1;
 }
 
-bool TileTree::allocate(Entry& e) {
-    if (freeSlots_.empty()) {
-        // The least recently wanted ready tile no view wants now; of equals,
-        // the finest (its parent is likelier to be wanted again first).
-        Entry* victim = nullptr;
-        for (auto& [key, c] : entries_) {
-            if (c.state != State::Ready || c.lastWanted == frame_) continue;
-            if (!victim || c.lastWanted < victim->lastWanted ||
-                (c.lastWanted == victim->lastWanted && c.id.level > victim->id.level))
-                victim = &c;
-        }
-        if (!victim) return false;
-        freeSlots_.push_back(static_cast<uint32_t>(victim->slot));
-        victim->slot = -1;
-        victim->state = State::Missing;
-        ++stats_.evicted;
-    }
-    e.slot = static_cast<int32_t>(freeSlots_.back());
-    freeSlots_.pop_back();
-    return true;
+void TileTree::evict(Node& n) {
+    freeSlots_.push_back(static_cast<uint32_t>(n.slot));
+    slotNode_[n.slot] = -1;
+    n.slot = -1;
+    n.state = State::Missing;
 }
 
 std::vector<Production> TileTree::takeProductions(uint32_t n) {
-    std::vector<const Wanted*> missing;
-    for (const auto& [key, w] : wanted_) {
-        const Entry& e = entries_.at(key);
-        if (e.state == State::Missing) missing.push_back(&w);
-    }
+    std::vector<int32_t> missing;
+    for (const int32_t i : wanted_)
+        if (nodes_[i].state == State::Missing) missing.push_back(i);
     // Coarse first (a parent is ready before its children are offered), then
     // the largest projected error.
-    std::sort(missing.begin(), missing.end(), [](const Wanted* a, const Wanted* b) {
-        if (a->id.level != b->id.level) return a->id.level < b->id.level;
-        if (a->error != b->error) return a->error > b->error;
-        return a->id.key() < b->id.key();
+    std::sort(missing.begin(), missing.end(), [&](int32_t ia, int32_t ib) {
+        const Node &a = nodes_[ia], &b = nodes_[ib];
+        if (a.id.level != b.id.level) return a.id.level < b.id.level;
+        if (a.error != b.error) return a.error > b.error;
+        return a.id.key() < b.id.key();
     });
+    // With no free slot, the least recently wanted ready tiles no view wants
+    // now give theirs; of equals, the finest (its parent is likelier to be
+    // wanted again first). Chosen once for the batch.
+    std::vector<int32_t> victims;
+    size_t nextVictim = 0;
+    bool victimsChosen = false;
     std::vector<Production> out;
-    for (const Wanted* w : missing) {
+    for (const int32_t i : missing) {
         if (out.size() >= n) break;
+        Node& m = nodes_[i];
         int32_t parentSlot = -1;
-        if (w->id.level > 0) {
-            auto pit = entries_.find(w->id.parent().key());
+        if (m.parent >= 0) {
             // Ready, not producing in this batch: a batch is produced at once
             // (one dispatch over all of it), so a child cannot read a parent
             // beside it.
-            if (pit == entries_.end() || pit->second.slot < 0 || pit->second.state != State::Ready) continue;
-            parentSlot = pit->second.slot;
+            const Node& p = nodes_[m.parent];
+            if (p.slot < 0 || p.state != State::Ready) continue;
+            parentSlot = p.slot;
         }
-        Entry& e = entries_.at(w->id.key());
-        if (!allocate(e)) break;
-        e.state = State::Producing;
-        out.push_back({w->id, static_cast<uint32_t>(e.slot), parentSlot});
+        if (freeSlots_.empty()) {
+            if (!victimsChosen) {
+                victimsChosen = true;
+                for (const int32_t v : slotNode_)
+                    if (v >= 0 && nodes_[v].state == State::Ready && !wantedNow(nodes_[v])) victims.push_back(v);
+                const size_t k = std::min<size_t>(victims.size(), n);
+                std::partial_sort(victims.begin(), victims.begin() + k, victims.end(), [&](int32_t ia, int32_t ib) {
+                    const Node &a = nodes_[ia], &b = nodes_[ib];
+                    if (a.lastWanted != b.lastWanted) return a.lastWanted < b.lastWanted;
+                    if (a.id.level != b.id.level) return a.id.level > b.id.level;
+                    return a.id.key() < b.id.key();
+                });
+                victims.resize(k);
+            }
+            if (nextVictim >= victims.size()) break;
+            evict(nodes_[victims[nextVictim++]]);
+            ++stats_.evicted;
+        }
+        m.slot = static_cast<int32_t>(freeSlots_.back());
+        freeSlots_.pop_back();
+        slotNode_[m.slot] = i;
+        m.state = State::Producing;
+        out.push_back({m.id, static_cast<uint32_t>(m.slot), parentSlot});
     }
     return out;
 }
 
 void TileTree::markReady(const TileId& id) {
-    auto it = entries_.find(id.key());
-    if (it == entries_.end() || it->second.state != State::Producing) return;
-    it->second.state = State::Ready;
+    const int32_t i = find(id);
+    if (i < 0 || nodes_[i].state != State::Producing) return;
+    nodes_[i].state = State::Ready;
     ++stats_.produced;
 }
 
 void TileTree::abandon(const TileId& id) {
-    auto it = entries_.find(id.key());
-    if (it == entries_.end() || it->second.state != State::Producing) return;
-    freeSlots_.push_back(static_cast<uint32_t>(it->second.slot));
-    it->second.slot = -1;
-    it->second.state = State::Missing;
+    const int32_t i = find(id);
+    if (i < 0 || nodes_[i].state != State::Producing) return;
+    evict(nodes_[i]);
 }
 
 uint32_t TileTree::pending() const {
     uint32_t n = 0;
-    for (const auto& [key, w] : wanted_)
-        if (!isReady(w.id)) ++n;
+    for (const int32_t i : wanted_)
+        if (nodes_[i].state != State::Ready) ++n;
     return n;
 }
 
-void TileTree::coverInto(const TileId& id, std::vector<DrawTile>& out, bool& ok) const {
-    const auto wit = wanted_.find(id.key());
-    const bool ready = isReady(id);
+void TileTree::coverInto(int32_t node, std::vector<DrawTile>& out, bool& ok) const {
+    const Node& n = nodes_[node];
+    const bool wanted = wantedNow(n), ready = n.state == State::Ready;
     auto self = [&] {
-        if (wit != wanted_.end() && !wit->second.visible) return;   // covered, but culled
+        if (wanted && !n.visible) return;   // covered, but culled
         DrawTile d;
-        d.id = id;
-        d.slot = static_cast<uint32_t>(slotOf(id));
-        d.parentSlot = id.level > 0 ? slotOf(id.parent()) : -1;
-        d.bounds = bounds(id);
+        d.id = n.id;
+        d.slot = static_cast<uint32_t>(n.slot);
+        d.parentSlot = n.parent >= 0 && nodes_[n.parent].state == State::Ready ? nodes_[n.parent].slot : -1;
+        d.bounds = bounds(n, n.range);
         out.push_back(d);
     };
-    if (wit == wanted_.end() || wit->second.leaf) {
+    if (!wanted || n.leaf) {
         ok = ready;
         if (ready) self();
         return;
     }
     const size_t mark = out.size();
     bool all = true;
-    for (uint32_t i = 0; i < 4 && all; ++i) coverInto(id.child(i), out, all);
+    for (uint32_t i = 0; i < 4 && all; ++i) {
+        if (n.child[i] < 0) all = false;
+        else coverInto(n.child[i], out, all);
+    }
     if (all) {
         ok = true;
         return;
@@ -359,9 +432,10 @@ void TileTree::coverInto(const TileId& id, std::vector<DrawTile>& out, bool& ok)
 
 std::vector<DrawTile> TileTree::drawSet() const {
     std::vector<DrawTile> out;
+    out.reserve(wanted_.size());
     for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) {
         bool ok = true;
-        coverInto({r, 0, 0, 0}, out, ok);
+        coverInto(static_cast<int32_t>(r), out, ok);
     }
     return out;
 }
