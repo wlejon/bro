@@ -600,7 +600,10 @@ void finishSlice() {
         s.keptDirty = false;
     }
     if (s.fresh.empty()) return;
-    const uint64_t full = ev::getRuntimeTelemetry().gcFullCollections;
+    // A marking cycle open now (host_gc.cpp) counts as a full collection at
+    // its finish, but it kept what was live at its start, these groups'
+    // arrays among them: the one that decides them is the next.
+    const uint64_t full = ev::getRuntimeTelemetry().gcFullCollections + (ev::heapPressure().marking ? 1 : 0);
     for (SweepGroup* g : s.fresh) g->fullAtDemote = full;
     s.fresh.clear();
 }

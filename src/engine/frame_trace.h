@@ -43,6 +43,10 @@ struct FrameRecord {
     double flipWaitMs = 0.0;   // of presentMs: commit + waiting for the flip to land
     double pacingWaitMs = 0.0; // after the present: waiting for a flip event / frame cap
     double gcMs = 0.0;         // after the present: the JS heap collected between frames
+    // What gcMs did (bronze_host kGcWork bits): 1 a minor collection, 2 a
+    // full one, 4 a marking cycle's start, 8 a mark slice, 16 the cycle's
+    // finish, 32 a sweep slice.
+    uint8_t gcWork = 0;
 
     // Layout thread, for a pass this frame waited on.
     double styleMs = 0.0;

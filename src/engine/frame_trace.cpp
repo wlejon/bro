@@ -57,6 +57,17 @@ void writeRecord(util::JsonOut& j, const FrameRecord& r) {
     j.key("flipWait").number(r.flipWaitMs);
     j.key("pacingWait").number(r.pacingWaitMs);
     j.key("gc").number(r.gcMs);
+    {
+        // "minor+mark", "" for none: the names of FrameRecord::gcWork's bits.
+        static const char* const kGcWorkNames[] = {"minor", "full", "start", "mark", "finish", "sweep"};
+        std::string work;
+        for (int bit = 0; bit < 6; ++bit) {
+            if (!(r.gcWork & (1u << bit))) continue;
+            if (!work.empty()) work += '+';
+            work += kGcWorkNames[bit];
+        }
+        j.key("gcWork").string(work);
+    }
     j.key("style").number(r.styleMs);
     j.key("layout").number(r.layoutPassMs);
     j.key("animTick").number(r.animTickMs);

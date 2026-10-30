@@ -257,7 +257,9 @@ fact. A record holds:
   windows), `tick` (timers, rAF, observers; `js` of it), `layoutWait`,
   `record`, `composite`, `present` (with `gpuWait` and `flipWait`), and
   `pacingWait`, then `gc` (the JS heap collected between frames, after the
-  present); `other` is what none of them account for
+  present; `gcWork` names what ran: `minor`, `full`, or an incremental
+  cycle's `start`, `mark`, `finish` and `sweep` slices, joined by `+`);
+  `other` is what none of them account for
 - `forcedLayouts` / `forcedLayoutMs`: layout forced on the main thread by a
   script reading geometry after a mutation
 - the layout pass it waited on (`style`, `layout`, `animTick`, active and

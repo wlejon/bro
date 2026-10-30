@@ -4,6 +4,7 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_telemetry.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/host_node_sweep.h"
 #include "engine/engine.h"
 #include "engine/capture_path.h"
@@ -800,6 +801,10 @@ void installHeadlessFrame(engine::Engine& engine) {
                 bnum("gcCollections", static_cast<double>(tel.gcCollections));
                 bnum("gcPauseNs", static_cast<double>(tel.gcPauseNs));
                 bnum("gcFullCollections", static_cast<double>(tel.gcFullCollections));
+                const HostGcCycleStats cycles = hostGcCycleStats();
+                bnum("gcCycles", static_cast<double>(cycles.finished));
+                bnum("gcCycleFrames", static_cast<double>(cycles.lastFrames));
+                bnum("gcCycleOpen", cycles.open ? 1.0 : 0.0);
                 bnum("shapeTransitions", static_cast<double>(tel.shapeTransitions));
                 o.set(ev::setProperty(o.get(), "bronze", bz.get()));
             }

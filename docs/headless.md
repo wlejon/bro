@@ -523,7 +523,13 @@ over 16 MB goes in bands of rows, each its own submission, so a frame waits
 for one band at most. `uploadCopyPath` names it: `'queue'` or `'bands'`.
 
 Collections the host starts are logged with `BRO_GC_LOG=1` (why: idle,
-periodic, memory pressure, the DOM sweep; and how long). Measure with an exe
+periodic, memory pressure, the DOM sweep; and how long; between frames, a
+line per frame that collected, and one per incremental marking cycle; the
+policy and its switches, `BRO_GC_INCREMENTAL`, `BRO_GC_FRAME_MS` and
+`BRO_GC_CYCLE_START`, are in `src/bronze_host/README.md`, "Collecting between
+frames"). `perf.stats().bronze` has the heap's counts: `gcCollections`,
+`gcFullCollections`, `gcCycles` (marking cycles finished between frames),
+`gcCycleFrames` (the last one's frames from start to finish), `gcCycleOpen`. Measure with an exe
 whose name has no Image File Execution Options set: a `gflags +ust` stack
 database adds hundreds of MB of 64 KB regions and skews every number.
 

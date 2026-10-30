@@ -55,6 +55,43 @@ So anything asynchronous here resolves at frame granularity: an abort rejects a
 fetch one frame after `abort()`, and a mutation made in an event handler is
 reported in the next frame.
 
+## Collecting between frames
+
+`hostCollectBetweenFrames` (`host_gc.cpp`) runs once a frame is presented,
+before the pacing wait: the JS heap is collected there, ahead of its own
+triggers, so a pause falls in the time the frame has left rather than inside a
+frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
+`minor`, `full`, `start`, `mark`, `finish`, `sweep`). Each frame:
+
+- a request from `hostNotifyIdleFrame` (idle, periodic, memory pressure on a
+  quiet page) or the boot is a stop-the-world full collection; memory pressure
+  on a busy page starts a marking cycle instead;
+- a minor collection once eden is half its adaptive limit;
+- the old generation incrementally (bronze `embed_gc.h`): a marking cycle
+  starts once the old generation has grown to half its full-collection
+  threshold; each frame then gets a mark slice of what is left of the frame's
+  GC budget (`BRO_GC_FRAME_MS`, 0.5 ms) after a minor collection, never less
+  than 0.25 ms (shorter slices run on one thread). When a slice has drained
+  the grey work, the next frame runs a minor collection if eden is a tenth
+  full, and the one after finishes the cycle on its own (it evacuates the
+  whole young generation, so it is kept small); then sweep slices from the
+  same budget until swept. Only then can the next cycle start.
+- A cycle that falls behind the program's promotion (still marking at 75% of
+  the threshold) gets twice the budget per slice, and the next cycle starts
+  0.1 earlier (down to 20%; it moves back up after a cycle that finished
+  ahead). At 90% it is finished at once, one longer pause between frames,
+  before the heap's own trigger would finish it at an allocation inside a
+  frame. A host that never slices still gets the heap's own collections.
+
+`BRO_GC_INCREMENTAL=0` restores the stop-the-world policy (a full collection
+between frames at 75% of the threshold), for A/B. `BRO_GC_CYCLE_START`
+(a fraction, default 0.5) sets where cycles start; 0 keeps one always open,
+for measuring them on a heap that seldom grows that far. `BRO_GC_LOG=1` logs
+a line per frame that collected (`gc: between frames 0.61 ms: minor 0.35
+mark 0.26`) and one per cycle with its frames, slices, finish and sweep;
+`BRASS_GC_LOG=1` adds brass's line per collection. `perf.stats().bronze`
+carries `gcCycles`, `gcCycleFrames` and `gcCycleOpen`.
+
 ## Adding a native or a namespace
 
 - bro's own namespaces: `natives/<sub>/` (`native_<sub>_decl.h`,

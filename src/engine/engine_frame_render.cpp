@@ -328,7 +328,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     // in the time left before the next frame, rather than inside one.
     {
         const double tGc = util::currentTimeMs();
-        bronze_host::hostCollectBetweenFrames();
+        rec.gcWork = static_cast<uint8_t>(bronze_host::hostCollectBetweenFrames());
         rec.gcMs = util::currentTimeMs() - tGc;
     }
 
