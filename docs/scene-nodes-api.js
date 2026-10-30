@@ -490,9 +490,9 @@ class SceneNode {
    * before lighting (`normal` is world space and renormalised after). The
    * fragment chunk may also define `void userLight(vec3 toSun, inout float
    * sunVisibility, inout float skyVisibility, inout vec3 skyNormal, inout
-   * float occluderSun)`, called after userFragment with the unit direction
-   * to the sun (the atmosphere's, else the first directional light) and 1,
-   * 1, the shading normal and 0.5: the
+   * float occluderSun, inout float sunDiffuse)`, called after userFragment
+   * with the unit direction to the sun (the atmosphere's, else the first
+   * directional light) and 1, 1, the shading normal, 0.5 and 0: the
    * occlusion the surface knows beyond the shadow maps (a terrain's
    * horizons). sunVisibility scales the sun's light (the share of its disc
    * in sight); skyVisibility is the cosine-weighted share of the sky the
@@ -505,8 +505,13 @@ class SceneNode {
    * light comes back to the surface as rho E mu / pi over the hidden share
    * (rho the surface's base colour, as the fit takes the occluders', E mu
    * the sun on level ground through the air), so a slope in shade is lit by
-   * the sunlit slopes across from it and not by the blue sky alone. A
-   * fragment chunk answers a debug view (SceneGraph.setDebugView) with
+   * the sunlit slopes across from it and not by the blue sky alone.
+   * sunDiffuse is the share of the sun on level ground that comes down
+   * scattered evenly from the sky above instead (what a cloud deck over
+   * the surface scatters forward, which sunVisibility leaves out of the
+   * sun): a radiance of E mu sunDiffuse / pi over the upper hemisphere,
+   * received as the sky's light is (along skyNormal, through
+   * skyVisibility) and casting no shadow. A fragment chunk answers a debug view (SceneGraph.setDebugView) with
    * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`: SCENE_DEBUG(name) is true
    * while the view `name` shows (any identifier names one), and the pixel
    * is then `rgb` as is, unlit and with no air. At

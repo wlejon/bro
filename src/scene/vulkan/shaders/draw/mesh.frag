@@ -67,9 +67,10 @@ vec2 albedoUV() {
 // gathered and before the lights, so standard lighting applies to its result.
 // A chunk may also define `void userLight(vec3 toSun, inout float
 // sunVisibility, inout float skyVisibility, inout vec3 skyNormal, inout float
-// occluderSun)` (it then defines CUSTOM_LIGHT): the occlusion it knows
-// beyond the shadow maps (SceneSurface's fields of those names), called
-// after userFragment.
+// occluderSun, inout float sunDiffuse)` (it then defines CUSTOM_LIGHT): the
+// occlusion it knows beyond the shadow maps and the sun a medium over it
+// scatters down (SceneSurface's fields of those names), called after
+// userFragment.
 //
 // While a debug view shows (scene/debug_views.h), a chunk that answers it
 // (SCENE_DEBUG(name)) calls sceneDebugOut(rgb): the pixel is that colour,
@@ -222,12 +223,14 @@ void main() {
     s.skyVisibility = 1.0;
     s.skyNormal = N;
     s.occluderSun = 0.5;
+    s.sunDiffuse = 0.0;
 #ifdef CUSTOM_LIGHT
-    userLight(sceneToSun(), s.sunVisibility, s.skyVisibility, s.skyNormal, s.occluderSun);
+    userLight(sceneToSun(), s.sunVisibility, s.skyVisibility, s.skyNormal, s.occluderSun, s.sunDiffuse);
     s.sunVisibility = clamp(s.sunVisibility, 0.0, 1.0);
     s.skyVisibility = clamp(s.skyVisibility, 0.0, 1.0);
     s.skyNormal = normalize(s.skyNormal);
     s.occluderSun = clamp(s.occluderSun, 0.0, 1.0);
+    s.sunDiffuse = clamp(s.sunDiffuse, 0.0, 1.0);
 #endif
 
     vec3 indirect = sceneAmbient(s);

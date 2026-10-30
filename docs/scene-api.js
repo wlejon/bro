@@ -570,8 +570,11 @@ class SceneGraph {
    * `depth` (aerial perspective, else fog), whose own light the scene behind
    * already carries. The chunk may call `sceneToSun()` (unit, to the sun),
    * `volumeSunLight(pos)` (the sun's illuminance at camera-relative pos,
-   * through the air) and `volumeSkyLight(pos, n)` (the sky's irradiance
-   * over pi on a surface facing n). The volumes draw, in tree order, into a
+   * through the air), `volumeSkyLight(pos, n)` (the sky's irradiance
+   * over pi on a surface facing n) and `volumeFootprint(t)` (the width, m,
+   * of what the ray's light stands for at distance t along it, which a
+   * medium resolves itself to: a pixel's cone for the pixel's ray, its
+   * width on an orthographic camera). The volumes draw, in tree order, into a
    * target of their own (each over the ones before it), which is
    * reconstructed over renders before it lands on the scene, after the
    * opaque surfaces, their sky and the decals, before SSR and translucent
@@ -590,9 +593,12 @@ class SceneGraph {
    * sky's hemisphere (the share they pass dims the sky's light, and their
    * light down counts as an overcast sky's), so under an overcast deck the
    * meter reads the deck's light, not the sun it hides (the first 8
-   * volumes in tree order). The global `volumeMeterRay` is true during
-   * those calls, so a medium whose surfaces light themselves by a model of
-   * it (an average over a footprint) can answer the meter by that model.
+   * volumes in tree order). The meter's rays stand for the light over the
+   * scene the view sees: their `volumeFootprint(t)` is at least the
+   * geometric mean of the view's opaque distances (over a 4 x 4 grid of
+   * it; 20 km where all is sky), so a medium resolved to it answers them
+   * as its cover over that ground lights it, not by the one cloud on the
+   * ray.
    * It answers a debug view (setDebugView) as a fragment chunk does,
    * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`, covering what is behind
    * with `rgb`; under a view it does not answer it lets all through. Its uniforms, `buffer`
@@ -775,6 +781,20 @@ class SceneGraph {
    * @returns {string[]}
    */
   pendingWork() {}
+
+  /**
+   * What the page still produces for the scene, so pendingWork() (and
+   * perf.settle) waits for it too: `count` items of `kind` (a field the page
+   * streams over frames: chunks queued, tiles wanted). While count is over 0
+   * pendingWork() has a line `"kind: count"`; 0 clears it. Set it each frame
+   * the count changes.
+   *
+   * @example
+   *   scene.setPendingWork('cloud light', queue.length);
+   * @param {string} kind
+   * @param {number} count
+   */
+  setPendingWork(kind, count) {}
 
   /**
    * Show a debug view: what the scene's custom chunks answering

@@ -177,6 +177,14 @@ void SceneRenderer::pendingWork(std::vector<std::string>& out) const {
         std::snprintf(buf, sizeof buf, "exposure: %.2f EV from its meter", s.exposureEv - s.meteredEv);
         out.push_back(buf);
     }
+    for (const auto& [kind, count] : pageWork_)
+        if (count > 0) out.push_back(kind + ": " + std::to_string(count));
+}
+
+void SceneRenderer::setPageWork(const std::string& kind, int count) {
+    for (auto& w : pageWork_)
+        if (w.first == kind) { w.second = count; return; }
+    if (count > 0) pageWork_.emplace_back(kind, count);
 }
 
 void SceneRenderer::settleAll(bool on) { WorldService::settleAll(on); }

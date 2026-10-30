@@ -22,8 +22,8 @@
 // before it lands on the scene: a chunk may jitter its samples with
 // camera.frame.x and the jitter averages out.
 //
-// The chunk may call sceneToSun(), volumeSunLight() and volumeSkyLight()
-// below, and read the engine's camera (camera.eyeWorld: the eye's absolute
+// The chunk may call sceneToSun(), volumeSunLight(), volumeSkyLight() and
+// volumeFootprint() below, and read the engine's camera (camera.eyeWorld: the eye's absolute
 // position) and lighting uniforms.
 //
 // The frame's first METER_RAYS pixels also march rays from the eye for the
@@ -35,9 +35,14 @@
 // each read a broken sky as all cloud or none, so the exposure jumped by
 // stops as a cloud's shadow edge crossed the eye, and disagreed with the
 // ground about it, whose cloud shadows are averages over its footprint.
-// Spread over pixels, no invocation marches more than the two.
+// Its rays stand for the light over the scene the view sees
+// (volumeFootprint), so a medium that resolves itself to the footprint
+// answers them as the ground's light shows it, by the same march. Spread
+// over pixels, no invocation marches more than the two.
 const int METER_RAYS = 4;   // SceneFrame::kVolumeMeterRays, exposure.comp's
 const float METER_SUN_SPREAD = 0.05;   // the sun cone's radius, radians (about 3 degrees)
+const int METER_SCENE_TAPS = 4;        // a side of the grid of the view's depth the meter's footprint reads
+const float METER_SKY_SCALE = 2.0e4;   // the scene's scale over the sky, m
 
 #include "common/scene_camera.glsl"
 #include "common/scene_lighting.glsl"
@@ -51,6 +56,16 @@ layout(location = 1) out float outDepth;
 
 // The opaque depth (SceneTargets::depthSnapshot), in the material set's slot.
 layout(set = 2, binding = 0) uniform sampler2D texSceneDepth;
+
+// The opaque surface's distance along the ray through pixel p, 1e30 over
+// the sky.
+float volumeSceneDistance(ivec2 p) {
+    float d = texelFetch(texSceneDepth, p, 0).r;
+    if (d <= 0.0) return 1e30;   // reversed depth: 0 is the cleared far plane (the sky)
+    vec2 uv = (vec2(p) + 0.5) / camera.viewport.xy;
+    vec4 view = camera.invProj * vec4(uv * 2.0 - 1.0, d, 1.0);
+    return length(view.xyz / view.w);
+}
 // The meter's readings, METER_RAYS pairs of slots per volume in draw order,
 // one pair a ray: the radiance down along the hemisphere's ray (rgb) and the
 // sun's transmittance along the cone's (a), then the transmittance along the
@@ -74,11 +89,16 @@ vec3 volumeSkyLight(vec3 pos, vec3 n) {
     return sceneOpenSkyIrradiance(pos, n);
 }
 
-// True while userVolume answers one of the meter's rays, so a medium whose
-// surfaces light themselves by a model of it (an average over a footprint)
-// can answer the meter by the same model, and the eye reads the light the
-// ground beside it shows.
-bool volumeMeterRay = false;
+// The width (m) of what the ray's light stands for at distance t along it,
+// which a medium resolves itself to: for the pixel's ray, the pixel's cone
+// (the pixel's width on an orthographic camera); for a meter's ray, at
+// least the scale of the scene the view sees (the geometric mean of its
+// opaque distances at METER_SCENE_TAPS points, as far as METER_SKY_SCALE
+// over the sky): the meter stands for the light over what the eye looks
+// at, so a cloud the ray meets counts as the cloud cover over that ground
+// does, the light its surfaces show, not as the one cloud on its line.
+float g_volumeConeAngle = 0.0, g_volumeMinWidth = 0.0;
+float volumeFootprint(float t) { return max(t * g_volumeConeAngle, g_volumeMinWidth); }
 
 // While a debug view shows (scene/debug_views.h), a chunk that answers it
 // (SCENE_DEBUG(name)) calls sceneDebugOut(rgb): the pixel is that colour,
@@ -91,13 +111,13 @@ void sceneDebugOut(vec3 rgb) { g_sceneDebug = vec4(rgb, 1.0); }
 
 void main() {
     vec3 dir = normalize(inWorldPos);
-    float sceneDist = 1e30;
-    float d = texelFetch(texSceneDepth, ivec2(gl_FragCoord.xy), 0).r;
-    if (d > 0.0) {   // reversed depth: 0 is the cleared far plane (the sky)
-        vec2 uv = gl_FragCoord.xy / camera.viewport.xy;
-        vec4 view = camera.invProj * vec4(uv * 2.0 - 1.0, d, 1.0);
-        sceneDist = length(view.xyz / view.w);
-    }
+    float sceneDist = volumeSceneDistance(ivec2(gl_FragCoord.xy));
+    // A pixel's width over the distance (perspective), or in metres
+    // (orthographic): 2 / (rows * proj[1][1]) either way.
+    float pixel = 2.0 / (camera.viewport.y * abs(camera.proj[1][1]));
+    bool perspective = camera.proj[3][3] < 0.5;
+    g_volumeConeAngle = perspective ? pixel : 0.0;
+    g_volumeMinWidth = perspective ? 0.0 : pixel;
 
     vec3 radiance = vec3(0.0);
     float transmittance = 1.0;
@@ -122,13 +142,22 @@ void main() {
         float a = 2.39996 * float(meterPixel.x);
         vec3 sunL = vec3(0.0), upL = vec3(0.0);
         float sunT = 1.0, upT = 1.0, d = 0.0;
-        volumeMeterRay = true;
+        float logSum = 0.0;
+        int seen = 0;
+        for (int j = 0; j < METER_SCENE_TAPS; j++) {
+            for (int i = 0; i < METER_SCENE_TAPS; i++) {
+                vec2 at = (vec2(i, j) + 0.5) / float(METER_SCENE_TAPS);
+                float sd = volumeSceneDistance(ivec2(at * camera.viewport.xy));
+                if (sd < 1e29) { logSum += log(max(sd, 1e-3)); seen++; }
+            }
+        }
+        g_volumeConeAngle = METER_SUN_SPREAD;
+        g_volumeMinWidth = seen > 0 ? exp(logSum / float(seen)) : METER_SKY_SCALE;
         userVolume(normalize(toSun + METER_SUN_SPREAD * (cos(a) * su + sin(a) * sv)), 1e30, sunL, sunT, d);
         // Cosine-weighted over the hemisphere: a disc's equal areas lifted
         // onto it (Malley).
         float r = sqrt((float(meterPixel.x) + 0.5) / float(METER_RAYS));
         userVolume(r * (cos(a) * hu + sin(a) * hv) + sqrt(max(1.0 - r * r, 0.0)) * up, 1e30, upL, upT, d);
-        volumeMeterRay = false;
         volumeMeter.slots[slot] = vec4(upL, clamp(sunT, 0.0, 1.0));
         volumeMeter.slots[slot + 1] = vec4(clamp(upT, 0.0, 1.0), 0.0, 0.0, 0.0);
     }

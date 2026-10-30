@@ -5,7 +5,9 @@
 //     occluderSun = 1, a surface of base colour rho under a sun of E
 //     straight overhead reads rho * rho * E / pi (their radiance, of the
 //     surface's albedo, over the whole hidden hemisphere), and nothing with
-//     occluderSun = 0.
+//     occluderSun = 0;
+//   - sunDiffuse comes down evenly from the sky above, as much as the sky
+//     seen lets through.
 
 function freshScene(size) {
     const cv = document.createElement('canvas');
@@ -45,13 +47,15 @@ if (!scene) {
                 metallic = 0.0;
                 roughness = 1.0;
             }
+            uniform float u_dif;
             void userLight(vec3 toSun, inout float sunVisibility, inout float skyVisibility,
-                           inout vec3 skyNormal, inout float occluderSun) {
+                           inout vec3 skyNormal, inout float occluderSun, inout float sunDiffuse) {
                 sunVisibility = u_sun;
                 skyVisibility = u_sky;
                 occluderSun = u_occ;
+                sunDiffuse = u_dif;
             }`,
-        uniforms: { u_sun: 1, u_sky: 1, u_occ: 0.5 },
+        uniforms: { u_sun: 1, u_sky: 1, u_occ: 0.5, u_dif: 0 },
     });
     const centre = () => {
         const img = scene.captureFrame();
@@ -73,4 +77,15 @@ if (!scene) {
     plane.setShaderUniform('u_occ', 0.5);
     const half = centre();
     assert(Math.abs(half - want / 2) <= 3, `half of them in sun, half the light (${half} vs ${(want / 2).toFixed(1)})`);
+    // The sun scattered down from the sky above: all of it, seen through the
+    // whole sky, lights a level surface as the sun did (rho E mu / pi, no
+    // specular); hidden with the sky, none.
+    plane.setShaderUniform('u_occ', 0.0);
+    plane.setShaderUniform('u_sky', 1.0);
+    plane.setShaderUniform('u_dif', 1.0);
+    const glow = centre();
+    assert(Math.abs(glow - 127.5) <= 4, `the sun scattered down evenly lights it as the sun did (${glow})`);
+    plane.setShaderUniform('u_sky', 0.0);
+    const hidden = centre();
+    assert(hidden <= 4, `with the sky hidden, the scattered sun is too (${hidden})`);
 }

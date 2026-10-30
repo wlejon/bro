@@ -423,6 +423,7 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_cullStatsJson", BRO_NATIVE_FN(bro_scene_SceneGraph_cullStatsJson), "str", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_pendingWorkJson", BRO_NATIVE_FN(bro_scene_SceneGraph_pendingWorkJson), "str", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_setDebugView", BRO_NATIVE_FN(bro_scene_SceneGraph_setDebugView), "i32", {"__bro_native.scene.SceneGraph", "str"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_setPendingWork", BRO_NATIVE_FN(bro_scene_SceneGraph_setPendingWork), "i32", {"__bro_native.scene.SceneGraph", "str", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_debugViewsJson", BRO_NATIVE_FN(bro_scene_SceneGraph_debugViewsJson), "str", {"__bro_native.scene.SceneGraph"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstances", BRO_NATIVE_FN(bro_scene_SceneNode_setInstances), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstancesFromTransforms", BRO_NATIVE_FN(bro_scene_SceneNode_setInstancesFromTransforms), "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&

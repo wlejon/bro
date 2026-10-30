@@ -284,6 +284,13 @@
             throw new TypeError("bro.scene.SceneGraph.prototype.setDebugView: name is a string or null");
         __bro_native.scene.SceneGraph_setDebugView(this, name || "");
     });
+    // What the page still produces for the scene: `count` of `kind`, in
+    // pendingWork() (and so perf.settle's wait) while over 0.
+    fn(SceneGraph.prototype, "setPendingWork", function setPendingWork(kind, count) {
+        if (typeof kind !== 'string' || !kind)
+            throw new TypeError("bro.scene.SceneGraph.prototype.setPendingWork: kind is a non-empty string");
+        __bro_native.scene.SceneGraph_setPendingWork(this, kind, Math.max(0, Math.floor(Number(count) || 0)));
+    });
     // { shown: name or null, views: [every name a chunk has named] }.
     fn(SceneGraph.prototype, "debugViews", function debugViews() {
         return JSON.parse(__bro_native.scene.SceneGraph_debugViewsJson(this));

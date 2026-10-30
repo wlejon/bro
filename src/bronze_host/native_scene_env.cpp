@@ -296,6 +296,12 @@ int32_t bro_scene_SceneGraph_setDebugView(void* self, const char* name) {
     return id;
 }
 
+int32_t bro_scene_SceneGraph_setPendingWork(void* self, const char* kind, int32_t count) {
+    auto* g = graphOf(self);
+    if (g && kind && *kind) g->renderer().setPageWork(kind, count);
+    return count;
+}
+
 const char* bro_scene_SceneGraph_debugViewsJson(void* self) {
     static thread_local std::string tl_viewsJson;
     auto* g = graphOf(self);

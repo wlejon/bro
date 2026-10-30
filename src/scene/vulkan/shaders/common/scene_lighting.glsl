@@ -465,11 +465,17 @@ struct SceneSurface {
     // the sky in, which the sky's light is taken along. occluderSun: the
     // share of the sun that falls on what hides the rest of the sky (0.5
     // when it says nothing: about half of a terrain's slopes face the sun),
-    // whose light the surface receives back from them.
+    // whose light the surface receives back from them. sunDiffuse: the share
+    // of the sun's light on level ground that comes down scattered evenly
+    // from the sky above instead (what a cloud deck or a haze layer over the
+    // surface scatters forward, which sunVisibility leaves out of the sun),
+    // taken as the sky's light is, along skyNormal for the share of the sky
+    // it sees, and casting no shadow; 0 when it says nothing.
     float sunVisibility;
     float skyVisibility;
     vec3 skyNormal;
     float occluderSun;
+    float sunDiffuse;
 };
 
 // The sun: the atmosphere's while it is on, else the first directional
@@ -689,6 +695,20 @@ vec3 sceneAmbient(SceneSurface s) {
             bounce = (1.0 - s.skyVisibility) * s.occluderSun * mu / 3.14159265 * s.baseColor * E;
         }
     }
+    // The sun scattered down evenly from the sky above (sunDiffuse): a
+    // radiance of E mu share / pi over the upper hemisphere, which a surface
+    // facing n receives (1 + n.up) / 2 of, over pi as the sky's irradiance.
+    vec3 glow = vec3(0.0);
+    if (s.sunDiffuse > 0.0) {
+        int sun = sceneSunIndex();
+        if (sun >= 0) {
+            vec3 E = lighting.lights[sun].color.rgb * lighting.lights[sun].color.a;
+            if (SCENE_ATMOSPHERE && sun == int(lighting.atm.ground.w)) E *= sceneSunTransmittance(s.position);
+            vec3 up = sceneAtmosphereOn() ? normalize(atmOrigin(s.position)) : vec3(0.0, 1.0, 0.0);
+            float mu = max(dot(up, sceneToSun()), 0.0);
+            glow = E * (mu * s.sunDiffuse * 0.5 * (1.0 + dot(nI, up)) / 3.14159265);
+        }
+    }
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
         // faces (the sky above, the lit ground below, through the air at
@@ -697,7 +717,7 @@ vec3 sceneAmbient(SceneSurface s) {
         vec3 c[6];
         mat3 frame;
         atmSkyLightSh(s.position, c, frame);   // once, for both
-        vec3 irradiance = atmShIrradiance(c, frame, nI);
+        vec3 irradiance = atmShIrradiance(c, frame, nI) + glow;
         vec3 sky = atmShRadiance(c, frame, R);
         // A smooth surface (water, glass) mirrors the sky itself, not the
         // SH's smooth mean of it: the sky-view table's, low in the air.
@@ -709,12 +729,12 @@ vec3 sceneAmbient(SceneSurface s) {
     if (lighting.iblParams.x > 0.5) {
         float rotation = lighting.iblParams.z;
         float intensity = lighting.iblParams.y;
-        vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI);
+        vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI) + glow;
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
         vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity * specularOcc;
         return (kD * irradiance + kDOpen * bounce) * s.baseColor + mix(specular, probeSpec, probeW);
     }
-    return (lighting.ambientColor.rgb * diffuseOcc + bounce) * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
+    return ((lighting.ambientColor.rgb + glow) * diffuseOcc + bounce) * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:

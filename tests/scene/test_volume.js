@@ -198,6 +198,43 @@ if (!probe.scene) {
     const overcast = day(0.25, 1, 0.25 * sunLux / Math.PI);
     assert(Math.abs(overcast - half) < 0.1,
            `the volume's light down counts as an overcast sky's (${overcast.toFixed(2)}, half ${half.toFixed(2)})`);
+    // The meter's rays stand for the scene the view sees: a metre along one
+    // its footprint is the view's distances' scale (metres here), where a
+    // pixel's is a pixel's cone (a hundredth of a metre or so). A volume
+    // passing half where the footprint a metre out passes a metre meters a
+    // stop darker, and leaves the frame's pixels alone.
+    {
+        const sc = freshScene(S).scene;
+        sc.setAtmosphere({});
+        sc.setExposure({ mode: 'auto', meter: 'incident' });
+        sc.createLight({ type: 'directional', direction: [-0.3, -0.8, -0.5], color: [1, 1, 1], intensity: 100000 });
+        sc.createMesh({ mesh: 'plane', color: '#121212', scale: [80, 1, 80] });
+        const vol = sc.createVolume({
+            fragment: `uniform float u_wide;
+                void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+                                inout float transmittance, inout float depth) {
+                    float w = volumeFootprint(1.0);
+                    if (gl_FragCoord.y > 1.0 || gl_FragCoord.x > 4.0) {
+                        if (w > 0.1) { radiance = vec3(1000.0, 0.0, 0.0); transmittance = 0.0; }
+                        return;
+                    }
+                    if (u_wide > 0.5 && w > 1.0) transmittance = 0.5;
+                }`,
+            uniforms: { u_wide: 0.0 },
+        });
+        const ev = (wide) => {
+            vol.setShaderUniform('u_wide', wide);
+            for (let i = 0; i < 6; i++) sc.captureFrame();
+            return sc.cullStats().meteredEv;
+        };
+        const open = ev(0), wide = ev(1);
+        assert(Math.abs(open - wide - 1) < 0.1,
+               `the meter's footprint is the scene's scale: half passed over it meters a stop darker (${open.toFixed(2)} -> ${wide.toFixed(2)})`);
+        const img = sc.captureFrame();
+        const c = px(img, S / 2, S / 2), top = px(img, S / 2, 2);
+        assert(!(c[0] > 200 && c[1] < 50) && !(top[0] > 200 && top[1] < 50),
+               `a pixel's footprint a metre out is a pixel's cone (${c}, ${top})`);
+    }
     // Dusk: below the knee a quarter of the light is a stop darker, not two.
     const dusk = meterScene(30, '#121212');
     const dim = dusk(1, 1, 0), dimmer = dusk(0.25, 0.25, 0);

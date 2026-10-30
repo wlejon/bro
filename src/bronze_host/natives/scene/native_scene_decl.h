@@ -880,6 +880,9 @@ const char* bro_scene_SceneGraph_pendingWorkJson(void* self);
 // bro.scene.SceneGraph.prototype.setDebugView: show the debug view `name`
 // (scene/debug_views.h; "" for none); its id.
 int32_t bro_scene_SceneGraph_setDebugView(void* self, const char* name);
+// bro.scene.SceneGraph.prototype.setPendingWork: what the page still produces
+// for the scene, `count` of kind `kind` (SceneRenderer::setPageWork).
+int32_t bro_scene_SceneGraph_setPendingWork(void* self, const char* kind, int32_t count);
 // bro.scene.SceneGraph.prototype.debugViews: { shown, views }, JSON: the
 // view shown (null for none) and every view a chunk has named.
 const char* bro_scene_SceneGraph_debugViewsJson(void* self);

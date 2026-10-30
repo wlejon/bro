@@ -129,6 +129,10 @@ public:
     /// pixel off) and the exposure's distance from its meter, as of the
     /// newest frame rendered.
     void pendingWork(std::vector<std::string>& out) const;
+    /// What the page still produces for this scene, by kind (a field it
+    /// streams over frames, say): pendingWork adds "kind: count" while count
+    /// is over 0 (SceneGraph.setPendingWork).
+    void setPageWork(const std::string& kind, int count);
     /// While on, every scene's world service spends at least its settle
     /// budget a frame (WorldService::settleAll): perf.settle's frames.
     static void settleAll(bool on);
@@ -581,6 +585,7 @@ private:
     // Tonemap + exposure
     ToneMap toneMap_ = ToneMap::ACES;
     int debugView_ = 0;
+    std::vector<std::pair<std::string, int>> pageWork_;   // setPageWork's, by kind in order set
     ExposureSettings exposure_;
     float pendingExposureDt_ = 0.0f;   // scene time since the last render
     float exposureDt_ = 0.0f;          // this render's
