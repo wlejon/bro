@@ -585,11 +585,14 @@ class SceneGraph {
    * volumes) is its own alone.
    * It casts no shadow and is never culled. The incident exposure meter
    * (setExposure) reads it: once a frame userVolume also runs from the eye
-   * toward the sun (the share it passes dims the sun the meter reads) and
-   * straight up (the share it passes dims the sky's light, and its light
-   * down counts as an overcast sky's), so under an
-   * overcast deck the meter reads the deck's light, not the sun it hides
-   * (the first 8 volumes in tree order). Its uniforms, `buffer`
+   * along four rays in a cone of 3 degrees about the sun (the share they
+   * pass dims the sun the meter reads) and four cosine-weighted over the
+   * sky's hemisphere (the share they pass dims the sky's light, and their
+   * light down counts as an overcast sky's), so under an overcast deck the
+   * meter reads the deck's light, not the sun it hides (the first 8
+   * volumes in tree order). The global `volumeMeterRay` is true during
+   * those calls, so a medium whose surfaces light themselves by a model of
+   * it (an average over a footprint) can answer the meter by that model. Its uniforms, `buffer`
    * declarations and textures are a custom shader's (setShader):
    * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
    * Throws TypeError without a fragment chunk and Error with the GLSL log

@@ -74,6 +74,12 @@ vec3 volumeSkyLight(vec3 pos, vec3 n) {
     return sceneOpenSkyIrradiance(pos, n);
 }
 
+// True while userVolume answers one of the meter's rays, so a medium whose
+// surfaces light themselves by a model of it (an average over a footprint)
+// can answer the meter by the same model, and the eye reads the light the
+// ground beside it shows.
+bool volumeMeterRay = false;
+
 //__USER_CHUNK__
 
 void main() {
@@ -103,11 +109,13 @@ void main() {
         float a = 2.39996 * float(meterPixel.x);
         vec3 sunL = vec3(0.0), upL = vec3(0.0);
         float sunT = 1.0, upT = 1.0, d = 0.0;
+        volumeMeterRay = true;
         userVolume(normalize(toSun + METER_SUN_SPREAD * (cos(a) * su + sin(a) * sv)), 1e30, sunL, sunT, d);
         // Cosine-weighted over the hemisphere: a disc's equal areas lifted
         // onto it (Malley).
         float r = sqrt((float(meterPixel.x) + 0.5) / float(METER_RAYS));
         userVolume(r * (cos(a) * hu + sin(a) * hv) + sqrt(max(1.0 - r * r, 0.0)) * up, 1e30, upL, upT, d);
+        volumeMeterRay = false;
         volumeMeter.slots[slot] = vec4(upL, clamp(sunT, 0.0, 1.0));
         volumeMeter.slots[slot + 1] = vec4(clamp(upT, 0.0, 1.0), 0.0, 0.0, 0.0);
     }
