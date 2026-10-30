@@ -66,6 +66,13 @@ struct AtmosphereParams {
     // from the terrain's as the viewer travelled, drawing a second sloping
     // horizon across the sky).
     float seaLevel = 0.0f;
+
+    // Or the planet's centre in world space, for a world drawn as the whole
+    // planet, whose up is away from the centre rather than +Y: the eye is
+    // then wherever it is about the centre (never below the surface), and
+    // seaLevel is unused. A camera-relative world moves it with the camera.
+    double center[3] = {0.0, 0.0, 0.0};
+    bool   centered  = false;
 };
 
 // Parameters for the additive starfield (scene/vulkan/shaders/lighting/starfield.frag).

@@ -145,6 +145,14 @@ void SceneAtmosphere::cleanup(SceneGpu& gpu) {
 void SceneAtmosphere::originFor(const bromath::Vec3& eye, float out[4]) const {
     const double Rb = block_.shell[0];
     out[3] = 0.0f;
+    if (centered_) {
+        // The eye about the scene's planet, lifted to the surface if under it.
+        double o[3] = {eye.x - center_[0], eye.y - center_[1], eye.z - center_[2]};
+        const double r = std::sqrt(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]);
+        const double lift = r > 0.0 ? std::max(r, Rb + 1.0) / r : 1.0;
+        for (int k = 0; k < 3; ++k) out[k] = static_cast<float>(r > 0.0 ? o[k] * lift : (k == 1 ? Rb + 1.0 : 0.0));
+        return;
+    }
     // The planet straight below the eye.
     out[0] = 0.0f;
     out[1] = static_cast<float>(std::max(static_cast<double>(eye.y) - seaLevel_, 1.0) + Rb);
@@ -213,6 +221,8 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     std::copy(a.groundAlbedo, a.groundAlbedo + 3, g.ground);
     g.ground[3] = static_cast<float>(sunLight);
     seaLevel_ = a.seaLevel;
+    centered_ = a.centered;
+    std::copy(a.center, a.center + 3, center_);
     eye_ = frame.view.eye;
     originFor(eye_, g.origin);
 

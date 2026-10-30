@@ -344,6 +344,7 @@
         v[18] = num(o.planetRadius);
         v[19] = num(o.thickness);
         v[20] = num(o.seaLevel);
+        put3(21, o.planetCenter);
         put3(25, o.sunDirection !== undefined ? o.sunDirection : o.sunPosition);
         // The sun's illuminance at the top of the air: sunColor times
         // sunIntensity (lux in physical units), either one alone pinning it.

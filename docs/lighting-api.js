@@ -199,6 +199,7 @@
  * @property {number} [planetRadius]  Metres (default 6360000).
  * @property {number} [thickness]  The air's depth above the surface, metres (default 100000).
  * @property {number} [seaLevel]  The world y that sits on the planet's surface, which is placed under the eye (default 0).
+ * @property {Array<number>} [planetCenter]  Instead, the planet's centre in world space [x, y, z], for a world drawn as the whole planet (up away from the centre, not +Y): the eye is wherever it is about it (lifted to the surface if under it), and seaLevel is unused. A camera-relative world passes the centre less the camera every frame.
  * @property {Array<number>} [sunDirection]  Pins the direction towards the sun, [x, y, z] (`sunPosition` is an alias).
  * @property {Array<number>} [sunColor]  With sunIntensity, pins the sun's illuminance above the air (sunColor * sunIntensity).
  * @property {number} [sunIntensity]

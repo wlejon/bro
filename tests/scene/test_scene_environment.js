@@ -166,6 +166,19 @@ if (!probe.scene) {
         const c = boxRGBA(img, 40, 20, 88, 60);
         assert(c[3] > 250, `the atmosphere fills the background ${fmt(c)}`);
         assert(c[2] > c[0] + 20 && c[2] > 60, `the day sky is blue ${fmt(c)}`);
+
+        // The same sky about a planet the scene places (planetCenter): the
+        // world turned a quarter about z, so the planet's up is +x, and the
+        // camera, its up and the sun turned with it, see what the y-up
+        // planet under the eye gave.
+        const turn = (v) => [v[1], -v[0], v[2]];
+        sc.setCamera({ fov: 60, near: 0.1, far: 1000, position: [0, 0, 0], target: turn([0, 2, -5]), up: turn([0, 1, 0]) });
+        sc.setAtmosphere({ sunPosition: turn([0, 0.6, 0.8]), planetCenter: [-(6360000 + 2), 0, 0] });
+        const turned = sc.captureFrame();
+        let diff = 0;
+        for (let i = 0; i < img.data.length; i += 4)
+            for (let k = 0; k < 3; k++) diff = Math.max(diff, Math.abs(img.data[i + k] - turned.data[i + k]));
+        assert(diff <= 3, `a placed planet's sky is the sky about it (largest difference ${diff})`);
         dropScene(s);
     }
 

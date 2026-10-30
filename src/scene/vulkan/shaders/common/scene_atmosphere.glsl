@@ -16,7 +16,9 @@
 //
 // Air space: positions about the planet's centre. The planet sits straight
 // below the eye (ATM.origin = (0, eye height above sea level + radius, 0)) so
-// the air's up is the world's +Y everywhere (scene/world/atmosphere.h).
+// the air's up is the world's +Y everywhere, unless the scene places the
+// planet's centre (scene/world/atmosphere.h): nothing here assumes an up,
+// every lookup takes it from the position.
 
 const float ATM_PI = 3.14159265359;
 #define ATM_RB (ATM.shell.x)
