@@ -65,6 +65,10 @@ vec2 albedoUV() {
 //                    inout vec3 emissive, inout float alpha)` replaces this
 // marker and defines CUSTOM_FRAGMENT. It runs after every material input is
 // gathered and before the lights, so standard lighting applies to its result.
+// A chunk may also define `void userLight(vec3 toSun, inout float
+// sunVisibility, inout float skyVisibility, inout vec3 skyNormal)` (it then
+// defines CUSTOM_LIGHT): the occlusion it knows beyond the shadow maps
+// (SceneSurface's fields of those names), called after userFragment.
 //__USER_CHUNK__
 
 void main() {
@@ -195,6 +199,15 @@ void main() {
     s.translucency = 0.0;
 #ifdef SCENE_VEGETATION
     if (vegLeaf) s.translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
+#endif
+    s.sunVisibility = 1.0;
+    s.skyVisibility = 1.0;
+    s.skyNormal = N;
+#ifdef CUSTOM_LIGHT
+    userLight(sceneToSun(), s.sunVisibility, s.skyVisibility, s.skyNormal);
+    s.sunVisibility = clamp(s.sunVisibility, 0.0, 1.0);
+    s.skyVisibility = clamp(s.skyVisibility, 0.0, 1.0);
+    s.skyNormal = normalize(s.skyNormal);
 #endif
 
     vec3 indirect = sceneAmbient(s);

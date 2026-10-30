@@ -478,8 +478,19 @@ class SceneNode {
    * define `void userFragment(inout vec3 baseColor, inout vec3 normal,
    * inout float metallic, inout float roughness, inout vec3 emissive,
    * inout float alpha)`, run after every material input is gathered and
-   * before lighting (`normal` is world space and renormalised after). At
-   * least one is required. User uniforms and samplers are declared in the
+   * before lighting (`normal` is world space and renormalised after). The
+   * fragment chunk may also define `void userLight(vec3 toSun, inout float
+   * sunVisibility, inout float skyVisibility, inout vec3 skyNormal)`, called
+   * after userFragment with the unit direction to the sun (the atmosphere's,
+   * else the first directional light) and 1, 1 and the shading normal: the
+   * occlusion the surface knows beyond the shadow maps (a terrain's
+   * horizons). sunVisibility scales the sun's light (the share of its disc
+   * in sight); skyVisibility is the cosine-weighted share of the sky the
+   * surface sees, scaling its sky (and environment, and ambient) light with
+   * the light its occluders bounce back added (Jimenez et al. 2016's fit
+   * over the base colour) and dimming the sky's reflection (Lagarde's
+   * specular occlusion); skyNormal is the direction the sky's light is taken
+   * along. At least one is required. User uniforms and samplers are declared in the
    * chunk and must be named `u_*`; `uniforms` gives their initial values
    * (a number or an array of up to 4 numbers). A uniform declared in both
    * chunks is one value, a line may declare several, and a node takes at

@@ -456,7 +456,49 @@ struct SceneSurface {
     bool twoSided;
     float subsurface;  // wrap-light translucency, two-sided surfaces only
     float translucency; // leaf light transport: the sun glowing through a leaf seen against it (0: none)
+    // What the surface's own shader knows of its occlusion beyond the shadow
+    // maps (a custom chunk's userLight: a terrain's horizons, say), 1, 1 and
+    // the normal when it says nothing. sunVisibility: the share of the sun's
+    // disc in sight, on the sun's light alone. skyVisibility: the share of
+    // the sky's light the surface receives (cosine-weighted, the light the
+    // occluders bounce back left out). skyNormal: the mean direction it sees
+    // the sky in, which the sky's light is taken along.
+    float sunVisibility;
+    float skyVisibility;
+    vec3 skyNormal;
 };
+
+// The sun: the atmosphere's while it is on, else the first directional
+// light; -1 with neither.
+int sceneSunIndex() {
+    if (sceneAtmosphereOn()) return int(lighting.atm.ground.w);
+    int count = int(lighting.params.x);
+    for (int i = 0; i < count && i < SCENE_MAX_LIGHTS; ++i)
+        if (int(lighting.lights[i].position.w) == 0) return i;
+    return -1;
+}
+
+// Unit, toward the sun (straight up the view's y with none).
+vec3 sceneToSun() {
+    int i = sceneSunIndex();
+    return i >= 0 ? normalize(-lighting.lights[i].direction.xyz) : vec3(0.0, 1.0, 0.0);
+}
+
+// The light a surface whose visible sky is `visibility` (cosine-weighted)
+// receives from it and from its occluders, which bounce what they receive:
+// Jimenez et al. 2016's fit (GTAO) over albedo, per channel.
+vec3 sceneMultiBounce(float visibility, vec3 albedo) {
+    vec3 a = 2.0404 * albedo - 0.3324;
+    vec3 b = -4.7951 * albedo + 0.6417;
+    vec3 c = 2.7552 * albedo + 0.6903;
+    return max(vec3(visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+// The share of a surface's specular sky light its occluders leave, from its
+// visible sky (Lagarde & de Rousiers 2014).
+float sceneSpecularOcclusion(float NdotV, float visibility, float roughness) {
+    return clamp(pow(NdotV + visibility, exp2(-16.0 * roughness - 1.0)) - 1.0 + visibility, 0.0, 1.0);
+}
 
 // The direct light of every scene light on `s`.
 vec3 sceneDirectLight(SceneSurface s) {
@@ -465,6 +507,7 @@ vec3 sceneDirectLight(SceneSurface s) {
     float NdotV = max(dot(N, V), 1e-4);
     vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
     vec3 Lo = vec3(0.0);
+    int sun = s.sunVisibility < 1.0 ? sceneSunIndex() : -1;
     int count = int(lighting.params.x);
     for (int i = 0; i < count && i < SCENE_MAX_LIGHTS; ++i) {
         SceneLight light = lighting.lights[i];
@@ -493,6 +536,10 @@ vec3 sceneDirectLight(SceneSurface s) {
         // The atmosphere's sun is that light above the air: what reaches the
         // surface is what the air and the planet's shadow leave of it.
         if (SCENE_ATMOSPHERE && i == int(lighting.atm.ground.w)) radiance *= sceneSunTransmittance(s.position);
+        if (i == sun) {
+            radiance *= s.sunVisibility;
+            if (s.sunVisibility <= 0.0) continue;
+        }
         // Wrap light through thin two-sided surfaces (leaves): lights the back
         // relative to L whether or not the front faces the light.
         if (s.twoSided && s.subsurface > 0.0 && s.translucency <= 0.0) {
@@ -611,7 +658,17 @@ vec3 sceneAmbient(SceneSurface s) {
         probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
     }
     vec3 kD = (1.0 - F) * (1.0 - s.metallic);
-    vec3 nI = s.normal;
+    // The sky's light as much of it as the surface sees, taken along the
+    // direction it sees it in (userLight's; open sky leaves both as they are).
+    vec3 nI = s.skyNormal;
+    vec3 diffuseOcc = vec3(1.0);
+    float specularOcc = 1.0;
+    if (s.skyVisibility < 1.0) {
+        diffuseOcc = sceneMultiBounce(s.skyVisibility, s.baseColor);
+        specularOcc = sceneSpecularOcclusion(NdotV, s.skyVisibility, s.roughness);
+        kD *= diffuseOcc;
+        probeSpec *= specularOcc;
+    }
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
         // faces (the sky above, the lit ground below, through the air at
@@ -626,7 +683,7 @@ vec3 sceneAmbient(SceneSurface s) {
         // SH's smooth mean of it: the sky-view table's, low in the air.
         float sharp = (1.0 - smoothstep(0.12, 0.4, s.roughness)) * lighting.atm.skyView.w;
         if (sharp > 0.0) sky = mix(sky, sceneSkyAlong(R), sharp);
-        vec3 specular = sky * (F * brdf.x + brdf.y);
+        vec3 specular = sky * (F * brdf.x + brdf.y) * specularOcc;
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
@@ -634,10 +691,10 @@ vec3 sceneAmbient(SceneSurface s) {
         float intensity = lighting.iblParams.y;
         vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
-        vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity;
+        vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity * specularOcc;
         return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
     }
-    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
+    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) * diffuseOcc + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:

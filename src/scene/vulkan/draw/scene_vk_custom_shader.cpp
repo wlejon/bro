@@ -50,7 +50,11 @@ std::string splice(const std::string& base, const std::string& chunk, const char
     const char* marker = "//__USER_CHUNK__";
     const size_t pos = s.find(marker);
     if (pos != std::string::npos) {
-        s.replace(pos, std::strlen(marker), std::string("\n#define ") + define + " 1\n" + chunk + "\n");
+        std::string defines = std::string("\n#define ") + define + " 1\n";
+        // mesh.frag's optional second hook, called where the chunk defines it.
+        if (std::strcmp(define, "CUSTOM_FRAGMENT") == 0 && chunk.find("void userLight(") != std::string::npos)
+            defines += "#define CUSTOM_LIGHT 1\n";
+        s.replace(pos, std::strlen(marker), defines + chunk + "\n");
     }
     return s;
 }
