@@ -566,6 +566,11 @@
         }
         return this;
     });
+    fn(SceneNode.prototype, "setShaderBuffer", function setShaderBuffer(name, buffer) {
+        if (!name) return this;
+        __bro_native.scene.SceneNode_setShaderBuffer(this, name, buffer === undefined ? null : buffer);
+        return this;
+    });
     fn(SceneNode.prototype, "setShaderTexture", function setShaderTexture(name, opts) {
         if (!name || !opts) return this;
         const isSub = opts.x !== undefined || opts.y !== undefined;

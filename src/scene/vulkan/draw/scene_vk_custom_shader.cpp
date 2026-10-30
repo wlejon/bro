@@ -82,6 +82,17 @@ void std140(const std::string& type, uint32_t& size, uint32_t& align) {
     align = n == 2 ? 8 : 16;
 }
 
+// std430 array stride of a buffer element type, 0 for one a buffer cannot hold.
+uint32_t std430Stride(const std::string& type) {
+    if (type == "float" || type == "int" || type == "uint") return 4;
+    if (type == "vec2" || type == "ivec2" || type == "uvec2") return 8;
+    if (type == "vec3" || type == "ivec3" || type == "uvec3" || type == "vec4" || type == "ivec4" ||
+        type == "uvec4")
+        return 16;
+    if (type == "mat4") return 64;
+    return 0;
+}
+
 // The engine's own shader a chunk is spliced into (from the source tree under
 // BRO_SCENE_SHADER_SOURCE).
 std::string base(const char* file, const char* embedded) {
@@ -139,9 +150,34 @@ bool CustomShaderInterface::declareUniform(const std::string& type, const std::s
     return true;
 }
 
+bool CustomShaderInterface::declareBuffer(const std::string& type, const std::string& name, uint32_t& offset,
+                                          std::string& err) {
+    if (std::any_of(buffers_.begin(), buffers_.end(), [&](const Buffer& b) { return b.name == name; })) {
+        return true;   // declared by the other chunk too
+    }
+    if (name.rfind("u_", 0) != 0) {
+        err = "custom shader: a buffer's name must start with u_ ('" + name + "')";
+        return false;
+    }
+    const uint32_t stride = std430Stride(type);
+    if (stride == 0) {
+        err = "custom shader: a buffer holds float, int, uint, their vec2-4 forms or mat4 ('" + type + " " + name +
+              "')";
+        return false;
+    }
+    offset = (offset + 7) & ~7u;
+    Buffer b{type, name, stride, offset, offset + 8};
+    uniformDecls_.push_back("    " + name + "_Buffer " + name + "_ref;\n");
+    uniformDecls_.push_back("    uint " + name + "_length;\n");
+    offset += 12;
+    buffers_.push_back(std::move(b));
+    return true;
+}
+
 bool CustomShaderInterface::scan(const std::string& chunk, bool vertex, std::string& body, uint32_t& offset,
                                  std::string& err) {
     static const std::regex uniformRe(R"(\buniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+([^;]+);)");
+    static const std::regex bufferRe(R"(\b(?:readonly\s+)?buffer\s+(\w+)\s+(\w+)\s*\[\s*\]\s*;)");
     static const std::regex varyingRe(
         R"(^\s*(?:(flat|smooth|noperspective)\s+)?(in|out)\s+(\w+)\s+(\w+)\s*(\[\s*\d+\s*\])?\s*;)");
 
@@ -175,6 +211,16 @@ bool CustomShaderInterface::scan(const std::string& chunk, bool vertex, std::str
                 }
             }
             if (!declareUniform(m[1].str(), pending, offset, err)) return false;
+        }
+        rest.append(last, code.cend());
+        code = rest;
+
+        rest.clear();
+        last = code.cbegin();
+        for (std::sregex_iterator it(code.begin(), code.end(), bufferRe), end; it != end; ++it) {
+            rest.append(last, (*it)[0].first);
+            last = (*it)[0].second;
+            if (!declareBuffer((*it)[1].str(), (*it)[2].str(), offset, err)) return false;
         }
         rest.append(last, code.cend());
         code = rest;
@@ -225,6 +271,13 @@ bool CustomShaderInterface::parse(const std::string& vertexChunk, const std::str
 
 std::string CustomShaderInterface::declarations(bool vertex) const {
     std::string s = vertex ? kVertexAliases : kFragmentAliases;
+    // Each buffer's block type, before the uniform block that holds its
+    // address (ComputeBuffer addresses are 256-byte aligned).
+    for (const Buffer& b : buffers_) {
+        s += "layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer " + b.name +
+             "_Buffer { " + b.type + " data[]; };\n";
+        s += "#define " + b.name + " " + b.name + "_ref.data\n";
+    }
     if (!uniformDecls_.empty()) {
         s += "layout(set = " + std::to_string(kCustomSet) + ", binding = 0, std140) uniform UserUniforms {\n";
         for (const std::string& d : uniformDecls_) s += d;
@@ -256,6 +309,15 @@ std::string CustomShaderInterface::declarations(bool vertex) const {
     return s;
 }
 
+std::string CustomShaderInterface::withExtensions(std::string src) const {
+    if (buffers_.empty()) return src;
+    const size_t version = src.find("#version");
+    const size_t lineEnd = version == std::string::npos ? std::string::npos : src.find('\n', version);
+    if (lineEnd == std::string::npos) return src;
+    src.insert(lineEnd + 1, "#extension GL_EXT_buffer_reference : require\n");
+    return src;
+}
+
 std::string CustomShaderInterface::vertexSource() const {
     return hasVertex_ ? declarations(true) + vertexBody_ : std::string();
 }
@@ -271,11 +333,12 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
     CustomShaderInterface iface;
     if (!iface.parse(vertexChunk, fragmentChunk, errOut)) return false;
     if (!vertexChunk.empty()) {
-        const std::string vs = splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX");
+        const std::string vs = iface.withExtensions(splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX"));
         if (SceneVkShaderCompiler::compileGlsl(vs, VK_SHADER_STAGE_VERTEX_BIT, &errOut).empty()) return false;
     }
     if (!fragmentChunk.empty()) {
-        const std::string fs = splice(base("draw/mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT");
+        const std::string fs = iface.withExtensions(
+            splice(base("draw/mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT"));
         if (SceneVkShaderCompiler::compileGlsl(fs, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut).empty()) return false;
     }
     return true;
@@ -290,8 +353,9 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
                                                      std::string& errOut) {
     // A custom varying needs the vertex stage to write it even when only the
     // fragment chunk reads it, so both stages always splice their chunk.
-    const std::string vsSrc = splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX");
-    std::string fsSrc = splice(base("draw/mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT");
+    const std::string vsSrc = iface.withExtensions(splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX"));
+    std::string fsSrc = iface.withExtensions(
+        splice(base("draw/mesh.frag", kVkMeshFragSrc), iface.fragmentSource(), "CUSTOM_FRAGMENT"));
     if (indirectOutput) fsSrc = defineAfterVersion(std::move(fsSrc), "SCENE_INDIRECT_OUTPUT");
 
     const auto vsSpirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
@@ -326,7 +390,7 @@ bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,
     default: src = base("shadow/shadow.vert", kVkShadowVertSrc); break;
     }
     // CUSTOM_CASTER declares the inputs only a custom caster's pipeline feeds.
-    std::string vsSrc = defineAfterVersion(splice(src, chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER");
+    std::string vsSrc = iface.withExtensions(defineAfterVersion(splice(src, chunk, "CUSTOM_VERTEX"), "CUSTOM_CASTER"));
     if (cutout) vsSrc = defineAfterVersion(std::move(vsSrc), "SHADOW_CUTOUT");
     const auto spirv = SceneVkShaderCompiler::compileGlsl(vsSrc, VK_SHADER_STAGE_VERTEX_BIT, &errOut);
     if (spirv.empty()) return false;

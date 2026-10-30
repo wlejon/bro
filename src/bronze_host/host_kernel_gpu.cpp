@@ -58,6 +58,9 @@ public:
 private:
     std::shared_ptr<Device> device_;
     std::shared_ptr<render::ComputeBuffer> buffer_;
+
+public:
+    const std::shared_ptr<render::ComputeBuffer>& computeBuffer() const { return buffer_; }
 };
 
 struct Program final : brokernel::api::GpuProgram {
@@ -145,6 +148,12 @@ private:
 };
 
 } // namespace
+
+std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v) {
+    const std::shared_ptr<brokernel::api::GpuBuffer> buffer = brokernel::api::bufferOf(v);
+    const auto* own = dynamic_cast<const Buffer*>(buffer.get());
+    return own ? own->computeBuffer() : nullptr;
+}
 
 void installKernelGpu(engine::Engine& engine) {
     // One device for every main-thread realm (the page and its iframes).

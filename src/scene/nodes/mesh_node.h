@@ -354,6 +354,16 @@ public:
         }
     }
 
+    /// Bind a GPU buffer to a `buffer` declaration of the custom shader (null
+    /// unbinds). Bumps the change generation: a vertex chunk reading it moves
+    /// the shadow silhouette, so binding again after rewriting the buffer
+    /// refreshes cached shadows.
+    void setCustomShaderBuffer(const std::string& name, std::shared_ptr<render::ComputeBuffer> buffer) {
+        bindCustomShaderBuffer(userBuffers_, name, std::move(buffer));
+        bumpChangeGeneration();
+    }
+    const std::vector<CustomShaderBuffer>& customShaderBuffers() const { return userBuffers_; }
+
     // --- Custom-shader sampler uniforms ---
     // Single-channel float (R32F) textures a user fragment/vertex chunk can
     // sample, e.g. a terrain heightfield raymarched by a sky-dome shader.
@@ -552,6 +562,7 @@ private:
     // of CustomShaderState: setShader() replaces that state wholesale, and the
     // textures outlive a shader swap.
     std::vector<UserTexture> userTextures_;
+    std::vector<CustomShaderBuffer> userBuffers_;
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;
 };

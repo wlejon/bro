@@ -222,7 +222,10 @@ private:
     static uint32_t resolveShade(const Node& node, MeshDraw& out);
     CustomProgram* program(const CustomShaderState& cs, MeshKind kind);
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
-                              const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
+                              const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures,
+                              const std::vector<CustomShaderBuffer>& buffers);
+    /// What an unbound `buffer` declaration reads: zeroes.
+    uint64_t zeroBufferAddress(SceneFrame& frame);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
     /// Set 3 holding a procedural draw's header and records, then its
     /// vegetation records (4 vec4s a segment; header[10] says where); null
@@ -253,6 +256,7 @@ private:
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
+    std::shared_ptr<render::ComputeBuffer> zeroBuffer_;
 };
 
 }  // namespace bro::scene::vk

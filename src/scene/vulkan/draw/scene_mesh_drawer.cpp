@@ -13,6 +13,8 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "render/vulkan_compute.h"
+#include "render/vulkan_context.h"
 #include "render/vulkan_pipeline_cache.h"
 #include "util/log.h"
 
@@ -135,6 +137,7 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
         for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect}) SceneVkShaderModule::destroy(device_, m);
     }
     custom_.clear();
+    zeroBuffer_.reset();
     for (VkShaderModule& m : vs_) {
         SceneVkShaderModule::destroy(device_, m);
         m = VK_NULL_HANDLE;
@@ -329,10 +332,34 @@ VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, float (&header)[1
     return set;
 }
 
+uint64_t SceneMeshDrawer::zeroBufferAddress(SceneFrame& frame) {
+    if (!zeroBuffer_) {
+        render::VulkanCompute& compute = frame.gpu.device.context().compute();
+        if (compute.available()) zeroBuffer_ = compute.createBuffer(256);
+    }
+    return zeroBuffer_ ? zeroBuffer_->address() : 0;
+}
+
 VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                                            const CustomProgram& prog,
-                                           std::vector<MeshNode::UserTexture>* textures) {
+                                           std::vector<MeshNode::UserTexture>* textures,
+                                           const std::vector<CustomShaderBuffer>& buffers) {
     std::vector<uint8_t> ubo(prog.iface.uboSize(), 0);
+    // Each buffer's address and element count (its bytes over the type's
+    // stride); an unbound one is the zero buffer, of length 0.
+    for (const CustomShaderInterface::Buffer& slot : prog.iface.buffers()) {
+        uint64_t address = 0;
+        uint32_t length = 0;
+        for (const CustomShaderBuffer& b : buffers) {
+            if (b.name != slot.name || !b.buffer || !b.buffer->address()) continue;
+            address = b.buffer->address();
+            length = static_cast<uint32_t>(b.buffer->size() / slot.stride);
+            break;
+        }
+        if (!address) address = zeroBufferAddress(frame);
+        std::memcpy(ubo.data() + slot.addressOffset, &address, 8);
+        std::memcpy(ubo.data() + slot.lengthOffset, &length, 4);
+    }
     for (const CustomShaderInterface::Uniform& slot : prog.iface.uniforms()) {
         for (const auto& u : cs.uniforms) {
             if (u.name != slot.name) continue;
@@ -535,7 +562,8 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
         if (CustomProgram* prog = program(*cs, out.kind))
-            out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures());
+            out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures(),
+                                      node.customShaderBuffers());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
     }
@@ -685,7 +713,8 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     if (geometry.hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
-        if (CustomProgram* prog = program(*cs, out.kind)) out.customSet = customSet(frame, node.id(), *cs, *prog, nullptr);
+        if (CustomProgram* prog = program(*cs, out.kind))
+            out.customSet = customSet(frame, node.id(), *cs, *prog, nullptr, node.customShaderBuffers());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
     }

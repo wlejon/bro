@@ -343,6 +343,11 @@ public:
             bumpChangeGeneration();
         }
     }
+    void setCustomShaderBuffer(const std::string& name, std::shared_ptr<render::ComputeBuffer> buffer) {
+        bindCustomShaderBuffer(userBuffers_, name, std::move(buffer));
+        bumpChangeGeneration();
+    }
+    const std::vector<CustomShaderBuffer>& customShaderBuffers() const { return userBuffers_; }
 
     // --- Vegetation (wind sway) ---
     // Per-instance or per-segment records that bend the node in the scene's
@@ -470,6 +475,7 @@ private:
 
     // Custom shader chunks + user-uniform values (null = default pipeline).
     std::unique_ptr<CustomShaderState> customShader_;
+    std::vector<CustomShaderBuffer> userBuffers_;
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;
 };

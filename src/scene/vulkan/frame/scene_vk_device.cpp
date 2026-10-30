@@ -1,4 +1,6 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "render/vulkan_compute.h"
+#include "render/vulkan_context.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
@@ -70,6 +72,9 @@ VkCommandBuffer SceneVkDevice::beginFrame() {
 
 bool SceneVkDevice::submitFrame(VkCommandBuffer cmd) {
     render::VulkanFrames& frames = context_.frames();
+    // Compute work recorded so far (render::VulkanCompute: kernels filling
+    // buffers the frame's shaders read) goes first on the graphics queue.
+    context_.compute().flush();
     flushUploads();
     uint64_t computeTicket = 0;
     if (computeCmd_ != VK_NULL_HANDLE) {

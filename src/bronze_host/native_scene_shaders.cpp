@@ -2,6 +2,10 @@
 #include "natives/scene/native_scene_decl.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
+#include "bronze_host/host_rooted.h"
+#if BRO_WITH_KERNEL
+#include "bronze_host/host_kernel_gpu.h"
+#endif
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>
@@ -263,6 +267,31 @@ void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceSc
         auto locked = weak.lock();
         return locked ? locked->graph : nullptr;
     });
+}
+
+bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t bufferBits) {
+    auto* n = nodeOf(self);
+    if (!n || !name) return false;
+    const Rooted value(ev::fromBits(bufferBits));
+    std::shared_ptr<bro::render::ComputeBuffer> buffer;
+    if (!ev::isNull(value) && !ev::isUndefined(value)) {
+#if BRO_WITH_KERNEL
+        buffer = computeBufferOf(value);
+#endif
+        if (!buffer) {
+            ev::throwTypeError("setShaderBuffer: the buffer is not a KernelBuffer (bro.kernel.createBuffer)");
+            return false;
+        }
+    }
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        static_cast<scene::MeshNode*>(n)->setCustomShaderBuffer(name, std::move(buffer));
+        return true;
+    }
+    if (n->type() == scene::SceneNode::Type::InstancedMesh) {
+        static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderBuffer(name, std::move(buffer));
+        return true;
+    }
+    return false;
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,

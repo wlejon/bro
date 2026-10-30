@@ -17,6 +17,11 @@
 //     set 4, a bare image its name #defines into a sampler of the set's
 //     own (the texture's repeat and clampT pick it: the block's hidden
 //     customSamplerModes);
+//   - each `buffer <type> u_name[];` (a GPU buffer the node binds by name,
+//     setShaderBuffer: a KernelBuffer) becomes a GL_EXT_buffer_reference
+//     block whose address and element count (`u_name_length`) are members of
+//     the uniform block, `u_name` #defined onto its array; an unbound one
+//     reads a zeroed buffer with length 0;
 //   - each custom varying (`out` in the vertex chunk, `in` in the fragment
 //     chunk) gets an explicit location after the engine's;
 //   - the GL names are #defines onto the Vulkan shaders' own.
@@ -61,6 +66,16 @@ public:
         bool array = false;   // sampler2DArray
     };
 
+    /// A `buffer <type> u_name[];` declaration: the block holds its address
+    /// at `addressOffset` and its element count at `lengthOffset`.
+    struct Buffer {
+        std::string type;
+        std::string name;
+        uint32_t stride = 0;          // std430 array stride of `type`
+        uint32_t addressOffset = 0;
+        uint32_t lengthOffset = 0;
+    };
+
     /// Parse both chunks. False with `err` on a declaration Vulkan cannot
     /// take (arrays of samplers, samplers other than 2D / 2D array, too many
     /// samplers, a fragment input no vertex output feeds).
@@ -73,6 +88,10 @@ public:
 
     const std::vector<Uniform>& uniforms() const { return uniforms_; }
     const std::vector<Sampler>& samplers() const { return samplers_; }
+    const std::vector<Buffer>& buffers() const { return buffers_; }
+    /// Each chunk-built stage needs GL_EXT_buffer_reference
+    /// (withExtensions).
+    std::string withExtensions(std::string stageSource) const;
     /// The block's size, a multiple of 16 and at least 16.
     uint32_t uboSize() const { return uboSize_; }
     /// Where the block keeps each sampler's mode (SamplerMode, two bits a
@@ -91,10 +110,12 @@ private:
     std::string declarations(bool vertex) const;
     bool scan(const std::string& chunk, bool vertex, std::string& body, uint32_t& offset, std::string& err);
     bool declareUniform(const std::string& type, const std::string& declarator, uint32_t& offset, std::string& err);
+    bool declareBuffer(const std::string& type, const std::string& name, uint32_t& offset, std::string& err);
 
     std::vector<Uniform> uniforms_;
     std::vector<std::string> uniformDecls_;   // block members, in order
     std::vector<Sampler> samplers_;
+    std::vector<Buffer> buffers_;
     std::vector<Varying> varyings_;
     std::string vertexBody_;
     std::string fragmentBody_;

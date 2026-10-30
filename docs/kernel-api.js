@@ -155,6 +155,11 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 // for each store. A kernel that returns a value returns a new KernelBuffer of
 // one value per cell, laid out as run()'s typed array; one that returns
 // nothing returns undefined. Stores are bounded as on the CPU (section 5).
+//
+// A scene draws from a KernelBuffer in place, with no read back: a node's
+// custom shader declares `buffer float u_heights[];` and the node binds the
+// buffer with setShaderBuffer('u_heights', buffer) (scene-nodes-api.js).
+// What is dispatched before a frame is what that frame draws.
 
 if (bro.kernel.gpu) {
     const fieldBuf = bro.kernel.createBuffer(field);          // its bytes, on the GPU

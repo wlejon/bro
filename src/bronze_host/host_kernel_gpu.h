@@ -1,8 +1,18 @@
 #pragma once
 
+#include "embed/embed.h"
+
+#include <memory>
+
 namespace bro::engine { class Engine; }
+namespace bro::render { class ComputeBuffer; }
 
 namespace bro::bronze_host {
+
+/// The engine buffer behind a KernelBuffer (bro.kernel.createBuffer), for
+/// the engine to read in place (a custom shader's `buffer`); null for any
+/// other value.
+std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v);
 
 /// bro.kernel's GPU half: kernels dispatched on the engine's own Vulkan
 /// device, in its graphics stream (render::VulkanCompute), into buffers the

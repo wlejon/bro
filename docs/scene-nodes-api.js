@@ -483,7 +483,11 @@ class SceneNode {
    * chunk and must be named `u_*`; `uniforms` gives their initial values
    * (a number or an array of up to 4 numbers). A uniform declared in both
    * chunks is one value, a line may declare several, and a node takes at
-   * most 8 `sampler2D`s (a ninth fails to compile). Chunks may read the
+   * most 8 `sampler2D`s (a ninth fails to compile). A `buffer <type>
+   * u_name[];` declaration reads a GPU buffer the node binds by name
+   * (setShaderBuffer), in place: `u_name[i]` is element i and
+   * `u_name_length` (uint) the element count, 0 while nothing is bound (an
+   * unbound buffer reads zeroes, so index under the length). Chunks may read the
    * engine's `vUV`, `vWorldPos` (camera-relative), `vCamDist` and the
    * vertex inputs (`aTangent` among them), and pass their own varyings
    * (`out` in the vertex chunk, `in` in the fragment chunk); the shadow
@@ -530,6 +534,34 @@ class SceneNode {
    * @returns {SceneNode}
    */
   setShaderTexture(name, opts) {}
+
+  /**
+   * Bind a KernelBuffer (bro.kernel.createBuffer, or one a kernel's dispatch
+   * returned) to a `buffer <type> u_name[];` declaration of the custom shader
+   * (MeshNode and InstancedMeshNode); null unbinds. The shaders read it in
+   * place on the GPU, with no copy: what kernels dispatch before a frame is
+   * what that frame draws, so a kernel can write heights, positions or
+   * colours every frame into a buffer bound once. The element type is
+   * float, int, uint, their vec2 / vec3 / vec4 forms or mat4, laid out
+   * std430 (a vec3 takes 16 bytes); `u_name_length` is the buffer's
+   * byteLength over that. The binding outlives setShader(). A vertex chunk's
+   * displacement also moves the node's shadow; bind the buffer again after
+   * rewriting it so cached shadows refresh. Throws TypeError for a value
+   * that is not a KernelBuffer.
+   *
+   * @param {string} name
+   * @param {KernelBuffer|null} buffer
+   * @returns {SceneNode}
+   * @example
+   * const heights = bro.kernel.createBuffer(N * N * 4);
+   * terrainKernel.dispatch([N, N], heights, origin);
+   * tile.setShader({ vertex: `buffer float u_heights[];
+   *   void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
+   *     if (uint(gl_VertexIndex) < u_heights_length) pos.y += u_heights[gl_VertexIndex];
+   *   }` });
+   * tile.setShaderBuffer('u_heights', heights);
+   */
+  setShaderBuffer(name, buffer) {}
 
   /**
    * Remove the custom shader; the node draws with the stock program again.

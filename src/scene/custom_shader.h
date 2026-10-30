@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 
+namespace bro::render {
+class ComputeBuffer;
+}
+
 namespace bro::scene {
 
 // Custom-shader state shared by MeshNode and InstancedMeshNode: user GLSL
@@ -57,5 +61,27 @@ struct CustomShaderState {
         uniforms.push_back(std::move(u));
     }
 };
+
+// A GPU buffer a custom shader reads in place: a `buffer <type> u_name[];`
+// declaration of its chunk, bound by name (setShaderBuffer). Kept on the
+// node apart from CustomShaderState, as the sampler textures are, so a new
+// setShader() keeps what is bound. The node holds the buffer while bound;
+// the buffer itself is released once the GPU is done with it.
+struct CustomShaderBuffer {
+    std::string name;
+    std::shared_ptr<render::ComputeBuffer> buffer;
+};
+
+/// Bind `buffer` to `name`, or unbind it when `buffer` is null.
+inline void bindCustomShaderBuffer(std::vector<CustomShaderBuffer>& buffers, const std::string& name,
+                                   std::shared_ptr<render::ComputeBuffer> buffer) {
+    for (auto it = buffers.begin(); it != buffers.end(); ++it) {
+        if (it->name != name) continue;
+        if (buffer) it->buffer = std::move(buffer);
+        else buffers.erase(it);
+        return;
+    }
+    if (buffer) buffers.push_back({name, std::move(buffer)});
+}
 
 } // namespace bro::scene
