@@ -456,8 +456,15 @@ void Engine::windowedFrame(bool modal) {
                 dispatchEvent(ev.element, aevt);
             }
         }
-        frameTrace_->current().eventsMs = util::currentTimeMs() - frameStart;
+        FrameRecord& rec = frameTrace_->current();
+        double tPhase = util::currentTimeMs();
+        rec.eventsMs = tPhase - frameStart;
         control_->pump();
+        {
+            const double t = util::currentTimeMs();
+            rec.controlMs = t - tPhase;
+            tPhase = t;
+        }
 
         pollAppWatcher(util::currentTimeMs());
         if (pendingAppReload_) {
@@ -483,6 +490,11 @@ void Engine::windowedFrame(bool modal) {
         if (framePresenter_->consumeIfReady()) traceRasterConsumed();
 
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
+        {
+            const double t = util::currentTimeMs();
+            rec.miscMs = t - tPhase;
+            tPhase = t;
+        }
 
         if (!modal) {
             if (eventLoop_) {
@@ -505,6 +517,11 @@ void Engine::windowedFrame(bool modal) {
             }
         }
         beginGpuFrame();
+        {
+            const double t = util::currentTimeMs();
+            rec.inputMs = t - tPhase;
+            tPhase = t;
+        }
 
 #if BRO_WITH_PHYSICS
         if (physicsWorld_) {
@@ -563,7 +580,11 @@ void Engine::windowedFrame(bool modal) {
 
         syncWebGLCanvasSizes();
 
-        if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
+        {
+            const double tJs = util::currentTimeMs();
+            if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
+            rec.jsMs = util::currentTimeMs() - tJs;
+        }
 
         for (auto& pump : framePumps_) pump();
 
@@ -647,6 +668,7 @@ void Engine::windowedFrame(bool modal) {
             layoutSignaled = true;
             noteHoverRecheck();
         }
+        rec.tickMs = util::currentTimeMs() - tPhase;
 
         renderAndPresentFrame(frameStart, now, wallFrameDtMs, layoutSignaled, baseWasDirty);
         traceFrameEnd();
