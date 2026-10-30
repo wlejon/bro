@@ -13,6 +13,10 @@ constexpr double kHalfPi = 1.57079632679489661923;
 double length(const Vec3d& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 Vec3d sub(const Vec3d& a, const Vec3d& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 double dot(const Vec3d& a, const Vec3d& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3d unit(const Vec3d& v) {
+    const double l = length(v);
+    return l > 0 ? Vec3d{v.x / l, v.y / l, v.z / l} : v;
+}
 
 } // namespace
 
@@ -117,7 +121,19 @@ double TileTree::error(const TileId& id, const View& view, bool* seen) const {
     *seen = visible(b, view);
     if (!*seen) return 0;
     const double cell = config_.domain.tileExtent(id) / std::max<uint32_t>(config_.tileSize, 1);
-    const double dist = std::max(length(sub(view.position, b.center)) - b.radius, cell * 1e-3);
+    // Two lower bounds on the distance to the tile, the larger kept: to its
+    // bounding sphere, and to its slab (the base footprint's disc, extruded
+    // from the base to maxHeight above it along the base normal). The sphere
+    // is inflated by maxHeight every way, so alone it reads a camera up to
+    // maxHeight from the base as touching every tile that near.
+    const Vec3d rel = sub(view.position, b.center);
+    const Vec3d n = config_.domain.kind == Domain::Kind::Plane ? Vec3d{0, 1, 0}
+                                                               : unit(sub(b.center, config_.domain.center));
+    const double up = dot(rel, n);
+    const double across = length(sub(rel, {n.x * up, n.y * up, n.z * up}));
+    const double dh = std::max(across - (b.radius - config_.maxHeight), 0.0);
+    const double dv = up > config_.maxHeight ? up - config_.maxHeight : (up < 0 ? -up : 0.0);
+    const double dist = std::max({length(rel) - b.radius, std::sqrt(dh * dh + dv * dv), cell * 1e-3});
     return cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
 }
 
