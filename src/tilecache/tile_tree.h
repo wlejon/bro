@@ -66,6 +66,15 @@ struct Domain {
     Vec3d center;
 
     uint32_t rootCount() const { return kind == Kind::Plane ? rootsX * rootsY : 6; }
+
+    /// A tile as a parallelogram in base coordinates: base(u, v) = corner +
+    /// u * du + v * dv for (u, v) in [0, 1]^2. A plane's base coordinates are
+    /// the world's; a cube-sphere's are the cube's ([-1, 1]^3), and the world
+    /// point is center + normalize(base) * radius.
+    struct Frame {
+        Vec3d corner, du, dv;
+    };
+    Frame frame(const TileId& t) const;
     /// The base surface at (u, v) in [0, 1]^2 of the tile.
     Vec3d point(const TileId& t, double u, double v) const;
     /// A tile's edge length on the base surface (a cube-sphere face spans a

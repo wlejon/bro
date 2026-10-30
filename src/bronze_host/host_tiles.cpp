@@ -106,6 +106,15 @@ Value tileObject(const Cache& c, const tilecache::Production& p) {
     t.set("tileSize", c.tree.config().tileSize);
     t.set("extent", d.tileExtent(p.id));
     t.set("origin", vec3(d.point(p.id, 0, 0)));
+    const tilecache::Domain::Frame f = d.frame(p.id);
+    ev::ObjectBuilder frame;
+    frame.set("corner", vec3(f.corner));
+    frame.set("u", vec3(f.du));
+    frame.set("v", vec3(f.dv));
+    t.set("frame", frame.get());
+    const tilecache::Bounds b = c.tree.bounds(p.id);
+    t.set("center", vec3(b.center));
+    t.set("radius", b.radius);
     t.set("layers", layerViews(c, p.slot));
     if (p.parentSlot >= 0) {
         ev::ObjectBuilder parent;

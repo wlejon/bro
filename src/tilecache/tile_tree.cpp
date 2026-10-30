@@ -18,23 +18,35 @@ Vec3d sub(const Vec3d& a, const Vec3d& b) { return {a.x - b.x, a.y - b.y, a.z - 
 // ---------------------------------------------------------------------------
 // Domain
 
-Vec3d Domain::point(const TileId& t, double u, double v) const {
+Domain::Frame Domain::frame(const TileId& t) const {
     const double n = std::ldexp(1.0, static_cast<int>(t.level));
-    const double fu = (t.x + u) / n, fv = (t.y + v) / n;   // across the root, [0, 1]
+    const double fu = t.x / n, fv = t.y / n;   // the tile's corner across its root, [0, 1]
     if (kind == Kind::Plane) {
         const uint32_t rx = t.root % rootsX, ry = t.root / rootsX;
-        return {origin[0] + (rx + fu) * size, 0.0, origin[1] + (ry + fv) * size};
+        const double e = size / n;
+        return {{origin[0] + (rx + fu) * size, 0.0, origin[1] + (ry + fv) * size}, {e, 0, 0}, {0, 0, e}};
     }
-    const double s = fu * 2 - 1, q = fv * 2 - 1;
-    Vec3d c;
+    // A face point at (s, q) in [-1, 1]^2 is origin + s * S + q * Q.
+    Vec3d o, S, Q;
     switch (t.root) {
-    case 0: c = {1, q, -s}; break;    // +X
-    case 1: c = {-1, q, s}; break;    // -X
-    case 2: c = {s, 1, -q}; break;    // +Y
-    case 3: c = {s, -1, q}; break;    // -Y
-    case 4: c = {s, q, 1}; break;     // +Z
-    default: c = {-s, q, -1}; break;  // -Z
+    case 0: o = {1, 0, 0}; S = {0, 0, -1}; Q = {0, 1, 0}; break;    // +X: (1, q, -s)
+    case 1: o = {-1, 0, 0}; S = {0, 0, 1}; Q = {0, 1, 0}; break;    // -X: (-1, q, s)
+    case 2: o = {0, 1, 0}; S = {1, 0, 0}; Q = {0, 0, -1}; break;    // +Y: (s, 1, -q)
+    case 3: o = {0, -1, 0}; S = {1, 0, 0}; Q = {0, 0, 1}; break;    // -Y: (s, -1, q)
+    case 4: o = {0, 0, 1}; S = {1, 0, 0}; Q = {0, 1, 0}; break;     // +Z: (s, q, 1)
+    default: o = {0, 0, -1}; S = {-1, 0, 0}; Q = {0, 1, 0}; break;  // -Z: (-s, q, -1)
     }
+    const double s0 = fu * 2 - 1, q0 = fv * 2 - 1, e = 2 / n;
+    return {{o.x + s0 * S.x + q0 * Q.x, o.y + s0 * S.y + q0 * Q.y, o.z + s0 * S.z + q0 * Q.z},
+            {S.x * e, S.y * e, S.z * e},
+            {Q.x * e, Q.y * e, Q.z * e}};
+}
+
+Vec3d Domain::point(const TileId& t, double u, double v) const {
+    const Frame f = frame(t);
+    const Vec3d c = {f.corner.x + u * f.du.x + v * f.dv.x, f.corner.y + u * f.du.y + v * f.dv.y,
+                     f.corner.z + u * f.du.z + v * f.dv.z};
+    if (kind == Kind::Plane) return c;
     const double k = radius / length(c);
     return {center.x + c.x * k, center.y + c.y * k, center.z + c.z * k};
 }

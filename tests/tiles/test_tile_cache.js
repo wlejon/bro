@@ -42,7 +42,11 @@ if (!bro.kernel.available || !bro.tiles) {
     const kRoot = mod.kernel('k_root'), kRefine = mod.kernel('k_refine');
 
     const SIZE = 64, T = 16;
+    let planeFrameOk = true;
     const produce = (tile) => {
+        const f = tile.frame;
+        planeFrameOk = planeFrameOk && f.corner[0] === tile.origin[0] && f.corner[2] === tile.origin[2] &&
+            f.u[0] === tile.extent && f.v[2] === tile.extent && f.u[2] === 0 && f.v[0] === 0;
         const step = tile.extent / tile.cells;
         if (!tile.parent) {
             kRoot.dispatch([tile.cells, tile.cells], tile.layers.height, tile.origin[0], tile.origin[2], step);
@@ -88,7 +92,8 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(settle(cache, near), 'the cache settles near the ground');
     const drawn = checkCoverage(cache, 'near');
     const deepest = Math.max(...drawn.map((t) => t.level));
-    assert(deepest >= 3, `tiles refine near the camera (deepest level ${deepest})`);
+    assert(planeFrameOk, 'a plane tile\'s frame is its origin and extent along +x and +z');
+    assert(deepest >= 3,`tiles refine near the camera (deepest level ${deepest})`);
     assert(drawn.some((t) => t.level < deepest), 'and stay coarse away from it');
     assert(cache.resident <= cache.capacity && cache.stats.produced === cache.resident,
            `every resident tile was produced once (${cache.stats.produced} produced, ${cache.resident} resident)`);
@@ -160,11 +165,24 @@ if (!bro.kernel.available || !bro.tiles) {
     const sphere = bro.tiles.createCache({
         domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },
         tileSize: T, capacity: 256, maxLevel: 6, layers: { height: 4 },
-        produce: (tile) => { if (tile.level === 0 && !tile.parent) produced0.push(tile.root); },
+        produce: (tile) => {
+            if (tile.level === 0 && !tile.parent) produced0.push(tile.root);
+            // The frame's far corner, pushed onto the sphere, is the point
+            // diagonally across from `origin`, at the tile's extent scale.
+            const f = tile.frame, onSphere = (b) => { const l = Math.hypot(...b); return b.map((c) => c / l * 100); };
+            const o = onSphere(f.corner);
+            frameErr = Math.max(frameErr, Math.hypot(o[0] - tile.origin[0], o[1] - tile.origin[1], o[2] - tile.origin[2]));
+            const far = onSphere(f.corner.map((c, i) => c + f.u[i] + f.v[i]));
+            const diag = Math.hypot(far[0] - o[0], far[1] - o[1], far[2] - o[2]) / tile.extent;
+            diagMin = Math.min(diagMin, diag); diagMax = Math.max(diagMax, diag);
+        },
     });
     const produced0 = [];
+    let frameErr = 0, diagMin = Infinity, diagMax = 0;
     assert(settle(sphere, { position: [0, 103, 0], fov: 60, viewportHeight: 720 }), 'a cube-sphere settles');
     assert(produced0.length === 6, `its six faces are roots (${produced0.length})`);
+    assert(frameErr < 1e-9, `a tile's frame corner on the sphere is its origin (${frameErr})`);
+    assert(diagMin > 0.8 && diagMax < 2.2, `and its frame spans the tile (diagonal / extent in [${diagMin}, ${diagMax}])`);
     const top = sphere.drawn.filter((t) => t.root === 2);
     assert(top.length > 1 && Math.max(...top.map((t) => t.level)) > Math.max(...sphere.drawn.filter((t) => t.root === 3).map((t) => t.level)),
            'the face under the camera refines further than the one opposite');

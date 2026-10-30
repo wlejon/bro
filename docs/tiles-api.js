@@ -61,6 +61,16 @@
 //   origin              [x, y, z] of its cell grid's (0, 0) corner on the
 //                       base surface (border excluded)
 //   extent              its edge length on the base surface
+//   frame               { corner, u, v }: the tile as a parallelogram in base
+//                       coordinates, base(s, t) = corner + s * u + t * v for
+//                       (s, t) in [0, 1]^2 across its interior. A plane's base
+//                       coordinates are the world's; a cube-sphere's are the
+//                       cube's ([-1, 1]^3), and the world point is
+//                       center + normalize(base) * radius. A kernel given
+//                       these in f64 places each cell exactly at any scale.
+//   center, radius      the tile's bounding sphere (the one cache.drawn
+//                       reports): a kernel that writes positions relative
+//                       to `center` keeps them small enough for f32
 //   layers              { name: KernelBuffer }: this tile's range of each
 //                       pool, cells * cells elements laid out [x, y] at
 //                       y * cells + x, a store bounded to the tile
