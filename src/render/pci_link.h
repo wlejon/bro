@@ -32,9 +32,12 @@ struct DeviceCandidate {
     double bandwidth = 0.0;
     uint64_t vram = 0;
     uint32_t index = 0;
+    bool drivesDisplay = false;  // drives the display the window presents to
 };
 
 /// Evaluates if candidate `a` is strictly preferred over candidate `b`:
+/// 0. Driving the window's display (a present from any other GPU is a copy
+///    across the bus every frame)
 /// 1. Type score (higher is better)
 /// 2. PCIe link bandwidth (higher is better)
 /// 3. Device-local VRAM (higher is better)

@@ -18,6 +18,8 @@
 #endif
 #include <windows.h>
 #include <shobjidl.h>
+#include <dxgi1_2.h>
+#include <cstring>
 #endif
 
 namespace bro::platform {
@@ -195,6 +197,40 @@ bool SdlWindow::createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) 
         return false;
     }
     return true;
+}
+
+bool SdlWindow::displayAdapterLuid(uint8_t luid[8]) const {
+#if defined(_WIN32)
+    HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
+                                                         SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    if (!hwnd) return false;
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    IDXGIFactory1* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) return false;
+    bool found = false;
+    IDXGIAdapter1* adapter = nullptr;
+    for (UINT a = 0; !found && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a) {
+        IDXGIOutput* output = nullptr;
+        for (UINT o = 0; !found && adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+            DXGI_OUTPUT_DESC od{};
+            if (SUCCEEDED(output->GetDesc(&od)) && od.Monitor == monitor) {
+                DXGI_ADAPTER_DESC1 ad{};
+                if (SUCCEEDED(adapter->GetDesc1(&ad))) {
+                    static_assert(sizeof(ad.AdapterLuid) == 8);
+                    std::memcpy(luid, &ad.AdapterLuid, 8);
+                    found = true;
+                }
+            }
+            output->Release();
+        }
+        adapter->Release();
+    }
+    factory->Release();
+    return found;
+#else
+    (void)luid;
+    return false;
+#endif
 }
 
 void SdlWindow::getSize(int& w, int& h) const {

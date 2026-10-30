@@ -45,6 +45,16 @@ void testDeviceRanking() {
         CHECK(reason.find("256 vs 64 GT/s") != std::string::npos);
     }
 
+    // 2b. The GPU driving the window's display wins over a wider link: any
+    // other presents through a copy to it every frame.
+    {
+        DeviceCandidate wide{1000, 256.0, 24ull * 1024 * 1024 * 1024, 0};
+        DeviceCandidate display{1000, 64.0, 24ull * 1024 * 1024 * 1024, 1, true};
+        CHECK(isDeviceCandidateBetter(display, wide));
+        CHECK(!isDeviceCandidateBetter(wide, display));
+        CHECK(deviceCandidateSelectionReason(display, wide).find("display") != std::string::npos);
+    }
+
     // 3. Device-local VRAM tie-break on equal type score and bandwidth
     {
         DeviceCandidate moreVram{1000, 256.0, 24ull * 1024 * 1024 * 1024, 1};

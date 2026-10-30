@@ -189,6 +189,11 @@ public:
     /// caller owns the surface and destroys it with vkDestroySurfaceKHR,
     /// before the window goes.
     virtual bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) = 0;
+    /// The LUID of the GPU driving the display this window is on, where the
+    /// window system names one (Windows). A device other than that one
+    /// presents through a copy across the bus to the display's GPU, each
+    /// frame; device selection prefers the one that does not.
+    virtual bool displayAdapterLuid(uint8_t luid[8]) const { (void)luid; return false; }
     /// Software backend: copy a frame of 32-bit pixels to the window and show
     /// it, clipped to the window. False on failure or for a Vulkan window.
     virtual bool presentPixels(const void* pixels, int width, int height, int stride, bool bgra) = 0;

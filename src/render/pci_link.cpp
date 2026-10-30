@@ -184,6 +184,7 @@ PciLink queryPciLink(uint32_t domain, uint32_t bus, uint32_t device, uint32_t fu
 }
 
 bool isDeviceCandidateBetter(const DeviceCandidate& a, const DeviceCandidate& b) {
+    if (a.drivesDisplay != b.drivesDisplay) return a.drivesDisplay;
     if (a.score != b.score) return a.score > b.score;
     if (std::abs(a.bandwidth - b.bandwidth) > 1e-6) return a.bandwidth > b.bandwidth;
     if (a.vram != b.vram) return a.vram > b.vram;
@@ -191,6 +192,7 @@ bool isDeviceCandidateBetter(const DeviceCandidate& a, const DeviceCandidate& b)
 }
 
 std::string deviceCandidateSelectionReason(const DeviceCandidate& winner, const DeviceCandidate& runnerUp) {
+    if (winner.drivesDisplay != runnerUp.drivesDisplay) return "drives the window's display";
     if (winner.score != runnerUp.score) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "higher device type score (%d vs %d)",

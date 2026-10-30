@@ -44,6 +44,8 @@ if(WIN32)
     # Its keyboard: hotkeys through a low-level hook (desktop_hotkeys.h).
     target_sources(bro_platform PRIVATE desktop_shell_keyboard_win.cpp)
     target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid runtimeobject)
+    # The adapter driving a window's monitor (SdlWindow::displayAdapterLuid).
+    target_link_libraries(bro_platform PRIVATE dxgi)
 elseif(APPLE)
     # NSDraggingSession (drags out of a window).
     target_sources(bro_platform PRIVATE sdl/sdl_drag_mac.mm)

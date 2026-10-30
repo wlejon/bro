@@ -128,7 +128,9 @@ bool VulkanContext::init(platform::Window* presentTarget) {
         cleanup();
         return false;
     }
-    const bool selected = selectPhysicalDevice(probe);
+    uint8_t displayLuid[8];
+    const bool knowsDisplay = probe != VK_NULL_HANDLE && presentTarget->displayAdapterLuid(displayLuid);
+    const bool selected = selectPhysicalDevice(probe, knowsDisplay ? displayLuid : nullptr);
     if (probe != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, probe, nullptr);
     if (!selected) {
         LOG_ERROR("Vulkan: Failed to select suitable physical device");
@@ -452,7 +454,7 @@ bool VulkanContext::deviceMeetsRequirements(VkPhysicalDevice dev,
     return true;
 }
 
-bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface) {
+bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface, const uint8_t* displayLuid) {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance_, &deviceCount, nullptr);
     if (deviceCount == 0) {
@@ -536,10 +538,22 @@ bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface) {
             std::snprintf(linkBuf, sizeof(linkBuf), "unknown");
         }
 
-        LOG_INFO("Vulkan: candidate %u: %s, PCI %s, link %s, %llu MB VRAM",
-                 i, props.deviceName, pciBuf, linkBuf, static_cast<unsigned long long>(vramMB));
+        bool drivesDisplay = false;
+        if (displayLuid) {
+            VkPhysicalDeviceIDProperties idProps{};
+            idProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+            VkPhysicalDeviceProperties2 props2{};
+            props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            props2.pNext = &idProps;
+            vkGetPhysicalDeviceProperties2(dev, &props2);
+            drivesDisplay = idProps.deviceLUIDValid && std::memcmp(idProps.deviceLUID, displayLuid, VK_LUID_SIZE) == 0;
+        }
 
-        candidates.push_back({dev, indices, props, {score, link.bandwidth(), vramBytes, i}});
+        LOG_INFO("Vulkan: candidate %u: %s, PCI %s, link %s, %llu MB VRAM%s",
+                 i, props.deviceName, pciBuf, linkBuf, static_cast<unsigned long long>(vramMB),
+                 drivesDisplay ? ", drives the window's display" : "");
+
+        candidates.push_back({dev, indices, props, {score, link.bandwidth(), vramBytes, i, drivesDisplay}});
     }
 
     if (candidates.empty()) {

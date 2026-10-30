@@ -20,6 +20,7 @@ public:
     GraphicsBackend backend() const override { return m_backend; }
 
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override;
+    bool displayAdapterLuid(uint8_t luid[8]) const override;
     bool presentPixels(const void* pixels, int width, int height, int stride, bool bgra) override;
     void setVSync(bool enabled) override { m_vsyncPref = enabled; }
     bool vsyncPreference() const override { return m_vsyncPref; }

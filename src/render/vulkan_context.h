@@ -243,7 +243,9 @@ public:
 private:
     bool createInstance();
     bool setupDebugMessenger();
-    bool selectPhysicalDevice(VkSurfaceKHR compatibleSurface);
+    // displayLuid: the adapter driving the window's display, preferred; null
+    // where unknown (headless, or a window system that does not say).
+    bool selectPhysicalDevice(VkSurfaceKHR compatibleSurface, const uint8_t* displayLuid);
     bool deviceMeetsRequirements(VkPhysicalDevice dev, const VkPhysicalDeviceProperties& props) const;
     bool createLogicalDevice();
     bool createCommandPool();
