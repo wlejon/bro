@@ -6,8 +6,10 @@
 #include "common/scene_camera.glsl"
 
 layout(location = 0) out vec3 outRay;
+layout(location = 1) flat out int outVolume;   // the volume's place in the frame (its first instance)
 
 void main() {
+    outVolume = gl_InstanceIndex;
     vec2 ndc = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2) * 2.0 - 1.0;
     gl_Position = vec4(ndc, 0.0, 1.0);
     vec4 v = camera.invProj * vec4(ndc, 0.5, 1.0);

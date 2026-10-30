@@ -91,6 +91,12 @@ struct SceneFrame {
     CullStats stats;
     /// Anything visible was drawn (the compositor shows the layer).
     bool drewContent = false;
+    /// What the volumes left the exposure's incident meter (PassVolume,
+    /// volume.frag): a vec4 a volume, in draw order, the radiance down from
+    /// straight up over the eye (rgb) and the share of the sun passed (a).
+    VkBuffer volumeMeter = VK_NULL_HANDLE;
+    VkDeviceSize volumeMeterOffset = 0;
+    uint32_t meteredVolumes = 0;
     /// Stamps the end of each pass (SceneGpuTimer::mark); null: untimed.
     SceneGpuTimer* timer = nullptr;
 

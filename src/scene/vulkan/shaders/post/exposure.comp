@@ -52,11 +52,15 @@ layout(push_constant) uniform ExposurePush {
     float sunRadius;   // its angular radius
     float incidentEvOffset;   // the grey card's EV less log2 E
     float brighter, darker;   // the incident reading's reach about the reflected one
+    int volumes;       // the incident meter's readings of the volumes (binding 4)
 } push;
 
 // The incident meter's air: the transmittance table (binding 3) and the
 // shell from the push.
 layout(set = 0, binding = 3) uniform sampler2D texTransmittance;
+// What the volumes left the meter (volume.frag): per volume, the radiance
+// down from straight up (rgb) and the share of the sun it passes (a).
+layout(std430, set = 0, binding = 4) readonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
 #include "common/scene_atmosphere_params.glsl"
 AtmosphereGpu atmAir;
 #define ATM atmAir
@@ -132,6 +136,17 @@ void main() {
                 atmAir.sunIlluminance = vec4(0.0, 0.0, 0.0, push.sunRadius);
                 vec3 T = atmSunTransmittance(max(push.r, push.rb), push.muS);
                 float E = push.sunLux * dot(T, vec3(0.2126, 0.7152, 0.0722));
+                // Through the volumes: the share of the sun they pass, and
+                // their own light from above as a CIE overcast sky's, whose
+                // radiance falls from the zenith's Lz as (1 + 2 cos) / 3 and
+                // gives a level surface 7/9 pi Lz (Moon and Spencer 1942).
+                float sunT = 1.0, down = 0.0;
+                for (int k = 0; k < push.volumes; ++k) {
+                    vec4 m = volumeMeter.slots[k];
+                    sunT *= m.a;
+                    down += dot(m.rgb, vec3(0.2126, 0.7152, 0.0722));
+                }
+                E = E * sunT + (7.0 / 9.0) * 3.14159265 * down;
                 float ev = E > 0.0 ? log2(E) + push.incidentEvOffset : reflected - push.brighter;
                 metered = clamp(ev, reflected - push.brighter, reflected + push.darker);
             }

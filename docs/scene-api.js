@@ -573,7 +573,12 @@ class SceneGraph {
    * through the air) and `volumeSkyLight(pos, n)` (the sky's irradiance
    * over pi on a surface facing n). Drawn after the opaque surfaces, their
    * sky and the decals, before SSR and translucent surfaces, in tree order.
-   * It casts no shadow and is never culled. Its uniforms, `buffer`
+   * It casts no shadow and is never culled. The incident exposure meter
+   * (setExposure) reads it: once a frame userVolume also runs from the eye
+   * toward the sun (the share it passes dims the sun the meter reads) and
+   * straight up (its light down counts as an overcast sky's), so under an
+   * overcast deck the meter reads the deck's light, not the sun it hides
+   * (the first 8 volumes in tree order). Its uniforms, `buffer`
    * declarations and textures are a custom shader's (setShader):
    * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
    * Throws TypeError without a fragment chunk and Error with the GLSL log

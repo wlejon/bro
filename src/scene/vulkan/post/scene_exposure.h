@@ -68,6 +68,7 @@ private:
         float rb, rt, r, muS;
         float sunLux, sunRadius;
         float incidentEvOffset, brighter, darker;
+        int32_t volumes;   // the volumes' readings at binding 4 (PassVolume)
     };
     /// A copy of the state for the CPU, and the submission that wrote it.
     struct Readback {

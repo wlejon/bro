@@ -283,7 +283,8 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
 }
 
 void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                                   VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw) {
+                                   VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
+                                   uint32_t index) {
     if (!draw.volume || !draw.custom || !draw.customSet) return;
     CustomProgram* prog = volumeProgram(*draw.custom);
     if (!prog) return;
@@ -318,7 +319,8 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
     const VkDescriptorSet sets[3] = {cameraSet, lightingSet, depthSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    // The volume's place as its first instance: volume.frag's meter slot.
+    vkCmdDraw(cmd, 3, 1, 0, index);
 }
 
 VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target) {

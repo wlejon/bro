@@ -198,9 +198,11 @@ public:
     /// Draw a volume (MeshDraw::volume) over the open HDR target: its
     /// triangle over the view, blended as dst * transmittance + its light
     /// (volume.frag), reading the opaque depth from `depthSet` (the
-    /// material layout, the depth at binding 0).
+    /// material layout, the depth at binding 0, the exposure meter's slots
+    /// at 5); `index` its place among the frame's volumes, its meter slot.
     void recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                      VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw);
+                      VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
+                      uint32_t index);
 
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
     /// with the shadow casters, whose pipelines read the same streams. A

@@ -114,4 +114,43 @@ if (!probe.scene) {
     threw = null;
     try { scene.createVolume({}); } catch (e) { threw = e; }
     assert(threw instanceof TypeError, 'createVolume without a fragment chunk throws a TypeError');
+
+    // The incident meter reads the volumes: one that passes a share of the
+    // sun only along the ray to it, and sends light down only along the ray
+    // straight up, leaves every pixel as it was and moves the meter alone.
+    const lit = freshScene(S).scene;
+    lit.setAtmosphere({});
+    lit.setExposure({ mode: 'auto', meter: 'incident' });
+    lit.createLight({ type: 'directional', direction: [-0.3, -0.8, -0.5], color: [1, 1, 1], intensity: 3 });
+    // Dark ground: the incident reading sits stops above the frame's, clear
+    // of the reach about it the meter keeps.
+    lit.createMesh({ mesh: 'plane', color: '#202020', scale: [80, 1, 80] });
+    const meterVol = lit.createVolume({
+        fragment: `uniform float u_sunT;
+            uniform float u_down;
+            void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+                            inout float transmittance, inout float depth) {
+                if (dot(dir, sceneToSun()) > 0.9999) transmittance = u_sunT;
+                if (dir.y > 0.9999) radiance = vec3(u_down);
+            }`,
+        uniforms: { u_sunT: 1.0, u_down: 0.0 },
+    });
+    const metered = () => {
+        for (let i = 0; i < 6; i++) lit.captureFrame();
+        return lit.cullStats().meteredEv;
+    };
+    const clear = metered();
+    meterVol.setShaderUniform('u_sunT', 0.5);
+    const half = metered();
+    assert(Math.abs(clear - half - 1) < 0.1,
+           `half the sun passed meters a stop darker (${clear.toFixed(2)} -> ${half.toFixed(2)})`);
+    meterVol.setShaderUniform('u_sunT', 0.25);
+    const quarter = metered();
+    // Light down of Lz adds 7/9 pi Lz (the CIE overcast sky's): matching
+    // the quarter of the sun lost, it meters as half again.
+    const E = Math.pow(2, clear) * 1.2 * Math.PI;   // the sun's illuminance at the eye (EV = log2(E / (1.2 pi)))
+    meterVol.setShaderUniform('u_down', 0.25 * E / (7 / 9 * Math.PI));
+    const overcast = metered();
+    assert(Math.abs(overcast - half) < 0.1,
+           `the volume's light down counts as an overcast sky's (${quarter.toFixed(2)} -> ${overcast.toFixed(2)}, half ${half.toFixed(2)})`);
 }

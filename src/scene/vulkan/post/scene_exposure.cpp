@@ -55,6 +55,7 @@ bool SceneExposure::setup(SceneGpu& gpu) {
     b.addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    b.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = b.build(dev);
     if (!setLayout_) return false;
     layout_ = computeLayout(dev, setLayout_, sizeof(Push));
@@ -156,6 +157,12 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         writer.writeImage(3, air.transmittanceView(), tableSampler_, VK_IMAGE_LAYOUT_GENERAL);
     else
         writer.writeImage(3, hdr.view, sampler_);   // (unread)
+    // The volumes' readings (PassVolume), else the state (unread).
+    if (incident && frame.meteredVolumes > 0)
+        writer.writeBuffer(4, frame.volumeMeter, frame.meteredVolumes * 4 * sizeof(float), frame.volumeMeterOffset,
+                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    else
+        writer.writeBuffer(4, state_.buffer, kStateBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(dev, set);
 
     Push ap{};
@@ -187,6 +194,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         ap.incidentEvOffset = static_cast<float>(exposure::incidentEvOffset());
         ap.brighter = exposure::kIncidentBrighter;
         ap.darker = exposure::kIncidentDarker;
+        ap.volumes = static_cast<int32_t>(frame.meteredVolumes);
     }
     bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);

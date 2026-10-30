@@ -750,6 +750,7 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.wideLines = available.wideLines;
     deviceFeatures.largePoints = available.largePoints;
     deviceFeatures.vertexPipelineStoresAndAtomics = available.vertexPipelineStoresAndAtomics;
+    deviceFeatures.fragmentStoresAndAtomics = available.fragmentStoresAndAtomics;
     deviceFeatures.textureCompressionBC = available.textureCompressionBC;
     deviceFeatures.textureCompressionETC2 = available.textureCompressionETC2;
     deviceFeatures.textureCompressionASTC_LDR = available.textureCompressionASTC_LDR;

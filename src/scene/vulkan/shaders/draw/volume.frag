@@ -21,15 +21,25 @@
 // The chunk may call sceneToSun(), volumeSunLight() and volumeSkyLight()
 // below, and read the engine's camera (camera.eyeWorld: the eye's absolute
 // position) and lighting uniforms.
+//
+// The frame's first pixel also marches two rays from the eye for the
+// exposure's incident meter (scene/exposure.h): toward the sun, for the share
+// of it the medium passes, and straight up, for the light the medium sends
+// down, so a meter under an overcast deck reads the deck's light and not the
+// sun it hides.
 
 #include "common/scene_camera.glsl"
 #include "common/scene_lighting.glsl"
 
 layout(location = 0) in vec3 inWorldPos;   // the pixel's ray (volume.vert), not unit
+layout(location = 1) flat in int inVolume;
 layout(location = 0) out vec4 outColor;
 
 // The opaque depth (SceneTargets::depthSnapshot), in the material set's slot.
 layout(set = 2, binding = 0) uniform sampler2D texSceneDepth;
+// The meter's readings, a slot per volume in draw order: the radiance down
+// from straight up (rgb) and the sun's transmittance (a) (PassVolume).
+layout(std430, set = 2, binding = 5) writeonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
 
 // The sun's illuminance at camera-relative `pos` (its light's colour times
 // intensity): what the air and the planet's shadow leave of it when it is
@@ -65,6 +75,14 @@ void main() {
     float depth = 0.0;
 #ifdef CUSTOM_VOLUME
     userVolume(dir, sceneDist, radiance, transmittance, depth);
+    if (all(equal(ivec2(gl_FragCoord.xy), ivec2(0))) && inVolume < volumeMeter.slots.length()) {
+        vec3 up = sceneAtmosphereOn() ? normalize(atmOrigin(vec3(0.0))) : vec3(0.0, 1.0, 0.0);
+        vec3 sunL = vec3(0.0), upL = vec3(0.0);
+        float sunT = 1.0, upT = 1.0, d = 0.0;
+        userVolume(sceneToSun(), 1e30, sunL, sunT, d);
+        userVolume(up, 1e30, upL, upT, d);
+        volumeMeter.slots[inVolume] = vec4(upL, clamp(sunT, 0.0, 1.0));
+    }
 #endif
     transmittance = clamp(transmittance, 0.0, 1.0);
     if (transmittance >= 1.0 && max(radiance.r, max(radiance.g, radiance.b)) <= 0.0) discard;
