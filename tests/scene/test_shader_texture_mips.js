@@ -1,17 +1,19 @@
-// User sampler slots on custom shaders — the three capabilities layered on
-// top of test_custom_shader.js's plain setShaderTexture coverage:
+// User sampler slots on custom shaders — the capabilities layered on top of
+// test_custom_shader.js's plain setShaderTexture coverage:
 //
-//   (a) `mipmap: true` builds a real mip chain with GL_LINEAR_MIPMAP_LINEAR
+//   (a) `mipmap: true` builds a real mip chain with linear-mipmap-linear
 //       minification, so textureLod() at a FRACTIONAL level blends the two
-//       bracketing levels (flushUserTex in src/scene/nodes/mesh_node.cpp). Without
-//       it there is only level 0 and GL clamps every lod to it.
-//   (b) `x`/`y` turn a set into a glTexSubImage2D sub-rectangle write that
-//       touches only that region and keeps the mip chain coherent
+//       bracketing levels. Without it there is only level 0 and every lod
+//       clamps to it.
+//   (b) `x`/`y` turn a set into a sub-rectangle write that touches only
+//       that region and keeps the mip chain coherent
 //       (MeshNode::updateCustomShaderTexture).
 //   (c) The shadow pass binds user samplers exactly as the color pass does
 //       (vulkan/shadow/pass_shadow.cpp), so a vertex chunk
 //       that displaces from a height texture casts the DISPLACED silhouette
 //       instead of sampling an unbound unit and casting the rest silhouette.
+//   (d) `layers` makes a slot a sampler2DArray of slices and `repeat` wraps
+//       its coordinates (MeshNode::setCustomShaderTextureArray).
 
 function patchBrightness(img, cx, cy, r) {
     let sum = 0, n = 0;
@@ -304,5 +306,66 @@ if (!boot.scene) {
         dropScene(s);
     }
 
-    console.log('shader texture mips/sub-update/shadow test passed');
+    // =====================================================================
+    // (d) `layers` makes the slot a sampler2DArray of that many slices, one
+    // after another in `data`; `repeat` wraps coordinates instead of
+    // clamping them. Each slice is a constant (0.25, 0.5, 0.75) but for
+    // texel (0, 0) of slice 0, 1.0: a coordinate just past 1 reads it
+    // when the slot repeats, and the far corner's 0.25 when it clamps.
+    // =====================================================================
+    {
+        const s = makeScene(SIZE);
+        const scn = s.scene;
+        const N = 8, L = 3;
+        const slices = new Float32Array(N * N * L);
+        for (let l = 0; l < L; l++) slices.fill(0.25 * (l + 1), l * N * N, (l + 1) * N * N);
+        slices[0] = 1.0;
+        const quad = scn.createMesh({ mesh: 'box', color: 'white' });
+        quad.setShader({
+            fragment: `
+                uniform sampler2DArray u_arr;
+                uniform vec3 u_at;
+                void userFragment(inout vec3 baseColor, inout vec3 normal,
+                                  inout float metallic, inout float roughness,
+                                  inout vec3 emissive, inout float alpha) {
+                    baseColor = vec3(0.0);
+                    metallic  = 0.0;
+                    roughness = 1.0;
+                    emissive  = vec3(textureLod(u_arr, u_at, 0.0).r);
+                }`,
+            uniforms: { u_at: [0.5, 0.5, 0] },
+        });
+        const at = (u, v, layer) => {
+            quad.setShaderUniform('u_at', [u, v, layer]);
+            return centerBrightness(scn.captureFrame(), 5);
+        };
+        const centre = (N / 2 + 0.5) / N, past = 1 + 0.5 / N;
+
+        quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: slices });
+        for (let l = 0; l < L; l++) {
+            const v = at(centre, centre, l);
+            assert(Math.abs(v - 255 * 0.25 * (l + 1)) < 6,
+                `slice ${l} reads its own value (${v.toFixed(1)})`);
+        }
+        const clamped = at(past, past, 0);
+        assert(Math.abs(clamped - 63.75) < 6,
+            `without repeat a coordinate past 1 clamps to the far corner (${clamped.toFixed(1)})`);
+
+        quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: slices, repeat: true });
+        const wrapped = at(past, past, 0);
+        assert(wrapped > 245,
+            `with repeat it wraps onto texel (0, 0) (${wrapped.toFixed(1)})`);
+        const deep = at(centre, centre, 2);
+        assert(Math.abs(deep - 191.25) < 6,
+            `re-staging with repeat keeps every slice (${deep.toFixed(1)})`);
+
+        let threw = false;
+        try { quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: new Float32Array(N * N) }); }
+        catch (e) { threw = e instanceof RangeError; }
+        assert(threw, 'data shorter than width * height * layers is a RangeError');
+
+        dropScene(s);
+    }
+
+    console.log('shader texture mips/sub-update/shadow/array test passed');
 }

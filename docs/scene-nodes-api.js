@@ -544,11 +544,16 @@ class SceneNode {
    * floats, row-major. With `x`/`y` given it writes a sub-rectangle of an
    * existing slot instead (width * height floats for the rect alone; a rect
    * outside the texture is ignored). A zero width or height releases the
-   * slot. `mipmap` builds a mip chain for textureLod(). A data array
-   * shorter than the extent is a RangeError. Returns the node.
+   * slot. `mipmap` builds a mip chain for textureLod(). `repeat` wraps the
+   * coordinates (a tiling texture) instead of clamping them. With `layers`
+   * the slot is a 2D array for a `uniform sampler2DArray u_*`: `data` holds
+   * that many width * height slices one after another (whole slots only, no
+   * sub-rectangles); a tiling 3D field is its z slices, read with two
+   * filtered fetches and a mix between them. A data array shorter than the
+   * extent is a RangeError. Returns the node.
    *
    * @param {string} name
-   * @param {{data: Float32Array|number[], width: number, height: number, x?: number, y?: number, mipmap?: boolean}} opts
+   * @param {{data: Float32Array|number[], width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number}} opts
    * @returns {SceneNode}
    */
   setShaderTexture(name, opts) {}

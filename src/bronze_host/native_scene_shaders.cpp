@@ -299,11 +299,28 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,
                                           int32_t width, int32_t height,
                                           const float* data, uint32_t dataCount,
-                                          bool mipmap, bool isSub) {
+                                          bool mipmap, bool isSub, bool repeat, int32_t layers) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* mn = static_cast<scene::MeshNode*>(n);
+        // An array slot: `layers` slices of width * height floats, one after
+        // another in `data`, for a sampler2DArray.
+        if (layers > 0 && !isSub) {
+            if (width <= 0 || height <= 0) {
+                mn->clearCustomShaderTexture(name);
+                return true;
+            }
+            const uint64_t slice = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+            if (!data || static_cast<uint64_t>(dataCount) < slice * static_cast<uint64_t>(layers)) {
+                ev::throwRangeError("setShaderTexture: data holds fewer than width * height * layers floats");
+                return false;
+            }
+            if (!mn->setCustomShaderTextureArray(name, width, height, layers, 1, mipmap, repeat)) return false;
+            for (int32_t l = 0; l < layers; ++l)
+                if (!mn->setCustomShaderTextureArrayLayer(name, l, data + slice * static_cast<uint64_t>(l))) return false;
+            return true;
+        }
         // The slot copies width * height * channels floats out of `data`: one
         // channel for a new slot, the slot's own count for a sub-rect write
         // (an engine-made slot may be RGBA). A shorter
@@ -324,7 +341,7 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
         if (isSub) {
             return mn->updateCustomShaderTexture(name, x, y, width, height, data);
         } else {
-            return mn->setCustomShaderTexture(name, width, height, data, mipmap);
+            return mn->setCustomShaderTexture(name, width, height, data, mipmap, repeat);
         }
     }
     return false;
