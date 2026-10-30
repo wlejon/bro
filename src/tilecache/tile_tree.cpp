@@ -292,8 +292,11 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         int32_t parentSlot = -1;
         if (w->id.level > 0) {
             auto pit = entries_.find(w->id.parent().key());
-            if (pit == entries_.end() || pit->second.slot < 0 || pit->second.state == State::Missing) continue;
-            parentSlot = pit->second.slot;   // ready, or producing earlier in this batch
+            // Ready, not producing in this batch: a batch is produced at once
+            // (one dispatch over all of it), so a child cannot read a parent
+            // beside it.
+            if (pit == entries_.end() || pit->second.slot < 0 || pit->second.state != State::Ready) continue;
+            parentSlot = pit->second.slot;
         }
         Entry& e = entries_.at(w->id.key());
         if (!allocate(e)) break;

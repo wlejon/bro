@@ -6,7 +6,8 @@
 //     cells over the quarter it covers;
 //   - the draw list on the GPU is the drawn set;
 //   - a small cache evicts what the view no longer wants and refills;
-//   - a producer that throws leaves the tiles missing, and the next update
+//   - produce takes the update's batch in one call, its table on the GPU;
+//   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
 //   - a layer's pool binds to a scene node; bad options are refused.
 
@@ -15,46 +16,64 @@ if (!bro.kernel.available || !bro.tiles) {
 } else if (!bro.kernel.gpu) {
     skipTest('no GPU device for bro.kernel');
 } else {
+    // A batch in one dispatch: grid z is the tile's batch table record, its
+    // slot where in the pool ([cells, cells, capacity]) it goes. A root's
+    // cells come from a function of the plane; a child's are its parent's
+    // cell plus detail that sums to zero over each 2x2 block, so the child
+    // averages back to the parent.
     const mod = bro.kernel.compile(`
-        @kernel @grid(2)
-        fn k_root(g: grid<2>, out: write_store<f32, 2>, ox: f32, oz: f32, step: f32) {
-            let x = ox + (g.x() as f32 + 0.5) * step;
-            let z = oz + (g.y() as f32 + 0.5) * step;
-            out[g.x(), g.y()] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
-        }
-
-        // A child's cell is its parent's cell plus detail that sums to zero
-        // over each 2x2 block, so the child averages back to the parent.
-        @kernel @grid(2)
-        fn k_refine(g: grid<2>, parent: read_store<f32, 2>, out: write_store<f32, 2>,
-                    qx: f32, qy: f32, half: f32, amp: f32) {
+        @kernel @grid(3)
+        fn k_produce(g: grid<3>, table: read_store<f64, 1>, pool: rw_store<f32, 3>, cells: f32) {
+            let r = g.z() * 24;
+            let slot = table[r] as i32;
+            let parent = table[r + 1] as i32;
             let fx = g.x() as f32;
             let fy = g.y() as f32;
+            if (parent < 0) {
+                let step = (table[r + 20] as f32) / cells;
+                let x = (table[r + 8] as f32) + (fx + 0.5) * step;
+                let z = (table[r + 10] as f32) + (fy + 0.5) * step;
+                pool[g.x(), g.y(), slot] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
+                return;
+            }
+            let half = cells * 0.5;
+            let qx = table[r + 6] as f32;
+            let qy = table[r + 7] as f32;
+            let amp = 0.5 / exp2(table[r + 3] as f32);
             let px = floor(fx * 0.5);
             let py = floor(fy * 0.5);
             let sx = (fx - 2.0 * px) * 2.0 - 1.0;
             let sy = (fy - 2.0 * py) * 2.0 - 1.0;
-            let p = parent[(qx * half + px) as i32, (qy * half + py) as i32];
+            let p = pool[(qx * half + px) as i32, (qy * half + py) as i32, parent];
             let d = amp * sin((px + qx * half) * 12.9898 + (py + qy * half) * 78.233);
-            out[g.x(), g.y()] = p + d * sx * sy;
+            pool[g.x(), g.y(), slot] = p + d * sx * sy;
+        }
+
+        // A range of [lo, hi] for every tile of the batch at level <= upTo.
+        @kernel @grid(1)
+        fn k_report(g: grid<1>, table: read_store<f64, 1>, ranges: write_store<f32, 1>,
+                    lo: f32, hi: f32, upTo: f32) {
+            let r = g.x() * 24;
+            if ((table[r + 3] as f32) > upTo) { return; }
+            let slot = table[r] as i32;
+            ranges[2 * slot] = lo;
+            ranges[2 * slot + 1] = hi;
         }
     `, { file: 'tiles.bk' });
-    const kRoot = mod.kernel('k_root'), kRefine = mod.kernel('k_refine');
+    const kProduce = mod.kernel('k_produce'), kReport = mod.kernel('k_report');
 
     const SIZE = 64, T = 16;
-    let planeFrameOk = true;
-    const produce = (tile) => {
-        const f = tile.frame;
-        planeFrameOk = planeFrameOk && f.corner[0] === tile.origin[0] && f.corner[2] === tile.origin[2] &&
-            f.u[0] === tile.extent && f.v[2] === tile.extent && f.u[2] === 0 && f.v[0] === 0;
-        const step = tile.extent / tile.cells;
-        if (!tile.parent) {
-            kRoot.dispatch([tile.cells, tile.cells], tile.layers.height, tile.origin[0], tile.origin[2], step);
-        } else {
-            const [qx, qy] = tile.parent.quadrant;
-            kRefine.dispatch([tile.cells, tile.cells], tile.parent.layers.height, tile.layers.height,
-                             qx, qy, tile.cells / 2, 0.5 / (1 << tile.level));
+    let planeFrameOk = true, batches = 0, sameBatchParent = 0;
+    const produce = function (batch) {
+        batches++;
+        const slots = new Set(batch.tiles.map((t) => t.slot));
+        for (const tile of batch.tiles) {
+            const f = tile.frame;
+            planeFrameOk = planeFrameOk && f.corner[0] === tile.origin[0] && f.corner[2] === tile.origin[2] &&
+                f.u[0] === tile.extent && f.v[2] === tile.extent && f.u[2] === 0 && f.v[0] === 0;
+            if (tile.parent && slots.has(tile.parent.slot)) sameBatchParent++;
         }
+        kProduce.dispatch([this.cells, this.cells, batch.count], batch.table, this.layer('height'), this.cells);
     };
     const makeCache = (opts) => bro.tiles.createCache(Object.assign({
         domain: { type: 'plane', origin: [0, 0], size: SIZE, roots: [1, 1] },
@@ -93,6 +112,8 @@ if (!bro.kernel.available || !bro.tiles) {
     const drawn = checkCoverage(cache, 'near');
     const deepest = Math.max(...drawn.map((t) => t.level));
     assert(planeFrameOk, 'a plane tile\'s frame is its origin and extent along +x and +z');
+    assert(batches < cache.stats.produced && sameBatchParent === 0,
+           `produce takes a batch a call, never a tile beside its parent (${batches} calls for ${cache.stats.produced} tiles)`);
     assert(deepest >= 3,`tiles refine near the camera (deepest level ${deepest})`);
     assert(drawn.some((t) => t.level < deepest), 'and stay coarse away from it');
     assert(cache.resident <= cache.capacity && cache.stats.produced === cache.resident,
@@ -145,13 +166,12 @@ if (!bro.kernel.available || !bro.tiles) {
            `moving evicts what the view no longer wants (${small.stats.evicted} evicted, ${small.resident} resident)`);
     assert([...after].some((k) => !before.has(k)), 'and refines where the camera went');
 
-    // A producer that throws: the tile stays missing and is offered again.
-    let failLevel = 2, calls = 0;
+    // A producer that throws: the batch stays missing and is offered again.
+    let failLevel = 2;
     const flaky = makeCache({
-        produce: (tile) => {
-            calls++;
-            if (tile.level === failLevel) throw new Error('no data yet');
-            produce(tile);
+        produce: function (batch) {
+            if (batch.tiles.some((t) => t.level === failLevel)) throw new Error('no data yet');
+            produce.call(this, batch);
         },
     });
     let threw = null;
@@ -169,11 +189,11 @@ if (!bro.kernel.available || !bro.tiles) {
     // reaches the camera, so all of them refine; once each tile reports the
     // [-5, 5] m it really spans, only those near the camera do. Tiles that
     // report nothing inherit.
-    const ranged = (report) => makeCache({
+    const ranged = (upTo) => makeCache({
         capacity: 1024, maxLevel: 6, pixelsPerCell: 16, minHeight: -10, maxHeight: 300, ranges: true,
-        produce: (tile) => {
-            produce(tile);
-            if (report(tile)) tile.range.write(Float32Array.of(-5, 5));
+        produce: function (batch) {
+            produce.call(this, batch);
+            kReport.dispatch([batch.count], batch.table, this.ranges, -5, 5, upTo);
         },
     });
     // Ranges come back once the GPU is done, never by waiting: a frame or two.
@@ -182,7 +202,7 @@ if (!bro.kernel.available || !bro.tiles) {
         for (let i = 0; i < 8; i++) { ok = settle(c, view) && ok; advanceTime(16); }
         return ok;
     };
-    const wide = ranged(() => false), tight = ranged(() => true), rootsOnly = ranged((t) => t.level === 0);
+    const wide = ranged(-1), tight = ranged(99), rootsOnly = ranged(0);
     const above = { position: [10, 40, 12], fov: 60, viewportHeight: 720 };
     assert(settleRanged(wide, above) && settleRanged(tight, above) && settleRanged(rootsOnly, above), 'ranged caches settle');
     assert(wide.drawn.every((t) => t.range[0] === -10 && t.range[1] === 300),
@@ -206,22 +226,35 @@ if (!bro.kernel.available || !bro.tiles) {
     const sphere = bro.tiles.createCache({
         domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },
         tileSize: T, capacity: 256, maxLevel: 6, layers: { height: 4 },
-        produce: (tile) => {
-            if (tile.level === 0 && !tile.parent) produced0.push(tile.root);
-            // The frame's far corner, pushed onto the sphere, is the point
-            // diagonally across from `origin`, at the tile's extent scale.
-            const f = tile.frame, onSphere = (b) => { const l = Math.hypot(...b); return b.map((c) => c / l * 100); };
-            const o = onSphere(f.corner);
-            frameErr = Math.max(frameErr, Math.hypot(o[0] - tile.origin[0], o[1] - tile.origin[1], o[2] - tile.origin[2]));
-            const far = onSphere(f.corner.map((c, i) => c + f.u[i] + f.v[i]));
-            const diag = Math.hypot(far[0] - o[0], far[1] - o[1], far[2] - o[2]) / tile.extent;
-            diagMin = Math.min(diagMin, diag); diagMax = Math.max(diagMax, diag);
+        produce: (batch) => {
+            // The table holds what the tile objects do.
+            const table = batch.table.read(new Float64Array(batch.count * 24));
+            batch.tiles.forEach((tile, i) => {
+                const r = table.subarray(i * 24, i * 24 + 24);
+                const f = tile.frame;
+                const same = r[0] === tile.slot && r[1] === (tile.parent ? tile.parent.slot : -1) &&
+                    r[2] === tile.root && r[3] === tile.level && r[4] === tile.x && r[5] === tile.y &&
+                    [...f.corner, ...f.u, ...f.v, ...tile.center].every((v, k) => r[8 + k] === v) &&
+                    r[20] === tile.extent && r[21] === tile.radius &&
+                    (!tile.parent || (r[6] === tile.parent.quadrant[0] && r[7] === tile.parent.quadrant[1]));
+                tableOk = tableOk && same;
+                if (tile.level === 0 && !tile.parent) produced0.push(tile.root);
+                // The frame's far corner, pushed onto the sphere, is the point
+                // diagonally across from `origin`, at the tile's extent scale.
+                const onSphere = (b) => { const l = Math.hypot(...b); return b.map((c) => c / l * 100); };
+                const o = onSphere(f.corner);
+                frameErr = Math.max(frameErr, Math.hypot(o[0] - tile.origin[0], o[1] - tile.origin[1], o[2] - tile.origin[2]));
+                const far = onSphere(f.corner.map((c, k) => c + f.u[k] + f.v[k]));
+                const diag = Math.hypot(far[0] - o[0], far[1] - o[1], far[2] - o[2]) / tile.extent;
+                diagMin = Math.min(diagMin, diag); diagMax = Math.max(diagMax, diag);
+            });
         },
     });
     const produced0 = [];
-    let frameErr = 0, diagMin = Infinity, diagMax = 0;
+    let frameErr = 0, diagMin = Infinity, diagMax = 0, tableOk = true;
     assert(settle(sphere, { position: [0, 103, 0], fov: 60, viewportHeight: 720 }), 'a cube-sphere settles');
     assert(produced0.length === 6, `its six faces are roots (${produced0.length})`);
+    assert(tableOk, 'the batch table holds each tile\'s slot, parent, id, quadrant, frame, center, extent and radius');
     assert(frameErr < 1e-9, `a tile's frame corner on the sphere is its origin (${frameErr})`);
     assert(diagMin > 0.8 && diagMax < 2.2, `and its frame spans the tile (diagonal / extent in [${diagMin}, ${diagMax}])`);
     const top = sphere.drawn.filter((t) => t.root === 2);

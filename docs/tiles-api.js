@@ -6,18 +6,23 @@
 // a kernel computes) in GPU memory as a forest of quadtrees over a domain,
 // and keeps the tiles the view needs resident. The engine owns *which* tiles
 // exist (selection, residency, eviction, the draw set); world code owns
-// *what* is in them, through one callback, `produce(tile)`, which typically
-// dispatches a bro.kernel kernel (kernel-api.js) into the tile's buffers.
+// *what* is in them, through one callback, `produce(batch)`, which typically
+// dispatches bro.kernel kernels (kernel-api.js) over the whole batch at once:
+// a grid of [cells, cells, batch.count] whose z is the tile's record in the
+// batch table, its slot where in the layer pools it goes. One dispatch over
+// the batch fills the GPU; a dispatch a tile is a few warps of it, and
+// flying the planet demo, 24 tiles a frame took 5x the GPU time that way.
 //
 // - Selection is error-driven: a tile splits while its cells project larger
 //   than `pixelsPerCell` pixels at the camera, down to `maxLevel`, within
 //   `capacity` resident tiles (the tile projecting largest splits first).
-// - A tile is produced after its parent and can read it: `tile.parent`
-//   carries the parent's buffers, so a child refines what its parent holds
-//   rather than replacing it (a child whose 2x2 cells average to its
-//   parent's cell is the same world seen closer).
+// - A tile is produced after its parent, in a later batch, and can read it:
+//   its record names the parent's slot and the quarter of it the tile
+//   covers, so a child refines what its parent holds rather than replacing
+//   it (a child whose 2x2 cells average to its parent's cell is the same
+//   world seen closer).
 // - Production is spread over updates: at most `producePerUpdate` tiles a
-//   call, parents before children, coarse before fine.
+//   call, coarse before fine.
 // - Tiles the view no longer wants are evicted least recently wanted first
 //   when a slot is needed, and produced again if wanted again.
 // - The draw set covers every root exactly once: a wanted tile whose
@@ -52,76 +57,93 @@
 //   minHeight         how far below it data reaches (default the lesser of 0
 //                     and maxHeight; at most maxHeight). On a cube-sphere the
 //                     horizon test lowers the surface to radius + minHeight
-//   ranges            true gives each produce a `tile.range` to report the
-//                     heights the tile actually spans (default false). A
-//                     tile without a report takes its nearest reported
-//                     ancestor's, else [minHeight, maxHeight]
+//   ranges            true gives the cache a `ranges` store for producers to
+//                     report the heights each tile actually spans (default
+//                     false). A tile without a report takes its nearest
+//                     reported ancestor's, else [minHeight, maxHeight]
 //   pixelsPerCell     a tile splits while a cell spans more pixels than this
 //                     (default 2)
-//   producePerUpdate  tiles produced per update() (default 8)
-//   produce(tile)     fills one tile; `this` is the cache
+//   producePerUpdate  tiles produced per update() (default 8): the most a
+//                     batch holds
+//   produce(batch)    fills the update's batch; `this` is the cache
 //
-// tile (the argument to produce):
-//   root, level, x, y   which tile: x and y in [0, 2^level) within its root
-//   slot                its index in the layer pools
-//   cells, border, tileSize
-//   origin              [x, y, z] of its cell grid's (0, 0) corner on the
-//                       base surface (border excluded)
-//   extent              its edge length on the base surface
-//   frame               { corner, u, v }: the tile as a parallelogram in base
-//                       coordinates, base(s, t) = corner + s * u + t * v for
-//                       (s, t) in [0, 1]^2 across its interior. A plane's base
-//                       coordinates are the world's; a cube-sphere's are the
-//                       cube's ([-1, 1]^3), and the world point is
-//                       center + normalize(base) * radius. A kernel given
-//                       these in f64 places each cell exactly at any scale.
-//   center, radius      the tile's bounding sphere (the one cache.drawn
-//                       reports): a kernel that writes positions relative
-//                       to `center` keeps them small enough for f32. The
-//                       center is the tile's on the base surface and never
-//                       moves; a narrower height range only shrinks radius
-//   range               with `ranges`: a KernelBuffer of 2 float32, [lo, hi],
-//                       for a kernel to write the heights (above the base
-//                       surface) this tile spans. It must bound the surface
-//                       at this level and at every finer level, since the
-//                       tile's children inherit it until they report their
-//                       own. It reads NaN until written; NaN (or lo > hi) is
-//                       no report. The cache reads it back once the GPU is
-//                       done, without waiting, and selection narrows a frame
-//                       or two after the tile is produced
-//   layers              { name: KernelBuffer }: this tile's range of each
-//                       pool, cells * cells elements laid out [x, y] at
-//                       y * cells + x, a store bounded to the tile; the same
-//                       object (and views) every time that slot is produced
-//   parent              null for a root, else { slot, layers, quadrant: [qx, qy] }:
-//                       the parent's buffers (resident while the child is
-//                       produced), and which quarter of it this tile covers:
-//                       the child's interior starts quadrant * tileSize / 2
-//                       cells into the parent's interior
+// batch (the argument to produce):
+//   count               its tiles, 1 to producePerUpdate
+//   table               KernelBuffer of `count` records of 24 float64
+//                       (integers exact) for kernels, record i at 24 * i:
+//                         0 slot, 1 parentSlot (-1 for a root), 2 root,
+//                         3 level, 4 x, 5 y, 6 quadrant x, 7 quadrant y,
+//                         8-10 frame corner, 11-13 frame u, 14-16 frame v,
+//                         17-19 center, 20 extent, 21 radius, 22-23 0
+//                       (the tile fields below). Written before produce is
+//                       called, it lands before the producer's dispatches;
+//                       the same KernelBuffer every update
+//   tiles               the same tiles as objects, for the CPU:
+//     root, level, x, y   which tile: x and y in [0, 2^level) within its root
+//     slot                its index in the layer pools: its cells are
+//                         elements slot * cells * cells on, laid out [x, y]
+//                         at y * cells + x, so a kernel over the batch writes
+//                         pool[x, y, slot] into the pool as a 3D store
+//     cells, border, tileSize
+//     origin              [x, y, z] of its cell grid's (0, 0) corner on the
+//                         base surface (border excluded)
+//     extent              its edge length on the base surface
+//     frame               { corner, u, v }: the tile as a parallelogram in
+//                         base coordinates, base(s, t) = corner + s * u + t * v
+//                         for (s, t) in [0, 1]^2 across its interior. A
+//                         plane's base coordinates are the world's; a
+//                         cube-sphere's are the cube's ([-1, 1]^3), and the
+//                         world point is center + normalize(base) * radius. A
+//                         kernel given these in f64 places each cell exactly
+//                         at any scale.
+//     center, radius      the tile's bounding sphere (the one cache.drawn
+//                         reports): a kernel that writes positions relative
+//                         to `center` keeps them small enough for f32. The
+//                         center is the tile's on the base surface and never
+//                         moves; a narrower height range only shrinks radius
+//     parent              null for a root, else { slot, quadrant: [qx, qy] }:
+//                         the parent's slot (ready, produced in an earlier
+//                         batch, and resident while the child is produced),
+//                         and which quarter of it this tile covers: the
+//                         child's interior starts quadrant * tileSize / 2
+//                         cells into the parent's interior
 //
-// A produce that throws leaves that tile and the rest of the update's batch
-// missing; update() rethrows, and later updates offer them again.
+// With `ranges`, a producer writes a tile's [lo, hi] into cache.ranges at
+// float32 2 * slot: the heights (above the base surface) the tile spans. It
+// must bound the surface at this level and at every finer level, since the
+// tile's children inherit it until they report their own. A batch's slots
+// read NaN until written; NaN (or lo > hi) is no report. The cache reads
+// them back once the GPU is done, without waiting, and selection narrows a
+// frame or two after the tile is produced.
+//
+// A produce that throws leaves the batch missing; update() rethrows, and
+// later updates offer it again.
 
+// Roots from a function of the plane; children their parent plus detail
+// that sums to zero over each 2x2 block. One kernel, the whole batch.
 const mod = bro.kernel.compile(`
-    @kernel @grid(2)
-    fn k_root(g: grid<2>, out: write_store<f32, 2>, ox: f32, oz: f32, step: f32) {
-        let x = ox + (g.x() as f32 + 0.5) * step;
-        let z = oz + (g.y() as f32 + 0.5) * step;
-        out[g.x(), g.y()] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
-    }
-
-    // The parent's cell plus detail that sums to zero over each 2x2 block.
-    @kernel @grid(2)
-    fn k_refine(g: grid<2>, parent: read_store<f32, 2>, out: write_store<f32, 2>,
-                qx: f32, qy: f32, half: f32, amp: f32) {
+    @kernel @grid(3)
+    fn k_produce(g: grid<3>, table: read_store<f64, 1>, pool: rw_store<f32, 3>, cells: f32) {
+        let r = g.z() * 24;
+        let slot = table[r] as i32;
+        let parent = table[r + 1] as i32;
         let fx = g.x() as f32;
         let fy = g.y() as f32;
+        if (parent < 0) {
+            let step = (table[r + 20] as f32) / cells;
+            let x = (table[r + 8] as f32) + (fx + 0.5) * step;
+            let z = (table[r + 10] as f32) + (fy + 0.5) * step;
+            pool[g.x(), g.y(), slot] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
+            return;
+        }
+        let half = cells * 0.5;
         let px = floor(fx * 0.5);
         let py = floor(fy * 0.5);
         let sx = (fx - 2.0 * px) * 2.0 - 1.0;
         let sy = (fy - 2.0 * py) * 2.0 - 1.0;
-        let p = parent[(qx * half + px) as i32, (qy * half + py) as i32];
-        out[g.x(), g.y()] = p + amp * sin(px * 12.9898 + py * 78.233) * sx * sy;
+        let p = pool[((table[r + 6] as f32) * half + px) as i32, ((table[r + 7] as f32) * half + py) as i32, parent];
+        let amp = 8.0 / exp2(table[r + 3] as f32);
+        pool[g.x(), g.y(), slot] = p + amp * sin(px * 12.9898 + py * 78.233) * sx * sy;
     }
 `, { file: 'terrain.bk' });
 
@@ -132,16 +154,9 @@ const terrain = bro.tiles.createCache({
     capacity: 512,
     maxLevel: 12,
     maxHeight: 300,
-    produce(tile) {
-        const cells = [tile.cells, tile.cells];
-        if (!tile.parent) {
-            mod.kernel('k_root').dispatch(cells, tile.layers.height,
-                tile.origin[0], tile.origin[2], tile.extent / tile.cells);
-        } else {
-            const [qx, qy] = tile.parent.quadrant;
-            mod.kernel('k_refine').dispatch(cells, tile.parent.layers.height, tile.layers.height,
-                qx, qy, tile.cells / 2, 8 / (1 << tile.level));
-        }
+    produce(batch) {
+        mod.kernel('k_produce').dispatch([this.cells, this.cells, batch.count], batch.table,
+                                         this.layer('height'), this.cells);
     },
 });
 
@@ -183,9 +198,12 @@ const terrain = bro.tiles.createCache({
 //                   good to f64 at any distance (demos/planet in broworkshop).
 //                   `drawn` builds an object a tile: for inspection, not for
 //                   every frame.
-// cache.layer(name) the layer's whole pool as a KernelBuffer: a scene
+// cache.layer(name) the layer's whole pool as a KernelBuffer: producers
+//                   write it (a batch's tiles at their slots), and a scene
 //                   node's custom shader binds it (setShaderBuffer, scene-
 //                   nodes-api.js) and reads tile `slot` at slot * cells * cells
+// cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
+//                   tile's reported [lo, hi] at 2 * slot; else null
 // cache.pending     wanted tiles not yet produced (0 once settled)
 // cache.wanted      tiles the last update selected
 // cache.resident    tiles holding data

@@ -146,8 +146,8 @@ public:
     /// Pick the tiles `view` wants (replacing the previous choice).
     void select(const View& view);
 
-    /// Up to `n` missing wanted tiles to produce now, each with a slot, in
-    /// order (a tile's parent always before it). Each must then be
+    /// Up to `n` missing wanted tiles to produce now, each with a slot, each
+    /// one's parent ready (never in the same batch). Each must then be
     /// markReady()'d or abandon()'d.
     std::vector<Production> takeProductions(uint32_t n);
     void markReady(const TileId& id);

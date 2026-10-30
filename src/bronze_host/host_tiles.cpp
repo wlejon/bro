@@ -34,6 +34,11 @@ using tilecache::DrawTile;
 // same way and get a camera-relative position to f64 accuracy).
 constexpr uint32_t kRecordInts = 16;
 
+// A batch table record, 24 float64 (integers exact): slot, parentSlot (-1
+// for a root), root, level, x, y, quadrant x, quadrant y, frame corner.xyz,
+// u.xyz, v.xyz, the bounding sphere's center.xyz, extent, radius, 0, 0.
+constexpr uint32_t kTableDoubles = 24;
+
 struct Layer {
     std::string name;
     uint32_t cellBytes = 4;
@@ -50,16 +55,14 @@ struct Cache {
     std::vector<Layer> layers;
     std::shared_ptr<brokernel::api::GpuBuffer> drawList;
     std::vector<DrawTile> drawn;
-    // Each slot's { name: KernelBuffer } views, made the first time the slot
-    // is produced into and handed out again after: a slot's range of each
-    // pool never changes, and views made afresh for every tile were thousands
-    // of host objects for each collection to finalize.
-    std::vector<ev::Persistent> slotLayers;
+    // The update's batch on the GPU, producePerUpdate records, and its
+    // KernelBuffer, made once.
+    std::shared_ptr<brokernel::api::GpuBuffer> table;
+    ev::Persistent tableValue;
 
-    // `ranges`: two float32 a slot, the [lo, hi] its producer wrote into
-    // tile.range, read back without waiting and given to the tree.
+    // `ranges`: two float32 a slot, the [lo, hi] its producer wrote at
+    // 2 * slot, read back without waiting and given to the tree.
     std::shared_ptr<brokernel::api::GpuBuffer> rangePool;
-    std::vector<ev::Persistent> slotRange;
     struct RangeReadback {
         std::shared_ptr<render::ComputeReadback> readback;
         uint32_t firstSlot = 0;
@@ -110,30 +113,6 @@ Value vec3(const tilecache::Vec3d& v) {
     return a.get();
 }
 
-// { name: KernelBuffer } over the slot's range of each layer's pool: the same
-// object every time for a slot.
-Value layerViews(Cache& c, uint32_t slot) {
-    if (c.slotLayers.size() <= slot) c.slotLayers.resize(c.tree.config().capacity);
-    Value held = c.slotLayers[slot].get();
-    if (ev::isObject(held)) return held;
-    ev::ObjectBuilder b;
-    for (const Layer& l : c.layers)
-        b.set(l.name, brokernel::api::bufferValue(engineBufferView(l.pool, l.tileBytes * slot, l.tileBytes)));
-    Value views = b.get();
-    c.slotLayers[slot].set(views);
-    return views;
-}
-
-// The slot's two-float32 range store: the same object every time.
-Value rangeView(Cache& c, uint32_t slot) {
-    if (c.slotRange.size() <= slot) c.slotRange.resize(c.tree.config().capacity);
-    Value held = c.slotRange[slot].get();
-    if (ev::isObject(held)) return held;
-    Value view = brokernel::api::bufferValue(engineBufferView(c.rangePool, size_t{8} * slot, 8));
-    c.slotRange[slot].set(view);
-    return view;
-}
-
 // The ranges producers wrote, for the readbacks the GPU has finished: each
 // tile still in the slot it was produced into gets its range.
 void collectRanges(Cache& c) {
@@ -171,12 +150,9 @@ Value tileObject(Cache& c, const tilecache::Production& p) {
     const tilecache::Bounds b = c.tree.bounds(p.id);
     t.set("center", vec3(b.center));
     t.set("radius", b.radius);
-    t.set("layers", layerViews(c, p.slot));
-    if (c.rangePool) t.set("range", rangeView(c, p.slot));
     if (p.parentSlot >= 0) {
         ev::ObjectBuilder parent;
         parent.set("slot", p.parentSlot);
-        parent.set("layers", layerViews(c, static_cast<uint32_t>(p.parentSlot)));
         // The quarter of the parent this tile covers: its interior starts at
         // quadrant * tileSize / 2 cells into the parent's interior.
         ev::ArrayBuilder q(2);
@@ -250,27 +226,50 @@ Value js_update(Value self, std::span<const Value> args) {
     c->tree.select(v);
 
     const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->producePerUpdate);
-    const Rooted produce(ev::getProperty(selfRoot, "produce"));
-    std::string err;
-    for (size_t i = 0; i < batch.size(); ++i) {
-        // A producer that writes no range leaves NaN, which is no range: the
+    if (!batch.empty()) {
+        std::string err;
+        // A producer that writes no range leaves NaN, which is no range: a
         // slot's last tile's must not stand in for it.
         if (c->rangePool) {
             const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
-            c->rangePool->write(size_t{8} * batch[i].slot, none, sizeof(none), &err);
+            for (const tilecache::Production& p : batch) c->rangePool->write(size_t{8} * p.slot, none, sizeof(none), &err);
         }
-        const Rooted tile(tileObject(*c, batch[i]));
-        const Value arg = tile;
-        const ev::CallResult r = ev::call(produce, selfRoot, std::span<const Value>(&arg, 1));
+        // The batch on the GPU, for kernels that produce it in one dispatch.
+        const tilecache::Domain& d = c->tree.config().domain;
+        std::vector<double> records(batch.size() * kTableDoubles, 0.0);
+        for (size_t i = 0; i < batch.size(); ++i) {
+            const tilecache::Production& p = batch[i];
+            double* r = records.data() + i * kTableDoubles;
+            const tilecache::Domain::Frame f = d.frame(p.id);
+            const tilecache::Bounds b = c->tree.bounds(p.id);
+            const double v[] = {static_cast<double>(p.slot), static_cast<double>(p.parentSlot),
+                                static_cast<double>(p.id.root), static_cast<double>(p.id.level),
+                                static_cast<double>(p.id.x), static_cast<double>(p.id.y),
+                                static_cast<double>(p.id.x & 1u), static_cast<double>(p.id.y & 1u),
+                                f.corner.x, f.corner.y, f.corner.z, f.du.x, f.du.y, f.du.z, f.dv.x, f.dv.y, f.dv.z,
+                                b.center.x, b.center.y, b.center.z, d.tileExtent(p.id), b.radius};
+            std::copy(std::begin(v), std::end(v), r);
+        }
+        c->table->write(0, records.data(), records.size() * sizeof(double), &err);
+
+        ev::ArrayBuilder tiles(batch.size());
+        for (size_t i = 0; i < batch.size(); ++i) tiles.set(static_cast<uint32_t>(i), tileObject(*c, batch[i]));
+        ev::ObjectBuilder b;
+        b.set("count", static_cast<double>(batch.size()));
+        b.set("tiles", tiles.get());
+        b.set("table", c->tableValue.get());
+        const Rooted arg(b.get());
+        const Value argv = arg;
+        const Rooted produce(ev::getProperty(selfRoot, "produce"));
+        const ev::CallResult r = ev::call(produce, selfRoot, std::span<const Value>(&argv, 1));
         if (r.thrown) {
-            // This tile and the rest of the batch stay missing; the next
-            // update offers them again.
+            // The batch stays missing; the next update offers it again.
             const Rooted thrown(r.value);
-            for (size_t j = i; j < batch.size(); ++j) c->tree.abandon(batch[j].id);
+            for (const tilecache::Production& p : batch) c->tree.abandon(p.id);
             writeDrawList(*c);
             return ev::throwValue(thrown);
         }
-        c->tree.markReady(batch[i].id);
+        for (const tilecache::Production& p : batch) c->tree.markReady(p.id);
     }
     if (c->rangePool && !batch.empty()) {
         Cache::RangeReadback rb;
@@ -328,6 +327,10 @@ void decorateCache(ev::ObjectBuilder& b) {
         c->rangeReadbacks.clear();
         return ev::undefined();
     });
+    b.accessor("ranges", [](Value self, std::span<const Value>) -> Value {
+        const Cache* c = cacheOf(self, "TileCache.ranges");
+        return c->rangePool ? brokernel::api::bufferValue(c->rangePool) : ev::null();
+    });
     b.accessor("drawn", js_drawn);
     b.accessor("drawList", [](Value self, std::span<const Value>) -> Value {
         return brokernel::api::bufferValue(cacheOf(self, "TileCache.drawList")->drawList);
@@ -378,7 +381,7 @@ Value js_createCache(Value, std::span<const Value> args) {
     const Rooted opts(args.empty() ? ev::undefined() : args[0]);
     if (!ev::isObject(opts)) return ev::throwTypeError("bro.tiles.createCache: takes an options object");
     const Rooted produce(ev::getProperty(opts, "produce"));
-    if (!ev::isFunction(produce)) return ev::throwTypeError("bro.tiles.createCache: `produce(tile)` is a function");
+    if (!ev::isFunction(produce)) return ev::throwTypeError("bro.tiles.createCache: `produce(batch)` is a function");
 
     tilecache::Config cfg;
     const Rooted domain(ev::getProperty(opts, "domain"));
@@ -443,6 +446,10 @@ Value js_createCache(Value, std::span<const Value> args) {
         cache->rangePool = createEngineBuffer(size_t{8} * cfg.capacity, &err);
         if (!cache->rangePool) return ev::throwError("bro.tiles.createCache: " + err);
     }
+
+    cache->table = createEngineBuffer(size_t{kTableDoubles} * sizeof(double) * cache->producePerUpdate, &err);
+    if (!cache->table) return ev::throwError("bro.tiles.createCache: " + err);
+    cache->tableValue.set(brokernel::api::bufferValue(cache->table));
 
     // `produce` lives on the object, so the collector traces it with the cache.
     const Rooted obj(g_cacheClass.createInstance(std::move(cache)));
