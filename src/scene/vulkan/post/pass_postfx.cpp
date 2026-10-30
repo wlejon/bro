@@ -185,15 +185,17 @@ void PassPostFx::record(SceneFrame& frame) {
     const SceneRenderer& r = frame.renderer;
     const SceneVkImage& hdr = source(frame);
     SceneVkImage& out = output(frame);
-    const bool bloomOn = r.bloomEnabled() && r.bloomIntensity() > 0.0f && bloom_[1].isValid();
+    // A debug view's values show as they are (SceneRenderer::setDebugView).
+    const bool debug = r.debugView() != 0;
+    const bool bloomOn = !debug && r.bloomEnabled() && r.bloomIntensity() > 0.0f && bloom_[1].isValid();
     if (bloomOn) bloom(frame, hdr);
-    const bool lut = ensureLut(frame.gpu, r) && r.colorLUTAmount() > 0.0f;
+    const bool lut = !debug && ensureLut(frame.gpu, r) && r.colorLUTAmount() > 0.0f;
     exposure_.record(frame, hdr);
 
     TonemapPush push{};
     push.gamma = r.gamma();
     push.bloomIntensity = bloomOn ? r.bloomIntensity() : 0.0f;
-    push.tonemapMode = static_cast<int32_t>(r.toneMap());
+    push.tonemapMode = static_cast<int32_t>(debug ? SceneRenderer::ToneMap::Linear : r.toneMap());
     push.dither = r.ditherEnabled() ? 1.0f : 0.0f;
     if (lut) {
         const auto size = static_cast<float>(lutSize_);

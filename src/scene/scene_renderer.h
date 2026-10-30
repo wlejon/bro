@@ -211,6 +211,13 @@ public:
     ToneMap toneMap() const { return toneMap_; }
     float gamma() const { return gamma_; }
 
+    /// The debug view shown (scene/debug_views.h), 0 for none. While one
+    /// shows, the frame is what the custom chunks answering it put out:
+    /// exposure 1, a linear tone map, no bloom, colour grading, SSR or sky
+    /// (mesh.frag, volume.frag).
+    void setDebugView(int id) { debugView_ = id < 0 ? 0 : id; }
+    int debugView() const { return debugView_; }
+
     /// The exposure (scene/exposure.h): a fixed EV, or metered from each
     /// frame's luminance with eye adaptation.
     void setExposure(const ExposureSettings& e) { exposure_ = e; }
@@ -573,6 +580,7 @@ private:
 
     // Tonemap + exposure
     ToneMap toneMap_ = ToneMap::ACES;
+    int debugView_ = 0;
     ExposureSettings exposure_;
     float pendingExposureDt_ = 0.0f;   // scene time since the last render
     float exposureDt_ = 0.0f;          // this render's

@@ -70,7 +70,22 @@ vec2 albedoUV() {
 // occluderSun)` (it then defines CUSTOM_LIGHT): the occlusion it knows
 // beyond the shadow maps (SceneSurface's fields of those names), called
 // after userFragment.
+//
+// While a debug view shows (scene/debug_views.h), a chunk that answers it
+// (SCENE_DEBUG(name)) calls sceneDebugOut(rgb): the pixel is that colour,
+// unlit, with no air, at an exposure of 1 and a linear tone map. A surface
+// that does not answer is a dim grey lit from the eye, for where things are.
+vec4 g_sceneDebug = vec4(0.0, 0.0, 0.0, -1.0);
+void sceneDebugOut(vec3 rgb) { g_sceneDebug = vec4(rgb, 1.0); }
 //__USER_CHUNK__
+
+// A debug view's pixel for a surface facing N (sceneDebugOut's, else the
+// grey), when one shows.
+bool sceneDebugPixel(vec3 N, vec3 view, out vec3 rgb) {
+    if (sceneDebugView() == 0) return false;
+    rgb = g_sceneDebug.a > 0.0 ? g_sceneDebug.rgb : vec3(0.06 + 0.2 * abs(dot(N, view)));
+    return true;
+}
 
 void main() {
     uint flags = meshFlags();
@@ -123,6 +138,8 @@ void main() {
     // (GL's unlit branch), only the air in front of it.
     if ((flags & MESH_UNLIT) != 0u) {
         vec3 color = baseColor * air.transmittance + air.inscatter;
+        vec3 shown;
+        if (sceneDebugPixel(geomN, normalize(-worldPos), shown)) color = shown;
         if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) color *= cellShade(worldPos, geomN);
         // Unlit surfaces reflect nothing in the SSR mask phase.
         outColor = vec4(color, (flags & MESH_REFLECTANCE) != 0u ? 0.0 : mix(alpha, 0.0, air.fade));
@@ -245,6 +262,13 @@ void main() {
         float shade = cellShade(worldPos, geomN);
         color *= shade;
         indirect *= shade;
+    }
+
+    vec3 shown;
+    if (sceneDebugPixel(s.normal, s.view, shown)) {
+        color = shown;
+        indirect = vec3(0.0);
+        if ((flags & MESH_REFLECTANCE) != 0u) alpha = 0.0;
     }
 
     outColor = vec4(min(color, vec3(SCENE_HDR_MAX)), alpha);

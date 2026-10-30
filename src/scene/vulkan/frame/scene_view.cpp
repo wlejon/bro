@@ -77,6 +77,7 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
     cam.viewport[3] = farZ;
     cam.frame[0] = static_cast<float>(frameIndex & 0xFFFFu);
     if (fog) {
+        cam.frame[1] = static_cast<float>(fog->debugView());
         cam.fogParams[0] = fog->fogStart();
         cam.fogParams[1] = fog->fogEnd();
         cam.fogParams[2] = fog->fogDensity();

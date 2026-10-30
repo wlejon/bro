@@ -877,6 +877,12 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self);
 // bro.scene.SceneGraph.prototype.pendingWork: what the scene still prepares
 // (SceneRenderer::pendingWork), a JSON array of strings, [] once ready.
 const char* bro_scene_SceneGraph_pendingWorkJson(void* self);
+// bro.scene.SceneGraph.prototype.setDebugView: show the debug view `name`
+// (scene/debug_views.h; "" for none); its id.
+int32_t bro_scene_SceneGraph_setDebugView(void* self, const char* name);
+// bro.scene.SceneGraph.prototype.debugViews: { shown, views }, JSON: the
+// view shown (null for none) and every view a chunk has named.
+const char* bro_scene_SceneGraph_debugViewsJson(void* self);
 void bro_scene_SceneNode_setInstances(void* self, const float* data, uint32_t count);
 void bro_scene_SceneNode_setInstancesFromTransforms(void* self, const float* data, uint32_t count);
 double bro_scene_SceneNode_instanceCount_get(void* self);

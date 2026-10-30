@@ -505,7 +505,11 @@ class SceneNode {
    * light comes back to the surface as rho E mu / pi over the hidden share
    * (rho the surface's base colour, as the fit takes the occluders', E mu
    * the sun on level ground through the air), so a slope in shade is lit by
-   * the sunlit slopes across from it and not by the blue sky alone. At
+   * the sunlit slopes across from it and not by the blue sky alone. A
+   * fragment chunk answers a debug view (SceneGraph.setDebugView) with
+   * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`: SCENE_DEBUG(name) is true
+   * while the view `name` shows (any identifier names one), and the pixel
+   * is then `rgb` as is, unlit and with no air. At
    * least one is required. User uniforms and samplers are declared in the
    * chunk and must be named `u_*`; `uniforms` gives their initial values
    * (a number or an array of up to 4 numbers). A uniform declared in both

@@ -80,6 +80,13 @@ vec3 volumeSkyLight(vec3 pos, vec3 n) {
 // ground beside it shows.
 bool volumeMeterRay = false;
 
+// While a debug view shows (scene/debug_views.h), a chunk that answers it
+// (SCENE_DEBUG(name)) calls sceneDebugOut(rgb): the pixel is that colour,
+// opaque, unlit and with no air. A volume that does not answer lets all
+// through, so what it covers shows.
+vec4 g_sceneDebug = vec4(0.0, 0.0, 0.0, -1.0);
+void sceneDebugOut(vec3 rgb) { g_sceneDebug = vec4(rgb, 1.0); }
+
 //__USER_CHUNK__
 
 void main() {
@@ -97,6 +104,12 @@ void main() {
     float depth = 0.0;
 #ifdef CUSTOM_VOLUME
     userVolume(dir, sceneDist, radiance, transmittance, depth);
+    if (sceneDebugView() != 0) {
+        bool answered = g_sceneDebug.a > 0.0;
+        radiance = answered ? g_sceneDebug.rgb : vec3(0.0);
+        transmittance = answered ? 0.0 : 1.0;
+        depth = 0.0;
+    }
     ivec2 meterPixel = ivec2(gl_FragCoord.xy);
     int slot = 2 * (inVolume * METER_RAYS + meterPixel.x);
     if (meterPixel.y == 0 && meterPixel.x < METER_RAYS && slot + 1 < volumeMeter.slots.length()) {

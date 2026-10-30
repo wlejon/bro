@@ -86,6 +86,7 @@ add_library(bro_scene STATIC
     scene_graph.cpp
     scene_renderer.cpp
     scene_renderer_shadow.cpp
+    debug_views.cpp
     animation_player.cpp
     animation_player_state_machine.cpp
     animation_player_root_motion.cpp

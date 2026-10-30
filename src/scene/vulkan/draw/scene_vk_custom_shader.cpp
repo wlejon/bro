@@ -1,6 +1,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/debug_views.h"
 
 #include <algorithm>
 #include <cstring>
@@ -45,9 +46,10 @@ constexpr const char* kVertexAliases =
     "#define aTangent inTangent\n";
 
 // The marker line the chunk replaces, with `define` set for the hook.
-std::string splice(const std::string& base, const std::string& chunk, const char* define) {
+std::string splice(const std::string& base, const std::string& userChunk, const char* define) {
     std::string s(base);
-    if (chunk.empty()) return s;
+    if (userChunk.empty()) return s;
+    const std::string chunk = debug_views::expand(userChunk);
     const char* marker = "//__USER_CHUNK__";
     const size_t pos = s.find(marker);
     if (pos != std::string::npos) {

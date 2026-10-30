@@ -7,7 +7,8 @@
 namespace bro::scene::vk {
 
 bool PassEnvironment::active(const SceneFrame& frame) const {
-    return frame.gpu.environment.skyVisible(frame.renderer, frame.view.perspective);
+    // (A debug view shows what answers it over black.)
+    return frame.renderer.debugView() == 0 && frame.gpu.environment.skyVisible(frame.renderer, frame.view.perspective);
 }
 
 void PassEnvironment::declare(const SceneFrame& frame, PassIO& io) const {

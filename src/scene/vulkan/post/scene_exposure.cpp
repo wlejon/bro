@@ -123,7 +123,9 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     VkCommandBuffer cmd = frame.cmd;
     VkDevice dev = device_->device();
     const ExposureSettings& e = frame.renderer.exposureSettings();
-    const bool metering = e.mode == ExposureSettings::Mode::Auto;
+    // A debug view's values show as they are: a fixed scale of 1.
+    const bool debug = frame.renderer.debugView() != 0;
+    const bool metering = !debug && e.mode == ExposureSettings::Mode::Auto;
 
     if (!cleared_) {
         vkCmdFillBuffer(cmd, histogram_.buffer, 0, VK_WHOLE_SIZE, 0);
@@ -177,7 +179,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     ap.maxLog2 = exposure::kMaxLog2;
     ap.mode = metering ? 1.0f : 0.0f;
     ap.fixedEv = e.ev100;
-    ap.fixedScale = exposure::scaleForEv(static_cast<double>(e.ev100) - e.compensation);
+    ap.fixedScale = debug ? 1.0f : exposure::scaleForEv(static_cast<double>(e.ev100) - e.compensation);
     ap.compensation = e.compensation;
     ap.dt = frame.renderer.exposureDt();
     ap.speedUp = e.speedUp;

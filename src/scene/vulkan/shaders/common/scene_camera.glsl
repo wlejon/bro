@@ -25,8 +25,13 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec4 windGust;    // x: gust amount, y: 1 / band length along the wind, z: 1 / across it, w: 0
     // x: the render's index mod 65536, for noise that changes every render
     // (a volume's jitter, which the volumes' reconstruction averages).
+    // y: the debug view shown (scene/debug_views.h), 0 for none.
     vec4 frame;
 } camera;
+
+// The debug view shown (SceneRenderer::setDebugView), 0 for none: a custom
+// chunk's SCENE_DEBUG(name) tests it against name's id.
+int sceneDebugView() { return int(camera.frame.y + 0.5); }
 
 // The engine's wind uniforms under the names custom shader chunks use.
 #define uWindDir (camera.wind.xyz)

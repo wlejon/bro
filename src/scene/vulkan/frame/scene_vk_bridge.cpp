@@ -144,7 +144,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
-    frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f;
+    frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f && renderer.debugView() == 0;
     frame.dof = renderer.depthOfFieldEnabled();
     frame.tilt = renderer.tiltShiftEnabled();
     frame.fxaa = renderer.fxaaEnabled();

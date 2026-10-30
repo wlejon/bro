@@ -592,7 +592,10 @@ class SceneGraph {
    * meter reads the deck's light, not the sun it hides (the first 8
    * volumes in tree order). The global `volumeMeterRay` is true during
    * those calls, so a medium whose surfaces light themselves by a model of
-   * it (an average over a footprint) can answer the meter by that model. Its uniforms, `buffer`
+   * it (an average over a footprint) can answer the meter by that model.
+   * It answers a debug view (setDebugView) as a fragment chunk does,
+   * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`, covering what is behind
+   * with `rgb`; under a view it does not answer it lets all through. Its uniforms, `buffer`
    * declarations and textures are a custom shader's (setShader):
    * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
    * Throws TypeError without a fragment chunk and Error with the GLSL log
@@ -772,6 +775,32 @@ class SceneGraph {
    * @returns {string[]}
    */
   pendingWork() {}
+
+  /**
+   * Show a debug view: what the scene's custom chunks answering
+   * `SCENE_DEBUG(name)` put out with `sceneDebugOut(rgb)` (a mesh's fragment
+   * chunk, setShader; a volume's, createVolume), each colour as is, unlit
+   * and with no air, at an exposure of 1 through a linear tone map (the
+   * display's encoding applied), with no sky, bloom, colour grading or SSR.
+   * A surface that does not answer is a dim grey lit from the eye (0.06 to
+   * 0.26), for where things are; a volume that does not answer lets all
+   * through. Any name a chunk tests is a view; one no chunk tests shows
+   * all grey. The views are the debugging lens on a world's own data (the
+   * share of a cell under water, a tile's level, a march's step count),
+   * shown without editing its shaders. null (or '') shows none.
+   * @param {string|null} name
+   * @example
+   *   scene.setDebugView('water');  // a chunk: if (SCENE_DEBUG(water)) sceneDebugOut(vec3(share));
+   *   perf.settle(); screenshot('water.png');
+   *   scene.setDebugView(null);
+   */
+  setDebugView(name) {}
+
+  /**
+   * The debug view shown and every view a chunk has named so far.
+   * @returns {{shown: string|null, views: string[]}}
+   */
+  debugViews() {}
 
   /**
    * `'ready'`: pendingWork() emptied (read each animation frame while a

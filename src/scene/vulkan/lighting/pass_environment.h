@@ -2,7 +2,8 @@
 
 // The sky, drawn into the HDR scope behind everything the opaque passes
 // draw: the atmosphere, else the environment's radiance cube, then the
-// starfield (SceneEnvironment::drawSky). Perspective cameras only.
+// starfield (SceneEnvironment::drawSky). Perspective cameras only, and not
+// while a debug view shows (SceneRenderer::setDebugView).
 
 #include "scene/vulkan/frame/scene_pass.h"
 

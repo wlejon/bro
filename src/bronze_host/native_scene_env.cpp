@@ -6,6 +6,7 @@
 #include "engine/engine.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/animation_player.h"
+#include "scene/debug_views.h"
 #include "scene/vulkan/frame/scene_inspect_record.h"
 #include "engine/scene_audio_sync.h"
 #include "util/asset_path.h"
@@ -286,6 +287,24 @@ const char* bro_scene_SceneGraph_pendingWorkJson(void* self) {
     g->renderer().pendingWork(pending);
     tl_pendingJson = nlohmann::json(pending).dump();
     return tl_pendingJson.c_str();
+}
+
+int32_t bro_scene_SceneGraph_setDebugView(void* self, const char* name) {
+    auto* g = graphOf(self);
+    const int id = name && *name ? scene::debug_views::idOf(name) : 0;
+    if (g) g->renderer().setDebugView(id);
+    return id;
+}
+
+const char* bro_scene_SceneGraph_debugViewsJson(void* self) {
+    static thread_local std::string tl_viewsJson;
+    auto* g = graphOf(self);
+    nlohmann::json j;
+    const int shown = g ? g->renderer().debugView() : 0;
+    j["shown"] = shown ? nlohmann::json(scene::debug_views::nameOf(shown)) : nlohmann::json(nullptr);
+    j["views"] = scene::debug_views::names();
+    tl_viewsJson = j.dump();
+    return tl_viewsJson.c_str();
 }
 
 const char* bro_scene_SceneGraph_cullStatsJson(void* self) {

@@ -277,6 +277,17 @@
         const s = __bro_native.scene.SceneGraph_pendingWorkJson(this);
         return s ? JSON.parse(s) : [];
     });
+    // The debug view the scene shows: what the custom chunks answering
+    // SCENE_DEBUG(name) put out (null or '' for none).
+    fn(SceneGraph.prototype, "setDebugView", function setDebugView(name) {
+        if (name !== null && name !== undefined && typeof name !== 'string')
+            throw new TypeError("bro.scene.SceneGraph.prototype.setDebugView: name is a string or null");
+        __bro_native.scene.SceneGraph_setDebugView(this, name || "");
+    });
+    // { shown: name or null, views: [every name a chunk has named] }.
+    fn(SceneGraph.prototype, "debugViews", function debugViews() {
+        return JSON.parse(__bro_native.scene.SceneGraph_debugViewsJson(this));
+    });
     // The ready event: pendingWork() read each animation frame while a
     // listener waits, fired each time it empties ({type, pending: []}).
     const readyListeners = new WeakMap();
