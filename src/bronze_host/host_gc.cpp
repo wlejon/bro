@@ -62,24 +62,36 @@ constexpr double kBetweenFramesEdenFill = 0.5;
 constexpr double kBetweenFramesOldFill = 0.75;
 
 // The old generation is collected incrementally between frames
-// (BRO_GC_INCREMENTAL, on unless 0): a marking cycle (bronze embed_gc.h)
-// starts once the old generation has grown this far toward its threshold,
-// which leaves the cycle the rest of the threshold's growth to finish in
-// before the heap's own trigger would finish it at an allocation. A program
-// that promotes faster than the slices mark makes its cycle fall behind
-// (below); its next cycle then starts kCycleStartStep earlier, down to
-// kCycleStartMin, and one that finishes well ahead moves back up.
-constexpr double kCycleStartFill = 0.5;
+// (BRO_GC_INCREMENTAL, on unless 0) by marking cycles (bronze embed_gc.h),
+// paced: a cycle starts as late as lets it finish, at the frame budget's
+// slices, by the time the old generation has grown to kCycleTargetFill of
+// its threshold, judged from the promotion rate (old growth a frame, a
+// running average) and the marking the last cycle took for its size. So
+// cycles run about as often as the stop-the-world fulls did at
+// kBetweenFramesOldFill, which is also the latest a cycle starts. Every
+// cycle a heap's growth puts off is a whole heap's marking saved, and each
+// frame of a cycle costs more than one outside it: a minor collection while
+// marking shades the old objects its dirty cards and promotions name.
+constexpr double kCycleTargetFill = 0.8;
+// The marking estimate's margin (the program shades and allocates grey while
+// the cycle marks) and the frames the finish and its minor take.
+constexpr double kCyclePaceMargin = 1.5;
+constexpr double kCycleFinishFrames = 4.0;
+// No cycle starts below this, however the estimate comes out: a program
+// promoting faster than the slices can mark gets the larger slices below.
 constexpr double kCycleStartMin = 0.2;
-constexpr double kCycleStartStep = 0.1;
-constexpr double kCycleAheadFill = 0.65;
-// A cycle still marking when the growth reaches this has fallen behind the
-// program's allocation: its slices get kCycleBehindFactor times the budget.
-constexpr double kCycleBehindFill = 0.75;
-constexpr double kCycleBehindFactor = 2.0;
-// And at this it is finished now, one longer pause between frames, rather
-// than by the heap's trigger inside a frame.
+// The marking per byte of threshold a heap is assumed to take before its
+// first cycle has measured it: a single marker thread's rate, about 1.3 MB a
+// ms, so a first cycle starts early rather than late.
+constexpr double kDefaultMarkMsPerMB = 0.75;
+// A cycle whose marking will not be done by kCycleTargetFill at the frame
+// budget gets larger slices, up to kCyclePaceMaxFactor times the budget.
+constexpr double kCyclePaceMaxFactor = 2.0;
+// And a cycle still marking at this is finished now, one longer pause
+// between frames, rather than by the heap's trigger inside a frame.
 constexpr double kCycleFallbackFill = 0.9;
+// The promotion rate's running average: the weight of each frame.
+constexpr double kPromotionRateWeight = 0.05;
 // The GC work a frame aims at, in ms (BRO_GC_FRAME_MS): a minor collection
 // due this frame comes out of it first, then a mark or sweep slice gets what
 // is left, but a mark slice never less than kMinMarkSliceMs, so a program
@@ -124,7 +136,7 @@ struct Cycle {
     bool open = false;
     bool markDone = false;  // the last slice drained the grey work: finish next
     bool preFinishMinor = false;  // the minor before the finish has run
-    bool behind = false;          // marked at kCycleBehindFill or later
+    bool behind = false;          // a slice was paced above the frame budget
     bool sweeping = false;  // finished by this file, its sweep not yet done
     uint32_t frames = 0;
     uint32_t slices = 0;
@@ -135,13 +147,19 @@ struct Cycle {
     double sweepMs = 0.0;
     uint32_t sweepSlices = 0;
     uint64_t index = 0;
+    double startFill = 0.0, finishFill = 0.0;
+    double estimateMs = 0.0;  // the marking it was expected to take
+    uint64_t threshold = 0;   // the threshold at its start, for the next estimate
 };
 Cycle s_cycle;
 uint64_t s_cycles = 0;
 uint64_t s_cyclesFinished = 0;
 uint32_t s_lastCycleFrames = 0;
-// Where the next cycle starts (kCycleStartFill, adapted; below).
-double s_startFill = -1.0;
+// The pacing's measures: old growth a frame (a running average), the growth
+// last seen, and the marking a cycle took per MB of its threshold.
+double s_promotionPerFrame = 0.0;
+uint64_t s_lastOldGrowth = 0;
+double s_markMsPerMB = kDefaultMarkMsPerMB;
 
 // BRO_GC_PRESSURE=0 turns the memory-pressure collection off; BRO_GC_LOG=1
 // logs every collection this file starts, with why and how long it took.
@@ -179,25 +197,12 @@ double frameBudgetMs() {
     static const double ms = envNumber("BRO_GC_FRAME_MS", kDefaultFrameBudgetMs, 0.01, 1000.0);
     return ms;
 }
-// BRO_GC_CYCLE_START: the fill of the threshold a cycle starts at
-// (kCycleStartFill); 0 starts one as soon as the last is swept, for
-// measuring cycles on a heap that seldom grows that far.
-double configuredStartFill() {
-    static const double f = envNumber("BRO_GC_CYCLE_START", kCycleStartFill, 0.0, kCycleBehindFill);
+// BRO_GC_CYCLE_START: a fixed fill of the threshold a cycle starts at, in
+// place of the paced start; 0 starts one as soon as the last is swept, for
+// measuring cycles on a heap that seldom grows that far. -1: paced.
+double fixedStartFill() {
+    static const double f = envNumber("BRO_GC_CYCLE_START", -1.0, -1.0, kBetweenFramesOldFill);
     return f;
-}
-double cycleStartFill() {
-    if (s_startFill < 0.0) s_startFill = configuredStartFill();
-    return s_startFill;
-}
-// After a cycle's finish at `fill`: the next one starts earlier if this one
-// fell behind, later (up to the configured fill) if it finished well ahead.
-void adaptStartFill(bool behind, double fill) {
-    const double configured = configuredStartFill();
-    double f = cycleStartFill();
-    if (behind) f = std::max(std::min(kCycleStartMin, configured), f - kCycleStartStep);
-    else if (fill < kCycleAheadFill) f = std::min(configured, f + kCycleStartStep / 2);
-    s_startFill = f;
 }
 
 void collectFor(const char* why);
@@ -417,27 +422,91 @@ void minorIfDue(const bronze::embed::HeapPressure& p, FrameGc& f) {
     f.work |= kGcWorkMinor;
 }
 
-void openCycle(double startMs) {
+double fillOf(const bronze::embed::HeapPressure& p) {
+    return p.fullThreshold > 0 ? static_cast<double>(p.oldGrowth) / static_cast<double>(p.fullThreshold) : 0.0;
+}
+
+// The old generation's growth since the last frame, into the promotion rate.
+// A finish or full collection starts the growth over: that frame is skipped.
+void notePromotion(const bronze::embed::HeapPressure& p) {
+    if (p.oldGrowth >= s_lastOldGrowth) {
+        const double delta = static_cast<double>(p.oldGrowth - s_lastOldGrowth);
+        s_promotionPerFrame += kPromotionRateWeight * (delta - s_promotionPerFrame);
+    }
+    s_lastOldGrowth = p.oldGrowth;
+}
+
+// Frames until the old generation grows to `fill` of its threshold at the
+// promotion rate; a very large number when it is not growing.
+double framesUntil(const bronze::embed::HeapPressure& p, double fill) {
+    const double room = fill * static_cast<double>(p.fullThreshold) - static_cast<double>(p.oldGrowth);
+    if (room <= 0.0) return 0.0;
+    if (s_promotionPerFrame <= 1.0) return 1e12;
+    return room / s_promotionPerFrame;
+}
+
+// The marking a cycle started now is expected to take, in ms: the last
+// cycle's rate for its threshold (about the old generation's live bytes
+// after the last collection, growth_factor 1) at this one.
+double markEstimateMs(const bronze::embed::HeapPressure& p) {
+    return s_markMsPerMB * static_cast<double>(p.fullThreshold) / 1048576.0;
+}
+
+// Whether a cycle starts this frame: once the growth left to
+// kCycleTargetFill is no more than its estimated marking (with the margin)
+// needs at the frame budget, never below kCycleStartMin, always by
+// kBetweenFramesOldFill.
+bool cycleDue(const bronze::embed::HeapPressure& p, double fill) {
+    if (p.fullThreshold == 0) return false;
+    const double fixed = fixedStartFill();
+    if (fixed >= 0.0) return fill >= fixed;
+    if (fill >= kBetweenFramesOldFill) return true;
+    if (fill < kCycleStartMin) return false;
+    const double needed = kCyclePaceMargin * markEstimateMs(p) / frameBudgetMs() + kCycleFinishFrames;
+    return framesUntil(p, kCycleTargetFill) <= needed;
+}
+
+// A mark slice's budget: the frame's budget, or more (up to
+// kCyclePaceMaxFactor times it) when the marking the estimate says is left
+// would not be done by kCycleTargetFill at it. The start left the margin for
+// a cycle that marks what was estimated; past the estimate, a quarter of it
+// is taken to be left.
+double markBudgetMs(const bronze::embed::HeapPressure& p) {
+    const double budget = frameBudgetMs();
+    const double left = std::max(s_cycle.estimateMs - s_cycle.markMs, 0.25 * s_cycle.estimateMs);
+    const double frames = std::max(1.0, framesUntil(p, kCycleTargetFill) - kCycleFinishFrames);
+    return std::clamp(left / frames, budget, kCyclePaceMaxFactor * budget);
+}
+
+void openCycle(double startMs, const bronze::embed::HeapPressure& p) {
     s_cycle = Cycle{};
     s_cycle.open = true;
     s_cycle.frames = 1;
     s_cycle.startMs = startMs;
     s_cycle.index = ++s_cycles;
+    s_cycle.startFill = fillOf(p);
+    s_cycle.estimateMs = markEstimateMs(p);
+    s_cycle.threshold = p.fullThreshold;
 }
 
 void finishCycle(FrameGc& f, double fill, const char* why) {
-    adaptStartFill(s_cycle.behind, fill);
     const auto t0 = std::chrono::steady_clock::now();
     bronze::embed::finishGcCycle();
     f.finishMs = msSince(t0);
     f.work |= kGcWorkFinish;
     if (why) f.note = why;
     s_cycle.finishMs = f.finishMs;
+    s_cycle.finishFill = fill;
+    // The marking it took, for the next one's estimate: a cycle finished
+    // early by the fallback marked only part of it and says less.
+    if (s_cycle.threshold > 0 && s_cycle.markDone)
+        s_markMsPerMB = s_cycle.markMs / (static_cast<double>(s_cycle.threshold) / 1048576.0);
     ++s_cyclesFinished;
     s_lastCycleFrames = s_cycle.frames;
     s_cycle.open = false;
     s_cycle.markDone = false;
     s_cycle.sweeping = true;
+    s_lastOldGrowth = 0;
     noteFullCollected();
 }
 
@@ -445,21 +514,22 @@ void finishCycle(FrameGc& f, double fill, const char* why) {
 void logCycleEnd(const char* how) {
     if (!gcLogEnabled()) return;
     const Cycle& c = s_cycle;
-    LOG_INFO("gc: cycle %llu %s: %u frames, start %.3f ms, %u mark slices %.3f ms (longest %.3f), finish %.3f ms, "
-             "%u sweep slices %.3f ms%s; the next starts at %.0f%% of the threshold",
-             static_cast<unsigned long long>(c.index), how, c.frames, c.startMs, c.slices, c.markMs, c.sliceMaxMs,
-             c.finishMs, c.sweepSlices, c.sweepMs, c.behind ? ", fell behind" : "", cycleStartFill() * 100.0);
+    LOG_INFO("gc: cycle %llu %s: %u frames from %.0f%% to %.0f%% of the threshold, start %.3f ms, %u mark slices "
+             "%.3f ms (estimated %.3f, longest %.3f), finish %.3f ms, %u sweep slices %.3f ms%s; promotion %.1f KB "
+             "a frame, marking %.3f ms a MB",
+             static_cast<unsigned long long>(c.index), how, c.frames, c.startFill * 100.0, c.finishFill * 100.0,
+             c.startMs, c.slices, c.markMs, c.estimateMs, c.sliceMaxMs, c.finishMs, c.sweepSlices, c.sweepMs,
+             c.behind ? ", slices paced up" : "", s_promotionPerFrame / 1024.0, s_markMsPerMB);
 }
 
-// The incremental half of the between-frames policy: a cycle started at
-// kCycleStartFill of the threshold, then each frame a slice of what the
-// frame's budget has left after a minor collection, the finish in a frame of
-// its own once a slice drained the grey work, then sweep slices.
+// The incremental half of the between-frames policy: a cycle started when
+// it is due (cycleDue), then each frame a slice of what its budget has left
+// after a minor collection, the finish in a frame of its own once a slice
+// drained the grey work, then sweep slices.
 void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
     using clock = std::chrono::steady_clock;
-    const double fill = p.fullThreshold > 0
-                            ? static_cast<double>(p.oldGrowth) / static_cast<double>(p.fullThreshold)
-                            : 0.0;
+    const double fill = fillOf(p);
+    notePromotion(p);
     if (s_cycle.open && !p.marking) {
         // Finished by the heap's own trigger or a full collection: the pause
         // happened where the heap wanted it.
@@ -491,10 +561,12 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
             return;
         }
         minorIfDue(p, f);
-        const bool behind = fill >= kCycleBehindFill;
-        if (behind) s_cycle.behind = true;
-        const double budget =
-            std::max(kMinMarkSliceMs, frameBudgetMs() * (behind ? kCycleBehindFactor : 1.0) - f.total());
+        const double paced = markBudgetMs(p);
+        if (paced > frameBudgetMs()) {
+            s_cycle.behind = true;
+            f.note = "paced: a larger slice to finish in time";
+        }
+        const double budget = std::max(kMinMarkSliceMs, paced - f.total());
         const auto t0 = clock::now();
         s_cycle.markDone = bronze::embed::gcMarkSlice(static_cast<uint64_t>(budget * 1e6));
         f.markMs = msSince(t0);
@@ -502,14 +574,14 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         ++s_cycle.slices;
         s_cycle.markMs += f.markMs;
         s_cycle.sliceMaxMs = std::max(s_cycle.sliceMaxMs, f.markMs);
-        if (behind) f.note = "behind: the slice's budget doubled";
         return;
     }
     if (p.marking) return;  // a cycle someone else opened: theirs to drive
     minorIfDue(p, f);
     const double budget = frameBudgetMs() - f.total();
+    const bool due = cycleDue(p, fill);
     if (p.sweeping) {
-        if (budget < kMinSweepSliceMs && fill < kCycleBehindFill) return;
+        if (budget < kMinSweepSliceMs && !due) return;
         const auto t0 = clock::now();
         const bool swept =
             bronze::embed::gcSweepSlice(static_cast<uint64_t>(std::max(budget, kMinSweepSliceMs) * 1e6));
@@ -524,19 +596,19 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
             }
         }
         // A cycle starts only once the last one is swept (its start would
-        // finish the sweep in its own pause), unless the growth will not wait.
-        if (!swept && fill < kCycleBehindFill) return;
+        // finish the sweep in its own pause), unless it is due.
+        if (!swept && !due) return;
     } else if (s_cycle.sweeping) {
         // Swept by the allocator, or by a full collection.
         logCycleEnd("swept by the heap");
         s_cycle = Cycle{};
     }
-    if (p.fullThreshold == 0 || fill < cycleStartFill()) return;
+    if (!due) return;
     const auto t0 = clock::now();
     if (!bronze::embed::startGcCycle()) return;
     f.startMs = msSince(t0);
     f.work |= kGcWorkStart;
-    openCycle(f.startMs);
+    openCycle(f.startMs, p);
 }
 
 }  // namespace
@@ -567,7 +639,7 @@ uint32_t hostCollectBetweenFrames() {
             if (bronze::embed::startGcCycle()) {
                 f.startMs = msSince(t0);
                 f.work |= kGcWorkStart;
-                openCycle(f.startMs);
+                openCycle(f.startMs, p);
                 f.note = "memory pressure";
             }
         }
