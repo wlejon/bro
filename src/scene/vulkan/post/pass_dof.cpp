@@ -32,8 +32,8 @@ bool PassDoF::setup(SceneGpu& gpu) {
     VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
     VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
     VkShaderModule dofFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::DofFrag);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat);
-    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, dofFs, SceneTargets::kHdrFormat);
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "dof blur");
+    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, dofFs, SceneTargets::kHdrFormat, "dof");
     for (VkShaderModule m : {vs, blurFs, dofFs}) SceneVkShaderModule::destroy(dev, m);
     return blurPipeline_ && compositePipeline_;
 }

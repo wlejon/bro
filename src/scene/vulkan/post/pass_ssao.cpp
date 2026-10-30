@@ -106,8 +106,8 @@ bool PassSSAO::setup(SceneGpu& gpu) {
     VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
     VkShaderModule ssaoFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::SsaoFrag);
     VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
-    ssaoPipeline_ = fullscreen::pipeline(dev, ssaoLayout_, vs, ssaoFs, kAoFormat);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, kAoFormat);
+    ssaoPipeline_ = fullscreen::pipeline(dev, ssaoLayout_, vs, ssaoFs, kAoFormat, "ssao");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, kAoFormat, "ssao blur");
     for (VkShaderModule m : {vs, ssaoFs, blurFs}) SceneVkShaderModule::destroy(dev, m);
     return ssaoPipeline_ && blurPipeline_;
 }
@@ -245,7 +245,8 @@ void PassAoApply::record(SceneFrame& frame) {
         blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vs_, fs_)
+        b.setLabel("ssao apply")
+         .setShaderStages(vs_, fs_)
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(frame.hdrTarget)
          .setColorBlendAttachment(0, blend)

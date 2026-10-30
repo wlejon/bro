@@ -91,6 +91,13 @@ public:
     /// does not declare it ignores it).
     SceneVkPipelineBuilder& setSpecialization(uint32_t id, bool value);
 
+    /// The name its statistics are logged under (BRO_VK_PIPELINE_STATS,
+    /// render::logPipelineStats); "graphics" when unset.
+    SceneVkPipelineBuilder& setLabel(std::string label) {
+        label_ = std::move(label);
+        return *this;
+    }
+
     /// Build and return the graphics pipeline, through the device's persisted
     /// pipeline cache (render::VulkanPipelineCache).
     VkPipeline build(VkDevice device, VkPipelineLayout layout);
@@ -113,6 +120,7 @@ private:
     std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments_;
     std::vector<VkDynamicState> dynamicStates_;
     std::vector<std::pair<uint32_t, VkBool32>> specializations_;
+    std::string label_;
 
     // Dynamic rendering state
     std::vector<VkFormat> colorAttachmentFormats_;

@@ -52,7 +52,7 @@ bool PassVolume::setup(SceneGpu& gpu) {
     layout_ = fullscreen::layout(dev, setLayout_, 0);
     VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
     VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::VolumeResolveFrag);
-    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat);
+    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat, "volume resolve");
     for (VkShaderModule m : {vs, fs}) SceneVkShaderModule::destroy(dev, m);
     return resolve_ != VK_NULL_HANDLE;
 }
@@ -248,7 +248,8 @@ void PassVolumeComposite::record(SceneFrame& frame) {
         blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vs_, fs_)
+        b.setLabel("volume box")
+         .setShaderStages(vs_, fs_)
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)

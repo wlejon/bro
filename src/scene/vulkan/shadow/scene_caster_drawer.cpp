@@ -1,6 +1,7 @@
 #include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
+#include "render/vulkan_pipeline_cache.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -133,6 +134,10 @@ VkPipeline SceneCasterDrawer::buildPipeline(VkShaderModule vs, MeshKind kind, bo
     target.depth = SceneTargets::kDepthFormat;
 
     SceneVkPipelineBuilder b;
+    if (render::pipelineStatsEnabled()) {
+        b.setLabel(std::string(custom ? "custom shadow" : "shadow") + " kind " +
+                   std::to_string(static_cast<int>(kind)) + (cutout ? " cutout" : ""));
+    }
     b.setShaderStages(vs, cutout ? fsCutout_ : fs_)
      .setVertexInput(bindings, attributes)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)

@@ -332,7 +332,7 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
         LOG_ERROR("SceneVkPipelineBuilder: Failed to create graphics pipeline: %d", res);
         return VK_NULL_HANDLE;
     }
-    render::logPipelineStats(device, pipeline);
+    render::logPipelineStats(device, pipeline, label_.empty() ? std::string("graphics") : label_);
     shader_sets::noteGraphicsPipeline(device, layout, *this, pipeline);
 
     return pipeline;
@@ -365,8 +365,7 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
         LOG_ERROR("createComputePipeline: Failed creating %s", name);
         pipeline = VK_NULL_HANDLE;
     } else {
-        render::setPipelineStatsLabel(name);
-        render::logPipelineStats(device, pipeline);
+        render::logPipelineStats(device, pipeline, name);
         shader_sets::noteComputePipeline(device, layout, module, name, pipeline);
     }
     return pipeline;

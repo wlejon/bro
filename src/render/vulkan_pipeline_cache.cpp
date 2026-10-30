@@ -162,8 +162,6 @@ bool writeCacheFile(const std::string& path, const void* data, size_t size) {
 
 namespace {
 bool s_statsEnabled = false;
-std::mutex s_statsMutex;
-std::string s_statsLabel;
 }  // namespace
 
 bool pipelineStatsEnabled() { return s_statsEnabled; }
@@ -171,23 +169,14 @@ void setPipelineStatsEnabled(bool on) { s_statsEnabled = on; }
 VkPipelineCreateFlags pipelineStatsFlags() {
     return s_statsEnabled ? VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR : 0;
 }
-void setPipelineStatsLabel(const std::string& label) {
-    std::lock_guard<std::mutex> lock(s_statsMutex);
-    s_statsLabel = label;
-}
 
-void logPipelineStats(VkDevice device, VkPipeline pipeline) {
+void logPipelineStats(VkDevice device, VkPipeline pipeline, const std::string& label) {
     if (!s_statsEnabled || pipeline == VK_NULL_HANDLE) return;
     auto getProps = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
         vkGetDeviceProcAddr(device, "vkGetPipelineExecutablePropertiesKHR"));
     auto getStats = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
         vkGetDeviceProcAddr(device, "vkGetPipelineExecutableStatisticsKHR"));
     if (!getProps || !getStats) return;
-    std::string label;
-    {
-        std::lock_guard<std::mutex> lock(s_statsMutex);
-        label = s_statsLabel;
-    }
     VkPipelineInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
     info.pipeline = pipeline;
     uint32_t count = 0;

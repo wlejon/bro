@@ -253,9 +253,9 @@ private:
     VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
     /// `streams` false: no vertex input, whatever `kind` (a vertex stage that
-    /// reads only gl_VertexIndex).
+    /// reads only gl_VertexIndex). `what` names it in the pipeline statistics.
     VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
-                             const TargetFormat& target, bool streams = true);
+                             const TargetFormat& target, const char* what, bool streams = true);
 
     VkDevice device_ = VK_NULL_HANDLE;
     SceneDefaults* defaults_ = nullptr;

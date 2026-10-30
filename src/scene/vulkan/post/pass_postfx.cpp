@@ -102,9 +102,9 @@ bool PassPostFx::setup(SceneGpu& gpu) {
     VkShaderModule brightFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BloomBrightFrag);
     VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
     VkShaderModule tonemapFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::TonemapFrag);
-    brightPipeline_ = fullscreen::pipeline(dev, brightLayout_, vs, brightFs, SceneTargets::kHdrFormat);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat);
-    tonemapPipeline_ = fullscreen::pipeline(dev, tonemapLayout_, vs, tonemapFs, SceneTargets::kLdrFormat);
+    brightPipeline_ = fullscreen::pipeline(dev, brightLayout_, vs, brightFs, SceneTargets::kHdrFormat, "bloom bright");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "bloom blur");
+    tonemapPipeline_ = fullscreen::pipeline(dev, tonemapLayout_, vs, tonemapFs, SceneTargets::kLdrFormat, "tonemap");
     for (VkShaderModule m : {vs, brightFs, blurFs, tonemapFs}) SceneVkShaderModule::destroy(dev, m);
 
     // The tonemap's LUT binding samples this until a LUT is loaded.
@@ -232,8 +232,9 @@ bool PassTiltShift::setup(SceneGpu& gpu) {
     VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
     VkShaderModule compositeFs =
         SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::TiltCompositeFrag);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kLdrFormat);
-    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, compositeFs, SceneTargets::kLdrFormat);
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kLdrFormat, "tilt blur");
+    compositePipeline_ =
+        fullscreen::pipeline(dev, compositeLayout_, vs, compositeFs, SceneTargets::kLdrFormat, "tilt composite");
     for (VkShaderModule m : {vs, blurFs, compositeFs}) SceneVkShaderModule::destroy(dev, m);
     return blurPipeline_ && compositePipeline_;
 }
@@ -304,7 +305,7 @@ bool PassFxaa::setup(SceneGpu& gpu) {
     layout_ = fullscreen::layout(dev, setLayout_, 4 * sizeof(float));
     VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
     VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::FxaaFrag);
-    pipeline_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kLdrFormat);
+    pipeline_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kLdrFormat, "fxaa");
     SceneVkShaderModule::destroy(dev, vs);
     SceneVkShaderModule::destroy(dev, fs);
     return pipeline_ != VK_NULL_HANDLE;

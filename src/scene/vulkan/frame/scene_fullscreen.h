@@ -23,8 +23,10 @@ VkPipelineLayout layout(VkDevice dev, VkDescriptorSetLayout set, uint32_t pushBy
 /// A layout of `samplers` combined-image-sampler bindings (0..n-1, fragment).
 VkDescriptorSetLayout samplerSetLayout(VkDevice dev, uint32_t samplers);
 
-/// postfx.vert + `fs` into one `format` attachment, no blending, no depth.
-VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, VkShaderModule fs, VkFormat format);
+/// postfx.vert + `fs` into one `format` attachment, no blending, no depth;
+/// `label` names it in the pipeline statistics (BRO_VK_PIPELINE_STATS).
+VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, VkShaderModule fs, VkFormat format,
+                    const char* label);
 
 /// Draw the triangle over all of `target` (which must be in
 /// COLOR_ATTACHMENT_OPTIMAL; the caller transitions it).

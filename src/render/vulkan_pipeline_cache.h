@@ -58,16 +58,14 @@ private:
 /// BRO_VK_PIPELINE_STATS=1: the driver's statistics of every pipeline built
 /// (VK_KHR_pipeline_executable_properties, enabled by VulkanContext when the
 /// device has it): registers, instructions and the like per stage, logged as
-/// each is created, under the label the builder last set. A diagnostic for
+/// each is created, under the name its builder gave it. A diagnostic for
 /// shader cost (which variant is register-bound); off, nothing is captured.
 bool pipelineStatsEnabled();
 void setPipelineStatsEnabled(bool on);
 /// VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR while enabled, else 0.
 VkPipelineCreateFlags pipelineStatsFlags();
-/// The name the next logged pipeline goes under.
-void setPipelineStatsLabel(const std::string& label);
-/// Log `pipeline`'s statistics (no-op while disabled).
-void logPipelineStats(VkDevice device, VkPipeline pipeline);
+/// Log `pipeline`'s statistics under `label` (no-op while disabled).
+void logPipelineStats(VkDevice device, VkPipeline pipeline, const std::string& label);
 
 /// Write `size` bytes to `path` through a per-process temp file renamed over
 /// it, creating the directory: concurrent writers and a crash mid-write never

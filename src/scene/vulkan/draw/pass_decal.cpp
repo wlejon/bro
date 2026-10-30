@@ -114,7 +114,8 @@ void PassDecal::record(SceneFrame& frame) {
         blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vs_, fs_)
+        b.setLabel("decal")
+         .setShaderStages(vs_, fs_)
          .setVertexInput({binding}, {position})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)

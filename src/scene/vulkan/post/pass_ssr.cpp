@@ -59,7 +59,8 @@ void PassSSR::declare(const SceneFrame& frame, PassIO& io) const {
 void PassSSR::record(SceneFrame& frame) {
     VkPipeline pipeline = pipelines_.get(0, frame.hdrTarget, [&] {
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vs_, fs_)
+        b.setLabel("ssr")
+         .setShaderStages(vs_, fs_)
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(frame.hdrTarget)
          .disableBlending(1)

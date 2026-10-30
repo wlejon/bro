@@ -186,7 +186,7 @@ uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
-                                          const TargetFormat& target, bool streams) {
+                                          const TargetFormat& target, const char* what, bool streams) {
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
     if (streams) vertexInput(kind, bindings, attributes);
@@ -198,6 +198,11 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
     if (lines && wideLines_) dynamic.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
 
     SceneVkPipelineBuilder b;
+    if (render::pipelineStatsEnabled()) {
+        b.setLabel(std::string(what) + " kind " + std::to_string(static_cast<int>(kind)) +
+                   (SceneTargets::carriesIndirect(target) ? " indirect" : "") + " raster " +
+                   std::to_string(rasterBits));
+    }
     b.setShaderStages(vs, fs)
      .setVertexInput(bindings, attributes)
      .setInputTopology(lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
@@ -231,15 +236,11 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
     return builtin_.get(variant, target, [&] {
         const bool indirect = SceneTargets::carriesIndirect(target);
-        if (render::pipelineStatsEnabled()) {
-            render::setPipelineStatsLabel(std::string("mesh kind ") + std::to_string(static_cast<int>(draw.kind)) +
-                                          (indirect ? " indirect" : "") + " raster " + std::to_string(rasterBits));
-        }
         const bool veg = vegetationShading(draw.kind);
         VkShaderModule vs = vs_[static_cast<int>(draw.kind)];
         VkShaderModule fs = indirect ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
         if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
-        return buildPipeline(vs, fs, draw.kind, rasterBits, target);
+        return buildPipeline(vs, fs, draw.kind, rasterBits, target, "mesh");
     }, true);
 }
 
@@ -315,6 +316,7 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
          .setColorBlendAttachment(0, blend)
          .setColorBlendAttachment(1, overwrite)
          .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
+         .setLabel("volume")
          .disableDepthTest();
         return b.build(device_, layout_);
     });
@@ -349,7 +351,7 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
             }
             fs = prog.fsIndirect;
         }
-        return buildPipeline(prog.vs, fs, kind, rasterBits, target);
+        return buildPipeline(prog.vs, fs, kind, rasterBits, target, "custom mesh");
     });
 }
 

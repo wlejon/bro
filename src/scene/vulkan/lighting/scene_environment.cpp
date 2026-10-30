@@ -94,10 +94,12 @@ bool SceneEnvironment::setup(SceneVkDevice& device, SceneVkAllocator&, const Sce
     irradianceFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::IrradianceFrag);
     prefilterFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::PrefilterFrag);
     brdfFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::BrdfLutFrag);
-    convertPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, convertFs_, kCubeFormat);
-    irradiancePipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, irradianceFs_, kCubeFormat);
-    prefilterPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, prefilterFs_, kCubeFormat);
-    brdfPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, brdfFs_, kBrdfFormat);
+    convertPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, convertFs_, kCubeFormat, "environment convert");
+    irradiancePipeline_ =
+        fullscreen::pipeline(dev_, bakeLayout_, postVs_, irradianceFs_, kCubeFormat, "environment irradiance");
+    prefilterPipeline_ =
+        fullscreen::pipeline(dev_, bakeLayout_, postVs_, prefilterFs_, kCubeFormat, "environment prefilter");
+    brdfPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, brdfFs_, kBrdfFormat, "environment brdf");
 
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -376,7 +378,8 @@ void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetF
     auto pipeline = [&](SkyVariant variant, VkShaderModule fs) {
         return skyPipelines_.get(variant, target, [&] {
             SceneVkPipelineBuilder b;
-            b.setShaderStages(skyVs_, fs)
+            b.setLabel("sky")
+             .setShaderStages(skyVs_, fs)
              .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
              .setPolygonMode(VK_POLYGON_MODE_FILL)
              .setCullMode(VK_CULL_MODE_NONE)
