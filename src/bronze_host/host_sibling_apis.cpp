@@ -474,7 +474,7 @@ void installSiblingApis(engine::Engine& engine) {
     // as the GPU half (host_kernel_gpu.h).
     installKernelGpu(engine);
     brokernel::api::installKernel();
-    installTiles();
+    installTiles(engine);
 #endif
     {
         // `bro.image` is ONE object with two sources: the kernels, codecs

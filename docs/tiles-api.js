@@ -218,7 +218,9 @@ const terrain = bro.tiles.createCache({
 //                   nodes-api.js) and reads tile `slot` at slot * cells * cells
 // cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
 //                   tile's reported [lo, hi] at 2 * slot; else null
-// cache.pending     wanted tiles not yet produced (0 once settled)
+// cache.pending     wanted tiles not yet produced (0 once settled); every
+//                   live cache's, and its range batches in flight, report
+//                   to perf.pendingWork / perf.settle as `tiles`
 // cache.wanted      tiles the last update selected
 // cache.resident    tiles holding data
 // cache.cells, cache.capacity

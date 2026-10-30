@@ -515,6 +515,14 @@ public:
     /// the newest render (a render a flush left pending is drawn first):
     /// what each still streams or converges for its view; empty: settled.
     std::vector<std::string> scenePendingWork();
+    /// Settle state beyond the scenes' own: work a sibling streams for the
+    /// view (a tile cache's productions), each call adding a line a kind of
+    /// work still outstanding. scenePendingWork adds every source's lines
+    /// after the scenes', so perf.settle waits for them too. The id removes
+    /// the source.
+    using PendingWorkSource = std::function<void(std::vector<std::string>&)>;
+    uint64_t addPendingWorkSource(PendingWorkSource source);
+    void removePendingWorkSource(uint64_t id);
     /// Let the scenes' exposure adapt over `seconds` with their clock held
     /// (perf.settle: the exposure settles while the scene does not move).
     void advanceSceneExposure(float seconds);
@@ -1263,6 +1271,8 @@ private:
 
     std::vector<std::function<void()>> framePumps_;
     std::vector<std::function<void()>> shutdownHooks_;
+    std::vector<std::pair<uint64_t, PendingWorkSource>> pendingWorkSources_;
+    uint64_t nextPendingWorkSource_ = 1;
     std::vector<std::function<void(double)>> frameCallbacks_;
     void fireFrameCallbacks(double dtMs);
 #if BRO_WITH_PHYSICS

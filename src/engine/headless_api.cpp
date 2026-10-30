@@ -574,7 +574,18 @@ std::vector<std::string> Engine::scenePendingWork() {
     for (auto& sg : sceneGraphs_)
         if (sg.graph) sg.graph->renderer().pendingWork(out);
 #endif
+    for (auto& [id, source] : pendingWorkSources_) source(out);
     return out;
+}
+
+uint64_t Engine::addPendingWorkSource(PendingWorkSource source) {
+    const uint64_t id = nextPendingWorkSource_++;
+    pendingWorkSources_.emplace_back(id, std::move(source));
+    return id;
+}
+
+void Engine::removePendingWorkSource(uint64_t id) {
+    std::erase_if(pendingWorkSources_, [id](const auto& s) { return s.first == id; });
 }
 
 void Engine::advanceSceneExposure(float seconds) {

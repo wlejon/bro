@@ -216,6 +216,13 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 for (const auto& [k, _] : kinds) ++waited[k];
             };
             scene::SceneRenderer::settleAll(true);
+            // A frame first: the newest render, and what the page streams
+            // in its own frames (a tile cache selects in its update), may
+            // predate what the script just changed (the camera), and read
+            // then they report the old view settled.
+            if (held && exposure) engine.advanceSceneExposure(static_cast<float>(kFrameMs / 1000.0));
+            stepFrame(engine);
+            frames = 1;
             std::vector<std::string> pending = pendingNow();
             int same = 0;
             for (; !pending.empty() && frames < maxFrames && same < stallFrames; ++frames) {

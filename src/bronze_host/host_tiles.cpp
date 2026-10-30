@@ -3,6 +3,7 @@
 #include "bronze_host/host_kernel_gpu.h"
 #include "bronze_host/host_rooted.h"
 #include "tilecache/tile_tree.h"
+#include "engine/engine.h"
 
 #include "embed/embed_host_class.h"
 #include "embed/embed_object_builder.h"
@@ -46,8 +47,16 @@ struct Layer {
     std::shared_ptr<brokernel::api::GpuBuffer> pool;
 };
 
+struct Cache;
+// The live caches, for the engine's settle state (installTiles). Caches are
+// made and read on the page's thread.
+std::vector<Cache*> s_live;
+
 struct Cache {
-    explicit Cache(const tilecache::Config& c) : tree(c) {}
+    explicit Cache(const tilecache::Config& c) : tree(c) { s_live.push_back(this); }
+    ~Cache() { std::erase(s_live, this); }
+    Cache(const Cache&) = delete;
+    Cache& operator=(const Cache&) = delete;
     tilecache::TileTree tree;
     uint32_t border = 0;
     uint32_t cells = 0;          // a tile's cells along an edge, borders included
@@ -503,7 +512,23 @@ Value js_createCache(Value, std::span<const Value> args) {
 
 } // namespace
 
-void installTiles() {
+void installTiles(engine::Engine& engine) {
+    // What the caches still owe their views, as perf.settle waits for it:
+    // wanted tiles not produced, and height ranges not read back (the tree
+    // refines a tile's selection by them).
+    static engine::Engine* s_reporting = nullptr;
+    if (s_reporting != &engine) {
+        s_reporting = &engine;
+        engine.addPendingWorkSource([](std::vector<std::string>& out) {
+            uint32_t pending = 0, ranges = 0;
+            for (const Cache* c : s_live) {
+                pending += c->tree.pending();
+                ranges += static_cast<uint32_t>(c->rangeReadbacks.size());
+            }
+            if (pending > 0) out.push_back("tiles: " + std::to_string(pending) + " wanted not produced");
+            if (ranges > 0) out.push_back("tiles: " + std::to_string(ranges) + " height range batches in flight");
+        });
+    }
     g_cacheClass.install("TileCache", 0, nullptr, decorateCache, /*global=*/false);
     const auto bro = ev::globalValue("bro");
     if (!bro.found || !ev::isObject(bro.value)) return;
