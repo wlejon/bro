@@ -16,7 +16,11 @@
 //
 // with airT and airL the air between the eye and `depth` (sceneAir: aerial
 // perspective, else fog): the scene behind already carries that air's own
-// light, so what the medium hides of it is put back.
+// light, so what the medium hides of it is put back. The volumes draw into
+// a target of their own (PassVolume), radiance over transmittance in the
+// colour and `depth` beside it, and that is reconstructed over frames
+// before it lands on the scene: a chunk may jitter its samples with
+// camera.frame.x and the jitter averages out.
 //
 // The chunk may call sceneToSun(), volumeSunLight() and volumeSkyLight()
 // below, and read the engine's camera (camera.eyeWorld: the eye's absolute
@@ -34,6 +38,9 @@
 layout(location = 0) in vec3 inWorldPos;   // the pixel's ray (volume.vert), not unit
 layout(location = 1) flat in int inVolume;
 layout(location = 0) out vec4 outColor;
+// The distance the medium's light comes from (`depth`), which the volumes'
+// reconstruction reprojects the pixel by (PassVolume).
+layout(location = 1) out float outDepth;
 
 // The opaque depth (SceneTargets::depthSnapshot), in the material set's slot.
 layout(set = 2, binding = 0) uniform sampler2D texSceneDepth;
@@ -96,4 +103,5 @@ void main() {
         airL = air.inscatter;
     }
     outColor = vec4(min(radiance * airT + (1.0 - transmittance) * airL, vec3(SCENE_HDR_MAX)), transmittance);
+    outDepth = depth;
 }

@@ -195,7 +195,8 @@ public:
 
     VkPipelineLayout layout() const { return layout_; }
 
-    /// Draw a volume (MeshDraw::volume) over the open HDR target: its
+    /// Draw a volume (MeshDraw::volume) into the open volume target
+    /// (PassVolume: light over transmittance, then the medium's depth): its
     /// triangle over the view, blended as dst * transmittance + its light
     /// (volume.frag), reading the opaque depth from `depthSet` (the
     /// material layout, the depth at binding 0, the exposure meter's slots

@@ -23,6 +23,9 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     // The wind field (scene/world/wind_field.h): what vegetation bends with.
     vec4 windField;   // xy: horizontal direction (x, z; unit, drifting), z: steady speed (m/s), w: gust travel speed (m/s)
     vec4 windGust;    // x: gust amount, y: 1 / band length along the wind, z: 1 / across it, w: 0
+    // x: the render's index mod 65536, for noise that changes every render
+    // (a volume's jitter, which the volumes' reconstruction averages).
+    vec4 frame;
 } camera;
 
 // The engine's wind uniforms under the names custom shader chunks use.

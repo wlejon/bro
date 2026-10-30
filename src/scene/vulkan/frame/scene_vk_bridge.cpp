@@ -62,7 +62,8 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // Decals land on the opaque result and so in the reflections; SSR runs
     // before anything blended, which draws over both.
     graph_.add(std::make_unique<PassDecal>());
-    graph_.add(std::make_unique<PassVolume>());
+    auto& volumes = static_cast<PassVolume&>(graph_.add(std::make_unique<PassVolume>()));
+    graph_.add(std::make_unique<PassVolumeComposite>(volumes));
     graph_.add(std::make_unique<PassColorSnapshot>());
     graph_.add(std::make_unique<PassSSR>());
     graph_.add(std::make_unique<PassTranslucent>());
@@ -134,6 +135,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.stats = stats;
     frame.timer = &timer_;
     frame.view = SceneView::fromCamera(graph, width, height);
+    frame.view.frameIndex = static_cast<uint32_t>(renderSerial_);
     shadows_.beginFrame(gpu_, renderer);
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);

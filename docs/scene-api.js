@@ -571,8 +571,18 @@ class SceneGraph {
    * already carries. The chunk may call `sceneToSun()` (unit, to the sun),
    * `volumeSunLight(pos)` (the sun's illuminance at camera-relative pos,
    * through the air) and `volumeSkyLight(pos, n)` (the sky's irradiance
-   * over pi on a surface facing n). Drawn after the opaque surfaces, their
-   * sky and the decals, before SSR and translucent surfaces, in tree order.
+   * over pi on a surface facing n). The volumes draw, in tree order, into a
+   * target of their own (each over the ones before it), which is
+   * reconstructed over renders before it lands on the scene, after the
+   * opaque surfaces, their sky and the decals, before SSR and translucent
+   * surfaces: last render's result is found again where `depth`
+   * reprojects the pixel to (the sky's direction where nothing set it),
+   * kept within the range of the pixel's neighbours this render, and
+   * blended in at 90%. So a march may offset its steps per pixel and per
+   * render (`camera.frame.x`, the render's index mod 65536) and its grain
+   * averages out, where a fixed offset is a fixed grain. A render that
+   * does not follow the last (the first, a resize, another set of
+   * volumes) is its own alone.
    * It casts no shadow and is never culled. The incident exposure meter
    * (setExposure) reads it: once a frame userVolume also runs from the eye
    * toward the sun (the share it passes dims the sun the meter reads) and

@@ -106,6 +106,36 @@ if (!probe.scene) {
     assert(px(img, S / 2, 2)[0] === 255, 'over the sky sceneDist is huge');
     scene.destroyNode(probeVol);
 
+    // The reconstruction: a medium whose light is noise, another value
+    // each pixel and each render (camera.frame.x), lands as its average
+    // over renders. The first render of a volume is its own alone (the
+    // noise's full spread), and over renders the pixels gather toward the
+    // mean, 0.5.
+    const noisy = scene.createVolume({
+        fragment: `void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+                                   inout float transmittance, inout float depth) {
+                uint h = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(camera.frame.x) * 26699u;
+                h = (h ^ (h >> 13)) * 0x5bd1e995u;
+                transmittance = 0.0;
+                radiance = vec3(float((h ^ (h >> 15)) & 1023u) / 1023.0);
+            }`,
+    });
+    const spread = (im) => {
+        let s = 0, s2 = 0, n = 0;
+        for (let y = 16; y < 48; y++) for (let x = 16; x < 48; x++) {
+            const v = px(im, x, y)[0];
+            s += v; s2 += v * v; n++;
+        }
+        return { mean: s / n, dev: Math.sqrt(Math.max(s2 / n - (s / n) * (s / n), 0)) };
+    };
+    const first = spread(scene.captureFrame());
+    let settled = first;
+    for (let i = 0; i < 40; i++) settled = spread(scene.captureFrame());
+    assert(first.dev > 60, `a volume's first render is its own (deviation ${first.dev.toFixed(1)})`);
+    assert(settled.dev < first.dev / 2 && Math.abs(settled.mean - 127.5) < 12,
+           `per-render noise averages over renders (deviation ${first.dev.toFixed(1)} -> ${settled.dev.toFixed(1)}, mean ${settled.mean.toFixed(1)})`);
+    scene.destroyNode(noisy);
+
     let threw = null;
     try {
         scene.createVolume({ fragment: 'void userFragment(inout vec3 a, inout vec3 b, inout float c, inout float d, inout vec3 e, inout float f) {}' });

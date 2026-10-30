@@ -290,18 +290,21 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
     if (!prog) return;
     const bool atmosphere = atmosphere_;
     VkPipeline pipeline = prog->pipelines.get(atmosphere ? raster::kAtmosphere : 0u, target, [&] {
-        // Over the scene: dst * transmittance (the source alpha) + the
-        // volume's light; the scene's alpha is kept.
+        // Over the volumes before it: their light * its transmittance (the
+        // source alpha) + its light, the transmittances multiplied; the
+        // medium's depth overwritten.
         VkPipelineColorBlendAttachmentState blend{};
         blend.blendEnable = VK_TRUE;
         blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
         blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         blend.colorBlendOp = VK_BLEND_OP_ADD;
         blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         blend.alphaBlendOp = VK_BLEND_OP_ADD;
         blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                                VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendAttachmentState overwrite{};
+        overwrite.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
         SceneVkPipelineBuilder b;
         b.setShaderStages(vsVolume_, prog->fs)
          .setVertexInput({}, {})
@@ -310,6 +313,7 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(target)
          .setColorBlendAttachment(0, blend)
+         .setColorBlendAttachment(1, overwrite)
          .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
          .disableDepthTest();
         return b.build(device_, layout_);

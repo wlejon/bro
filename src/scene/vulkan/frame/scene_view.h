@@ -62,6 +62,9 @@ struct SceneView {
     bool perspective = true;
     uint32_t width = 0;
     uint32_t height = 0;
+    /// The render's index (the bridge's count of renders): camera.frame.x,
+    /// for noise that changes every render.
+    uint32_t frameIndex = 0;
 
     /// `projection` in bromath's convention (scene/depth_policy.h builders).
     static SceneView make(const bromath::Mat4& view, const bromath::Mat4& projection,

@@ -25,6 +25,7 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float windParams[4]; // x = time (s), y = frequency, z = the eye's phase offset, w = the oscillator clock (time mod kWindClockPeriod)
     alignas(16) float windField[4];  // xy = horizontal direction (x, z), z = steady speed, w = gust travel speed
     alignas(16) float windGust[4];   // x = gust amount, y = 1 / along scale, z = 1 / across scale
+    alignas(16) float frame[4];      // x = the render's index mod 65536 (SceneView::frameIndex)
 };
 
 /// The light and shadow-map capacity of the lighting block (SceneRenderer's

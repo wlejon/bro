@@ -1,11 +1,17 @@
 #include "scene/vulkan/draw/pass_volume.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_context.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
+#include "scene/vulkan/frame/scene_frame_graph.h"
+#include "scene/vulkan/frame/scene_fullscreen.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <cstring>
@@ -15,15 +21,78 @@ namespace bro::scene::vk {
 namespace {
 // The volumes the exposure meter reads, the first in draw order.
 constexpr uint32_t kMeteredVolumes = 8;
+// The medium's depth beside its light.
+constexpr VkFormat kDepthFormat = VK_FORMAT_R32_SFLOAT;
+
+TargetFormat volumeTarget() {
+    TargetFormat t = TargetFormat::colorOnly(SceneTargets::kHdrFormat);
+    t.color[1] = kDepthFormat;
+    t.colorCount = 2;
+    return t;
+}
+}  // namespace
+
+bool PassVolume::setup(SceneGpu& gpu) {
+    device_ = &gpu.device;
+    VkDevice dev = gpu.device.device();
+    VkSamplerCreateInfo sampler{};
+    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler.magFilter = VK_FILTER_LINEAR;
+    sampler.minFilter = VK_FILTER_LINEAR;
+    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(dev, &sampler, nullptr, &sampler_) != VK_SUCCESS) return false;
+
+    // This render's light, its depth, the history; the uniforms.
+    SceneVkDescriptorLayoutBuilder builder;
+    for (uint32_t i = 0; i < 3; ++i)
+        builder.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    setLayout_ = builder.build(dev);
+    if (!setLayout_) return false;
+    layout_ = fullscreen::layout(dev, setLayout_, 0);
+    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
+    VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::VolumeResolveFrag);
+    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat);
+    for (VkShaderModule m : {vs, fs}) SceneVkShaderModule::destroy(dev, m);
+    return resolve_ != VK_NULL_HANDLE;
+}
+
+void PassVolume::resize(SceneGpu& gpu, uint32_t width, uint32_t height) {
+    for (SceneVkImage* img : {&medium_, &mediumDepth_, &history_[0], &history_[1]}) gpu.allocator.destroyImage(*img);
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    bool ok = gpu.allocator.createImage(width, height, SceneTargets::kHdrFormat, usage,
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, medium_) &&
+              gpu.allocator.createImage(width, height, kDepthFormat, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        mediumDepth_);
+    for (SceneVkImage& img : history_)
+        ok = ok && gpu.allocator.createImage(width, height, SceneTargets::kHdrFormat, usage,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img);
+    if (!ok) LOG_ERROR("PassVolume: Failed creating the %ux%u volume targets", width, height);
+    haveHistory_ = false;
+}
+
+void PassVolume::cleanup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    for (SceneVkImage* img : {&medium_, &mediumDepth_, &history_[0], &history_[1]}) gpu.allocator.destroyImage(*img);
+    gpu.device.defer([dev, s = sampler_, p = resolve_] {
+        if (s) vkDestroySampler(dev, s, nullptr);
+        if (p) destroyScenePipeline(dev, p, nullptr);
+    });
+    sampler_ = VK_NULL_HANDLE;
+    resolve_ = VK_NULL_HANDLE;
+    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
+    if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
+    layout_ = VK_NULL_HANDLE;
+    setLayout_ = VK_NULL_HANDLE;
 }
 
 bool PassVolume::active(const SceneFrame& frame) const {
-    return !frame.lists.volumes.empty();
+    return !frame.lists.volumes.empty() && medium_.isValid() && mediumDepth_.isValid() && history_[0].isValid() &&
+           history_[1].isValid();
 }
 
 void PassVolume::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.depthSnapshot);
-    io.hdr();
 }
 
 void PassVolume::record(SceneFrame& frame) {
@@ -59,13 +128,144 @@ void PassVolume::record(SceneFrame& frame) {
     writer.writeBuffer(5, meter.buffer, bytes, meter.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(frame.gpu.device.device(), set);
 
+    // The volumes into their own target: no light, all passed, no depth.
+    VkCommandBuffer cmd = frame.cmd;
+    SceneFrameGraph::transition(cmd, medium_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    SceneFrameGraph::transition(cmd, mediumDepth_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo att[2]{};
+    for (int i = 0; i < 2; ++i) {
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = i == 0 ? medium_.view : mediumDepth_.view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    att[0].clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    att[1].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    const uint32_t width = medium_.width, height = medium_.height;
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {width, height}};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 2;
+    info.pColorAttachments = att;
+    frame.gpu.device.cmdBeginRendering(cmd, &info);
+    const VkViewport vp{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {width, height}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    const TargetFormat target = volumeTarget();
     uint32_t index = 0;
     for (const MeshDraw& draw : frame.lists.volumes) {
-        frame.gpu.meshes.recordVolume(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, set, draw,
-                                      index);
-        frame.drewContent = true;
+        frame.gpu.meshes.recordVolume(cmd, target, frame.cameraSet, frame.lightingSet, set, draw, index);
         ++index;
     }
+    frame.gpu.device.cmdEndRendering(cmd);
+    frame.drewContent = true;
+    SceneFrameGraph::transition(cmd, medium_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, mediumDepth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    // Reconstructed with last render's into the other history image, when
+    // that was the render before this one and of the same volumes.
+    uint64_t ids = 1469598103934665603ull;
+    for (const MeshDraw& draw : frame.lists.volumes) ids = (ids ^ draw.nodeId) * 1099511628211ull;
+    const bool follows = haveHistory_ && frame.view.frameIndex == lastIndex_ + 1 && ids == lastVolumes_;
+    lastVolumes_ = ids;
+    const uint32_t prev = current_;
+    current_ ^= 1u;
+    Uniforms u{};
+    std::memcpy(u.prevViewProj, prevViewProj_.data, sizeof(u.prevViewProj));
+    const bromath::Mat4 inv = bromath::minverse(frame.view.relViewProj);
+    std::memcpy(u.invViewProj, inv.data, sizeof(u.invViewProj));
+    const bromath::Vec3 delta = frame.view.eye - prevEye_;
+    u.eyeDelta[0] = delta.x;
+    u.eyeDelta[1] = delta.y;
+    u.eyeDelta[2] = delta.z;
+    u.eyeDelta[3] = follows ? kBlend : 1.0f;
+    const VkDescriptorBufferInfo ubo = device_->frameUniform(&u, sizeof(u));
+    SceneFrameGraph::transition(cmd, history_[prev], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VkDescriptorSet resolveSet = device_->frameSet(setLayout_);
+    SceneVkDescriptorWriter rw;
+    rw.writeImage(0, medium_.view, sampler_);
+    rw.writeImage(1, mediumDepth_.view, sampler_);
+    rw.writeImage(2, history_[prev].view, sampler_);
+    rw.writeBuffer(3, ubo.buffer, ubo.range, ubo.offset);
+    rw.updateSet(device_->device(), resolveSet);
+    SceneVkImage& out = history_[current_];
+    SceneFrameGraph::transition(cmd, out, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    fullscreen::draw(*device_, cmd, out, resolve_, layout_, resolveSet);
+    SceneFrameGraph::transition(cmd, out, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    haveHistory_ = true;
+    lastIndex_ = frame.view.frameIndex;
+    prevViewProj_ = frame.view.relViewProj;
+    prevEye_ = frame.view.eye;
+}
+
+bool PassVolumeComposite::setup(SceneGpu& gpu) {
+    device_ = &gpu.device;
+    VkDevice dev = gpu.device.device();
+    setLayout_ = fullscreen::samplerSetLayout(dev, 1);
+    if (!setLayout_) return false;
+    layout_ = fullscreen::layout(dev, setLayout_, 0);
+    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
+    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::VolumeCompositeFrag);
+    return layout_ && vs_ && fs_;
+}
+
+void PassVolumeComposite::cleanup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    pipelines_.destroy(gpu.device);
+    SceneVkShaderModule::destroy(dev, vs_);
+    SceneVkShaderModule::destroy(dev, fs_);
+    vs_ = fs_ = VK_NULL_HANDLE;
+    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
+    if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
+    layout_ = VK_NULL_HANDLE;
+    setLayout_ = VK_NULL_HANDLE;
+}
+
+bool PassVolumeComposite::active(const SceneFrame& frame) const {
+    return volumes_.active(frame);
+}
+
+void PassVolumeComposite::declare(const SceneFrame&, PassIO& io) const {
+    io.hdr();
+}
+
+void PassVolumeComposite::record(SceneFrame& frame) {
+    VkPipeline pipeline = pipelines_.get(0, frame.hdrTarget, [&] {
+        // Over the scene: dst * transmittance (the source alpha) + the
+        // volumes' light; the scene's alpha is kept.
+        VkPipelineColorBlendAttachmentState blend{};
+        blend.blendEnable = VK_TRUE;
+        blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend.colorBlendOp = VK_BLEND_OP_ADD;
+        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT;
+        SceneVkPipelineBuilder b;
+        b.setShaderStages(vs_, fs_)
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(frame.hdrTarget)
+         .disableBlending(frame.hdrTarget.colorCount)
+         .setColorBlendAttachment(0, blend)
+         .disableDepthTest();
+        return b.build(device_->device(), layout_);
+    });
+    if (!pipeline) return;
+    VkDescriptorSet set = device_->frameSet(setLayout_);
+    SceneVkDescriptorWriter writer;
+    writer.writeImage(0, volumes_.result().view, volumes_.sampler());
+    writer.updateSet(device_->device(), set);
+    bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
+    vkCmdDraw(frame.cmd, 3, 1, 0, 0);
 }
 
 }  // namespace bro::scene::vk

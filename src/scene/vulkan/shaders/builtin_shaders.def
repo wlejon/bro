@@ -38,6 +38,8 @@ BRO_SCENE_SHADER(DecalVert,                "decal.vert",                  "draw/
 BRO_SCENE_SHADER(DecalFrag,                "decal.frag",                  "draw/decal.frag",                    "frag", "")
 // A volume's triangle over the view (pass_volume.cpp); volume.frag is compiled with its chunk at run time.
 BRO_SCENE_SHADER(VolumeVert,               "volume.vert",                 "draw/volume.vert",                   "vert", "")
+BRO_SCENE_SHADER(VolumeResolveFrag,        "volume_resolve.frag",         "post/volume_resolve.frag",           "frag", "")
+BRO_SCENE_SHADER(VolumeCompositeFrag,      "volume_composite.frag",       "post/volume_composite.frag",         "frag", "")
 BRO_SCENE_SHADER(BlurFrag,                 "blur.frag",                   "post/blur.frag",                     "frag", "")
 BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "post/ssao.frag",                     "frag", "")
 BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "post/ssr.frag",                      "frag", "")
