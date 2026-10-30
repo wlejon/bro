@@ -209,6 +209,35 @@ void testFrustum() {
     check(!behind, "nothing wholly behind the camera is drawn");
     check(under, "the ground in view ahead still refines");
 
+    // Siblings are produced together: a parent draws in its children's place
+    // until all four are ready, so one left behind (culled, its error small)
+    // would hold back everything refined under the quad. One at a time, a
+    // started quad finishes before another starts, and the draw set refines
+    // as tiles arrive rather than at the end.
+    TileTree one(planeConfig(4096));
+    one.select(v);
+    std::unordered_set<uint64_t> closed;
+    uint64_t open = ~0ull;
+    uint32_t made = 0, deepestHalf = 0;
+    bool together = true;
+    for (int guard = 0; guard < 10000; ++guard) {
+        auto batch = one.takeProductions(1);
+        if (batch.empty()) break;
+        const TileId id = batch[0].id;
+        // Each parent's children form one run in the order produced.
+        const uint64_t p = id.level > 0 ? id.parent().key() : ~1ull;
+        if (p != open) {
+            if (closed.count(p)) together = false;
+            closed.insert(open);
+            open = p;
+        }
+        one.markReady(id);
+        if (++made == one.wanted() / 2)
+            for (const DrawTile& d : one.drawSet()) deepestHalf = std::max(deepestHalf, d.id.level);
+    }
+    check(together, "a quad's siblings are produced one after another");
+    check(deepestHalf >= 6, "half-way through, the draw set already refines (level " + std::to_string(deepestHalf) + ")");
+
     Config c;
     c.domain.kind = Domain::Kind::CubeSphere;
     c.domain.radius = 6.371e6;

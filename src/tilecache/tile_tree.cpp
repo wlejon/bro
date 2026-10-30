@@ -327,13 +327,21 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         if (nodes_[i].state == State::Missing) missing.push_back(i);
     // The largest projected error first: what is drawn most wrong, the
     // ground nearest the eye, refines before ground far off that a coarse
-    // tile already draws nearly right. A parent projects larger than its
-    // children, so along any chain the parent still comes first (a child
-    // whose parent is not ready waits, below).
+    // tile already draws nearly right. Siblings go together, ranked by their
+    // parent's error: a parent draws in its children's place until all four
+    // are ready, so one sibling left for last (culled, or far) would keep
+    // the whole quad, and everything refined under it, at the parent. A
+    // parent projects larger than its children, so along any chain the
+    // parent still comes first (a child whose parent is not ready waits,
+    // below).
+    auto rank = [&](const Node& m) { return m.parent >= 0 ? nodes_[m.parent].error : m.error; };
+    auto group = [&](const Node& m) { return m.parent >= 0 ? nodes_[m.parent].id.key() : m.id.key(); };
     std::sort(missing.begin(), missing.end(), [&](int32_t ia, int32_t ib) {
         const Node &a = nodes_[ia], &b = nodes_[ib];
-        if (a.error != b.error) return a.error > b.error;
+        const double ra = rank(a), rb = rank(b);
+        if (ra != rb) return ra > rb;
         if (a.id.level != b.id.level) return a.id.level < b.id.level;
+        if (group(a) != group(b)) return group(a) < group(b);
         return a.id.key() < b.id.key();
     });
     // With no free slot, the least recently wanted ready tiles no view wants

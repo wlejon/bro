@@ -23,7 +23,8 @@
 //   world seen closer).
 // - Production is spread over updates: at most `producePerUpdate` tiles a
 //   call, or as many as fit `produceBudgetMs` of GPU time, the largest
-//   projected error first (a parent before its children).
+//   projected error first (a parent before its children), the four children
+//   of a parent together, so the draw set refines quad by quad as they land.
 // - Tiles the view no longer wants are evicted least recently wanted first
 //   when a slot is needed, and produced again if wanted again.
 // - The draw set covers every root exactly once: a wanted tile whose

@@ -15,7 +15,8 @@
 //     (refinement: a world's producer reads the parent's slot) and a draw can
 //     blend toward it.
 //   - takeProductions() hands out the missing tiles whose parent is ready,
-//     coarse first, then by projected size; a slot comes from the free list,
+//     a quad of siblings together, the largest projected error (their
+//     parent's) first; a slot comes from the free list,
 //     else from the least recently wanted tile no view wants now.
 //   - drawSet() covers each root with ready tiles and never overlaps: a
 //     wanted tile whose children are not all ready yet draws itself.
