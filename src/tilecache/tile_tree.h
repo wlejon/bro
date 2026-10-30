@@ -87,12 +87,22 @@ struct Bounds {
     double radius = 0;
 };
 
+/// How far the surface within a tile leaves its base, along the base normal:
+/// at this tile's level and every finer one (a child's detail stays inside
+/// its parent's range).
+struct HeightRange {
+    double lo = 0, hi = 0;
+};
+
 struct Config {
     Domain domain;
     uint32_t tileSize = 64;      // cells along a tile's edge (borders not counted)
     uint32_t capacity = 256;     // slots: the most tiles resident at once
     uint32_t maxLevel = 16;
-    double maxHeight = 0;        // how far the surface may leave its base, for bounds
+    // The range every tile's surface lies in until one is set for it or an
+    // ancestor (setRange): what bounds it for selection.
+    double minHeight = 0;
+    double maxHeight = 0;
     double pixelsPerCell = 2;    // split while a cell projects larger than this
 };
 
@@ -154,7 +164,16 @@ public:
     uint32_t resident() const { return config_.capacity - static_cast<uint32_t>(freeSlots_.size()); }
     const Stats& stats() const { return stats_; }
 
+    /// A sphere about the tile's base center (its base surface at (0.5, 0.5),
+    /// fixed for the tile) holding its surface within range(id).
     Bounds bounds(const TileId& id) const;
+    /// The tile's height range: its own once set, else its nearest
+    /// ancestor's, else [minHeight, maxHeight].
+    HeightRange range(const TileId& id) const;
+    /// What the surface of `id` and every tile below it lies within, as its
+    /// producer measured it: narrows the bounds selection and culling use for
+    /// it and its descendants. Kept while the tree lives (cleared by clear()).
+    void setRange(const TileId& id, HeightRange r);
     /// The slot of a ready tile, or -1.
     int32_t slotOf(const TileId& id) const;
 
@@ -176,7 +195,21 @@ private:
         bool visible = true;
     };
 
-    bool visible(const Bounds& b, const View& view) const;
+    // A tile's base footprint (fixed) and the range last resolved for it.
+    struct Footprint {
+        Vec3d center;        // base surface at (0.5, 0.5)
+        Vec3d normal;        // the base normal there
+        double radius = 0;   // the farthest base point from center
+        double sag = 0;      // how far the base falls below its tangent plane at center
+        HeightRange range;
+        uint64_t rangeGen = 0;
+    };
+    const Footprint& footprint(const TileId& id) const;
+    /// The tight sphere selection and culling use: about the middle of the
+    /// tile's range rather than its base.
+    Bounds tightBounds(const Footprint& f) const;
+    /// `top`: the tile's highest surface above its base (its range's hi).
+    bool visible(const Bounds& b, double top, const View& view) const;
     /// 0 for a tile the view culls.
     double error(const TileId& id, const View& view, bool* seen) const;
     bool isReady(const TileId& id) const;
@@ -188,7 +221,9 @@ private:
     std::unordered_map<uint64_t, Entry> entries_;
     std::unordered_map<uint64_t, Wanted> wanted_;
     std::vector<uint32_t> freeSlots_;
-    mutable std::unordered_map<uint64_t, Bounds> boundsCache_;
+    mutable std::unordered_map<uint64_t, Footprint> footprints_;
+    std::unordered_map<uint64_t, HeightRange> ranges_;
+    uint64_t rangeGen_ = 1;   // advanced by every setRange: resolved ranges are stale
     Stats stats_;
 };
 

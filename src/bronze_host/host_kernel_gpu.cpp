@@ -194,6 +194,14 @@ std::shared_ptr<brokernel::api::GpuBuffer> engineBufferView(const std::shared_pt
     return std::make_shared<View>(std::move(own), offset, bytes);
 }
 
+std::shared_ptr<render::ComputeReadback> engineReadLater(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer,
+                                                         size_t offset, size_t bytes) {
+    auto own = std::dynamic_pointer_cast<Buffer>(buffer);
+    if (!own || !s_device || !s_device->context() || offset > own->bytes() || bytes > own->bytes() - offset)
+        return nullptr;
+    return s_device->context()->compute().readLater(*own->computeBuffer(), offset, bytes);
+}
+
 void installKernelGpu(engine::Engine& engine) {
     if (s_device && s_device->engine == &engine) return;
     s_device = std::make_shared<Device>();

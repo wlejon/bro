@@ -232,6 +232,56 @@ void testFrustum() {
     check(!sphere.drawSet().empty(), "and draws the ground in view");
 }
 
+// Height ranges: a tile without one takes its nearest ancestor's (else the
+// config's), and measured ranges narrow selection. A camera 2 m over a
+// plateau that never leaves [3000, 3040] m, looking straight down, wants far
+// fewer tiles once the tiles say so than under the 9 km worst case, and the
+// ground below it still refines.
+void testRanges() {
+    Config c;
+    c.domain.kind = Domain::Kind::CubeSphere;
+    c.domain.radius = 6.371e6;
+    c.tileSize = 32;
+    c.capacity = 4096;
+    c.maxLevel = 22;
+    c.maxHeight = 9000;
+    TileTree tree(c);
+
+    const TileId root{2, 0, 0, 0}, deep{2, 5, 10, 11};
+    check(tree.range(deep).lo == 0 && tree.range(deep).hi == 9000, "no range set: the config's");
+    tree.setRange(root, {-10, 40});
+    check(tree.range(deep).lo == -10 && tree.range(deep).hi == 40, "a tile takes its nearest ancestor's range");
+    tree.setRange(deep, {std::nan(""), 1});
+    check(tree.range(deep).hi == 40, "a NaN range is refused");
+    const double before = tree.bounds(deep).radius;
+    tree.setRange(deep, {0, 20});
+    check(tree.bounds(deep).radius < before, "a narrower range shrinks the bounds");
+    tree.clear();
+    check(tree.range(deep).hi == 9000, "clear() forgets ranges");
+
+    // Over a plateau 3 km up: the range's bounds sit well above the base.
+    View v = viewAt(0, c.domain.radius + 3002, 0);
+    v.frustum = true;
+    v.forward = {0, -1, 0};
+    v.right = {1, 0, 0};
+    v.up = {0, 0, -1};
+    v.tanHalfX = v.tanHalfY = std::tan(30.0 * 3.14159265358979 / 180.0);
+    tree.select(v);
+    const uint32_t worst = tree.wanted();
+    bool parentFirst = true;
+    for (int round = 0; round < 6; ++round) {
+        produceAll(tree, 4096, parentFirst);
+        for (const DrawTile& d : tree.drawSet()) tree.setRange(d.id, {3000, 3040});
+        for (uint32_t r = 0; r < 6; ++r) tree.setRange({r, 0, 0, 0}, {3000, 3040});
+        tree.select(v);
+    }
+    check(tree.wanted() * 4 < worst, "measured ranges cut what a ground view wants (" +
+                                         std::to_string(tree.wanted()) + " of " + std::to_string(worst) + ")");
+    uint32_t deepest = 0;
+    for (const DrawTile& d : tree.drawSet()) deepest = std::max(deepest, d.id.level);
+    check(deepest >= 18, "and the ground below still refines (level " + std::to_string(deepest) + ")");
+}
+
 } // namespace
 
 int main() {
@@ -239,6 +289,7 @@ int main() {
     testEvictionAndRefill();
     testCubeSphere();
     testFrustum();
+    testRanges();
     std::printf("bro_tilecache_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

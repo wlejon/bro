@@ -50,6 +50,24 @@ void ComputeBuffer::release() {
     address_ = 0;
 }
 
+ComputeReadback::~ComputeReadback() {
+    if (!owner_ || !owner_->context) return;
+    owner_->readbacks.erase(this);
+    VulkanContext* ctx = owner_->context;
+    ctx->frames().defer([ctx, buffer = buffer_, alloc = allocId_] { ctx->destroyBuffer(buffer, alloc); });
+}
+
+void ComputeReadback::release() {
+    if (owner_ && owner_->context) owner_->context->destroyBuffer(buffer_, allocId_);
+    buffer_ = VK_NULL_HANDLE;
+    allocId_ = 0;
+    mapped_ = nullptr;
+}
+
+bool ComputeReadback::ready() const {
+    return owner_ && owner_->context && buffer_ != VK_NULL_HANDLE && owner_->context->queue().isComplete(ticket_);
+}
+
 ComputePipeline::~ComputePipeline() {
     if (!owner_ || !owner_->context) return;
     owner_->pipelines.erase(this);
@@ -90,8 +108,10 @@ void VulkanCompute::shutdown() {
     if (lastTicket_) context_->queue().wait(lastTicket_);
     for (ComputeBuffer* b : owner_->buffers) b->release();
     for (ComputePipeline* p : owner_->pipelines) p->release();
+    for (ComputeReadback* r : owner_->readbacks) r->release();
     owner_->buffers.clear();
     owner_->pipelines.clear();
+    owner_->readbacks.clear();
     owner_->context = nullptr;
     owner_.reset();
     if (readback_ != VK_NULL_HANDLE) context_->destroyBuffer(readback_, readbackAlloc_);
@@ -289,6 +309,36 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
     if (!ticket || !context_->queue().wait(ticket)) return false;
     std::memcpy(out, readbackMapped_, static_cast<size_t>(size));
     return true;
+}
+
+std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& buffer, VkDeviceSize offset,
+                                                          VkDeviceSize size) {
+    if (!context_ || buffer.buffer_ == VK_NULL_HANDLE || offset > buffer.size_ || size > buffer.size_ - offset ||
+        size == 0)
+        return nullptr;
+    std::shared_ptr<ComputeReadback> r(new ComputeReadback());
+    r->owner_ = owner_;
+    VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (findMemoryType(context_->memoryProperties(), ~0u, props | VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+        props |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize memOffset = 0;
+    if (!context_->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, props, r->buffer_, memory, memOffset,
+                                r->allocId_, r->mapped_)) {
+        LOG_ERROR("VulkanCompute: could not allocate a %zu-byte readback buffer", static_cast<size_t>(size));
+        return nullptr;
+    }
+    r->size_ = size;
+    owner_->readbacks.insert(r.get());
+    VkCommandBuffer cmd = commands();
+    const VkBufferCopy copy{offset, 0, size};
+    vkCmdCopyBuffer(cmd, buffer.buffer_, r->buffer_, 1, &copy);
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                  VK_ACCESS_HOST_READ_BIT);
+    pendingBarrier_ = true;
+    r->ticket_ = flush();
+    if (!r->ticket_) return nullptr;
+    return r;
 }
 
 uint64_t VulkanCompute::flush() {

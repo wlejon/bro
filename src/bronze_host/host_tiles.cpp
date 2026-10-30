@@ -9,9 +9,13 @@
 
 #include <brokernel/api.h>
 
+#include "render/vulkan_compute.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,6 +55,17 @@ struct Cache {
     // pool never changes, and views made afresh for every tile were thousands
     // of host objects for each collection to finalize.
     std::vector<ev::Persistent> slotLayers;
+
+    // `ranges`: two float32 a slot, the [lo, hi] its producer wrote into
+    // tile.range, read back without waiting and given to the tree.
+    std::shared_ptr<brokernel::api::GpuBuffer> rangePool;
+    std::vector<ev::Persistent> slotRange;
+    struct RangeReadback {
+        std::shared_ptr<render::ComputeReadback> readback;
+        uint32_t firstSlot = 0;
+        std::vector<tilecache::Production> tiles;
+    };
+    std::deque<RangeReadback> rangeReadbacks;
 };
 
 ev::HostClass g_cacheClass;
@@ -109,6 +124,31 @@ Value layerViews(Cache& c, uint32_t slot) {
     return views;
 }
 
+// The slot's two-float32 range store: the same object every time.
+Value rangeView(Cache& c, uint32_t slot) {
+    if (c.slotRange.size() <= slot) c.slotRange.resize(c.tree.config().capacity);
+    Value held = c.slotRange[slot].get();
+    if (ev::isObject(held)) return held;
+    Value view = brokernel::api::bufferValue(engineBufferView(c.rangePool, size_t{8} * slot, 8));
+    c.slotRange[slot].set(view);
+    return view;
+}
+
+// The ranges producers wrote, for the readbacks the GPU has finished: each
+// tile still in the slot it was produced into gets its range.
+void collectRanges(Cache& c) {
+    while (!c.rangeReadbacks.empty() && c.rangeReadbacks.front().readback->ready()) {
+        const Cache::RangeReadback& rb = c.rangeReadbacks.front();
+        const auto* f = static_cast<const float*>(rb.readback->data());
+        for (const tilecache::Production& p : rb.tiles) {
+            if (c.tree.slotOf(p.id) != static_cast<int32_t>(p.slot)) continue;
+            const float* r = f + 2 * (p.slot - rb.firstSlot);
+            if (std::isfinite(r[0]) && std::isfinite(r[1])) c.tree.setRange(p.id, {r[0], r[1]});
+        }
+        c.rangeReadbacks.pop_front();
+    }
+}
+
 Value tileObject(Cache& c, const tilecache::Production& p) {
     const tilecache::Domain& d = c.tree.config().domain;
     ev::ObjectBuilder t;
@@ -132,6 +172,7 @@ Value tileObject(Cache& c, const tilecache::Production& p) {
     t.set("center", vec3(b.center));
     t.set("radius", b.radius);
     t.set("layers", layerViews(c, p.slot));
+    if (c.rangePool) t.set("range", rangeView(c, p.slot));
     if (p.parentSlot >= 0) {
         ev::ObjectBuilder parent;
         parent.set("slot", p.parentSlot);
@@ -205,11 +246,19 @@ Value js_update(Value self, std::span<const Value> args) {
         v.tanHalfX = tanHalf * numberOr(view, "viewportWidth", height * 16.0 / 9.0) / height;
         v.frustum = true;
     }
+    collectRanges(*c);
     c->tree.select(v);
 
     const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->producePerUpdate);
     const Rooted produce(ev::getProperty(selfRoot, "produce"));
+    std::string err;
     for (size_t i = 0; i < batch.size(); ++i) {
+        // A producer that writes no range leaves NaN, which is no range: the
+        // slot's last tile's must not stand in for it.
+        if (c->rangePool) {
+            const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
+            c->rangePool->write(size_t{8} * batch[i].slot, none, sizeof(none), &err);
+        }
         const Rooted tile(tileObject(*c, batch[i]));
         const Value arg = tile;
         const ev::CallResult r = ev::call(produce, selfRoot, std::span<const Value>(&arg, 1));
@@ -222,6 +271,18 @@ Value js_update(Value self, std::span<const Value> args) {
             return ev::throwValue(thrown);
         }
         c->tree.markReady(batch[i].id);
+    }
+    if (c->rangePool && !batch.empty()) {
+        Cache::RangeReadback rb;
+        uint32_t last = 0;
+        rb.firstSlot = UINT32_MAX;
+        for (const tilecache::Production& p : batch) {
+            rb.firstSlot = std::min(rb.firstSlot, p.slot);
+            last = std::max(last, p.slot);
+        }
+        rb.readback = engineReadLater(c->rangePool, size_t{8} * rb.firstSlot, size_t{8} * (last - rb.firstSlot + 1));
+        rb.tiles = batch;
+        if (rb.readback) c->rangeReadbacks.push_back(std::move(rb));
     }
     writeDrawList(*c);
     return ev::fromDouble(static_cast<double>(batch.size()));
@@ -241,6 +302,11 @@ Value js_drawn(Value self, std::span<const Value>) {
         t.set("parentSlot", d.parentSlot);
         t.set("center", vec3(d.bounds.center));
         t.set("radius", d.bounds.radius);
+        const tilecache::HeightRange r = c->tree.range(d.id);
+        ev::ArrayBuilder range(2);
+        range.set(0, r.lo);
+        range.set(1, r.hi);
+        t.set("range", range.get());
         out.set(i, t.get());
     }
     return out.get();
@@ -259,6 +325,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         Cache* c = cacheOf(self, "TileCache.clear");
         c->tree.clear();
         c->drawn.clear();
+        c->rangeReadbacks.clear();
         return ev::undefined();
     });
     b.accessor("drawn", js_drawn);
@@ -340,7 +407,10 @@ Value js_createCache(Value, std::span<const Value> args) {
     cfg.tileSize = integer(opts, "tileSize", 64, 1, 4096);
     cfg.capacity = integer(opts, "capacity", 256, 1, 65536);
     cfg.maxLevel = integer(opts, "maxLevel", 16, 0, tilecache::TileId::kMaxLevel);
-    cfg.maxHeight = std::max(0.0, numberOr(opts, "maxHeight", 0.0));
+    cfg.maxHeight = numberOr(opts, "maxHeight", 0.0);
+    cfg.minHeight = numberOr(opts, "minHeight", std::min(0.0, cfg.maxHeight));
+    if (!(cfg.minHeight <= cfg.maxHeight))
+        return ev::throwRangeError("bro.tiles.createCache: minHeight is at most maxHeight");
     cfg.pixelsPerCell = numberOr(opts, "pixelsPerCell", 2.0);
     if (!(cfg.pixelsPerCell > 0)) return ev::throwRangeError("bro.tiles.createCache: pixelsPerCell is positive");
 
@@ -369,6 +439,10 @@ Value js_createCache(Value, std::span<const Value> args) {
     }
     cache->drawList = createEngineBuffer(static_cast<size_t>(cfg.capacity) * kRecordInts * sizeof(int32_t), &err);
     if (!cache->drawList) return ev::throwError("bro.tiles.createCache: " + err);
+    if (ev::toBool(ev::getProperty(opts, "ranges"))) {
+        cache->rangePool = createEngineBuffer(size_t{8} * cfg.capacity, &err);
+        if (!cache->rangePool) return ev::throwError("bro.tiles.createCache: " + err);
+    }
 
     // `produce` lives on the object, so the collector traces it with the cache.
     const Rooted obj(g_cacheClass.createInstance(std::move(cache)));

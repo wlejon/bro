@@ -88,6 +88,34 @@ private:
 /// all (vertex, index, indirect, shader and transfer reads alike).
 ///
 /// Owned by VulkanContext (compute()). Main thread.
+/// Bytes of a buffer copied into host memory without waiting: the copy is
+/// recorded after everything recorded before it and submitted at once, and
+/// the bytes are there once ready() (the GPU has passed it). Made by
+/// VulkanCompute::readLater.
+class ComputeReadback {
+public:
+    ~ComputeReadback();
+    ComputeReadback(const ComputeReadback&) = delete;
+    ComputeReadback& operator=(const ComputeReadback&) = delete;
+
+    bool ready() const;
+    /// The copied bytes once ready(); size() of them.
+    const void* data() const { return mapped_; }
+    VkDeviceSize size() const { return size_; }
+
+private:
+    friend class VulkanCompute;
+    ComputeReadback() = default;
+    void release();
+
+    std::shared_ptr<ComputeOwner> owner_;
+    VkBuffer buffer_ = VK_NULL_HANDLE;
+    uint64_t allocId_ = 0;
+    void* mapped_ = nullptr;
+    VkDeviceSize size_ = 0;
+    uint64_t ticket_ = 0;
+};
+
 class VulkanCompute {
 public:
     VulkanCompute() = default;
@@ -115,6 +143,8 @@ public:
     /// Copy `size` bytes of `buffer` at `offset` into `out`, after every
     /// operation recorded so far: submits them and waits for that ticket.
     bool read(const ComputeBuffer& buffer, VkDeviceSize offset, void* out, VkDeviceSize size);
+    /// The same copy, not waited for: null on failure.
+    std::shared_ptr<ComputeReadback> readLater(const ComputeBuffer& buffer, VkDeviceSize offset, VkDeviceSize size);
 
     /// Submit what is recorded. Returns its ticket on the graphics queue, or
     /// the last submission's when nothing was recorded since.
@@ -144,6 +174,7 @@ struct ComputeOwner {
     VulkanContext* context = nullptr;
     std::unordered_set<ComputeBuffer*> buffers;
     std::unordered_set<ComputePipeline*> pipelines;
+    std::unordered_set<ComputeReadback*> readbacks;
 };
 
 } // namespace bro::render

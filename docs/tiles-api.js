@@ -49,6 +49,13 @@
 //   maxLevel          deepest level (default 16, at most 24)
 //   maxHeight         how far above the base surface data reaches (default
 //                     0), widening each tile's bounds for selection
+//   minHeight         how far below it data reaches (default the lesser of 0
+//                     and maxHeight; at most maxHeight). On a cube-sphere the
+//                     horizon test lowers the surface to radius + minHeight
+//   ranges            true gives each produce a `tile.range` to report the
+//                     heights the tile actually spans (default false). A
+//                     tile without a report takes its nearest reported
+//                     ancestor's, else [minHeight, maxHeight]
 //   pixelsPerCell     a tile splits while a cell spans more pixels than this
 //                     (default 2)
 //   producePerUpdate  tiles produced per update() (default 8)
@@ -70,7 +77,18 @@
 //                       these in f64 places each cell exactly at any scale.
 //   center, radius      the tile's bounding sphere (the one cache.drawn
 //                       reports): a kernel that writes positions relative
-//                       to `center` keeps them small enough for f32
+//                       to `center` keeps them small enough for f32. The
+//                       center is the tile's on the base surface and never
+//                       moves; a narrower height range only shrinks radius
+//   range               with `ranges`: a KernelBuffer of 2 float32, [lo, hi],
+//                       for a kernel to write the heights (above the base
+//                       surface) this tile spans. It must bound the surface
+//                       at this level and at every finer level, since the
+//                       tile's children inherit it until they report their
+//                       own. It reads NaN until written; NaN (or lo > hi) is
+//                       no report. The cache reads it back once the GPU is
+//                       done, without waiting, and selection narrows a frame
+//                       or two after the tile is produced
 //   layers              { name: KernelBuffer }: this tile's range of each
 //                       pool, cells * cells elements laid out [x, y] at
 //                       y * cells + x, a store bounded to the tile; the same
@@ -138,14 +156,19 @@ const terrain = bro.tiles.createCache({
 //   list, and returns how many it produced. Call it once a frame.
 //   With `forward` (the camera's view direction; `up` its up, viewportWidth
 //   / viewportHeight its aspect) the view is a frustum: tiles outside it,
-//   and on a cube-sphere tiles below the horizon of the surface lowered by
-//   maxHeight, are neither refined nor drawn, so the capacity goes to what
-//   is seen. Without it every tile in range refines and is drawn.
+//   and on a cube-sphere tiles whose top lies below the horizon of the
+//   surface lowered by minHeight, are neither refined nor drawn, so the
+//   capacity goes to what is seen. Without it every tile in range refines
+//   and is drawn. A tile's distance for refinement is to its height slab, so
+//   tight ranges (`ranges`) refine what is near and stop refining what only
+//   the worst-case height would have brought near.
 //
 // cache.drawn       the draw set: [{ root, level, x, y, slot, parentSlot,
-//                   center: [x, y, z], radius }], each tile's bounding sphere;
-//                   parentSlot is -1 for a root. Without a frustum it covers
-//                   every root once; with one, less the tiles it culled.
+//                   center: [x, y, z], radius, range: [lo, hi] }], each
+//                   tile's bounding sphere and the height range it is
+//                   selected by; parentSlot is -1 for a root. Without a
+//                   frustum it covers every root once; with one, less the
+//                   tiles it culled.
 // cache.drawCount   drawn.length
 // cache.drawList    KernelBuffer of drawCount records of 16 words, the draw
 //                   set on the GPU for a shader or kernel to walk: int32

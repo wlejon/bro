@@ -75,25 +75,83 @@ void TileTree::clear() {
     wanted_.clear();
     freeSlots_.clear();
     for (uint32_t s = config_.capacity; s-- > 0;) freeSlots_.push_back(s);   // slot 0 handed out first
+    ranges_.clear();
+    ++rangeGen_;
+}
+
+const TileTree::Footprint& TileTree::footprint(const TileId& id) const {
+    // A tile's base footprint never changes; selection asks for every
+    // candidate's each frame, so footprints are kept (and dropped wholesale
+    // past a few capacities' worth, which a moving view refills). The range
+    // is resolved again only after a setRange.
+    auto it = footprints_.find(id.key());
+    if (it == footprints_.end()) {
+        if (footprints_.size() > 8 * static_cast<size_t>(config_.capacity)) footprints_.clear();
+        Footprint f;
+        f.center = config_.domain.point(id, 0.5, 0.5);
+        f.normal = config_.domain.kind == Domain::Kind::Plane ? Vec3d{0, 1, 0}
+                                                              : unit(sub(f.center, config_.domain.center));
+        static constexpr double kSamples[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 1}, {0, 0.5}, {1, 0.5}};
+        for (const auto& s : kSamples) {
+            const Vec3d d = sub(config_.domain.point(id, s[0], s[1]), f.center);
+            f.radius = std::max(f.radius, length(d));
+            f.sag = std::max(f.sag, -dot(d, f.normal));
+        }
+        it = footprints_.emplace(id.key(), f).first;
+    }
+    Footprint& f = it->second;
+    if (f.rangeGen != rangeGen_) {
+        f.range = {config_.minHeight, config_.maxHeight};
+        for (TileId t = id;; t = t.parent()) {
+            if (const auto r = ranges_.find(t.key()); r != ranges_.end()) {
+                f.range = r->second;
+                break;
+            }
+            if (t.level == 0) break;
+        }
+        f.rangeGen = rangeGen_;
+    }
+    return f;
+}
+
+HeightRange TileTree::range(const TileId& id) const { return footprint(id).range; }
+
+void TileTree::setRange(const TileId& id, HeightRange r) {
+    if (!(r.lo <= r.hi)) return;   // NaN or inverted: not a range
+    // A tree that has seen more tiles than it can hold many times over keeps
+    // the ranges of the tiles it still knows (a dropped one falls back to its
+    // ancestor's).
+    if (ranges_.size() > 16 * static_cast<size_t>(config_.capacity)) {
+        for (auto it = ranges_.begin(); it != ranges_.end();) {
+            if (entries_.count(it->first)) ++it;
+            else it = ranges_.erase(it);
+        }
+    }
+    ranges_[id.key()] = r;
+    ++rangeGen_;
 }
 
 Bounds TileTree::bounds(const TileId& id) const {
-    // A tile's bounds never change; selection asks for every candidate's
-    // each frame, so they are kept (and dropped wholesale past a few
-    // capacities' worth, which a moving view refills).
-    if (const auto it = boundsCache_.find(id.key()); it != boundsCache_.end()) return it->second;
-    if (boundsCache_.size() > 8 * static_cast<size_t>(config_.capacity)) boundsCache_.clear();
-    Bounds b;
-    b.center = config_.domain.point(id, 0.5, 0.5);
-    static constexpr double kSamples[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 1}, {0, 0.5}, {1, 0.5}};
-    for (const auto& s : kSamples)
-        b.radius = std::max(b.radius, length(sub(config_.domain.point(id, s[0], s[1]), b.center)));
-    b.radius += config_.maxHeight;
-    boundsCache_.emplace(id.key(), b);
-    return b;
+    const Footprint& f = footprint(id);
+    const double h = std::max(std::abs(f.range.lo), std::abs(f.range.hi));
+    // A plane's surface leaves its base square to it; a sphere's along each
+    // point's own normal, which a sphere about the base center bounds at
+    // radius + |h|.
+    if (config_.domain.kind == Domain::Kind::Plane) return {f.center, std::sqrt(f.radius * f.radius + h * h)};
+    return {f.center, f.radius + h};
 }
 
-bool TileTree::visible(const Bounds& b, const View& view) const {
+Bounds TileTree::tightBounds(const Footprint& f) const {
+    const double mid = 0.5 * (f.range.lo + f.range.hi), half = 0.5 * (f.range.hi - f.range.lo);
+    const Vec3d c = {f.center.x + f.normal.x * mid, f.center.y + f.normal.y * mid, f.center.z + f.normal.z * mid};
+    if (config_.domain.kind == Domain::Kind::Plane) return {c, std::sqrt(f.radius * f.radius + half * half)};
+    // A base point b at height h sits at b + u_b h, u_b its own normal:
+    // |b + u_b h - (c + n mid)| <= |b - c| + |h - mid| + |mid| |u_b - n|, and
+    // |u_b - n| = |b - c| / radius on the sphere.
+    return {c, f.radius * (1 + std::abs(mid) / config_.domain.radius) + half};
+}
+
+bool TileTree::visible(const Bounds& b, double top, const View& view) const {
     const Vec3d rel = sub(b.center, view.position);
     if (view.frustum) {
         const double z = dot(rel, view.forward);
@@ -107,14 +165,14 @@ bool TileTree::visible(const Bounds& b, const View& view) const {
         if ((y - z * view.tanHalfY) * cy > b.radius) return false;
     }
     if (view.frustum && config_.domain.kind == Domain::Kind::CubeSphere) {
-        // Beyond the horizon of the lowest surface (radius - maxHeight): a
+        // Beyond the horizon of the lowest surface (radius + minHeight): a
         // point h above it is seen no farther than the two tangent lengths
         // sqrt(d^2 - r0^2) + sqrt((r0 + h)^2 - r0^2), and no point of the tile
-        // is more than 2 maxHeight above it.
-        const double r0 = std::max(config_.domain.radius - config_.maxHeight, 0.0);
+        // is more than its range's top above it.
+        const double r0 = std::max(config_.domain.radius + config_.minHeight, 0.0);
         const double d = length(sub(view.position, config_.domain.center));
         if (d > r0) {
-            const double h = 2 * config_.maxHeight;
+            const double h = std::max(top - config_.minHeight, 0.0);
             const double reach = std::sqrt(d * d - r0 * r0) + std::sqrt(h * (2 * r0 + h));
             if (length(rel) - b.radius > reach) return false;
         }
@@ -123,23 +181,25 @@ bool TileTree::visible(const Bounds& b, const View& view) const {
 }
 
 double TileTree::error(const TileId& id, const View& view, bool* seen) const {
-    const Bounds b = bounds(id);
-    *seen = visible(b, view);
+    const Footprint& f = footprint(id);
+    const Bounds b = tightBounds(f);
+    *seen = visible(b, f.range.hi, view);
     if (!*seen) return 0;
     const double cell = config_.domain.tileExtent(id) / std::max<uint32_t>(config_.tileSize, 1);
     // Two lower bounds on the distance to the tile, the larger kept: to its
     // bounding sphere, and to its slab (the base footprint's disc, extruded
-    // from the base to maxHeight above it along the base normal). The sphere
-    // is inflated by maxHeight every way, so alone it reads a camera up to
-    // maxHeight from the base as touching every tile that near.
-    const Vec3d rel = sub(view.position, b.center);
-    const Vec3d n = config_.domain.kind == Domain::Kind::Plane ? Vec3d{0, 1, 0}
-                                                               : unit(sub(b.center, config_.domain.center));
+    // over its height range along the base normal, the bottom lowered by the
+    // base's own curvature). The sphere alone reads a camera within the
+    // range's height of the base as touching every tile that near.
+    const Vec3d rel = sub(view.position, f.center);
+    const Vec3d& n = f.normal;
     const double up = dot(rel, n);
     const double across = length(sub(rel, {n.x * up, n.y * up, n.z * up}));
-    const double dh = std::max(across - (b.radius - config_.maxHeight), 0.0);
-    const double dv = up > config_.maxHeight ? up - config_.maxHeight : (up < 0 ? -up : 0.0);
-    const double dist = std::max({length(rel) - b.radius, std::sqrt(dh * dh + dv * dv), cell * 1e-3});
+    const double dh = std::max(across - f.radius, 0.0);
+    const double bottom = f.range.lo - f.sag;
+    const double dv = up > f.range.hi ? up - f.range.hi : (up < bottom ? bottom - up : 0.0);
+    const double sphere = length(sub(view.position, b.center)) - b.radius;
+    const double dist = std::max({sphere, std::sqrt(dh * dh + dv * dv), cell * 1e-3});
     return cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
 }
 

@@ -165,6 +165,43 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(settle(flaky, near), 'the next updates produce them');
     assert(Math.max(...flaky.drawn.map((t) => t.level)) === deepest, 'and the cache refines as far as before');
 
+    // Height ranges: 40 m up, under a 300 m worst case every tile's slab
+    // reaches the camera, so all of them refine; once each tile reports the
+    // [-5, 5] m it really spans, only those near the camera do. Tiles that
+    // report nothing inherit.
+    const ranged = (report) => makeCache({
+        capacity: 1024, maxLevel: 6, pixelsPerCell: 16, minHeight: -10, maxHeight: 300, ranges: true,
+        produce: (tile) => {
+            produce(tile);
+            if (report(tile)) tile.range.write(Float32Array.of(-5, 5));
+        },
+    });
+    // Ranges come back once the GPU is done, never by waiting: a frame or two.
+    const settleRanged = (c, view) => {
+        let ok = true;
+        for (let i = 0; i < 8; i++) { ok = settle(c, view) && ok; advanceTime(16); }
+        return ok;
+    };
+    const wide = ranged(() => false), tight = ranged(() => true), rootsOnly = ranged((t) => t.level === 0);
+    const above = { position: [10, 40, 12], fov: 60, viewportHeight: 720 };
+    assert(settleRanged(wide, above) && settleRanged(tight, above) && settleRanged(rootsOnly, above), 'ranged caches settle');
+    assert(wide.drawn.every((t) => t.range[0] === -10 && t.range[1] === 300),
+           'a tile that reports nothing has the configured range');
+    assert(tight.drawn.every((t) => t.range[0] === -5 && t.range[1] === 5), 'a reported range is the tile\'s');
+    assert(rootsOnly.drawn.every((t) => t.range[0] === -5 && t.range[1] === 5), 'and its descendants\' until they report');
+    checkCoverage(tight, 'ranged');
+    assert(tight.drawCount * 2 < wide.drawCount,
+           `tight ranges select far fewer tiles (${tight.drawCount} drawn, ${wide.drawCount} under the worst case)`);
+    const under = tight.drawn.find((t) => {
+        const e = SIZE / (1 << t.level);
+        return t.x * e <= 10 && 10 < (t.x + 1) * e && t.y * e <= 12 && 12 < (t.y + 1) * e;
+    });
+    assert(under && under.level === Math.max(...tight.drawn.map((t) => t.level)) && under.level >= 2,
+           `and still refine most under the camera (level ${under && under.level})`);
+    const r0 = tight.drawn[0], w0 = wide.drawn.find((t) => tileKey(t) === tileKey(r0));
+    if (w0) assert(r0.radius < w0.radius && r0.center.every((c, i) => c === w0.center[i]),
+                   'a narrower range shrinks the bounds about the same center');
+
     // A cube-sphere refines toward a camera above its surface.
     const sphere = bro.tiles.createCache({
         domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },

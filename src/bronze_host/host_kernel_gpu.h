@@ -7,7 +7,7 @@
 #include <string>
 
 namespace bro::engine { class Engine; }
-namespace bro::render { class ComputeBuffer; }
+namespace bro::render { class ComputeBuffer; class ComputeReadback; }
 namespace brokernel::api { class GpuBuffer; }
 
 namespace bro::bronze_host {
@@ -26,6 +26,13 @@ std::shared_ptr<brokernel::api::GpuBuffer> createEngineBuffer(size_t bytes, std:
 /// createEngineBuffer made or the range leaves it.
 std::shared_ptr<brokernel::api::GpuBuffer> engineBufferView(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer,
                                                             size_t offset, size_t bytes);
+
+/// `bytes` of an engine buffer from byte `offset` copied to the host without
+/// waiting, after the work recorded so far (render::ComputeReadback): null
+/// when `buffer` is not one createEngineBuffer made, the range leaves it, or
+/// there is no device.
+std::shared_ptr<render::ComputeReadback> engineReadLater(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer,
+                                                         size_t offset, size_t bytes);
 
 /// bro.kernel's GPU half: kernels dispatched on the engine's own Vulkan
 /// device, in its graphics stream (render::VulkanCompute), into buffers the
