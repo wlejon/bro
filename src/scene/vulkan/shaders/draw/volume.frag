@@ -37,8 +37,9 @@ layout(location = 0) out vec4 outColor;
 
 // The opaque depth (SceneTargets::depthSnapshot), in the material set's slot.
 layout(set = 2, binding = 0) uniform sampler2D texSceneDepth;
-// The meter's readings, a slot per volume in draw order: the radiance down
-// from straight up (rgb) and the sun's transmittance (a) (PassVolume).
+// The meter's readings, two slots per volume in draw order: the radiance down
+// from straight up (rgb) and the sun's transmittance (a), then the
+// transmittance straight up (x) (PassVolume).
 layout(std430, set = 2, binding = 5) writeonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
 
 // The sun's illuminance at camera-relative `pos` (its light's colour times
@@ -75,13 +76,14 @@ void main() {
     float depth = 0.0;
 #ifdef CUSTOM_VOLUME
     userVolume(dir, sceneDist, radiance, transmittance, depth);
-    if (all(equal(ivec2(gl_FragCoord.xy), ivec2(0))) && inVolume < volumeMeter.slots.length()) {
+    if (all(equal(ivec2(gl_FragCoord.xy), ivec2(0))) && 2 * inVolume + 1 < volumeMeter.slots.length()) {
         vec3 up = sceneAtmosphereOn() ? normalize(atmOrigin(vec3(0.0))) : vec3(0.0, 1.0, 0.0);
         vec3 sunL = vec3(0.0), upL = vec3(0.0);
         float sunT = 1.0, upT = 1.0, d = 0.0;
         userVolume(sceneToSun(), 1e30, sunL, sunT, d);
         userVolume(up, 1e30, upL, upT, d);
-        volumeMeter.slots[inVolume] = vec4(upL, clamp(sunT, 0.0, 1.0));
+        volumeMeter.slots[2 * inVolume] = vec4(upL, clamp(sunT, 0.0, 1.0));
+        volumeMeter.slots[2 * inVolume + 1] = vec4(clamp(upT, 0.0, 1.0), 0.0, 0.0, 0.0);
     }
 #endif
     transmittance = clamp(transmittance, 0.0, 1.0);

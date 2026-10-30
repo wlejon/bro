@@ -42,11 +42,15 @@ struct ExposureSettings {
     // washes it out. Incident: the light arriving, as a hand-held incident
     // meter at the eye reads it: the sun through the air there (the
     // atmosphere's transmittance; with the atmosphere off, the reflected
-    // meter), at the EV the reflected meter gives a grey card in it, kept within
-    // kIncidentBrighter stops brighter and kIncidentDarker darker than the
-    // reflected reading, so shade and night are still seen. The scene's
-    // volumes dim that sun by the share they pass from the eye toward it and
-    // add their own light from straight up, as an overcast sky's (volume.frag,
+    // meter) and the sky's light on a level surface, at the EV the reflected
+    // meter gives a grey card in it. Below a grey card's 3 cd/m^2 each stop
+    // less light is half a stop (the eye's threshold goes as the square
+    // root of the light there, de Vries-Rose), so dusk and night read dim.
+    // It is kept within kIncidentBrighter stops brighter and kIncidentDarker
+    // darker than the reflected reading, so shade and night are still seen.
+    // The scene's volumes dim the sun by the share they pass from the eye
+    // toward it and the sky by the share straight up, and add their own
+    // light from straight up, as an overcast sky's (volume.frag,
     // exposure.comp), so under a deck it reads the deck's light.
     enum class Meter : uint8_t { Reflected, Incident };
     Meter meter = Meter::Reflected;

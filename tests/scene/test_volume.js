@@ -118,39 +118,56 @@ if (!probe.scene) {
     // The incident meter reads the volumes: one that passes a share of the
     // sun only along the ray to it, and sends light down only along the ray
     // straight up, leaves every pixel as it was and moves the meter alone.
-    const lit = freshScene(S).scene;
-    lit.setAtmosphere({});
-    lit.setExposure({ mode: 'auto', meter: 'incident' });
-    lit.createLight({ type: 'directional', direction: [-0.3, -0.8, -0.5], color: [1, 1, 1], intensity: 3 });
-    // Dark ground: the incident reading sits stops above the frame's, clear
-    // of the reach about it the meter keeps.
-    lit.createMesh({ mesh: 'plane', color: '#202020', scale: [80, 1, 80] });
-    const meterVol = lit.createVolume({
-        fragment: `uniform float u_sunT;
-            uniform float u_down;
-            void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
-                            inout float transmittance, inout float depth) {
-                if (dot(dir, sceneToSun()) > 0.9999) transmittance = u_sunT;
-                if (dir.y > 0.9999) radiance = vec3(u_down);
-            }`,
-        uniforms: { u_sunT: 1.0, u_down: 0.0 },
-    });
-    const metered = () => {
-        for (let i = 0; i < 6; i++) lit.captureFrame();
-        return lit.cullStats().meteredEv;
+    // The meter reads the sun and the sky's light on a level surface; above
+    // a grey card's 3 cd/m^2 an EV is log2(E / (1.2 pi)), so E goes as 2^EV.
+    const meterScene = (intensity, ground) => {
+        const sc = freshScene(S).scene;
+        sc.setAtmosphere({});
+        sc.setExposure({ mode: 'auto', meter: 'incident' });
+        sc.createLight({ type: 'directional', direction: [-0.3, -0.8, -0.5], color: [1, 1, 1], intensity });
+        sc.createMesh({ mesh: 'plane', color: ground, scale: [80, 1, 80] });
+        const vol = sc.createVolume({
+            fragment: `uniform float u_sunT;
+                uniform float u_upT;
+                uniform float u_down;
+                void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+                                inout float transmittance, inout float depth) {
+                    if (dot(dir, sceneToSun()) > 0.9999) transmittance = u_sunT;
+                    if (dir.y > 0.9999) { radiance = vec3(u_down); transmittance = u_upT; }
+                }`,
+            uniforms: { u_sunT: 1.0, u_upT: 1.0, u_down: 0.0 },
+        });
+        const metered = (sunT, upT, down) => {
+            vol.setShaderUniform('u_sunT', sunT);
+            vol.setShaderUniform('u_upT', upT);
+            vol.setShaderUniform('u_down', down);
+            for (let i = 0; i < 6; i++) sc.captureFrame();
+            return sc.cullStats().meteredEv;
+        };
+        return metered;
     };
-    const clear = metered();
-    meterVol.setShaderUniform('u_sunT', 0.5);
-    const half = metered();
-    assert(Math.abs(clear - half - 1) < 0.1,
-           `half the sun passed meters a stop darker (${clear.toFixed(2)} -> ${half.toFixed(2)})`);
-    meterVol.setShaderUniform('u_sunT', 0.25);
-    const quarter = metered();
-    // Light down of Lz adds 7/9 pi Lz (the CIE overcast sky's): matching
-    // the quarter of the sun lost, it meters as half again.
-    const E = Math.pow(2, clear) * 1.2 * Math.PI;   // the sun's illuminance at the eye (EV = log2(E / (1.2 pi)))
-    meterVol.setShaderUniform('u_down', 0.25 * E / (7 / 9 * Math.PI));
-    const overcast = metered();
+    const lux = (ev) => Math.pow(2, ev) * 1.2 * Math.PI;
+    // A day's sun over darkish ground: the incident reading sits a stop and a
+    // half above the frame's, so every reading below stays inside the reach
+    // about it the meter keeps (the volume moves the meter, not the pixels).
+    const day = meterScene(100000, '#121212');
+    const clear = day(1, 1, 0);
+    const both = day(0.5, 0.5, 0);
+    assert(Math.abs(clear - both - 1) < 0.1,
+           `half the sun and half the sky passed meter a stop darker (${clear.toFixed(2)} -> ${both.toFixed(2)})`);
+    // Half the sun alone: what the sky passed adds back half the sky's.
+    const half = day(0.5, 1, 0);
+    const skyLux = 2 * (lux(half) - lux(both)), sunLux = lux(clear) - skyLux;
+    assert(skyLux > 0.02 * lux(clear) && sunLux > 0,
+           `the sky's light counts beside the sun's (${lux(clear).toFixed(0)} lux, the sky ${skyLux.toFixed(0)})`);
+    // Light down of Lz adds 7/9 pi Lz (the CIE overcast sky's): matching a
+    // quarter of the sun, a quarter of the sun passed meters as half.
+    const overcast = day(0.25, 1, 0.25 * sunLux / (7 / 9 * Math.PI));
     assert(Math.abs(overcast - half) < 0.1,
-           `the volume's light down counts as an overcast sky's (${quarter.toFixed(2)} -> ${overcast.toFixed(2)}, half ${half.toFixed(2)})`);
+           `the volume's light down counts as an overcast sky's (${overcast.toFixed(2)}, half ${half.toFixed(2)})`);
+    // Dusk: below the knee a quarter of the light is a stop darker, not two.
+    const dusk = meterScene(30, '#121212');
+    const dim = dusk(1, 1, 0), dimmer = dusk(0.25, 0.25, 0);
+    assert(dim < 3.8 && Math.abs(dim - dimmer - 1) < 0.1,
+           `below a grey card's 3 cd/m^2 each stop of light is half a stop (${dim.toFixed(2)} -> ${dimmer.toFixed(2)})`);
 }

@@ -32,14 +32,15 @@ void PassVolume::record(SceneFrame& frame) {
     // failed leaves the meter as it was. Without the memory nothing draws
     // (frameUpload has said so).
     const uint32_t metered = std::min<uint32_t>(static_cast<uint32_t>(frame.lists.volumes.size()), kMeteredVolumes);
-    const VkDeviceSize bytes = metered * 4 * sizeof(float);
+    constexpr uint32_t kFloats = SceneFrame::kVolumeMeterFloats;
+    const VkDeviceSize bytes = metered * kFloats * sizeof(float);
     const VkDeviceSize align =
         frame.gpu.device.context().deviceProperties().limits.minStorageBufferOffsetAlignment;
     render::UploadSlice meter = frame.gpu.device.frameUpload(bytes, std::max<VkDeviceSize>(align, 16));
     if (!meter) return;
-    const float none[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    const float none[kFloats] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f};
     for (uint32_t i = 0; i < metered; ++i)
-        std::memcpy(static_cast<float*>(meter.mapped) + 4 * i, none, sizeof(none));
+        std::memcpy(static_cast<float*>(meter.mapped) + kFloats * i, none, sizeof(none));
     frame.volumeMeter = meter.buffer;
     frame.volumeMeterOffset = meter.offset;
     frame.meteredVolumes = metered;

@@ -56,6 +56,7 @@ bool SceneExposure::setup(SceneGpu& gpu) {
     b.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     b.addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    b.addBinding(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     setLayout_ = b.build(dev);
     if (!setLayout_) return false;
     layout_ = computeLayout(dev, setLayout_, sizeof(Push));
@@ -144,7 +145,7 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
     // atmosphere off it has nothing to read, and the reflected meter stands.
     const SceneAtmosphere& air = frame.gpu.atmosphere;
     const bool incident = metering && e.meter == ExposureSettings::Meter::Incident && air.active() &&
-                          air.transmittanceView() != VK_NULL_HANDLE;
+                          air.transmittanceView() != VK_NULL_HANDLE && air.skyLightView() != VK_NULL_HANDLE;
     AtmosphereGpu atm{};
     if (incident) air.fill(atm, frame.view.eye);
 
@@ -159,10 +160,14 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         writer.writeImage(3, hdr.view, sampler_);   // (unread)
     // The volumes' readings (PassVolume), else the state (unread).
     if (incident && frame.meteredVolumes > 0)
-        writer.writeBuffer(4, frame.volumeMeter, frame.meteredVolumes * 4 * sizeof(float), frame.volumeMeterOffset,
-                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        writer.writeBuffer(4, frame.volumeMeter, frame.meteredVolumes * SceneFrame::kVolumeMeterFloats * sizeof(float),
+                           frame.volumeMeterOffset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     else
         writer.writeBuffer(4, state_.buffer, kStateBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    // The sky's light table: the atmosphere makes it with the transmittance
+    // table, so it is there whenever the scene's GPU is (read only when
+    // incident).
+    writer.writeImage(5, air.skyLightView(), tableSampler_, VK_IMAGE_LAYOUT_GENERAL);
     writer.updateSet(dev, set);
 
     Push ap{};

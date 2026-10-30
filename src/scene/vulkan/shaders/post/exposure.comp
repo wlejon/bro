@@ -59,8 +59,11 @@ layout(push_constant) uniform ExposurePush {
 // shell from the push.
 layout(set = 0, binding = 3) uniform sampler2D texTransmittance;
 // What the volumes left the meter (volume.frag): per volume, the radiance
-// down from straight up (rgb) and the share of the sun it passes (a).
+// down from straight up (rgb) and the share of the sun it passes (a), then
+// the share of the sky straight up it passes (x).
 layout(std430, set = 0, binding = 4) readonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
+// The sky's light table (SceneAtmosphere's skyLight: SH by mu_s and altitude).
+layout(set = 0, binding = 5) uniform sampler3D texSkyLight;
 #include "common/scene_atmosphere_params.glsl"
 AtmosphereGpu atmAir;
 #define ATM atmAir
@@ -135,19 +138,42 @@ void main() {
                 atmAir.shell = vec4(push.rb, push.rt, 1.0, 1.0);
                 atmAir.sunIlluminance = vec4(0.0, 0.0, 0.0, push.sunRadius);
                 vec3 T = atmSunTransmittance(max(push.r, push.rb), push.muS);
-                float E = push.sunLux * dot(T, vec3(0.2126, 0.7152, 0.0722));
-                // Through the volumes: the share of the sun they pass, and
-                // their own light from above as a CIE overcast sky's, whose
-                // radiance falls from the zenith's Lz as (1 + 2 cos) / 3 and
-                // gives a level surface 7/9 pi Lz (Moon and Spencer 1942).
-                float sunT = 1.0, down = 0.0;
+                const vec3 lum = vec3(0.2126, 0.7152, 0.0722);
+                float E = push.sunLux * dot(T, lum);
+                // The sky's on a level surface (the irradiance its SH
+                // gives straight up, scene_atmosphere.glsl atmShIrradiance
+                // at local z): at dusk it is the light there is, and an
+                // eye that read the sun alone would open up as it set
+                // until the sky blew out.
+                vec2 uv = atmSkyLightUv(max(push.r, push.rb), push.muS);
+                vec4 l0 = textureLod(texSkyLight, vec3(uv, 0.1), 0.0);
+                vec4 l1 = textureLod(texSkyLight, vec3(uv, 0.3), 0.0);
+                vec4 l2 = textureLod(texSkyLight, vec3(uv, 0.5), 0.0);
+                vec3 c0 = l0.rgb, c1 = vec3(l0.a, l1.rg), c3 = l2.gba;
+                vec3 sky = ATM_PI * c0 * 0.282095 + (2.0 * ATM_PI / 3.0) * c1 * 0.488603 +
+                           (ATM_PI / 4.0) * c3 * 0.630784;
+                float skyE = push.sunLux / ATM_TABLE_SCALE * max(dot(sky, lum), 0.0);
+                // Through the volumes: the share of the sun and of the sky
+                // straight up they pass, and their own light from above as a
+                // CIE overcast sky's, whose radiance falls from the zenith's
+                // Lz as (1 + 2 cos) / 3 and gives a level surface 7/9 pi Lz
+                // (Moon and Spencer 1942).
+                float sunT = 1.0, skyT = 1.0, down = 0.0;
                 for (int k = 0; k < push.volumes; ++k) {
-                    vec4 m = volumeMeter.slots[k];
+                    vec4 m = volumeMeter.slots[2 * k];
                     sunT *= m.a;
-                    down += dot(m.rgb, vec3(0.2126, 0.7152, 0.0722));
+                    skyT *= volumeMeter.slots[2 * k + 1].x;
+                    down += dot(m.rgb, lum);
                 }
-                E = E * sunT + (7.0 / 9.0) * 3.14159265 * down;
+                E = E * sunT + skyE * skyT + (7.0 / 9.0) * 3.14159265 * down;
                 float ev = E > 0.0 ? log2(E) + push.incidentEvOffset : reflected - push.brighter;
+                // The eye adapts fully only in daylight: its threshold
+                // follows the light (Weber) while cones see, down to a grey
+                // card at about 3 cd/m^2, and below that as its square root
+                // (de Vries-Rose), so each stop less light is half a stop
+                // darker. Dusk and night read dim, as they look.
+                float knee = log2(3.0 * 3.14159265 / 0.18) + push.incidentEvOffset;
+                if (ev < knee) ev = knee - 0.5 * (knee - ev);
                 metered = clamp(ev, reflected - push.brighter, reflected + push.darker);
             }
             metered = clamp(metered, push.minEv, push.maxEv);

@@ -78,18 +78,22 @@
  *    meteredEv, exposureEv and exposureScale a few frames late.
  *    `meter: 'incident'` meters the light instead of the frame: the sun
  *    through the air at the eye (the atmosphere's transmittance, the
- *    planet's shadow included), as a hand-held incident meter reads it,
- *    at the EV the reflected meter gives a grey card in that light,
- *    log2(E / (1.2 pi)). A dark scene stays dark and a bright one bright
- *    (a forest, a planet's ocean seen from orbit, a snowfield), where the
- *    reflected meter takes each to middle grey. It is kept within 1 stop
- *    brighter and 3 darker than the reflected reading, so shade and night
- *    are still seen; with the atmosphere off the reflected meter stands.
- *    Volumes (scene.createVolume) dim the sun it reads by the share they
- *    pass from the eye toward it, and add their own light from straight
- *    up as a CIE overcast sky's (7/9 pi times the zenith radiance on a
- *    level surface; Moon and Spencer 1942): under a deck it reads the
- *    deck's light, not the hidden sun.
+ *    planet's shadow included) and the sky's light on a level surface, as
+ *    a hand-held incident meter reads it, at the EV the reflected meter
+ *    gives a grey card in that light, log2(E / (1.2 pi)). A dark scene
+ *    stays dark and a bright one bright (a forest, a planet's ocean seen
+ *    from orbit, a snowfield), where the reflected meter takes each to
+ *    middle grey. Below a grey card's 3 cd/m^2 (about 52 lux) each stop
+ *    less light is half a stop darker, as the eye's threshold goes as the
+ *    square root of the light there (de Vries-Rose): dusk and night read
+ *    dim instead of lifted to day. It is kept within 1 stop brighter and
+ *    3 darker than the reflected reading, so shade and night are still
+ *    seen; with the atmosphere off the reflected meter stands. Volumes
+ *    (scene.createVolume) dim the sun it reads by the share they pass from
+ *    the eye toward it and the sky by the share straight up, and add their
+ *    own light from straight up as a CIE overcast sky's (7/9 pi times the
+ *    zenith radiance on a level surface; Moon and Spencer 1942): under a
+ *    deck it reads the deck's light, not the hidden sun.
  *
  * Physical light values, for a scene lit in real units with auto exposure
  * (lux for directional lights, which are illuminance; candela-scale numbers

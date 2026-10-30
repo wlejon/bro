@@ -576,7 +576,8 @@ class SceneGraph {
    * It casts no shadow and is never culled. The incident exposure meter
    * (setExposure) reads it: once a frame userVolume also runs from the eye
    * toward the sun (the share it passes dims the sun the meter reads) and
-   * straight up (its light down counts as an overcast sky's), so under an
+   * straight up (the share it passes dims the sky's light, and its light
+   * down counts as an overcast sky's), so under an
    * overcast deck the meter reads the deck's light, not the sun it hides
    * (the first 8 volumes in tree order). Its uniforms, `buffer`
    * declarations and textures are a custom shader's (setShader):
