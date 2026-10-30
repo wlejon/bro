@@ -382,6 +382,7 @@
     accessor(SceneNode.prototype, "roughness", function () { return isMeshLike(this) ? __bro_native.scene.SceneNode_roughness_get(this) : undefined; }, function (v) { if (isMeshLike(this)) __bro_native.scene.SceneNode_roughness_set(this, +v); });
     accessor(SceneNode.prototype, "emissive", function () { return isMeshLike(this) ? __bro_native.scene.SceneNode_emissive_get(this) : undefined; }, function (v) { if (isMeshLike(this)) __bro_native.scene.SceneNode_emissive_set(this, +v); });
     accessor(SceneNode.prototype, "cullMargin", function () { return isMeshLike(this) ? __bro_native.scene.SceneNode_cullMargin_get(this) : undefined; }, function (v) { if (isMeshLike(this)) __bro_native.scene.SceneNode_cullMargin_set(this, +v); });
+    accessor(SceneNode.prototype, "drawOrder", function () { return __bro_native.scene.SceneNode_drawOrder_get(this); }, function (v) { __bro_native.scene.SceneNode_drawOrder_set(this, v | 0); });
     accessor(SceneNode.prototype, "boneCount", function () { return __bro_native.scene.SceneNode_boneCount_get(this); }, undefined);
     accessor(SceneNode.prototype, "skinReady", function () { return __bro_native.scene.SceneNode_skinReady_get(this); }, undefined);
     accessor(SceneNode.prototype, "isPlaying", function () {

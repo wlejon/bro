@@ -888,6 +888,8 @@ bool bro_scene_SceneNode_boxProjection_get(void* self);
 void bro_scene_SceneNode_boxProjection_set(void* self, bool bp);
 double bro_scene_SceneNode_cullMargin_get(void* self);
 void bro_scene_SceneNode_cullMargin_set(void* self, double v);
+int32_t bro_scene_SceneNode_drawOrder_get(void* self);
+void bro_scene_SceneNode_drawOrder_set(void* self, int32_t v);
 int32_t bro_scene_SceneNode_splatCount_get(void* self);
 void bro_scene_SceneNode_setCloud(void* self, const float* pos, uint32_t posCount, const float* scales, uint32_t scaleCount, const float* rots, uint32_t rotCount, const float* opacities, uint32_t opCount, const float* sh, uint32_t shCount, int32_t shDegree);
 bool bro_scene_SceneNode_loadSplatPly(void* self, const char* path);

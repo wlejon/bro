@@ -61,6 +61,15 @@ public:
         if (v != visible_) { visible_ = v; ++changeGeneration_; }
     }
 
+    // --- Draw order ---
+    // Where the opaque pass draws the node's meshes, low first (stable, so
+    // equal orders keep the scene's order): what covers others drawn first
+    // fails the hidden ones at the early depth test instead of shading them
+    // and drawing over them (foliage over the ground it stands on). 10 by
+    // default.
+    uint8_t drawOrder() const { return drawOrder_; }
+    void setDrawOrder(uint8_t order) { drawOrder_ = order; }
+
     // --- Visibility range (camera-distance gate) ---
     // Optional world-space distance window: while set, the node only renders
     // when begin <= d < end, where d is the distance from the camera eye to
@@ -197,6 +206,7 @@ private:
     mutable bool eulerValid_ = true;
     bromath::Vec3 scale_{1, 1, 1};
     bool visible_ = true;
+    uint8_t drawOrder_ = 10;
     uint64_t changeGeneration_ = 1;
 
     // Visibility-range gate (see setVisibilityRange). rangeGateOpen_ is the

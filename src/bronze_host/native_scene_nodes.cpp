@@ -630,6 +630,16 @@ void bro_scene_SceneNode_cullMargin_set(void* self, double v) {
     }
 }
 
+int32_t bro_scene_SceneNode_drawOrder_get(void* self) {
+    auto* n = nodeOf(self);
+    return n ? static_cast<int32_t>(n->drawOrder()) : 0;
+}
+
+void bro_scene_SceneNode_drawOrder_set(void* self, int32_t v) {
+    auto* n = nodeOf(self);
+    if (n) n->setDrawOrder(static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v));
+}
+
 double bro_scene_SceneNode_intensity_get(void* self) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Light) {

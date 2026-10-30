@@ -433,6 +433,8 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_boxProjection_set", BRO_NATIVE_FN(bro_scene_SceneNode_boxProjection_set), "void", {"__bro_native.scene.SceneNode", "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_cullMargin_get", BRO_NATIVE_FN(bro_scene_SceneNode_cullMargin_get), "f64", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_cullMargin_set", BRO_NATIVE_FN(bro_scene_SceneNode_cullMargin_set), "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_drawOrder_get", BRO_NATIVE_FN(bro_scene_SceneNode_drawOrder_get), "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_drawOrder_set", BRO_NATIVE_FN(bro_scene_SceneNode_drawOrder_set), "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_splatCount_get", BRO_NATIVE_FN(bro_scene_SceneNode_splatCount_get), "i32", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setCloud", BRO_NATIVE_FN(bro_scene_SceneNode_setCloud), "void", {"__bro_native.scene.SceneNode", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_loadSplatPly", BRO_NATIVE_FN(bro_scene_SceneNode_loadSplatPly), "bool", {"__bro_native.scene.SceneNode", "str"}, error) &&

@@ -146,7 +146,7 @@ struct MeshDraw {
     float viewDepth = 0.0f;      // along the view direction, for sorting
     /// Where the opaque pass draws it (stable, low first): what is near and
     /// solid first, so what is behind it fails the early depth test
-    /// (kOrderMid for anything not ranked).
+    /// (SceneNode::drawOrder, kOrderMid unless set).
     static constexpr uint8_t kOrderMid = 10;
     uint8_t order = kOrderMid;
     /// What the timed passes call it (a static string; null: its kind's name).

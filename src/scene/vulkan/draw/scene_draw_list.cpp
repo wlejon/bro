@@ -104,6 +104,7 @@ void buildDrawLists(SceneFrame& frame) {
         }
 
         draw.cameraCulled = culled;
+        draw.order = node->drawOrder();
         placeDraw(frame, node, bounds, draw);
         const auto index = static_cast<uint32_t>(lists.meshes.size());
         lists.meshes.push_back(draw);
