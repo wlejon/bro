@@ -120,14 +120,18 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(detail > 1e-3, `and adds detail of its own (${detail})`);
 
     // The draw list on the GPU is the drawn set.
-    const records = cache.drawList.read(new Int32Array(cache.drawCount * 8));
-    let listOk = cache.drawCount === drawn.length;
+    const records = cache.drawList.read(new Int32Array(cache.drawCount * 16));
+    const floats = new Float32Array(records.buffer);
+    let listOk = cache.drawCount === drawn.length, centerErr = 0;
     for (let i = 0; i < drawn.length && listOk; i++) {
-        const r = records.subarray(i * 8, i * 8 + 8), t = drawn[i];
+        const r = records.subarray(i * 16, i * 16 + 16), t = drawn[i];
         listOk = r[0] === t.slot && r[1] === t.parentSlot && r[2] === t.root && r[3] === t.level &&
-                 r[4] === t.x && r[5] === t.y;
+                 r[4] === t.x && r[5] === t.y && Math.abs(floats[i * 16 + 11] - t.radius) <= t.radius * 1e-6;
+        for (let k = 0; k < 3; k++)
+            centerErr = Math.max(centerErr, Math.abs(floats[i * 16 + 8 + k] + floats[i * 16 + 12 + k] - t.center[k]));
     }
-    assert(listOk, 'the draw list holds the drawn tiles\' slots and ids');
+    assert(listOk, 'the draw list holds the drawn tiles\' slots, ids and radii');
+    assert(centerErr < 1e-9, `and their centers as hi + lo, to f64 (${centerErr})`);
 
     // A cache too small to hold both views evicts and refills.
     const small = makeCache({ capacity: 24 });

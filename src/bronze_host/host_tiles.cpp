@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,7 +24,11 @@ namespace ev = bronze::embed;
 using Value = bronze::Value;
 using tilecache::DrawTile;
 
-constexpr uint32_t kRecordInts = 8;   // a drawList record: slot, parentSlot, root, level, x, y, 0, 0
+// A drawList record, 16 words: int32 slot, parentSlot, root, level, x, y, 0,
+// 0, then float32 centerHi.xyz, radius, centerLo.xyz, 0 (the bounding
+// sphere's center as hi + lo, so a shader can subtract a camera split the
+// same way and get a camera-relative position to f64 accuracy).
+constexpr uint32_t kRecordInts = 16;
 
 struct Layer {
     std::string name;
@@ -146,6 +151,14 @@ void writeDrawList(Cache& c) {
         r[3] = static_cast<int32_t>(d.id.level);
         r[4] = static_cast<int32_t>(d.id.x);
         r[5] = static_cast<int32_t>(d.id.y);
+        float f[8] = {};
+        const double c[3] = {d.bounds.center.x, d.bounds.center.y, d.bounds.center.z};
+        for (int k = 0; k < 3; ++k) {
+            f[k] = static_cast<float>(c[k]);
+            f[4 + k] = static_cast<float>(c[k] - static_cast<double>(f[k]));
+        }
+        f[3] = static_cast<float>(d.bounds.radius);
+        std::memcpy(r + 8, f, sizeof(f));
     }
     std::string err;
     c.drawList->write(0, records.data(), records.size() * sizeof(int32_t), &err);

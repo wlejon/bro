@@ -188,6 +188,7 @@ private:
     std::unordered_map<uint64_t, Entry> entries_;
     std::unordered_map<uint64_t, Wanted> wanted_;
     std::vector<uint32_t> freeSlots_;
+    mutable std::unordered_map<uint64_t, Bounds> boundsCache_;
     Stats stats_;
 };
 

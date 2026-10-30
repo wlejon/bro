@@ -146,9 +146,19 @@ const terrain = bro.tiles.createCache({
 //                   parentSlot is -1 for a root. Without a frustum it covers
 //                   every root once; with one, less the tiles it culled.
 // cache.drawCount   drawn.length
-// cache.drawList    KernelBuffer of drawCount records of 8 int32s:
-//                   slot, parentSlot, root, level, x, y, 0, 0, the draw set
-//                   on the GPU for a shader or kernel to walk
+// cache.drawList    KernelBuffer of drawCount records of 16 words, the draw
+//                   set on the GPU for a shader or kernel to walk: int32
+//                   slot, parentSlot, root, level, x, y, 0, 0, then float32
+//                   centerHi.xyz, radius, centerLo.xyz, 0, the bounding
+//                   sphere's center split hi + lo. A frame needs nothing
+//                   else from the CPU: draw drawCount instances, each
+//                   reading record gl_InstanceIndex (`buffer ivec4 u_tiles[]`,
+//                   four ivec4 a record, intBitsToFloat for the floats), and
+//                   place it at (centerHi - camHi) + (centerLo - camLo) with
+//                   the camera split the same way, a camera-relative position
+//                   good to f64 at any distance (demos/planet in broworkshop).
+//                   `drawn` builds an object a tile: for inspection, not for
+//                   every frame.
 // cache.layer(name) the layer's whole pool as a KernelBuffer: a scene
 //                   node's custom shader binds it (setShaderBuffer, scene-
 //                   nodes-api.js) and reads tile `slot` at slot * cells * cells
@@ -160,11 +170,16 @@ const terrain = bro.tiles.createCache({
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 
-function frame(camera) {
-    terrain.update({ position: camera.position, fov: camera.fov, viewportHeight: 1080 });
-    // node.setShaderBuffer('u_heights', terrain.layer('height'));
-    // node.setShaderBuffer('u_tiles', terrain.drawList);
-    // node.instanceCount = terrain.drawCount;
+function frame(camera, patch) {
+    terrain.update({ position: camera.position, forward: camera.forward, up: camera.up,
+                     fov: camera.fov, viewportWidth: 1920, viewportHeight: 1080 });
+    // patch: an instanced mesh whose shader reads u_heights and u_tiles
+    // (bound once: patch.setShaderBuffer('u_heights', terrain.layer('height'));
+    // patch.setShaderBuffer('u_tiles', terrain.drawList)).
+    if (patch.instanceCount !== terrain.drawCount) patch.setInstanceCount(terrain.drawCount);
+    const hi = camera.position.map(Math.fround);
+    patch.setShaderUniform('u_camHi', hi);
+    patch.setShaderUniform('u_camLo', camera.position.map((v, i) => v - hi[i]));
 }
 
 // Errors: options that are not an object, an unknown domain type or a

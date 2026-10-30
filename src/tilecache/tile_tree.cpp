@@ -78,12 +78,18 @@ void TileTree::clear() {
 }
 
 Bounds TileTree::bounds(const TileId& id) const {
+    // A tile's bounds never change; selection asks for every candidate's
+    // each frame, so they are kept (and dropped wholesale past a few
+    // capacities' worth, which a moving view refills).
+    if (const auto it = boundsCache_.find(id.key()); it != boundsCache_.end()) return it->second;
+    if (boundsCache_.size() > 8 * static_cast<size_t>(config_.capacity)) boundsCache_.clear();
     Bounds b;
     b.center = config_.domain.point(id, 0.5, 0.5);
     static constexpr double kSamples[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0}, {0.5, 1}, {0, 0.5}, {1, 0.5}};
     for (const auto& s : kSamples)
         b.radius = std::max(b.radius, length(sub(config_.domain.point(id, s[0], s[1]), b.center)));
     b.radius += config_.maxHeight;
+    boundsCache_.emplace(id.key(), b);
     return b;
 }
 
