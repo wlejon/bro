@@ -90,10 +90,11 @@
  *    3 darker than the reflected reading, so shade and night are still
  *    seen; with the atmosphere off the reflected meter stands. Volumes
  *    (scene.createVolume) dim the sun it reads by the share they pass from
- *    the eye toward it and the sky by the share straight up, and add their
- *    own light from straight up as a CIE overcast sky's (7/9 pi times the
- *    zenith radiance on a level surface; Moon and Spencer 1942): under a
- *    deck it reads the deck's light, not the hidden sun.
+ *    the eye toward it (over a cone of a few degrees) and the sky by the
+ *    share they pass over its hemisphere, cosine-weighted as an incident
+ *    meter's dome takes it, and add their own light from above the same
+ *    way: under a deck it reads the deck's light, not the hidden sun, and a
+ *    broken sky reads as its average rather than all cloud or none.
  *
  * Physical light values, for a scene lit in real units with auto exposure
  * (lux for directional lights, which are illuminance; candela-scale numbers

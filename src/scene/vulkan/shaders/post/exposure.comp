@@ -58,9 +58,11 @@ layout(push_constant) uniform ExposurePush {
 // The incident meter's air: the transmittance table (binding 3) and the
 // shell from the push.
 layout(set = 0, binding = 3) uniform sampler2D texTransmittance;
-// What the volumes left the meter (volume.frag): per volume, the radiance
-// down from straight up (rgb) and the share of the sun it passes (a), then
-// the share of the sky straight up it passes (x).
+// What the volumes left the meter (volume.frag): per volume, METER_RAYS
+// pairs, one a ray: the radiance down along a ray over the sky's hemisphere
+// (rgb, cosine-weighted rays) and the share of the sun passed along one in a
+// cone about it (a), then the share passed along the hemisphere's (x).
+const int METER_RAYS = 4;   // SceneFrame::kVolumeMeterRays, volume.frag's
 layout(std430, set = 0, binding = 4) readonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
 // The sky's light table (SceneAtmosphere's skyLight: SH by mu_s and altitude).
 layout(set = 0, binding = 5) uniform sampler3D texSkyLight;
@@ -154,18 +156,21 @@ void main() {
                            (ATM_PI / 4.0) * c3 * 0.630784;
                 float skyE = push.sunLux / ATM_TABLE_SCALE * max(dot(sky, lum), 0.0);
                 // Through the volumes: the share of the sun and of the sky
-                // straight up they pass, and their own light from above as a
-                // CIE overcast sky's, whose radiance falls from the zenith's
-                // Lz as (1 + 2 cos) / 3 and gives a level surface 7/9 pi Lz
-                // (Moon and Spencer 1942).
+                // they pass, and their own light from above, pi times its
+                // cosine-weighted mean radiance (volume.frag's readings).
                 float sunT = 1.0, skyT = 1.0, down = 0.0;
                 for (int k = 0; k < push.volumes; ++k) {
-                    vec4 m = volumeMeter.slots[2 * k];
-                    sunT *= m.a;
-                    skyT *= volumeMeter.slots[2 * k + 1].x;
-                    down += dot(m.rgb, lum);
+                    float s = 0.0, t = 0.0;
+                    for (int j = 0; j < METER_RAYS; ++j) {
+                        vec4 m = volumeMeter.slots[2 * (k * METER_RAYS + j)];
+                        s += m.a;
+                        t += volumeMeter.slots[2 * (k * METER_RAYS + j) + 1].x;
+                        down += dot(m.rgb, lum) / float(METER_RAYS);
+                    }
+                    sunT *= s / float(METER_RAYS);
+                    skyT *= t / float(METER_RAYS);
                 }
-                E = E * sunT + skyE * skyT + (7.0 / 9.0) * 3.14159265 * down;
+                E = E * sunT + skyE * skyT + 3.14159265 * down;
                 float ev = E > 0.0 ? log2(E) + push.incidentEvOffset : reflected - push.brighter;
                 // The eye adapts fully only in daylight: its threshold
                 // follows the light (Weber) while cones see, down to a grey

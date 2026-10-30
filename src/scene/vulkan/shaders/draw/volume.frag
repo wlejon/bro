@@ -26,11 +26,18 @@
 // below, and read the engine's camera (camera.eyeWorld: the eye's absolute
 // position) and lighting uniforms.
 //
-// The frame's first pixel also marches two rays from the eye for the
-// exposure's incident meter (scene/exposure.h): toward the sun, for the share
-// of it the medium passes, and straight up, for the light the medium sends
-// down, so a meter under an overcast deck reads the deck's light and not the
-// sun it hides.
+// The frame's first METER_RAYS pixels also march rays from the eye for the
+// exposure's incident meter (scene/exposure.h), as its dome takes the light,
+// a pair each: one in a cone about the sun, for the share of it the medium
+// passes, and one cosine-weighted over the sky's hemisphere, for the share
+// of the sky it passes and the light it sends down, so a meter under an
+// overcast deck reads the deck's light and not the sun it hides. One ray
+// each read a broken sky as all cloud or none, so the exposure jumped by
+// stops as a cloud's shadow edge crossed the eye, and disagreed with the
+// ground about it, whose cloud shadows are averages over its footprint.
+// Spread over pixels, no invocation marches more than the two.
+const int METER_RAYS = 4;   // SceneFrame::kVolumeMeterRays, exposure.comp's
+const float METER_SUN_SPREAD = 0.05;   // the sun cone's radius, radians (about 3 degrees)
 
 #include "common/scene_camera.glsl"
 #include "common/scene_lighting.glsl"
@@ -44,9 +51,10 @@ layout(location = 1) out float outDepth;
 
 // The opaque depth (SceneTargets::depthSnapshot), in the material set's slot.
 layout(set = 2, binding = 0) uniform sampler2D texSceneDepth;
-// The meter's readings, two slots per volume in draw order: the radiance down
-// from straight up (rgb) and the sun's transmittance (a), then the
-// transmittance straight up (x) (PassVolume).
+// The meter's readings, METER_RAYS pairs of slots per volume in draw order,
+// one pair a ray: the radiance down along the hemisphere's ray (rgb) and the
+// sun's transmittance along the cone's (a), then the transmittance along the
+// hemisphere's (x) (PassVolume).
 layout(std430, set = 2, binding = 5) writeonly buffer VolumeMeter { vec4 slots[]; } volumeMeter;
 
 // The sun's illuminance at camera-relative `pos` (its light's colour times
@@ -83,14 +91,25 @@ void main() {
     float depth = 0.0;
 #ifdef CUSTOM_VOLUME
     userVolume(dir, sceneDist, radiance, transmittance, depth);
-    if (all(equal(ivec2(gl_FragCoord.xy), ivec2(0))) && 2 * inVolume + 1 < volumeMeter.slots.length()) {
+    ivec2 meterPixel = ivec2(gl_FragCoord.xy);
+    int slot = 2 * (inVolume * METER_RAYS + meterPixel.x);
+    if (meterPixel.y == 0 && meterPixel.x < METER_RAYS && slot + 1 < volumeMeter.slots.length()) {
         vec3 up = sceneAtmosphereOn() ? normalize(atmOrigin(vec3(0.0))) : vec3(0.0, 1.0, 0.0);
+        vec3 toSun = sceneToSun();
+        vec3 su = normalize(cross(toSun, abs(toSun.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec3 sv = cross(toSun, su);
+        vec3 hu = normalize(cross(up, abs(up.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec3 hv = cross(up, hu);
+        float a = 2.39996 * float(meterPixel.x);
         vec3 sunL = vec3(0.0), upL = vec3(0.0);
         float sunT = 1.0, upT = 1.0, d = 0.0;
-        userVolume(sceneToSun(), 1e30, sunL, sunT, d);
-        userVolume(up, 1e30, upL, upT, d);
-        volumeMeter.slots[2 * inVolume] = vec4(upL, clamp(sunT, 0.0, 1.0));
-        volumeMeter.slots[2 * inVolume + 1] = vec4(clamp(upT, 0.0, 1.0), 0.0, 0.0, 0.0);
+        userVolume(normalize(toSun + METER_SUN_SPREAD * (cos(a) * su + sin(a) * sv)), 1e30, sunL, sunT, d);
+        // Cosine-weighted over the hemisphere: a disc's equal areas lifted
+        // onto it (Malley).
+        float r = sqrt((float(meterPixel.x) + 0.5) / float(METER_RAYS));
+        userVolume(r * (cos(a) * hu + sin(a) * hv) + sqrt(max(1.0 - r * r, 0.0)) * up, 1e30, upL, upT, d);
+        volumeMeter.slots[slot] = vec4(upL, clamp(sunT, 0.0, 1.0));
+        volumeMeter.slots[slot + 1] = vec4(clamp(upT, 0.0, 1.0), 0.0, 0.0, 0.0);
     }
 #endif
     transmittance = clamp(transmittance, 0.0, 1.0);

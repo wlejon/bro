@@ -146,8 +146,10 @@ if (!probe.scene) {
     assert(threw instanceof TypeError, 'createVolume without a fragment chunk throws a TypeError');
 
     // The incident meter reads the volumes: one that passes a share of the
-    // sun only along the ray to it, and sends light down only along the ray
-    // straight up, leaves every pixel as it was and moves the meter alone.
+    // sun within a few degrees of it and a share of the sky over the rest of
+    // the hemisphere, sending light down evenly from it, only at the frame's
+    // first pixels (where the meter's rays are marched), leaves the frame as
+    // it was and moves the meter alone.
     // The meter reads the sun and the sky's light on a level surface; above
     // a grey card's 3 cd/m^2 an EV is log2(E / (1.2 pi)), so E goes as 2^EV.
     const meterScene = (intensity, ground) => {
@@ -162,8 +164,9 @@ if (!probe.scene) {
                 uniform float u_down;
                 void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
                                 inout float transmittance, inout float depth) {
-                    if (dot(dir, sceneToSun()) > 0.9999) transmittance = u_sunT;
-                    if (dir.y > 0.9999) { radiance = vec3(u_down); transmittance = u_upT; }
+                    if (gl_FragCoord.y > 1.0 || gl_FragCoord.x > 4.0) return;
+                    if (dot(dir, sceneToSun()) > 0.998) transmittance = u_sunT;
+                    else if (dir.y > 0.0) { radiance = vec3(u_down); transmittance = u_upT; }
                 }`,
             uniforms: { u_sunT: 1.0, u_upT: 1.0, u_down: 0.0 },
         });
@@ -190,9 +193,9 @@ if (!probe.scene) {
     const skyLux = 2 * (lux(half) - lux(both)), sunLux = lux(clear) - skyLux;
     assert(skyLux > 0.02 * lux(clear) && sunLux > 0,
            `the sky's light counts beside the sun's (${lux(clear).toFixed(0)} lux, the sky ${skyLux.toFixed(0)})`);
-    // Light down of Lz adds 7/9 pi Lz (the CIE overcast sky's): matching a
-    // quarter of the sun, a quarter of the sun passed meters as half.
-    const overcast = day(0.25, 1, 0.25 * sunLux / (7 / 9 * Math.PI));
+    // Light down of L from the whole hemisphere adds pi L: matching a quarter
+    // of the sun, a quarter of the sun passed meters as half.
+    const overcast = day(0.25, 1, 0.25 * sunLux / Math.PI);
     assert(Math.abs(overcast - half) < 0.1,
            `the volume's light down counts as an overcast sky's (${overcast.toFixed(2)}, half ${half.toFixed(2)})`);
     // Dusk: below the knee a quarter of the light is a stop darker, not two.

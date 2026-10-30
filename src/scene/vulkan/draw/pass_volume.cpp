@@ -107,9 +107,9 @@ void PassVolume::record(SceneFrame& frame) {
         frame.gpu.device.context().deviceProperties().limits.minStorageBufferOffsetAlignment;
     render::UploadSlice meter = frame.gpu.device.frameUpload(bytes, std::max<VkDeviceSize>(align, 16));
     if (!meter) return;
-    const float none[kFloats] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f};
-    for (uint32_t i = 0; i < metered; ++i)
-        std::memcpy(static_cast<float*>(meter.mapped) + kFloats * i, none, sizeof(none));
+    const float none[8] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    for (uint32_t i = 0; i < metered * SceneFrame::kVolumeMeterRays; ++i)
+        std::memcpy(static_cast<float*>(meter.mapped) + 8 * i, none, sizeof(none));
     frame.volumeMeter = meter.buffer;
     frame.volumeMeterOffset = meter.offset;
     frame.meteredVolumes = metered;

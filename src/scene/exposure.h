@@ -49,8 +49,9 @@ struct ExposureSettings {
     // It is kept within kIncidentBrighter stops brighter and kIncidentDarker
     // darker than the reflected reading, so shade and night are still seen.
     // The scene's volumes dim the sun by the share they pass from the eye
-    // toward it and the sky by the share straight up, and add their own
-    // light from straight up, as an overcast sky's (volume.frag,
+    // toward it (over a cone of a few degrees) and the sky by the share they
+    // pass over its hemisphere, cosine-weighted as the meter's dome takes
+    // it, and add their own light from above the same way (volume.frag,
     // exposure.comp), so under a deck it reads the deck's light.
     enum class Meter : uint8_t { Reflected, Incident };
     Meter meter = Meter::Reflected;
