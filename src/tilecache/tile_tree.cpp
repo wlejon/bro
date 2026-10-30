@@ -324,12 +324,15 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
     std::vector<int32_t> missing;
     for (const int32_t i : wanted_)
         if (nodes_[i].state == State::Missing) missing.push_back(i);
-    // Coarse first (a parent is ready before its children are offered), then
-    // the largest projected error.
+    // The largest projected error first: what is drawn most wrong, the
+    // ground nearest the eye, refines before ground far off that a coarse
+    // tile already draws nearly right. A parent projects larger than its
+    // children, so along any chain the parent still comes first (a child
+    // whose parent is not ready waits, below).
     std::sort(missing.begin(), missing.end(), [&](int32_t ia, int32_t ib) {
         const Node &a = nodes_[ia], &b = nodes_[ib];
-        if (a.id.level != b.id.level) return a.id.level < b.id.level;
         if (a.error != b.error) return a.error > b.error;
+        if (a.id.level != b.id.level) return a.id.level < b.id.level;
         return a.id.key() < b.id.key();
     });
     // With no free slot, the least recently wanted ready tiles no view wants
