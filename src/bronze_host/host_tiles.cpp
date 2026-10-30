@@ -46,6 +46,11 @@ struct Cache {
     std::vector<Layer> layers;
     std::shared_ptr<brokernel::api::GpuBuffer> drawList;
     std::vector<DrawTile> drawn;
+    // Each slot's { name: KernelBuffer } views, made the first time the slot
+    // is produced into and handed out again after: a slot's range of each
+    // pool never changes, and views made afresh for every tile were thousands
+    // of host objects for each collection to finalize.
+    std::vector<ev::Persistent> slotLayers;
 };
 
 ev::HostClass g_cacheClass;
@@ -90,15 +95,21 @@ Value vec3(const tilecache::Vec3d& v) {
     return a.get();
 }
 
-// { name: KernelBuffer } over the tile's range of each layer's pool.
-Value layerViews(const Cache& c, uint32_t slot) {
+// { name: KernelBuffer } over the slot's range of each layer's pool: the same
+// object every time for a slot.
+Value layerViews(Cache& c, uint32_t slot) {
+    if (c.slotLayers.size() <= slot) c.slotLayers.resize(c.tree.config().capacity);
+    Value held = c.slotLayers[slot].get();
+    if (ev::isObject(held)) return held;
     ev::ObjectBuilder b;
     for (const Layer& l : c.layers)
         b.set(l.name, brokernel::api::bufferValue(engineBufferView(l.pool, l.tileBytes * slot, l.tileBytes)));
-    return b.get();
+    Value views = b.get();
+    c.slotLayers[slot].set(views);
+    return views;
 }
 
-Value tileObject(const Cache& c, const tilecache::Production& p) {
+Value tileObject(Cache& c, const tilecache::Production& p) {
     const tilecache::Domain& d = c.tree.config().domain;
     ev::ObjectBuilder t;
     t.set("root", p.id.root);

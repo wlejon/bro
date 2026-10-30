@@ -73,7 +73,8 @@
 //                       to `center` keeps them small enough for f32
 //   layers              { name: KernelBuffer }: this tile's range of each
 //                       pool, cells * cells elements laid out [x, y] at
-//                       y * cells + x, a store bounded to the tile
+//                       y * cells + x, a store bounded to the tile; the same
+//                       object (and views) every time that slot is produced
 //   parent              null for a root, else { slot, layers, quadrant: [qx, qy] }:
 //                       the parent's buffers (resident while the child is
 //                       produced), and which quarter of it this tile covers:
