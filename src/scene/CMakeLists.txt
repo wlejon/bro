@@ -210,9 +210,10 @@ if(BRO_BUILD_TESTS)
 
     # Live GPU SDF sphere-tracing, cone-traced soft shadows, ambient occlusion,
     # and SPIR-V 1.5 compute shader formal verification.
-    add_executable(bro_sdf_gpu_tracer_test tests/test_sdf_gpu_tracer.cpp sdf_gpu_tracer.cpp sdf_gpu_vulkan.cpp)
-    target_link_libraries(bro_sdf_gpu_tracer_test PRIVATE bromesh bromath brass bro_glsl)
-    target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src)
+    add_executable(bro_sdf_gpu_tracer_test tests/test_sdf_gpu_tracer.cpp)
+    target_link_libraries(bro_sdf_gpu_tracer_test PRIVATE bro_scene bro_engine bro_dom bro_engine
+                          bro_render bro_platform bro_util bro_glsl bromesh bromath brass skia Vulkan::Vulkan)
+    target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
 
 

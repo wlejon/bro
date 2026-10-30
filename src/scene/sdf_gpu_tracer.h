@@ -69,27 +69,28 @@ struct SdfSpirvAuditSummary {
 };
 
 /// Live GPU SDF sphere-tracer, cone-traced soft-shadow & ambient-occlusion evaluator,
-/// and SPIR-V 1.5 compute shader compiler + formal verifier + Vulkan compute dispatcher.
+/// and SPIR-V 1.5 compute shader compiler + formal verifier. The GPU half
+/// dispatches on the engine's device (SceneRenderer::defaultVulkanContext()'s
+/// render::VulkanCompute), so it runs on the main thread.
 class SdfGpuTracer {
 public:
-    /// Returns true if a Vulkan 1.2+ compute queue with PhysicalStorageBufferAddresses is
-    /// available for hardware-accelerated SDF compute dispatch.
+    /// Returns true if the engine's device can run the compute kernels here
+    /// (render::VulkanCompute::available) and BRO_SDF_FORCE_CPU is not set.
     static bool vulkanAvailable();
 
-    /// Returns the name of the active Vulkan compute device (or empty string if unavailable).
+    /// Returns the name of the engine's Vulkan device (or empty string if unavailable).
     static std::string vulkanDeviceName();
 
     /// Returns true if the most recent traceRays / traceRaysGpu / evaluateGridGpu call
-    /// dispatched on the hardware Vulkan compute queue.
+    /// dispatched on the GPU.
     static bool lastTraceUsedVulkanGpu();
 
-    /// Returns the number of compiled SPIR-V compute pipelines cached in VulkanModule storage.
+    /// Returns the number of compiled compute pipelines cached.
     static uint32_t cachedVulkanPipelineCount();
 
-    /// Release the cached pipelines and close brass's Vulkan runtime, while
-    /// the driver is still loaded (brass's own exit handler runs in libbro's
-    /// DLL detach, after the driver's). The engine's shutdown calls it.
-    static void closeVulkan();
+    /// Drop the cached pipelines. The engine's shutdown calls it, before its
+    /// device goes.
+    static void releasePipelines();
 
     /// Compile an SdfGraph into a Vulkan SPIR-V 1.5 grid evaluation compute shader
     /// (`eval_sdf_gpu`) via `bromesh::JitSdfCompiler::compile_spirv` and verify it.

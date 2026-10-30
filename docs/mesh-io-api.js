@@ -473,6 +473,43 @@ class SDFGraph {
   /** @param {MeshSdfMeshOptions} [opts] @returns {Mesh} */
   surfaceNets(opts) {}
 
+  // --- Evaluation and sphere tracing ----------------------------------------
+  //
+  // The *Gpu forms compile the graph to a SPIR-V compute kernel and dispatch
+  // it on the engine's Vulkan device (cached per graph hash), falling back to
+  // the CPU when there is none: `bro.mesh.sdfVulkanAvailable()`,
+  // `bro.mesh.sdfVulkanDeviceName()`, and `bro.mesh.sdfLastTraceUsedGpu()`
+  // after a call say which ran. BRO_SDF_FORCE_CPU=1 keeps them on the CPU.
+
+  /** Distance at a point. @param {Array<number>|number} p -  [x,y,z], or three loose numbers. @returns {number} */
+  evalPoint(p) {}
+
+  /**
+   * Sphere-trace one ray on the CPU.
+   * @param {Array<number>} origin @param {Array<number>} dir
+   * @param {Object} [cfg] -  maxSteps, hitEpsilon, lightDir, shadowK, aoSteps, ...
+   * @returns {{hit: boolean, t: number, distance: number, position: number[], normal: number[],
+   *            softShadow: number, ambientOcclusion: number, steps: number}}
+   */
+  traceRay(origin, dir, cfg) {}
+
+  /**
+   * Sphere-trace a batch of rays. `rays` holds 8 floats per ray
+   * (origin xyz, tMin, dir xyz, tMax) or 6 (origin, dir). Returns 8 floats per
+   * hit: t, normal xyz, softShadow, ambientOcclusion, hit (1/0), steps.
+   * @param {Float32Array} rays @param {Object} [cfg] @returns {Float32Array}
+   */
+  traceRaysGpu(rays, cfg) {}
+
+  /**
+   * The distance at every cell of a grid spanning [min, max] (cell i at
+   * min + i * (max - min) / (dim - 1)), x fastest.
+   * @param {{dimX?: number, dimY?: number, dimZ?: number, resolution?: number,
+   *          min?: number[], max?: number[]}} opts
+   * @returns {{dimX: number, dimY: number, dimZ: number, usedVulkanGpu: boolean, field: Float32Array}}
+   */
+  evaluateGridGpu(opts) {}
+
 }
 
 /** @returns {SDFGraph} */

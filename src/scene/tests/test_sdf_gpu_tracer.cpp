@@ -1,7 +1,9 @@
 #include "scene/sdf_gpu_tracer.h"
 #include "render/glsl_compiler.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
+#include "scene/scene_renderer.h"
 
-#include <brass/gpu/vulkan_driver.hpp>
 #include <bromesh/isosurface/jit/sdf_compiler.h>
 
 #include <cmath>
@@ -277,7 +279,7 @@ void testVulkanGpuComputeExecutionAndParity() {
     g.setRoot(root);
 
     const bool vkAvail = SdfGpuTracer::vulkanAvailable();
-    check(vkAvail, "Vulkan compute queue with PhysicalStorageBufferAddresses is available");
+    check(vkAvail, "the engine's device runs compute kernels (VulkanCompute::available)");
     if (vkAvail) {
         check(!SdfGpuTracer::vulkanDeviceName().empty(), "Vulkan compute device name is non-empty");
     }
@@ -323,7 +325,7 @@ void testVulkanGpuComputeExecutionAndParity() {
         check(raysUsedVk && SdfGpuTracer::lastTraceUsedVulkanGpu(),
               "traceRaysGpu executed on hardware Vulkan compute queue");
         check(SdfGpuTracer::cachedVulkanPipelineCount() >= 2,
-              "VulkanModule pipeline cache holds compiled grid + raymarch pipelines");
+              "the pipeline cache holds the compiled grid + raymarch pipelines");
     }
 
     std::vector<SdfTraceHit> cpuHits;
@@ -431,12 +433,29 @@ void main() {
 } // namespace
 
 int main() {
+    // The engine's device, as the tracer finds it in a running engine: the
+    // default context, with a frame begun (Engine::beginGpuFrame).
+    bro::render::VulkanContextConfig cfg;
+    cfg.headless = true;
+    cfg.enableValidation = true;
+    bro::render::VulkanContext context(cfg);
+    if (!context.init()) {
+        std::fprintf(stderr, "Failed to initialize headless Vulkan context!\n");
+        return 1;
+    }
+    SceneRenderer::setDefaultVulkanContext(&context);
+    context.frames().beginFrame();
+
     testSpirvCompilationAndFormalAudit();
     testSphereTracingAccuracy();
     testConeTracedSoftShadowsAndAmbientOcclusion();
     testLiveCsgParameterUpdateWithoutMeshing();
     testVulkanGpuComputeExecutionAndParity();
     testGlslCompilerRelaxedPrecisionAndComputeAudit();
+
+    SdfGpuTracer::releasePipelines();
+    SceneRenderer::setDefaultVulkanContext(nullptr);
+    check(bro::render::vulkanValidationErrorCount() == 0, "no Vulkan validation errors");
 
     std::printf("bro_sdf_gpu_tracer_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

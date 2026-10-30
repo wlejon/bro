@@ -169,13 +169,12 @@ void installBroRoots(engine::Engine& engine) {
     }
 #if BRO_WITH_3D
     {
-        // The SDF tracer runs on brass's own Vulkan runtime, which must close
-        // while the driver is still loaded (SdfGpuTracer::closeVulkan). Once
-        // per engine.
+        // The SDF tracer's cached pipelines go before the engine's device.
+        // Once per engine.
         static engine::Engine* s_engine = nullptr;
         if (s_engine != &engine) {
             s_engine = &engine;
-            engine.addShutdownHook([] { scene::SdfGpuTracer::closeVulkan(); });
+            engine.addShutdownHook([] { scene::SdfGpuTracer::releasePipelines(); });
         }
     }
 #endif
