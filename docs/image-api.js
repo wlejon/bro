@@ -1091,6 +1091,38 @@ bro.image.warpAffineU8 = function(dst, src, params) {};
  */
 bro.image.sharpness = function(src, params) {};
 
+// ── Compare: how one image differs from another ──────────────────────────────
+//
+// The measured oracle for a change of look: a render against the one before
+// it, overall and over a grid of cells, so a change is sized and placed (the
+// sky's band, the horizon's, the ground's). Per channel the signed mean of
+// b - a (brighter, bluer), the rms over every channel and the PSNR it makes,
+// the largest difference, the share of pixels changed past `threshold`, and
+// the SSIM of the luma (Wang et al. 2004; 8 x 8 windows stepped by 4): 1 for
+// the same structure, falling as edges and texture move or blur, whatever
+// the brightness does. Integer sums in one order: the same answer everywhere.
+// CPU, a 1920 x 1080 RGBA pair in a few tens of milliseconds.
+
+/**
+ * @param {Uint8Array} a  the reference
+ * @param {Uint8Array} b  the same size
+ * @param {{width:number, height:number, channels?:number, strideA?:number, strideB?:number,
+ *          rows?:number, cols?:number, threshold?:number}} params
+ *   channels  1..4 (default 4); 1 and 2 are luma (+ alpha)
+ *   rows, cols  the grid of cells (default 1 x 1; clamped to the image)
+ *   threshold  a channel difference over this changes its pixel (default 8)
+ * @returns {{mean:number[], rms:number, psnr:number, maxAbs:number, changed:number, ssim:number,
+ *            cells:{x:number, y:number, w:number, h:number, mean:number[], rms:number, psnr:number,
+ *                   maxAbs:number, changed:number, ssim:number}[]}}
+ *   psnr in dB, Infinity when equal; changed 0..1; cells row-major.
+ * @example
+ *   // Before and after a lighting change, by bands down the frame.
+ *   const A = bro.image.decodeOriented('before.png'), B = bro.image.decodeOriented('after.png');
+ *   const d = bro.image.compare(A.pixels, B.pixels, { width: A.width, height: A.height, rows: 6 });
+ *   d.cells.forEach((c) => console.log(c.y, c.mean.map((v) => v.toFixed(1)), c.ssim.toFixed(3)));
+ */
+bro.image.compare = function(a, b, params) {};
+
 // ── Geometric, untyped names ─────────────────────────────────────────────────
 //
 // The same broimage kernels under the shorter names, with the same option keys

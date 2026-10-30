@@ -1,13 +1,16 @@
 // perf.* for the 3D scene's measurement hygiene (docs/headless.md "Shader
 // A/B" and "Settling a scene"): a second set of the scene's shaders measured
-// against the first frame by frame in one process, and the scene's settle
-// state with a helper that runs frames on a held clock until it is settled.
+// against the first frame by frame in one process, the scene's settle state
+// with a helper that runs frames on a held clock until it is settled, and a
+// run of frames in motion measured (perf.measure).
 
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_brokit.h"
 #include "engine/engine.h"
 #if BRO_WITH_3D
+#include "render/vulkan_compute.h"
+#include "render/vulkan_context.h"
 #include "scene/scene_renderer.h"
 
 #include <json.hpp>
@@ -145,6 +148,30 @@ nlohmann::json diffOf(const std::vector<double>& a, const std::vector<double>& b
     return {{"ms", s.mean}, {"median", s.median}, {"se", se}, {"pct", aMean > 0 ? 100.0 * s.mean / aMean : 0.0}};
 }
 
+// The q-th quantile (0..1) of v, sorted, by the nearest rank.
+double quantile(const std::vector<double>& sorted, double q) {
+    if (sorted.empty()) return 0.0;
+    const size_t i = static_cast<size_t>(std::ceil(q * static_cast<double>(sorted.size())));
+    return sorted[std::min(sorted.size() - 1, i == 0 ? 0 : i - 1)];
+}
+
+// A run's distribution: { mean, median, p90, p99, max }.
+nlohmann::json spreadOf(std::vector<double> v) {
+    const double mean = summarize(v).mean;
+    std::sort(v.begin(), v.end());
+    return {{"mean", mean}, {"median", quantile(v, 0.5)}, {"p90", quantile(v, 0.9)},
+            {"p99", quantile(v, 0.99)}, {"max", v.empty() ? 0.0 : v.back()}};
+}
+
+// The compute dispatches finished since the last take, by kernel (ms).
+std::map<std::string, double> frameKernels(engine::Engine& engine) {
+    std::map<std::string, double> out;
+    render::VulkanContext* ctx = engine.vulkanContext();
+    if (!ctx) return out;
+    for (const render::ComputeTime& t : ctx->compute().takeTimes()) out[t.label] += t.ms;
+    return out;
+}
+
 // The frame's passes by name, the compute stream's prefixed "compute:".
 std::map<std::string, double> framePasses(engine::Engine& engine) {
     std::vector<std::pair<std::string, double>> passes, compute;
@@ -247,6 +274,96 @@ void installHeadlessScenePerf(engine::Engine& engine,
             j["frames"] = frames;
             j["pending"] = pending;
             j["waited"] = waited;
+            return fromJson(j);
+        });
+    // perf.measure({ frames, warm, step, held, budget, stepMs }): a run of frames,
+    // step(i) called before each (the camera moved, the sun turned), each
+    // frame's scene render and kernels waited on.
+    setPerfFn("measure", 1,
+        [&engine](Value, std::span<const Value> a) -> Value {
+            const Value opts = a.empty() ? ev::undefined() : a[0];
+            const int frames = static_cast<int>(std::max(1.0, optNumber(opts, "frames", 120)));
+            const int warm = static_cast<int>(std::max(0.0, optNumber(opts, "warm", 0)));
+            const bool held = optBool(opts, "held", false);
+            const double budget = optNumber(opts, "budget", 1000.0 / 360.0);
+            // A frame is one tick of the clock (advanceTime runs one at most
+            // 16 ms long): the page's frame and the render it asks for.
+            const double stepMs = std::clamp(optNumber(opts, "stepMs", budget), 0.01, 16.0);
+            const ev::Persistent step(ev::isObject(opts) ? ev::getProperty(opts, "step") : ev::undefined());
+            if (!ev::isUndefined(step.get()) && !ev::isFunction(step.get()))
+                return ev::throwTypeError("measure: step must be a function");
+            HeldClock clock(engine, held);
+            // (The first calls turn the stamps on.)
+            framePasses(engine);
+            if (render::VulkanContext* ctx = engine.vulkanContext()) ctx->compute().setTiming(true);
+            int i = 0;
+            // One frame: step(i), then the frame, its GPU work waited on.
+            // False when step threw (the throw is the measure's).
+            ev::Persistent thrown(ev::undefined());
+            const auto frame = [&]() -> bool {
+                if (ev::isFunction(step.get())) {
+                    Value arg = ev::fromDouble(i);
+                    ev::CallResult r = ev::call(step.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+                    if (r.thrown) {
+                        thrown.set(r.value);
+                        return false;
+                    }
+                }
+                engine.advanceTime(stepMs);
+                pumpBrokitTicks();
+                drainMicrotasksAndLocalFetches();
+                return true;
+            };
+            for (int w = 0; w < warm; ++w, ++i) {
+                if (!frame()) return ev::throwValue(thrown.get());
+                engine.gpuFrameMs(true);
+            }
+            frameKernels(engine);
+            std::vector<double> gpu, kern, total, wall;
+            std::map<std::string, double> passSum, kernelSum;
+            nlohmann::json spikes = nlohmann::json::array();
+            for (int k = 0; k < frames; ++k, ++i) {
+                const auto t0 = std::chrono::steady_clock::now();
+                if (!frame()) return ev::throwValue(thrown.get());
+                const double ms = engine.gpuFrameMs(true);
+                wall.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                const std::map<std::string, double> passes = framePasses(engine);
+                const std::map<std::string, double> kernels = frameKernels(engine);
+                double km = 0;
+                for (const auto& [n, v] : kernels) {
+                    km += v;
+                    kernelSum[n] += v;
+                }
+                for (const auto& [n, v] : passes) passSum[n] += v;
+                gpu.push_back(ms);
+                kern.push_back(km);
+                total.push_back(ms + km);
+                if (ms + km > budget) {
+                    nlohmann::json s;
+                    s["frame"] = k;
+                    s["total"] = ms + km;
+                    s["gpu"] = ms;
+                    s["kernels"] = km;
+                    // What it went on: the passes and kernels of a tenth of
+                    // the budget or more.
+                    for (const auto& [n, v] : passes) if (v >= 0.1 * budget) s["passes"][n] = v;
+                    for (const auto& [n, v] : kernels) if (v >= 0.1 * budget) s["kernelsBy"][n] = v;
+                    spikes.push_back(s);
+                }
+            }
+            nlohmann::json j;
+            j["frames"] = frames;
+            j["budget"] = budget;
+            j["gpu"] = spreadOf(gpu);
+            j["kernels"] = spreadOf(kern);
+            j["total"] = spreadOf(total);
+            j["wall"] = spreadOf(wall);
+            j["passes"] = nlohmann::json::object();
+            for (const auto& [n, v] : passSum) j["passes"][n] = v / frames;
+            j["kernelsBy"] = nlohmann::json::object();
+            for (const auto& [n, v] : kernelSum) j["kernelsBy"][n] = v / frames;
+            j["over"] = spikes.size();
+            j["spikes"] = spikes;
             return fromJson(j);
         });
     // perf.asyncShaders([on]): whether frames skip what is still compiling
