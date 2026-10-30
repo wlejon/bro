@@ -39,6 +39,19 @@ set_target_properties(libbro PROPERTIES
 target_compile_definitions(libbro PRIVATE BRO_RUNTIME_BUILD)
 target_include_directories(libbro PUBLIC ${bro_SOURCE_DIR}/src)
 
+# Windows: a running bro maps libbro and its executable, and the linker cannot
+# overwrite a mapped file. Each link first moves the old one aside and sweeps
+# the stale copies nothing runs any more (cmake/move_aside_running.cmake).
+function(bro_move_aside_before_link target)
+    if(WIN32)
+        add_custom_command(TARGET ${target} PRE_LINK
+            COMMAND "${CMAKE_COMMAND}" -DFILE=$<TARGET_FILE:${target}>
+                    -P "${bro_SOURCE_DIR}/cmake/move_aside_running.cmake"
+            VERBATIM)
+    endif()
+endfunction()
+bro_move_aside_before_link(libbro)
+
 # Every static library bro builds under src/ that the engine links. Linked
 # normally (which brings each one's own dependencies) and, off Windows, also
 # as whole archives so the library carries the full C++ surface rather than
@@ -180,6 +193,7 @@ if(BRO_BUILD_EXECUTABLES)
         target_compile_definitions(${name} PRIVATE BRO_EXE_ENTRY=${entry} BRO_RUNTIME_SHARED)
         target_link_libraries(${name} PRIVATE libbro)
         target_include_directories(${name} PRIVATE ${bro_SOURCE_DIR}/src)
+        bro_move_aside_before_link(${name})
         bro_bronze_stage_runtime(${name})
         if(_bro_origin_rpath)
             set_property(TARGET ${name} APPEND PROPERTY BUILD_RPATH "${_bro_origin_rpath}")
