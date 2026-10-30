@@ -182,12 +182,63 @@ void testCubeSphere() {
               ", others " + std::to_string(deepestOther) + ")");
 }
 
+// With a frustum, tiles outside it are not refined and not drawn, and on a
+// cube-sphere neither are tiles past the horizon.
+void testFrustum() {
+    TileTree all(planeConfig(4096)), seen(planeConfig(4096));
+    View v = viewAt(13.7, 10, 21.3);
+    all.select(v);
+    v.frustum = true;
+    v.forward = {1, 0, 0};       // looking along +x, level with the plane
+    v.right = {0, 0, 1};
+    v.up = {0, 1, 0};
+    v.tanHalfX = v.tanHalfY = std::tan(30.0 * 3.14159265358979 / 180.0);
+    seen.select(v);
+    check(seen.wanted() < all.wanted() * 3 / 4, "a frustum refines fewer tiles (" + std::to_string(seen.wanted()) +
+                                                    " of " + std::to_string(all.wanted()) + ")");
+    bool parentFirst = true;
+    produceAll(seen, 64, parentFirst);
+    bool behind = false, under = false;
+    for (const DrawTile& d : seen.drawSet()) {
+        const double ext = seen.config().domain.tileExtent(d.id);
+        const Vec3d o = seen.config().domain.point(d.id, 0, 0);
+        if (o.x + ext < 13.7 - d.bounds.radius * 2) behind = true;
+        // 30 m ahead the ground is 18 degrees down, inside the 30 degree half-angle.
+        if (o.x <= 43.7 && 43.7 < o.x + ext && o.z <= 21.3 && 21.3 < o.z + ext && d.id.level >= 6) under = true;
+    }
+    check(!behind, "nothing wholly behind the camera is drawn");
+    check(under, "the ground in view ahead still refines");
+
+    Config c;
+    c.domain.kind = Domain::Kind::CubeSphere;
+    c.domain.radius = 6.371e6;
+    c.tileSize = 64;
+    c.capacity = 4096;
+    c.maxLevel = 20;
+    c.maxHeight = 9000;
+    TileTree sphere(c);
+    View s = viewAt(0, c.domain.radius + 2000, 0);
+    s.frustum = true;
+    s.forward = {1, 0, 0};       // toward the horizon, which is ~160 km away
+    s.right = {0, 0, 1};
+    s.up = {0, 1, 0};
+    s.tanHalfX = s.tanHalfY = 1;
+    sphere.select(s);
+    produceAll(sphere, 256, parentFirst);
+    bool farSide = false;
+    for (const DrawTile& d : sphere.drawSet())
+        if (d.bounds.center.y < 0 || d.bounds.center.x > 2e6) farSide = true;
+    check(!farSide, "a cube-sphere draws nothing past the horizon");
+    check(!sphere.drawSet().empty(), "and draws the ground in view");
+}
+
 } // namespace
 
 int main() {
     testPlaneSelection();
     testEvictionAndRefill();
     testCubeSphere();
+    testFrustum();
     std::printf("bro_tilecache_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

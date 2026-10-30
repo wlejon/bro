@@ -130,14 +130,21 @@ const terrain = bro.tiles.createCache({
 // 2. TileCache
 // ============================================================================
 //
-// cache.update({ position: [x, y, z], fov = 60, viewportHeight = 1080 }) -> number
+// cache.update({ position: [x, y, z], fov = 60, viewportHeight = 1080,
+//                forward, up = [0, 1, 0], viewportWidth }) -> number
 //   Selects the tiles this view wants, produces up to producePerUpdate of
 //   the missing ones (calling produce), refreshes the draw set and draw
 //   list, and returns how many it produced. Call it once a frame.
+//   With `forward` (the camera's view direction; `up` its up, viewportWidth
+//   / viewportHeight its aspect) the view is a frustum: tiles outside it,
+//   and on a cube-sphere tiles below the horizon of the surface lowered by
+//   maxHeight, are neither refined nor drawn, so the capacity goes to what
+//   is seen. Without it every tile in range refines and is drawn.
 //
 // cache.drawn       the draw set: [{ root, level, x, y, slot, parentSlot,
-//                   center: [x, y, z], radius }], each tile's bounding sphere
-//                   for culling; parentSlot is -1 for a root
+//                   center: [x, y, z], radius }], each tile's bounding sphere;
+//                   parentSlot is -1 for a root. Without a frustum it covers
+//                   every root once; with one, less the tiles it culled.
 // cache.drawCount   drawn.length
 // cache.drawList    KernelBuffer of drawCount records of 8 int32s:
 //                   slot, parentSlot, root, level, x, y, 0, 0, the draw set

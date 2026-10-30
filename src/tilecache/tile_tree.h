@@ -100,6 +100,13 @@ struct View {
     Vec3d position;
     /// Pixels per unit of size at unit distance: viewport height / (2 tan(fov / 2)).
     double projScale = 1;
+    /// With a frustum, a tile outside it (or, on a cube-sphere, below the
+    /// horizon) is not refined and not drawn; it stays wanted at the level
+    /// that covers it. `forward`, `right` and `up` are unit and orthogonal;
+    /// tanHalfX / tanHalfY are the tangents of the half field of view.
+    bool frustum = false;
+    Vec3d forward, right, up;
+    double tanHalfX = 1, tanHalfY = 1;
 };
 
 struct Production {
@@ -137,7 +144,8 @@ public:
     /// The production failed: the slot goes back, the tile stays missing.
     void abandon(const TileId& id);
 
-    /// The ready tiles that cover the wanted tree without overlap.
+    /// The ready tiles that cover the wanted tree without overlap, less those
+    /// the last view culled.
     std::vector<DrawTile> drawSet() const;
 
     /// Wanted tiles not ready yet.
@@ -165,9 +173,12 @@ private:
         TileId id;
         double error = 0;   // > 1: its cells project larger than pixelsPerCell
         bool leaf = true;
+        bool visible = true;
     };
 
-    double error(const TileId& id, const View& view) const;
+    bool visible(const Bounds& b, const View& view) const;
+    /// 0 for a tile the view culls.
+    double error(const TileId& id, const View& view, bool* seen) const;
     bool isReady(const TileId& id) const;
     bool allocate(Entry& e);
     void coverInto(const TileId& id, std::vector<DrawTile>& out, bool& ok) const;

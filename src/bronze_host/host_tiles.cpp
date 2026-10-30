@@ -162,7 +162,25 @@ Value js_update(Value self, std::span<const Value> args) {
     const double height = numberOr(view, "viewportHeight", 1080.0);
     tilecache::View v;
     v.position = {pos[0], pos[1], pos[2]};
-    v.projScale = height / (2.0 * std::tan(fovDeg * 3.14159265358979323846 / 360.0));
+    const double tanHalf = std::tan(fovDeg * 3.14159265358979323846 / 360.0);
+    v.projScale = height / (2.0 * tanHalf);
+    double fwd[3], up[3] = {0, 1, 0};
+    if (numbers(view, "forward", fwd, 3)) {
+        numbers(view, "up", up, 3);
+        auto unit = [](tilecache::Vec3d a) {
+            const double l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+            return l > 0 ? tilecache::Vec3d{a.x / l, a.y / l, a.z / l} : a;
+        };
+        auto cross = [](const tilecache::Vec3d& a, const tilecache::Vec3d& b) {
+            return tilecache::Vec3d{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+        };
+        v.forward = unit({fwd[0], fwd[1], fwd[2]});
+        v.right = unit(cross(v.forward, {up[0], up[1], up[2]}));
+        v.up = cross(v.right, v.forward);
+        v.tanHalfY = tanHalf;
+        v.tanHalfX = tanHalf * numberOr(view, "viewportWidth", height * 16.0 / 9.0) / height;
+        v.frustum = true;
+    }
     c->tree.select(v);
 
     const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->producePerUpdate);

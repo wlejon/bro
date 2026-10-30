@@ -12,6 +12,7 @@ constexpr double kHalfPi = 1.57079632679489661923;
 
 double length(const Vec3d& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 Vec3d sub(const Vec3d& a, const Vec3d& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+double dot(const Vec3d& a, const Vec3d& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 } // namespace
 
@@ -82,8 +83,39 @@ Bounds TileTree::bounds(const TileId& id) const {
     return b;
 }
 
-double TileTree::error(const TileId& id, const View& view) const {
+bool TileTree::visible(const Bounds& b, const View& view) const {
+    const Vec3d rel = sub(b.center, view.position);
+    if (view.frustum) {
+        const double z = dot(rel, view.forward);
+        if (z < -b.radius) return false;
+        // Each side plane through the eye, its normal's tangent-space form
+        // scaled to unit length: a sphere beyond any of them is outside.
+        const double x = std::abs(dot(rel, view.right)), y = std::abs(dot(rel, view.up));
+        const double cx = 1 / std::sqrt(1 + view.tanHalfX * view.tanHalfX);
+        const double cy = 1 / std::sqrt(1 + view.tanHalfY * view.tanHalfY);
+        if ((x - z * view.tanHalfX) * cx > b.radius) return false;
+        if ((y - z * view.tanHalfY) * cy > b.radius) return false;
+    }
+    if (view.frustum && config_.domain.kind == Domain::Kind::CubeSphere) {
+        // Beyond the horizon of the lowest surface (radius - maxHeight): a
+        // point h above it is seen no farther than the two tangent lengths
+        // sqrt(d^2 - r0^2) + sqrt((r0 + h)^2 - r0^2), and no point of the tile
+        // is more than 2 maxHeight above it.
+        const double r0 = std::max(config_.domain.radius - config_.maxHeight, 0.0);
+        const double d = length(sub(view.position, config_.domain.center));
+        if (d > r0) {
+            const double h = 2 * config_.maxHeight;
+            const double reach = std::sqrt(d * d - r0 * r0) + std::sqrt(h * (2 * r0 + h));
+            if (length(rel) - b.radius > reach) return false;
+        }
+    }
+    return true;
+}
+
+double TileTree::error(const TileId& id, const View& view, bool* seen) const {
     const Bounds b = bounds(id);
+    *seen = visible(b, view);
+    if (!*seen) return 0;
     const double cell = config_.domain.tileExtent(id) / std::max<uint32_t>(config_.tileSize, 1);
     const double dist = std::max(length(sub(view.position, b.center)) - b.radius, cell * 1e-3);
     return cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
@@ -98,10 +130,12 @@ void TileTree::select(const View& view) {
         return a.error != b.error ? a.error < b.error : a.id.key() > b.id.key();
     };
     std::priority_queue<Wanted, std::vector<Wanted>, decltype(cmp)> open(cmp);
-    for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) {
-        const TileId id{r, 0, 0, 0};
-        open.push({id, error(id, view), true});
-    }
+    auto offer = [&](const TileId& id) {
+        Wanted w{id};
+        w.error = error(id, view, &w.visible);
+        open.push(w);
+    };
+    for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) offer({r, 0, 0, 0});
     uint32_t count = config_.domain.rootCount();
     while (!open.empty()) {
         Wanted w = open.top();
@@ -109,10 +143,7 @@ void TileTree::select(const View& view) {
         if (w.error > 1.0 && w.id.level < config_.maxLevel && count + 4 <= config_.capacity) {
             w.leaf = false;
             count += 4;
-            for (uint32_t i = 0; i < 4; ++i) {
-                const TileId c = w.id.child(i);
-                open.push({c, error(c, view), true});
-            }
+            for (uint32_t i = 0; i < 4; ++i) offer(w.id.child(i));
         }
         wanted_[w.id.key()] = w;
     }
@@ -216,6 +247,7 @@ void TileTree::coverInto(const TileId& id, std::vector<DrawTile>& out, bool& ok)
     const auto wit = wanted_.find(id.key());
     const bool ready = isReady(id);
     auto self = [&] {
+        if (wit != wanted_.end() && !wit->second.visible) return;   // covered, but culled
         DrawTile d;
         d.id = id;
         d.slot = static_cast<uint32_t>(slotOf(id));
