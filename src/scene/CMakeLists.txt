@@ -59,6 +59,7 @@ endfunction()
 
 embed_vk_shader(draw/mesh.vert                  kVkMeshVertSrc)
 embed_vk_shader(draw/mesh.frag                  kVkMeshFragSrc)
+embed_vk_shader(draw/volume.frag                kVkVolumeFragSrc)
 embed_vk_shader(draw/mesh_instanced.vert        kVkMeshInstancedVertSrc)
 embed_vk_shader(draw/mesh_skinned.vert          kVkMeshSkinnedVertSrc)
 embed_vk_shader(shadow/shadow.vert              kVkShadowVertSrc)
@@ -140,6 +141,7 @@ add_library(bro_scene STATIC
     vulkan/draw/scene_draw_list.cpp
     vulkan/draw/pass_mesh.cpp
     vulkan/draw/pass_decal.cpp
+    vulkan/draw/pass_volume.cpp
     vulkan/draw/pass_particles.cpp
     vulkan/draw/pass_billboard.cpp
     vulkan/draw/pass_gaussian_splat.cpp

@@ -25,6 +25,7 @@ struct SceneDrawLists {
     std::vector<uint32_t> opaque;          // indices into meshes (not culled)
     std::vector<uint32_t> translucent;     // indices, far to near (not culled)
     std::vector<uint32_t> overlay;         // unlit meshes, tree order (not culled)
+    std::vector<MeshDraw> volumes;         // volumes (MeshNode::isVolume), tree order: the volume pass draws them
 };
 
 /// Fill frame.lists from the graph and count the forward-pass culling stats.

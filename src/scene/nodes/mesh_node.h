@@ -285,6 +285,16 @@ public:
     void setTwoSided(bool b) { twoSided_ = b; }
     bool twoSided() const { return twoSided_; }
 
+    /// A volume (scene.createVolume): not a surface but a medium over the
+    /// whole view, its custom fragment chunk's userVolume marching each
+    /// pixel's ray up to the opaque depth (draw/volume.frag). Its mesh is
+    /// never drawn; it casts no shadow and is never culled.
+    void setVolume(bool b) {
+        volume_ = b;
+        if (b) castsShadow_ = false;
+    }
+    bool isVolume() const { return volume_; }
+
     /// Subsurface / wrap-lighting amount [0,1]. When > 0 AND twoSided is on,
     /// the shader adds a cheap leaf-translucency term that lights the back
     /// of the surface relative to the dominant directional light.
@@ -547,6 +557,7 @@ private:
     bool castsShadow_ = true;
     bool receivesShadow_ = true;
     bool twoSided_ = false;
+    bool volume_ = false;
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
     float windMask_ = 0.0f;

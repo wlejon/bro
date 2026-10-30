@@ -144,6 +144,12 @@ public:
                                            bool indirectOutput,
                                            std::string& errOut);
 
+    /// A volume's fragment stage: the fragment chunk (its userVolume)
+    /// spliced into volume.frag. The vertex stage is the built-in
+    /// VolumeVert.
+    static bool compileVolumeModule(VkDevice device, const CustomShaderInterface& iface, VkShaderModule& outFs,
+                                    std::string& errOut);
+
     /// The shadow vertex stage a chunk is spliced into: shadow.vert,
     /// shadow_skinned.vert or shadow_instanced.vert.
     enum class ShadowCaster { Static, Skinned, Instanced };

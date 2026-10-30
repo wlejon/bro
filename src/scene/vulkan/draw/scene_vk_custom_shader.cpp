@@ -9,6 +9,7 @@
 
 #include "mesh.vert.src.h"
 #include "mesh.frag.src.h"
+#include "volume.frag.src.h"
 #include "mesh_instanced.vert.src.h"
 #include "mesh_skinned.vert.src.h"
 #include "shadow.vert.src.h"
@@ -336,6 +337,15 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
                                                std::string& errOut) {
     CustomShaderInterface iface;
     if (!iface.parse(vertexChunk, fragmentChunk, errOut)) return false;
+    if (target == SceneRenderer::CustomShaderTarget::Volume) {
+        if (!vertexChunk.empty() || fragmentChunk.find("void userVolume(") == std::string::npos) {
+            errOut = "a volume takes a fragment chunk defining userVolume, and no vertex chunk";
+            return false;
+        }
+        const std::string fs = iface.withExtensions(
+            splice(base("draw/volume.frag", kVkVolumeFragSrc), iface.fragmentSource(), "CUSTOM_VOLUME"));
+        return !SceneVkShaderCompiler::compileGlsl(fs, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut).empty();
+    }
     if (!vertexChunk.empty()) {
         const std::string vs = iface.withExtensions(splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX"));
         if (SceneVkShaderCompiler::compileGlsl(vs, VK_SHADER_STAGE_VERTEX_BIT, &errOut).empty()) return false;
@@ -377,6 +387,17 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
         return false;
     }
     return true;
+}
+
+bool SceneVkCustomShader::compileVolumeModule(VkDevice device, const CustomShaderInterface& iface,
+                                              VkShaderModule& outFs, std::string& errOut) {
+    const std::string fsSrc = iface.withExtensions(
+        splice(base("draw/volume.frag", kVkVolumeFragSrc), iface.fragmentSource(), "CUSTOM_VOLUME"));
+    const auto spirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
+    if (spirv.empty()) return false;
+    outFs = SceneVkShaderModule::create(device, spirv);
+    if (outFs == VK_NULL_HANDLE) errOut = "Failed to create VkShaderModule";
+    return outFs != VK_NULL_HANDLE;
 }
 
 bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,

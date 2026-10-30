@@ -234,6 +234,8 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
     }
 
     const Rooted opts(ev::fromBits(optsBits));
+    // scene.createVolume: a medium over the view, not a surface (MeshNode::setVolume).
+    if (ev::isObject(opts) && ev::toBool(ev::getProperty(opts, "volume"))) node->setVolume(true);
     if (ev::isObject(opts)) {
         // 1. Raw positions/indices
         const Rooted posVal(ev::getProperty(opts, "positions"));

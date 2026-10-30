@@ -5,6 +5,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/draw/pass_billboard.h"
 #include "scene/vulkan/draw/pass_decal.h"
+#include "scene/vulkan/draw/pass_volume.h"
 #include "scene/vulkan/post/pass_dof.h"
 #include "scene/vulkan/lighting/pass_atmosphere.h"
 #include "scene/vulkan/lighting/pass_environment.h"
@@ -61,6 +62,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // Decals land on the opaque result and so in the reflections; SSR runs
     // before anything blended, which draws over both.
     graph_.add(std::make_unique<PassDecal>());
+    graph_.add(std::make_unique<PassVolume>());
     graph_.add(std::make_unique<PassColorSnapshot>());
     graph_.add(std::make_unique<PassSSR>());
     graph_.add(std::make_unique<PassTranslucent>());

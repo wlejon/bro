@@ -121,9 +121,10 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
     fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
     fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
+    vsVolume_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::VolumeVert);
     bool vsAll = true;
     for (int k = 0; k < kMeshKindCount; ++k) vsAll = vsAll && vs_[k];
-    if (!vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_) {
+    if (!vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ || !vsVolume_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -148,6 +149,8 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     SceneVkShaderModule::destroy(device_, fsVegIndirect_);
     SceneVkShaderModule::destroy(device_, fsBark_);
     SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
+    SceneVkShaderModule::destroy(device_, vsVolume_);
+    vsVolume_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -259,6 +262,63 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
         return nullptr;
     }
     return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
+}
+
+SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShaderState& cs) {
+    const std::string key = cs.key + "\x1evolume";
+    auto it = custom_.find(key);
+    if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
+
+    auto prog = std::make_unique<CustomProgram>();
+    std::string err;
+    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
+        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, prog->fs, err)) {
+        // Logged once; the volume draws nothing from now on.
+        LOG_ERROR("SceneMeshDrawer: Failed compiling a volume shader: %s", err.c_str());
+        prog->failed = true;
+        custom_.emplace(key, std::move(prog));
+        return nullptr;
+    }
+    return custom_.emplace(key, std::move(prog)).first->second.get();
+}
+
+void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
+                                   VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw) {
+    if (!draw.volume || !draw.custom || !draw.customSet) return;
+    CustomProgram* prog = volumeProgram(*draw.custom);
+    if (!prog) return;
+    const bool atmosphere = atmosphere_;
+    VkPipeline pipeline = prog->pipelines.get(atmosphere ? raster::kAtmosphere : 0u, target, [&] {
+        // Over the scene: dst * transmittance (the source alpha) + the
+        // volume's light; the scene's alpha is kept.
+        VkPipelineColorBlendAttachmentState blend{};
+        blend.blendEnable = VK_TRUE;
+        blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend.colorBlendOp = VK_BLEND_OP_ADD;
+        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT;
+        SceneVkPipelineBuilder b;
+        b.setShaderStages(vsVolume_, prog->fs)
+         .setVertexInput({}, {})
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(target)
+         .setColorBlendAttachment(0, blend)
+         .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
+         .disableDepthTest();
+        return b.build(device_, layout_);
+    });
+    if (!pipeline) return;
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, depthSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
 VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target) {
@@ -501,6 +561,18 @@ VkDescriptorSet materialSet(SceneFrame& frame, const SceneDefaults& d, const Mat
 }  // namespace
 
 bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) {
+    if (node.isVolume()) {
+        const CustomShaderState* cs = node.customShader();
+        CustomProgram* prog = cs ? volumeProgram(*cs) : nullptr;
+        if (!prog) return false;
+        out.volume = true;
+        out.nodeId = node.id();
+        out.custom = cs;
+        out.castsShadow = false;
+        out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures(),
+                                  node.customShaderBuffers());
+        return out.customSet != VK_NULL_HANDLE;
+    }
     const bromesh::MeshData& data = node.currentMesh();
     if (data.empty()) return false;
     const uint32_t slot = &data == &node.mesh() ? 0u : static_cast<uint32_t>(node.selectedLod()) + 1u;

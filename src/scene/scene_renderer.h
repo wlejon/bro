@@ -481,7 +481,7 @@ public:
     /// Which mesh pipeline a custom-shader variant targets. Static and
     /// Skinned share mesh.vert/mesh.frag (SKINNED define); Instanced splices
     /// into mesh_instanced.vert.
-    enum class CustomShaderTarget : uint8_t { Static, Skinned, Instanced };
+    enum class CustomShaderTarget : uint8_t { Static, Skinned, Instanced, Volume };
 
     /// Compile a pair of user GLSL chunks (either may be empty) for
     /// `target` to SPIR-V, so setShader can report errors at set time.

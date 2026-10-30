@@ -21,7 +21,7 @@ void copyWhole(VkCommandBuffer cmd, const SceneVkImage& src, const SceneVkImage&
 }  // namespace
 
 bool PassDepthSnapshot::active(const SceneFrame& frame) const {
-    if (frame.ssao || frame.ssr || frame.dof) return true;
+    if (frame.ssao || frame.ssr || frame.dof || !frame.lists.volumes.empty()) return true;
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() == SceneNode::Type::Decal) return true;
         if (node->type() == SceneNode::Type::Particles3D) {

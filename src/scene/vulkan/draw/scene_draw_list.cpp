@@ -74,6 +74,12 @@ void buildDrawLists(SceneFrame& frame) {
             continue;
         }
 
+        if (type == SceneNode::Type::Mesh && static_cast<MeshNode*>(node)->isVolume()) {
+            // Over the whole view, so never culled, and drawn by no mesh pass.
+            MeshDraw draw;
+            if (drawer.prepare(frame, *static_cast<MeshNode*>(node), draw)) lists.volumes.push_back(draw);
+            continue;
+        }
         const auto bounds = frame.renderer.nodeWorldBounds(node);
         const bool culled = frustum && bounds && !bromath::fintersects(*frustum, *bounds);
         bool overlay = false;

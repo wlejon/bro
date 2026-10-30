@@ -61,7 +61,9 @@ const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const 
     bool isSkinned = false;
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* mn = static_cast<scene::MeshNode*>(n);
-        if (mn->asSkinnedMesh()) {
+        if (mn->isVolume()) {
+            target = scene::SceneRenderer::CustomShaderTarget::Volume;
+        } else if (mn->asSkinnedMesh()) {
             target = scene::SceneRenderer::CustomShaderTarget::Skinned;
             isSkinned = true;
         }

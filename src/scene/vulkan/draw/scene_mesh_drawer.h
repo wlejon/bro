@@ -137,6 +137,9 @@ struct MeshDraw {
     float lineWidth = 1.0f;
     bool mirrored = false;       // drawn through a y-flipped projection (probe faces): clockwise is front
     bool noDepthTest = false;    // ignores depth entirely (gizmo handles)
+    /// A volume (MeshNode::isVolume): only `custom`, `customSet` and
+    /// `nodeId` are set, and only recordVolume draws it.
+    bool volume = false;
     float depthBiasFactor = 0.0f;   // MeshNode::setDepthBias: negative pulls toward the camera
     float depthBiasUnits = 0.0f;
     bool cameraCulled = false;   // outside the camera frustum this frame
@@ -192,6 +195,13 @@ public:
 
     VkPipelineLayout layout() const { return layout_; }
 
+    /// Draw a volume (MeshDraw::volume) over the open HDR target: its
+    /// triangle over the view, blended as dst * transmittance + its light
+    /// (volume.frag), reading the opaque depth from `depthSet` (the
+    /// material layout, the depth at binding 0).
+    void recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
+                      VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw);
+
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
     /// with the shadow casters, whose pipelines read the same streams. A
     /// chunked draw given `cull` draws its chunks inside cull's frustum,
@@ -221,6 +231,8 @@ private:
     template <typename Node>
     static uint32_t resolveShade(const Node& node, MeshDraw& out);
     CustomProgram* program(const CustomShaderState& cs, MeshKind kind);
+    /// A volume's: `fs` its volume.frag build, `vs` unset (vsVolume_).
+    CustomProgram* volumeProgram(const CustomShaderState& cs);
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures,
                               const std::vector<CustomShaderBuffer>& buffers);
@@ -254,6 +266,7 @@ private:
     VkShaderModule fsVegIndirect_ = VK_NULL_HANDLE;
     VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube: mesh.frag's SCENE_BARK build
     VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsVolume_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
     std::shared_ptr<render::ComputeBuffer> zeroBuffer_;

@@ -552,6 +552,53 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
+   * A medium over the whole view: clouds, fog banks, smoke, light shafts.
+   * Not a surface: each frame it runs one triangle over the view whose
+   * fragment chunk defines
+   *
+   *   void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+   *                   inout float transmittance, inout float depth)
+   *
+   * and marches the pixel's ray: `dir` unit and camera-relative (the eye at
+   * the origin; `camera.eyeWorld` is its absolute position), up to
+   * `sceneDist`, the opaque surface's distance along the ray (1e30 over the
+   * sky). It sets `radiance`, the light the medium sends the eye (as it
+   * leaves the medium), `transmittance` (from 1), the share of what lies
+   * behind that comes through, and `depth`, the distance its light comes
+   * from. The pixel becomes scene * transmittance + airT * radiance +
+   * (1 - transmittance) * airL, airT and airL the air between the eye and
+   * `depth` (aerial perspective, else fog), whose own light the scene behind
+   * already carries. The chunk may call `sceneToSun()` (unit, to the sun),
+   * `volumeSunLight(pos)` (the sun's illuminance at camera-relative pos,
+   * through the air) and `volumeSkyLight(pos, n)` (the sky's irradiance
+   * over pi on a surface facing n). Drawn after the opaque surfaces, their
+   * sky and the decals, before SSR and translucent surfaces, in tree order.
+   * It casts no shadow and is never culled. Its uniforms, `buffer`
+   * declarations and textures are a custom shader's (setShader):
+   * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
+   * Throws TypeError without a fragment chunk and Error with the GLSL log
+   * when it fails to compile (or defines no userVolume).
+   *
+   * @param {{fragment: string, uniforms?: Object<string, number|number[]>, name?: string}} opts
+   * @returns {SceneNode}
+   * @example
+   * // Uniform haze, 1 km visibility, lit by the sun and the sky.
+   * scene.createVolume({
+   *   fragment: `uniform float u_sigma;
+   *     void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+   *                     inout float transmittance, inout float depth) {
+   *       float d = min(sceneDist, 5000.0);
+   *       transmittance = exp(-u_sigma * d);
+   *       vec3 p = dir * d * 0.5;
+   *       radiance = (volumeSunLight(p) / 12.57 + volumeSkyLight(p, vec3(0, 1, 0))) * (1.0 - transmittance);
+   *       depth = d * 0.5;
+   *     }`,
+   *   uniforms: { u_sigma: 0.003 },
+   * });
+   */
+  createVolume(opts) {}
+
+  /**
    * @param {ReflectionProbeNodeOptions} [opts]
    * @returns {SceneNode}
    */

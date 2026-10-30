@@ -494,6 +494,22 @@
         applyNodeOpts(node, opts);
         return node;
     });
+    // A medium over the whole view (draw/volume.frag): a mesh node whose
+    // fragment chunk defines userVolume and is its only drawing.
+    fn(SceneGraph.prototype, "createVolume", function createVolume(opts) {
+        if (!opts || typeof opts.fragment !== 'string')
+            throw new TypeError('createVolume: takes { fragment, uniforms }, the fragment chunk defining userVolume');
+        const node = canon(__bro_native.scene.SceneGraph_createMesh(this, { volume: true }, null));
+        if (!node) return undefined;
+        try {
+            node.setShader({ fragment: opts.fragment, uniforms: opts.uniforms });
+        } catch (e) {
+            node.destroy();
+            throw e;
+        }
+        if (opts.name !== undefined) node.name = opts.name;
+        return node;
+    });
     fn(SceneGraph.prototype, "createShape", function createShape(opts) {
         const node = canon(__bro_native.scene.SceneGraph_createShape(this, opts ? JSON.stringify(opts) : ""));
         if (node) applyNodeOpts(node, opts);
