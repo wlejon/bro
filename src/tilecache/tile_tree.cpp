@@ -344,9 +344,13 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         if (group(a) != group(b)) return group(a) < group(b);
         return a.id.key() < b.id.key();
     });
-    // With no free slot, the least recently wanted ready tiles no view wants
-    // now give theirs; of equals, the finest (its parent is likelier to be
-    // wanted again first). Chosen once for the batch.
+    // With no free slot, the ready tiles no view wants now give theirs: the
+    // finest first, then the least recently wanted. Coarse tiles are few (a
+    // level holds a quarter of the next), wanted again first (a turn, a
+    // horizon's edge), and dearest to produce again (a cell of one stands
+    // for the most ground), so keeping them costs little and losing them
+    // brings a frame's worth of production back for one tile. Chosen once
+    // for the batch.
     std::vector<int32_t> victims;
     size_t nextVictim = 0;
     bool victimsChosen = false;
@@ -371,8 +375,8 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
                 const size_t k = std::min<size_t>(victims.size(), n);
                 std::partial_sort(victims.begin(), victims.begin() + k, victims.end(), [&](int32_t ia, int32_t ib) {
                     const Node &a = nodes_[ia], &b = nodes_[ib];
-                    if (a.lastWanted != b.lastWanted) return a.lastWanted < b.lastWanted;
                     if (a.id.level != b.id.level) return a.id.level > b.id.level;
+                    if (a.lastWanted != b.lastWanted) return a.lastWanted < b.lastWanted;
                     return a.id.key() < b.id.key();
                 });
                 victims.resize(k);

@@ -17,7 +17,8 @@
 //   - takeProductions() hands out the missing tiles whose parent is ready,
 //     a quad of siblings together, the largest projected error (their
 //     parent's) first; a slot comes from the free list,
-//     else from the least recently wanted tile no view wants now.
+//     else from the finest tile no view wants now (of equals, the least
+//     recently wanted): coarse tiles are few and dearest to produce again.
 //   - drawSet() covers each root with ready tiles and never overlaps: a
 //     wanted tile whose children are not all ready yet draws itself.
 //

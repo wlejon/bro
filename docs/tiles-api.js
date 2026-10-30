@@ -25,8 +25,10 @@
 //   call, or as many as fit `produceBudgetMs` of GPU time, the largest
 //   projected error first (a parent before its children), the four children
 //   of a parent together, so the draw set refines quad by quad as they land.
-// - Tiles the view no longer wants are evicted least recently wanted first
-//   when a slot is needed, and produced again if wanted again.
+// - Tiles the view no longer wants are evicted when a slot is needed, the
+//   finest first (of equals, the least recently wanted), and produced again
+//   if wanted again: coarse tiles are few, wanted again first, and dearest
+//   to produce.
 // - The draw set covers every root exactly once: a wanted tile whose
 //   children are not all resident yet draws itself.
 //
