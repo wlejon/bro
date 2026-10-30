@@ -586,6 +586,34 @@ class SceneGraph {
    * averages out, where a fixed offset is a fixed grain. A render that
    * does not follow the last (the first, a resize, another set of
    * volumes) is its own alone.
+   *
+   * The medium near the eye may instead be given point by point, where a
+   * march from inside a medium takes most of its steps in the first
+   * kilometre and a dozen neighbouring pixels take the same ones. A chunk
+   * that also defines
+   *
+   *   float userMediumRange()
+   *   void userMedium(vec3 pos, vec3 dir, float footprint,
+   *                   out mat4x3 scatter, out vec4 extinction, out float clear)
+   *
+   * has its medium integrated once a render over a grid on the view
+   * (froxels: cells of 8 pixels a side, 128 slices from the eye to
+   * userMediumRange(), about evenly spaced to a 64th of the range and in
+   * proportion to the distance beyond; none while it returns 0), and each
+   * pixel reads the grid to its opaque depth. userMedium answers at
+   * camera-relative `pos` on the ray along unit `dir`, at the cell's
+   * `footprint`, as four parts of the cell's rays, each with its own
+   * scatter (a column: light sent toward the eye a metre) and extinction
+   * (a component, 1/m), the cell's light their mean: what the cell does not
+   * resolve is cover, a part holding all of the medium or none, so a cloud
+   * over a third of a cell passes two thirds of what lies behind it (a
+   * resolved medium gives the four alike). `clear` is how far on along
+   * `dir` the medium is provably absent (0 when it cannot say), slices
+   * within it not asked. Each slice is sampled at one point, moved within it
+   * every render, and integrated in closed form with the light constant
+   * across it. userVolume then marches on from `volumeNearEnd()` (the
+   * range; 0 for the meter's rays and without a near grid) and its light
+   * is seen through the near medium's.
    * It casts no shadow and is never culled. The incident exposure meter
    * (setExposure) reads it: once a frame userVolume also runs from the eye
    * along four rays in a cone of 3 degrees about the sun (the share they
@@ -605,7 +633,8 @@ class SceneGraph {
    * declarations and textures are a custom shader's (setShader):
    * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
    * Throws TypeError without a fragment chunk and Error with the GLSL log
-   * when it fails to compile (or defines no userVolume).
+   * when it fails to compile (or defines no userVolume, or a userMedium
+   * without userMediumRange).
    *
    * @param {{fragment: string, uniforms?: Object<string, number|number[]>, name?: string}} opts
    * @returns {SceneNode}

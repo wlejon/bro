@@ -147,9 +147,14 @@ public:
 
     /// A volume's fragment stage: the fragment chunk (its userVolume)
     /// spliced into volume.frag. The vertex stage is the built-in
-    /// VolumeVert.
-    static bool compileVolumeModule(VkDevice device, const CustomShaderInterface& iface, VkShaderModule& outFs,
-                                    std::string& errOut);
+    /// VolumeVert. `nearPass`: the stage that integrates a chunk's
+    /// userMedium over the near grid (volume.frag's VOLUME_NEAR_PASS).
+    static bool compileVolumeModule(VkDevice device, const CustomShaderInterface& iface, bool nearPass,
+                                    VkShaderModule& outFs, std::string& errOut);
+
+    /// Whether a volume's fragment chunk gives its near medium point by
+    /// point (userMedium and userMediumRange, volume.frag).
+    static bool volumeHasMedium(const std::string& fragmentChunk);
 
     /// The shadow vertex stage a chunk is spliced into: shadow.vert,
     /// shadow_skinned.vert or shadow_instanced.vert.

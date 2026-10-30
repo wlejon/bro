@@ -205,6 +205,17 @@ public:
                       VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
                       uint32_t index);
 
+    /// Whether a volume's chunk gives its near medium point by point
+    /// (userMedium, volume.frag), so it has a near grid.
+    bool volumeHasMedium(const MeshDraw& draw);
+    /// Integrate a volume's userMedium over its near grid, in an open pass
+    /// with no attachments whose viewport is the grid's cells: `nearSet`
+    /// (volumeNearSetLayout) holds the grid's light and depth images, in
+    /// GENERAL.
+    void recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
+                          VkDescriptorSet nearSet, const MeshDraw& draw, uint32_t index);
+    VkDescriptorSetLayout volumeNearSetLayout() const { return nearSetLayout_; }
+
     /// Bind a draw's vertex streams (none for a tube) and issue it: shared
     /// with the shadow casters, whose pipelines read the same streams. A
     /// chunked draw given `cull` draws its chunks inside cull's frustum,
@@ -226,6 +237,10 @@ private:
         VkShaderModule fs = VK_NULL_HANDLE;
         VkShaderModule fsIndirect = VK_NULL_HANDLE;   // compiled on first use
         PipelineVariants pipelines;
+        // A volume whose chunk gives a near medium: its near pass's stage.
+        bool medium = false;
+        VkShaderModule fsNear = VK_NULL_HANDLE;
+        PipelineVariants nearPipelines;
     };
 
     template <typename Node>
@@ -261,6 +276,10 @@ private:
     SceneDefaults* defaults_ = nullptr;
     bool wideLines_ = false;   // the device draws lines wider than 1 px
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    // A volume's near pass: layout_ with the near grid's set in the
+    // material set's place.
+    VkDescriptorSetLayout nearSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout nearLayout_ = VK_NULL_HANDLE;
     bool atmosphere_ = false;   // setAtmosphere
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;

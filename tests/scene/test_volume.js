@@ -8,7 +8,11 @@
 //   - dir is the unit ray (the view's centre looks along -camera);
 //   - setShaderUniform reaches the chunk; a volume casts no shadow and does
 //     not hide what it covers from the depth;
-//   - a chunk without userVolume, or with a vertex chunk, is refused.
+//   - the near grid: a medium given point by point (userMedium) is read to
+//     the opaque depth or its range, the march on from volumeNearEnd() seen
+//     through it, and a medium in one part of the four is cover;
+//   - a chunk without userVolume, or with a vertex chunk, is refused, as is
+//     a userMedium without userMediumRange.
 
 function freshScene(size) {
     const cv = document.createElement('canvas');
@@ -60,6 +64,7 @@ if (!probe.scene) {
     missingGpuContext('scene');
 } else {
     const { scene } = probe;
+    let threw = null;
     plane(scene, [0.6, 0.2, 0.1]);
     const before = scene.captureFrame();
     const centre = px(before, S / 2, S / 2), sky = px(before, S / 2, 2);
@@ -106,6 +111,64 @@ if (!probe.scene) {
     assert(px(img, S / 2, 2)[0] === 255, 'over the sky sceneDist is huge');
     scene.destroyNode(probeVol);
 
+    // The near grid: a medium given point by point (userMedium) to its
+    // range, read by each pixel to its opaque depth, the march (userVolume)
+    // on from volumeNearEnd() seen through it. A uniform medium of
+    // extinction s and scatter q a metre passes exp(-s d) over d metres and
+    // sends q / s (1 - exp(-s d)); the march adds blue 0.2 when it starts at
+    // the range. A medium in one part of four is cover: whatever its
+    // density, a quarter of what lies behind is hidden.
+    const nearVol = scene.createVolume({
+        fragment: `uniform float u_range;
+            uniform float u_sigma;
+            uniform float u_scatter;
+            uniform float u_parts;
+            float userMediumRange() { return u_range; }
+            void userMedium(vec3 pos, vec3 dir, float footprint, out mat4x3 scatter, out vec4 extinction,
+                            out float clear) {
+                extinction = u_parts > 1.5 ? vec4(u_sigma, 0.0, 0.0, 0.0) : vec4(u_sigma);
+                scatter = mat4x3(vec3(u_scatter), vec3(u_scatter), vec3(u_scatter), vec3(u_scatter));
+                clear = 0.0;
+            }
+            void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
+                            inout float transmittance, inout float depth) {
+                if (abs(volumeNearEnd() - u_range) < 1e-3) radiance = vec3(0.0, 0.0, 0.2);
+            }`,
+        uniforms: { u_range: 2, u_sigma: 0.5, u_scatter: 0.25, u_parts: 1 },
+    });
+    const uniform = (d, behind) => {
+        const t = Math.exp(-0.5 * d), l = 0.5 * (1 - t);
+        return behind.map((b, i) => 255 * (b * t + l + (i === 2 ? 0.2 * t : 0)));
+    };
+    const glow = [0.6, 0.2, 0.1];
+    img = scene.captureFrame();
+    let want = uniform(2, glow), got = px(img, S / 2, S / 2);
+    assert(near(got, want, 3), `over the plane past a 2 m range: the medium's 2 m, then the march (${got} vs ${want.map(Math.round)})`);
+    want = uniform(2, [0, 0, 0]);
+    got = px(img, S / 2, 2);
+    assert(near(got, want, 3), `over the sky the medium to its range (${got} vs ${want.map(Math.round)})`);
+    nearVol.setShaderUniform('u_range', 10);
+    img = scene.captureFrame();
+    want = uniform(dist, glow);
+    got = px(img, S / 2, S / 2);
+    assert(near(got, want, 3), `a range past the plane is read to the plane (${got} vs ${want.map(Math.round)})`);
+    nearVol.setShaderUniform('u_sigma', 50);
+    nearVol.setShaderUniform('u_scatter', 0);
+    nearVol.setShaderUniform('u_parts', 4);
+    img = scene.captureFrame();
+    got = px(img, S / 2, S / 2);
+    want = glow.map((b, i) => 255 * 0.75 * (b + (i === 2 ? 0.2 : 0)));
+    assert(near(got, want, 3), `a dense medium in one part of four hides a quarter (${got} vs ${want.map(Math.round)})`);
+    scene.destroyNode(nearVol);
+    threw = null;
+    try {
+        scene.createVolume({
+            fragment: `void userMedium(vec3 p, vec3 d, float w, out mat4x3 s, out vec4 e, out float c) {}
+                void userVolume(vec3 dir, float sceneDist, inout vec3 radiance, inout float t, inout float depth) {}`,
+        });
+    } catch (e) { threw = e; }
+    assert(threw !== null, 'a userMedium without userMediumRange is refused');
+
     // The reconstruction: a medium whose light is noise, another value
     // each pixel and each render (camera.frame.x), lands as its average
     // over renders. The first render of a volume is its own alone (the
@@ -136,7 +199,7 @@ if (!probe.scene) {
            `per-render noise averages over renders (deviation ${first.dev.toFixed(1)} -> ${settled.dev.toFixed(1)}, mean ${settled.mean.toFixed(1)})`);
     scene.destroyNode(noisy);
 
-    let threw = null;
+    threw = null;
     try {
         scene.createVolume({ fragment: 'void userFragment(inout vec3 a, inout vec3 b, inout float c, inout float d, inout vec3 e, inout float f) {}' });
     } catch (e) { threw = e; }

@@ -18,6 +18,13 @@
 // volumes (SceneMeshDrawer::recordVolume), so a volume's uniforms, buffers
 // and textures are a custom shader's.
 //
+// A volume whose chunk gives its near medium point by point (userMedium,
+// volume.frag) has a near grid of its own: before the volumes draw,
+// PassVolumeNear integrates the medium over the grid's cells (kNearTile
+// pixels a side, kNearSlices deep), and the volume's pixels read the grid
+// to their opaque depth in place of marching that part of the ray. A grid
+// lives while its volume draws and follows the frame's size.
+//
 // PassVolumeComposite then blends the result over the HDR scope as scene *
 // transmittance + light: after the opaque surfaces, their sky and the
 // decals, before SSR and the translucent surfaces.
@@ -31,13 +38,54 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <unordered_map>
 
 namespace bro::scene::vk {
+
+class SceneVkAllocator;
+
+class PassVolumeNear final : public ScenePass {
+public:
+    /// A near grid's cell, pixels a side, and its slices (volume.frag's
+    /// VOLUME_NEAR_SLICES).
+    static constexpr uint32_t kNearTile = 8;
+    static constexpr uint32_t kNearSlices = 128;
+
+    /// A volume's near grid: light (rgb) and transmittance (a), and the
+    /// distance weighted by opacity, each to a slice's far end; in GENERAL.
+    struct Grid {
+        SceneVkImage light, depth;
+        uint32_t frame = 0;   // the render that wrote it last
+    };
+
+    const char* name() const override { return "volumes near"; }
+    bool setup(SceneGpu& gpu) override;
+    void resize(SceneGpu& gpu, uint32_t width, uint32_t height) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
+
+    /// The volume's grid this render wrote, else null.
+    const Grid* grid(const SceneFrame& frame, uint32_t nodeId) const;
+
+private:
+    /// The volume's grid at the frame's size, made or remade as needed;
+    /// null when it cannot be made.
+    Grid* make(SceneFrame& frame, uint32_t nodeId);
+
+    SceneVkDevice* device_ = nullptr;
+    SceneVkAllocator* allocator_ = nullptr;
+    uint32_t width_ = 0, height_ = 0;
+    std::unordered_map<uint32_t, Grid> grids_;
+};
 
 class PassVolume final : public ScenePass {
 public:
     /// This render's share of the result where last render's is found.
     static constexpr float kBlend = 0.1f;
+
+    explicit PassVolume(const PassVolumeNear& near) : near_(near) {}
 
     const char* name() const override { return "volumes"; }
     bool setup(SceneGpu& gpu) override;
@@ -60,6 +108,7 @@ private:
         float eyeDelta[4];        // xyz: this render's eye - last render's; w: this render's share
     };
 
+    const PassVolumeNear& near_;
     SceneVkDevice* device_ = nullptr;
     SceneVkImage medium_, mediumDepth_;
     SceneVkImage history_[2];

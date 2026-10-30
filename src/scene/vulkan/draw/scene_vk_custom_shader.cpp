@@ -114,6 +114,16 @@ std::string vertexBase(SceneRenderer::CustomShaderTarget target) {
     }
 }
 
+// A volume's fragment stage: CUSTOM_MEDIUM when its chunk gives a near
+// medium, and `nearPass` the stage integrating it over the near grid.
+std::string volumeSource(const CustomShaderInterface& iface, bool nearPass) {
+    const std::string chunk = iface.fragmentSource();
+    std::string src = splice(base("draw/volume.frag", kVkVolumeFragSrc), chunk, "CUSTOM_VOLUME");
+    if (SceneVkCustomShader::volumeHasMedium(chunk)) src = defineAfterVersion(std::move(src), "CUSTOM_MEDIUM");
+    if (nearPass) src = defineAfterVersion(std::move(src), "VOLUME_NEAR_PASS");
+    return iface.withExtensions(std::move(src));
+}
+
 }  // namespace
 
 bool CustomShaderInterface::declareUniform(const std::string& type, const std::string& declarator,
@@ -345,9 +355,17 @@ bool SceneVkCustomShader::validateCustomShader(SceneRenderer::CustomShaderTarget
             errOut = "a volume takes a fragment chunk defining userVolume, and no vertex chunk";
             return false;
         }
-        const std::string fs = iface.withExtensions(
-            splice(base("draw/volume.frag", kVkVolumeFragSrc), iface.fragmentSource(), "CUSTOM_VOLUME"));
-        return !SceneVkShaderCompiler::compileGlsl(fs, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut).empty();
+        const bool medium = volumeHasMedium(fragmentChunk);
+        if (medium && fragmentChunk.find("float userMediumRange(") == std::string::npos) {
+            errOut = "a volume's userMedium needs userMediumRange beside it";
+            return false;
+        }
+        if (SceneVkShaderCompiler::compileGlsl(volumeSource(iface, false), VK_SHADER_STAGE_FRAGMENT_BIT, &errOut)
+                .empty())
+            return false;
+        return !medium ||
+               !SceneVkShaderCompiler::compileGlsl(volumeSource(iface, true), VK_SHADER_STAGE_FRAGMENT_BIT, &errOut)
+                    .empty();
     }
     if (!vertexChunk.empty()) {
         const std::string vs = iface.withExtensions(splice(vertexBase(target), iface.vertexSource(), "CUSTOM_VERTEX"));
@@ -392,10 +410,13 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
     return true;
 }
 
-bool SceneVkCustomShader::compileVolumeModule(VkDevice device, const CustomShaderInterface& iface,
+bool SceneVkCustomShader::volumeHasMedium(const std::string& fragmentChunk) {
+    return fragmentChunk.find("void userMedium(") != std::string::npos;
+}
+
+bool SceneVkCustomShader::compileVolumeModule(VkDevice device, const CustomShaderInterface& iface, bool nearPass,
                                               VkShaderModule& outFs, std::string& errOut) {
-    const std::string fsSrc = iface.withExtensions(
-        splice(base("draw/volume.frag", kVkVolumeFragSrc), iface.fragmentSource(), "CUSTOM_VOLUME"));
+    const std::string fsSrc = volumeSource(iface, nearPass);
     const auto spirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
     if (spirv.empty()) return false;
     outFs = SceneVkShaderModule::create(device, spirv);

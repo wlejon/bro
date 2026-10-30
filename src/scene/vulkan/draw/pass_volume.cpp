@@ -2,6 +2,9 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "render/vulkan_context.h"
+#include "render/vulkan_util.h"
+#include "scene/vulkan/frame/scene_vk_allocator.h"
+#include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
@@ -95,6 +98,110 @@ void PassVolume::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.targets.depthSnapshot);
 }
 
+bool PassVolumeNear::setup(SceneGpu& gpu) {
+    device_ = &gpu.device;
+    allocator_ = &gpu.allocator;
+    return true;
+}
+
+void PassVolumeNear::resize(SceneGpu&, uint32_t width, uint32_t height) {
+    width_ = width;
+    height_ = height;
+}
+
+void PassVolumeNear::cleanup(SceneGpu& gpu) {
+    for (auto& [id, grid] : grids_) {
+        gpu.allocator.destroyImage(grid.light);
+        gpu.allocator.destroyImage(grid.depth);
+    }
+    grids_.clear();
+}
+
+bool PassVolumeNear::active(const SceneFrame& frame) const {
+    return !frame.lists.volumes.empty() || !grids_.empty();
+}
+
+void PassVolumeNear::declare(const SceneFrame&, PassIO&) const {}
+
+const PassVolumeNear::Grid* PassVolumeNear::grid(const SceneFrame& frame, uint32_t nodeId) const {
+    auto it = grids_.find(nodeId);
+    return it != grids_.end() && it->second.frame == frame.view.frameIndex && it->second.light.isValid()
+               ? &it->second
+               : nullptr;
+}
+
+PassVolumeNear::Grid* PassVolumeNear::make(SceneFrame& frame, uint32_t nodeId) {
+    const uint32_t gx = (width_ + kNearTile - 1) / kNearTile;
+    const uint32_t gy = (height_ + kNearTile - 1) / kNearTile;
+    if (gx == 0 || gy == 0) return nullptr;
+    Grid& grid = grids_[nodeId];
+    grid.frame = frame.view.frameIndex;
+    if (grid.light.isValid() && grid.light.width == gx && grid.light.height == gy) return &grid;
+    allocator_->destroyImage(grid.light);
+    allocator_->destroyImage(grid.depth);
+    if (!allocator_->createStorageImage(gx, gy, kNearSlices, VK_FORMAT_R16G16B16A16_SFLOAT, grid.light, false) ||
+        !allocator_->createStorageImage(gx, gy, kNearSlices, VK_FORMAT_R32_SFLOAT, grid.depth, false)) {
+        LOG_ERROR("PassVolumeNear: Failed creating a %ux%ux%u grid", gx, gy, kNearSlices);
+        allocator_->destroyImage(grid.light);
+        allocator_->destroyImage(grid.depth);
+        return nullptr;
+    }
+    return &grid;
+}
+
+void PassVolumeNear::record(SceneFrame& frame) {
+    VkCommandBuffer cmd = frame.cmd;
+    bool any = false;
+    uint32_t index = 0;
+    for (const MeshDraw& draw : frame.lists.volumes) {
+        const uint32_t at = index++;
+        if (!frame.gpu.meshes.volumeHasMedium(draw)) continue;
+        Grid* grid = make(frame, draw.nodeId);
+        if (!grid) continue;
+        if (!any) {
+            // Last render's pixels done reading the grids before they are
+            // written again.
+            render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+            any = true;
+        }
+        VkDescriptorSet set = device_->frameSet(frame.gpu.meshes.volumeNearSetLayout());
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(6, grid->light.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        writer.writeImage(7, grid->depth.view, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        writer.updateSet(device_->device(), set);
+        // A pass with no attachments over the grid's cells: one fragment a
+        // cell, writing its column.
+        const uint32_t gx = grid->light.width, gy = grid->light.height;
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = {{0, 0}, {gx, gy}};
+        info.layerCount = 1;
+        device_->cmdBeginRendering(cmd, &info);
+        const VkViewport vp{0.0f, 0.0f, static_cast<float>(gx), static_cast<float>(gy), 0.0f, 1.0f};
+        const VkRect2D scissor{{0, 0}, {gx, gy}};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        frame.gpu.meshes.recordVolumeNear(cmd, frame.cameraSet, frame.lightingSet, set, draw, at);
+        device_->cmdEndRendering(cmd);
+    }
+    // Grids of volumes no longer drawn go.
+    for (auto it = grids_.begin(); it != grids_.end();) {
+        if (it->second.frame == frame.view.frameIndex) {
+            ++it;
+            continue;
+        }
+        allocator_->destroyImage(it->second.light);
+        allocator_->destroyImage(it->second.depth);
+        it = grids_.erase(it);
+    }
+    if (any)
+        render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+}
+
 void PassVolume::record(SceneFrame& frame) {
     // The meter's slots in this frame's upload memory, each "no medium" (no
     // light, all the sun) until its volume writes it: a volume whose program
@@ -157,7 +264,20 @@ void PassVolume::record(SceneFrame& frame) {
     const TargetFormat target = volumeTarget();
     uint32_t index = 0;
     for (const MeshDraw& draw : frame.lists.volumes) {
-        frame.gpu.meshes.recordVolume(cmd, target, frame.cameraSet, frame.lightingSet, set, draw, index);
+        // A volume with a near grid reads it as images 1 and 2.
+        VkDescriptorSet drawSet = set;
+        if (const PassVolumeNear::Grid* grid = near_.grid(frame, draw.nodeId)) {
+            drawSet = frame.gpu.device.frameSet(d.materialLayout);
+            SceneVkDescriptorWriter gw;
+            gw.writeImage(0, depth.view, depth.sampler);
+            gw.writeImage(1, grid->light.view, sampler_, VK_IMAGE_LAYOUT_GENERAL);
+            gw.writeImage(2, grid->depth.view, sampler_, VK_IMAGE_LAYOUT_GENERAL);
+            gw.writeImage(3, d.black.view, d.sampler);
+            gw.writeImage(4, d.white.view, d.sampler);
+            gw.writeBuffer(5, meter.buffer, bytes, meter.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            gw.updateSet(frame.gpu.device.device(), drawSet);
+        }
+        frame.gpu.meshes.recordVolume(cmd, target, frame.cameraSet, frame.lightingSet, drawSet, draw, index);
         ++index;
     }
     frame.gpu.device.cmdEndRendering(cmd);

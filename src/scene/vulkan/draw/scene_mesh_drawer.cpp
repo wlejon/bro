@@ -100,6 +100,19 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the pipeline layout");
         return false;
     }
+    // A volume's near pass: its grid's light and depth images in the
+    // material set's place, written (volume.frag's VOLUME_NEAR_PASS).
+    SceneVkDescriptorLayoutBuilder near;
+    near.addBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    near.addBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    nearSetLayout_ = near.build(device_);
+    std::array<VkDescriptorSetLayout, 5> nearSets = sets;
+    nearSets[2] = nearSetLayout_;
+    info.pSetLayouts = nearSets.data();
+    if (!nearSetLayout_ || vkCreatePipelineLayout(device_, &info, nullptr, &nearLayout_) != VK_SUCCESS) {
+        LOG_ERROR("SceneMeshDrawer: Failed creating the volume near pass layout");
+        return false;
+    }
 
     vs_[static_cast<int>(MeshKind::Static)] =
         SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVert);
@@ -135,7 +148,9 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     builtin_.destroy(gpu.device);
     for (auto& [key, prog] : custom_) {
         prog->pipelines.destroy(gpu.device);
-        for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect}) SceneVkShaderModule::destroy(device_, m);
+        prog->nearPipelines.destroy(gpu.device);
+        for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect, prog->fsNear})
+            SceneVkShaderModule::destroy(device_, m);
     }
     custom_.clear();
     zeroBuffer_.reset();
@@ -153,7 +168,10 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     vsVolume_ = VK_NULL_HANDLE;
     fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
     if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
-    layout_ = VK_NULL_HANDLE;
+    if (nearLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, nearLayout_, nullptr);
+    if (nearSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, nearSetLayout_, nullptr);
+    layout_ = nearLayout_ = VK_NULL_HANDLE;
+    nearSetLayout_ = VK_NULL_HANDLE;
 }
 
 namespace raster {
@@ -272,8 +290,10 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
 
     auto prog = std::make_unique<CustomProgram>();
     std::string err;
+    prog->medium = SceneVkCustomShader::volumeHasMedium(cs.fragmentChunk);
     if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
-        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, prog->fs, err)) {
+        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, false, prog->fs, err) ||
+        (prog->medium && !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, true, prog->fsNear, err))) {
         // Logged once; the volume draws nothing from now on.
         LOG_ERROR("SceneMeshDrawer: Failed compiling a volume shader: %s", err.c_str());
         prog->failed = true;
@@ -326,6 +346,38 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     // The volume's place as its first instance: volume.frag's meter slot.
+    vkCmdDraw(cmd, 3, 1, 0, index);
+}
+
+bool SceneMeshDrawer::volumeHasMedium(const MeshDraw& draw) {
+    if (!draw.volume || !draw.custom || !draw.customSet) return false;
+    const CustomProgram* prog = volumeProgram(*draw.custom);
+    return prog && prog->medium;
+}
+
+void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
+                                       VkDescriptorSet nearSet, const MeshDraw& draw, uint32_t index) {
+    if (!volumeHasMedium(draw)) return;
+    CustomProgram* prog = volumeProgram(*draw.custom);
+    const bool atmosphere = atmosphere_;
+    VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? raster::kAtmosphere : 0u, TargetFormat{}, [&] {
+        SceneVkPipelineBuilder b;
+        b.setShaderStages(vsVolume_, prog->fsNear)
+         .setVertexInput({}, {})
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(TargetFormat{})
+         .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
+         .setLabel("volume near")
+         .disableDepthTest();
+        return b.build(device_, nearLayout_);
+    });
+    if (!pipeline) return;
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, nearSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 0, 3, sets, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, index);
 }
 
