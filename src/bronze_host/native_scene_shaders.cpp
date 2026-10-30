@@ -9,6 +9,7 @@
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>
+#include "render/vulkan_compute.h"
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/particle_node.h"
 #include "scene/nodes/decal_node.h"
@@ -294,6 +295,34 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
         return true;
     }
     return false;
+}
+
+bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width,
+                                                int32_t height, int32_t layers, int32_t channels, bool repeat) {
+    auto* n = nodeOf(self);
+    if (!n || !name) return false;
+    const Rooted value(ev::fromBits(bufferBits));
+    std::shared_ptr<bro::render::ComputeBuffer> buffer;
+#if BRO_WITH_KERNEL
+    buffer = computeBufferOf(value);
+#endif
+    if (!buffer) {
+        ev::throwTypeError("setShaderTexture: buffer is not a KernelBuffer (bro.kernel.createBuffer)");
+        return false;
+    }
+    if (n->type() != scene::SceneNode::Type::Mesh) return false;
+    if (channels != 1 && channels != 2 && channels != 4) {
+        ev::throwRangeError("setShaderTexture: channels must be 1, 2 or 4 for a buffer");
+        return false;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(std::max(width, 0)) * static_cast<uint64_t>(std::max(height, 0)) *
+                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) * 4u;
+    if (buffer->size() < bytes) {
+        ev::throwRangeError("setShaderTexture: the buffer holds fewer than width * height * layers * channels floats");
+        return false;
+    }
+    return static_cast<scene::MeshNode*>(n)->setCustomShaderTextureBuffer(name, width, height, layers, channels,
+                                                                           std::move(buffer), repeat);
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,

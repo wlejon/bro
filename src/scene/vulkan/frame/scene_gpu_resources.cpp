@@ -1,5 +1,6 @@
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 
+#include "render/vulkan_compute.h"
 #include "scene/gpu_upload_stats.h"
 #include "scene/nodes/skinned_mesh_node.h"
 #include "util/log.h"
@@ -329,9 +330,16 @@ const SceneVkImage* SceneGpuResources::userTexture(uint32_t id, MeshNode::UserTe
             allocator_.uploadImage(entry.image, src, texels * entry.texelBytes, region, tex.mipmap);
         }
         entry.generation = tex.generation;
+        entry.copiedRender = 0;
         tex.subUpdates.clear();
         tex.sliceUpdates.clear();
-        noteTextureUpload(texels * entry.texelBytes);
+        if (!tex.source) noteTextureUpload(texels * entry.texelBytes);
+    }
+    if (tex.source) {
+        if (entry.copiedRender != render_) {
+            allocator_.copyBufferToImage(entry.image, tex.source->buffer());
+            entry.copiedRender = render_;
+        }
         return &entry.image;
     }
 

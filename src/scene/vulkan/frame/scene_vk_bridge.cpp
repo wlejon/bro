@@ -120,6 +120,7 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     if (resized) graph_.resize(gpu_, width, height);
 
     ++renderSerial_;
+    resources_.beginRender();
     const bool readbackInline = readSinceRender_;
     readSinceRender_ = false;
 

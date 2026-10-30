@@ -550,11 +550,24 @@ class SceneNode {
    * that many width * height slices one after another (whole slots only, no
    * sub-rectangles); a tiling 3D field is its z slices, read with two
    * filtered fetches and a mix between them. A data array shorter than the
-   * extent is a RangeError. Returns the node.
+   * extent is a RangeError.
+   *
+   * With `buffer` (a KernelBuffer) in place of `data`, the slot's texels are
+   * the buffer's: width * height (* layers) texels of `channels` floats (1,
+   * 2 or 4: a `.r`, `.rg` or `.rgba` read), row-major, slice after slice,
+   * from its start. The buffer is copied into the slot's image every render
+   * that draws the node, after the kernel dispatches before it, so a kernel
+   * writing a field each frame is sampled with hardware bilinear filtering (and
+   * `repeat`, a toroidal grid's wrap) instead of four buffer loads and their
+   * mixes. A buffer smaller than the texels is a RangeError. Returns the
+   * node.
    *
    * @param {string} name
-   * @param {{data: Float32Array|number[], width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number}} opts
+   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, channels?: number}} opts
    * @returns {SceneNode}
+   * @example
+   * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .rg:
+   * volume.setShaderTexture('u_field', { buffer: field, width: 256, height: 256, layers: 4, channels: 2, repeat: true });
    */
   setShaderTexture(name, opts) {}
 

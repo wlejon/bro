@@ -573,6 +573,11 @@
     });
     fn(SceneNode.prototype, "setShaderTexture", function setShaderTexture(name, opts) {
         if (!name || !opts) return this;
+        if (opts.buffer) {
+            __bro_native.scene.SceneNode_setShaderTextureBuffer(this, name, opts.buffer, opts.width | 0, opts.height | 0,
+                                                                opts.layers | 0, opts.channels || 1, !!opts.repeat);
+            return this;
+        }
         const isSub = opts.x !== undefined || opts.y !== undefined;
         const x = opts.x || 0, y = opts.y || 0, w = opts.width || 0, h = opts.height || 0;
         const data = opts.data ? (opts.data instanceof Float32Array ? opts.data : Float32Array.from(opts.data)) : EMPTY_F32;

@@ -14,6 +14,8 @@
 //       instead of sampling an unbound unit and casting the rest silhouette.
 //   (d) `layers` makes a slot a sampler2DArray of slices and `repeat` wraps
 //       its coordinates (MeshNode::setCustomShaderTextureArray).
+//   (e) `buffer` makes a KernelBuffer the texels, copied every frame
+//       (MeshNode::setCustomShaderTextureBuffer).
 
 function patchBrightness(img, cx, cy, r) {
     let sum = 0, n = 0;
@@ -363,6 +365,70 @@ if (!boot.scene) {
         try { quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: new Float32Array(N * N) }); }
         catch (e) { threw = e instanceof RangeError; }
         assert(threw, 'data shorter than width * height * layers is a RangeError');
+
+        dropScene(s);
+    }
+
+    // =====================================================================
+    // (e) `buffer` makes a KernelBuffer the slot's texels: two channels,
+    // read as .rg, slice after slice, copied every frame the node draws, so
+    // a write to the buffer shows in the next frame. Each slice is (0.25 (l
+    // + 1), 0.5) but for texel (0, 0) of slice 1, whose green is 1: a
+    // coordinate just past 1 wraps onto it with `repeat`.
+    // =====================================================================
+    if (bro.kernel && bro.kernel.available !== false) {
+        const s = makeScene(SIZE);
+        const scn = s.scene;
+        const N = 8, L = 2;
+        const texels = new Float32Array(N * N * L * 2);
+        for (let l = 0; l < L; l++)
+            for (let i = 0; i < N * N; i++) {
+                texels[(l * N * N + i) * 2] = 0.25 * (l + 1);
+                texels[(l * N * N + i) * 2 + 1] = 0.5;
+            }
+        texels[N * N * 2 + 1] = 1.0;
+        const buffer = bro.kernel.createBuffer(texels);
+        const quad = scn.createMesh({ mesh: 'box', color: 'white' });
+        quad.setShader({
+            fragment: `
+                uniform sampler2DArray u_field;
+                uniform vec3 u_at;
+                uniform float u_green;
+                void userFragment(inout vec3 baseColor, inout vec3 normal,
+                                  inout float metallic, inout float roughness,
+                                  inout vec3 emissive, inout float alpha) {
+                    baseColor = vec3(0.0);
+                    metallic  = 0.0;
+                    roughness = 1.0;
+                    vec2 v = textureLod(u_field, u_at, 0.0).rg;
+                    emissive  = vec3(u_green > 0.5 ? v.y : v.x);
+                }`,
+            uniforms: { u_at: [0.5, 0.5, 0], u_green: 0 },
+        });
+        const at = (u, v, layer, green) => {
+            quad.setShaderUniform('u_at', [u, v, layer]);
+            quad.setShaderUniform('u_green', green ? 1 : 0);
+            return centerBrightness(scn.captureFrame(), 5);
+        };
+        const centre = (N / 2 + 0.5) / N, past = 1 + 0.5 / N;
+        quad.setShaderTexture('u_field', { buffer, width: N, height: N, layers: L, channels: 2, repeat: true });
+        for (let l = 0; l < L; l++) {
+            const r = at(centre, centre, l, false), g = at(centre, centre, l, true);
+            assert(Math.abs(r - 255 * 0.25 * (l + 1)) < 6 && Math.abs(g - 127.5) < 6,
+                `slice ${l} reads its texels from the buffer (${r.toFixed(1)}, ${g.toFixed(1)})`);
+        }
+        const wrapped = at(past, past, 1, true);
+        assert(wrapped > 245, `with repeat it wraps onto texel (0, 0) (${wrapped.toFixed(1)})`);
+
+        buffer.write(new Float32Array([0.75, 0.75]), (N * N + (N / 2) * N + N / 2) * 8);
+        const rewritten = at(centre, centre, 1, false);
+        assert(Math.abs(rewritten - 191.25) < 6,
+            `a write to the buffer shows in the next frame (${rewritten.toFixed(1)})`);
+
+        let threw = false;
+        try { quad.setShaderTexture('u_field', { buffer, width: N, height: N, layers: L + 1, channels: 2 }); }
+        catch (e) { threw = e instanceof RangeError; }
+        assert(threw, 'a buffer smaller than the texels is a RangeError');
 
         dropScene(s);
     }

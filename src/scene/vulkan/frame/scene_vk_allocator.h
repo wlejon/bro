@@ -135,6 +135,11 @@ public:
     /// sampleable afterwards.
     bool uploadImage(SceneVkImage& image, const void* data, VkDeviceSize size,
                      const ImageRegion& region = {}, bool regenerateMips = false);
+    /// Record a copy of mip 0 of every layer of a sampled image from the
+    /// tightly packed texels at the start of a GPU buffer (a transfer
+    /// source), on the upload stream: after the frame's compute work, ahead
+    /// of its draws. The image is sampleable afterwards.
+    void copyBufferToImage(SceneVkImage& image, VkBuffer source);
 
     void destroyImage(SceneVkImage& image);
 

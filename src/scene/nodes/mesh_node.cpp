@@ -1,4 +1,5 @@
 #include "scene/nodes/mesh_node.h"
+#include "render/vulkan_compute.h"
 #include "scene/scene_graph.h"
 #include "util/log.h"
 
@@ -177,6 +178,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
         t.subUpdates.clear();
         t.sliceUpdates.clear();
         t.layers = 0;
+        t.source.reset();
         t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
         t.w = width;
         t.h = height;
@@ -265,7 +267,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
             bumpChangeGeneration();
             return true;
         }
-        const bool sameShape = t.layers == layers && t.w == width &&
+        const bool sameShape = !t.source && t.layers == layers && t.w == width &&
                                t.h == height && t.channels == channels &&
                                t.mipmap == mipmap && t.repeat == repeat &&
                                t.clampT == clampT;
@@ -273,6 +275,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
         t.data.assign((size_t)width * height * layers * channels, 0.0f);
         t.subUpdates.clear();
         t.sliceUpdates.clear();       // written against the old shape
+        t.source.reset();
         t.w = width;
         t.h = height;
         t.layers = layers;
@@ -330,6 +333,45 @@ bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
     LOG_WARN("setShaderTextureArrayLayer('%s'): no such sampler slot (ignored)",
              name.c_str());
     return false;
+}
+
+bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
+                                            int channels, std::shared_ptr<render::ComputeBuffer> source,
+                                            bool repeat) {
+    auto it = std::find_if(userTextures_.begin(), userTextures_.end(),
+                           [&](const UserTexture& t) { return t.name == name; });
+    if (width <= 0 || height <= 0 || !source) {
+        if (it != userTextures_.end()) {
+            userTextures_.erase(it);
+            bumpChangeGeneration();
+        }
+        return true;
+    }
+    if (channels != 1 && channels != 2 && channels != 4) return false;
+    const uint64_t bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) *
+                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) * sizeof(float);
+    if (source->size() < bytes) return false;
+    if (it == userTextures_.end()) {
+        if ((int)userTextures_.size() >= maxUserTextures()) return false;
+        userTextures_.emplace_back();
+        it = userTextures_.end() - 1;
+        it->name = name;
+    }
+    UserTexture& t = *it;
+    t.data.clear();
+    t.subUpdates.clear();
+    t.sliceUpdates.clear();
+    t.w = width;
+    t.h = height;
+    t.layers = std::max(layers, 0);
+    t.channels = channels;
+    t.mipmap = false;
+    t.repeat = repeat;
+    t.clampT = false;
+    t.source = std::move(source);
+    t.generation = nextResourceGeneration();
+    bumpChangeGeneration();
+    return true;
 }
 
 void MeshNode::clearCustomShaderTexture(const std::string& name) {

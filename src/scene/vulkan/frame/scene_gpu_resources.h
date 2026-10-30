@@ -101,8 +101,11 @@ public:
     VkBuffer skinAttributes(const SkinnedMeshNode& node, size_t vertexCount);
 
     /// A custom-shader sampler slot (2D, or a 2D array when `tex.layers` > 0).
-    /// Staged sub-rect and slice writes are applied, then cleared.
+    /// Staged sub-rect and slice writes are applied, then cleared; a slot
+    /// backed by a GPU buffer is copied from it once a render.
     const SceneVkImage* userTexture(uint32_t id, MeshNode::UserTexture& tex);
+    /// A render begins: buffer-backed slots copy again on their next use.
+    void beginRender() { ++render_; }
     /// Drop the copies of node `id`'s sampler slots that `live` no longer has.
     void pruneUserTextures(uint32_t id, const std::vector<MeshNode::UserTexture>& live);
 
@@ -126,6 +129,7 @@ private:
         uint64_t generation = 0;
         uint32_t texelBytes = 0;
         bool expand3 = false;
+        uint64_t copiedRender = 0;   // the render (render_) a buffer slot was last copied in
     };
     struct Skin {
         SceneVkBuffer buffer;
@@ -140,6 +144,7 @@ private:
     bool createUserTexture(MeshNode::UserTexture& tex, UserTexture& out);
 
     SceneVkAllocator& allocator_;
+    uint64_t render_ = 1;
     std::map<uint64_t, GpuMesh> meshes_;
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;

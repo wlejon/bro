@@ -227,6 +227,21 @@ bool SceneVkAllocator::uploadImage(SceneVkImage& image, const void* data, VkDevi
     return true;
 }
 
+void SceneVkAllocator::copyBufferToImage(SceneVkImage& image, VkBuffer source) {
+    if (!image.isValid() || source == VK_NULL_HANDLE) return;
+    VkCommandBuffer cmd = device_.uploadCommands();
+    const VkImageAspectFlags aspect = render::imageAspectFor(image.format);
+    const VkImageSubresourceRange whole{aspect, 0, image.mipLevels, 0, image.arrayLayers};
+    render::cmdTransitionImage(cmd, image.image, whole, image.currentLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {aspect, 0, 0, image.arrayLayers};
+    copy.imageExtent = {image.width, image.height, image.depth};
+    vkCmdCopyBufferToImage(cmd, source, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    render::cmdTransitionImage(cmd, image.image, whole, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    image.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
 bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage) {
     if (desc.width == 0 || desc.height == 0) return false;
 

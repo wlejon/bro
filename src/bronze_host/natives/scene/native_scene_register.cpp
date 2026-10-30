@@ -240,6 +240,7 @@ bool registerSceneAttachNatives(std::string* error) {
 bool registerSceneShaderNatives(std::string* error) {
     return natives::fn("__bro_native.scene.SceneNode_setShaderBuffer", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderBuffer), "bool", {"__bro_native.scene.SceneNode", "str", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setShaderTexture", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderTexture), "bool", {"__bro_native.scene.SceneNode", "str", "i32", "i32", "i32", "i32", "f32[]", "bool", "bool", "bool", "i32"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_setShaderTextureBuffer", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderTextureBuffer), "bool", {"__bro_native.scene.SceneNode", "str", "dynamic", "i32", "i32", "i32", "i32", "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setBaseColorTextureData", BRO_NATIVE_FN(bro_scene_SceneNode_setBaseColorTextureData), "void", {"__bro_native.scene.SceneNode", "i32", "i32", "u8[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_clearBaseColorTexture", BRO_NATIVE_FN(bro_scene_SceneNode_clearBaseColorTexture), "void", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setEmissionTextureData", BRO_NATIVE_FN(bro_scene_SceneNode_setEmissionTextureData), "void", {"__bro_native.scene.SceneNode", "i32", "i32", "u8[]"}, error) &&

@@ -433,6 +433,10 @@ public:
         };
         std::vector<SliceUpdate> sliceUpdates;
         std::vector<SubUpdate> subUpdates;
+        // A slot filled on the GPU (setCustomShaderTextureBuffer): its texels
+        // are this buffer's, copied into the image every frame the node
+        // draws, so it follows what kernels write there; `data` stays empty.
+        std::shared_ptr<render::ComputeBuffer> source;
     };
 
     /// Stage a float texture for the named user sampler.
@@ -477,6 +481,20 @@ public:
     /// non-array slot or a layer out of range.
     bool setCustomShaderTextureArrayLayer(const std::string& name, int layer,
                                           const float* data);
+
+    /// Bind a GPU buffer as the named slot's texels: width x height (x
+    /// layers, read through a sampler2DArray, when layers > 0) of `channels`
+    /// floats a texel, row-major, slice after slice, from the buffer's start.
+    /// The renderer copies the buffer into the slot's image every frame the
+    /// node draws, after the frame's kernel work, so the shader samples what
+    /// was last written there with hardware filtering and the slot's
+    /// addressing (`repeat` in both directions). A null buffer or zero extent
+    /// releases the slot. False when a new name would exceed
+    /// maxUserTextures(), `channels` is not 1, 2 or 4, or the buffer is
+    /// smaller than the texels.
+    bool setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
+                                      int channels, std::shared_ptr<render::ComputeBuffer> source,
+                                      bool repeat);
 
     /// Release the named slot; the name no longer counts against the budget.
     void clearCustomShaderTexture(const std::string& name);
