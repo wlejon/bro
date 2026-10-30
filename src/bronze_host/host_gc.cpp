@@ -52,7 +52,10 @@ constexpr double kPressureQuietMs = 100.0;                 // quiet this long: c
 // its own triggers, so they seldom fire in the middle of a frame. A minor
 // collection once eden is this full, a full one once the old generation has
 // grown this near its threshold. A frame allocating more than the rest of
-// eden still collects where it fills it.
+// eden still collects where it fills it. Eden's capacity is the collector's
+// adaptive limit (brass HeapConfig::adaptive_eden), which shrinks while much
+// of each eden survives so a minor collection's copying stays short; the
+// fill is of that limit, so the early collection keeps the same bound.
 constexpr double kBetweenFramesEdenFill = 0.5;
 constexpr double kBetweenFramesOldFill = 0.75;
 
@@ -274,7 +277,7 @@ void hostCollectBetweenFrames() {
         const auto t0 = std::chrono::steady_clock::now();
         bronze::embed::collectYoungGarbage();
         if (gcLogEnabled())
-            LOG_INFO("gc: minor collection between frames in %.2f ms, the collector's pause %.2f ms (eden %.1f of %.1f MB)",
+            LOG_INFO("gc: minor collection between frames in %.2f ms, the collector's pause %.2f ms (eden %.1f of its %.1f MB limit)",
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
                      bronze::embed::getRuntimeTelemetry().gcPauseNs / 1e6,
                      p.edenUsed / 1048576.0, p.edenCapacity / 1048576.0);
