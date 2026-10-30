@@ -127,8 +127,9 @@ bool CustomShaderInterface::declareUniform(const std::string& type, const std::s
     const std::string name = m[1].str();
     const bool array = m[2].matched;
     if (type.rfind("sampler", 0) == 0) {
-        if ((type != "sampler2D" && type != "sampler2DArray") || array) {
-            err = "custom shader: only single sampler2D / sampler2DArray uniforms are supported ('" + name + "')";
+        if ((type != "sampler2D" && type != "sampler2DArray" && type != "sampler3D") || array) {
+            err = "custom shader: only single sampler2D / sampler2DArray / sampler3D uniforms are supported ('" +
+                  name + "')";
             return false;
         }
         if (std::none_of(samplers_.begin(), samplers_.end(), [&](const Sampler& x) { return x.name == name; })) {
@@ -136,7 +137,7 @@ bool CustomShaderInterface::declareUniform(const std::string& type, const std::s
                 err = "custom shader: more than " + std::to_string(kMaxSamplers) + " samplers";
                 return false;
             }
-            samplers_.push_back({name, type == "sampler2DArray"});
+            samplers_.push_back({name, type == "sampler2DArray", type == "sampler3D"});
         }
         return true;
     }
@@ -300,8 +301,8 @@ std::string CustomShaderInterface::declarations(bool vertex) const {
     }
     for (size_t i = 0; i < samplers_.size(); ++i) {
         const std::string& name = samplers_[i].name;
-        const char* image = samplers_[i].array ? "texture2DArray " : "texture2D ";
-        const char* sampler = samplers_[i].array ? "sampler2DArray" : "sampler2D";
+        const char* image = samplers_[i].volume ? "texture3D " : samplers_[i].array ? "texture2DArray " : "texture2D ";
+        const char* sampler = samplers_[i].volume ? "sampler3D" : samplers_[i].array ? "sampler2DArray" : "sampler2D";
         s += set + std::to_string(i + 1) + ") uniform " + image + name + "_image;\n";
         s += "#define " + name + " " + sampler + "(" + name + "_image, customSamplers[(customSamplerModes >> " +
              std::to_string(2 * i) + "u) & 3u])\n";

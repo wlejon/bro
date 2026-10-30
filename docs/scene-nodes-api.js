@@ -566,12 +566,14 @@ class SceneNode {
    * coordinates (a tiling texture) instead of clamping them. With `layers`
    * the slot is a 2D array for a `uniform sampler2DArray u_*`: `data` holds
    * that many width * height slices one after another (whole slots only, no
-   * sub-rectangles); a tiling 3D field is its z slices, read with two
-   * filtered fetches and a mix between them. A data array shorter than the
-   * extent is a RangeError.
+   * sub-rectangles). With `depth` in its place the slices are the z of a 3D
+   * texture for a `uniform sampler3D u_*`, filtered across them by the
+   * hardware (one fetch for a tiling 3D field) and, with `repeat`, wrapping
+   * in z too; never mipmapped, written whole. A data array shorter than the
+   * extent is a RangeError; `layers` and `depth` together a TypeError.
    *
    * With `buffer` (a KernelBuffer) in place of `data`, the slot's texels are
-   * the buffer's: width * height (* layers) texels of `channels` floats (1,
+   * the buffer's: width * height (* layers or depth) texels of `channels` floats (1,
    * 2 or 4: a `.r`, `.rg` or `.rgba` read), row-major, slice after slice,
    * from its start. The buffer is copied into the slot's image every render
    * that draws the node, after the kernel dispatches before it, so a kernel
@@ -581,7 +583,7 @@ class SceneNode {
    * node.
    *
    * @param {string} name
-   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, channels?: number}} opts
+   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number}} opts
    * @returns {SceneNode}
    * @example
    * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .rg:

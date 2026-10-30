@@ -298,7 +298,8 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
 }
 
 bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width,
-                                                int32_t height, int32_t layers, int32_t channels, bool repeat) {
+                                                int32_t height, int32_t layers, int32_t channels, bool repeat,
+                                                bool volume) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
     const Rooted value(ev::fromBits(bufferBits));
@@ -322,19 +323,24 @@ bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, ui
         return false;
     }
     return static_cast<scene::MeshNode*>(n)->setCustomShaderTextureBuffer(name, width, height, layers, channels,
-                                                                           std::move(buffer), repeat);
+                                                                           std::move(buffer), repeat, volume);
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,
                                           int32_t width, int32_t height,
                                           const float* data, uint32_t dataCount,
-                                          bool mipmap, bool isSub, bool repeat, int32_t layers) {
+                                          bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* mn = static_cast<scene::MeshNode*>(n);
+        if (volume && isSub) {
+            ev::throwTypeError("setShaderTexture: a 3D slot (depth) is written whole, not by sub-rects");
+            return false;
+        }
         // An array slot: `layers` slices of width * height floats, one after
-        // another in `data`, for a sampler2DArray.
+        // another in `data`, for a sampler2DArray (a sampler3D's z with
+        // `volume`).
         if (layers > 0 && !isSub) {
             if (width <= 0 || height <= 0) {
                 mn->clearCustomShaderTexture(name);
@@ -345,7 +351,8 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
                 ev::throwRangeError("setShaderTexture: data holds fewer than width * height * layers floats");
                 return false;
             }
-            if (!mn->setCustomShaderTextureArray(name, width, height, layers, 1, mipmap, repeat)) return false;
+            if (!mn->setCustomShaderTextureArray(name, width, height, layers, 1, mipmap, repeat, false, volume))
+                return false;
             for (int32_t l = 0; l < layers; ++l)
                 if (!mn->setCustomShaderTextureArrayLayer(name, l, data + slice * static_cast<uint64_t>(l))) return false;
             return true;

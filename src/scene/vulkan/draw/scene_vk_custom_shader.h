@@ -13,7 +13,7 @@
 //     (set 4, binding 0) declared identically in every stage, so the vertex,
 //     fragment and shadow stages agree on the offsets the node's values are
 //     written at;
-//   - each `sampler2D` / `sampler2DArray` takes a binding 1..kMaxSamplers of
+//   - each `sampler2D` / `sampler2DArray` / `sampler3D` takes a binding 1..kMaxSamplers of
 //     set 4, a bare image its name #defines into a sampler of the set's
 //     own (the texture's repeat and clampT pick it: the block's hidden
 //     customSamplerModes);
@@ -64,6 +64,7 @@ public:
     struct Sampler {
         std::string name;
         bool array = false;   // sampler2DArray
+        bool volume = false;  // sampler3D
     };
 
     /// A `buffer <type> u_name[];` declaration: the block holds its address

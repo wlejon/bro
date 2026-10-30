@@ -450,10 +450,11 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     const auto& samplers = prog.iface.samplers();
     for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i) {
         const bool array = i < samplers.size() && samplers[i].array;
-        views[i] = array ? defaults_->zeroArray.view : defaults_->white.view;
+        const bool volume = i < samplers.size() && samplers[i].volume;
+        views[i] = volume ? defaults_->zeroVolume.view : array ? defaults_->zeroArray.view : defaults_->white.view;
         if (!textures || i >= samplers.size()) continue;
         for (auto& t : *textures) {
-            if (t.name != samplers[i].name || (t.layers > 0) != array) continue;
+            if (t.name != samplers[i].name || (t.layers > 0 && !t.volume) != array || t.volume != volume) continue;
             if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
                 views[i] = img->view;
                 const uint32_t mode = !t.repeat     ? CustomShaderInterface::kLinear

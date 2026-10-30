@@ -574,16 +574,21 @@
     });
     fn(SceneNode.prototype, "setShaderTexture", function setShaderTexture(name, opts) {
         if (!name || !opts) return this;
+        // depth: the slices are a 3D texture's z (a sampler3D), not an array's.
+        const volume = opts.depth !== undefined;
+        if (volume && opts.layers !== undefined) throw new TypeError("setShaderTexture: layers or depth, not both");
+        if (volume && (opts.depth | 0) <= 0 && (opts.width | 0) > 0) throw new RangeError("setShaderTexture: depth must be positive");
+        const layers = volume ? opts.depth | 0 : opts.layers | 0;
         if (opts.buffer) {
             __bro_native.scene.SceneNode_setShaderTextureBuffer(this, name, opts.buffer, opts.width | 0, opts.height | 0,
-                                                                opts.layers | 0, opts.channels || 1, !!opts.repeat);
+                                                                layers, opts.channels || 1, !!opts.repeat, volume);
             return this;
         }
         const isSub = opts.x !== undefined || opts.y !== undefined;
         const x = opts.x || 0, y = opts.y || 0, w = opts.width || 0, h = opts.height || 0;
         const data = opts.data ? (opts.data instanceof Float32Array ? opts.data : Float32Array.from(opts.data)) : EMPTY_F32;
         __bro_native.scene.SceneNode_setShaderTexture(this, name, x, y, w, h, data, !!opts.mipmap, isSub,
-                                                      !!opts.repeat, opts.layers | 0);
+                                                      !!opts.repeat, layers, volume);
         return this;
     });
     fn(SceneNode.prototype, "capture", function capture() {

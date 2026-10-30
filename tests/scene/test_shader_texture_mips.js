@@ -16,6 +16,7 @@
 //       its coordinates (MeshNode::setCustomShaderTextureArray).
 //   (e) `buffer` makes a KernelBuffer the texels, copied every frame
 //       (MeshNode::setCustomShaderTextureBuffer).
+//   (f) `depth` makes a slot a sampler3D, filtered across its z slices.
 
 function patchBrightness(img, cx, cy, r) {
     let sum = 0, n = 0;
@@ -433,5 +434,65 @@ if (!boot.scene) {
         dropScene(s);
     }
 
-    console.log('shader texture mips/sub-update/shadow/array test passed');
+    // =====================================================================
+    // (f) `depth` makes the slot a 3D texture of that many z slices, read
+    // through a sampler3D and filtered across them by the hardware. Slice
+    // l holds 0.25 (l + 1): halfway between two slices' centres reads their
+    // mean, and a z just past 1 reads slice 0 with `repeat`, the last slice
+    // without. From `data` and from a KernelBuffer alike.
+    // =====================================================================
+    {
+        const s = makeScene(SIZE);
+        const scn = s.scene;
+        const N = 4, D = 4;
+        const slices = new Float32Array(N * N * D);
+        for (let l = 0; l < D; l++) slices.fill(0.25 * (l + 1), l * N * N, (l + 1) * N * N);
+        const quad = scn.createMesh({ mesh: 'box', color: 'white' });
+        quad.setShader({
+            fragment: `
+                uniform sampler3D u_vol;
+                uniform vec3 u_at;
+                void userFragment(inout vec3 baseColor, inout vec3 normal,
+                                  inout float metallic, inout float roughness,
+                                  inout vec3 emissive, inout float alpha) {
+                    baseColor = vec3(0.0);
+                    metallic  = 0.0;
+                    roughness = 1.0;
+                    emissive  = vec3(textureLod(u_vol, u_at, 0.0).r);
+                }`,
+            uniforms: { u_at: [0.5, 0.5, 0.5] },
+        });
+        const at = (z) => {
+            quad.setShaderUniform('u_at', [0.5, 0.5, z]);
+            return centerBrightness(scn.captureFrame(), 5);
+        };
+        const sliceZ = (l) => (l + 0.5) / D;
+        for (const source of ['data', 'buffer']) {
+            if (source === 'buffer' && !(bro.kernel && bro.kernel.available !== false)) continue;
+            const opts = source === 'data' ? { data: slices } : { buffer: bro.kernel.createBuffer(slices) };
+            quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, ...opts });
+            for (let l = 0; l < D; l++) {
+                const v = at(sliceZ(l));
+                assert(Math.abs(v - 255 * 0.25 * (l + 1)) < 6, `${source}: slice ${l} reads its own value (${v.toFixed(1)})`);
+            }
+            const mid = at(0.5 * (sliceZ(1) + sliceZ(2)));
+            assert(Math.abs(mid - 255 * 0.625) < 6, `${source}: between slices 1 and 2 the hardware blends them (${mid.toFixed(1)})`);
+            const clamped = at(1 + 0.5 / D);
+            assert(Math.abs(clamped - 255) < 6, `${source}: without repeat z past 1 clamps to the last slice (${clamped.toFixed(1)})`);
+            quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, repeat: true, ...opts });
+            const wrapped = at(1 + 0.5 / D);
+            assert(Math.abs(wrapped - 63.75) < 6, `${source}: with repeat z past 1 wraps onto slice 0 (${wrapped.toFixed(1)})`);
+        }
+
+        let threw = null;
+        try { quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, layers: D, data: slices }); } catch (e) { threw = e; }
+        assert(threw instanceof TypeError, 'layers and depth together are a TypeError');
+        threw = null;
+        try { quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, data: new Float32Array(N * N) }); } catch (e) { threw = e; }
+        assert(threw instanceof RangeError, 'data shorter than width * height * depth is a RangeError');
+
+        dropScene(s);
+    }
+
+    console.log('shader texture mips/sub-update/shadow/array/3D test passed');
 }

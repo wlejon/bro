@@ -425,6 +425,10 @@ public:
         // array of `layers` slices, each w x h, bound to a sampler2DArray.
         // One binding however many slices.
         int layers = 0;
+        // With `layers`: the slices are the z of a 3D texture, bound to a
+        // sampler3D and filtered across them by the hardware, instead of
+        // the slices of an array. No mip chain.
+        bool volume = false;
         // A staged whole-slice write. Also already applied to `data`, whose
         // slices not yet written read as zero.
         struct SliceUpdate {
@@ -469,12 +473,14 @@ public:
     /// shape keeps the GPU storage and every slice already written; a new shape
     /// reallocates and zeroes. `repeat` repeats in S, and in T too unless
     /// `clampT`. A mipmapped slot regenerates the chain of each written slice.
-    /// Same budget rule as setCustomShaderTexture: false only when a NEW name
-    /// would exceed maxUserTextures().
+    /// `volume`: the slices are the z of a 3D texture read through a
+    /// sampler3D (`repeat` in z too; never mipmapped). Same budget rule as
+    /// setCustomShaderTexture: false only when a NEW name would exceed
+    /// maxUserTextures().
     bool setCustomShaderTextureArray(const std::string& name, int width,
                                      int height, int layers, int channels,
                                      bool mipmap = false, bool repeat = false,
-                                     bool clampT = false);
+                                     bool clampT = false, bool volume = false);
 
     /// Stage one whole slice of an existing array slot: width*height*channels
     /// floats at the slot's shape. Refused (false, logged) for an unknown or
@@ -491,10 +497,11 @@ public:
     /// addressing (`repeat` in both directions). A null buffer or zero extent
     /// releases the slot. False when a new name would exceed
     /// maxUserTextures(), `channels` is not 1, 2 or 4, or the buffer is
-    /// smaller than the texels.
+    /// smaller than the texels. `volume`: the layers are a 3D texture's z,
+    /// read through a sampler3D.
     bool setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
                                       int channels, std::shared_ptr<render::ComputeBuffer> source,
-                                      bool repeat);
+                                      bool repeat, bool volume = false);
 
     /// Release the named slot; the name no longer counts against the budget.
     void clearCustomShaderTexture(const std::string& name);

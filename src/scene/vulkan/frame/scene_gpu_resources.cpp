@@ -272,8 +272,9 @@ bool SceneGpuResources::createUserTexture(MeshNode::UserTexture& tex, UserTextur
     if (mips > 1) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (!allocator_.createImage(static_cast<uint32_t>(tex.w), static_cast<uint32_t>(tex.h), format, usage,
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out.image, mips, VK_SAMPLE_COUNT_1_BIT,
-                                VK_IMAGE_ASPECT_COLOR_BIT, layers, 0,
-                                tex.layers > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D)) {
+                                VK_IMAGE_ASPECT_COLOR_BIT, tex.volume ? 1u : layers, 0,
+                                tex.layers > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
+                                tex.volume ? layers : 0u)) {
         return false;
     }
 
@@ -285,7 +286,7 @@ bool SceneGpuResources::createUserTexture(MeshNode::UserTexture& tex, UserTextur
     info.addressModeU = tex.repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.addressModeV = (tex.repeat && !tex.clampT) ? VK_SAMPLER_ADDRESS_MODE_REPEAT
                                                     : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeW = tex.volume && tex.repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.maxLod = static_cast<float>(mips);
     if (vkCreateSampler(allocator_.device().device(), &info, nullptr, &out.image.sampler) != VK_SUCCESS) {
         allocator_.destroyImage(out.image);

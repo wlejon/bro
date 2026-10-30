@@ -105,7 +105,8 @@ public:
     // Image & Texture management
     /// Create an image and its view. A sampled image starts out (once the
     /// upload stream runs) in SHADER_READ_ONLY_OPTIMAL, cleared to zero, so it
-    /// is valid to bind before anything renders into it.
+    /// is valid to bind before anything renders into it. `depth` > 0 makes
+    /// it a 3D image that deep (one layer, a 3D view).
     bool createImage(uint32_t width, uint32_t height, VkFormat format,
                      VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                      SceneVkImage& outImage, uint32_t mipLevels = 1,
@@ -113,7 +114,8 @@ public:
                      VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                      uint32_t arrayLayers = 1,
                      VkImageCreateFlags createFlags = 0,
-                     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM);
+                     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM,
+                     uint32_t depth = 0);
 
     /// A storage image a compute shader writes and every stage samples: 2D
     /// when `depth` is 1, else 3D; one mip, no sampler. It is cleared to zero
@@ -132,7 +134,8 @@ public:
     /// Record an upload of `size` bytes of tightly packed texels into
     /// `region` of mip 0 of a sampled image; with `regenerateMips` the rest of
     /// the mip chain of those layers is rebuilt from it. The image is
-    /// sampleable afterwards.
+    /// sampleable afterwards. Of a 3D image, the region's layers are z
+    /// slices.
     bool uploadImage(SceneVkImage& image, const void* data, VkDeviceSize size,
                      const ImageRegion& region = {}, bool regenerateMips = false);
     /// Record a copy of mip 0 of every layer of a sampled image from the

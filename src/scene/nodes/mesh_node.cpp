@@ -178,6 +178,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
         t.subUpdates.clear();
         t.sliceUpdates.clear();
         t.layers = 0;
+        t.volume = false;
         t.source.reset();
         t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
         t.w = width;
@@ -256,9 +257,10 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
 bool MeshNode::setCustomShaderTextureArray(const std::string& name,
                                            int width, int height, int layers,
                                            int channels, bool mipmap,
-                                           bool repeat, bool clampT) {
+                                           bool repeat, bool clampT, bool volume) {
     const bool release = (width <= 0 || height <= 0 || layers <= 0);
     if (!release && (channels < 1 || channels > 4)) return false;
+    if (volume) mipmap = false;
     for (auto it = userTextures_.begin(); it != userTextures_.end(); ++it) {
         UserTexture& t = *it;
         if (t.name != name) continue;
@@ -270,7 +272,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
         const bool sameShape = !t.source && t.layers == layers && t.w == width &&
                                t.h == height && t.channels == channels &&
                                t.mipmap == mipmap && t.repeat == repeat &&
-                               t.clampT == clampT;
+                               t.clampT == clampT && t.volume == volume;
         if (sameShape) return true;   // storage and written slices survive
         t.data.assign((size_t)width * height * layers * channels, 0.0f);
         t.subUpdates.clear();
@@ -279,6 +281,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
         t.w = width;
         t.h = height;
         t.layers = layers;
+        t.volume = volume;
         t.channels = channels;
         t.mipmap = mipmap;
         t.repeat = repeat;
@@ -295,6 +298,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
     t.w = width;
     t.h = height;
     t.layers = layers;
+    t.volume = volume;
     t.channels = channels;
     t.mipmap = mipmap;
     t.repeat = repeat;
@@ -337,7 +341,7 @@ bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
 
 bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
                                             int channels, std::shared_ptr<render::ComputeBuffer> source,
-                                            bool repeat) {
+                                            bool repeat, bool volume) {
     auto it = std::find_if(userTextures_.begin(), userTextures_.end(),
                            [&](const UserTexture& t) { return t.name == name; });
     if (width <= 0 || height <= 0 || !source) {
@@ -364,6 +368,7 @@ bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, 
     t.w = width;
     t.h = height;
     t.layers = std::max(layers, 0);
+    t.volume = volume && t.layers > 0;
     t.channels = channels;
     t.mipmap = false;
     t.repeat = repeat;

@@ -95,8 +95,12 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
                                    SceneVkImage& outImage, uint32_t mipLevels,
                                    VkSampleCountFlagBits samples, VkImageAspectFlags aspectMask,
                                    uint32_t arrayLayers, VkImageCreateFlags createFlags,
-                                   VkImageViewType viewType) {
+                                   VkImageViewType viewType, uint32_t depth) {
     if (width == 0 || height == 0 || arrayLayers == 0) return false;
+    if (depth > 0) {
+        arrayLayers = 1;
+        viewType = VK_IMAGE_VIEW_TYPE_3D;
+    }
     VkDevice dev = device_.device();
     const bool sampled = (usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0;
     // Sampled images are cleared once at creation.
@@ -105,8 +109,8 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
     VkImageCreateInfo imgInfo{};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.flags = createFlags;
-    imgInfo.imageType = VK_IMAGE_TYPE_2D;
-    imgInfo.extent = {width, height, 1};
+    imgInfo.imageType = depth > 0 ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+    imgInfo.extent = {width, height, std::max(depth, 1u)};
     imgInfo.mipLevels = mipLevels;
     imgInfo.arrayLayers = arrayLayers;
     imgInfo.format = format;
@@ -154,7 +158,7 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
     outImage.format = format;
     outImage.width = width;
     outImage.height = height;
-    outImage.depth = 1;
+    outImage.depth = std::max(depth, 1u);
     outImage.mipLevels = mipLevels;
     outImage.arrayLayers = arrayLayers;
     outImage.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -206,15 +210,18 @@ bool SceneVkAllocator::uploadImage(SceneVkImage& image, const void* data, VkDevi
         image.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
     const bool mips = regenerateMips && image.mipLevels > 1;
-    const VkImageSubresourceRange dst{aspect, 0, mips ? image.mipLevels : 1u, region.layer, region.layerCount};
+    // A 3D image's "layers" are its z slices, all in its one layer.
+    const bool volume = image.depth > 1;
+    const VkImageSubresourceRange dst{aspect, 0, mips ? image.mipLevels : 1u, volume ? 0u : region.layer,
+                                      volume ? 1u : region.layerCount};
     render::cmdTransitionImage(cmd, image.image, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkBufferImageCopy copy{};
     copy.bufferOffset = staging.offset;
-    copy.imageSubresource = {aspect, 0, region.layer, region.layerCount};
-    copy.imageOffset = {region.x, region.y, 0};
-    copy.imageExtent = {w, h, image.depth};
+    copy.imageSubresource = {aspect, 0, dst.baseArrayLayer, dst.layerCount};
+    copy.imageOffset = {region.x, region.y, volume ? static_cast<int32_t>(region.layer) : 0};
+    copy.imageExtent = {w, h, volume ? region.layerCount : 1u};
     vkCmdCopyBufferToImage(cmd, staging.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 
     if (mips) {
@@ -421,7 +428,9 @@ bool SceneVkAllocator::createTexture3D(const void* voxelData, uint32_t size, VkF
 
     if (voxelData) {
         const VkDeviceSize dataSize = static_cast<VkDeviceSize>(size) * size * size * bytesPerTexel(format);
-        if (!uploadImage(outImage, voxelData, dataSize)) {
+        ImageRegion all;
+        all.layerCount = size;   // every z slice
+        if (!uploadImage(outImage, voxelData, dataSize, all)) {
             destroyImage(outImage);
             return false;
         }
