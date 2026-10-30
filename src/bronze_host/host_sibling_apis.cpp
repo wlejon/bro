@@ -70,6 +70,7 @@
 #endif
 #if BRO_WITH_KERNEL
 #include "bronze_host/host_kernel_gpu.h"
+#include "bronze_host/host_tiles.h"
 #include <brokernel/api.h>
 #endif
 #if BRO_WITH_3D
@@ -473,6 +474,7 @@ void installSiblingApis(engine::Engine& engine) {
     // as the GPU half (host_kernel_gpu.h).
     installKernelGpu(engine);
     brokernel::api::installKernel();
+    installTiles();
 #endif
     {
         // `bro.image` is ONE object with two sources: the kernels, codecs

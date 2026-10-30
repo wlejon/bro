@@ -36,7 +36,7 @@ The engine is one shared library, `libbro` (`src/runtime/`; C entry points in `r
 
 Module layering (each names only layers left of it):
 ```
-util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | tile | physics | audio_inference | terminal | a11y | compositor | net | steam | video → engine (main loop) → bronze_host | ctl → runtime (libbro + the bro / bro-headless / bro-server / bro-app-stub mains)
+util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | tile | tilecache | physics | audio_inference | terminal | a11y | compositor | net | steam | video → engine (main loop) → bronze_host | ctl → runtime (libbro + the bro / bro-headless / bro-server / bro-app-stub mains)
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
@@ -109,6 +109,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | global `FastNoise`, FastNoise2 SIMD noise |
 | `kernel-api.js` | `bro.kernel`: brokernel source compiled (`compile(source, {file, modules})`, no disk reads), point kernels `eval`ed and grid kernels `run` over typed arrays on the CPU, `dispatch`ed over `KernelBuffer`s (`createBuffer`, `read`/`write`) on the engine's GPU (`render::VulkanCompute`, the graphics stream); stores bounded (outside reads zero, writes nothing; a store accessed at the cells must cover the grid) |
+| `tiles-api.js` | `bro.tiles.createCache`: GPU tile caches over a plane or cube-sphere quadtree forest (`tilecache::TileTree`): error-driven selection within a capacity, `produce(tile)` fills a tile's `KernelBuffer` views after its parent (refine from `tile.parent`), LRU eviction, a seamless draw set + GPU `drawList`, `layer(name)` pools bindable with `setShaderBuffer` |
 | `image-api.js` | `bro.image` typed-array kernels (CPU, broimage): decode/EXIF, encode/KTX2, geometry, color, preproc, presets |
 | `image-gpu-api.js` | `bro.image.gpu.*` WebGL2 renderer (bro-side JS): `colormap`, `fbm2D`, ranging, `viewRect` |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |

@@ -6,6 +6,7 @@ include_directories(BEFORE "${BRO_SDL_FENCE_DIR}")
 
 add_subdirectory(util)
 add_subdirectory(tile)
+add_subdirectory(tilecache)
 add_subdirectory(audio_inference)
 add_subdirectory(platform)
 add_subdirectory(svg)

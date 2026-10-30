@@ -63,6 +63,28 @@ public:
     const std::shared_ptr<render::ComputeBuffer>& computeBuffer() const { return buffer_; }
 };
 
+// `bytes` of a Buffer from byte `offset`: a store bounded to that range.
+class View final : public brokernel::api::GpuBuffer {
+public:
+    View(std::shared_ptr<Buffer> buffer, size_t offset, size_t bytes)
+        : buffer_(std::move(buffer)), offset_(offset), bytes_(bytes) {}
+
+    uint64_t address() const override { return buffer_->address() + offset_; }
+    size_t bytes() const override { return bytes_; }
+    size_t capacity() const override { return bytes_; }
+    bool write(size_t offset, const void* data, size_t n, std::string* err) override {
+        return buffer_->write(offset_ + offset, data, n, err);
+    }
+    bool read(size_t offset, void* out, size_t n, std::string* err) override {
+        return buffer_->read(offset_ + offset, out, n, err);
+    }
+
+private:
+    std::shared_ptr<Buffer> buffer_;
+    size_t offset_;
+    size_t bytes_;
+};
+
 struct Program final : brokernel::api::GpuProgram {
     std::shared_ptr<render::ComputePipeline> pipeline;
 };
@@ -147,6 +169,9 @@ private:
     std::shared_ptr<Device> device_;
 };
 
+// One device for every main-thread realm (the page and its iframes).
+std::shared_ptr<Device> s_device;
+
 } // namespace
 
 std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v) {
@@ -155,9 +180,21 @@ std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v) {
     return own ? own->computeBuffer() : nullptr;
 }
 
+std::shared_ptr<brokernel::api::GpuBuffer> createEngineBuffer(size_t bytes, std::string* err) {
+    if (!s_device || lost(*s_device, err)) return nullptr;
+    auto buffer = s_device->context()->compute().createBuffer(bytes, err);
+    if (!buffer) return nullptr;
+    return std::make_shared<Buffer>(s_device, std::move(buffer));
+}
+
+std::shared_ptr<brokernel::api::GpuBuffer> engineBufferView(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer,
+                                                            size_t offset, size_t bytes) {
+    auto own = std::dynamic_pointer_cast<Buffer>(buffer);
+    if (!own || offset > own->bytes() || bytes > own->bytes() - offset) return nullptr;
+    return std::make_shared<View>(std::move(own), offset, bytes);
+}
+
 void installKernelGpu(engine::Engine& engine) {
-    // One device for every main-thread realm (the page and its iframes).
-    static std::shared_ptr<Device> s_device;
     if (s_device && s_device->engine == &engine) return;
     s_device = std::make_shared<Device>();
     s_device->engine = &engine;
