@@ -256,7 +256,8 @@ fact. A record holds:
   (agent commands and their input), `misc`, `input` (libinput, seat, client
   windows), `tick` (timers, rAF, observers; `js` of it), `layoutWait`,
   `record`, `composite`, `present` (with `gpuWait` and `flipWait`), and
-  `pacingWait`; `other` is what none of them account for
+  `pacingWait`, then `gc` (the JS heap collected between frames, after the
+  present); `other` is what none of them account for
 - `forcedLayouts` / `forcedLayoutMs`: layout forced on the main thread by a
   script reading geometry after a mutation
 - the layout pass it waited on (`style`, `layout`, `animTick`, active and

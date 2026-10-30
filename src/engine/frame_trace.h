@@ -42,6 +42,7 @@ struct FrameRecord {
     double gpuWaitMs = 0.0;    // of presentMs: CPU blocked on the composite's GPU ticket
     double flipWaitMs = 0.0;   // of presentMs: commit + waiting for the flip to land
     double pacingWaitMs = 0.0; // after the present: waiting for a flip event / frame cap
+    double gcMs = 0.0;         // after the present: the JS heap collected between frames
 
     // Layout thread, for a pass this frame waited on.
     double styleMs = 0.0;

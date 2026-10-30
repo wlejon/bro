@@ -33,7 +33,7 @@ namespace {
 // Wall time no phase accounts for.
 double otherMs(const FrameRecord& r) {
     const double phases = r.eventsMs + r.controlMs + r.miscMs + r.inputMs + r.tickMs + r.layoutWaitMs + r.recordMs +
-                          r.compositeMs + r.presentMs + r.pacingWaitMs;
+                          r.compositeMs + r.presentMs + r.pacingWaitMs + r.gcMs;
     return std::max(0.0, (r.endMs - r.startMs) - phases);
 }
 
@@ -56,6 +56,7 @@ void writeRecord(util::JsonOut& j, const FrameRecord& r) {
     j.key("gpuWait").number(r.gpuWaitMs);
     j.key("flipWait").number(r.flipWaitMs);
     j.key("pacingWait").number(r.pacingWaitMs);
+    j.key("gc").number(r.gcMs);
     j.key("style").number(r.styleMs);
     j.key("layout").number(r.layoutPassMs);
     j.key("animTick").number(r.animTickMs);
@@ -201,6 +202,7 @@ Summary summarize(const std::vector<FrameRecord>& recs, double refreshMs, int wo
     phase("gpuWait", &FrameRecord::gpuWaitMs);
     phase("flipWait", &FrameRecord::flipWaitMs);
     phase("pacingWait", &FrameRecord::pacingWaitMs);
+    phase("gc", &FrameRecord::gcMs);
 
     s.worst = recs;
     std::sort(s.worst.begin(), s.worst.end(), [](const FrameRecord& a, const FrameRecord& b) {
@@ -326,11 +328,11 @@ std::string FrameTrace::summaryText(double fromMs, double toMs, int worstN) cons
     for (const auto& r : s.worst) {
         add("  #%llu t=%.1f total %.2f: events %.2f control %.2f misc %.2f input %.2f tick %.2f (js %.2f) "
             "layoutWait %.2f (style %.2f layout %.2f) record %.2f composite %.2f present %.2f (gpu %.2f flip %.2f) "
-            "pacing %.2f other %.2f raster %.2f forced layouts %u (%.2f) anims %u%s%s\n",
+            "pacing %.2f gc %.2f other %.2f raster %.2f forced layouts %u (%.2f) anims %u%s%s\n",
             static_cast<unsigned long long>(r.frame), r.startMs - recs.front().startMs, r.endMs - r.startMs,
             r.eventsMs, r.controlMs, r.miscMs, r.inputMs, r.tickMs, r.jsMs, r.layoutWaitMs, r.styleMs,
             r.layoutPassMs, r.recordMs, r.compositeMs, r.presentMs, r.gpuWaitMs, r.flipWaitMs, r.pacingWaitMs,
-            otherMs(r), r.rasterMs, r.forcedLayouts, r.forcedLayoutMs, r.activeAnimations,
+            r.gcMs, otherMs(r), r.rasterMs, r.forcedLayouts, r.forcedLayoutMs, r.activeAnimations,
             r.recorded ? " recorded" : "", r.layoutPerformed ? " layout" : "");
     }
     for (const auto& m : marks(fromMs, toMs)) add("mark t=%.1f %s\n", m.ms - recs.front().startMs, m.label.c_str());

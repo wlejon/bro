@@ -11,6 +11,7 @@
 #include "webgl/webgl2_context.h"
 #include "platform/window.h"
 #include "util/time.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine_drm.h"
 #include "render/software_cursor.h"
@@ -321,6 +322,14 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     } else {
         // No present to pace the loop on: wait a little for the raster.
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // The frame is out: what the JS heap needs collecting is collected here,
+    // in the time left before the next frame, rather than inside one.
+    {
+        const double tGc = util::currentTimeMs();
+        bronze_host::hostCollectBetweenFrames();
+        rec.gcMs = util::currentTimeMs() - tGc;
     }
 
     {

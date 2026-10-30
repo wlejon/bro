@@ -48,6 +48,14 @@ constexpr double kPressureSampleIntervalMs = 250.0;        // sample private byt
 constexpr double kPressureMaxWaitMs = 2000.0;              // then collect even on a busy frame
 constexpr double kPressureQuietMs = 100.0;                 // quiet this long: collect now
 
+// Between frames (hostCollectBetweenFrames): the heap is collected ahead of
+// its own triggers, so they seldom fire in the middle of a frame. A minor
+// collection once eden is this full, a full one once the old generation has
+// grown this near its threshold. A frame allocating more than the rest of
+// eden still collects where it fills it.
+constexpr double kBetweenFramesEdenFill = 0.5;
+constexpr double kBetweenFramesOldFill = 0.75;
+
 double s_idleAccumulatorMs = 0.0;
 double s_timeSinceLastGcMs = 0.0;
 double s_timeSinceSampleMs = 0.0;
@@ -55,6 +63,13 @@ double s_pressureWaitedMs = 0.0;
 uint64_t s_bytesAfterLastGc = 0;
 bool s_collectedForCurrentIdle = false;
 bool s_pressurePending = false;
+// A full collection the frame's policy decided on, run between frames.
+const char* s_requested = nullptr;
+bool s_requestedIsIdleSpell = false;  // it counts as the idle spell's collection
+// The page's boot data is still young: the first frames' slot promotes it
+// with a full collection, so it is copied once rather than aged through two
+// minor collections mid-animation.
+bool s_bootCollected = false;
 std::atomic<int> s_evalDepth{0};
 
 // BRO_GC_PRESSURE=0 turns the memory-pressure collection off; BRO_GC_LOG=1
@@ -74,6 +89,14 @@ bool gcLogEnabled() {
 }
 
 void collectFor(const char* why);
+
+// Collections the frame's policy decides on run after the frame is
+// presented, not in the frame (hostCollectBetweenFrames).
+void requestFor(const char* why, bool idleSpell = true) {
+    if (s_requested) return;
+    s_requested = why;
+    s_requestedIsIdleSpell = idleSpell;
+}
 
 bool underMemoryPressure() {
     if (s_timeSinceLastGcMs < kPressureMinIntervalMs) return false;
@@ -120,6 +143,8 @@ void hostCollectGarbage() {
         return;
     }
     bronze::embed::collectGarbage();
+    s_requested = nullptr;
+    s_bootCollected = true;
     s_pressurePending = false;
     s_timeSinceLastGcMs = 0.0;
     s_timeSinceSampleMs = 0.0;
@@ -181,6 +206,8 @@ void hostResetIdleGCTimer() {
     s_timeSinceSampleMs = 0.0;
     s_bytesAfterLastGc = 0;
     s_collectedForCurrentIdle = false;
+    s_requested = nullptr;
+    s_bootCollected = false;
 }
 
 void hostNotifyIdleFrame(double dtMs) {
@@ -199,11 +226,11 @@ void hostNotifyIdleFrame(double dtMs) {
     if (isQuiescent) {
         s_idleAccumulatorMs += delta;
         if (!s_collectedForCurrentIdle && s_idleAccumulatorMs >= kIdleQuiescentThresholdMs)
-            collectFor("idle");
+            requestFor("idle");
         else if (s_timeSinceLastGcMs >= kIdlePeriodicIntervalMs)
-            collectFor("periodic");
+            requestFor("periodic");
         else if (s_pressurePending && s_idleAccumulatorMs >= kPressureQuietMs)
-            collectFor("pressure (quiet)");
+            requestFor("pressure (quiet)");
     } else {
         s_idleAccumulatorMs = 0.0;
         s_collectedForCurrentIdle = false;
@@ -217,11 +244,40 @@ void hostNotifyIdleFrame(double dtMs) {
         } else if (s_pressurePending) {
             s_pressureWaitedMs += delta;
             if (s_pressureWaitedMs >= kPressureMaxWaitMs) {
-                collectFor("pressure (busy)");
-                // A busy page still gets its idle collection when it settles.
-                s_collectedForCurrentIdle = false;
+                requestFor("pressure (busy)", /*idleSpell=*/false);
             }
         }
+    }
+}
+
+void hostCollectBetweenFrames() {
+    if (!isWebHostGlobalsInstalled()) return;
+    if (isExecutionStackActive()) return;
+    if (!s_bootCollected) requestFor("boot", /*idleSpell=*/false);
+    if (s_requested) {
+        const bool wasIdle = s_collectedForCurrentIdle;
+        const bool idleSpell = s_requestedIsIdleSpell;
+        collectFor(s_requested);
+        // One made for the boot or a busy page's pressure is not the idle
+        // spell's: the page still gets that when it settles.
+        if (!idleSpell) s_collectedForCurrentIdle = wasIdle;
+        return;
+    }
+    const bronze::embed::HeapPressure p = bronze::embed::heapPressure();
+    if (p.fullThreshold > 0 &&
+        static_cast<double>(p.oldGrowth) >= kBetweenFramesOldFill * static_cast<double>(p.fullThreshold)) {
+        collectFor("old generation near its threshold");
+        return;
+    }
+    if (p.edenCapacity > 0 &&
+        static_cast<double>(p.edenUsed) >= kBetweenFramesEdenFill * static_cast<double>(p.edenCapacity)) {
+        const auto t0 = std::chrono::steady_clock::now();
+        bronze::embed::collectYoungGarbage();
+        if (gcLogEnabled())
+            LOG_INFO("gc: minor collection between frames in %.2f ms, the collector's pause %.2f ms (eden %.1f of %.1f MB)",
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
+                     bronze::embed::getRuntimeTelemetry().gcPauseNs / 1e6,
+                     p.edenUsed / 1048576.0, p.edenCapacity / 1048576.0);
     }
 }
 

@@ -17,6 +17,16 @@ void hostCollectGarbage();
 /// the JS heap's own triggers and is only given back by their finalizers.
 void hostNotifyIdleFrame(double dtMs);
 
+/// Called by the engine once a frame is presented (or held), before the next
+/// one starts: the one place the host collects during an animation. It runs
+/// what hostNotifyIdleFrame decided on (idle, periodic, pressure), a full
+/// collection once after the page has booted (promoting its boot data in one
+/// copy), and otherwise collects ahead of the heap's own triggers: a minor
+/// collection once eden is half full, a full one once the old generation is
+/// near its threshold. The pause then falls in the time the frame left
+/// before the next one rather than inside a frame.
+void hostCollectBetweenFrames();
+
 /// The process's private bytes (Windows PrivateUsage, Linux resident set); 0
 /// where unknown. What the memory-pressure collection and perf.stats() read.
 uint64_t hostProcessPrivateBytes();
