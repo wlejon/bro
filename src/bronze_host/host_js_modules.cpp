@@ -183,9 +183,6 @@ void installPhysicsModule() {
     adoptGlobalProperty("PhysicsVehicle");
     adoptGlobalProperty("PhysicsRagdoll");
     adoptGlobalProperty("PhysicsWorldHandle");
-#if BRO_WITH_PHYSICS
-    installPhysicsForceFieldExtensions();
-#endif
 }
 
 void installTerrainModule() {

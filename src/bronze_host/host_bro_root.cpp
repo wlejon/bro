@@ -24,13 +24,15 @@
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_permissions.h"
 #include "bronze_host/host_solve.h"
 #include "bronze_host/host_window_open.h"
 #include "engine/engine.h"
 #include "util/log.h"
+#if BRO_WITH_3D
+#include "scene/sdf_gpu_tracer.h"
+#endif
 
 #include <string>
 #include <vector>
@@ -164,8 +166,19 @@ void installBroRoots(engine::Engine& engine) {
     {
         ev::Persistent gpu(makeBroGpuValue());
         ev::setProperty(bro->get(), "gpu", gpu.get());
-        registerJsGpuShutdown(engine);
     }
+#if BRO_WITH_3D
+    {
+        // The SDF tracer runs on brass's own Vulkan runtime, which must close
+        // while the driver is still loaded (SdfGpuTracer::closeVulkan). Once
+        // per engine.
+        static engine::Engine* s_engine = nullptr;
+        if (s_engine != &engine) {
+            s_engine = &engine;
+            engine.addShutdownHook([] { scene::SdfGpuTracer::closeVulkan(); });
+        }
+    }
+#endif
     {
         ev::Persistent steam(makeBroSteamValue());
         ev::setProperty(bro->get(), "steam", steam.get());

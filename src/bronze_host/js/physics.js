@@ -13,6 +13,9 @@
     // ---- Physics -------------------------------------------------------------
     const ns_Physics = typeof Physics === 'object' && Physics !== null ? Physics : {};
     globalThis.Physics = ns_Physics;
+    // bro.physics is the same object. The root is read off globalThis (see
+    // net.js: a bare `bro` read is cached per compiled module, not per thread).
+    if (globalThis.bro !== undefined) globalThis.bro.physics = ns_Physics;
 
     fn(ns_Physics, "createWorldHandle", function createWorldHandle(opts) {
         return __bro_native.physics.createWorldHandle(opts === undefined ? '' : JSON.stringify(opts));

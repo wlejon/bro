@@ -168,33 +168,6 @@ assert(typeof bro.layout === 'object' && typeof bro.layout.solve === 'function',
     assert(rep.estimatedOpsAfter < rep.estimatedOpsBefore, 'ops reduced');
 }
 
-// ---- #144: bro.autoKernel (SMT Loop-to-@kernel Parallelizer) ----------------
-
-{
-    assert(typeof bro.autoKernel === 'function', 'bro.autoKernel is a function');
-    const okLoop = bro.autoKernel(`
-        function saxpy(out, x, y, a, n) {
-            for (let i = 0; i < n; i++) {
-                out[i] = a * x[i] + y[i];
-            }
-        }
-    `);
-    assert(okLoop.parallelizable === true, 'saxpy loop proven parallelizable');
-    assert(okLoop.provenNoWaw && okLoop.provenNoRaw && okLoop.provenNoWar, 'no loop-carried hazards');
-    assert(okLoop.kernel !== null && typeof okLoop.kernel === 'object', 'compiled @kernel attached');
-
-    const badLoop = bro.autoKernel(`
-        function prefixSum(a, x, n) {
-            for (let i = 0; i < n; i++) {
-                a[i] = a[i - 1] + x[i];
-            }
-        }
-    `);
-    assert(badLoop.parallelizable === false, 'prefixSum loop rejected due to RAW dependency');
-    assert(badLoop.hazards.length >= 1 && badLoop.hazards[0].hazardKind === 'RAW',
-           'reports concrete RAW hazard witness');
-}
-
 // ---- #152: Proof-to-Codegen Unlock (TypedArray integral-index & in-bounds) --
 
 {

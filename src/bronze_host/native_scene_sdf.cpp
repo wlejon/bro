@@ -1,5 +1,4 @@
 #include "bronze_host/native_scene_internal.h"
-#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_values.h"
 #include "scene/sdf_gpu_tracer.h"
 
@@ -621,7 +620,6 @@ void installSdfGraphGpuExtensions() {
         if (ev::isObject(meshVal)) {
             ObjectBuilder meshBuilder(meshVal);
             attachSdfFunctionsToObject(meshBuilder);
-            attachJsGpuKernelFunctions(meshBuilder);
         }
     }
 }
@@ -637,7 +635,6 @@ void installSceneSdfExtensions() {
     if (!ev::isObject(sceneVal)) return;
     ObjectBuilder sceneBuilder(sceneVal);
     attachSdfFunctionsToObject(sceneBuilder);
-    attachJsGpuKernelFunctions(sceneBuilder);
 }
 
 } // namespace bro::bronze_host

@@ -1,6 +1,5 @@
 #include "scene/sdf_gpu_tracer.h"
 #include "render/glsl_compiler.h"
-#include "codegen-brass/js_gpu_kernel.h"
 
 #include <brass/gpu/vulkan_driver.hpp>
 #include <bromesh/isosurface/jit/sdf_compiler.h>
@@ -429,112 +428,6 @@ void main() {
           "BRO_AUDIT_COMPUTE_SHADERS=1 records proven-safe compute audit stats");
 }
 
-void testJsGpuKernelSingleSourceAndVulkanDispatch() {
-    // 1. Single-source 2D scalar height kernel (#116)
-    const char* heightJs = R"(
-        // @kernel
-        function terrainWave(x, z) {
-            return Math.sin(x * 0.25) * 2.0 + Math.cos(z * 0.25) * 1.5;
-        }
-    )";
-    bronze::GpuCompileOptions opts;
-    opts.stage = brass::target::SpirvStage::Compute;
-    opts.enableRelaxedPrecision = true;
-    opts.localSizeX = 64;
-
-    const auto res = bronze::compileJsGpuKernelSource(heightJs, "terrainWave.js", opts);
-    check(res.ok, "bronze::compileJsGpuKernelSource compiles single-source terrainWave JS function");
-    check(res.hasScalarReturn && res.scalarParamCount == 2,
-          "terrainWave has 2 scalar parameters and scalar return");
-    check(res.cpuGpuProvenEquivalent, "terrainWave CPU MIR == SPIR-V equivalence formally proven");
-    check(res.singleSourceParityVerified && res.maxCpuGpuUlpDiff <= 2.0f,
-          "terrainWave single-source 64-point parity verified within 2 ULPs");
-    check(res.relaxedPrecisionReport.promoted_count > 0,
-          "terrainWave promotes bounded float ops to RelaxedPrecision");
-    check(!res.spirvWords.empty() && !res.ptxAssembly.empty(),
-          "terrainWave emits both SPIR-V 1.5 words and PTX assembly");
-
-    const float cpuVal = res.evalCpu2D(1.5f, -0.75f);
-    const float spvVal = res.evalSpirv2D(1.5f, -0.75f);
-    const float refVal = std::sin(1.5f * 0.25f) * 2.0f + std::cos(-0.75f * 0.25f) * 1.5f;
-    check(std::fabs(cpuVal - refVal) < 1e-5f && std::fabs(spvVal - cpuVal) < 1e-5f,
-          "terrainWave evalCpu2D and evalSpirv2D match reference value");
-
-    if (brass::gpu::vulkan_available()) {
-        brass::target::SpirvKernel k;
-        k.entry = "terrainWave";
-        k.stage = brass::target::SpirvStage::Compute;
-        k.words = res.spirvWords;
-        k.params = res.spirvLayout.params;
-        k.descriptors = res.spirvLayout.descriptors;
-        k.push_constant_bytes = res.spirvLayout.push_constant_bytes;
-        k.local_size[0] = 64;
-        k.local_size[1] = 1;
-        k.local_size[2] = 1;
-
-        std::string err;
-        auto mod = brass::gpu::VulkanModule::load(k, &err);
-        auto outBuf = brass::gpu::VulkanBuffer::alloc(sizeof(float));
-        float vkVal = 0.0f;
-        const bool launched = mod.valid() && outBuf.valid() &&
-                              mod.launch_1d(1, 64, {1.5f, -0.75f, outBuf}, &err) &&
-                              outBuf.download(&vkVal, sizeof(float));
-        // Compiled with enableRelaxedPrecision: hardware may run the promoted
-        // ops at mediump (fp16, 10-bit mantissa), as NVIDIA does, so the match
-        // is to fp16's relative precision, not fp32's.
-        check(launched && std::fabs(vkVal - cpuVal) <= std::fabs(cpuVal) * 2e-3f,
-              "single-source JS @kernel terrainWave executes on hardware Vulkan queue and matches CPU (" +
-              std::to_string(res.spirvLayout.params.size()) + " params, vk " + std::to_string(vkVal) +
-              ", cpu " + std::to_string(cpuVal) + (err.empty() ? "" : ", " + err) + ")");
-    }
-
-    // 2. Buffer compute kernel dispatched on Vulkan (#116)
-    const char* saxpyJs = R"(
-        // @kernel
-        function saxpy(out, a, scale, n) {
-            let i = global_tid_x();
-            if (i < n) {
-                out[i] = a[i] * scale + 2.5;
-            }
-        }
-    )";
-    const auto saxpyRes = bronze::compileJsGpuKernelSource(saxpyJs, "saxpy.js", opts);
-    check(saxpyRes.ok && !saxpyRes.spirvWords.empty(),
-          "bronze::compileJsGpuKernelSource compiles buffer compute kernel saxpy");
-
-    if (brass::gpu::vulkan_available()) {
-        brass::target::SpirvKernel k;
-        k.entry = "saxpy";
-        k.stage = brass::target::SpirvStage::Compute;
-        k.words = saxpyRes.spirvWords;
-        k.params = saxpyRes.spirvLayout.params;
-        k.descriptors = saxpyRes.spirvLayout.descriptors;
-        k.push_constant_bytes = saxpyRes.spirvLayout.push_constant_bytes;
-        k.local_size[0] = 64;
-        k.local_size[1] = 1;
-        k.local_size[2] = 1;
-
-        constexpr int N = 64;
-        std::vector<float> hostA(N), hostOut(N, 0.0f);
-        for (int i = 0; i < N; ++i) hostA[static_cast<size_t>(i)] = static_cast<float>(i) * 0.5f;
-
-        auto bufA = brass::gpu::VulkanBuffer::alloc(N * sizeof(float));
-        auto bufOut = brass::gpu::VulkanBuffer::alloc(N * sizeof(float));
-        std::string err;
-        auto mod = brass::gpu::VulkanModule::load(k, &err);
-        const bool ok = mod.valid() && bufA.valid() && bufOut.valid() &&
-                        bufA.upload(hostA.data(), N * sizeof(float)) &&
-                        mod.launch_1d(1, 64, {bufOut, bufA, 4.0f, static_cast<int32_t>(N)}, &err) &&
-                        bufOut.download(hostOut.data(), N * sizeof(float));
-        bool match = ok;
-        for (int i = 0; i < N && match; ++i) {
-            const float expected = (static_cast<float>(i) * 0.5f) * 4.0f + 2.5f;
-            if (std::fabs(hostOut[static_cast<size_t>(i)] - expected) > 1e-4f) match = false;
-        }
-        check(match, "JS buffer @kernel saxpy dispatches 64 elements on Vulkan queue and matches expected output");
-    }
-}
-
 } // namespace
 
 int main() {
@@ -544,7 +437,6 @@ int main() {
     testLiveCsgParameterUpdateWithoutMeshing();
     testVulkanGpuComputeExecutionAndParity();
     testGlslCompilerRelaxedPrecisionAndComputeAudit();
-    testJsGpuKernelSingleSourceAndVulkanDispatch();
 
     std::printf("bro_sdf_gpu_tracer_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

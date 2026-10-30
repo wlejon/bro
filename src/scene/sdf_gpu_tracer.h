@@ -86,6 +86,11 @@ public:
     /// Returns the number of compiled SPIR-V compute pipelines cached in VulkanModule storage.
     static uint32_t cachedVulkanPipelineCount();
 
+    /// Release the cached pipelines and close brass's Vulkan runtime, while
+    /// the driver is still loaded (brass's own exit handler runs in libbro's
+    /// DLL detach, after the driver's). The engine's shutdown calls it.
+    static void closeVulkan();
+
     /// Compile an SdfGraph into a Vulkan SPIR-V 1.5 grid evaluation compute shader
     /// (`eval_sdf_gpu`) via `bromesh::JitSdfCompiler::compile_spirv` and verify it.
     static std::vector<uint32_t> compileGridSpirv(

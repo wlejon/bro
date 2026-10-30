@@ -201,6 +201,16 @@ uint32_t SdfGpuTracer::cachedVulkanPipelineCount() {
 #endif
 }
 
+void SdfGpuTracer::closeVulkan() {
+#if defined(BROMESH_HAS_BRASS_JIT)
+    {
+        std::lock_guard<std::mutex> lock(vkCacheMutex());
+        vkModuleCache().clear();
+    }
+    brass::gpu::vulkan_close();
+#endif
+}
+
 bool SdfGpuTracer::evaluateGridGpu(
     const bromesh::SdfGraph& graph,
     int dimX,

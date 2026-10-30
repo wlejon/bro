@@ -9,9 +9,7 @@
 #include <vector>
 
 #include "bronze_host/host_builder.h"
-#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_values.h"
-#include "check/auto_kernel_rewriter.h"
 #include "check/cegis_superopt.h"
 #include "check/js_source_rewriter.h"
 
@@ -178,84 +176,6 @@ Value jsBroRewriteSource(Value, std::span<const Value> args) {
     return out.get();
 }
 
-// #144: bro.autoKernel(fnOrSource, opts)
-Value jsBroAutoKernel(Value, std::span<const Value> args) {
-    if (!hasArg(args, 0)) {
-        return ev::throwError("bro.autoKernel(fnOrSource, opts): missing function or source");
-    }
-    std::string src, err;
-    if (!extractFnOrString(args[0], src, err)) {
-        return ev::throwError(("bro.autoKernel: " + err).c_str());
-    }
-
-    auto rep = bronze::check::analyzeAndRewriteLoopToKernel(src);
-
-    ObjectBuilder out;
-    out.set("foundLoop", ev::fromBool(rep.foundLoop));
-    out.set("parallelizable", ev::fromBool(rep.parallelizable));
-    out.set("provenNoWaw", ev::fromBool(rep.provenNoWaw));
-    out.set("provenNoRaw", ev::fromBool(rep.provenNoRaw));
-    out.set("provenNoWar", ev::fromBool(rep.provenNoWar));
-    out.set("provenInBounds", ev::fromBool(rep.provenInBounds));
-    ev::Persistent fnStr(ev::fromUtf8(rep.functionName));
-    out.set("functionName", fnStr.get());
-    ev::Persistent ivStr(ev::fromUtf8(rep.inductionVar));
-    out.set("inductionVar", ivStr.get());
-    ev::Persistent bndStr(ev::fromUtf8(rep.boundExpr));
-    out.set("boundExpr", bndStr.get());
-    ev::Persistent origStr(ev::fromUtf8(rep.originalSource));
-    out.set("originalSource", origStr.get());
-    ev::Persistent kernStr(ev::fromUtf8(rep.kernelSource));
-    out.set("kernelSource", kernStr.get());
-    ev::Persistent diffStr(ev::fromUtf8(rep.unifiedDiff));
-    out.set("unifiedDiff", diffStr.get());
-    ev::Persistent certStr(ev::fromUtf8(rep.certificateHash));
-    out.set("certificateHash", certStr.get());
-    ev::Persistent sumStr(ev::fromUtf8(rep.summary));
-    out.set("summary", sumStr.get());
-
-    Value hazardsArr = hostArrayOf(rep.hazards.size(), [&](size_t i) -> Value {
-        const auto& h = rep.hazards[i];
-        ObjectBuilder item;
-        ev::Persistent kV(ev::fromUtf8(h.hazardKind));
-        item.set("hazardKind", kV.get());
-        ev::Persistent aV(ev::fromUtf8(h.arrayName));
-        item.set("arrayName", aV.get());
-        ev::Persistent wV(ev::fromUtf8(h.writeIndexExpr));
-        item.set("writeIndexExpr", wV.get());
-        ev::Persistent rV(ev::fromUtf8(h.readIndexExpr));
-        item.set("readIndexExpr", rV.get());
-        item.set("iterA", ev::fromDouble(static_cast<double>(h.iterA)));
-        item.set("iterB", ev::fromDouble(static_cast<double>(h.iterB)));
-        item.set("conflictIndex", ev::fromDouble(static_cast<double>(h.conflictIndex)));
-        ev::Persistent dV(ev::fromUtf8(h.description));
-        item.set("description", dV.get());
-        return item.get();
-    });
-    out.set("hazards", hazardsArr);
-
-    Value distinctArr = hostArrayOf(rep.requiresDistinct.size(), [&](size_t i) -> Value {
-        const auto& [a, b] = rep.requiresDistinct[i];
-        ev::Persistent aV(ev::fromUtf8(a));
-        ev::Persistent bV(ev::fromUtf8(b));
-        return hostArrayOf(2, [&](size_t j) -> Value { return j == 0 ? aV.get() : bV.get(); });
-    });
-    out.set("requiresDistinct", distinctArr);
-
-    if (rep.parallelizable && !rep.kernelSource.empty()) {
-        ev::Persistent kSrcVal(ev::fromUtf8(rep.kernelSource));
-        Value kArgs[1] = {kSrcVal.get()};
-        Value compiled = compileJsKernelValue(kArgs, false);
-        if (ev::isObject(compiled)) {
-            out.set("kernel", compiled);
-        }
-    } else {
-        out.set("kernel", ev::null());
-    }
-
-    return out.get();
-}
-
 }  // namespace
 
 void attachBroRewriteApis(Value broObj) {
@@ -264,7 +184,6 @@ void attachBroRewriteApis(Value broObj) {
     ObjectBuilder bro(broRoot.get());
     bro.def("superoptimize", 2, jsBroSuperoptimize);
     bro.def("rewriteSource", 2, jsBroRewriteSource);
-    bro.def("autoKernel", 2, jsBroAutoKernel);
 }
 
 }  // namespace bro::bronze_host

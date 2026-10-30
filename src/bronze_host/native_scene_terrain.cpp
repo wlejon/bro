@@ -1,7 +1,6 @@
 // native_scene_terrain.cpp — TerrainManager binding and C entry points.
 
 #include "bronze_host/native_scene_internal.h"
-#include "bronze_host/host_js_gpu.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_values.h"
 #include "natives/terrain/native_terrain_decl.h"
@@ -246,8 +245,7 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
     if (!c || !c->mgr()) return;
 
     Value jsFn = ev::fromBits(fn);
-    const bool isKernelObj = isCompiledJsKernelObject(jsFn);
-    if (!ev::isFunction(jsFn) && !isKernelObj) {
+    if (!ev::isFunction(jsFn)) {
         c->heightSource.set(ev::undefined());
         c->hasHeightSource = false;
         c->mgr()->setHeightSource(nullptr);
@@ -261,12 +259,7 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
                                   int paddedW, int paddedH, float cellSize,
                                   float worldX0, float worldZ0) -> bool {
         if (!c->hasHeightSource) return false;
-        Value srcVal = c->heightSource.get();
-        if (isCompiledJsKernelObject(srcVal)) {
-            return tryEvalCompiledKernelHeightGrid(
-                srcVal, padded, paddedW, paddedH, cellSize, worldX0, worldZ0);
-        }
-        if (!ev::isFunction(srcVal)) return false;
+        if (!ev::isFunction(c->heightSource.get())) return false;
 
         const size_t totalFloats = static_cast<size_t>(paddedW) * static_cast<size_t>(paddedH);
         // Rooted: it is read again after the callback, which allocates.
@@ -321,15 +314,8 @@ double bro_terrain_Terrain_heightAt(void* self, double x, double z) {
 
 void bro_terrain_Terrain_normalAt(void* self, double x, double z, bronze_native_buffer* out) {
     auto* c = terrainCellOf(self);
-    double n[3] = {0.0, 1.0, 0.0};
     if (!c || !c->mgr()) {
         tl_buf3[0] = 0.0; tl_buf3[1] = 1.0; tl_buf3[2] = 0.0;
-    } else if (c->hasHeightSource &&
-               tryEvalCompiledKernelNormalAt(c->heightSource.get(),
-                                             x, z, n)) {
-        tl_buf3[0] = n[0];
-        tl_buf3[1] = n[1];
-        tl_buf3[2] = n[2];
     } else {
         const bromath::Vec3 origin{static_cast<float>(x), 1000.0f, static_cast<float>(z)};
         const bromath::Vec3 dir{0.0f, -1.0f, 0.0f};
