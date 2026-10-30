@@ -462,10 +462,14 @@ struct SceneSurface {
     // disc in sight, on the sun's light alone. skyVisibility: the share of
     // the sky's light the surface receives (cosine-weighted, the light the
     // occluders bounce back left out). skyNormal: the mean direction it sees
-    // the sky in, which the sky's light is taken along.
+    // the sky in, which the sky's light is taken along. occluderSun: the
+    // share of the sun that falls on what hides the rest of the sky (0.5
+    // when it says nothing: about half of a terrain's slopes face the sun),
+    // whose light the surface receives back from them.
     float sunVisibility;
     float skyVisibility;
     vec3 skyNormal;
+    float occluderSun;
 };
 
 // The sun: the atmosphere's while it is on, else the first directional
@@ -658,16 +662,32 @@ vec3 sceneAmbient(SceneSurface s) {
         probeSpec = raw * (F * brdf.x + brdf.y) * lighting.probeParams.x;
     }
     vec3 kD = (1.0 - F) * (1.0 - s.metallic);
+    vec3 kDOpen = kD;
     // The sky's light as much of it as the surface sees, taken along the
     // direction it sees it in (userLight's; open sky leaves both as they are).
     vec3 nI = s.skyNormal;
     vec3 diffuseOcc = vec3(1.0);
     float specularOcc = 1.0;
+    vec3 bounce = vec3(0.0);   // the light the sunlit occluders send back, over pi
     if (s.skyVisibility < 1.0) {
         diffuseOcc = sceneMultiBounce(s.skyVisibility, s.baseColor);
         specularOcc = sceneSpecularOcclusion(NdotV, s.skyVisibility, s.roughness);
         kD *= diffuseOcc;
         probeSpec *= specularOcc;
+        // What hides the sky is lit too: the multi-bounce fit takes it lit as
+        // the surface is, by the sky alone in a shadow, which leaves a slope
+        // in shade the deep blue of the sky; the sun on the slopes across
+        // from it lights it as well. Their radiance, of the surface's albedo
+        // (as the fit takes them), rho E mu / pi over their share of the
+        // hemisphere, for the share of the sun on them.
+        int sun = sceneSunIndex();
+        if (sun >= 0 && s.occluderSun > 0.0) {
+            vec3 E = lighting.lights[sun].color.rgb * lighting.lights[sun].color.a;
+            if (SCENE_ATMOSPHERE && sun == int(lighting.atm.ground.w)) E *= sceneSunTransmittance(s.position);
+            vec3 up = sceneAtmosphereOn() ? normalize(atmOrigin(s.position)) : vec3(0.0, 1.0, 0.0);
+            float mu = max(dot(up, sceneToSun()), 0.0);
+            bounce = (1.0 - s.skyVisibility) * s.occluderSun * mu / 3.14159265 * s.baseColor * E;
+        }
     }
     if (sceneAtmosphereOn()) {
         // The atmosphere's sky: its light on the surface from every way it
@@ -684,7 +704,7 @@ vec3 sceneAmbient(SceneSurface s) {
         float sharp = (1.0 - smoothstep(0.12, 0.4, s.roughness)) * lighting.atm.skyView.w;
         if (sharp > 0.0) sky = mix(sky, sceneSkyAlong(R), sharp);
         vec3 specular = sky * (F * brdf.x + brdf.y) * specularOcc;
-        return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
+        return (kD * irradiance + kDOpen * bounce) * s.baseColor + mix(specular, probeSpec, probeW);
     }
     if (lighting.iblParams.x > 0.5) {
         float rotation = lighting.iblParams.z;
@@ -692,9 +712,9 @@ vec3 sceneAmbient(SceneSurface s) {
         vec3 irradiance = sceneOpenSkyIrradiance(s.position, nI);
         vec3 prefiltered = textureLod(texPrefilter, rotateY(R, rotation), s.roughness * lighting.iblParams.w).rgb;
         vec3 specular = prefiltered * (F * brdf.x + brdf.y) * intensity * specularOcc;
-        return kD * irradiance * s.baseColor + mix(specular, probeSpec, probeW);
+        return (kD * irradiance + kDOpen * bounce) * s.baseColor + mix(specular, probeSpec, probeW);
     }
-    return lighting.ambientColor.rgb * s.baseColor * (1.0 - s.metallic) * diffuseOcc + probeSpec * probeW;
+    return (lighting.ambientColor.rgb * diffuseOcc + bounce) * s.baseColor * (1.0 - s.metallic) + probeSpec * probeW;
 }
 
 // Fog in [0,1] for a fragment `camDist` from the eye at world height `worldY`:
