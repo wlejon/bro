@@ -9,6 +9,7 @@
 //   - produce takes the update's batch in one call, its table on the GPU;
 //   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
+//   - a GPU-time budget sizes the batches;
 //   - a layer's pool binds to a scene node; bad options are refused.
 
 if (!bro.kernel.available || !bro.tiles) {
@@ -185,6 +186,26 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(settle(flaky, near), 'the next updates produce them');
     assert(Math.max(...flaky.drawn.map((t) => t.level)) === deepest, 'and the cache refines as far as before');
 
+    // A GPU-time budget sizes the batches: one tile at first, then held to
+    // one under a budget nothing fits, and growing under one everything
+    // fits, a tile an update, never past producePerUpdate.
+    const budgeted = (ms) => {
+        const b = makeCache({ produceBudgetMs: ms, producePerUpdate: 6 });
+        const made = [];
+        for (let i = 0; i < 12; i++) {
+            made.push(b.update(near));
+            b.layer('height').read(new Float32Array(1));   // the GPU done with the batch
+        }
+        return { cache: b, made };
+    };
+    const starved = budgeted(1e-6), loose = budgeted(1000);
+    assert(starved.made[0] === 1 && loose.made[0] === 1, 'a budgeted cache starts at one tile a batch');
+    assert(starved.made.every((n) => n <= 1) && starved.cache.stats.batchSize === 1 && starved.cache.stats.batchMs > 0,
+           `under a budget nothing fits, a tile a batch (${starved.made}, last ${starved.cache.stats.batchMs} ms)`);
+    assert(Math.max(...loose.made) === 6 && loose.made.every((n, i) => i === 0 || n <= loose.made[i - 1] + 1 || n === 0),
+           `under a loose budget batches grow a tile at a time up to producePerUpdate (${loose.made})`);
+    assert(makeCache({}).stats.batchSize === 1000, 'without a budget a batch is producePerUpdate');
+
     // Height ranges: 40 m up, under a 300 m worst case every tile's slab
     // reaches the camera, so all of them refine; once each tile reports the
     // [-5, 5] m it really spans, only those near the camera do. Tiles that
@@ -289,5 +310,6 @@ if (!bro.kernel.available || !bro.tiles) {
     throws(() => makeCache({ domain: { type: 'torus' } }), (e) => e instanceof TypeError, 'an unknown domain');
     throws(() => makeCache({ layers: { height: 3 } }), (e) => e instanceof RangeError, 'a layer of 3 bytes a cell');
     throws(() => makeCache({ produce: 7 }), (e) => e instanceof TypeError, 'a produce that is not a function');
+    throws(() => makeCache({ produceBudgetMs: -1 }), (e) => e instanceof RangeError, 'a negative produceBudgetMs');
     throws(() => cache.update({}), (e) => e instanceof TypeError, 'an update without a position');
 }

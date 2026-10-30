@@ -15,6 +15,8 @@ namespace {
 constexpr VkDeviceSize kBufferGranule = 256;
 // Timestamp queries for timed dispatches, two a dispatch, in a ring.
 constexpr uint32_t kTimedQueries = 8192;
+// And for spans, two a span.
+constexpr uint32_t kSpanQueries = 256;
 
 constexpr VkAccessFlags kComputeAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
                                          VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -71,6 +73,25 @@ bool ComputeReadback::ready() const {
     return owner_ && owner_->context && buffer_ != VK_NULL_HANDLE && owner_->context->queue().isComplete(ticket_);
 }
 
+ComputeSpan::~ComputeSpan() {
+    // Its queries are reset where the next span begins, after this one's.
+    if (owner_ && owner_->context) owner_->freeSpans.push_back(query_);
+}
+
+bool ComputeSpan::ready() const {
+    return owner_ && owner_->context && ticket_ && owner_->context->queue().isComplete(ticket_);
+}
+
+double ComputeSpan::ms() const {
+    if (ms_ < 0.0 && ready()) {
+        uint64_t stamps[2] = {0, 0};
+        if (vkGetQueryPoolResults(owner_->context->device(), owner_->spanPool, query_, 2, sizeof(stamps), stamps,
+                                  sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            ms_ = static_cast<double>((stamps[1] - stamps[0]) & owner_->timestampMask) * owner_->timestampNs * 1e-6;
+    }
+    return ms_;
+}
+
 ComputePipeline::~ComputePipeline() {
     if (!owner_ || !owner_->context) return;
     owner_->pipelines.erase(this);
@@ -115,6 +136,8 @@ void VulkanCompute::shutdown() {
     owner_->buffers.clear();
     owner_->pipelines.clear();
     owner_->readbacks.clear();
+    if (owner_->spanPool != VK_NULL_HANDLE) vkDestroyQueryPool(context_->device(), owner_->spanPool, nullptr);
+    owner_->spanPool = VK_NULL_HANDLE;
     owner_->context = nullptr;
     owner_.reset();
     if (readback_ != VK_NULL_HANDLE) context_->destroyBuffer(readback_, readbackAlloc_);
@@ -297,8 +320,10 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
     return true;
 }
 
-void VulkanCompute::setTiming(bool on) {
-    if (on && timePool_ == VK_NULL_HANDLE && context_) {
+bool VulkanCompute::timestamps() {
+    if (!context_) return false;
+    if (owner_->timestampNs == 0.0) {
+        owner_->timestampNs = -1.0;
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(context_->physicalDevice(), &props);
         uint32_t familyCount = 0;
@@ -306,12 +331,52 @@ void VulkanCompute::setTiming(bool on) {
         std::vector<VkQueueFamilyProperties> families(familyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(context_->physicalDevice(), &familyCount, families.data());
         const int family = context_->queueFamilies().graphicsFamily;
-        if (family < 0 || static_cast<uint32_t>(family) >= familyCount || families[family].timestampValidBits == 0 ||
-            props.limits.timestampPeriod <= 0.0f)
-            return;
-        const uint32_t bits = families[family].timestampValidBits;
-        timestampMask_ = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
-        timestampNs_ = props.limits.timestampPeriod;
+        if (family >= 0 && static_cast<uint32_t>(family) < familyCount && families[family].timestampValidBits != 0 &&
+            props.limits.timestampPeriod > 0.0f) {
+            const uint32_t bits = families[family].timestampValidBits;
+            owner_->timestampMask = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
+            owner_->timestampNs = props.limits.timestampPeriod;
+        }
+    }
+    return owner_->timestampNs > 0.0;
+}
+
+std::shared_ptr<ComputeSpan> VulkanCompute::beginSpan() {
+    if (!timestamps()) return nullptr;
+    if (owner_->spanPool == VK_NULL_HANDLE) {
+        VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        info.queryCount = kSpanQueries;
+        if (vkCreateQueryPool(context_->device(), &info, nullptr, &owner_->spanPool) != VK_SUCCESS) {
+            owner_->spanPool = VK_NULL_HANDLE;
+            owner_->timestampNs = -1.0;
+            return nullptr;
+        }
+        for (uint32_t q = kSpanQueries; q >= 2; q -= 2) owner_->freeSpans.push_back(q - 2);
+    }
+    if (owner_->freeSpans.empty()) return nullptr;
+    std::shared_ptr<ComputeSpan> span(new ComputeSpan());
+    span->owner_ = owner_;
+    span->query_ = owner_->freeSpans.back();
+    owner_->freeSpans.pop_back();
+    VkCommandBuffer cmd = commands();
+    vkCmdResetQueryPool(cmd, owner_->spanPool, span->query_, 2);
+    // At the bottom: once everything before it is done, so the span holds
+    // only its own work.
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span->query_);
+    return span;
+}
+
+void VulkanCompute::endSpan(ComputeSpan& span) {
+    if (!context_ || span.owner_ != owner_ || span.ticket_) return;
+    VkCommandBuffer cmd = commands();
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span.query_ + 1);
+    span.ticket_ = flush();
+}
+
+void VulkanCompute::setTiming(bool on) {
+    if (on && timePool_ == VK_NULL_HANDLE && context_) {
+        if (!timestamps()) return;
         VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         info.queryType = VK_QUERY_TYPE_TIMESTAMP;
         info.queryCount = kTimedQueries;
@@ -329,7 +394,8 @@ void VulkanCompute::collectTimes() {
         uint64_t stamps[2] = {0, 0};
         if (vkGetQueryPoolResults(context_->device(), timePool_, t.query, 2, sizeof(stamps), stamps, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
-            const double ms = static_cast<double>((stamps[1] - stamps[0]) & timestampMask_) * timestampNs_ * 1e-6;
+            const double ms =
+                static_cast<double>((stamps[1] - stamps[0]) & owner_->timestampMask) * owner_->timestampNs * 1e-6;
             auto it = std::find_if(times_.begin(), times_.end(), [&](const ComputeTime& c) { return c.label == *t.label; });
             if (it == times_.end()) it = times_.insert(times_.end(), ComputeTime{*t.label, 0.0, 0});
             it->ms += ms;

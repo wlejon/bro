@@ -203,6 +203,10 @@ std::shared_ptr<render::ComputeReadback> engineReadLater(const std::shared_ptr<b
     return s_device->context()->compute().readLater(*own->computeBuffer(), offset, bytes);
 }
 
+render::VulkanCompute* engineCompute() {
+    return s_device && s_device->context() ? &s_device->context()->compute() : nullptr;
+}
+
 void installKernelGpu(engine::Engine& engine) {
     if (s_device && s_device->engine == &engine) return;
     s_device = std::make_shared<Device>();

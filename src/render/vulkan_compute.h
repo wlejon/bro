@@ -128,6 +128,29 @@ private:
     uint64_t ticket_ = 0;
 };
 
+/// The GPU time of the work recorded between VulkanCompute::beginSpan and
+/// endSpan, from the end of everything submitted before it to the end of
+/// that work. Made by beginSpan; there once ready(), waiting for nothing.
+class ComputeSpan {
+public:
+    ~ComputeSpan();
+    ComputeSpan(const ComputeSpan&) = delete;
+    ComputeSpan& operator=(const ComputeSpan&) = delete;
+
+    bool ready() const;
+    /// Its GPU milliseconds once ready(), else negative.
+    double ms() const;
+
+private:
+    friend class VulkanCompute;
+    ComputeSpan() = default;
+
+    std::shared_ptr<ComputeOwner> owner_;
+    uint32_t query_ = 0;
+    uint64_t ticket_ = 0;
+    mutable double ms_ = -1.0;
+};
+
 class VulkanCompute {
 public:
     VulkanCompute() = default;
@@ -172,9 +195,18 @@ public:
     /// call, summed by their pipelines' labels. Waits for nothing.
     std::vector<ComputeTime> takeTimes();
 
+    /// Time the work recorded from now to endSpan(): null when the device
+    /// has no timestamps or too many spans are alive.
+    std::shared_ptr<ComputeSpan> beginSpan();
+    /// End the span and submit what is recorded.
+    void endSpan(ComputeSpan& span);
+
 private:
     VkCommandBuffer commands();
     void barrier();
+    // The timestamp period and valid bits into owner_, once: false when the
+    // queue writes no timestamps.
+    bool timestamps();
     // Finished dispatches' stamps into times_.
     void collectTimes();
 
@@ -188,8 +220,6 @@ private:
     bool timing_ = false;
     VkQueryPool timePool_ = VK_NULL_HANDLE;
     uint32_t nextQuery_ = 0;
-    double timestampNs_ = 0.0;
-    uint64_t timestampMask_ = 0;
     std::deque<TimedDispatch> timed_;
     std::vector<ComputeTime> times_;
 
@@ -214,6 +244,13 @@ struct ComputeOwner {
     std::unordered_set<ComputeBuffer*> buffers;
     std::unordered_set<ComputePipeline*> pipelines;
     std::unordered_set<ComputeReadback*> readbacks;
+    // Timestamps: ns a tick (0 until known, negative when there are none)
+    // and the valid bits' mask.
+    double timestampNs = 0.0;
+    uint64_t timestampMask = 0;
+    // Spans' queries, two a span, and the pairs no span holds.
+    VkQueryPool spanPool = VK_NULL_HANDLE;
+    std::vector<uint32_t> freeSpans;
 };
 
 } // namespace bro::render

@@ -69,6 +69,19 @@ struct Cache {
         std::vector<tilecache::Production> tiles;
     };
     std::deque<RangeReadback> rangeReadbacks;
+
+    // `produceBudgetMs`: the GPU ms an update's production may take (0: no
+    // budget, every batch producePerUpdate). Each batch is timed on the GPU,
+    // and the batch size follows what they took: fewer tiles after one over
+    // the budget, one more after one well under it.
+    double budgetMs = 0.0;
+    uint32_t batchSize = 1;
+    double lastBatchMs = 0.0;
+    struct TimedBatch {
+        std::shared_ptr<render::ComputeSpan> span;
+        uint32_t count = 0;
+    };
+    std::deque<TimedBatch> timedBatches;
 };
 
 ev::HostClass g_cacheClass;
@@ -225,7 +238,27 @@ Value js_update(Value self, std::span<const Value> args) {
     collectRanges(*c);
     c->tree.select(v);
 
-    const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->producePerUpdate);
+    if (c->budgetMs > 0.0) {
+        while (!c->timedBatches.empty() && c->timedBatches.front().span->ready()) {
+            const Cache::TimedBatch& t = c->timedBatches.front();
+            const double ms = t.span->ms();
+            if (ms >= 0.0) {
+                c->lastBatchMs = ms;
+                // A batch's cost is not proportional to its tiles (a small
+                // one leaves the GPU part idle), so the size is felt for.
+                if (ms > c->budgetMs)
+                    c->batchSize = std::max(1u, std::min(c->batchSize, static_cast<uint32_t>(t.count * c->budgetMs / ms)));
+                else if (ms < 0.85 * c->budgetMs)
+                    c->batchSize = std::min(c->producePerUpdate, std::max(c->batchSize, t.count + 1));
+            }
+            c->timedBatches.pop_front();
+        }
+    }
+    const uint32_t batchSize = c->budgetMs > 0.0 ? c->batchSize : c->producePerUpdate;
+    const std::vector<tilecache::Production> batch = c->tree.takeProductions(batchSize);
+    std::shared_ptr<render::ComputeSpan> span;
+    if (!batch.empty() && c->budgetMs > 0.0)
+        if (render::VulkanCompute* compute = engineCompute()) span = compute->beginSpan();
     if (!batch.empty()) {
         std::string err;
         // A producer that writes no range leaves NaN, which is no range: a
@@ -266,10 +299,15 @@ Value js_update(Value self, std::span<const Value> args) {
             // The batch stays missing; the next update offers it again.
             const Rooted thrown(r.value);
             for (const tilecache::Production& p : batch) c->tree.abandon(p.id);
+            if (span) engineCompute()->endSpan(*span);
             writeDrawList(*c);
             return ev::throwValue(thrown);
         }
         for (const tilecache::Production& p : batch) c->tree.markReady(p.id);
+        if (span && engineCompute()) {
+            engineCompute()->endSpan(*span);
+            c->timedBatches.push_back({std::move(span), static_cast<uint32_t>(batch.size())});
+        }
     }
     if (c->rangePool && !batch.empty()) {
         Cache::RangeReadback rb;
@@ -360,6 +398,8 @@ void decorateCache(ev::ObjectBuilder& b) {
         o.set("produced", static_cast<double>(s.produced));
         o.set("evicted", static_cast<double>(s.evicted));
         o.set("rangesInFlight", static_cast<double>(c->rangeReadbacks.size()));
+        o.set("batchSize", static_cast<double>(c->budgetMs > 0.0 ? c->batchSize : c->producePerUpdate));
+        o.set("batchMs", c->lastBatchMs);
         return o.get();
     });
 }
@@ -423,6 +463,8 @@ Value js_createCache(Value, std::span<const Value> args) {
     cache->border = integer(opts, "border", 0, 0, 64);
     cache->cells = cfg.tileSize + 2 * cache->border;
     cache->producePerUpdate = integer(opts, "producePerUpdate", 8, 1, 65536);
+    cache->budgetMs = numberOr(opts, "produceBudgetMs", 0.0);
+    if (!(cache->budgetMs >= 0.0)) return ev::throwRangeError("bro.tiles.createCache: produceBudgetMs is at least 0");
 
     const Rooted layers(ev::getProperty(opts, "layers"));
     const std::vector<std::string> names = ev::isObject(layers) ? keysOf(layers) : std::vector<std::string>{};

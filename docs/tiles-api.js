@@ -22,7 +22,8 @@
 //   it (a child whose 2x2 cells average to its parent's cell is the same
 //   world seen closer).
 // - Production is spread over updates: at most `producePerUpdate` tiles a
-//   call, coarse before fine.
+//   call, or as many as fit `produceBudgetMs` of GPU time, the largest
+//   projected error first (a parent before its children).
 // - Tiles the view no longer wants are evicted least recently wanted first
 //   when a slot is needed, and produced again if wanted again.
 // - The draw set covers every root exactly once: a wanted tile whose
@@ -65,6 +66,13 @@
 //                     (default 2)
 //   producePerUpdate  tiles produced per update() (default 8): the most a
 //                     batch holds
+//   produceBudgetMs   the GPU milliseconds an update's batch may take
+//                     (default 0: no budget, every batch producePerUpdate).
+//                     Each batch is timed on the GPU (render::ComputeSpan,
+//                     from the end of the work before it), and the size
+//                     follows: smaller after a batch over the budget, one
+//                     tile larger after one under 85% of it. Motion keeps
+//                     its frame time; the nearest error still comes first
 //   produce(batch)    fills the update's batch; `this` is the cache
 //
 // batch (the argument to produce):
@@ -209,7 +217,9 @@ const terrain = bro.tiles.createCache({
 // cache.resident    tiles holding data
 // cache.cells, cache.capacity
 // cache.stats       { produced, evicted } since creation, and rangesInFlight:
-//                   batches whose ranges the GPU has not handed back yet
+//                   batches whose ranges the GPU has not handed back yet;
+//                   batchSize, the most the next batch holds, and batchMs,
+//                   the GPU ms of the newest timed batch (0 until one)
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 
