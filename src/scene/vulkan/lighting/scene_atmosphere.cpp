@@ -263,11 +263,11 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     }
     g.skyView[0] = slot.r;
     g.skyView[1] = slot.muS;
-    g.skyView[2] = 1.0f;   // dither the lookups
+    g.skyView[2] = 1.0f;   // dither the sky pass's lookups
     // The froxels' share of the air's lookups (scene_lighting.glsl's
     // sceneAtmosphereAir): all of it low in the air; none from high in it
     // or above, where a slice (squared in depth out to the air's horizon)
-    // is deeper than the air under the eye and its dither would be noise.
+    // is deeper than the air under the eye.
     {
         const double t = std::clamp((static_cast<double>(height) - kFroxelsFull) / (kFroxelsNone - kFroxelsFull), 0.0, 1.0);
         g.skyView[3] = static_cast<float>(1.0 - t * t * (3.0 - 2.0 * t));

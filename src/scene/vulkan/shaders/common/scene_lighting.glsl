@@ -754,10 +754,12 @@ struct SceneAir {
 // atmosphere's tables. Inside the main camera's frustum: its aerial-
 // perspective volume (froxels over the frustum, slices squared in depth,
 // a point nearer than the first slice taking the share of it its distance
-// is), the lookup dithered by a fraction of a slice so no slice's edge bands.
+// is), read across slices by a cubic B-spline: linear between slices, the
+// slope changes at every slice and a slow gradient shows each one's edge,
+// and a dither over them leaves a fixed grain (nothing averages it).
 // Outside it (a reflection probe's faces), and from high in the air or above
-// it, where a slice is deeper than the air under the eye and its dither
-// would be noise (the froxels' share, skyView.w, 1 low in the air and 0
+// it, where a slice is deeper than the air under the eye
+// (the froxels' share, skyView.w, 1 low in the air and 0
 // above, scene_atmosphere.cpp): the transmittance from the transmittance
 // table (the ratio of the two points' to the top) and the in-scatter as the
 // sky-view table's radiance along the ray, by the share of the ray's air
@@ -773,12 +775,19 @@ void sceneAtmosphereAir(vec3 pos, out vec3 transmittance, out vec3 inscatter) {
         float d = length(p);
         float nearWeight;
         float w = atmFroxelW(lighting.atm.froxel.w, d, nearWeight);
-#ifndef SCENE_VERTEX_STAGE   // (a vertex shader's: no dither)
-        w += (atmNoise(gl_FragCoord.xy) - 0.5) * lighting.atm.skyView.z / ATM_FROXEL_SLICES;
-#endif
-        vec3 uvw = vec3(ndc * 0.5 + 0.5, clamp(w, 0.5 / ATM_FROXEL_SLICES, 1.0 - 0.5 / ATM_FROXEL_SLICES));
-        vec3 L = textureLod(texAtmInscatter, uvw, 0.0).rgb;
-        vec3 T = textureLod(texAtmAirTransmittance, uvw, 0.0).rgb;
+        // Across the slices a cubic B-spline, as two linear lookups at the
+        // pairs' weighted centres (Sigg and Hadwiger 2005).
+        const float N = ATM_FROXEL_SLICES;
+        float x = clamp(w, 0.5 / N, 1.0 - 0.5 / N) * N - 0.5;
+        float i = floor(x), f = x - i, g = 1.0 - f, f2 = f * f, f3 = f2 * f;
+        vec4 b = vec4(g * g * g, 3.0 * f3 - 6.0 * f2 + 4.0, -3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0, f3) / 6.0;
+        float g0 = b.x + b.y, g1 = b.z + b.w;
+        vec2 ws = clamp((vec2(i - 1.0 + b.y / g0, i + 1.0 + b.w / g1) + 0.5) / N, 0.5 / N, 1.0 - 0.5 / N);
+        vec2 uv = ndc * 0.5 + 0.5;
+        vec3 L = g0 * textureLod(texAtmInscatter, vec3(uv, ws.x), 0.0).rgb
+               + g1 * textureLod(texAtmInscatter, vec3(uv, ws.y), 0.0).rgb;
+        vec3 T = g0 * textureLod(texAtmAirTransmittance, vec3(uv, ws.x), 0.0).rgb
+               + g1 * textureLod(texAtmAirTransmittance, vec3(uv, ws.y), 0.0).rgb;
         fL = L * nearWeight * E;
         fT = mix(vec3(1.0), T, nearWeight);
         if (froxels >= 1.0) {
