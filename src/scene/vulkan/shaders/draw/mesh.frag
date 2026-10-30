@@ -221,11 +221,20 @@ void main() {
     vec3 color = sceneDirectLight(s) + indirect + emissive;
 
     // SSR mask phase: alpha carries the reflectance the SSR pass weights its
-    // reflections by (normal-incidence Fresnel luminance times smoothness^2);
-    // the SSR pass restores coverage before anything blends against it.
+    // reflections by: Schlick's Fresnel at the angle the surface is seen at
+    // (its luminance), so water and glass seen across mirror what is about
+    // them as they do. A rougher surface's reflection is blurred, not
+    // dimmer, but the march cannot blur it: the weight fades out from
+    // roughness 0.4 to 0.6 and none is marched beyond, where the reflection
+    // is a blur the environment's light already gives (and every grazing
+    // pixel of rough ground would march). The SSR pass restores coverage
+    // before anything blends against it.
     if ((flags & MESH_REFLECTANCE) != 0u) {
         vec3 F0 = mix(vec3(0.04), s.baseColor, s.metallic);
-        alpha = dot(F0, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - s.roughness) * (1.0 - s.roughness);
+        float c = 1.0 - clamp(dot(s.normal, s.view), 0.0, 1.0);
+        float c2 = c * c;
+        vec3 F = F0 + (1.0 - F0) * (c2 * c2 * c);
+        alpha = dot(F, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - smoothstep(0.4, 0.6, s.roughness));
     }
 
     color = color * air.transmittance + air.inscatter;

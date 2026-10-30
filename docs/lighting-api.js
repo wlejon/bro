@@ -251,7 +251,7 @@
  * @property {number} [maxDistance]   Longest reflected ray, world units (default 30).
  * @property {number} [steps]         Linear march steps over maxDistance, 4..256 (default 48; `stepCount` is accepted too).
  * @property {number} [thickness]     How far behind a surface a ray still counts as hitting it, view units (default 0.3).
- * @property {number} [intensity]     Reflection weight, times each surface's reflectance; 0 is SSR off (default 1).
+ * @property {number} [intensity]     Reflection weight, times each surface's reflectance at the angle it is seen at (Schlick's Fresnel, fading out from roughness 0.4 to none at 0.6, whose blurred reflection the environment's light gives); 0 is SSR off (default 1).
  * @property {number} [edgeFade]      Fade toward the screen border, fraction of the viewport 0..0.5 (default 0.1).
  */
 
