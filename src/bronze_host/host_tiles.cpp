@@ -354,10 +354,12 @@ void decorateCache(ev::ObjectBuilder& b) {
         return ev::fromDouble(cacheOf(self, "TileCache.capacity")->tree.config().capacity);
     });
     b.accessor("stats", [](Value self, std::span<const Value>) -> Value {
-        const tilecache::Stats& s = cacheOf(self, "TileCache.stats")->tree.stats();
+        const Cache* c = cacheOf(self, "TileCache.stats");
+        const tilecache::Stats& s = c->tree.stats();
         ev::ObjectBuilder o;
         o.set("produced", static_cast<double>(s.produced));
         o.set("evicted", static_cast<double>(s.evicted));
+        o.set("rangesInFlight", static_cast<double>(c->rangeReadbacks.size()));
         return o.get();
     });
 }

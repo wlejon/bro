@@ -6,12 +6,15 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace bro::render {
 
 namespace {
 
 constexpr VkDeviceSize kBufferGranule = 256;
+// Timestamp queries for timed dispatches, two a dispatch, in a ring.
+constexpr uint32_t kTimedQueries = 8192;
 
 constexpr VkAccessFlags kComputeAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
                                          VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -117,6 +120,10 @@ void VulkanCompute::shutdown() {
     if (readback_ != VK_NULL_HANDLE) context_->destroyBuffer(readback_, readbackAlloc_);
     readback_ = VK_NULL_HANDLE;
     readbackSize_ = 0;
+    if (timePool_ != VK_NULL_HANDLE) vkDestroyQueryPool(context_->device(), timePool_, nullptr);
+    timePool_ = VK_NULL_HANDLE;
+    timing_ = false;
+    timed_.clear();
     context_ = nullptr;
 }
 
@@ -225,6 +232,7 @@ std::shared_ptr<ComputePipeline> VulkanCompute::createPipeline(const ComputePipe
         return nullptr;
     }
     p->owner_ = owner_;
+    p->label_ = std::make_shared<const std::string>(desc.label.empty() ? desc.entry : desc.label);
     owner_->pipelines.insert(p.get());
     return p;
 }
@@ -272,9 +280,68 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
         vkCmdPushConstants(cmd, pipeline.layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(push.size()),
                            push.data());
     }
+    // A pair of queries the ring still has free (none: this one goes untimed).
+    const bool timed = timing_ && timePool_ != VK_NULL_HANDLE && timed_.size() < kTimedQueries / 2;
+    const uint32_t query = nextQuery_;
+    if (timed) {
+        nextQuery_ = (nextQuery_ + 2) % kTimedQueries;
+        vkCmdResetQueryPool(cmd, timePool_, query, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timePool_, query);
+    }
     vkCmdDispatch(cmd, groups[0], groups[1], groups[2]);
+    if (timed) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timePool_, query + 1);
+        timed_.push_back({pipeline.label_, query, 0});
+    }
     pendingBarrier_ = true;
     return true;
+}
+
+void VulkanCompute::setTiming(bool on) {
+    if (on && timePool_ == VK_NULL_HANDLE && context_) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(context_->physicalDevice(), &props);
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(context_->physicalDevice(), &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(context_->physicalDevice(), &familyCount, families.data());
+        const int family = context_->queueFamilies().graphicsFamily;
+        if (family < 0 || static_cast<uint32_t>(family) >= familyCount || families[family].timestampValidBits == 0 ||
+            props.limits.timestampPeriod <= 0.0f)
+            return;
+        const uint32_t bits = families[family].timestampValidBits;
+        timestampMask_ = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
+        timestampNs_ = props.limits.timestampPeriod;
+        VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        info.queryCount = kTimedQueries;
+        if (vkCreateQueryPool(context_->device(), &info, nullptr, &timePool_) != VK_SUCCESS) {
+            timePool_ = VK_NULL_HANDLE;
+            return;
+        }
+    }
+    timing_ = on && timePool_ != VK_NULL_HANDLE;
+}
+
+void VulkanCompute::collectTimes() {
+    while (!timed_.empty() && timed_.front().ticket && context_->queue().isComplete(timed_.front().ticket)) {
+        const TimedDispatch& t = timed_.front();
+        uint64_t stamps[2] = {0, 0};
+        if (vkGetQueryPoolResults(context_->device(), timePool_, t.query, 2, sizeof(stamps), stamps, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            const double ms = static_cast<double>((stamps[1] - stamps[0]) & timestampMask_) * timestampNs_ * 1e-6;
+            auto it = std::find_if(times_.begin(), times_.end(), [&](const ComputeTime& c) { return c.label == *t.label; });
+            if (it == times_.end()) it = times_.insert(times_.end(), ComputeTime{*t.label, 0.0, 0});
+            it->ms += ms;
+            ++it->dispatches;
+        }
+        timed_.pop_front();
+    }
+}
+
+std::vector<ComputeTime> VulkanCompute::takeTimes() {
+    if (context_) collectTimes();
+    return std::exchange(times_, {});
 }
 
 bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void* out, VkDeviceSize size) {
@@ -351,6 +418,11 @@ uint64_t VulkanCompute::flush() {
     pendingBarrier_ = false;
     const uint64_t ticket = context_->frames().submit(cmd);
     if (ticket) lastTicket_ = ticket;
+    // The dispatches timed in it finish with it (a failed submission's never).
+    for (auto it = timed_.rbegin(); it != timed_.rend() && it->ticket == 0; ++it) it->ticket = ticket;
+    if (!ticket)
+        while (!timed_.empty() && timed_.back().ticket == 0) timed_.pop_back();
+    if (!timed_.empty()) collectTimes();
     return ticket;
 }
 

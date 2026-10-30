@@ -9,6 +9,8 @@
 #include "engine/capture_path.h"
 #include "canvas/canvas_scene.h"
 #if BRO_WITH_3D
+#include "render/vulkan_compute.h"
+#include "render/vulkan_context.h"
 #include "scene/scene_renderer.h"
 #endif
 #include "dom/element.h"
@@ -918,6 +920,27 @@ void installHeadlessFrame(engine::Engine& engine) {
                 for (const auto& [name, ms] : compute)
                     c.set(ev::setProperty(c.get(), name.c_str(), ev::fromDouble(ms)));
                 o.set(ev::setProperty(o.get(), "compute", c.get()));
+            }
+            return o.get();
+        });
+    setPerfFn("kernelTimes", 0,
+        [&engine](Value, std::span<const Value>) -> Value {
+            // The GPU ms of the compute dispatches finished since the last
+            // call, {kernel: {ms, dispatches}}. The first call turns the
+            // stamps on: {} until dispatches after it finish.
+            ev::Persistent o(ev::createObject());
+            render::VulkanContext* ctx = engine.vulkanContext();
+            if (!ctx) return o.get();
+            render::VulkanCompute& compute = ctx->compute();
+            if (!compute.timing()) {
+                compute.setTiming(true);
+                return o.get();
+            }
+            for (const render::ComputeTime& t : compute.takeTimes()) {
+                ev::Persistent k(ev::createObject());
+                k.set(ev::setProperty(k.get(), "ms", ev::fromDouble(t.ms)));
+                k.set(ev::setProperty(k.get(), "dispatches", ev::fromDouble(t.dispatches)));
+                o.set(ev::setProperty(o.get(), t.label.c_str(), k.get()));
             }
             return o.get();
         });

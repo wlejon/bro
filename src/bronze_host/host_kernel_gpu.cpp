@@ -145,6 +145,7 @@ public:
         desc.pushConstantBytes = spirv.push_constant_bytes;
         for (int i = 0; i < 3; ++i) desc.localSize[i] = kernel.local_size[i] ? kernel.local_size[i] : 1;
         desc.localSizeSpecConstants = spirv.local_size_spec_constants;
+        desc.label = kernel.name;
         auto program = std::make_shared<Program>();
         program->pipeline = ctx.compute().createPipeline(desc, err);
         if (!program->pipeline) return nullptr;

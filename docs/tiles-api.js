@@ -208,7 +208,8 @@ const terrain = bro.tiles.createCache({
 // cache.wanted      tiles the last update selected
 // cache.resident    tiles holding data
 // cache.cells, cache.capacity
-// cache.stats       { produced, evicted } since creation
+// cache.stats       { produced, evicted } since creation, and rangesInFlight:
+//                   batches whose ranges the GPU has not handed back yet
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 

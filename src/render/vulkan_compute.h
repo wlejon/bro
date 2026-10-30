@@ -3,10 +3,12 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <span>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace bro::render {
 
@@ -56,6 +58,15 @@ struct ComputePipelineDesc {
     /// The local size is given as specialization constants 0..2 (else it is
     /// the module's own LocalSize).
     bool localSizeSpecConstants = false;
+    /// What its dispatches' GPU time is reported under (VulkanCompute::takeTimes).
+    std::string label;
+};
+
+/// The GPU time of a label's dispatches.
+struct ComputeTime {
+    std::string label;
+    double ms = 0.0;
+    uint32_t dispatches = 0;
 };
 
 /// A compute pipeline with a push-constant-only layout. Released once the
@@ -77,6 +88,7 @@ private:
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     uint32_t pushBytes_ = 0;
+    std::shared_ptr<const std::string> label_;
 };
 
 /// Compute work on the graphics queue, in submission order with the frames'
@@ -150,9 +162,36 @@ public:
     /// the last submission's when nothing was recorded since.
     uint64_t flush();
 
+    /// Time every dispatch on the GPU from now on (timestamps either side of
+    /// it; the dispatches before it are already finished by the barrier
+    /// each one starts with), or stop. Off by default: it costs two queries
+    /// a dispatch.
+    void setTiming(bool on);
+    bool timing() const { return timing_; }
+    /// The GPU time of the dispatches the GPU has finished since the last
+    /// call, summed by their pipelines' labels. Waits for nothing.
+    std::vector<ComputeTime> takeTimes();
+
 private:
     VkCommandBuffer commands();
     void barrier();
+    // Finished dispatches' stamps into times_.
+    void collectTimes();
+
+    // A timed dispatch: its pair of queries, and the ticket of the
+    // submission it went in (0 while still recorded).
+    struct TimedDispatch {
+        std::shared_ptr<const std::string> label;
+        uint32_t query = 0;
+        uint64_t ticket = 0;
+    };
+    bool timing_ = false;
+    VkQueryPool timePool_ = VK_NULL_HANDLE;
+    uint32_t nextQuery_ = 0;
+    double timestampNs_ = 0.0;
+    uint64_t timestampMask_ = 0;
+    std::deque<TimedDispatch> timed_;
+    std::vector<ComputeTime> times_;
 
     VulkanContext* context_ = nullptr;
     std::shared_ptr<ComputeOwner> owner_;
