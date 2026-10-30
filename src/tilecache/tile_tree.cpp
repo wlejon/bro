@@ -273,6 +273,7 @@ double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* 
 
 void TileTree::select(const View& view) {
     ++frame_;
+    eye_ = view.position;
     wanted_.clear();
     open_.clear();
     // Split the largest-error tile first, while it projects too large and the
@@ -440,7 +441,17 @@ std::vector<DrawTile> TileTree::drawSet() const {
         bool ok = true;
         coverInto(static_cast<int32_t>(r), out, ok);
     }
-    return out;
+    std::vector<std::pair<double, uint32_t>> order(out.size());
+    for (uint32_t i = 0; i < out.size(); ++i) {
+        const Bounds& b = out[i].bounds;
+        const double dx = b.center.x - eye_.x, dy = b.center.y - eye_.y, dz = b.center.z - eye_.z;
+        order[i] = {std::sqrt(dx * dx + dy * dy + dz * dz) - b.radius, i};
+    }
+    std::sort(order.begin(), order.end());
+    std::vector<DrawTile> sorted;
+    sorted.reserve(out.size());
+    for (const auto& o : order) sorted.push_back(out[o.second]);
+    return sorted;
 }
 
 } // namespace bro::tilecache

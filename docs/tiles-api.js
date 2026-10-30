@@ -191,7 +191,10 @@ const terrain = bro.tiles.createCache({
 //                   tile's bounding sphere and the height range it is
 //                   selected by; parentSlot is -1 for a root. Without a
 //                   frustum it covers every root once; with one, less the
-//                   tiles it culled.
+//                   tiles it culled. Nearest the view's position first (by
+//                   the nearest point of the bounding sphere), so a draw in
+//                   list order lets the depth test reject hidden ground
+//                   before it shades.
 // cache.drawCount   drawn.length
 // cache.drawList    KernelBuffer of drawCount records of 16 words, the draw
 //                   set on the GPU for a shader or kernel to walk: int32

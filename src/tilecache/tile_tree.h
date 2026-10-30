@@ -155,7 +155,9 @@ public:
     void abandon(const TileId& id);
 
     /// The ready tiles that cover the wanted tree without overlap, less those
-    /// the last view culled.
+    /// the last view culled, nearest the last view's eye first (by the
+    /// nearest point of their bounds): drawn in that order, the depth test
+    /// rejects what nearer ground hides before it shades.
     std::vector<DrawTile> drawSet() const;
 
     /// Wanted tiles not ready yet.
@@ -251,6 +253,7 @@ private:
 
     Config config_;
     uint64_t frame_ = 0;
+    Vec3d eye_;                       // the last select's view position
     std::vector<Node> nodes_;
     std::vector<int32_t> freeNodes_;
     std::unordered_map<uint64_t, int32_t> index_;
