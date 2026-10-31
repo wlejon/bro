@@ -216,6 +216,15 @@ const terrain = bro.tiles.createCache({
 //                   write it (a batch's tiles at their slots), and a scene
 //                   node's custom shader binds it (setShaderBuffer, scene-
 //                   nodes-api.js) and reads tile `slot` at slot * cells * cells
+// cache.lookup      KernelBuffer: every ready tile's slot by (root, level, x,
+//                   y), a hash table rewritten once an update's batch is
+//                   produced (after its dispatches, so a tile is found once
+//                   its cells are there, and a slot taken from an evicted
+//                   tile is gone from it in the same write). Pass it to
+//                   tiles.bk (bro.tiles.module) to read the cache at any
+//                   point rather than tile by tile: a ray, a kernel over
+//                   other data, a volume's hook (setShaderBuffer, read as
+//                   read_buffer<i32>; a kernel takes read_store<i32, 1>)
 // cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
 //                   tile's reported [lo, hi] at 2 * slot; else null
 // cache.pending     wanted tiles not yet produced (0 once settled); every
@@ -242,6 +251,48 @@ function frame(camera, patch) {
     patch.setShaderUniform('u_camHi', hi);
     patch.setShaderUniform('u_camLo', camera.position.map((v, i) => v - hi[i]));
 }
+
+// ============================================================================
+// 3. bro.tiles.module: tiles.bk
+// ============================================================================
+//
+// The brokernel module (src/tilecache/tiles.bk) that reads a cache at a
+// point, registered under the name `tiles` by whoever imports it:
+// bro.kernel.compile(src, { modules: { tiles: bro.tiles.module } }), or a
+// volume's createVolume({ module, modules: { tiles: bro.tiles.module } }).
+// Its table argument is the cache's `lookup`, taken by any int32 container.
+//
+//   tiles::cube_point(dir) -> Point { root, u, v }   a cube-sphere's root
+//       under a unit direction and (u, v) in [0, 1] across it, the cache's
+//       own projection
+//   tiles::plane_point(x, z, origin, size, roots) -> Point   a plane's
+//   tiles::locate(lookup, p, level) -> Tile { slot, level, x, y }   the
+//       finest ready tile holding p at `level` or coarser (slot -1: none of
+//       its root is ready); one hash probe a level tried
+//   tiles::find(lookup, root, level, x, y) -> slot or -1
+//   tiles::cells(tile, p, tileSize, border) -> Cells { i00, i10, i01, i11,
+//       f }   the four cells around p as indices into a layer's pool and
+//       the bilinear weights: interior cell i is centred at (i + 0.5) /
+//       tileSize across the tile; with a border of 1 or more filtering
+//       crosses tiles without a seam, without one the outermost cells hold
+//   tiles::level_for(w, w0, maxLevel) -> f32   the level whose cells are w
+//       across where level 0's are w0, fractional (blend two, as mips)
+//
+// A cube-sphere point's (u, v) is f32: good to a millionth of a face, about
+// level 14 of a 64-cell tile.
+
+const near = bro.kernel.compile(`
+    import tiles;
+    @kernel @grid(1)
+    fn k_sample(g: grid<1>, lookup: read_store<i32, 1>, heights: read_store<f32, 1>,
+                dirs: read_store<f32, 1>, out: write_store<f32, 1>) {
+        let n = g.x();
+        let p = tiles::cube_point(vec3<f32>(dirs[3 * n], dirs[3 * n + 1], dirs[3 * n + 2]));
+        let t = tiles::locate(lookup, p, 12);
+        let c = tiles::cells(t, p, 64, 1);
+        out[n] = mix(mix(heights[c.i00], heights[c.i10], c.f.x), mix(heights[c.i01], heights[c.i11], c.f.x), c.f.y);
+    }
+`, { file: 'sample.bk', modules: { tiles: bro.tiles.module } });
 
 // Errors: options that are not an object, an unknown domain type or a
 // produce that is not a function throw a TypeError; out-of-range integers

@@ -3,6 +3,7 @@
 #include "bronze_host/host_kernel_gpu.h"
 #include "bronze_host/host_rooted.h"
 #include "tilecache/tile_tree.h"
+#include "tilecache/tiles_module.h"
 #include "engine/engine.h"
 
 #include "embed/embed_host_class.h"
@@ -40,6 +41,17 @@ constexpr uint32_t kRecordInts = 16;
 // u.xyz, v.xyz, the bounding sphere's center.xyz, extent, radius, 0, 0.
 constexpr uint32_t kTableDoubles = 24;
 
+// The lookup (common/tiles.bk): int4 records, the first [mask, 0, 0, 0],
+// then mask + 1 entries, a ready tile at the first free one from
+// tilecache::lookupHash(id) & mask on: [x, y, root | level << 8, slot],
+// an empty one [0, 0, -1, -1]. Twice the capacity, a power of two, so a
+// probe ends within a few entries.
+uint32_t lookupEntries(uint32_t capacity) {
+    uint32_t n = 4;
+    while (n < 2 * capacity) n *= 2;
+    return n;
+}
+
 struct Layer {
     std::string name;
     uint32_t cellBytes = 4;
@@ -64,6 +76,7 @@ struct Cache {
     std::vector<Layer> layers;
     std::shared_ptr<brokernel::api::GpuBuffer> drawList;
     std::vector<DrawTile> drawn;
+    std::shared_ptr<brokernel::api::GpuBuffer> lookup;
     // The update's batch on the GPU, producePerUpdate records, and its
     // KernelBuffer, made once.
     std::shared_ptr<brokernel::api::GpuBuffer> table;
@@ -188,6 +201,24 @@ Value tileObject(Cache& c, const tilecache::Production& p) {
     return t.get();
 }
 
+void writeLookup(Cache& c) {
+    const uint32_t n = lookupEntries(c.tree.config().capacity);
+    std::vector<int32_t> words(size_t{4} * (n + 1), 0);
+    words[0] = static_cast<int32_t>(n - 1);
+    for (uint32_t i = 1; i <= n; ++i) words[4 * i + 2] = words[4 * i + 3] = -1;
+    for (const tilecache::Production& t : c.tree.readyTiles()) {
+        uint32_t h = tilecache::lookupHash(t.id) & (n - 1);
+        while (words[4 * (h + 1) + 3] >= 0) h = (h + 1) & (n - 1);
+        int32_t* e = words.data() + 4 * (h + 1);
+        e[0] = static_cast<int32_t>(t.id.x);
+        e[1] = static_cast<int32_t>(t.id.y);
+        e[2] = static_cast<int32_t>(t.id.root | (t.id.level << 8));
+        e[3] = static_cast<int32_t>(t.slot);
+    }
+    std::string err;
+    c.lookup->write(0, words.data(), words.size() * sizeof(int32_t), &err);
+}
+
 void writeDrawList(Cache& c) {
     c.drawn = c.tree.drawSet();
     if (c.drawn.empty()) return;
@@ -308,11 +339,16 @@ Value js_update(Value self, std::span<const Value> args) {
             // The batch stays missing; the next update offers it again.
             const Rooted thrown(r.value);
             for (const tilecache::Production& p : batch) c->tree.abandon(p.id);
+            writeLookup(*c);
             if (span) engineCompute()->endSpan(*span);
             writeDrawList(*c);
             return ev::throwValue(thrown);
         }
         for (const tilecache::Production& p : batch) c->tree.markReady(p.id);
+        // Written after the producers' dispatches, so the GPU finds a tile
+        // once its cells are there; a slot taken from an evicted tile is gone
+        // from it in the same write.
+        writeLookup(*c);
         if (span && engineCompute()) {
             engineCompute()->endSpan(*span);
             c->timedBatches.push_back({std::move(span), static_cast<uint32_t>(batch.size())});
@@ -372,7 +408,11 @@ void decorateCache(ev::ObjectBuilder& b) {
         c->tree.clear();
         c->drawn.clear();
         c->rangeReadbacks.clear();
+        writeLookup(*c);
         return ev::undefined();
+    });
+    b.accessor("lookup", [](Value self, std::span<const Value>) -> Value {
+        return brokernel::api::bufferValue(cacheOf(self, "TileCache.lookup")->lookup);
     });
     b.accessor("ranges", [](Value self, std::span<const Value>) -> Value {
         const Cache* c = cacheOf(self, "TileCache.ranges");
@@ -495,6 +535,9 @@ Value js_createCache(Value, std::span<const Value> args) {
     }
     cache->drawList = createEngineBuffer(static_cast<size_t>(cfg.capacity) * kRecordInts * sizeof(int32_t), &err);
     if (!cache->drawList) return ev::throwError("bro.tiles.createCache: " + err);
+    cache->lookup = createEngineBuffer(size_t{16} * (lookupEntries(cfg.capacity) + 1), &err);
+    if (!cache->lookup) return ev::throwError("bro.tiles.createCache: " + err);
+    writeLookup(*cache);
     if (ev::toBool(ev::getProperty(opts, "ranges"))) {
         cache->rangePool = createEngineBuffer(size_t{8} * cfg.capacity, &err);
         if (!cache->rangePool) return ev::throwError("bro.tiles.createCache: " + err);
@@ -535,6 +578,7 @@ void installTiles(engine::Engine& engine) {
     const Rooted broObj(bro.value);
     ev::ObjectBuilder tiles;
     tiles.def("createCache", 1, js_createCache);
+    tiles.set("module", tilecache::tilesModuleSource());
     ev::setProperty(broObj, "tiles", tiles.get());
 }
 

@@ -282,6 +282,107 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(top.length > 1 && Math.max(...top.map((t) => t.level)) > Math.max(...sphere.drawn.filter((t) => t.root === 3).map((t) => t.level)),
            'the face under the camera refines further than the one opposite');
 
+    // The lookup: a kernel finds the ready tile holding a direction through
+    // tiles.bk and filters a layer there. Each cell holds its centre's
+    // direction (x, y, z) and its tile's slot, border cells included.
+    const LT = 8, LB = 1, LC = LT + 2 * LB;
+    const looked = bro.kernel.compile(`
+        import tiles;
+        @kernel @grid(3)
+        fn k_dirs(g: grid<3>, table: read_store<f64, 1>, dirs: rw_store<f32, 1>, slots: rw_store<f32, 1>) {
+            let r = g.z() * 24;
+            let slot = table[r] as i32;
+            let s = ((g.x() as f64) - ${LB}.0 + 0.5) / ${LT}.0;
+            let t = ((g.y() as f64) - ${LB}.0 + 0.5) / ${LT}.0;
+            let b = vec3<f64>(table[r + 8], table[r + 9], table[r + 10])
+                  + vec3<f64>(table[r + 11], table[r + 12], table[r + 13]) * s
+                  + vec3<f64>(table[r + 14], table[r + 15], table[r + 16]) * t;
+            let d = normalize(b);
+            let i = (slot * ${LC} + g.y()) * ${LC} + g.x();
+            dirs[3 * i] = d.x as f32;
+            dirs[3 * i + 1] = d.y as f32;
+            dirs[3 * i + 2] = d.z as f32;
+            slots[i] = slot as f32;
+        }
+        fn filtered(dirs: read_store<f32, 1>, c: tiles::Cells, k: i32) -> f32 {
+            return mix(mix(dirs[3 * c.i00 + k], dirs[3 * c.i10 + k], c.f.x),
+                       mix(dirs[3 * c.i01 + k], dirs[3 * c.i11 + k], c.f.x), c.f.y);
+        }
+        // For each direction: the tile found (slot, level, x, y, root) and
+        // the direction filtered from the cells around it, and the slot
+        // read at its first cell.
+        @kernel @grid(1)
+        fn k_find(g: grid<1>, lookup: read_store<i32, 1>, q: read_store<f32, 1>, dirs: read_store<f32, 1>,
+                  slots: read_store<f32, 1>, out: write_store<f32, 1>, level: i32) {
+            let n = g.x();
+            let d = normalize(vec3<f32>(q[3 * n], q[3 * n + 1], q[3 * n + 2]));
+            let p = tiles::cube_point(d);
+            let t = tiles::locate(lookup, p, level);
+            let c = tiles::cells(t, p, ${LT}, ${LB});
+            let f = vec3<f32>(filtered(dirs, c, 0), filtered(dirs, c, 1), filtered(dirs, c, 2));
+            out[8 * n] = t.slot as f32;
+            out[8 * n + 1] = t.level as f32;
+            out[8 * n + 2] = t.x as f32;
+            out[8 * n + 3] = t.y as f32;
+            out[8 * n + 4] = p.root as f32;
+            out[8 * n + 5] = dot(normalize(f), d);
+            out[8 * n + 6] = slots[c.i00];
+            out[8 * n + 7] = slots[c.i11];
+        }
+    `, { file: 'lookup.bk', modules: { tiles: bro.tiles.module } });
+    const kDirs = looked.kernel('k_dirs'), kFind = looked.kernel('k_find');
+    const globe = bro.tiles.createCache({
+        domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },
+        tileSize: LT, border: LB, capacity: 512, maxLevel: 7, producePerUpdate: 64,
+        layers: { dirs: 12, slots: 4 },
+        produce(batch) { kDirs.dispatch([LC, LC, batch.count], batch.table, this.layer('dirs'), this.layer('slots')); },
+    });
+    assert(settle(globe, { position: [30, 104, -20], fov: 60, viewportHeight: 720 }), 'a cube-sphere with a border settles');
+    const N = 512, qs = new Float32Array(3 * N);
+    let seed = 12345;
+    const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296) * 2 - 1;
+    for (let i = 0; i < N; i++) {
+        // Half of them near the camera's point, where tiles are finest.
+        const near = i % 2 === 0;
+        qs[3 * i] = near ? 0.3 + rnd() * 0.05 : rnd();
+        qs[3 * i + 1] = near ? 1.0 : rnd();
+        qs[3 * i + 2] = near ? -0.2 + rnd() * 0.05 : rnd();
+    }
+    const qBuf = bro.kernel.createBuffer(qs), outBuf = bro.kernel.createBuffer(N * 32);
+    kFind.dispatch([N], globe.lookup, qBuf, globe.layer('dirs'), globe.layer('slots'), outBuf, 7);
+    const res = outBuf.read(new Float32Array(N * 8));
+    // A direction's root and (u, v) as the cache's frames place it.
+    const cubePoint = (x, y, z) => {
+        const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+        if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, y / ax] : [1, z / ax, y / ax];
+        if (ay >= az) return y > 0 ? [2, x / ay, -z / ay] : [3, x / ay, z / ay];
+        return z > 0 ? [4, x / az, y / az] : [5, -x / az, y / az];
+    };
+    const drawnLevel = new Map(globe.drawn.map((t) => [tileKey(t), t]));
+    let found = 0, inTile = 0, finest = 0, slotOk = 0, minDot = 1;
+    for (let i = 0; i < N; i++) {
+        const r = res.subarray(8 * i, 8 * i + 8);
+        const [root, s, q] = cubePoint(qs[3 * i], qs[3 * i + 1], qs[3 * i + 2]);
+        if (r[0] < 0) continue;
+        found++;
+        const n = 2 ** r[1], u = (s + 1) / 2 * n, v = (q + 1) / 2 * n;
+        if (r[4] === root && u >= r[2] - 1e-4 && u <= r[2] + 1 + 1e-4 && v >= r[3] - 1e-4 && v <= r[3] + 1 + 1e-4) inTile++;
+        // No drawn tile holding it is finer than the one found.
+        let deepest = 0;
+        for (let l = 0; l <= 7; l++) {
+            const m = 2 ** l, k = tileKey({ root, level: l, x: Math.min(m - 1, Math.floor((s + 1) / 2 * m)), y: Math.min(m - 1, Math.floor((q + 1) / 2 * m)) });
+            if (drawnLevel.has(k)) deepest = l;
+        }
+        if (r[1] >= deepest) finest++;
+        if (r[6] === r[0] && r[7] === r[0]) slotOk++;
+        minDot = Math.min(minDot, r[5]);
+    }
+    assert(found === N, `every direction finds a ready tile (${found} of ${N})`);
+    assert(inTile === N, `the tile found holds it (${inTile} of ${N})`);
+    assert(finest === N, `and is at least as fine as the drawn tile there (${finest} of ${N})`);
+    assert(slotOk === N, `its cells are in its slot, the border included (${slotOk} of ${N})`);
+    assert(minDot > 0.99999, `filtering the cells around it gives its direction (cos ${minDot})`);
+
     // A layer's pool is a KernelBuffer a scene node reads in place.
     const cv = document.createElement('canvas');
     cv.setAttribute('width', '32');

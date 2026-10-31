@@ -1,0 +1,158 @@
+// A tile cache read from a shader or a kernel (bro.tiles, docs/tiles-api.js):
+// where a point of the domain is, which ready tile holds it, and the cells
+// to filter it from. The cache's `lookup` buffer is passed in as `table`,
+// int32s read by index (a kernel's read_store<i32, 1>, a shader's
+// read_buffer<i32>): first [mask, 0, 0, 0], then mask + 1 entries of four,
+// placed by open addressing from hash() (tilecache::lookupHash):
+// [x, y, root | level << 8, slot], an empty one [0, 0, -1, -1].
+module tiles;
+
+// A point of the domain: its root, and (u, v) across the root in [0, 1].
+pub struct Point {
+    root: i32,
+    u: f32,
+    v: f32,
+}
+
+// The cube-sphere root under the unit direction d and where on it: the
+// face of its largest axis, by the gnomonic projection the cache's frames
+// use (face 0 +X at (1, v, -u), 1 -X (-1, v, u), 2 +Y (u, 1, -v),
+// 3 -Y (u, -1, v), 4 +Z (u, v, 1), 5 -Z (-u, v, -1), u and v in [-1, 1]).
+pub fn cube_point(d: vec3<f32>) -> Point {
+    let a = abs(d);
+    var root: i32 = 0;
+    var s: f32 = 0.0;
+    var q: f32 = 0.0;
+    if (a.x >= a.y && a.x >= a.z) {
+        q = d.y / a.x;
+        if (d.x > 0.0) {
+            s = -d.z / a.x;
+        } else {
+            root = 1;
+            s = d.z / a.x;
+        }
+    } else if (a.y >= a.z) {
+        s = d.x / a.y;
+        if (d.y > 0.0) {
+            root = 2;
+            q = -d.z / a.y;
+        } else {
+            root = 3;
+            q = d.z / a.y;
+        }
+    } else {
+        q = d.y / a.z;
+        if (d.z > 0.0) {
+            root = 4;
+            s = d.x / a.z;
+        } else {
+            root = 5;
+            s = -d.x / a.z;
+        }
+    }
+    return Point { root: root, u: s * 0.5 + 0.5, v: q * 0.5 + 0.5 };
+}
+
+// The plane root under (x, z): roots of edge `size` from `origin`,
+// roots_x to a row (the cache's plane domain). Off the domain, clamped to
+// its edge.
+pub fn plane_point(x: f32, z: f32, origin: vec2<f32>, size: f32, roots: vec2<i32>) -> Point {
+    let gx = clamp((x - origin.x) / size, 0.0, (roots.x as f32) - 0.000001);
+    let gz = clamp((z - origin.y) / size, 0.0, (roots.y as f32) - 0.000001);
+    let rx = floor(gx);
+    let rz = floor(gz);
+    return Point { root: (rz as i32) * roots.x + (rx as i32), u: gx - rx, v: gz - rz };
+}
+
+// Where a tile's search starts.
+pub fn hash(root: i32, level: i32, x: i32, y: i32) -> i32 {
+    return (x * 73856093) ^ (y * 19349663) ^ (level * 83492791) ^ (root * 1640531527);
+}
+
+// The slot of ready tile (root, level, x, y), or -1.
+pub fn find<B>(table: B, root: i32, level: i32, x: i32, y: i32) -> i32 {
+    let mask = table[0];
+    let key = root | (level << 8);
+    var h: i32 = hash(root, level, x, y) & mask;
+    var slot: i32 = -1;
+    var probing: bool = true;
+    var n: i32 = 0;
+    while (probing && n <= mask) {
+        let e = 4 * (h + 1);
+        let s = table[e + 3];
+        if (s < 0) {
+            probing = false;
+        } else if (table[e] == x && table[e + 1] == y && table[e + 2] == key) {
+            slot = s;
+            probing = false;
+        }
+        h = (h + 1) & mask;
+        n += 1;
+    }
+    return slot;
+}
+
+// A ready tile: its slot (-1 for none), level and place.
+pub struct Tile {
+    slot: i32,
+    level: i32,
+    x: i32,
+    y: i32,
+}
+
+// The tile of `level` holding p, whether ready or not.
+pub fn tile_at(p: Point, level: i32) -> Tile {
+    let n = exp2(level as f32);
+    let x = min(floor(p.u * n), n - 1.0) as i32;
+    let y = min(floor(p.v * n), n - 1.0) as i32;
+    return Tile { slot: -1, level: level, x: x, y: y };
+}
+
+// The finest ready tile holding p at `level` or coarser; slot -1 when no
+// tile of its root is ready.
+pub fn locate<B>(table: B, p: Point, level: i32) -> Tile {
+    var l: i32 = level;
+    var t: Tile = tile_at(p, level);
+    while (l >= 0) {
+        let at = tile_at(p, l);
+        let slot = find(table, p.root, l, at.x, at.y);
+        if (slot >= 0) {
+            return Tile { slot: slot, level: l, x: at.x, y: at.y };
+        }
+        t = at;
+        l -= 1;
+    }
+    return t;
+}
+
+// The four cells around p in tile t and their weights, as indices into a
+// layer's pool (slot * cells * cells + y * cells + x): a tile's interior
+// cell i is centred at (i + 0.5) / tile_size across it. Bilinear filtering
+// reaches half a cell past the interior, into the border, so a cache with
+// a border of at least 1 filters across tiles without a seam; without
+// one, the outermost cells are held. tile_size is at least 2.
+pub struct Cells {
+    i00: i32,
+    i10: i32,
+    i01: i32,
+    i11: i32,
+    f: vec2<f32>,
+}
+pub fn cells(t: Tile, p: Point, tile_size: i32, border: i32) -> Cells {
+    let n = exp2(t.level as f32);
+    let reach = min(border as f32, 1.0);
+    let lo = (border as f32) - reach;
+    let hi = ((border + tile_size - 1) as f32) + reach;
+    let c = vec2<f32>(border as f32) + (vec2<f32>(p.u, p.v) * n - vec2<f32>(t.x as f32, t.y as f32)) * (tile_size as f32) - 0.5;
+    let cc = clamp(c, vec2<f32>(lo), vec2<f32>(hi));
+    let c0 = min(floor(cc), vec2<f32>(hi - 1.0));
+    let cells_n = tile_size + 2 * border;
+    let base = t.slot * cells_n * cells_n + (c0.y as i32) * cells_n + (c0.x as i32);
+    return Cells { i00: base, i10: base + 1, i01: base + cells_n, i11: base + cells_n + 1, f: cc - c0 };
+}
+
+// The level whose cells are `w` across where a root's cells at level 0 are
+// `w0` (fractional: between two, as a mip's), clamped to [0, max_level].
+pub fn level_for(w: f32, w0: f32, max_level: i32) -> f32 {
+    return clamp(log2(max(w, 1.0e-30) / w0), 0.0, max_level as f32);
+}

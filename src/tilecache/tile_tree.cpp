@@ -314,6 +314,16 @@ int32_t TileTree::slotOf(const TileId& id) const {
     return i >= 0 && nodes_[i].state == State::Ready ? nodes_[i].slot : -1;
 }
 
+std::vector<Production> TileTree::readyTiles() const {
+    std::vector<Production> out;
+    for (const int32_t i : slotNode_) {
+        if (i < 0 || nodes_[i].state != State::Ready) continue;
+        const Node& n = nodes_[i];
+        out.push_back({n.id, static_cast<uint32_t>(n.slot), -1});
+    }
+    return out;
+}
+
 void TileTree::evict(Node& n) {
     freeSlots_.push_back(static_cast<uint32_t>(n.slot));
     slotNode_[n.slot] = -1;

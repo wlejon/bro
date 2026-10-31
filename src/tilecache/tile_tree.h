@@ -48,6 +48,12 @@ struct TileId {
     bool operator==(const TileId& o) const { return key() == o.key(); }
 };
 
+/// Where a tile's search starts in a GPU lookup table (bro.tiles' `lookup`;
+/// common/tiles.bk computes the same in 32-bit wrapping arithmetic).
+inline uint32_t lookupHash(const TileId& t) {
+    return (t.x * 73856093u) ^ (t.y * 19349663u) ^ (t.level * 83492791u) ^ (t.root * 1640531527u);
+}
+
 struct Vec3d {
     double x = 0, y = 0, z = 0;
 };
@@ -185,6 +191,9 @@ public:
     void setRange(const TileId& id, HeightRange r);
     /// The slot of a ready tile, or -1.
     int32_t slotOf(const TileId& id) const;
+    /// Every ready tile and its slot, wanted or not (what a lookup can find:
+    /// a tile no view wants still holds its cells until its slot is taken).
+    std::vector<Production> readyTiles() const;
 
     /// Forget every tile (a world's producer changed): all slots free.
     void clear();
