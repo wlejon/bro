@@ -257,8 +257,10 @@ void writeDrawList(Cache& c) {
 // least half of producePerUpdate: a view still coarse is often what makes
 // the frames heavy (on the planet, 3.5 to 4 ms a frame until the ground and
 // clouds refine, 2.3 after), leaving no gap at all, and slowing production
-// then keeps them coarse. No scene, no load: producePerUpdate is reached a
-// tile an update.
+// then keeps them coarse: with a floor of one tile, turning 180 degrees at
+// 1.3 km or at 27.6 km left the view unconverged 600 frames later, and the
+// 27.6 km turn's frames rose from 2.93 to 3.34 ms, where half converges in
+// 60 to 90. No scene, no load: producePerUpdate is reached a tile an update.
 engine::Engine* g_engine = nullptr;
 void pace(Cache& c) {
     const uint32_t floor = (c.producePerUpdate + 1) / 2;
