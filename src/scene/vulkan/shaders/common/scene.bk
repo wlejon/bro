@@ -1,0 +1,78 @@
+// The scene's frame state as every stage composed with the engine reads it:
+// set 0, the camera (SceneCameraUniforms, scene_vk_descriptors.h), and the
+// math the stages share.
+//
+// Everything is CAMERA-RELATIVE (scene/vulkan/frame/scene_view.h): model
+// matrices arrive with the eye subtracted, so a "world" position in any scene
+// stage is world - eye, the eye sits at the origin, and view / view_proj take
+// such positions. eye_world is the one absolute position, for what is a
+// function of where the camera really is (height fog, the atmosphere).
+module scene;
+
+pub struct Camera {
+    view: mat4f,
+    proj: mat4f,
+    view_proj: mat4f,
+    inv_view: mat4f,
+    inv_proj: mat4f,
+    eye_world: vec4<f32>,
+    viewport: vec4<f32>,     // x: width, y: height, z: near, w: far
+    fog_params: vec4<f32>,   // x: start, y: end, z: density, w: start distance
+    fog_color: vec4<f32>,    // rgb, a: height falloff
+    wind: vec4<f32>,         // xyz: direction, w: strength
+    // x: time (s), y: frequency, z: the eye's phase (dot(eye.xz, (0.3, 0.5))
+    // mod 2 pi), w: the oscillator clock, time mod the wind clock's period.
+    wind_params: vec4<f32>,
+    // The wind field (scene/world/wind_field.h): xy its horizontal direction
+    // (x, z; unit, drifting), z its steady speed (m/s), w the gusts' travel
+    // speed (m/s).
+    wind_field: vec4<f32>,
+    wind_gust: vec4<f32>,    // x: gust amount, y: 1 / band length along the wind, z: 1 / across it
+    // x: the render's index mod 65536, for noise that changes every render
+    // (a volume's jitter, which the volumes' reconstruction averages).
+    // y: the debug view shown (scene/debug_views.h), 0 for none.
+    frame: vec4<f32>,
+}
+
+@binding(0, 0) pub var camera: uniform<Camera>;
+
+pub const PI: f32 = 3.14159265359;
+
+// What the scene's HDR target holds at most (RGBA16F's largest finite value,
+// rounded down): a lit surface's output is clamped to it, so a highlight of a
+// sun in lux saturates rather than turning the pixel infinite.
+pub const HDR_MAX: f32 = 64000.0;
+
+// The debug view shown (SceneRenderer::setDebugView), 0 for none: a stage's
+// SCENE_DEBUG(name) tests it against name's id (scene/debug_views.h).
+pub fn debug_view() -> i32 {
+    return (camera.frame.y + 0.5) as i32;
+}
+
+// m * v, m column-major (a matrix is its columns).
+pub fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w;
+}
+pub fn mul3(m: mat3f, v: vec3<f32>) -> vec3<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z;
+}
+// transpose(m) * v: v into the frame whose axes are m's columns.
+pub fn mul3t(m: mat3f, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(m[0], v), dot(m[1], v), dot(m[2], v));
+}
+
+// The pixel's ray through window position `frag` (camera-relative, unit),
+// from the inverse projection and view.
+pub fn view_ray(frag: vec2<f32>) -> vec3<f32> {
+    let uv = frag / camera.viewport.xy;
+    let v = mul4(camera.inv_proj, vec4<f32>(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, 0.5, 1.0));
+    let w = mul4(camera.inv_view, vec4<f32>(v.x / v.w, v.y / v.w, v.z / v.w, 0.0));
+    return normalize(w.xyz);
+}
+
+// A hash of two integers to [0, 1).
+pub fn hash2(x: u32, y: u32) -> f32 {
+    var h: u32 = x * 1973u + y * 9277u;
+    h = (h ^ (h >> 13u)) * 0x5bd1e995u;
+    return ((h ^ (h >> 15u)) & 1023u) as f32 / 1024.0;
+}

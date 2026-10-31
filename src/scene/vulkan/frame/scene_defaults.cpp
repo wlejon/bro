@@ -78,6 +78,14 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     static_assert(CS::kLinear == 0 && CS::kRepeat == 1 && CS::kRepeatS == 2 && CS::kNearest == 3 &&
                   CS::kSamplerModes == 4 && CS::kSamplersBinding == kCustomImages + 1);
     custom.addSamplers(CS::kSamplersBinding, {mipSampler, repeatSampler, repeatSSampler, nearestSampler}, kVsFs);
+    // A brokernel hook's (custom.bk): the same four, one a binding, then its
+    // storage buffers.
+    static_assert(CS::kKernelSamplersBinding == CS::kSamplersBinding + 1);
+    const VkSampler kernelSamplers[CS::kSamplerModes] = {mipSampler, repeatSampler, repeatSSampler, nearestSampler};
+    for (uint32_t i = 0; i < CS::kSamplerModes; ++i)
+        custom.addSamplers(CS::kKernelSamplersBinding + i, {kernelSamplers[i]}, kVsFs);
+    for (uint32_t i = 0; i < CS::kMaxBuffers; ++i)
+        custom.addBinding(CS::kBuffersBinding + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kVsFs);
     customLayout = custom.build(dev);
 
     SceneVkDescriptorLayoutBuilder empty;

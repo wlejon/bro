@@ -1,0 +1,56 @@
+// The near grid's pass (volume.bk, PassVolume): one cell's column of the
+// grid, front to back. The pass draws the volume's triangle over a viewport
+// of the grid's cells, so world_pos is the ray through the cell's centre.
+// The engine composes it with the volume's module as `hook`.
+import scene;
+import volume;
+import hook;
+from scene import camera;
+
+// Slice k of a cell: the light (rgb) and transmittance (a) from the eye to
+// the slice's far end, and the distance weighted by the opacity over it.
+@binding(2, 6) @format(rgba16f) var near_light_out: image3d<vec4<f32>>;
+@binding(2, 7) @format(r32f) var near_depth_out: image3d<f32>;
+
+@fragment fn volume_near(@location(0) world_pos: vec3<f32>, @location(1) index: i32) {
+    let range = hook::medium_range();
+    if (!(range > 0.0)) {
+        return;   // no near field: nothing reads the grid
+    }
+    let dir = normalize(world_pos);
+    let fc = frag_coord();
+    let cell = vec2<i32>(fc.x as i32, fc.y as i32);
+    let cone = volume::pixel_cone(near_light_out.size().y as f32);
+    // Each slice's sample at a fraction of it, per cell and moved on by the
+    // golden ratio each render, as the volumes' marches are.
+    let jitter = fract(scene::hash2(cell.x as u32, cell.y as u32) + 0.618034 * camera.frame.x);
+    // The four parts' transmittances; the light and depth their means.
+    var l: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    var t: vec4<f32> = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    var d: f32 = 0.0;
+    var z0: f32 = 0.0;
+    var clear_to: f32 = 0.0;
+    for (var k: i32 = 0; k < volume::NEAR_SLICES; k += 1) {
+        let z1 = volume::near_distance((k + 1) as f32, range);
+        let z = mix(z0, z1, jitter);
+        if (z >= clear_to && max(max(t.x, t.y), max(t.z, t.w)) > 0.002) {
+            let m = hook::medium(dir * z, dir, max(z * cone.x, cone.y));
+            clear_to = z + max(m.clear, 0.0);
+            let dz = z1 - z0;
+            let s = m.extinction;
+            let st = vec4<f32>(exp(-s.x * dz), exp(-s.y * dz), exp(-s.z * dz), exp(-s.w * dz));
+            // Each part's light over the slice per unit of its scatter.
+            let lit = vec4<f32>(s.x > 0.0000001 ? (1.0 - st.x) / s.x : dz,
+                                s.y > 0.0000001 ? (1.0 - st.y) / s.y : dz,
+                                s.z > 0.0000001 ? (1.0 - st.z) / s.z : dz,
+                                s.w > 0.0000001 ? (1.0 - st.w) / s.w : dz) * t;
+            l += (m.scatter0 * lit.x + m.scatter1 * lit.y + m.scatter2 * lit.z + m.scatter3 * lit.w) * 0.25;
+            d += 0.25 * dot(t, vec4<f32>(1.0, 1.0, 1.0, 1.0) - st) * z;
+            t *= st;
+        }
+        let hdr = vec3<f32>(scene::HDR_MAX, scene::HDR_MAX, scene::HDR_MAX);
+        near_light_out.store(vec3<i32>(cell.x, cell.y, k), vec4<f32>(min(l, hdr), 0.25 * (t.x + t.y + t.z + t.w)));
+        near_depth_out.store(vec3<i32>(cell.x, cell.y, k), d);
+        z0 = z1;
+    }
+}

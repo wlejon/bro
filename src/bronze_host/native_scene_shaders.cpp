@@ -126,6 +126,33 @@ const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const 
     return "";
 }
 
+const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, const char* file) {
+    auto* n = nodeOf(self);
+    auto* cell = nodeCellOf(self);
+    auto* g = cell ? cell->graph() : nullptr;
+    if (!n || !g) {
+        tl_shaderErr = "setShaderModule: node or scene destroyed";
+        return tl_shaderErr.c_str();
+    }
+    auto* mn = n->type() == scene::SceneNode::Type::Mesh ? static_cast<scene::MeshNode*>(n) : nullptr;
+    if (!mn || !mn->isVolume()) {
+        tl_shaderErr = "setShaderModule: node is not a volume";
+        return tl_shaderErr.c_str();
+    }
+    const std::string source = module ? module : "";
+    const std::string name = file && *file ? file : "hook.bk";
+    if (source.empty()) {
+        tl_shaderErr = "setShaderModule: no module source";
+        return tl_shaderErr.c_str();
+    }
+    std::string err;
+    if (!g->compileVolumeModule(source, name, err)) {
+        tl_shaderErr = err.empty() ? "module compilation failed" : err;
+        return tl_shaderErr.c_str();
+    }
+    mn->setCustomShaderModule(source, name);
+    return "";
+}
 
 void bro_scene_SceneNode_clearShader(void* self) {
     auto* n = nodeOf(self);

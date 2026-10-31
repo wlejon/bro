@@ -8,6 +8,7 @@
 #include "scene/nodes/skinned_mesh_node.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/world/world_service.h"
 #include "render/vulkan_context.h"
@@ -311,6 +312,11 @@ bool SceneRenderer::compileCustomShader(CustomShaderTarget target, const std::st
                                         const std::string& vertexChunk, const std::string& fragmentChunk,
                                         std::string& errOut) {
     return vk::SceneVkCustomShader::validateCustomShader(target, vertexChunk, fragmentChunk, errOut);
+}
+
+bool SceneRenderer::compileVolumeModule(const std::string& module, const std::string& file, std::string& errOut) {
+    vk::KernelVolumeHook hook;
+    return vk::compileKernelVolumeHook(module, file, hook, errOut);
 }
 
 // --- Colour grading ---------------------------------------------------------

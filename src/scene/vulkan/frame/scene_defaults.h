@@ -25,8 +25,10 @@ public:
     // (binding 0) or a procedural draw's segment records (binding 1, storage);
     // set 4: custom shader UBO + kCustomImages images (bindings 1 to
     // kCustomImages), then the samplers they are read through
-    // (CustomShaderInterface::kSamplersBinding, immutable). A set written for
-    // this layout fills every image binding.
+    // (CustomShaderInterface::kSamplersBinding, immutable), the same samplers
+    // one a binding for a brokernel hook (kKernelSamplersBinding) and its
+    // storage buffers (kBuffersBinding). A set written for this layout fills
+    // every image and buffer binding.
     static constexpr uint32_t kCustomImages = MeshNode::kMaxUserTextures;
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;

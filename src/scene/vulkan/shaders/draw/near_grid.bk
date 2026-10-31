@@ -1,0 +1,31 @@
+// The near medium of a volume whose hook gives it point by point
+// (volume.bk): the near grid (PassVolume) read to the opaque depth or the
+// range. Slice k of a cell holds the light (rgb) and transmittance (a) from
+// the eye to the slice's far end, and the distance weighted by the opacity
+// over it, so the slice coordinate's texel is half one less, and within the
+// first slice a share of the first.
+module near;
+
+import volume;
+import hook;
+from scene import camera;
+
+@binding(2, 1) var near_light: sampler3d<vec4<f32>>;
+@binding(2, 2) var near_depth: sampler3d<f32>;
+
+pub fn at(frag: vec2<f32>, scene_dist: f32) -> volume::Near {
+    let range = max(hook::medium_range(), 0.0);
+    if (!(range > 0.0)) {
+        return volume::no_near();
+    }
+    let u = volume::near_slice(min(scene_dist, range), range);
+    let uv = frag / camera.viewport.xy;
+    let at = vec3<f32>(uv.x, uv.y, (max(u, 1.0) - 0.5) / (volume::NEAR_SLICES as f32));
+    var light: vec4<f32> = near_light.sample_lod(at, 0.0);
+    var depth: f32 = near_depth.sample_lod(at, 0.0);
+    if (u < 1.0) {
+        light = mix(vec4<f32>(0.0, 0.0, 0.0, 1.0), light, u);
+        depth *= u;
+    }
+    return volume::Near { light: light, depth: depth, range: range };
+}

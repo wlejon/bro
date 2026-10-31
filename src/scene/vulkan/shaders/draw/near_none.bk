@@ -1,0 +1,9 @@
+// The near medium of a volume whose hook gives none point by point
+// (volume.bk): nothing before the march.
+module near;
+
+import volume;
+
+pub fn at(frag: vec2<f32>, scene_dist: f32) -> volume::Near {
+    return volume::no_near();
+}

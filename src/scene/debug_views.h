@@ -22,7 +22,8 @@ std::string nameOf(int id);
 std::vector<std::string> names();
 
 /// `source` with each SCENE_DEBUG(name) replaced by a test of the camera's
-/// view id (sceneDebugView(), scene_camera.glsl) against name's.
-std::string expand(const std::string& source);
+/// view id (`viewExpr`: sceneDebugView() in a GLSL chunk, scene_camera.glsl;
+/// scene::debug_view() in a brokernel module, scene.bk) against name's.
+std::string expand(const std::string& source, const std::string& viewExpr = "sceneDebugView()");
 
 } // namespace bro::scene::debug_views

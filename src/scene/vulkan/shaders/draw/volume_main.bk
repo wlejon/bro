@@ -1,0 +1,30 @@
+// A volume's fragment stage (volume.bk): the pixel's ray through the near
+// medium (near: near_grid.bk for a hook that gives its medium point by
+// point, near_none.bk otherwise) and the hook's march, composited, and on the
+// first row's first pixels the exposure meter's rays. The engine composes it
+// with the volume's module as `hook`.
+import scene;
+import volume;
+import near;
+import hook;
+from scene import camera;
+
+@fragment fn volume_main(@location(0) world_pos: vec3<f32>, @location(1) index: i32) {
+    let dir = normalize(world_pos);
+    let fc = frag_coord();
+    let p = vec2<i32>(fc.x as i32, fc.y as i32);
+    let scene_dist = volume::scene_distance(p);
+    let cone = volume::pixel_cone(camera.viewport.y);
+    let n = near::at(vec2<f32>(fc.x, fc.y), scene_dist);
+    let march = hook::volume(volume::Ray { dir: dir, scene_dist: scene_dist, near: n.range, cone: cone.x, min_width: cone.y });
+    if (p.y == 0 && p.x < volume::METER_RAYS) {
+        let rays = volume::meter_rays(p.x);
+        volume::write_meter(index, p.x, hook::volume(rays.sun), hook::volume(rays.sky));
+    }
+    let c = volume::composite(dir, n, march);
+    if (!c.visible) {
+        discard_fragment();
+    }
+    set_frag_output(0, c.color);
+    set_frag_output(1, c.depth);
+}

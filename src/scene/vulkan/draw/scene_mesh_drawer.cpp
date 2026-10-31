@@ -11,6 +11,7 @@
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "render/vulkan_compute.h"
@@ -290,6 +291,29 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
 
     auto prog = std::make_unique<CustomProgram>();
     std::string err;
+    if (cs.isModule()) {
+        KernelVolumeHook hook;
+        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, hook, err);
+        if (ok) {
+            prog->iface = std::move(hook.iface);
+            prog->medium = hook.medium;
+            prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
+            prog->fsEntry = hook.main.entry;
+            if (hook.medium) {
+                prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
+                prog->fsNearEntry = hook.nearPass.entry;
+            }
+            ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
+            if (!ok) err = "Failed to create VkShaderModule";
+        }
+        if (!ok) {
+            LOG_ERROR("SceneMeshDrawer: Failed compiling a volume module: %s", err.c_str());
+            prog->failed = true;
+            custom_.emplace(key, std::move(prog));
+            return nullptr;
+        }
+        return custom_.emplace(key, std::move(prog)).first->second.get();
+    }
     prog->medium = SceneVkCustomShader::volumeHasMedium(cs.fragmentChunk);
     if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
         !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, false, prog->fs, err) ||
@@ -327,7 +351,8 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
         VkPipelineColorBlendAttachmentState overwrite{};
         overwrite.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vsVolume_, prog->fs)
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fs, prog->fsEntry.c_str())
          .setVertexInput({}, {})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -362,7 +387,8 @@ void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet came
     const bool atmosphere = atmosphere_;
     VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? raster::kAtmosphere : 0u, TargetFormat{}, [&] {
         SceneVkPipelineBuilder b;
-        b.setShaderStages(vsVolume_, prog->fsNear)
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fsNear, prog->fsNearEntry.c_str())
          .setVertexInput({}, {})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -519,7 +545,7 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
             break;
         }
     }
-    if (!samplers.empty() && prog.iface.samplerModesOffset() + 4 <= ubo.size())
+    if (prog.iface.hasSamplerModes() && prog.iface.samplerModesOffset() + 4 <= ubo.size())
         std::memcpy(ubo.data() + prog.iface.samplerModesOffset(), &modes, 4);
     const VkDescriptorBufferInfo uboInfo = frame.gpu.device.frameUniform(ubo.data(), ubo.size());
 
@@ -531,6 +557,25 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i)
         writer.writeImage(i + 1, views[i], VK_NULL_HANDLE, kRead, kImage);
     static_assert(CustomShaderInterface::kMaxSamplers == SceneDefaults::kCustomImages);
+    // A brokernel hook's storage buffers, by name; an unbound one is a byte
+    // of the zero buffer, so its len() is 0.
+    zeroBufferAddress(frame);
+    const VkBuffer zero = zeroBuffer_ ? zeroBuffer_->buffer() : VK_NULL_HANDLE;
+    constexpr VkDescriptorType kStorage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    for (uint32_t i = 0; i < CustomShaderInterface::kMaxBuffers; ++i) {
+        VkBuffer buffer = zero;
+        VkDeviceSize size = 1;
+        for (const CustomShaderInterface::KernelBuffer& slot : prog.iface.kernelBuffers()) {
+            if (slot.binding != CustomShaderInterface::kBuffersBinding + i) continue;
+            for (const CustomShaderBuffer& b : buffers) {
+                if (b.name != slot.name || !b.buffer || !b.buffer->buffer()) continue;
+                buffer = b.buffer->buffer();
+                size = b.buffer->size();
+                break;
+            }
+        }
+        if (buffer) writer.writeBuffer(CustomShaderInterface::kBuffersBinding + i, buffer, size, 0, kStorage);
+    }
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);
     return set;

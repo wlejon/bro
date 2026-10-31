@@ -862,6 +862,7 @@ void bro_scene_SceneNode_onStateChanged_set(void* self, uint64_t cbBits);
 bool bro_scene_SceneNode_hasShader(void* self);
 const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const char* fragment,
                                           const char* uniformsJson);
+const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, const char* file);
 void bro_scene_SceneNode_clearShader(void* self);
 void bro_scene_SceneNode_setShaderUniform(void* self, const char* name, const double* vals, uint32_t count);
 void bro_scene_SceneNode_setLodMeshes(void* self, const char* jsonLods);

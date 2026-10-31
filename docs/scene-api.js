@@ -636,7 +636,31 @@ class SceneGraph {
    * when it fails to compile (or defines no userVolume, or a userMedium
    * without userMediumRange).
    *
-   * @param {{fragment: string, uniforms?: Object<string, number|number[]>, name?: string}} opts
+   * The hook may instead be a brokernel module (`module`, its source;
+   * `file` names it in errors), registered as `hook` beside the engine's
+   * modules (src/scene/vulkan/shaders/common/*.bk, draw/volume.bk) and
+   * compiled by brass, with the same meaning throughout:
+   *
+   *   pub fn volume(ray: volume::Ray) -> volume::Light
+   *   pub fn medium_range() -> f32          (with medium, for the near grid)
+   *   pub fn medium(pos: vec3<f32>, dir: vec3<f32>, footprint: f32) -> volume::Medium
+   *
+   * ray.dir, ray.scene_dist and ray.near are userVolume's dir, sceneDist and
+   * volumeNearEnd(); volume::light(radiance, transmittance, depth) makes its
+   * answer, and volume::sun_light, volume::sky_light, volume::footprint,
+   * lighting::to_sun() and scene::camera are the chunk's helpers. A
+   * Medium's scatter0..3 and extinction are userMedium's four parts. The
+   * module declares the node's values in set 4 (common/custom.bk): a
+   * `uniform<Params>` at binding 0, whose fields setShaderUniform sets by
+   * name (32-bit scalars and vectors); textures at bindings 1 to 8
+   * (texture2d, texture2d_array, texture3d; setShaderTexture) read through
+   * custom::linear, repeat, repeat_s or nearest, which the module picks; and
+   * `buffer`/`read_buffer`s at bindings 14 to 19 (setShaderBuffer), an
+   * unbound one of len() 0. SCENE_DEBUG(name) tests a debug view, and a
+   * Light's `debug` (alpha 1) answers it. Errors carry brokernel's
+   * diagnostics, or name a set-4 resource the set does not hold.
+   *
+   * @param {{fragment?: string, module?: string, file?: string, uniforms?: Object<string, number|number[]>, name?: string}} opts
    * @returns {SceneNode}
    * @example
    * // Uniform haze, 1 km visibility, lit by the sun and the sky.

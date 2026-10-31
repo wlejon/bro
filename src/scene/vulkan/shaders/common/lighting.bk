@@ -1,0 +1,270 @@
+// Set 1 of every lit scene stage: the lights, the shadow pages, the
+// environment and the atmosphere's tables (LightingUBO and the lighting set
+// layout, scene_vk_descriptors.h / .cpp), and what the stages ask of them.
+module lighting;
+
+import scene;
+import atmosphere;
+from scene import camera;
+
+pub const MAX_LIGHTS: i32 = 32;
+const MAX_SHADOW_MAPS: i32 = 32;   // shadow_pages_layout.h SP_MAX_MAPS
+
+pub struct Light {
+    position: vec4<f32>,      // xyz camera-relative position, w type (0 directional)
+    direction: vec4<f32>,     // xyz unit direction (light -> scene), w range (0 = unbounded)
+    color: vec4<f32>,         // rgb linear, a intensity
+    shadow: vec4<f32>,        // x cos(inner), y cos(outer), z first shadow map (-1 = none), w map count
+    shadow_reach: vec4<f32>,  // x how far from the eye it shadows (0: no limit)
+}
+
+// A virtual shadow map (scene/world/shadow_pages.h, ShadowMapGpu).
+pub struct ShadowMap {
+    matrix: mat4f,
+    info: vec4<f32>,
+    bias: vec4<f32>,
+    depth: vec4<f32>,
+}
+
+pub struct Lighting {
+    sun_direction: vec4<f32>,  // the dominant directional light (decals), w its index + 1 (0: none)
+    sun_color: vec4<f32>,      // rgb, a intensity
+    ambient_color: vec4<f32>,  // rgb flat ambient
+    params: vec4<f32>,         // x the light count, y the PCF grid's side, z 1 / the pool's side, w the pool's columns
+    shadow_view: vec4<f32>,
+    shadow_soft: vec4<f32>,
+    lights: array<Light, 32>,
+    shadow_maps: array<ShadowMap, 32>,
+    probe_world_to_local: mat4f,
+    probe_local_to_world: mat4f,
+    probe_pos: vec4<f32>,
+    probe_box_size: vec4<f32>,
+    probe_params: vec4<f32>,
+    shade_origin: vec4<f32>,
+    shade_params: vec4<f32>,
+    ibl_params: vec4<f32>,     // x enabled, y intensity, z rotation, w the prefilter's last LOD
+    ground_bounce: vec4<f32>,  // rgb the ground's bounce, as irradiance over pi and intensity (0: none)
+    atm: atmosphere::Atmosphere,   // the atmosphere, atm.sun_dir.w on
+}
+
+@binding(1, 0) pub var lighting: uniform<Lighting>;
+// One sampler for the set's images (linear, clamped).
+@binding(1, 8) pub var linear: sampler;
+@binding(1, 4) var irradiance_map: texture_cube<vec4<f32>>;
+@binding(1, 9) var atm_transmittance: texture2d<vec4<f32>>;
+@binding(1, 10) var atm_sky_view: texture2d<vec4<f32>>;
+@binding(1, 11) var atm_inscatter: texture3d<vec4<f32>>;
+@binding(1, 12) var atm_air_transmittance: texture3d<vec4<f32>>;
+@binding(1, 13) var atm_sky_light: texture3d<vec4<f32>>;
+
+pub fn atmosphere_on() -> bool {
+    return lighting.atm.sun_dir.w > 0.5;
+}
+
+// The sun's light at camera-relative `pos`, for a sun of 1 at the top of the
+// air: what the air and the planet's shadow leave of it.
+pub fn sun_transmittance(pos: vec3<f32>) -> vec3<f32> {
+    let atm = lighting.atm;
+    let p = atmosphere::origin(atm, pos);
+    let r = length(p);
+    return atmosphere::sun_transmittance(atm, atm_transmittance, linear, r, dot(p, atm.sun_dir.xyz) / r);
+}
+
+// `d` turned about +Y by `a` radians: the environment's rotation.
+fn rotate_y(d: vec3<f32>, a: f32) -> vec3<f32> {
+    let c = cos(a);
+    let s = sin(a);
+    return vec3<f32>(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+}
+
+// The open sky's irradiance over pi on a surface at `pos` facing `n`, as if
+// nothing stood about it: the atmosphere's sky light, else the environment's
+// irradiance with the ground's bounce below (the light a level ground sends
+// back, seen by the lower (1 - n.y) / 2 of the surface's hemisphere), else
+// the flat ambient.
+pub fn open_sky_irradiance(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    if (atmosphere_on()) {
+        return atmosphere::sh_irradiance(atmosphere::sky_light_sh(lighting.atm, atm_sky_light, linear, pos), n);
+    }
+    if (lighting.ibl_params.x > 0.5) {
+        let e = irradiance_map.sample(linear, rotate_y(n, lighting.ibl_params.z)).xyz;
+        return (e + lighting.ground_bounce.xyz * (0.5 - 0.5 * n.y)) * lighting.ibl_params.y;
+    }
+    return lighting.ambient_color.xyz;
+}
+
+// The sun: the atmosphere's while it is on, else the first directional
+// light; -1 with neither.
+pub fn sun_index() -> i32 {
+    if (atmosphere_on()) {
+        return lighting.atm.ground.w as i32;
+    }
+    let count = min(lighting.params.x as i32, MAX_LIGHTS);
+    for (var i: i32 = 0; i < count; i += 1) {
+        if (lighting.lights[i].position.w < 0.5) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Unit, toward the sun (straight up the view's y with none).
+pub fn to_sun() -> vec3<f32> {
+    let i = sun_index();
+    if (i < 0) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    return normalize(-lighting.lights[i].direction.xyz);
+}
+
+// The sun's illuminance at camera-relative `pos` (its light's colour times
+// intensity): what the air and the planet's shadow leave of it when it is
+// the atmosphere's sun. Black without a sun.
+pub fn sun_light(pos: vec3<f32>) -> vec3<f32> {
+    let i = sun_index();
+    if (i < 0) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let c = lighting.lights[i].color;
+    if (atmosphere_on() && i == (lighting.atm.ground.w as i32)) {
+        return c.xyz * c.w * sun_transmittance(pos);
+    }
+    return c.xyz * c.w;
+}
+
+// Fog in [0, 1] for a point `cam_dist` from the eye at world height
+// `world_y`: exponential-squared height fog when the density is set, else
+// the linear start / end ramp, else none.
+fn fog_factor(cam_dist: f32, world_y: f32) -> f32 {
+    var density: f32 = camera.fog_params.z;
+    if (density > 0.0) {
+        let d = max(cam_dist - camera.fog_params.w, 0.0);
+        let falloff = camera.fog_color.w;
+        if (falloff > 0.0) {
+            density *= exp(-falloff * world_y);
+        }
+        let x = density * d;
+        return 1.0 - exp(-x * x);
+    }
+    let fog_end = camera.fog_params.y;
+    if (fog_end > 0.0) {
+        let f = clamp((cam_dist - camera.fog_params.x) / (fog_end - camera.fog_params.x), 0.0, 1.0);
+        return f * f;
+    }
+    return 0.0;
+}
+
+// The air between the eye and a point, as what survives of the point's
+// colour and what the air adds; `fade` is how far a surface's alpha fades
+// out (fog only).
+pub struct Air {
+    transmittance: vec3<f32>,
+    inscatter: vec3<f32>,
+    fade: f32,
+}
+
+// The air between this view's eye and camera-relative `pos`, from the
+// atmosphere's tables. Inside the main camera's frustum: its aerial-
+// perspective volume (froxels over the frustum, slices squared in depth, a
+// point nearer than the first slice taking the share of it its distance is),
+// read across slices by a cubic B-spline (two linear lookups at the pairs'
+// weighted centres, Sigg and Hadwiger 2005): linear between slices, a slow
+// gradient shows each slice's edge. Outside it, and from high in the air
+// where a slice is deeper than the air under the eye (the froxels' share,
+// sky_view.w, 1 low in the air and 0 above): the transmittance from the
+// transmittance table (the ratio of the two points' to the top) and the
+// in-scatter as the sky-view table's radiance along the ray, by the share of
+// the ray's air that lies before the point.
+fn atmosphere_air(pos: vec3<f32>) -> Air {
+    let atm = lighting.atm;
+    let e = atm.sun_illuminance.xyz / atmosphere::TABLE_SCALE;   // both tables read here are scaled
+    let p = pos + atm.froxel.xyz;   // relative to the froxel camera
+    let clip = scene::mul4(atm.froxel_view_proj, vec4<f32>(p, 1.0));
+    var ndc: vec2<f32> = vec2<f32>(2.0, 2.0);
+    if (clip.w > 0.0) {
+        ndc = clip.xy / clip.w;
+    }
+    var froxels: f32 = atm.sky_view.w;
+    var f_t: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    var f_l: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if (froxels > 0.0 && abs(ndc.x) <= 1.02 && abs(ndc.y) <= 1.02) {
+        let wn = atmosphere::froxel_w(atm.froxel.w, length(p));
+        let n = atmosphere::FROXEL_SLICES;
+        let x = clamp(wn.x, 0.5 / n, 1.0 - 0.5 / n) * n - 0.5;
+        let i = floor(x);
+        let f = x - i;
+        let g = 1.0 - f;
+        let f2 = f * f;
+        let f3 = f2 * f;
+        let bx = g * g * g / 6.0;
+        let by = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+        let bz = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+        let bw = f3 / 6.0;
+        let g0 = bx + by;
+        let g1 = bz + bw;
+        let w0 = clamp((i - 1.0 + by / g0 + 0.5) / n, 0.5 / n, 1.0 - 0.5 / n);
+        let w1 = clamp((i + 1.0 + bw / g1 + 0.5) / n, 0.5 / n, 1.0 - 0.5 / n);
+        let uv = ndc * 0.5 + 0.5;
+        let l = atm_inscatter.sample_lod(linear, vec3<f32>(uv, w0), 0.0).xyz * g0 +
+                atm_inscatter.sample_lod(linear, vec3<f32>(uv, w1), 0.0).xyz * g1;
+        let t = atm_air_transmittance.sample_lod(linear, vec3<f32>(uv, w0), 0.0).xyz * g0 +
+                atm_air_transmittance.sample_lod(linear, vec3<f32>(uv, w1), 0.0).xyz * g1;
+        f_l = l * wn.y * e;
+        f_t = mix(vec3<f32>(1.0, 1.0, 1.0), t, wn.y);
+        if (froxels >= 1.0) {
+            return Air { transmittance: f_t, inscatter: f_l, fade: 0.0 };
+        }
+    } else {
+        froxels = 0.0;
+    }
+    let d = length(pos);
+    let ro = atmosphere::origin(atm, vec3<f32>(0.0, 0.0, 0.0));
+    let rd = pos / max(d, 0.0001);
+    let pp = ro + pos;
+    let r0 = length(ro);
+    let r1 = length(pp);
+    let mu0 = dot(ro, rd) / r0;
+    let mu1 = dot(pp, rd) / r1;
+    let t_ground = atmosphere::ground_hit(atm, ro, rd);
+    var t_full: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    var t_ray: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    if (t_ground >= 0.0) {
+        // Toward the ground: the reversed ray, from the point back up past
+        // the eye (a = T(point..eye) * b); the sky view's ray ends at the
+        // ground, so its air is the eye's to there (t_full), not all of it.
+        let a = atmosphere::transmittance_to_top(atm, atm_transmittance, linear, r1, -mu1);
+        let b = atmosphere::transmittance_to_top(atm, atm_transmittance, linear, r0, -mu0);
+        let pg = ro + rd * t_ground;
+        let gt = atmosphere::transmittance_to_top(atm, atm_transmittance, linear, atm.shell.x, -dot(pg, rd) / length(pg));
+        let bb = max(b, vec3<f32>(0.000001, 0.000001, 0.000001));
+        t_ray = clamp(a / bb, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+        t_full = clamp(gt / bb, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+    } else {
+        let a = atmosphere::transmittance_to_top(atm, atm_transmittance, linear, r0, mu0);
+        let b = atmosphere::transmittance_to_top(atm, atm_transmittance, linear, r1, mu1);
+        t_ray = clamp(a / max(b, vec3<f32>(0.000001, 0.000001, 0.000001)), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+        t_full = a;
+    }
+    let up = ro / r0;
+    let sf = atmosphere::sun_frame(atm, up);
+    let h = vec2<f32>(dot(rd, sf.axes[0]), dot(rd, sf.axes[1]));
+    let hl = length(h);
+    let cos_az = hl > 0.00001 ? h.x / hl : 1.0;
+    let sky = atm_sky_view.sample_lod(linear, atmosphere::sky_view_uv(atm, atm.sky_view.x, dot(rd, up), cos_az), 0.0).xyz;
+    let share = clamp((1.0 - t_ray) / max(1.0 - t_full, vec3<f32>(0.0001, 0.0001, 0.0001)),
+                      vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+    return Air { transmittance: mix(t_ray, f_t, froxels), inscatter: mix(sky * share * e, f_l, froxels), fade: 0.0 };
+}
+
+// The air between the eye and a point at camera-relative `pos`, `cam_dist`
+// away: the atmosphere's transmittance and in-scatter (aerial perspective,
+// integrated with the sky's own model, so distant ground fades into the sky
+// behind it) when it is on, else the fog. Aerial perspective supersedes fog;
+// both model the same air.
+pub fn air(pos: vec3<f32>, cam_dist: f32) -> Air {
+    if (atmosphere_on()) {
+        return atmosphere_air(pos);
+    }
+    let fog = fog_factor(cam_dist, pos.y + camera.eye_world.y);
+    return Air { transmittance: vec3<f32>(1.0 - fog, 1.0 - fog, 1.0 - fog), inscatter: camera.fog_color.xyz * fog, fade: fog };
+}

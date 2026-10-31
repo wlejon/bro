@@ -35,7 +35,7 @@ std::vector<std::string> names() {
     return g_names;
 }
 
-std::string expand(const std::string& source) {
+std::string expand(const std::string& source, const std::string& viewExpr) {
     static const std::string kMacro = "SCENE_DEBUG(";
     std::string out;
     out.reserve(source.size());
@@ -55,7 +55,7 @@ std::string expand(const std::string& source) {
         while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
         while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
         out.append(source, at, hit - at);
-        out += "(sceneDebugView() == " + std::to_string(idOf(name)) + ")";
+        out += "(" + viewExpr + " == " + std::to_string(idOf(name)) + ")";
         at = close + 1;
     }
     out.append(source, at, std::string::npos);

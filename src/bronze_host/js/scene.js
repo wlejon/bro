@@ -481,8 +481,16 @@
         return this;
     });
     fn(SceneNode.prototype, "clearShader", function clearShader() { __bro_native.scene.SceneNode_clearShader(this); return this; });
+    fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file) {
+        if (typeof source !== 'string' || !source) throw new TypeError("setShaderModule expects the module's source");
+        if (file !== undefined && typeof file !== 'string') throw new TypeError("file must be a string");
+        const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "");
+        if (err && err.length > 0) throw new Error(err);
+        return this;
+    });
     fn(SceneNode.prototype, "setShaderUniform", function setShaderUniform(name, val) {
-        if (!name || typeof name !== 'string' || !name.startsWith('u_')) throw new TypeError("Uniform names must start with 'u_'");
+        // A chunk's uniforms are its u_* names, a module's its uniform's fields.
+        if (!name || typeof name !== 'string') throw new TypeError("setShaderUniform expects a uniform name");
         if (typeof val === 'number') {
             __bro_native.scene.SceneNode_setShaderUniform(this, name, new Float64Array([val]));
         } else if (Array.isArray(val) || ArrayBuffer.isView(val)) {

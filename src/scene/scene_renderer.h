@@ -503,6 +503,9 @@ public:
                              const std::string& vertexChunk,
                              const std::string& fragmentChunk,
                              std::string& errOut);
+    /// Compile a volume's brokernel hook module (`file` names it in
+    /// diagnostics), so setShaderModule can report errors at set time.
+    bool compileVolumeModule(const std::string& module, const std::string& file, std::string& errOut);
 
     // --- What the GPU passes read each frame ---
 

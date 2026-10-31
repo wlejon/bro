@@ -547,8 +547,20 @@ class SceneNode {
   setShader(opts) {}
 
   /**
-   * Set one `u_*` uniform of the custom shader: a number, or 1 to 4 numbers
-   * (float, vec2, vec3, vec4). Extra components are ignored.
+   * A volume's hook as a brokernel module (scene.createVolume's `module`):
+   * compiled with the engine's modules now, replacing the node's shader.
+   * Throws with brokernel's diagnostics, `file` naming the module.
+   *
+   * @param {string} source
+   * @param {string} [file]
+   * @returns {SceneNode}
+   */
+  setShaderModule(source, file) {}
+
+  /**
+   * Set one uniform of the custom shader (a chunk's `u_*` uniform, a
+   * module's uniform field): a number, or 1 to 4 numbers (float, vec2,
+   * vec3, vec4). Extra components are ignored.
    *
    * @param {string} name
    * @param {number|number[]|Float32Array} value

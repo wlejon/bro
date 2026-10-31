@@ -1,0 +1,17 @@
+// Set 4 of a hook's stages (a volume's module, scene.createVolume): the
+// node's own values. The hook declares them itself, by binding:
+//
+//   @binding(4, 0) var params: uniform<Params>;      setShaderUniform(field name, value)
+//   @binding(4, 1..8) var noise: texture3d<f32>;     setShaderTexture(name, ...)
+//   @binding(4, 14..19) var map: read_buffer<T>;     setShaderBuffer(name, buffer)
+//
+// A uniform's fields are 32-bit scalars or vectors (the engine writes each by
+// name, std140); a texture is a texture2d, texture2d_array or texture3d
+// (unset: zeros, white for a texture2d), read through one of the samplers
+// here, which the hook picks; an unbound buffer is empty (len() 0).
+module custom;
+
+@binding(4, 10) pub var linear: sampler;     // linear, every mip, clamped
+@binding(4, 11) pub var repeat: sampler;     // linear, every mip, repeating
+@binding(4, 12) pub var repeat_s: sampler;   // linear, every mip, repeating across (s), clamped in t
+@binding(4, 13) pub var nearest: sampler;    // nearest, clamped (integer textures)

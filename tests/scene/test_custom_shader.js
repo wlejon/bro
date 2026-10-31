@@ -144,8 +144,8 @@ if (!probe.scene) {
 
         // Name/value validation.
         let threw = false;
-        try { m.setShaderUniform('tint', 1.0); } catch (e) { threw = true; }
-        assert(threw, 'setShaderUniform rejects names without the u_ prefix');
+        try { m.setShaderUniform('', 1.0); } catch (e) { threw = true; }
+        assert(threw, 'setShaderUniform rejects an empty name');
         threw = false;
         try { m.setShaderUniform('u_tint', 'red'); } catch (e) { threw = true; }
         assert(threw, 'setShaderUniform rejects non-numeric values');

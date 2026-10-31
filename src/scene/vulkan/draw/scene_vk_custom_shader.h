@@ -32,8 +32,13 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <vector>
+
+namespace brokernel {
+struct CompileResult;
+}
 
 namespace bro::scene::vk {
 
@@ -53,6 +58,12 @@ public:
         kNearest = 3,   // nearest, clamped (integer images)
         kSamplerModes = 4,
     };
+    /// A brokernel hook's (custom.bk): the same samplers at bindings of
+    /// their own, which the hook names (custom::linear ...), and its storage
+    /// buffers (setShaderBuffer) after them.
+    static constexpr uint32_t kKernelSamplersBinding = kSamplersBinding + 1;
+    static constexpr uint32_t kBuffersBinding = kKernelSamplersBinding + kSamplerModes;
+    static constexpr uint32_t kMaxBuffers = 6;
 
     struct Uniform {
         std::string type;
@@ -81,6 +92,25 @@ public:
     /// take (arrays of samplers, samplers other than 2D / 2D array, too many
     /// samplers, a fragment input no vertex output feeds).
     bool parse(const std::string& vertexChunk, const std::string& fragmentChunk, std::string& err);
+
+    /// A brokernel hook's set 4 from its module's resources (custom.bk):
+    /// the uniform at binding 0 (its fields the uniforms, by name), the
+    /// textures at 1 to kMaxSamplers (samplers(), indexed by binding - 1,
+    /// unnamed where there is none) and the storage buffers from
+    /// kBuffersBinding. False with `err` on a resource of set 4 the set does
+    /// not hold.
+    /// Every stage of the hook gives its own; one set serves them all.
+    bool fromKernel(std::initializer_list<const brokernel::CompileResult*> stages, std::string& err);
+
+    /// A storage buffer of a brokernel hook (setShaderBuffer by name).
+    struct KernelBuffer {
+        std::string name;
+        uint32_t binding = 0;
+    };
+    const std::vector<KernelBuffer>& kernelBuffers() const { return kernelBuffers_; }
+    /// Whether the block holds the samplers' modes (a GLSL chunk's): a
+    /// brokernel hook names its samplers itself.
+    bool hasSamplerModes() const { return !kernel_ && !samplers_.empty(); }
 
     /// Each chunk rewritten for Vulkan (the mesh and shadow vertex stages
     /// share the vertex one), empty when the chunk is.
@@ -117,6 +147,8 @@ private:
     std::vector<std::string> uniformDecls_;   // block members, in order
     std::vector<Sampler> samplers_;
     std::vector<Buffer> buffers_;
+    std::vector<KernelBuffer> kernelBuffers_;
+    bool kernel_ = false;
     std::vector<Varying> varyings_;
     std::string vertexBody_;
     std::string fragmentBody_;

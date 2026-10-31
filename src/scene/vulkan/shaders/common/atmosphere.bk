@@ -1,0 +1,197 @@
+// The atmosphere's model as the stages read it (scene/world/atmosphere.h,
+// scene/vulkan/lighting/scene_atmosphere.cpp, which fills Atmosphere from
+// AtmosphereParams and builds the tables). Lengths in metres; positions about
+// the planet's centre ("air space"): `origin` is the block's eye there, so a
+// camera-relative position p is at origin + p. Each function takes the block
+// and the tables it reads, so the lighting set's (lighting.bk) and the
+// atmosphere passes' own bindings both use them.
+module atmosphere;
+
+pub struct Atmosphere {
+    sun_dir: vec4<f32>,          // xyz the unit vector toward the sun, w 1 when the atmosphere is on
+    sun_illuminance: vec4<f32>,  // rgb the sun's illuminance at the top of the air, w its angular radius
+    rayleigh: vec4<f32>,         // rgb scattering a metre at the ground, w the scale height
+    mie: vec4<f32>,              // x scattering, y absorption a metre at the ground, z g, w the scale height
+    ozone: vec4<f32>,            // rgb absorption a metre at the layer's peak, w the peak's altitude
+    shell: vec4<f32>,            // x the planet's radius, y the top of the air's, z the ozone's half width
+    origin: vec4<f32>,           // xyz the eye about the planet's centre
+    ground: vec4<f32>,           // rgb the ground's albedo, w the lights[] index of the sun (-1: none)
+    // x the r the sky-view table was made at, y its mu_s, z jitter on, w the
+    // froxels' share of the air's lookups (air()).
+    sky_view: vec4<f32>,
+    froxel: vec4<f32>,           // xyz this block's eye minus the froxel eye, w the volume's depth (m)
+    froxel_view_proj: mat4f,     // a position relative to the froxel eye -> its clip space
+}
+
+pub const TRANSMITTANCE_W: f32 = 256.0;
+pub const TRANSMITTANCE_H: f32 = 64.0;
+pub const SKYVIEW_W: f32 = 256.0;
+pub const SKYVIEW_H: f32 = 128.0;
+pub const SKYLIGHT_W: f32 = 64.0;
+pub const SKYLIGHT_H: f32 = 32.0;
+pub const FROXEL_SLICES: f32 = 32.0;
+// The tables of light (in-scatter, sky view, the sky's light) hold it times
+// this, so twilight's (1e-8 of the sun near the eye) stays above half
+// float's smallest values; the brightest (the haze about the sun, about 1)
+// stays far below its largest.
+pub const TABLE_SCALE: f32 = 1024.0;
+
+const PI: f32 = 3.14159265359;
+
+// A camera-relative position in air space.
+pub fn origin(atm: Atmosphere, rel: vec3<f32>) -> vec3<f32> {
+    return atm.origin.xyz + rel;
+}
+
+// The first hit of the planet's surface ahead, -1 if none.
+pub fn ground_hit(atm: Atmosphere, ro: vec3<f32>, rd: vec3<f32>) -> f32 {
+    let b = dot(ro, rd);
+    let c = dot(ro, ro) - atm.shell.x * atm.shell.x;
+    let d = b * b - c;
+    if (d < 0.0) {
+        return -1.0;
+    }
+    let t = -b - sqrt(d);
+    return t >= 0.0 ? t : -1.0;
+}
+
+fn unit_to_texel(x: f32, size: f32) -> f32 {
+    return 0.5 / size + x * (1.0 - 1.0 / size);
+}
+
+pub fn transmittance_uv(atm: Atmosphere, r: f32, mu: f32) -> vec2<f32> {
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let h = sqrt(max(rt * rt - rb * rb, 0.0));
+    let rho = sqrt(max(r * r - rb * rb, 0.0));
+    let disc = r * r * (mu * mu - 1.0) + rt * rt;
+    let d = max(-r * mu + sqrt(max(disc, 0.0)), 0.0);
+    let d_min = rt - r;
+    let d_max = rho + h;
+    let x_mu = d_max > d_min ? (d - d_min) / (d_max - d_min) : 0.0;
+    let x_r = h > 0.0 ? rho / h : 0.0;
+    return vec2<f32>(unit_to_texel(clamp(x_mu, 0.0, 1.0), TRANSMITTANCE_W),
+                     unit_to_texel(clamp(x_r, 0.0, 1.0), TRANSMITTANCE_H));
+}
+
+// The air's transmittance from radius r (inside the shell) along mu to the top.
+pub fn transmittance_to_top(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sampler, r: f32, mu: f32) -> vec3<f32> {
+    return table.sample_lod(s, transmittance_uv(atm, clamp(r, atm.shell.x, atm.shell.y), mu), 0.0).xyz;
+}
+
+// How much of the sun's disc stands above the planet's horizon from radius r
+// with the sun at mu_s: 0 under it, 1 clear, smooth across the disc.
+pub fn planet_shadow(atm: Atmosphere, r: f32, mu_s: f32) -> f32 {
+    let s = clamp(atm.shell.x / max(r, atm.shell.x), 0.0, 1.0);   // sin of the horizon's zenith angle
+    let mu_h = -sqrt(max(1.0 - s * s, 0.0));
+    let alpha = max(atm.sun_illuminance.w, 0.0001);
+    return smoothstep(-alpha, alpha, (mu_s - mu_h) / max(s, 0.001));
+}
+
+// The sun's light at radius r with the sun at mu_s, for a sun of 1.
+pub fn sun_transmittance(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sampler, r: f32, mu_s: f32) -> vec3<f32> {
+    return transmittance_to_top(atm, table, s, r, mu_s) * planet_shadow(atm, r, mu_s);
+}
+
+fn sun_unit(mu_s: f32) -> f32 {
+    let m = clamp(mu_s, -1.0, 1.0);
+    return 0.5 + 0.5 * sign(m) * sqrt(abs(m));
+}
+
+// The sky-view table's coordinates: azimuth from the sun, zenith angle at r.
+pub fn sky_view_uv(atm: Atmosphere, r: f32, cos_z: f32, cos_az: f32) -> vec2<f32> {
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let rr = max(r, rb + 1.0);
+    let z_horizon = PI - asin(min(rb / rr, 1.0));
+    let z_top = rr > rt ? PI - asin(min(rt / rr, 1.0)) : 0.0;
+    let z = acos(clamp(cos_z, -1.0, 1.0));
+    var y: f32 = 0.0;
+    if (z < z_horizon) {
+        let c = clamp((z - z_top) / (z_horizon - z_top), 0.0, 1.0);
+        y = 0.5 * (1.0 - sqrt(1.0 - c));
+    } else {
+        let c = clamp((z - z_horizon) / (PI - z_horizon), 0.0, 1.0);
+        y = 0.5 + 0.5 * sqrt(c);
+    }
+    let x = sqrt(clamp(0.5 - 0.5 * cos_az, 0.0, 1.0));
+    return vec2<f32>(unit_to_texel(x, SKYVIEW_W), unit_to_texel(y, SKYVIEW_H));
+}
+
+// The local frame of a point: up, and the sun's horizontal direction (any
+// horizontal when the sun stands at the zenith or nadir), as columns
+// (x, y, up), and the sun's cosine there.
+pub struct SunFrame {
+    axes: mat3f,
+    mu_s: f32,
+}
+pub fn sun_frame(atm: Atmosphere, up: vec3<f32>) -> SunFrame {
+    let sun = atm.sun_dir.xyz;
+    let mu_s = dot(up, sun);
+    let h = sun - up * mu_s;
+    let l = length(h);
+    var x_axis: vec3<f32> = h / max(l, 0.00001);
+    if (l <= 0.00001) {
+        let a = abs(up.x) < 0.9 ? vec3<f32>(1.0, 0.0, 0.0) : vec3<f32>(0.0, 0.0, 1.0);
+        x_axis = normalize(a - up * dot(a, up));
+    }
+    return SunFrame { axes: mat3f(x_axis, cross(up, x_axis), up), mu_s: mu_s };
+}
+
+// The sky's light at a point: six SH coefficients a channel in the sun's
+// frame there (scene/world/atmosphere.h), times the sun.
+pub struct SkySh {
+    c0: vec3<f32>,
+    c1: vec3<f32>,
+    c2: vec3<f32>,
+    c3: vec3<f32>,
+    c4: vec3<f32>,
+    c5: vec3<f32>,
+    frame: mat3f,
+}
+
+pub fn sky_light_sh(atm: Atmosphere, table: texture3d<vec4<f32>>, s: sampler, pos: vec3<f32>) -> SkySh {
+    let p = origin(atm, pos);
+    let r = length(p);
+    let f = sun_frame(atm, p / r);
+    let h = clamp((r - atm.shell.x) / (atm.shell.y - atm.shell.x), 0.0, 1.0);
+    let uv = vec2<f32>(unit_to_texel(sun_unit(f.mu_s), SKYLIGHT_W), unit_to_texel(sqrt(h), SKYLIGHT_H));
+    let l0 = table.sample_lod(s, vec3<f32>(uv, 0.1), 0.0);
+    let l1 = table.sample_lod(s, vec3<f32>(uv, 0.3), 0.0);
+    let l2 = table.sample_lod(s, vec3<f32>(uv, 0.5), 0.0);
+    let l3 = table.sample_lod(s, vec3<f32>(uv, 0.7), 0.0);
+    let l4 = table.sample_lod(s, vec3<f32>(uv, 0.9), 0.0);
+    let e = atm.sun_illuminance.xyz / TABLE_SCALE;
+    return SkySh {
+        c0: l0.xyz * e,
+        c1: vec3<f32>(l0.w, l1.x, l1.y) * e,
+        c2: vec3<f32>(l1.z, l1.w, l2.x) * e,
+        c3: vec3<f32>(l2.y, l2.z, l2.w) * e,
+        c4: l3.xyz * e,
+        c5: vec3<f32>(l3.w, l4.x, l4.y) * e,
+        frame: f.axes,
+    };
+}
+
+// The irradiance over pi the coefficients give a surface facing `n`.
+pub fn sh_irradiance(sh: SkySh, n: vec3<f32>) -> vec3<f32> {
+    let d = vec3<f32>(dot(sh.frame[0], n), dot(sh.frame[1], n), dot(sh.frame[2], n));   // into the sun's frame
+    let b1 = 0.488603 * d.z;
+    let b2 = 0.488603 * d.x;
+    let b3 = 0.315392 * (3.0 * d.z * d.z - 1.0);
+    let b4 = 1.092548 * d.x * d.z;
+    let b5 = 0.546274 * (d.x * d.x - d.y * d.y);
+    let e = PI * sh.c0 * 0.282095 + (2.0 * PI / 3.0) * (sh.c1 * b1 + sh.c2 * b2) +
+            (PI / 4.0) * (sh.c3 * b3 + sh.c4 * b4 + sh.c5 * b5);
+    return max(e, vec3<f32>(0.0, 0.0, 0.0)) / PI;
+}
+
+// The aerial-perspective volume's w for a distance d, and how much of the
+// first slice's air a point nearer than it gets (scene/world/atmosphere.h,
+// froxelW), as (w, near weight).
+pub fn froxel_w(max_dist: f32, d: f32) -> vec2<f32> {
+    let s = sqrt(max(d, 0.0) / max_dist) * FROXEL_SLICES;
+    let first = max_dist / (FROXEL_SLICES * FROXEL_SLICES);
+    return vec2<f32>(clamp((s - 0.5) / FROXEL_SLICES, 0.5 / FROXEL_SLICES, 1.0 - 0.5 / FROXEL_SLICES),
+                     clamp(d / first, 0.0, 1.0));
+}

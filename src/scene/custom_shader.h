@@ -21,7 +21,7 @@ namespace bro::scene {
 // with custom-shader state always maps to a linked program.
 
 struct CustomShaderUniform {
-    std::string name;      // must carry the `u_` user-namespace prefix
+    std::string name;      // a chunk's carries the `u_` user-namespace prefix; a module's is its field's
     int comps = 1;         // 1..4 → float / vec2 / vec3 / vec4
     float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
@@ -29,7 +29,11 @@ struct CustomShaderUniform {
 struct CustomShaderState {
     std::string vertexChunk;
     std::string fragmentChunk;
-    std::string key;       // program-cache key: vertex + '\x1f' + fragment
+    // A brokernel hook (scene_vk_kernel_hook.h) in place of the chunks: its
+    // module's source, and the file diagnostics name.
+    std::string module;
+    std::string moduleFile;
+    std::string key;       // program-cache key: vertex + '\x1f' + fragment, or '\x1d' + module
     std::vector<CustomShaderUniform> uniforms;
 
     static std::unique_ptr<CustomShaderState> make(std::string vertexChunk,
@@ -40,6 +44,14 @@ struct CustomShaderState {
         st->fragmentChunk = std::move(fragmentChunk);
         return st;
     }
+    static std::unique_ptr<CustomShaderState> makeModule(std::string module, std::string file) {
+        auto st = std::make_unique<CustomShaderState>();
+        st->key = '\x1d' + module;
+        st->module = std::move(module);
+        st->moduleFile = std::move(file);
+        return st;
+    }
+    bool isModule() const { return !module.empty(); }
 
     /// Set (or update) a numeric user-uniform value. Values are plain floats
     /// — nothing JS-owned — and are uploaded per draw, so two nodes sharing

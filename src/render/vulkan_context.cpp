@@ -72,6 +72,7 @@ struct DeviceFeatureSupport {
     bool dynamicRendering = false;
     bool synchronization2 = false;
     bool timelineSemaphore = false;
+    bool demoteToHelperInvocation = false;   // core in 1.3 (brokernel's discard_fragment)
 };
 
 DeviceFeatureSupport queryFeatureSupport(VkPhysicalDevice dev) {
@@ -85,7 +86,7 @@ DeviceFeatureSupport queryFeatureSupport(VkPhysicalDevice dev) {
     f2.pNext = &f12;
     vkGetPhysicalDeviceFeatures2(dev, &f2);
     return {f13.dynamicRendering == VK_TRUE, f13.synchronization2 == VK_TRUE,
-            f12.timelineSemaphore == VK_TRUE};
+            f12.timelineSemaphore == VK_TRUE, f13.shaderDemoteToHelperInvocation == VK_TRUE};
 }
 
 } // namespace
@@ -690,6 +691,7 @@ bool VulkanContext::createLogicalDevice() {
     vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     vulkan13Features.dynamicRendering = VK_TRUE;
     vulkan13Features.synchronization2 = synchronization2_ ? VK_TRUE : VK_FALSE;
+    vulkan13Features.shaderDemoteToHelperInvocation = support.demoteToHelperInvocation ? VK_TRUE : VK_FALSE;
 
     // Compute features (VulkanComputeFeatures): what SPIR-V compiled outside
     // bro asks for (brokernel's kernels reach their buffers by address and

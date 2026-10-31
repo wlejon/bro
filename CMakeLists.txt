@@ -413,6 +413,8 @@ _bro_require(BRO_WITH_FLORA        BRO_WITH_3D)
 # the FLORA→3D→{PHYSICS,GAMEAI} chain fully resolves in one pass.
 _bro_require(BRO_WITH_3D           BRO_WITH_PHYSICS)
 _bro_require(BRO_WITH_3D           BRO_WITH_GAMEAI)
+# The scene's shader hooks are brokernel modules (scene_vk_kernel_hook.cpp).
+_bro_require(BRO_WITH_3D           BRO_WITH_KERNEL)
 
 # Forward feature choices into the sibling repos (must happen before
 # third_party/ is added — brotensor's backend is fixed at first add_subdirectory,
