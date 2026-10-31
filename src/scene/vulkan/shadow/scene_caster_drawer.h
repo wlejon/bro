@@ -64,7 +64,9 @@ private:
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkShaderModule vs_[kMeshKindCount] = {};
+    std::string vsEntry_[kMeshKindCount];
     VkShaderModule fs_ = VK_NULL_HANDLE;
+    std::string fsEntry_;
     // The built-in and cutout casters' pipelines, built off the frame thread
     // (a caster is not drawn until its pipeline is in; the shadow pages it
     // was skipped from are drawn again then): by variant, a kind's
@@ -75,7 +77,9 @@ private:
     // Cutout casters (a textured static or instanced mesh with an alpha
     // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
     VkShaderModule vsCutout_[2] = {};              // [instanced]
+    std::string vsCutoutEntry_[2];
     VkShaderModule fsCutout_ = VK_NULL_HANDLE;
+    std::string fsCutoutEntry_;
     // Custom-vertex casters by (chunk key, kind, sidedness); VK_NULL_HANDLE
     // remembers a failed compile, so it is reported once and the caster
     // falls back to its undisplaced silhouette.

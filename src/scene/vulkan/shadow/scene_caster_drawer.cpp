@@ -74,28 +74,33 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
     info.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
-    vs_[static_cast<int>(MeshKind::Static)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVert);
-    vs_[static_cast<int>(MeshKind::Instanced)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVert);
-    vs_[static_cast<int>(MeshKind::Skinned)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowSkinnedVert);
-    vs_[static_cast<int>(MeshKind::Tube)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowTubeVert);
-    vs_[static_cast<int>(MeshKind::Scatter)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowScatterVert);
-    vs_[static_cast<int>(MeshKind::Vegetation)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowVegVert);
-    vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedVegVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowFrag);
-    vsCutout_[0] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutVert);
-    vsCutout_[1] = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowInstancedCutoutVert);
-    fsCutout_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ShadowCutoutFrag);
-    for (VkShaderModule m : vs_) {
-        if (!m) return false;
+    static constexpr const char* kVsEntries[kMeshKindCount] = {
+        "shadow_vert",
+        "shadow_instanced_vert",
+        "shadow_skinned_vert",
+        "shadow_scatter_vert",
+        "shadow_tube_vert",
+        "shadow_veg_vert",
+        "shadow_instanced_veg_vert",
+    };
+    auto buildStage = [&](const char* entry, VkShaderModule& mod, std::string& outEntry) {
+        KernelHookStage stage;
+        std::string err;
+        if (!compileKernelShadowStage(entry, stage, err)) {
+            LOG_ERROR("SceneCasterDrawer: %s failed: %s", entry, err.c_str());
+            return false;
+        }
+        mod = SceneVkShaderModule::create(dev, stage.spirv);
+        outEntry = std::move(stage.entry);
+        return mod != VK_NULL_HANDLE;
+    };
+    for (int k = 0; k < kMeshKindCount; ++k) {
+        if (!buildStage(kVsEntries[k], vs_[k], vsEntry_[k])) return false;
     }
-    return fs_ != VK_NULL_HANDLE && vsCutout_[0] != VK_NULL_HANDLE && vsCutout_[1] != VK_NULL_HANDLE && fsCutout_ != VK_NULL_HANDLE;
+    return buildStage("shadow_frag", fs_, fsEntry_) &&
+           buildStage("shadow_cutout_vert", vsCutout_[0], vsCutoutEntry_[0]) &&
+           buildStage("shadow_instanced_cutout_vert", vsCutout_[1], vsCutoutEntry_[1]) &&
+           buildStage("shadow_cutout_frag", fsCutout_, fsCutoutEntry_);
 }
 
 void SceneCasterDrawer::cleanup(SceneGpu& gpu) {
@@ -141,7 +146,7 @@ VkPipeline SceneCasterDrawer::buildPipeline(VkShaderModule vs, MeshKind kind, bo
         b.setLabel(std::string(custom ? "custom shadow" : "shadow") + " kind " +
                    std::to_string(static_cast<int>(kind)) + (cutout ? " cutout" : ""));
     }
-    b.setShaderStages(vs, cutout ? fsCutout_ : fs_, vsEntry, "main")
+    b.setShaderStages(vs, cutout ? fsCutout_ : fs_, vsEntry, cutout ? fsCutoutEntry_.c_str() : fsEntry_.c_str())
      .setVertexInput(bindings, attributes)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -165,8 +170,9 @@ TargetFormat casterTarget() {
 
 VkPipeline SceneCasterDrawer::builtinPipeline(MeshKind kind, bool twoSided) {
     const uint32_t variant = kBuiltin | static_cast<uint32_t>(kind) << 1 | (twoSided ? 1u : 0u);
+    const int k = static_cast<int>(kind);
     return pipelines_.get(variant, casterTarget(), [&] {
-        return buildPipeline(vs_[static_cast<int>(kind)], kind, false, twoSided, false);
+        return buildPipeline(vs_[k], kind, false, twoSided, false, vsEntry_[k].c_str());
     }, /*async=*/true);
 }
 
@@ -174,7 +180,7 @@ VkPipeline SceneCasterDrawer::cutoutPipeline(MeshKind kind, bool twoSided) {
     const int instanced = kind == MeshKind::Instanced ? 1 : 0;
     const uint32_t variant = kCutout | static_cast<uint32_t>(instanced) << 1 | (twoSided ? 1u : 0u);
     return pipelines_.get(variant, casterTarget(), [&] {
-        return buildPipeline(vsCutout_[instanced], kind, false, twoSided, true);
+        return buildPipeline(vsCutout_[instanced], kind, false, twoSided, true, vsCutoutEntry_[instanced].c_str());
     }, /*async=*/true);
 }
 

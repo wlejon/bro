@@ -138,7 +138,8 @@ enum class BuiltinSceneShader;
 VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
                                  const char* name);
 /// The same of a shader module the caller keeps.
-VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name);
+VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
+                                 const char* entry = "main");
 
 /// A compute pipeline built on a thread of its own from when it is started
 /// (pipeline_async::inFlight counts it), so no frame waits on the driver's
@@ -148,7 +149,8 @@ class AsyncComputePipeline {
 public:
     /// `module` (start's second form) and `layout` outlive the build.
     void start(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout, const char* name);
-    void start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name);
+    void start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
+               const char* entry = "main");
     VkPipeline get();
     /// Started and not yet failed (a null pipeline once built).
     bool usable() const { return started_ && !failed_; }

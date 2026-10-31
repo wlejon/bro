@@ -9,7 +9,7 @@
 #ifdef SHADOW_CUTOUT_VERTEX
 layout(location = 0) out vec2 outCutUV;
 layout(location = 1) out float outCutAlpha;
-layout(location = 2) flat out vec4 outCut;   // x cutoff, y atlas cell, zw grid cols, rows
+layout(location = 2) out vec4 outCut;   // x cutoff, y atlas cell, zw grid cols, rows
 
 // `uv` after the custom chunk, `vertexAlpha` the vertex colour's, `cellCode`
 // an instance record's alpha (1 for a mesh's own: mesh.vert's outInstColor).
@@ -27,7 +27,7 @@ void shadowCutoutOut(vec2 uv, float vertexAlpha, float cellCode) {
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(location = 0) in vec2 inCutUV;
 layout(location = 1) in float inCutAlpha;
-layout(location = 2) flat in vec4 inCut;
+layout(location = 2) in vec4 inCut;
 
 void shadowCutoutTest() {
     vec2 uv = inCutUV;

@@ -351,14 +351,15 @@ VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkP
     return pipeline;
 }
 
-VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
+VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
+                                 const char* entry) {
     if (!module || !layout) return VK_NULL_HANDLE;
     VkComputePipelineCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
-    ci.stage.pName = "main";
+    ci.stage.pName = entry;
     ci.layout = layout;
     ci.flags = render::pipelineStatsFlags();
     VkPipeline pipeline = VK_NULL_HANDLE;
@@ -395,8 +396,10 @@ void AsyncComputePipeline::start(VkDevice device, BuiltinSceneShader shader, VkP
     failed_ = false;
 }
 
-void AsyncComputePipeline::start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name) {
-    future_ = buildOnThread([=] { return createComputePipeline(device, module, layout, name); });
+void AsyncComputePipeline::start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
+                                 const char* entry) {
+    std::string e(entry ? entry : "main");
+    future_ = buildOnThread([=] { return createComputePipeline(device, module, layout, name, e.c_str()); });
     started_ = true;
     failed_ = false;
 }

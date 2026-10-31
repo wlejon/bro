@@ -11,16 +11,6 @@
 // compiles the same source with the same DEFINES at run time
 // (docs/hot-reload.md). Adding a shader is adding a line here.
 
-BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shadow/shadow.vert",                 "vert", "")
-BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow/shadow_instanced.vert",       "vert", "")
-BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow/shadow_skinned.vert",         "vert", "")
-BRO_SCENE_SHADER(ShadowFrag,               "shadow.frag",                 "shadow/shadow.frag",                 "frag", "")
-// Cutout casters (scene_shadow_cutout.glsl): a textured mesh with an alpha cutoff.
-BRO_SCENE_SHADER(ShadowCutoutVert,         "shadow_cutout.vert",          "shadow/shadow.vert",                 "vert", "SHADOW_CUTOUT")
-BRO_SCENE_SHADER(ShadowInstancedCutoutVert, "shadow_instanced_cutout.vert", "shadow/shadow_instanced.vert",    "vert", "SHADOW_CUTOUT")
-BRO_SCENE_SHADER(ShadowCutoutFrag,         "shadow_cutout.frag",          "shadow/shadow_cutout.frag",          "frag", "")
-// The shadow pages' marking (pass_shadow_mark.cpp).
-BRO_SCENE_SHADER(ShadowMarkComp,           "shadow_mark.comp",            "shadow/shadow_mark.comp",            "comp", "")
 BRO_SCENE_SHADER(PostFxVert,               "postfx.vert",                 "post/postfx.vert",                   "vert", "")
 BRO_SCENE_SHADER(TonemapFrag,              "tonemap.frag",                "post/tonemap.frag",                  "frag", "")
 BRO_SCENE_SHADER(FxaaFrag,                 "fxaa.frag",                   "post/fxaa.frag",                     "frag", "")
@@ -51,10 +41,6 @@ BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "light
 BRO_SCENE_SHADER(BrdfLutFrag,              "brdf_lut.frag",               "lighting/brdf_lut.frag",             "frag", "")
 BRO_SCENE_SHADER(BloomBrightFrag,          "bloom_bright.frag",           "post/bloom_bright.frag",             "frag", "")
 BRO_SCENE_SHADER(TiltCompositeFrag,        "tilt_composite.frag",         "post/tilt_composite.frag",           "frag", "")
-BRO_SCENE_SHADER(ShadowTubeVert,           "shadow_tube.vert",            "shadow/shadow_tube.vert",            "vert", "")
-BRO_SCENE_SHADER(ShadowVegVert,            "shadow_veg.vert",             "shadow/shadow.vert",                 "vert", "SCENE_VEGETATION")
-BRO_SCENE_SHADER(ShadowInstancedVegVert,   "shadow_instanced_veg.vert",   "shadow/shadow_instanced.vert",       "vert", "SCENE_VEGETATION")
-BRO_SCENE_SHADER(ShadowScatterVert,        "shadow_scatter.vert",         "shadow/shadow_scatter.vert",         "vert", "")
 // The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
 // (transmittance, multiple scattering, the sky's light) and the per-frame
 // view tables (sky view, aerial-perspective froxels).

@@ -46,6 +46,13 @@ using KernelHookModules = std::vector<std::pair<std::string, std::string>>;
 /// Compile a built-in mesh stage entry point from draw/mesh_main.bk.
 bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string& err);
 
+/// Compile a built-in shadow caster stage entry point from shadow/shadow.bk.
+bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::string& err);
+
+/// Compile a built-in stage entry point from `file` (with common engine modules registered).
+bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,
+                        std::string& err);
+
 /// Compile a volume's hook module (`file` names it in diagnostics).
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
                              KernelVolumeHook& out, std::string& err);

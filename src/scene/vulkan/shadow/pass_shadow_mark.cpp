@@ -4,6 +4,7 @@
 #include "render/vulkan_util.h"
 #include "scene/nodes/light_node.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
@@ -11,6 +12,9 @@
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/lighting/scene_lighting.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
+#include "util/log.h"
+
+#include "shadow_mark.bk.src.h"
 
 #include <cstring>
 
@@ -36,7 +40,15 @@ bool PassShadowMark::setup(SceneGpu& gpu) {
     li.setLayoutCount = 1;
     li.pSetLayouts = &setLayout_;
     if (vkCreatePipelineLayout(dev, &li, nullptr, &layout_) != VK_SUCCESS) return false;
-    pipeline_ = createComputePipeline(dev, BuiltinSceneShader::ShadowMarkComp, layout_, "shadow_mark");
+    KernelHookStage stage;
+    std::string err;
+    if (!compileKernelStage("shadow/shadow_mark.bk", kBkShadowMarkSrc, "shadow_mark", stage, err)) {
+        LOG_ERROR("PassShadowMark: shadow_mark.bk failed: %s", err.c_str());
+        return false;
+    }
+    VkShaderModule mod = SceneVkShaderModule::create(dev, stage.spirv);
+    pipeline_ = createComputePipeline(dev, mod, layout_, "shadow_mark", stage.entry.c_str());
+    SceneVkShaderModule::destroy(dev, mod);
     return pipeline_ != VK_NULL_HANDLE;
 }
 

@@ -1,0 +1,303 @@
+// Built-in and custom-hook vertex and fragment entry points for depth-only
+// and alpha-cutout shadow casters (PassShadow / SceneCasterDrawer).
+import scene;
+import lighting;
+import vegetation;
+import procedural;
+import bark;
+import mesh;
+import hook;
+
+// ---------------------------------------------------------------------------
+// Built-in Shadow Caster Vertex Stages
+// ---------------------------------------------------------------------------
+
+@vertex fn shadow_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
+    let pos = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+@vertex fn shadow_veg_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(12) in_veg0: vec4<f32>,
+    @location(13) in_veg1: vec4<f32>,
+    @location(14) in_veg2: vec4<f32>,
+    @location(15) in_veg3: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let world_pos0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
+    let n0 = normalize(scene::mul3(scene::mat3_from4(model), in_normal));
+    let sw = vegetation::sway(model, in_veg0, in_veg1, in_veg2, in_veg3, n0, world_pos0, true);
+    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(sw.world_pos, 1.0)));
+}
+
+@vertex fn shadow_instanced_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(8) in_inst_row0: vec4<f32>,
+    @location(9) in_inst_row1: vec4<f32>,
+    @location(10) in_inst_row2: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
+    let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
+    let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+@vertex fn shadow_instanced_veg_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(8) in_inst_row0: vec4<f32>,
+    @location(9) in_inst_row1: vec4<f32>,
+    @location(10) in_inst_row2: vec4<f32>,
+    @location(12) in_veg0: vec4<f32>,
+    @location(13) in_veg1: vec4<f32>,
+    @location(14) in_veg2: vec4<f32>,
+    @location(15) in_veg3: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
+    let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
+    let world_pos0 = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0)).xyz;
+    let n0 = normalize(scene::mul3(scene::mat3_from4(model), scene::mul3(r, in_normal)));
+    let sw = vegetation::sway(model, in_veg0, in_veg1, in_veg2, in_veg3, n0, world_pos0, true);
+    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(sw.world_pos, 1.0)));
+}
+
+@vertex fn shadow_skinned_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(5) in_joints: vec4<u32>,
+    @location(6) in_weights: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let skin = mesh::skin_matrix(in_joints, in_weights);
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let p_skin = scene::mul4(skin, vec4<f32>(in_pos, 1.0)).xyz;
+    let wp0 = scene::mul4(model, vec4<f32>(p_skin, 1.0)).xyz;
+    let pos = p_skin + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+@vertex fn shadow_scatter_vert(
+    @location(0) in_pos: vec3<f32>,
+    push: mesh::ShadowPush
+) {
+    let idx = procedural::scatter_leaf_index(instance_index(), vertex_index());
+    if (!idx.valid) {
+        set_vertex_position(vec4<f32>(2.0, 2.0, 2.0, 1.0));
+        return;
+    }
+    let sl = procedural::scatter_leaf(idx.leaf);
+    if (!sl.valid) {
+        set_vertex_position(vec4<f32>(2.0, 2.0, 2.0, 1.0));
+        return;
+    }
+    let model = mesh::caster_model(push);
+    var wp: vec3<f32> = scene::mul4(model, vec4<f32>(scene::mul3(sl.r, in_pos) + sl.p, 1.0)).xyz;
+    if (procedural::has_vegetation()) {
+        let vr = procedural::vegetation_at(sl.seg, sl.along, sl.p);
+        let card_n = normalize(scene::mul3(scene::mat3_from4(model), sl.r[1]));
+        let sw = vegetation::sway_axis(model, vr.v0, vr.v1, vr.v2, vr.v3, sl.f, card_n, wp, true);
+        wp = sw.world_pos;
+    }
+    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(wp, 1.0)));
+}
+
+@vertex fn shadow_tube_vert(push: mesh::ShadowPush) {
+    let tv = procedural::tube_vertex(vertex_index());
+    if (!tv.valid) {
+        set_vertex_position(vec4<f32>(2.0, 2.0, 2.0, 1.0));
+        return;
+    }
+    let model = mesh::caster_model(push);
+    var wp: vec3<f32> = scene::mul4(model, vec4<f32>(tv.pos, 1.0)).xyz;
+    if (procedural::has_vegetation()) {
+        let vr = procedural::vegetation_at(tv.seg, tv.end_t, tv.pos);
+        let sw = vegetation::sway_axis(model, vr.v0, vr.v1, vr.v2, vr.v3, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), wp, true);
+        wp = sw.world_pos;
+    }
+    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(wp, 1.0)));
+}
+
+@vertex fn shadow_cutout_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
+    let pos = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    mesh::emit_shadow_cutout(push, in_uv, in_color.w, 1.0);
+}
+
+@vertex fn shadow_instanced_cutout_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(8) in_inst_row0: vec4<f32>,
+    @location(9) in_inst_row1: vec4<f32>,
+    @location(10) in_inst_row2: vec4<f32>,
+    @location(11) in_inst_color: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
+    let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
+    let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    mesh::emit_shadow_cutout(push, in_uv, in_color.w, in_inst_color.w);
+}
+
+// ---------------------------------------------------------------------------
+// Custom Hook Shadow Caster Vertex Stages
+// ---------------------------------------------------------------------------
+
+@vertex fn shadow_hook_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(4) in_tangent: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
+    let pos0 = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, in_normal, in_uv, in_color, in_tangent));
+    let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+@vertex fn shadow_hook_cutout_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(4) in_tangent: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
+    let pos0 = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, in_normal, in_uv, in_color, in_tangent));
+    let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    mesh::emit_shadow_cutout(push, v.uv, in_color.w, 1.0);
+}
+
+@vertex fn shadow_hook_instanced_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(4) in_tangent: vec4<f32>,
+    @location(8) in_inst_row0: vec4<f32>,
+    @location(9) in_inst_row1: vec4<f32>,
+    @location(10) in_inst_row2: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, in_pos, in_normal, in_uv, in_color, in_tangent));
+    let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
+    let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
+    let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, v.pos) + trans, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+@vertex fn shadow_hook_instanced_cutout_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(4) in_tangent: vec4<f32>,
+    @location(8) in_inst_row0: vec4<f32>,
+    @location(9) in_inst_row1: vec4<f32>,
+    @location(10) in_inst_row2: vec4<f32>,
+    @location(11) in_inst_color: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let model = mesh::caster_model(push);
+    let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, in_pos, in_normal, in_uv, in_color, in_tangent));
+    let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
+    let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
+    let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, v.pos) + trans, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    mesh::emit_shadow_cutout(push, v.uv, in_color.w, in_inst_color.w);
+}
+
+@vertex fn shadow_hook_skinned_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_normal: vec3<f32>,
+    @location(2) in_uv: vec2<f32>,
+    @location(3) in_color: vec4<f32>,
+    @location(4) in_tangent: vec4<f32>,
+    @location(5) in_joints: vec4<u32>,
+    @location(6) in_weights: vec4<f32>,
+    push: mesh::ShadowPush
+) {
+    let skin = mesh::skin_matrix(in_joints, in_weights);
+    let skin_n = scene::mat3_from4(skin);
+    let model = mesh::caster_model(push);
+    let inv_m3 = scene::inv3(scene::mat3_from4(model));
+    let p_skin = scene::mul4(skin, vec4<f32>(in_pos, 1.0)).xyz;
+    let n_skin = scene::mul3(skin_n, in_normal);
+    let wp0 = scene::mul4(model, vec4<f32>(p_skin, 1.0)).xyz;
+    let pos0 = p_skin + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
+    let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, n_skin, in_uv, in_color, in_tangent));
+    let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
+    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+}
+
+// ---------------------------------------------------------------------------
+// Shadow Caster Fragment Stages
+// ---------------------------------------------------------------------------
+
+@fragment fn shadow_frag() {
+}
+
+@fragment fn shadow_cutout_frag(
+    @location(0) in_cut_uv: vec2<f32>,
+    @location(1) in_cut_alpha: f32,
+    @location(2) in_cut: vec4<f32>
+) {
+    var uv: vec2<f32> = in_cut_uv;
+    let cols = (in_cut.z + 0.5) as i32;
+    let rows = (in_cut.w + 0.5) as i32;
+    if (cols != 1 || rows != 1) {
+        let cell = clamp((in_cut.y * 256.0) as i32, 0, cols * rows - 1);
+        let cell_size = vec2<f32>(1.0 / (cols as f32), 1.0 / (rows as f32));
+        let cell_xy = vec2<f32>((cell % cols) as f32, (cell / cols) as f32);
+        uv = (cell_xy + fract(in_cut_uv)) * cell_size;
+    }
+    if (mesh::albedo_map.sample(uv).w * in_cut_alpha < in_cut.x) {
+        discard_fragment();
+    }
+}

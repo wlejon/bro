@@ -1,0 +1,161 @@
+// The shadow pages' marking (vulkan/shadow/pass_shadow_mark.h): each
+// invocation reads the depth at the centre of its block of pixels, takes it
+// back to a camera-relative position, and for each shadowed light sets the
+// request bit of every page the lit shaders' lookup of that point wants
+// (common/lighting.bk's light_shadow): the sun's clipmap level its footprint
+// picks (or the first coarser one whose window holds it) and the guard
+// SP_GUARD_LEVELS coarser, and the search level and the two finer (a wide
+// penumbra's); a local light's mip and its one-page top. A point near its
+// page's edge marks the neighbour the filter and the normal offset may reach.
+
+const SP_PAGE: i32 = 128;
+const SP_BORDER: i32 = 4;
+const SP_WINDOW: i32 = 64;
+const SP_LOCAL: i32 = 8;
+const SP_LOCAL_MIPS: i32 = 4;
+const SP_GUARD_LEVELS: i32 = 3;
+const SP_MARK_MAPS: i32 = 48;
+
+struct ShadowMapGpu {
+    matrix: mat4f,
+    info: vec4<f32>,
+    bias: vec4<f32>,
+    depth: vec4<f32>,
+}
+
+struct ShadowMarkUBO {
+    inv_view_proj: mat4f,
+    grid: vec4<f32>,
+    view: vec4<f32>,
+    soft: vec4<f32>,
+    lights: array<vec4<f32>, 32>,
+    light_pos: array<vec4<f32>, 32>,
+    maps: array<ShadowMapGpu, 48>,
+}
+
+@binding(0, 0) var u: uniform<ShadowMarkUBO>;
+@binding(0, 1) var scene_depth: sampler2d<vec4<f32>>;
+@binding(0, 2) var requests: buffer<u32>;
+
+fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w;
+}
+
+fn sp_local_mip_first(m: i32) -> i32 {
+    if (m == 0) { return 0; }
+    if (m == 1) { return 64; }
+    if (m == 2) { return 80; }
+    return 84;
+}
+
+fn shadow_clipmap_entry(map: ShadowMapGpu, page: vec2<i32>) -> i32 {
+    let ox = map.info.z as i32;
+    let oy = map.info.w as i32;
+    let sx = (ox + page.x) & (SP_WINDOW - 1);
+    let sy = (oy + page.y) & (SP_WINDOW - 1);
+    return (map.info.x as i32) + sy * SP_WINDOW + sx;
+}
+
+fn shadow_local_entry(map: ShadowMapGpu, mip: i32, page: vec2<i32>) -> i32 {
+    let n = SP_LOCAL >> mip;
+    return (map.info.x as i32) + sp_local_mip_first(mip) + page.y * n + page.x;
+}
+
+fn shadow_cube_face(to_frag: vec3<f32>) -> i32 {
+    let a = abs(to_frag);
+    if (a.x >= a.y && a.x >= a.z) { return to_frag.x > 0.0 ? 0 : 1; }
+    if (a.y >= a.z) { return to_frag.y > 0.0 ? 2 : 3; }
+    return to_frag.z > 0.0 ? 4 : 5;
+}
+
+fn mark_entry(e: i32) {
+    let eu = e as u32;
+    let w = eu >> 5u;
+    let m = 1u << (eu & 31u);
+    if ((requests[w] & m) == 0u) {
+        requests.atomic_or(w, m);
+    }
+}
+
+fn mark_clipmap(m: i32, pos: vec3<f32>) -> bool {
+    let map = u.maps[m];
+    let pc = mul4(map.matrix, vec4<f32>(pos, 1.0)).xy * (SP_WINDOW as f32);
+    if (pc.x < 0.0 || pc.y < 0.0 || pc.x >= (SP_WINDOW as f32) || pc.y >= (SP_WINDOW as f32)) {
+        return false;
+    }
+    let fl = floor(pc);
+    let p = vec2<i32>(fl.x as i32, fl.y as i32);
+    mark_entry(shadow_clipmap_entry(map, p));
+    let t = (pc - fl) * (SP_PAGE as f32);
+    let dx = t.x < (SP_BORDER as f32) ? -1 : (t.x > ((SP_PAGE - SP_BORDER) as f32) ? 1 : 0);
+    let dy = t.y < (SP_BORDER as f32) ? -1 : (t.y > ((SP_PAGE - SP_BORDER) as f32) ? 1 : 0);
+    if (dx != 0 && p.x + dx >= 0 && p.x + dx < SP_WINDOW) {
+        mark_entry(shadow_clipmap_entry(map, p + vec2<i32>(dx, 0)));
+    }
+    if (dy != 0 && p.y + dy >= 0 && p.y + dy < SP_WINDOW) {
+        mark_entry(shadow_clipmap_entry(map, p + vec2<i32>(0, dy)));
+    }
+    return true;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn shadow_mark() {
+    let size = vec2<i32>(u.grid.x as i32, u.grid.y as i32);
+    let step = u.grid.z as i32;
+    let px = vec2<i32>(global_id_x(), global_id_y()) * step + step / 2;
+    if (px.x >= size.x || px.y >= size.y) { return; }
+    let depth = scene_depth.fetch(px, 0).x;
+    if (depth <= 0.0) { return; }
+    let ndc = (vec2<f32>(px.x as f32, px.y as f32) + 0.5) / vec2<f32>(size.x as f32, size.y as f32) * 2.0 - 1.0;
+    let h = mul4(u.inv_view_proj, vec4<f32>(ndc.x, ndc.y, depth, 1.0));
+    let pos = h.xyz / h.w;
+    let dist = length(pos);
+    let footprint = u.view.x > 0.0 ? (dist * u.view.x) : u.view.y;
+
+    let lights = u.grid.w as i32;
+    for (var k: i32 = 0; k < lights; k += 1) {
+        let l = u.lights[k];
+        let first = l.x as i32;
+        let count = l.y as i32;
+        let kind = l.z as i32;
+        if (!(l.w > 0.0 && dist > l.w)) {
+            if (kind == 0) {
+                let lf = log2(max(footprint / u.view.z, 1.0e-9));
+                var level: i32 = clamp(floor(lf) as i32, 0, count - 1);
+                while (level < count && !mark_clipmap(first + level, pos)) {
+                    level += 1;
+                }
+                if (level < count) {
+                    mark_clipmap(first + min(level + SP_GUARD_LEVELS, count - 1), pos);
+                    let search = u.soft.x as i32;
+                    if (search >= 0 && level < search) {
+                        let s_end = min(search, count - 1);
+                        for (var s: i32 = max(search - 2, level + 1); s <= s_end; s += 1) {
+                            mark_clipmap(first + s, pos);
+                        }
+                    }
+                }
+            } else {
+                let to_frag = pos - u.light_pos[k].xyz;
+                let ld = length(to_frag);
+                if (ld <= u.light_pos[k].w) {
+                    let m = first + (kind == 2 ? shadow_cube_face(to_frag) : 0);
+                    let map = u.maps[m];
+                    let c = mul4(map.matrix, vec4<f32>(pos, 1.0));
+                    if (c.w > 0.0) {
+                        let uv = c.xy / c.w;
+                        if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x < 1.0 && uv.y < 1.0) {
+                            let texel0 = max(map.bias.w * ld, 1.0e-9);
+                            let mip = clamp(floor(log2(max(footprint / texel0, 1.0e-9))) as i32, 0, SP_LOCAL_MIPS - 1);
+                            let n = SP_LOCAL >> mip;
+                            let uv_n = uv * (n as f32);
+                            let page = min(vec2<i32>(uv_n.x as i32, uv_n.y as i32), vec2<i32>(n - 1));
+                            mark_entry(shadow_local_entry(map, mip, page));
+                            mark_entry(shadow_local_entry(map, SP_LOCAL_MIPS - 1, vec2<i32>(0, 0)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

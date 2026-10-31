@@ -21,6 +21,7 @@
 #include "bark.bk.src.h"
 #include "mesh.bk.src.h"
 #include "mesh_main.bk.src.h"
+#include "shadow.bk.src.h"
 #include "volume.bk.src.h"
 #include "volume_main.bk.src.h"
 #include "volume_near.bk.src.h"
@@ -73,8 +74,8 @@ brokernel::CompileResult compileVolumeStage(const char* stageFile, const char* s
     return compiler.compile_source(engineSource(stageFile, stageEmbedded), stageFile, opts);
 }
 
-brokernel::CompileResult compileMeshEntry(const char* entry, const std::string& hook,
-                                          const KernelHookModules& modules) {
+brokernel::CompileResult compileMeshOrShadowEntry(const char* stageFile, const char* stageEmbedded, const char* entry,
+                                                  const std::string& hook, const KernelHookModules& modules) {
     brokernel::Compiler compiler;
     registerCommonModules(compiler, modules);
     compiler.register_module("vegetation", engineSource("common/vegetation.bk", kBkVegetationSrc));
@@ -85,7 +86,17 @@ brokernel::CompileResult compileMeshEntry(const char* entry, const std::string& 
     brokernel::CompileOptions opts;
     opts.entry_name = entry;
     opts.compile_cpu = false;
-    return compiler.compile_source(engineSource("draw/mesh_main.bk", kBkMeshMainSrc), "draw/mesh_main.bk", opts);
+    return compiler.compile_source(engineSource(stageFile, stageEmbedded), stageFile, opts);
+}
+
+brokernel::CompileResult compileMeshEntry(const char* entry, const std::string& hook,
+                                          const KernelHookModules& modules) {
+    return compileMeshOrShadowEntry("draw/mesh_main.bk", kBkMeshMainSrc, entry, hook, modules);
+}
+
+brokernel::CompileResult compileShadowEntry(const char* entry, const std::string& hook,
+                                            const KernelHookModules& modules) {
+    return compileMeshOrShadowEntry("shadow/shadow.bk", kBkShadowSrc, entry, hook, modules);
 }
 
 // BRO_KERNEL_SPIRV_DUMP=<dir> writes each stage's SPIR-V there as
@@ -157,6 +168,55 @@ bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string
     {
         std::lock_guard<std::mutex> lock(s_mu);
         s_cache.emplace(entry, out);
+    }
+    return true;
+}
+
+bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::string& err) {
+    static std::mutex s_mu;
+    static std::unordered_map<std::string, KernelHookStage> s_cache;
+    {
+        std::lock_guard<std::mutex> lock(s_mu);
+        auto it = s_cache.find(entry);
+        if (it != s_cache.end()) {
+            out = it->second;
+            return true;
+        }
+    }
+    const brokernel::CompileResult res = compileShadowEntry(entry, "module hook;\n", {});
+    if (!takeStage(res, entry, out, err)) return false;
+    {
+        std::lock_guard<std::mutex> lock(s_mu);
+        s_cache.emplace(entry, out);
+    }
+    return true;
+}
+
+bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,
+                        std::string& err) {
+    static std::mutex s_mu;
+    static std::unordered_map<std::string, KernelHookStage> s_cache;
+    const std::string key = std::string(file) + ":" + entry;
+    {
+        std::lock_guard<std::mutex> lock(s_mu);
+        auto it = s_cache.find(key);
+        if (it != s_cache.end()) {
+            out = it->second;
+            return true;
+        }
+    }
+    brokernel::Compiler compiler;
+    registerCommonModules(compiler, {});
+    compiler.register_module("vegetation", engineSource("common/vegetation.bk", kBkVegetationSrc));
+    compiler.register_module("procedural", engineSource("common/procedural.bk", kBkProceduralSrc));
+    brokernel::CompileOptions opts;
+    opts.entry_name = entry;
+    opts.compile_cpu = false;
+    const brokernel::CompileResult res = compiler.compile_source(engineSource(file, embedded), file, opts);
+    if (!takeStage(res, entry, out, err)) return false;
+    {
+        std::lock_guard<std::mutex> lock(s_mu);
+        s_cache.emplace(key, out);
     }
     return true;
 }
@@ -257,7 +317,7 @@ bool compileKernelShadowHook(SceneVkCustomShader::ShadowCaster caster, bool cuto
     } else if (cutout) {
         vsEntry = "shadow_hook_cutout_vert";
     }
-    const brokernel::CompileResult vsRes = compileMeshEntry(vsEntry, hook, modules);
+    const brokernel::CompileResult vsRes = compileShadowEntry(vsEntry, hook, modules);
     if (!takeStage(vsRes, vsEntry, out, err)) {
         err = file + ": " + err;
         return false;
