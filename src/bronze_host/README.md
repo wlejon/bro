@@ -64,8 +64,13 @@ frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
 `minor`, `full`, `start`, `mark`, `finish`, `sweep`). Each frame:
 
 - a request from `hostNotifyIdleFrame` (idle, periodic, memory pressure on a
-  quiet page) or the boot is a stop-the-world full collection; memory pressure
-  on a busy page starts a marking cycle instead;
+  quiet page) is a stop-the-world full collection: these come only on a
+  quiescent page, whose next frame is not waiting. Memory pressure on a busy
+  page starts a marking cycle instead, and so does the boot: the first slot
+  starts a cycle (once a sweep the boot left is swept), paced like any other,
+  where a stop-the-world full of a page that built a large heap in its boot
+  turn was all of its marking in the first frame (94 ms at 1 GB). Under
+  `BRO_GC_INCREMENTAL=0` the boot is a full collection, as before;
 - a minor collection once eden is half its adaptive limit;
 - the old generation incrementally (bronze `embed_gc.h`), by paced marking
   cycles. A cycle starts as late as lets it finish by 80% of the old
@@ -80,14 +85,20 @@ frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
   slice of what is left of the budget after a minor collection, never less
   than 0.25 ms, and more (up to twice the budget) when the estimate says the
   marking left would not be done by 80% at it. When a slice has drained the
-  grey work, the next frame runs a minor collection if eden is a tenth full,
-  and the one after finishes the cycle on its own (it evacuates the whole
-  young generation, so it is kept small); then sweep slices from the same
+  grey work, the next frame runs a minor collection if eden is a tenth full
+  and a slice after it to drain what it promoted, and the one after finishes
+  the cycle on its own (it marks the live young generation in place, so eden
+  is kept to one frame's allocation); then sweep slices from the same
   budget until swept. Only then can the next cycle start.
 - A cycle still marking at 90% of the threshold is finished at once, one
   longer pause between frames, before the heap's own trigger would finish it
-  at an allocation inside a frame. A host that never slices still gets the
-  heap's own collections.
+  at an allocation inside a frame. While a cycle marks, the threshold is the
+  heap's plus brass's cycle headroom (`HeapConfig::cycle_headroom`, a
+  quarter; `BRASS_GC_CYCLE_HEADROOM=0` for A/B), the growth at which the heap
+  itself would finish it, so a cycle that falls behind (the boot's, on a
+  threshold left from a heap built in one turn) still finishes at its slices
+  rather than in one pause of the marking left (32 ms at 1 GB). A host that
+  never slices still gets the heap's own collections.
 - A slice marks on brass's parked marker threads (`BRASS_GC_MARK_POOL=0`
   creates and joins them per slice, as before, which cost a 0.4 ms slice
   most of its parallelism). The same threads copy a parallel minor

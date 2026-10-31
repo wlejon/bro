@@ -88,7 +88,13 @@ constexpr double kDefaultMarkMsPerMB = 0.75;
 // budget gets larger slices, up to kCyclePaceMaxFactor times the budget.
 constexpr double kCyclePaceMaxFactor = 2.0;
 // And a cycle still marking at this is finished now, one longer pause
-// between frames, rather than by the heap's trigger inside a frame.
+// between frames, rather than by the heap's trigger inside a frame. While a
+// cycle marks, the threshold the heap reports is its own plus brass's
+// HeapConfig::cycle_headroom (a quarter): the growth that would finish the
+// cycle at an allocation. So the fills a cycle is paced and fallen back at
+// are of that, and a cycle behind its estimate (one the boot started on a
+// threshold left from a heap built in one turn) has that room to finish at
+// its slices.
 constexpr double kCycleFallbackFill = 0.9;
 // The promotion rate's running average: the weight of each frame.
 constexpr double kPromotionRateWeight = 0.05;
@@ -109,10 +115,11 @@ constexpr double kMinSweepSliceMs = 0.05;
 // The finish marks the young generation in place with the old one (brass
 // HeapConfig::finish_promote_all) and rescans the dirty cards, so its pause
 // grows with the live young data. A cycle whose marking is done with eden
-// this full runs a minor collection first, in a frame of its own, which
-// leaves one frame's allocation in eden; what that minor promoted is grey,
-// so the next frames' slices drain it before the finish, which then has
-// only what the program shaded since.
+// this full runs a minor collection first, and a slice after it in the same
+// slot, which leaves one frame's allocation in eden at the finish; what that
+// minor promoted is grey, so that slice (and the next frames', if it is not
+// enough) drain it before the finish, which then has only what the program
+// shaded since.
 constexpr double kPreFinishEdenFill = 0.1;
 
 double s_idleAccumulatorMs = 0.0;
@@ -127,8 +134,13 @@ const char* s_requested = nullptr;
 bool s_requestedIsIdleSpell = false;  // it counts as the idle spell's collection
 // The page's boot data is still young: the first frames' slot promotes it
 // with a full collection, so it is copied once rather than aged through two
-// minor collections mid-animation.
+// minor collections mid-animation. Incrementally (BRO_GC_INCREMENTAL) the
+// boot's collection is a marking cycle instead (s_bootCycle), started once
+// a sweep left by the boot is done: a stop-the-world full of a page that
+// built a large heap in its boot turn is that heap's whole marking in one
+// pause (94 ms at 1 GB), in the first frame.
 bool s_bootCollected = false;
+bool s_bootCycle = false;
 std::atomic<int> s_evalDepth{0};
 
 // The marking cycle this file opened (hostCollectBetweenFrames). The heap may
@@ -264,6 +276,7 @@ namespace {
 void noteFullCollected() {
     s_requested = nullptr;
     s_bootCollected = true;
+    s_bootCycle = false;
     s_pressurePending = false;
     s_timeSinceLastGcMs = 0.0;
     s_timeSinceSampleMs = 0.0;
@@ -342,6 +355,7 @@ void hostResetIdleGCTimer() {
     s_collectedForCurrentIdle = false;
     s_requested = nullptr;
     s_bootCollected = false;
+    s_bootCycle = false;
 }
 
 void hostNotifyIdleFrame(double dtMs) {
@@ -415,14 +429,18 @@ struct FrameGc {
     }
 };
 
-void minorIfDue(const bronze::embed::HeapPressure& p, FrameGc& f) {
-    if (p.edenCapacity == 0 ||
-        static_cast<double>(p.edenUsed) < kBetweenFramesEdenFill * static_cast<double>(p.edenCapacity))
-        return;
+void runMinor(FrameGc& f) {
     const auto t0 = std::chrono::steady_clock::now();
     bronze::embed::collectYoungGarbage();
     f.minorMs = msSince(t0);
     f.work |= kGcWorkMinor;
+}
+
+void minorIfDue(const bronze::embed::HeapPressure& p, FrameGc& f) {
+    if (p.edenCapacity == 0 ||
+        static_cast<double>(p.edenUsed) < kBetweenFramesEdenFill * static_cast<double>(p.edenCapacity))
+        return;
+    runMinor(f);
 }
 
 double fillOf(const bronze::embed::HeapPressure& p) {
@@ -550,22 +568,22 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
             if (!s_cycle.preFinishMinor && p.edenCapacity > 0 &&
                 static_cast<double>(p.edenUsed) >= kPreFinishEdenFill * static_cast<double>(p.edenCapacity)) {
                 s_cycle.preFinishMinor = true;
-                // What it promotes is grey: slices again until it is drained.
+                // What it promotes is grey: a slice in this slot drains it
+                // (more slices after, if it does not), so the finish has
+                // one frame's allocation young rather than two.
                 s_cycle.markDone = false;
-                const auto t0 = clock::now();
-                bronze::embed::collectYoungGarbage();
-                f.minorMs = msSince(t0);
-                f.work |= kGcWorkMinor;
+                runMinor(f);
                 f.note = "before the finish";
+            } else {
+                // The frame's work is the finish alone: the young data it
+                // marks is the last minor's survivors and about a frame's
+                // allocation, the grey work what the program shaded since
+                // the last slice.
+                finishCycle(f, fill, nullptr);
                 return;
             }
-            // The frame's work is the finish alone: the young data it marks
-            // is the last minor's survivors and about a frame's allocation,
-            // the grey work what the program shaded since the last slice.
-            finishCycle(f, fill, nullptr);
-            return;
         }
-        minorIfDue(p, f);
+        if (!(f.work & kGcWorkMinor)) minorIfDue(p, f);
         const double paced = markBudgetMs(p);
         if (paced > frameBudgetMs()) {
             s_cycle.behind = true;
@@ -581,10 +599,17 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         s_cycle.sliceMaxMs = std::max(s_cycle.sliceMaxMs, f.markMs);
         return;
     }
-    if (p.marking) return;  // a cycle someone else opened: theirs to drive
+    if (p.marking) {
+        // A cycle someone else opened: theirs to drive, and the boot's.
+        s_bootCycle = false;
+        return;
+    }
     minorIfDue(p, f);
     const double budget = frameBudgetMs() - f.total();
+    // The boot's cycle waits for the sweep like a paced one (it is not due:
+    // its start would finish the sweep in its own pause).
     const bool due = cycleDue(p, fill);
+    const bool wanted = due || s_bootCycle;
     if (p.sweeping) {
         if (budget < kMinSweepSliceMs && !due) return;
         const auto t0 = clock::now();
@@ -608,12 +633,14 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         logCycleEnd("swept by the heap");
         s_cycle = Cycle{};
     }
-    if (!due) return;
+    if (!wanted) return;
     const auto t0 = clock::now();
     if (!bronze::embed::startGcCycle()) return;
     f.startMs = msSince(t0);
     f.work |= kGcWorkStart;
     openCycle(f.startMs, p);
+    if (s_bootCycle && !due) f.note = "boot";
+    s_bootCycle = false;
 }
 
 }  // namespace
@@ -643,7 +670,14 @@ uint32_t hostCollectBetweenFrames() {
     // rather than in the first collection that wants them.
     hostStartGcHelpers();
     FrameGc f;
-    if (!s_bootCollected) requestFor("boot", /*idleSpell=*/false);
+    if (!s_bootCollected) {
+        if (incrementalEnabled()) {
+            s_bootCollected = true;
+            s_bootCycle = true;
+        } else {
+            requestFor("boot", /*idleSpell=*/false);
+        }
+    }
     // A busy page under memory pressure is collected by a cycle like any
     // other (its native memory comes back at the finish, a few frames on)
     // rather than in one pause in the middle of what keeps it busy.
@@ -664,6 +698,12 @@ uint32_t hostCollectBetweenFrames() {
         f.log();
         return f.work;
     }
+    // What is left stops the world even incrementally, as it must or may:
+    // the idle, periodic and quiet-pressure collections are asked for only on
+    // a quiescent page (no animation frame pending, nothing in flight), whose
+    // next frame is not waiting on this one, and which wants its memory back
+    // now rather than a cycle's frames on; and BRO_GC_INCREMENTAL=0 asks for
+    // every collection so.
     if (s_requested) {
         const bool wasIdle = s_collectedForCurrentIdle;
         const bool idleSpell = s_requestedIsIdleSpell;
