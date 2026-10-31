@@ -106,10 +106,13 @@ constexpr double kDefaultFrameBudgetMs = 0.5;
 constexpr double kMinMarkSliceMs = 0.25;
 // A sweep slice shorter than this waits for the next frame.
 constexpr double kMinSweepSliceMs = 0.05;
-// The finish evacuates the whole young generation (every survivor promoted
-// and scanned) and rescans the dirty cards, so a cycle whose marking is done
-// with eden this full runs a minor collection first, in a frame of its own,
-// and finishes in the next one, with one frame's allocation young.
+// The finish marks the young generation in place with the old one (brass
+// HeapConfig::finish_promote_all) and rescans the dirty cards, so its pause
+// grows with the live young data. A cycle whose marking is done with eden
+// this full runs a minor collection first, in a frame of its own, which
+// leaves one frame's allocation in eden; what that minor promoted is grey,
+// so the next frames' slices drain it before the finish, which then has
+// only what the program shaded since.
 constexpr double kPreFinishEdenFill = 0.1;
 
 double s_idleAccumulatorMs = 0.0;
@@ -547,6 +550,8 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
             if (!s_cycle.preFinishMinor && p.edenCapacity > 0 &&
                 static_cast<double>(p.edenUsed) >= kPreFinishEdenFill * static_cast<double>(p.edenCapacity)) {
                 s_cycle.preFinishMinor = true;
+                // What it promotes is grey: slices again until it is drained.
+                s_cycle.markDone = false;
                 const auto t0 = clock::now();
                 bronze::embed::collectYoungGarbage();
                 f.minorMs = msSince(t0);
@@ -554,9 +559,9 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
                 f.note = "before the finish";
                 return;
             }
-            // The frame's work is the finish alone: the young generation it
-            // evacuates is about one frame's allocation, the grey work what
-            // the program shaded since the last slice.
+            // The frame's work is the finish alone: the young data it marks
+            // is the last minor's survivors and about a frame's allocation,
+            // the grey work what the program shaded since the last slice.
             finishCycle(f, fill, nullptr);
             return;
         }
