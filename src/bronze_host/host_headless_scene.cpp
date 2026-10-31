@@ -295,7 +295,7 @@ void installHeadlessScenePerf(engine::Engine& engine,
             // A frame is one tick of the clock (advanceTime runs one at most
             // 16 ms long): the page's frame and the render it asks for.
             const double stepMs = std::clamp(optNumber(opts, "stepMs", budget), 0.01, 16.0);
-            const ev::Persistent step(ev::isObject(opts) ? ev::getProperty(opts, "step") : ev::undefined());
+            ev::Persistent step(ev::isObject(opts) ? ev::getProperty(opts, "step") : ev::undefined());
             if (!ev::isUndefined(step.get()) && !ev::isFunction(step.get()))
                 return ev::throwTypeError("measure: step must be a function");
             HeldClock clock(engine, held);
@@ -399,6 +399,63 @@ void installHeadlessScenePerf(engine::Engine& engine,
             j["over"] = spikes.size();
             j["spill"] = spill;
             j["spikes"] = spikes;
+
+            // converge: N (or { maxFrames, kinds }): then frames with no
+            // step, paced and measured alike, until nothing is pending
+            // (pendingWork, of `kinds` if given) or N frames: how long the
+            // view takes to finish refining after the motion, at the frame
+            // rate the budget stands for.
+            const ev::Persistent conv(ev::isObject(opts) ? ev::getProperty(opts, "converge") : ev::undefined());
+            if (!ev::isUndefined(conv.get())) {
+                int maxFrames = 600;
+                std::vector<std::string> kinds;
+                if (ev::isObject(conv.get())) {
+                    maxFrames = static_cast<int>(std::max(1.0, optNumber(conv.get(), "maxFrames", 600)));
+                    const ev::Persistent k(ev::getProperty(conv.get(), "kinds"));
+                    if (ev::isObject(k.get())) {
+                        const uint32_t n = static_cast<uint32_t>(optNumber(k.get(), "length", 0));
+                        for (uint32_t q = 0; q < n; ++q) {
+                            const Value e = ev::getProperty(k.get(), std::to_string(q).c_str());
+                            if (ev::isString(e)) kinds.push_back(ev::toUtf8(e));
+                        }
+                    }
+                } else {
+                    maxFrames = static_cast<int>(std::max(1.0, ev::isNumber(conv.get()) ? ev::toDouble(conv.get()) : 600.0));
+                }
+                const auto pendingNow = [&engine, &kinds] {
+                    std::vector<std::string> all = engine.scenePendingWork(), some;
+                    if (kinds.empty()) return all;
+                    for (std::string& r : all)
+                        if (std::find(kinds.begin(), kinds.end(), r.substr(0, r.find(':'))) != kinds.end())
+                            some.push_back(std::move(r));
+                    return some;
+                };
+                step.set(ev::undefined());
+                std::vector<double> cTotal, cRefine;
+                int cSpill = 0, cOver = 0, n = 0;
+                std::vector<std::string> pending = pendingNow();
+                for (; !pending.empty() && n < maxFrames; ++n, ++i) {
+                    if (!frame()) return ev::throwValue(thrown.get());
+                    const double ms = engine.gpuFrameMs(true);
+                    const double rm = refine();
+                    double km = 0;
+                    for (const auto& [name, v] : frameKernels(engine)) km += v;
+                    cTotal.push_back(ms + km);
+                    cRefine.push_back(rm);
+                    if (ms + km > budget) ++cOver;
+                    if (ms + km + rm > budget) ++cSpill;
+                    pending = pendingNow();
+                }
+                nlohmann::json c;
+                c["settled"] = pending.empty();
+                c["frames"] = n;
+                c["pending"] = pending;
+                c["total"] = spreadOf(cTotal);
+                c["refine"] = spreadOf(cRefine);
+                c["over"] = cOver;
+                c["spill"] = cSpill;
+                j["converge"] = c;
+            }
             return fromJson(j);
         });
     // perf.asyncShaders([on]): whether frames skip what is still compiling

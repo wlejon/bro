@@ -32,8 +32,12 @@ if (!scene) {
     }
     let rafs = 0;
     const bgBuf = gpuKernel ? bro.kernel.createBuffer(65536 * 4) : null;
+    // A tile cache updated each frame, once the convergence check sets it.
+    let cache = null;
+    const view = { position: [500, 5, 500], fov: 60, viewportHeight: 1080 };
     const tick = () => {
         rafs++;
+        if (cache) cache.update(view);
         if (k) k.dispatch([65536], buf, rafs);
         // And refinement for the gap after the frame, as a tile cache's production.
         if (k) bro.kernel.background(() => k.dispatch([65536], bgBuf, rafs));
@@ -68,6 +72,27 @@ if (!scene) {
     assert(all.over === 4 && all.spikes.length === 4, `every frame over a zero budget (${all.over})`);
     assert(all.spill === 4, `and every one spilled (${all.spill})`);
     assert(all.spikes.every((s, i) => s.frame === i && s.total === s.gpu + s.kernels), 'a spike names its frame and its ms');
+
+    // converge: then frames with no step until nothing (of `kinds`) is
+    // pending, measured alike: here a tile cache refining for a view.
+    if (gpuKernel) {
+        cache = bro.tiles.createCache({
+            domain: { type: 'plane', origin: [0, 0], size: 1000, roots: [1, 1] },
+            tileSize: 8, capacity: 128, maxLevel: 4, pixelsPerCell: 2, layers: { height: 4 }, producePerUpdate: 2,
+            produce(batch) { k.dispatch([8 * 8 * batch.count], this.layer('height'), 1); },
+        });
+        let steps = 0;
+        const c = perf.measure({ frames: 2, step: () => { steps++; }, converge: { maxFrames: 400, kinds: ['tiles'] } });
+        assert(steps === 2, `step runs for the measured frames only (${steps})`);
+        assert(c.converge && c.converge.settled && c.converge.frames > 0,
+               `then frames until the tiles are produced (${JSON.stringify(c.converge && { s: c.converge.settled, f: c.converge.frames, p: c.converge.pending })})`);
+        assert(cache.pending === 0, `and they are (${cache.pending})`);
+        assert(typeof c.converge.total.mean === 'number' && typeof c.converge.refine.mean === 'number' &&
+               typeof c.converge.spill === 'number' && typeof c.converge.over === 'number', 'measured as the run is');
+        const none = perf.measure({ frames: 1, converge: { kinds: ['tiles'] } });
+        assert(none.converge.settled && none.converge.frames === 0, `nothing pending: no frames (${none.converge.frames})`);
+        cache = null;
+    }
 
     // A step that throws ends the run with its throw; a step not a function is a TypeError.
     let threw = null;
