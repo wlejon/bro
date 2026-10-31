@@ -450,6 +450,13 @@ void decorateCache(ev::ObjectBuilder& b) {
         writeLookup(*c);
         return ev::undefined();
     });
+    b.def("refresh", 0, [](Value self, std::span<const Value>) -> Value {
+        cacheOf(self, "TileCache.refresh")->tree.refresh();
+        return ev::undefined();
+    });
+    b.accessor("stale", [](Value self, std::span<const Value>) -> Value {
+        return ev::fromDouble(static_cast<double>(cacheOf(self, "TileCache.stale")->tree.stale()));
+    });
     b.accessor("lookup", [](Value self, std::span<const Value>) -> Value {
         return brokernel::api::bufferValue(cacheOf(self, "TileCache.lookup")->lookup);
     });

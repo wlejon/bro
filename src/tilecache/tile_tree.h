@@ -199,6 +199,15 @@ public:
 
     /// Forget every tile (a world's producer changed): all slots free.
     void clear();
+    /// Every ready tile's cells are out of date (what its producer reads
+    /// changed: a sun, a parameter): each stays ready, drawn and found, and
+    /// takeProductions hands the wanted ones out again, after the missing
+    /// ones, into their own slots, a parent before its children, so the old
+    /// cells serve until the new are ready. A tile taken before the refresh
+    /// is out of date once it is ready, and is handed out again too.
+    void refresh();
+    /// Wanted tiles ready but out of date.
+    uint32_t stale() const;
 
 private:
     enum class State : uint8_t { Missing, Producing, Ready };
@@ -227,6 +236,11 @@ private:
         State state = State::Missing;
         uint64_t batch = 0;        // the takeProductions call that took it
         uint64_t lastWanted = 0;   // == frame_: wanted by the last select
+        // The refresh its cells are of (< generation_: out of date), the one
+        // it was taken at, and whether a ready tile is being produced again.
+        uint64_t gen = 0;
+        uint64_t takenGen = 0;
+        bool again = false;
         // The last select's verdict.
         double error = 0;    // > 1: its cells project larger than pixelsPerCell
         bool leaf = true;
@@ -268,6 +282,11 @@ private:
     Config config_;
     uint64_t frame_ = 0;
     uint64_t batch_ = 0;   // takeProductions calls
+    uint64_t generation_ = 0;   // refresh() calls
+    bool stale(const Node& n) const { return n.state == State::Ready && n.gen < generation_; }
+    /// Ready and up to date, or taken (fresh or again) by an earlier batch:
+    /// what a child may be produced from.
+    bool before(const Node& p) const;
     Vec3d eye_;                       // the last select's view position
     std::vector<Node> nodes_;
     std::vector<int32_t> freeNodes_;

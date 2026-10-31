@@ -253,7 +253,8 @@ const terrain = bro.tiles.createCache({
 //                   parent (tiles::parent_of) costs one search
 // cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
 //                   tile's reported [lo, hi] at 2 * slot; else null
-// cache.pending     wanted tiles not yet produced (0 once settled); every
+// cache.pending     wanted tiles not yet produced or out of date (0 once
+//                   settled); every
 //                   live cache's, and its range batches in flight, report
 //                   to perf.pendingWork / perf.settle as `tiles`
 // cache.wanted      tiles the last update selected
@@ -264,6 +265,19 @@ const terrain = bro.tiles.createCache({
 //                   batchSize, the most the next batch holds (as paced)
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
+// cache.refresh()   every ready tile is out of date (what produce reads has
+//                   changed: a sun, a parameter) but stays ready, drawn and
+//                   in the lookup; the next updates hand the wanted ones to
+//                   produce again, into their own slots, after the missing
+//                   tiles and ranked as they are, a parent's batch before
+//                   its children's (a child refined from its parent reads
+//                   the new parent), so the view keeps its detail while it
+//                   changes over. A texture filled from a layer changes as
+//                   each batch is done; a shader reading the pool itself
+//                   may read a slot as it is rewritten. A tile no view wants
+//                   stays out of date until one does. A batch taken before
+//                   the refresh is out of date once ready, and goes again.
+// cache.stale       wanted tiles out of date since a refresh (in pending)
 
 function frame(camera, patch) {
     terrain.update({ position: camera.position, forward: camera.forward, up: camera.up,

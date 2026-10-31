@@ -10,6 +10,8 @@
 //   - produce takes the update's batch in one call, its table on the GPU;
 //   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
+//   - a refresh produces every wanted tile again in place, parents first,
+//     still drawn meanwhile;
 //   - the batches pace themselves by the frames;
 //   - a layer's pool binds to a scene node, as a buffer or a texture array
 //     copied slot by slot as tiles are produced; bad options are refused.
@@ -203,6 +205,41 @@ if (!bro.kernel.available || !bro.tiles) {
     failLevel = -1;
     assert(settle(flaky, near), 'the next updates produce them');
     assert(Math.max(...flaky.drawn.map((t) => t.level)) === deepest, 'and the cache refines as far as before');
+
+    // A refresh: every wanted tile is produced again into its own slot, a
+    // parent's batch before its children's, the drawn set unchanged meanwhile.
+    let seen = [];
+    const redo = makeCache({
+        produce: function (batch) {
+            seen.push(batch.tiles.map((t) => ({ key: tileKey(t), slot: t.slot, parent: t.parent ? t.parent.slot : -1 })));
+            produce.call(this, batch);
+        },
+    });
+    assert(settle(redo, near), 'a cache to refresh settles');
+    const slotOf = new Map(seen.flat().map((t) => [t.key, t.slot]));
+    const drawnKeys = redo.drawn.map(tileKey).sort().join();
+    const producedBefore = redo.stats.produced;
+    seen = [];
+    redo.refresh();
+    assert(redo.stale === redo.wanted && redo.pending === redo.wanted && redo.stale > 0,
+           `a refresh leaves every wanted tile out of date (${redo.stale} of ${redo.wanted})`);
+    let keptDrawn = true, settled = false;
+    for (let i = 0; i < 64 && !settled; i++) {
+        redo.update(near);
+        keptDrawn = keptDrawn && redo.drawn.map(tileKey).sort().join() === drawnKeys;
+        settled = redo.pending === 0;
+        advanceTime(16);
+    }
+    const again = seen.flat();
+    assert(settled && redo.stale === 0, `the updates produce them again (${redo.pending} pending)`);
+    assert(keptDrawn, 'the drawn tiles stay drawn while they are produced again');
+    assert(again.length === redo.wanted && again.every((t) => slotOf.get(t.key) === t.slot) &&
+           redo.stats.produced === producedBefore + again.length && redo.stats.evicted === 0,
+           `each once, into its own slot (${again.length} for ${redo.wanted} wanted)`);
+    const batchOf = new Map();
+    seen.forEach((b, i) => b.forEach((t) => batchOf.set(t.slot, i)));
+    assert(again.every((t) => t.parent < 0 || batchOf.get(t.parent) < batchOf.get(t.slot)),
+           'a parent in an earlier batch than its children');
 
     // The batches pace themselves by the frames: a quarter of
     // producePerUpdate at first, then a

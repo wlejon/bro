@@ -329,6 +329,23 @@ void TileTree::evict(Node& n) {
     slotNode_[n.slot] = -1;
     n.slot = -1;
     n.state = State::Missing;
+    n.again = false;
+}
+
+void TileTree::refresh() { ++generation_; }
+
+uint32_t TileTree::stale() const {
+    uint32_t n = 0;
+    for (const int32_t i : wanted_)
+        if (stale(nodes_[i])) ++n;
+    return n;
+}
+
+bool TileTree::before(const Node& p) const {
+    // A batch is produced at once (one dispatch over all of it), so a child
+    // cannot read a parent beside it; an earlier batch runs first.
+    if (p.state == State::Producing || p.again) return p.batch != batch_ + 1;
+    return p.state == State::Ready && p.gen == generation_;
 }
 
 std::vector<Production> TileTree::takeProductions(uint32_t n) {
@@ -370,19 +387,17 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         Node& m = nodes_[i];
         int32_t parentSlot = -1;
         if (m.parent >= 0) {
-            // Ready, or taken by an earlier batch, which runs first: a batch
-            // is produced at once (one dispatch over all of it), so a child
-            // cannot read a parent beside it.
+            // Ready and up to date, or taken by an earlier batch.
             const Node& p = nodes_[m.parent];
-            const bool before = p.state == State::Ready || (p.state == State::Producing && p.batch != batch_ + 1);
-            if (p.slot < 0 || !before) continue;
+            if (p.slot < 0 || !before(p)) continue;
             parentSlot = p.slot;
         }
         if (freeSlots_.empty()) {
             if (!victimsChosen) {
                 victimsChosen = true;
                 for (const int32_t v : slotNode_)
-                    if (v >= 0 && nodes_[v].state == State::Ready && !wantedNow(nodes_[v])) victims.push_back(v);
+                    if (v >= 0 && nodes_[v].state == State::Ready && !nodes_[v].again && !wantedNow(nodes_[v]))
+                        victims.push_back(v);
                 const size_t k = std::min<size_t>(victims.size(), n);
                 std::partial_sort(victims.begin(), victims.begin() + k, victims.end(), [&](int32_t ia, int32_t ib) {
                     const Node &a = nodes_[ia], &b = nodes_[ib];
@@ -401,7 +416,36 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         slotNode_[m.slot] = i;
         m.state = State::Producing;
         m.batch = batch_ + 1;
+        m.takenGen = generation_;
         out.push_back({m.id, static_cast<uint32_t>(m.slot), parentSlot});
+    }
+    // Then the wanted tiles out of date, into their own slots, ranked as the
+    // missing are: they draw, only from cells made for what has changed.
+    if (out.size() < n && generation_ > 0) {
+        std::vector<int32_t> stale;
+        for (const int32_t i : wanted_)
+            if (this->stale(nodes_[i]) && !nodes_[i].again) stale.push_back(i);
+        std::sort(stale.begin(), stale.end(), [&](int32_t ia, int32_t ib) {
+            const Node &a = nodes_[ia], &b = nodes_[ib];
+            const double ra = rank(a), rb = rank(b);
+            if (ra != rb) return ra > rb;
+            if (a.id.level != b.id.level) return a.id.level < b.id.level;
+            return a.id.key() < b.id.key();
+        });
+        for (const int32_t i : stale) {
+            if (out.size() >= n) break;
+            Node& m = nodes_[i];
+            int32_t parentSlot = -1;
+            if (m.parent >= 0) {
+                const Node& p = nodes_[m.parent];
+                if (p.slot < 0 || !before(p)) continue;
+                parentSlot = p.slot;
+            }
+            m.again = true;
+            m.batch = batch_ + 1;
+            m.takenGen = generation_;
+            out.push_back({m.id, static_cast<uint32_t>(m.slot), parentSlot});
+        }
     }
     if (!out.empty()) ++batch_;
     return out;
@@ -409,24 +453,38 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
 
 void TileTree::markReady(const TileId& id) {
     const int32_t i = find(id);
-    if (i < 0 || nodes_[i].state != State::Producing) return;
-    nodes_[i].state = State::Ready;
+    if (i < 0) return;
+    Node& m = nodes_[i];
+    if (m.state == State::Producing) {
+        m.state = State::Ready;
+    } else if (m.state == State::Ready && m.again) {
+        m.again = false;
+    } else {
+        return;
+    }
+    m.gen = m.takenGen;
     ++stats_.produced;
 }
 
 void TileTree::abandon(const TileId& id) {
     const int32_t i = find(id);
-    if (i < 0 || nodes_[i].state != State::Producing) return;
-    evict(nodes_[i]);
+    if (i < 0) return;
+    if (nodes_[i].again) {
+        nodes_[i].again = false;   // still ready, its old cells still out of date
+    } else if (nodes_[i].state == State::Producing) {
+        evict(nodes_[i]);
+    } else {
+        return;
+    }
     // A child taken after it was produced from what it never got.
     for (const int32_t c : nodes_[i].child)
-        if (c >= 0 && nodes_[c].state == State::Producing) abandon(nodes_[c].id);
+        if (c >= 0 && (nodes_[c].state == State::Producing || nodes_[c].again)) abandon(nodes_[c].id);
 }
 
 uint32_t TileTree::pending() const {
     uint32_t n = 0;
     for (const int32_t i : wanted_)
-        if (nodes_[i].state != State::Ready) ++n;
+        if (nodes_[i].state != State::Ready || stale(nodes_[i])) ++n;
     return n;
 }
 
