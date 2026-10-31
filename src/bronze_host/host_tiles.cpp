@@ -572,9 +572,9 @@ Value js_createCache(Value, std::span<const Value> args) {
         Layer l;
         l.name = name;
         const double bytes = numberOr(layers, name.c_str(), 0);
-        if (!(bytes >= 4 && bytes <= 256) || std::fmod(bytes, 4) != 0)
+        if (!(bytes >= 4 && bytes <= 4096) || std::fmod(bytes, 4) != 0)
             return ev::throwRangeError("bro.tiles.createCache: layer '" + name +
-                                       "' has 4 to 256 bytes a cell, a multiple of 4");
+                                       "' has 4 to 4096 bytes a cell, a multiple of 4");
         l.cellBytes = static_cast<uint32_t>(bytes);
         l.tileBytes = static_cast<size_t>(cache->cells) * cache->cells * l.cellBytes;
         l.pool = createEngineBuffer(l.tileBytes * cfg.capacity, &err);

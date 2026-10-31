@@ -558,6 +558,9 @@ if (!bro.kernel.available || !bro.tiles) {
     throws(() => cache.layer('colour'), (e) => e instanceof RangeError, 'an unknown layer');
     throws(() => makeCache({ domain: { type: 'torus' } }), (e) => e instanceof TypeError, 'an unknown domain');
     throws(() => makeCache({ layers: { height: 3 } }), (e) => e instanceof RangeError, 'a layer of 3 bytes a cell');
+    throws(() => makeCache({ layers: { block: 4100 } }), (e) => e instanceof RangeError, 'a layer of 4100 bytes a cell');
+    // A block of finer texels a cell: 512 bytes (8 x 8 of 8 bytes).
+    assert(makeCache({ layers: { block: 512 } }).layer('block'), 'a layer of 512 bytes a cell');
     throws(() => makeCache({ produce: 7 }), (e) => e instanceof TypeError, 'a produce that is not a function');
     throws(() => cache.update({}), (e) => e instanceof TypeError, 'an update without a position');
 }

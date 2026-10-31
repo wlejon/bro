@@ -75,7 +75,11 @@
 //                     cells = tileSize + 2 * border along an edge, so a
 //                     stencil can read its neighbours without a seam
 //   layers            { name: bytesPerCell, ... }: one GPU pool per layer,
-//                     4 to 256 bytes a cell (a multiple of 4)
+//                     4 to 4096 bytes a cell (a multiple of 4); a cell may
+//                     hold a block of finer texels, so data finer than the
+//                     cells costs no more tiles. The pool must still
+//                     allocate, and a node binding it reads it whole
+//                     (maxStorageBufferRange, 4 GiB on desktop GPUs)
 //   capacity          resident tiles (default 256): each layer's pool is
 //                     capacity * cells * cells * bytesPerCell bytes
 //   maxLevel          deepest level (default 16, at most 24)
