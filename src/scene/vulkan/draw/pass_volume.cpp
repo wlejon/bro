@@ -47,45 +47,82 @@ bool PassVolume::setup(SceneGpu& gpu) {
     sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(dev, &sampler, nullptr, &sampler_) != VK_SUCCESS) return false;
 
-    // This render's light, its depth, the history; the uniforms.
+    // The passes' images (postfx.bk volume_latest_frag / volume_resolve_frag
+    // say which each binds), the uniforms at 3.
     SceneVkDescriptorLayoutBuilder builder;
     for (uint32_t i = 0; i < 3; ++i)
         builder.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     setLayout_ = builder.build(dev);
     if (!setLayout_) return false;
     layout_ = fullscreen::layout(dev, setLayout_, 0);
+    // Each pass writes the frame-sized light and an R8 beside it: the latest
+    // frame and whether each pixel holds a march, the result and its march
+    // counts.
     VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
-    VkShaderModule fs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "volume_resolve_frag");
-    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat, "volume resolve", "postfx_vert",
-                                    "volume_resolve_frag");
-    for (VkShaderModule m : {vs, fs}) SceneVkShaderModule::destroy(dev, m);
-    return resolve_ != VK_NULL_HANDLE;
+    const auto build = [&](const char* entry, const char* label) -> VkPipeline {
+        VkShaderModule fs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, entry);
+        VkPipeline p = VK_NULL_HANDLE;
+        if (vs && fs && layout_) {
+            TargetFormat target = TargetFormat::colorOnly(SceneTargets::kHdrFormat);
+            target.color[1] = kCountFormat;
+            target.colorCount = 2;
+            SceneVkPipelineBuilder b;
+            b.setLabel(label)
+             .setShaderStages(vs, fs, "postfx_vert", entry)
+             .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+             .setPolygonMode(VK_POLYGON_MODE_FILL)
+             .setCullMode(VK_CULL_MODE_NONE)
+             .setTarget(target)
+             .disableBlending(2)
+             .disableDepthTest();
+            p = b.build(dev, layout_);
+        }
+        SceneVkShaderModule::destroy(dev, fs);
+        return p;
+    };
+    latest_ = build("volume_latest_frag", "volume latest");
+    resolve_ = build("volume_resolve_frag", "volume resolve");
+    SceneVkShaderModule::destroy(dev, vs);
+    return resolve_ != VK_NULL_HANDLE && latest_ != VK_NULL_HANDLE;
+}
+
+std::array<SceneVkImage*, 10> PassVolume::images() {
+    return {&medium_, &mediumDepth_, &history_[0], &history_[1], &counts_[0], &counts_[1], &latestFrame_[0],
+            &latestFrame_[1], &real_[0], &real_[1]};
 }
 
 void PassVolume::resize(SceneGpu& gpu, uint32_t width, uint32_t height) {
-    for (SceneVkImage* img : {&medium_, &mediumDepth_, &history_[0], &history_[1]}) gpu.allocator.destroyImage(*img);
+    for (SceneVkImage* img : images()) gpu.allocator.destroyImage(*img);
     const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    bool ok = gpu.allocator.createImage(width, height, SceneTargets::kHdrFormat, usage,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, medium_) &&
-              gpu.allocator.createImage(width, height, kDepthFormat, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                        mediumDepth_);
-    for (SceneVkImage& img : history_)
+    // A render's marches: a texel for each 2 x 2 block's pixel it marches.
+    const uint32_t hw = (width + 1) / 2, hh = (height + 1) / 2;
+    bool ok = gpu.allocator.createImage(hw, hh, SceneTargets::kHdrFormat, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        medium_) &&
+              gpu.allocator.createImage(hw, hh, kDepthFormat, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mediumDepth_);
+    for (SceneVkImage* img : {&history_[0], &history_[1], &latestFrame_[0], &latestFrame_[1]})
         ok = ok && gpu.allocator.createImage(width, height, SceneTargets::kHdrFormat, usage,
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img);
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, *img);
+    for (SceneVkImage* img : {&counts_[0], &counts_[1], &real_[0], &real_[1]})
+        ok = ok && gpu.allocator.createImage(width, height, kCountFormat, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                             *img);
     if (!ok) LOG_ERROR("PassVolume: Failed creating the %ux%u volume targets", width, height);
     haveHistory_ = false;
 }
 
 void PassVolume::cleanup(SceneGpu& gpu) {
     VkDevice dev = gpu.device.device();
-    for (SceneVkImage* img : {&medium_, &mediumDepth_, &history_[0], &history_[1]}) gpu.allocator.destroyImage(*img);
-    gpu.device.defer([dev, s = sampler_, p = resolve_] {
+    for (SceneVkImage* img : images()) gpu.allocator.destroyImage(*img);
+    gpu.device.defer([dev, s = sampler_, p = resolve_, l = latest_] {
         if (s) vkDestroySampler(dev, s, nullptr);
         if (p) destroyScenePipeline(dev, p, nullptr);
+        if (l) destroyScenePipeline(dev, l, nullptr);
     });
     sampler_ = VK_NULL_HANDLE;
     resolve_ = VK_NULL_HANDLE;
+    latest_ = VK_NULL_HANDLE;
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     layout_ = VK_NULL_HANDLE;
@@ -93,8 +130,11 @@ void PassVolume::cleanup(SceneGpu& gpu) {
 }
 
 bool PassVolume::active(const SceneFrame& frame) const {
-    return !frame.lists.volumes.empty() && medium_.isValid() && mediumDepth_.isValid() && history_[0].isValid() &&
-           history_[1].isValid();
+    if (frame.lists.volumes.empty()) return false;
+    for (const SceneVkImage* img : {&medium_, &mediumDepth_, &history_[0], &history_[1], &counts_[0], &counts_[1],
+                                    &latestFrame_[0], &latestFrame_[1], &real_[0], &real_[1]})
+        if (!img->isValid()) return false;
+    return true;
 }
 
 void PassVolume::declare(const SceneFrame& frame, PassIO& io) const {
@@ -260,7 +300,14 @@ void PassVolume::record(SceneFrame& frame) {
     info.colorAttachmentCount = 2;
     info.pColorAttachments = att;
     frame.gpu.device.cmdBeginRendering(cmd, &info);
-    const VkViewport vp{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+    // The triangle over half the frame, moved by the fraction that puts
+    // texel t's ray through frame pixel 2 t + o (volume::frame_pixel): its
+    // centre t + 0.5 lands on the frame's 2 t + o + 0.5 when the viewport
+    // starts at 0.25 - o / 2.
+    const uint32_t k = (frame.view.frameIndex & 0xFFFFu) % 4u;
+    const float ox = (k == 1 || k == 2) ? 1.0f : 0.0f, oy = (k == 1 || k == 3) ? 1.0f : 0.0f;
+    const float fullW = static_cast<float>(history_[0].width), fullH = static_cast<float>(history_[0].height);
+    const VkViewport vp{0.25f - 0.5f * ox, 0.25f - 0.5f * oy, 0.5f * fullW, 0.5f * fullH, 0.0f, 1.0f};
     const VkRect2D scissor{{0, 0}, {width, height}};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
@@ -304,25 +351,83 @@ void PassVolume::record(SceneFrame& frame) {
     u.eyeDelta[0] = delta.x;
     u.eyeDelta[1] = delta.y;
     u.eyeDelta[2] = delta.z;
-    u.eyeDelta[3] = follows ? kBlend : 1.0f;
+    u.eyeDelta[3] = follows ? 0.0f : 1.0f;
+    u.interleave[0] = ox;
+    u.interleave[1] = oy;
+    u.interleave[2] = kBlend;
     const VkDescriptorBufferInfo ubo = device_->frameUniform(&u, sizeof(u));
     SceneFrameGraph::transition(cmd, history_[prev], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, counts_[prev], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, latestFrame_[prev], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, real_[prev], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    // 1. The latest frame: every pixel's newest march (volume_latest_frag).
+    VkDescriptorSet latestSet = device_->frameSet(setLayout_);
+    SceneVkDescriptorWriter lw;
+    lw.writeImage(0, medium_.view, sampler_);
+    lw.writeImage(1, mediumDepth_.view, sampler_);
+    lw.writeImage(2, latestFrame_[prev].view, sampler_);
+    lw.writeBuffer(3, ubo.buffer, ubo.range, ubo.offset);
+    lw.writeImage(4, real_[prev].view, sampler_);
+    lw.writeImage(5, medium_.view, sampler_);
+    lw.updateSet(device_->device(), latestSet);
+    SceneVkImage& latest = latestFrame_[current_];
+    SceneVkImage& real = real_[current_];
+    SceneFrameGraph::transition(cmd, latest, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    SceneFrameGraph::transition(cmd, real, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    drawPair(cmd, latest, real, latest_, latestSet);
+    SceneFrameGraph::transition(cmd, latest, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, real, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    // 2. The result and its march counts (volume_resolve_frag).
     VkDescriptorSet resolveSet = device_->frameSet(setLayout_);
     SceneVkDescriptorWriter rw;
-    rw.writeImage(0, medium_.view, sampler_);
+    rw.writeImage(0, latest.view, sampler_);
     rw.writeImage(1, mediumDepth_.view, sampler_);
     rw.writeImage(2, history_[prev].view, sampler_);
     rw.writeBuffer(3, ubo.buffer, ubo.range, ubo.offset);
+    rw.writeImage(4, counts_[prev].view, sampler_);
+    rw.writeImage(5, medium_.view, sampler_);
     rw.updateSet(device_->device(), resolveSet);
     SceneVkImage& out = history_[current_];
+    SceneVkImage& outCount = counts_[current_];
     SceneFrameGraph::transition(cmd, out, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    fullscreen::draw(*device_, cmd, out, resolve_, layout_, resolveSet);
+    SceneFrameGraph::transition(cmd, outCount, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    drawPair(cmd, out, outCount, resolve_, resolveSet);
     SceneFrameGraph::transition(cmd, out, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    SceneFrameGraph::transition(cmd, outCount, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     haveHistory_ = true;
     lastIndex_ = frame.view.frameIndex;
     prevViewProj_ = frame.view.relViewProj;
     prevEye_ = frame.view.eye;
+}
+
+void PassVolume::drawPair(VkCommandBuffer cmd, const SceneVkImage& light, const SceneVkImage& r8, VkPipeline pipeline,
+                          VkDescriptorSet set) {
+    VkRenderingAttachmentInfo att[2]{};
+    for (int i = 0; i < 2; ++i) {
+        att[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att[i].imageView = i == 0 ? light.view : r8.view;
+        att[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att[i].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {light.width, light.height}};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 2;
+    info.pColorAttachments = att;
+    device_->cmdBeginRendering(cmd, &info);
+    const VkViewport vp{0.0f, 0.0f, static_cast<float>(light.width), static_cast<float>(light.height), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {light.width, light.height}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    device_->cmdEndRendering(cmd);
 }
 
 bool PassVolumeComposite::setup(SceneGpu& gpu) {

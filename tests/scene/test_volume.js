@@ -93,6 +93,10 @@ if (!probe.scene) {
         uniforms: { t: 0.5, light: [0.2, 0.2, 0.2] },
     });
     assert(fog && fog.hasShader, 'createVolume makes a node with its module');
+    // (A render marches a quarter of the pixels: after the first four each
+    // holds a march, and from then on a change lands in the next render.)
+    const marchAll = () => { for (let i = 0; i < 4; i++) scene.captureFrame(); };
+    marchAll();
     let img = scene.captureFrame();
     assert(near(px(img, S / 2, S / 2), [127, 76, 64], 3),
            `over the plane: plane * 0.5 + 0.2 (${px(img, S / 2, S / 2)})`);
@@ -159,6 +163,7 @@ if (!probe.scene) {
         return behind.map((b, i) => 255 * (b * t + l + (i === 2 ? 0.2 * t : 0)));
     };
     const glow = [0.6, 0.2, 0.1];
+    marchAll();
     img = scene.captureFrame();
     let want = uniform(2, glow), got = px(img, S / 2, S / 2);
     assert(near(got, want, 3), `over the plane past a 2 m range: the medium's 2 m, then the march (${got} vs ${want.map(Math.round)})`);
@@ -197,15 +202,16 @@ if (!probe.scene) {
     assert(threw !== null, 'a medium without medium_range is refused');
 
     // The reconstruction: a medium whose light is noise, another value
-    // each pixel and each render (camera.frame.x), lands as its average
-    // over renders.
+    // each pixel and each march (volume::march_index), lands as its average
+    // over renders. A render marches one pixel of each 2 x 2 block, so the
+    // first holds those marches and what stands between them.
     const noisy = scene.createVolume({
         module: `
             module hook;
             import scene;
             import volume;
             pub fn volume(ray: volume::Ray) -> volume::Light {
-                var h: u32 = (ray.pixel.x as u32) * 1973u + (ray.pixel.y as u32) * 9277u + (scene::camera.frame.x as u32) * 26699u;
+                var h: u32 = (ray.pixel.x as u32) * 1973u + (ray.pixel.y as u32) * 9277u + (volume::march_index() as u32) * 26699u;
                 h = (h ^ (h >> 13u)) * 0x5bd1e995u;
                 let n = ((h ^ (h >> 15u)) & 1023u) as f32 / 1023.0;
                 return volume::light(vec3<f32>(n), 0.0, ray.near);
@@ -222,10 +228,35 @@ if (!probe.scene) {
     const first = spread(scene.captureFrame());
     let settled = first;
     for (let i = 0; i < 40; i++) settled = spread(scene.captureFrame());
-    assert(first.dev > 60, `a volume's first render is its own (deviation ${first.dev.toFixed(1)})`);
+    assert(first.dev > 40, `a volume's first render is its own marches (deviation ${first.dev.toFixed(1)})`);
     assert(settled.dev < first.dev / 2 && Math.abs(settled.mean - 127.5) < 12,
            `per-render noise averages over renders (deviation ${first.dev.toFixed(1)} -> ${settled.dev.toFixed(1)}, mean ${settled.mean.toFixed(1)})`);
     scene.destroyNode(noisy);
+
+    // Each pixel is its own ray's: light by the pixel's column and row
+    // parity holds its 2 x 2 pattern once every pixel has been marched (the
+    // half-size marches are put back where they were marched, not between).
+    const parity = scene.createVolume({
+        module: `
+            module hook;
+            import volume;
+            pub fn volume(ray: volume::Ray) -> volume::Light {
+                let x = step(0.5, fract(floor(ray.pixel.x) * 0.5));
+                let y = step(0.5, fract(floor(ray.pixel.y) * 0.5));
+                return volume::light(vec3<f32>(x, y, 0.0), 0.0, ray.near);
+            }`,
+    });
+    let im = null;
+    for (let i = 0; i < 12; i++) im = scene.captureFrame();
+    let wrong = 0;
+    for (let y = 16; y < 48; y++) for (let x = 16; x < 48; x++) {
+        const p = px(im, x, y);
+        if ((p[0] > 128) !== (x % 2 === 1) || (p[1] > 128) !== (y % 2 === 1)) wrong++;
+    }
+    const patch = [];
+    for (let y = 20; y < 24; y++) for (let x = 20; x < 24; x++) patch.push(px(im, x, y).slice(0, 2).join('/'));
+    assert(wrong === 0, `every pixel holds its own ray's light (${wrong} of 1024 do not; ${patch.join(' ')})`);
+    scene.destroyNode(parity);
 
     threw = null;
     try {

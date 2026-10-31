@@ -9,7 +9,7 @@
 //  - ssao_frag:             half-resolution 16-tap hemisphere SSAO
 //  - apply_ao_frag:         subtractive indirect-light ambient occlusion apply
 //  - ssr_frag:              screen-space reflection ray march + binary refinement
-//  - volume_resolve_frag:   temporal reprojection + 3x3 neighbourhood clamp for volumes
+//  - volume_resolve_frag:   the volumes' interleaved marches + reprojected history, neighbourhood clamped
 //  - volume_composite_frag: volume composite over the HDR scene target
 
 struct TonemapPush {
@@ -56,6 +56,9 @@ struct VolumeResolveUBO {
     prev_view_proj: mat4f,
     inv_view_proj: mat4f,
     eye_delta: vec4<f32>,
+    // xy: the pixel of each 2 x 2 block this render marched
+    // (volume::interleave); z: a marched pixel's share of its result.
+    interleave: vec4<f32>,
 }
 
 fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
@@ -503,55 +506,202 @@ fn ssr_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
     set_frag_output(0, vec4<f32>(mix(src.xyz, refl, w), 1.0));
 }
 
-@fragment fn volume_resolve_frag(
-    @location(0) in_uv: vec2<f32>,
-    @binding(0, 0) u_medium: sampler2d<vec4<f32>>,
-    @binding(0, 1) u_depth: sampler2d<vec4<f32>>,
-    @binding(0, 2) u_history: sampler2d<vec4<f32>>,
-    @binding(0, 3) ubo: uniform<VolumeResolveUBO>
-) {
-    let fc = frag_coord().xy;
-    let px = vec2<i32>(fc.x as i32, fc.y as i32);
-    let last = u_medium.size(0) - vec2<i32>(1);
-    let c = u_medium.fetch(px, 0);
-    let share = ubo.eye_delta.w;
-    if (share >= 1.0) {
-        set_frag_output(0, c);
-        return;
-    }
+// The volumes' reconstruction (PassVolume) in two passes over the frame.
+// A render marched one pixel of each 2 x 2 block, into u_medium / u_depth at
+// half the frame's size: texel t holds frame pixel 2 t + interleave.xy.
 
-    var lo: vec4<f32> = c;
-    var hi: vec4<f32> = c;
-    var depth: f32 = u_depth.fetch(px, 0).x;
-    for (var y: i32 = -1; y <= 1; y += 1) {
-        for (var x: i32 = -1; x <= 1; x += 1) {
-            if (x == 0 && y == 0) {
-                continue;
-            }
-            let q = clamp(px + vec2<i32>(x, y), vec2<i32>(0), last);
-            let s = u_medium.fetch(q, 0);
-            lo = min(lo, s);
-            hi = max(hi, s);
-            if (depth <= 0.0) {
-                depth = u_depth.fetch(q, 0).x;
-            }
-        }
-    }
-    let p = mul4(ubo.inv_view_proj, vec4<f32>(in_uv * 2.0 - 1.0, 1.0, 1.0));
+// Where last render saw the medium of the pixel at in_uv (xy; z 1 when it
+// was in view), by the medium's depth at the marches about texel q.
+fn volume_reproject(in_uv: vec2<f32>, depth: f32, inv_view_proj: mat4f, prev_view_proj: mat4f,
+                    eye_delta: vec3<f32>) -> vec3<f32> {
+    let p = mul4(inv_view_proj, vec4<f32>(in_uv * 2.0 - 1.0, 1.0, 1.0));
     let dir = normalize(p.xyz / p.w);
-    let clip = depth > 0.0 ? mul4(ubo.prev_view_proj, vec4<f32>(dir * depth + ubo.eye_delta.xyz, 1.0))
-                           : mul4(ubo.prev_view_proj, vec4<f32>(dir, 0.0));
+    let clip = depth > 0.0 ? mul4(prev_view_proj, vec4<f32>(dir * depth + eye_delta, 1.0))
+                           : mul4(prev_view_proj, vec4<f32>(dir, 0.0));
     if (clip.w <= 0.0) {
-        set_frag_output(0, c);
-        return;
+        return vec3<f32>(0.0, 0.0, 0.0);
     }
     let uv = (clip.xy / clip.w) * 0.5 + 0.5;
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        set_frag_output(0, c);
+        return vec3<f32>(uv, 0.0);
+    }
+    return vec3<f32>(uv, 1.0);
+}
+
+// The march nearest frame pixel px (texel), and whether it is px's own.
+fn volume_texel(px: vec2<i32>, o: vec2<i32>, last: vec2<i32>) -> vec2<i32> {
+    return clamp(vec2<i32>((px.x - o.x + 1) / 2, (px.y - o.y + 1) / 2), vec2<i32>(0), last);
+}
+fn volume_own(px: vec2<i32>, o: vec2<i32>) -> f32 {
+    var own: f32 = 0.0;
+    if ((px.x - o.x) % 2 == 0) {
+        if ((px.y - o.y) % 2 == 0) {
+            own = 1.0;
+        }
+    }
+    return own;
+}
+
+// 1. The latest frame: every pixel's newest march, and whether it is one
+// (1) or what stands in for one until its march comes round (0: the marches
+// about it, where nothing was in view). A pixel marched now takes its
+// march. Any other takes what it held, found again where the medium's depth
+// reprojects it to, moved on by how much the marches about it changed from
+// what they held (those that held marches): what changed everywhere (the
+// medium's parameters, the light) lands at once, and a pixel's own detail,
+// which the marches about it do not bound, stays. As far as the view moved
+// it, up to a pixel, it is held to the range of those marches: what moves
+// may be stale where it lands (a ridge crossing the medium behind it).
+@fragment fn volume_latest_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_medium: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_depth: sampler2d<vec4<f32>>,
+    @binding(0, 2) u_last: sampler2d<vec4<f32>>,
+    @binding(0, 3) ubo: uniform<VolumeResolveUBO>,
+    @binding(0, 4) u_real: sampler2d<vec4<f32>>
+) {
+    let fc = frag_coord().xy;
+    let px = vec2<i32>(fc.x as i32, fc.y as i32);
+    let o = vec2<i32>(ubo.interleave.x as i32, ubo.interleave.y as i32);
+    let size = u_medium.size(0);
+    let last = size - vec2<i32>(1);
+    let q = volume_texel(px, o, last);
+    if (volume_own(px, o) > 0.5) {
+        set_frag_output(0, u_medium.fetch(q, 0));
+        set_frag_output(1, vec4<f32>(1.0, 0.0, 0.0, 0.0));
         return;
     }
-    let h = clamp(u_history.sample(uv), lo, hi);
-    set_frag_output(0, mix(h, c, share));
+    // Between the marches: t in texels (texel t's centre is t + 0.5).
+    let t = (fc - ubo.interleave.xy - vec2<f32>(0.5, 0.5)) * 0.5;
+    let c = u_medium.sample((t + vec2<f32>(0.5, 0.5)) / vec2<f32>(size.x as f32, size.y as f32));
+    if (ubo.eye_delta.w >= 1.0) {
+        set_frag_output(0, c);
+        set_frag_output(1, vec4<f32>(0.0));
+        return;
+    }
+    var lo: vec4<f32> = c;
+    var hi: vec4<f32> = c;
+    var depth: f32 = u_depth.fetch(q, 0).x;
+    for (var y: i32 = -1; y <= 1; y += 1) {
+        for (var x: i32 = -1; x <= 1; x += 1) {
+            let n = clamp(q + vec2<i32>(x, y), vec2<i32>(0), last);
+            let s = u_medium.fetch(n, 0);
+            lo = min(lo, s);
+            hi = max(hi, s);
+            if (depth <= 0.0) {
+                depth = u_depth.fetch(n, 0).x;
+            }
+        }
+    }
+    let r = volume_reproject(in_uv, depth, ubo.inv_view_proj, ubo.prev_view_proj, ubo.eye_delta.xyz);
+    // What it held must be a march (the pixels it is found between all held
+    // one), else it stands in again.
+    if (r.z < 0.5 || u_real.sample(r.xy).x < 0.99) {
+        set_frag_output(0, c);
+        set_frag_output(1, vec4<f32>(0.0));
+        return;
+    }
+    let full = vec2<f32>(u_last.size(0).x as f32, u_last.size(0).y as f32);
+    // The four marches about it, each's change from what it held (found
+    // again as this pixel is: the view moves them alike), bilinearly, of
+    // those that held marches.
+    let base = vec2<i32>(floor(t.x) as i32, floor(t.y) as i32);
+    let f = t - vec2<f32>(base.x as f32, base.y as f32);
+    var delta: vec4<f32> = vec4<f32>(0.0);
+    var weight: f32 = 0.0;
+    for (var j: i32 = 0; j <= 1; j += 1) {
+        for (var i: i32 = 0; i <= 1; i += 1) {
+            let k = clamp(base + vec2<i32>(i, j), vec2<i32>(0), last);
+            let at = vec2<f32>((2 * k.x + o.x) as f32, (2 * k.y + o.y) as f32) + vec2<f32>(0.5, 0.5);
+            let uv_k = r.xy + (at - fc) / full;
+            let w = mix(1.0 - f.x, f.x, i as f32) * mix(1.0 - f.y, f.y, j as f32) * step(0.99, u_real.sample(uv_k).x);
+            delta = delta + (u_medium.fetch(k, 0) - u_last.sample(uv_k)) * w;
+            weight = weight + w;
+        }
+    }
+    var l = u_last.sample(r.xy) + delta / max(weight, 1e-6);
+    let moved = length((r.xy - in_uv) * full);
+    l = mix(l, clamp(l, lo, hi), clamp(moved, 0.0, 1.0));
+    set_frag_output(0, vec4<f32>(max(l.xyz, vec3<f32>(0.0)), clamp(l.w, 0.0, 1.0)));
+    set_frag_output(1, vec4<f32>(1.0, 0.0, 0.0, 0.0));
+}
+
+// 2. The result: last render's, found again where the medium's depth
+// reprojects the pixel to and held to the range of this render's marches
+// about the pixel and the pixel's own newest march (so its detail stays,
+// and a change lands as soon as the latest frame has it; the latest frame
+// about it would do the same, but the changes it carries over are its
+// neighbours', alike, so its range drifts as one and drags the result with
+// it as grain); a pixel marched now blends its march in at 1 / the marches its
+// result then holds, to no less than interleave.z, so its first march after
+// it came into view replaces what stood in for it, and the grain of a
+// jittered march averages over the rest. A young pixel's march leans on
+// the mean of the marches about it, all of it at the first and none from
+// the fourth: one jittered march alone is grain, which a view turning
+// fast would show along the edge it turns toward.
+@fragment fn volume_resolve_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_latest: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_depth: sampler2d<vec4<f32>>,
+    @binding(0, 2) u_history: sampler2d<vec4<f32>>,
+    @binding(0, 3) ubo: uniform<VolumeResolveUBO>,
+    @binding(0, 4) u_count: sampler2d<vec4<f32>>,
+    @binding(0, 5) u_medium: sampler2d<vec4<f32>>
+) {
+    let fc = frag_coord().xy;
+    let px = vec2<i32>(fc.x as i32, fc.y as i32);
+    let o = vec2<i32>(ubo.interleave.x as i32, ubo.interleave.y as i32);
+    let dlast = u_depth.size(0) - vec2<i32>(1);
+    let q = volume_texel(px, o, dlast);
+    let own = volume_own(px, o);
+    let c = u_latest.fetch(px, 0);
+    // This render's marches about the pixel (fresh, each its own sample):
+    // their range with the pixel's newest march, their mean, and the
+    // medium's depth.
+    var lo: vec4<f32> = c;
+    var hi: vec4<f32> = c;
+    var sum: vec4<f32> = vec4<f32>(0.0);
+    var depth: f32 = u_depth.fetch(q, 0).x;
+    for (var y: i32 = -1; y <= 1; y += 1) {
+        for (var x: i32 = -1; x <= 1; x += 1) {
+            let n = clamp(q + vec2<i32>(x, y), vec2<i32>(0), dlast);
+            let s = u_medium.fetch(n, 0);
+            lo = min(lo, s);
+            hi = max(hi, s);
+            sum = sum + s;
+            if (depth <= 0.0) {
+                depth = u_depth.fetch(n, 0).x;
+            }
+        }
+    }
+    let mean = sum / 9.0;
+    // With no history: a marched pixel's first march, leaning on the mean;
+    // any other what stands in for it.
+    var marches: f32 = own;
+    var first: vec4<f32> = c;
+    if (own > 0.5) {
+        first = mix(mean, c, 0.25);
+    }
+    var r: vec3<f32> = vec3<f32>(0.0);
+    if (ubo.eye_delta.w < 1.0) {
+        r = volume_reproject(in_uv, depth, ubo.inv_view_proj, ubo.prev_view_proj, ubo.eye_delta.xyz);
+    }
+    if (r.z < 0.5) {
+        set_frag_output(0, first);
+        set_frag_output(1, vec4<f32>(marches / 16.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    let h = clamp(u_history.sample(r.xy), lo, hi);
+    let held = floor(u_count.sample(r.xy).x * 16.0 + 0.5);
+    var out: vec4<f32> = h;
+    marches = held;
+    if (own > 0.5) {
+        marches = min(held + 1.0, floor(1.0 / ubo.interleave.z + 0.5));
+        let sample = mix(mean, c, min(marches * 0.25, 1.0));
+        out = mix(h, sample, max(1.0 / marches, ubo.interleave.z));
+    }
+    set_frag_output(0, out);
+    set_frag_output(1, vec4<f32>(marches / 16.0, 0.0, 0.0, 0.0));
 }
 
 @fragment fn volume_composite_frag(

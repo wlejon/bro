@@ -18,8 +18,9 @@
 // own light, so what the medium hides of it is put back. The volumes draw
 // into a target of their own (PassVolume), radiance over transmittance in
 // the colour and depth beside it, and that is reconstructed over frames
-// before it lands on the scene: a hook may jitter its samples with
-// scene::camera.frame.x and the jitter averages out. While a debug view
+// before it lands on the scene: a hook may jitter its samples by
+// volume::march_index() (a pixel is marched every fourth render) and the
+// jitter averages out. While a debug view
 // shows (scene/debug_views.h), a hook that answers it (SCENE_DEBUG(name))
 // returns its colour in Light.debug (alpha 1): the pixel is that colour,
 // opaque, unlit and with no air; a volume that does not answer lets all
@@ -151,6 +152,36 @@ pub fn scene_distance(p: vec2<i32>) -> f32 {
     let uv = (vec2<f32>(p.x as f32, p.y as f32) + 0.5) / camera.viewport.xy;
     let v = scene::mul4(camera.inv_proj, vec4<f32>(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, d, 1.0));
     return length(v.xyz / v.w);
+}
+
+// The volumes march a quarter of the frame's pixels each render, one of
+// each 2 x 2 block in turn (PassVolume): the block's pixel this render
+// marches, by the render's index (camera.frame.x).
+pub fn interleave() -> vec2<f32> {
+    let k = (camera.frame.x as i32) % 4;
+    var o: vec2<f32> = vec2<f32>(0.0, 0.0);
+    if (k == 1) {
+        o = vec2<f32>(1.0, 1.0);
+    } else if (k == 2) {
+        o = vec2<f32>(1.0, 0.0);
+    } else if (k == 3) {
+        o = vec2<f32>(0.0, 1.0);
+    }
+    return o;
+}
+
+// How many times the pixels have been marched (the render's index over
+// four): what a hook's jitter moves on by, once a march, so a pixel's
+// offsets cover a step evenly over its marches.
+pub fn march_index() -> f32 {
+    return floor(camera.frame.x * 0.25);
+}
+
+// The frame's pixel (its centre) that the half-size target's texel at
+// frag_coord q marches: the volumes' triangle is drawn over a viewport
+// moved by the fraction that puts the texel's ray through that pixel.
+pub fn frame_pixel(q: vec2<f32>) -> vec2<f32> {
+    return 2.0 * q - vec2<f32>(0.5, 0.5) + interleave();
 }
 
 // A pixel's width over the distance (perspective), or in metres

@@ -584,17 +584,22 @@ class SceneGraph {
    * facing n) and `volume::footprint(t)` (the width, m, of what the ray's
    * light stands for at distance t along it, which a medium resolves itself
    * to: a pixel's cone for the pixel's ray, its width on an orthographic
-   * camera). The volumes draw, in tree order, into a target of their own (each
-   * over the ones before it), which is reconstructed over renders before it
+   * camera). A render marches a quarter of the pixels, one of each 2 x 2
+   * block, the four in turn, so every pixel is marched every fourth render
+   * at its own ray (`ray.pixel` is that pixel's centre). The volumes draw, in
+   * tree order, into a target of their own (each over the ones before it),
+   * which is reconstructed over renders at the frame's full size before it
    * lands on the scene, after the opaque surfaces, their sky and the decals,
    * before SSR and translucent surfaces: last render's result is found again
    * where `depth` reprojects the pixel to (the sky's direction where nothing
-   * set it), kept within the range of the pixel's neighbours this render, and
-   * blended in at 90%. So a march may offset its steps per pixel and per
-   * render (`scene::camera.frame.x`, the render's index mod 65536) and its
-   * grain averages out, where a fixed offset is a fixed grain. A render that
-   * does not follow the last (the first, a resize, another set of volumes) is
-   * its own alone.
+   * set it), kept within the range of this render's marches about the pixel,
+   * and a pixel marched this render blends its march in at 10% once it holds
+   * a few (more while it holds fewer). So a march may offset its steps per
+   * pixel and per march (`volume::march_index()`, which changes once each
+   * pixel has been marched) and its grain averages out, where a fixed offset
+   * is a fixed grain. A pixel no history covers (the first render, a resize,
+   * another set of volumes, what came into view) takes the marches about it
+   * until its own comes round; a converged still holds each pixel's own ray.
    *
    * The medium near the eye may instead be given point by point, where a
    * march from inside a medium takes most of its steps in the first

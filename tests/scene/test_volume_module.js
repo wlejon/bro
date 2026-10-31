@@ -164,6 +164,10 @@ if (!probe.scene) {
 
     const fog = scene.createVolume({ module: FOG, file: 'fog.bk', uniforms: { t: 0.5, light: [0.2, 0.2, 0.2] } });
     assert(fog && fog.hasShader, 'createVolume makes a node with its module');
+    // (A render marches a quarter of the pixels: after the first four each
+    // holds a march, and from then on a change lands in the next render.)
+    const marchAll = () => { for (let i = 0; i < 4; i++) scene.captureFrame(); };
+    marchAll();
     let img = scene.captureFrame();
     assert(near(px(img, S / 2, S / 2), [127, 76, 64], 3),
            `over the plane: plane * 0.5 + 0.2 (${px(img, S / 2, S / 2)})`);
@@ -192,6 +196,7 @@ if (!probe.scene) {
         return behind.map((b, i) => 255 * (b * t + l + (i === 2 ? 0.2 * t : 0)));
     };
     const glow = [0.6, 0.2, 0.1];
+    marchAll();
     img = scene.captureFrame();
     let want = uniform(2, glow), got = px(img, S / 2, S / 2);
     assert(near(got, want, 3), `over the plane past a 2 m range: the medium's 2 m, then the march (${got} vs ${want.map(Math.round)})`);
@@ -206,6 +211,7 @@ if (!probe.scene) {
     scene.destroyNode(nearVol);
 
     const tinted = scene.createVolume({ module: BUFFER, file: 'buffer.bk' });
+    marchAll();
     img = scene.captureFrame();
     assert(near(px(img, S / 2, 2), [0, 0, 0], 1), `an unbound buffer is empty (${px(img, S / 2, 2)})`);
     const buf = bro.kernel.createBuffer(new Float32Array([0.4, 0.2, 0.1, 1.0]));

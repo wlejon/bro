@@ -1,8 +1,10 @@
 // A volume's fragment stage (volume.bk): the pixel's ray through the near
 // medium (near: near_grid.bk for a hook that gives its medium point by
 // point, near_none.bk otherwise) and the hook's march, composited, and on the
-// first row's first pixels the exposure meter's rays. The engine composes it
-// with the volume's module as `hook`.
+// first row's first texels the exposure meter's rays. Drawn into the
+// half-size target, a texel for the frame pixel it marches this render
+// (volume::frame_pixel). The engine composes it with the volume's module as
+// `hook`.
 import scene;
 import volume;
 import near;
@@ -11,16 +13,18 @@ from scene import camera;
 
 @fragment fn volume_main(@location(0) world_pos: vec3<f32>, @location(1) index: i32) {
     let dir = normalize(world_pos);
-    let fc = frag_coord();
+    let q = frag_coord();
+    let fc = volume::frame_pixel(vec2<f32>(q.x, q.y));
     let p = vec2<i32>(fc.x as i32, fc.y as i32);
     let scene_dist = volume::scene_distance(p);
     let cone = volume::pixel_cone(camera.viewport.y);
-    let n = near::at(vec2<f32>(fc.x, fc.y), scene_dist);
+    let n = near::at(fc, scene_dist);
     let march = hook::volume(volume::Ray { dir: dir, scene_dist: scene_dist, near: n.range, cone: cone.x, min_width: cone.y,
-                                           pixel: vec2<f32>(fc.x, fc.y) });
-    if (p.y == 0 && p.x < volume::METER_RAYS) {
-        let rays = volume::meter_rays(p.x);
-        volume::write_meter(index, p.x, hook::volume(rays.sun), hook::volume(rays.sky));
+                                           pixel: fc });
+    let t = vec2<i32>(q.x as i32, q.y as i32);
+    if (t.y == 0 && t.x < volume::METER_RAYS) {
+        let rays = volume::meter_rays(t.x);
+        volume::write_meter(index, t.x, hook::volume(rays.sun), hook::volume(rays.sky));
     }
     let c = volume::composite(dir, n, march);
     if (!c.visible) {
