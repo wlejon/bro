@@ -208,24 +208,41 @@ public:
     /// the last submission's when nothing was recorded since.
     uint64_t flush();
 
-    /// Record into the background stream until endBackground(): work beside
-    /// the frames rather than between them, on the async compute queue where
-    /// the device has one (else the graphics queue, in order, the same
-    /// contract). Background work starts after everything submitted to the
-    /// graphics queue before it (so it may rewrite what an earlier frame
-    /// draws from), runs beside the frames submitted after it, and is in
-    /// order with earlier background work; nothing on the graphics queue
-    /// waits for it unless told to (acquireBackground). For work whose
-    /// results are wanted frames later, not this frame: a tile cache's
-    /// production, which on a single queue lengthened the frame by its
-    /// whole latency (a few small dependent dispatches, far from filling the
-    /// GPU). Readbacks and spans begun in it report on its tickets.
+    /// Record into the background stream until endBackground(): work for
+    /// the gap between frames rather than inside one, on the async compute
+    /// queue where the device has one (else the graphics queue, in order,
+    /// the same contract). What is recorded is held until the frame's GPU
+    /// work is all submitted (releaseBackground: the engine calls it after
+    /// the frame's present, and at the latest when the next frame begins),
+    /// then starts after everything submitted to the graphics queue so far:
+    /// it runs in the time the frame leaves before the next one, not beside
+    /// its draws (sharing the GPU with them, a lone planet tile of 0.33 ms
+    /// slowed a frame's render by more than its own length). It may rewrite
+    /// what an earlier frame draws from, and is in order with earlier
+    /// background work; nothing on the graphics queue waits for it unless
+    /// told to (acquireBackground). For work whose results are wanted
+    /// frames later: a tile cache's production. Its tickets, and those of
+    /// readbacks and spans begun in it, are the stream's own serials, which
+    /// complete once the work they mark is submitted and done.
     void beginBackground();
-    /// Submit the background work recorded and go back to the graphics
-    /// stream. Its ticket (backgroundComplete), or the last background
-    /// submission's when nothing was recorded.
+    /// Go back to the graphics stream. The ticket of the work recorded
+    /// (backgroundComplete), or of the last background work when nothing
+    /// was recorded.
     uint64_t endBackground();
     bool backgroundComplete(uint64_t ticket) const;
+    /// Submit the background work held: called once the frame's GPU work is
+    /// all submitted.
+    void releaseBackground();
+    /// releaseBackground and wait for every background submission to finish:
+    /// a frame's refinement run in the gap before the next (headless's
+    /// perf.measure, which has no vblank to wait for).
+    void finishBackground();
+    /// GPU milliseconds of the background submissions finished since the
+    /// last call, each from the start of its work (after the graphics it
+    /// waits for) to its end, and of the newest one alone (negative before
+    /// any). Waits for nothing.
+    double takeBackgroundMs();
+    double lastBackgroundMs();
     /// Between beginBackground and endBackground.
     bool inBackground() const { return background_; }
     /// The graphics queue's next submission from here waits for background
@@ -272,6 +289,22 @@ private:
     bool timestamps();
     // Finished dispatches' stamps into times_.
     void collectTimes();
+    // A serial for the background work recorded so far (or the last one,
+    // when the stream holds nothing).
+    uint64_t markBackground();
+    // Finished background submissions' stamps into backgroundMs_.
+    void collectBackgroundStamps();
+    struct BackgroundStamp {
+        uint32_t query = 0;
+        uint64_t ticket = 0;
+    };
+    VkQueryPool backgroundPool_ = VK_NULL_HANDLE;
+    uint32_t backgroundQuery_ = 0;       // the next pair in the ring
+    bool backgroundStamped_ = false;     // the open background buffer began with a stamp
+    uint32_t backgroundStampQuery_ = 0;  // ... at this pair
+    std::deque<BackgroundStamp> backgroundStamps_;
+    double backgroundMs_ = 0.0;
+    double lastBackgroundMs_ = -1.0;
 
     // A timed dispatch: its pair of queries, and the ticket of the
     // submission it went in (0 while still recorded).
@@ -317,6 +350,23 @@ struct ComputeOwner {
     // Spans' queries, two a span, and the pairs no span holds.
     VkQueryPool spanPool = VK_NULL_HANDLE;
     std::vector<uint32_t> freeSpans;
+
+    // The background stream's serials (VulkanCompute::beginBackground): a
+    // mark of the work recorded up to it, which becomes a queue ticket when
+    // the stream is submitted. Submissions oldest first, by the newest
+    // serial each carries.
+    struct BackgroundSubmit {
+        uint64_t lastSerial = 0;
+        uint64_t ticket = 0;   // 0: the submission failed (nothing to wait for)
+    };
+    std::deque<BackgroundSubmit> backgroundSubmits;
+    uint64_t backgroundMarked = 0;     // the newest serial handed out
+    uint64_t backgroundSubmitted = 0;  // the newest one submitted
+    uint64_t backgroundCompleted = 0;  // the newest one the GPU has done
+    bool backgroundSerialComplete(uint64_t serial);
+    // The queue ticket of `serial`'s submission: 0 once it is done (or when
+    // it is not submitted yet).
+    uint64_t backgroundTicket(uint64_t serial);
 };
 
 } // namespace bro::render

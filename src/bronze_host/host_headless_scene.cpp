@@ -165,8 +165,8 @@ nlohmann::json spreadOf(std::vector<double> v) {
 
 // The compute dispatches finished since the last take, by kernel (ms).
 // The frame's kernels by label: those on the graphics queue, in the frame's
-// length, and into `background` those run beside the frames (a tile cache's
-// production), which are not.
+// length, and into `background` those run in the gap after it (a tile
+// cache's production), which are not.
 std::map<std::string, double> frameKernels(engine::Engine& engine, std::map<std::string, double>* background = nullptr) {
     std::map<std::string, double> out;
     render::VulkanContext* ctx = engine.vulkanContext();
@@ -320,12 +320,25 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 drainMicrotasksAndLocalFetches();
                 return true;
             };
+            // The frame's refinement (the background work held for the gap
+            // after it: VulkanCompute::beginBackground) run to its end before
+            // the next frame begins, as a vblank's wait leaves it the time
+            // to: its GPU ms.
+            render::VulkanCompute* compute = engine.vulkanContext() ? &engine.vulkanContext()->compute() : nullptr;
+            const auto refine = [&]() -> double {
+                if (!compute) return 0.0;
+                compute->finishBackground();
+                return compute->takeBackgroundMs();
+            };
             for (int w = 0; w < warm; ++w, ++i) {
                 if (!frame()) return ev::throwValue(thrown.get());
                 engine.gpuFrameMs(true);
+                refine();
             }
             frameKernels(engine);
-            std::vector<double> gpu, kern, total, wall, back;
+            refine();
+            std::vector<double> gpu, kern, total, wall, back, refined;
+            int spill = 0;
             std::map<std::string, double> passSum, kernelSum, backSum;
             nlohmann::json spikes = nlohmann::json::array();
             for (int k = 0; k < frames; ++k, ++i) {
@@ -333,6 +346,8 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 if (!frame()) return ev::throwValue(thrown.get());
                 const double ms = engine.gpuFrameMs(true);
                 wall.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                const double rm = refine();
+                refined.push_back(rm);
                 const std::map<std::string, double> passes = framePasses(engine);
                 std::map<std::string, double> background;
                 const std::map<std::string, double> kernels = frameKernels(engine, &background);
@@ -350,6 +365,7 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 gpu.push_back(ms);
                 kern.push_back(km);
                 total.push_back(ms + km);
+                if (ms + km + rm > budget) ++spill;
                 if (ms + km > budget) {
                     nlohmann::json s;
                     s["frame"] = k;
@@ -379,7 +395,9 @@ void installHeadlessScenePerf(engine::Engine& engine,
             j["background"] = spreadOf(back);
             j["backgroundBy"] = nlohmann::json::object();
             for (const auto& [n, v] : backSum) j["backgroundBy"][n] = v / frames;
+            j["refine"] = spreadOf(refined);
             j["over"] = spikes.size();
+            j["spill"] = spill;
             j["spikes"] = spikes;
             return fromJson(j);
         });

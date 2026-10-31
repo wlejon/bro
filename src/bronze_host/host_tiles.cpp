@@ -98,9 +98,9 @@ struct Cache {
     uint32_t batchSize = 1;
 
     // Batches produced in the background stream (VulkanCompute::
-    // beginBackground), oldest first: beside the frames, so a frame is not
-    // lengthened by their latency; their tiles are ready once the GPU has
-    // done them.
+    // beginBackground), oldest first: in the gap after their frame, so no
+    // frame waits for them or shares the GPU with them; their tiles are
+    // ready once the GPU has done them.
     struct InFlight {
         std::vector<tilecache::Production> tiles;
         uint64_t ticket = 0;
@@ -248,27 +248,21 @@ void writeDrawList(Cache& c) {
     c.drawList->write(0, records.data(), records.size() * sizeof(int32_t), &err);
 }
 
-// The next batch's size, by how the scenes' renders keep to their frame
-// target (Engine::sceneFrameLoad), additive up and halving down, as a
-// network paces by its losses: one tile more while the newest finished
-// render is under 90% of its target, half as many once one is over it, at
+// The next batch's size, by how the refinement fits the gap a frame leaves
+// before the next (Engine::refineLoad: production runs there, after the
+// frame's work), additive up and halving down, as a network paces by its
+// losses: one tile more while the newest finished refinement takes under
+// 90% of the gap, half as many once it overran it. Every cache paces by the
+// same signal, so together they share the gap as flows share a link. At
 // least half of producePerUpdate: a view still coarse is often what makes
 // the frames heavy (on the planet, 3.5 to 4 ms a frame until the ground and
-// clouds refine, 2.3 after), so slowing production while they are over
-// keeps them over. Turning at 27.6 km, where the march runs at the edge of
-// its 2.78 ms, a floor of one tile ran 16-48 of 120 frames over, a quarter
-// of producePerUpdate 21-29, half 1-4, and no pacing at all 1-2; but with
-// no pacing, a jump from orbit to the ground (thousands of tiles wanted at
-// once) stalled frames for 27-41 ms where half the batch keeps them to
-// about 5. Production runs beside the frames,
-// so its own GPU time (stretched by the frames' work it shares the GPU
-// with: a lone planet tile, 0.33 ms alone, read 1 to 6 ms beside a render)
-// says nothing of what it costs them; what it slows their renders by does.
-// No scene, no load: producePerUpdate is reached a tile an update.
+// clouds refine, 2.3 after), leaving no gap at all, and slowing production
+// then keeps them coarse. No scene, no load: producePerUpdate is reached a
+// tile an update.
 engine::Engine* g_engine = nullptr;
 void pace(Cache& c) {
     const uint32_t floor = (c.producePerUpdate + 1) / 2;
-    const double load = g_engine ? g_engine->sceneFrameLoad() : -1.0;
+    const double load = g_engine ? g_engine->refineLoad() : -1.0;
     if (load > 1.0)
         c.batchSize = std::max(floor, c.batchSize / 2);
     else if (load < 0.9)

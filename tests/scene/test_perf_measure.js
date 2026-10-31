@@ -31,9 +31,12 @@ if (!scene) {
         buf = bro.kernel.createBuffer(65536 * 4);
     }
     let rafs = 0;
+    const bgBuf = gpuKernel ? bro.kernel.createBuffer(65536 * 4) : null;
     const tick = () => {
         rafs++;
         if (k) k.dispatch([65536], buf, rafs);
+        // And refinement for the gap after the frame, as a tile cache's production.
+        if (k) bro.kernel.background(() => k.dispatch([65536], bgBuf, rafs));
         scene.captureFrame();
         requestAnimationFrame(tick);
     };
@@ -52,11 +55,18 @@ if (!scene) {
     assert(Math.abs(r.total.mean - r.gpu.mean - r.kernels.mean) < 1e-6, 'total is the scene and the kernels');
     assert(Object.keys(r.passes).length > 0, `the passes' mean ms (${JSON.stringify(r.passes)})`);
     if (gpuKernel) assert(r.kernelsBy.k_fill > 0 && r.kernels.mean > 0, `the page's kernel timed (${JSON.stringify(r.kernelsBy)})`);
+    // The refinement is run after each frame, timed whole, and apart from the frame's total.
+    if (gpuKernel) {
+        assert(r.refine.mean > 0 && r.refine.max >= r.refine.mean, `the refinement's GPU ms a frame (${JSON.stringify(r.refine)})`);
+        assert(r.backgroundBy['k_fill'] > 0, `its kernels listed apart (${JSON.stringify(r.backgroundBy)})`);
+        assert(typeof r.spill === 'number' && r.spill >= r.over, `frames whose refinement overran the interval (${r.spill})`);
+    }
     assert(Math.abs(r.budget - 1000 / 360) < 1e-9, 'the budget is a 360 Hz frame by default');
 
     // Over a budget of nothing every frame is a spike, with its breakdown.
     const all = perf.measure({ frames: 4, budget: 0 });
     assert(all.over === 4 && all.spikes.length === 4, `every frame over a zero budget (${all.over})`);
+    assert(all.spill === 4, `and every one spilled (${all.spill})`);
     assert(all.spikes.every((s, i) => s.frame === i && s.total === s.gpu + s.kernels), 'a spike names its frame and its ms');
 
     // A step that throws ends the run with its throw; a step not a function is a TypeError.

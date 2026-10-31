@@ -180,20 +180,21 @@ if (bro.kernel.gpu) {
 // the device cannot run (a capability it lacks) throws an Error naming it.
 
 // ============================================================================
-// 7. bro.kernel.background(fn) -> BackgroundJob: work beside the frames
+// 7. bro.kernel.background(fn) -> BackgroundJob: work between the frames
 // ============================================================================
 //
 // fn() is called at once, and every dispatch, write and createBuffer it makes
 // goes to the background stream (render::VulkanCompute::beginBackground):
-// the GPU's async compute queue (in order on the graphics queue where the
-// device has none), after the work recorded before it, in order with
-// earlier background jobs, and beside the frames recorded after it. For
+// held until the frame's GPU work is all submitted (its present, or at the
+// latest the next frame's start), then run on the GPU's async compute queue
+// (in order on the graphics queue where the device has none) after
+// everything submitted before it, in order with earlier background jobs: in
+// the time the frame leaves before the next one, not beside its draws. For
 // work whose results are wanted frames later, not this frame: a world's
 // field rebuilt into the half of a double buffer it does not draw from. A
 // few small dependent dispatches are far from filling the GPU, so in the
-// frame's own stream they lengthen the frame by all of their latency, where
-// beside it they cost only what they slow its work by. (A tile cache's
-// production runs here already, tiles-api.js.)
+// frame's own stream they lengthen the frame by all of their latency. (A
+// tile cache's production runs here already, tiles-api.js.)
 //
 //   job.done   true once the GPU has done the job's work; from the read that
 //              finds it true, the frames read what it wrote (the graphics

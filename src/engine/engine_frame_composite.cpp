@@ -606,6 +606,10 @@ bool Engine::presentCurrentFrame(bool mayHold) {
     // them: a compile or panel frame in between always re-presents.
     presentedKey_ = key;
     presentedKeyValid_ = presented && mayHold;
+    // The frame's GPU work is all submitted: the refinement held for the
+    // gap before the next frame starts after it (VulkanCompute::
+    // beginBackground).
+    if (vulkanContext_) vulkanContext_->compute().releaseBackground();
     return presented;
 }
 

@@ -17,6 +17,8 @@ constexpr VkDeviceSize kBufferGranule = 256;
 constexpr uint32_t kTimedQueries = 8192;
 // And for spans, two a span.
 constexpr uint32_t kSpanQueries = 256;
+// And for background submissions, two a submission.
+constexpr uint32_t kBackgroundQueries = 128;
 
 constexpr VkAccessFlags kComputeAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
                                          VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -84,9 +86,30 @@ void ComputeReadback::release() {
     mapped_ = nullptr;
 }
 
+bool ComputeOwner::backgroundSerialComplete(uint64_t serial) {
+    if (serial <= backgroundCompleted) return true;
+    if (serial > backgroundSubmitted || !context) return false;
+    VulkanQueue& q = queueOf(*context, true);
+    while (!backgroundSubmits.empty()) {
+        const BackgroundSubmit& f = backgroundSubmits.front();
+        if (f.ticket && !q.isComplete(f.ticket)) break;
+        backgroundCompleted = f.lastSerial;
+        backgroundSubmits.pop_front();
+    }
+    return serial <= backgroundCompleted;
+}
+
+uint64_t ComputeOwner::backgroundTicket(uint64_t serial) {
+    if (serial <= backgroundCompleted) return 0;
+    for (const BackgroundSubmit& f : backgroundSubmits)
+        if (f.lastSerial >= serial) return f.ticket;
+    return 0;
+}
+
 bool ComputeReadback::ready() const {
-    return owner_ && owner_->context && buffer_ != VK_NULL_HANDLE &&
-           queueOf(*owner_->context, background_).isComplete(ticket_);
+    if (!owner_ || !owner_->context || buffer_ == VK_NULL_HANDLE) return false;
+    return background_ ? owner_->backgroundSerialComplete(ticket_)
+                       : queueOf(*owner_->context, false).isComplete(ticket_);
 }
 
 ComputeSpan::~ComputeSpan() {
@@ -95,7 +118,9 @@ ComputeSpan::~ComputeSpan() {
 }
 
 bool ComputeSpan::ready() const {
-    return owner_ && owner_->context && ticket_ && queueOf(*owner_->context, background_).isComplete(ticket_);
+    if (!owner_ || !owner_->context || !ticket_) return false;
+    return background_ ? owner_->backgroundSerialComplete(ticket_)
+                       : queueOf(*owner_->context, false).isComplete(ticket_);
 }
 
 double ComputeSpan::ms() const {
@@ -136,10 +161,12 @@ bool VulkanCompute::init(VulkanContext& context) {
     context_ = &context;
     owner_ = std::make_shared<ComputeOwner>();
     owner_->context = &context;
-    // A frame's command buffers never outlive it: what is open goes now.
+    // A frame's command buffers never outlive it: what is open goes now,
+    // the background after the frame's graphics (when the present has not
+    // released it already).
     frameHook_ = context.frames().addFrameEndHook([this] {
-        flushStream(backgroundStream_, true);
         flush();
+        flushStream(backgroundStream_, true);
     });
     return true;
 }
@@ -147,8 +174,8 @@ bool VulkanCompute::init(VulkanContext& context) {
 void VulkanCompute::shutdown() {
     if (!context_) return;
     background_ = false;
-    flushStream(backgroundStream_, true);
     flush();
+    flushStream(backgroundStream_, true);
     context_->frames().removeFrameEndHook(frameHook_);
     if (backgroundStream_.lastTicket) queueOf(*context_, true).wait(backgroundStream_.lastTicket);
     if (graphicsStream_.lastTicket) context_->queue().wait(graphicsStream_.lastTicket);
@@ -167,6 +194,9 @@ void VulkanCompute::shutdown() {
     readbackSize_ = 0;
     if (timePool_ != VK_NULL_HANDLE) vkDestroyQueryPool(context_->device(), timePool_, nullptr);
     timePool_ = VK_NULL_HANDLE;
+    if (backgroundPool_ != VK_NULL_HANDLE) vkDestroyQueryPool(context_->device(), backgroundPool_, nullptr);
+    backgroundPool_ = VK_NULL_HANDLE;
+    backgroundStamps_.clear();
     timing_ = false;
     timed_.clear();
     context_ = nullptr;
@@ -286,7 +316,28 @@ VkCommandBuffer VulkanCompute::commands() {
     Stream& s = current();
     if (s.open == VK_NULL_HANDLE) {
         context_->frames().ensureFrame();
-        s.open = recordingBackground() ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
+        const bool bg = recordingBackground();
+        s.open = bg ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
+        // A background submission is timed whole, from when its work starts
+        // (after the graphics it waits for) to its end: what it takes of the
+        // gap between frames.
+        if (bg) backgroundStamped_ = false;
+        if (bg && timestamps()) {
+            if (backgroundPool_ == VK_NULL_HANDLE) {
+                VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+                info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                info.queryCount = kBackgroundQueries;
+                if (vkCreateQueryPool(context_->device(), &info, nullptr, &backgroundPool_) != VK_SUCCESS)
+                    backgroundPool_ = VK_NULL_HANDLE;
+            }
+            if (backgroundPool_ != VK_NULL_HANDLE && backgroundStamps_.size() < kBackgroundQueries / 2) {
+                backgroundStampQuery_ = backgroundQuery_;
+                backgroundQuery_ = (backgroundQuery_ + 2) % kBackgroundQueries;
+                vkCmdResetQueryPool(s.open, backgroundPool_, backgroundStampQuery_, 2);
+                vkCmdWriteTimestamp(s.open, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, backgroundPool_, backgroundStampQuery_);
+                backgroundStamped_ = true;
+            }
+        }
         // After whatever was submitted before: draws reading a buffer this
         // work writes, and earlier writes it reads. (On the background
         // stream, after its own earlier work; the graphics queue's is
@@ -319,16 +370,60 @@ void VulkanCompute::beginBackground() {
 uint64_t VulkanCompute::endBackground() {
     if (!context_ || !background_) return 0;
     const bool wasAsync = recordingBackground();
+    const uint64_t ticket = wasAsync ? markBackground() : flush();
     background_ = false;
-    return wasAsync ? flushStream(backgroundStream_, true) : flush();
+    return ticket;
+}
+
+uint64_t VulkanCompute::markBackground() {
+    if (backgroundStream_.open == VK_NULL_HANDLE) return owner_->backgroundMarked;
+    return ++owner_->backgroundMarked;
 }
 
 bool VulkanCompute::backgroundComplete(uint64_t ticket) const {
-    return context_ && queueFor(async()).isComplete(ticket);
+    if (!context_) return false;
+    return async() ? owner_->backgroundSerialComplete(ticket) : context_->queue().isComplete(ticket);
 }
 
-void VulkanCompute::acquireBackground(uint64_t ticket) {
-    if (!async() || ticket <= acquire_) return;
+void VulkanCompute::releaseBackground() {
+    if (context_ && async()) flushStream(backgroundStream_, true);
+}
+
+void VulkanCompute::finishBackground() {
+    if (!context_ || !async()) return;
+    flushStream(backgroundStream_, true);
+    if (backgroundStream_.lastTicket) queueFor(true).wait(backgroundStream_.lastTicket);
+}
+
+double VulkanCompute::takeBackgroundMs() {
+    if (context_) collectBackgroundStamps();
+    return std::exchange(backgroundMs_, 0.0);
+}
+
+double VulkanCompute::lastBackgroundMs() {
+    if (context_) collectBackgroundStamps();
+    return lastBackgroundMs_;
+}
+
+void VulkanCompute::collectBackgroundStamps() {
+    while (!backgroundStamps_.empty() && queueFor(true).isComplete(backgroundStamps_.front().ticket)) {
+        uint64_t stamps[2] = {0, 0};
+        if (vkGetQueryPoolResults(context_->device(), backgroundPool_, backgroundStamps_.front().query, 2,
+                                  sizeof(stamps), stamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            lastBackgroundMs_ =
+                static_cast<double>((stamps[1] - stamps[0]) & owner_->timestampMask) * owner_->timestampNs * 1e-6;
+            backgroundMs_ += lastBackgroundMs_;
+        }
+        backgroundStamps_.pop_front();
+    }
+}
+
+void VulkanCompute::acquireBackground(uint64_t serial) {
+    if (!async()) return;
+    // Wanted before the frame's end released it: it goes now.
+    if (serial > owner_->backgroundSubmitted) flushStream(backgroundStream_, true);
+    const uint64_t ticket = owner_->backgroundTicket(serial);
+    if (!ticket || ticket <= acquire_) return;
     acquire_ = ticket;
     // A graphics submission to carry the wait, at the latest when the frame
     // ends, before anything that reads the work (consumers flush() first).
@@ -430,7 +525,7 @@ void VulkanCompute::endSpan(ComputeSpan& span) {
     if (!context_ || span.owner_ != owner_ || span.ticket_) return;
     VkCommandBuffer cmd = commands();
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span.query_ + 1);
-    span.ticket_ = span.background_ ? flushStream(backgroundStream_, true) : flush();
+    span.ticket_ = span.background_ ? markBackground() : flush();
 }
 
 void VulkanCompute::setTiming(bool on) {
@@ -532,7 +627,7 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
                   VK_ACCESS_HOST_READ_BIT);
     current().pendingBarrier = true;
     r->background_ = recordingBackground();
-    r->ticket_ = r->background_ ? flushStream(backgroundStream_, true) : flush();
+    r->ticket_ = r->background_ ? markBackground() : flush();
     if (!r->ticket_) return nullptr;
     return r;
 }
@@ -556,7 +651,18 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
         flush();
         if (const uint64_t g = context_->queue().lastSubmittedTicket())
             waits.push_back({context_->queue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, g});
+        const bool stamped = backgroundStamped_;
+        if (stamped) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, backgroundPool_,
+                                         backgroundStampQuery_ + 1);
+        backgroundStamped_ = false;
         ticket = context_->frames().submitCompute(cmd, std::move(waits));
+        if (stamped && ticket) backgroundStamps_.push_back({backgroundStampQuery_, ticket});
+        // The serials handed out so far are this submission's (a failed
+        // one's complete at once: there is nothing to wait for).
+        if (owner_->backgroundMarked > owner_->backgroundSubmitted) {
+            owner_->backgroundSubmits.push_back({owner_->backgroundMarked, ticket});
+            owner_->backgroundSubmitted = owner_->backgroundMarked;
+        }
     } else {
         if (acquire_ > acquired_) {
             waits.push_back({queueFor(true).timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, acquire_});

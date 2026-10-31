@@ -197,8 +197,10 @@ if (!bro.kernel.available || !bro.tiles) {
         },
     });
     let threw = null;
+    // (A frame between updates: a batch's production starts once its frame ends.)
     for (let i = 0; i < 8 && !threw; i++) {
         try { flaky.update(near); } catch (e) { threw = e; }
+        advanceTime(16);
     }
     assert(threw && threw.message === 'no data yet', 'update rethrows what produce threw');
     assert(flaky.pending > 0, `the failed tiles stay pending (${flaky.pending})`);

@@ -25,28 +25,28 @@
 //   call, paced by the frames (below), the largest projected error first (a
 //   parent before its children), the four children of a parent together, so
 //   the draw set refines quad by quad as they land.
-// - Production runs beside the frames: what produce records goes to the
-//   GPU's async compute queue (VulkanCompute::beginBackground; in order on
-//   the graphics queue where the device has none), after the frames
-//   submitted before it, beside the ones after. A batch's tiles are ready,
-//   drawn, in the lookup and copied into textures filled from a pool, at the
-//   first update after the GPU has done it, usually the next. A tile's
-//   production is a few small dependent dispatches, far from filling the
-//   GPU: in the frame's own queue it lengthened the frame by all of it (a
-//   lone planet tile, 0.33 ms, pushed most frames of a fast turn past 2.78
-//   ms), where beside it costs the frame only what it slows its work by.
-//   produce must give its kernels only buffers nothing rewrites until the
-//   batch is ready (the batch's own, the pools, constants), as the GPU may
-//   still be reading them a frame later.
-// - The batch size paces itself by the scenes' renders: one tile more each
-//   update while the newest finished render is under 90% of its frame
-//   target (2.78 ms, 360 fps), half as many once one is over it, at least
-//   half of producePerUpdate (a view still coarse is often what makes the
-//   frames heavy, and starving it keeps it so; unpaced, a jump that wants
-//   thousands of tiles at once stalls frames). A batch's own GPU time
-//   says nothing of its cost beside the frames
-//   (sharing the GPU stretches it: a lone planet tile read 1 to 6 ms beside
-//   a render), what it slows their renders by does. Without a scene the
+// - Production runs between the frames: what produce records goes to the
+//   background stream (VulkanCompute::beginBackground), held until the
+//   frame's GPU work is all submitted, then run on the GPU's async compute
+//   queue (in order on the graphics queue where the device has none) after
+//   it: in the gap the frame leaves before the next. A batch's tiles are
+//   ready, drawn, in the lookup and copied into textures filled from a
+//   pool, at the first update after the GPU has done it, usually the next.
+//   A tile's production is a few small dependent dispatches, far from
+//   filling the GPU: in the frame's own queue it lengthened the frame by
+//   all of it (a lone planet tile, 0.33 ms, pushed most frames of a fast
+//   turn past 2.78 ms). produce must give its kernels only buffers nothing
+//   rewrites until the batch is ready (the batch's own, the pools,
+//   constants), as the GPU may still be reading them a frame later.
+// - The batch size paces itself by how the refinement fits that gap
+//   (Engine::refineLoad: the newest finished background submission's GPU
+//   time over the frame target, 2.78 ms at 360 fps, less the scene's newest
+//   render and a margin): one tile more each update while it takes under
+//   90% of the gap, half as many once it overran it, at least half of
+//   producePerUpdate (a view still coarse is often what makes the frames
+//   heavy, leaving no gap, and starving it keeps it so; unpaced, a jump
+//   that wants thousands of tiles at once stalls frames). Every cache paces
+//   by the one signal, so together they share the gap. Without a scene the
 //   batches grow to producePerUpdate.
 // - Tiles the view no longer wants are evicted when a slot is needed, the
 //   finest first (of equals, the least recently wanted), and produced again

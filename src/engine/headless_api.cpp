@@ -19,6 +19,7 @@
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
 #include "render/command_buffer.h"
+#include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -550,14 +551,22 @@ double Engine::gpuFrameMs(bool wait) {
     return lastGpuFrameMs_;
 }
 
-double Engine::sceneFrameLoad() {
+double Engine::refineLoad() {
     double load = -1.0;
 #if BRO_WITH_3D
+    if (!vulkanContext_) return load;
+    const double refine = vulkanContext_->compute().lastBackgroundMs();
+    if (refine < 0.0) return load;
+    // What the GPU must keep free of it: the present, the swapchain's
+    // handoff and a frame's CPU-side jitter.
+    constexpr double kMarginMs = 0.25;
     for (auto& sg : sceneGraphs_) {
         if (!sg.graph) continue;
         const double ms = sg.graph->renderer().latestGpuMs();
         const double target = sg.graph->renderer().frameTargetMs();
-        if (ms >= 0.0 && target > 0.0) load = std::max(load, ms / target);
+        if (ms < 0.0 || target <= 0.0) continue;
+        const double gap = std::max(0.05, target - ms - kMarginMs);
+        load = std::max(load, refine / gap);
     }
 #endif
     return load;

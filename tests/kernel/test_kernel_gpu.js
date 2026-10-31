@@ -71,9 +71,10 @@ if (!bro.kernel.available) {
     const row = outBuf.read(new Float32Array(W));
     assert(row.every((v) => near(v, 3, 1e-6)), 'a write is seen by the next dispatch: ' + row[5]);
 
-    // bro.kernel.background(fn): fn's dispatches run beside the frames, in
-    // order with each other, after the work recorded before; the job is
-    // done once the GPU has done them, and its results read right then.
+    // bro.kernel.background(fn): fn's dispatches run in the gap after the
+    // frame, in order with each other, after the work recorded before; the
+    // job is done once the GPU has done them, and its results read right
+    // then.
     perf.kernelTimes();
     const bgOut = bro.kernel.createBuffer(W * H * 4), bgTwice = bro.kernel.createBuffer(W * H * 4);
     srcBuf.write(src, 0);
@@ -81,6 +82,10 @@ if (!bro.kernel.available) {
         blur.dispatch([W, H], srcBuf, bgOut);
         blur.dispatch([W, H], bgOut, bgTwice);
     });
+    // Held until the frame's work is all submitted: a graphics readback
+    // waited on in the same frame does not let it start.
+    outBuf.read(new Float32Array(W));
+    assert(!job.done, 'a background job waits for the frame to end');
     let frames = 0;
     while (!job.done && frames < 30) { advanceTime(16); frames++; }
     assert(job.done, `a background job is done within frames (${frames})`);
