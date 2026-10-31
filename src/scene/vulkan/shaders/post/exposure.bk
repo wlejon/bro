@@ -1,0 +1,218 @@
+// Exposure (scene/exposure.h; scene/vulkan/post/scene_exposure.h), in one
+// dispatch: a 128-bin log2-luminance histogram of the HDR frame (one pixel of
+// every 4 x 4 block), metered by the last workgroup to finish.
+
+import atmosphere;
+
+const BINS: i32 = 128;
+const MIDDLE_GREY: f32 = 0.18;
+const METER_RAYS: i32 = 4;
+
+struct ExposureState {
+    ev: f32,
+    metered: f32,
+    scale: f32,
+    adapting: u32,
+}
+
+struct ExposurePush {
+    width: i32,
+    height: i32,
+    min_log2: f32,
+    max_log2: f32,
+    mode: f32,
+    fixed_ev: f32,
+    fixed_scale: f32,
+    compensation: f32,
+    dt: f32,
+    speed_up: f32,
+    speed_down: f32,
+    min_ev: f32,
+    max_ev: f32,
+    low_percent: f32,
+    high_percent: f32,
+    incident: f32,
+    rb: f32,
+    rt: f32,
+    r: f32,
+    mu_s: f32,
+    sun_lux: f32,
+    sun_radius: f32,
+    incident_ev_offset: f32,
+    brighter: f32,
+    darker: f32,
+    volumes: i32,
+}
+
+@binding(0, 0) var tex_hdr: sampler2d<vec4<f32>>;
+@binding(0, 1) var bins: buffer<u32>;
+@binding(0, 2) var state_buf: buffer<ExposureState>;
+@binding(0, 3) var t_transmittance: sampler2d<vec4<f32>>;
+@binding(0, 4) var volume_meter: read_buffer<vec4<f32>>;
+@binding(0, 5) var t_sky_light: sampler3d<vec4<f32>>;
+
+shared var tile: array<u32, 128>;
+shared var is_last: u32;
+
+@compute @fast @workgroup_size(16, 16, 1)
+fn exposure_comp(u: ExposurePush) {
+    let i = local_index();
+    if (u.mode < 0.5) {
+        if (i == 0) {
+            state_buf[0] = ExposureState {
+                ev: u.fixed_ev,
+                metered: u.fixed_ev,
+                scale: u.fixed_scale,
+                adapting: 0u,
+            };
+        }
+        return;
+    }
+
+    if (i < BINS) {
+        tile[i] = 0u;
+    }
+    barrier();
+
+    let gid = global_id();
+    let p = gid.xy * 4 + vec2<i32>(1, 1);
+    if (p.x < u.width && p.y < u.height) {
+        let c = tex_hdr.fetch(p, 0);
+        let lum = dot(c.xyz, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let x = lum > 0.0 ? (log2(lum) - u.min_log2) / (u.max_log2 - u.min_log2) : -1.0;
+        if (c.w > 0.0 && x >= 0.0) {
+            let b = (min(x * 128.0, 127.0) as u32) as i32;
+            tile.atomic_add(b, 1u);
+        }
+    }
+    barrier();
+
+    if (i < BINS) {
+        let n = tile[i];
+        if (n > 0u) {
+            bins.atomic_add(i, n);
+        }
+    }
+    storage_barrier();
+    barrier();
+    if (i == 0) {
+        let groups = num_workgroups();
+        let total_groups = (groups.x * groups.y) as u32;
+        is_last = (bins.atomic_add(BINS, 1u) == total_groups - 1u) ? 1u : 0u;
+    }
+    barrier();
+    if (is_last == 0u) {
+        return;
+    }
+
+    storage_barrier();
+    if (i < BINS) {
+        tile[i] = bins.atomic_exchange(i, 0u);
+    }
+    barrier();
+    if (i != 0) {
+        return;
+    }
+    bins[BINS] = 0u;
+
+    var total: u32 = 0u;
+    for (var b: i32 = 0; b < BINS; b += 1) {
+        total += tile[b];
+    }
+    let st = state_buf[0];
+    var ev: f32 = st.ev;
+    var metered: f32 = st.metered;
+    if (total > 0u) {
+        let lo = u.low_percent * (total as f32);
+        let hi = u.high_percent * (total as f32);
+        var below: f32 = 0.0;
+        var sum: f32 = 0.0;
+        var weight: f32 = 0.0;
+        let bin_width = (u.max_log2 - u.min_log2) / 128.0;
+        for (var b: i32 = 0; b < BINS; b += 1) {
+            let n = tile[b] as f32;
+            let take = max(0.0, min(below + n, hi) - max(below, lo));
+            sum += take * (u.min_log2 + ((b as f32) + 0.5) * bin_width);
+            weight += take;
+            below += n;
+        }
+        if (weight > 0.0) {
+            let reflected = sum / weight - log2(1.2 * MIDDLE_GREY);
+            metered = reflected;
+            if (u.incident > 0.5) {
+                let z4 = vec4<f32>(0.0);
+                let atm = atmosphere::Atmosphere {
+                    sun_dir: z4,
+                    sun_illuminance: vec4<f32>(0.0, 0.0, 0.0, u.sun_radius),
+                    rayleigh: z4,
+                    mie: z4,
+                    ozone: z4,
+                    shell: vec4<f32>(u.rb, u.rt, 1.0, 1.0),
+                    ground: z4,
+                    origin: z4,
+                    sky_view: z4,
+                    froxel: z4,
+                    froxel_view_proj: mat4f(z4, z4, z4, z4),
+                };
+                let r_clamped = clamp(max(u.r, u.rb), u.rb, u.rt);
+                let tr_uv = atmosphere::transmittance_uv(atm, r_clamped, u.mu_s);
+                let tr = t_transmittance.sample_lod(tr_uv, 0.0).xyz * atmosphere::planet_shadow(atm, max(u.r, u.rb), u.mu_s);
+                let lum_vec = vec3<f32>(0.2126, 0.7152, 0.0722);
+                var e_inc: f32 = u.sun_lux * dot(tr, lum_vec);
+
+                let h = clamp((max(u.r, u.rb) - u.rb) / (u.rt - u.rb), 0.0, 1.0);
+                let sky_uv = vec2<f32>(
+                    atmosphere::unit_to_texel(atmosphere::sun_unit(u.mu_s), atmosphere::SKYLIGHT_W),
+                    atmosphere::unit_to_texel(sqrt(h), atmosphere::SKYLIGHT_H)
+                );
+                let l0 = t_sky_light.sample_lod(vec3<f32>(sky_uv, 0.1), 0.0);
+                let l1 = t_sky_light.sample_lod(vec3<f32>(sky_uv, 0.3), 0.0);
+                let l2 = t_sky_light.sample_lod(vec3<f32>(sky_uv, 0.5), 0.0);
+                let c0 = l0.xyz;
+                let c1 = vec3<f32>(l0.w, l1.x, l1.y);
+                let c3 = vec3<f32>(l2.y, l2.z, l2.w);
+                let sky = atmosphere::PI * c0 * 0.282095 + (2.0 * atmosphere::PI / 3.0) * c1 * 0.488603 +
+                          (atmosphere::PI / 4.0) * c3 * 0.630784;
+                let sky_e = u.sun_lux / atmosphere::TABLE_SCALE * max(dot(sky, lum_vec), 0.0);
+
+                var sun_t: f32 = 1.0;
+                var sky_t: f32 = 1.0;
+                var down: f32 = 0.0;
+                for (var k: i32 = 0; k < u.volumes; k += 1) {
+                    var s: f32 = 0.0;
+                    var t: f32 = 0.0;
+                    for (var j: i32 = 0; j < METER_RAYS; j += 1) {
+                        let m = volume_meter[2 * (k * METER_RAYS + j)];
+                        s += m.w;
+                        t += volume_meter[2 * (k * METER_RAYS + j) + 1].x;
+                        down += dot(m.xyz, lum_vec) / (METER_RAYS as f32);
+                    }
+                    sun_t *= s / (METER_RAYS as f32);
+                    sky_t *= t / (METER_RAYS as f32);
+                }
+                e_inc = e_inc * sun_t + sky_e * sky_t + 3.14159265 * down;
+                var ev_inc: f32 = e_inc > 0.0 ? (log2(e_inc) + u.incident_ev_offset) : (reflected - u.brighter);
+                let knee = log2(3.0 * 3.14159265 / 0.18) + u.incident_ev_offset;
+                if (ev_inc < knee) {
+                    ev_inc = knee - 0.5 * (knee - ev_inc);
+                }
+                metered = clamp(ev_inc, reflected - u.brighter, reflected + u.darker);
+            }
+            metered = clamp(metered, u.min_ev, u.max_ev);
+        }
+        if (st.adapting == 0u) {
+            ev = metered;
+        } else {
+            let speed = metered > ev ? u.speed_up : u.speed_down;
+            ev += (metered - ev) * (1.0 - exp(-max(u.dt, 0.0) * max(speed, 0.0)));
+        }
+    }
+    let scale = 1.0 / (1.2 * exp2(ev - u.compensation));
+    let adapting = total > 0u ? 1u : st.adapting;
+    state_buf[0] = ExposureState {
+        ev: ev,
+        metered: metered,
+        scale: scale,
+        adapting: adapting,
+    };
+}

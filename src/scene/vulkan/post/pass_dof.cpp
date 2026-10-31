@@ -1,12 +1,14 @@
 #include "scene/vulkan/post/pass_dof.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
 #include "scene/vulkan/frame/scene_fullscreen.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "postfx.bk.src.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -29,11 +31,13 @@ bool PassDoF::setup(SceneGpu& gpu) {
     blurLayout_ = fullscreen::layout(dev, blurSetLayout_, 4 * sizeof(float));
     compositeLayout_ = fullscreen::layout(dev, compositeSetLayout_, 5 * sizeof(float));
 
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
-    VkShaderModule dofFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::DofFrag);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "dof blur");
-    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, dofFs, SceneTargets::kHdrFormat, "dof");
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "blur_frag");
+    VkShaderModule dofFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "dof_frag");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "dof blur",
+                                         "postfx_vert", "blur_frag");
+    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, dofFs, SceneTargets::kHdrFormat, "dof",
+                                              "postfx_vert", "dof_frag");
     for (VkShaderModule m : {vs, blurFs, dofFs}) SceneVkShaderModule::destroy(dev, m);
     return blurPipeline_ && compositePipeline_;
 }

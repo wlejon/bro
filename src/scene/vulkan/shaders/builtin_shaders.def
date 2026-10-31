@@ -11,9 +11,6 @@
 // compiles the same source with the same DEFINES at run time
 // (docs/hot-reload.md). Adding a shader is adding a line here.
 
-BRO_SCENE_SHADER(PostFxVert,               "postfx.vert",                 "post/postfx.vert",                   "vert", "")
-BRO_SCENE_SHADER(TonemapFrag,              "tonemap.frag",                "post/tonemap.frag",                  "frag", "")
-BRO_SCENE_SHADER(FxaaFrag,                 "fxaa.frag",                   "post/fxaa.frag",                     "frag", "")
 BRO_SCENE_SHADER(BillboardVert,            "billboard.vert",              "draw/billboard.vert",                "vert", "")
 BRO_SCENE_SHADER(BillboardFrag,            "billboard.frag",              "draw/billboard.frag",                "frag", "")
 BRO_SCENE_SHADER(ParticlesVert,            "particles.vert",              "draw/particles.vert",                "vert", "")
@@ -22,17 +19,5 @@ BRO_SCENE_SHADER(DecalVert,                "decal.vert",                  "draw/
 BRO_SCENE_SHADER(DecalFrag,                "decal.frag",                  "draw/decal.frag",                    "frag", "")
 // A volume's triangle over the view (pass_volume.cpp); volume.frag is compiled with its chunk at run time.
 BRO_SCENE_SHADER(VolumeVert,               "volume.vert",                 "draw/volume.vert",                   "vert", "")
-BRO_SCENE_SHADER(VolumeResolveFrag,        "volume_resolve.frag",         "post/volume_resolve.frag",           "frag", "")
-BRO_SCENE_SHADER(VolumeCompositeFrag,      "volume_composite.frag",       "post/volume_composite.frag",         "frag", "")
-BRO_SCENE_SHADER(BlurFrag,                 "blur.frag",                   "post/blur.frag",                     "frag", "")
-BRO_SCENE_SHADER(SsaoFrag,                 "ssao.frag",                   "post/ssao.frag",                     "frag", "")
-BRO_SCENE_SHADER(SsrFrag,                  "ssr.frag",                    "post/ssr.frag",                      "frag", "")
-BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "post/dof.frag",                      "frag", "")
-BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "post/apply_ao.frag",                 "frag", "")
 BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "draw/gaussian_splat.vert",           "vert", "")
 BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "draw/gaussian_splat.frag",           "frag", "")
-BRO_SCENE_SHADER(BloomBrightFrag,          "bloom_bright.frag",           "post/bloom_bright.frag",             "frag", "")
-BRO_SCENE_SHADER(TiltCompositeFrag,        "tilt_composite.frag",         "post/tilt_composite.frag",           "frag", "")
-// Exposure (scene_exposure.cpp): the frame's luminance histogram, metered and
-// adapted by its last workgroup.
-BRO_SCENE_SHADER(ExposureComp,             "exposure.comp",               "post/exposure.comp",                 "comp", "")

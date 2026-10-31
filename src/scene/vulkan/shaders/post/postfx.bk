@@ -1,0 +1,567 @@
+// Full-screen post-processing stages (scene/vulkan/post/*, pass_volume.cpp):
+//  - postfx_vert:           full-screen triangle vertex stage
+//  - bloom_bright_frag:     soft-knee HDR luminance threshold for bloom
+//  - blur_frag:             9-tap separable Gaussian blur
+//  - tonemap_frag:          exposure + Reinhard/ACES + gamma + 3D LUT + TPDF dither
+//  - tilt_composite_frag:   tilt-shift miniature focus band + saturation/contrast
+//  - fxaa_frag:             FXAA 3.11 quality-12 edge search + sub-pixel filter
+//  - dof_frag:              circle-of-confusion depth-of-field composite
+//  - ssao_frag:             half-resolution 16-tap hemisphere SSAO
+//  - apply_ao_frag:         subtractive indirect-light ambient occlusion apply
+//  - ssr_frag:              screen-space reflection ray march + binary refinement
+//  - volume_resolve_frag:   temporal reprojection + 3x3 neighbourhood clamp for volumes
+//  - volume_composite_frag: volume composite over the HDR scene target
+
+struct TonemapPush {
+    gamma: f32,
+    bloom_intensity: f32,
+    tonemap_mode: i32,
+    lut_amount: f32,
+    lut_scale: f32,
+    lut_offset: f32,
+    dither: f32,
+}
+
+struct TiltPush {
+    focus_center: f32,
+    focus_width: f32,
+    feather: f32,
+    saturation: f32,
+    contrast: f32,
+}
+
+struct DofPush {
+    focus_dist: f32,
+    focus_range: f32,
+    near_z: f32,
+    far_z: f32,
+    perspective: f32,
+}
+
+struct SsaoUBO {
+    proj: mat4f,
+    inv_proj: mat4f,
+    kernel: array<vec4<f32>, 16>,
+    params: vec4<f32>,
+}
+
+struct SsrUBO {
+    proj: mat4f,
+    inv_proj: mat4f,
+    params1: vec4<f32>,
+    params2: vec4<f32>,
+}
+
+struct VolumeResolveUBO {
+    prev_view_proj: mat4f,
+    inv_view_proj: mat4f,
+    eye_delta: vec4<f32>,
+}
+
+fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w;
+}
+
+fn mul3(c0: vec3<f32>, c1: vec3<f32>, c2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    return c0 * v.x + c1 * v.y + c2 * v.z;
+}
+
+@vertex fn postfx_vert() {
+    let vid = vertex_index();
+    let uv = vec2<f32>(((vid << 1) & 2) as f32, (vid & 2) as f32);
+    set_vertex_output(0, uv);
+    set_vertex_position(vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0));
+}
+
+@fragment fn bloom_bright_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) tex_source: sampler2d<vec4<f32>>,
+    threshold: f32
+) {
+    let c = tex_source.sample(in_uv).xyz;
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let k = clamp((luma - threshold) / max(threshold, 1e-3), 0.0, 1.0);
+    set_frag_output(0, vec4<f32>(c * k, 1.0));
+}
+
+@fragment fn blur_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_tex: sampler2d<vec4<f32>>,
+    step_vec: vec4<f32>
+) {
+    let dir = step_vec.xy;
+    let w0 = 0.2270270270;
+    let w1 = 0.1945945946;
+    let w2 = 0.1216216216;
+    let w3 = 0.0540540541;
+    let w4 = 0.0162162162;
+
+    var c: vec4<f32> = u_tex.sample(in_uv) * w0;
+    c += u_tex.sample(in_uv + dir * 1.0) * w1;
+    c += u_tex.sample(in_uv - dir * 1.0) * w1;
+    c += u_tex.sample(in_uv + dir * 2.0) * w2;
+    c += u_tex.sample(in_uv - dir * 2.0) * w2;
+    c += u_tex.sample(in_uv + dir * 3.0) * w3;
+    c += u_tex.sample(in_uv - dir * 3.0) * w3;
+    c += u_tex.sample(in_uv + dir * 4.0) * w4;
+    c += u_tex.sample(in_uv - dir * 4.0) * w4;
+    set_frag_output(0, c);
+}
+
+fn aces(x: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn hash12(p: vec2<f32>) -> f32 {
+    var p3: vec3<f32> = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += vec3<f32>(dot(p3, vec3<f32>(p3.y, p3.z, p3.x) + vec3<f32>(33.33)));
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn dither_tpdf(p: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        hash12(p) + hash12(p + vec2<f32>(57.31, 113.7)),
+        hash12(p + vec2<f32>(91.7, 23.9)) + hash12(p + vec2<f32>(11.3, 71.1)),
+        hash12(p + vec2<f32>(37.1, 147.3)) + hash12(p + vec2<f32>(163.9, 5.7))
+    ) - vec3<f32>(1.0);
+}
+
+@fragment fn tonemap_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) tex_hdr: sampler2d<vec4<f32>>,
+    @binding(0, 1) tex_bloom: sampler2d<vec4<f32>>,
+    @binding(0, 2) tex_lut: sampler3d<vec4<f32>>,
+    @binding(0, 3) exposure_state: read_buffer<vec4<f32>>,
+    u: TonemapPush
+) {
+    let src = tex_hdr.sample(in_uv);
+    var c: vec3<f32> = src.xyz;
+    if (u.bloom_intensity > 0.0) {
+        c += tex_bloom.sample(in_uv).xyz * u.bloom_intensity;
+    }
+    c *= exposure_state[0].z;
+    if (u.tonemap_mode == 2) {
+        c = aces(c);
+    } else if (u.tonemap_mode == 1) {
+        c = c / (c + vec3<f32>(1.0));
+    } else {
+        c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (u.gamma > 0.0 && u.gamma != 1.0) {
+        c = pow(c, vec3<f32>(1.0 / u.gamma));
+    }
+    if (u.lut_amount > 0.0) {
+        let graded = tex_lut.sample(c * u.lut_scale + vec3<f32>(u.lut_offset)).xyz;
+        c = mix(c, graded, u.lut_amount);
+    }
+    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    if (u.dither > 0.0) {
+        let fc = frag_coord().xy;
+        c += dither_tpdf(fc) * min(vec3<f32>(1.0), min(c, vec3<f32>(1.0) - c) * 255.0) / 255.0;
+    }
+    set_frag_output(0, vec4<f32>(c, src.w));
+}
+
+@fragment fn tilt_composite_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) tex_sharp: sampler2d<vec4<f32>>,
+    @binding(0, 1) tex_blur: sampler2d<vec4<f32>>,
+    u: TiltPush
+) {
+    let sharp = tex_sharp.sample(in_uv);
+    let blur = tex_blur.sample(in_uv);
+    let d = abs((1.0 - in_uv.y) - u.focus_center);
+    let t = smoothstep(u.focus_width, u.focus_width + u.feather, d);
+    var c: vec3<f32> = mix(sharp.xyz, blur.xyz, t);
+    let luma = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+    c = mix(vec3<f32>(luma), c, u.saturation);
+    c = (c - vec3<f32>(0.5)) * u.contrast + vec3<f32>(0.5);
+    set_frag_output(0, vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), mix(sharp.w, blur.w, t)));
+}
+
+fn luma_of(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+fn step_quality(i: i32) -> f32 {
+    if (i < 5) { return 1.0; }
+    if (i == 5) { return 1.5; }
+    if (i < 10) { return 2.0; }
+    if (i == 10) { return 4.0; }
+    return 8.0;
+}
+
+@fragment fn fxaa_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) tex_source: sampler2d<vec4<f32>>,
+    texel_vec: vec4<f32>
+) {
+    let texel_size = texel_vec.xy;
+    let center = tex_source.sample(in_uv);
+    let luma_center = luma_of(center.xyz);
+    let luma_down  = luma_of(tex_source.sample_offset(in_uv, vec2<i32>( 0, -1)).xyz);
+    let luma_up    = luma_of(tex_source.sample_offset(in_uv, vec2<i32>( 0,  1)).xyz);
+    let luma_left  = luma_of(tex_source.sample_offset(in_uv, vec2<i32>(-1,  0)).xyz);
+    let luma_right = luma_of(tex_source.sample_offset(in_uv, vec2<i32>( 1,  0)).xyz);
+
+    let luma_min = min(luma_center, min(min(luma_down, luma_up), min(luma_left, luma_right)));
+    let luma_max = max(luma_center, max(max(luma_down, luma_up), max(luma_left, luma_right)));
+    let luma_range = luma_max - luma_min;
+
+    if (luma_range < max(0.0312, luma_max * 0.125)) {
+        set_frag_output(0, center);
+        return;
+    }
+
+    let luma_down_left  = luma_of(tex_source.sample_offset(in_uv, vec2<i32>(-1, -1)).xyz);
+    let luma_up_right   = luma_of(tex_source.sample_offset(in_uv, vec2<i32>( 1,  1)).xyz);
+    let luma_up_left    = luma_of(tex_source.sample_offset(in_uv, vec2<i32>(-1,  1)).xyz);
+    let luma_down_right = luma_of(tex_source.sample_offset(in_uv, vec2<i32>( 1, -1)).xyz);
+
+    let luma_down_up    = luma_down + luma_up;
+    let luma_left_right = luma_left + luma_right;
+    let luma_left_corners  = luma_down_left + luma_up_left;
+    let luma_down_corners  = luma_down_left + luma_down_right;
+    let luma_right_corners = luma_down_right + luma_up_right;
+    let luma_up_corners    = luma_up_right + luma_up_left;
+
+    let edge_horizontal = abs(-2.0 * luma_left + luma_left_corners)
+                        + abs(-2.0 * luma_center + luma_down_up) * 2.0
+                        + abs(-2.0 * luma_right + luma_right_corners);
+    let edge_vertical   = abs(-2.0 * luma_up + luma_up_corners)
+                        + abs(-2.0 * luma_center + luma_left_right) * 2.0
+                        + abs(-2.0 * luma_down + luma_down_corners);
+    let is_horizontal = edge_horizontal >= edge_vertical;
+
+    let luma1 = is_horizontal ? luma_down : luma_left;
+    let luma2 = is_horizontal ? luma_up : luma_right;
+    let gradient1 = luma1 - luma_center;
+    let gradient2 = luma2 - luma_center;
+    let is_1_steepest = abs(gradient1) >= abs(gradient2);
+    let gradient_scaled = 0.25 * max(abs(gradient1), abs(gradient2));
+
+    var step_length: f32 = is_horizontal ? texel_size.y : texel_size.x;
+    var luma_local_average: f32 = 0.0;
+    if (is_1_steepest) {
+        step_length = -step_length;
+        luma_local_average = 0.5 * (luma1 + luma_center);
+    } else {
+        luma_local_average = 0.5 * (luma2 + luma_center);
+    }
+
+    let current_uv = in_uv + (is_horizontal ? vec2<f32>(0.0, step_length * 0.5) : vec2<f32>(step_length * 0.5, 0.0));
+    let offset = is_horizontal ? vec2<f32>(texel_size.x, 0.0) : vec2<f32>(0.0, texel_size.y);
+    var uv1: vec2<f32> = current_uv - offset;
+    var uv2: vec2<f32> = current_uv + offset;
+
+    var luma_end1: f32 = luma_of(tex_source.sample(uv1).xyz) - luma_local_average;
+    var luma_end2: f32 = luma_of(tex_source.sample(uv2).xyz) - luma_local_average;
+    var reached1: bool = abs(luma_end1) >= gradient_scaled;
+    var reached2: bool = abs(luma_end2) >= gradient_scaled;
+    var reached_both: bool = reached1 && reached2;
+    if (!reached1) { uv1 -= offset; }
+    if (!reached2) { uv2 += offset; }
+
+    if (!reached_both) {
+        for (var i: i32 = 2; i < 12; i += 1) {
+            if (!reached1) {
+                luma_end1 = luma_of(tex_source.sample(uv1).xyz) - luma_local_average;
+                reached1 = abs(luma_end1) >= gradient_scaled;
+            }
+            if (!reached2) {
+                luma_end2 = luma_of(tex_source.sample(uv2).xyz) - luma_local_average;
+                reached2 = abs(luma_end2) >= gradient_scaled;
+            }
+            reached_both = reached1 && reached2;
+            let sq = step_quality(i);
+            if (!reached1) { uv1 -= offset * sq; }
+            if (!reached2) { uv2 += offset * sq; }
+            if (reached_both) { break; }
+        }
+    }
+
+    let distance1 = is_horizontal ? (in_uv.x - uv1.x) : (in_uv.y - uv1.y);
+    let distance2 = is_horizontal ? (uv2.x - in_uv.x) : (uv2.y - in_uv.y);
+    let is_direction1 = distance1 < distance2;
+    let distance_final = min(distance1, distance2);
+    let edge_thickness = distance1 + distance2;
+
+    let is_luma_center_smaller = luma_center < luma_local_average;
+    let correct_variation1 = (luma_end1 < 0.0) != is_luma_center_smaller;
+    let correct_variation2 = (luma_end2 < 0.0) != is_luma_center_smaller;
+    let correct_variation = is_direction1 ? correct_variation1 : correct_variation2;
+
+    let pixel_offset = -distance_final / edge_thickness + 0.5;
+    var final_offset: f32 = correct_variation ? pixel_offset : 0.0;
+
+    let luma_average = (1.0 / 12.0) * (2.0 * (luma_down_up + luma_left_right) + luma_left_corners + luma_right_corners);
+    let sub_pixel_offset1 = clamp(abs(luma_average - luma_center) / luma_range, 0.0, 1.0);
+    let sub_pixel_offset2 = (-2.0 * sub_pixel_offset1 + 3.0) * sub_pixel_offset1 * sub_pixel_offset1;
+    let sub_pixel_offset_final = sub_pixel_offset2 * sub_pixel_offset2 * 0.75;
+    final_offset = max(final_offset, sub_pixel_offset_final);
+
+    let final_uv = in_uv + (is_horizontal ? vec2<f32>(0.0, final_offset * step_length) : vec2<f32>(final_offset * step_length, 0.0));
+    set_frag_output(0, tex_source.sample(final_uv));
+}
+
+fn linearize_depth(d: f32, u: DofPush) -> f32 {
+    let n = u.near_z;
+    let f = u.far_z;
+    if (u.perspective > 0.5) {
+        return n * f / max(d * (f - n) + n, 1e-9);
+    }
+    return n + (1.0 - d) * (f - n);
+}
+
+@fragment fn dof_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_sharp: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_blur: sampler2d<vec4<f32>>,
+    @binding(0, 2) u_depth_tex: sampler2d<vec4<f32>>,
+    u: DofPush
+) {
+    let sharp = u_sharp.sample(in_uv);
+    let blur = u_blur.sample(in_uv);
+    let d = u_depth_tex.sample(in_uv).x;
+    let dist = linearize_depth(d, u);
+    var coc: f32 = clamp((abs(dist - u.focus_dist) - u.focus_range) / max(u.focus_range, 1e-3), 0.0, 1.0);
+    coc = coc * coc * (3.0 - 2.0 * coc);
+    set_frag_output(0, mix(sharp, blur, coc));
+}
+
+fn ssao_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
+    let clip = vec4<f32>(uv * 2.0 - 1.0, d, 1.0);
+    let v = mul4(inv_proj, clip);
+    return v.xyz / v.w;
+}
+
+@fragment fn ssao_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_depth_tex: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_noise_tex: sampler2d<vec4<f32>>,
+    @binding(0, 2) ubo: uniform<SsaoUBO>
+) {
+    let d0 = u_depth_tex.sample(in_uv).x;
+    if (d0 <= 0.0) {
+        set_frag_output(0, 1.0);
+        return;
+    }
+
+    let p = ssao_view_pos(ubo.inv_proj, in_uv, d0);
+    let dp_dx = dpdx(p);
+    let dp_dy = dpdy(p);
+    var n: vec3<f32> = normalize(cross(dp_dx, dp_dy));
+    if (n.z < 0.0) {
+        n = -n;
+    }
+
+    let noise_scale = ubo.params.zw;
+    let rnd = vec3<f32>(u_noise_tex.sample(in_uv * noise_scale).xy * 2.0 - 1.0, 0.0);
+    let t = normalize(rnd - n * dot(rnd, n));
+    let b = cross(n, t);
+
+    let radius = ubo.params.x;
+    let bias = ubo.params.y;
+
+    var occlusion: f32 = 0.0;
+    for (var i: i32 = 0; i < 16; i += 1) {
+        let sp = p + mul3(t, b, n, ubo.kernel[i].xyz) * radius;
+        let off = mul4(ubo.proj, vec4<f32>(sp, 1.0));
+        let suv = (off.xy / off.w) * 0.5 + 0.5;
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
+            continue;
+        }
+        let sd = u_depth_tex.sample(suv).x;
+        let sample_z = ssao_view_pos(ubo.inv_proj, suv, sd).z;
+        let range_check = smoothstep(0.0, 1.0, radius / abs(p.z - sample_z));
+        occlusion += (sample_z >= sp.z + bias ? 1.0 : 0.0) * range_check;
+    }
+
+    let ao = 1.0 - occlusion / 16.0;
+    set_frag_output(0, ao);
+}
+
+@fragment fn apply_ao_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_ao_tex: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_indirect_tex: sampler2d<vec4<f32>>,
+    ao_params: vec4<f32>
+) {
+    let ao = u_ao_tex.sample(in_uv).x;
+    let visibility = clamp(mix(1.0, ao, ao_params.x), 0.0, 1.0);
+    let fc = frag_coord().xy;
+    let indirect = u_indirect_tex.fetch(vec2<i32>(fc.x as i32, fc.y as i32), 0).xyz;
+    set_frag_output(0, vec4<f32>(indirect * (1.0 - visibility), 0.0));
+}
+
+fn ssr_is_sky(d: f32) -> bool {
+    return d <= 0.0;
+}
+
+fn ssr_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
+    let clip = vec4<f32>(uv * 2.0 - 1.0, d, 1.0);
+    let v = mul4(inv_proj, clip);
+    return v.xyz / v.w;
+}
+
+@fragment fn ssr_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_color_tex: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_depth_tex: sampler2d<vec4<f32>>,
+    @binding(0, 2) ubo: uniform<SsrUBO>
+) {
+    let src = u_color_tex.sample(in_uv);
+    let d0 = u_depth_tex.sample(in_uv).x;
+    let p = ssr_view_pos(ubo.inv_proj, in_uv, d0);
+    let dp_dx = dpdx(p);
+    let dp_dy = dpdy(p);
+    var n: vec3<f32> = normalize(cross(dp_dx, dp_dy));
+    if (ssr_is_sky(d0)) {
+        discard_fragment();
+    }
+
+    let mask = src.w;
+    let intensity = ubo.params2.x;
+    let edge_fade = ubo.params2.y;
+    let is_perspective = (ubo.params1.x + 0.5) as i32;
+    let max_dist = ubo.params1.y;
+    let steps = (ubo.params1.z + 0.5) as i32;
+    let thickness = ubo.params1.w;
+
+    var refl: vec3<f32> = vec3<f32>(0.0);
+    var w: f32 = 0.0;
+
+    if (mask * intensity > 0.002) {
+        let i_dir = (is_perspective == 1) ? normalize(p) : vec3<f32>(0.0, 0.0, -1.0);
+        if (dot(n, i_dir) > 0.0) {
+            n = -n;
+        }
+        let r = reflect(i_dir, n);
+        let facing_fade = 1.0 - smoothstep(0.35, 0.9, dot(r, -i_dir));
+
+        if (facing_fade > 0.001) {
+            let step_len = max_dist / (steps as f32);
+            let o = p + n * min(0.05, step_len * 0.5);
+
+            var t_prev: f32 = 0.0;
+            var dz_prev: f32 = -1.0;
+            var t: f32 = step_len;
+            for (var i: i32 = 0; i < steps; i += 1) {
+                let q = o + r * t;
+                let clip = mul4(ubo.proj, vec4<f32>(q, 1.0));
+                if (is_perspective == 1 && clip.w <= 0.0) {
+                    break;
+                }
+                let uv = (clip.xy / clip.w) * 0.5 + 0.5;
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                    break;
+                }
+
+                let sd = u_depth_tex.sample(uv).x;
+                let dz = !ssr_is_sky(sd) ? (ssr_view_pos(ubo.inv_proj, uv, sd).z - q.z) : -1.0;
+
+                if (dz > 0.0 && dz_prev <= 0.0) {
+                    var lo: f32 = t_prev;
+                    var hi: f32 = t;
+                    var hit_uv: vec2<f32> = uv;
+                    var hit_dz: f32 = dz;
+                    for (var j: i32 = 0; j < 6; j += 1) {
+                        let mid = 0.5 * (lo + hi);
+                        let qm = o + r * mid;
+                        let cm = mul4(ubo.proj, vec4<f32>(qm, 1.0));
+                        let um = (cm.xy / cm.w) * 0.5 + 0.5;
+                        let sm = u_depth_tex.sample(um).x;
+                        let dm = !ssr_is_sky(sm) ? (ssr_view_pos(ubo.inv_proj, um, sm).z - qm.z) : -1.0;
+                        if (dm > 0.0) {
+                            hi = mid;
+                            hit_uv = um;
+                            hit_dz = dm;
+                        } else {
+                            lo = mid;
+                        }
+                    }
+                    if (hit_dz <= thickness) {
+                        let b = min(hit_uv, vec2<f32>(1.0) - hit_uv);
+                        let edge = (edge_fade > 0.0) ? smoothstep(0.0, edge_fade, min(b.x, b.y)) : 1.0;
+                        refl = u_color_tex.sample(hit_uv).xyz;
+                        w = clamp(mask * intensity, 0.0, 1.0) * edge * facing_fade;
+                        break;
+                    }
+                }
+                dz_prev = dz;
+                t_prev = t;
+                t += step_len;
+            }
+        }
+    }
+
+    set_frag_output(0, vec4<f32>(mix(src.xyz, refl, w), 1.0));
+}
+
+@fragment fn volume_resolve_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_medium: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_depth: sampler2d<vec4<f32>>,
+    @binding(0, 2) u_history: sampler2d<vec4<f32>>,
+    @binding(0, 3) ubo: uniform<VolumeResolveUBO>
+) {
+    let fc = frag_coord().xy;
+    let px = vec2<i32>(fc.x as i32, fc.y as i32);
+    let last = u_medium.size(0) - vec2<i32>(1);
+    let c = u_medium.fetch(px, 0);
+    let share = ubo.eye_delta.w;
+    if (share >= 1.0) {
+        set_frag_output(0, c);
+        return;
+    }
+
+    var lo: vec4<f32> = c;
+    var hi: vec4<f32> = c;
+    var depth: f32 = u_depth.fetch(px, 0).x;
+    for (var y: i32 = -1; y <= 1; y += 1) {
+        for (var x: i32 = -1; x <= 1; x += 1) {
+            if (x == 0 && y == 0) {
+                continue;
+            }
+            let q = clamp(px + vec2<i32>(x, y), vec2<i32>(0), last);
+            let s = u_medium.fetch(q, 0);
+            lo = min(lo, s);
+            hi = max(hi, s);
+            if (depth <= 0.0) {
+                depth = u_depth.fetch(q, 0).x;
+            }
+        }
+    }
+    let p = mul4(ubo.inv_view_proj, vec4<f32>(in_uv * 2.0 - 1.0, 1.0, 1.0));
+    let dir = normalize(p.xyz / p.w);
+    let clip = depth > 0.0 ? mul4(ubo.prev_view_proj, vec4<f32>(dir * depth + ubo.eye_delta.xyz, 1.0))
+                           : mul4(ubo.prev_view_proj, vec4<f32>(dir, 0.0));
+    if (clip.w <= 0.0) {
+        set_frag_output(0, c);
+        return;
+    }
+    let uv = (clip.xy / clip.w) * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        set_frag_output(0, c);
+        return;
+    }
+    let h = clamp(u_history.sample(uv), lo, hi);
+    set_frag_output(0, mix(h, c, share));
+}
+
+@fragment fn volume_composite_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_volumes: sampler2d<vec4<f32>>
+) {
+    let fc = frag_coord().xy;
+    let v = u_volumes.fetch(vec2<i32>(fc.x as i32, fc.y as i32), 0);
+    if (v.w >= 1.0 && max(v.x, max(v.y, v.z)) <= 0.0) {
+        discard_fragment();
+    }
+    set_frag_output(0, vec4<f32>(v.xyz, clamp(v.w, 0.0, 1.0)));
+}

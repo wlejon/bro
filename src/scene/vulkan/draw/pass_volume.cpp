@@ -16,6 +16,7 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "postfx.bk.src.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -55,9 +56,10 @@ bool PassVolume::setup(SceneGpu& gpu) {
     setLayout_ = builder.build(dev);
     if (!setLayout_) return false;
     layout_ = fullscreen::layout(dev, setLayout_, 0);
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::VolumeResolveFrag);
-    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat, "volume resolve");
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule fs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "volume_resolve_frag");
+    resolve_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kHdrFormat, "volume resolve", "postfx_vert",
+                                    "volume_resolve_frag");
     for (VkShaderModule m : {vs, fs}) SceneVkShaderModule::destroy(dev, m);
     return resolve_ != VK_NULL_HANDLE;
 }
@@ -330,8 +332,8 @@ bool PassVolumeComposite::setup(SceneGpu& gpu) {
     setLayout_ = fullscreen::samplerSetLayout(dev, 1);
     if (!setLayout_) return false;
     layout_ = fullscreen::layout(dev, setLayout_, 0);
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::VolumeCompositeFrag);
+    vs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    fs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "volume_composite_frag");
     return layout_ && vs_ && fs_;
 }
 
@@ -371,7 +373,7 @@ void PassVolumeComposite::record(SceneFrame& frame) {
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
         b.setLabel("volume box")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "postfx_vert", "volume_composite_frag")
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)

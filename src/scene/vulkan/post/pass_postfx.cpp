@@ -2,12 +2,14 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
 #include "scene/vulkan/frame/scene_fullscreen.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
+#include "postfx.bk.src.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -98,13 +100,16 @@ bool PassPostFx::setup(SceneGpu& gpu) {
     blurLayout_ = fullscreen::layout(dev, singleSetLayout_, 4 * sizeof(float));
     tonemapLayout_ = fullscreen::layout(dev, tonemapSetLayout_, sizeof(TonemapPush));
 
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule brightFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BloomBrightFrag);
-    VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
-    VkShaderModule tonemapFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::TonemapFrag);
-    brightPipeline_ = fullscreen::pipeline(dev, brightLayout_, vs, brightFs, SceneTargets::kHdrFormat, "bloom bright");
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "bloom blur");
-    tonemapPipeline_ = fullscreen::pipeline(dev, tonemapLayout_, vs, tonemapFs, SceneTargets::kLdrFormat, "tonemap");
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule brightFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "bloom_bright_frag");
+    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "blur_frag");
+    VkShaderModule tonemapFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "tonemap_frag");
+    brightPipeline_ = fullscreen::pipeline(dev, brightLayout_, vs, brightFs, SceneTargets::kHdrFormat, "bloom bright",
+                                           "postfx_vert", "bloom_bright_frag");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kHdrFormat, "bloom blur",
+                                         "postfx_vert", "blur_frag");
+    tonemapPipeline_ = fullscreen::pipeline(dev, tonemapLayout_, vs, tonemapFs, SceneTargets::kLdrFormat, "tonemap",
+                                            "postfx_vert", "tonemap_frag");
     for (VkShaderModule m : {vs, brightFs, blurFs, tonemapFs}) SceneVkShaderModule::destroy(dev, m);
 
     // The tonemap's LUT binding samples this until a LUT is loaded.
@@ -228,13 +233,14 @@ bool PassTiltShift::setup(SceneGpu& gpu) {
     if (!sampler_ || !singleSetLayout_ || !compositeSetLayout_) return false;
     blurLayout_ = fullscreen::layout(dev, singleSetLayout_, 4 * sizeof(float));
     compositeLayout_ = fullscreen::layout(dev, compositeSetLayout_, 5 * sizeof(float));
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "blur_frag");
     VkShaderModule compositeFs =
-        SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::TiltCompositeFrag);
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kLdrFormat, "tilt blur");
-    compositePipeline_ =
-        fullscreen::pipeline(dev, compositeLayout_, vs, compositeFs, SceneTargets::kLdrFormat, "tilt composite");
+        createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "tilt_composite_frag");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, SceneTargets::kLdrFormat, "tilt blur",
+                                         "postfx_vert", "blur_frag");
+    compositePipeline_ = fullscreen::pipeline(dev, compositeLayout_, vs, compositeFs, SceneTargets::kLdrFormat,
+                                              "tilt composite", "postfx_vert", "tilt_composite_frag");
     for (VkShaderModule m : {vs, blurFs, compositeFs}) SceneVkShaderModule::destroy(dev, m);
     return blurPipeline_ && compositePipeline_;
 }
@@ -303,9 +309,9 @@ bool PassFxaa::setup(SceneGpu& gpu) {
     setLayout_ = fullscreen::samplerSetLayout(dev, 1);
     if (!sampler_ || !setLayout_) return false;
     layout_ = fullscreen::layout(dev, setLayout_, 4 * sizeof(float));
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::FxaaFrag);
-    pipeline_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kLdrFormat, "fxaa");
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule fs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "fxaa_frag");
+    pipeline_ = fullscreen::pipeline(dev, layout_, vs, fs, SceneTargets::kLdrFormat, "fxaa", "postfx_vert", "fxaa_frag");
     SceneVkShaderModule::destroy(dev, vs);
     SceneVkShaderModule::destroy(dev, fs);
     return pipeline_ != VK_NULL_HANDLE;

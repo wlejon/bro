@@ -4,12 +4,13 @@
 #include "render/vulkan_queue.h"
 #include "render/vulkan_util.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
+#include "exposure.bk.src.h"
 #include "util/log.h"
 
 #include <cmath>
@@ -61,7 +62,9 @@ bool SceneExposure::setup(SceneGpu& gpu) {
     if (!setLayout_) return false;
     layout_ = computeLayout(dev, setLayout_, sizeof(Push));
     if (!layout_) return false;
-    pipeline_ = createComputePipeline(dev, BuiltinSceneShader::ExposureComp, layout_, "exposure");
+    VkShaderModule mod = createKernelStageModule(dev, "post/exposure.bk", kBkExposureSrc, "exposure_comp");
+    pipeline_ = createComputePipeline(dev, mod, layout_, "exposure", "exposure_comp");
+    SceneVkShaderModule::destroy(dev, mod);
     if (!pipeline_) return false;
 
     constexpr VkBufferUsageFlags kStorage =

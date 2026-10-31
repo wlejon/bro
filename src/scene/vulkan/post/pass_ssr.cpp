@@ -2,12 +2,13 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "postfx.bk.src.h"
 
 #include <cstring>
 
@@ -29,8 +30,8 @@ bool PassSSR::setup(SceneGpu& gpu) {
     info.pSetLayouts = &setLayout_;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::SsrFrag);
+    vs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    fs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "ssr_frag");
     return vs_ && fs_;
 }
 
@@ -60,7 +61,7 @@ void PassSSR::record(SceneFrame& frame) {
     VkPipeline pipeline = pipelines_.get(0, frame.hdrTarget, [&] {
         SceneVkPipelineBuilder b;
         b.setLabel("ssr")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "postfx_vert", "ssr_frag")
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(frame.hdrTarget)
          .disableBlending(1)

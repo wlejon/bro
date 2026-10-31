@@ -2,6 +2,7 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
@@ -9,7 +10,7 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "postfx.bk.src.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -103,11 +104,12 @@ bool PassSSAO::setup(SceneGpu& gpu) {
     blurLayout_ = fullscreen::layout(dev, blurSetLayout_, 4 * sizeof(float));
     if (!ssaoLayout_ || !blurLayout_) return false;
 
-    VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    VkShaderModule ssaoFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::SsaoFrag);
-    VkShaderModule blurFs = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BlurFrag);
-    ssaoPipeline_ = fullscreen::pipeline(dev, ssaoLayout_, vs, ssaoFs, kAoFormat, "ssao");
-    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, kAoFormat, "ssao blur");
+    VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    VkShaderModule ssaoFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "ssao_frag");
+    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "blur_frag");
+    ssaoPipeline_ = fullscreen::pipeline(dev, ssaoLayout_, vs, ssaoFs, kAoFormat, "ssao", "postfx_vert", "ssao_frag");
+    blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, kAoFormat, "ssao blur", "postfx_vert",
+                                         "blur_frag");
     for (VkShaderModule m : {vs, ssaoFs, blurFs}) SceneVkShaderModule::destroy(dev, m);
     return ssaoPipeline_ && blurPipeline_;
 }
@@ -205,8 +207,8 @@ bool PassAoApply::setup(SceneGpu& gpu) {
     setLayout_ = builder.build(dev);
     if (!setLayout_) return false;
     layout_ = fullscreen::layout(dev, setLayout_, 4 * sizeof(float));
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::PostFxVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ApplyAoFrag);
+    vs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
+    fs_ = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "apply_ao_frag");
     return layout_ && vs_ && fs_;
 }
 
@@ -246,7 +248,7 @@ void PassAoApply::record(SceneFrame& frame) {
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
         b.setLabel("ssao apply")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "postfx_vert", "apply_ao_frag")
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(frame.hdrTarget)
          .setColorBlendAttachment(0, blend)
