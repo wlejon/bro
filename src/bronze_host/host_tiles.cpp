@@ -107,8 +107,16 @@ struct Cache {
     double wantMs = 0.0;
     double credit = 0.0;
     double spendMs = std::numeric_limits<double>::infinity();
+    // A level's cost, else the nearest level's timed (the finer first: a
+    // descent reaches levels finer than any timed), else the mean.
     double costOf(uint32_t level) const {
-        return level < levelMs.size() && levelMs[level] > 0.0 ? levelMs[level] : tileMs;
+        const int32_t n = static_cast<int32_t>(levelMs.size());
+        for (int32_t d = 0; d < n + static_cast<int32_t>(level); ++d) {
+            const int32_t finer = static_cast<int32_t>(level) + d, coarser = static_cast<int32_t>(level) - d;
+            if (finer < n && levelMs[finer] > 0.0) return levelMs[finer];
+            if (coarser >= 0 && coarser < n && levelMs[coarser] > 0.0) return levelMs[coarser];
+        }
+        return tileMs;
     }
 
     // Batches produced in the background stream (VulkanCompute::
