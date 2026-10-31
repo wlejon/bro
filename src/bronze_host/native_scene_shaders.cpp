@@ -126,7 +126,8 @@ const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const 
     return "";
 }
 
-const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, const char* file) {
+const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, const char* file,
+                                                const char* modulesJson) {
     auto* n = nodeOf(self);
     auto* cell = nodeCellOf(self);
     auto* g = cell ? cell->graph() : nullptr;
@@ -145,12 +146,28 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
         tl_shaderErr = "setShaderModule: no module source";
         return tl_shaderErr.c_str();
     }
+    // The modules it imports beside the engine's: { name: source }.
+    std::vector<std::pair<std::string, std::string>> modules;
+    if (modulesJson && *modulesJson) {
+        auto j = json::parse(modulesJson, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) {
+            tl_shaderErr = "setShaderModule: modules must map names to sources";
+            return tl_shaderErr.c_str();
+        }
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (!it.value().is_string()) {
+                tl_shaderErr = "setShaderModule: module '" + it.key() + "' is not a source string";
+                return tl_shaderErr.c_str();
+            }
+            modules.emplace_back(it.key(), it.value().get<std::string>());
+        }
+    }
     std::string err;
-    if (!g->compileVolumeModule(source, name, err)) {
+    if (!g->compileVolumeModule(source, name, modules, err)) {
         tl_shaderErr = err.empty() ? "module compilation failed" : err;
         return tl_shaderErr.c_str();
     }
-    mn->setCustomShaderModule(source, name);
+    mn->setCustomShaderModule(source, name, std::move(modules));
     return "";
 }
 

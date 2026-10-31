@@ -1,7 +1,8 @@
 #pragma once
 
 // A brokernel module as a scene shader hook (createVolume({ module })): the
-// node's module, registered as `hook`, composed with the engine's own
+// node's module, registered as `hook` beside any modules it brings (the
+// app's, which its kernels share), composed with the engine's own
 // (scene.bk, atmosphere.bk, lighting.bk, custom.bk and the stage's) and
 // compiled by brass to the stage's SPIR-V. The hook reads the engine's frame
 // state through those modules' resources and declares its own in set 4
@@ -19,6 +20,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::scene::vk {
@@ -35,9 +37,14 @@ struct KernelVolumeHook {
     CustomShaderInterface iface;
 };
 
+/// Modules the hook imports beside the engine's (the app's own, shared with
+/// its kernels): name and source.
+using KernelHookModules = std::vector<std::pair<std::string, std::string>>;
+
 /// Compile a volume's hook module (`file` names it in diagnostics). False
-/// with `err` on a compile error or a set-4 resource the set cannot hold.
-bool compileKernelVolumeHook(const std::string& module, const std::string& file, KernelVolumeHook& out,
-                             std::string& err);
+/// with `err` on a compile error, a set-4 resource the set cannot hold, or
+/// one of `modules` named as an engine module.
+bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
+                             KernelVolumeHook& out, std::string& err);
 
 } // namespace bro::scene::vk

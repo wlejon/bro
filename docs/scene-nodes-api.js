@@ -550,12 +550,14 @@ class SceneNode {
    * A volume's hook as a brokernel module (scene.createVolume's `module`):
    * compiled with the engine's modules now, replacing the node's shader.
    * Throws with brokernel's diagnostics, `file` naming the module.
+   * `modules` are the app's modules it imports, `{ name: source }`.
    *
    * @param {string} source
    * @param {string} [file]
+   * @param {Object<string, string>} [modules]
    * @returns {SceneNode}
    */
-  setShaderModule(source, file) {}
+  setShaderModule(source, file, modules) {}
 
   /**
    * Set one uniform of the custom shader (a chunk's `u_*` uniform, a

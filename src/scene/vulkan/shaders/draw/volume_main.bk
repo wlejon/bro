@@ -16,7 +16,8 @@ from scene import camera;
     let scene_dist = volume::scene_distance(p);
     let cone = volume::pixel_cone(camera.viewport.y);
     let n = near::at(vec2<f32>(fc.x, fc.y), scene_dist);
-    let march = hook::volume(volume::Ray { dir: dir, scene_dist: scene_dist, near: n.range, cone: cone.x, min_width: cone.y });
+    let march = hook::volume(volume::Ray { dir: dir, scene_dist: scene_dist, near: n.range, cone: cone.x, min_width: cone.y,
+                                           pixel: vec2<f32>(fc.x, fc.y) });
     if (p.y == 0 && p.x < volume::METER_RAYS) {
         let rays = volume::meter_rays(p.x);
         volume::write_meter(index, p.x, hook::volume(rays.sun), hook::volume(rays.sky));

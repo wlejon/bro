@@ -639,14 +639,18 @@ class SceneGraph {
    * The hook may instead be a brokernel module (`module`, its source;
    * `file` names it in errors), registered as `hook` beside the engine's
    * modules (src/scene/vulkan/shaders/common/*.bk, draw/volume.bk) and
-   * compiled by brass, with the same meaning throughout:
+   * compiled by brass, with the same meaning throughout. `modules` gives
+   * it the app's own modules to import, `{ name: source }` (the names
+   * scene, atmosphere, lighting, custom, volume, near and hook are the
+   * engine's and refused):
    *
    *   pub fn volume(ray: volume::Ray) -> volume::Light
    *   pub fn medium_range() -> f32          (with medium, for the near grid)
    *   pub fn medium(pos: vec3<f32>, dir: vec3<f32>, footprint: f32) -> volume::Medium
    *
    * ray.dir, ray.scene_dist and ray.near are userVolume's dir, sceneDist and
-   * volumeNearEnd(); volume::light(radiance, transmittance, depth) makes its
+   * volumeNearEnd(), ray.pixel the centre of the pixel it is marched in (to
+   * offset steps by); volume::light(radiance, transmittance, depth) makes its
    * answer, and volume::sun_light, volume::sky_light, volume::footprint,
    * lighting::to_sun() and scene::camera are the chunk's helpers. A
    * Medium's scatter0..3 and extinction are userMedium's four parts. The
@@ -659,8 +663,10 @@ class SceneGraph {
    * unbound one of len() 0. SCENE_DEBUG(name) tests a debug view, and a
    * Light's `debug` (alpha 1) answers it. Errors carry brokernel's
    * diagnostics, or name a set-4 resource the set does not hold.
+   * BRO_KERNEL_SPIRV_DUMP=<dir> writes each compiled stage's SPIR-V there
+   * (<entry>.<hash>.spv), for spirv-dis.
    *
-   * @param {{fragment?: string, module?: string, file?: string, uniforms?: Object<string, number|number[]>, name?: string}} opts
+   * @param {{fragment?: string, module?: string, file?: string, modules?: Object<string, string>, uniforms?: Object<string, number|number[]>, name?: string}} opts
    * @returns {SceneNode}
    * @example
    * // Uniform haze, 1 km visibility, lit by the sun and the sky.

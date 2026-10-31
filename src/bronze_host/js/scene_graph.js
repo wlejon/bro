@@ -516,13 +516,13 @@
     // fragment chunk defines userVolume and is its only drawing.
     fn(SceneGraph.prototype, "createVolume", function createVolume(opts) {
         if (!opts || (typeof opts.fragment !== 'string' && typeof opts.module !== 'string'))
-            throw new TypeError('createVolume: takes { module, file, uniforms }, a brokernel module defining volume, ' +
+            throw new TypeError('createVolume: takes { module, file, modules, uniforms }, a brokernel module defining volume, ' +
                                 'or { fragment, uniforms }, the fragment chunk defining userVolume');
         const node = canon(__bro_native.scene.SceneGraph_createMesh(this, { volume: true }, null));
         if (!node) return undefined;
         try {
             if (typeof opts.module === 'string') {
-                node.setShaderModule(opts.module, opts.file);
+                node.setShaderModule(opts.module, opts.file, opts.modules);
                 if (opts.uniforms) for (const k of Object.keys(opts.uniforms)) node.setShaderUniform(k, opts.uniforms[k]);
             } else {
                 node.setShader({ fragment: opts.fragment, uniforms: opts.uniforms });

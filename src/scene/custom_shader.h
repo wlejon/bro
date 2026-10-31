@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::render {
@@ -33,6 +34,7 @@ struct CustomShaderState {
     // module's source, and the file diagnostics name.
     std::string module;
     std::string moduleFile;
+    std::vector<std::pair<std::string, std::string>> modules;   // the app's it imports: name, source
     std::string key;       // program-cache key: vertex + '\x1f' + fragment, or '\x1d' + module
     std::vector<CustomShaderUniform> uniforms;
 
@@ -44,11 +46,14 @@ struct CustomShaderState {
         st->fragmentChunk = std::move(fragmentChunk);
         return st;
     }
-    static std::unique_ptr<CustomShaderState> makeModule(std::string module, std::string file) {
+    static std::unique_ptr<CustomShaderState> makeModule(std::string module, std::string file,
+                                                         std::vector<std::pair<std::string, std::string>> modules) {
         auto st = std::make_unique<CustomShaderState>();
         st->key = '\x1d' + module;
+        for (const auto& [name, source] : modules) st->key += '\x1e' + name + '\x1f' + source;
         st->module = std::move(module);
         st->moduleFile = std::move(file);
+        st->modules = std::move(modules);
         return st;
     }
     bool isModule() const { return !module.empty(); }

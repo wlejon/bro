@@ -78,6 +78,7 @@ pub struct Ray {
     near: f32,        // where the march starts: the near grid's far end
     cone: f32,        // the width of what the ray's light stands for, a metre along it
     min_width: f32,   // and at least (m)
+    pixel: vec2<f32>, // the pixel it is marched in (its centre), to offset steps by
 }
 
 // What a volume sends the eye along a ray.
@@ -265,9 +266,11 @@ pub fn meter_rays(x: i32) -> MeterRays {
     // it (Malley).
     let r = sqrt(((x as f32) + 0.5) / (METER_RAYS as f32));
     let sky_dir = (hu * cos(a) + hv * sin(a)) * r + up * sqrt(max(1.0 - r * r, 0.0));
+    // Marched in the first row's pixel x.
+    let pixel = vec2<f32>((x as f32) + 0.5, 0.5);
     return MeterRays {
-        sun: Ray { dir: sun_dir, scene_dist: 1e30, near: 0.0, cone: METER_SUN_SPREAD, min_width: width },
-        sky: Ray { dir: sky_dir, scene_dist: 1e30, near: 0.0, cone: METER_SUN_SPREAD, min_width: width },
+        sun: Ray { dir: sun_dir, scene_dist: 1e30, near: 0.0, cone: METER_SUN_SPREAD, min_width: width, pixel: pixel },
+        sky: Ray { dir: sky_dir, scene_dist: 1e30, near: 0.0, cone: METER_SUN_SPREAD, min_width: width, pixel: pixel },
     };
 }
 

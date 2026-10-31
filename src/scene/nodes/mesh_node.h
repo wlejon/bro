@@ -348,8 +348,9 @@ public:
         bumpChangeGeneration();
     }
     /// A volume's brokernel hook (scene_vk_kernel_hook.h) in place of chunks.
-    void setCustomShaderModule(std::string module, std::string file) {
-        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file));
+    void setCustomShaderModule(std::string module, std::string file,
+                               std::vector<std::pair<std::string, std::string>> modules) {
+        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules));
         bumpChangeGeneration();
     }
     void clearCustomShader() {

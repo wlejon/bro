@@ -8,6 +8,8 @@
 //   - a medium (medium_range, medium) is integrated by the near grid to the
 //     opaque depth or its range, and the march starts at its range;
 //   - setShaderBuffer reaches a read_buffer of set 4, an unbound one len() 0;
+//   - `modules` gives the hook the app's modules to import (an engine
+//     module's name refused), and ray.pixel is the pixel's centre;
 //   - a module that does not compile, or declares a set-4 resource the set
 //     does not hold, is refused with the compiler's message.
 
@@ -124,6 +126,25 @@ pub fn volume(ray: volume::Ray) -> volume::Light {
 }
 `;
 
+// Its light the pixel it is marched in over the frame's size, from a module
+// of the app's.
+const SHADE = `
+module app::shade;
+
+pub fn of_pixel(p: vec2<f32>, size: f32) -> vec3<f32> {
+    return vec3<f32>(p.x / size, p.y / size, 0.0);
+}
+`;
+const PIXEL = `
+module hook;
+import volume;
+from app::shade import of_pixel;
+
+pub fn volume(ray: volume::Ray) -> volume::Light {
+    return volume::light(of_pixel(ray.pixel, 64.0), 0.0, ray.near);
+}
+`;
+
 const S = 64;
 const probe = freshScene(S);
 if (!probe.scene) {
@@ -188,7 +209,19 @@ if (!probe.scene) {
     assert(near(px(img, S / 2, 2), [102, 51, 26], 2), `setShaderBuffer reaches the module's buffer (${px(img, S / 2, 2)})`);
     scene.destroyNode(tinted);
 
+    const pixelVol = scene.createVolume({ module: PIXEL, file: 'pixel.bk', modules: { 'app::shade': SHADE } });
+    img = scene.captureFrame();
+    want = [255 * (S / 2 + 0.5) / S, 255 * 2.5 / S, 0];
+    got = px(img, S / 2, 2);
+    assert(near(got, want, 2), `a module of the app's is imported, and ray.pixel is the pixel's centre (${got} vs ${want.map(Math.round)})`);
+    scene.destroyNode(pixelVol);
+
     let threw = null;
+    try {
+        scene.createVolume({ module: PIXEL, file: 'pixel.bk', modules: { 'app::shade': SHADE, scene: SHADE } });
+    } catch (e) { threw = e; }
+    assert(threw !== null && String(threw.message).includes("'scene' is the engine's"), `an engine module's name is refused (${threw && threw.message})`);
+    threw = null;
     try {
         scene.createVolume({ module: 'module hook;\npub fn volume(ray: volume::Ray) -> volume::Light { return 1; }', file: 'bad.bk' });
     } catch (e) { threw = e; }

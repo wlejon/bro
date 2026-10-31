@@ -293,7 +293,7 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
     std::string err;
     if (cs.isModule()) {
         KernelVolumeHook hook;
-        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, hook, err);
+        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
         if (ok) {
             prog->iface = std::move(hook.iface);
             prog->medium = hook.medium;

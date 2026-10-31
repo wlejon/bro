@@ -581,8 +581,9 @@ public:
         return renderer_.compileCustomShader(target, key, vertexChunk,
                                              fragmentChunk, errOut);
     }
-    bool compileVolumeModule(const std::string& module, const std::string& file, std::string& errOut) {
-        return renderer_.compileVolumeModule(module, file, errOut);
+    bool compileVolumeModule(const std::string& module, const std::string& file,
+                             const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut) {
+        return renderer_.compileVolumeModule(module, file, modules, errOut);
     }
 
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---

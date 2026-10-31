@@ -314,9 +314,11 @@ bool SceneRenderer::compileCustomShader(CustomShaderTarget target, const std::st
     return vk::SceneVkCustomShader::validateCustomShader(target, vertexChunk, fragmentChunk, errOut);
 }
 
-bool SceneRenderer::compileVolumeModule(const std::string& module, const std::string& file, std::string& errOut) {
+bool SceneRenderer::compileVolumeModule(const std::string& module, const std::string& file,
+                                        const std::vector<std::pair<std::string, std::string>>& modules,
+                                        std::string& errOut) {
     vk::KernelVolumeHook hook;
-    return vk::compileKernelVolumeHook(module, file, hook, errOut);
+    return vk::compileKernelVolumeHook(module, file, modules, hook, errOut);
 }
 
 // --- Colour grading ---------------------------------------------------------

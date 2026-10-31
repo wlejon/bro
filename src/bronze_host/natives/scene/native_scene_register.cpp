@@ -409,7 +409,7 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_onStateChanged_set", BRO_NATIVE_FN(bro_scene_SceneNode_onStateChanged_set), "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_hasShader", BRO_NATIVE_FN(bro_scene_SceneNode_hasShader), "bool", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setShader", BRO_NATIVE_FN(bro_scene_SceneNode_setShader), "str", {"__bro_native.scene.SceneNode", "str", "str", "str"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_setShaderModule", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderModule), "str", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_setShaderModule", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderModule), "str", {"__bro_native.scene.SceneNode", "str", "str", "str"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_clearShader", BRO_NATIVE_FN(bro_scene_SceneNode_clearShader), "void", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setShaderUniform", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderUniform), "void", {"__bro_native.scene.SceneNode", "str", "f64[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setLodMeshes", BRO_NATIVE_FN(bro_scene_SceneNode_setLodMeshes), "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
