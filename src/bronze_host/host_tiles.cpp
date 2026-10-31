@@ -252,17 +252,22 @@ void writeDrawList(Cache& c) {
 // target (Engine::sceneFrameLoad), additive up and halving down, as a
 // network paces by its losses: one tile more while the newest finished
 // render is under 90% of its target, half as many once one is over it, at
-// least a quarter of producePerUpdate: a view still coarse is often what
-// makes the frames heavy (on the planet, 3.5 to 4 ms a frame until the
-// ground and clouds refine, 2.3 after), and pacing it to a tile a frame
-// kept it so. Production runs beside the frames,
+// least half of producePerUpdate: a view still coarse is often what makes
+// the frames heavy (on the planet, 3.5 to 4 ms a frame until the ground and
+// clouds refine, 2.3 after), so slowing production while they are over
+// keeps them over. Turning at 27.6 km, where the march runs at the edge of
+// its 2.78 ms, a floor of one tile ran 16-48 of 120 frames over, a quarter
+// of producePerUpdate 21-29, half 1-4, and no pacing at all 1-2; but with
+// no pacing, a jump from orbit to the ground (thousands of tiles wanted at
+// once) stalled frames for 27-41 ms where half the batch keeps them to
+// about 5. Production runs beside the frames,
 // so its own GPU time (stretched by the frames' work it shares the GPU
 // with: a lone planet tile, 0.33 ms alone, read 1 to 6 ms beside a render)
 // says nothing of what it costs them; what it slows their renders by does.
 // No scene, no load: producePerUpdate is reached a tile an update.
 engine::Engine* g_engine = nullptr;
 void pace(Cache& c) {
-    const uint32_t floor = (c.producePerUpdate + 3) / 4;
+    const uint32_t floor = (c.producePerUpdate + 1) / 2;
     const double load = g_engine ? g_engine->sceneFrameLoad() : -1.0;
     if (load > 1.0)
         c.batchSize = std::max(floor, c.batchSize / 2);

@@ -242,17 +242,16 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(again.every((t) => t.parent < 0 || batchOf.get(t.parent) < batchOf.get(t.slot)),
            'a parent in an earlier batch than its children');
 
-    // The batches pace themselves by the frames: a quarter of
-    // producePerUpdate at first, then a
-    // tile more an update while no scene runs over its frame target (none
-    // here), never past producePerUpdate.
+    // The batches pace themselves by the frames: half of producePerUpdate
+    // at first, then a tile more an update while no scene runs over its
+    // frame target (none here), never past producePerUpdate.
     const paced = makeCache({ producePerUpdate: 6 });
     const made = [];
     for (let i = 0; i < 12; i++) {
         made.push(paced.update(near));
         advanceTime(16);
     }
-    assert(Math.max(...made) === 6 && made.every((n, i) => n <= i + 2),
+    assert(Math.max(...made) === 6 && made.every((n, i) => n <= i + 3),
            `batches grow a tile an update up to producePerUpdate (${made})`);
     assert(paced.stats.batchSize === 6, `and hold there (${paced.stats.batchSize})`);
 

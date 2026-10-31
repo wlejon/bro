@@ -41,8 +41,9 @@
 // - The batch size paces itself by the scenes' renders: one tile more each
 //   update while the newest finished render is under 90% of its frame
 //   target (2.78 ms, 360 fps), half as many once one is over it, at least
-//   a quarter of producePerUpdate (a view still coarse is often what makes
-//   the frames heavy, and starving it keeps it so). A batch's own GPU time
+//   half of producePerUpdate (a view still coarse is often what makes the
+//   frames heavy, and starving it keeps it so; unpaced, a jump that wants
+//   thousands of tiles at once stalls frames). A batch's own GPU time
 //   says nothing of its cost beside the frames
 //   (sharing the GPU stretches it: a lone planet tile read 1 to 6 ms beside
 //   a render), what it slows their renders by does. Without a scene the
