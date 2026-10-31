@@ -76,3 +76,139 @@ pub fn hash2(x: u32, y: u32) -> f32 {
     h = (h ^ (h >> 13u)) * 0x5bd1e995u;
     return ((h ^ (h >> 15u)) & 1023u) as f32 / 1024.0;
 }
+
+// transpose(inverse(mat3(m0, m1, m2))) * v for transforming normals.
+pub fn mul_normal(m0: vec3<f32>, m1: vec3<f32>, m2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    let c0 = cross(m1, m2);
+    let c1 = cross(m2, m0);
+    let c2 = cross(m0, m1);
+    let det = dot(m0, c0);
+    let inv_det = select(det != 0.0, 1.0 / det, 0.0);
+    return (c0 * v.x + c1 * v.y + c2 * v.z) * inv_det;
+}
+
+pub fn mat3_from4(m: mat4f) -> mat3f {
+    return mat3f(m[0].xyz, m[1].xyz, m[2].xyz);
+}
+
+pub fn mul_mat3(a: mat3f, b: mat3f) -> mat3f {
+    return mat3f(mul3(a, b[0]), mul3(a, b[1]), mul3(a, b[2]));
+}
+
+pub fn transpose3(m: mat3f) -> mat3f {
+    return mat3f(vec3<f32>(m[0].x, m[1].x, m[2].x),
+                 vec3<f32>(m[0].y, m[1].y, m[2].y),
+                 vec3<f32>(m[0].z, m[1].z, m[2].z));
+}
+
+pub fn inv3(m: mat3f) -> mat3f {
+    let c0 = cross(m[1], m[2]);
+    let c1 = cross(m[2], m[0]);
+    let c2 = cross(m[0], m[1]);
+    let det = dot(m[0], c0);
+    let inv_det = select(det != 0.0, 1.0 / det, 0.0);
+    return transpose3(mat3f(c0 * inv_det, c1 * inv_det, c2 * inv_det));
+}
+
+pub fn clip(world_pos: vec3<f32>) -> vec4<f32> {
+    return mul4(camera.view_proj, vec4<f32>(world_pos, 1.0));
+}
+
+pub fn view_pos(world_pos: vec3<f32>) -> vec3<f32> {
+    return mul4(camera.view, vec4<f32>(world_pos, 1.0)).xyz;
+}
+
+// Vertex wind displacement (scene_camera.glsl's windDelta).
+pub fn wind_delta(pos: vec3<f32>, bend: f32) -> vec3<f32> {
+    if camera.wind.w <= 0.0 || bend <= 0.0 { return vec3<f32>(0.0, 0.0, 0.0); }
+    let phase = sin(camera.wind_params.x * camera.wind_params.y + camera.wind_params.z +
+                    dot(pos.xz, vec2<f32>(0.3, 0.5)));
+    return camera.wind.xyz * (phase * camera.wind.w * bend);
+}
+
+// --- The wind field (scene/world/wind_field.h, scene_camera.glsl) ----------
+
+pub fn wind_hash(p: vec2<i32>) -> f32 {
+    var h: u32 = (p.x as u32) * 374761393u + (p.y as u32) * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return (h as f32) / 4294967296.0;
+}
+
+pub fn wind_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let ii = vec2<i32>(i);
+    let a = wind_hash(ii);
+    let b = wind_hash(ii + vec2<i32>(1, 0));
+    let c = wind_hash(ii + vec2<i32>(0, 1));
+    let d = wind_hash(ii + vec2<i32>(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+const WIND_SIMPLEX_GRID: f32 = 0.38;
+
+fn wind_simplex_corner(c: vec2<i32>, d: vec2<f32>) -> f32 {
+    var t: f32 = 0.5 - dot(d, d);
+    if t <= 0.0 { return 0.0; }
+    let a = wind_hash(c) * 6.2831853;
+    t *= t;
+    return t * t * (cos(a) * d.x + sin(a) * d.y);
+}
+
+pub fn wind_simplex(p_in: vec2<f32>) -> f32 {
+    let f2: f32 = 0.36602540378;
+    let g2: f32 = 0.21132486540;
+    let p = p_in * WIND_SIMPLEX_GRID;
+    let i = floor(p + (p.x + p.y) * f2);
+    let d0 = p - i + (i.x + i.y) * g2;
+    let o = select(d0.x > d0.y, vec2<i32>(1, 0), vec2<i32>(0, 1));
+    let d1 = d0 - vec2<f32>(o) + g2;
+    let d2 = d0 - 1.0 + 2.0 * g2;
+    let ii = vec2<i32>(i);
+    return 80.0 * (wind_simplex_corner(ii, d0) +
+                   wind_simplex_corner(ii + o, d1) +
+                   wind_simplex_corner(ii + vec2<i32>(1, 1), d2));
+}
+
+const GUST_SOFT: f32 = 0.06;
+
+fn wind_soft_ramp(x: f32) -> f32 {
+    return 0.5 * (x + sqrt(x * x + GUST_SOFT * GUST_SOFT));
+}
+
+pub fn wind_gust_at_time(xz: vec2<f32>, t: f32, fine: bool) -> f32 {
+    if camera.wind_gust.x <= 0.0 { return 0.0; }
+    let d = camera.wind_field.xy;
+    let along = dot(xz, d) - t * camera.wind_field.w;
+    let across = dot(xz, vec2<f32>(-d.y, d.x));
+    let k = camera.wind_gust.yz;
+    var g: f32 = wind_simplex(vec2<f32>(along * k.x, across * k.y)) * 0.5 + 0.5;
+    if fine {
+        g += 0.35 * wind_simplex(vec2<f32>(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
+    }
+    return wind_soft_ramp(g - 0.45) * 2.4 * camera.wind_gust.x;
+}
+
+const WIND_CLOCK_PERIOD: f32 = 256.0;
+
+pub fn wind_cycles(hz: f32) -> f32 {
+    let f = floor(hz * WIND_CLOCK_PERIOD + 0.5) / WIND_CLOCK_PERIOD;
+    return fract(f * camera.wind_params.w);
+}
+
+pub fn wind_gust_at(xz: vec2<f32>) -> f32 {
+    return wind_gust_at_time(xz, camera.wind_params.x, true);
+}
+
+pub fn wind_at(pos: vec3<f32>) -> vec4<f32> {
+    let xz = pos.xz + camera.eye_world.xz;
+    let g = wind_gust_at(xz);
+    let d = camera.wind_field.xy;
+    let spd = camera.wind_field.z + g * 4.0;
+    let t = camera.wind_params.x;
+    let wobble = wind_noise(vec2<f32>(dot(xz, d) * 0.03 - t * 0.3, t * 0.1)) * 0.25;
+    let v = (d + vec2<f32>(-d.y, d.x) * wobble) * spd;
+    return vec4<f32>(v.x, 0.0, v.y, g);
+}

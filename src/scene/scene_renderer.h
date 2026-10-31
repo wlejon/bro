@@ -510,6 +510,9 @@ public:
     /// diagnostics), so setShaderModule can report errors at set time.
     bool compileVolumeModule(const std::string& module, const std::string& file,
                              const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut);
+    bool compileShaderModule(CustomShaderTarget target, const std::string& module, const std::string& file,
+                             const std::vector<std::pair<std::string, std::string>>& modules, bool& hasVertexOut,
+                             std::string& errOut);
 
     // --- What the GPU passes read each frame ---
 

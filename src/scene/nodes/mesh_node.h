@@ -349,8 +349,9 @@ public:
     }
     /// A volume's brokernel hook (scene_vk_kernel_hook.h) in place of chunks.
     void setCustomShaderModule(std::string module, std::string file,
-                               std::vector<std::pair<std::string, std::string>> modules) {
-        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules));
+                               std::vector<std::pair<std::string, std::string>> modules,
+                               bool hasVertex = false) {
+        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules), hasVertex);
         bumpChangeGeneration();
     }
     void clearCustomShader() {
@@ -532,7 +533,24 @@ public:
                                       int atlas = 1);
 
     /// Release the named slot; the name no longer counts against the budget.
+    /// Release the named slot; the name no longer counts against the budget.
     void clearCustomShaderTexture(const std::string& name);
+
+    static bool setUserTexture(std::vector<UserTexture>& slots, const std::string& name, int width,
+                               int height, const float* data, bool mipmap, bool repeat, bool clampT,
+                               int channels, bool& changed);
+    static bool updateUserTexture(std::vector<UserTexture>& slots, const std::string& name, int x,
+                                  int y, int width, int height, const float* data, bool& changed);
+    static bool setUserTextureArray(std::vector<UserTexture>& slots, const std::string& name,
+                                    int width, int height, int layers, int channels, bool mipmap,
+                                    bool repeat, bool clampT, bool volume, bool& changed);
+    static bool setUserTextureArrayLayer(std::vector<UserTexture>& slots, const std::string& name,
+                                         int layer, const float* data, bool& changed);
+    static bool setUserTextureBuffer(std::vector<UserTexture>& slots, const std::string& name,
+                                     int width, int height, int layers, int channels,
+                                     std::shared_ptr<render::ComputeBuffer> source, bool repeat,
+                                     bool volume, UserTexture::Encoding encoding, int atlas,
+                                     bool& changed);
     const std::vector<UserTexture>& customShaderTextures() const {
         return userTextures_;
     }

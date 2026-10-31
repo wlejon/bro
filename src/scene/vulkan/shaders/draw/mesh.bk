@@ -1,0 +1,526 @@
+// Shared mesh types, bindings, push constants, and vertex/fragment shading
+// helpers for built-in meshes and custom mesh module hooks (mesh_main.bk).
+//
+// A mesh's hook module (`setShaderModule`, `createMesh({ module })`) imports
+// `mesh` and defines any of:
+//   pub fn vertex(v: mesh::Vertex) -> mesh::Vertex
+//   pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface
+//   pub fn light(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface
+module mesh;
+
+import scene;
+import lighting;
+import vegetation;
+import procedural;
+import bark;
+from scene import camera;
+
+pub struct Push {
+    model: mat4f,
+    base_color: vec4<f32>,
+    emissive: vec4<f32>,
+    pbr_params: vec4<f32>,
+    extra: vec4<f32>,
+}
+
+pub struct ShadowPush {
+    light_view_proj: mat4f,
+    model_rows: array<vec4<f32>, 3>,
+    params: vec4<f32>,
+}
+
+pub const ALBEDO_MAP: u32         = 1u;
+pub const NORMAL_MAP: u32         = 2u;
+pub const METALLIC_ROUGHNESS: u32 = 4u;
+pub const EMISSIVE_MAP: u32       = 8u;
+pub const UNLIT: u32              = 16u;
+pub const SHADE_MAP: u32          = 32u;
+pub const REFLECTANCE: u32        = 64u;
+pub const OCCLUSION_MAP: u32      = 128u;
+pub const RECEIVES_SHADOW: u32    = 256u;
+pub const TWO_SIDED: u32          = 512u;
+pub const HAS_TANGENTS: u32       = 4096u;
+pub const VERTEX_COLOR_SHIFT: u32 = 10u;
+
+@binding(2, 0) pub var albedo_map: sampler2d<vec4<f32>>;
+@binding(2, 1) pub var normal_map: sampler2d<vec4<f32>>;
+@binding(2, 2) pub var mr_map: sampler2d<vec4<f32>>;
+@binding(2, 3) pub var emissive_map: sampler2d<vec4<f32>>;
+@binding(2, 4) pub var occlusion_map: sampler2d<vec4<f32>>;
+
+pub struct BonePalette {
+    bones: array<vec4<f32>, 1024>,
+}
+@binding(3, 0) pub var bone_palette: uniform<BonePalette>;
+
+pub struct Vertex {
+    pos: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    color: vec4<f32>,
+    tangent: vec4<f32>,
+    bitangent: vec3<f32>,
+    world_pos: vec3<f32>,
+    cam_dist: f32,
+    pixel: vec2<f32>,
+    vertex_index: i32,
+    instance_index: i32,
+    model: mat4f,
+    wind_mask: f32,
+    v0: vec4<f32>,
+    v1: vec4<f32>,
+    v2: vec4<f32>,
+    v3: vec4<f32>,
+    v4: vec4<f32>,
+    v5: vec4<f32>,
+    vi: vec4<i32>,
+}
+
+pub struct Surface {
+    base_color: vec3<f32>,
+    normal: vec3<f32>,
+    metallic: f32,
+    roughness: f32,
+    emissive: vec3<f32>,
+    alpha: f32,
+    sun_visibility: f32,
+    sky_visibility: f32,
+    sky_normal: vec3<f32>,
+    occluder_sun: f32,
+    sun_diffuse: f32,
+    to_sun: vec3<f32>,
+    debug: vec4<f32>,
+}
+
+pub struct FragOut {
+    color: vec4<f32>,
+    indirect: vec4<f32>,
+}
+
+pub fn debug(s: Surface, rgb: vec3<f32>) -> Surface {
+    return Surface {
+        base_color: s.base_color,
+        normal: s.normal,
+        metallic: s.metallic,
+        roughness: s.roughness,
+        emissive: s.emissive,
+        alpha: s.alpha,
+        sun_visibility: s.sun_visibility,
+        sky_visibility: s.sky_visibility,
+        sky_normal: s.sky_normal,
+        occluder_sun: s.occluder_sun,
+        sun_diffuse: s.sun_diffuse,
+        to_sun: s.to_sun,
+        debug: vec4<f32>(rgb, 1.0),
+    };
+}
+
+pub fn flags(push: Push) -> u32 {
+    return push.pbr_params.w as u32;
+}
+
+pub fn vertex_color_mode(push: Push) -> u32 {
+    return (flags(push) >> VERTEX_COLOR_SHIFT) & 3u;
+}
+
+pub fn caster_model(push: ShadowPush) -> mat4f {
+    let r0 = push.model_rows[0];
+    let r1 = push.model_rows[1];
+    let r2 = push.model_rows[2];
+    return mat4f(
+        vec4<f32>(r0.x, r1.x, r2.x, 0.0),
+        vec4<f32>(r0.y, r1.y, r2.y, 0.0),
+        vec4<f32>(r0.z, r1.z, r2.z, 0.0),
+        vec4<f32>(r0.w, r1.w, r2.w, 1.0)
+    );
+}
+
+pub fn skin_matrix(joints: vec4<u32>, weights: vec4<f32>) -> mat4f {
+    if (weights.x + weights.y + weights.z + weights.w < 0.001) {
+        return mat4f(
+            vec4<f32>(1.0, 0.0, 0.0, 0.0),
+            vec4<f32>(0.0, 1.0, 0.0, 0.0),
+            vec4<f32>(0.0, 0.0, 1.0, 0.0),
+            vec4<f32>(0.0, 0.0, 0.0, 1.0)
+        );
+    }
+    let j0 = (joints.x * 4u) as i32;
+    let j1 = (joints.y * 4u) as i32;
+    let j2 = (joints.z * 4u) as i32;
+    let j3 = (joints.w * 4u) as i32;
+    return mat4f(
+        weights.x * bone_palette.bones[j0]     + weights.y * bone_palette.bones[j1]     + weights.z * bone_palette.bones[j2]     + weights.w * bone_palette.bones[j3],
+        weights.x * bone_palette.bones[j0 + 1] + weights.y * bone_palette.bones[j1 + 1] + weights.z * bone_palette.bones[j2 + 1] + weights.w * bone_palette.bones[j3 + 1],
+        weights.x * bone_palette.bones[j0 + 2] + weights.y * bone_palette.bones[j1 + 2] + weights.z * bone_palette.bones[j2 + 2] + weights.w * bone_palette.bones[j3 + 2],
+        weights.x * bone_palette.bones[j0 + 3] + weights.y * bone_palette.bones[j1 + 3] + weights.z * bone_palette.bones[j2 + 3] + weights.w * bone_palette.bones[j3 + 3]
+    );
+}
+
+pub fn inst_rot(r0: vec4<f32>, r1: vec4<f32>, r2: vec4<f32>) -> mat3f {
+    return mat3f(
+        vec3<f32>(r0.x, r1.x, r2.x),
+        vec3<f32>(r0.y, r1.y, r2.y),
+        vec3<f32>(r0.z, r1.z, r2.z)
+    );
+}
+
+pub fn make_vertex_in(model: mat4f, wind_mask: f32, pos: vec3<f32>, normal: vec3<f32>,
+                      uv: vec2<f32>, color: vec4<f32>, tangent: vec4<f32>) -> Vertex {
+    let wp = scene::mul4(model, vec4<f32>(pos, 1.0)).xyz;
+    return Vertex {
+        pos: pos,
+        normal: normal,
+        uv: uv,
+        color: color,
+        tangent: tangent,
+        bitangent: vec3<f32>(0.0),
+        world_pos: wp,
+        cam_dist: length(wp),
+        pixel: vec2<f32>(0.0),
+        vertex_index: vertex_index(),
+        instance_index: instance_index(),
+        model: model,
+        wind_mask: wind_mask,
+        v0: vec4<f32>(0.0),
+        v1: vec4<f32>(0.0),
+        v2: vec4<f32>(0.0),
+        v3: vec4<f32>(0.0),
+        v4: vec4<f32>(0.0),
+        v5: vec4<f32>(0.0),
+        vi: vec4<i32>(0),
+    };
+}
+
+pub fn make_frag_vertex(push: Push, world_pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>,
+                        color: vec4<f32>, tangent: vec3<f32>, bitangent: vec3<f32>,
+                        v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<f32>,
+                        v4: vec4<f32>, v5: vec4<f32>, vi: vec4<i32>) -> Vertex {
+    let fc = frag_coord();
+    return Vertex {
+        pos: world_pos,
+        normal: normal,
+        uv: uv,
+        color: color,
+        tangent: vec4<f32>(tangent, 1.0),
+        bitangent: bitangent,
+        world_pos: world_pos,
+        cam_dist: length(world_pos),
+        pixel: vec2<f32>(fc.x, fc.y),
+        vertex_index: 0,
+        instance_index: 0,
+        model: push.model,
+        wind_mask: push.extra.z,
+        v0: v0,
+        v1: v1,
+        v2: v2,
+        v3: v3,
+        v4: v4,
+        v5: v5,
+        vi: vi,
+    };
+}
+
+pub fn emit_standard(world_pos: vec4<f32>, n: vec3<f32>, t: vec3<f32>, b: vec3<f32>,
+                     uv: vec2<f32>, color: vec4<f32>, inst_color: vec4<f32>) {
+    set_vertex_position(scene::clip(world_pos.xyz));
+    set_vertex_output(0, world_pos.xyz);
+    set_vertex_output(1, n);
+    set_vertex_output(2, uv);
+    set_vertex_output(3, color);
+    set_vertex_output(4, t);
+    set_vertex_output(5, b);
+    set_vertex_output(6, inst_color);
+}
+
+pub fn emit_custom(v: Vertex) {
+    set_vertex_output(7, v.v0);
+    set_vertex_output(8, v.v1);
+    set_vertex_output(9, v.v2);
+    set_vertex_output(10, v.v3);
+    set_vertex_output(11, v.v4);
+    set_vertex_output(12, v.v5);
+    set_vertex_output(13, v.vi);
+}
+
+pub fn emit_shadow_cutout(push: ShadowPush, uv: vec2<f32>, vertex_alpha: f32, cell_code: f32) {
+    let base = push.params.z;
+    let cut_alpha = base < 0.0 ? (-base * vertex_alpha) : base;
+    let grid = push.params.w;
+    let cols = max(floor(grid - floor(grid / 256.0) * 256.0), 1.0);
+    let rows = max(floor(grid / 256.0), 1.0);
+    set_vertex_output(0, uv);
+    set_vertex_output(1, cut_alpha);
+    set_vertex_output(2, vec4<f32>(push.params.y, cell_code, cols, rows));
+}
+
+// The base colour uv: an instance's cell of the atlas grid, else the mesh uv.
+pub fn albedo_uv(push: Push, uv: vec2<f32>, inst_alpha: f32) -> vec2<f32> {
+    let grid = push.extra.w;
+    let cols = max((grid - floor(grid / 256.0) * 256.0) as i32, 1);
+    let rows = max((grid / 256.0) as i32, 1);
+    if (cols == 1 && rows == 1) {
+        return uv;
+    }
+    let cell = clamp((inst_alpha * 256.0) as i32, 0, cols * rows - 1);
+    let cell_size = vec2<f32>(1.0 / (cols as f32), 1.0 / (rows as f32));
+    let cell_xy = vec2<f32>((cell % cols) as f32, (cell / cols) as f32);
+    return (cell_xy + fract(uv)) * cell_size;
+}
+
+pub fn base_albedo(push: Push, uv: vec2<f32>, in_color: vec4<f32>, inst_color: vec4<f32>) -> vec4<f32> {
+    let fl = flags(push);
+    let vc_mode = vertex_color_mode(push);
+    var base_color: vec3<f32> = push.base_color.xyz;
+    var alpha: f32 = push.base_color.w;
+    if ((fl & ALBEDO_MAP) != 0u) {
+        let tex = albedo_map.sample(albedo_uv(push, uv, inst_color.w));
+        base_color = tex.xyz * push.base_color.xyz * in_color.xyz;
+        alpha = tex.w * push.base_color.w * in_color.w;
+    } else if (vc_mode == 1u) {
+        base_color = in_color.xyz;
+        alpha = in_color.w;
+    } else if (vc_mode == 2u) {
+        base_color = push.base_color.xyz * in_color.xyz;
+        alpha = push.base_color.w * in_color.w;
+    }
+    return vec4<f32>(base_color * inst_color.xyz, alpha);
+}
+
+pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec4<f32>, inst_color: vec4<f32>) -> bool {
+    if (push.extra.x > 0.0 && length(world_pos) < push.extra.x) {
+        return true;
+    }
+    if (push.pbr_params.z > 0.0) {
+        let ba = base_albedo(push, uv, in_color, inst_color);
+        if (ba.w < push.pbr_params.z) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn debug_pixel(debug_col: vec4<f32>, n: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
+    if (debug_col.w > 0.0) {
+        return debug_col.xyz;
+    }
+    return vec3<f32>(0.06 + 0.2 * abs(dot(n, view)));
+}
+
+pub fn prepare_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv: vec2<f32>,
+                       in_color: vec4<f32>, in_tangent: vec3<f32>, in_bitangent: vec3<f32>,
+                       in_inst_color: vec4<f32>, front_facing: bool) -> Surface {
+    let fl = flags(push);
+    let ba = base_albedo(push, in_uv, in_color, in_inst_color);
+    var emissive: vec3<f32> = push.emissive.xyz * push.emissive.w;
+    var n: vec3<f32> = normalize(in_normal);
+    if ((fl & TWO_SIDED) != 0u && !front_facing) {
+        n = -n;
+    }
+    if ((fl & (NORMAL_MAP | HAS_TANGENTS)) == (NORMAL_MAP | HAS_TANGENTS)) {
+        let n_ts = normal_map.sample(in_uv).xyz * 2.0 - vec3<f32>(1.0);
+        let tbn = mat3f(normalize(in_tangent), normalize(in_bitangent), n);
+        n = normalize(scene::mul3(tbn, n_ts));
+    }
+    var metallic: f32 = push.pbr_params.x;
+    var roughness: f32 = push.pbr_params.y;
+    if ((fl & METALLIC_ROUGHNESS) != 0u) {
+        let mr = mr_map.sample(in_uv);
+        roughness *= mr.y;
+        metallic *= mr.z;
+    }
+    if ((fl & EMISSIVE_MAP) != 0u) {
+        emissive *= emissive_map.sample(in_uv).xyz;
+    }
+    return Surface {
+        base_color: ba.xyz,
+        normal: n,
+        metallic: metallic,
+        roughness: roughness,
+        emissive: emissive,
+        alpha: ba.w,
+        sun_visibility: 1.0,
+        sky_visibility: 1.0,
+        sky_normal: vec3<f32>(0.0),
+        occluder_sun: 0.5,
+        sun_diffuse: 0.0,
+        to_sun: lighting::to_sun(),
+        debug: vec4<f32>(0.0, 0.0, 0.0, -1.0),
+    };
+}
+
+pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv: vec2<f32>,
+                      s_in: Surface, veg_leaf: bool, veg_ao: f32) -> FragOut {
+    let fl = flags(push);
+    let cam_dist = length(world_pos);
+    let air = lighting::air(world_pos, cam_dist);
+    if ((fl & UNLIT) != 0u) {
+        var color: vec3<f32> = s_in.base_color * air.transmittance + air.inscatter;
+        if (scene::debug_view() != 0) {
+            color = debug_pixel(s_in.debug, geom_n, normalize(-world_pos));
+        }
+        if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
+            color *= lighting::cell_shade(world_pos, geom_n);
+        }
+        let out_a = (fl & REFLECTANCE) != 0u ? 0.0 : mix(s_in.alpha, 0.0, air.fade);
+        return FragOut {
+            color: vec4<f32>(min(color, vec3<f32>(scene::HDR_MAX)), out_a),
+            indirect: vec4<f32>(0.0),
+        };
+    }
+
+    let n = normalize(s_in.normal);
+    let sky_n = dot(s_in.sky_normal, s_in.sky_normal) > 0.0001 ? normalize(s_in.sky_normal) : n;
+    var translucency: f32 = 0.0;
+    if (veg_leaf) {
+        translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
+    }
+    let ls = lighting::Surface {
+        position: world_pos,
+        normal: n,
+        view: normalize(-world_pos),
+        cam_dist: cam_dist,
+        base_color: s_in.base_color,
+        metallic: clamp(s_in.metallic, 0.0, 1.0),
+        roughness: clamp(s_in.roughness, 0.04, 1.0),
+        receives_shadow: (fl & RECEIVES_SHADOW) != 0u,
+        two_sided: (fl & TWO_SIDED) != 0u,
+        subsurface: push.extra.y,
+        translucency: translucency,
+        sun_visibility: clamp(s_in.sun_visibility, 0.0, 1.0),
+        sky_visibility: clamp(s_in.sky_visibility, 0.0, 1.0),
+        sky_normal: sky_n,
+        occluder_sun: clamp(s_in.occluder_sun, 0.0, 1.0),
+        sun_diffuse: clamp(s_in.sun_diffuse, 0.0, 1.0),
+    };
+
+    var indirect: vec3<f32> = lighting::ambient(ls);
+    if ((fl & OCCLUSION_MAP) != 0u) {
+        indirect *= occlusion_map.sample(in_uv).x;
+    }
+    indirect *= veg_ao;
+    var color: vec3<f32> = lighting::direct_light(ls) + indirect + s_in.emissive;
+
+    var alpha: f32 = s_in.alpha;
+    if ((fl & REFLECTANCE) != 0u) {
+        let f0 = mix(vec3<f32>(0.04), ls.base_color, ls.metallic);
+        let c = 1.0 - clamp(dot(ls.normal, ls.view), 0.0, 1.0);
+        let c2 = c * c;
+        let f = f0 + (vec3<f32>(1.0) - f0) * (c2 * c2 * c);
+        alpha = dot(f, vec3<f32>(0.2126, 0.7152, 0.0722)) * (1.0 - smoothstep(0.4, 0.6, ls.roughness));
+    }
+
+    color = color * air.transmittance + air.inscatter;
+    indirect *= air.transmittance;
+    alpha = mix(alpha, 0.0, air.fade);
+
+    if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
+        let shade = lighting::cell_shade(world_pos, geom_n);
+        color *= shade;
+        indirect *= shade;
+    }
+
+    if (scene::debug_view() != 0) {
+        color = debug_pixel(s_in.debug, ls.normal, ls.view);
+        indirect = vec3<f32>(0.0);
+        if ((fl & REFLECTANCE) != 0u) {
+            alpha = 0.0;
+        }
+    }
+
+    let hdr_max = vec3<f32>(scene::HDR_MAX);
+    return FragOut {
+        color: vec4<f32>(min(color, hdr_max), alpha),
+        indirect: vec4<f32>(min(indirect, hdr_max), 0.0),
+    };
+}
+
+pub fn shade_builtin(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv: vec2<f32>,
+                     in_color: vec4<f32>, in_tangent: vec3<f32>, in_bitangent: vec3<f32>,
+                     in_inst_color: vec4<f32>, front_facing: bool) -> FragOut {
+    let s = prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing);
+    return finish_surface(push, world_pos, normalize(in_normal), in_uv, s, false, 1.0);
+}
+
+pub fn shade_veg_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv: vec2<f32>,
+                         in_color: vec4<f32>, in_tangent: vec3<f32>, in_bitangent: vec3<f32>,
+                         in_inst_color: vec4<f32>, in_veg_shade: vec4<f32>, front_in: bool) -> Surface {
+    let veg_leaf = in_veg_shade.w < 0.0;
+    let front_facing = veg_leaf ? (dot(in_normal, -world_pos) >= 0.0) : front_in;
+    let s0 = prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing);
+    var base_color: vec3<f32> = s0.base_color;
+    var normal: vec3<f32> = s0.normal;
+    if (veg_leaf && !front_facing) {
+        let veg_under = base_color * vec3<f32>(1.25, 1.3, 1.05) + vec3<f32>(0.015, 0.02, 0.0);
+        base_color = mix(base_color, veg_under, 0.6);
+    }
+    let bulk_weight = length(in_veg_shade.xyz);
+    var bulk_keep: f32 = 1.0;
+    if (veg_leaf) {
+        let near = 1.0 - smoothstep(6.0, 25.0, length(world_pos));
+        if (near > 0.0) {
+            let across = clamp(in_uv.x * 2.0 - 1.0, -1.0, 1.0);
+            let t_vec = normalize(in_tangent);
+            let f_sign = front_facing ? 1.0 : -1.0;
+            normal = normalize(normal - f_sign * 0.55 * near * across * abs(across) * t_vec);
+            bulk_keep = 1.0 - 0.5 * near;
+        }
+    }
+    if (bulk_weight > 0.0001) {
+        normal = normalize(normal * (1.0 - bulk_weight * bulk_keep) + in_veg_shade.xyz * bulk_keep);
+    }
+    return Surface {
+        base_color: base_color,
+        normal: normal,
+        metallic: s0.metallic,
+        roughness: s0.roughness,
+        emissive: s0.emissive,
+        alpha: s0.alpha,
+        sun_visibility: s0.sun_visibility,
+        sky_visibility: s0.sky_visibility,
+        sky_normal: s0.sky_normal,
+        occluder_sun: s0.occluder_sun,
+        sun_diffuse: s0.sun_diffuse,
+        to_sun: s0.to_sun,
+        debug: s0.debug,
+    };
+}
+
+pub fn shade_veg(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv: vec2<f32>,
+                 in_color: vec4<f32>, in_tangent: vec3<f32>, in_bitangent: vec3<f32>,
+                 in_inst_color: vec4<f32>, in_veg_shade: vec4<f32>, front_in: bool) -> FragOut {
+    let s = shade_veg_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, in_veg_shade, front_in);
+    return finish_surface(push, world_pos, normalize(in_normal), in_uv, s, in_veg_shade.w < 0.0, abs(in_veg_shade.w));
+}
+
+pub fn shade_bark(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv: vec2<f32>,
+                  in_color: vec4<f32>, in_tangent: vec3<f32>, in_bitangent: vec3<f32>,
+                  in_inst_color: vec4<f32>, in_veg_shade: vec4<f32>, front_in: bool) -> FragOut {
+    let s0 = shade_veg_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, in_veg_shade, front_in);
+    var base_color: vec3<f32> = s0.base_color;
+    var normal: vec3<f32> = s0.normal;
+    var roughness: f32 = s0.roughness;
+    var veg_ao: f32 = abs(in_veg_shade.w);
+    if (in_uv.y >= 0.0) {
+        let bs = bark::surface(in_color, in_uv.x, in_uv.y, world_pos, normal, in_tangent, base_color, normal, roughness, veg_ao);
+        base_color = bs.color;
+        normal = bs.n;
+        roughness = bs.roughness;
+        veg_ao = bs.ao;
+    }
+    let s = Surface {
+        base_color: base_color,
+        normal: normal,
+        metallic: s0.metallic,
+        roughness: roughness,
+        emissive: s0.emissive,
+        alpha: s0.alpha,
+        sun_visibility: s0.sun_visibility,
+        sky_visibility: s0.sky_visibility,
+        sky_normal: s0.sky_normal,
+        occluder_sun: s0.occluder_sun,
+        sun_diffuse: s0.sun_diffuse,
+        to_sun: s0.to_sun,
+        debug: s0.debug,
+    };
+    return finish_surface(push, world_pos, normalize(in_normal), in_uv, s, in_veg_shade.w < 0.0, veg_ao);
+}

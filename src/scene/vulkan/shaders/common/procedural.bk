@@ -1,0 +1,365 @@
+// The segment records a procedural instanced draw (foliage scatter, branch
+// tubes) builds its geometry from: set 3 binding 1, the slot skinned meshes
+// use binding 0 of for their bone palette. SceneMeshDrawer::prepare writes it.
+//
+//   segments[0..3]  header[0..3]: the mode's parameters; header[2].z is the
+//                   first vegetation record (0: the node carries none);
+//                   header[3] is scatter's leaves per instance, leaf mesh
+//                   vertex count, and leaf count.
+//   segments[4..]   records[]: 2 per segment (3 when mitred), then (scatter)
+//                   the per-leaf segment indices packed four to a record, then
+//                   (with vegetation) 4 per segment: (root.xyz, height),
+//                   (crown.xyz, crownRadius), (weightFrom, weightTo, 0, 0),
+//                   (0, twig, limb, trunk) — common/vegetation.bk.
+module procedural;
+
+import scene;
+
+@binding(3, 1) pub var segments: read_buffer<vec4<f32>>;
+
+pub const TWO_PI: f32 = 6.28318530718;
+
+pub fn header(i: i32) -> vec4<f32> {
+    return segments[i];
+}
+
+pub fn record(i: i32) -> vec4<f32> {
+    return segments[4 + i];
+}
+
+pub struct ScatterIdx {
+    valid: bool,
+    leaf: i32,
+}
+
+// The leaf a scatter vertex belongs to: each instance draws header[3].x
+// copies of the leaf mesh end to end (InstancedMeshNode::scatterBatchMesh).
+pub fn scatter_leaf_index(instance_idx: i32, vertex_idx: i32) -> ScatterIdx {
+    let h = header(3);
+    let per_inst = (h.x + 0.5) as i32;
+    let verts = max((h.y + 0.5) as i32, 1);
+    let total = (h.z + 0.5) as i32;
+    let leaf = instance_idx * per_inst + vertex_idx / verts;
+    return ScatterIdx { valid: leaf < total, leaf: leaf };
+}
+
+// Any unit vector perpendicular to unit `t` (bromesh's perpendicularUnit), so
+// tube rings and leaf frames share a basis.
+pub fn perpendicular_unit(t: vec3<f32>) -> vec3<f32> {
+    var c: vec3<f32> = cross(t, vec3<f32>(0.0, 1.0, 0.0));
+    if (dot(c, c) < 0.00000001) {
+        c = cross(t, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    return normalize(c);
+}
+
+// A unit vector from two floats (octahedral; InstancedMeshNode's octEncode).
+pub fn oct_decode(e: vec2<f32>) -> vec3<f32> {
+    let vz = 1.0 - abs(e.x) - abs(e.y);
+    var vxy: vec2<f32> = e;
+    if (vz < 0.0) {
+        let sx = e.x >= 0.0 ? 1.0 : -1.0;
+        let sy = e.y >= 0.0 ? 1.0 : -1.0;
+        vxy = (vec2<f32>(1.0) - abs(vec2<f32>(e.y, e.x))) * vec2<f32>(sx, sy);
+    }
+    return normalize(vec3<f32>(vxy.x, vxy.y, vz));
+}
+
+pub struct RingFrame {
+    e1: vec3<f32>,
+    e2: vec3<f32>,
+}
+
+// The ring frame at a tube end: radial directions in the plane across unit
+// `t`, the least rotation taking up (+Y) to `t` applied to +X.
+pub fn tube_ring_frame(t: vec3<f32>) -> RingFrame {
+    let c = t.y;
+    var e1: vec3<f32> = vec3<f32>(1.0, 0.0, 0.0);
+    if (c >= -0.9999) {
+        let k = 1.0 / (1.0 + c);
+        e1 = normalize(vec3<f32>(c + t.z * t.z * k, -t.x, -t.x * t.z * k));
+    }
+    return RingFrame { e1: e1, e2: cross(t, e1) };
+}
+
+pub struct TubeVertex {
+    valid: bool,
+    pos: vec3<f32>,
+    radial: vec3<f32>,
+    axis_dir: vec3<f32>,
+    uv: vec2<f32>,
+    seg: i32,
+    end_t: f32,
+}
+
+// The vertex of a tube draw: segment from the vertex index, `sides` quads a
+// segment as two triangles across its rings.
+pub fn tube_vertex(vertex_idx: i32) -> TubeVertex {
+    let h0 = header(0);
+    let sides = h0.x as i32;
+    let stride = h0.z > 2.5 ? 3 : 2;
+    let per_seg = sides * 6;
+    let seg = vertex_idx / per_seg;
+    let local = vertex_idx - seg * per_seg;
+    let side = local / 6;
+    let corner = local - side * 6;
+
+    // corner 0=b0 1=b1 2=t0   3=t0 4=b1 5=t1 (b = from ring, t = to ring)
+    let top = corner == 2 || corner == 3 || corner == 5;
+    let next_side = corner == 1 || corner == 4 || corner == 5;
+    let s_idx = next_side ? (side + 1) : side;
+    let ang = (s_idx as f32) / (sides as f32) * TWO_PI;
+    let end_t = top ? 1.0 : 0.0;
+
+    let s0 = record(seg * stride);
+    let s1 = record(seg * stride + 1);
+    let axis = s1.xyz - s0.xyz;
+    let len = length(axis);
+    if (len < 0.000001) {
+        return TubeVertex {
+            valid: false,
+            pos: vec3<f32>(0.0),
+            radial: vec3<f32>(0.0),
+            axis_dir: vec3<f32>(0.0, 1.0, 0.0),
+            uv: vec2<f32>(0.0),
+            seg: seg,
+            end_t: end_t,
+        };
+    }
+    var axis_dir: vec3<f32> = axis / len;
+    if (stride == 3) {
+        let j = record(seg * stride + 2);
+        let t_dir = oct_decode(top ? j.zw : j.xy);
+        if (dot(axis_dir, t_dir) > 0.2) {
+            axis_dir = t_dir;
+        }
+    }
+    let rf = tube_ring_frame(axis_dir);
+    let radial = cos(ang) * rf.e1 + sin(ang) * rf.e2;
+    let r = mix(s0.w, s1.w, end_t) * h0.y;
+    let base = top ? s1.xyz : s0.xyz;
+    return TubeVertex {
+        valid: true,
+        pos: base + r * radial,
+        radial: radial,
+        axis_dir: axis_dir,
+        uv: vec2<f32>(ang / TWO_PI, end_t),
+        seg: seg,
+        end_t: end_t,
+    };
+}
+
+// Chris Wellons' triple32-lite.
+pub fn hash(x: u32) -> u32 {
+    var v: u32 = x;
+    v = (v ^ (v >> 16u)) * 0x7feb352du;
+    v = (v ^ (v >> 15u)) * 0x846ca68bu;
+    v = v ^ (v >> 16u);
+    return v;
+}
+
+pub fn normalize_or(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    return dot(v, v) < 0.00000001 ? normalize(fallback) : normalize(v);
+}
+
+// Rodrigues rotation of v about a unit axis.
+pub fn rot_axis(v: vec3<f32>, axis: vec3<f32>, ang: f32) -> vec3<f32> {
+    let c = cos(ang);
+    let s = sin(ang);
+    return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
+pub fn draw_rand(base: u32, k: u32) -> f32 {
+    return ((hash(base + k * 0x9e3779b9u) >> 8u) as f32) * (1.0 / 16777216.0);
+}
+
+pub struct ClumpLobe {
+    center: vec3<f32>,
+    radius: f32,
+}
+
+pub fn clump_lobe(c: vec4<f32>, clump: i32, lobe: i32, seed: u32) -> ClumpLobe {
+    if (lobe <= 0) {
+        return ClumpLobe { center: c.xyz, radius: c.w * 0.72 };
+    }
+    let cb = hash(seed ^ hash((clump as u32) * 0x632be5abu + 0x51ed27u));
+    let b = hash(cb + (lobe as u32) * 0x9e3779b9u);
+    let z = draw_rand(b, 0u) * 1.2 - 0.4;
+    let phi = draw_rand(b, 1u) * TWO_PI;
+    let s = sqrt(max(0.0, 1.0 - z * z));
+    let center = c.xyz + vec3<f32>(s * cos(phi), z, s * sin(phi)) * (c.w * 0.42);
+    let radius = c.w * (0.5 + 0.2 * draw_rand(b, 2u));
+    return ClumpLobe { center: center, radius: radius };
+}
+
+pub struct ScatterLeaf {
+    valid: bool,
+    p: vec3<f32>,
+    r: mat3f,
+    f: vec3<f32>,
+    seg: i32,
+    along: f32,
+}
+
+// Clump mode: leaf `leaf` of clump `clump`, as bromesh::leafInClump places it.
+pub fn scatter_clump_leaf(leaf: i32, clump: i32) -> ScatterLeaf {
+    let c = record(clump * 2);
+    let h0 = header(0);
+    let h1 = header(1);
+    let seed = bitcast<u32>(h0.x);
+    let up_bias = h0.y;
+    let tilt_jitter = h0.z;
+    let shell = h0.w;
+
+    let base = hash(seed ^ hash((leaf as u32) + 1u));
+    let lobe = min(2, (draw_rand(base, 0u) * 3.0) as i32);
+    let cl = clump_lobe(c, clump, lobe, seed);
+
+    let z = draw_rand(base, 1u) * 2.0 - 1.0;
+    let phi = draw_rand(base, 2u) * TWO_PI;
+    let s = sqrt(max(0.0, 1.0 - z * z));
+    let u = vec3<f32>(s * cos(phi), z, s * sin(phi));
+    let r_off = cl.radius * (1.0 - shell * draw_rand(base, 3u));
+    let y_scale = u.y < 0.0 ? 0.7 : 0.9;
+    let off = vec3<f32>(u.x * r_off, u.y * r_off * y_scale, u.z * r_off);
+    let p = cl.center + off;
+
+    var n: vec3<f32> = normalize(u * (1.0 - up_bias) + vec3<f32>(0.0, up_bias, 0.0));
+    let jit = vec3<f32>(draw_rand(base, 4u), draw_rand(base, 5u), draw_rand(base, 6u)) * 2.0 - vec3<f32>(1.0);
+    n = n + jit * tilt_jitter;
+    n = dot(n, n) < 0.00000001 ? u : normalize(n);
+
+    let theta = draw_rand(base, 7u) * TWO_PI;
+    let t0 = perpendicular_unit(n);
+    let t1 = cross(n, t0);
+    let f = normalize(t0 * cos(theta) + t1 * sin(theta));
+    let x_axis = cross(f, n);
+
+    let scale = h1.x * (1.0 + (draw_rand(base, 8u) * 2.0 - 1.0) * h1.y);
+    if (scale < 0.000001) {
+        return ScatterLeaf {
+            valid: false,
+            p: p,
+            r: mat3f(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0)),
+            f: f,
+            seg: clump,
+            along: 1.0,
+        };
+    }
+    return ScatterLeaf {
+        valid: true,
+        p: p,
+        r: mat3f(x_axis * scale, n * scale, f * scale),
+        f: f,
+        seg: clump,
+        along: 1.0,
+    };
+}
+
+// Foliage scatter: leaf `leaf`'s frame, synthesised from the segment records.
+pub fn scatter_leaf(leaf: i32) -> ScatterLeaf {
+    let h0 = header(0);
+    let h1 = header(1);
+    let h2 = header(2);
+    let up_bias = h0.y;
+    let tilt_jitter = h0.z;
+    let roll_jitter = h0.w;
+    let base_scale = h1.x;
+    let scale_jitter = h1.y;
+    let scale_by_radius = h1.z;
+    let ref_radius = h1.w;
+    let density_falloff = h2.x;
+
+    let idx_rec = record((h2.y as i32) + leaf / 4);
+    let lane = leaf % 4;
+    let seg_f = lane == 0 ? idx_rec.x : (lane == 1 ? idx_rec.y : (lane == 2 ? idx_rec.z : idx_rec.w));
+    let seg = (seg_f + 0.5) as i32;
+    if (h2.w > 0.5) {
+        return scatter_clump_leaf(leaf, seg);
+    }
+
+    let id_mat = mat3f(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    let t0 = record(seg * 2);
+    let t1 = record(seg * 2 + 1);
+    let from_pos = t0.xyz;
+    let radius = t0.w;
+    let dir = t1.xyz;
+
+    let len = length(dir);
+    if (len < 0.000001) {
+        return ScatterLeaf { valid: false, p: vec3<f32>(0.0), r: id_mat, f: vec3<f32>(0.0, 0.0, 1.0), seg: seg, along: 0.0 };
+    }
+    let t_dir = dir / len;
+
+    let base = hash(bitcast<u32>(h0.x) ^ hash((leaf as u32) + 1u));
+    let u = draw_rand(base, 0u);
+    let along = density_falloff > 0.0 ? (1.0 - pow(1.0 - u, 1.0 + density_falloff)) : u;
+    let p = from_pos + dir * along;
+
+    let phi = draw_rand(base, 1u) * TWO_PI;
+    let e1 = perpendicular_unit(t_dir);
+    let e2 = cross(t_dir, e1);
+    let rd = e1 * cos(phi) + e2 * sin(phi);
+
+    let world_up = vec3<f32>(0.0, 1.0, 0.0);
+    var f: vec3<f32> = normalize_or(rd * (1.0 - up_bias) + world_up * up_bias, rd);
+    if (tilt_jitter > 0.0) {
+        let tilt_ang = (draw_rand(base, 2u) * 2.0 - 1.0) * tilt_jitter;
+        f = normalize(rot_axis(f, normalize_or(cross(f, t_dir), e2), tilt_ang));
+    }
+
+    var side_axis: vec3<f32> = cross(f, world_up);
+    if (dot(side_axis, side_axis) < 0.00000001) {
+        side_axis = cross(f, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    side_axis = normalize(side_axis);
+    var n: vec3<f32> = normalize(cross(side_axis, f));
+    if (roll_jitter > 0.0) {
+        let roll_ang = (draw_rand(base, 3u) * 2.0 - 1.0) * roll_jitter;
+        side_axis = normalize(rot_axis(side_axis, f, roll_ang));
+        n = normalize(rot_axis(n, f, roll_ang));
+    }
+
+    let jitter = (draw_rand(base, 4u) * 2.0 - 1.0) * scale_jitter;
+    var radius_factor: f32 = 1.0;
+    if (scale_by_radius > 0.0) {
+        let ratio = radius > 0.0 ? (radius / ref_radius) : 1.0;
+        radius_factor = max(1.0 + scale_by_radius * (ratio - 1.0), 0.05);
+    }
+    let scale = base_scale * (1.0 + jitter) * radius_factor;
+    if (scale < 0.000001) {
+        return ScatterLeaf { valid: false, p: p, r: id_mat, f: f, seg: seg, along: along };
+    }
+    return ScatterLeaf {
+        valid: true,
+        p: p,
+        r: mat3f(side_axis * scale, n * scale, f * scale),
+        f: f,
+        seg: seg,
+        along: along,
+    };
+}
+
+pub fn has_vegetation() -> bool {
+    return header(2).z > 0.5;
+}
+
+pub struct VegRecord {
+    v0: vec4<f32>,
+    v1: vec4<f32>,
+    v2: vec4<f32>,
+    v3: vec4<f32>,
+}
+
+// Segment `seg`'s vegetation record at `along` (0 at from, 1 at to) for a
+// point `anchor` on it (node space).
+pub fn vegetation_at(seg: i32, along: f32, anchor: vec3<f32>) -> VegRecord {
+    let b = ((header(2).z + 0.5) as i32) + seg * 4;
+    let r2 = record(b + 2);
+    return VegRecord {
+        v0: record(b),
+        v1: record(b + 1),
+        v2: vec4<f32>(anchor, mix(r2.x, r2.y, along)),
+        v3: record(b + 3),
+    };
+}

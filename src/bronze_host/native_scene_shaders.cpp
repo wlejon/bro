@@ -135,9 +135,20 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
         tl_shaderErr = "setShaderModule: node or scene destroyed";
         return tl_shaderErr.c_str();
     }
-    auto* mn = n->type() == scene::SceneNode::Type::Mesh ? static_cast<scene::MeshNode*>(n) : nullptr;
-    if (!mn || !mn->isVolume()) {
-        tl_shaderErr = "setShaderModule: node is not a volume";
+    scene::SceneRenderer::CustomShaderTarget target = scene::SceneRenderer::CustomShaderTarget::Static;
+    bool isSkinned = false;
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        auto* mn = static_cast<scene::MeshNode*>(n);
+        if (mn->isVolume()) {
+            target = scene::SceneRenderer::CustomShaderTarget::Volume;
+        } else if (mn->asSkinnedMesh()) {
+            target = scene::SceneRenderer::CustomShaderTarget::Skinned;
+            isSkinned = true;
+        }
+    } else if (n->type() == scene::SceneNode::Type::InstancedMesh) {
+        target = scene::SceneRenderer::CustomShaderTarget::Instanced;
+    } else {
+        tl_shaderErr = "setShaderModule: node is not a MeshNode or InstancedMeshNode";
         return tl_shaderErr.c_str();
     }
     const std::string source = module ? module : "";
@@ -163,11 +174,22 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
         }
     }
     std::string err;
-    if (!g->compileVolumeModule(source, name, modules, err)) {
+    bool hasVertex = false;
+    if (!g->compileShaderModule(target, source, name, modules, hasVertex, err)) {
         tl_shaderErr = err.empty() ? "module compilation failed" : err;
         return tl_shaderErr.c_str();
     }
-    mn->setCustomShaderModule(source, name, std::move(modules));
+    if (isSkinned) {
+        bool staticVertex = false;
+        std::string errStatic;
+        g->compileShaderModule(scene::SceneRenderer::CustomShaderTarget::Static, source, name, modules, staticVertex,
+                               errStatic);
+    }
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        static_cast<scene::MeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex);
+    } else {
+        static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex);
+    }
     return "";
 }
 
@@ -355,7 +377,7 @@ bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, ui
         ev::throwTypeError("setShaderTexture: buffer is not a KernelBuffer (bro.kernel.createBuffer)");
         return false;
     }
-    if (n->type() != scene::SceneNode::Type::Mesh) return false;
+    if (n->type() != scene::SceneNode::Type::Mesh && n->type() != scene::SceneNode::Type::InstancedMesh) return false;
     if (channels != 1 && channels != 2 && channels != 4) {
         ev::throwRangeError("setShaderTexture: channels must be 1, 2 or 4 for a buffer");
         return false;
@@ -377,8 +399,12 @@ bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, ui
         ev::throwRangeError("setShaderTexture: the buffer holds fewer than width * height * layers texels");
         return false;
     }
-    return static_cast<scene::MeshNode*>(n)->setCustomShaderTextureBuffer(name, width, height, layers, channels,
-                                                                           std::move(buffer), repeat, volume, enc, atlas);
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        return static_cast<scene::MeshNode*>(n)->setCustomShaderTextureBuffer(
+            name, width, height, layers, channels, std::move(buffer), repeat, volume, enc, atlas);
+    }
+    return static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderTextureBuffer(
+        name, width, height, layers, channels, std::move(buffer), repeat, volume, enc, atlas);
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,
@@ -387,8 +413,7 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
                                           bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
-    if (n->type() == scene::SceneNode::Type::Mesh) {
-        auto* mn = static_cast<scene::MeshNode*>(n);
+    auto apply = [&](auto* mn) -> bool {
         if (volume && isSub) {
             ev::throwTypeError("setShaderTexture: a 3D slot (depth) is written whole, not by sub-rects");
             return false;
@@ -434,7 +459,9 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
         } else {
             return mn->setCustomShaderTexture(name, width, height, data, mipmap, repeat);
         }
-    }
+    };
+    if (n->type() == scene::SceneNode::Type::Mesh) return apply(static_cast<scene::MeshNode*>(n));
+    if (n->type() == scene::SceneNode::Type::InstancedMesh) return apply(static_cast<scene::InstancedMeshNode*>(n));
     return false;
 }
 

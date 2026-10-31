@@ -48,14 +48,23 @@ pub struct Lighting {
 }
 
 @binding(1, 0) pub var lighting: uniform<Lighting>;
+@binding(1, 1) var shadow_pool: texture2d_shadow;
+@binding(1, 2) var probe_map: texture_cube<vec4<f32>>;
+@binding(1, 3) var shade_map: texture2d<vec4<f32>>;
+@binding(1, 4) var irradiance_map: texture_cube<vec4<f32>>;
+@binding(1, 5) var prefilter_map: texture_cube<vec4<f32>>;
+@binding(1, 6) var brdf_lut: texture2d<vec4<f32>>;
+@binding(1, 7) var sky_map: texture_cube<vec4<f32>>;
 // One sampler for the set's images (linear, clamped).
 @binding(1, 8) pub var linear: sampler;
-@binding(1, 4) var irradiance_map: texture_cube<vec4<f32>>;
 @binding(1, 9) var atm_transmittance: texture2d<vec4<f32>>;
 @binding(1, 10) var atm_sky_view: texture2d<vec4<f32>>;
 @binding(1, 11) var atm_inscatter: texture3d<vec4<f32>>;
 @binding(1, 12) var atm_air_transmittance: texture3d<vec4<f32>>;
 @binding(1, 13) var atm_sky_light: texture3d<vec4<f32>>;
+@binding(1, 14) var shadow_table: read_buffer<u32>;
+@binding(1, 15) var shadow_overlay: texture2d_shadow;
+@binding(1, 16) var shadow_compare: sampler;
 
 pub fn atmosphere_on() -> bool {
     return lighting.atm.sun_dir.w > 0.5;
@@ -267,4 +276,621 @@ pub fn air(pos: vec3<f32>, cam_dist: f32) -> Air {
     }
     let fog = fog_factor(cam_dist, pos.y + camera.eye_world.y);
     return Air { transmittance: vec3<f32>(1.0 - fog, 1.0 - fog, 1.0 - fog), inscatter: camera.fog_color.xyz * fog, fade: fog };
+}
+
+// ---------------------------------------------------------------------------
+// Cached shadow pages (shadow/shadow_pages_layout.h, scene_shadow_pages.glsl)
+// ---------------------------------------------------------------------------
+
+pub const SP_PAGE: i32 = 128;
+pub const SP_BORDER: i32 = 4;
+pub const SP_STRIDE: i32 = 136;
+pub const SP_WINDOW: i32 = 64;
+pub const SP_LOCAL: i32 = 8;
+pub const SP_LOCAL_MIPS: i32 = 4;
+pub const SP_RESIDENT: u32 = 0x80000000u;
+pub const SP_PHYSICAL_MASK: u32 = 0xFFFFu;
+pub const SP_OVERLAY_BITS: u32 = 12u;
+pub const SP_OVERLAY_MASK: u32 = 0xFFFu;
+pub const SP_KIND_CLIPMAP: i32 = 0;
+pub const SP_KIND_LOCAL: i32 = 1;
+
+pub fn sp_local_mip_first(m: i32) -> i32 {
+    if m == 0 { return 0; }
+    if m == 1 { return 64; }
+    if m == 2 { return 80; }
+    return 84;
+}
+
+pub fn shadow_clipmap_entry(map: ShadowMap, page: vec2<i32>) -> i32 {
+    let ox = map.info.z as i32;
+    let oy = map.info.w as i32;
+    let sx = (ox + page.x) & (SP_WINDOW - 1);
+    let sy = (oy + page.y) & (SP_WINDOW - 1);
+    return (map.info.x as i32) + sy * SP_WINDOW + sx;
+}
+
+pub fn shadow_local_entry(map: ShadowMap, mip: i32, page: vec2<i32>) -> i32 {
+    let n = SP_LOCAL >> mip;
+    return (map.info.x as i32) + sp_local_mip_first(mip) + page.y * n + page.x;
+}
+
+pub fn shadow_cube_face(to_frag: vec3<f32>) -> i32 {
+    let a = abs(to_frag);
+    if a.x >= a.y && a.x >= a.z { return select(to_frag.x > 0.0, 0, 1); }
+    if a.y >= a.z { return select(to_frag.y > 0.0, 2, 3); }
+    return select(to_frag.z > 0.0, 4, 5);
+}
+
+struct ShadowHit {
+    valid: bool,
+    in_page: vec2<f32>,
+    page: u32,
+    overlay: u32,
+    depth: f32,
+    z_eye: f32,
+    ref_z: f32,
+}
+
+fn no_shadow_hit() -> ShadowHit {
+    return ShadowHit {
+        valid: false,
+        in_page: vec2<f32>(0.0, 0.0),
+        page: 0u,
+        overlay: 0u,
+        depth: 0.0,
+        z_eye: 1.0,
+        ref_z: 0.0,
+    };
+}
+
+fn shadow_locate(m: i32, mip: i32, pos: vec3<f32>) -> ShadowHit {
+    let map = lighting.shadow_maps[m];
+    let sc = scene::mul4(map.matrix, vec4<f32>(pos, 1.0));
+    if sc.w <= 0.0 { return no_shadow_hit(); }
+    let z_eye = sc.w;
+    let ndc = sc.xyz / sc.w;
+    let clipmap = (map.info.y as i32) == SP_KIND_CLIPMAP;
+    let n = select(clipmap, SP_WINDOW, SP_LOCAL >> mip);
+    let pc = ndc.xy * (n as f32);
+    if pc.x < 0.0 || pc.y < 0.0 || pc.x >= (n as f32) || pc.y >= (n as f32) {
+        return no_shadow_hit();
+    }
+    let p = min(vec2<i32>(floor(pc)), vec2<i32>(n - 1, n - 1));
+    let e = select(clipmap, shadow_clipmap_entry(map, p), shadow_local_entry(map, mip, p));
+    return ShadowHit {
+        valid: true,
+        in_page: (pc - vec2<f32>(p)) * (SP_PAGE as f32),
+        page: shadow_table[2 * e],
+        overlay: shadow_table[2 * e + 1],
+        depth: ndc.z,
+        z_eye: z_eye,
+        ref_z: 0.0,
+    };
+}
+
+fn shadow_filter_page(first: vec2<f32>, texel: vec2<f32>, inv: f32, ref_z: f32, spread: f32) -> f32 {
+    let base = texel * inv;
+    let min_uv = (first - (SP_BORDER as f32) + 1.0) * inv;
+    let max_uv = (first + ((SP_PAGE + SP_BORDER) as f32) - 1.0) * inv;
+    let hk = ((lighting.params.y as i32) - 1) / 2;
+    if hk <= 0 || spread == 0.0 {
+        return shadow_pool.compare(shadow_compare, clamp(base, min_uv, max_uv), ref_z);
+    }
+    if spread < 0.0 {
+        let o = vec2<f32>(inv * (-spread * 0.5 * (hk as f32)), inv * (-spread * 0.5 * (hk as f32)));
+        return 0.25 * (shadow_pool.compare(shadow_compare, clamp(base + vec2<f32>(-o.x, -o.y), min_uv, max_uv), ref_z) +
+                       shadow_pool.compare(shadow_compare, clamp(base + vec2<f32>( o.x, -o.y), min_uv, max_uv), ref_z) +
+                       shadow_pool.compare(shadow_compare, clamp(base + vec2<f32>(-o.x,  o.y), min_uv, max_uv), ref_z) +
+                       shadow_pool.compare(shadow_compare, clamp(base + vec2<f32>( o.x,  o.y), min_uv, max_uv), ref_z));
+    }
+    var s: f32 = 0.0;
+    let step_uv = vec2<f32>(inv * spread, inv * spread);
+    for (var y: i32 = -hk; y <= hk; y += 1) {
+        for (var x: i32 = -hk; x <= hk; x += 1) {
+            let uv = clamp(base + vec2<f32>(x as f32, y as f32) * step_uv, min_uv, max_uv);
+            s += shadow_pool.compare(shadow_compare, uv, ref_z);
+        }
+    }
+    let side = (2 * hk + 1) as f32;
+    return s / (side * side);
+}
+
+fn shadow_filter_overlay(first: vec2<f32>, texel: vec2<f32>, inv: f32, ref_z: f32, spread: f32) -> f32 {
+    let base = texel * inv;
+    let min_uv = (first - (SP_BORDER as f32) + 1.0) * inv;
+    let max_uv = (first + ((SP_PAGE + SP_BORDER) as f32) - 1.0) * inv;
+    let hk = ((lighting.params.y as i32) - 1) / 2;
+    if hk <= 0 || spread == 0.0 {
+        return shadow_overlay.compare(shadow_compare, clamp(base, min_uv, max_uv), ref_z);
+    }
+    if spread < 0.0 {
+        let o = vec2<f32>(inv * (-spread * 0.5 * (hk as f32)), inv * (-spread * 0.5 * (hk as f32)));
+        return 0.25 * (shadow_overlay.compare(shadow_compare, clamp(base + vec2<f32>(-o.x, -o.y), min_uv, max_uv), ref_z) +
+                       shadow_overlay.compare(shadow_compare, clamp(base + vec2<f32>( o.x, -o.y), min_uv, max_uv), ref_z) +
+                       shadow_overlay.compare(shadow_compare, clamp(base + vec2<f32>(-o.x,  o.y), min_uv, max_uv), ref_z) +
+                       shadow_overlay.compare(shadow_compare, clamp(base + vec2<f32>( o.x,  o.y), min_uv, max_uv), ref_z));
+    }
+    var s: f32 = 0.0;
+    let step_uv = vec2<f32>(inv * spread, inv * spread);
+    for (var y: i32 = -hk; y <= hk; y += 1) {
+        for (var x: i32 = -hk; x <= hk; x += 1) {
+            let uv = clamp(base + vec2<f32>(x as f32, y as f32) * step_uv, min_uv, max_uv);
+            s += shadow_overlay.compare(shadow_compare, uv, ref_z);
+        }
+    }
+    let side = (2 * hk + 1) as f32;
+    return s / (side * side);
+}
+
+fn shadow_probe(m: i32, mip: i32, texel_w: f32, pos: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> ShadowHit {
+    let map = lighting.shadow_maps[m];
+    let sin_t = sqrt(max(1.0 - n_dot_l * n_dot_l, 0.0));
+    let n_off = map.bias.y + texel_w * (0.5 + sin_t);
+    let b_world = texel_w * (0.3 + 0.5 * sin_t);
+    let h = shadow_locate(m, mip, pos + n * n_off);
+    if !h.valid { return h; }
+    let span = max(map.depth.y - map.depth.x, 0.000001);
+    let b01 = select(map.depth.z > 0.5, b_world / span,
+                     b_world * map.depth.x * map.depth.y / (span * h.z_eye * h.z_eye));
+    let ref_z = min(h.depth - map.bias.x - b01, 1.0);
+    return ShadowHit {
+        valid: true,
+        in_page: h.in_page,
+        page: h.page,
+        overlay: h.overlay,
+        depth: h.depth,
+        z_eye: h.z_eye,
+        ref_z: ref_z,
+    };
+}
+
+fn shadow_page_first(hit: ShadowHit) -> vec2<f32> {
+    let phys = (hit.page & SP_PHYSICAL_MASK) as f32;
+    let row = floor((phys + 0.5) / lighting.params.w);
+    return vec2<f32>(phys - row * lighting.params.w, row) * (SP_STRIDE as f32) + (SP_BORDER as f32);
+}
+
+fn shadow_page_at(hit: ShadowHit, ref_z: f32, spread: f32) -> f32 {
+    let first = shadow_page_first(hit);
+    return shadow_filter_page(first, first + hit.in_page, lighting.params.z, ref_z, spread);
+}
+
+fn shadow_blocked_at(hit: ShadowHit, ref_z: f32) -> f32 {
+    let first = shadow_page_first(hit);
+    let inv = lighting.params.z;
+    let uv = clamp((first + hit.in_page) * inv, (first - (SP_BORDER as f32) + 1.0) * inv,
+                   (first + ((SP_PAGE + SP_BORDER) as f32) - 1.0) * inv);
+    return 1.0 - dot(shadow_pool.gather(shadow_compare, uv, ref_z), vec4<f32>(0.25, 0.25, 0.25, 0.25));
+}
+
+fn shadow_overlay_at(hit: ShadowHit, ref_z: f32, spread: f32) -> f32 {
+    if (hit.overlay & SP_RESIDENT) == 0u { return 1.0; }
+    let first = vec2<f32>((hit.overlay & SP_OVERLAY_MASK) as f32,
+                          ((hit.overlay >> SP_OVERLAY_BITS) & SP_OVERLAY_MASK) as f32);
+    return shadow_filter_overlay(first, first + hit.in_page, 1.0 / (shadow_overlay.size(0).x as f32), ref_z, -abs(spread));
+}
+
+struct SunProbe {
+    p: vec3<f32>,
+    n: vec3<f32>,
+    sin_t: f32,
+}
+
+fn sun_probe(first: i32, pos: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> SunProbe {
+    let m = lighting.shadow_maps[first].matrix;
+    return SunProbe {
+        p: scene::mul4(m, vec4<f32>(pos, 1.0)).xyz,
+        n: scene::mul4(m, vec4<f32>(n, 0.0)).xyz,
+        sin_t: sqrt(max(1.0 - n_dot_l * n_dot_l, 0.0)),
+    };
+}
+
+fn sun_locate(first: i32, level: i32, sp: SunProbe) -> ShadowHit {
+    let map0 = lighting.shadow_maps[first];
+    let scale = exp2(-(level as f32));
+    let texel_w = map0.bias.z / scale;
+    let n_off = map0.bias.y + texel_w * (0.5 + sp.sin_t);
+    let b_world = texel_w * (0.3 + 0.5 * sp.sin_t);
+    let q = sp.p + sp.n * n_off;
+    let map = lighting.shadow_maps[first + level];
+    let pc = (q.xy * scale + (map.matrix[3].xy - scale * map0.matrix[3].xy)) * (SP_WINDOW as f32);
+    if pc.x < 0.0 || pc.y < 0.0 || pc.x >= (SP_WINDOW as f32) || pc.y >= (SP_WINDOW as f32) {
+        return no_shadow_hit();
+    }
+    let p = min(vec2<i32>(floor(pc)), vec2<i32>(SP_WINDOW - 1, SP_WINDOW - 1));
+    let e = shadow_clipmap_entry(map, p);
+    let ref_z = min(q.z - map0.bias.x - b_world / max(map0.depth.y - map0.depth.x, 0.000001), 1.0);
+    return ShadowHit {
+        valid: true,
+        in_page: (pc - vec2<f32>(p)) * (SP_PAGE as f32),
+        page: shadow_table[2 * e],
+        overlay: shadow_table[2 * e + 1],
+        depth: q.z,
+        z_eye: 1.0,
+        ref_z: ref_z,
+    };
+}
+
+pub fn light_shadow(i: i32, pos: vec3<f32>, cam_dist: f32, light_dist: f32, n: vec3<f32>, n_dot_l: f32, spread: f32) -> f32 {
+    let light = lighting.lights[i];
+    let first = light.shadow.z as i32;
+    if first < 0 { return 1.0; }
+    let count = light.shadow.w as i32;
+    let footprint = select(lighting.shadow_view.x > 0.0, cam_dist * lighting.shadow_view.x, lighting.shadow_view.y);
+    var hit = no_shadow_hit();
+    if (light.position.w as i32) == 0 {
+        var lf: f32 = log2(max(footprint / lighting.shadow_view.z, 1e-9));
+        let sp = sun_probe(first, pos, n, n_dot_l);
+        let scale_last = exp2(-((count - 1) as f32));
+        let pc_last = (sp.p.xy * scale_last + (lighting.shadow_maps[first + count - 1].matrix[3].xy -
+                                                scale_last * lighting.shadow_maps[first].matrix[3].xy)) * (SP_WINDOW as f32);
+        if pc_last.x < -1.0 || pc_last.y < -1.0 || pc_last.x > ((SP_WINDOW + 1) as f32) || pc_last.y > ((SP_WINDOW + 1) as f32) {
+            return 1.0;
+        }
+        let search = lighting.shadow_soft.z as i32;
+        if search >= 0 && search < count && lf < (search as f32) {
+            let sh = sun_locate(first, search, sp);
+            if sh.valid && (sh.page & SP_RESIDENT) != 0u {
+                hit = sh;
+                let map0 = lighting.shadow_maps[first];
+                let still = lighting.shadow_soft.y / (lighting.shadow_soft.x * max(map0.depth.y - map0.depth.x, 0.000001));
+                let f0 = shadow_blocked_at(hit, hit.ref_z - still);
+                if f0 > 0.0 {
+                    let lp = log2(lighting.shadow_soft.y / (4.0 * lighting.shadow_view.z)) +
+                             shadow_blocked_at(hit, hit.ref_z - 2.0 * still) + shadow_blocked_at(hit, hit.ref_z - 4.0 * still);
+                    lf = max(lf, mix(lf, lp, f0));
+                }
+            }
+        }
+        let want = clamp(floor(lf) as i32, 0, count - 1);
+        var level: i32 = want;
+        while level < count {
+            let lh = sun_locate(first, level, sp);
+            if lh.valid && (lh.page & SP_RESIDENT) != 0u {
+                hit = lh;
+                break;
+            }
+            level += 1;
+        }
+        if level >= count {
+            level = want - 1;
+            while level >= 0 {
+                let lh = sun_locate(first, level, sp);
+                if lh.valid && (lh.page & SP_RESIDENT) != 0u {
+                    hit = lh;
+                    break;
+                }
+                level -= 1;
+            }
+            if level < 0 { return 1.0; }
+        }
+        var s: f32 = shadow_page_at(hit, hit.ref_z, spread * exp2(clamp(lf - (level as f32), 0.0, 1.0)));
+        let sway = min(lighting.shadow_view.w as i32, count - 1);
+        if s > 0.0 && sway >= 0 {
+            if level < sway {
+                let sw_hit = sun_locate(first, sway, sp);
+                if sw_hit.valid {
+                    hit = sw_hit;
+                } else {
+                    hit = ShadowHit { valid: hit.valid, in_page: hit.in_page, page: hit.page, overlay: 0u, depth: hit.depth, z_eye: hit.z_eye, ref_z: hit.ref_z };
+                }
+            }
+            s *= shadow_overlay_at(hit, hit.ref_z, spread);
+        }
+        let reach = light.shadow_reach.x;
+        if reach > 0.0 {
+            s = mix(s, 1.0, smoothstep(0.9 * reach, reach, cam_dist));
+        }
+        return s;
+    }
+    let to_frag = pos - light.position.xyz;
+    let m = first + select(count == 6, shadow_cube_face(to_frag), 0);
+    let texel0 = lighting.shadow_maps[m].bias.w * light_dist;
+    var mip: i32 = clamp(floor(log2(max(footprint / max(texel0, 1e-9), 1e-9))) as i32, 0, SP_LOCAL_MIPS - 1);
+    while mip < SP_LOCAL_MIPS {
+        let ph = shadow_probe(m, mip, texel0 * exp2(mip as f32), pos, n, n_dot_l);
+        if ph.valid && (ph.page & SP_RESIDENT) != 0u {
+            hit = ph;
+            break;
+        }
+        mip += 1;
+    }
+    if mip >= SP_LOCAL_MIPS { return 1.0; }
+    let s = shadow_page_at(hit, hit.ref_z, spread);
+    return select(s > 0.0 && lighting.shadow_view.w >= 0.0, s * shadow_overlay_at(hit, hit.ref_z, spread), s);
+}
+
+// ---------------------------------------------------------------------------
+// Cook-Torrance PBR + IBL + Probe + Shade Map (common/scene_lighting.glsl)
+// ---------------------------------------------------------------------------
+
+pub struct Surface {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    view: vec3<f32>,
+    cam_dist: f32,
+    base_color: vec3<f32>,
+    metallic: f32,
+    roughness: f32,
+    receives_shadow: bool,
+    two_sided: bool,
+    subsurface: f32,
+    translucency: f32,
+    sun_visibility: f32,
+    sky_visibility: f32,
+    sky_normal: vec3<f32>,
+    occluder_sun: f32,
+    sun_diffuse: f32,
+}
+
+fn distribution_ggx(n_dot_h: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    return a2 / max(scene::PI * denom * denom, 0.0000001);
+}
+
+fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    return n_dot_v / (n_dot_v * (1.0 - k) + k);
+}
+
+fn geometry_smith(n_dot_v: f32, n_dot_l: f32, roughness: f32) -> f32 {
+    return geometry_schlick_ggx(n_dot_v, roughness) * geometry_schlick_ggx(n_dot_l, roughness);
+}
+
+fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+fn fresnel_schlick_roughness(cos_theta: f32, f0: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let r1 = vec3<f32>(1.0 - roughness, 1.0 - roughness, 1.0 - roughness);
+    return f0 + (max(r1, f0) - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+fn distance_attenuation(dist: f32, range: f32) -> f32 {
+    if range <= 0.0 { return 1.0; }
+    let t = dist / range;
+    let win = clamp(1.0 - t * t * t * t, 0.0, 1.0);
+    return win * win / (dist * dist + 1.0);
+}
+
+pub fn multi_bounce(visibility: f32, albedo: vec3<f32>) -> vec3<f32> {
+    let a = 2.0404 * albedo - 0.3324;
+    let b = -4.7951 * albedo + 0.6417;
+    let c = 2.7552 * albedo + 0.6903;
+    return max(vec3<f32>(visibility, visibility, visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+pub fn specular_occlusion(n_dot_v: f32, visibility: f32, roughness: f32) -> f32 {
+    return clamp(pow(n_dot_v + visibility, exp2(-16.0 * roughness - 1.0)) - 1.0 + visibility, 0.0, 1.0);
+}
+
+pub fn direct_light(s: Surface) -> vec3<f32> {
+    let n = s.normal;
+    let v = s.view;
+    let n_dot_v = max(dot(n, v), 0.0001);
+    let f0 = mix(vec3<f32>(0.04, 0.04, 0.04), s.base_color, s.metallic);
+    var lo: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    let sun = select(s.sun_visibility < 1.0, sun_index(), -1);
+    let count = min(lighting.params.x as i32, MAX_LIGHTS);
+    for (var i: i32 = 0; i < count; i += 1) {
+        let light = lighting.lights[i];
+        let ltype = light.position.w as i32;
+        var l: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+        var atten: f32 = 1.0;
+        var light_dist: f32 = 0.0;
+        if ltype == 0 {
+            l = -light.direction.xyz;
+        } else {
+            let to_light = light.position.xyz - s.position;
+            let d = length(to_light);
+            if d < 0.0001 { continue; }
+            light_dist = d;
+            l = to_light / d;
+            atten = distance_attenuation(d, light.direction.w);
+            if ltype == 2 {
+                let c = dot(-l, light.direction.xyz);
+                let t = clamp((c - light.shadow.y) / max(light.shadow.x - light.shadow.y, 0.0001), 0.0, 1.0);
+                atten *= t * t * (3.0 - 2.0 * t);
+            }
+            if atten <= 0.0 { continue; }
+        }
+
+        var radiance: vec3<f32> = light.color.xyz * light.color.w * atten;
+        if atmosphere_on() && i == (lighting.atm.ground.w as i32) {
+            radiance *= sun_transmittance(s.position);
+        }
+        if i == sun {
+            radiance *= s.sun_visibility;
+            if s.sun_visibility <= 0.0 { continue; }
+        }
+        if s.two_sided && s.subsurface > 0.0 && s.translucency <= 0.0 {
+            let wrap = max(0.0, dot(-n, l) + s.subsurface) * s.subsurface;
+            lo += s.base_color * radiance * wrap * 0.6;
+        }
+        let leafy = s.translucency > 0.0;
+        let nl = dot(n, l);
+        var leaf_shadow: f32 = 1.0;
+        if leafy && s.receives_shadow {
+            let tn = select(nl < 0.0, -n, n);
+            let vis = light_shadow(i, s.position, s.cam_dist, light_dist, tn, max(abs(nl), 0.2), -2.0);
+            leaf_shadow = 0.1 + 0.9 * vis;
+        }
+        if leafy {
+            let through = smoothstep(-0.3, 0.4, 0.3 - nl);
+            let back = pow(max(dot(-v, l), 0.0), 3.0);
+            let amount = s.translucency * through * (0.1 + 0.9 * back);
+            let tcol = sqrt(max(s.base_color, vec3<f32>(0.0, 0.0, 0.0))) * vec3<f32>(0.75, 0.95, 0.35) * 0.55;
+            lo += tcol * radiance * amount * leaf_shadow;
+        }
+
+        let n_dot_l = max(nl, 0.0);
+        let diff_nl = select(leafy, clamp((nl + 0.3) / 1.3, 0.0, 1.0), n_dot_l);
+        if diff_nl <= 0.0 { continue; }
+        let h = normalize(v + l);
+        let d_term = distribution_ggx(max(dot(n, h), 0.0), s.roughness);
+        let g_term = geometry_smith(n_dot_v, n_dot_l, s.roughness);
+        let f_term = fresnel_schlick(max(dot(v, h), 0.0), f0);
+        let specular = (d_term * g_term * f_term) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
+        let diffuse = (vec3<f32>(1.0, 1.0, 1.0) - f_term) * (1.0 - s.metallic) * s.base_color / scene::PI;
+
+        var shadow: f32 = 1.0;
+        if leafy {
+            shadow = leaf_shadow;
+        } else if s.receives_shadow {
+            shadow = light_shadow(i, s.position, s.cam_dist, light_dist, n, n_dot_l, 1.0);
+        }
+        lo += shadow * (diffuse * diff_nl + specular * n_dot_l) * radiance;
+    }
+    return lo;
+}
+
+fn probe_radiance(pos: vec3<f32>, r: vec3<f32>, rough: f32) -> vec4<f32> {
+    let lp = scene::mul4(lighting.probe_world_to_local, vec4<f32>(pos, 1.0)).xyz;
+    let edge_dist = (vec3<f32>(0.5, 0.5, 0.5) - abs(lp)) * lighting.probe_box_size.xyz;
+    let dmin = min(min(edge_dist.x, edge_dist.y), edge_dist.z);
+    let blend_dist = lighting.probe_params.y;
+    let w = select(blend_dist > 0.0, clamp(dmin / blend_dist, 0.0, 1.0), step(0.0, dmin));
+    var dir: vec3<f32> = r;
+    if lighting.probe_box_size.w > 0.5 {
+        let w2l = lighting.probe_world_to_local;
+        var ld: vec3<f32> = w2l[0].xyz * r.x + w2l[1].xyz * r.y + w2l[2].xyz * r.z;
+        ld = vec3<f32>(select(abs(ld.x) < 1e-6, 1e-6, ld.x),
+                       select(abs(ld.y) < 1e-6, 1e-6, ld.y),
+                       select(abs(ld.z) < 1e-6, 1e-6, ld.z));
+        let inv_d = 1.0 / ld;
+        let tm = max((vec3<f32>(-0.5, -0.5, -0.5) - lp) * inv_d, (vec3<f32>(0.5, 0.5, 0.5) - lp) * inv_d);
+        let t_hit = min(min(tm.x, tm.y), tm.z);
+        let hit = scene::mul4(lighting.probe_local_to_world, vec4<f32>(lp + ld * t_hit, 1.0)).xyz;
+        let d2 = hit - lighting.probe_pos.xyz;
+        if dot(d2, d2) > 1e-8 { dir = d2; }
+    }
+    let rad = probe_map.sample_lod(linear, dir, rough * lighting.probe_params.z).xyz;
+    return vec4<f32>(rad, w);
+}
+
+pub fn sky_along(dir: vec3<f32>) -> vec3<f32> {
+    let atm = lighting.atm;
+    let ro = atmosphere::origin(atm, vec3<f32>(0.0, 0.0, 0.0));
+    let up = normalize(ro);
+    let sf = atmosphere::sun_frame(atm, up);
+    let h = vec2<f32>(dot(dir, sf.axes[0]), dot(dir, sf.axes[1]));
+    let hl = length(h);
+    let cos_az = select(hl > 0.00001, h.x / hl, 1.0);
+    let uv = atmosphere::sky_view_uv(atm, atm.sky_view.x, dot(dir, up), cos_az);
+    return atm_sky_view.sample_lod(linear, uv, 0.0).xyz * (atm.sun_illuminance.xyz / atmosphere::TABLE_SCALE);
+}
+
+pub fn ambient(s: Surface) -> vec3<f32> {
+    let min_nv = select(s.translucency > 0.0, 0.6, 0.0001);
+    let n_dot_v = max(dot(s.normal, s.view), min_nv);
+    let f0 = mix(vec3<f32>(0.04, 0.04, 0.04), s.base_color, s.metallic);
+    let f = fresnel_schlick_roughness(n_dot_v, f0, s.roughness);
+    let r = reflect(-s.view, s.normal);
+    let brdf = brdf_lut.sample(linear, vec2<f32>(n_dot_v, s.roughness)).xy;
+
+    var probe_w: f32 = 0.0;
+    var probe_spec: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if lighting.probe_pos.w > 0.5 {
+        let raw = probe_radiance(s.position, r, s.roughness);
+        probe_w = raw.w;
+        probe_spec = raw.xyz * (f * brdf.x + brdf.y) * lighting.probe_params.x;
+    }
+    var kd: vec3<f32> = (1.0 - f) * (1.0 - s.metallic);
+    let kd_open = kd;
+    let ni = s.sky_normal;
+    var diffuse_occ: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    var specular_occ: f32 = 1.0;
+    var bounce: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if s.sky_visibility < 1.0 {
+        diffuse_occ = multi_bounce(s.sky_visibility, s.base_color);
+        specular_occ = specular_occlusion(n_dot_v, s.sky_visibility, s.roughness);
+        kd *= diffuse_occ;
+        probe_spec *= specular_occ;
+        let sun = sun_index();
+        if sun >= 0 && s.occluder_sun > 0.0 {
+            var e: vec3<f32> = lighting.lights[sun].color.xyz * lighting.lights[sun].color.w;
+            if atmosphere_on() && sun == (lighting.atm.ground.w as i32) {
+                e *= sun_transmittance(s.position);
+            }
+            let up = select(atmosphere_on(), normalize(atmosphere::origin(lighting.atm, s.position)), vec3<f32>(0.0, 1.0, 0.0));
+            let mu = max(dot(up, to_sun()), 0.0);
+            bounce = (1.0 - s.sky_visibility) * s.occluder_sun * mu / 3.14159265 * s.base_color * e;
+        }
+    }
+    var glow: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if s.sun_diffuse > 0.0 {
+        let sun = sun_index();
+        if sun >= 0 {
+            var e: vec3<f32> = lighting.lights[sun].color.xyz * lighting.lights[sun].color.w;
+            if atmosphere_on() && sun == (lighting.atm.ground.w as i32) {
+                e *= sun_transmittance(s.position);
+            }
+            let up = select(atmosphere_on(), normalize(atmosphere::origin(lighting.atm, s.position)), vec3<f32>(0.0, 1.0, 0.0));
+            let mu = max(dot(up, to_sun()), 0.0);
+            glow = e * (mu * s.sun_diffuse * 0.5 * (1.0 + dot(ni, up)) / 3.14159265);
+        }
+    }
+    if atmosphere_on() {
+        let sh = atmosphere::sky_light_sh(lighting.atm, atm_sky_light, linear, s.position);
+        let irradiance = atmosphere::sh_irradiance(sh, ni) + glow;
+        var sky: vec3<f32> = atmosphere::sh_radiance(sh, r);
+        let sharp = (1.0 - smoothstep(0.12, 0.4, s.roughness)) * lighting.atm.sky_view.w;
+        if sharp > 0.0 {
+            sky = mix(sky, sky_along(r), sharp);
+        }
+        let specular = sky * (f * brdf.x + brdf.y) * specular_occ;
+        return (kd * irradiance + kd_open * bounce) * s.base_color + mix(specular, probe_spec, probe_w);
+    }
+    if lighting.ibl_params.x > 0.5 {
+        let rotation = lighting.ibl_params.z;
+        let intensity = lighting.ibl_params.y;
+        let irradiance = open_sky_irradiance(s.position, ni) + glow;
+        let prefiltered = prefilter_map.sample_lod(linear, rotate_y(r, rotation), s.roughness * lighting.ibl_params.w).xyz;
+        let specular = prefiltered * (f * brdf.x + brdf.y) * intensity * specular_occ;
+        return (kd * irradiance + kd_open * bounce) * s.base_color + mix(specular, probe_spec, probe_w);
+    }
+    return ((lighting.ambient_color.xyz + glow) * diffuse_occ + bounce) * s.base_color * (1.0 - s.metallic) + probe_spec * probe_w;
+}
+
+pub fn cell_shade(pos: vec3<f32>, geom_normal: vec3<f32>) -> f32 {
+    let r_cell = max(lighting.shade_params.x, 0.000001);
+    let nudged = pos - geom_normal * (0.05 * r_cell);
+    let p = nudged.xz - lighting.shade_origin.xz;
+    var cx: i32 = 0;
+    var cy: i32 = 0;
+    if lighting.shade_params.y > 0.5 {
+        let r = p.y / (1.5 * r_cell);
+        let q = p.x / (1.7320508 * r_cell) - r * 0.5;
+        let x = q;
+        let z = r;
+        let y = -x - z;
+        var rx: f32 = floor(x + 0.5);
+        var ry: f32 = floor(y + 0.5);
+        var rz: f32 = floor(z + 0.5);
+        let dx = abs(rx - x);
+        let dy = abs(ry - y);
+        let dz = abs(rz - z);
+        if dx > dy && dx > dz {
+            rx = -ry - rz;
+        } else if dy > dz {
+            ry = -rx - rz;
+        } else {
+            rz = -rx - ry;
+        }
+        let hq = rx as i32;
+        let hr = rz as i32;
+        cy = hr;
+        cx = hq + (hr - (hr & 1)) / 2;
+    } else {
+        cx = floor(p.x / r_cell) as i32;
+        cy = floor(p.y / r_cell) as i32;
+    }
+    if cx < 0 || cy < 0 || cx >= (lighting.shade_params.z as i32) || cy >= (lighting.shade_params.w as i32) {
+        return 1.0;
+    }
+    return shade_map.fetch(vec2<i32>(cx, cy), 0).x;
 }

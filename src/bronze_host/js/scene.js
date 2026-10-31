@@ -484,11 +484,21 @@
     });
     fn(SceneNode.prototype, "clearShader", function clearShader() { __bro_native.scene.SceneNode_clearShader(this); return this; });
     fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules) {
+        let uniforms;
+        if (source && typeof source === 'object') {
+            file = source.file;
+            modules = source.modules;
+            uniforms = source.uniforms;
+            source = source.module;
+        }
         if (typeof source !== 'string' || !source) throw new TypeError("setShaderModule expects the module's source");
         if (file !== undefined && typeof file !== 'string') throw new TypeError("file must be a string");
         if (modules !== undefined && (modules === null || typeof modules !== 'object'))
             throw new TypeError("modules must map names to sources");
         const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "", modules ? JSON.stringify(modules) : "");
+        if (err && err.length > 0) throw new Error(err);
+        if (uniforms && typeof uniforms === 'object')
+            for (const k of Object.keys(uniforms)) this.setShaderUniform(k, uniforms[k]);
         if (err && err.length > 0) throw new Error(err);
         return this;
     });

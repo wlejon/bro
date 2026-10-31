@@ -68,7 +68,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                     auto* sm = m->asSkinnedMesh();
                     const bool skinned = sm && sm->skinReady();
                     // A custom vertex chunk displaces with no generation signal.
-                    const bool chunk = m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
+                    const bool chunk = m->hasCustomShader() && m->customShader()->hasVertex;
                     const bool sways = (m->vegetationHeight() > 0.0f && swaying) ||
                                        (m->vegetationHeight() <= 0.0f && windy && m->windMask() > 0.0f);
                     const bool moving = shadowCasterStates_.caster(m->id(), m->changeGeneration(), *wb,
@@ -88,7 +88,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             if (casts) {
                 if (const auto wb = nodeWorldBounds(m)) {
                     const CustomShaderState* cs = m->customShader();
-                    const bool chunk = cs && !cs->vertexChunk.empty();
+                    const bool chunk = cs && cs->hasVertex;
                     const bool sways = swaying && m->hasVegetation();
                     const bool moving =
                         shadowCasterStates_.caster(m->id(), m->changeGeneration(), *wb, chunk, pages, sways);

@@ -232,17 +232,24 @@ private:
     struct CustomProgram {
         bool failed = false;
         bool indirectFailed = false;
+        bool hasLight = false;
         CustomShaderInterface iface;
         VkShaderModule vs = VK_NULL_HANDLE;
         VkShaderModule fs = VK_NULL_HANDLE;
+        VkShaderModule fsCuts = VK_NULL_HANDLE;
         VkShaderModule fsIndirect = VK_NULL_HANDLE;   // compiled on first use
+        VkShaderModule fsIndirectCuts = VK_NULL_HANDLE;
         PipelineVariants pipelines;
         // A volume whose chunk gives a near medium: its near pass's stage.
         bool medium = false;
         VkShaderModule fsNear = VK_NULL_HANDLE;
         PipelineVariants nearPipelines;
         // A brokernel hook's stages' entry points ("main" for GLSL).
+        std::string vsEntry = "main";
         std::string fsEntry = "main";
+        std::string fsCutsEntry = "main";
+        std::string fsIndirectEntry = "main";
+        std::string fsIndirectCutsEntry = "main";
         std::string fsNearEntry = "main";
     };
 
@@ -267,13 +274,14 @@ private:
                                const std::vector<float>* leafSegments, const std::vector<float>* vegetation);
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.
+    static constexpr uint32_t kAtmosphereVariant = 64, kAtmosphereConstantId = 2;
     uint32_t rasterVariant(const MeshDraw& draw) const;
     VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
     /// `streams` false: no vertex input, whatever `kind` (a vertex stage that
     /// reads only gl_VertexIndex). `what` names it in the pipeline statistics.
-    VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
-                             const TargetFormat& target, const char* what, bool streams = true);
+    VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster, const TargetFormat& target, const char* what, bool streams = true, const char* vsEntry = "main", const char* fsEntry = "main");
+
 
     VkDevice device_ = VK_NULL_HANDLE;
     SceneDefaults* defaults_ = nullptr;
@@ -285,12 +293,8 @@ private:
     VkPipelineLayout nearLayout_ = VK_NULL_HANDLE;
     bool atmosphere_ = false;   // setAtmosphere
     VkShaderModule vs_[kMeshKindCount] = {};
-    VkShaderModule fs_ = VK_NULL_HANDLE;
-    VkShaderModule fsIndirect_ = VK_NULL_HANDLE;
-    VkShaderModule fsVeg_ = VK_NULL_HANDLE;
-    VkShaderModule fsVegIndirect_ = VK_NULL_HANDLE;
-    VkShaderModule fsBark_ = VK_NULL_HANDLE;           // Tube: mesh.frag's SCENE_BARK build
-    VkShaderModule fsBarkIndirect_ = VK_NULL_HANDLE;
+    VkShaderModule vsPassthrough_[3] = {};
+    VkShaderModule fs_[3][2][2] = {};
     VkShaderModule vsVolume_ = VK_NULL_HANDLE;
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;

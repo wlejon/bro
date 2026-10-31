@@ -11,6 +11,7 @@
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "render/vulkan_context.h"
@@ -96,14 +97,14 @@ int main() {
     std::cout << "[Test 1] SceneVkShaderCompiler (built-in SPIR-V & run-time GLSL)... " << std::flush;
     {
         // 1. Verify built-in shader bytecode
-        const auto& meshVs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::MeshVert);
-        const auto& meshFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::MeshFrag);
+        KernelHookStage meshVs, meshFs;
+        std::string meshErr;
+        assert(compileKernelMeshStage("mesh_vert", meshVs, meshErr) && !meshVs.spirv.empty() && meshVs.spirv[0] == 0x07230203);
+        assert(compileKernelMeshStage("mesh_frag", meshFs, meshErr) && !meshFs.spirv.empty() && meshFs.spirv[0] == 0x07230203);
         const auto& shadowVs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::ShadowVert);
         const auto& envFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::SkyAtmosphereFrag);
         const auto& tonemapFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::TonemapFrag);
 
-        assert(!meshVs.empty() && meshVs[0] == 0x07230203);
-        assert(!meshFs.empty() && meshFs[0] == 0x07230203);
         assert(!shadowVs.empty() && shadowVs[0] == 0x07230203);
         assert(!envFs.empty() && envFs[0] == 0x07230203);
         assert(!tonemapFs.empty() && tonemapFs[0] == 0x07230203);

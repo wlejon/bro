@@ -186,6 +186,20 @@ pub fn sh_irradiance(sh: SkySh, n: vec3<f32>) -> vec3<f32> {
     return max(e, vec3<f32>(0.0, 0.0, 0.0)) / PI;
 }
 
+// The radiance along `dir` the coefficients hold (smooth: the ambient's
+// specular on a surface no probe covers).
+pub fn sh_radiance(sh: SkySh, dir: vec3<f32>) -> vec3<f32> {
+    let d = vec3<f32>(dot(sh.frame[0], dir), dot(sh.frame[1], dir), dot(sh.frame[2], dir));
+    let b0 = 0.282095;
+    let b1 = 0.488603 * d.z;
+    let b2 = 0.488603 * d.x;
+    let b3 = 0.315392 * (3.0 * d.z * d.z - 1.0);
+    let b4 = 1.092548 * d.x * d.z;
+    let b5 = 0.546274 * (d.x * d.x - d.y * d.y);
+    return max(sh.c0 * b0 + sh.c1 * b1 + sh.c2 * b2 + sh.c3 * b3 + sh.c4 * b4 + sh.c5 * b5,
+               vec3<f32>(0.0, 0.0, 0.0));
+}
+
 // The aerial-perspective volume's w for a distance d, and how much of the
 // first slice's air a point nearer than it gets (scene/world/atmosphere.h,
 // froxelW), as (w, near weight).

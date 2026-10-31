@@ -15,7 +15,6 @@
 #include "scene_shadow_cutout.glsl.src.h"
 #include "scene_vegetation.glsl.src.h"
 #include "scene_procedural.glsl.src.h"
-#include "scene_bark.glsl.src.h"
 #include "mesh.frag.src.h"
 #include "util/user_dirs.h"
 
@@ -106,7 +105,6 @@ const char* embeddedInclude(const std::string& name) {
         {"shadow/scene_shadow_cutout.glsl", kVkSceneShadowCutoutSrc},
         {"common/scene_vegetation.glsl", kVkSceneVegetationSrc},
         {"common/scene_procedural.glsl", kVkSceneProceduralSrc},
-        {"draw/scene_bark.glsl", kVkSceneBarkSrc},
         // The built-in shaders compileBuiltinWith builds.
         {"draw/mesh.frag", kVkMeshFragSrc},
     };

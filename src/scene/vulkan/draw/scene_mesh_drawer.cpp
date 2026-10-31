@@ -30,6 +30,19 @@ namespace {
 
 constexpr uint32_t kBonePaletteSize = 256;
 
+constexpr const char* kVsEntries[kMeshKindCount] = {
+    "mesh_vert", "mesh_instanced_vert", "mesh_skinned_vert",
+    "mesh_scatter_vert", "mesh_tube_vert", "mesh_veg_vert", "mesh_instanced_veg_vert",
+};
+constexpr const char* kVsPassthroughEntries[3] = {
+    "mesh_hook_passthrough_vert", "mesh_skinned_hook_passthrough_vert", "mesh_instanced_hook_passthrough_vert",
+};
+constexpr const char* kFsEntries[3][2][2] = {
+    {{"mesh_frag", "mesh_cuts_frag"}, {"mesh_indirect_frag", "mesh_indirect_cuts_frag"}},
+    {{"mesh_veg_frag", "mesh_veg_cuts_frag"}, {"mesh_veg_indirect_frag", "mesh_veg_indirect_cuts_frag"}},
+    {{"mesh_bark_frag", "mesh_bark_cuts_frag"}, {"mesh_bark_indirect_frag", "mesh_bark_indirect_cuts_frag"}},
+};
+
 SceneRenderer::CustomShaderTarget shaderTarget(MeshKind kind) {
     switch (kind) {
     case MeshKind::Instanced:
@@ -115,30 +128,23 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         return false;
     }
 
-    vs_[static_cast<int>(MeshKind::Static)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVert);
-    vs_[static_cast<int>(MeshKind::Instanced)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVert);
-    vs_[static_cast<int>(MeshKind::Skinned)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshSkinnedVert);
-    vs_[static_cast<int>(MeshKind::Scatter)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshScatterVert);
-    vs_[static_cast<int>(MeshKind::Tube)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshTubeVert);
-    vs_[static_cast<int>(MeshKind::Vegetation)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegVert);
-    vs_[static_cast<int>(MeshKind::InstancedVegetation)] =
-        SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshInstancedVegVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshFrag);
-    fsIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshIndirectFrag);
-    fsVeg_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegFrag);
-    fsVegIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshVegIndirectFrag);
-    fsBark_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkFrag);
-    fsBarkIndirect_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::MeshBarkIndirectFrag);
+    auto compile = [&](const char* entry) {
+        KernelHookStage bin;
+        std::string err;
+        if (!compileKernelMeshStage(entry, bin, err)) {
+            LOG_ERROR("SceneMeshDrawer: %s", err.c_str());
+            return static_cast<VkShaderModule>(VK_NULL_HANDLE);
+        }
+        return SceneVkShaderModule::create(device_, bin.spirv);
+    };
+    bool ok = true;
+    for (int k = 0; k < kMeshKindCount; ++k) ok = (vs_[k] = compile(kVsEntries[k])) && ok;
+    for (int t = 0; t < 3; ++t) ok = (vsPassthrough_[t] = compile(kVsPassthroughEntries[t])) && ok;
+    for (int f = 0; f < 3; ++f)
+        for (int i = 0; i < 2; ++i)
+            for (int c = 0; c < 2; ++c) ok = (fs_[f][i][c] = compile(kFsEntries[f][i][c])) && ok;
     vsVolume_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::VolumeVert);
-    bool vsAll = true;
-    for (int k = 0; k < kMeshKindCount; ++k) vsAll = vsAll && vs_[k];
-    if (!vsAll || !fs_ || !fsIndirect_ || !fsVeg_ || !fsVegIndirect_ || !fsBark_ || !fsBarkIndirect_ || !vsVolume_) {
+    if (!ok || !vsVolume_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;
     }
@@ -150,29 +156,21 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     for (auto& [key, prog] : custom_) {
         prog->pipelines.destroy(gpu.device);
         prog->nearPipelines.destroy(gpu.device);
-        for (VkShaderModule m : {prog->vs, prog->fs, prog->fsIndirect, prog->fsNear})
+        for (VkShaderModule m : {prog->vs, prog->fs, prog->fsCuts, prog->fsIndirect, prog->fsIndirectCuts, prog->fsNear})
             SceneVkShaderModule::destroy(device_, m);
     }
     custom_.clear();
     zeroBuffer_.reset();
-    for (VkShaderModule& m : vs_) {
-        SceneVkShaderModule::destroy(device_, m);
-        m = VK_NULL_HANDLE;
-    }
-    SceneVkShaderModule::destroy(device_, fs_);
-    SceneVkShaderModule::destroy(device_, fsIndirect_);
-    SceneVkShaderModule::destroy(device_, fsVeg_);
-    SceneVkShaderModule::destroy(device_, fsVegIndirect_);
-    SceneVkShaderModule::destroy(device_, fsBark_);
-    SceneVkShaderModule::destroy(device_, fsBarkIndirect_);
-    SceneVkShaderModule::destroy(device_, vsVolume_);
-    vsVolume_ = VK_NULL_HANDLE;
-    fs_ = fsIndirect_ = fsVeg_ = fsVegIndirect_ = fsBark_ = fsBarkIndirect_ = VK_NULL_HANDLE;
-    if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, layout_, nullptr);
-    if (nearLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, nearLayout_, nullptr);
-    if (nearSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, nearSetLayout_, nullptr);
-    layout_ = nearLayout_ = VK_NULL_HANDLE;
-    nearSetLayout_ = VK_NULL_HANDLE;
+    for (VkShaderModule& m : vs_) SceneVkShaderModule::destroy(device_, std::exchange(m, VK_NULL_HANDLE));
+    for (VkShaderModule& m : vsPassthrough_) SceneVkShaderModule::destroy(device_, std::exchange(m, VK_NULL_HANDLE));
+    for (auto& f : fs_)
+        for (auto& i : f)
+            for (VkShaderModule& m : i) SceneVkShaderModule::destroy(device_, std::exchange(m, VK_NULL_HANDLE));
+    SceneVkShaderModule::destroy(device_, std::exchange(vsVolume_, VK_NULL_HANDLE));
+    if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, std::exchange(layout_, VK_NULL_HANDLE), nullptr);
+    if (nearLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, std::exchange(nearLayout_, VK_NULL_HANDLE), nullptr);
+    if (nearSetLayout_ != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device_, std::exchange(nearSetLayout_, VK_NULL_HANDLE), nullptr);
 }
 
 namespace raster {
@@ -205,7 +203,8 @@ uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
-                                          const TargetFormat& target, const char* what, bool streams) {
+                                          const TargetFormat& target, const char* what, bool streams,
+                                          const char* vsEntry, const char* fsEntry) {
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
     if (streams) vertexInput(kind, bindings, attributes);
@@ -222,7 +221,7 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
                    (SceneTargets::carriesIndirect(target) ? " indirect" : "") + " raster " +
                    std::to_string(rasterBits));
     }
-    b.setShaderStages(vs, fs)
+    b.setShaderStages(vs, fs, vsEntry, fsEntry)
      .setVertexInput(bindings, attributes)
      .setInputTopology(lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -254,12 +253,12 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
     // Built off the frame thread (the draw skipped until it is in).
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
     return builtin_.get(variant, target, [&] {
-        const bool indirect = SceneTargets::carriesIndirect(target);
-        const bool veg = vegetationShading(draw.kind);
-        VkShaderModule vs = vs_[static_cast<int>(draw.kind)];
-        VkShaderModule fs = indirect ? (veg ? fsVegIndirect_ : fsIndirect_) : (veg ? fsVeg_ : fs_);
-        if (draw.kind == MeshKind::Tube) fs = indirect ? fsBarkIndirect_ : fsBark_;
-        return buildPipeline(vs, fs, draw.kind, rasterBits, target, "mesh");
+        const int f = draw.kind == MeshKind::Tube ? 2 : vegetationShading(draw.kind) ? 1 : 0;
+        const int i = SceneTargets::carriesIndirect(target) ? 1 : 0;
+        const int c = (rasterBits & raster::kCuts) != 0 ? 1 : 0;
+        const int v = static_cast<int>(draw.kind);
+        return buildPipeline(vs_[v], fs_[f][i][c], draw.kind, rasterBits, target, "mesh", true,
+                             kVsEntries[v], kFsEntries[f][i][c]);
     }, true);
 }
 
@@ -272,6 +271,34 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
 
     auto prog = std::make_unique<CustomProgram>();
     std::string err;
+    if (cs.isModule()) {
+        const auto target = shaderTarget(kind);
+        KernelMeshHook hook;
+        bool ok = compileKernelMeshHook(target, cs.module, cs.moduleFile, cs.modules, hook, err);
+        if (ok) {
+            prog->iface = std::move(hook.iface);
+            prog->hasLight = hook.hasLight;
+            if (hook.hasVertex) {
+                prog->vs = SceneVkShaderModule::create(device_, hook.vs.spirv);
+                prog->vsEntry = hook.vs.entry;
+            } else {
+                prog->vsEntry = kVsPassthroughEntries[static_cast<int>(target)];
+            }
+            if (hook.hasFragment) {
+                prog->fs = SceneVkShaderModule::create(device_, hook.fs.spirv);
+                prog->fsEntry = hook.fs.entry;
+            }
+            ok = (!hook.hasVertex || prog->vs) && (!hook.hasFragment || prog->fs);
+            if (!ok) err = "Failed to create VkShaderModule";
+        }
+        if (!ok) {
+            LOG_ERROR("SceneMeshDrawer: Failed compiling a mesh module: %s", err.c_str());
+            prog->failed = true;
+            custom_.emplace(std::move(key), std::move(prog));
+            return nullptr;
+        }
+        return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
+    }
     if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
         !SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog->iface, prog->vs,
                                                          prog->fs, false, err)) {
@@ -284,135 +311,47 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
     return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
 }
 
-SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShaderState& cs) {
-    const std::string key = cs.key + "\x1evolume";
-    auto it = custom_.find(key);
-    if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
-
-    auto prog = std::make_unique<CustomProgram>();
-    std::string err;
-    if (cs.isModule()) {
-        KernelVolumeHook hook;
-        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
-        if (ok) {
-            prog->iface = std::move(hook.iface);
-            prog->medium = hook.medium;
-            prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
-            prog->fsEntry = hook.main.entry;
-            if (hook.medium) {
-                prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
-                prog->fsNearEntry = hook.nearPass.entry;
-            }
-            ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
-            if (!ok) err = "Failed to create VkShaderModule";
-        }
-        if (!ok) {
-            LOG_ERROR("SceneMeshDrawer: Failed compiling a volume module: %s", err.c_str());
-            prog->failed = true;
-            custom_.emplace(key, std::move(prog));
-            return nullptr;
-        }
-        return custom_.emplace(key, std::move(prog)).first->second.get();
-    }
-    prog->medium = SceneVkCustomShader::volumeHasMedium(cs.fragmentChunk);
-    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
-        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, false, prog->fs, err) ||
-        (prog->medium && !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, true, prog->fsNear, err))) {
-        // Logged once; the volume draws nothing from now on.
-        LOG_ERROR("SceneMeshDrawer: Failed compiling a volume shader: %s", err.c_str());
-        prog->failed = true;
-        custom_.emplace(key, std::move(prog));
-        return nullptr;
-    }
-    return custom_.emplace(key, std::move(prog)).first->second.get();
-}
-
-void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
-                                   VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
-                                   uint32_t index) {
-    if (!draw.volume || !draw.custom || !draw.customSet) return;
-    CustomProgram* prog = volumeProgram(*draw.custom);
-    if (!prog) return;
-    const bool atmosphere = atmosphere_;
-    VkPipeline pipeline = prog->pipelines.get(atmosphere ? raster::kAtmosphere : 0u, target, [&] {
-        // Over the volumes before it: their light * its transmittance (the
-        // source alpha) + its light, the transmittances multiplied; the
-        // medium's depth overwritten.
-        VkPipelineColorBlendAttachmentState blend{};
-        blend.blendEnable = VK_TRUE;
-        blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blend.alphaBlendOp = VK_BLEND_OP_ADD;
-        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                               VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendAttachmentState overwrite{};
-        overwrite.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
-        SceneVkPipelineBuilder b;
-        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
-         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fs, prog->fsEntry.c_str())
-         .setVertexInput({}, {})
-         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-         .setPolygonMode(VK_POLYGON_MODE_FILL)
-         .setCullMode(VK_CULL_MODE_NONE)
-         .setTarget(target)
-         .setColorBlendAttachment(0, blend)
-         .setColorBlendAttachment(1, overwrite)
-         .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
-         .setLabel("volume")
-         .disableDepthTest();
-        return b.build(device_, layout_);
-    });
-    if (!pipeline) return;
-    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, depthSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
-    // The volume's place as its first instance: volume.frag's meter slot.
-    vkCmdDraw(cmd, 3, 1, 0, index);
-}
-
-bool SceneMeshDrawer::volumeHasMedium(const MeshDraw& draw) {
-    if (!draw.volume || !draw.custom || !draw.customSet) return false;
-    const CustomProgram* prog = volumeProgram(*draw.custom);
-    return prog && prog->medium;
-}
-
-void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
-                                       VkDescriptorSet nearSet, const MeshDraw& draw, uint32_t index) {
-    if (!volumeHasMedium(draw)) return;
-    CustomProgram* prog = volumeProgram(*draw.custom);
-    const bool atmosphere = atmosphere_;
-    VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? raster::kAtmosphere : 0u, TargetFormat{}, [&] {
-        SceneVkPipelineBuilder b;
-        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
-         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fsNear, prog->fsNearEntry.c_str())
-         .setVertexInput({}, {})
-         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-         .setPolygonMode(VK_POLYGON_MODE_FILL)
-         .setCullMode(VK_CULL_MODE_NONE)
-         .setTarget(TargetFormat{})
-         .setSpecialization(raster::kAtmosphereConstantId, atmosphere)
-         .setLabel("volume near")
-         .disableDepthTest();
-        return b.build(device_, nearLayout_);
-    });
-    if (!pipeline) return;
-    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, nearSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 0, 3, sets, 0, nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 4, 1, &draw.customSet, 0, nullptr);
-    vkCmdDraw(cmd, 3, 1, 0, index);
-}
-
 VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target) {
     const MeshKind kind = draw.kind;
     const uint32_t rasterBits = rasterVariant(draw);
     return prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
+        const bool indirect = SceneTargets::carriesIndirect(target);
+        const bool cuts = (rasterBits & raster::kCuts) != 0;
+        if (draw.custom && draw.custom->isModule()) {
+            const auto st = shaderTarget(kind);
+            VkShaderModule vs = prog.vs ? prog.vs : vsPassthrough_[static_cast<int>(st)];
+            VkShaderModule fs = fs_[0][indirect ? 1 : 0][cuts ? 1 : 0];
+            const char* fsEntry = kFsEntries[0][indirect ? 1 : 0][cuts ? 1 : 0];
+            if (prog.fs) {
+                if (indirect || cuts) {
+                    if (prog.indirectFailed) return VK_NULL_HANDLE;
+                    VkShaderModule& dst = indirect ? (cuts ? prog.fsIndirectCuts : prog.fsIndirect) : prog.fsCuts;
+                    std::string& dstEntry =
+                        indirect ? (cuts ? prog.fsIndirectCutsEntry : prog.fsIndirectEntry) : prog.fsCutsEntry;
+                    if (!dst) {
+                        KernelHookStage bin;
+                        std::string err;
+                        if (!compileKernelMeshHookFragment(draw.custom->module, draw.custom->moduleFile,
+                                                           draw.custom->modules, prog.hasLight, indirect, cuts, bin,
+                                                           err)) {
+                            LOG_ERROR("SceneMeshDrawer: Failed compiling module variant: %s", err.c_str());
+                            prog.indirectFailed = true;
+                            return VK_NULL_HANDLE;
+                        }
+                        dst = SceneVkShaderModule::create(device_, bin.spirv);
+                        dstEntry = bin.entry;
+                    }
+                    fs = dst;
+                    fsEntry = dstEntry.c_str();
+                } else {
+                    fs = prog.fs;
+                    fsEntry = prog.fsEntry.c_str();
+                }
+            }
+            return buildPipeline(vs, fs, kind, rasterBits, target, "custom mesh", true, prog.vsEntry.c_str(), fsEntry);
+        }
         VkShaderModule fs = prog.fs;
-        if (SceneTargets::carriesIndirect(target)) {
+        if (indirect) {
             if (prog.indirectFailed) return VK_NULL_HANDLE;
             if (prog.fsIndirect == VK_NULL_HANDLE) {
                 VkShaderModule vs = VK_NULL_HANDLE;
@@ -892,7 +831,8 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
         if (CustomProgram* prog = program(*cs, out.kind))
-            out.customSet = customSet(frame, node.id(), *cs, *prog, nullptr, node.customShaderBuffers());
+            out.customSet = customSet(frame, node.id(), *cs, *prog, &node.customShaderTextures(),
+                                      node.customShaderBuffers());
     } else if (node.effectiveUnlit()) {
         flags |= mesh_flags::kUnlit;
     }

@@ -3,6 +3,7 @@
 
 #include "render/vulkan_pipeline_cache.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_targets.h"
@@ -124,8 +125,10 @@ void SceneCasterDrawer::cleanup(SceneGpu& gpu) {
     layout_ = VK_NULL_HANDLE;
 }
 
+
+
 VkPipeline SceneCasterDrawer::buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided,
-                                            bool cutout) {
+                                            bool cutout, const char* vsEntry) {
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
     shadowVertexInput(kind, custom, cutout, bindings, attributes);
@@ -138,7 +141,7 @@ VkPipeline SceneCasterDrawer::buildPipeline(VkShaderModule vs, MeshKind kind, bo
         b.setLabel(std::string(custom ? "custom shadow" : "shadow") + " kind " +
                    std::to_string(static_cast<int>(kind)) + (cutout ? " cutout" : ""));
     }
-    b.setShaderStages(vs, cutout ? fsCutout_ : fs_)
+    b.setShaderStages(vs, cutout ? fsCutout_ : fs_, vsEntry, "main")
      .setVertexInput(bindings, attributes)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
@@ -190,7 +193,16 @@ VkPipeline SceneCasterDrawer::customPipeline(const CustomShaderState& cs, MeshKi
     VkShaderModule vs = VK_NULL_HANDLE;
     std::string err;
     CustomShaderInterface iface;
-    if (iface.parse(cs.vertexChunk, cs.fragmentChunk, err) &&
+    if (cs.isModule()) {
+        KernelHookStage stage;
+        if (compileKernelShadowHook(caster, cutout, cs.module, cs.moduleFile, cs.modules, stage, err)) {
+            vs = SceneVkShaderModule::create(device_->device(), stage.spirv);
+            if (vs) {
+                pipeline = buildPipeline(vs, kind, true, twoSided, cutout, stage.entry.c_str());
+                SceneVkShaderModule::destroy(device_->device(), vs);
+            }
+        }
+    } else if (iface.parse(cs.vertexChunk, cs.fragmentChunk, err) &&
         SceneVkCustomShader::compileCustomShadowShaderModule(device_->device(), caster, cutout, iface, vs, err)) {
         pipeline = buildPipeline(vs, kind, true, twoSided, cutout);
         SceneVkShaderModule::destroy(device_->device(), vs);
@@ -212,7 +224,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     const bool cutout = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Instanced) &&
                         draw.push.pbrParams[2] > 0.0f && (flags & mesh_flags::kAlbedoMap) != 0u &&
                         draw.materialSet != VK_NULL_HANDLE;
-    const bool custom = draw.custom && draw.customSet && !draw.custom->vertexChunk.empty();
+    const bool custom = draw.custom && draw.customSet && draw.custom->hasVertex;
     if (custom) pipeline = customPipeline(*draw.custom, draw.kind, twoSided, cutout);
     const bool customBound = pipeline != VK_NULL_HANDLE;
     // (A custom chunk that does not build casts the undisplaced silhouette,

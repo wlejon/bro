@@ -6,6 +6,8 @@
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_frame_graph.h"
@@ -387,6 +389,129 @@ void PassVolumeComposite::record(SceneFrame& frame) {
     bindScenePipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
     vkCmdDraw(frame.cmd, 3, 1, 0, 0);
+}
+
+SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShaderState& cs) {
+    const std::string key = cs.key + "\x1evolume";
+    auto it = custom_.find(key);
+    if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
+
+    auto prog = std::make_unique<CustomProgram>();
+    std::string err;
+    if (cs.isModule()) {
+        KernelVolumeHook hook;
+        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
+        if (ok) {
+            prog->iface = std::move(hook.iface);
+            prog->medium = hook.medium;
+            prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
+            prog->fsEntry = hook.main.entry;
+            if (hook.medium) {
+                prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
+                prog->fsNearEntry = hook.nearPass.entry;
+            }
+            ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
+            if (!ok) err = "Failed to create VkShaderModule";
+        }
+        if (!ok) {
+            LOG_ERROR("SceneMeshDrawer: Failed compiling a volume module: %s", err.c_str());
+            prog->failed = true;
+            custom_.emplace(key, std::move(prog));
+            return nullptr;
+        }
+        return custom_.emplace(key, std::move(prog)).first->second.get();
+    }
+    prog->medium = SceneVkCustomShader::volumeHasMedium(cs.fragmentChunk);
+    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
+        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, false, prog->fs, err) ||
+        (prog->medium && !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, true, prog->fsNear, err))) {
+        // Logged once; the volume draws nothing from now on.
+        LOG_ERROR("SceneMeshDrawer: Failed compiling a volume shader: %s", err.c_str());
+        prog->failed = true;
+        custom_.emplace(key, std::move(prog));
+        return nullptr;
+    }
+    return custom_.emplace(key, std::move(prog)).first->second.get();
+}
+
+void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
+                                   VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
+                                   uint32_t index) {
+    if (!draw.volume || !draw.custom || !draw.customSet) return;
+    CustomProgram* prog = volumeProgram(*draw.custom);
+    if (!prog) return;
+    const bool atmosphere = atmosphere_;
+    VkPipeline pipeline = prog->pipelines.get(atmosphere ? kAtmosphereVariant : 0u, target, [&] {
+        // Over the volumes before it: their light * its transmittance (the
+        // source alpha) + its light, the transmittances multiplied; the
+        // medium's depth overwritten.
+        VkPipelineColorBlendAttachmentState blend{};
+        blend.blendEnable = VK_TRUE;
+        blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blend.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend.colorBlendOp = VK_BLEND_OP_ADD;
+        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendAttachmentState overwrite{};
+        overwrite.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        SceneVkPipelineBuilder b;
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fs, prog->fsEntry.c_str())
+         .setVertexInput({}, {})
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(target)
+         .setColorBlendAttachment(0, blend)
+         .setColorBlendAttachment(1, overwrite)
+         .setSpecialization(kAtmosphereConstantId, atmosphere)
+         .setLabel("volume")
+         .disableDepthTest();
+        return b.build(device_, layout_);
+    });
+    if (!pipeline) return;
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, depthSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
+    // The volume's place as its first instance: volume.frag's meter slot.
+    vkCmdDraw(cmd, 3, 1, 0, index);
+}
+
+bool SceneMeshDrawer::volumeHasMedium(const MeshDraw& draw) {
+    if (!draw.volume || !draw.custom || !draw.customSet) return false;
+    const CustomProgram* prog = volumeProgram(*draw.custom);
+    return prog && prog->medium;
+}
+
+void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
+                                       VkDescriptorSet nearSet, const MeshDraw& draw, uint32_t index) {
+    if (!volumeHasMedium(draw)) return;
+    CustomProgram* prog = volumeProgram(*draw.custom);
+    const bool atmosphere = atmosphere_;
+    VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? kAtmosphereVariant : 0u, TargetFormat{}, [&] {
+        SceneVkPipelineBuilder b;
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+         .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fsNear, prog->fsNearEntry.c_str())
+         .setVertexInput({}, {})
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(TargetFormat{})
+         .setSpecialization(kAtmosphereConstantId, atmosphere)
+         .setLabel("volume near")
+         .disableDepthTest();
+        return b.build(device_, nearLayout_);
+    });
+    if (!pipeline) return;
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    const VkDescriptorSet sets[3] = {cameraSet, lightingSet, nearSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 0, 3, sets, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, nearLayout_, 4, 1, &draw.customSet, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, index);
 }
 
 }  // namespace bro::scene::vk

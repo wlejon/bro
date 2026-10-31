@@ -585,6 +585,11 @@ public:
                              const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut) {
         return renderer_.compileVolumeModule(module, file, modules, errOut);
     }
+    bool compileShaderModule(SceneRenderer::CustomShaderTarget target, const std::string& module,
+                             const std::string& file, const std::vector<std::pair<std::string, std::string>>& modules,
+                             bool& hasVertexOut, std::string& errOut) {
+        return renderer_.compileShaderModule(target, module, file, modules, hasVertexOut, errOut);
+    }
 
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);

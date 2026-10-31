@@ -325,6 +325,17 @@ bool SceneRenderer::compileVolumeModule(const std::string& module, const std::st
     return vk::compileKernelVolumeHook(module, file, modules, hook, errOut);
 }
 
+bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::string& module, const std::string& file,
+                                        const std::vector<std::pair<std::string, std::string>>& modules,
+                                        bool& hasVertexOut, std::string& errOut) {
+    hasVertexOut = false;
+    if (target == CustomShaderTarget::Volume) return compileVolumeModule(module, file, modules, errOut);
+    vk::KernelMeshHook hook;
+    if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut)) return false;
+    hasVertexOut = hook.hasVertex;
+    return true;
+}
+
 // --- Colour grading ---------------------------------------------------------
 
 bool SceneRenderer::loadColorLUT(const std::string& path, int size, float amount) {

@@ -1,0 +1,449 @@
+// Vegetation: plants moving in the scene's wind field (common/scene_vegetation.glsl).
+module vegetation;
+
+import scene;
+from scene import camera;
+
+const VEG_REFERENCE_WIND: f32 = 10.0;
+const VEG_FREQ_RANGE: vec2<f32> = vec2<f32>(0.05, 50.0);
+const VEG_SWAY_RANGE: vec2<f32> = vec2<f32>(1.0e-5, 1.0);
+const VEG_LENGTH_RANGE: vec2<f32> = vec2<f32>(0.005, 200.0);
+const VEG_SHAPE_RANGE: vec2<f32> = vec2<f32>(1.0, 4.0);
+const VEG_TWO_PI: f32 = 6.28318530718;
+const VEG_GUST_KICK: f32 = 0.4;
+const VEG_LEAF_FLUTTER_HZ: vec2<f32> = vec2<f32>(2.0, 2.5);
+const VEG_NEAR_SHRINK: vec2<f32> = vec2<f32>(0.25, 1.0);
+const VEG_LIMB_BOB: f32 = 0.6;
+const VEG_TWIG_BOB: f32 = 0.8;
+const VEG_FINE_PIXELS: vec2<f32> = vec2<f32>(3.0, 9.0);
+const VEG_STILL_PIXELS: vec2<f32> = vec2<f32>(1.0, 3.0);
+const VEG_AERO_DAMPING: f32 = 4.0;
+const VEG_TREE_TURBULENCE: f32 = 0.04;
+const VEG_CROWN_RING: f32 = 0.07;
+const VEG_BUFFET: f32 = 0.2;
+const VEG_EDDY_HZ: f32 = 0.7;
+const VEG_BOUGH_DAMPING: f32 = 0.2;
+const VEG_SPRAY_DAMPING: f32 = 0.35;
+
+pub struct VegCantilever {
+    freq: f32,
+    sway: f32,
+    len: f32,
+}
+
+pub struct VegPlant {
+    root: vec3<f32>,
+    height: f32,
+    trunk: VegCantilever,
+    seed: f32,
+    shape: f32,
+}
+
+pub struct VegLimb {
+    limb: VegCantilever,
+    twig: VegCantilever,
+    phase: f32,
+}
+
+pub struct VegWind {
+    dir: vec3<f32>,
+    side: vec3<f32>,
+    trunk: f32,
+    kick: f32,
+    t: f32,
+}
+
+pub struct VegPose {
+    offset: vec3<f32>,
+    omega: vec3<f32>,
+    drag: f32,
+}
+
+fn veg_log_value(code: u32, bits: u32, range: vec2<f32>) -> f32 {
+    if code == 0u { return 0.0; }
+    let t = ((code - 1u) as f32) / (((1u << bits) - 2u) as f32);
+    return range.x * exp(t * log(range.y / range.x));
+}
+
+pub fn scale_of(model: mat4f) -> f32 {
+    return max(length(model[1].xyz), 1.0e-6);
+}
+
+pub fn plant_of(model: mat4f, v0: vec4<f32>, v3: vec4<f32>) -> VegPlant {
+    let scale = scale_of(model);
+    let root = scene::mul4(model, vec4<f32>(v0.xyz, 1.0)).xyz;
+    let height = max(v0.w * scale, 0.05);
+    let w = (max(v3.w, 0.0) + 0.5) as u32;
+    let trunk = VegCantilever {
+        freq: veg_log_value(w >> 15u, 9u, VEG_FREQ_RANGE) / scale,
+        sway: veg_log_value((w >> 6u) & 511u, 9u, VEG_SWAY_RANGE),
+        len: height,
+    };
+    let sh = w & 63u;
+    let shape = select(sh == 0u, 0.0, VEG_SHAPE_RANGE.x + (VEG_SHAPE_RANGE.y - VEG_SHAPE_RANGE.x) * ((sh - 1u) as f32) / 62.0);
+    let root_abs = root + camera.eye_world.xyz;
+    let seed = scene::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)));
+    return VegPlant { root: root, height: height, trunk: trunk, seed: seed, shape: shape };
+}
+
+pub fn limb_of(model: mat4f, v3: vec4<f32>) -> VegLimb {
+    let scale = scale_of(model);
+    let a = (max(v3.y, 0.0) + 0.5) as u32;
+    let b = (max(v3.z, 0.0) + 0.5) as u32;
+    let phase = ((a >> 18u) as f32) / 64.0;
+    let twig = VegCantilever {
+        freq: veg_log_value((a >> 12u) & 63u, 6u, VEG_FREQ_RANGE) / scale,
+        sway: veg_log_value((a >> 6u) & 63u, 6u, VEG_SWAY_RANGE),
+        len: veg_log_value(a & 63u, 6u, VEG_LENGTH_RANGE) * scale,
+    };
+    let limb = VegCantilever {
+        freq: veg_log_value(b >> 16u, 8u, VEG_FREQ_RANGE) / scale,
+        sway: veg_log_value((b >> 8u) & 255u, 8u, VEG_SWAY_RANGE),
+        len: veg_log_value(b & 255u, 8u, VEG_LENGTH_RANGE) * scale,
+    };
+    return VegLimb { limb: limb, twig: twig, phase: phase };
+}
+
+pub fn unpack_axis(word: f32) -> vec3<f32> {
+    let u = ((word + 0.5) as u32) - 1u;
+    let e = vec2<f32>((u >> 12u) as f32, (u & 4095u) as f32) * (2.0 / 4095.0) - 1.0;
+    var v: vec3<f32> = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if v.z < 0.0 {
+        let sx = select(v.x >= 0.0, 1.0, -1.0);
+        let sy = select(v.y >= 0.0, 1.0, -1.0);
+        v = vec3<f32>((1.0 - abs(v.y)) * sx, (1.0 - abs(v.x)) * sy, v.z);
+    }
+    return normalize(v);
+}
+
+fn veg_pressure(u: f32) -> f32 {
+    return pow(max(u, 0.0) / VEG_REFERENCE_WIND, 1.3);
+}
+
+fn veg_drag_at(xz: vec2<f32>, t: f32, fine: bool) -> f32 {
+    return veg_pressure(camera.wind_field.z + 4.0 * scene::wind_gust_at_time(xz, t, fine));
+}
+
+fn veg_smooth_abs(x: f32) -> f32 {
+    return sqrt(x * x + 0.0025) - 0.05;
+}
+
+fn veg_lag(freq: f32) -> f32 {
+    return min(0.25 / max(freq, 0.05), 1.3);
+}
+
+pub fn wind_of(plant: VegPlant) -> VegWind {
+    let period = 1.0 / max(plant.trunk.freq, 0.05);
+    let xz = plant.root.xz + camera.eye_world.xz;
+    let t = camera.wind_params.x;
+    let d = camera.wind_field.xy;
+    let a = veg_drag_at(xz, t - min(0.1 * period, 0.5), true);
+    let b = veg_drag_at(xz, t - min(0.4 * period, 2.1), true);
+    return VegWind {
+        dir: vec3<f32>(d.x, 0.0, d.y),
+        side: vec3<f32>(-d.y, 0.0, d.x),
+        trunk: 0.5 * (a + b),
+        kick: veg_smooth_abs(a - b),
+        t: t,
+    };
+}
+
+fn veg_pixels_per_metre(at: vec3<f32>) -> f32 {
+    let ortho = abs(camera.proj[3].w) > 0.5;
+    let denom = select(ortho, 1.0, max(length(at), 1.0e-3));
+    return abs(camera.proj[1].y) * camera.viewport.y * 0.5 / denom;
+}
+
+fn veg_speed(drag: f32) -> f32 {
+    return VEG_REFERENCE_WIND * pow(max(drag, 0.0), 1.0 / 1.3);
+}
+
+fn veg_damping(c: VegCantilever, zeta0: f32, mean: f32) -> f32 {
+    return min(zeta0 + VEG_AERO_DAMPING * VEG_TWO_PI * c.freq * c.sway * c.len * veg_speed(mean) /
+                           (VEG_REFERENCE_WIND * VEG_REFERENCE_WIND), 2.0);
+}
+
+fn veg_trunk_damping(mean: f32) -> f32 {
+    return 0.12 + 0.012 * veg_speed(mean);
+}
+
+fn veg_over(zeta: f32) -> f32 {
+    return 1.0 - smoothstep(0.3, 0.8, zeta);
+}
+
+fn veg_buffet(phase: f32, seed: f32) -> vec2<f32> {
+    let s = 0.85 + 0.3 * fract(seed * 7.31);
+    let b1 = sin(VEG_TWO_PI * (scene::wind_cycles(0.37 * s) + phase));
+    let b2 = sin(VEG_TWO_PI * (scene::wind_cycles(0.61 * s) + phase * 2.7) + 1.1);
+    let b3 = sin(VEG_TWO_PI * (scene::wind_cycles(1.01 * s) + phase * 4.1) + 2.3);
+    let c1 = sin(VEG_TWO_PI * (scene::wind_cycles(0.43 * s) + phase * 1.9) + 0.7);
+    let c2 = sin(VEG_TWO_PI * (scene::wind_cycles(0.79 * s) + phase * 3.3) + 2.9);
+    return vec2<f32>((b1 + 0.7 * b2 + 0.45 * b3) * 1.088, (c1 + 0.6 * c2) * 1.213);
+}
+
+fn veg_tree_level(c: VegCantilever, zeta: f32, ring: f32, phase: f32, mean: f32, kick: f32, w: VegWind, bob: f32,
+                  buffet: f32, seed: f32, px_per_m: f32) -> vec3<f32> {
+    if c.sway <= 0.0 || c.freq <= 0.0 { return vec3<f32>(0.0, 0.0, 0.0); }
+    let over = veg_over(zeta);
+    var rms: f32 = 0.0;
+    var a1: f32 = 0.0;
+    var a2: f32 = 0.0;
+    var a3: f32 = 0.0;
+    var a4: f32 = 0.0;
+    if over > 0.0 {
+        let turb = ring * mean * pow(max(c.freq, 0.1), -1.0 / 3.0) * rsqrt(zeta);
+        let gust = VEG_GUST_KICK * kick * min(1.0, 1.25 / c.freq) * sqrt(0.15 / zeta);
+        rms = over * sqrt(turb * turb + gust * gust);
+        a1 = sin(VEG_TWO_PI * (scene::wind_cycles(c.freq * 0.94) + phase));
+        a2 = sin(VEG_TWO_PI * (scene::wind_cycles(c.freq * 1.06) + phase * 2.3) + 2.0);
+        a3 = sin(VEG_TWO_PI * (scene::wind_cycles(c.freq * 1.13) + phase * 3.7) + 1.3);
+        a4 = sin(VEG_TWO_PI * (scene::wind_cycles(c.freq * 0.97) + phase) + 2.1);
+    }
+    var b: vec2<f32> = vec2<f32>(0.0, 0.0);
+    var b_amp: f32 = 0.0;
+    if buffet > 0.0 {
+        let lp = c.freq * c.freq / (c.freq * c.freq + VEG_EDDY_HZ * VEG_EDDY_HZ);
+        b_amp = VEG_BUFFET * buffet * mean * lp;
+        b = veg_buffet(phase, seed) * vec2<f32>(b_amp, 0.7 * b_amp);
+    }
+    if px_per_m > 0.0 {
+        let keep = smoothstep(VEG_FINE_PIXELS.x, VEG_FINE_PIXELS.y, (2.0 * rms + 2.0 * b_amp) * c.sway * c.len * px_per_m);
+        rms *= keep;
+        b *= keep;
+    }
+    let x = w.dir * (mean + b.x + rms * (a1 + a2)) + w.side * (b.y + 0.85 * rms * a3) +
+            vec3<f32>(0.0, bob * (1.41421 * rms * a4 + 0.5 * b.y), 0.0);
+    return x * (c.sway * c.len);
+}
+
+fn veg_bend(s: f32) -> f32 {
+    return select(s <= 1.0, s * s * (3.0 - s) * 0.5, 1.0 + 1.5 * (s - 1.0));
+}
+
+fn veg_bend_slope(s: f32) -> f32 {
+    return select(s <= 1.0, s * (3.0 - 1.5 * s), 1.5);
+}
+
+fn veg_trunk_bend(h: f32, p: f32) -> f32 {
+    if p <= 0.0 { return veg_bend(h); }
+    return select(h <= 1.0, pow(max(h, 0.0), p), 1.0 + p * (h - 1.0));
+}
+
+fn veg_trunk_bend_slope(h: f32, p: f32) -> f32 {
+    if p <= 0.0 { return veg_bend_slope(h); }
+    return select(h <= 1.0, p * pow(max(h, 1.0e-4), p - 1.0), p);
+}
+
+fn veg_pose_moving(plant: VegPlant, limb: VegLimb, w: VegWind, rest: vec3<f32>, weight: f32) -> VegPose {
+    let h = clamp((rest.y - plant.root.y) / plant.height, 0.0, 1.3);
+    let xt = veg_tree_level(plant.trunk, veg_trunk_damping(w.trunk), VEG_TREE_TURBULENCE, plant.seed, w.trunk, w.kick, w,
+                            0.0, 0.0, plant.seed, 0.0);
+    let bt = veg_trunk_bend(h, plant.shape);
+    var offset: vec3<f32> = xt * bt - vec3<f32>(0.0, 0.6 * dot(xt, xt) * bt / plant.height, 0.0);
+    var omega: vec3<f32> = cross(vec3<f32>(0.0, 1.0, 0.0), xt) * (veg_trunk_bend_slope(h, plant.shape) / plant.height);
+    var drag: f32 = w.trunk;
+    if limb.limb.sway <= 0.0 || weight <= 0.0 {
+        return VegPose { offset: offset, omega: omega, drag: drag };
+    }
+
+    let rel = rest - plant.root;
+    let out2 = dot(rel.xz, rel.xz);
+    let dir = select(out2 > 1.0e-6, normalize(vec3<f32>(rel.x, 0.75 * sqrt(out2), rel.z)), vec3<f32>(0.0, 1.0, 0.0));
+    let s = clamp(weight, 0.0, 1.0);
+    let here = rest.xz + camera.eye_world.xz;
+    let pl = veg_drag_at(here, w.t - veg_lag(limb.limb.freq), true);
+    drag = pl;
+    let px_per_m = veg_pixels_per_metre(rest);
+    let xl = veg_tree_level(limb.limb, veg_damping(limb.limb, VEG_BOUGH_DAMPING, pl), VEG_CROWN_RING, limb.phase, pl,
+                            w.kick, w, VEG_LIMB_BOB, 1.0, limb.phase, px_per_m);
+    offset += xl * veg_bend(s);
+    omega += cross(dir, xl) * (veg_bend_slope(s) / max(limb.limb.len, 0.05));
+
+    if limb.twig.sway <= 0.0 {
+        return VegPose { offset: offset, omega: omega, drag: drag };
+    }
+    let w0 = 1.0 - min(1.0, 1.5 * limb.twig.len / max(limb.limb.len, 0.05));
+    let u = clamp((s - w0) / max(1.0 - w0, 1.0e-3), 0.0, 1.0);
+    if u <= 0.0 {
+        return VegPose { offset: offset, omega: omega, drag: drag };
+    }
+    let ra = rest + camera.eye_world.xyz;
+    let ph = limb.phase + 0.12 * (sin(dot(ra, vec3<f32>(3.1, 1.7, 2.3))) + sin(dot(ra, vec3<f32>(-1.9, 2.9, 3.7))) +
+                                  sin(dot(ra, vec3<f32>(2.7, -3.3, 1.3))));
+    let xw = veg_tree_level(limb.twig, veg_damping(limb.twig, VEG_SPRAY_DAMPING, pl), VEG_CROWN_RING, ph, pl, w.kick, w,
+                            VEG_TWIG_BOB, 1.0, limb.phase, px_per_m);
+    offset += xw * veg_bend(u);
+    omega += cross(dir, xw) * (veg_bend_slope(u) / max(limb.twig.len, 0.02));
+    return VegPose { offset: offset, omega: omega, drag: drag };
+}
+
+pub fn pose_of(plant: VegPlant, limb: VegLimb, w: VegWind, rest: vec3<f32>, weight: f32) -> VegPose {
+    let o = veg_pose_moving(plant, limb, w, rest, weight);
+    let still = smoothstep(VEG_STILL_PIXELS.x, VEG_STILL_PIXELS.y, length(o.offset) * veg_pixels_per_metre(rest));
+    return VegPose { offset: o.offset * still, omega: o.omega * still, drag: o.drag };
+}
+
+pub fn axis_angle(a: vec3<f32>, ang: f32) -> mat3f {
+    let c = cos(ang);
+    let s = sin(ang);
+    let t = 1.0 - c;
+    return mat3f(
+        vec3<f32>(t * a.x * a.x + c,       t * a.x * a.y + s * a.z, t * a.x * a.z - s * a.y),
+        vec3<f32>(t * a.x * a.y - s * a.z, t * a.y * a.y + c,       t * a.y * a.z + s * a.x),
+        vec3<f32>(t * a.x * a.z + s * a.y, t * a.y * a.z - s * a.x, t * a.z * a.z + c)
+    );
+}
+
+pub fn rotation(omega: vec3<f32>) -> mat3f {
+    let a = length(omega);
+    if a > 1.0e-6 {
+        return axis_angle(omega / a, a);
+    }
+    return mat3f(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+}
+
+struct LeafTurn {
+    rot: mat3f,
+    side: vec3<f32>,
+    fold: f32,
+}
+
+fn veg_leaf_turn(pose: VegPose, w: VegWind, axis: vec3<f32>, normal: vec3<f32>, seed: f32, amount: f32) -> LeafTurn {
+    if amount <= 0.0 {
+        return LeafTurn { rot: rotation(pose.omega), side: vec3<f32>(1.0, 0.0, 0.0), fold: 0.0 };
+    }
+    let drag = pose.drag;
+    let gust = smoothstep(0.0, 1.0, (drag - 0.12) * 1.6) * amount;
+    var omega: vec3<f32> = pose.omega;
+    let turn = cross(axis, w.dir);
+    let tl = length(turn);
+    if tl > 1.0e-4 {
+        omega += turn * (min(atan2(tl, dot(axis, w.dir)) * 0.45, 1.0) * gust / tl);
+    }
+
+    let raw_side = cross(normal, axis);
+    let sl = length(raw_side);
+    let side = select(sl > 1.0e-4, raw_side / sl, vec3<f32>(1.0, 0.0, 0.0));
+    let f = VEG_LEAF_FLUTTER_HZ.x + VEG_LEAF_FLUTTER_HZ.y * fract(seed * 7.13);
+    let a = amount * 0.35 * sqrt(max(drag, 0.0)) *
+            (0.55 + 0.45 * sin(VEG_TWO_PI * (scene::wind_cycles(0.45 + 0.3 * fract(seed * 3.7)) + seed)));
+    let th = VEG_TWO_PI * (scene::wind_cycles(f) + seed);
+    let th2 = VEG_TWO_PI * (scene::wind_cycles(1.37 * f) + 1.37 * seed) + 2.0;
+    omega += axis * (a * sin(th)) + side * (0.45 * a * sin(th2));
+    return LeafTurn { rot: rotation(omega), side: side, fold: 0.8 * gust };
+}
+
+pub fn leaf_amount(pose: VegPose, w: VegWind, axis: vec3<f32>, normal: vec3<f32>, local: vec3<f32>,
+                   seed: f32, amount: f32) -> mat3f {
+    let lt = veg_leaf_turn(pose, w, axis, normal, seed, amount);
+    var r: mat3f = lt.rot;
+    let x = dot(local, lt.side);
+    if lt.fold > 0.0 && abs(x) > 1.0e-6 {
+        r = scene::mul_mat3(r, axis_angle(axis, sign(x) * lt.fold));
+    }
+    return r;
+}
+
+pub fn leaf_rot(pose: VegPose, w: VegWind, axis: vec3<f32>, normal: vec3<f32>, local: vec3<f32>, seed: f32) -> mat3f {
+    return leaf_amount(pose, w, axis, normal, local, seed, 1.0);
+}
+
+pub fn crown_shade(model: mat4f, v1: vec4<f32>, anchor: vec3<f32>) -> vec4<f32> {
+    if v1.w <= 0.0 { return vec4<f32>(0.0, 0.0, 0.0, -1.0); }
+    let scale = scale_of(model);
+    let crown = scene::mul4(model, vec4<f32>(v1.xyz, 1.0)).xyz;
+    let rc = (anchor - crown) / max(v1.w * scale, 0.5);
+    let bulk = normalize(rc + vec3<f32>(0.0, 0.25, 0.0));
+    let depth = clamp(length(rc), 0.0, 1.2);
+    let ao = clamp(0.25 + 0.85 * depth * depth, 0.25, 1.0) * mix(0.75, 1.0, clamp(rc.y * 0.5 + 0.6, 0.0, 1.0));
+    return vec4<f32>(bulk * 0.6, -ao);
+}
+
+pub struct VegSway {
+    world_pos: vec3<f32>,
+    rot: mat3f,
+    shade: vec4<f32>,
+}
+
+pub fn sway_axis(model: mat4f, v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<f32>,
+                 axis: vec3<f32>, leaf_normal: vec3<f32>, pos: vec3<f32>, shadow_caster: bool) -> VegSway {
+    let plant = plant_of(model, v0, v3);
+    let limb = limb_of(model, v3);
+    let w = wind_of(plant);
+    let anchor = scene::mul4(model, vec4<f32>(v2.xyz, 1.0)).xyz;
+    let leaf = dot(axis, axis) > 0.25;
+
+    var bw: f32 = clamp(v2.w, 0.0, 1.0);
+    if !leaf && v1.w < 0.0 {
+        let tip = scene::mul4(model, vec4<f32>(v1.xyz, 1.0)).xyz;
+        let d = tip - anchor;
+        let dd = dot(d, d);
+        let along = select(dd > 1.0e-12, clamp(dot(pos - anchor, d) / dd, 0.0, 1.0), 1.0);
+        bw = mix(bw, clamp(-v1.w - 1.0, 0.0, 1.0), along);
+    }
+
+    if !leaf {
+        let pose = pose_of(plant, limb, w, pos, bw);
+        let h = clamp((pos.y - plant.root.y) / plant.height, 0.0, 1.0);
+        return VegSway {
+            world_pos: pos + pose.offset,
+            rot: rotation(pose.omega),
+            shade: vec4<f32>(0.0, 0.0, 0.0, mix(0.6, 1.0, h)),
+        };
+    }
+
+    let pose = pose_of(plant, limb, w, anchor, bw);
+    let seed = fract(sin(dot(v2.xyz, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+    let m3 = scene::mat3_from4(model);
+    let r = leaf_rot(pose, w, normalize(scene::mul3(m3, axis)), leaf_normal, pos - anchor, seed);
+    let at = anchor + pose.offset;
+    let rel = scene::mul3(r, pos - anchor);
+    let out_pos = select(shadow_caster, at + rel, at + rel * smoothstep(VEG_NEAR_SHRINK.x, VEG_NEAR_SHRINK.y, length(at)));
+    return VegSway {
+        world_pos: out_pos,
+        rot: r,
+        shade: crown_shade(model, v1, anchor),
+    };
+}
+
+pub fn sway(model: mat4f, v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<f32>,
+            leaf_normal: vec3<f32>, pos: vec3<f32>, shadow_caster: bool) -> VegSway {
+    let axis = select(v3.x > 0.5, unpack_axis(v3.x), vec3<f32>(0.0, 0.0, 0.0));
+    return sway_axis(model, v0, v1, v2, v3, axis, leaf_normal, pos, shadow_caster);
+}
+
+fn veg_tree_tone(model: mat4f, v0: vec4<f32>) -> f32 {
+    let root_abs = scene::mul4(model, vec4<f32>(v0.xyz, 1.0)).xyz + camera.eye_world.xyz;
+    return scene::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)) + vec2<i32>(17, 3));
+}
+
+fn veg_tree_leaf_tint(tree: f32) -> vec3<f32> {
+    let value = 0.9 + 0.2 * fract(tree * 13.7);
+    return mix(vec3<f32>(0.84, 0.97, 1.08), vec3<f32>(1.12, 1.04, 0.76), tree) * value;
+}
+
+fn veg_tree_bark_tint(tree: f32) -> vec3<f32> {
+    return vec3<f32>(0.82 + 0.3 * tree, 0.8 + 0.28 * tree, 0.78 + 0.24 * tree);
+}
+
+fn veg_limb_leaf_tint(model: mat4f, v0: vec4<f32>, v3: vec4<f32>) -> vec3<f32> {
+    let phase = (((max(v3.y, 0.0) + 0.5) as u32) >> 18u) as f32 / 64.0;
+    let limb = fract(phase * 7.31 + 0.37);
+    return veg_tree_leaf_tint(veg_tree_tone(model, v0)) * (0.8 + 0.4 * limb);
+}
+
+pub fn tint(model: mat4f, v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<f32>, leaf: bool) -> vec3<f32> {
+    let scale = scale_of(model);
+    if !leaf { return veg_tree_bark_tint(veg_tree_tone(model, v0)); }
+
+    let each = fract(sin(dot(v2.xyz, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+    var c: vec3<f32> = veg_limb_leaf_tint(model, v0, v3) * (0.9 + 0.2 * each);
+    if v1.w > 0.0 {
+        let crown = scene::mul4(model, vec4<f32>(v1.xyz, 1.0)).xyz;
+        let anchor = scene::mul4(model, vec4<f32>(v2.xyz, 1.0)).xyz;
+        let depth = length(anchor - crown) / max(v1.w * scale, 0.5);
+        c *= mix(vec3<f32>(0.5, 0.62, 0.68), vec3<f32>(1.0, 1.0, 1.0), smoothstep(0.25, 1.0, depth));
+        c *= 1.0 + 0.15 * smoothstep(0.85, 1.15, depth);
+    }
+    return c;
+}

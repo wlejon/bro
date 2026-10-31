@@ -35,6 +35,7 @@ struct CustomShaderState {
     std::string module;
     std::string moduleFile;
     std::vector<std::pair<std::string, std::string>> modules;   // the app's it imports: name, source
+    bool hasVertex = false;
     std::string key;       // program-cache key: vertex + '\x1f' + fragment, or '\x1d' + module
     std::vector<CustomShaderUniform> uniforms;
 
@@ -42,16 +43,19 @@ struct CustomShaderState {
                                                    std::string fragmentChunk) {
         auto st = std::make_unique<CustomShaderState>();
         st->key = vertexChunk + '\x1f' + fragmentChunk;
+        st->hasVertex = !vertexChunk.empty();
         st->vertexChunk = std::move(vertexChunk);
         st->fragmentChunk = std::move(fragmentChunk);
         return st;
     }
     static std::unique_ptr<CustomShaderState> makeModule(std::string module, std::string file,
-                                                         std::vector<std::pair<std::string, std::string>> modules) {
+                                                         std::vector<std::pair<std::string, std::string>> modules,
+                                                         bool hasVertex = false) {
         auto st = std::make_unique<CustomShaderState>();
         st->key = '\x1d' + module;
         for (const auto& [name, source] : modules) st->key += '\x1e' + name + '\x1f' + source;
         st->module = std::move(module);
+        st->hasVertex = hasVertex;
         st->moduleFile = std::move(file);
         st->modules = std::move(modules);
         return st;

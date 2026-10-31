@@ -1,0 +1,279 @@
+// Bark: the wood of a plant's tubes (mesh_main.bk) drawn as bark rather than
+// clay. Everything is procedural and comes from the tube's own records.
+module bark;
+
+pub struct BarkParams {
+    furrow: f32,
+    scale: f32,
+    moss: f32,
+    ribs: bool,
+}
+
+// The plant's bark word (broflora packBarkWord): furrow 0..1, scale (x the
+// default spacing) and moss 0..1, a field of code 0 the default; and its top
+// bit, ribbed (Species::barkRibs).
+pub fn unpack(word: f32) -> BarkParams {
+    let w = (max(word, 0.0) + 0.5) as u32;
+    let f = w & 255u;
+    let s = (w >> 8u) & 255u;
+    let m = (w >> 16u) & 127u;
+    let furrow = f == 0u ? 0.55 : (((f - 1u) as f32) / 254.0);
+    let scale = s == 0u ? 1.0 : (0.25 * pow(16.0, ((s - 1u) as f32) / 254.0));
+    let moss = m == 0u ? 0.5 : (((m - 1u) as f32) / 126.0);
+    let ribs = ((w >> 23u) & 1u) != 0u;
+    return BarkParams { furrow: furrow, scale: scale, moss: moss, ribs: ribs };
+}
+
+// The buttresses of a trunk's foot: how far (x the radius) the point at
+// angle `ang` round the stem stands out, `hb` above the root, the ring's
+// radius `rad`.
+pub fn buttress(ang: f32, hb: f32, rad: f32, seed: f32) -> f32 {
+    let k = exp(-max(hb, 0.0) / max(0.9 * rad, 0.0001));
+    if (k < 0.01) {
+        return 0.0;
+    }
+    let c = 0.5 + 0.5 * cos(5.0 * ang + seed * 6.2831853 + 0.8 * sin(3.0 * ang + seed * 17.0));
+    return 0.45 * k * (c * c - 0.3);
+}
+
+pub struct BarkSurface {
+    color: vec3<f32>,
+    n: vec3<f32>,
+    roughness: f32,
+    ao: f32,
+}
+
+// Ribbed bark (a cactus's): 48 / scale ridges round the stem however thick,
+// unbroken along it, rounded with sharp valleys between.
+pub fn ribbed(coords: vec4<f32>, furrow: f32, scale: f32, r: f32, fp: f32, geom_n: vec3<f32>, axis: vec3<f32>,
+              color_in: vec3<f32>, n_in: vec3<f32>, ao_in: f32) -> BarkSurface {
+    let tau = 6.2831853;
+    let n_ribs = max(5.0, floor(48.0 / scale + 0.5));
+    let spacing = tau * r / n_ribs;
+    let seen = clamp(spacing / fp * 0.5 - 0.5, 0.0, 1.0);
+    let f = fract(atan2(coords.y, coords.x) * n_ribs / tau);
+    let s = sin(3.14159265 * f);
+    let rs = sqrt(max(s, 0.0));
+    let h = mix(0.75, rs, seen);
+    let slope = 0.5 / max(rs, 0.1) * 3.14159265 * cos(3.14159265 * f) * n_ribs / (tau * r);
+    let t_vec = normalize(axis - geom_n * dot(axis, geom_n));
+    let a_vec = cross(t_vec, geom_n);
+    let n_out = normalize(n_in - (furrow * spacing / 3.0) * seen * slope * a_vec);
+    let seen_fine = clamp(0.5 * spacing / fp * 0.25 - 0.5, 0.0, 1.0);
+    let up = fract(coords.z / (0.5 * spacing) + 0.5 * floor(atan2(coords.y, coords.x) * n_ribs / tau));
+    let areole = (1.0 - smoothstep(0.03, 0.09, abs(f - 0.5))) * (1.0 - smoothstep(0.08, 0.2, abs(up - 0.5)));
+    var color: vec3<f32> = color_in * (0.55 + 0.6 * h);
+    color = mix(color, vec3<f32>(0.42, 0.38, 0.3), 0.7 * areole * seen_fine);
+    let roughness = mix(0.75, 0.55, h);
+    let ao = ao_in * mix(1.0 - 0.5 * furrow, 1.0, h);
+    return BarkSurface { color: color, n: n_out, roughness: roughness, ao: ao };
+}
+
+// An integer hash of a lattice point into [0, 1).
+pub fn hash(p: vec3<i32>) -> f32 {
+    var h: u32 = (p.x as u32) * 0x8da6b343u ^ (p.y as u32) * 0xd8163841u ^ (p.z as u32) * 0xcb1ab31fu;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return ((h >> 8u) as f32) * (1.0 / 16777216.0);
+}
+
+pub struct NoiseGrad {
+    val: f32,
+    d: vec3<f32>,
+}
+
+// Value noise in [0, 1) (quintic), and its gradient in `d`.
+pub fn noise_d(p: vec3<f32>) -> NoiseGrad {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * f * (f * (f * 6.0 - vec3<f32>(15.0)) + vec3<f32>(10.0));
+    let du = 30.0 * f * f * (f * (f - vec3<f32>(2.0)) + vec3<f32>(1.0));
+    let c = vec3<i32>(i.x as i32, i.y as i32, i.z as i32);
+    let a = hash(c);
+    let b = hash(c + vec3<i32>(1, 0, 0));
+    let cc = hash(c + vec3<i32>(0, 1, 0));
+    let dd = hash(c + vec3<i32>(1, 1, 0));
+    let e = hash(c + vec3<i32>(0, 0, 1));
+    let ff = hash(c + vec3<i32>(1, 0, 1));
+    let g = hash(c + vec3<i32>(0, 1, 1));
+    let h = hash(c + vec3<i32>(1, 1, 1));
+    let k1 = b - a;
+    let k2 = cc - a;
+    let k3 = e - a;
+    let k4 = a - b - cc + dd;
+    let k5 = a - cc - e + g;
+    let k6 = a - b - e + ff;
+    let k7 = -a + b + cc - dd + e - ff - g + h;
+    let d = du * vec3<f32>(
+        k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z,
+        k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x,
+        k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y
+    );
+    let val = a + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x +
+              k7 * u.x * u.y * u.z;
+    return NoiseGrad { val: val, d: d };
+}
+
+pub fn noise(p: vec3<f32>) -> f32 {
+    return noise_d(p).val;
+}
+
+pub fn hash3(p: vec3<i32>) -> vec3<f32> {
+    return vec3<f32>(hash(p), hash(p + vec3<i32>(71, 13, 5)), hash(p + vec3<i32>(29, 101, 47)));
+}
+
+pub struct Plates {
+    gap: f32,
+    d: vec3<f32>,
+    cell: f32,
+}
+
+// The bark's plates: a cell pattern in q (a jittered lattice, its cells the
+// plates). Returns the gap to the nearest border (F2 - F1, 0 on a furrow)
+// with its gradient in `d`, and in `cell` a hash of the plate it lies on.
+pub fn plates(q: vec3<f32>) -> Plates {
+    let qf = floor(q);
+    let i = vec3<i32>(qf.x as i32, qf.y as i32, qf.z as i32);
+    let f = q - qf;
+    var d1: f32 = 1e9;
+    var d2: f32 = 1e9;
+    var v1: vec3<f32> = vec3<f32>(0.0);
+    var v2: vec3<f32> = vec3<f32>(0.0);
+    var c1: f32 = 0.0;
+    for (var z: i32 = -1; z <= 1; z += 1) {
+        for (var y: i32 = -1; y <= 1; y += 1) {
+            for (var x: i32 = -1; x <= 1; x += 1) {
+                let o = vec3<i32>(x, y, z);
+                let j = hash3(i + o);
+                let of = vec3<f32>(x as f32, y as f32, z as f32);
+                let v = of + vec3<f32>(0.1) + 0.8 * j - f;
+                let dd = dot(v, v);
+                if (dd < d1) {
+                    d2 = d1;
+                    v2 = v1;
+                    d1 = dd;
+                    v1 = v;
+                    c1 = j.x;
+                } else if (dd < d2) {
+                    d2 = dd;
+                    v2 = v;
+                }
+            }
+        }
+    }
+    let sd1 = sqrt(d1);
+    let sd2 = sqrt(d2);
+    let d = -v2 / max(sd2, 0.00001) + v1 / max(sd1, 0.00001);
+    return Plates { gap: sd2 - sd1, d: d, cell: c1 };
+}
+
+// The bark at a fragment. `coords` is the vertex stage's (across.xy, along,
+// radius) in metres, `hb` its height over the root, `word` the bark word;
+// `pos` the camera-relative position, `geom_n` the surface normal and `axis`
+// the stem's direction (up it).
+pub fn surface(coords_in: vec4<f32>, hb: f32, word: f32, pos: vec3<f32>, geom_n: vec3<f32>, axis: vec3<f32>,
+               color_in: vec3<f32>, n_in: vec3<f32>, roughness_in: f32, ao_in: f32) -> BarkSurface {
+    let bp = unpack(word);
+    let furrow = bp.furrow;
+    let scale = bp.scale;
+    let moss = bp.moss;
+    let r = max(coords_in.w, 0.001);
+    let c_xy = normalize(coords_in.xy + vec2<f32>(0.0000001, 0.0)) * coords_in.w;
+    let coords = vec4<f32>(c_xy.x, c_xy.y, coords_in.z, coords_in.w);
+    let fp = max(length(fwidth(pos)), 0.00001);
+    if (bp.ribs) {
+        return ribbed(coords, furrow, scale, r, fp, geom_n, axis, color_in, n_in, ao_in);
+    }
+
+    let pale = smoothstep(0.3, 0.55, dot(color_in, vec3<f32>(0.3, 0.5, 0.2)));
+    var color: vec3<f32> = mix(color_in, vec3<f32>(0.15, 0.095, 0.065), pale * (1.0 - smoothstep(0.006, 0.03, r)));
+    let lambda = scale * (0.01 + 0.13 * r);
+    let relief = furrow * smoothstep(0.006, 0.05, r);
+    let seen = clamp(lambda / fp * 0.5 - 0.5, 0.0, 1.0);
+    let seen_fine = clamp(lambda / fp * 0.2 - 0.6, 0.0, 1.0);
+    let seen_coarse = clamp(lambda / fp * 1.5 - 0.5, 0.0, 1.0);
+
+    let stretch = 6.0;
+    let q = vec3<f32>(coords.x / lambda, coords.y / lambda, coords.z / (lambda * stretch));
+    var h: f32 = 0.75;
+    var cell: f32 = 0.5;
+    var dh: vec3<f32> = vec3<f32>(0.0);
+    if (seen > 0.0) {
+        let wq = q * vec3<f32>(0.7, 0.7, 0.5);
+        let warp = vec3<f32>(noise(wq + vec3<f32>(11.3)), noise(wq + vec3<f32>(27.1)), 0.0) - vec3<f32>(0.5, 0.5, 0.0);
+        let pl = plates(q + 1.1 * warp);
+        var gap: f32 = pl.gap;
+        var dg: vec3<f32> = pl.d;
+        cell = pl.cell;
+
+        let rag_ng = noise_d(q * vec3<f32>(3.0, 3.0, 1.5) + vec3<f32>(17.0));
+        let rag = rag_ng.val - 0.5;
+        gap += 0.18 * rag * seen_fine;
+        dg += 0.18 * seen_fine * rag_ng.d * vec3<f32>(3.0, 3.0, 1.5);
+
+        let w = max(mix(0.08, 0.4, furrow), 1.2 * fp / lambda);
+        let t = clamp(gap / w, 0.0, 1.0);
+        let t2 = clamp(gap / (w + 0.6), 0.0, 1.0);
+        let s1 = t * t * (3.0 - 2.0 * t);
+        let s2 = t2 * (2.0 - t2);
+        let plate = s1 * (0.55 + 0.45 * s2);
+        let d1_f = gap < w ? (6.0 * t * (1.0 - t) / w) : 0.0;
+        let d2_f = t2 < 1.0 ? ((2.0 - 2.0 * t2) / (w + 0.6)) : 0.0;
+        let d_plate = (d1_f * (0.55 + 0.45 * s2) + s1 * 0.45 * d2_f) * dg;
+
+        let fib_ng = noise_d(q * vec3<f32>(4.0, 4.0, 0.6) + vec3<f32>(5.7));
+        let gf = fib_ng.d * vec3<f32>(4.0, 4.0, 0.6) * seen_fine;
+        let nf = mix(0.5, fib_ng.val, seen_fine);
+        let hr = plate * (0.85 + 0.15 * nf + 0.1 * (cell - 0.5));
+        let dhr = d_plate * (0.85 + 0.15 * nf + 0.1 * (cell - 0.5)) + plate * 0.15 * gf;
+        h = mix(0.75, hr, seen);
+        dh = dhr * seen;
+        cell = mix(0.5, cell, seen);
+    }
+
+    let t_vec = normalize(axis - geom_n * dot(axis, geom_n));
+    let a_vec = cross(t_vec, geom_n);
+    let dir = normalize(coords.xy + vec2<f32>(0.000001));
+    let d_around = dot(dh.xy, vec2<f32>(-dir.y, dir.x)) / lambda;
+    let d_along = dh.z / (lambda * stretch);
+    let depth = relief * lambda * 0.15;
+    var n_out: vec3<f32> = normalize(n_in - depth * (a_vec * d_around + t_vec * d_along));
+
+    let patch_size = 0.12 + 0.6 * r;
+    let blotch = noise(vec3<f32>(coords.x, coords.y, coords.z * 0.4) / patch_size + vec3<f32>(3.1)) * 0.7 +
+                 noise(vec3<f32>(coords.x, coords.y, coords.z * 0.4) * (2.7 / patch_size) + vec3<f32>(13.7)) * 0.3;
+    let streak = seen_coarse > 0.0
+        ? mix(0.5, noise(vec3<f32>(coords.x / (3.0 * lambda), coords.y / (3.0 * lambda), coords.z / (30.0 * lambda)) + vec3<f32>(7.7)), seen_coarse)
+        : 0.5;
+    color *= 0.7 + 0.6 * streak;
+    let fleck = seen_fine > 0.0 ? mix(0.5, noise(q * vec3<f32>(6.0, 6.0, 2.0) + vec3<f32>(9.2)), seen_fine) : 0.5;
+    let grey = dot(color, vec3<f32>(0.3, 0.5, 0.2));
+    let hi_c = max(color.x, max(color.y, color.z));
+    let lo_c = min(color.x, min(color.y, color.z));
+    let sat = (hi_c - lo_c) / max(hi_c, 0.0001);
+    let face = mix(color, vec3<f32>(grey) * vec3<f32>(1.05, 1.02, 0.97), 0.65 * (1.0 - smoothstep(0.5, 0.8, sat))) * 1.3;
+    var c: vec3<f32> = mix(color * mix(1.0, 0.22, relief) * vec3<f32>(1.0, 0.85, 0.7), face, h);
+    c *= 0.78 + 0.44 * cell * h + 0.22 * (1.0 - h);
+    c = mix(c * vec3<f32>(1.05, 0.95, 0.85) * 0.7, c * vec3<f32>(1.0, 1.02, 1.05) * 1.25, blotch);
+    c *= 0.85 + 0.3 * fleck;
+    var roughness: f32 = mix(1.0, 0.8, h);
+    let ao = ao_in * mix(1.0 - 0.5 * relief, 1.0, h);
+
+    let moss_side = vec3<f32>(0.0, 0.0, -1.0);
+    let side = normalize(vec3<f32>(geom_n.x, 0.0, geom_n.z) + vec3<f32>(0.00001));
+    let grow = 0.55 * smoothstep(-0.2, 0.9, dot(side, moss_side)) + 0.7 * smoothstep(0.25, 0.85, geom_n.y) +
+               0.9 * exp(-max(hb, 0.0) / 0.6);
+    let patchy_fine = seen > 0.0 ? mix(0.5, noise(q * vec3<f32>(1.7, 1.7, 2.5) + vec3<f32>(63.0)), seen) : 0.5;
+    let patchy = noise(vec3<f32>(coords.x, coords.y, coords.z * 0.5) / (0.7 * patch_size) + vec3<f32>(41.0)) * 0.7 +
+                 patchy_fine * 0.3;
+    let m = smoothstep(0.45, 0.8, moss * grow + 0.45 * patchy + 0.15 * (1.0 - h) - 0.2);
+    let moss_c = vec3<f32>(0.075, 0.12, 0.025) * (0.75 + 0.5 * fleck);
+    c = mix(c, moss_c, m);
+    var lichen: f32 = seen > 0.0 ? mix(0.1, smoothstep(0.72, 0.8, noise(q * vec3<f32>(1.3, 1.3, 4.0) + vec3<f32>(87.0))), seen) : 0.1;
+    lichen *= h * (0.3 + 0.7 * moss);
+    c = mix(c, vec3<f32>(0.34, 0.37, 0.3), 0.55 * lichen * (1.0 - m));
+    n_out = normalize(mix(n_out, geom_n, 0.6 * m));
+    roughness = mix(roughness, 1.0, m);
+    return BarkSurface { color: c, n: n_out, roughness: roughness, ao: ao };
+}

@@ -34,9 +34,10 @@ public:
     SceneVkPipelineBuilder& reset();
 
     /// Attach vertex and fragment shader stages.
-    SceneVkPipelineBuilder& setShaderStages(VkShaderModule vs, VkShaderModule fs) {
-        addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vs);
-        addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fs);
+    SceneVkPipelineBuilder& setShaderStages(VkShaderModule vs, VkShaderModule fs,
+                                            const char* vsEntry = "main", const char* fsEntry = "main") {
+        addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vs, vsEntry);
+        addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fs, fsEntry);
         return *this;
     }
 
@@ -111,6 +112,7 @@ public:
 
 private:
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages_;
+    std::vector<std::string> stageEntryNames_;
     std::vector<VkVertexInputBindingDescription> vertexBindings_;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes_;
     VkPipelineInputAssemblyStateCreateInfo inputAssembly_{};

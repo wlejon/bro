@@ -1,20 +1,13 @@
 #pragma once
 
-// A brokernel module as a scene shader hook (createVolume({ module })): the
-// node's module, registered as `hook` beside any modules it brings (the
-// app's, which its kernels share), composed with the engine's own
-// (scene.bk, atmosphere.bk, lighting.bk, custom.bk and the stage's) and
-// compiled by brass to the stage's SPIR-V. The hook reads the engine's frame
-// state through those modules' resources and declares its own in set 4
-// (custom.bk), which CustomShaderInterface::fromKernel reflects.
-//
-// A volume's hook gives
-//   pub fn volume(ray: volume::Ray) -> volume::Light
-// and, for a near medium the grid integrates (PassVolumeNear),
-//   pub fn medium_range() -> f32
-//   pub fn medium(pos: vec3<f32>, dir: vec3<f32>, footprint: f32) -> volume::Medium
-// (volume.bk). The engine's sources come from the source tree under
-// BRO_SCENE_SHADER_SOURCE, as the GLSL ones do.
+// A brokernel module as a scene shader hook (setShaderModule, createVolume,
+// createMesh, createInstancedMesh, createSkinnedMesh): the node's module,
+// registered as `hook` beside any modules it brings (the app's, which its
+// kernels share), composed with the engine's own (scene.bk, atmosphere.bk,
+// lighting.bk, custom.bk and the stage's) and compiled by brass to the
+// stage's SPIR-V. The hook reads the engine's frame state through those
+// modules' resources and declares its own in set 4 (custom.bk), which
+// CustomShaderInterface::fromKernel reflects.
 
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 
@@ -37,14 +30,39 @@ struct KernelVolumeHook {
     CustomShaderInterface iface;
 };
 
+struct KernelMeshHook {
+    bool hasVertex = false;
+    bool hasFragment = false;
+    bool hasLight = false;
+    KernelHookStage vs;         // empty when !hasVertex (uses built-in passthrough vs)
+    KernelHookStage fs;         // empty when !hasFragment (uses built-in mesh_frag)
+    CustomShaderInterface iface;
+};
+
 /// Modules the hook imports beside the engine's (the app's own, shared with
 /// its kernels): name and source.
 using KernelHookModules = std::vector<std::pair<std::string, std::string>>;
 
-/// Compile a volume's hook module (`file` names it in diagnostics). False
-/// with `err` on a compile error, a set-4 resource the set cannot hold, or
-/// one of `modules` named as an engine module.
+/// Compile a built-in mesh stage entry point from draw/mesh_main.bk.
+bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string& err);
+
+/// Compile a volume's hook module (`file` names it in diagnostics).
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
                              KernelVolumeHook& out, std::string& err);
+
+/// Compile a mesh's hook module for `target` (`file` names it in diagnostics).
+bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
+                           const std::string& file, const KernelHookModules& modules,
+                           KernelMeshHook& out, std::string& err);
+
+/// Compile a mesh hook's fragment variant (cuts / indirect output).
+bool compileKernelMeshHookFragment(const std::string& module, const std::string& file,
+                                   const KernelHookModules& modules, bool hasLight, bool indirect, bool cuts,
+                                   KernelHookStage& out, std::string& err);
+
+/// Compile a mesh hook's shadow-caster vertex stage.
+bool compileKernelShadowHook(SceneVkCustomShader::ShadowCaster caster, bool cutout, const std::string& module,
+                             const std::string& file, const KernelHookModules& modules,
+                             KernelHookStage& out, std::string& err);
 
 } // namespace bro::scene::vk

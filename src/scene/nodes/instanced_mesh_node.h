@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/custom_shader.h"
+#include "scene/nodes/mesh_node.h"
 #include "scene/scene_node.h"
 #include "scene/world/shade_map.h"
 #include <bromath/aabb.h>
@@ -330,6 +331,13 @@ public:
                                                 std::move(fragmentChunk));
         bumpChangeGeneration();
     }
+    void setCustomShaderModule(std::string module, std::string file,
+                               std::vector<std::pair<std::string, std::string>> modules,
+                               bool hasVertex = false) {
+        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file),
+                                                      std::move(modules), hasVertex);
+        bumpChangeGeneration();
+    }
     void clearCustomShader() {
         customShader_.reset();
         bumpChangeGeneration();
@@ -348,6 +356,45 @@ public:
         bumpChangeGeneration();
     }
     const std::vector<CustomShaderBuffer>& customShaderBuffers() const { return userBuffers_; }
+
+    using UserTexture = MeshNode::UserTexture;
+    bool setCustomShaderTexture(const std::string& name, int width, int height, const float* data,
+                                bool mipmap = false, bool repeat = false, bool clampT = false, int channels = 1) {
+        bool changed = false;
+        const bool ok = MeshNode::setUserTexture(userTextures_, name, width, height, data, mipmap, repeat, clampT, channels, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
+    bool updateCustomShaderTexture(const std::string& name, int x, int y, int width, int height, const float* data) {
+        bool changed = false;
+        const bool ok = MeshNode::updateUserTexture(userTextures_, name, x, y, width, height, data, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
+    bool setCustomShaderTextureArray(const std::string& name, int width, int height, int layers, int channels,
+                                     bool mipmap = false, bool repeat = false, bool clampT = false, bool volume = false) {
+        bool changed = false;
+        const bool ok = MeshNode::setUserTextureArray(userTextures_, name, width, height, layers, channels, mipmap, repeat, clampT, volume, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
+    bool setCustomShaderTextureArrayLayer(const std::string& name, int layer, const float* data) {
+        bool changed = false;
+        const bool ok = MeshNode::setUserTextureArrayLayer(userTextures_, name, layer, data, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
+    bool setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers, int channels,
+                                      std::shared_ptr<render::ComputeBuffer> source, bool repeat, bool volume = false,
+                                      UserTexture::Encoding encoding = UserTexture::Encoding::Float32, int atlas = 1) {
+        bool changed = false;
+        const bool ok = MeshNode::setUserTextureBuffer(userTextures_, name, width, height, layers, channels, std::move(source), repeat, volume, encoding, atlas, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
+    void clearCustomShaderTexture(const std::string& name) { setCustomShaderTexture(name, 0, 0, nullptr); }
+    const std::vector<UserTexture>& customShaderTextures() const { return userTextures_; }
+    std::vector<UserTexture>& customShaderTextures() { return userTextures_; }
 
     // --- Vegetation (wind sway) ---
     // Per-instance or per-segment records that bend the node in the scene's
@@ -475,6 +522,7 @@ private:
 
     // Custom shader chunks + user-uniform values (null = default pipeline).
     std::unique_ptr<CustomShaderState> customShader_;
+    std::vector<UserTexture> userTextures_;
     std::vector<CustomShaderBuffer> userBuffers_;
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;

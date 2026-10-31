@@ -59,7 +59,7 @@ private:
     VkPipeline builtinPipeline(MeshKind kind, bool twoSided);
     VkPipeline cutoutPipeline(MeshKind kind, bool twoSided);
     VkPipeline customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout);
-    VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout);
+    VkPipeline buildPipeline(VkShaderModule vs, MeshKind kind, bool custom, bool twoSided, bool cutout, const char* vsEntry = "main");
 
     SceneVkDevice* device_ = nullptr;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

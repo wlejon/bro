@@ -49,6 +49,7 @@ SceneVkPipelineBuilder::SceneVkPipelineBuilder() {
 
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::reset() {
     shaderStages_.clear();
+    stageEntryNames_.clear();
     specializations_.clear();
     vertexBindings_.clear();
     vertexAttributes_.clear();
@@ -104,6 +105,8 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::addShaderStage(VkShaderStageFlag
     stageInfo.stage = stage;
     stageInfo.module = module;
     stageInfo.pName = entryPoint;
+    stageEntryNames_.push_back(entryPoint ? entryPoint : "main");
+    stageInfo.pName = stageEntryNames_.back().c_str();
     shaderStages_.push_back(stageInfo);
     return *this;
 }
@@ -288,6 +291,8 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     spec.dataSize = specData.size() * sizeof(VkBool32);
     spec.pData = specData.data();
     std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
+    for (size_t i = 0; i < stages.size() && i < stageEntryNames_.size(); ++i)
+        stages[i].pName = stageEntryNames_[i].c_str();
     if (!specEntries.empty())
         for (auto& st : stages) st.pSpecializationInfo = &spec;
 

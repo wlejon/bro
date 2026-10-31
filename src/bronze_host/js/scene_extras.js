@@ -224,6 +224,15 @@
             if (opts.tube && typeof opts.tube === 'object') node.setTubeSegments(opts.tube);
             if (opts.vegetation) node.setVegetation(opts.vegetation);
         }
+        if (isMeshOrInstanced(node) && typeof opts.module === 'string') {
+            try {
+                node.setShaderModule(opts.module, opts.file, opts.modules);
+                if (opts.uniforms) for (const k of Object.keys(opts.uniforms)) node.setShaderUniform(k, opts.uniforms[k]);
+            } catch (e) {
+                node.destroy();
+                throw e;
+            }
+        }
         return node;
     };
     const wrapFactory = (name) => {
@@ -233,7 +242,7 @@
             return applyExtras(base.apply(this, arguments), opts);
         });
     };
-    ['createMesh', 'createInstancedMesh', 'createShape', 'createSprite',
+    ['createMesh', 'createSkinnedMesh', 'createInstancedMesh', 'createShape', 'createSprite',
      'createPhysicsNode', 'createReflectionProbe', 'createHtmlNode'].forEach(wrapFactory);
 
     // Moving a scene between canvases with everything it has uploaded

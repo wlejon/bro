@@ -392,6 +392,60 @@ void MeshNode::clearCustomShaderTexture(const std::string& name) {
     setCustomShaderTexture(name, 0, 0, nullptr);
 }
 
+namespace {
+template <typename F>
+bool withTempMesh(std::vector<MeshNode::UserTexture>& slots, bool& changed, F&& fn) {
+    MeshNode tmp;
+    const uint64_t before = tmp.changeGeneration();
+    tmp.customShaderTextures() = std::move(slots);
+    const bool ok = fn(tmp);
+    slots = std::move(tmp.customShaderTextures());
+    changed = tmp.changeGeneration() != before;
+    return ok;
+}
+} // namespace
+
+bool MeshNode::setUserTexture(std::vector<UserTexture>& slots, const std::string& name, int width,
+                              int height, const float* data, bool mipmap, bool repeat, bool clampT,
+                              int channels, bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) {
+        return m.setCustomShaderTexture(name, width, height, data, mipmap, repeat, clampT, channels);
+    });
+}
+
+bool MeshNode::updateUserTexture(std::vector<UserTexture>& slots, const std::string& name, int x,
+                                 int y, int width, int height, const float* data, bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) {
+        return m.updateCustomShaderTexture(name, x, y, width, height, data);
+    });
+}
+
+bool MeshNode::setUserTextureArray(std::vector<UserTexture>& slots, const std::string& name,
+                                   int width, int height, int layers, int channels, bool mipmap,
+                                   bool repeat, bool clampT, bool volume, bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) {
+        return m.setCustomShaderTextureArray(name, width, height, layers, channels, mipmap, repeat, clampT, volume);
+    });
+}
+
+bool MeshNode::setUserTextureArrayLayer(std::vector<UserTexture>& slots, const std::string& name,
+                                        int layer, const float* data, bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) {
+        return m.setCustomShaderTextureArrayLayer(name, layer, data);
+    });
+}
+
+bool MeshNode::setUserTextureBuffer(std::vector<UserTexture>& slots, const std::string& name,
+                                    int width, int height, int layers, int channels,
+                                    std::shared_ptr<render::ComputeBuffer> source, bool repeat,
+                                    bool volume, UserTexture::Encoding encoding, int atlas,
+                                    bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) {
+        return m.setCustomShaderTextureBuffer(name, width, height, layers, channels, std::move(source),
+                                             repeat, volume, encoding, atlas);
+    });
+}
+
 void MeshNode::setDrawMode(DrawMode m) {
     drawMode_ = m;
     if (m == DrawMode::Lines) {

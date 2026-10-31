@@ -11,12 +11,6 @@
 // compiles the same source with the same DEFINES at run time
 // (docs/hot-reload.md). Adding a shader is adding a line here.
 
-BRO_SCENE_SHADER(MeshVert,                 "mesh.vert",                   "draw/mesh.vert",                     "vert", "")
-BRO_SCENE_SHADER(MeshInstancedVert,        "mesh_instanced.vert",         "draw/mesh_instanced.vert",           "vert", "")
-BRO_SCENE_SHADER(MeshSkinnedVert,          "mesh_skinned.vert",           "draw/mesh_skinned.vert",             "vert", "")
-BRO_SCENE_SHADER(MeshFrag,                 "mesh.frag",                   "draw/mesh.frag",                     "frag", "")
-// mesh.frag that also writes the indirect light, for the SSAO opaque pass.
-BRO_SCENE_SHADER(MeshIndirectFrag,         "mesh_indirect.frag",          "draw/mesh.frag",                     "frag", "SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowVert,               "shadow.vert",                 "shadow/shadow.vert",                 "vert", "")
 BRO_SCENE_SHADER(ShadowInstancedVert,      "shadow_instanced.vert",       "shadow/shadow_instanced.vert",       "vert", "")
 BRO_SCENE_SHADER(ShadowSkinnedVert,        "shadow_skinned.vert",         "shadow/shadow_skinned.vert",         "vert", "")
@@ -57,22 +51,10 @@ BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "light
 BRO_SCENE_SHADER(BrdfLutFrag,              "brdf_lut.frag",               "lighting/brdf_lut.frag",             "frag", "")
 BRO_SCENE_SHADER(BloomBrightFrag,          "bloom_bright.frag",           "post/bloom_bright.frag",             "frag", "")
 BRO_SCENE_SHADER(TiltCompositeFrag,        "tilt_composite.frag",         "post/tilt_composite.frag",           "frag", "")
-BRO_SCENE_SHADER(MeshScatterVert,          "mesh_scatter.vert",           "draw/mesh_scatter.vert",             "vert", "")
-BRO_SCENE_SHADER(MeshTubeVert,             "mesh_tube.vert",              "draw/mesh_tube.vert",                "vert", "")
 BRO_SCENE_SHADER(ShadowTubeVert,           "shadow_tube.vert",            "shadow/shadow_tube.vert",            "vert", "")
-// Vegetation (scene_vegetation.glsl): the SCENE_VEGETATION builds of the mesh
-// and shadow vertex stages and of mesh.frag, plus the scatter caster.
-BRO_SCENE_SHADER(MeshVegVert,              "mesh_veg.vert",               "draw/mesh.vert",                     "vert", "SCENE_VEGETATION")
-BRO_SCENE_SHADER(MeshInstancedVegVert,     "mesh_instanced_veg.vert",     "draw/mesh_instanced.vert",           "vert", "SCENE_VEGETATION")
-BRO_SCENE_SHADER(MeshVegFrag,              "mesh_veg.frag",               "draw/mesh.frag",                     "frag", "SCENE_VEGETATION")
-BRO_SCENE_SHADER(MeshVegIndirectFrag,      "mesh_veg_indirect.frag",      "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_INDIRECT_OUTPUT")
 BRO_SCENE_SHADER(ShadowVegVert,            "shadow_veg.vert",             "shadow/shadow.vert",                 "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowInstancedVegVert,   "shadow_instanced_veg.vert",   "shadow/shadow_instanced.vert",       "vert", "SCENE_VEGETATION")
 BRO_SCENE_SHADER(ShadowScatterVert,        "shadow_scatter.vert",         "shadow/shadow_scatter.vert",         "vert", "")
-// A tube's wood (createTubes): mesh.frag built with SCENE_BARK
-// (scene_bark.glsl), ridges, furrows, moss and lichen from the tube's records.
-BRO_SCENE_SHADER(MeshBarkFrag,             "mesh_bark.frag",              "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_BARK")
-BRO_SCENE_SHADER(MeshBarkIndirectFrag,     "mesh_bark_indirect.frag",     "draw/mesh.frag",                     "frag", "SCENE_VEGETATION SCENE_BARK SCENE_INDIRECT_OUTPUT")
 // The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
 // (transmittance, multiple scattering, the sky's light) and the per-frame
 // view tables (sky view, aerial-perspective froxels).

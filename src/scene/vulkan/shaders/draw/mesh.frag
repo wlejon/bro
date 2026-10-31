@@ -37,9 +37,6 @@ layout(location = 1) out vec4 outIndirect;
 #include "common/scene_camera.glsl"
 #include "common/scene_lighting.glsl"
 #include "common/scene_mesh_push.glsl"
-#ifdef SCENE_BARK
-#include "draw/scene_bark.glsl"
-#endif
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -193,11 +190,6 @@ void main() {
         metallic *= mr.b;
     }
     if ((flags & MESH_EMISSIVE_MAP) != 0u) emissive *= texture(texEmissive, inUV).rgb;
-#ifdef SCENE_BARK
-    // A tube's wood (scene_bark.glsl): inColor where on the stem, inUV its
-    // height over the root and the bark word (negative: not a plant's).
-    if (inUV.y >= 0.0) barkSurface(inColor, inUV.x, inUV.y, worldPos, N, inTangent, baseColor, N, roughness, vegAO);
-#endif
 
 #ifdef CUSTOM_FRAGMENT
     userFragment(baseColor, N, metallic, roughness, emissive, alpha);
