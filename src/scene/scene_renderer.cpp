@@ -149,6 +149,10 @@ double SceneRenderer::takeGpuMs(bool wait) {
     return vkBridge_ ? vkBridge_->takeGpuMs(wait) : -1.0;
 }
 
+double SceneRenderer::latestGpuMs() {
+    return vkBridge_ ? vkBridge_->latestGpuMs() : -1.0;
+}
+
 void SceneRenderer::timeGpuPasses() { vk::SceneGpuTimer::timePasses(); }
 
 void SceneRenderer::pendingWork(std::vector<std::string>& out) const {

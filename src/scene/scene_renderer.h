@@ -118,6 +118,9 @@ public:
     /// it; -1 when nothing was rendered or timed since the previous call.
     /// Not `wait`: the oldest render finished and not read yet, -1 for none.
     double takeGpuMs(bool wait = true);
+    /// GPU milliseconds of the newest finished render, waiting for nothing
+    /// and taking nothing from takeGpuMs; -1 before any.
+    double latestGpuMs();
     /// Every scene renderer's renders from now on time their passes
     /// (perf.gpuPasses(); nothing is stamped before the first call).
     static void timeGpuPasses();

@@ -102,6 +102,10 @@ public:
     /// none, so a caller reading every frame reads each render once, a frame
     /// or so behind, and its frames overlap the GPU's.
     double takeMs(bool wait = true);
+    /// Milliseconds of the newest render the GPU has finished, reading what
+    /// has finished without waiting and taking nothing (takeMs and
+    /// takeFrames read the same renders); -1 before any.
+    double latestMs();
     /// The passes of the last render read that had marks (reading the
     /// submitted ones first, waiting for the newest), and its compute
     /// stream's (`computed` false when it had none apart). False when no
@@ -137,6 +141,7 @@ private:
     // not taken yet, oldest first.
     double ready_[8] = {};
     uint32_t readyCount_ = 0;
+    double latestMs_ = -1.0;
     // Each slot's spans: those written (on the graphics queue, on the
     // compute stream), the one with a segment open, and each one's segments
     // and units.

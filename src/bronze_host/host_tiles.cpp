@@ -94,18 +94,18 @@ struct Cache {
     };
     std::deque<RangeReadback> rangeReadbacks;
 
-    // `produceBudgetMs`: the GPU ms an update's production may take (0: no
-    // budget, every batch producePerUpdate). Each batch is timed on the GPU,
-    // and the batch size follows what they took: fewer tiles after one over
-    // the budget, one more after one well under it.
-    double budgetMs = 0.0;
+    // The next batch's most tiles (pace()): up to producePerUpdate.
     uint32_t batchSize = 1;
-    double lastBatchMs = 0.0;
-    struct TimedBatch {
-        std::shared_ptr<render::ComputeSpan> span;
-        uint32_t count = 0;
+
+    // Batches produced in the background stream (VulkanCompute::
+    // beginBackground), oldest first: beside the frames, so a frame is not
+    // lengthened by their latency; their tiles are ready once the GPU has
+    // done them.
+    struct InFlight {
+        std::vector<tilecache::Production> tiles;
+        uint64_t ticket = 0;
     };
-    std::deque<TimedBatch> timedBatches;
+    std::deque<InFlight> inFlight;
 };
 
 ev::HostClass g_cacheClass;
@@ -248,6 +248,52 @@ void writeDrawList(Cache& c) {
     c.drawList->write(0, records.data(), records.size() * sizeof(int32_t), &err);
 }
 
+// The next batch's size, by how the scenes' renders keep to their frame
+// target (Engine::sceneFrameLoad), additive up and halving down, as a
+// network paces by its losses: one tile more while the newest finished
+// render is under 90% of its target, half as many once one is over it, at
+// least a quarter of producePerUpdate: a view still coarse is often what
+// makes the frames heavy (on the planet, 3.5 to 4 ms a frame until the
+// ground and clouds refine, 2.3 after), and pacing it to a tile a frame
+// kept it so. Production runs beside the frames,
+// so its own GPU time (stretched by the frames' work it shares the GPU
+// with: a lone planet tile, 0.33 ms alone, read 1 to 6 ms beside a render)
+// says nothing of what it costs them; what it slows their renders by does.
+// No scene, no load: producePerUpdate is reached a tile an update.
+engine::Engine* g_engine = nullptr;
+void pace(Cache& c) {
+    const uint32_t floor = (c.producePerUpdate + 3) / 4;
+    const double load = g_engine ? g_engine->sceneFrameLoad() : -1.0;
+    if (load > 1.0)
+        c.batchSize = std::max(floor, c.batchSize / 2);
+    else if (load < 0.9)
+        c.batchSize = std::min(c.producePerUpdate, std::max(floor, c.batchSize + 1));
+}
+
+// The batches the GPU has finished, ready: their slots logged on the layer
+// pools (a texture array filled from one copies those alone), and the
+// graphics queue told to wait for them before it reads any (a wait already
+// passed). True when any were.
+bool retireBatches(Cache& c) {
+    render::VulkanCompute* compute = engineCompute();
+    bool any = false;
+    std::vector<uint32_t> slots;
+    while (!c.inFlight.empty() && (!compute || compute->backgroundComplete(c.inFlight.front().ticket))) {
+        const Cache::InFlight& f = c.inFlight.front();
+        for (const tilecache::Production& p : f.tiles) {
+            c.tree.markReady(p.id);
+            slots.push_back(p.slot);
+        }
+        if (compute) compute->acquireBackground(f.ticket);
+        c.inFlight.pop_front();
+        any = true;
+    }
+    if (!slots.empty())
+        for (const Layer& l : c.layers)
+            if (auto buffer = computeBufferOf(l.pool)) buffer->markLayers(slots, c.tree.config().capacity);
+    return any;
+}
+
 Value js_update(Value self, std::span<const Value> args) {
     Cache* c = cacheOf(self, "TileCache.update");
     const Rooted selfRoot(self);
@@ -278,30 +324,20 @@ Value js_update(Value self, std::span<const Value> args) {
         v.tanHalfX = tanHalf * numberOr(view, "viewportWidth", height * 16.0 / 9.0) / height;
         v.frustum = true;
     }
+    // Ready first: a batch's ranges come back with it, and the tree takes a
+    // range for a ready tile.
+    const bool retired = retireBatches(*c);
     collectRanges(*c);
     c->tree.select(v);
 
-    if (c->budgetMs > 0.0) {
-        while (!c->timedBatches.empty() && c->timedBatches.front().span->ready()) {
-            const Cache::TimedBatch& t = c->timedBatches.front();
-            const double ms = t.span->ms();
-            if (ms >= 0.0) {
-                c->lastBatchMs = ms;
-                // A batch's cost is not proportional to its tiles (a small
-                // one leaves the GPU part idle), so the size is felt for.
-                if (ms > c->budgetMs)
-                    c->batchSize = std::max(1u, std::min(c->batchSize, static_cast<uint32_t>(t.count * c->budgetMs / ms)));
-                else if (ms < 0.85 * c->budgetMs)
-                    c->batchSize = std::min(c->producePerUpdate, std::max(c->batchSize, t.count + 1));
-            }
-            c->timedBatches.pop_front();
-        }
-    }
-    const uint32_t batchSize = c->budgetMs > 0.0 ? c->batchSize : c->producePerUpdate;
-    const std::vector<tilecache::Production> batch = c->tree.takeProductions(batchSize);
-    std::shared_ptr<render::ComputeSpan> span;
-    if (!batch.empty() && c->budgetMs > 0.0)
-        if (render::VulkanCompute* compute = engineCompute()) span = compute->beginSpan();
+    pace(*c);
+    const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->batchSize);
+    render::VulkanCompute* compute = engineCompute();
+    // The lookup without the tiles whose slots the batch takes, before the
+    // batch: its work waits for what is submitted before it, so no ray reads
+    // a slot as it is rewritten.
+    if (retired || !batch.empty()) writeLookup(*c);
+    if (!batch.empty() && compute) compute->beginBackground();
     if (!batch.empty()) {
         std::string err;
         // A producer that writes no range leaves NaN, which is no range: a
@@ -342,26 +378,9 @@ Value js_update(Value self, std::span<const Value> args) {
             // The batch stays missing; the next update offers it again.
             const Rooted thrown(r.value);
             for (const tilecache::Production& p : batch) c->tree.abandon(p.id);
-            writeLookup(*c);
-            if (span) engineCompute()->endSpan(*span);
+            if (compute) compute->endBackground();
             writeDrawList(*c);
             return ev::throwValue(thrown);
-        }
-        for (const tilecache::Production& p : batch) c->tree.markReady(p.id);
-        // The slots rewritten, so a texture array filled from a layer's pool
-        // (setShaderTexture({ buffer: cache.layer(name), layers: capacity }))
-        // copies those alone.
-        std::vector<uint32_t> slots(batch.size());
-        for (size_t i = 0; i < batch.size(); ++i) slots[i] = batch[i].slot;
-        for (const Layer& l : c->layers)
-            if (auto buffer = computeBufferOf(l.pool)) buffer->markLayers(slots, c->tree.config().capacity);
-        // Written after the producers' dispatches, so the GPU finds a tile
-        // once its cells are there; a slot taken from an evicted tile is gone
-        // from it in the same write.
-        writeLookup(*c);
-        if (span && engineCompute()) {
-            engineCompute()->endSpan(*span);
-            c->timedBatches.push_back({std::move(span), static_cast<uint32_t>(batch.size())});
         }
     }
     if (c->rangePool && !batch.empty()) {
@@ -375,6 +394,13 @@ Value js_update(Value self, std::span<const Value> args) {
         rb.readback = engineReadLater(c->rangePool, size_t{8} * rb.firstSlot, size_t{8} * (last - rb.firstSlot + 1));
         rb.tiles = batch;
         if (rb.readback) c->rangeReadbacks.push_back(std::move(rb));
+    }
+    if (!batch.empty()) {
+        // Ready once the GPU has done it (retireBatches, a later update).
+        Cache::InFlight f;
+        f.tiles = batch;
+        f.ticket = compute ? compute->endBackground() : 0;
+        c->inFlight.push_back(std::move(f));
     }
     writeDrawList(*c);
     return ev::fromDouble(static_cast<double>(batch.size()));
@@ -418,6 +444,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         c->tree.clear();
         c->drawn.clear();
         c->rangeReadbacks.clear();
+        c->inFlight.clear();   // their slots are free; later batches run after them
         writeLookup(*c);
         return ev::undefined();
     });
@@ -457,8 +484,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         o.set("produced", static_cast<double>(s.produced));
         o.set("evicted", static_cast<double>(s.evicted));
         o.set("rangesInFlight", static_cast<double>(c->rangeReadbacks.size()));
-        o.set("batchSize", static_cast<double>(c->budgetMs > 0.0 ? c->batchSize : c->producePerUpdate));
-        o.set("batchMs", c->lastBatchMs);
+        o.set("batchSize", static_cast<double>(c->batchSize));
         return o.get();
     });
 }
@@ -522,8 +548,6 @@ Value js_createCache(Value, std::span<const Value> args) {
     cache->border = integer(opts, "border", 0, 0, 64);
     cache->cells = cfg.tileSize + 2 * cache->border;
     cache->producePerUpdate = integer(opts, "producePerUpdate", 8, 1, 65536);
-    cache->budgetMs = numberOr(opts, "produceBudgetMs", 0.0);
-    if (!(cache->budgetMs >= 0.0)) return ev::throwRangeError("bro.tiles.createCache: produceBudgetMs is at least 0");
 
     const Rooted layers(ev::getProperty(opts, "layers"));
     const std::vector<std::string> names = ev::isObject(layers) ? keysOf(layers) : std::vector<std::string>{};
@@ -570,6 +594,7 @@ void installTiles(engine::Engine& engine) {
     // wanted tiles not produced, and height ranges not read back (the tree
     // refines a tile's selection by them).
     static engine::Engine* s_reporting = nullptr;
+    g_engine = &engine;
     if (s_reporting != &engine) {
         s_reporting = &engine;
         engine.addPendingWorkSource([](std::vector<std::string>& out) {

@@ -941,11 +941,15 @@ void installHeadlessFrame(engine::Engine& engine) {
                 compute.setTiming(true);
                 return o.get();
             }
+            // (A kernel run in the background stream, a tile cache's
+            // production, is listed apart, as "<kernel> (background)".)
             for (const render::ComputeTime& t : compute.takeTimes()) {
                 ev::Persistent k(ev::createObject());
                 k.set(ev::setProperty(k.get(), "ms", ev::fromDouble(t.ms)));
                 k.set(ev::setProperty(k.get(), "dispatches", ev::fromDouble(t.dispatches)));
-                o.set(ev::setProperty(o.get(), t.label.c_str(), k.get()));
+                if (t.background) k.set(ev::setProperty(k.get(), "background", ev::fromBool(true)));
+                const std::string name = t.background ? t.label + " (background)" : t.label;
+                o.set(ev::setProperty(o.get(), name.c_str(), k.get()));
             }
             return o.get();
         });

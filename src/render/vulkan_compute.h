@@ -14,6 +14,7 @@ namespace bro::render {
 
 class VulkanContext;
 class VulkanCompute;
+class VulkanQueue;
 struct ComputeOwner;
 
 /// A device-local storage buffer that compute shaders reach by its device
@@ -83,6 +84,10 @@ struct ComputeTime {
     std::string label;
     double ms = 0.0;
     uint32_t dispatches = 0;
+    /// Run in the background stream (VulkanCompute::beginBackground): beside
+    /// the frames, so not part of any frame's length; its cost to a frame is
+    /// what it slows the frame's own work by.
+    bool background = false;
 };
 
 /// A compute pipeline with a push-constant-only layout. Released once the
@@ -142,6 +147,7 @@ private:
     void* mapped_ = nullptr;
     VkDeviceSize size_ = 0;
     uint64_t ticket_ = 0;
+    bool background_ = false;   // its ticket is the background stream's
 };
 
 /// The GPU time of the work recorded between VulkanCompute::beginSpan and
@@ -164,6 +170,7 @@ private:
     std::shared_ptr<ComputeOwner> owner_;
     uint32_t query_ = 0;
     uint64_t ticket_ = 0;
+    bool background_ = false;
     mutable double ms_ = -1.0;
 };
 
@@ -201,6 +208,30 @@ public:
     /// the last submission's when nothing was recorded since.
     uint64_t flush();
 
+    /// Record into the background stream until endBackground(): work beside
+    /// the frames rather than between them, on the async compute queue where
+    /// the device has one (else the graphics queue, in order, the same
+    /// contract). Background work starts after everything submitted to the
+    /// graphics queue before it (so it may rewrite what an earlier frame
+    /// draws from), runs beside the frames submitted after it, and is in
+    /// order with earlier background work; nothing on the graphics queue
+    /// waits for it unless told to (acquireBackground). For work whose
+    /// results are wanted frames later, not this frame: a tile cache's
+    /// production, which on a single queue lengthened the frame by its
+    /// whole latency (a few small dependent dispatches, far from filling the
+    /// GPU). Readbacks and spans begun in it report on its tickets.
+    void beginBackground();
+    /// Submit the background work recorded and go back to the graphics
+    /// stream. Its ticket (backgroundComplete), or the last background
+    /// submission's when nothing was recorded.
+    uint64_t endBackground();
+    bool backgroundComplete(uint64_t ticket) const;
+    /// The graphics queue's next submission from here waits for background
+    /// ticket `ticket`: what it and everything after it on the graphics
+    /// queue read of that work is there. Called once the ticket is complete
+    /// it costs nothing.
+    void acquireBackground(uint64_t ticket);
+
     /// Time every dispatch on the GPU from now on (timestamps either side of
     /// it; the dispatches before it are already finished by the barrier
     /// each one starts with), or stop. Off by default: it costs two queries
@@ -218,6 +249,20 @@ public:
     void endSpan(ComputeSpan& span);
 
 private:
+    // What a stream records into: the graphics one, and the background one.
+    struct Stream {
+        VkCommandBuffer open = VK_NULL_HANDLE;
+        bool pendingBarrier = false;
+        uint64_t lastTicket = 0;
+    };
+    // The stream recording now: the background one only on an async queue
+    // (else background work is the graphics stream's).
+    Stream& current() { return recordingBackground() ? backgroundStream_ : graphicsStream_; }
+    bool async() const;
+    bool recordingBackground() const { return background_ && async(); }
+    uint64_t flushStream(Stream& s, bool isBackground);
+    VulkanQueue& queueFor(bool isBackground) const;
+
     VkCommandBuffer commands();
     void barrier();
     // The timestamp period and valid bits into owner_, once: false when the
@@ -232,6 +277,7 @@ private:
         std::shared_ptr<const std::string> label;
         uint32_t query = 0;
         uint64_t ticket = 0;
+        bool background = false;
     };
     bool timing_ = false;
     VkQueryPool timePool_ = VK_NULL_HANDLE;
@@ -242,9 +288,11 @@ private:
     VulkanContext* context_ = nullptr;
     std::shared_ptr<ComputeOwner> owner_;
     uint64_t frameHook_ = 0;
-    VkCommandBuffer open_ = VK_NULL_HANDLE;
-    bool pendingBarrier_ = false;
-    uint64_t lastTicket_ = 0;
+    Stream graphicsStream_;
+    Stream backgroundStream_;
+    bool background_ = false;      // between beginBackground and endBackground
+    uint64_t acquire_ = 0;         // background ticket the next graphics submission waits for
+    uint64_t acquired_ = 0;        // the last one a graphics submission waited for
 
     // Host-visible destination of readbacks, grown as needed.
     VkBuffer readback_ = VK_NULL_HANDLE;

@@ -36,6 +36,13 @@ bool fail(std::string* error, const std::string& msg) {
     return false;
 }
 
+// The queue a ticket is on: the background stream's is the async compute
+// queue (a background ticket exists only where there is one).
+VulkanQueue& queueOf(VulkanContext& context, bool background) {
+    VulkanQueue* async = background ? context.asyncComputeQueue() : nullptr;
+    return async ? *async : context.queue();
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -78,7 +85,8 @@ void ComputeReadback::release() {
 }
 
 bool ComputeReadback::ready() const {
-    return owner_ && owner_->context && buffer_ != VK_NULL_HANDLE && owner_->context->queue().isComplete(ticket_);
+    return owner_ && owner_->context && buffer_ != VK_NULL_HANDLE &&
+           queueOf(*owner_->context, background_).isComplete(ticket_);
 }
 
 ComputeSpan::~ComputeSpan() {
@@ -87,7 +95,7 @@ ComputeSpan::~ComputeSpan() {
 }
 
 bool ComputeSpan::ready() const {
-    return owner_ && owner_->context && ticket_ && owner_->context->queue().isComplete(ticket_);
+    return owner_ && owner_->context && ticket_ && queueOf(*owner_->context, background_).isComplete(ticket_);
 }
 
 double ComputeSpan::ms() const {
@@ -129,15 +137,21 @@ bool VulkanCompute::init(VulkanContext& context) {
     owner_ = std::make_shared<ComputeOwner>();
     owner_->context = &context;
     // A frame's command buffers never outlive it: what is open goes now.
-    frameHook_ = context.frames().addFrameEndHook([this] { flush(); });
+    frameHook_ = context.frames().addFrameEndHook([this] {
+        flushStream(backgroundStream_, true);
+        flush();
+    });
     return true;
 }
 
 void VulkanCompute::shutdown() {
     if (!context_) return;
+    background_ = false;
+    flushStream(backgroundStream_, true);
     flush();
     context_->frames().removeFrameEndHook(frameHook_);
-    if (lastTicket_) context_->queue().wait(lastTicket_);
+    if (backgroundStream_.lastTicket) queueOf(*context_, true).wait(backgroundStream_.lastTicket);
+    if (graphicsStream_.lastTicket) context_->queue().wait(graphicsStream_.lastTicket);
     for (ComputeBuffer* b : owner_->buffers) b->release();
     for (ComputePipeline* p : owner_->pipelines) p->release();
     for (ComputeReadback* r : owner_->readbacks) r->release();
@@ -192,7 +206,7 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
     // It reads zero until written.
     VkCommandBuffer cmd = commands();
     vkCmdFillBuffer(cmd, b->buffer_, 0, VK_WHOLE_SIZE, 0);
-    pendingBarrier_ = true;
+    current().pendingBarrier = true;
     return b;
 }
 
@@ -269,24 +283,56 @@ std::shared_ptr<ComputePipeline> VulkanCompute::createPipeline(const ComputePipe
 }
 
 VkCommandBuffer VulkanCompute::commands() {
-    if (open_ == VK_NULL_HANDLE) {
+    Stream& s = current();
+    if (s.open == VK_NULL_HANDLE) {
         context_->frames().ensureFrame();
-        open_ = context_->frames().beginCommands();
+        s.open = recordingBackground() ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
         // After whatever was submitted before: draws reading a buffer this
-        // work writes, and earlier writes it reads.
-        memoryBarrier(open_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT, kComputeStages,
+        // work writes, and earlier writes it reads. (On the background
+        // stream, after its own earlier work; the graphics queue's is
+        // ordered by the semaphore its submission waits on.)
+        memoryBarrier(s.open, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT, kComputeStages,
                       kComputeAccess);
-        pendingBarrier_ = false;
-    } else if (pendingBarrier_) {
+        s.pendingBarrier = false;
+    } else if (s.pendingBarrier) {
         barrier();
     }
-    return open_;
+    return s.open;
 }
 
 void VulkanCompute::barrier() {
-    memoryBarrier(open_, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, kComputeStages,
+    Stream& s = current();
+    memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, kComputeStages,
                   kComputeAccess);
-    pendingBarrier_ = false;
+    s.pendingBarrier = false;
+}
+
+bool VulkanCompute::async() const { return context_ && context_->asyncComputeQueue() != nullptr; }
+
+VulkanQueue& VulkanCompute::queueFor(bool isBackground) const { return queueOf(*context_, isBackground); }
+
+void VulkanCompute::beginBackground() {
+    if (!context_ || background_) return;
+    background_ = true;
+}
+
+uint64_t VulkanCompute::endBackground() {
+    if (!context_ || !background_) return 0;
+    const bool wasAsync = recordingBackground();
+    background_ = false;
+    return wasAsync ? flushStream(backgroundStream_, true) : flush();
+}
+
+bool VulkanCompute::backgroundComplete(uint64_t ticket) const {
+    return context_ && queueFor(async()).isComplete(ticket);
+}
+
+void VulkanCompute::acquireBackground(uint64_t ticket) {
+    if (!async() || ticket <= acquire_) return;
+    acquire_ = ticket;
+    // A graphics submission to carry the wait, at the latest when the frame
+    // ends, before anything that reads the work (consumers flush() first).
+    commands();
 }
 
 bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void* data, VkDeviceSize size) {
@@ -298,7 +344,7 @@ bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void
     VkCommandBuffer cmd = commands();
     const VkBufferCopy copy{slice.offset, offset, size};
     vkCmdCopyBuffer(cmd, slice.buffer, buffer.buffer_, 1, &copy);
-    pendingBarrier_ = true;
+    current().pendingBarrier = true;
     return true;
 }
 
@@ -322,9 +368,9 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
     vkCmdDispatch(cmd, groups[0], groups[1], groups[2]);
     if (timed) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timePool_, query + 1);
-        timed_.push_back({pipeline.label_, query, 0});
+        timed_.push_back({pipeline.label_, query, 0, recordingBackground()});
     }
-    pendingBarrier_ = true;
+    current().pendingBarrier = true;
     return true;
 }
 
@@ -338,10 +384,14 @@ bool VulkanCompute::timestamps() {
         vkGetPhysicalDeviceQueueFamilyProperties(context_->physicalDevice(), &familyCount, nullptr);
         std::vector<VkQueueFamilyProperties> families(familyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(context_->physicalDevice(), &familyCount, families.data());
-        const int family = context_->queueFamilies().graphicsFamily;
-        if (family >= 0 && static_cast<uint32_t>(family) < familyCount && families[family].timestampValidBits != 0 &&
-            props.limits.timestampPeriod > 0.0f) {
-            const uint32_t bits = families[family].timestampValidBits;
+        // The graphics family's, and the async compute family's where the
+        // background stream runs: both must stamp, at the fewer bits.
+        auto bitsOf = [&](int family) {
+            return family >= 0 && static_cast<uint32_t>(family) < familyCount ? families[family].timestampValidBits : 0u;
+        };
+        uint32_t bits = bitsOf(context_->queueFamilies().graphicsFamily);
+        if (async()) bits = std::min(bits, bitsOf(context_->queueFamilies().computeFamily));
+        if (bits != 0 && props.limits.timestampPeriod > 0.0f) {
             owner_->timestampMask = bits >= 64 ? ~0ull : ((1ull << bits) - 1);
             owner_->timestampNs = props.limits.timestampPeriod;
         }
@@ -366,6 +416,7 @@ std::shared_ptr<ComputeSpan> VulkanCompute::beginSpan() {
     std::shared_ptr<ComputeSpan> span(new ComputeSpan());
     span->owner_ = owner_;
     span->query_ = owner_->freeSpans.back();
+    span->background_ = recordingBackground();
     owner_->freeSpans.pop_back();
     VkCommandBuffer cmd = commands();
     vkCmdResetQueryPool(cmd, owner_->spanPool, span->query_, 2);
@@ -379,7 +430,7 @@ void VulkanCompute::endSpan(ComputeSpan& span) {
     if (!context_ || span.owner_ != owner_ || span.ticket_) return;
     VkCommandBuffer cmd = commands();
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span.query_ + 1);
-    span.ticket_ = flush();
+    span.ticket_ = span.background_ ? flushStream(backgroundStream_, true) : flush();
 }
 
 void VulkanCompute::setTiming(bool on) {
@@ -397,15 +448,17 @@ void VulkanCompute::setTiming(bool on) {
 }
 
 void VulkanCompute::collectTimes() {
-    while (!timed_.empty() && timed_.front().ticket && context_->queue().isComplete(timed_.front().ticket)) {
+    while (!timed_.empty() && timed_.front().ticket && queueFor(timed_.front().background).isComplete(timed_.front().ticket)) {
         const TimedDispatch& t = timed_.front();
         uint64_t stamps[2] = {0, 0};
         if (vkGetQueryPoolResults(context_->device(), timePool_, t.query, 2, sizeof(stamps), stamps, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
             const double ms =
                 static_cast<double>((stamps[1] - stamps[0]) & owner_->timestampMask) * owner_->timestampNs * 1e-6;
-            auto it = std::find_if(times_.begin(), times_.end(), [&](const ComputeTime& c) { return c.label == *t.label; });
-            if (it == times_.end()) it = times_.insert(times_.end(), ComputeTime{*t.label, 0.0, 0});
+            auto it = std::find_if(times_.begin(), times_.end(), [&](const ComputeTime& c) {
+                return c.label == *t.label && c.background == t.background;
+            });
+            if (it == times_.end()) it = times_.insert(times_.end(), ComputeTime{*t.label, 0.0, 0, t.background});
             it->ms += ms;
             ++it->dispatches;
         }
@@ -445,9 +498,10 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
     vkCmdCopyBuffer(cmd, buffer.buffer_, readback_, 1, &copy);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
-    pendingBarrier_ = true;
-    const uint64_t ticket = flush();
-    if (!ticket || !context_->queue().wait(ticket)) return false;
+    current().pendingBarrier = true;
+    const bool bg = recordingBackground();
+    const uint64_t ticket = bg ? flushStream(backgroundStream_, true) : flush();
+    if (!ticket || !queueFor(bg).wait(ticket)) return false;
     std::memcpy(out, readbackMapped_, static_cast<size_t>(size));
     return true;
 }
@@ -476,26 +530,46 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
     vkCmdCopyBuffer(cmd, buffer.buffer_, r->buffer_, 1, &copy);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
-    pendingBarrier_ = true;
-    r->ticket_ = flush();
+    current().pendingBarrier = true;
+    r->background_ = recordingBackground();
+    r->ticket_ = r->background_ ? flushStream(backgroundStream_, true) : flush();
     if (!r->ticket_) return nullptr;
     return r;
 }
 
-uint64_t VulkanCompute::flush() {
-    if (open_ == VK_NULL_HANDLE) return lastTicket_;
+uint64_t VulkanCompute::flush() { return flushStream(graphicsStream_, false); }
+
+uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
+    if (!context_ || s.open == VK_NULL_HANDLE) return s.lastTicket;
     // Everything submitted after this sees what the work wrote.
-    memoryBarrier(open_, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+    memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-    const VkCommandBuffer cmd = open_;
-    open_ = VK_NULL_HANDLE;
-    pendingBarrier_ = false;
-    const uint64_t ticket = context_->frames().submit(cmd);
-    if (ticket) lastTicket_ = ticket;
+    const VkCommandBuffer cmd = s.open;
+    s.open = VK_NULL_HANDLE;
+    s.pendingBarrier = false;
+    std::vector<SemaphoreWait> waits;
+    uint64_t ticket = 0;
+    if (isBackground) {
+        // After the graphics queue's work so far: the writes it reads (this
+        // stream's graphics work recorded before it included), and frames
+        // still drawing from what it rewrites.
+        flush();
+        if (const uint64_t g = context_->queue().lastSubmittedTicket())
+            waits.push_back({context_->queue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, g});
+        ticket = context_->frames().submitCompute(cmd, std::move(waits));
+    } else {
+        if (acquire_ > acquired_) {
+            waits.push_back({queueFor(true).timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, acquire_});
+            acquired_ = acquire_;
+        }
+        ticket = context_->frames().submit(cmd, std::move(waits));
+    }
+    if (ticket) s.lastTicket = ticket;
     // The dispatches timed in it finish with it (a failed submission's never).
-    for (auto it = timed_.rbegin(); it != timed_.rend() && it->ticket == 0; ++it) it->ticket = ticket;
+    for (TimedDispatch& t : timed_)
+        if (t.ticket == 0 && t.background == isBackground) t.ticket = ticket;
     if (!ticket)
-        while (!timed_.empty() && timed_.back().ticket == 0) timed_.pop_back();
+        std::erase_if(timed_, [&](const TimedDispatch& t) { return t.ticket == 0 && t.background == isBackground; });
     if (!timed_.empty()) collectTimes();
     return ticket;
 }

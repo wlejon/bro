@@ -6,10 +6,11 @@
 //     cells over the quarter it covers;
 //   - the draw list on the GPU is the drawn set;
 //   - a small cache evicts what the view no longer wants and refills;
+//   - production runs beside the frames: a batch is ready at a later update;
 //   - produce takes the update's batch in one call, its table on the GPU;
 //   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
-//   - a GPU-time budget sizes the batches;
+//   - the batches pace themselves by the frames;
 //   - a layer's pool binds to a scene node, as a buffer or a texture array
 //     copied slot by slot as tiles are produced; bad options are refused.
 
@@ -82,10 +83,13 @@ if (!bro.kernel.available || !bro.tiles) {
         tileSize: T, capacity: 128, maxLevel: 5, pixelsPerCell: 2,
         layers: { height: 4 }, producePerUpdate: 1000, produce,
     }, opts));
+    // A batch is ready once the GPU has done it (it runs beside the frames),
+    // so each update is a frame apart.
     const settle = (cache, view) => {
-        for (let i = 0; i < 32; i++) {
+        for (let i = 0; i < 64; i++) {
             cache.update(view);
             if (cache.pending === 0) return true;
+            advanceTime(16);
         }
         return false;
     };
@@ -108,6 +112,19 @@ if (!bro.kernel.available || !bro.tiles) {
     };
 
     const near = { position: [10, 3, 12], fov: 60, viewportHeight: 720 };
+    // Production runs in the background stream, beside the frames: a batch
+    // is ready at a later update, once the GPU has done it, and its kernels
+    // are timed as background work.
+    perf.kernelTimes();
+    const fresh = makeCache({});
+    fresh.update(near);
+    assert(fresh.stats.produced === 0 && fresh.drawn.length === 0 && fresh.pending > 0,
+           `a batch is not ready in the update that produced it (${fresh.stats.produced} produced, ${fresh.drawn.length} drawn)`);
+    assert(settle(fresh, near) && fresh.drawn.length > 0, 'and is at a later one');
+    const times = perf.kernelTimes();
+    assert(times['k_produce (background)']?.background === true && !times.k_produce,
+           `production is timed as background work (${Object.keys(times)})`);
+
     const cache = makeCache({});
     assert(cache instanceof Object && cache.cells === T && cache.capacity === 128, 'createCache makes a TileCache');
     assert(settle(cache, near), 'the cache settles near the ground');
@@ -187,25 +204,19 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(settle(flaky, near), 'the next updates produce them');
     assert(Math.max(...flaky.drawn.map((t) => t.level)) === deepest, 'and the cache refines as far as before');
 
-    // A GPU-time budget sizes the batches: one tile at first, then held to
-    // one under a budget nothing fits, and growing under one everything
-    // fits, a tile an update, never past producePerUpdate.
-    const budgeted = (ms) => {
-        const b = makeCache({ produceBudgetMs: ms, producePerUpdate: 6 });
-        const made = [];
-        for (let i = 0; i < 12; i++) {
-            made.push(b.update(near));
-            b.layer('height').read(new Float32Array(1));   // the GPU done with the batch
-        }
-        return { cache: b, made };
-    };
-    const starved = budgeted(1e-6), loose = budgeted(1000);
-    assert(starved.made[0] === 1 && loose.made[0] === 1, 'a budgeted cache starts at one tile a batch');
-    assert(starved.made.every((n) => n <= 1) && starved.cache.stats.batchSize === 1 && starved.cache.stats.batchMs > 0,
-           `under a budget nothing fits, a tile a batch (${starved.made}, last ${starved.cache.stats.batchMs} ms)`);
-    assert(Math.max(...loose.made) === 6 && loose.made.every((n, i) => i === 0 || n <= loose.made[i - 1] + 1 || n === 0),
-           `under a loose budget batches grow a tile at a time up to producePerUpdate (${loose.made})`);
-    assert(makeCache({}).stats.batchSize === 1000, 'without a budget a batch is producePerUpdate');
+    // The batches pace themselves by the frames: a quarter of
+    // producePerUpdate at first, then a
+    // tile more an update while no scene runs over its frame target (none
+    // here), never past producePerUpdate.
+    const paced = makeCache({ producePerUpdate: 6 });
+    const made = [];
+    for (let i = 0; i < 12; i++) {
+        made.push(paced.update(near));
+        advanceTime(16);
+    }
+    assert(Math.max(...made) === 6 && made.every((n, i) => n <= i + 2),
+           `batches grow a tile an update up to producePerUpdate (${made})`);
+    assert(paced.stats.batchSize === 6, `and hold there (${paced.stats.batchSize})`);
 
     // Height ranges: 40 m up, under a 300 m worst case every tile's slab
     // reaches the camera, so all of them refine; once each tile reports the
@@ -471,6 +482,5 @@ if (!bro.kernel.available || !bro.tiles) {
     throws(() => makeCache({ domain: { type: 'torus' } }), (e) => e instanceof TypeError, 'an unknown domain');
     throws(() => makeCache({ layers: { height: 3 } }), (e) => e instanceof RangeError, 'a layer of 3 bytes a cell');
     throws(() => makeCache({ produce: 7 }), (e) => e instanceof TypeError, 'a produce that is not a function');
-    throws(() => makeCache({ produceBudgetMs: -1 }), (e) => e instanceof RangeError, 'a negative produceBudgetMs');
     throws(() => cache.update({}), (e) => e instanceof TypeError, 'an update without a position');
 }

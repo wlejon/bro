@@ -155,8 +155,10 @@ public:
     void select(const View& view);
 
     /// Up to `n` missing wanted tiles to produce now, each with a slot, each
-    /// one's parent ready (never in the same batch). Each must then be
-    /// markReady()'d or abandon()'d.
+    /// one's parent ready or taken by an earlier call (never in the same
+    /// batch): batches are produced in order, so a child's batch runs after
+    /// its parent's has, ready or not. Each must then be markReady()'d or
+    /// abandon()'d; abandoning a tile abandons the children taken after it.
     std::vector<Production> takeProductions(uint32_t n);
     void markReady(const TileId& id);
     /// The production failed: the slot goes back, the tile stays missing.
@@ -223,6 +225,7 @@ private:
         // Residency.
         int32_t slot = -1;
         State state = State::Missing;
+        uint64_t batch = 0;        // the takeProductions call that took it
         uint64_t lastWanted = 0;   // == frame_: wanted by the last select
         // The last select's verdict.
         double error = 0;    // > 1: its cells project larger than pixelsPerCell
@@ -264,6 +267,7 @@ private:
 
     Config config_;
     uint64_t frame_ = 0;
+    uint64_t batch_ = 0;   // takeProductions calls
     Vec3d eye_;                       // the last select's view position
     std::vector<Node> nodes_;
     std::vector<int32_t> freeNodes_;

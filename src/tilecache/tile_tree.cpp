@@ -370,11 +370,12 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         Node& m = nodes_[i];
         int32_t parentSlot = -1;
         if (m.parent >= 0) {
-            // Ready, not producing in this batch: a batch is produced at once
-            // (one dispatch over all of it), so a child cannot read a parent
-            // beside it.
+            // Ready, or taken by an earlier batch, which runs first: a batch
+            // is produced at once (one dispatch over all of it), so a child
+            // cannot read a parent beside it.
             const Node& p = nodes_[m.parent];
-            if (p.slot < 0 || p.state != State::Ready) continue;
+            const bool before = p.state == State::Ready || (p.state == State::Producing && p.batch != batch_ + 1);
+            if (p.slot < 0 || !before) continue;
             parentSlot = p.slot;
         }
         if (freeSlots_.empty()) {
@@ -399,8 +400,10 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
         freeSlots_.pop_back();
         slotNode_[m.slot] = i;
         m.state = State::Producing;
+        m.batch = batch_ + 1;
         out.push_back({m.id, static_cast<uint32_t>(m.slot), parentSlot});
     }
+    if (!out.empty()) ++batch_;
     return out;
 }
 
@@ -415,6 +418,9 @@ void TileTree::abandon(const TileId& id) {
     const int32_t i = find(id);
     if (i < 0 || nodes_[i].state != State::Producing) return;
     evict(nodes_[i]);
+    // A child taken after it was produced from what it never got.
+    for (const int32_t c : nodes_[i].child)
+        if (c >= 0 && nodes_[c].state == State::Producing) abandon(nodes_[c].id);
 }
 
 uint32_t TileTree::pending() const {

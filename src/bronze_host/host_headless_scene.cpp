@@ -164,11 +164,17 @@ nlohmann::json spreadOf(std::vector<double> v) {
 }
 
 // The compute dispatches finished since the last take, by kernel (ms).
-std::map<std::string, double> frameKernels(engine::Engine& engine) {
+// The frame's kernels by label: those on the graphics queue, in the frame's
+// length, and into `background` those run beside the frames (a tile cache's
+// production), which are not.
+std::map<std::string, double> frameKernels(engine::Engine& engine, std::map<std::string, double>* background = nullptr) {
     std::map<std::string, double> out;
     render::VulkanContext* ctx = engine.vulkanContext();
     if (!ctx) return out;
-    for (const render::ComputeTime& t : ctx->compute().takeTimes()) out[t.label] += t.ms;
+    for (const render::ComputeTime& t : ctx->compute().takeTimes()) {
+        if (!t.background) out[t.label] += t.ms;
+        else if (background) (*background)[t.label] += t.ms;
+    }
     return out;
 }
 
@@ -319,8 +325,8 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 engine.gpuFrameMs(true);
             }
             frameKernels(engine);
-            std::vector<double> gpu, kern, total, wall;
-            std::map<std::string, double> passSum, kernelSum;
+            std::vector<double> gpu, kern, total, wall, back;
+            std::map<std::string, double> passSum, kernelSum, backSum;
             nlohmann::json spikes = nlohmann::json::array();
             for (int k = 0; k < frames; ++k, ++i) {
                 const auto t0 = std::chrono::steady_clock::now();
@@ -328,12 +334,18 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 const double ms = engine.gpuFrameMs(true);
                 wall.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
                 const std::map<std::string, double> passes = framePasses(engine);
-                const std::map<std::string, double> kernels = frameKernels(engine);
-                double km = 0;
+                std::map<std::string, double> background;
+                const std::map<std::string, double> kernels = frameKernels(engine, &background);
+                double km = 0, bm = 0;
                 for (const auto& [n, v] : kernels) {
                     km += v;
                     kernelSum[n] += v;
                 }
+                for (const auto& [n, v] : background) {
+                    bm += v;
+                    backSum[n] += v;
+                }
+                back.push_back(bm);
                 for (const auto& [n, v] : passes) passSum[n] += v;
                 gpu.push_back(ms);
                 kern.push_back(km);
@@ -348,6 +360,8 @@ void installHeadlessScenePerf(engine::Engine& engine,
                     // the budget or more.
                     for (const auto& [n, v] : passes) if (v >= 0.1 * budget) s["passes"][n] = v;
                     for (const auto& [n, v] : kernels) if (v >= 0.1 * budget) s["kernelsBy"][n] = v;
+                    s["background"] = bm;
+                    for (const auto& [n, v] : background) if (v >= 0.1 * budget) s["backgroundBy"][n] = v;
                     spikes.push_back(s);
                 }
             }
@@ -362,6 +376,9 @@ void installHeadlessScenePerf(engine::Engine& engine,
             for (const auto& [n, v] : passSum) j["passes"][n] = v / frames;
             j["kernelsBy"] = nlohmann::json::object();
             for (const auto& [n, v] : kernelSum) j["kernelsBy"][n] = v / frames;
+            j["background"] = spreadOf(back);
+            j["backgroundBy"] = nlohmann::json::object();
+            for (const auto& [n, v] : backSum) j["backgroundBy"][n] = v / frames;
             j["over"] = spikes.size();
             j["spikes"] = spikes;
             return fromJson(j);

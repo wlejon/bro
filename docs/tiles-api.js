@@ -22,9 +22,31 @@
 //   it (a child whose 2x2 cells average to its parent's cell is the same
 //   world seen closer).
 // - Production is spread over updates: at most `producePerUpdate` tiles a
-//   call, or as many as fit `produceBudgetMs` of GPU time, the largest
-//   projected error first (a parent before its children), the four children
-//   of a parent together, so the draw set refines quad by quad as they land.
+//   call, paced by the frames (below), the largest projected error first (a
+//   parent before its children), the four children of a parent together, so
+//   the draw set refines quad by quad as they land.
+// - Production runs beside the frames: what produce records goes to the
+//   GPU's async compute queue (VulkanCompute::beginBackground; in order on
+//   the graphics queue where the device has none), after the frames
+//   submitted before it, beside the ones after. A batch's tiles are ready,
+//   drawn, in the lookup and copied into textures filled from a pool, at the
+//   first update after the GPU has done it, usually the next. A tile's
+//   production is a few small dependent dispatches, far from filling the
+//   GPU: in the frame's own queue it lengthened the frame by all of it (a
+//   lone planet tile, 0.33 ms, pushed most frames of a fast turn past 2.78
+//   ms), where beside it costs the frame only what it slows its work by.
+//   produce must give its kernels only buffers nothing rewrites until the
+//   batch is ready (the batch's own, the pools, constants), as the GPU may
+//   still be reading them a frame later.
+// - The batch size paces itself by the scenes' renders: one tile more each
+//   update while the newest finished render is under 90% of its frame
+//   target (2.78 ms, 360 fps), half as many once one is over it, at least
+//   a quarter of producePerUpdate (a view still coarse is often what makes
+//   the frames heavy, and starving it keeps it so). A batch's own GPU time
+//   says nothing of its cost beside the frames
+//   (sharing the GPU stretches it: a lone planet tile read 1 to 6 ms beside
+//   a render), what it slows their renders by does. Without a scene the
+//   batches grow to producePerUpdate.
 // - Tiles the view no longer wants are evicted when a slot is needed, the
 //   finest first (of equals, the least recently wanted), and produced again
 //   if wanted again: coarse tiles are few, wanted again first, and dearest
@@ -68,14 +90,7 @@
 //   pixelsPerCell     a tile splits while a cell spans more pixels than this
 //                     (default 2)
 //   producePerUpdate  tiles produced per update() (default 8): the most a
-//                     batch holds
-//   produceBudgetMs   the GPU milliseconds an update's batch may take
-//                     (default 0: no budget, every batch producePerUpdate).
-//                     Each batch is timed on the GPU (render::ComputeSpan,
-//                     from the end of the work before it), and the size
-//                     follows: smaller after a batch over the budget, one
-//                     tile larger after one under 85% of it. Motion keeps
-//                     its frame time; the nearest error still comes first
+//                     batch holds, as paced by the frames
 //   produce(batch)    fills the update's batch; `this` is the cache
 //
 // batch (the argument to produce):
@@ -113,8 +128,9 @@
 //                         center is the tile's on the base surface and never
 //                         moves; a narrower height range only shrinks radius
 //     parent              null for a root, else { slot, quadrant: [qx, qy] }:
-//                         the parent's slot (ready, produced in an earlier
-//                         batch, and resident while the child is produced),
+//                         the parent's slot (produced in an earlier batch,
+//                         which the GPU runs first, ready or not yet, and
+//                         resident while the child is produced),
 //                         and which quarter of it this tile covers: the
 //                         child's interior starts quadrant * tileSize / 2
 //                         cells into the parent's interior
@@ -245,8 +261,7 @@ const terrain = bro.tiles.createCache({
 // cache.cells, cache.capacity
 // cache.stats       { produced, evicted } since creation, and rangesInFlight:
 //                   batches whose ranges the GPU has not handed back yet;
-//                   batchSize, the most the next batch holds, and batchMs,
-//                   the GPU ms of the newest timed batch (0 until one)
+//                   batchSize, the most the next batch holds (as paced)
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 

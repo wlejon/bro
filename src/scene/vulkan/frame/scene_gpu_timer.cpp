@@ -192,6 +192,7 @@ void SceneGpuTimer::drain(bool wait) {
         }
         const double ms = harvest(pair);
         if (ms < 0.0) continue;
+        latestMs_ = ms;
         if (readyCount_ == std::size(ready_)) {
             std::copy(ready_ + 1, ready_ + readyCount_, ready_);
             --readyCount_;
@@ -212,6 +213,11 @@ double SceneGpuTimer::takeMs(bool wait) {
     std::copy(ready_ + 1, ready_ + readyCount_, ready_);
     --readyCount_;
     return first;
+}
+
+double SceneGpuTimer::latestMs() {
+    drain(false);
+    return latestMs_;
 }
 
 bool SceneGpuTimer::lastPasses(Passes& passes, Passes& compute, bool& computed) {

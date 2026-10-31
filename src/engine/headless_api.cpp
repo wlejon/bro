@@ -550,6 +550,19 @@ double Engine::gpuFrameMs(bool wait) {
     return lastGpuFrameMs_;
 }
 
+double Engine::sceneFrameLoad() {
+    double load = -1.0;
+#if BRO_WITH_3D
+    for (auto& sg : sceneGraphs_) {
+        if (!sg.graph) continue;
+        const double ms = sg.graph->renderer().latestGpuMs();
+        const double target = sg.graph->renderer().frameTargetMs();
+        if (ms >= 0.0 && target > 0.0) load = std::max(load, ms / target);
+    }
+#endif
+    return load;
+}
+
 bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,
                        std::vector<std::pair<std::string, double>>& compute, bool& computed) {
     passes.clear();
