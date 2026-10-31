@@ -30,7 +30,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// billboard.vert/frag's push block.
+    /// draw/billboard.bk's BillboardPush.
     struct alignas(16) Push {
         float anchor[4];     // xyz world anchor
         float right[4];      // xyz quad right

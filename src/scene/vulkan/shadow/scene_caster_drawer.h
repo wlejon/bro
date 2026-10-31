@@ -4,7 +4,7 @@
 // through a view-projection of its own, with the colour pass's wind sway,
 // vegetation sway and custom vertex chunks so the silhouette matches what is
 // drawn, and a textured static or instanced mesh with an alpha cutoff cut
-// by its base colour's alpha (scene_shadow_cutout.glsl). The shadow pass
+// by its base colour's alpha (shadow/shadow.bk's cutout stages). The shadow pass
 // draws its views' casters with it (pass_shadow.h). One set of pipelines,
 // built on first use, shared by every user.
 //
@@ -48,7 +48,7 @@ public:
               const bromath::Frustum* frustum, Mode mode = Mode::Caster);
 
 private:
-    /// shaders/common/scene_shadow_push.glsl.
+    /// ShadowPush in shaders/draw/mesh.bk.
     struct alignas(16) Push {
         float lightViewProj[16];
         float modelRows[12];
@@ -75,7 +75,7 @@ private:
     static constexpr uint32_t kBuiltin = 0x0000, kCutout = 0x0100;
     PipelineVariants pipelines_;
     // Cutout casters (a textured static or instanced mesh with an alpha
-    // cutoff): their base colour's alpha cut, scene_shadow_cutout.glsl.
+    // cutoff): their base colour's alpha cut, shadow/shadow.bk.
     VkShaderModule vsCutout_[2] = {};              // [instanced]
     std::string vsCutoutEntry_[2];
     VkShaderModule fsCutout_ = VK_NULL_HANDLE;

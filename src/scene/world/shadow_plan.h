@@ -9,7 +9,7 @@
 // (world/shadow_pages.h); drawn by the Vulkan shadow pass
 // (vulkan/shadow/pass_shadow.h), marked by the marking pass
 // (vulkan/shadow/pass_shadow_mark.h) and sampled by every lit shader
-// (common/scene_shadow_pages.glsl).
+// (common/lighting.bk).
 
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
 

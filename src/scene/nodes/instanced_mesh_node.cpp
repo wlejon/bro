@@ -172,8 +172,8 @@ const bromesh::MeshData& InstancedMeshNode::scatterBatchMesh() const {
 
 namespace {
 
-// A unit vector in two floats (octahedral), the encoding mesh_tube.vert
-// decodes (scene_procedural.glsl procOctDecode).
+// A unit vector in two floats (octahedral), the encoding mesh_tube_vert
+// decodes (common/procedural.bk oct_decode).
 void octEncode(const float* v, float* out) {
     float x = v[0], y = v[1], z = v[2];
     const float l1 = std::fabs(x) + std::fabs(y) + std::fabs(z);

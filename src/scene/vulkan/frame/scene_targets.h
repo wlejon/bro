@@ -37,7 +37,7 @@ public:
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
     // The opaque scope's indirect-light attachment, at this output location
-    // of the shaders that draw in it (mesh.frag, sky_common.glsl).
+    // of the shaders that draw in it (draw/mesh_main.bk, lighting/sky.bk).
     static constexpr uint32_t kIndirectSlot = 1;
 
     bool setup(SceneVkDevice& device, SceneVkAllocator& allocator);

@@ -279,7 +279,7 @@ pub fn air(pos: vec3<f32>, cam_dist: f32) -> Air {
 }
 
 // ---------------------------------------------------------------------------
-// Cached shadow pages (shadow/shadow_pages_layout.h, scene_shadow_pages.glsl)
+// Cached shadow pages (shadow/shadow_pages_layout.h)
 // ---------------------------------------------------------------------------
 
 pub const SP_PAGE: i32 = 128;
@@ -602,7 +602,7 @@ pub fn light_shadow(i: i32, pos: vec3<f32>, cam_dist: f32, light_dist: f32, n: v
 }
 
 // ---------------------------------------------------------------------------
-// Cook-Torrance PBR + IBL + Probe + Shade Map (common/scene_lighting.glsl)
+// Cook-Torrance PBR + IBL + Probe + Shade Map
 // ---------------------------------------------------------------------------
 
 pub struct Surface {

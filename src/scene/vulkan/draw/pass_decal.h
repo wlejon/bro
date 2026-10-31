@@ -26,7 +26,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// decal.vert/frag's push block.
+    /// draw/decal.bk's DecalPush.
     struct alignas(16) Push {
         float model[16];
         float invModel[16];

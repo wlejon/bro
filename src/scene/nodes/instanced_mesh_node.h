@@ -202,7 +202,7 @@ public:
 
     // --- GPU foliage scatter mode ---
     // Expand `segCount` branch segments into leaves entirely in the vertex
-    // shader (vulkan/shaders/draw/mesh_scatter.vert), so the tens-of-thousands-of-leaves
+    // shader (vulkan/shaders/draw/mesh_main.bk mesh_scatter_vert), so the tens-of-thousands-of-leaves
     // scatter never touches the CPU and no per-leaf instance buffer is built or
     // uploaded — only the compact per-segment buffer is. The draw issues
     // `segCount * maxPerSeg` instances; slots past a segment's leaf count clip
@@ -249,7 +249,7 @@ public:
 
     // --- GPU procedural branch-tube mode ---
     // Synthesise tapered tube (stem) geometry entirely in the vertex shader
-    // (vulkan/shaders/draw/mesh_tube.vert) from a compact per-segment storage buffer, so
+    // (vulkan/shaders/draw/mesh_main.bk mesh_tube_vert) from a compact per-segment storage buffer, so
     // a growing skeleton re-uploads only the segment records — never a re-baked
     // multi-MB merged mesh. `segData` is segCount*8 floats, 2 RGBA32F texels per
     // segment: [from.xyz, radiusFrom] then [to.xyz, radiusTo]. Each segment
@@ -257,7 +257,7 @@ public:
     // segCount*sides*6 vertices with NO vertex or instance attributes (the VS
     // reads the vertex index + the segment records). Mutually exclusive with
     // mesh instances and with scatter mode. Casts shadows through
-    // shadow_tube.vert and receives them like any lit mesh.
+    // shadow/shadow.bk's shadow_tube_vert and receives them like any lit mesh.
     //
     // `tangents` (optional, segCount*6 floats: the bark's direction at
     // `from`, then at `to`) mitres the joints: each end ring lies in the
@@ -395,7 +395,7 @@ public:
     // --- Vegetation (wind sway) ---
     // Per-instance or per-segment records that bend the node in the scene's
     // wind field (scene/world/wind_field.h; layout in docs/vegetation-api.js
-    // "Vegetation records", vulkan/shaders/common/scene_vegetation.glsl): 16 floats an
+    // "Vegetation records", vulkan/shaders/common/vegetation.bk): 16 floats an
     // instance, (root.xyz, height) (crown.xyz, crownRadius) (anchor.xyz,
     // weight) (axis, twig, limb, trunk); or, for a scatter or tube node, 16
     // floats a segment, (root.xyz, height) (crown.xyz, crownRadius)

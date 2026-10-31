@@ -31,7 +31,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// gaussian_splat.vert's UBO.
+    /// draw/gaussian_splat.bk's SplatUBO.
     struct Uniforms {
         float model[16];
         float view[16];

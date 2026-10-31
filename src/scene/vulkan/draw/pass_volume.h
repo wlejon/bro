@@ -46,8 +46,8 @@ class SceneVkAllocator;
 
 class PassVolumeNear final : public ScenePass {
 public:
-    /// A near grid's cell, pixels a side, and its slices (volume.frag's
-    /// VOLUME_NEAR_SLICES).
+    /// A near grid's cell, pixels a side, and its slices (volume.bk's
+    /// NEAR_SLICES).
     static constexpr uint32_t kNearTile = 8;
     static constexpr uint32_t kNearSlices = 128;
 
@@ -101,7 +101,7 @@ public:
     VkSampler sampler() const { return sampler_; }
 
 private:
-    /// volume_resolve.frag's uniform block.
+    /// post/postfx.bk's VolumeResolveUBO.
     struct Uniforms {
         float prevViewProj[16];   // last render's camera-relative clip
         float invViewProj[16];    // this render's, inverted

@@ -100,7 +100,7 @@ pub struct Medium {
 }
 
 pub const NEAR_SLICES: i32 = 128;   // PassVolume::kNearSlices
-pub const METER_RAYS: i32 = 4;      // SceneFrame::kVolumeMeterRays, exposure.comp's
+pub const METER_RAYS: i32 = 4;      // SceneFrame::kVolumeMeterRays, post/exposure.bk's
 const METER_SUN_SPREAD: f32 = 0.05;   // the sun cone's radius, radians (about 3 degrees)
 const METER_SCENE_TAPS: i32 = 4;      // a side of the grid of the view's depth the meter's footprint reads
 const METER_SKY_SCALE: f32 = 20000.0; // the scene's scale over the sky, m

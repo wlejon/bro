@@ -1,7 +1,7 @@
 // Cached shadow pages: the numbers the
 // CPU's paging (scene/world/shadow_pages.h), the marking pass
-// (shadow/shadow_mark.comp) and every lit shader's lookup
-// (common/scene_shadow_pages.glsl) agree on, for C++ and GLSL alike.
+// (shadow/shadow_mark.bk) and every lit shader's lookup
+// (common/lighting.bk) agree on.
 //
 // A virtual map is a square of pages of SP_PAGE texels. The sun's shadow is
 // a clipmap: SP_MAX_LEVELS levels, each a window of SP_WINDOW x SP_WINDOW

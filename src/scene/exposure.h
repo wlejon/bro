@@ -51,8 +51,8 @@ struct ExposureSettings {
     // The scene's volumes dim the sun by the share they pass from the eye
     // toward it (over a cone of a few degrees) and the sky by the share they
     // pass over its hemisphere, cosine-weighted as the meter's dome takes
-    // it, and add their own light from above the same way (volume.frag,
-    // exposure.comp), so under a deck it reads the deck's light.
+    // it, and add their own light from above the same way (draw/volume.bk,
+    // post/exposure.bk), so under a deck it reads the deck's light.
     enum class Meter : uint8_t { Reflected, Incident };
     Meter meter = Meter::Reflected;
 };

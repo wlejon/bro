@@ -8,7 +8,7 @@
 // planetRadius and planetRadius + thickness, three media in it (Rayleigh
 // scattering, Mie scattering and absorption, an ozone layer that only
 // absorbs), lit by a sun of a given illuminance at the top. The GPU half
-// (scene/vulkan/lighting/scene_atmosphere.h, shaders/common/scene_atmosphere.glsl)
+// (scene/vulkan/lighting/scene_atmosphere.h, shaders/common/atmosphere.bk)
 // makes its tables from these numbers; the functions below are the tables'
 // parametrisations, shared word for word with the GLSL, so a test can read
 // a table back and look it up as the shaders do (bro_atmosphere_test).
@@ -75,7 +75,7 @@ struct AtmosphereParams {
     bool   centered  = false;
 };
 
-// Parameters for the additive starfield (scene/vulkan/shaders/lighting/starfield.frag).
+// Parameters for the additive starfield (scene/vulkan/shaders/lighting/sky.bk starfield_frag).
 // Drawn over whichever sky is active, so the same field reads as invisible in a
 // bright day sky and as stars against the near-black sky above the atmosphere.
 struct StarfieldParams {
@@ -88,7 +88,7 @@ struct StarfieldParams {
 namespace atmosphere {
 
 // --- The tables' sizes ----------------------------------------------------------
-// (common/scene_atmosphere.glsl has the same numbers.)
+// (common/atmosphere.bk has the same numbers.)
 constexpr int kTransmittanceW = 256, kTransmittanceH = 64;    // (mu, r)
 constexpr int kMultiScatterSun = 64, kMultiScatterAlt = 32;    // (mu_s, r)
 constexpr int kSkyViewW = 256, kSkyViewH = 128;                // (azimuth, zenith) at the eye

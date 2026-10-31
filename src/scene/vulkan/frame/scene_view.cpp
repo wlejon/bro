@@ -93,7 +93,7 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         cam.wind[3] = fog->windStrength();
         cam.windParams[0] = fog->windTime();
         cam.windParams[1] = fog->windFrequency();
-        // The eye's share of the sway phase (windDelta in scene_camera.glsl),
+        // The eye's share of the sway phase (wind_delta in common/scene.bk),
         // reduced in double so a far eye does not round the phase away.
         const double phase = 0.3 * static_cast<double>(eye.x) + 0.5 * static_cast<double>(eye.z);
         cam.windParams[2] = static_cast<float>(std::fmod(phase, 2.0 * 3.14159265358979323846));

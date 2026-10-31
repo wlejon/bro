@@ -4,7 +4,7 @@
 // tonemap multiplies the HDR frame by, fixed or metered.
 //
 // Each frame, in the frame's graphics stream right before the tonemap
-// (PassPostFx), one dispatch (exposure.comp): in the auto mode a histogram
+// (PassPostFx), one dispatch (post/exposure.bk): in the auto mode a histogram
 // of the HDR frame's log2 luminance (one pixel of every 4 x 4 block), which
 // its last workgroup to finish meters, moving the applied EV toward the
 // metered one by the frame's time step and writing the state buffer the

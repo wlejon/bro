@@ -9,7 +9,7 @@
 
 namespace bro::scene::vk {
 
-/// The camera block (set 0), std140 — shaders/common/scene_camera.glsl. The
+/// The camera block (set 0), std140 — Camera in shaders/common/scene.bk. The
 /// matrices are camera-relative (scene_view.h): view takes (world - eye).
 struct alignas(16) SceneCameraUniforms {
     alignas(16) float view[16];
@@ -33,7 +33,7 @@ struct alignas(16) SceneCameraUniforms {
 constexpr int kSceneMaxLights = 32;
 constexpr int kSceneMaxShadowMaps = SP_MAX_MAPS;
 
-/// One light — SceneLight in shaders/common/scene_lighting.glsl.
+/// One light — Light in shaders/common/lighting.bk.
 struct alignas(16) SceneLightUniform {
     alignas(16) float position[4];      // xyz = camera-relative position, w = type (0 dir, 1 point, 2 spot)
     alignas(16) float direction[4];     // xyz = unit direction (light -> scene), w = range
@@ -43,7 +43,7 @@ struct alignas(16) SceneLightUniform {
 };
 
 /// One virtual shadow map (a sun's clipmap level, a spot's map, a point
-/// light's face) — ShadowMapGpu in shaders/common/scene_shadow_pages.glsl.
+/// light's face) — ShadowMap in shaders/common/lighting.bk.
 struct alignas(16) SceneShadowMapUniform {
     alignas(16) float matrix[16];       // camera-relative position -> (map uv, [0,1] depth)
     alignas(16) float info[4];          // first page-table entry, kind (SP_KIND_*), window origin x, y (mod SP_WINDOW)
@@ -51,7 +51,7 @@ struct alignas(16) SceneShadowMapUniform {
     alignas(16) float depth[4];         // near, far, ortho, clipmap level
 };
 
-/// The marking pass's block (std140) — shaders/shadow/shadow_mark.comp.
+/// The marking pass's block (std140) — ShadowMarkUBO in shaders/shadow/shadow_mark.bk.
 struct alignas(16) SceneShadowMarkUniforms {
     alignas(16) float invViewProj[16];  // Vulkan clip (the camera's reversed depth) -> camera-relative
     alignas(16) float grid[4];          // x, y = the depth target's size, z = pixels a side an invocation marks for, w = lights
@@ -63,8 +63,8 @@ struct alignas(16) SceneShadowMarkUniforms {
     SceneShadowMapUniform maps[SP_MARK_MAPS];
 };
 
-/// The atmosphere's block (std140) — AtmosphereGpu in
-/// shaders/common/scene_atmosphere_params.glsl; filled by SceneAtmosphere::fill
+/// The atmosphere's block (std140) — Atmosphere in
+/// shaders/common/atmosphere.bk; filled by SceneAtmosphere::fill
 /// (scene/vulkan/lighting/scene_atmosphere.h). Lengths in metres, positions
 /// about the planet's centre.
 struct alignas(16) AtmosphereGpu {
@@ -83,7 +83,7 @@ struct alignas(16) AtmosphereGpu {
 };
 static_assert(sizeof(AtmosphereGpu) == 10 * 16 + 64);
 
-/// The lighting block (set 1), std140 — shaders/common/scene_lighting.glsl.
+/// The lighting block (set 1), std140 — Lighting in shaders/common/lighting.bk.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];  // dominant directional light, w = its index + 1 (0: none)
     alignas(16) float sunColor[4];      // rgb = color, a = intensity

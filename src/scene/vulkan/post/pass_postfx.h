@@ -42,7 +42,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// tonemap.frag's push block (the exposure is SceneExposure's state buffer).
+    /// post/postfx.bk's TonemapPush (the exposure is SceneExposure's state buffer).
     struct TonemapPush {
         float gamma;
         float bloomIntensity;

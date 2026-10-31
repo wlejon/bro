@@ -2,7 +2,7 @@
 
 // The full-screen-triangle passes' shared plumbing (SSAO, depth of field,
 // bloom, tonemap, FXAA, colour grading): a pipeline layout of one set and an
-// optional fragment push block, a pipeline drawing postfx.vert's triangle
+// optional fragment push block, a pipeline drawing postfx_vert's triangle
 // into one colour attachment, and the draw itself into a whole image.
 
 #include "scene/vulkan/frame/scene_vk_allocator.h"
@@ -23,7 +23,7 @@ VkPipelineLayout layout(VkDevice dev, VkDescriptorSetLayout set, uint32_t pushBy
 /// A layout of `samplers` combined-image-sampler bindings (0..n-1, fragment).
 VkDescriptorSetLayout samplerSetLayout(VkDevice dev, uint32_t samplers);
 
-/// postfx.vert + `fs` into one `format` attachment, no blending, no depth;
+/// post/postfx.bk's postfx_vert + `fs` into one `format` attachment, no blending, no depth;
 /// `label` names it in the pipeline statistics (BRO_VK_PIPELINE_STATS).
 VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, VkShaderModule fs, VkFormat format,
                     const char* label, const char* vsEntry = "main", const char* fsEntry = "main");

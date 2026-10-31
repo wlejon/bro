@@ -3,8 +3,8 @@
 // The scene's wind field: a steady wind whose direction drifts slowly, with
 // gusts that travel downwind as bands. Vegetation (and later grass and
 // particles) bends with it on the GPU; scripts read the same field with
-// scene.windAt(). This header is the CPU twin of sceneWind() /
-// sceneWindGustAt() in shaders/common/scene_camera.glsl: the same integer-hash value
+// scene.windAt(). This header is the CPU twin of wind_at() /
+// wind_gust_at() in shaders/common/scene.bk: the same integer-hash value
 // noise and the same formulas in float, so a script and a shader agree on
 // where a gust is.
 //
@@ -27,7 +27,7 @@ struct WindFieldParams {
 };
 
 /// The field at one moment: what the camera block carries
-/// (windField / windGust in scene_camera.glsl) plus the clock.
+/// (wind_field / wind_gust in common/scene.bk's Camera) plus the clock.
 struct WindFieldState {
     float dirX = 1.0f, dirZ = 0.0f; // horizontal direction, unit, drifting
     float base = 0.0f;              // the steady speed now
@@ -62,7 +62,7 @@ inline WindFieldState windFieldState(const float dir[3], const WindFieldParams& 
 /// True when nothing in the field moves (no steady wind, no gusts).
 inline bool windFieldCalm(const WindFieldState& s) { return s.base <= 0.0f && s.gust <= 0.0f; }
 
-/// The farthest vegetationSway (shaders/common/scene_vegetation.glsl) can move any
+/// The farthest sway (shaders/common/vegetation.bk) can move any
 /// point of a plant `height` tall (world units) under `p`, at the strongest
 /// steady wind and the strongest gust: the culling and shadow-fit pad. The
 /// bound follows the shader's terms one by one, plus a leaf's flutter.
@@ -128,12 +128,12 @@ inline float windSimplex(float px, float py) {
 inline constexpr float kWindGustSoft = 0.06f;
 inline float windSoftRamp(float x) { return 0.5f * (x + std::sqrt(x * x + kWindGustSoft * kWindGustSoft)); }
 
-/// The oscillator clock's period (s): scene_camera.glsl's
-/// SCENE_WIND_CLOCK_PERIOD, the camera block's windParams.w.
+/// The oscillator clock's period (s): common/scene.bk's
+/// WIND_CLOCK_PERIOD, the camera block's windParams.w.
 inline constexpr double kWindClockPeriod = 256.0;
 
 /// The gust at absolute world (x, z): 0 between bands, up to ~1.7 x gust in one
-/// (its mean over the field 0.34 x gust: scene_grass.glsl's SCENE_GUST_MEAN).
+/// (its mean over the field 0.34 x gust).
 inline float windGustAt(const WindFieldState& s, float x, float z) {
     if (s.gust <= 0.0f) return 0.0f;
     const float along = x * s.dirX + z * s.dirZ - s.time * s.gustSpeed;

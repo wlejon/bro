@@ -43,9 +43,9 @@ float halfToFloat(uint16_t h) {
 }
 
 // The irradiance over pi on a surface facing +Y from an RGBA16F panorama
-// (row 0 the +Y pole, env_convert.frag's), as the irradiance cube holds it:
+// (row 0 the +Y pole, lighting/ibl.bk env_convert_frag's), as the irradiance cube holds it:
 // (1/pi) * the integral of L cos over the upper hemisphere, sampled on a
-// grid of at most 512 x 256 texels. Texels env_convert.frag's sanitize()
+// grid of at most 512 x 256 texels. Texels ibl.bk's sanitize()
 // would zero (negative, NaN, infinite) count as it does.
 void skyIrradianceUp(const std::vector<uint16_t>& px, uint32_t w, uint32_t h, float out[3]) {
     out[0] = out[1] = out[2] = 0.0f;
@@ -340,8 +340,8 @@ void SceneEnvironment::fillLighting(SceneLightingUniforms& out, const SceneRende
     // The ground's bounce (SceneRenderer::setGroundBounce), worked out here
     // once a frame: a level ground of that albedo lit by the sun (over pi
     // for the light it sends back) and by the sky over it, as irradiance
-    // over pi and the environment's intensity, so scene_lighting.glsl's
-    // sceneAmbient adds it times the share of a surface's lower hemisphere
+    // over pi and the environment's intensity, so common/lighting.bk's
+    // ambient adds it times the share of a surface's lower hemisphere
     // that is ground. Needs the sun filled in first (scene_lighting.cpp).
     const float* gb = renderer.groundBounce();
     const float intensity = renderer.environmentIntensity();

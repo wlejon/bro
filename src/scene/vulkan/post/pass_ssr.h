@@ -4,7 +4,7 @@
 // HDR scope (at the scene's sample count) after decals, before anything blended.
 // Ray-marches the depth snapshot along the reflected view ray and mixes the
 // hit's colour from the colour snapshot over the surface by its reflectance
-// (the alpha mesh.frag writes when SSR is on); sky pixels are left alone.
+// (the alpha the mesh shaders write when SSR is on); sky pixels are left alone.
 
 #include "scene/vulkan/frame/scene_pass.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
@@ -23,7 +23,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// ssr.frag's uniform block.
+    /// post/postfx.bk's SsrUBO.
     struct Uniforms {
         float proj[16];
         float invProj[16];

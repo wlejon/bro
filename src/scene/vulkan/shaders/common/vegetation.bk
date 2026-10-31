@@ -1,4 +1,4 @@
-// Vegetation: plants moving in the scene's wind field (common/scene_vegetation.glsl).
+// Vegetation: plants moving in the scene's wind field.
 module vegetation;
 
 import scene;

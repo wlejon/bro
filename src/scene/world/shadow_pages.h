@@ -3,7 +3,7 @@
 // policy, the CPU half, testable without a GPU (bro_shadow_pages_test). The
 // GPU half draws what it plans (vulkan/shadow/pass_shadow.h), marks the
 // pages each frame's pixels want (vulkan/shadow/pass_shadow_mark.h) and
-// samples them (common/scene_shadow_pages.glsl); the numbers they share are
+// samples them (common/lighting.bk); the numbers they share are
 // shaders/shadow/shadow_pages_layout.h's.
 //
 // Virtual maps. The sun's shadow is a clipmap (SP_MAX_LEVELS levels, level

@@ -22,7 +22,7 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
-    /// particles.vert/frag's push block.
+    /// draw/particles.bk's ParticlePush.
     struct alignas(16) Push {
         float model[16];
         float camRight[4];

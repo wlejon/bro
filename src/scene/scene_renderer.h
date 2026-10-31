@@ -221,7 +221,7 @@ public:
     /// The debug view shown (scene/debug_views.h), 0 for none. While one
     /// shows, the frame is what the custom chunks answering it put out:
     /// exposure 1, a linear tone map, no bloom, colour grading, SSR or sky
-    /// (mesh.frag, volume.frag).
+    /// (draw/mesh_main.bk, draw/volume.bk).
     void setDebugView(int id) { debugView_ = id < 0 ? 0 : id; }
     int debugView() const { return debugView_; }
 
@@ -492,9 +492,9 @@ public:
 
     // --- Custom mesh shaders ---
 
-    /// Which mesh pipeline a custom-shader variant targets. Static and
-    /// Skinned share mesh.vert/mesh.frag (SKINNED define); Instanced splices
-    /// into mesh_instanced.vert.
+    /// Which mesh pipeline a custom-shader variant targets: the hook entry
+    /// points of draw/mesh_main.bk (mesh_hook_vert, mesh_hook_skinned_vert,
+    /// mesh_hook_instanced_vert) and draw/volume.bk's for a volume.
     enum class CustomShaderTarget : uint8_t { Static, Skinned, Instanced, Volume };
 
     /// Compile a volume's brokernel hook module (`file` names it in

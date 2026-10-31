@@ -248,7 +248,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     // (A capture's wind mask is 0: it stands still.)
     push.params[0] = mode == Mode::Capture ? 0.0f : draw.push.extra[2];
     if (cutout) {
-        // scene_shadow_cutout.glsl's: the cutoff, the base colour's alpha
+        // shadow/shadow.bk's cutout stages: the cutoff, the base colour's alpha
         // (negated: the vertex colour's alpha counts too), the atlas grid.
         const bool vertexAlpha = (flags & mesh_flags::vertexColor(3)) != 0u;
         push.params[1] = draw.push.pbrParams[2];

@@ -2,7 +2,7 @@
 
 // The atmosphere's tables on the GPU (world/atmosphere.h;
 // Hillaire 2020; the model and the tables' parametrisations are
-// scene/world/atmosphere.h and shaders/common/scene_atmosphere.glsl).
+// scene/world/atmosphere.h and shaders/common/atmosphere.bk).
 //
 // View-independent tables, remade only when the air changes (its media,
 // the planet, the ground's albedo), as world-service compute jobs
@@ -15,7 +15,7 @@
 //  - the sky's light (64 x 32 x 5, (mu_s, altitude)): the radiance arriving
 //    from every direction as l <= 2 spherical harmonics in the sun's frame
 //    (the sky above, the lit ground below), from which every surface reads
-//    its ambient with direction (scene_lighting.glsl, sceneSkyIrradiance).
+//    its ambient with direction (common/lighting.bk, open_sky_irradiance).
 // View tables, per frame, one of each per frame slot:
 //  - the sky view (256 x 128, (azimuth from the sun, zenith)) at the eye,
 //    remade when the eye's height or the sun moved enough to matter (or the
@@ -26,7 +26,7 @@
 //  - the aerial perspective (32 x 32 x 32 froxels over the main camera's
 //    frustum, slices squared in depth out to the camera's far plane or the
 //    air's horizon): the in-scatter and transmittance between the eye and
-//    every lit surface (scene_lighting.glsl, sceneAir), in the graphics
+//    every lit surface (common/lighting.bk, air), in the graphics
 //    stream beside the sky view. It is a small dispatch: on the async
 //    compute queue it queued behind the plants' plans and the frame's join
 //    waited for it, while the graphics idled ahead of the join anyway.
@@ -111,7 +111,7 @@ public:
 
 private:
     enum Job : uint32_t { kTransmittance, kMultiScatter, kSkyLight, kSkyView, kAerial, kJobs };
-    /// The compute block (atmosphere_compute.glsl's AtmosphereBlock).
+    /// The compute block (lighting/atmosphere_tables.bk's AtmosphereBlock).
     struct Block {
         AtmosphereGpu atm;
         float froxelInvViewProj[16];

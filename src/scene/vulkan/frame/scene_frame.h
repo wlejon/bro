@@ -92,11 +92,11 @@ struct SceneFrame {
     /// Anything visible was drawn (the compositor shows the layer).
     bool drewContent = false;
     /// What the volumes left the exposure's incident meter (PassVolume,
-    /// volume.frag): per volume, in draw order, kVolumeMeterRays pairs of
+    /// draw/volume.bk): per volume, in draw order, kVolumeMeterRays pairs of
     /// vec4s, one a ray: the radiance down along a ray over the sky's
     /// hemisphere (rgb) and the share of the sun passed along one in a cone
     /// about it (a), then the share passed along the hemisphere's (x).
-    /// volume.frag and exposure.comp's METER_RAYS.
+    /// draw/volume.bk's METER_RAYS, which post/exposure.bk imports.
     static constexpr uint32_t kVolumeMeterRays = 4;
     static constexpr uint32_t kVolumeMeterFloats = 8 * kVolumeMeterRays;
     VkBuffer volumeMeter = VK_NULL_HANDLE;

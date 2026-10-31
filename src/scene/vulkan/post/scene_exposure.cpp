@@ -20,7 +20,7 @@ namespace bro::scene::vk {
 
 namespace {
 
-// The bins and the count of workgroups done (exposure.comp).
+// The bins and the count of workgroups done (post/exposure.bk).
 constexpr VkDeviceSize kHistogramBytes = (exposure::kBins + 1) * sizeof(uint32_t);
 
 VkPipelineLayout computeLayout(VkDevice dev, VkDescriptorSetLayout set, uint32_t pushBytes) {

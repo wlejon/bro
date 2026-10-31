@@ -269,8 +269,8 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     g.skyView[0] = slot.r;
     g.skyView[1] = slot.muS;
     g.skyView[2] = 1.0f;   // dither the sky pass's lookups
-    // The froxels' share of the air's lookups (scene_lighting.glsl's
-    // sceneAtmosphereAir): all of it low in the air; none from high in it
+    // The froxels' share of the air's lookups (common/lighting.bk's
+    // air()): all of it low in the air; none from high in it
     // or above, where a slice (squared in depth out to the air's horizon)
     // is deeper than the air under the eye.
     {
@@ -382,7 +382,7 @@ void SceneAtmosphere::dispatch(SceneFrame& frame, VkCommandBuffer cmd, Job job, 
         case kAerial:
             storage(3, slot.inscatter);
             storage(4, slot.transmittance);
-            // atmosphere_aerial.comp: a workgroup a pair of columns, an
+            // atmosphere_tables.bk's atmosphere_aerial: a workgroup a pair of columns, an
             // invocation a slice.
             static_assert(kFroxelSlices == 32 && kFroxelXY % 2 == 0);
             gx = kFroxelXY;

@@ -3,7 +3,7 @@
 // The shadow pages' marking (scene/world/shadow_pages.h): after the
 // opaque surfaces, a compute pass over the depth target marks, for every
 // shadowed light, the page each pixel's lookup needs (shaders/shadow/
-// shadow_mark.comp): the sun's clipmap level its footprint wants (a texel a
+// shadow_mark.bk): the sun's clipmap level its footprint wants (a texel a
 // pixel) and the guard SP_GUARD_LEVELS coarser; a spot's or a point light's
 // face's mip, and its one-page top. A pixel near a page's edge marks the
 // neighbour its filter and normal offset may reach. One invocation marks for a block of kStep x kStep pixels (its

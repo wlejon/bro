@@ -69,7 +69,7 @@ class SceneNode {
   // from the plant's root, height and trunk word, the limb's twig and limb
   // words, and the point's branch weight) and, on top, vegLeaf (a leaf's own
   // motion). Whatever calls vegPose with the same records moves exactly as
-  // the rest of the plant (scene_vegetation.glsl).
+  // the rest of the plant (src/scene/vulkan/shaders/common/vegetation.bk).
   //
   // The look: a leaf's normal leans toward its crown's centre-out direction
   // so the crown lights as one form, leaves deep inside the crown take less

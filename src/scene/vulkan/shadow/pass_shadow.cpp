@@ -13,7 +13,7 @@ namespace {
 
 // Slope-scaled polygon offset on the conventional [0,1] shadow depth: the big
 // hammer against acne across the slopes a light sees. The receivers add a
-// texel-sized normal offset and bias on top (scene_lighting.glsl).
+// texel-sized normal offset and bias on top (common/lighting.bk).
 constexpr float kDepthBiasConstant = 4.0f;
 constexpr float kDepthBiasSlope = 2.0f;
 
