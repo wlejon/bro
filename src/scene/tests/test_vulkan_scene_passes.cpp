@@ -102,10 +102,8 @@ int main() {
         assert(compileKernelMeshStage("mesh_vert", meshVs, meshErr) && !meshVs.spirv.empty() && meshVs.spirv[0] == 0x07230203);
         assert(compileKernelMeshStage("mesh_frag", meshFs, meshErr) && !meshFs.spirv.empty() && meshFs.spirv[0] == 0x07230203);
         assert(compileKernelShadowStage("shadow_vert", shadowVs, meshErr) && !shadowVs.spirv.empty() && shadowVs.spirv[0] == 0x07230203);
-        const auto& envFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::SkyAtmosphereFrag);
         const auto& tonemapFs = SceneVkShaderCompiler::getBuiltinSpirv(BuiltinSceneShader::TonemapFrag);
 
-        assert(!envFs.empty() && envFs[0] == 0x07230203);
         assert(!tonemapFs.empty() && tonemapFs[0] == 0x07230203);
 
         // 2. Runtime GLSL compilation (in-process glslang)

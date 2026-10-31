@@ -98,7 +98,7 @@ fn mark_clipmap(m: i32, pos: vec3<f32>) -> bool {
     return true;
 }
 
-@compute @workgroup_size(8, 8, 1)
+@compute @fast @workgroup_size(8, 8, 1)
 fn shadow_mark() {
     let size = vec2<i32>(u.grid.x as i32, u.grid.y as i32);
     let step = u.grid.z as i32;

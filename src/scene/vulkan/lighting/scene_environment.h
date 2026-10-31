@@ -109,8 +109,11 @@ private:
     VkPipelineLayout skyLayout_ = VK_NULL_HANDLE;
     VkShaderModule skyVs_ = VK_NULL_HANDLE;
     VkShaderModule atmosphereFs_ = VK_NULL_HANDLE;
+    VkShaderModule atmosphereIndirectFs_ = VK_NULL_HANDLE;
     VkShaderModule skyboxFs_ = VK_NULL_HANDLE;
+    VkShaderModule skyboxIndirectFs_ = VK_NULL_HANDLE;
     VkShaderModule starfieldFs_ = VK_NULL_HANDLE;
+    VkShaderModule starfieldIndirectFs_ = VK_NULL_HANDLE;
     PipelineVariants skyPipelines_;
 
     uint64_t generation_ = 0;

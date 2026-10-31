@@ -54,11 +54,11 @@ pub struct Lighting {
 @binding(1, 4) var irradiance_map: texture_cube<vec4<f32>>;
 @binding(1, 5) var prefilter_map: texture_cube<vec4<f32>>;
 @binding(1, 6) var brdf_lut: texture2d<vec4<f32>>;
-@binding(1, 7) var sky_map: texture_cube<vec4<f32>>;
+@binding(1, 7) pub var sky_map: texture_cube<vec4<f32>>;
 // One sampler for the set's images (linear, clamped).
 @binding(1, 8) pub var linear: sampler;
-@binding(1, 9) var atm_transmittance: texture2d<vec4<f32>>;
-@binding(1, 10) var atm_sky_view: texture2d<vec4<f32>>;
+@binding(1, 9) pub var atm_transmittance: texture2d<vec4<f32>>;
+@binding(1, 10) pub var atm_sky_view: texture2d<vec4<f32>>;
 @binding(1, 11) var atm_inscatter: texture3d<vec4<f32>>;
 @binding(1, 12) var atm_air_transmittance: texture3d<vec4<f32>>;
 @binding(1, 13) var atm_sky_light: texture3d<vec4<f32>>;
@@ -80,7 +80,7 @@ pub fn sun_transmittance(pos: vec3<f32>) -> vec3<f32> {
 }
 
 // `d` turned about +Y by `a` radians: the environment's rotation.
-fn rotate_y(d: vec3<f32>, a: f32) -> vec3<f32> {
+pub fn rotate_y(d: vec3<f32>, a: f32) -> vec3<f32> {
     let c = cos(a);
     let s = sin(a);
     return vec3<f32>(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);

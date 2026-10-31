@@ -6,12 +6,15 @@
 #include "scene/nodes/light_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/world/atmosphere.h"
 #include "util/log.h"
+
+#include "atmosphere_tables.bk.src.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,10 +26,10 @@ namespace {
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
-constexpr BuiltinSceneShader kShaders[] = {
-    BuiltinSceneShader::AtmosphereTransmittanceComp, BuiltinSceneShader::AtmosphereMultiScatterComp,
-    BuiltinSceneShader::AtmosphereSkyLightComp, BuiltinSceneShader::AtmosphereSkyViewComp,
-    BuiltinSceneShader::AtmosphereAerialComp};
+constexpr const char* kEntries[] = {
+    "atmosphere_transmittance", "atmosphere_multiscatter", "atmosphere_skylight",
+    "atmosphere_skyview", "atmosphere_aerial"
+};
 constexpr const char* kNames[] = {"atmosphere transmittance", "atmosphere multiscatter", "atmosphere skylight",
                                   "atmosphere skyview", "atmosphere aerial"};
 
@@ -102,7 +105,10 @@ bool SceneAtmosphere::setup(SceneGpu& gpu) {
     li.pSetLayouts = &setLayout_;
     if (vkCreatePipelineLayout(dev, &li, nullptr, &layout_) != VK_SUCCESS) return false;
     for (int j = 0; j < kJobs; ++j) {
-        pipelines_[j] = createComputePipeline(dev, kShaders[j], layout_, kNames[j]);
+        VkShaderModule mod =
+            createKernelStageModule(dev, "lighting/atmosphere_tables.bk", kBkAtmosphereTablesSrc, kEntries[j]);
+        pipelines_[j] = createComputePipeline(dev, mod, layout_, kNames[j], kEntries[j]);
+        SceneVkShaderModule::destroy(dev, mod);
         if (!pipelines_[j]) return false;
     }
 

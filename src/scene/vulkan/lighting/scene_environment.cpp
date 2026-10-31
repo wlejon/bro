@@ -2,6 +2,7 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 
 #include "scene/scene_renderer.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_fullscreen.h"
@@ -9,6 +10,9 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "util/log.h"
+
+#include "ibl.bk.src.h"
+#include "sky.bk.src.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,17 +93,19 @@ bool SceneEnvironment::setup(SceneVkDevice& device, SceneVkAllocator&, const Sce
 
     bakeSetLayout_ = fullscreen::samplerSetLayout(dev_, 1);
     bakeLayout_ = bakeSetLayout_ ? fullscreen::layout(dev_, bakeSetLayout_, sizeof(BakePush)) : VK_NULL_HANDLE;
-    postVs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::PostFxVert);
-    convertFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::EnvConvertFrag);
-    irradianceFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::IrradianceFrag);
-    prefilterFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::PrefilterFrag);
-    brdfFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::BrdfLutFrag);
-    convertPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, convertFs_, kCubeFormat, "environment convert");
-    irradiancePipeline_ =
-        fullscreen::pipeline(dev_, bakeLayout_, postVs_, irradianceFs_, kCubeFormat, "environment irradiance");
-    prefilterPipeline_ =
-        fullscreen::pipeline(dev_, bakeLayout_, postVs_, prefilterFs_, kCubeFormat, "environment prefilter");
-    brdfPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, brdfFs_, kBrdfFormat, "environment brdf");
+    postVs_ = createKernelStageModule(dev_, "lighting/ibl.bk", kBkIblSrc, "bake_vert");
+    convertFs_ = createKernelStageModule(dev_, "lighting/ibl.bk", kBkIblSrc, "env_convert_frag");
+    irradianceFs_ = createKernelStageModule(dev_, "lighting/ibl.bk", kBkIblSrc, "irradiance_frag");
+    prefilterFs_ = createKernelStageModule(dev_, "lighting/ibl.bk", kBkIblSrc, "prefilter_frag");
+    brdfFs_ = createKernelStageModule(dev_, "lighting/ibl.bk", kBkIblSrc, "brdf_lut_frag");
+    convertPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, convertFs_, kCubeFormat, "environment convert",
+                                            "bake_vert", "env_convert_frag");
+    irradiancePipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, irradianceFs_, kCubeFormat,
+                                               "environment irradiance", "bake_vert", "irradiance_frag");
+    prefilterPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, prefilterFs_, kCubeFormat,
+                                              "environment prefilter", "bake_vert", "prefilter_frag");
+    brdfPipeline_ = fullscreen::pipeline(dev_, bakeLayout_, postVs_, brdfFs_, kBrdfFormat, "environment brdf",
+                                         "bake_vert", "brdf_lut_frag");
 
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -121,13 +127,17 @@ bool SceneEnvironment::setup(SceneVkDevice& device, SceneVkAllocator&, const Sce
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(dev_, &layoutInfo, nullptr, &skyLayout_) != VK_SUCCESS) skyLayout_ = VK_NULL_HANDLE;
-    skyVs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::SkyVert);
-    atmosphereFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::SkyAtmosphereFrag);
-    skyboxFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::SkyboxFrag);
-    starfieldFs_ = SceneVkShaderCompiler::createBuiltinModule(dev_, BuiltinSceneShader::StarfieldFrag);
+    skyVs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "sky_vert");
+    atmosphereFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "sky_atmosphere_frag");
+    atmosphereIndirectFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "sky_atmosphere_indirect_frag");
+    skyboxFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "skybox_frag");
+    skyboxIndirectFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "skybox_indirect_frag");
+    starfieldFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "starfield_frag");
+    starfieldIndirectFs_ = createKernelStageModule(dev_, "lighting/sky.bk", kBkSkySrc, "starfield_indirect_frag");
 
     if (!convertPipeline_ || !irradiancePipeline_ || !prefilterPipeline_ || !brdfPipeline_ || !equirectSampler_ ||
-        !skyLayout_ || !skyVs_ || !atmosphereFs_ || !skyboxFs_ || !starfieldFs_) {
+        !skyLayout_ || !skyVs_ || !atmosphereFs_ || !atmosphereIndirectFs_ || !skyboxFs_ || !skyboxIndirectFs_ ||
+        !starfieldFs_ || !starfieldIndirectFs_) {
         LOG_ERROR("SceneEnvironment: Failed creating the environment pipelines");
         return false;
     }
@@ -143,7 +153,8 @@ void SceneEnvironment::cleanup(SceneVkDevice& device, SceneVkAllocator& allocato
         *p = VK_NULL_HANDLE;
     }
     for (VkShaderModule* m : {&postVs_, &convertFs_, &irradianceFs_, &prefilterFs_, &brdfFs_, &skyVs_, &atmosphereFs_,
-                              &skyboxFs_, &starfieldFs_}) {
+                              &atmosphereIndirectFs_, &skyboxFs_, &skyboxIndirectFs_, &starfieldFs_,
+                              &starfieldIndirectFs_}) {
         SceneVkShaderModule::destroy(dev_, *m);
         *m = VK_NULL_HANDLE;
     }
@@ -375,11 +386,12 @@ bool SceneEnvironment::skyVisible(const SceneRenderer& renderer, bool perspectiv
 
 void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetFormat& target,
                                VkDescriptorSet cameraSet, VkDescriptorSet lightingSet, const SceneRenderer& renderer) {
-    auto pipeline = [&](SkyVariant variant, VkShaderModule fs) {
+    const bool indirect = target.colorCount > 1;
+    auto pipeline = [&](SkyVariant variant, VkShaderModule fs, const char* fsEntry) {
         return skyPipelines_.get(variant, target, [&] {
             SceneVkPipelineBuilder b;
             b.setLabel("sky")
-             .setShaderStages(skyVs_, fs)
+             .setShaderStages(skyVs_, fs, "sky_vert", fsEntry)
              .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
              .setPolygonMode(VK_POLYGON_MODE_FILL)
              .setCullMode(VK_CULL_MODE_NONE)
@@ -411,9 +423,11 @@ void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetF
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyLayout_, 0, 2, sets, 0, nullptr);
     VkPipeline background = VK_NULL_HANDLE;
     if (renderer.atmosphere().enabled) {
-        background = pipeline(kSkyAtmosphere, atmosphereFs_);
+        background = pipeline(kSkyAtmosphere, indirect ? atmosphereIndirectFs_ : atmosphereFs_,
+                              indirect ? "sky_atmosphere_indirect_frag" : "sky_atmosphere_frag");
     } else if (radiance_.isValid()) {
-        background = pipeline(kSkybox, skyboxFs_);
+        background = pipeline(kSkybox, indirect ? skyboxIndirectFs_ : skyboxFs_,
+                              indirect ? "skybox_indirect_frag" : "skybox_frag");
     }
     if (background) {
         bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, background);
@@ -421,7 +435,8 @@ void SceneEnvironment::drawSky(SceneGpu& gpu, VkCommandBuffer cmd, const TargetF
     }
     const StarfieldParams& stars = renderer.starfield();
     if (!stars.enabled) return;
-    if (VkPipeline p = pipeline(kSkyStars, starfieldFs_)) {
+    if (VkPipeline p = pipeline(kSkyStars, indirect ? starfieldIndirectFs_ : starfieldFs_,
+                                indirect ? "starfield_indirect_frag" : "starfield_frag")) {
         const float push[4] = {stars.intensity, stars.density, stars.rotation, 0.0f};
         bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
         vkCmdPushConstants(cmd, skyLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);

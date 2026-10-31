@@ -1,0 +1,165 @@
+// Sky background passes (scene/vulkan/lighting/scene_environment.cpp):
+//  - sky_vert:             fullscreen triangle on far plane emitting world view ray
+//  - sky_atmosphere_frag:  physical atmosphere sky + sun disc + planet surface
+//  - skybox_frag:          HDR environment cubemap skybox
+//  - starfield_frag:       procedural celestial starfield
+
+import scene;
+import atmosphere;
+import lighting;
+from scene import camera;
+from lighting import lighting;
+
+struct SkyPush {
+    params: vec4<f32>,
+}
+
+const SUN_LIMB_U: f32 = 0.6;
+
+@vertex fn sky_vert() {
+    let vid = vertex_index();
+    let ndc = vec2<f32>(((vid << 1) & 2) as f32, (vid & 2) as f32) * 2.0 - 1.0;
+    let near_point = scene::mul4(camera.inv_proj, vec4<f32>(ndc, 1.0, 1.0));
+    let world_dir = scene::mul3(scene::mat3_from4(camera.inv_view), near_point.xyz / near_point.w);
+    set_vertex_output(0, world_dir);
+    set_vertex_position(vec4<f32>(ndc, 0.0, 1.0));
+}
+
+fn sky_atmosphere_color(in_world_dir: vec3<f32>, frag_xy: vec2<f32>) -> vec4<f32> {
+    let rd = normalize(in_world_dir);
+    let atm = lighting.atm;
+    let e = atm.sun_illuminance.xyz;
+    let ro = atmosphere::origin(atm, vec3<f32>(0.0));
+    let r = length(ro);
+    let up = ro / r;
+    let sf = atmosphere::sun_frame(atm, up);
+    let h = vec2<f32>(dot(rd, sf.axes[0]), dot(rd, sf.axes[1]));
+    let hl = length(h);
+    let cos_az = hl > 0.00001 ? h.x / hl : 1.0;
+    let uv = atmosphere::sky_view_uv(atm, atm.sky_view.x, dot(rd, up), cos_az);
+    let jitter = (vec2<f32>(atmosphere::noise(frag_xy), atmosphere::noise(frag_xy.yx + 17.0)) - 0.5) * atm.sky_view.z;
+    let sky_size = vec2<f32>(atmosphere::SKYVIEW_W, atmosphere::SKYVIEW_H);
+    var col: vec3<f32> = atmosphere::sphere_near(ro, rd, atm.shell.y) < 0.0
+        ? vec3<f32>(0.0)
+        : lighting::atm_sky_view.sample_lod(lighting::linear, uv + jitter / sky_size, 0.0).xyz * (e / atmosphere::TABLE_SCALE);
+
+    let g = atmosphere::ground_hit(atm, ro, rd);
+    if (g >= 0.0) {
+        let p = ro + rd * g;
+        let n = normalize(p);
+        let mu = dot(n, atm.sun_dir.xyz);
+        let sun = atmosphere::sun_transmittance(atm, lighting::atm_transmittance, lighting::linear, atm.shell.x, mu) * max(mu, 0.0) * e / atmosphere::PI;
+        let sky = lighting::open_sky_irradiance(p - ro, n);
+        let a = atmosphere::transmittance_to_top(atm, lighting::atm_transmittance, lighting::linear, atm.shell.x, -dot(n, rd));
+        let r_in = min(r, atm.shell.y);
+        let eye_in = r > atm.shell.y ? ro + rd * atmosphere::sphere_near(ro, rd, atm.shell.y) : ro;
+        let b = atmosphere::transmittance_to_top(atm, lighting::atm_transmittance, lighting::linear, r_in, -dot(eye_in, rd) / r_in);
+        let tr = clamp(a / max(b, vec3<f32>(0.000001)), vec3<f32>(0.0), vec3<f32>(1.0));
+        col += tr * atm.ground.xyz * (sun + sky);
+    } else {
+        let alpha = max(atm.sun_illuminance.w, 0.0001);
+        let c = dot(rd, atm.sun_dir.xyz);
+        let cos_alpha = cos(alpha);
+        if (c > cos_alpha) {
+            let x = clamp(acos(min(c, 1.0)) / alpha, 0.0, 1.0);
+            let limb = (1.0 - SUN_LIMB_U * (1.0 - sqrt(1.0 - x * x))) / (1.0 - SUN_LIMB_U / 3.0);
+            let l = e / (atmosphere::PI * alpha * alpha) * limb;
+            col += l * atmosphere::transmittance_ray(atm, lighting::atm_transmittance, lighting::linear, ro, rd);
+        }
+    }
+    return vec4<f32>(min(col, vec3<f32>(scene::HDR_MAX)), 1.0);
+}
+
+@fragment fn sky_atmosphere_frag(@location(0) in_world_dir: vec3<f32>) {
+    set_frag_output(0, sky_atmosphere_color(in_world_dir, frag_coord().xy));
+}
+
+@fragment fn sky_atmosphere_indirect_frag(@location(0) in_world_dir: vec3<f32>) {
+    set_frag_output(0, sky_atmosphere_color(in_world_dir, frag_coord().xy));
+    set_frag_output(1, vec4<f32>(0.0));
+}
+
+fn skybox_color(in_world_dir: vec3<f32>) -> vec4<f32> {
+    let d = lighting::rotate_y(normalize(in_world_dir), lighting.ibl_params.z);
+    return vec4<f32>(lighting::sky_map.sample(lighting::linear, d).xyz * lighting.ibl_params.y, 1.0);
+}
+
+@fragment fn skybox_frag(@location(0) in_world_dir: vec3<f32>) {
+    set_frag_output(0, skybox_color(in_world_dir));
+}
+
+@fragment fn skybox_indirect_frag(@location(0) in_world_dir: vec3<f32>) {
+    set_frag_output(0, skybox_color(in_world_dir));
+    set_frag_output(1, vec4<f32>(0.0));
+}
+
+fn h21(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453123);
+}
+
+fn h22(p: vec2<f32>) -> vec2<f32> {
+    return fract(sin(vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)),
+                               dot(p, vec2<f32>(269.5, 183.3)))) * 43758.5453123);
+}
+
+struct FaceGrid {
+    uv: vec2<f32>,
+    salt: f32,
+}
+
+fn face_grid(d: vec3<f32>, grid: f32) -> FaceGrid {
+    let a = abs(d);
+    var uv: vec2<f32> = vec2<f32>(0.0);
+    var salt: f32 = 1.0;
+    if (a.x >= a.y && a.x >= a.z) {
+        uv = d.yz / a.x;
+        salt = d.x > 0.0 ? 1.0 : 2.0;
+    } else if (a.y >= a.z) {
+        uv = d.xz / a.y;
+        salt = d.y > 0.0 ? 3.0 : 4.0;
+    } else {
+        uv = d.xy / a.z;
+        salt = d.z > 0.0 ? 5.0 : 6.0;
+    }
+    return FaceGrid { uv: (uv * 0.5 + 0.5) * grid, salt: salt };
+}
+
+fn star_layer(d: vec3<f32>, grid: f32, thresh: f32, size: f32) -> vec3<f32> {
+    let fg = face_grid(d, grid);
+    let g = fg.uv;
+    let salt = fg.salt;
+    let cell = floor(g);
+    var col: vec3<f32> = vec3<f32>(0.0);
+    for (var j: i32 = -1; j <= 1; j += 1) {
+        for (var i: i32 = -1; i <= 1; i += 1) {
+            let c = cell + vec2<f32>(i as f32, j as f32);
+            let cs = c + salt * 17.0;
+            if (h21(cs) > thresh) {
+                continue;
+            }
+            let pos = c + 0.2 + 0.6 * h22(cs + 1.7);
+            let mag = h21(cs + 5.3);
+            let b = smoothstep(size * (0.5 + mag), 0.0, length(g - pos)) * (0.2 + 0.8 * mag * mag);
+            let t = h21(cs + 9.1);
+            let tint = mix(vec3<f32>(1.0, 0.83, 0.66), vec3<f32>(0.74, 0.85, 1.0), t);
+            col = max(col, b * tint);
+        }
+    }
+    return col;
+}
+
+fn starfield_color(in_world_dir: vec3<f32>, sky: SkyPush) -> vec4<f32> {
+    let d = lighting::rotate_y(normalize(in_world_dir), sky.params.z);
+    let thresh = clamp(0.05 * sky.params.y, 0.0, 0.9);
+    let col = star_layer(d, 90.0, thresh, 0.06) + star_layer(d, 165.0, thresh * 0.7, 0.04) * 0.6;
+    return vec4<f32>(col * sky.params.x, 1.0);
+}
+
+@fragment fn starfield_frag(@location(0) in_world_dir: vec3<f32>, sky: SkyPush) {
+    set_frag_output(0, starfield_color(in_world_dir, sky));
+}
+
+@fragment fn starfield_indirect_frag(@location(0) in_world_dir: vec3<f32>, sky: SkyPush) {
+    set_frag_output(0, starfield_color(in_world_dir, sky));
+    set_frag_output(1, vec4<f32>(0.0));
+}

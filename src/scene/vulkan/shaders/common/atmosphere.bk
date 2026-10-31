@@ -25,10 +25,14 @@ pub struct Atmosphere {
 
 pub const TRANSMITTANCE_W: f32 = 256.0;
 pub const TRANSMITTANCE_H: f32 = 64.0;
+pub const MULTISCATTER_W: f32 = 64.0;
+pub const MULTISCATTER_H: f32 = 32.0;
 pub const SKYVIEW_W: f32 = 256.0;
 pub const SKYVIEW_H: f32 = 128.0;
 pub const SKYLIGHT_W: f32 = 64.0;
 pub const SKYLIGHT_H: f32 = 32.0;
+pub const SKYLIGHT_LAYERS: f32 = 5.0;
+pub const FROXEL_XY: f32 = 32.0;
 pub const FROXEL_SLICES: f32 = 32.0;
 // The tables of light (in-scatter, sky view, the sky's light) hold it times
 // this, so twilight's (1e-8 of the sun near the eye) stays above half
@@ -36,11 +40,73 @@ pub const FROXEL_SLICES: f32 = 32.0;
 // stays far below its largest.
 pub const TABLE_SCALE: f32 = 1024.0;
 
-const PI: f32 = 3.14159265359;
+pub const PI: f32 = 3.14159265359;
 
 // A camera-relative position in air space.
 pub fn origin(atm: Atmosphere, rel: vec3<f32>) -> vec3<f32> {
     return atm.origin.xyz + rel;
+}
+
+pub struct Medium {
+    scatter_r: vec3<f32>,
+    scatter_m: f32,
+    extinction: vec3<f32>,
+}
+
+// The air at radius r: nothing above the shell's top.
+pub fn medium(atm: Atmosphere, r: f32) -> Medium {
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    var h: f32 = r - rb;
+    if (h > rt - rb) {
+        return Medium { scatter_r: vec3<f32>(0.0), scatter_m: 0.0, extinction: vec3<f32>(0.0) };
+    }
+    h = max(h, 0.0);
+    let d_r = exp(-h / atm.rayleigh.w);
+    let d_m = exp(-h / atm.mie.w);
+    let d_o = max(0.0, 1.0 - abs(h - atm.ozone.w) / atm.shell.z);
+    let scatter_r = atm.rayleigh.xyz * d_r;
+    let scatter_m = atm.mie.x * d_m;
+    let extinction = scatter_r + (atm.mie.x + atm.mie.y) * d_m + atm.ozone.xyz * d_o;
+    return Medium { scatter_r: scatter_r, scatter_m: scatter_m, extinction: extinction };
+}
+
+pub fn phase_r(nu: f32) -> f32 {
+    return 3.0 / (16.0 * PI) * (1.0 + nu * nu);
+}
+
+pub fn phase_m(nu: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    let d = max(1.0 + g2 - 2.0 * g * nu, 0.0001);
+    return 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * d * sqrt(d));
+}
+
+// Where a ray from `ro` leaves the sphere of radius `r` about the centre; -1 if never.
+pub fn sphere_far(ro: vec3<f32>, rd: vec3<f32>, r: f32) -> f32 {
+    let b = dot(ro, rd);
+    let c = dot(ro, ro) - r * r;
+    let d = b * b - c;
+    if (d < 0.0) {
+        return -1.0;
+    }
+    return -b + sqrt(d);
+}
+
+// Where a ray first meets the sphere (0 from inside); -1 if it never does.
+pub fn sphere_near(ro: vec3<f32>, rd: vec3<f32>, r: f32) -> f32 {
+    let b = dot(ro, rd);
+    let c = dot(ro, ro) - r * r;
+    if (c <= 0.0) {
+        return 0.0;
+    }
+    if (b > 0.0) {
+        return -1.0;
+    }
+    let d = b * b - c;
+    if (d < 0.0) {
+        return -1.0;
+    }
+    return -b - sqrt(d);
 }
 
 // The first hit of the planet's surface ahead, -1 if none.
@@ -55,8 +121,12 @@ pub fn ground_hit(atm: Atmosphere, ro: vec3<f32>, rd: vec3<f32>) -> f32 {
     return t >= 0.0 ? t : -1.0;
 }
 
-fn unit_to_texel(x: f32, size: f32) -> f32 {
+pub fn unit_to_texel(x: f32, size: f32) -> f32 {
     return 0.5 / size + x * (1.0 - 1.0 / size);
+}
+
+pub fn texel_to_unit(u: f32, size: f32) -> f32 {
+    return (u - 0.5 / size) / (1.0 - 1.0 / size);
 }
 
 pub fn transmittance_uv(atm: Atmosphere, r: f32, mu: f32) -> vec2<f32> {
@@ -74,9 +144,41 @@ pub fn transmittance_uv(atm: Atmosphere, r: f32, mu: f32) -> vec2<f32> {
                      unit_to_texel(clamp(x_r, 0.0, 1.0), TRANSMITTANCE_H));
 }
 
+pub fn transmittance_r_mu(atm: Atmosphere, uv: vec2<f32>) -> vec2<f32> {
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let x_mu = texel_to_unit(uv.x, TRANSMITTANCE_W);
+    let x_r = texel_to_unit(uv.y, TRANSMITTANCE_H);
+    let h = sqrt(max(rt * rt - rb * rb, 0.0));
+    let rho = h * x_r;
+    let r = sqrt(rho * rho + rb * rb);
+    let d_min = rt - r;
+    let d_max = rho + h;
+    let d = d_min + x_mu * (d_max - d_min);
+    let mu = d <= 0.0 ? 1.0 : clamp((h * h - rho * rho - d * d) / (2.0 * r * d), -1.0, 1.0);
+    return vec2<f32>(r, mu);
+}
+
 // The air's transmittance from radius r (inside the shell) along mu to the top.
 pub fn transmittance_to_top(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sampler, r: f32, mu: f32) -> vec3<f32> {
     return table.sample_lod(s, transmittance_uv(atm, clamp(r, atm.shell.x, atm.shell.y), mu), 0.0).xyz;
+}
+
+// From a point anywhere (above the shell too) along a ray that does not hit
+// the planet: the air the ray crosses on its way out.
+pub fn transmittance_ray(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sampler, ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
+    var p: vec3<f32> = ro;
+    var r: f32 = length(p);
+    let rt = atm.shell.y;
+    if (r > rt) {
+        let t = sphere_near(p, rd, rt);
+        if (t < 0.0) {
+            return vec3<f32>(1.0);
+        }
+        p += rd * t;
+        r = rt;
+    }
+    return transmittance_to_top(atm, table, s, r, dot(p, rd) / r);
 }
 
 // How much of the sun's disc stands above the planet's horizon from radius r
@@ -93,9 +195,19 @@ pub fn sun_transmittance(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sample
     return transmittance_to_top(atm, table, s, r, mu_s) * planet_shadow(atm, r, mu_s);
 }
 
-fn sun_unit(mu_s: f32) -> f32 {
+pub fn sun_unit(mu_s: f32) -> f32 {
     let m = clamp(mu_s, -1.0, 1.0);
     return 0.5 + 0.5 * sign(m) * sqrt(abs(m));
+}
+
+pub fn sun_from_unit(x: f32) -> f32 {
+    let s = 2.0 * x - 1.0;
+    return sign(s) * s * s;
+}
+
+pub fn multi_scatter_uv(atm: Atmosphere, r: f32, mu_s: f32) -> vec2<f32> {
+    return vec2<f32>(unit_to_texel(sun_unit(mu_s), MULTISCATTER_W),
+                     unit_to_texel(clamp((r - atm.shell.x) / (atm.shell.y - atm.shell.x), 0.0, 1.0), MULTISCATTER_H));
 }
 
 // The sky-view table's coordinates: azimuth from the sun, zenith angle at r.
@@ -116,6 +228,25 @@ pub fn sky_view_uv(atm: Atmosphere, r: f32, cos_z: f32, cos_az: f32) -> vec2<f32
     }
     let x = sqrt(clamp(0.5 - 0.5 * cos_az, 0.0, 1.0));
     return vec2<f32>(unit_to_texel(x, SKYVIEW_W), unit_to_texel(y, SKYVIEW_H));
+}
+
+pub fn sky_view_direction(atm: Atmosphere, r: f32, uv: vec2<f32>) -> vec2<f32> {
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let rr = max(r, rb + 1.0);
+    let z_horizon = PI - asin(min(rb / rr, 1.0));
+    let z_top = rr > rt ? PI - asin(min(rt / rr, 1.0)) : 0.0;
+    let x = texel_to_unit(uv.x, SKYVIEW_W);
+    let y = texel_to_unit(uv.y, SKYVIEW_H);
+    var z: f32 = 0.0;
+    if (y < 0.5) {
+        let c = 1.0 - (1.0 - 2.0 * y) * (1.0 - 2.0 * y);
+        z = z_top + c * (z_horizon - z_top);
+    } else {
+        let c = (2.0 * y - 1.0) * (2.0 * y - 1.0);
+        z = z_horizon + c * (PI - z_horizon);
+    }
+    return vec2<f32>(cos(z), 1.0 - 2.0 * x * x);
 }
 
 // The local frame of a point: up, and the sun's horizontal direction (any
@@ -208,4 +339,9 @@ pub fn froxel_w(max_dist: f32, d: f32) -> vec2<f32> {
     let first = max_dist / (FROXEL_SLICES * FROXEL_SLICES);
     return vec2<f32>(clamp((s - 0.5) / FROXEL_SLICES, 0.5 / FROXEL_SLICES, 1.0 - 0.5 / FROXEL_SLICES),
                      clamp(d / first, 0.0, 1.0));
+}
+
+// Interleaved gradient noise (Jimenez 2014) in [0, 1): the lookups' dither.
+pub fn noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
 }

@@ -53,6 +53,9 @@ bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::stri
 bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,
                         std::string& err);
 
+/// Compile a built-in stage entry point from `file` and create its VkShaderModule.
+VkShaderModule createKernelStageModule(VkDevice dev, const char* file, const char* embedded, const char* entry);
+
 /// Compile a volume's hook module (`file` names it in diagnostics).
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
                              KernelVolumeHook& out, std::string& err);

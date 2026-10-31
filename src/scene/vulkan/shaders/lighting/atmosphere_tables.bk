@@ -1,0 +1,397 @@
+// Atmosphere LUT compute passes (scene/vulkan/lighting/scene_atmosphere.cpp):
+//  - atmosphere_transmittance: (mu, r) -> transmittance to top of atmosphere
+//  - atmosphere_multiscatter:  (mu_s, r) -> isotropic multiple-scattering LUT
+//  - atmosphere_skylight:      (mu_s, h) -> l <= 2 spherical harmonics of sky + ground radiance
+//  - atmosphere_skyview:       (azimuth, zenith) -> per-frame sky-view LUT at eye (r, mu_s)
+//  - atmosphere_aerial:        32x32x32 camera-frustum aerial perspective froxel volume
+
+import atmosphere;
+
+struct AtmosphereBlock {
+    atm: atmosphere::Atmosphere,
+    froxel_inv_view_proj: mat4f,
+    job: vec4<f32>,
+}
+
+@binding(0, 0) var block: uniform<AtmosphereBlock>;
+@binding(0, 1) var t_transmittance: sampler2d<vec4<f32>>;
+@binding(0, 2) var t_multi_scatter: sampler2d<vec4<f32>>;
+
+shared var ms_shared_l: array<vec3<f32>, 64>;
+shared var ms_shared_f: array<vec3<f32>, 64>;
+
+shared var sl_shared_e: array<vec3<f32>, 64>;
+shared var sl_shared_c0: array<vec3<f32>, 64>;
+shared var sl_shared_c1: array<vec3<f32>, 64>;
+shared var sl_shared_c2: array<vec3<f32>, 64>;
+shared var sl_shared_c3: array<vec3<f32>, 64>;
+shared var sl_shared_c4: array<vec3<f32>, 64>;
+shared var sl_shared_c5: array<vec3<f32>, 64>;
+
+shared var ae_shared_l: array<vec3<f32>, 64>;
+shared var ae_shared_t: array<vec3<f32>, 64>;
+
+fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w;
+}
+
+fn sun_trans_combined(atm: atmosphere::Atmosphere, r: f32, mu_s: f32) -> vec3<f32> {
+    let uv = atmosphere::transmittance_uv(atm, clamp(r, atm.shell.x, atm.shell.y), mu_s);
+    return t_transmittance.sample_lod(uv, 0.0).xyz * atmosphere::planet_shadow(atm, r, mu_s);
+}
+
+fn step_weight(ext: vec3<f32>, step_t: vec3<f32>, dt: f32) -> vec3<f32> {
+    let rx = ext.x > 1e-12 ? (1.0 - step_t.x) / max(ext.x, 1e-20) : dt;
+    let ry = ext.y > 1e-12 ? (1.0 - step_t.y) / max(ext.y, 1e-20) : dt;
+    let rz = ext.z > 1e-12 ? (1.0 - step_t.z) / max(ext.z, 1e-20) : dt;
+    return vec3<f32>(rx, ry, rz);
+}
+
+struct MarchResult {
+    l: vec3<f32>,
+    t: vec3<f32>,
+}
+
+fn atm_march(
+    atm: atmosphere::Atmosphere,
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    sun: vec3<f32>,
+    t0: f32,
+    t1: f32,
+    steps: i32,
+    transmittance_in: vec3<f32>
+) -> MarchResult {
+    let nu = dot(rd, sun);
+    let p_r = atmosphere::phase_r(nu);
+    let p_m = atmosphere::phase_m(nu, atm.mie.z);
+    let dt = (t1 - t0) / (steps as f32);
+    var l: vec3<f32> = vec3<f32>(0.0);
+    var tr: vec3<f32> = transmittance_in;
+    for (var i: i32 = 0; i < steps; i += 1) {
+        let p = ro + rd * (t0 + dt * ((i as f32) + 0.5));
+        let r = length(p);
+        let m = atmosphere::medium(atm, r);
+        let ext = m.extinction;
+        let mu_s = dot(p, sun) / r;
+        let sun_t = sun_trans_combined(atm, r, mu_s);
+        let ms = t_multi_scatter.sample_lod(atmosphere::multi_scatter_uv(atm, r, mu_s), 0.0).xyz / atmosphere::TABLE_SCALE;
+        let s = (m.scatter_r * p_r + m.scatter_m * p_m) * sun_t + (m.scatter_r + vec3<f32>(m.scatter_m)) * ms;
+        let step_t = exp(-ext * dt);
+        let s_int = s * step_weight(ext, step_t, dt);
+        l += tr * s_int;
+        tr *= step_t;
+    }
+    return MarchResult { l: l, t: tr };
+}
+
+struct SegmentResult {
+    hit: bool,
+    t0: f32,
+    t1: f32,
+    ground: bool,
+}
+
+fn atm_segment(atm: atmosphere::Atmosphere, ro: vec3<f32>, rd: vec3<f32>) -> SegmentResult {
+    let rt = atm.shell.y;
+    let t0 = atmosphere::sphere_near(ro, rd, rt);
+    var t1: f32 = atmosphere::sphere_far(ro, rd, rt);
+    var ground: bool = false;
+    if (t0 < 0.0 || t1 <= t0) {
+        return SegmentResult { hit: false, t0: 0.0, t1: 0.0, ground: false };
+    }
+    let g = atmosphere::ground_hit(atm, ro, rd);
+    if (g >= 0.0 && g < t1) {
+        t1 = g;
+        ground = true;
+    }
+    return SegmentResult { hit: t1 > t0, t0: t0, t1: t1, ground: ground };
+}
+
+@compute @fast @workgroup_size(8, 8, 1)
+fn atmosphere_transmittance(@binding(0, 3) @format(rgba16f) out_transmittance: write_image2d<vec4<f32>>) {
+    let gid = global_id();
+    let px = gid.xy;
+    if (px.x >= (atmosphere::TRANSMITTANCE_W as i32) || px.y >= (atmosphere::TRANSMITTANCE_H as i32)) {
+        return;
+    }
+    let atm = block.atm;
+    let uv = (vec2<f32>(px.x as f32, px.y as f32) + 0.5) / vec2<f32>(atmosphere::TRANSMITTANCE_W, atmosphere::TRANSMITTANCE_H);
+    let r_mu = atmosphere::transmittance_r_mu(atm, uv);
+    let r = r_mu.x;
+    let mu = r_mu.y;
+    let ro = vec3<f32>(0.0, 0.0, r);
+    let rd = vec3<f32>(sqrt(max(1.0 - mu * mu, 0.0)), 0.0, mu);
+    let t1 = max(atmosphere::sphere_far(ro, rd, atm.shell.y), 0.0);
+    let steps = 256;
+    let dt = t1 / (steps as f32);
+    var depth: vec3<f32> = vec3<f32>(0.0);
+    for (var i: i32 = 0; i < steps; i += 1) {
+        depth += atmosphere::medium(atm, length(ro + rd * (dt * ((i as f32) + 0.5)))).extinction;
+    }
+    out_transmittance.store(px, vec4<f32>(exp(-depth * dt), 1.0));
+}
+
+@compute @fast @workgroup_size(64, 1, 1)
+fn atmosphere_multiscatter(@binding(0, 3) @format(rgba16f) out_multi_scatter: write_image2d<vec4<f32>>) {
+    let wgid = workgroup_id();
+    let px = wgid.xy;
+    let i = local_index();
+    let atm = block.atm;
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let uv = (vec2<f32>(px.x as f32, px.y as f32) + 0.5) / vec2<f32>(atmosphere::MULTISCATTER_W, atmosphere::MULTISCATTER_H);
+    let mu_s = atmosphere::sun_from_unit(atmosphere::texel_to_unit(uv.x, atmosphere::MULTISCATTER_W));
+    let r = clamp(rb + atmosphere::texel_to_unit(uv.y, atmosphere::MULTISCATTER_H) * (rt - rb), rb + 1.0, rt - 1.0);
+    let ro = vec3<f32>(0.0, 0.0, r);
+    let sun = vec3<f32>(sqrt(max(1.0 - mu_s * mu_s, 0.0)), 0.0, mu_s);
+
+    let a = (((i % 8) as f32) + 0.5) / 8.0;
+    let b = (((i / 8) as f32) + 0.5) / 8.0;
+    let theta = 2.0 * atmosphere::PI * a;
+    let phi = acos(1.0 - 2.0 * b);
+    let rd = vec3<f32>(cos(theta) * sin(phi), sin(theta) * sin(phi), cos(phi));
+
+    var t1: f32 = atmosphere::sphere_far(ro, rd, rt);
+    let g = atmosphere::ground_hit(atm, ro, rd);
+    let ground = g >= 0.0 && g < t1;
+    if (ground) {
+        t1 = g;
+    }
+    let steps = 20;
+    let iso = 1.0 / (4.0 * atmosphere::PI);
+    let dt = t1 / (steps as f32);
+    var tr: vec3<f32> = vec3<f32>(1.0);
+    var l: vec3<f32> = vec3<f32>(0.0);
+    var f: vec3<f32> = vec3<f32>(0.0);
+    for (var s: i32 = 0; s < steps; s += 1) {
+        let p = ro + rd * (dt * ((s as f32) + 0.5));
+        let pr = length(p);
+        let m = atmosphere::medium(atm, pr);
+        let scatter = m.scatter_r + vec3<f32>(m.scatter_m);
+        let step_t = exp(-m.extinction * dt);
+        let w = step_weight(m.extinction, step_t, dt);
+        let sun_t = sun_trans_combined(atm, pr, dot(p, sun) / pr);
+        l += tr * scatter * iso * sun_t * w;
+        f += tr * scatter * w;
+        tr *= step_t;
+    }
+    if (ground) {
+        let p = ro + rd * t1;
+        let n = normalize(p);
+        let mu = dot(n, sun);
+        let sun_t = sun_trans_combined(atm, rb, mu);
+        l += tr * sun_t * max(mu, 0.0) * atm.ground.xyz / atmosphere::PI;
+        f += tr * atm.ground.xyz;
+    }
+    ms_shared_l[i] = l;
+    ms_shared_f[i] = f;
+    barrier();
+    for (var stride: i32 = 32; stride > 0; stride >>= 1) {
+        if (i < stride) {
+            ms_shared_l[i] = ms_shared_l[i] + ms_shared_l[i + stride];
+            ms_shared_f[i] = ms_shared_f[i] + ms_shared_f[i + stride];
+        }
+        barrier();
+    }
+    if (i == 0) {
+        let l2 = ms_shared_l[0] / 64.0;
+        let fms = ms_shared_f[0] / 64.0 * (4.0 * atmosphere::PI) * iso;
+        out_multi_scatter.store(px, vec4<f32>(l2 / max(vec3<f32>(1.0) - fms, vec3<f32>(0.001)) * atmosphere::TABLE_SCALE, 1.0));
+    }
+}
+
+@compute @fast @workgroup_size(64, 1, 1)
+fn atmosphere_skylight(@binding(0, 3) @format(rgba16f) out_sky_light: image3d<vec4<f32>>) {
+    let wgid = workgroup_id();
+    let px = wgid.xy;
+    let i = local_index();
+    let atm = block.atm;
+    let rb = atm.shell.x;
+    let rt = atm.shell.y;
+    let uv = (vec2<f32>(px.x as f32, px.y as f32) + 0.5) / vec2<f32>(atmosphere::SKYLIGHT_W, atmosphere::SKYLIGHT_H);
+    let mu_s = atmosphere::sun_from_unit(atmosphere::texel_to_unit(uv.x, atmosphere::SKYLIGHT_W));
+    let hx = atmosphere::texel_to_unit(uv.y, atmosphere::SKYLIGHT_H);
+    let r = clamp(rb + hx * hx * (rt - rb), rb + 1.0, rt - 1.0);
+    let sun = vec3<f32>(sqrt(max(1.0 - mu_s * mu_s, 0.0)), 0.0, mu_s);
+
+    let g0 = vec3<f32>(0.0, 0.0, rb + 1.0);
+    var sum_e: vec3<f32> = vec3<f32>(0.0);
+    let steps = 24;
+    for (var k: i32 = 0; k < 2; k += 1) {
+        let n = i * 2 + k;
+        let a = (((n % 16) as f32) + 0.5) / 16.0;
+        let b = (((n / 16) as f32) + 0.5) / 8.0;
+        let phi = 2.0 * atmosphere::PI * a;
+        let z = sqrt(1.0 - b);
+        let s = sqrt(max(1.0 - z * z, 0.0));
+        let rd = normalize(vec3<f32>(s * cos(phi), s * sin(phi), max(z, 0.001)));
+        let seg = atm_segment(atm, g0, rd);
+        if (seg.hit) {
+            sum_e += atm_march(atm, g0, rd, sun, seg.t0, seg.t1, steps, vec3<f32>(1.0)).l;
+        }
+    }
+    sl_shared_e[i] = sum_e;
+    barrier();
+    for (var stride: i32 = 32; stride > 0; stride >>= 1) {
+        if (i < stride) {
+            sl_shared_e[i] = sl_shared_e[i] + sl_shared_e[i + stride];
+        }
+        barrier();
+    }
+    let ground_sky = atmosphere::PI * sl_shared_e[0] / 128.0;
+    barrier();
+
+    let ro = vec3<f32>(0.0, 0.0, r);
+    var c0: vec3<f32> = vec3<f32>(0.0);
+    var c1: vec3<f32> = vec3<f32>(0.0);
+    var c2: vec3<f32> = vec3<f32>(0.0);
+    var c3: vec3<f32> = vec3<f32>(0.0);
+    var c4: vec3<f32> = vec3<f32>(0.0);
+    var c5: vec3<f32> = vec3<f32>(0.0);
+    let total_dirs = 256.0;
+    for (var k: i32 = 0; k < 4; k += 1) {
+        let n = ((i * 4 + k) as f32) + 0.5;
+        let z = 1.0 - 2.0 * n / total_dirs;
+        let phi = 2.39996323 * n;
+        let s = sqrt(max(1.0 - z * z, 0.0));
+        let rd = vec3<f32>(s * cos(phi), s * sin(phi), z);
+        let seg = atm_segment(atm, ro, rd);
+        var l: vec3<f32> = vec3<f32>(0.0);
+        var tr: vec3<f32> = vec3<f32>(1.0);
+        if (seg.hit) {
+            let mr = atm_march(atm, ro, rd, sun, seg.t0, seg.t1, steps, vec3<f32>(1.0));
+            l = mr.l;
+            tr = mr.t;
+        }
+        if (seg.ground) {
+            let n3 = normalize(ro + rd * seg.t1);
+            let mu = dot(n3, sun);
+            let direct = sun_trans_combined(atm, rb, mu) * max(mu, 0.0);
+            l += tr * atm.ground.xyz / atmosphere::PI * (direct + ground_sky);
+        }
+        c0 += l * 0.282095;
+        c1 += l * (0.488603 * rd.z);
+        c2 += l * (0.488603 * rd.x);
+        c3 += l * (0.315392 * (3.0 * rd.z * rd.z - 1.0));
+        c4 += l * (1.092548 * rd.x * rd.z);
+        c5 += l * (0.546274 * (rd.x * rd.x - rd.y * rd.y));
+    }
+    sl_shared_c0[i] = c0;
+    sl_shared_c1[i] = c1;
+    sl_shared_c2[i] = c2;
+    sl_shared_c3[i] = c3;
+    sl_shared_c4[i] = c4;
+    sl_shared_c5[i] = c5;
+    barrier();
+    for (var stride: i32 = 32; stride > 0; stride >>= 1) {
+        if (i < stride) {
+            sl_shared_c0[i] = sl_shared_c0[i] + sl_shared_c0[i + stride];
+            sl_shared_c1[i] = sl_shared_c1[i] + sl_shared_c1[i + stride];
+            sl_shared_c2[i] = sl_shared_c2[i] + sl_shared_c2[i + stride];
+            sl_shared_c3[i] = sl_shared_c3[i] + sl_shared_c3[i + stride];
+            sl_shared_c4[i] = sl_shared_c4[i] + sl_shared_c4[i + stride];
+            sl_shared_c5[i] = sl_shared_c5[i] + sl_shared_c5[i + stride];
+        }
+        barrier();
+    }
+    if (i == 0) {
+        let w = 4.0 * atmosphere::PI / total_dirs * atmosphere::TABLE_SCALE;
+        let k0 = sl_shared_c0[0] * w;
+        let k1 = sl_shared_c1[0] * w;
+        let k2 = sl_shared_c2[0] * w;
+        let k3 = sl_shared_c3[0] * w;
+        let k4 = sl_shared_c4[0] * w;
+        let k5 = sl_shared_c5[0] * w;
+        out_sky_light.store(vec3<i32>(px, 0), vec4<f32>(k0, k1.x));
+        out_sky_light.store(vec3<i32>(px, 1), vec4<f32>(k1.y, k1.z, k2.x, k2.y));
+        out_sky_light.store(vec3<i32>(px, 2), vec4<f32>(k2.z, k3));
+        out_sky_light.store(vec3<i32>(px, 3), vec4<f32>(k4, k5.x));
+        out_sky_light.store(vec3<i32>(px, 4), vec4<f32>(k5.y, k5.z, 0.0, 0.0));
+    }
+}
+
+@compute @fast @workgroup_size(8, 8, 1)
+fn atmosphere_skyview(@binding(0, 3) @format(rgba16f) out_sky_view: write_image2d<vec4<f32>>) {
+    let gid = global_id();
+    let px = gid.xy;
+    if (px.x >= (atmosphere::SKYVIEW_W as i32) || px.y >= (atmosphere::SKYVIEW_H as i32)) {
+        return;
+    }
+    let atm = block.atm;
+    let uv = (vec2<f32>(px.x as f32, px.y as f32) + 0.5) / vec2<f32>(atmosphere::SKYVIEW_W, atmosphere::SKYVIEW_H);
+    let r = block.job.x;
+    let mu_s = block.job.y;
+    let dir = atmosphere::sky_view_direction(atm, r, uv);
+    let cos_z = dir.x;
+    let cos_az = dir.y;
+    let sin_z = sqrt(max(1.0 - cos_z * cos_z, 0.0));
+    let sin_az = sqrt(max(1.0 - cos_az * cos_az, 0.0));
+    let rd = vec3<f32>(sin_z * cos_az, sin_z * sin_az, cos_z);
+    let ro = vec3<f32>(0.0, 0.0, r);
+    let sun = vec3<f32>(sqrt(max(1.0 - mu_s * mu_s, 0.0)), 0.0, mu_s);
+    var l: vec3<f32> = vec3<f32>(0.0);
+    let seg = atm_segment(atm, ro, rd);
+    if (seg.hit) {
+        l = atm_march(atm, ro, rd, sun, seg.t0, seg.t1, 48, vec3<f32>(1.0)).l;
+    }
+    out_sky_view.store(px, vec4<f32>(l * atmosphere::TABLE_SCALE, 1.0));
+}
+
+@compute @fast @workgroup_size(32, 2, 1)
+fn atmosphere_aerial(
+    @binding(0, 3) @format(rgba16f) out_inscatter: image3d<vec4<f32>>,
+    @binding(0, 4) @format(rgba16f) out_transmittance: image3d<vec4<f32>>
+) {
+    let lid = local_id();
+    let wgid = workgroup_id();
+    let k = lid.x;
+    let c = lid.y;
+    let col = vec2<i32>(wgid.x, wgid.y * 2 + c);
+    let atm = block.atm;
+    let ndc = (vec2<f32>(col.x as f32, col.y as f32) + 0.5) / atmosphere::FROXEL_XY * 2.0 - 1.0;
+    let h = mul4(block.froxel_inv_view_proj, vec4<f32>(ndc, 0.5, 1.0));
+    let rd = normalize(h.xyz / h.w);
+    let ro = atm.origin.xyz;
+    let rt = atm.shell.y;
+    let t_in = atmosphere::sphere_near(ro, rd, rt);
+    var t_out: f32 = atmosphere::sphere_far(ro, rd, rt);
+    let t_ground = atmosphere::ground_hit(atm, ro, rd);
+    if (t_ground >= 0.0) {
+        t_out = min(t_out, t_ground);
+    }
+    let depth = atm.froxel.w;
+
+    let s0 = (k as f32) / atmosphere::FROXEL_SLICES;
+    let s1 = ((k + 1) as f32) / atmosphere::FROXEL_SLICES;
+    let a = max(depth * s0 * s0, t_in);
+    let b = min(depth * s1 * s1, t_out);
+    var l: vec3<f32> = vec3<f32>(0.0);
+    var tr: vec3<f32> = vec3<f32>(1.0);
+    if (t_in >= 0.0 && b > a) {
+        let mr = atm_march(atm, ro, rd, atm.sun_dir.xyz, a, b, 8, vec3<f32>(1.0));
+        l = mr.l;
+        tr = mr.t;
+    }
+
+    let idx = c * 32 + k;
+    ae_shared_l[idx] = l;
+    ae_shared_t[idx] = tr;
+    barrier();
+    for (var off: i32 = 1; off < 32; off <<= 1) {
+        var lp: vec3<f32> = vec3<f32>(0.0);
+        var tp: vec3<f32> = vec3<f32>(1.0);
+        if (k >= off) {
+            lp = ae_shared_l[idx - off];
+            tp = ae_shared_t[idx - off];
+        }
+        barrier();
+        l = lp + tp * l;
+        tr = tp * tr;
+        ae_shared_l[idx] = l;
+        ae_shared_t[idx] = tr;
+        barrier();
+    }
+    out_inscatter.store(vec3<i32>(col, k), vec4<f32>(l * atmosphere::TABLE_SCALE, 1.0));
+    out_transmittance.store(vec3<i32>(col, k), vec4<f32>(tr, 1.0));
+}

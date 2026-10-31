@@ -26,7 +26,7 @@ VkDescriptorSetLayout samplerSetLayout(VkDevice dev, uint32_t samplers);
 /// postfx.vert + `fs` into one `format` attachment, no blending, no depth;
 /// `label` names it in the pipeline statistics (BRO_VK_PIPELINE_STATS).
 VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, VkShaderModule fs, VkFormat format,
-                    const char* label);
+                    const char* label, const char* vsEntry = "main", const char* fsEntry = "main");
 
 /// Draw the triangle over all of `target` (which must be in
 /// COLOR_ATTACHMENT_OPTIMAL; the caller transitions it).

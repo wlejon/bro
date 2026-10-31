@@ -1,6 +1,8 @@
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
+#include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/debug_views.h"
+#include "util/log.h"
 
 #include <brokernel/brokernel.h>
 
@@ -219,6 +221,16 @@ bool compileKernelStage(const char* file, const char* embedded, const char* entr
         s_cache.emplace(key, out);
     }
     return true;
+}
+
+VkShaderModule createKernelStageModule(VkDevice dev, const char* file, const char* embedded, const char* entry) {
+    KernelHookStage stage;
+    std::string err;
+    if (!compileKernelStage(file, embedded, entry, stage, err)) {
+        LOG_ERROR("createKernelStageModule(%s:%s): %s", file, entry, err.c_str());
+        return VK_NULL_HANDLE;
+    }
+    return SceneVkShaderModule::create(dev, stage.spirv);
 }
 
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,

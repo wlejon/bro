@@ -29,11 +29,11 @@ VkDescriptorSetLayout samplerSetLayout(VkDevice dev, uint32_t samplers) {
 }
 
 VkPipeline pipeline(VkDevice dev, VkPipelineLayout layout, VkShaderModule vs, VkShaderModule fs, VkFormat format,
-                    const char* label) {
+                    const char* label, const char* vsEntry, const char* fsEntry) {
     if (!vs || !fs || !layout) return VK_NULL_HANDLE;
     SceneVkPipelineBuilder b;
     b.setLabel(label)
-     .setShaderStages(vs, fs)
+     .setShaderStages(vs, fs, vsEntry, fsEntry)
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
      .setCullMode(VK_CULL_MODE_NONE)

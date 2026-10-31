@@ -31,24 +31,8 @@ BRO_SCENE_SHADER(DofFrag,                  "dof.frag",                    "post/
 BRO_SCENE_SHADER(ApplyAoFrag,              "apply_ao.frag",               "post/apply_ao.frag",                 "frag", "")
 BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "draw/gaussian_splat.vert",           "vert", "")
 BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "draw/gaussian_splat.frag",           "frag", "")
-BRO_SCENE_SHADER(SkyVert,                  "sky.vert",                    "lighting/sky.vert",                  "vert", "")
-BRO_SCENE_SHADER(SkyAtmosphereFrag,        "sky_atmosphere.frag",         "lighting/sky_atmosphere.frag",       "frag", "")
-BRO_SCENE_SHADER(SkyboxFrag,               "skybox.frag",                 "lighting/skybox.frag",               "frag", "")
-BRO_SCENE_SHADER(StarfieldFrag,            "starfield.frag",              "lighting/starfield.frag",            "frag", "")
-BRO_SCENE_SHADER(EnvConvertFrag,           "env_convert.frag",            "lighting/env_convert.frag",          "frag", "")
-BRO_SCENE_SHADER(IrradianceFrag,           "irradiance.frag",             "lighting/irradiance.frag",           "frag", "")
-BRO_SCENE_SHADER(PrefilterFrag,            "prefilter.frag",              "lighting/prefilter.frag",            "frag", "")
-BRO_SCENE_SHADER(BrdfLutFrag,              "brdf_lut.frag",               "lighting/brdf_lut.frag",             "frag", "")
 BRO_SCENE_SHADER(BloomBrightFrag,          "bloom_bright.frag",           "post/bloom_bright.frag",             "frag", "")
 BRO_SCENE_SHADER(TiltCompositeFrag,        "tilt_composite.frag",         "post/tilt_composite.frag",           "frag", "")
-// The atmosphere's tables (scene_atmosphere.cpp): the world-service jobs
-// (transmittance, multiple scattering, the sky's light) and the per-frame
-// view tables (sky view, aerial-perspective froxels).
-BRO_SCENE_SHADER(AtmosphereTransmittanceComp, "atmosphere_transmittance.comp", "lighting/atmosphere_transmittance.comp", "comp", "")
-BRO_SCENE_SHADER(AtmosphereMultiScatterComp, "atmosphere_multiscatter.comp", "lighting/atmosphere_multiscatter.comp", "comp", "")
-BRO_SCENE_SHADER(AtmosphereSkyLightComp,   "atmosphere_skylight.comp",    "lighting/atmosphere_skylight.comp",  "comp", "")
-BRO_SCENE_SHADER(AtmosphereSkyViewComp,    "atmosphere_skyview.comp",     "lighting/atmosphere_skyview.comp",   "comp", "")
-BRO_SCENE_SHADER(AtmosphereAerialComp,     "atmosphere_aerial.comp",      "lighting/atmosphere_aerial.comp",    "comp", "")
 // Exposure (scene_exposure.cpp): the frame's luminance histogram, metered and
 // adapted by its last workgroup.
 BRO_SCENE_SHADER(ExposureComp,             "exposure.comp",               "post/exposure.comp",                 "comp", "")
