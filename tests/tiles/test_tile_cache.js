@@ -312,7 +312,7 @@ if (!bro.kernel.available || !bro.tiles) {
         // the direction filtered from the cells around it, and the slot
         // read at its first cell.
         @kernel @grid(1)
-        fn k_find(g: grid<1>, lookup: read_store<i32, 1>, q: read_store<f32, 1>, dirs: read_store<f32, 1>,
+        fn k_find(g: grid<1>, lookup: read_store<vec4<i32>, 1>, q: read_store<f32, 1>, dirs: read_store<f32, 1>,
                   slots: read_store<f32, 1>, out: write_store<f32, 1>, level: i32) {
             let n = g.x();
             let d = normalize(vec3<f32>(q[3 * n], q[3 * n + 1], q[3 * n + 2]));
@@ -320,14 +320,15 @@ if (!bro.kernel.available || !bro.tiles) {
             let t = tiles::locate(lookup, p, level);
             let c = tiles::cells(t, p, ${LT}, ${LB});
             let f = vec3<f32>(filtered(dirs, c, 0), filtered(dirs, c, 1), filtered(dirs, c, 2));
-            out[8 * n] = t.slot as f32;
-            out[8 * n + 1] = t.level as f32;
-            out[8 * n + 2] = t.x as f32;
-            out[8 * n + 3] = t.y as f32;
-            out[8 * n + 4] = p.root as f32;
-            out[8 * n + 5] = dot(normalize(f), d);
-            out[8 * n + 6] = slots[c.i00];
-            out[8 * n + 7] = slots[c.i11];
+            out[9 * n] = t.slot as f32;
+            out[9 * n + 1] = t.level as f32;
+            out[9 * n + 2] = t.x as f32;
+            out[9 * n + 3] = t.y as f32;
+            out[9 * n + 4] = p.root as f32;
+            out[9 * n + 5] = dot(normalize(f), d);
+            out[9 * n + 6] = slots[c.i00];
+            out[9 * n + 7] = slots[c.i11];
+            out[9 * n + 8] = t.parent as f32;
         }
     `, { file: 'lookup.bk', modules: { tiles: bro.tiles.module } });
     const kDirs = looked.kernel('k_dirs'), kFind = looked.kernel('k_find');
@@ -348,9 +349,9 @@ if (!bro.kernel.available || !bro.tiles) {
         qs[3 * i + 1] = near ? 1.0 : rnd();
         qs[3 * i + 2] = near ? -0.2 + rnd() * 0.05 : rnd();
     }
-    const qBuf = bro.kernel.createBuffer(qs), outBuf = bro.kernel.createBuffer(N * 32);
+    const qBuf = bro.kernel.createBuffer(qs), outBuf = bro.kernel.createBuffer(N * 36);
     kFind.dispatch([N], globe.lookup, qBuf, globe.layer('dirs'), globe.layer('slots'), outBuf, 7);
-    const res = outBuf.read(new Float32Array(N * 8));
+    const res = outBuf.read(new Float32Array(N * 9));
     // A direction's root and (u, v) as the cache's frames place it.
     const cubePoint = (x, y, z) => {
         const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
@@ -359,9 +360,9 @@ if (!bro.kernel.available || !bro.tiles) {
         return z > 0 ? [4, x / az, y / az] : [5, -x / az, y / az];
     };
     const drawnLevel = new Map(globe.drawn.map((t) => [tileKey(t), t]));
-    let found = 0, inTile = 0, finest = 0, slotOk = 0, minDot = 1;
+    let found = 0, inTile = 0, finest = 0, slotOk = 0, minDot = 1, parents = 0, parentOk = 0;
     for (let i = 0; i < N; i++) {
-        const r = res.subarray(8 * i, 8 * i + 8);
+        const r = res.subarray(9 * i, 9 * i + 9);
         const [root, s, q] = cubePoint(qs[3 * i], qs[3 * i + 1], qs[3 * i + 2]);
         if (r[0] < 0) continue;
         found++;
@@ -376,7 +377,14 @@ if (!bro.kernel.available || !bro.tiles) {
         if (r[1] >= deepest) finest++;
         if (r[6] === r[0] && r[7] === r[0]) slotOk++;
         minDot = Math.min(minDot, r[5]);
+        // A drawn tile's record names its parent's slot as the draw set does.
+        const d = drawnLevel.get(tileKey({ root: r[4], level: r[1], x: r[2], y: r[3] }));
+        if (d && d.level > 0) {
+            parents++;
+            if (r[8] === d.parentSlot) parentOk++;
+        }
     }
+    assert(parents > N / 4 && parentOk === parents, `the tile found carries its parent's slot (${parentOk} of ${parents})`);
     assert(found === N, `every direction finds a ready tile (${found} of ${N})`);
     assert(inTile === N, `the tile found holds it (${inTile} of ${N})`);
     assert(finest === N, `and is at least as fine as the drawn tile there (${finest} of ${N})`);

@@ -1,10 +1,11 @@
 // A tile cache read from a shader or a kernel (bro.tiles, docs/tiles-api.js):
 // where a point of the domain is, which ready tile holds it, and the cells
 // to filter it from. The cache's `lookup` buffer is passed in as `table`,
-// int32s read by index (a kernel's read_store<i32, 1>, a shader's
-// read_buffer<i32>): first [mask, 0, 0, 0], then mask + 1 entries of four,
+// int4 records read by index (a kernel's read_store<vec4<i32>, 1>, a
+// shader's read_buffer<vec4<i32>>): first [mask, 0, 0, 0], then mask + 1 entries,
 // placed by open addressing from hash() (tilecache::lookupHash):
-// [x, y, root | level << 8, slot], an empty one [0, 0, -1, -1].
+// [x, y, root | level << 8 | (parent's slot + 1) << 13, slot], the
+// parent's slot -1 unless it is ready; an empty one [0, 0, -1, -1].
 module tiles;
 
 // A point of the domain: its root, and (u, v) across the root in [0, 1].
@@ -69,35 +70,40 @@ pub fn hash(root: i32, level: i32, x: i32, y: i32) -> i32 {
     return (x * 73856093) ^ (y * 19349663) ^ (level * 83492791) ^ (root * 1640531527);
 }
 
-// The slot of ready tile (root, level, x, y), or -1.
-pub fn find<B>(table: B, root: i32, level: i32, x: i32, y: i32) -> i32 {
-    let mask = table[0];
+// Ready tile (root, level, x, y)'s slot and its parent's (each -1 for
+// none).
+pub fn probe<B>(table: B, root: i32, level: i32, x: i32, y: i32) -> vec2<i32> {
+    let mask = table[0].x;
     let key = root | (level << 8);
     var h: i32 = hash(root, level, x, y) & mask;
-    var slot: i32 = -1;
-    var probing: bool = true;
+    // At most half full, so nearly every search ends at its first entry:
+    // one load, and the loop only past it.
+    var e: vec4<i32> = table[1 + h];
     var n: i32 = 0;
-    while (probing && n <= mask) {
-        let e = 4 * (h + 1);
-        let s = table[e + 3];
-        if (s < 0) {
-            probing = false;
-        } else if (table[e] == x && table[e + 1] == y && table[e + 2] == key) {
-            slot = s;
-            probing = false;
-        }
+    while (e.w >= 0 && (e.x != x || e.y != y || (e.z & 8191) != key) && n < mask) {
         h = (h + 1) & mask;
+        e = table[1 + h];
         n += 1;
     }
-    return slot;
+    if (e.w >= 0 && e.x == x && e.y == y && (e.z & 8191) == key) {
+        return vec2<i32>(e.w, (e.z >> 13) - 1);
+    }
+    return vec2<i32>(-1, -1);
 }
 
-// A ready tile: its slot (-1 for none), level and place.
+// The slot of ready tile (root, level, x, y), or -1.
+pub fn find<B>(table: B, root: i32, level: i32, x: i32, y: i32) -> i32 {
+    return probe(table, root, level, x, y).x;
+}
+
+// A ready tile: its slot (-1 for none), level and place, and its parent's
+// slot (-1 unless the parent is ready).
 pub struct Tile {
     slot: i32,
     level: i32,
     x: i32,
     y: i32,
+    parent: i32,
 }
 
 // The tile of `level` holding p, whether ready or not.
@@ -105,7 +111,12 @@ pub fn tile_at(p: Point, level: i32) -> Tile {
     let n = exp2(level as f32);
     let x = min(floor(p.u * n), n - 1.0) as i32;
     let y = min(floor(p.v * n), n - 1.0) as i32;
-    return Tile { slot: -1, level: level, x: x, y: y };
+    return Tile { slot: -1, level: level, x: x, y: y, parent: -1 };
+}
+
+// Tile t's parent, its slot as t's entry gave it.
+pub fn parent_of(t: Tile) -> Tile {
+    return Tile { slot: t.parent, level: t.level - 1, x: t.x >> 1, y: t.y >> 1, parent: -1 };
 }
 
 // The finest ready tile holding p at `level` or coarser; slot -1 when no
@@ -115,9 +126,9 @@ pub fn locate<B>(table: B, p: Point, level: i32) -> Tile {
     var t: Tile = tile_at(p, level);
     while (l >= 0) {
         let at = tile_at(p, l);
-        let slot = find(table, p.root, l, at.x, at.y);
-        if (slot >= 0) {
-            return Tile { slot: slot, level: l, x: at.x, y: at.y };
+        let found = probe(table, p.root, l, at.x, at.y);
+        if (found.x >= 0) {
+            return Tile { slot: found.x, level: l, x: at.x, y: at.y, parent: found.y };
         }
         t = at;
         l -= 1;
@@ -154,5 +165,5 @@ pub fn cells(t: Tile, p: Point, tile_size: i32, border: i32) -> Cells {
 // The level whose cells are `w` across where a root's cells at level 0 are
 // `w0` (fractional: between two, as a mip's), clamped to [0, max_level].
 pub fn level_for(w: f32, w0: f32, max_level: i32) -> f32 {
-    return clamp(log2(max(w, 1.0e-30) / w0), 0.0, max_level as f32);
+    return clamp(log2(w0 / max(w, 1.0e-30)), 0.0, max_level as f32);
 }

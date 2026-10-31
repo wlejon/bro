@@ -224,7 +224,10 @@ const terrain = bro.tiles.createCache({
 //                   tiles.bk (bro.tiles.module) to read the cache at any
 //                   point rather than tile by tile: a ray, a kernel over
 //                   other data, a volume's hook (setShaderBuffer, read as
-//                   read_buffer<i32>; a kernel takes read_store<i32, 1>)
+//                   read_buffer<vec4<i32>>; a kernel takes
+//                   read_store<vec4<i32>, 1>). A record's parent slot
+//                   rides with it, so a read blending a tile with its
+//                   parent (tiles::parent_of) costs one search
 // cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
 //                   tile's reported [lo, hi] at 2 * slot; else null
 // cache.pending     wanted tiles not yet produced (0 once settled); every
@@ -260,16 +263,20 @@ function frame(camera, patch) {
 // point, registered under the name `tiles` by whoever imports it:
 // bro.kernel.compile(src, { modules: { tiles: bro.tiles.module } }), or a
 // volume's createVolume({ module, modules: { tiles: bro.tiles.module } }).
-// Its table argument is the cache's `lookup`, taken by any int32 container.
+// Its table argument is the cache's `lookup`, taken by any container of
+// vec4<i32>.
 //
 //   tiles::cube_point(dir) -> Point { root, u, v }   a cube-sphere's root
 //       under a unit direction and (u, v) in [0, 1] across it, the cache's
 //       own projection
 //   tiles::plane_point(x, z, origin, size, roots) -> Point   a plane's
-//   tiles::locate(lookup, p, level) -> Tile { slot, level, x, y }   the
-//       finest ready tile holding p at `level` or coarser (slot -1: none of
-//       its root is ready); one hash probe a level tried
+//   tiles::locate(lookup, p, level) -> Tile { slot, level, x, y, parent }
+//       the finest ready tile holding p at `level` or coarser (slot -1:
+//       none of its root is ready), and its parent's slot (-1 unless
+//       ready); one search a level tried, nearly always one load
+//   tiles::parent_of(tile) -> Tile   its parent, from the slot it carries
 //   tiles::find(lookup, root, level, x, y) -> slot or -1
+//   tiles::probe(lookup, root, level, x, y) -> vec2<i32>(slot, parent)
 //   tiles::cells(tile, p, tileSize, border) -> Cells { i00, i10, i01, i11,
 //       f }   the four cells around p as indices into a layer's pool and
 //       the bilinear weights: interior cell i is centred at (i + 0.5) /
@@ -284,7 +291,7 @@ function frame(camera, patch) {
 const near = bro.kernel.compile(`
     import tiles;
     @kernel @grid(1)
-    fn k_sample(g: grid<1>, lookup: read_store<i32, 1>, heights: read_store<f32, 1>,
+    fn k_sample(g: grid<1>, lookup: read_store<vec4<i32>, 1>, heights: read_store<f32, 1>,
                 dirs: read_store<f32, 1>, out: write_store<f32, 1>) {
         let n = g.x();
         let p = tiles::cube_point(vec3<f32>(dirs[3 * n], dirs[3 * n + 1], dirs[3 * n + 2]));

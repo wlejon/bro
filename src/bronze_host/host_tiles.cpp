@@ -41,11 +41,13 @@ constexpr uint32_t kRecordInts = 16;
 // u.xyz, v.xyz, the bounding sphere's center.xyz, extent, radius, 0, 0.
 constexpr uint32_t kTableDoubles = 24;
 
-// The lookup (common/tiles.bk): int4 records, the first [mask, 0, 0, 0],
+// The lookup (tilecache/tiles.bk): int4 records, the first [mask, 0, 0, 0],
 // then mask + 1 entries, a ready tile at the first free one from
-// tilecache::lookupHash(id) & mask on: [x, y, root | level << 8, slot],
-// an empty one [0, 0, -1, -1]. Twice the capacity, a power of two, so a
-// probe ends within a few entries.
+// tilecache::lookupHash(id) & mask on: [x, y, root | level << 8 |
+// (parent's slot + 1) << 13, slot], the parent's slot -1 unless it is
+// ready (so a read blending a tile with its parent, as mips, finds both in
+// one probe); an empty one [0, 0, -1, -1]. Twice the capacity, a power of
+// two, so a probe ends within a few entries.
 uint32_t lookupEntries(uint32_t capacity) {
     uint32_t n = 4;
     while (n < 2 * capacity) n *= 2;
@@ -212,7 +214,8 @@ void writeLookup(Cache& c) {
         int32_t* e = words.data() + 4 * (h + 1);
         e[0] = static_cast<int32_t>(t.id.x);
         e[1] = static_cast<int32_t>(t.id.y);
-        e[2] = static_cast<int32_t>(t.id.root | (t.id.level << 8));
+        const int32_t parent = t.id.level > 0 ? c.tree.slotOf(t.id.parent()) : -1;
+        e[2] = static_cast<int32_t>(t.id.root | (t.id.level << 8)) | ((parent + 1) << 13);
         e[3] = static_cast<int32_t>(t.slot);
     }
     std::string err;
