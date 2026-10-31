@@ -226,6 +226,8 @@ public:
     /// submission's when nothing was recorded.
     uint64_t endBackground();
     bool backgroundComplete(uint64_t ticket) const;
+    /// Between beginBackground and endBackground.
+    bool inBackground() const { return background_; }
     /// The graphics queue's next submission from here waits for background
     /// ticket `ticket`: what it and everything after it on the graphics
     /// queue read of that work is there. Called once the ticket is complete

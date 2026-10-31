@@ -1,5 +1,8 @@
 #include "bronze_host/host_kernel_gpu.h"
 
+#include "bronze_host/host_rooted.h"
+#include "embed/embed_host_class.h"
+#include "embed/embed_object_builder.h"
 #include "engine/engine.h"
 #include "render/vulkan_context.h"
 
@@ -208,6 +211,67 @@ std::shared_ptr<render::ComputeReadback> engineReadLater(const std::shared_ptr<b
 
 render::VulkanCompute* engineCompute() {
     return s_device && s_device->context() ? &s_device->context()->compute() : nullptr;
+}
+
+namespace {
+
+namespace ev = bronze::embed;
+
+// A bro.kernel.background job: the background ticket its work went in.
+struct BackgroundJob {
+    uint64_t ticket = 0;
+    bool done = false;
+};
+ev::HostClass g_jobClass;
+
+// done: whether the GPU has finished the job's work; true makes the frames'
+// reads of what it wrote wait for it (render::VulkanCompute::
+// acquireBackground: a wait already passed costs nothing).
+bronze::Value js_jobDone(bronze::Value self, std::span<const bronze::Value>) {
+    auto* job = static_cast<BackgroundJob*>(g_jobClass.unwrap(self));
+    if (!job) return ev::throwTypeError("BackgroundJob.done: not a BackgroundJob");
+    if (!job->done) {
+        render::VulkanCompute* compute = engineCompute();
+        if (!compute || compute->backgroundComplete(job->ticket)) {
+            if (compute) compute->acquireBackground(job->ticket);
+            job->done = true;
+        }
+    }
+    return ev::fromBool(job->done);
+}
+
+// bro.kernel.background(fn): fn() called with every dispatch, write and
+// buffer creation it makes recorded into the background stream (render::
+// VulkanCompute::beginBackground), submitted when it returns; a job whose
+// `done` turns true once the GPU has done it.
+bronze::Value js_background(bronze::Value, std::span<const bronze::Value> args) {
+    if (args.empty() || !ev::isFunction(args[0]))
+        return ev::throwTypeError("bro.kernel.background: `fn` is a function");
+    render::VulkanCompute* compute = engineCompute();
+    if (!compute) return ev::throwTypeError("bro.kernel.background: no GPU device");
+    if (compute->inBackground()) return ev::throwTypeError("bro.kernel.background: already inside a background job");
+    compute->beginBackground();
+    const ev::CallResult r = ev::call(args[0], ev::undefined(), std::span<const bronze::Value>());
+    const uint64_t ticket = compute->endBackground();
+    if (r.thrown) return ev::throwValue(r.value);
+    auto job = std::make_unique<BackgroundJob>();
+    job->ticket = ticket;
+    return g_jobClass.createInstance(std::move(job));
+}
+
+} // namespace
+
+void installKernelBackground() {
+    // (Realms install before the engine's device is up: a call without one
+    // throws.)
+    g_jobClass.install("BackgroundJob", 0, nullptr, [](ev::ObjectBuilder& b) { b.accessor("done", js_jobDone); },
+                       /*global=*/false);
+    const auto bro = ev::globalValue("bro");
+    if (!bro.found || !ev::isObject(bro.value)) return;
+    const Rooted kernel(ev::getProperty(bro.value, "kernel"));
+    if (!ev::isObject(kernel)) return;
+    const Rooted fn(ev::makeFunction(js_background, 1, "background"));
+    ev::setProperty(kernel, "background", fn);
 }
 
 void installKernelGpu(engine::Engine& engine) {

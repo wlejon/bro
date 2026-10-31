@@ -474,6 +474,7 @@ void installSiblingApis(engine::Engine& engine) {
     // as the GPU half (host_kernel_gpu.h).
     installKernelGpu(engine);
     brokernel::api::installKernel();
+    installKernelBackground();
     installTiles(engine);
 #endif
     {

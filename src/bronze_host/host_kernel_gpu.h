@@ -47,4 +47,11 @@ render::VulkanCompute* engineCompute();
 /// none either), and then `bro.kernel.gpu` is false.
 void installKernelGpu(engine::Engine& engine);
 
+/// bro.kernel.background(fn) (kernel-api.js): fn's GPU work recorded into
+/// the background stream (render::VulkanCompute::beginBackground), beside
+/// the frames; returns a BackgroundJob whose `done` turns true once the GPU
+/// has done it. Mounted on bro.kernel per realm, after installKernel; it
+/// throws without a device.
+void installKernelBackground();
+
 } // namespace bro::bronze_host

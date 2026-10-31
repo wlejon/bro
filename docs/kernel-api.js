@@ -178,3 +178,48 @@ if (bro.kernel.gpu) {
 // Errors: a typed array where a KernelBuffer goes, dispatch() of a point
 // kernel, or a read / write outside the buffer (RangeError) throws; a kernel
 // the device cannot run (a capability it lacks) throws an Error naming it.
+
+// ============================================================================
+// 7. bro.kernel.background(fn) -> BackgroundJob: work beside the frames
+// ============================================================================
+//
+// fn() is called at once, and every dispatch, write and createBuffer it makes
+// goes to the background stream (render::VulkanCompute::beginBackground):
+// the GPU's async compute queue (in order on the graphics queue where the
+// device has none), after the work recorded before it, in order with
+// earlier background jobs, and beside the frames recorded after it. For
+// work whose results are wanted frames later, not this frame: a world's
+// field rebuilt into the half of a double buffer it does not draw from. A
+// few small dependent dispatches are far from filling the GPU, so in the
+// frame's own stream they lengthen the frame by all of their latency, where
+// beside it they cost only what they slow its work by. (A tile cache's
+// production runs here already, tiles-api.js.)
+//
+//   job.done   true once the GPU has done the job's work; from the read that
+//              finds it true, the frames read what it wrote (the graphics
+//              queue waits for it, a wait already passed)
+//
+// Until done, nothing may rewrite a buffer the job's kernels read (write it,
+// or dispatch into it outside the job), nor read what they write: the GPU
+// may still be at it a frame later. A buffer read() inside fn waits for the
+// job's work so far. fn's throw is rethrown (what it recorded still runs); a
+// job inside a job, and TileCache.update inside one, throw a TypeError.
+// perf.kernelTimes lists its kernels as "<kernel> (background)".
+
+if (bro.kernel.gpu) {
+    const source = bro.kernel.createBuffer(field);
+    const fields = [bro.kernel.createBuffer(W * H * 4), bro.kernel.createBuffer(W * H * 4)];
+    let front = 0, job = null;
+    // A frame: start a rebuild into the back half when wanted, and swap once
+    // it is done; the scene draws fields[front] meanwhile.
+    function frame(wanted) {
+        if (!job && wanted) {
+            const back = fields[1 - front];
+            job = bro.kernel.background(() => mod.kernel('k_smooth').dispatch([W, H], source, back));
+        }
+        if (job && job.done) {
+            front = 1 - front;   // node.setShaderBuffer('u_field', fields[front])
+            job = null;
+        }
+    }
+}

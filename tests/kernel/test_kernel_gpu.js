@@ -71,6 +71,32 @@ if (!bro.kernel.available) {
     const row = outBuf.read(new Float32Array(W));
     assert(row.every((v) => near(v, 3, 1e-6)), 'a write is seen by the next dispatch: ' + row[5]);
 
+    // bro.kernel.background(fn): fn's dispatches run beside the frames, in
+    // order with each other, after the work recorded before; the job is
+    // done once the GPU has done them, and its results read right then.
+    perf.kernelTimes();
+    const bgOut = bro.kernel.createBuffer(W * H * 4), bgTwice = bro.kernel.createBuffer(W * H * 4);
+    srcBuf.write(src, 0);
+    const job = bro.kernel.background(() => {
+        blur.dispatch([W, H], srcBuf, bgOut);
+        blur.dispatch([W, H], bgOut, bgTwice);
+    });
+    let frames = 0;
+    while (!job.done && frames < 30) { advanceTime(16); frames++; }
+    assert(job.done, `a background job is done within frames (${frames})`);
+    agree(bgTwice.read(new Float32Array(W * H)), cpuTwice, 1e-6, 'a background blur of the blur');
+    const bgTimes = perf.kernelTimes();
+    assert(bgTimes['k_blur (background)']?.dispatches === 2, `its dispatches are timed as background work (${Object.keys(bgTimes)})`);
+    let inner = null;
+    try { bro.kernel.background(() => { bro.kernel.background(() => {}); }); } catch (e) { inner = e; }
+    assert(inner instanceof TypeError, 'a background job inside one is refused');
+    let thrown = null;
+    try { bro.kernel.background(() => { throw new Error('produce failed'); }); } catch (e) { thrown = e; }
+    assert(thrown && thrown.message === 'produce failed', 'what fn throws is rethrown');
+    const after = bro.kernel.background(() => {});
+    while (!after.done && frames < 60) { advanceTime(16); frames++; }
+    assert(after.done, 'and later jobs still run');
+
     // A gather returning one value per cell; an index outside the table reads zero.
     const gather = mod.kernel('k_gather');
     const returns = gather.dispatch(5, bro.kernel.createBuffer(new Float32Array([10, 20, 30])),

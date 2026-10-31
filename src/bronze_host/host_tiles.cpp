@@ -295,6 +295,8 @@ bool retireBatches(Cache& c) {
 }
 
 Value js_update(Value self, std::span<const Value> args) {
+    if (render::VulkanCompute* compute = engineCompute(); compute && compute->inBackground())
+        return ev::throwTypeError("TileCache.update: inside bro.kernel.background (production runs there already)");
     Cache* c = cacheOf(self, "TileCache.update");
     const Rooted selfRoot(self);
     const Rooted view(args.empty() ? ev::undefined() : args[0]);
