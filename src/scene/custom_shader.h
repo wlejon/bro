@@ -27,7 +27,7 @@ struct CustomShaderUniform {
 };
 
 /// A GPU buffer (a KernelBuffer) bound by name to a custom shader's
-/// `@binding(4, 14..19) var name: read_buffer<T>;` declaration.
+/// `@binding(4, 14..23) var name: read_buffer<T>;` declaration.
 struct CustomShaderBuffer {
     std::string name;
     std::shared_ptr<render::ComputeBuffer> buffer;

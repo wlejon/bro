@@ -176,9 +176,9 @@ if (!probe.scene) {
         got.node.setShader({ module: `
             module hook;
             import mesh;
-            @binding(4, 20) var flags: read_buffer<f32>;
+            @binding(4, 24) var flags: read_buffer<f32>;
             pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { return v; }` });
     } catch (e) { threw = e; }
-    assert(threw && /\(4, 20\)/.test(threw.message), 'a buffer outside 14..19 is refused: ' + (threw && threw.message));
+    assert(threw && /\(4, 24\)/.test(threw.message), 'a buffer outside 14..23 is refused: ' + (threw && threw.message));
     dropScene(got.s);
 }

@@ -638,7 +638,7 @@ class SceneNode {
 
   /**
    * Bind a KernelBuffer (bro.kernel.createBuffer, or one a kernel's dispatch
-   * returned) to a `@binding(4, 14..19) var name: read_buffer<T>;` declaration
+   * returned) to a `@binding(4, 14..23) var name: read_buffer<T>;` declaration
    * of the custom shader module; null unbinds. The shaders read it in place on
    * the GPU, with no copy: what kernels dispatch before a frame is what that
    * frame draws, so a kernel can write heights, positions or colours every

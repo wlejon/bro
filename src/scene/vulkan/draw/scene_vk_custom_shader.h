@@ -4,7 +4,7 @@
 //   - binding 0: uniform<Params>, its fields matched by name to setShaderUniform
 //   - bindings 1..kMaxSamplers: texture2d / texture2d_array / texture3d
 //   - bindings 10..13: custom.bk's immutable samplers (linear, repeat, repeat_s, nearest)
-//   - bindings 14..19: storage buffers (read_buffer<T> / buffer<T>), matched by name to setShaderBuffer
+//   - bindings 14..23: storage buffers (read_buffer<T> / buffer<T>), matched by name to setShaderBuffer
 
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_renderer.h"
@@ -34,7 +34,7 @@ public:
     };
     static constexpr uint32_t kKernelSamplersBinding = 10;
     static constexpr uint32_t kBuffersBinding = kKernelSamplersBinding + kSamplerModes;
-    static constexpr uint32_t kMaxBuffers = 6;
+    static constexpr uint32_t kMaxBuffers = 10;
 
     struct Uniform {
         std::string type;

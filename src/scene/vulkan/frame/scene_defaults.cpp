@@ -74,7 +74,7 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     for (uint32_t i = 1; i <= kCustomImages; ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFs);
     // A brokernel hook's (custom.bk): the four immutable samplers, one per
-    // binding (10..13), then its storage buffers (14..19).
+    // binding (10..13), then its storage buffers (14..23).
     using CS = CustomShaderInterface;
     static_assert(CS::kLinear == 0 && CS::kRepeat == 1 && CS::kRepeatS == 2 && CS::kNearest == 3 &&
                   CS::kSamplerModes == 4 && CS::kKernelSamplersBinding == 10);

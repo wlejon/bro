@@ -3,7 +3,7 @@
 //
 //   @binding(4, 0) var params: uniform<Params>;      setShaderUniform(field name, value)
 //   @binding(4, 1..8) var noise: texture3d<f32>;     setShaderTexture(name, ...)
-//   @binding(4, 14..19) var map: read_buffer<T>;     setShaderBuffer(name, buffer)
+//   @binding(4, 14..23) var map: read_buffer<T>;     setShaderBuffer(name, buffer)
 //
 // A uniform's fields are 32-bit scalars or vectors (the engine writes each by
 // name, std140); a texture is a texture2d, texture2d_array or texture3d

@@ -7,7 +7,7 @@
 //   - light(v, s, l) -> mesh::Light scales sun/sky/occluder/diffuse lighting;
 //   - setShaderUniform reaches the module's uniform by field name;
 //   - setShaderTexture reaches custom::sample(slot, uv) at set 4 bindings 1..8;
-//   - setShaderBuffer reaches a read_buffer of set 4 (bindings 14..19);
+//   - setShaderBuffer reaches a read_buffer of set 4 (bindings 14..23);
 //   - `modules` gives the hook the app's modules to import (an engine
 //     module's name is refused);
 //   - a module that does not compile, or declares a set-4 resource the set
