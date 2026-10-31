@@ -460,7 +460,7 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
         VkPipelineColorBlendAttachmentState overwrite{};
         overwrite.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
         SceneVkPipelineBuilder b;
-        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_, "volume_vert")
          .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fs, prog->fsEntry.c_str())
          .setVertexInput({}, {})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
@@ -496,7 +496,7 @@ void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet came
     const bool atmosphere = atmosphere_;
     VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? kAtmosphereVariant : 0u, TargetFormat{}, [&] {
         SceneVkPipelineBuilder b;
-        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_)
+        b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_, "volume_vert")
          .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fsNear, prog->fsNearEntry.c_str())
          .setVertexInput({}, {})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)

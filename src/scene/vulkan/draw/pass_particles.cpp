@@ -7,9 +7,10 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "particles.bk.src.h"
 
 #include <cstring>
 #include <vector>
@@ -42,8 +43,8 @@ bool PassParticles::setup(SceneGpu& gpu) {
     info.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ParticlesVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::ParticlesFrag);
+    vs_ = createKernelStageModule(dev, "draw/particles.bk", kBkParticlesSrc, "particles_vert");
+    fs_ = createKernelStageModule(dev, "draw/particles.bk", kBkParticlesSrc, "particles_frag");
     return vs_ && fs_;
 }
 
@@ -82,7 +83,7 @@ VkPipeline PassParticles::pipeline(const TargetFormat& target, bool additive) {
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
         b.setLabel("particles")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "particles_vert", "particles_frag")
          .setVertexInput({binding}, attributes)
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)

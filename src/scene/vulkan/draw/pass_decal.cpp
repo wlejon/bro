@@ -7,9 +7,10 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
 #include "scene/vulkan/frame/scene_targets.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "decal.bk.src.h"
 
 #include <algorithm>
 #include <cstring>
@@ -53,8 +54,8 @@ bool PassDecal::setup(SceneGpu& gpu) {
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
     if (!gpu.allocator.createVertexBuffer(sizeof(kCube), kCube, cube_)) return false;
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::DecalVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::DecalFrag);
+    vs_ = createKernelStageModule(dev, "draw/decal.bk", kBkDecalSrc, "decal_vert");
+    fs_ = createKernelStageModule(dev, "draw/decal.bk", kBkDecalSrc, "decal_frag");
     return vs_ && fs_;
 }
 
@@ -115,7 +116,7 @@ void PassDecal::record(SceneFrame& frame) {
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
         b.setLabel("decal")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "decal_vert", "decal_frag")
          .setVertexInput({binding}, {position})
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)

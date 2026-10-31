@@ -1,0 +1,106 @@
+// 3D particle system (PassParticles): instanced camera-facing quads with
+// spritesheet sub-UV selection and soft-particle depth fade against the
+// opaque depth snapshot.
+import scene;
+from scene import camera;
+
+struct ParticlePush {
+    model: mat4f,
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+    params: vec4<f32>,
+}
+
+@binding(1, 0) var u_tex: sampler2d<vec4<f32>>;
+@binding(1, 1) var u_scene_depth: sampler2d<vec4<f32>>;
+
+fn linearize_depth(d: f32) -> f32 {
+    let n = camera.viewport.z;
+    let f = camera.viewport.w;
+    if (camera.proj[3].w > 0.5) {
+        return n + (1.0 - d) * (f - n);
+    }
+    return n * f / max(d * (f - n) + n, 0.0000001);
+}
+
+@vertex fn particles_vert(
+    @location(0) in_pos: vec3<f32>,
+    @location(1) in_size: f32,
+    @location(2) in_color: vec4<f32>,
+    @location(3) in_rot: f32,
+    @location(4) in_frame: f32,
+    push: ParticlePush
+) {
+    let vid = vertex_index() % 6;
+    var a_quad: vec2<f32> = vec2<f32>(-1.0, 1.0);
+    if (vid == 0 || vid == 3) {
+        a_quad = vec2<f32>(-1.0, -1.0);
+    } else if (vid == 1) {
+        a_quad = vec2<f32>(1.0, -1.0);
+    } else if (vid == 2 || vid == 4) {
+        a_quad = vec2<f32>(1.0, 1.0);
+    }
+    let c = cos(in_rot);
+    let s = sin(in_rot);
+    let corner = vec2<f32>(
+        a_quad.x * c - a_quad.y * s,
+        a_quad.x * s + a_quad.y * c
+    );
+    let world = scene::mul4(push.model, vec4<f32>(in_pos, 1.0)).xyz;
+    let half_size = in_size * 0.5;
+    let world_pos = world
+                  + push.cam_right.xyz * (corner.x * half_size)
+                  + push.cam_up.xyz    * (corner.y * half_size);
+
+    var uv: vec2<f32> = vec2<f32>(a_quad.x * 0.5 + 0.5, 0.5 - a_quad.y * 0.5);
+    let cols = push.params.x;
+    let rows = push.params.y;
+    if (cols > 1.0 || rows > 1.0) {
+        let icols = cols as i32;
+        let irows = rows as i32;
+        let frame = clamp(in_frame as i32, 0, icols * irows - 1);
+        let cx = frame - (frame / icols) * icols;
+        let cy = frame / icols;
+        uv = (vec2<f32>(cx as f32, cy as f32) + uv) / vec2<f32>(cols, rows);
+    }
+
+    set_vertex_output(0, uv);
+    set_vertex_output(1, in_color);
+    set_vertex_position(scene::mul4(camera.view_proj, vec4<f32>(world_pos, 1.0)));
+}
+
+@fragment fn particles_frag(
+    @location(0) in_uv: vec2<f32>,
+    @location(1) in_color: vec4<f32>,
+    push: ParticlePush
+) {
+    var a: f32 = 0.0;
+    var rgb: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    let mode = push.params.z as i32;
+    if (mode == 1) {
+        let tex = u_tex.sample(in_uv);
+        a = tex.w * in_color.w;
+        rgb = tex.xyz * in_color.xyz;
+    } else {
+        let p = in_uv - 0.5;
+        let d = length(p) * 2.0;
+        let t = clamp(1.0 - d, 0.0, 1.0);
+        a = in_color.w * t * t;
+        rgb = in_color.xyz;
+    }
+
+    let soft_dist = push.params.w;
+    if (soft_dist > 0.0) {
+        let fc = frag_coord();
+        let screen_uv = fc.xy / camera.viewport.xy;
+        let scene_d = u_scene_depth.sample(screen_uv).x;
+        let scene_z = linearize_depth(scene_d);
+        let frag_z = linearize_depth(fc.z);
+        a *= clamp((scene_z - frag_z) / soft_dist, 0.0, 1.0);
+    }
+
+    if (a <= 0.001) {
+        discard_fragment();
+    }
+    set_frag_output(0, vec4<f32>(rgb * a, a));
+}

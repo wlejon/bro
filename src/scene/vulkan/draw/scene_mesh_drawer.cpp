@@ -13,7 +13,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "volume.bk.src.h"
 #include "render/vulkan_compute.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_pipeline_cache.h"
@@ -143,7 +143,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     for (int f = 0; f < 3; ++f)
         for (int i = 0; i < 2; ++i)
             for (int c = 0; c < 2; ++c) ok = (fs_[f][i][c] = compile(kFsEntries[f][i][c])) && ok;
-    vsVolume_ = SceneVkShaderCompiler::createBuiltinModule(device_, BuiltinSceneShader::VolumeVert);
+    vsVolume_ = createKernelStageModule(device_, "draw/volume.bk", kBkVolumeSrc, "volume_vert");
     if (!ok || !vsVolume_) {
         LOG_ERROR("SceneMeshDrawer: Failed creating the mesh shader modules");
         return false;

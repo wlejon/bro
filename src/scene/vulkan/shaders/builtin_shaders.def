@@ -11,13 +11,3 @@
 // compiles the same source with the same DEFINES at run time
 // (docs/hot-reload.md). Adding a shader is adding a line here.
 
-BRO_SCENE_SHADER(BillboardVert,            "billboard.vert",              "draw/billboard.vert",                "vert", "")
-BRO_SCENE_SHADER(BillboardFrag,            "billboard.frag",              "draw/billboard.frag",                "frag", "")
-BRO_SCENE_SHADER(ParticlesVert,            "particles.vert",              "draw/particles.vert",                "vert", "")
-BRO_SCENE_SHADER(ParticlesFrag,            "particles.frag",              "draw/particles.frag",                "frag", "")
-BRO_SCENE_SHADER(DecalVert,                "decal.vert",                  "draw/decal.vert",                    "vert", "")
-BRO_SCENE_SHADER(DecalFrag,                "decal.frag",                  "draw/decal.frag",                    "frag", "")
-// A volume's triangle over the view (pass_volume.cpp); volume.frag is compiled with its chunk at run time.
-BRO_SCENE_SHADER(VolumeVert,               "volume.vert",                 "draw/volume.vert",                   "vert", "")
-BRO_SCENE_SHADER(GaussianSplatVert,        "gaussian_splat.vert",         "draw/gaussian_splat.vert",           "vert", "")
-BRO_SCENE_SHADER(GaussianSplatFrag,        "gaussian_splat.frag",         "draw/gaussian_splat.frag",           "frag", "")

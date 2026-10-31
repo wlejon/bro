@@ -64,8 +64,9 @@ const BuiltinInfo kBuiltins[] = {
     {#name, source, stage, defines, spv::kSpv##name, &spv::kSpv##name##Words},
 #include "scene/vulkan/shaders/builtin_shaders.def"
 #undef BRO_SCENE_SHADER
+    {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
 };
-static_assert(sizeof(kBuiltins) / sizeof(kBuiltins[0]) == kBuiltinCount);
+static_assert(sizeof(kBuiltins) / sizeof(kBuiltins[0]) == kBuiltinCount + 1);
 
 const BuiltinInfo* infoOf(BuiltinSceneShader shader) {
     const size_t i = static_cast<size_t>(shader);

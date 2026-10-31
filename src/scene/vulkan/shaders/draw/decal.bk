@@ -1,0 +1,98 @@
+// Projected box decal (PassDecal): reconstructs the opaque surface world
+// position from the depth snapshot, projects into the decal's unit box
+// [-0.5, 0.5]^3, and blends sun + sky lit albedo and emission.
+import scene;
+import lighting;
+from scene import camera;
+from lighting import lighting;
+
+@binding(2, 0) var u_scene_depth: sampler2d<vec4<f32>>;
+@binding(2, 1) var u_albedo_tex: sampler2d<vec4<f32>>;
+@binding(2, 2) var u_emission_tex: sampler2d<vec4<f32>>;
+
+struct DecalPush {
+    model: mat4f,
+    inv_model: mat4f,
+    modulate: vec4<f32>,
+    decal_up: vec4<f32>,
+    fades: vec4<f32>,
+    flags: vec4<i32>,
+}
+
+@vertex fn decal_vert(@location(0) in_pos: vec3<f32>, push: DecalPush) {
+    set_vertex_position(scene::mul4(camera.view_proj, scene::mul4(push.model, vec4<f32>(in_pos, 1.0))));
+}
+
+@fragment fn decal_frag(push: DecalPush) {
+    let screen_uv = frag_coord().xy / camera.viewport.xy;
+    let d = u_scene_depth.sample(screen_uv).x;
+
+    let ndc = vec4<f32>(screen_uv * 2.0 - 1.0, d, 1.0);
+    var view_pos: vec4<f32> = scene::mul4(camera.inv_proj, ndc);
+    view_pos = view_pos / view_pos.w;
+    let world_pos = scene::mul4(camera.inv_view, view_pos).xyz;
+
+    let nrm = normalize(cross(dpdy(world_pos), dpdx(world_pos)));
+
+    if (d <= 0.0) {
+        discard_fragment();
+    }
+
+    var pixel_world: f32 = 2.0 / (abs(camera.proj[1].y) * camera.viewport.y);
+    if (camera.proj[2].w != 0.0) {
+        pixel_world *= -view_pos.z;
+    }
+    let slack = pixel_world * (push.flags.z != 0 ? 0.75 : 0.001);
+    let to_local = scene::mat3_from4(push.inv_model);
+    let local_per_world = vec3<f32>(
+        length(vec3<f32>(to_local[0].x, to_local[1].x, to_local[2].x)),
+        length(vec3<f32>(to_local[0].y, to_local[1].y, to_local[2].y)),
+        length(vec3<f32>(to_local[0].z, to_local[1].z, to_local[2].z))
+    );
+    var local: vec3<f32> = scene::mul4(push.inv_model, vec4<f32>(world_pos, 1.0)).xyz;
+    let bound = vec3<f32>(0.5, 0.5, 0.5) + slack * local_per_world;
+    let abs_local = abs(local);
+    if (abs_local.x > bound.x || abs_local.y > bound.y || abs_local.z > bound.z) {
+        discard_fragment();
+    }
+    local = clamp(local, vec3<f32>(-0.5, -0.5, -0.5), vec3<f32>(0.5, 0.5, 0.5));
+
+    let uv = local.xz + 0.5;
+
+    var fade: f32 = 1.0;
+    if (push.fades.x > 0.0 && local.y > 0.0) {
+        fade *= pow(clamp(1.0 - local.y * 2.0, 0.0, 1.0), push.fades.x);
+    }
+    if (push.fades.y > 0.0 && local.y < 0.0) {
+        fade *= pow(clamp(1.0 + local.y * 2.0, 0.0, 1.0), push.fades.y);
+    }
+
+    let facing = dot(nrm, push.decal_up.xyz);
+    if (push.fades.z > 0.0) {
+        fade *= smoothstep(push.fades.z, 1.0, facing * 0.5 + 0.5);
+    }
+
+    fade *= push.modulate.w;
+    if (fade <= 0.001) {
+        discard_fragment();
+    }
+
+    let albedo = push.flags.x == 1 ? u_albedo_tex.sample(uv) : vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    let a = albedo.w * fade;
+
+    let ambient = lighting::open_sky_irradiance(world_pos, nrm);
+    let sun_dir = lighting.sun_direction.xyz;
+    var sun_col: vec3<f32> = lighting.sun_color.xyz * lighting.sun_color.w;
+    if (lighting::atmosphere_on()) {
+        sun_col *= lighting::sun_transmittance(world_pos);
+    }
+    let lit = ambient + sun_col * (max(dot(nrm, -sun_dir), 0.0) / scene::PI);
+    var rgb: vec3<f32> = albedo.xyz * push.modulate.xyz * lit * a;
+
+    if (push.flags.y == 1) {
+        let emission_strength = push.decal_up.w;
+        rgb += u_emission_tex.sample(uv).xyz * push.modulate.xyz * emission_strength * fade;
+    }
+
+    set_frag_output(0, vec4<f32>(rgb, a));
+}

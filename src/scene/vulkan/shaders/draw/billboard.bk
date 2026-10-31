@@ -1,0 +1,99 @@
+// World-anchored billboard quad (PassBillboard): camera-facing or Y-axis
+// locked quad with procedural SDF shapes (rect, circle, ring) or sampled
+// textures (premultiplied HTML panel or straight-alpha sprite), premultiplied
+// alpha output.
+import scene;
+from scene import camera;
+
+struct BillboardPush {
+    anchor: vec4<f32>,
+    right: vec4<f32>,
+    up: vec4<f32>,
+    half_size: vec2<f32>,
+    uv_min: vec2<f32>,
+    uv_max: vec2<f32>,
+    stroke_width: f32,
+    shape_mode: i32,
+    color: vec4<f32>,
+    stroke: vec4<f32>,
+}
+
+@binding(1, 0) var u_tex: sampler2d<vec4<f32>>;
+
+@vertex fn billboard_vert(push: BillboardPush) {
+    let vid = vertex_index() % 6;
+    var quad: vec2<f32> = vec2<f32>(-1.0, 1.0);
+    if (vid == 0 || vid == 3) {
+        quad = vec2<f32>(-1.0, -1.0);
+    } else if (vid == 1) {
+        quad = vec2<f32>(1.0, -1.0);
+    } else if (vid == 2 || vid == 4) {
+        quad = vec2<f32>(1.0, 1.0);
+    }
+    let world_pos = push.anchor.xyz
+                  + push.right.xyz * (quad.x * push.half_size.x)
+                  + push.up.xyz    * (quad.y * push.half_size.y);
+
+    let uv = vec2<f32>(quad.x * 0.5 + 0.5, 0.5 - quad.y * 0.5);
+    set_vertex_output(0, uv);
+    set_vertex_output(1, mix(push.uv_min, push.uv_max, uv));
+    set_vertex_position(scene::mul4(camera.view_proj, vec4<f32>(world_pos, 1.0)));
+}
+
+@fragment fn billboard_frag(
+    @location(0) in_uv: vec2<f32>,
+    @location(1) in_tex_uv: vec2<f32>,
+    push: BillboardPush
+) {
+    if (push.shape_mode == 0) {
+        var c: vec4<f32> = push.color;
+        if (push.stroke_width > 0.0) {
+            let d = min(in_uv, 1.0 - in_uv);
+            let border = min(d.x, d.y);
+            if (border < push.stroke_width) {
+                c = push.stroke;
+            }
+        }
+        if (c.w <= 0.0) {
+            discard_fragment();
+        }
+        set_frag_output(0, vec4<f32>(c.xyz * c.w, c.w));
+    } else if (push.shape_mode == 1) {
+        let p = in_uv - 0.5;
+        let d = length(p) * 2.0;
+        let aa = fwidth(d);
+        let alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+        if (alpha <= 0.0) {
+            discard_fragment();
+        }
+        let a = push.color.w * alpha;
+        set_frag_output(0, vec4<f32>(push.color.xyz * a, a));
+    } else if (push.shape_mode == 3) {
+        let p = in_uv - 0.5;
+        let d = length(p) * 2.0;
+        let aa = fwidth(d);
+        let alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+        if (alpha <= 0.0) {
+            discard_fragment();
+        }
+        let inner = 1.0 - clamp(push.stroke_width, 0.0, 1.0);
+        let ring_t = smoothstep(inner - aa, inner + aa, d);
+        let c = mix(push.color, push.stroke, ring_t);
+        let a = c.w * alpha;
+        set_frag_output(0, vec4<f32>(c.xyz * a, a));
+    } else if (push.shape_mode == 4) {
+        let tex = u_tex.sample(in_tex_uv);
+        let a = tex.w * push.color.w;
+        if (a <= 0.0) {
+            discard_fragment();
+        }
+        set_frag_output(0, vec4<f32>(tex.xyz * push.color.xyz * a, a));
+    } else {
+        let tex = u_tex.sample(in_tex_uv);
+        let c = tex * push.color;
+        if (c.w <= 0.0) {
+            discard_fragment();
+        }
+        set_frag_output(0, c);
+    }
+}

@@ -9,9 +9,10 @@
 #include "scene/vulkan/frame/scene_defaults.h"
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_gpu_resources.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "billboard.bk.src.h"
 
 #include <bromath/color.h>
 
@@ -33,8 +34,8 @@ bool PassBillboard::setup(SceneGpu& gpu) {
     info.pushConstantRangeCount = 1;
     info.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BillboardVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BillboardFrag);
+    vs_ = createKernelStageModule(dev, "draw/billboard.bk", kBkBillboardSrc, "billboard_vert");
+    fs_ = createKernelStageModule(dev, "draw/billboard.bk", kBkBillboardSrc, "billboard_frag");
     return vs_ && fs_;
 }
 
@@ -237,7 +238,7 @@ void PassBillboard::record(SceneFrame& frame) {
                                VK_COLOR_COMPONENT_A_BIT;
         SceneVkPipelineBuilder b;
         b.setLabel("billboard")
-         .setShaderStages(vs_, fs_)
+         .setShaderStages(vs_, fs_, "billboard_vert", "billboard_frag")
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)

@@ -6,9 +6,10 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_depth.h"
 #include "scene/vulkan/frame/scene_vk_descriptors.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "gaussian_splat.bk.src.h"
 
 #include <cmath>
 #include <cstring>
@@ -38,8 +39,8 @@ bool PassGaussianSplat::setup(SceneGpu& gpu) {
     info.pSetLayouts = &setLayout_;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
-    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::GaussianSplatVert);
-    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::GaussianSplatFrag);
+    vs_ = createKernelStageModule(dev, "draw/gaussian_splat.bk", kBkGaussianSplatSrc, "gaussian_splat_vert");
+    fs_ = createKernelStageModule(dev, "draw/gaussian_splat.bk", kBkGaussianSplatSrc, "gaussian_splat_frag");
     return vs_ && fs_;
 }
 
@@ -49,8 +50,8 @@ void PassGaussianSplat::cleanup(SceneGpu& gpu) {
     for (auto& [id, inst] : instances_) gpu.allocator.destroyBuffer(inst.buffer);
     instances_.clear();
     gpu.allocator.destroyBuffer(quad_);
-    SceneVkShaderCompiler::destroyModule(dev, vs_);
-    SceneVkShaderCompiler::destroyModule(dev, fs_);
+    SceneVkShaderModule::destroy(dev, vs_);
+    SceneVkShaderModule::destroy(dev, fs_);
     vs_ = fs_ = VK_NULL_HANDLE;
     if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
@@ -107,7 +108,7 @@ void PassGaussianSplat::record(SceneFrame& frame) {
                                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
                 SceneVkPipelineBuilder b;
                 b.setLabel("gaussian splat")
-                 .setShaderStages(vs_, fs_)
+                 .setShaderStages(vs_, fs_, "gaussian_splat_vert", "gaussian_splat_frag")
                  .setVertexInput(bindings, attributes)
                  .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                  .setPolygonMode(VK_POLYGON_MODE_FILL)
