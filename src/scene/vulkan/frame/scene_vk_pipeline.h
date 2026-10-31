@@ -88,10 +88,6 @@ public:
     /// Specify dynamic states (defaults to VIEWPORT and SCISSOR).
     SceneVkPipelineBuilder& setDynamicStates(const std::vector<VkDynamicState>& states);
 
-    /// A boolean specialization constant `id` for every stage (a stage that
-    /// does not declare it ignores it).
-    SceneVkPipelineBuilder& setSpecialization(uint32_t id, bool value);
-
     /// The name its statistics are logged under (BRO_VK_PIPELINE_STATS,
     /// render::logPipelineStats); "graphics" when unset.
     SceneVkPipelineBuilder& setLabel(std::string label) {
@@ -121,7 +117,6 @@ private:
     VkPipelineDepthStencilStateCreateInfo depthStencil_{};
     std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments_;
     std::vector<VkDynamicState> dynamicStates_;
-    std::vector<std::pair<uint32_t, VkBool32>> specializations_;
     std::string label_;
 
     // Dynamic rendering state

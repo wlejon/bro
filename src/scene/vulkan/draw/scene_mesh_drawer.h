@@ -44,7 +44,7 @@ struct SceneGpu;
 class SceneDefaults;
 
 /// Per-draw push constants of every mesh pipeline (and the terrain's) —
-/// shaders/common/scene_mesh_push.glsl. Exactly the 128 bytes every device offers.
+/// shaders/draw/mesh.bk's Push. Exactly the 128 bytes every device offers.
 struct alignas(16) MeshPushConstants {
     float model[16];      // the node's world matrix less the frame's eye (scene_view.h)
     float baseColor[4];
@@ -54,7 +54,7 @@ struct alignas(16) MeshPushConstants {
 };
 static_assert(sizeof(MeshPushConstants) == 128);
 
-/// MeshPushConstants::pbrParams[3] bits (scene_mesh_push.glsl).
+/// MeshPushConstants::pbrParams[3] bits (draw/mesh.bk).
 namespace mesh_flags {
 constexpr uint32_t kAlbedoMap = 1;
 constexpr uint32_t kNormalMap = 2;
@@ -73,16 +73,16 @@ constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3
 
 /// Scatter: the leaf mesh, one instance per leaf placed by the vertex shader
 /// from segment records. Tube: no vertex streams at all, the walls built from
-/// the vertex index and segment records (scene_procedural.glsl). Vegetation
+/// the vertex index and segment records (common/procedural.bk). Vegetation
 /// and InstancedVegetation are Static and Instanced carrying wind-sway
-/// records (scene_vegetation.glsl): a per-vertex or per-instance stream at
+/// records (common/vegetation.bk): a per-vertex or per-instance stream at
 /// locations 12-15. Scatter and Tube sway from records in their segment set.
 enum class MeshKind : uint8_t {
     Static, Instanced, Skinned, Scatter, Tube, Vegetation, InstancedVegetation,
 };
 constexpr int kMeshKindCount = 7;
 
-/// The kinds the vegetation shading (mesh.frag's SCENE_VEGETATION variant) draws.
+/// The kinds the vegetation shading (draw/mesh_main.bk's mesh_veg_* entry points) draws.
 constexpr bool vegetationShading(MeshKind k) {
     return k == MeshKind::Vegetation || k == MeshKind::InstancedVegetation || k == MeshKind::Scatter ||
            k == MeshKind::Tube;
@@ -170,10 +170,6 @@ public:
     bool setup(SceneGpu& gpu);
     void cleanup(SceneGpu& gpu);
 
-    /// Whether this frame has the atmosphere on: the pipelines its draws
-    /// select are built with the atmosphere's shading, or without it.
-    void setAtmosphere(bool on) { atmosphere_ = on; }
-
     /// Fill `out` for this frame. False when the node has nothing to draw.
     bool prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out);
     bool prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
@@ -259,7 +255,7 @@ private:
     template <typename Node>
     static uint32_t resolveShade(const Node& node, MeshDraw& out);
     CustomProgram* program(const CustomShaderState& cs, MeshKind kind);
-    /// A volume's: `fs` its volume.frag build, `vs` unset (vsVolume_).
+    /// A volume's: `fs` its volume_main build (draw/volume_main.bk), `vs` unset (vsVolume_).
     CustomProgram* volumeProgram(const CustomShaderState& cs);
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures,
@@ -274,7 +270,6 @@ private:
                                const std::vector<float>* leafSegments, const std::vector<float>* vegetation);
     bool prepareProcedural(SceneFrame& frame, InstancedMeshNode& node, MeshDraw& out);
     /// The pipeline state a draw selects beyond its shaders.
-    static constexpr uint32_t kAtmosphereVariant = 64, kAtmosphereConstantId = 2;
     uint32_t rasterVariant(const MeshDraw& draw) const;
     VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
     VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
@@ -291,7 +286,6 @@ private:
     // material set's place.
     VkDescriptorSetLayout nearSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout nearLayout_ = VK_NULL_HANDLE;
-    bool atmosphere_ = false;   // setAtmosphere
     VkShaderModule vs_[kMeshKindCount] = {};
     VkShaderModule vsPassthrough_[3] = {};
     VkShaderModule fs_[3][2][2] = {};

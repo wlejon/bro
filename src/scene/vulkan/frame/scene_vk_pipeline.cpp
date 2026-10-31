@@ -49,7 +49,6 @@ SceneVkPipelineBuilder::SceneVkPipelineBuilder() {
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::reset() {
     shaderStages_.clear();
     stageEntryNames_.clear();
-    specializations_.clear();
     vertexBindings_.clear();
     vertexAttributes_.clear();
 
@@ -206,11 +205,6 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setDynamicStates(const std::vect
     return *this;
 }
 
-SceneVkPipelineBuilder& SceneVkPipelineBuilder::setSpecialization(uint32_t id, bool value) {
-    specializations_.emplace_back(id, value ? VK_TRUE : VK_FALSE);
-    return *this;
-}
-
 namespace pipeline_async {
 namespace {
 std::atomic<int> s_inFlight{0};
@@ -276,23 +270,9 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     colorBlending.attachmentCount = static_cast<uint32_t>(blends.size());
     colorBlending.pAttachments = blends.data();
 
-    // The builder's specialization constants, on every stage.
-    std::vector<VkBool32> specData;
-    std::vector<VkSpecializationMapEntry> specEntries;
-    for (const auto& [id, value] : specializations_) {
-        specEntries.push_back({id, static_cast<uint32_t>(specData.size() * sizeof(VkBool32)), sizeof(VkBool32)});
-        specData.push_back(value);
-    }
-    VkSpecializationInfo spec{};
-    spec.mapEntryCount = static_cast<uint32_t>(specEntries.size());
-    spec.pMapEntries = specEntries.data();
-    spec.dataSize = specData.size() * sizeof(VkBool32);
-    spec.pData = specData.data();
     std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
     for (size_t i = 0; i < stages.size() && i < stageEntryNames_.size(); ++i)
         stages[i].pName = stageEntryNames_[i].c_str();
-    if (!specEntries.empty())
-        for (auto& st : stages) st.pSpecializationInfo = &spec;
 
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;

@@ -73,7 +73,7 @@ void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindin
         {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32},   // colour
         {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48},   // tangent
     };
-    // The vegetation record: four vec4s at locations 12-15 (scene_vegetation.glsl).
+    // The vegetation record: four vec4s at locations 12-15 (common/vegetation.bk).
     const auto vegetation = [&](uint32_t binding, VkVertexInputRate rate) {
         bindings.push_back({binding, 64, rate});
         for (uint32_t i = 0; i < 4; ++i)
@@ -115,7 +115,7 @@ bool SceneMeshDrawer::setup(SceneGpu& gpu) {
         return false;
     }
     // A volume's near pass: its grid's light and depth images in the
-    // material set's place, written (volume.frag's VOLUME_NEAR_PASS).
+    // material set's place, written (draw/volume_near.bk).
     SceneVkDescriptorLayoutBuilder near;
     near.addBinding(6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     near.addBinding(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -179,23 +179,16 @@ constexpr uint32_t kTwoSided = 2;
 constexpr uint32_t kLines = 4;
 constexpr uint32_t kMirrored = 8;
 constexpr uint32_t kNoDepth = 16;
-// It cuts pixels (a near clip or an alpha cutoff): mesh.frag's discards are
-// built in only then (MESH_CUTS). A fragment stage that can discard is
-// depth-tested after it shades, so every layer behind the nearest is shaded
-// too.
+// It cuts pixels (a near clip or an alpha cutoff): the *_cuts_frag entry
+// points (draw/mesh_main.bk), the only ones that discard. A fragment stage
+// that can discard is depth-tested after it shades, so every layer behind
+// the nearest is shaded too.
 constexpr uint32_t kCuts = 32;
-// The frame has the atmosphere on: the lit stages are built with its code
-// (scene_lighting.glsl's SCENE_ATMOSPHERE), and without it when it is off.
-constexpr uint32_t kAtmosphere = 64;
-constexpr uint32_t kCount = 128;
-// mesh.frag's MESH_CUTS.
-constexpr uint32_t kCutsConstantId = 1;
-// scene_lighting.glsl's SCENE_ATMOSPHERE.
-constexpr uint32_t kAtmosphereConstantId = 2;
+constexpr uint32_t kCount = 64;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
-    return (atmosphere_ ? raster::kAtmosphere : 0u) | (draw.translucent ? raster::kTranslucent : 0u) |
+    return (draw.translucent ? raster::kTranslucent : 0u) |
            (draw.twoSided ? raster::kTwoSided : 0u) |
            (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
            (draw.noDepthTest ? raster::kNoDepth : 0u) |
@@ -229,9 +222,7 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
                   (rasterBits & raster::kMirrored) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE)
      .setTarget(target)
      .setDepthBias(true)
-     .setDynamicStates(dynamic)
-     .setSpecialization(raster::kCutsConstantId, (rasterBits & raster::kCuts) != 0)
-     .setSpecialization(raster::kAtmosphereConstantId, (rasterBits & raster::kAtmosphere) != 0);
+     .setDynamicStates(dynamic);
     if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {
@@ -357,7 +348,7 @@ VkDescriptorSet SceneMeshDrawer::segmentSet(SceneFrame& frame, float (&header)[1
                                             const std::vector<float>& records,
                                             const std::vector<float>* leafSegments,
                                             const std::vector<float>* vegetation) {
-    constexpr size_t kHeader = 16;   // scene_procedural.glsl's header[4]
+    constexpr size_t kHeader = 16;   // common/procedural.bk's header(0..3)
     const size_t leafFloats = leafSegments ? (leafSegments->size() + 3) / 4 * 4 : 0;
     // Records are whole vec4s, so the vegetation starts on one.
     const size_t recordFloats = (records.size() + 3) / 4 * 4;

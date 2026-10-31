@@ -428,8 +428,7 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
     if (!draw.volume || !draw.custom || !draw.customSet) return;
     CustomProgram* prog = volumeProgram(*draw.custom);
     if (!prog) return;
-    const bool atmosphere = atmosphere_;
-    VkPipeline pipeline = prog->pipelines.get(atmosphere ? kAtmosphereVariant : 0u, target, [&] {
+    VkPipeline pipeline = prog->pipelines.get(0u, target, [&] {
         // Over the volumes before it: their light * its transmittance (the
         // source alpha) + its light, the transmittances multiplied; the
         // medium's depth overwritten.
@@ -455,7 +454,6 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
          .setTarget(target)
          .setColorBlendAttachment(0, blend)
          .setColorBlendAttachment(1, overwrite)
-         .setSpecialization(kAtmosphereConstantId, atmosphere)
          .setLabel("volume")
          .disableDepthTest();
         return b.build(device_, layout_);
@@ -465,7 +463,7 @@ void SceneMeshDrawer::recordVolume(VkCommandBuffer cmd, const TargetFormat& targ
     const VkDescriptorSet sets[3] = {cameraSet, lightingSet, depthSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
-    // The volume's place as its first instance: volume.frag's meter slot.
+    // The volume's place as its first instance: draw/volume.bk's meter slot.
     vkCmdDraw(cmd, 3, 1, 0, index);
 }
 
@@ -479,8 +477,7 @@ void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet came
                                        VkDescriptorSet nearSet, const MeshDraw& draw, uint32_t index) {
     if (!volumeHasMedium(draw)) return;
     CustomProgram* prog = volumeProgram(*draw.custom);
-    const bool atmosphere = atmosphere_;
-    VkPipeline pipeline = prog->nearPipelines.get(atmosphere ? kAtmosphereVariant : 0u, TargetFormat{}, [&] {
+    VkPipeline pipeline = prog->nearPipelines.get(0u, TargetFormat{}, [&] {
         SceneVkPipelineBuilder b;
         b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsVolume_, "volume_vert")
          .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, prog->fsNear, prog->fsNearEntry.c_str())
@@ -489,7 +486,6 @@ void SceneMeshDrawer::recordVolumeNear(VkCommandBuffer cmd, VkDescriptorSet came
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)
          .setTarget(TargetFormat{})
-         .setSpecialization(kAtmosphereConstantId, atmosphere)
          .setLabel("volume near")
          .disableDepthTest();
         return b.build(device_, nearLayout_);

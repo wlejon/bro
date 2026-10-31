@@ -140,7 +140,6 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     shadows_.beginFrame(gpu_, renderer);
     environment_.update(gpu_, cmd, renderer);
     atmosphere_.beginFrame(frame);
-    meshes_.setAtmosphere(atmosphere_.active());
     clock.step("frame setup");
     frame.lighting = sceneLighting(renderer, gpu_, frame.view);
     writeCameraSet(frame);
