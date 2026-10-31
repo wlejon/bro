@@ -96,6 +96,20 @@ struct Cache {
 
     // The next batch's most tiles (pace()): up to producePerUpdate.
     uint32_t batchSize = 1;
+    // A produced tile's GPU ms, learned from its batches' spans: over every
+    // level (-1 before a batch is timed) and by level (-1: none of it
+    // timed yet), as a producer's cost often follows the level (a coarse
+    // tile's cells each stand for more ground to average); its pending
+    // tiles' ms, as of its last update; the ms of its share of the
+    // refinement not spent yet, and what this update's batch may spend.
+    double tileMs = -1.0;
+    std::vector<double> levelMs;
+    double wantMs = 0.0;
+    double credit = 0.0;
+    double spendMs = std::numeric_limits<double>::infinity();
+    double costOf(uint32_t level) const {
+        return level < levelMs.size() && levelMs[level] > 0.0 ? levelMs[level] : tileMs;
+    }
 
     // Batches produced in the background stream (VulkanCompute::
     // beginBackground), oldest first: in the gap after their frame, so no
@@ -104,6 +118,7 @@ struct Cache {
     struct InFlight {
         std::vector<tilecache::Production> tiles;
         uint64_t ticket = 0;
+        std::shared_ptr<render::ComputeSpan> span;   // its GPU time, when timestamps are there
     };
     std::deque<InFlight> inFlight;
 };
@@ -248,27 +263,70 @@ void writeDrawList(Cache& c) {
     c.drawList->write(0, records.data(), records.size() * sizeof(int32_t), &err);
 }
 
-// The next batch's size, by how the refinement fits the gap a frame leaves
-// before the next (Engine::refineLoad: production runs there, after the
-// frame's work), additive up and halving down, as a network paces by its
-// losses: one tile more while the newest finished refinement takes under
-// 90% of the gap, half as many once it overran it. Every cache paces by the
-// same signal, so together they share the gap as flows share a link. At
-// least half of producePerUpdate: a view still coarse is often what makes
-// the frames heavy (on the planet, 3.5 to 4 ms a frame until the ground and
-// clouds refine, 2.3 after), leaving no gap at all, and slowing production
-// then keeps them coarse: with a floor of one tile, turning 180 degrees at
-// 1.3 km or at 27.6 km left the view unconverged 600 frames later, and the
-// 27.6 km turn's frames rose from 2.93 to 3.34 ms, where half converges in
-// 60 to 90. No scene, no load: producePerUpdate is reached a tile an update.
+// What the next batch may spend, from the milliseconds the frame leaves its
+// refinement (Engine::refineBudgetMs: production runs in the gap after the
+// frame's work) and what this cache's tiles cost. The caches share that
+// budget in proportion to the work each has pending (its pending tiles at
+// its measured ms a tile), and each spends its share on whole tiles in
+// their order (takeProductions' budget), carrying the rest to the next
+// update, so a share under a tile's cost still produces one every few
+// frames, the dearest included. Pacing by a tile count instead (one more
+// while the gap held, half as many once it overran, at least half of
+// producePerUpdate so a coarse heavy view still refined) held the planet's
+// three caches at their floors through a fast turn: its refinement took
+// 1.05 ms of a 0.88 ms gap and 50 of 120 frames would have run into the
+// next; one ms a tile for every level let two batches of the planet's
+// coarse ground (1.3 ms a tile, 16 times a near one) through at 4 to 5 ms.
+// Until a batch is timed (or without timestamps) half of producePerUpdate
+// a batch; without a scene, producePerUpdate.
 engine::Engine* g_engine = nullptr;
 void pace(Cache& c) {
-    const uint32_t floor = (c.producePerUpdate + 1) / 2;
-    const double load = g_engine ? g_engine->refineLoad() : -1.0;
-    if (load > 1.0)
-        c.batchSize = std::max(floor, c.batchSize / 2);
-    else if (load < 0.9)
-        c.batchSize = std::min(c.producePerUpdate, std::max(floor, c.batchSize + 1));
+    const double budget = g_engine ? g_engine->refineBudgetMs() : -1.0;
+    c.spendMs = std::numeric_limits<double>::infinity();
+    if (budget < 0.0) {
+        c.batchSize = c.producePerUpdate;
+        return;
+    }
+    if (c.tileMs <= 0.0) {
+        c.batchSize = (c.producePerUpdate + 1) / 2;
+        return;
+    }
+    c.wantMs = c.tree.pending() * c.tileMs;
+    double total = 0.0;
+    for (const Cache* o : s_live) total += o->wantMs;
+    const double share = total > 0.0 ? budget * c.wantMs / total : 0.0;
+    double dearest = c.tileMs;
+    for (const double ms : c.levelMs) dearest = std::max(dearest, ms);
+    c.credit = std::min(c.credit + share, share + dearest);
+    c.spendMs = c.credit;
+    c.batchSize = c.producePerUpdate;
+}
+
+// A retired batch's span into the cache's costs: the mean a tile, and each
+// level in the batch toward its estimate scaled by how far the batch's
+// estimates missed, by the share of the estimate the level held (a batch of
+// one level corrects that level alone; a mixed one, each by its part).
+void timeBatch(Cache& c, const Cache::InFlight& f) {
+    if (!f.span || !f.span->ready() || f.tiles.empty()) return;
+    const double ms = f.span->ms();
+    if (ms <= 0.0) return;
+    const double perTile = ms / static_cast<double>(f.tiles.size());
+    if (c.tileMs <= 0.0) c.tileMs = perTile;
+    std::vector<std::pair<uint32_t, double>> byLevel;   // level, its estimated ms in the batch
+    double predicted = 0.0;
+    for (const tilecache::Production& p : f.tiles) {
+        const double est = c.costOf(p.id.level);
+        predicted += est;
+        auto it = std::find_if(byLevel.begin(), byLevel.end(), [&](const auto& e) { return e.first == p.id.level; });
+        if (it == byLevel.end()) byLevel.push_back({p.id.level, est});
+        else it->second += est;
+    }
+    const double scale = ms / predicted;
+    for (const auto& [level, est] : byLevel) {
+        if (level >= c.levelMs.size()) c.levelMs.resize(level + 1, -1.0);
+        c.levelMs[level] = c.costOf(level) * std::pow(scale, 0.5 * est / predicted);
+    }
+    c.tileMs = 0.8 * c.tileMs + 0.2 * perTile;
 }
 
 // The batches the GPU has finished, ready: their slots logged on the layer
@@ -286,6 +344,7 @@ bool retireBatches(Cache& c) {
             slots.push_back(p.slot);
         }
         if (compute) compute->acquireBackground(f.ticket);
+        timeBatch(c, f);
         c.inFlight.pop_front();
         any = true;
     }
@@ -334,13 +393,23 @@ Value js_update(Value self, std::span<const Value> args) {
     const uint32_t dropped = c->tree.select(v);
 
     pace(*c);
-    const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->batchSize);
+    const Cache* costs = c;
+    const std::vector<tilecache::Production> batch =
+        std::isfinite(c->spendMs)
+            ? c->tree.takeProductions(c->batchSize, c->spendMs, [costs](uint32_t level) { return costs->costOf(level); })
+            : c->tree.takeProductions(c->batchSize);
+    for (const tilecache::Production& p : batch)
+        if (std::isfinite(c->spendMs)) c->credit -= c->costOf(p.id.level);
     render::VulkanCompute* compute = engineCompute();
     // The lookup without the tiles whose slots the batch takes (or that
     // select dropped out of date), before the batch: its work waits for what
     // is submitted before it, so no ray reads a slot as it is rewritten.
     if (retired || dropped || !batch.empty()) writeLookup(*c);
-    if (!batch.empty() && compute) compute->beginBackground();
+    std::shared_ptr<render::ComputeSpan> span;
+    if (!batch.empty() && compute) {
+        compute->beginBackground();
+        span = compute->beginSpan();
+    }
     if (!batch.empty()) {
         std::string err;
         // A producer that writes no range leaves NaN, which is no range: a
@@ -402,6 +471,8 @@ Value js_update(Value self, std::span<const Value> args) {
         // Ready once the GPU has done it (retireBatches, a later update).
         Cache::InFlight f;
         f.tiles = batch;
+        if (span) compute->endSpan(*span);
+        f.span = std::move(span);
         f.ticket = compute ? compute->endBackground() : 0;
         c->inFlight.push_back(std::move(f));
     }
@@ -495,6 +566,10 @@ void decorateCache(ev::ObjectBuilder& b) {
         o.set("evicted", static_cast<double>(s.evicted));
         o.set("rangesInFlight", static_cast<double>(c->rangeReadbacks.size()));
         o.set("batchSize", static_cast<double>(c->batchSize));
+        o.set("tileMs", c->tileMs);
+        ev::ArrayBuilder levels(static_cast<uint32_t>(c->levelMs.size()));
+        for (uint32_t i = 0; i < c->levelMs.size(); ++i) levels.set(i, c->levelMs[i]);
+        o.set("levelMs", levels.get());
         return o.get();
     });
 }

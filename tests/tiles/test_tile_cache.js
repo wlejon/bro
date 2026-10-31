@@ -244,17 +244,17 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(again.every((t) => t.parent < 0 || batchOf.get(t.parent) < batchOf.get(t.slot)),
            'a parent in an earlier batch than its children');
 
-    // The batches pace themselves by the frames: half of producePerUpdate
-    // at first, then a tile more an update while no scene runs over its
-    // frame target (none here), never past producePerUpdate.
+    // The batches pace themselves by the gap a scene's frames leave; with no
+    // scene (none yet here) each takes producePerUpdate, as many as can be
+    // produced (a child waits for its parent's batch).
     const paced = makeCache({ producePerUpdate: 6 });
     const made = [];
     for (let i = 0; i < 12; i++) {
         made.push(paced.update(near));
         advanceTime(16);
     }
-    assert(Math.max(...made) === 6 && made.every((n, i) => n <= i + 3),
-           `batches grow a tile an update up to producePerUpdate (${made})`);
+    assert(Math.max(...made) === 6 && made.every((n) => n <= 6),
+           `without a scene, batches of up to producePerUpdate (${made})`);
     assert(paced.stats.batchSize === 6, `and hold there (${paced.stats.batchSize})`);
 
     // Height ranges: 40 m up, under a 300 m worst case every tile's slab
@@ -550,6 +550,27 @@ if (!bro.kernel.available || !bro.tiles) {
         const reproduced = shown(again);
         assert(Math.abs(reproduced - expect(pool[cellAt(again)])) < 4,
                `a slot produced again is copied (${reproduced} for ${pool[cellAt(again)].toFixed(3)})`);
+
+        // With a scene's frames timed, each batch is timed on the GPU and
+        // the cache learns its tiles' cost, overall and by level; batches
+        // then spend the gap the frames leave, and the cache still settles.
+        perf.gpuFrameMs();
+        const timed = makeCache({ producePerUpdate: 64 });
+        let frames = 0;
+        while (timed.pending > 0 && frames < 200) {
+            timed.update(near);
+            sc.captureFrame();
+            advanceTime(16);
+            ++frames;
+        }
+        assert(timed.pending === 0, `paced by a scene, the cache settles (${frames} frames)`);
+        for (let i = 0; i < 4; i++) {   // its batches retire
+            sc.captureFrame();
+            advanceTime(16);
+            timed.update(near);
+        }
+        assert(timed.stats.tileMs > 0, `its tiles' cost is timed (${timed.stats.tileMs} ms)`);
+        assert(timed.stats.levelMs.some((ms) => ms > 0), `and learned by level (${timed.stats.levelMs})`);
     }
 
     // The errors a script gets.

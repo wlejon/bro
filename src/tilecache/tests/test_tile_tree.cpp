@@ -376,7 +376,27 @@ void testRefreshDropsUnwanted() {
 
 } // namespace
 
+// A batch with a budget stops before the tile that would pass it, in order:
+// a dear tile is not skipped for cheaper ones after it.
+void testBudget() {
+    TileTree tree(planeConfig(512));
+    tree.select(viewAt(13.7, 10, 21.3));
+    auto root = tree.takeProductions(8, 0.5, [](uint32_t) { return 1.0; });
+    check(root.empty(), "a budget under the first tile's cost takes nothing");
+    root = tree.takeProductions(8, 1.0, [](uint32_t level) { return level == 0 ? 1.0 : 0.1; });
+    check(root.size() == 1 && root[0].id.level == 0, "the root alone fits");
+    for (const Production& p : root) tree.markReady(p.id);
+    auto four = tree.takeProductions(8, 0.45, [](uint32_t) { return 0.1; });
+    check(four.size() == 4, "0.45 ms at 0.1 a tile takes four (" + std::to_string(four.size()) + ")");
+    for (const Production& p : four) tree.markReady(p.id);
+    auto dear = tree.takeProductions(8, 1.5, [](uint32_t level) { return level == 2 ? 2.0 : 0.1; });
+    check(dear.empty(), "a dear tile first stops the batch rather than being skipped");
+    auto open = tree.takeProductions(3);
+    check(open.size() == 3, "without a cost, n tiles");
+}
+
 int main() {
+    testBudget();
     testPlaneSelection();
     testEvictionAndRefill();
     testRefreshDropsUnwanted();

@@ -38,16 +38,18 @@
 //   turn past 2.78 ms). produce must give its kernels only buffers nothing
 //   rewrites until the batch is ready (the batch's own, the pools,
 //   constants), as the GPU may still be reading them a frame later.
-// - The batch size paces itself by how the refinement fits that gap
-//   (Engine::refineLoad: the newest finished background submission's GPU
-//   time over the frame target, 2.78 ms at 360 fps, less the scene's newest
-//   render and a margin): one tile more each update while it takes under
-//   90% of the gap, half as many once it overran it, at least half of
-//   producePerUpdate (a view still coarse is often what makes the frames
-//   heavy, leaving no gap, and starving it keeps it so; unpaced, a jump
-//   that wants thousands of tiles at once stalls frames). Every cache paces
-//   by the one signal, so together they share the gap. Without a scene the
-//   batches grow to producePerUpdate.
+// - Batches pace themselves by the milliseconds that gap holds (the frame
+//   target, 2.78 ms at 360 fps, less the scene's newest render and a
+//   margin, and never under a seventh of the target, so a view heavy
+//   because it is still coarse refines anyway) and what the cache's tiles
+//   cost, timed batch by batch on the GPU and learned by level (a
+//   producer's coarse tiles often cost more: each cell averages more
+//   ground). The caches share the gap in proportion to the work each has
+//   pending, and each spends its share on whole tiles in their order,
+//   carrying the rest to the next update, so a share under a tile's cost
+//   still produces one every few frames. Until a batch is timed, half of
+//   producePerUpdate a batch; without a scene, producePerUpdate. A tile
+//   dearer than the gap still runs past it when its turn comes.
 // - Tiles the view no longer wants are evicted when a slot is needed, the
 //   finest first (of equals, the least recently wanted), and produced again
 //   if wanted again: coarse tiles are few, wanted again first, and dearest
@@ -267,7 +269,9 @@ const terrain = bro.tiles.createCache({
 // cache.cells, cache.capacity
 // cache.stats       { produced, evicted } since creation, and rangesInFlight:
 //                   batches whose ranges the GPU has not handed back yet;
-//                   batchSize, the most the next batch holds (as paced)
+//                   batchSize, the most the next batch holds; tileMs, a
+//                   produced tile's GPU ms (-1 before a batch is timed),
+//                   and levelMs, by level (-1 where none was timed)
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 // cache.refresh()   every ready tile is out of date (what produce reads has

@@ -551,25 +551,24 @@ double Engine::gpuFrameMs(bool wait) {
     return lastGpuFrameMs_;
 }
 
-double Engine::refineLoad() {
-    double load = -1.0;
+double Engine::refineBudgetMs() {
+    double budget = -1.0;
 #if BRO_WITH_3D
-    if (!vulkanContext_) return load;
-    const double refine = vulkanContext_->compute().lastBackgroundMs();
-    if (refine < 0.0) return load;
+    if (!vulkanContext_) return budget;
     // What the GPU must keep free of it: the present, the swapchain's
     // handoff and a frame's CPU-side jitter.
     constexpr double kMarginMs = 0.25;
+    constexpr double kLeastShare = 1.0 / 7.0;
     for (auto& sg : sceneGraphs_) {
         if (!sg.graph) continue;
         const double ms = sg.graph->renderer().latestGpuMs();
         const double target = sg.graph->renderer().frameTargetMs();
         if (ms < 0.0 || target <= 0.0) continue;
-        const double gap = std::max(0.05, target - ms - kMarginMs);
-        load = std::max(load, refine / gap);
+        const double b = std::max(kLeastShare * target, target - ms - kMarginMs);
+        budget = budget < 0.0 ? b : std::min(budget, b);
     }
 #endif
-    return load;
+    return budget;
 }
 
 bool Engine::gpuPasses(std::vector<std::pair<std::string, double>>& passes,

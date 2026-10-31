@@ -25,6 +25,8 @@
 // No GPU here: the caller owns the pools and runs the producers.
 
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -164,7 +166,11 @@ public:
     /// batch): batches are produced in order, so a child's batch runs after
     /// its parent's has, ready or not. Each must then be markReady()'d or
     /// abandon()'d; abandoning a tile abandons the children taken after it.
-    std::vector<Production> takeProductions(uint32_t n);
+    /// With `cost` (a tile's cost by its level), the batch also stops before
+    /// the tile that would take its costs past `budget`, so it keeps to the
+    /// order rather than skipping a dear tile for cheaper ones after it.
+    std::vector<Production> takeProductions(uint32_t n, double budget = std::numeric_limits<double>::infinity(),
+                                            const std::function<double(uint32_t level)>& cost = {});
     void markReady(const TileId& id);
     /// The production failed: the slot goes back, the tile stays missing.
     void abandon(const TileId& id);

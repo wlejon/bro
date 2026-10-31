@@ -363,7 +363,17 @@ bool TileTree::before(const Node& p) const {
     return p.state == State::Ready && p.gen == generation_;
 }
 
-std::vector<Production> TileTree::takeProductions(uint32_t n) {
+std::vector<Production> TileTree::takeProductions(uint32_t n, double budget,
+                                                  const std::function<double(uint32_t level)>& cost) {
+    double spent = 0.0;
+    bool full = false;
+    auto afford = [&](const Node& m) {
+        if (!cost) return true;
+        const double c = cost(m.id.level);
+        if (spent + c > budget) return !(full = true);
+        spent += c;
+        return true;
+    };
     std::vector<int32_t> missing;
     for (const int32_t i : wanted_)
         if (nodes_[i].state == State::Missing) missing.push_back(i);
@@ -407,6 +417,7 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
             if (p.slot < 0 || !before(p)) continue;
             parentSlot = p.slot;
         }
+        if (!afford(m)) break;
         if (freeSlots_.empty()) {
             if (!victimsChosen) {
                 victimsChosen = true;
@@ -436,7 +447,7 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
     }
     // Then the wanted tiles out of date, into their own slots, ranked as the
     // missing are: they draw, only from cells made for what has changed.
-    if (out.size() < n && generation_ > 0) {
+    if (out.size() < n && generation_ > 0 && !full) {
         std::vector<int32_t> stale;
         for (const int32_t i : wanted_)
             if (this->stale(nodes_[i]) && !nodes_[i].again) stale.push_back(i);
@@ -456,6 +467,7 @@ std::vector<Production> TileTree::takeProductions(uint32_t n) {
                 if (p.slot < 0 || !before(p)) continue;
                 parentSlot = p.slot;
             }
+            if (!afford(m)) break;
             m.again = true;
             m.batch = batch_ + 1;
             m.takenGen = generation_;

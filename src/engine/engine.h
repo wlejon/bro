@@ -505,13 +505,13 @@ public:
     bool screenshot(const std::string& path, int x, int y, int w, int h);
     std::vector<uint8_t> capturePixels();
     double gpuFrameMs(bool wait = true);
-    /// How the newest finished refinement (the background work held for the
-    /// gap after a frame: render::VulkanCompute::beginBackground) fits that
-    /// gap: its GPU ms over what the frame target leaves after the heaviest
-    /// scene's newest render and a margin, as a ratio (1: it fills the gap;
-    /// -1 before any, or without a scene). Waits for nothing. What a tile
-    /// cache's production paces itself by.
-    double refineLoad();
+    /// The GPU milliseconds a frame's refinement (the background work held
+    /// for the gap after it: render::VulkanCompute::beginBackground) may
+    /// take: what the frame target leaves after the heaviest scene's newest
+    /// render and a margin, and never under a seventh of the target, so a
+    /// view heavy because it is still coarse refines anyway. -1 without a
+    /// timed scene render. Waits for nothing. What the tile caches share.
+    double refineBudgetMs();
     /// The last timed scene render's GPU milliseconds pass by pass (the
     /// page's scenes added by name), and its async compute stream's
     /// (`computed`: there was one). The first call turns the passes' stamps
