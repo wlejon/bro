@@ -626,9 +626,22 @@ HostGcCycleStats hostGcCycleStats() {
     return st;
 }
 
+void hostStartGcHelpers() {
+    static bool started = false;
+    if (started || !isWebHostGlobalsInstalled()) return;
+    started = true;
+    if (!envFlag("BRO_GC_PRESTART_HELPERS", true)) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    const unsigned helpers = bronze::embed::startGcHelperThreads();
+    if (gcLogEnabled()) LOG_INFO("gc: %u helper threads started in %.3f ms", helpers, msSince(t0));
+}
+
 uint32_t hostCollectBetweenFrames() {
     if (!isWebHostGlobalsInstalled()) return 0;
     if (isExecutionStackActive()) return 0;
+    // The first slot after a frame is presented: the helpers start here
+    // rather than in the first collection that wants them.
+    hostStartGcHelpers();
     FrameGc f;
     if (!s_bootCollected) requestFor("boot", /*idleSpell=*/false);
     // A busy page under memory pressure is collected by a cycle like any

@@ -9,6 +9,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/host_headless.h"
 #include "render/vulkan_debug.h"
 #include "platform/desktop_notifications.h"
@@ -416,6 +417,12 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         // "first frame N ms after start") measures, so a launch's cost reads
         // the same headless as windowed and owes nothing to the test script.
         engine->flush();
+        // Headless runs no between-frames slot, where a window starts the
+        // collector's helper threads: they start here, after the boot and
+        // before the script, so its first parallel collection does not
+        // create them in its pause. A page without scripts has no realm
+        // yet; then they start once the script's is installed, below.
+        bro::bronze_host::hostStartGcHelpers();
 
         if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
             exitCode = 1;
@@ -466,6 +473,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
                 bro::bronze_host::installWebHostGlobals(*engine);
             }
+            bro::bronze_host::hostStartGcHelpers();
             bool ok = bro::bronze_host::evalScriptFile(*engine, scriptPath);
             drainAppReloads();
             if (!ok || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {

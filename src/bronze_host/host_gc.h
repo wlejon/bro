@@ -42,6 +42,17 @@ enum : uint32_t {
 /// one rather than inside a frame. Returns the kGcWork bits of what it did.
 uint32_t hostCollectBetweenFrames();
 
+/// Creates the collector's parked helper threads for the main thread's heap
+/// (bronze embed::startGcHelperThreads) once, so that the first parallel
+/// minor collection or mark slice does not create them inside its pause
+/// (0.7 ms of an eight-thread first minor). Called where a pause costs
+/// nothing: the first between-frames slot (hostCollectBetweenFrames, which
+/// then collects the boot data) and, in headless, after the page's first
+/// frame, before the test script runs. A no-op before the main realm exists,
+/// after the first call, and under BRO_GC_PRESTART_HELPERS=0 (the A/B switch:
+/// the first collection to want them creates them, as before).
+void hostStartGcHelpers();
+
 /// The marking cycles hostCollectBetweenFrames has run (perf.stats().bronze):
 /// how many it finished, how many frames the last one took from its start to
 /// its finish, and whether one is open now.

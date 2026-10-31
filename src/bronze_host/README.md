@@ -90,7 +90,14 @@ frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
   heap's own collections.
 - A slice marks on brass's parked marker threads (`BRASS_GC_MARK_POOL=0`
   creates and joins them per slice, as before, which cost a 0.4 ms slice
-  most of its parallelism).
+  most of its parallelism). The same threads copy a parallel minor
+  collection. `hostStartGcHelpers` creates them once, in the first
+  between-frames slot (headless: after the page's first frame, before the
+  test script), through bronze `embed::startGcHelperThreads`, rather than in
+  the first collection that wants them, where creating seven took 0.7 ms of
+  its pause. `BRO_GC_PRESTART_HELPERS=0` leaves them to that collection, for
+  A/B. Workers' heaps never start theirs ahead: most never collect in
+  parallel.
 
 `BRO_GC_INCREMENTAL=0` restores the stop-the-world policy (a full collection
 between frames at 75% of the threshold), for A/B. `BRO_GC_CYCLE_START`
