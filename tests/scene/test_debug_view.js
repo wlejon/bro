@@ -1,13 +1,13 @@
-// scene.setDebugView(name): the frame is what the custom chunks answering
-// SCENE_DEBUG(name) put out with sceneDebugOut(rgb), unlit at an exposure of
-// 1 and a linear tone map, over black (no sky):
+// scene.setDebugView(name): the frame is what the custom modules answering
+// SCENE_DEBUG(name) put out with mesh::debug(s, rgb) or Light.debug, unlit at
+// an exposure of 1 and a linear tone map, over black (no sky):
 //   - an answering surface shows its colour as is, whatever the light and
 //     the auto exposure would make of it, and the same at another view's;
 //   - a surface that does not answer is a dim grey (0.06 to 0.26, shown
 //     through the linear tone map's display encoding);
 //   - an answering volume covers what is behind it with its colour; one
 //     that does not answer lets all through;
-//   - debugViews() names the views the chunks named and the one shown;
+//   - debugViews() names the views the modules named and the one shown;
 //   - no view: the frame as it was.
 
 function freshScene(size) {
@@ -42,9 +42,15 @@ if (!scene) {
         color: [0.5, 0.5, 0.5],
     });
     plane.setShader({
-        fragment: `void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
-                                     inout float roughness, inout vec3 emissive, inout float alpha) {
-                if (SCENE_DEBUG(probe) && gl_FragCoord.x < 32.0) sceneDebugOut(vec3(0.25, 0.0, 0.0));
+        module: `
+            module hook;
+            import scene;
+            import mesh;
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                if (SCENE_DEBUG(probe) && v.pixel.x < 32.0) {
+                    return mesh::debug(s, vec3<f32>(0.25, 0.0, 0.0));
+                }
+                return s;
             }`,
     });
     const normal = scene.captureFrame();
@@ -66,16 +72,21 @@ if (!scene) {
     scene.createLight({ type: 'directional', direction: [0.3, -0.8, 0.5], color: [1, 1, 1], intensity: 400000 });
     img = scene.captureFrame();
     for (let i = 0; i < 4; i++) img = scene.captureFrame();
-    assert(Math.abs(px(img, 20, 44)[0] - red[0]) <= 1, `a view's colour is the chunk's, not the light's (${px(img, 20, 44)}, ${red})`);
+    assert(Math.abs(px(img, 20, 44)[0] - red[0]) <= 1, `a view's colour is the module's, not the light's (${px(img, 20, 44)}, ${red})`);
 
     // A volume answering 'probe' over the top rows, and lets all through
     // under another view.
     const vol = scene.createVolume({
-        fragment: `void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
-                                   inout float transmittance, inout float depth) {
-                transmittance = 0.2;
-                radiance = vec3(1.0);
-                if (SCENE_DEBUG(probe) && gl_FragCoord.y < 16.0) sceneDebugOut(vec3(0.0, 0.0, 0.25));
+        module: `
+            module hook;
+            import scene;
+            import volume;
+            pub fn volume(ray: volume::Ray) -> volume::Light {
+                var out = volume::light(vec3<f32>(1.0), 0.2, ray.near);
+                if (SCENE_DEBUG(probe) && ray.pixel.y < 16.0) {
+                    out.debug = vec4<f32>(0.0, 0.0, 0.25, 1.0);
+                }
+                return out;
             }`,
     });
     for (let i = 0; i < 12; i++) img = scene.captureFrame();

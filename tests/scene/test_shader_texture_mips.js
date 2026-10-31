@@ -2,22 +2,22 @@
 // test_custom_shader.js's plain setShaderTexture coverage:
 //
 //   (a) `mipmap: true` builds a real mip chain with linear-mipmap-linear
-//       minification, so textureLod() at a FRACTIONAL level blends the two
+//       minification, so sample_lod() at a FRACTIONAL level blends the two
 //       bracketing levels. Without it there is only level 0 and every lod
 //       clamps to it.
 //   (b) `x`/`y` turn a set into a sub-rectangle write that touches only
 //       that region and keeps the mip chain coherent
 //       (MeshNode::updateCustomShaderTexture).
 //   (c) The shadow pass binds user samplers exactly as the color pass does
-//       (vulkan/shadow/pass_shadow.cpp), so a vertex chunk
+//       (vulkan/shadow/pass_shadow.cpp), so a vertex hook
 //       that displaces from a height texture casts the DISPLACED silhouette
 //       instead of sampling an unbound unit and casting the rest silhouette.
-//   (d) `layers` makes a slot a sampler2DArray of slices and `repeat` wraps
-//       its coordinates (MeshNode::setCustomShaderTextureArray).
+//   (d) `layers` makes a slot a texture2d_array of slices and `custom::repeat`
+//       wraps its coordinates (MeshNode::setCustomShaderTextureArray).
 //   (e) `buffer` makes a KernelBuffer the texels, copied every frame
 //       (MeshNode::setCustomShaderTextureBuffer), as floats or `format`
 //       'unorm16'.
-//   (f) `depth` makes a slot a sampler3D, filtered across its z slices.
+//   (f) `depth` makes a slot a texture3d, filtered across its z slices.
 
 function patchBrightness(img, cx, cy, r) {
     let sum = 0, n = 0;
@@ -63,24 +63,30 @@ function dropScene(s) {
 // so a readback depends on nothing but the texture contents and the lod —
 // no assumptions about the primitive's UV layout or screen coverage.
 const probeFrag = `
-    uniform sampler2D u_tex;
-    uniform vec2 u_uv;
-    uniform float u_lod;
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.0);
-        metallic  = 0.0;
-        roughness = 1.0;
-        emissive  = vec3(textureLod(u_tex, u_uv, u_lod).r);
+    module hook;
+    import mesh;
+    import custom;
+    struct Params {
+        uv: vec2<f32>,
+        lod: f32,
+    }
+    @binding(4, 0) var params: uniform<Params>;
+    @binding(4, 1) var tex: texture2d<vec4<f32>>;
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.metallic  = 0.0;
+        out.roughness = 1.0;
+        out.emissive  = vec3<f32>(tex.sample_lod(custom::linear, params.uv, params.lod).x);
+        return out;
     }`;
 
 // Sample the texel at integer coords (tx, ty) of an N-wide texture at `lod`.
 // Uses the exact texel CENTER so level-0 bilinear filtering resolves to that
 // one texel with zero weight on its neighbours.
 function probe(scene, node, N, tx, ty, lod) {
-    node.setShaderUniform('u_uv', [(tx + 0.5) / N, (ty + 0.5) / N]);
-    node.setShaderUniform('u_lod', lod);
+    node.setShaderUniform('uv', [(tx + 0.5) / N, (ty + 0.5) / N]);
+    node.setShaderUniform('lod', lod);
     return centerBrightness(scene.captureFrame(), 5);
 }
 
@@ -92,7 +98,7 @@ if (!boot.scene) {
     const SIZE = 128;
 
     // =====================================================================
-    // (a) Fractional textureLod blends two mip levels.
+    // (a) Fractional sample_lod blends two mip levels.
     //
     // Level 0 is horizontal stripes with period 2 (even rows 1.0, odd 0.0),
     // so every 2x2 box-filtered block averages to 0.5 and level 1 is
@@ -108,10 +114,10 @@ if (!boot.scene) {
             for (let x = 0; x < N; x++) stripes[y * N + x] = (y % 2 === 0) ? 1.0 : 0.0;
 
         const quad = scn.createMesh({ mesh: 'box', color: 'white' });
-        quad.setShader({ fragment: probeFrag, uniforms: { u_uv: [0.5, 0.5], u_lod: 0 } });
+        quad.setShader({ module: probeFrag, uniforms: { uv: [0.5, 0.5], lod: 0 } });
 
         // --- no mipmaps: lod is clamped to level 0, so lod 1 == lod 0 ---
-        quad.setShaderTexture('u_tex', { width: N, height: N, data: stripes });
+        quad.setShaderTexture('tex', { width: N, height: N, data: stripes });
         const flatL0 = probe(scn, quad, N, 32, 16, 0.0);
         const flatL1 = probe(scn, quad, N, 32, 16, 1.0);
         assert(flatL0 > 230,
@@ -121,7 +127,7 @@ if (!boot.scene) {
             `(lod0=${flatL0.toFixed(1)}, lod1=${flatL1.toFixed(1)})`);
 
         // --- mipmap: true -> level 1 exists and is the 0.5 average ---
-        quad.setShaderTexture('u_tex',
+        quad.setShaderTexture('tex',
             { width: N, height: N, data: stripes, mipmap: true });
         const l0 = probe(scn, quad, N, 32, 16, 0.0);
         const l1 = probe(scn, quad, N, 32, 16, 1.0);
@@ -161,8 +167,8 @@ if (!boot.scene) {
         const flat = new Float32Array(N * N).fill(0.25);   // -> ~64
 
         const quad = scn.createMesh({ mesh: 'box', color: 'white' });
-        quad.setShader({ fragment: probeFrag, uniforms: { u_uv: [0.5, 0.5], u_lod: 0 } });
-        quad.setShaderTexture('u_tex', { width: N, height: N, data: flat });
+        quad.setShader({ module: probeFrag, uniforms: { uv: [0.5, 0.5], lod: 0 } });
+        quad.setShaderTexture('tex', { width: N, height: N, data: flat });
 
         const base = probe(scn, quad, N, 10, 10, 0.0);
         assert(Math.abs(base - 63.75) < 6,
@@ -170,7 +176,7 @@ if (!boot.scene) {
 
         // Write a 4x4 block of 1.0 at (8,8) -> covers texels x,y in [8,12).
         const block = new Float32Array(4 * 4).fill(1.0);
-        quad.setShaderTexture('u_tex',
+        quad.setShaderTexture('tex',
             { x: 8, y: 8, width: 4, height: 4, data: block });
 
         const inside = probe(scn, quad, N, 10, 10, 0.0);
@@ -192,9 +198,9 @@ if (!boot.scene) {
         // unknown slot. All must warn-and-ignore, leaving the texture
         // exactly as it was — never a clipped partial write.
         const stray = new Float32Array(8 * 8).fill(0.0);
-        quad.setShaderTexture('u_tex', { x: 28, y: 28, width: 8, height: 8, data: stray });
-        quad.setShaderTexture('u_tex', { x: -4, y: 0, width: 8, height: 8, data: stray });
-        quad.setShaderTexture('u_nope', { x: 0, y: 0, width: 8, height: 8, data: stray });
+        quad.setShaderTexture('tex', { x: 28, y: 28, width: 8, height: 8, data: stray });
+        quad.setShaderTexture('tex', { x: -4, y: 0, width: 8, height: 8, data: stray });
+        quad.setShaderTexture('nope', { x: 0, y: 0, width: 8, height: 8, data: stray });
 
         const corner = probe(scn, quad, N, 31, 31, 0.0);
         assert(Math.abs(corner - base) < 6,
@@ -205,12 +211,12 @@ if (!boot.scene) {
 
         // A sub-write into a MIPMAPPED slot must regenerate the chain, or
         // level 1 would keep serving pre-write texels forever.
-        quad.setShaderTexture('u_tex',
+        quad.setShaderTexture('tex',
             { width: N, height: N, data: flat, mipmap: true });
         const mipBefore = probe(scn, quad, N, 10, 10, 1.0);
         assert(Math.abs(mipBefore - 63.75) < 8,
             `mipmapped flat texture: level 1 also ~64 (${mipBefore.toFixed(1)})`);
-        quad.setShaderTexture('u_tex',
+        quad.setShaderTexture('tex',
             { x: 8, y: 8, width: 4, height: 4, data: block });
         const mipAfter = probe(scn, quad, N, 10, 10, 1.0);
         assert(mipAfter > 230,
@@ -221,13 +227,8 @@ if (!boot.scene) {
     }
 
     // =====================================================================
-    // (c) A vertex chunk displacing from a user texture casts the displaced
-    // shadow. Same rig as test_custom_shader_variants.js's uniform-driven
-    // shadow case: the key light travels (0,-1,1)/sqrt2, so a blocker at
-    // height y shadows the ground around z ~ y. Driving the displacement
-    // from a TEXTURE rather than a uniform is the point — before the shadow
-    // pass bound user samplers, the blocker moved in the color pass while
-    // its silhouette stayed put.
+    // (c) A vertex hook displacing from a user texture casts the displaced
+    // shadow.
     // =====================================================================
     {
         const s = makeScene(256);
@@ -264,24 +265,29 @@ if (!boot.scene) {
         // Displacement = 1.5 * the sampled texel. Start at 0 so the shader
         // is installed but the silhouette should not have moved yet.
         blocker.setShader({
-            vertex: `
-                uniform sampler2D u_disp;
-                void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                    pos.x += 1.5 * textureLod(u_disp, vec2(0.5), 0.0).r;
+            module: `
+                module hook;
+                import mesh;
+                import custom;
+                @binding(4, 1) var disp: texture2d<vec4<f32>>;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.x += 1.5 * disp.sample_lod(custom::linear, vec2<f32>(0.5), 0.0).x;
+                    return out;
                 }`,
         });
         blocker.cullMargin = 1.5;   // displacement exceeds the mesh AABB
 
         const D = 8;
         const zeros = new Float32Array(D * D);   // 0.0
-        blocker.setShaderTexture('u_disp', { width: D, height: D, data: zeros });
+        blocker.setShaderTexture('disp', { width: D, height: D, data: zeros });
         const atRest = scn.captureFrame();
         assert(patchBrightness(atRest, ox, oy, 3) < baseMoved * 0.8,
             'zero-valued height texture leaves the shadow at rest');
 
         // Full re-upload of 1.0 -> blocker and shadow both move +1.5 x.
         const ones = new Float32Array(D * D).fill(1.0);
-        blocker.setShaderTexture('u_disp', { width: D, height: D, data: ones });
+        blocker.setShaderTexture('disp', { width: D, height: D, data: ones });
         const disp = scn.captureFrame();
         const dOrig = patchBrightness(disp, ox, oy, 3);
         const dMoved = patchBrightness(disp, mx, my, 3);
@@ -299,7 +305,7 @@ if (!boot.scene) {
         // A SUB-rect write must reach the shadow pass too — both passes
         // consume the same staged queue, so neither may miss an update.
         const zeroBlock = new Float32Array(D * D);
-        blocker.setShaderTexture('u_disp',
+        blocker.setShaderTexture('disp',
             { x: 0, y: 0, width: D, height: D, data: zeroBlock });
         const back = scn.captureFrame();
         assert(patchBrightness(back, ox, oy, 3) < baseMoved * 0.8,
@@ -311,11 +317,9 @@ if (!boot.scene) {
     }
 
     // =====================================================================
-    // (d) `layers` makes the slot a sampler2DArray of that many slices, one
-    // after another in `data`; `repeat` wraps coordinates instead of
-    // clamping them. Each slice is a constant (0.25, 0.5, 0.75) but for
-    // texel (0, 0) of slice 0, 1.0: a coordinate just past 1 reads it
-    // when the slot repeats, and the far corner's 0.25 when it clamps.
+    // (d) `layers` makes the slot a texture2d_array of that many slices, one
+    // after another in `data`; `custom::repeat` wraps coordinates instead of
+    // clamping them (`custom::linear`).
     // =====================================================================
     {
         const s = makeScene(SIZE);
@@ -326,26 +330,36 @@ if (!boot.scene) {
         slices[0] = 1.0;
         const quad = scn.createMesh({ mesh: 'box', color: 'white' });
         quad.setShader({
-            fragment: `
-                uniform sampler2DArray u_arr;
-                uniform vec3 u_at;
-                void userFragment(inout vec3 baseColor, inout vec3 normal,
-                                  inout float metallic, inout float roughness,
-                                  inout vec3 emissive, inout float alpha) {
-                    baseColor = vec3(0.0);
-                    metallic  = 0.0;
-                    roughness = 1.0;
-                    emissive  = vec3(textureLod(u_arr, u_at, 0.0).r);
+            module: `
+                module hook;
+                import mesh;
+                import custom;
+                struct Params {
+                    at: vec3<f32>,
+                    rep: f32,
+                }
+                @binding(4, 0) var params: uniform<Params>;
+                @binding(4, 1) var arr: texture2d_array<vec4<f32>>;
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic  = 0.0;
+                    out.roughness = 1.0;
+                    let r = select(params.rep > 0.5,
+                                   arr.sample_lod(custom::repeat, params.at, 0.0).x,
+                                   arr.sample_lod(custom::linear, params.at, 0.0).x);
+                    out.emissive  = vec3<f32>(r);
+                    return out;
                 }`,
-            uniforms: { u_at: [0.5, 0.5, 0] },
+            uniforms: { at: [0.5, 0.5, 0], rep: 0 },
         });
         const at = (u, v, layer) => {
-            quad.setShaderUniform('u_at', [u, v, layer]);
+            quad.setShaderUniform('at', [u, v, layer]);
             return centerBrightness(scn.captureFrame(), 5);
         };
         const centre = (N / 2 + 0.5) / N, past = 1 + 0.5 / N;
 
-        quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: slices });
+        quad.setShaderTexture('arr', { width: N, height: N, layers: L, data: slices });
         for (let l = 0; l < L; l++) {
             const v = at(centre, centre, l);
             assert(Math.abs(v - 255 * 0.25 * (l + 1)) < 6,
@@ -355,7 +369,8 @@ if (!boot.scene) {
         assert(Math.abs(clamped - 63.75) < 6,
             `without repeat a coordinate past 1 clamps to the far corner (${clamped.toFixed(1)})`);
 
-        quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: slices, repeat: true });
+        quad.setShaderTexture('arr', { width: N, height: N, layers: L, data: slices, repeat: true });
+        quad.setShaderUniform('rep', 1);
         const wrapped = at(past, past, 0);
         assert(wrapped > 245,
             `with repeat it wraps onto texel (0, 0) (${wrapped.toFixed(1)})`);
@@ -364,7 +379,7 @@ if (!boot.scene) {
             `re-staging with repeat keeps every slice (${deep.toFixed(1)})`);
 
         let threw = false;
-        try { quad.setShaderTexture('u_arr', { width: N, height: N, layers: L, data: new Float32Array(N * N) }); }
+        try { quad.setShaderTexture('arr', { width: N, height: N, layers: L, data: new Float32Array(N * N) }); }
         catch (e) { threw = e instanceof RangeError; }
         assert(threw, 'data shorter than width * height * layers is a RangeError');
 
@@ -373,10 +388,8 @@ if (!boot.scene) {
 
     // =====================================================================
     // (e) `buffer` makes a KernelBuffer the slot's texels: two channels,
-    // read as .rg, slice after slice, copied every frame the node draws, so
-    // a write to the buffer shows in the next frame. Each slice is (0.25 (l
-    // + 1), 0.5) but for texel (0, 0) of slice 1, whose green is 1: a
-    // coordinate just past 1 wraps onto it with `repeat`.
+    // read as .xy, slice after slice, copied every frame the node draws, so
+    // a write to the buffer shows in the next frame.
     // =====================================================================
     if (bro.kernel && bro.kernel.available !== false) {
         const s = makeScene(SIZE);
@@ -392,28 +405,34 @@ if (!boot.scene) {
         const buffer = bro.kernel.createBuffer(texels);
         const quad = scn.createMesh({ mesh: 'box', color: 'white' });
         quad.setShader({
-            fragment: `
-                uniform sampler2DArray u_field;
-                uniform vec3 u_at;
-                uniform float u_green;
-                void userFragment(inout vec3 baseColor, inout vec3 normal,
-                                  inout float metallic, inout float roughness,
-                                  inout vec3 emissive, inout float alpha) {
-                    baseColor = vec3(0.0);
-                    metallic  = 0.0;
-                    roughness = 1.0;
-                    vec2 v = textureLod(u_field, u_at, 0.0).rg;
-                    emissive  = vec3(u_green > 0.5 ? v.y : v.x);
+            module: `
+                module hook;
+                import mesh;
+                import custom;
+                struct Params {
+                    at: vec3<f32>,
+                    green: f32,
+                }
+                @binding(4, 0) var params: uniform<Params>;
+                @binding(4, 1) var field: texture2d_array<vec4<f32>>;
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic  = 0.0;
+                    out.roughness = 1.0;
+                    let val = field.sample_lod(custom::repeat, params.at, 0.0);
+                    out.emissive  = vec3<f32>(select(params.green > 0.5, val.y, val.x));
+                    return out;
                 }`,
-            uniforms: { u_at: [0.5, 0.5, 0], u_green: 0 },
+            uniforms: { at: [0.5, 0.5, 0], green: 0 },
         });
         const at = (u, v, layer, green) => {
-            quad.setShaderUniform('u_at', [u, v, layer]);
-            quad.setShaderUniform('u_green', green ? 1 : 0);
+            quad.setShaderUniform('at', [u, v, layer]);
+            quad.setShaderUniform('green', green ? 1 : 0);
             return centerBrightness(scn.captureFrame(), 5);
         };
         const centre = (N / 2 + 0.5) / N, past = 1 + 0.5 / N;
-        quad.setShaderTexture('u_field', { buffer, width: N, height: N, layers: L, channels: 2, repeat: true });
+        quad.setShaderTexture('field', { buffer, width: N, height: N, layers: L, channels: 2, repeat: true });
         for (let l = 0; l < L; l++) {
             const r = at(centre, centre, l, false), g = at(centre, centre, l, true);
             assert(Math.abs(r - 255 * 0.25 * (l + 1)) < 6 && Math.abs(g - 127.5) < 6,
@@ -428,7 +447,7 @@ if (!boot.scene) {
             `a write to the buffer shows in the next frame (${rewritten.toFixed(1)})`);
 
         let threw = false;
-        try { quad.setShaderTexture('u_field', { buffer, width: N, height: N, layers: L + 1, channels: 2 }); }
+        try { quad.setShaderTexture('field', { buffer, width: N, height: N, layers: L + 1, channels: 2 }); }
         catch (e) { threw = e instanceof RangeError; }
         assert(threw, 'a buffer smaller than the texels is a RangeError');
 
@@ -437,14 +456,14 @@ if (!boot.scene) {
         for (let l = 0; l < L; l++)
             words.fill((Math.round(65535 * 0.25 * (l + 1)) | (Math.round(65535 * 0.75) << 16)), l * N * N, (l + 1) * N * N);
         const packed = bro.kernel.createBuffer(words);
-        quad.setShaderTexture('u_field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm16' });
+        quad.setShaderTexture('field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm16' });
         for (let l = 0; l < L; l++) {
             const r = at(centre, centre, l, false), g = at(centre, centre, l, true);
             assert(Math.abs(r - 255 * 0.25 * (l + 1)) < 6 && Math.abs(g - 191.25) < 6,
                 `unorm16 slice ${l} reads its halves as 0 to 1 (${r.toFixed(1)}, ${g.toFixed(1)})`);
         }
         threw = false;
-        try { quad.setShaderTexture('u_field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm12' }); }
+        try { quad.setShaderTexture('field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm12' }); }
         catch (e) { threw = e instanceof RangeError; }
         assert(threw, 'an unknown format is a RangeError');
 
@@ -453,10 +472,7 @@ if (!boot.scene) {
 
     // =====================================================================
     // (f) `depth` makes the slot a 3D texture of that many z slices, read
-    // through a sampler3D and filtered across them by the hardware. Slice
-    // l holds 0.25 (l + 1): halfway between two slices' centres reads their
-    // mean, and a z just past 1 reads slice 0 with `repeat`, the last slice
-    // without. From `data` and from a KernelBuffer alike.
+    // through a texture3d and filtered across them by the hardware.
     // =====================================================================
     {
         const s = makeScene(SIZE);
@@ -466,28 +482,39 @@ if (!boot.scene) {
         for (let l = 0; l < D; l++) slices.fill(0.25 * (l + 1), l * N * N, (l + 1) * N * N);
         const quad = scn.createMesh({ mesh: 'box', color: 'white' });
         quad.setShader({
-            fragment: `
-                uniform sampler3D u_vol;
-                uniform vec3 u_at;
-                void userFragment(inout vec3 baseColor, inout vec3 normal,
-                                  inout float metallic, inout float roughness,
-                                  inout vec3 emissive, inout float alpha) {
-                    baseColor = vec3(0.0);
-                    metallic  = 0.0;
-                    roughness = 1.0;
-                    emissive  = vec3(textureLod(u_vol, u_at, 0.0).r);
+            module: `
+                module hook;
+                import mesh;
+                import custom;
+                struct Params {
+                    at: vec3<f32>,
+                    rep: f32,
+                }
+                @binding(4, 0) var params: uniform<Params>;
+                @binding(4, 1) var vol: texture3d<vec4<f32>>;
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic  = 0.0;
+                    out.roughness = 1.0;
+                    let r = select(params.rep > 0.5,
+                                   vol.sample_lod(custom::repeat, params.at, 0.0).x,
+                                   vol.sample_lod(custom::linear, params.at, 0.0).x);
+                    out.emissive  = vec3<f32>(r);
+                    return out;
                 }`,
-            uniforms: { u_at: [0.5, 0.5, 0.5] },
+            uniforms: { at: [0.5, 0.5, 0.5], rep: 0 },
         });
         const at = (z) => {
-            quad.setShaderUniform('u_at', [0.5, 0.5, z]);
+            quad.setShaderUniform('at', [0.5, 0.5, z]);
             return centerBrightness(scn.captureFrame(), 5);
         };
         const sliceZ = (l) => (l + 0.5) / D;
         for (const source of ['data', 'buffer']) {
             if (source === 'buffer' && !(bro.kernel && bro.kernel.available !== false)) continue;
             const opts = source === 'data' ? { data: slices } : { buffer: bro.kernel.createBuffer(slices) };
-            quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, ...opts });
+            quad.setShaderTexture('vol', { width: N, height: N, depth: D, ...opts });
+            quad.setShaderUniform('rep', 0);
             for (let l = 0; l < D; l++) {
                 const v = at(sliceZ(l));
                 assert(Math.abs(v - 255 * 0.25 * (l + 1)) < 6, `${source}: slice ${l} reads its own value (${v.toFixed(1)})`);
@@ -496,16 +523,17 @@ if (!boot.scene) {
             assert(Math.abs(mid - 255 * 0.625) < 6, `${source}: between slices 1 and 2 the hardware blends them (${mid.toFixed(1)})`);
             const clamped = at(1 + 0.5 / D);
             assert(Math.abs(clamped - 255) < 6, `${source}: without repeat z past 1 clamps to the last slice (${clamped.toFixed(1)})`);
-            quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, repeat: true, ...opts });
+            quad.setShaderTexture('vol', { width: N, height: N, depth: D, repeat: true, ...opts });
+            quad.setShaderUniform('rep', 1);
             const wrapped = at(1 + 0.5 / D);
             assert(Math.abs(wrapped - 63.75) < 6, `${source}: with repeat z past 1 wraps onto slice 0 (${wrapped.toFixed(1)})`);
         }
 
         let threw = null;
-        try { quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, layers: D, data: slices }); } catch (e) { threw = e; }
+        try { quad.setShaderTexture('vol', { width: N, height: N, depth: D, layers: D, data: slices }); } catch (e) { threw = e; }
         assert(threw instanceof TypeError, 'layers and depth together are a TypeError');
         threw = null;
-        try { quad.setShaderTexture('u_vol', { width: N, height: N, depth: D, data: new Float32Array(N * N) }); } catch (e) { threw = e; }
+        try { quad.setShaderTexture('vol', { width: N, height: N, depth: D, data: new Float32Array(N * N) }); } catch (e) { threw = e; }
         assert(threw instanceof RangeError, 'data shorter than width * height * depth is a RangeError');
 
         dropScene(s);

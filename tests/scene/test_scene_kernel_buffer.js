@@ -1,13 +1,13 @@
-// A scene drawing straight from kernel output: a custom shader's
-// `buffer float u_heights[];` reads a KernelBuffer a GPU kernel filled, in
-// place. The oracle is the same grid with the kernel's CPU heights baked into
-// its positions: both must render the same pixels.
-//   - an unbound buffer reads as length 0 (the grid stays flat);
+// A scene drawing straight from kernel output: a custom shader module's
+// `@binding(4, 14) var heights: read_buffer<f32>;` reads a KernelBuffer a GPU
+// kernel filled, in place. The oracle is the same grid with the kernel's CPU
+// heights baked into its positions: both must render the same pixels.
+//   - an unbound buffer reads as len() 0 (the grid stays flat);
 //   - a buffer filled by dispatch and bound displaces the grid exactly as
 //     the baked heights do;
 //   - a second dispatch into the same buffer is seen by the next frame;
-//   - a value that is not a KernelBuffer, and a buffer of a type a buffer
-//     cannot hold, are refused.
+//   - a value that is not a KernelBuffer, and a buffer at a binding set 4
+//     does not hold, are refused.
 
 function freshScene(size) {
     const cv = document.createElement('canvas');
@@ -52,22 +52,38 @@ function grid(N, h) {
 }
 
 // The height as a colour, so the displaced surface is what the pixels show.
-const fragment = `in float v_h;
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.0);
-        emissive = vec3(0.5 + v_h, 0.5 - v_h, 0.25);
+const baked = `
+    module hook;
+    import mesh;
+    pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+        var out = v;
+        out.v0.x = v.pos.y;
+        return out;
+    }
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.emissive = vec3<f32>(0.5 + v.v0.x, 0.5 - v.v0.x, 0.25);
+        return out;
     }`;
-const baked = `out float v_h;
-    void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-        v_h = pos.y;
-    }`;
-const fromBuffer = `buffer float u_heights[];
-    out float v_h;
-    void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-        if (uint(gl_VertexIndex) < u_heights_length) pos.y += u_heights[gl_VertexIndex];
-        v_h = pos.y;
+
+const fromBuffer = `
+    module hook;
+    import mesh;
+    @binding(4, 14) var heights: read_buffer<f32>;
+    pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+        var out = v;
+        if (v.vertex_index < heights.len()) {
+            out.pos.y += heights[v.vertex_index];
+        }
+        out.v0.x = out.pos.y;
+        return out;
+    }
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.emissive = vec3<f32>(0.5 + v.v0.x, 0.5 - v.v0.x, 0.25);
+        return out;
     }`;
 
 function frameDiff(a, b) {
@@ -99,10 +115,10 @@ if (!probe.scene) {
         }
     `, { file: 'heights.bk' }).kernel('k_heights');
 
-    const render = (vertex, mesh, bind) => {
+    const render = (mod, mesh, bind) => {
         const s = freshScene(S);
         const node = s.scene.createMesh(Object.assign({ color: [1, 1, 1] }, mesh));
-        node.setShader({ vertex, fragment });
+        node.setShader({ module: mod });
         if (bind) bind(node);
         const img = s.scene.captureFrame();
         return { s, node, img };
@@ -127,7 +143,7 @@ if (!probe.scene) {
     const buf = bro.kernel.createBuffer(N * N * 4);
     heights.dispatch([N, N], buf, 0.31);
     const want = render(baked, grid(N, cpuHeights(0.31)));
-    const got = render(fromBuffer, grid(N, null), (node) => node.setShaderBuffer('u_heights', buf));
+    const got = render(fromBuffer, grid(N, null), (node) => node.setShaderBuffer('heights', buf));
     const flatImg = render(baked, grid(N, null));
     const vsFlat = frameDiff(want.img, flatImg.img);
     assert(vsFlat.count > 500, `the baked heights change the picture (${vsFlat.count} px)`);
@@ -144,7 +160,7 @@ if (!probe.scene) {
     dropScene(want2.s);
 
     // Unbinding goes back to length 0.
-    got.node.setShaderBuffer('u_heights', null);
+    got.node.setShaderBuffer('heights', null);
     const flatAgain = render(baked, grid(N, null));
     d = frameDiff(flatAgain.img, got.s.scene.captureFrame());
     assert(d.count === 0, `unbinding reads as length 0 again (worst ${d.worst}, ${d.count} px differ)`);
@@ -152,14 +168,17 @@ if (!probe.scene) {
 
     // The errors a script gets.
     let threw = null;
-    try { got.node.setShaderBuffer('u_heights', new Float32Array(N * N)); } catch (e) { threw = e; }
+    try { got.node.setShaderBuffer('heights', new Float32Array(N * N)); } catch (e) { threw = e; }
     assert(threw instanceof TypeError && /KernelBuffer/.test(threw.message),
            'a typed array is not a KernelBuffer: ' + (threw && threw.message));
     threw = null;
     try {
-        got.node.setShader({ vertex: `buffer bool u_flags[];
-            void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {}` });
+        got.node.setShader({ module: `
+            module hook;
+            import mesh;
+            @binding(4, 20) var flags: read_buffer<f32>;
+            pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { return v; }` });
     } catch (e) { threw = e; }
-    assert(threw && /buffer holds/.test(threw.message), 'a buffer of bools is refused: ' + (threw && threw.message));
+    assert(threw && /\(4, 20\)/.test(threw.message), 'a buffer outside 14..19 is refused: ' + (threw && threw.message));
     dropScene(got.s);
 }

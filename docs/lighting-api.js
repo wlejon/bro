@@ -144,7 +144,7 @@
  * shown when it is complete, every shadow moving by the step at once.
  * What moves every frame (skinned or moving nodes, swaying plants) is
  * drawn each frame over the cached depth. There is nothing to
- * size: resolution follows the screen. A custom vertex chunk that moves
+ * size: resolution follows the screen. A custom vertex hook that moves
  * geometry past a node's bounds needs its `cullMargin` set, or the pages
  * its shadow falls in are not found.
  * @typedef {Object} ShadowQualityConfig

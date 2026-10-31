@@ -29,7 +29,7 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 
 ## SPIR-V cache
 
-GLSL compiled at run time (custom shader chunks spliced into the scene's shaders, WebGL programs) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
+GLSL compiled at run time (WebGL programs) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
 
 ## Pipelines built off the frame thread
 

@@ -497,15 +497,6 @@ public:
     /// into mesh_instanced.vert.
     enum class CustomShaderTarget : uint8_t { Static, Skinned, Instanced, Volume };
 
-    /// Compile a pair of user GLSL chunks (either may be empty) for
-    /// `target` to SPIR-V, so setShader can report errors at set time.
-    /// Returns false with the compiler log in errOut. `key` is
-    /// CustomShaderState::key for the same chunk pair.
-    bool compileCustomShader(CustomShaderTarget target,
-                             const std::string& key,
-                             const std::string& vertexChunk,
-                             const std::string& fragmentChunk,
-                             std::string& errOut);
     /// Compile a volume's brokernel hook module (`file` names it in
     /// diagnostics), so setShaderModule can report errors at set time.
     bool compileVolumeModule(const std::string& module, const std::string& file,

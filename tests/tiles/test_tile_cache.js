@@ -480,12 +480,17 @@ if (!bro.kernel.available || !bro.tiles) {
     const sc = cv.getContext('scene');
     if (sc) {
         const node = sc.createMesh({ mesh: 'box' });
-        node.setShader({ vertex: `buffer float u_tiles[];
-            void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                if (u_tiles_length > 0u) pos.y += u_tiles[0] * 0.0;
+        node.setShader({ module: `
+            module hook;
+            import mesh;
+            @binding(4, 14) var tiles: read_buffer<f32>;
+            pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                var out = v;
+                if (tiles.len() > 0) { out.pos.y += tiles[0] * 0.0; }
+                return out;
             }` });
         let bindErr = null;
-        try { node.setShaderBuffer('u_tiles', cache.layer('height')); } catch (e) { bindErr = e; }
+        try { node.setShaderBuffer('tiles', cache.layer('height')); } catch (e) { bindErr = e; }
         assert(bindErr === null, 'a layer pool binds to a scene node: ' + (bindErr && bindErr.message));
         sc.captureFrame();
 
@@ -499,25 +504,30 @@ if (!bro.kernel.available || !bro.tiles) {
         assert(settle(tex, near), 'the textured cache settles');
         const quad = sc.createMesh({ mesh: 'box', color: 'white' });
         quad.setShader({
-            fragment: `
-                uniform sampler2DArray u_cells;
-                uniform vec3 u_at;
-                void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
-                                  inout float roughness, inout vec3 emissive, inout float alpha) {
-                    baseColor = vec3(0.0);
-                    metallic = 0.0;
-                    roughness = 1.0;
-                    emissive = vec3(clamp(textureLod(u_cells, u_at, 0.0).r * 0.1 + 0.5, 0.0, 1.0));
+            module: `
+                module hook;
+                import mesh;
+                import custom;
+                struct Params { at: vec3<f32> }
+                @binding(4, 0) var params: uniform<Params>;
+                @binding(4, 1) var cells: texture2d_array<vec4<f32>>;
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic = 0.0;
+                    out.roughness = 1.0;
+                    out.emissive = vec3<f32>(clamp(cells.sample_lod(custom::linear, params.at, 0.0).x * 0.1 + 0.5, 0.0, 1.0));
+                    return out;
                 }`,
-            uniforms: { u_at: [0.5, 0.5, 0] },
+            uniforms: { at: [0.5, 0.5, 0] },
         });
         // Two by two slots a layer (tiles::atlas_uvw).
-        quad.setShaderTexture('u_cells', { buffer: tex.layer('height'), width: T, height: T, layers: tex.capacity, atlas: 2 });
+        quad.setShaderTexture('cells', { buffer: tex.layer('height'), width: T, height: T, layers: tex.capacity, atlas: 2 });
         const pool = new Float32Array(tex.capacity * T * T);
         const cellAt = (slot) => (slot * T + T / 2) * T + T / 2;
         const shown = (slot) => {
             const cell = slot % 4, c = (T / 2 + 0.5) / T;
-            quad.setShaderUniform('u_at', [((cell % 2) + c) / 2, (Math.floor(cell / 2) + c) / 2, Math.floor(slot / 4)]);
+            quad.setShaderUniform('at', [((cell % 2) + c) / 2, (Math.floor(cell / 2) + c) / 2, Math.floor(slot / 4)]);
             const img = sc.captureFrame();
             const i = (Math.floor(img.height / 2) * img.width + Math.floor(img.width / 2)) * 4;
             return img.data[i];

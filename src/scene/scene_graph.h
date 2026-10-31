@@ -563,24 +563,6 @@ public:
 
     // --- Custom mesh shaders ---
 
-    /// Eagerly compile + cache a mesh-program variant for a pair of user
-    /// GLSL chunks (mesh.setShader validation path). `target` picks the
-    /// pipeline flavour (static / skinned / instanced) — skinned nodes
-    /// compile Static AND Skinned since a not-ready skin degrades to the
-    /// static path. True when linked (or already cached); false with the
-    /// full compiler log in errOut. Main thread only (JS bindings already
-    /// satisfy this). `key` is CustomShaderState's cache
-    /// key: vertex + '\x1f' + fragment. Non-empty vertex chunks also
-    /// pre-compile the matching shadow variant (failure there only warns —
-    /// the caster falls back to the undisplaced default silhouette).
-    bool compileCustomShader(SceneRenderer::CustomShaderTarget target,
-                             const std::string& key,
-                             const std::string& vertexChunk,
-                             const std::string& fragmentChunk,
-                             std::string& errOut) {
-        return renderer_.compileCustomShader(target, key, vertexChunk,
-                                             fragmentChunk, errOut);
-    }
     bool compileVolumeModule(const std::string& module, const std::string& file,
                              const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut) {
         return renderer_.compileVolumeModule(module, file, modules, errOut);

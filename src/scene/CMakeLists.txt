@@ -1,44 +1,18 @@
 set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 
-
-## ── Vulkan SPIR-V shader compilation ──────────────────────────────────────────
-# The built-in scene shaders, compiled at build time by the same in-process
-# glslang the engine uses at run time (bro_spirv_header, cmake/glslang.cmake).
-# vulkan/shaders/builtin_shaders.def lists them, with their variants' DEFINES;
-# each becomes a <name>.spv.cpp of its own, rebuilt only when the files it
-# actually #includes change (the tool's depfile), and the Visual Studio build
-# runs them in parallel (CMP0147). BRO_SCENE_SHADER_SOURCE compiles them from
-# this tree at run time instead, with no rebuild (docs/hot-reload.md).
-if(POLICY CMP0147)
-    cmake_policy(SET CMP0147 NEW)
-endif()
+## ── Vulkan brokernel shader embedding ────────────────────────────────────────
+# Every built-in 3D scene shader is written in brokernel (.bk) under
+# vulkan/shaders/ and compiled in-process by brass to SPIR-V. Each .bk file is
+# embedded as a string literal (<file>.src.h); BRO_SCENE_SHADER_SOURCE=1 reads
+# them from this tree at run time instead, with no rebuild.
 set(VK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_vk")
 file(MAKE_DIRECTORY "${VK_GEN_DIR}")
 set(VK_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders")
 
 set(VK_GENERATED_HEADERS "")
-set(VK_SHADER_LIST "${VK_SHADER_DIR}/builtin_shaders.def")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VK_SHADER_LIST}")
-file(STRINGS "${VK_SHADER_LIST}" _vkShaderLines REGEX "^BRO_SCENE_SHADER\\(")
-foreach(_line IN LISTS _vkShaderLines)
-    if(NOT _line MATCHES "^BRO_SCENE_SHADER\\(([A-Za-z0-9_]+), *\"([^\"]+)\", *\"([^\"]+)\", *\"(vert|frag|comp)\", *\"([^\"]*)\"\\)")
-        message(FATAL_ERROR "builtin_shaders.def: cannot read the line: ${_line}")
-    endif()
-    set(_vkEnum "${CMAKE_MATCH_1}")
-    set(_vkName "${CMAKE_MATCH_2}")
-    set(_vkSource "${CMAKE_MATCH_3}")
-    set(_vkStage "${CMAKE_MATCH_4}")
-    string(REPLACE " " ";" _vkDefines "${CMAKE_MATCH_5}")
-    bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}" "${VK_SHADER_DIR}/${_vkSource}" ${_vkStage}
-                     NAME "${_vkName}" SYMBOL "bro::scene::vk::spv::kSpv${_vkEnum}"
-                     INCLUDE_DIR "${VK_SHADER_DIR}" DEFINES ${_vkDefines})
-endforeach()
-set_source_files_properties(vulkan/frame/scene_vk_shader_compiler.cpp PROPERTIES
+set_source_files_properties(vulkan/draw/scene_vk_kernel_hook.cpp PROPERTIES
     COMPILE_DEFINITIONS "BRO_SCENE_SHADER_SOURCE_DIR=\"${VK_SHADER_DIR}\"")
 
-# A shader source embedded as text, for the shaders compiled at run time
-# (custom mesh shaders, shader set B). SHADER_FILE is its path under
-# vulkan/shaders; the header is named by the file alone (<file>.src.h).
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     get_filename_component(_name "${SHADER_FILE}" NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -57,25 +31,6 @@ function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
 endfunction()
 
-embed_vk_shader(draw/mesh.vert                  kVkMeshVertSrc)
-embed_vk_shader(draw/mesh.frag                  kVkMeshFragSrc)
-embed_vk_shader(draw/volume.frag                kVkVolumeFragSrc)
-embed_vk_shader(draw/mesh_instanced.vert        kVkMeshInstancedVertSrc)
-embed_vk_shader(draw/mesh_skinned.vert          kVkMeshSkinnedVertSrc)
-embed_vk_shader(shadow/shadow.vert              kVkShadowVertSrc)
-embed_vk_shader(shadow/shadow_skinned.vert      kVkShadowSkinnedVertSrc)
-embed_vk_shader(shadow/shadow_instanced.vert    kVkShadowInstancedVertSrc)
-embed_vk_shader(common/scene_camera.glsl        kVkSceneCameraSrc)
-embed_vk_shader(common/scene_lighting.glsl      kVkSceneLightingSrc)
-embed_vk_shader(common/scene_atmosphere.glsl    kVkSceneAtmosphereSrc)
-embed_vk_shader(common/scene_atmosphere_params.glsl kVkSceneAtmosphereParamsSrc)
-embed_vk_shader(common/scene_mesh_push.glsl     kVkSceneMeshPushSrc)
-embed_vk_shader(common/scene_shadow_push.glsl   kVkSceneShadowPushSrc)
-embed_vk_shader(common/scene_shadow_pages.glsl  kVkSceneShadowPagesSrc)
-embed_vk_shader(shadow/shadow_pages_layout.h    kVkShadowPagesLayoutSrc)
-embed_vk_shader(shadow/scene_shadow_cutout.glsl kVkSceneShadowCutoutSrc)
-embed_vk_shader(common/scene_vegetation.glsl    kVkSceneVegetationSrc)
-# The brokernel modules a hook composes with (scene_vk_kernel_hook.cpp).
 embed_vk_shader(common/scene.bk                 kBkSceneSrc)
 embed_vk_shader(common/atmosphere.bk            kBkAtmosphereSrc)
 embed_vk_shader(common/lighting.bk              kBkLightingSrc)
@@ -147,7 +102,6 @@ add_library(bro_scene STATIC
     vulkan/frame/scene_vk_pipeline.cpp
     vulkan/frame/scene_shader_sets.cpp
     vulkan/frame/scene_vk_descriptors.cpp
-    vulkan/frame/scene_vk_shader_compiler.cpp
     vulkan/frame/scene_view.cpp
     vulkan/frame/scene_inspect_record.cpp
     vulkan/frame/scene_view_inspect.cpp
@@ -244,5 +198,3 @@ if(BRO_BUILD_TESTS)
                           bro_render bro_platform bro_util bro_glsl bromesh bromath brass skia Vulkan::Vulkan)
     target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
-
-

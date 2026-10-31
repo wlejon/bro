@@ -1,6 +1,6 @@
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/debug_views.h"
 #include "util/log.h"
 
@@ -8,10 +8,12 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <regex>
+#include <sstream>
 #include <unordered_map>
 
 #include "scene.bk.src.h"
@@ -32,10 +34,46 @@
 
 namespace bro::scene::vk {
 
+const char* buildShaderSourceDir() {
+    return BRO_SCENE_SHADER_SOURCE_DIR "/";
+}
+
+const std::string& shaderSourceDir() {
+    static const std::string s_dir = []() -> std::string {
+        const char* env = std::getenv("BRO_SCENE_SHADER_SOURCE");
+        if (!env || !*env || std::strcmp(env, "0") == 0) return {};
+        std::string dir = std::strcmp(env, "1") == 0 ? std::string(BRO_SCENE_SHADER_SOURCE_DIR) : std::string(env);
+        for (char& c : dir)
+            if (c == '\\') c = '/';
+        if (!dir.empty() && dir.back() != '/') dir += '/';
+        if (!std::ifstream(dir + "common/scene.bk")) {
+            LOG_WARN("BRO_SCENE_SHADER_SOURCE=%s holds no common/scene.bk; using embedded shaders", env);
+            return {};
+        }
+        LOG_INFO("Scene shaders: compiling from %s", dir.c_str());
+        return dir;
+    }();
+    return s_dir;
+}
+
+std::string shaderSource(const char* fileName, const char* embedded) {
+    const std::string& dir = shader_sets::compilingSetB() ? shader_sets::setBSourceDir() : shaderSourceDir();
+    if (!dir.empty()) {
+        std::ifstream f(dir + fileName);
+        if (f) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            return ss.str();
+        }
+        LOG_WARN("BRO_SCENE_SHADER_SOURCE: cannot open %s%s; using embedded copy", dir.c_str(), fileName);
+    }
+    return embedded ? std::string(embedded) : std::string();
+}
+
 namespace {
 
 std::string engineSource(const char* file, const char* embedded) {
-    return SceneVkShaderCompiler::shaderSource(file, embedded);
+    return shaderSource(file, embedded);
 }
 
 constexpr const char* kEngineModules[] = {
@@ -152,12 +190,23 @@ const char* fragmentEntry(bool hasLight, bool indirect, bool cuts) {
     return cuts ? "mesh_hook_cuts_frag" : "mesh_hook_frag";
 }
 
+void noteStageRecipe(std::string name, const std::vector<uint32_t>& words,
+                     std::function<std::vector<uint32_t>(std::string* err)> compile) {
+    if (shader_sets::compilingSetB() || words.empty()) return;
+    auto r = std::make_shared<ShaderRecipe>();
+    r->name = std::move(name);
+    r->compile = std::move(compile);
+    r->words = words;
+    shader_sets::noteSpirv(std::move(r));
+}
+
 } // namespace
 
 bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string& err) {
     static std::mutex s_mu;
     static std::unordered_map<std::string, KernelHookStage> s_cache;
-    {
+    const bool setB = shader_sets::compilingSetB();
+    if (!setB) {
         std::lock_guard<std::mutex> lock(s_mu);
         auto it = s_cache.find(entry);
         if (it != s_cache.end()) {
@@ -167,9 +216,21 @@ bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string
     }
     const brokernel::CompileResult res = compileMeshEntry(entry, "module hook;\n", {});
     if (!takeStage(res, entry, out, err)) return false;
-    {
-        std::lock_guard<std::mutex> lock(s_mu);
-        s_cache.emplace(entry, out);
+    if (!setB) {
+        {
+            std::lock_guard<std::mutex> lock(s_mu);
+            s_cache.emplace(entry, out);
+        }
+        std::string e(entry);
+        noteStageRecipe("draw/mesh_main.bk:" + e, out.spirv, [e](std::string* errOut) {
+            KernelHookStage st;
+            std::string localErr;
+            if (!compileKernelMeshStage(e.c_str(), st, localErr)) {
+                if (errOut) *errOut = std::move(localErr);
+                return std::vector<uint32_t>{};
+            }
+            return st.spirv;
+        });
     }
     return true;
 }
@@ -177,7 +238,8 @@ bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string
 bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::string& err) {
     static std::mutex s_mu;
     static std::unordered_map<std::string, KernelHookStage> s_cache;
-    {
+    const bool setB = shader_sets::compilingSetB();
+    if (!setB) {
         std::lock_guard<std::mutex> lock(s_mu);
         auto it = s_cache.find(entry);
         if (it != s_cache.end()) {
@@ -187,9 +249,21 @@ bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::stri
     }
     const brokernel::CompileResult res = compileShadowEntry(entry, "module hook;\n", {});
     if (!takeStage(res, entry, out, err)) return false;
-    {
-        std::lock_guard<std::mutex> lock(s_mu);
-        s_cache.emplace(entry, out);
+    if (!setB) {
+        {
+            std::lock_guard<std::mutex> lock(s_mu);
+            s_cache.emplace(entry, out);
+        }
+        std::string e(entry);
+        noteStageRecipe("shadow/shadow.bk:" + e, out.spirv, [e](std::string* errOut) {
+            KernelHookStage st;
+            std::string localErr;
+            if (!compileKernelShadowStage(e.c_str(), st, localErr)) {
+                if (errOut) *errOut = std::move(localErr);
+                return std::vector<uint32_t>{};
+            }
+            return st.spirv;
+        });
     }
     return true;
 }
@@ -199,7 +273,8 @@ bool compileKernelStage(const char* file, const char* embedded, const char* entr
     static std::mutex s_mu;
     static std::unordered_map<std::string, KernelHookStage> s_cache;
     const std::string key = std::string(file) + ":" + entry;
-    {
+    const bool setB = shader_sets::compilingSetB();
+    if (!setB) {
         std::lock_guard<std::mutex> lock(s_mu);
         auto it = s_cache.find(key);
         if (it != s_cache.end()) {
@@ -216,9 +291,23 @@ bool compileKernelStage(const char* file, const char* embedded, const char* entr
     opts.compile_cpu = false;
     const brokernel::CompileResult res = compiler.compile_source(engineSource(file, embedded), file, opts);
     if (!takeStage(res, entry, out, err)) return false;
-    {
-        std::lock_guard<std::mutex> lock(s_mu);
-        s_cache.emplace(key, out);
+    if (!setB) {
+        {
+            std::lock_guard<std::mutex> lock(s_mu);
+            s_cache.emplace(key, out);
+        }
+        std::string f(file);
+        std::string emb(embedded ? embedded : "");
+        std::string e(entry);
+        noteStageRecipe(key, out.spirv, [f, emb, e](std::string* errOut) {
+            KernelHookStage st;
+            std::string localErr;
+            if (!compileKernelStage(f.c_str(), emb.c_str(), e.c_str(), st, localErr)) {
+                if (errOut) *errOut = std::move(localErr);
+                return std::vector<uint32_t>{};
+            }
+            return st.spirv;
+        });
     }
     return true;
 }
@@ -317,14 +406,14 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
     return true;
 }
 
-bool compileKernelShadowHook(SceneVkCustomShader::ShadowCaster caster, bool cutout, const std::string& module,
+bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module,
                              const std::string& file, const KernelHookModules& modules,
                              KernelHookStage& out, std::string& err) {
     const std::string hook = debug_views::expand(module, "scene::debug_view()");
     const char* vsEntry = "shadow_hook_vert";
-    if (caster == SceneVkCustomShader::ShadowCaster::Skinned) {
+    if (caster == ShadowCaster::Skinned) {
         vsEntry = "shadow_hook_skinned_vert";
-    } else if (caster == SceneVkCustomShader::ShadowCaster::Instanced) {
+    } else if (caster == ShadowCaster::Instanced) {
         vsEntry = cutout ? "shadow_hook_instanced_cutout_vert" : "shadow_hook_instanced_vert";
     } else if (cutout) {
         vsEntry = "shadow_hook_cutout_vert";

@@ -9,7 +9,6 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/lighting/scene_lighting.h"
 #include "scene/vulkan/shadow/scene_shadow_pages.h"
 #include "util/log.h"

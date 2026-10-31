@@ -1,8 +1,8 @@
 #pragma once
 
 // Volumes (scene.createVolume): each a triangle over the whole view whose
-// custom chunk marches the pixel's ray through a medium up to the opaque
-// depth (draw/volume.frag). They draw, in tree order, into a target of their
+// custom module marches the pixel's ray through a medium up to the opaque
+// depth (draw/volume_main.bk). They draw, in tree order, into a target of their
 // own at the frame's size: light over transmittance (each volume over the
 // ones before it, dst * transmittance + its light) and the distance the
 // medium's light comes from. A march samples a few points of a long ray, and
@@ -18,8 +18,8 @@
 // volumes (SceneMeshDrawer::recordVolume), so a volume's uniforms, buffers
 // and textures are a custom shader's.
 //
-// A volume whose chunk gives its near medium point by point (userMedium,
-// volume.frag) has a near grid of its own: before the volumes draw,
+// A volume whose module gives its near medium point by point (medium /
+// medium_range, volume_near.bk) has a near grid of its own: before the volumes draw,
 // PassVolumeNear integrates the medium over the grid's cells (kNearTile
 // pixels a side, kNearSlices deep), and the volume's pixels read the grid
 // to their opaque depth in place of marching that part of the ray. A grid

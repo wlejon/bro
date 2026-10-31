@@ -1,11 +1,10 @@
 #pragma once
 
 // Debug views (SceneRenderer::setDebugView): named views a custom shader
-// chunk answers. A chunk tests for one with SCENE_DEBUG(name), which the
-// splice (scene_vk_custom_shader.cpp) replaces with a test of the camera's
-// view id against the name's id here, and shows a value with
-// sceneDebugOut(rgb) (mesh.frag, volume.frag). The ids are the process's,
-// given in the order names are first met; 0 is no view.
+// module answers. A module tests for one with SCENE_DEBUG(name), which is
+// replaced with a test of the camera's view id against the name's id here,
+// and outputs a value in `debug` (mesh.bk, volume.bk). The ids are the
+// process's, given in the order names are first met; 0 is no view.
 
 #include <string>
 #include <vector>
@@ -22,8 +21,8 @@ std::string nameOf(int id);
 std::vector<std::string> names();
 
 /// `source` with each SCENE_DEBUG(name) replaced by a test of the camera's
-/// view id (`viewExpr`: sceneDebugView() in a GLSL chunk, scene_camera.glsl;
-/// scene::debug_view() in a brokernel module, scene.bk) against name's.
-std::string expand(const std::string& source, const std::string& viewExpr = "sceneDebugView()");
+/// view id (`viewExpr`: scene::debug_view() in a brokernel module, scene.bk)
+/// against name's.
+std::string expand(const std::string& source, const std::string& viewExpr = "scene::debug_view()");
 
 } // namespace bro::scene::debug_views

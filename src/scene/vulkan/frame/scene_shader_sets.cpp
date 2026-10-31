@@ -26,6 +26,7 @@ struct PipelineRecord {
     VkPipelineLayout layout = VK_NULL_HANDLE;
     std::optional<SceneVkPipelineBuilder> builder;   // graphics; compute when empty
     std::string name;                               // compute: its stats label
+    std::string entry;                              // compute: its entry point
     std::vector<std::shared_ptr<ShaderRecipe>> stages;
     VkPipeline twin = VK_NULL_HANDLE;
 };
@@ -62,37 +63,20 @@ void compileB(ShaderRecipe& r) {
     r.bGeneration = s_generation;
     r.bWords.clear();
     r.bError.clear();
+    if (!r.compile) {
+        r.bDiffers = false;
+        return;
+    }
     std::string err;
     t_compilingB = true;
-    switch (r.kind) {
-        case ShaderRecipe::Kind::Words: break;
-        case ShaderRecipe::Kind::Builtin:
-            r.bWords = SceneVkShaderCompiler::compileBuiltinFromSource(r.builtin, s_dirB, &err);
-            break;
-        case ShaderRecipe::Kind::BuiltinWith:
-            r.bWords = SceneVkShaderCompiler::compileBuiltinWith(r.builtin, r.overrides, &err);
-            break;
-        case ShaderRecipe::Kind::Glsl:
-            r.bWords = SceneVkShaderCompiler::compileGlsl(r.glsl, r.stage, &err, r.overrides);
-            break;
-    }
+    r.bWords = r.compile(&err);
     t_compilingB = false;
-    if (r.kind != ShaderRecipe::Kind::Words && r.bWords.empty()) {
+    if (r.bWords.empty()) {
         r.bError = err.empty() ? std::string("did not compile") : err;
         LOG_ERROR("Shader set B: %s did not compile from %s; it keeps set A's:\n%s",
-                  r.kind == ShaderRecipe::Kind::Glsl ? "a run-time shader" : SceneVkShaderCompiler::builtinName(r.builtin),
-                  s_dirB.c_str(), r.bError.c_str());
+                  r.name.empty() ? "shader" : r.name.c_str(), s_dirB.c_str(), r.bError.c_str());
     }
     r.bDiffers = !r.bWords.empty() && r.bWords != r.words;
-}
-
-std::string recipeName(const ShaderRecipe& r) {
-    switch (r.kind) {
-        case ShaderRecipe::Kind::Builtin: return SceneVkShaderCompiler::builtinName(r.builtin);
-        case ShaderRecipe::Kind::BuiltinWith: return std::string(SceneVkShaderCompiler::builtinName(r.builtin)) + " (with modules)";
-        case ShaderRecipe::Kind::Glsl: return "run-time GLSL";
-        default: return "SPIR-V";
-    }
 }
 
 // The record's twin from set B's SPIR-V; none when no stage differs.
@@ -114,7 +98,8 @@ void buildTwin(PipelineRecord& rec) {
         for (size_t i = 0; i < made.size(); ++i) b.setStageModule(i, made[i]);
         rec.twin = b.build(rec.device, rec.layout);
     } else if (ok && !made.empty()) {
-        rec.twin = createComputePipeline(rec.device, made[0], rec.layout, rec.name.c_str());
+        rec.twin = createComputePipeline(rec.device, made[0], rec.layout, rec.name.c_str(),
+                                         rec.entry.empty() ? "main" : rec.entry.c_str());
     }
     t_buildingTwin = false;
     for (VkShaderModule m : made) SceneVkShaderModule::destroy(rec.device, m);
@@ -200,7 +185,7 @@ void noteGraphicsPipeline(VkDevice device, VkPipelineLayout layout, const SceneV
 }
 
 void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModule module, const char* name,
-                         VkPipeline pipeline) {
+                         const char* entry, VkPipeline pipeline) {
     if (t_buildingTwin || !pipeline) return;
     std::lock_guard<std::recursive_mutex> g(lock());
     auto r = recipeOf(module);
@@ -209,6 +194,7 @@ void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModul
     rec.device = device;
     rec.layout = layout;
     rec.name = name ? name : "";
+    rec.entry = entry ? entry : "main";
     rec.stages.push_back(std::move(r));
     if (s_generation) buildTwin(rec);
     pipelines()[pipeline] = std::move(rec);
@@ -230,8 +216,8 @@ bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* 
     for (char& c : dir)
         if (c == '\\') c = '/';
     if (!dir.empty() && dir.back() != '/') dir += '/';
-    if (dir.empty() || !std::ifstream(dir + "builtin_shaders.def")) {
-        if (error) *error = "shader set: " + dirIn + " holds no builtin_shaders.def";
+    if (dir.empty() || !std::ifstream(dir + "common/scene.bk")) {
+        if (error) *error = "shader set: " + dirIn + " holds no common/scene.bk";
         return false;
     }
     std::lock_guard<std::recursive_mutex> g(lock());
@@ -266,11 +252,11 @@ ShaderSetInfo shaderSetInfo() {
         ++info.pipelines;
         if (rec.twin) ++info.twinned;
         for (auto& st : rec.stages) {
-            if (st->kind == ShaderRecipe::Kind::Words || !seen.insert(st.get()).second) continue;
+            if (!st->compile || !seen.insert(st.get()).second) continue;
             ++info.shaders;
             if (st->bGeneration == s_generation && s_generation) {
                 if (st->bDiffers) ++info.differing;
-                if (!st->bError.empty()) info.failed.push_back(recipeName(*st));
+                if (!st->bError.empty()) info.failed.push_back(st->name.empty() ? "shader" : st->name);
             }
         }
     }

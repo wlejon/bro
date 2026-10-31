@@ -312,12 +312,6 @@ std::vector<uint8_t> SceneRenderer::readTonemapPixelsRGBA(int& outW, int& outH) 
     return {};
 }
 
-bool SceneRenderer::compileCustomShader(CustomShaderTarget target, const std::string& /*key*/,
-                                        const std::string& vertexChunk, const std::string& fragmentChunk,
-                                        std::string& errOut) {
-    return vk::SceneVkCustomShader::validateCustomShader(target, vertexChunk, fragmentChunk, errOut);
-}
-
 bool SceneRenderer::compileVolumeModule(const std::string& module, const std::string& file,
                                         const std::vector<std::pair<std::string, std::string>>& modules,
                                         std::string& errOut) {

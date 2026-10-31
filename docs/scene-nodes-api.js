@@ -469,88 +469,108 @@ class SceneNode {
    */
   updateMesh(mesh, opts) {}
 
-  // ── Custom shaders (MeshNode, SkinnedMeshNode, InstancedMeshNode) ────────
+  // ── Custom shaders (MeshNode, SkinnedMeshNode, InstancedMeshNode, VolumeNode) ──
 
   /**
-   *  True while a custom shader from setShader() is installed.
+   *  True while a custom shader module from setShader() or setShaderModule() is installed.
    * @readonly
    * @type {boolean}
    */
   hasShader;
 
   /**
-   * Splice GLSL into the node's PBR program. `vertex` must define
-   * `void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)`,
-   * run on the object-space position (after skinning and wind; for an
-   * InstancedMesh, in mesh-local space before the per-instance transform)
-   * so lighting, fog and shadows follow the displacement. `fragment` must
-   * define `void userFragment(inout vec3 baseColor, inout vec3 normal,
-   * inout float metallic, inout float roughness, inout vec3 emissive,
-   * inout float alpha)`, run after every material input is gathered and
-   * before lighting (`normal` is world space and renormalised after). The
-   * fragment chunk may also define `void userLight(vec3 toSun, inout float
-   * sunVisibility, inout float skyVisibility, inout vec3 skyNormal, inout
-   * float occluderSun, inout float sunDiffuse)`, called after userFragment
-   * with the unit direction to the sun (the atmosphere's, else the first
-   * directional light) and 1, 1, the shading normal, 0.5 and 0: the
-   * occlusion the surface knows beyond the shadow maps (a terrain's
-   * horizons). sunVisibility scales the sun's light (the share of its disc
-   * in sight); skyVisibility is the cosine-weighted share of the sky the
-   * surface sees, scaling its sky (and environment, and ambient) light with
-   * the light its occluders bounce back added (Jimenez et al. 2016's fit
-   * over the base colour) and dimming the sky's reflection (Lagarde's
-   * specular occlusion); skyNormal is the direction the sky's light is taken
-   * along; occluderSun is the share of the sun falling on what hides the
-   * rest of the sky (0.5: about half a terrain's slopes face the sun), whose
-   * light comes back to the surface as rho E mu / pi over the hidden share
-   * (rho the surface's base colour, as the fit takes the occluders', E mu
-   * the sun on level ground through the air), so a slope in shade is lit by
-   * the sunlit slopes across from it and not by the blue sky alone.
-   * sunDiffuse is the share of the sun on level ground that comes down
-   * scattered evenly from the sky above instead (what a cloud deck over
-   * the surface scatters forward, which sunVisibility leaves out of the
-   * sun): a radiance of E mu sunDiffuse / pi over the upper hemisphere,
-   * received as the sky's light is (along skyNormal, through
-   * skyVisibility) and casting no shadow. A fragment chunk answers a debug view (SceneGraph.setDebugView) with
-   * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`: SCENE_DEBUG(name) is true
-   * while the view `name` shows (any identifier names one), and the pixel
-   * is then `rgb` as is, unlit and with no air. At
-   * least one is required. User uniforms and samplers are declared in the
-   * chunk and must be named `u_*`; `uniforms` gives their initial values
-   * (a number or an array of up to 4 numbers). A uniform declared in both
-   * chunks is one value, a line may declare several, and a node takes at
-   * most 8 `sampler2D`s (a ninth fails to compile). A `buffer <type>
-   * u_name[];` declaration reads a GPU buffer the node binds by name
-   * (setShaderBuffer), in place: `u_name[i]` is element i and
-   * `u_name_length` (uint) the element count, 0 while nothing is bound (an
-   * unbound buffer reads zeroes, so index under the length). Chunks may read the
-   * engine's `vUV`, `vWorldPos` (camera-relative), `vCamDist` and the
-   * vertex inputs (`aTangent` among them), and pass their own varyings
-   * (`out` in the vertex chunk, `in` in the fragment chunk); the shadow
-   * pass runs the vertex chunk too. Throws TypeError on bad
-   * options and Error with the GLSL log when the program fails to compile.
+   * Install a brokernel (`.bk`) shader hook on the node (`module`, its source;
+   * `file` names it in errors; `modules` gives `{ name: source }` helper modules
+   * to import; `uniforms` gives initial uniform values by field name). Registered
+   * as `hook` beside the engine's modules (`src/scene/vulkan/shaders/common/*.bk`,
+   * `draw/mesh.bk`) and compiled in process by brass (`scene`, `atmosphere`,
+   * `lighting`, `custom`, `vegetation`, `procedural`, `bark`, `mesh` and `hook`
+   * are the engine's module names and refused in `modules`).
+   *
+   * A mesh hook (`createMesh`, `createSkinnedMesh`, `createInstancedMesh`) may
+   * export any combination of:
+   *
+   *   pub fn vertex(v: mesh::Vertex) -> mesh::Vertex
+   *   pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface
+   *   pub fn light(v: mesh::Vertex, s: mesh::Surface, l: mesh::Light) -> mesh::Light
+   *
+   * `vertex` runs on the object-space vertex (`v.pos`, `v.normal`, `v.uv`,
+   * `v.tangent`, `v.color`, `v.world_pos` camera-relative, `v.vertex_index`,
+   * `v.instance_index`) after skinning and wind (for an InstancedMesh, in
+   * mesh-local space before the per-instance transform) so lighting, fog and
+   * shadows follow the displacement; the shadow pass runs `vertex` too. A hook
+   * may pass its own interpolated `vec4<f32>` varyings in `v.user0`, `v.user1`
+   * and `v.user2`.
+   *
+   * `fragment` runs after every material input is gathered and before lighting:
+   * `s.base_color`, `s.normal` (world space, renormalised after), `s.metallic`,
+   * `s.roughness`, `s.emissive`, `s.alpha`.
+   *
+   * `light` runs after `fragment` with `l.to_sun` (unit direction to the sun:
+   * the atmosphere's, else the first directional light) and initial values
+   * `sun_visibility = 1`, `sky_visibility = 1`, `sky_normal = s.normal`,
+   * `occluder_sun = 0.5`, `sun_diffuse = 0`: the occlusion the surface knows
+   * beyond the shadow maps (a terrain's horizons). `sun_visibility` scales the
+   * sun's light (the share of its disc in sight); `sky_visibility` is the
+   * cosine-weighted share of the sky the surface sees, scaling its sky (and
+   * environment, and ambient) light with the light its occluders bounce back
+   * added (Jimenez et al. 2016's fit over the base colour) and dimming the
+   * sky's reflection (Lagarde's specular occlusion); `sky_normal` is the
+   * direction the sky's light is taken along; `occluder_sun` is the share of
+   * the sun falling on what hides the rest of the sky (0.5: about half a
+   * terrain's slopes face the sun), whose light comes back to the surface as
+   * rho E mu / pi over the hidden share (rho the surface's base colour, as the
+   * fit takes the occluders', E mu the sun on level ground through the air),
+   * so a slope in shade is lit by the sunlit slopes across from it and not by
+   * the blue sky alone. `sun_diffuse` is the share of the sun on level ground
+   * that comes down scattered evenly from the sky above instead (what a cloud
+   * deck over the surface scatters forward, which `sun_visibility` leaves out
+   * of the sun): a radiance of E mu sun_diffuse / pi over the upper hemisphere,
+   * received as the sky's light is (along `sky_normal`, through
+   * `sky_visibility`) and casting no shadow.
+   *
+   * A fragment hook answers a debug view (`SceneGraph.setDebugView`) with
+   * `if (SCENE_DEBUG(name)) { out.debug = vec4<f32>(rgb, 1.0); }`:
+   * `SCENE_DEBUG(name)` is true while the view `name` shows (any identifier
+   * names one), and the pixel is then `rgb` as is, unlit and with no air.
+   *
+   * The module declares the node's resources in set 4 (`common/custom.bk`):
+   * a `uniform<Params>` at `@binding(4, 0)`, whose fields `setShaderUniform`
+   * sets by name (32-bit scalars and vectors); textures at `@binding(4, 1)` to
+   * `@binding(4, 8)` (`texture2d<vec4<f32>>`, `texture2d_array<vec4<f32>>`,
+   * `texture3d<vec4<f32>>`; `setShaderTexture`) sampled through
+   * `custom::linear`, `custom::repeat`, `custom::repeat_s` or
+   * `custom::nearest`; and `buffer` / `read_buffer` bindings at
+   * `@binding(4, 14)` to `@binding(4, 19)` (`setShaderBuffer`), an unbound one
+   * of `.len() == 0`. Throws TypeError on bad options and Error with
+   * brokernel's diagnostics when compilation or set-4 reflection fails.
    * Needs GPU rendering.
    *
-   * @param {{vertex?: string, fragment?: string, uniforms?: Object<string, number|number[]>}} opts
+   * @param {{module: string, file?: string, modules?: Object<string, string>, uniforms?: Object<string, number|number[]>}} opts
    * @returns {SceneNode}
    * @example
    * box.setShader({
-   *   fragment: `uniform vec3 u_tint;
-   *     void userFragment(inout vec3 baseColor, inout vec3 normal,
-   *                       inout float metallic, inout float roughness,
-   *                       inout vec3 emissive, inout float alpha) {
-   *       emissive = u_tint;
+   *   module: `
+   *     module hook;
+   *     import mesh;
+   *     struct Params { tint: vec3<f32> }
+   *     @binding(4, 0) var params: uniform<Params>;
+   *     pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+   *       var out = s;
+   *       out.emissive = params.tint;
+   *       return out;
    *     }`,
-   *   uniforms: { u_tint: [1, 0, 0] },
+   *   uniforms: { tint: [1, 0, 0] },
    * });
    */
   setShader(opts) {}
 
   /**
-   * A volume's hook as a brokernel module (scene.createVolume's `module`):
-   * compiled with the engine's modules now, replacing the node's shader.
-   * Throws with brokernel's diagnostics, `file` naming the module.
-   * `modules` are the app's modules it imports, `{ name: source }`.
+   * Install a brokernel module hook on a mesh or volume node directly from its
+   * `source` string (`setShader({ module: source, file, modules })`), compiled
+   * with the engine's modules now, replacing the node's shader. Throws with
+   * brokernel's diagnostics, `file` naming the module. `modules` are the app's
+   * modules it imports, `{ name: source }`.
    *
    * @param {string} source
    * @param {string} [file]
@@ -560,9 +580,9 @@ class SceneNode {
   setShaderModule(source, file, modules) {}
 
   /**
-   * Set one uniform of the custom shader (a chunk's `u_*` uniform, a
-   * module's uniform field): a number, or 1 to 4 numbers (float, vec2,
-   * vec3, vec4). Extra components are ignored.
+   * Set one uniform field of the custom shader module's `@binding(4, 0)`
+   * uniform struct: a number, or 1 to 4 numbers (f32, vec2, vec3, vec4).
+   * Extra components are ignored.
    *
    * @param {string} name
    * @param {number|number[]|Float32Array} value
@@ -571,39 +591,39 @@ class SceneNode {
   setShaderUniform(name, value) {}
 
   /**
-   * Upload a single-channel float (R32F) texture for a `uniform sampler2D
-   * u_*` in the custom shader (MeshNode only). `data` holds width * height
-   * floats, row-major. With `x`/`y` given it writes a sub-rectangle of an
-   * existing slot instead (width * height floats for the rect alone; a rect
-   * outside the texture is ignored). A zero width or height releases the
-   * slot. `mipmap` builds a mip chain for textureLod(). `repeat` wraps the
-   * coordinates (a tiling texture) instead of clamping them. With `layers`
-   * the slot is a 2D array for a `uniform sampler2DArray u_*`: `data` holds
-   * that many width * height slices one after another (whole slots only, no
-   * sub-rectangles). With `depth` in its place the slices are the z of a 3D
-   * texture for a `uniform sampler3D u_*`, filtered across them by the
-   * hardware (one fetch for a tiling 3D field) and, with `repeat`, wrapping
-   * in z too; never mipmapped, written whole. A data array shorter than the
-   * extent is a RangeError; `layers` and `depth` together a TypeError.
+   * Upload a float texture for a `@binding(4, 1..8)` texture variable in the
+   * custom shader module (`texture2d<vec4<f32>>`, `texture2d_array<vec4<f32>>`,
+   * or `texture3d<vec4<f32>>`). `data` holds width * height floats, row-major.
+   * With `x`/`y` given it writes a sub-rectangle of an existing slot instead
+   * (width * height floats for the rect alone; a rect outside the texture is
+   * ignored). A zero width or height releases the slot. `mipmap` builds a mip
+   * chain for `.sample_lod()`. With `layers` the slot is a 2D array for a
+   * `texture2d_array<vec4<f32>>`: `data` holds that many width * height slices
+   * one after another (whole slots only, no sub-rectangles). With `depth` in
+   * its place the slices are the z of a 3D texture for a
+   * `texture3d<vec4<f32>>`, filtered across them by the hardware (one fetch
+   * for a tiling 3D field), never mipmapped, written whole. A data array
+   * shorter than the extent is a RangeError; `layers` and `depth` together a
+   * TypeError.
    *
    * With `buffer` (a KernelBuffer) in place of `data`, the slot's texels are
    * the buffer's: width * height (* layers or depth) texels of `channels` floats (1,
-   * 2 or 4: a `.r`, `.rg` or `.rgba` read), row-major, slice after slice,
+   * 2 or 4: a `.x`, `.xy` or `.xyzw` read), row-major, slice after slice,
    * from its start. The buffer is copied into the slot's image every render
    * that draws the node, after the kernel dispatches before it, so a kernel
-   * writing a field each frame is sampled with hardware bilinear filtering (and
-   * `repeat`, a toroidal grid's wrap) instead of four buffer loads and their
-   * mixes. `format` is how a channel is stored in the buffer: 'float32'
-   * (the default), 'unorm8' or 'unorm16' (an unsigned integer read as 0 to
-   * 1) or 'float16'; the shader reads floats whichever it is, and a format
-   * the GPU cannot filter fails the draw's binding (logged), as does an
-   * image past its limits (2048 array layers is common). `atlas` (an
-   * integer, 1 by default) packs atlas x atlas of the buffer's `layers` into
-   * each layer of the image, part i at cell i % atlas² (row-major) of layer
-   * floor(i / atlas²), the image width * atlas by height * atlas: more
-   * parts than the GPU has layers. A buffer whose writer logs the parts it
-   * rewrites, as a tile cache's layer pools do (one part a slot,
-   * bro.tiles), has only those parts copied after the first. A buffer
+   * writing a field each frame is sampled with hardware bilinear filtering
+   * (`custom::linear`, `custom::repeat`, `custom::repeat_s`, `custom::nearest`)
+   * instead of four buffer loads and their mixes. `format` is how a channel is
+   * stored in the buffer: 'float32' (the default), 'unorm8' or 'unorm16' (an
+   * unsigned integer read as 0 to 1) or 'float16'; the shader reads floats
+   * whichever it is, and a format the GPU cannot filter fails the draw's
+   * binding (logged), as does an image past its limits (2048 array layers is
+   * common). `atlas` (an integer, 1 by default) packs atlas x atlas of the
+   * buffer's `layers` into each layer of the image, part i at cell i % atlas²
+   * (row-major) of layer floor(i / atlas²), the image width * atlas by
+   * height * atlas: more parts than the GPU has layers. A buffer whose writer
+   * logs the parts it rewrites, as a tile cache's layer pools do (one part a
+   * slot, bro.tiles), has only those parts copied after the first. A buffer
    * smaller than the texels is a RangeError, as is an atlas below 1 or one
    * above 1 without `layers`. Returns the node.
    *
@@ -611,24 +631,22 @@ class SceneNode {
    * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number, format?: 'float32'|'unorm8'|'unorm16'|'float16', atlas?: number}} opts
    * @returns {SceneNode}
    * @example
-   * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .rg:
-   * volume.setShaderTexture('u_field', { buffer: field, width: 256, height: 256, layers: 4, channels: 2, repeat: true });
+   * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .xy:
+   * volume.setShaderTexture('field', { buffer: field, width: 256, height: 256, layers: 4, channels: 2, repeat: true });
    */
   setShaderTexture(name, opts) {}
 
   /**
    * Bind a KernelBuffer (bro.kernel.createBuffer, or one a kernel's dispatch
-   * returned) to a `buffer <type> u_name[];` declaration of the custom shader
-   * (MeshNode and InstancedMeshNode); null unbinds. The shaders read it in
-   * place on the GPU, with no copy: what kernels dispatch before a frame is
-   * what that frame draws, so a kernel can write heights, positions or
-   * colours every frame into a buffer bound once. The element type is
-   * float, int, uint, their vec2 / vec3 / vec4 forms or mat4, laid out
-   * std430 (a vec3 takes 16 bytes); `u_name_length` is the buffer's
-   * byteLength over that. The binding outlives setShader(). A vertex chunk's
+   * returned) to a `@binding(4, 14..19) var name: read_buffer<T>;` declaration
+   * of the custom shader module; null unbinds. The shaders read it in place on
+   * the GPU, with no copy: what kernels dispatch before a frame is what that
+   * frame draws, so a kernel can write heights, positions or colours every
+   * frame into a buffer bound once. `.len()` is the buffer's element count (0
+   * while unbound). The binding outlives setShader(). A vertex hook's
    * displacement also moves the node's shadow; bind the buffer again after
-   * rewriting it so cached shadows refresh. Throws TypeError for a value
-   * that is not a KernelBuffer.
+   * rewriting it so cached shadows refresh. Throws TypeError for a value that
+   * is not a KernelBuffer.
    *
    * @param {string} name
    * @param {KernelBuffer|null} buffer
@@ -636,11 +654,19 @@ class SceneNode {
    * @example
    * const heights = bro.kernel.createBuffer(N * N * 4);
    * terrainKernel.dispatch([N, N], heights, origin);
-   * tile.setShader({ vertex: `buffer float u_heights[];
-   *   void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-   *     if (uint(gl_VertexIndex) < u_heights_length) pos.y += u_heights[gl_VertexIndex];
-   *   }` });
-   * tile.setShaderBuffer('u_heights', heights);
+   * tile.setShader({
+   *   module: `
+   *     module hook;
+   *     import mesh;
+   *     @binding(4, 14) var heights: read_buffer<f32>;
+   *     pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+   *       var out = v;
+   *       let idx: u32 = u32(v.vertex_index);
+   *       if (idx < heights.len()) { out.pos.y += heights[idx]; }
+   *       return out;
+   *     }`,
+   * });
+   * tile.setShaderBuffer('heights', heights);
    */
   setShaderBuffer(name, buffer) {}
 

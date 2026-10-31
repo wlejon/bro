@@ -8,7 +8,6 @@
 #include "scene/vulkan/frame/scene_fullscreen.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "util/log.h"
 
 #include "ibl.bk.src.h"

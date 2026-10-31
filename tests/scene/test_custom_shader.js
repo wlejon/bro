@@ -1,12 +1,13 @@
-// Test custom shaders on static mesh materials — mesh.setShader installs
-// user GLSL chunks (userVertex / userFragment hooks spliced into the mesh
-// uber-shader), setShaderUniform drives numeric u_-prefixed uniforms live,
-// clearShader restores the default pipeline. Exercises the program cache in
-// src/scene/vulkan/draw/scene_mesh_drawer.cpp (SceneMeshDrawer::program — identical sources
-// share one program), the custom sub-pass routing in scene_renderer.cpp
-// (incl. the "custom shader wins over unlit" rule), the eager-compile error
-// path (invalid GLSL throws, node keeps rendering default), and the
-// setShader/setShaderUniform/clearShader bindings in src/bronze_host/native_scene_shaders.cpp.
+// Test custom shader modules on static mesh materials — mesh.setShader /
+// setShaderModule installs user brokernel modules (vertex / fragment / light
+// hooks composed with mesh_main.bk), setShaderUniform drives numeric uniform
+// struct fields live, clearShader restores the default pipeline. Exercises the
+// program cache in src/scene/vulkan/draw/scene_mesh_drawer.cpp
+// (SceneMeshDrawer::program — identical sources share one program), the custom
+// sub-pass routing in scene_renderer.cpp (incl. the "custom shader wins over
+// unlit" rule), the eager-compile error path (invalid module throws, node keeps
+// rendering default), and the setShader/setShaderUniform/clearShader bindings
+// in src/bronze_host/native_scene_shaders.cpp.
 
 function regionChannel(img, ch, x0, y0, x1, y1) {
     let sum = 0, n = 0;
@@ -44,18 +45,20 @@ function dropScene(s) {
     flush();
 }
 
-// Fragment chunk that zeroes the PBR inputs and emits a pure emissive color,
+// Fragment hook that zeroes the PBR inputs and emits a pure emissive color,
 // so the output pixel is exactly the emissive value (linear tonemap, base
 // color 0 kills diffuse/ambient; residual spec off a black dielectric is
 // a couple of counts at most).
 const emitFrag = (r, g, b) => `
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.0);
-        metallic  = 0.0;
-        roughness = 1.0;
-        emissive  = vec3(${r.toFixed(1)}, ${g.toFixed(1)}, ${b.toFixed(1)});
+    module hook;
+    import mesh;
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.metallic  = 0.0;
+        out.roughness = 1.0;
+        out.emissive  = vec3<f32>(${r.toFixed(1)}, ${g.toFixed(1)}, ${b.toFixed(1)});
+        return out;
     }`;
 
 const probe = freshScene(64);
@@ -72,7 +75,7 @@ if (!probe.scene) {
         const s = freshScene(SIZE);
         const m = s.scene.createMesh({ mesh: 'box', color: '#ff0000' });
         assert(m.hasShader === false, 'hasShader is false before setShader');
-        m.setShader({ fragment: emitFrag(0, 1, 0) });
+        m.setShader({ module: emitFrag(0, 1, 0) });
         assert(m.hasShader === true, 'hasShader is true after setShader');
         const img = s.scene.captureFrame();
         const r = centerChannel(img, 0, 8), g = centerChannel(img, 1, 8);
@@ -93,9 +96,13 @@ if (!probe.scene) {
         const before = s.scene.captureFrame();
         assert(centerChannel(before, 0, 8) > 60, 'box starts at the center');
 
-        m.setShader({ vertex: `
-            void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                pos.x += 1.5;
+        m.setShader({ module: `
+            module hook;
+            import mesh;
+            pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                var out = v;
+                out.pos.x += 1.5;
+                return out;
             }` });
         const after = s.scene.captureFrame();
         assert(centerChannel(after, 0, 8) < 10,
@@ -115,29 +122,34 @@ if (!probe.scene) {
         const s = freshScene(SIZE);
         const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff' });
         m.setShader({
-            fragment: `
-                uniform vec3 u_tint;
-                uniform float u_gain;
-                void userFragment(inout vec3 baseColor, inout vec3 normal,
-                                  inout float metallic, inout float roughness,
-                                  inout vec3 emissive, inout float alpha) {
-                    baseColor = vec3(0.0);
-                    roughness = 1.0;
-                    emissive  = u_tint * u_gain;
+            module: `
+                module hook;
+                import mesh;
+                struct Params {
+                    tint: vec3<f32>,
+                    gain: f32,
+                }
+                @binding(4, 0) var params: uniform<Params>;
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.roughness = 1.0;
+                    out.emissive  = params.tint * params.gain;
+                    return out;
                 }`,
-            uniforms: { u_tint: [1, 0, 0], u_gain: 1.0 },
+            uniforms: { tint: [1, 0, 0], gain: 1.0 },
         });
         const a = s.scene.captureFrame();
         assert(centerChannel(a, 0, 8) > 200 && centerChannel(a, 2, 8) < 40,
             'initial uniforms render red');
 
-        m.setShaderUniform('u_tint', [0, 0, 1]);
+        m.setShaderUniform('tint', [0, 0, 1]);
         advanceTime(16);
         const b = s.scene.captureFrame();
         assert(centerChannel(b, 2, 8) > 200 && centerChannel(b, 0, 8) < 40,
             'setShaderUniform retints to blue live');
 
-        m.setShaderUniform('u_gain', 0.0);
+        m.setShaderUniform('gain', 0.0);
         const c = s.scene.captureFrame();
         assert(centerChannel(c, 2, 8) < 10,
             `scalar uniform update applies (${centerChannel(c, 2, 8)})`);
@@ -147,13 +159,13 @@ if (!probe.scene) {
         try { m.setShaderUniform('', 1.0); } catch (e) { threw = true; }
         assert(threw, 'setShaderUniform rejects an empty name');
         threw = false;
-        try { m.setShaderUniform('u_tint', 'red'); } catch (e) { threw = true; }
+        try { m.setShaderUniform('tint', 'red'); } catch (e) { threw = true; }
         assert(threw, 'setShaderUniform rejects non-numeric values');
         dropScene(s);
     }
 
     // =====================================================================
-    // Invalid GLSL throws with a driver message; the mesh keeps rendering
+    // Invalid module throws with a compiler message; the mesh keeps rendering
     // with its previous (default) pipeline.
     // =====================================================================
     {
@@ -161,20 +173,20 @@ if (!probe.scene) {
         const m = s.scene.createMesh({ mesh: 'box', color: '#ff0000' });
         let msg = null;
         try {
-            m.setShader({ fragment: 'void userFragment(this is not glsl' });
+            m.setShader({ module: 'module hook; pub fn fragment(this is not brokernel' });
         } catch (e) {
             msg = String(e.message || e);
         }
-        assert(msg !== null, 'invalid GLSL throws');
-        assert(msg.length > 10, `error carries the driver log (${msg})`);
+        assert(msg !== null, 'invalid module throws');
+        assert(msg.length > 10, `error carries the compiler log (${msg})`);
         assert(m.hasShader === false, 'failed setShader leaves no shader installed');
         const img = s.scene.captureFrame();
         assert(centerChannel(img, 0, 8) > 60,
             'mesh still renders default after a failed compile');
 
         // A failed set also never clobbers a previously working shader.
-        m.setShader({ fragment: emitFrag(0, 1, 0) });
-        try { m.setShader({ fragment: 'garbage(' }); } catch (e) {}
+        m.setShader({ module: emitFrag(0, 1, 0) });
+        try { m.setShader({ module: 'module hook; garbage(' }); } catch (e) {}
         assert(m.hasShader === true, 'failed setShader keeps the previous shader');
         assert(centerChannel(s.scene.captureFrame(), 1, 8) > 200,
             'previous shader still renders after a failed re-set');
@@ -187,7 +199,7 @@ if (!probe.scene) {
     {
         const s = freshScene(SIZE);
         const m = s.scene.createMesh({ mesh: 'box', color: '#ff0000' });
-        m.setShader({ fragment: emitFrag(0, 1, 0) });
+        m.setShader({ module: emitFrag(0, 1, 0) });
         assert(centerChannel(s.scene.captureFrame(), 1, 8) > 200, 'shader active');
         m.clearShader();
         assert(m.hasShader === false, 'hasShader false after clearShader');
@@ -204,20 +216,23 @@ if (!probe.scene) {
     // =====================================================================
     {
         const s = freshScene(SIZE);
-        const tintFrag = `
-            uniform vec3 u_tint;
-            void userFragment(inout vec3 baseColor, inout vec3 normal,
-                              inout float metallic, inout float roughness,
-                              inout vec3 emissive, inout float alpha) {
-                baseColor = vec3(0.0);
-                roughness = 1.0;
-                emissive  = u_tint;
+        const tintMod = `
+            module hook;
+            import mesh;
+            struct Params { tint: vec3<f32> }
+            @binding(4, 0) var params: uniform<Params>;
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                var out = s;
+                out.base_color = vec3<f32>(0.0);
+                out.roughness = 1.0;
+                out.emissive  = params.tint;
+                return out;
             }`;
         const a = s.scene.createMesh({ mesh: 'box', x: -1.4, color: '#ffffff' });
         const b = s.scene.createMesh({ mesh: 'box', x:  1.4, color: '#ffffff' });
         s.scene.createMesh({ mesh: 'box', y: -1.4, color: '#ff0000' });  // plain
-        a.setShader({ fragment: tintFrag, uniforms: { u_tint: [0, 1, 0] } });
-        b.setShader({ fragment: tintFrag, uniforms: { u_tint: [0, 0, 1] } });
+        a.setShader({ module: tintMod, uniforms: { tint: [0, 1, 0] } });
+        b.setShader({ module: tintMod, uniforms: { tint: [0, 0, 1] } });
 
         const img = s.scene.captureFrame();
         const cy = SIZE / 2;
@@ -249,7 +264,7 @@ if (!probe.scene) {
     {
         const s = freshScene(SIZE);
         const m = s.scene.createMesh({ mesh: 'box', color: '#ff0000', unlit: true });
-        m.setShader({ fragment: emitFrag(0, 1, 0) });
+        m.setShader({ module: emitFrag(0, 1, 0) });
         const withShader = s.scene.captureFrame();
         assert(centerChannel(withShader, 1, 8) > 200,
             'custom shader overrides unlit (hook runs, mesh renders lit)');
@@ -269,8 +284,8 @@ if (!probe.scene) {
         for (const badCall of [
             () => m.setShader(),
             () => m.setShader({}),
-            () => m.setShader({ vertex: 42 }),
-            () => m.setShader({ fragment: emitFrag(1, 0, 0), uniforms: { tint: 1 } }),
+            () => m.setShader({ module: 42 }),
+            () => m.setShader({ module: emitFrag(1, 0, 0), uniforms: { tint: 'bad' } }),
         ]) {
             let threw = false;
             try { badCall(); } catch (e) { threw = true; }

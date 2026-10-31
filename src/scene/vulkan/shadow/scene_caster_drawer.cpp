@@ -9,7 +9,6 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "util/log.h"
 
 #include <array>
@@ -185,36 +184,27 @@ VkPipeline SceneCasterDrawer::cutoutPipeline(MeshKind kind, bool twoSided) {
 }
 
 VkPipeline SceneCasterDrawer::customPipeline(const CustomShaderState& cs, MeshKind kind, bool twoSided, bool cutout) {
-    using Caster = SceneVkCustomShader::ShadowCaster;
-    const Caster caster = kind == MeshKind::Skinned     ? Caster::Skinned
-                          : kind == MeshKind::Instanced ? Caster::Instanced
-                                                        : Caster::Static;
-    std::string key = cs.key + (caster == Caster::Skinned ? "_skin" : caster == Caster::Instanced ? "_inst" : "_static");
+    const ShadowCaster caster = kind == MeshKind::Skinned     ? ShadowCaster::Skinned
+                              : kind == MeshKind::Instanced ? ShadowCaster::Instanced
+                                                            : ShadowCaster::Static;
+    std::string key = cs.key + (caster == ShadowCaster::Skinned ? "_skin" : caster == ShadowCaster::Instanced ? "_inst" : "_static");
     if (twoSided) key += "_2s";
     if (cutout) key += "_cut";
     auto it = custom_.find(key);
     if (it != custom_.end()) return it->second;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkShaderModule vs = VK_NULL_HANDLE;
     std::string err;
-    CustomShaderInterface iface;
-    if (cs.isModule()) {
-        KernelHookStage stage;
-        if (compileKernelShadowHook(caster, cutout, cs.module, cs.moduleFile, cs.modules, stage, err)) {
-            vs = SceneVkShaderModule::create(device_->device(), stage.spirv);
-            if (vs) {
-                pipeline = buildPipeline(vs, kind, true, twoSided, cutout, stage.entry.c_str());
-                SceneVkShaderModule::destroy(device_->device(), vs);
-            }
+    KernelHookStage stage;
+    if (compileKernelShadowHook(caster, cutout, cs.module, cs.moduleFile, cs.modules, stage, err)) {
+        VkShaderModule vs = SceneVkShaderModule::create(device_->device(), stage.spirv);
+        if (vs) {
+            pipeline = buildPipeline(vs, kind, true, twoSided, cutout, stage.entry.c_str());
+            SceneVkShaderModule::destroy(device_->device(), vs);
         }
-    } else if (iface.parse(cs.vertexChunk, cs.fragmentChunk, err) &&
-        SceneVkCustomShader::compileCustomShadowShaderModule(device_->device(), caster, cutout, iface, vs, err)) {
-        pipeline = buildPipeline(vs, kind, true, twoSided, cutout);
-        SceneVkShaderModule::destroy(device_->device(), vs);
     }
     if (pipeline == VK_NULL_HANDLE) {
-        LOG_WARN("SceneCasterDrawer: a custom vertex chunk does not build as a shadow caster; the mesh casts its "
+        LOG_WARN("SceneCasterDrawer: a custom vertex hook does not build as a shadow caster; the mesh casts its "
                  "undisplaced silhouette: %s", err.c_str());
     }
     custom_.emplace(std::move(key), pipeline);

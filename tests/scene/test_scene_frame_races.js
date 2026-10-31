@@ -56,14 +56,17 @@ function dropScene(s) {
 }
 
 const emissive = `
-    uniform vec3 u_color;
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.0);
-        metallic = 0.0;
-        roughness = 1.0;
-        emissive = u_color;
+    module hook;
+    import mesh;
+    struct Params { color: vec3<f32> }
+    @binding(4, 0) var params: uniform<Params>;
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.metallic = 0.0;
+        out.roughness = 1.0;
+        out.emissive = params.color;
+        return out;
     }`;
 
 document.body.setAttribute('style', 'margin:0; background:#000');
@@ -81,10 +84,10 @@ if (!probe.scene) {
     {
         const s = freshScene(64, 64, 'position:absolute; left:0; top:0; width:64px; height:64px');
         const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff', scale: [3, 3, 3] });
-        m.setShader({ fragment: emissive, uniforms: { u_color: [1, 0, 0] } });
+        m.setShader({ module: emissive, uniforms: { color: [1, 0, 0] } });
         for (let i = 0; i < palette.length; ++i) {
             const c = palette[i];
-            m.setShaderUniform('u_color', c.map(v => v / 255));
+            m.setShaderUniform('color', c.map(v => v / 255));
             advanceTime(16);
             const px = getPixels(32, 32, 1, 1).data;
             dominant(px, c, `composited scene, frame ${i}`);
@@ -99,10 +102,10 @@ if (!probe.scene) {
     {
         const s = freshScene(64, 64);
         const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff', scale: [3, 3, 3] });
-        m.setShader({ fragment: emissive, uniforms: { u_color: [0, 0, 0] } });
+        m.setShader({ module: emissive, uniforms: { color: [0, 0, 0] } });
         for (let i = 0; i < palette.length; ++i) {
             const c = palette[i];
-            m.setShaderUniform('u_color', c.map(v => v / 255));
+            m.setShaderUniform('color', c.map(v => v / 255));
             const img = s.scene.captureFrame();
             dominant(region(img, 28, 28, 36, 36), c, `captureFrame ${i}`);
         }
@@ -118,7 +121,7 @@ if (!probe.scene) {
         const nodes = palette.map((c, i) => {
             const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff', position: [-3.5 + i, 0, 0],
                                            scale: [0.9, 0.9, 0.9] });
-            m.setShader({ fragment: emissive, uniforms: { u_color: c.map(v => v / 255) } });
+            m.setShader({ module: emissive, uniforms: { color: c.map(v => v / 255) } });
             return m;
         });
         const img = s.scene.captureFrame();
@@ -167,10 +170,10 @@ if (!probe.scene) {
         resize(64, 64);
         const s = freshScene(64, 64, 'position:absolute; left:0; top:0; width:64px; height:64px');
         const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff', scale: [3, 3, 3] });
-        m.setShader({ fragment: emissive, uniforms: { u_color: [0, 0, 0] } });
+        m.setShader({ module: emissive, uniforms: { color: [0, 0, 0] } });
         for (let i = 0; i < palette.length; ++i) {
             const c = palette[i];
-            m.setShaderUniform('u_color', c.map(v => v / 255));
+            m.setShaderUniform('color', c.map(v => v / 255));
             advanceTime(16);
             dominant(getPixels(32, 32, 1, 1).data, c, `full-frame scene, frame ${i}`);
         }

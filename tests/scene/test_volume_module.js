@@ -1,6 +1,6 @@
 // scene.createVolume({ module }): a volume whose hook is a brokernel module
 // (volume.bk's contract), composed with the engine's modules and compiled by
-// brass, drawing as a GLSL chunk's does.
+// brass.
 //   - the composite: an emissive plane and the black sky behind a medium of
 //     transmittance 0.5 and light 0.2 read plane * 0.5 + 0.2 and 0.2;
 //   - setShaderUniform reaches the module's uniform by its field's name;
@@ -38,15 +38,20 @@ function plane(scene, rgb) {
         color: [0, 0, 0],
     });
     node.setShader({
-        fragment: `uniform vec3 u_glow;
-            void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
-                              inout float roughness, inout vec3 emissive, inout float alpha) {
-                baseColor = vec3(0.0);
-                metallic = 0.0;
-                roughness = 1.0;
-                emissive = u_glow;
+        module: `
+            module hook;
+            import mesh;
+            struct Params { glow: vec3<f32> }
+            @binding(4, 0) var params: uniform<Params>;
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                var out = s;
+                out.base_color = vec3<f32>(0.0);
+                out.metallic = 0.0;
+                out.roughness = 1.0;
+                out.emissive = params.glow;
+                return out;
             }`,
-        uniforms: { u_glow: rgb },
+        uniforms: { glow: rgb },
     });
     return node;
 }

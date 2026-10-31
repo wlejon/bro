@@ -1,13 +1,14 @@
 #pragma once
 
 // A brokernel module as a scene shader hook (setShaderModule, createVolume,
-// createMesh, createInstancedMesh, createSkinnedMesh): the node's module,
-// registered as `hook` beside any modules it brings (the app's, which its
-// kernels share), composed with the engine's own (scene.bk, atmosphere.bk,
-// lighting.bk, custom.bk and the stage's) and compiled by brass to the
-// stage's SPIR-V. The hook reads the engine's frame state through those
-// modules' resources and declares its own in set 4 (custom.bk), which
-// CustomShaderInterface::fromKernel reflects.
+// createMesh, createInstancedMesh, createSkinnedMesh) and the engine's own
+// built-in scene stages: compiled in-process by brass to SPIR-V.
+//
+// Engine modules read the frame's camera, lighting and atmosphere at the
+// engine's sets/bindings (common/scene.bk, atmosphere.bk, lighting.bk,
+// custom.bk, vegetation.bk, procedural.bk) and a node's hook declares its
+// own resources in set 4 (custom.bk), which CustomShaderInterface::fromKernel
+// reflects.
 
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 
@@ -17,6 +18,8 @@
 #include <vector>
 
 namespace bro::scene::vk {
+
+enum class ShadowCaster { Static, Skinned, Instanced };
 
 struct KernelHookStage {
     std::vector<uint32_t> spirv;
@@ -42,6 +45,17 @@ struct KernelMeshHook {
 /// Modules the hook imports beside the engine's (the app's own, shared with
 /// its kernels): name and source.
 using KernelHookModules = std::vector<std::pair<std::string, std::string>>;
+
+/// When BRO_SCENE_SHADER_SOURCE is set, the directory (with trailing '/')
+/// shaders are read from instead of their embedded strings; "" otherwise.
+const std::string& shaderSourceDir();
+
+/// The shader directory in the source tree this binary was built from.
+const char* buildShaderSourceDir();
+
+/// `fileName`'s text from shaderSourceDir() (or setBSourceDir() while
+/// compiling shader set B) when set, `embedded` otherwise.
+std::string shaderSource(const char* fileName, const char* embedded);
 
 /// Compile a built-in mesh stage entry point from draw/mesh_main.bk.
 bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string& err);
@@ -71,7 +85,7 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
                                    KernelHookStage& out, std::string& err);
 
 /// Compile a mesh hook's shadow-caster vertex stage.
-bool compileKernelShadowHook(SceneVkCustomShader::ShadowCaster caster, bool cutout, const std::string& module,
+bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module,
                              const std::string& file, const KernelHookModules& modules,
                              KernelHookStage& out, std::string& err);
 

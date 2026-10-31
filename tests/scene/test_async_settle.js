@@ -5,21 +5,23 @@
 // frame without its pipeline made of it. (scene_vk_pipeline.h's
 // pipeline_async; docs/code-cache.md "Pipelines built off the frame thread".) Verifies, with an
 // atmosphere, auto exposure, a ground, boxes casting the sun's shadow (one
-// with a salted custom fragment chunk, so its program compiles cold):
+// with a salted custom fragment module, so its program compiles cold):
 //   - settled both ways and run on to the same time, the two pictures are
 //     the same to within two scenes' run-to-run noise, at the same exposure
 //   - the window's way skipped draws at first; when it skipped none (every
 //     pipeline a pipeline-cache hit) the test reports SKIP
 
-// (A salt in the custom chunk: nothing of this run's is in the shader cache.)
-const SALT = (Math.random() * 1e-6).toExponential(6);
-const FRAG = `
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.7, 0.35, 0.2) + ${SALT};
-        roughness = 0.6;
-    }`;
+// (A salt in the custom module: nothing of this run's is in the shader cache.)
+const SALT = (Math.random() * 1e-6).toFixed(9);
+const MODULE = `
+module hook;
+import mesh;
+pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+    var out = s;
+    out.base_color = vec3<f32>(0.7, 0.35, 0.2) + vec3<f32>(${SALT});
+    out.roughness = 0.6;
+    return out;
+}`;
 
 function differ(a, b) {
     let over = 0, worst = 0, se = 0;
@@ -61,7 +63,7 @@ function settleOnce(async) {
     scn.createMesh({ mesh: 'plane', color: '#5a7040', scale: [80, 1, 80] });
     scn.createMesh({ mesh: 'box', color: 'white', x: -2, y: 1, z: -10, castsShadow: true });
     const custom = scn.createMesh({ mesh: 'box', color: 'white', x: 2, y: 1, z: -8, castsShadow: true });
-    custom.setShader({ fragment: FRAG });
+    custom.setShader({ module: MODULE });
     scn.setCamera({ fov: 60, near: 0.1, far: 2e4, position: [0, 4, 2], target: [0, 1, -10], up: [0, 1, 0] });
     // (As many frames each way, so both scenes' clocks read the same.)
     let skipped = 0;

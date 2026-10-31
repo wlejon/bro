@@ -1,4 +1,4 @@
-// bro_vulkan_scene_passes_test: the built-in SPIR-V shaders, run-time GLSL
+// bro_vulkan_scene_passes_test: the built-in brokernel scene shaders, hook
 // compilation, and the scene renderer's full pass list run on a real graph.
 //
 // assert() is the check here, so it must survive a Release build: NDEBUG is
@@ -7,15 +7,14 @@
 // fails the run too.
 #undef NDEBUG
 
+#include "render/vulkan_context.h"
+#include "render/vulkan_debug.h"
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
-#include "render/vulkan_context.h"
-#include "render/vulkan_debug.h"
 #include "util/log.h"
 
 #include <broimage/encode.h>
@@ -92,9 +91,9 @@ int main() {
     }
 
     // -------------------------------------------------------------------------
-    // Test 1: SceneVkShaderCompiler & SPIR-V Pipeline
+    // Test 1: brokernel built-in stages & custom hook compilation
     // -------------------------------------------------------------------------
-    std::cout << "[Test 1] SceneVkShaderCompiler (built-in SPIR-V & run-time GLSL)... " << std::flush;
+    std::cout << "[Test 1] Scene brokernel stages & hook compilation... " << std::flush;
     {
         // 1. Verify built-in shader bytecode
         KernelHookStage meshVs, meshFs, shadowVs;
@@ -103,24 +102,25 @@ int main() {
         assert(compileKernelMeshStage("mesh_frag", meshFs, meshErr) && !meshFs.spirv.empty() && meshFs.spirv[0] == 0x07230203);
         assert(compileKernelShadowStage("shadow_vert", shadowVs, meshErr) && !shadowVs.spirv.empty() && shadowVs.spirv[0] == 0x07230203);
 
-        // 2. Runtime GLSL compilation (in-process glslang)
+        // 2. Runtime brokernel hook compilation
         {
-            std::string testGlsl =
-                "#version 450\n"
-                "layout(location = 0) in vec3 pos;\n"
-                "layout(location = 0) out vec3 outPos;\n"
-                "void main() {\n"
-                "    gl_Position = vec4(pos, 1.0);\n"
-                "    outPos = pos;\n"
-                "}\n";
-            auto compiled = SceneVkShaderCompiler::compileGlsl(testGlsl, VK_SHADER_STAGE_VERTEX_BIT);
-            assert(!compiled.empty());
-            assert(compiled[0] == 0x07230203);
+            std::string testHook =
+                "module hook;\n"
+                "import mesh;\n"
+                "pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { return v; }\n"
+                "pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface { return s; }\n";
+            KernelMeshHook compiled;
+            std::string err;
+            assert(compileKernelMeshHook(scene::SceneRenderer::CustomShaderTarget::Static, testHook, "test.bk", {}, compiled, err));
+            assert(compiled.hasVertex && compiled.hasFragment);
+            assert(!compiled.vs.spirv.empty() && compiled.vs.spirv[0] == 0x07230203);
+            assert(!compiled.fs.spirv.empty() && compiled.fs.spirv[0] == 0x07230203);
 
-            // Test shader module creation and deletion
-            VkShaderModule mod = SceneVkShaderCompiler::createModule(device.device(), compiled);
-            assert(mod != VK_NULL_HANDLE);
-            SceneVkShaderCompiler::destroyModule(device.device(), mod);
+            KernelMeshHook bad;
+            std::string badErr;
+            assert(!compileKernelMeshHook(scene::SceneRenderer::CustomShaderTarget::Static,
+                                          "module hook; fn broken(", "bad.bk", {}, bad, badErr));
+            assert(!badErr.empty());
         }
 
         std::cout << "PASSED" << std::endl;

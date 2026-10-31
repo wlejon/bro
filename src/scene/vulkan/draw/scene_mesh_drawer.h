@@ -198,17 +198,17 @@ public:
     /// Draw a volume (MeshDraw::volume) into the open volume target
     /// (PassVolume: light over transmittance, then the medium's depth): its
     /// triangle over the view, blended as dst * transmittance + its light
-    /// (volume.frag), reading the opaque depth from `depthSet` (the
+    /// (volume_main.bk), reading the opaque depth from `depthSet` (the
     /// material layout, the depth at binding 0, the exposure meter's slots
     /// at 5); `index` its place among the frame's volumes, its meter slot.
     void recordVolume(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
                       VkDescriptorSet lightingSet, VkDescriptorSet depthSet, const MeshDraw& draw,
                       uint32_t index);
 
-    /// Whether a volume's chunk gives its near medium point by point
-    /// (userMedium, volume.frag), so it has a near grid.
+    /// Whether a volume's module gives its near medium point by point
+    /// (medium / medium_range, volume_near.bk), so it has a near grid.
     bool volumeHasMedium(const MeshDraw& draw);
-    /// Integrate a volume's userMedium over its near grid, in an open pass
+    /// Integrate a volume's `medium` over its near grid, in an open pass
     /// with no attachments whose viewport is the grid's cells: `nearSet`
     /// (volumeNearSetLayout) holds the grid's light and depth images, in
     /// GENERAL.

@@ -226,7 +226,7 @@ public:
     bool unlit() const { return unlit_; }
 
     /// The unlit flag as the renderer applies it: a custom shader suppresses
-    /// unlit (its early-return would skip the userFragment hook, and unlit
+    /// unlit (its early-return would skip the fragment hook, and unlit
     /// meshes draw post-tonemap where the hook's PBR inputs don't exist).
     /// Every pass — color routing, uUnlit upload, shadow caster gather —
     /// keys off this so they can never disagree.
@@ -286,9 +286,9 @@ public:
     bool twoSided() const { return twoSided_; }
 
     /// A volume (scene.createVolume): not a surface but a medium over the
-    /// whole view, its custom fragment chunk's userVolume marching each
-    /// pixel's ray up to the opaque depth (draw/volume.frag). Its mesh is
-    /// never drawn; it casts no shadow and is never culled.
+    /// whole view, its custom module's `volume` marching each pixel's ray up
+    /// to the opaque depth (draw/volume_main.bk). Its mesh is never drawn; it
+    /// casts no shadow and is never culled.
     void setVolume(bool b) {
         volume_ = b;
         if (b) castsShadow_ = false;
@@ -337,21 +337,15 @@ public:
     // on InstancedMeshNode). Works on static AND skinned meshes — the
     // renderer picks the SKINNED program variant for a ready skin.
 
-    /// Install user shader chunks (either may be empty, not both — callers
-    /// validate). Replaces any previous shader; uniform values reset.
-    /// Bumps the change generation: a vertex chunk changes the shadow
-    /// silhouette, and clearing one must invalidate tiles that still hold
-    /// the displaced depth.
-    void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
-        customShader_ = CustomShaderState::make(std::move(vertexChunk),
-                                                std::move(fragmentChunk));
-        bumpChangeGeneration();
-    }
-    /// A volume's brokernel hook (scene_vk_kernel_hook.h) in place of chunks.
+    /// Install a brokernel hook module (scene_vk_kernel_hook.h). Replaces any
+    /// previous shader; uniform values reset. Bumps the change generation: a
+    /// vertex hook changes the shadow silhouette, and clearing one must
+    /// invalidate tiles that still hold the displaced depth.
     void setCustomShaderModule(std::string module, std::string file,
-                               std::vector<std::pair<std::string, std::string>> modules,
+                               std::vector<std::pair<std::string, std::string>> modules = {},
                                bool hasVertex = false) {
-        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules), hasVertex);
+        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules));
+        if (hasVertex) customShader_->hasVertex = true;
         bumpChangeGeneration();
     }
     void clearCustomShader() {

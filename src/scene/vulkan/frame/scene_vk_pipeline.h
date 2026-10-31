@@ -130,14 +130,9 @@ private:
     VkFormat stencilAttachmentFormat_ = VK_FORMAT_UNDEFINED;
 };
 
-enum class BuiltinSceneShader;
-
-/// A compute pipeline of the built-in shader `shader` over `layout`, through
-/// the device's persisted pipeline cache, its statistics (when on) logged
-/// under `name`. Null on failure.
-VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
-                                 const char* name);
-/// The same of a shader module the caller keeps.
+/// A compute pipeline of a shader module the caller keeps, over `layout`,
+/// through the device's persisted pipeline cache, its statistics (when on)
+/// logged under `name`. Null on failure.
 VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
                                  const char* entry = "main");
 
@@ -147,8 +142,7 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
 /// ready (pipeline_async::async()), and waits for it where they do not.
 class AsyncComputePipeline {
 public:
-    /// `module` (start's second form) and `layout` outlive the build.
-    void start(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout, const char* name);
+    /// `module` and `layout` outlive the build.
     void start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
                const char* entry = "main");
     VkPipeline get();

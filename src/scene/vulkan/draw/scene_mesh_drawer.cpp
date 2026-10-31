@@ -271,39 +271,27 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
 
     auto prog = std::make_unique<CustomProgram>();
     std::string err;
-    if (cs.isModule()) {
-        const auto target = shaderTarget(kind);
-        KernelMeshHook hook;
-        bool ok = compileKernelMeshHook(target, cs.module, cs.moduleFile, cs.modules, hook, err);
-        if (ok) {
-            prog->iface = std::move(hook.iface);
-            prog->hasLight = hook.hasLight;
-            if (hook.hasVertex) {
-                prog->vs = SceneVkShaderModule::create(device_, hook.vs.spirv);
-                prog->vsEntry = hook.vs.entry;
-            } else {
-                prog->vsEntry = kVsPassthroughEntries[static_cast<int>(target)];
-            }
-            if (hook.hasFragment) {
-                prog->fs = SceneVkShaderModule::create(device_, hook.fs.spirv);
-                prog->fsEntry = hook.fs.entry;
-            }
-            ok = (!hook.hasVertex || prog->vs) && (!hook.hasFragment || prog->fs);
-            if (!ok) err = "Failed to create VkShaderModule";
+    const auto target = shaderTarget(kind);
+    KernelMeshHook hook;
+    bool ok = compileKernelMeshHook(target, cs.module, cs.moduleFile, cs.modules, hook, err);
+    if (ok) {
+        prog->iface = std::move(hook.iface);
+        prog->hasLight = hook.hasLight;
+        if (hook.hasVertex) {
+            prog->vs = SceneVkShaderModule::create(device_, hook.vs.spirv);
+            prog->vsEntry = hook.vs.entry;
+        } else {
+            prog->vsEntry = kVsPassthroughEntries[static_cast<int>(target)];
         }
-        if (!ok) {
-            LOG_ERROR("SceneMeshDrawer: Failed compiling a mesh module: %s", err.c_str());
-            prog->failed = true;
-            custom_.emplace(std::move(key), std::move(prog));
-            return nullptr;
+        if (hook.hasFragment) {
+            prog->fs = SceneVkShaderModule::create(device_, hook.fs.spirv);
+            prog->fsEntry = hook.fs.entry;
         }
-        return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
+        ok = (!hook.hasVertex || prog->vs) && (!hook.hasFragment || prog->fs);
+        if (!ok) err = "Failed to create VkShaderModule";
     }
-    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
-        !SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog->iface, prog->vs,
-                                                         prog->fs, false, err)) {
-        // Logged once; the node draws with the built-in shading from now on.
-        LOG_ERROR("SceneMeshDrawer: Failed compiling a custom shader: %s", err.c_str());
+    if (!ok) {
+        LOG_ERROR("SceneMeshDrawer: Failed compiling a mesh module: %s", err.c_str());
         prog->failed = true;
         custom_.emplace(std::move(key), std::move(prog));
         return nullptr;
@@ -317,59 +305,38 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
     return prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
         const bool indirect = SceneTargets::carriesIndirect(target);
         const bool cuts = (rasterBits & raster::kCuts) != 0;
-        if (draw.custom && draw.custom->isModule()) {
-            const auto st = shaderTarget(kind);
-            VkShaderModule vs = prog.vs ? prog.vs : vsPassthrough_[static_cast<int>(st)];
-            VkShaderModule fs = fs_[0][indirect ? 1 : 0][cuts ? 1 : 0];
-            const char* fsEntry = kFsEntries[0][indirect ? 1 : 0][cuts ? 1 : 0];
-            if (prog.fs) {
-                if (indirect || cuts) {
-                    if (prog.indirectFailed) return VK_NULL_HANDLE;
-                    VkShaderModule& dst = indirect ? (cuts ? prog.fsIndirectCuts : prog.fsIndirect) : prog.fsCuts;
-                    std::string& dstEntry =
-                        indirect ? (cuts ? prog.fsIndirectCutsEntry : prog.fsIndirectEntry) : prog.fsCutsEntry;
-                    if (!dst) {
-                        KernelHookStage bin;
-                        std::string err;
-                        if (!compileKernelMeshHookFragment(draw.custom->module, draw.custom->moduleFile,
-                                                           draw.custom->modules, prog.hasLight, indirect, cuts, bin,
-                                                           err)) {
-                            LOG_ERROR("SceneMeshDrawer: Failed compiling module variant: %s", err.c_str());
-                            prog.indirectFailed = true;
-                            return VK_NULL_HANDLE;
-                        }
-                        dst = SceneVkShaderModule::create(device_, bin.spirv);
-                        dstEntry = bin.entry;
+        const auto st = shaderTarget(kind);
+        VkShaderModule vs = prog.vs ? prog.vs : vsPassthrough_[static_cast<int>(st)];
+        VkShaderModule fs = fs_[0][indirect ? 1 : 0][cuts ? 1 : 0];
+        const char* fsEntry = kFsEntries[0][indirect ? 1 : 0][cuts ? 1 : 0];
+        if (prog.fs) {
+            if (indirect || cuts) {
+                if (prog.indirectFailed) return VK_NULL_HANDLE;
+                VkShaderModule& dst = indirect ? (cuts ? prog.fsIndirectCuts : prog.fsIndirect) : prog.fsCuts;
+                std::string& dstEntry =
+                    indirect ? (cuts ? prog.fsIndirectCutsEntry : prog.fsIndirectEntry) : prog.fsCutsEntry;
+                if (!dst) {
+                    KernelHookStage bin;
+                    std::string err;
+                    if (!compileKernelMeshHookFragment(draw.custom->module, draw.custom->moduleFile,
+                                                       draw.custom->modules, prog.hasLight, indirect, cuts, bin,
+                                                       err)) {
+                        LOG_ERROR("SceneMeshDrawer: Failed compiling module variant: %s", err.c_str());
+                        prog.indirectFailed = true;
+                        return VK_NULL_HANDLE;
                     }
-                    fs = dst;
-                    fsEntry = dstEntry.c_str();
-                } else {
-                    fs = prog.fs;
-                    fsEntry = prog.fsEntry.c_str();
+                    dst = SceneVkShaderModule::create(device_, bin.spirv);
+                    dstEntry = bin.entry;
                 }
+                fs = dst;
+                fsEntry = dstEntry.c_str();
+            } else {
+                fs = prog.fs;
+                fsEntry = prog.fsEntry.c_str();
             }
-            return buildPipeline(vs, fs, kind, rasterBits, target, "custom mesh", true, prog.vsEntry.c_str(), fsEntry);
         }
-        VkShaderModule fs = prog.fs;
-        if (indirect) {
-            if (prog.indirectFailed) return VK_NULL_HANDLE;
-            if (prog.fsIndirect == VK_NULL_HANDLE) {
-                VkShaderModule vs = VK_NULL_HANDLE;
-                std::string err;
-                // The chunks compiled once already, so this is the indirect
-                // splice failing: the node keeps the built-in shading there.
-                if (!SceneVkCustomShader::compileCustomShaderModules(device_, shaderTarget(kind), prog.iface, vs,
-                                                                     prog.fsIndirect, true, err)) {
-                    LOG_ERROR("SceneMeshDrawer: Failed compiling the indirect custom variant: %s", err.c_str());
-                    prog.indirectFailed = true;
-                    return VK_NULL_HANDLE;
-                }
-                SceneVkShaderModule::destroy(device_, vs);
-            }
-            fs = prog.fsIndirect;
-        }
-        return buildPipeline(prog.vs, fs, kind, rasterBits, target, "custom mesh");
-    });
+        return buildPipeline(vs, fs, kind, rasterBits, target, "custom mesh", true, prog.vsEntry.c_str(), fsEntry);
+    }, true);
 }
 
 VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<float>& palette) {
@@ -430,21 +397,6 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
                                            std::vector<MeshNode::UserTexture>* textures,
                                            const std::vector<CustomShaderBuffer>& buffers) {
     std::vector<uint8_t> ubo(prog.iface.uboSize(), 0);
-    // Each buffer's address and element count (its bytes over the type's
-    // stride); an unbound one is the zero buffer, of length 0.
-    for (const CustomShaderInterface::Buffer& slot : prog.iface.buffers()) {
-        uint64_t address = 0;
-        uint32_t length = 0;
-        for (const CustomShaderBuffer& b : buffers) {
-            if (b.name != slot.name || !b.buffer || !b.buffer->address()) continue;
-            address = b.buffer->address();
-            length = static_cast<uint32_t>(b.buffer->size() / slot.stride);
-            break;
-        }
-        if (!address) address = zeroBufferAddress(frame);
-        std::memcpy(ubo.data() + slot.addressOffset, &address, 8);
-        std::memcpy(ubo.data() + slot.lengthOffset, &length, 4);
-    }
     for (const CustomShaderInterface::Uniform& slot : prog.iface.uniforms()) {
         for (const auto& u : cs.uniforms) {
             if (u.name != slot.name) continue;
@@ -461,11 +413,8 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
             break;
         }
     }
-    // The images, bare: each read through the custom set's sampler its
-    // texture's addressing asks for (CS_*, the block's customSamplerModes).
     SceneGpuResources& res = frame.gpu.resources;
     VkImageView views[CustomShaderInterface::kMaxSamplers];
-    uint32_t modes = 0;
     const auto& samplers = prog.iface.samplers();
     for (uint32_t i = 0; i < CustomShaderInterface::kMaxSamplers; ++i) {
         const bool array = i < samplers.size() && samplers[i].array;
@@ -474,18 +423,10 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
         if (!textures || i >= samplers.size()) continue;
         for (auto& t : *textures) {
             if (t.name != samplers[i].name || (t.layers > 0 && !t.volume) != array || t.volume != volume) continue;
-            if (const SceneVkImage* img = res.userTexture(nodeId, t)) {
-                views[i] = img->view;
-                const uint32_t mode = !t.repeat     ? CustomShaderInterface::kLinear
-                                      : t.clampT    ? CustomShaderInterface::kRepeatS
-                                                    : CustomShaderInterface::kRepeat;
-                modes |= mode << (2 * i);
-            }
+            if (const SceneVkImage* img = res.userTexture(nodeId, t)) views[i] = img->view;
             break;
         }
     }
-    if (prog.iface.hasSamplerModes() && prog.iface.samplerModesOffset() + 4 <= ubo.size())
-        std::memcpy(ubo.data() + prog.iface.samplerModesOffset(), &modes, 4);
     const VkDescriptorBufferInfo uboInfo = frame.gpu.device.frameUniform(ubo.data(), ubo.size());
 
     VkDescriptorSet set = frame.gpu.device.frameSet(defaults_->customLayout);

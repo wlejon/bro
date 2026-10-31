@@ -10,7 +10,6 @@
 #include "scene/vulkan/frame/scene_frame.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/world/atmosphere.h"
 #include "util/log.h"
 

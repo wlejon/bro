@@ -15,7 +15,6 @@
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "postfx.bk.src.h"
 #include "util/log.h"
 
@@ -400,35 +399,22 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
 
     auto prog = std::make_unique<CustomProgram>();
     std::string err;
-    if (cs.isModule()) {
-        KernelVolumeHook hook;
-        bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
-        if (ok) {
-            prog->iface = std::move(hook.iface);
-            prog->medium = hook.medium;
-            prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
-            prog->fsEntry = hook.main.entry;
-            if (hook.medium) {
-                prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
-                prog->fsNearEntry = hook.nearPass.entry;
-            }
-            ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
-            if (!ok) err = "Failed to create VkShaderModule";
+    KernelVolumeHook hook;
+    bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
+    if (ok) {
+        prog->iface = std::move(hook.iface);
+        prog->medium = hook.medium;
+        prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
+        prog->fsEntry = hook.main.entry;
+        if (hook.medium) {
+            prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
+            prog->fsNearEntry = hook.nearPass.entry;
         }
-        if (!ok) {
-            LOG_ERROR("SceneMeshDrawer: Failed compiling a volume module: %s", err.c_str());
-            prog->failed = true;
-            custom_.emplace(key, std::move(prog));
-            return nullptr;
-        }
-        return custom_.emplace(key, std::move(prog)).first->second.get();
+        ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
+        if (!ok) err = "Failed to create VkShaderModule";
     }
-    prog->medium = SceneVkCustomShader::volumeHasMedium(cs.fragmentChunk);
-    if (!prog->iface.parse(cs.vertexChunk, cs.fragmentChunk, err) ||
-        !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, false, prog->fs, err) ||
-        (prog->medium && !SceneVkCustomShader::compileVolumeModule(device_, prog->iface, true, prog->fsNear, err))) {
-        // Logged once; the volume draws nothing from now on.
-        LOG_ERROR("SceneMeshDrawer: Failed compiling a volume shader: %s", err.c_str());
+    if (!ok) {
+        LOG_ERROR("SceneMeshDrawer: Failed compiling a volume module: %s", err.c_str());
         prog->failed = true;
         custom_.emplace(key, std::move(prog));
         return nullptr;

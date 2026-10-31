@@ -1,7 +1,7 @@
 // Cutout shadow casters, read back as pixels: a textured card with an alpha
 // cutoff casts what the colour pass keeps of it (PassShadow's SHADOW_CUTOUT
-// pipelines, scene_shadow_cutout.glsl), a static mesh and an instanced one;
-// and an instanced node's custom vertex chunk moves its shadow with it, cut
+// pipelines, shadow.bk), a static mesh and an instanced one;
+// and an instanced node's custom vertex hook moves its shadow with it, cut
 // or not. The sun is straight above a 2 x 2 m card at 2 m whose base colour
 // is clear on its -x half and opaque on its +x half, so the ground under the
 // -x half is lit and under the +x half shadowed.
@@ -107,7 +107,14 @@ function expectWhole(h, what) {
 }
 
 // Moves the card 3 m along +x in its own space (before the instance rows).
-const SHIFT = `void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) { pos.x += 3.0; }`;
+const SHIFT = `
+module hook;
+import mesh;
+pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+    var out = v;
+    out.pos.x += 3.0;
+    return out;
+}`;
 
 const probe = freshScene(64);
 if (!probe.scene) {
@@ -134,29 +141,29 @@ if (!probe.scene) {
         m.alphaCutoff = 0;
         expectWhole(halves(scn, scn.captureFrame(), 0, 0), 'instanced, no cutoff');
 
-        // A custom vertex chunk moves the card, and its shadow with it.
-        m.setShader({ vertex: SHIFT });
+        // A custom vertex module moves the card, and its shadow with it.
+        m.setShader({ module: SHIFT });
         let h = halves(scn, scn.captureFrame(), 3, 0);
-        expectWhole(h, 'instanced custom chunk');
+        expectWhole(h, 'instanced custom module');
         const left = halves(scn, scn.captureFrame(), 0, 0);
         for (const v of left.clear.concat(left.opaque))
-            assert(v > left.open * 0.9, `instanced custom chunk: nothing left where the card was (${v.toFixed(1)})`);
+            assert(v > left.open * 0.9, `instanced custom module: nothing left where the card was (${v.toFixed(1)})`);
 
         // Cut and moved.
         m.alphaCutoff = 0.5;
-        expectCut(halves(scn, scn.captureFrame(), 3, 0), 'instanced custom chunk, cutout');
+        expectCut(halves(scn, scn.captureFrame(), 3, 0), 'instanced custom module, cutout');
         dropScene(s);
     }
 
-    // ---- A static card's custom chunk, cut --------------------------------------
+    // ---- A static card's custom module, cut -------------------------------------
     {
         const { s, scn } = setup();
-        // (Its cullMargin the chunk's reach past its bounds, as setCullMargin
+        // (Its cullMargin the hook's reach past its bounds, as setCullMargin
         // asks: the shadow pages its shadow can fall in are found by it.)
         const m = scn.createMesh({ mesh: card(), texture: halfTexture(), alphaCutoff: 0.5, twoSided: true, y: 2,
                                    cullMargin: 3 });
-        m.setShader({ vertex: SHIFT });
-        expectCut(halves(scn, scn.captureFrame(), 3, 0), 'static custom chunk, cutout');
+        m.setShader({ module: SHIFT });
+        expectCut(halves(scn, scn.captureFrame(), 3, 0), 'static custom module, cutout');
         dropScene(s);
     }
 }

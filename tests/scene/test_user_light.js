@@ -1,12 +1,12 @@
-// A custom chunk's userLight (docs/scene-nodes-api.js, setShader): the
+// A custom module's light hook (docs/scene-nodes-api.js, setShaderModule): the
 // occlusion a surface knows beyond the shadow maps.
-//   - sunVisibility scales the sun's light;
+//   - sun_visibility scales the sun's light;
 //   - what hides the sky sends back the sun on it: with no sky seen and
-//     occluderSun = 1, a surface of base colour rho under a sun of E
+//     occluder_sun = 1, a surface of base colour rho under a sun of E
 //     straight overhead reads rho * rho * E / pi (their radiance, of the
 //     surface's albedo, over the whole hidden hemisphere), and nothing with
-//     occluderSun = 0;
-//   - sunDiffuse comes down evenly from the sky above, as much as the sky
+//     occluder_sun = 0;
+//   - sun_diffuse comes down evenly from the sky above, as much as the sky
 //     seen lets through.
 
 function freshScene(size) {
@@ -38,24 +38,32 @@ if (!scene) {
         color: [1, 1, 1],
     });
     plane.setShader({
-        fragment: `uniform float u_sun;
-            uniform float u_sky;
-            uniform float u_occ;
-            void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
-                              inout float roughness, inout vec3 emissive, inout float alpha) {
-                baseColor = vec3(0.5);
-                metallic = 0.0;
-                roughness = 1.0;
+        module: `
+            module hook;
+            import mesh;
+            struct Params {
+                sun: f32,
+                sky: f32,
+                occ: f32,
+                dif: f32,
             }
-            uniform float u_dif;
-            void userLight(vec3 toSun, inout float sunVisibility, inout float skyVisibility,
-                           inout vec3 skyNormal, inout float occluderSun, inout float sunDiffuse) {
-                sunVisibility = u_sun;
-                skyVisibility = u_sky;
-                occluderSun = u_occ;
-                sunDiffuse = u_dif;
+            @binding(4, 0) var params: uniform<Params>;
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                var out = s;
+                out.base_color = vec3<f32>(0.5);
+                out.metallic = 0.0;
+                out.roughness = 1.0;
+                return out;
+            }
+            pub fn light(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                var out = s;
+                out.sun_visibility = params.sun;
+                out.sky_visibility = params.sky;
+                out.occluder_sun = params.occ;
+                out.sun_diffuse = params.dif;
+                return out;
             }`,
-        uniforms: { u_sun: 1, u_sky: 1, u_occ: 0.5, u_dif: 0 },
+        uniforms: { sun: 1, sky: 1, occ: 0.5, dif: 0 },
     });
     const centre = () => {
         const img = scene.captureFrame();
@@ -65,27 +73,27 @@ if (!scene) {
     // Lambert, rho E mu / pi = 0.5, plus the specular's few percent.
     const lit = centre();
     assert(lit > 120 && lit < 150, `in the sun a level surface of 0.5 reads about 0.5 (${lit})`);
-    plane.setShaderUniform('u_sun', 0.0);
-    plane.setShaderUniform('u_sky', 0.0);
-    plane.setShaderUniform('u_occ', 0.0);
+    plane.setShaderUniform('sun', 0.0);
+    plane.setShaderUniform('sky', 0.0);
+    plane.setShaderUniform('occ', 0.0);
     const dark = centre();
     assert(dark <= 2, `no sun, no sky, unlit occluders: black (${dark})`);
-    plane.setShaderUniform('u_occ', 1.0);
+    plane.setShaderUniform('occ', 1.0);
     const back = centre();
     const want = 255 * 0.5 * 0.5;   // rho * rho * E / pi, E = pi
     assert(Math.abs(back - want) <= 4, `the sunlit occluders' light: rho^2 E / pi (${back} vs ${want.toFixed(1)})`);
-    plane.setShaderUniform('u_occ', 0.5);
+    plane.setShaderUniform('occ', 0.5);
     const half = centre();
     assert(Math.abs(half - want / 2) <= 3, `half of them in sun, half the light (${half} vs ${(want / 2).toFixed(1)})`);
     // The sun scattered down from the sky above: all of it, seen through the
     // whole sky, lights a level surface as the sun did (rho E mu / pi, no
     // specular); hidden with the sky, none.
-    plane.setShaderUniform('u_occ', 0.0);
-    plane.setShaderUniform('u_sky', 1.0);
-    plane.setShaderUniform('u_dif', 1.0);
+    plane.setShaderUniform('occ', 0.0);
+    plane.setShaderUniform('sky', 1.0);
+    plane.setShaderUniform('dif', 1.0);
     const glow = centre();
     assert(Math.abs(glow - 127.5) <= 4, `the sun scattered down evenly lights it as the sun did (${glow})`);
-    plane.setShaderUniform('u_sky', 0.0);
+    plane.setShaderUniform('sky', 0.0);
     const hidden = centre();
     assert(hidden <= 4, `with the sky hidden, the scattered sun is too (${hidden})`);
 }

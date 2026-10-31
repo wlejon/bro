@@ -1,6 +1,5 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "render/vulkan_pipeline_cache.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/frame/scene_cpu_stalls.h"
 #include "util/log.h"
@@ -104,7 +103,6 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::addShaderStage(VkShaderStageFlag
     stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stageInfo.stage = stage;
     stageInfo.module = module;
-    stageInfo.pName = entryPoint;
     stageEntryNames_.push_back(entryPoint ? entryPoint : "main");
     stageInfo.pName = stageEntryNames_.back().c_str();
     shaderStages_.push_back(stageInfo);
@@ -343,14 +341,6 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     return pipeline;
 }
 
-VkPipeline createComputePipeline(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
-                                 const char* name) {
-    VkShaderModule module = SceneVkShaderCompiler::createBuiltinModule(device, shader);
-    VkPipeline pipeline = createComputePipeline(device, module, layout, name);
-    SceneVkShaderModule::destroy(device, module);
-    return pipeline;
-}
-
 VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
                                  const char* entry) {
     if (!module || !layout) return VK_NULL_HANDLE;
@@ -372,7 +362,7 @@ VkPipeline createComputePipeline(VkDevice device, VkShaderModule module, VkPipel
         pipeline = VK_NULL_HANDLE;
     } else {
         render::logPipelineStats(device, pipeline, name);
-        shader_sets::noteComputePipeline(device, layout, module, name, pipeline);
+        shader_sets::noteComputePipeline(device, layout, module, name, entry, pipeline);
     }
     return pipeline;
 }
@@ -388,13 +378,6 @@ std::shared_future<VkPipeline> buildOnThread(Build build) {
            }).share();
 }
 }  // namespace
-
-void AsyncComputePipeline::start(VkDevice device, BuiltinSceneShader shader, VkPipelineLayout layout,
-                                 const char* name) {
-    future_ = buildOnThread([=] { return createComputePipeline(device, shader, layout, name); });
-    started_ = true;
-    failed_ = false;
-}
 
 void AsyncComputePipeline::start(VkDevice device, VkShaderModule module, VkPipelineLayout layout, const char* name,
                                  const char* entry) {

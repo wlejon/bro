@@ -19,15 +19,21 @@ if (!scene) {
 } else {
     scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 4], target: [0, 0, 0] });
     scene.setToneMap({ mode: 'linear', gamma: 1.0 });
-    const flat = (rgb) => `uniform vec3 u_rgb;
-        void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic, inout float roughness,
-                          inout vec3 emissive, inout float alpha) {
-            baseColor = vec3(0.0); emissive = u_rgb;
+    const flat = `
+        module hook;
+        import mesh;
+        struct Params { rgb: vec3<f32> }
+        @binding(4, 0) var params: uniform<Params>;
+        pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+            var out = s;
+            out.base_color = vec3<f32>(0.0);
+            out.emissive = params.rgb;
+            return out;
         }`;
     const red = scene.createMesh({ mesh: 'box', color: 'white' });
-    red.setShader({ fragment: flat(), uniforms: { u_rgb: [1, 0, 0] } });
+    red.setShader({ module: flat, uniforms: { rgb: [1, 0, 0] } });
     const blue = scene.createMesh({ mesh: 'box', color: 'white' });
-    blue.setShader({ fragment: flat(), uniforms: { u_rgb: [0, 0, 1] } });
+    blue.setShader({ module: flat, uniforms: { rgb: [0, 0, 1] } });
 
     assert(red.drawOrder === 10 && blue.drawOrder === 10, 'drawOrder is 10 by default');
     red.drawOrder = 5;

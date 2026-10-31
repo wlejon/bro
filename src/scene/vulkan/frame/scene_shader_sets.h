@@ -2,24 +2,23 @@
 
 // A second set of the scene's shaders, for A/B measurement in one process
 // (docs/headless.md "Shader A/B"). Set A is what the scene runs (the
-// embedded SPIR-V, or BRO_SCENE_SHADER_SOURCE's); set B is the same shaders
-// compiled from another source tree (the layout BRO_SCENE_SHADER_SOURCE
-// takes). Both stay compiled: every scene pipeline whose SPIR-V differs
-// under B gets a twin built from B's, and the scene binds the twin while B
-// is the active set, so switching costs a flag and no compile.
+// embedded brokernel sources, or BRO_SCENE_SHADER_SOURCE's); set B is the
+// same shaders compiled from another source tree (the layout
+// BRO_SCENE_SHADER_SOURCE takes). Both stay compiled: every scene pipeline
+// whose SPIR-V differs under B gets a twin built from B's, and the scene
+// binds the twin while B is the active set, so switching costs a flag and no
+// compile.
 //
-// It works from how each SPIR-V blob was made (its recipe: a built-in
-// shader, a built-in with a world's modules, or run-time GLSL, each with
-// its includes), noted as the compiler makes it, and from what each pipeline
-// was built of (the builder's state, its stages' recipes), noted as it is
-// built; so the pipelines made before B was loaded get their twins too. For
-// that every scene pipeline is bound with bindScenePipeline and destroyed
-// with destroyScenePipeline, in place of the plain Vulkan calls.
-
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+// It works from how each SPIR-V blob was made (its recipe), noted as the
+// compiler makes it, and from what each pipeline was built of (the builder's
+// state, its stages' recipes), noted as it is built; so the pipelines made
+// before B was loaded get their twins too. For that every scene pipeline is
+// bound with bindScenePipeline and destroyed with destroyScenePipeline, in
+// place of the plain Vulkan calls.
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,12 +29,8 @@ class SceneVkPipelineBuilder;
 
 /// How a SPIR-V blob was made, so it can be made again from another tree.
 struct ShaderRecipe {
-    enum class Kind { Words, Builtin, BuiltinWith, Glsl };
-    Kind kind = Kind::Words;          // Words: nothing to remake (the same under B)
-    BuiltinSceneShader builtin{};     // Builtin, BuiltinWith
-    std::string glsl;                 // Glsl: the source compileGlsl was given
-    VkShaderStageFlagBits stage = VK_SHADER_STAGE_ALL;
-    SceneVkShaderCompiler::IncludeOverrides overrides;  // BuiltinWith, Glsl
+    std::string name;
+    std::function<std::vector<uint32_t>(std::string* err)> compile; // empty: nothing to remake
     std::vector<uint32_t> words;      // set A's SPIR-V
     // Set B's, made at the set's load (or at first use after it).
     uint64_t bGeneration = 0;
@@ -52,9 +47,7 @@ void noteSpirv(std::shared_ptr<ShaderRecipe> recipe);
 bool compilingSetB();
 /// The tree set B's compiles read their sources from ("" otherwise).
 const std::string& setBSourceDir();
-/// The names set B's compiles define (each `#define NAME 1` after the
-/// #version line; none otherwise): one tree with its parts guarded
-/// `#ifndef NAME` loaded once a name, to time each part as knocked out.
+/// Optional define names passed to loadShaderSetB.
 const std::vector<std::string>& setBDefines();
 
 /// SceneVkShaderModule notes each module it makes and forgets it at destroy.
@@ -65,7 +58,7 @@ void forgetModule(VkShaderModule module);
 void noteGraphicsPipeline(VkDevice device, VkPipelineLayout layout, const SceneVkPipelineBuilder& builder,
                           VkPipeline pipeline);
 void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModule module, const char* name,
-                         VkPipeline pipeline);
+                         const char* entry, VkPipeline pipeline);
 
 } // namespace shader_sets
 
@@ -79,10 +72,9 @@ struct ShaderSetInfo {
     std::vector<std::string> failed;  // shaders that did not compile from B (they keep A's)
 };
 
-/// Load set B from the shader tree at `dir` (it must hold
-/// builtin_shaders.def), replacing a set loaded before, every shader of it
-/// compiled with `defines` (names, setBDefines). False with the reason in
-/// *error when the tree is not one or a name is not an identifier.
+/// Load set B from the shader tree at `dir` (it must hold common/scene.bk),
+/// replacing a set loaded before. False with the reason in *error when the
+/// tree is not one or a define name is not an identifier.
 bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error,
                     const std::vector<std::string>& defines = {});
 /// The set the scene binds from now on: 0 (A) or 1 (B; only once loaded).

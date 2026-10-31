@@ -59,7 +59,7 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     SceneVkDescriptorLayoutBuilder material;
     for (uint32_t i = 0; i < 5; ++i)
         material.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    // A volume's readings for the exposure meter (volume.frag, PassVolume).
+    // A volume's readings for the exposure meter (volume.bk, PassVolume).
     material.addBinding(5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     materialLayout = material.build(dev);
 
@@ -73,14 +73,11 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     custom.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kVsFs);
     for (uint32_t i = 1; i <= kCustomImages; ++i)
         custom.addBinding(i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kVsFs);
-    // The images' samplers, in CustomShaderInterface::SamplerMode order.
+    // A brokernel hook's (custom.bk): the four immutable samplers, one per
+    // binding (10..13), then its storage buffers (14..19).
     using CS = CustomShaderInterface;
     static_assert(CS::kLinear == 0 && CS::kRepeat == 1 && CS::kRepeatS == 2 && CS::kNearest == 3 &&
-                  CS::kSamplerModes == 4 && CS::kSamplersBinding == kCustomImages + 1);
-    custom.addSamplers(CS::kSamplersBinding, {mipSampler, repeatSampler, repeatSSampler, nearestSampler}, kVsFs);
-    // A brokernel hook's (custom.bk): the same four, one a binding, then its
-    // storage buffers.
-    static_assert(CS::kKernelSamplersBinding == CS::kSamplersBinding + 1);
+                  CS::kSamplerModes == 4 && CS::kKernelSamplersBinding == 10);
     const VkSampler kernelSamplers[CS::kSamplerModes] = {mipSampler, repeatSampler, repeatSSampler, nearestSampler};
     for (uint32_t i = 0; i < CS::kSamplerModes; ++i)
         custom.addSamplers(CS::kKernelSamplersBinding + i, {kernelSamplers[i]}, kVsFs);

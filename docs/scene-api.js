@@ -554,133 +554,115 @@ class SceneGraph {
   /**
    * A medium over the whole view: clouds, fog banks, smoke, light shafts.
    * Not a surface: each frame it runs one triangle over the view whose
-   * fragment chunk defines
+   * brokernel module (`module`, its source; `file` names it in errors;
+   * `modules` gives `{ name: source }` app modules to import; `uniforms`
+   * gives initial uniform values by field name) is registered as `hook`
+   * beside the engine's modules (`src/scene/vulkan/shaders/common/*.bk`,
+   * `draw/volume.bk`) and compiled by brass (`scene`, `atmosphere`,
+   * `lighting`, `custom`, `volume`, `near` and `hook` are the engine's
+   * module names and refused in `modules`). It defines:
    *
-   *   void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
-   *                   inout float transmittance, inout float depth)
+   *   pub fn volume(ray: volume::Ray) -> volume::Light
+   *   pub fn medium_range() -> f32          (optional, with medium, for the near grid)
+   *   pub fn medium(pos: vec3<f32>, dir: vec3<f32>, footprint: f32) -> volume::Medium
    *
-   * and marches the pixel's ray: `dir` unit and camera-relative (the eye at
-   * the origin; `camera.eyeWorld` is its absolute position), up to
-   * `sceneDist`, the opaque surface's distance along the ray (1e30 over the
-   * sky). It sets `radiance`, the light the medium sends the eye (as it
-   * leaves the medium), `transmittance` (from 1), the share of what lies
-   * behind that comes through, and `depth`, the distance its light comes
-   * from. The pixel becomes scene * transmittance + airT * radiance +
-   * (1 - transmittance) * airL, airT and airL the air between the eye and
-   * `depth` (aerial perspective, else fog), whose own light the scene behind
-   * already carries. The chunk may call `sceneToSun()` (unit, to the sun),
-   * `volumeSunLight(pos)` (the sun's illuminance at camera-relative pos,
-   * through the air), `volumeSkyLight(pos, n)` (the sky's irradiance
-   * over pi on a surface facing n) and `volumeFootprint(t)` (the width, m,
-   * of what the ray's light stands for at distance t along it, which a
-   * medium resolves itself to: a pixel's cone for the pixel's ray, its
-   * width on an orthographic camera). The volumes draw, in tree order, into a
-   * target of their own (each over the ones before it), which is
-   * reconstructed over renders before it lands on the scene, after the
-   * opaque surfaces, their sky and the decals, before SSR and translucent
-   * surfaces: last render's result is found again where `depth`
-   * reprojects the pixel to (the sky's direction where nothing set it),
-   * kept within the range of the pixel's neighbours this render, and
+   * and marches the pixel's ray: `ray.dir` unit and camera-relative (the eye
+   * at the origin; `scene::camera.eye_world` is its absolute position), up to
+   * `ray.scene_dist`, the opaque surface's distance along the ray (1e30 over
+   * the sky), starting from `ray.near` (0 without a near grid), with
+   * `ray.pixel` the centre of the pixel it is marched in (to offset steps by).
+   * `volume::light(radiance, transmittance, depth)` builds the `volume::Light`
+   * return value: `radiance`, the light the medium sends the eye (as it leaves
+   * the medium), `transmittance` (from 1), the share of what lies behind that
+   * comes through, and `depth`, the distance its light comes from. The pixel
+   * becomes scene * transmittance + airT * radiance + (1 - transmittance) * airL,
+   * airT and airL the air between the eye and `depth` (aerial perspective,
+   * else fog), whose own light the scene behind already carries. The module
+   * may call `lighting::to_sun()` (unit, to the sun), `volume::sun_light(pos)`
+   * (the sun's illuminance at camera-relative pos, through the air),
+   * `volume::sky_light(pos, n)` (the sky's irradiance over pi on a surface
+   * facing n) and `volume::footprint(t)` (the width, m, of what the ray's
+   * light stands for at distance t along it, which a medium resolves itself
+   * to: a pixel's cone for the pixel's ray, its width on an orthographic
+   * camera). The volumes draw, in tree order, into a target of their own (each
+   * over the ones before it), which is reconstructed over renders before it
+   * lands on the scene, after the opaque surfaces, their sky and the decals,
+   * before SSR and translucent surfaces: last render's result is found again
+   * where `depth` reprojects the pixel to (the sky's direction where nothing
+   * set it), kept within the range of the pixel's neighbours this render, and
    * blended in at 90%. So a march may offset its steps per pixel and per
-   * render (`camera.frame.x`, the render's index mod 65536) and its grain
-   * averages out, where a fixed offset is a fixed grain. A render that
-   * does not follow the last (the first, a resize, another set of
-   * volumes) is its own alone.
+   * render (`scene::camera.frame.x`, the render's index mod 65536) and its
+   * grain averages out, where a fixed offset is a fixed grain. A render that
+   * does not follow the last (the first, a resize, another set of volumes) is
+   * its own alone.
    *
    * The medium near the eye may instead be given point by point, where a
    * march from inside a medium takes most of its steps in the first
-   * kilometre and a dozen neighbouring pixels take the same ones. A chunk
-   * that also defines
-   *
-   *   float userMediumRange()
-   *   void userMedium(vec3 pos, vec3 dir, float footprint,
-   *                   out mat4x3 scatter, out vec4 extinction, out float clear)
-   *
-   * has its medium integrated once a render over a grid on the view
-   * (froxels: cells of 8 pixels a side, 128 slices from the eye to
-   * userMediumRange(), about evenly spaced to a 64th of the range and in
-   * proportion to the distance beyond; none while it returns 0), and each
-   * pixel reads the grid to its opaque depth. userMedium answers at
-   * camera-relative `pos` on the ray along unit `dir`, at the cell's
-   * `footprint`, as four parts of the cell's rays, each with its own
-   * scatter (a column: light sent toward the eye a metre) and extinction
-   * (a component, 1/m), the cell's light their mean: what the cell does not
-   * resolve is cover, a part holding all of the medium or none, so a cloud
-   * over a third of a cell passes two thirds of what lies behind it (a
-   * resolved medium gives the four alike). `clear` is how far on along
-   * `dir` the medium is provably absent (0 when it cannot say), slices
-   * within it not asked. Each slice is sampled at one point, moved within it
-   * every render, and integrated in closed form with the light constant
-   * across it. userVolume then marches on from `volumeNearEnd()` (the
-   * range; 0 for the meter's rays and without a near grid) and its light
+   * kilometre and a dozen neighbouring pixels take the same ones. A module
+   * that also defines `medium_range()` and `medium(pos, dir, footprint)` has
+   * its medium integrated once a render over a grid on the view (froxels:
+   * cells of 8 pixels a side, 128 slices from the eye to `medium_range()`,
+   * about evenly spaced to a 64th of the range and in proportion to the
+   * distance beyond; none while it returns 0), and each pixel reads the grid
+   * to its opaque depth. `medium` answers at camera-relative `pos` on the ray
+   * along unit `dir`, at the cell's `footprint`, as four parts of the cell's
+   * rays (`scatter0..3` and `extinction`), each with its own scatter (light
+   * sent toward the eye a metre) and extinction (a component, 1/m), the cell's
+   * light their mean: what the cell does not resolve is cover, a part holding
+   * all of the medium or none, so a cloud over a third of a cell passes two
+   * thirds of what lies behind it (a resolved medium gives the four alike).
+   * `clear` is how far on along `dir` the medium is provably absent (0 when it
+   * cannot say), slices within it not asked. Each slice is sampled at one
+   * point, moved within it every render, and integrated in closed form with
+   * the light constant across it. `volume` then marches on from `ray.near`
+   * (the range; 0 for the meter's rays and without a near grid) and its light
    * is seen through the near medium's.
+   *
    * It casts no shadow and is never culled. The incident exposure meter
-   * (setExposure) reads it: once a frame userVolume also runs from the eye
-   * along four rays in a cone of 3 degrees about the sun (the share they
-   * pass dims the sun the meter reads) and four cosine-weighted over the
-   * sky's hemisphere (the share they pass dims the sky's light, and their
-   * light down counts as an overcast sky's), so under an overcast deck the
-   * meter reads the deck's light, not the sun it hides (the first 8
-   * volumes in tree order). The meter's rays stand for the light over the
-   * scene the view sees: their `volumeFootprint(t)` is at least the
-   * geometric mean of the view's opaque distances (over a 4 x 4 grid of
-   * it; 20 km where all is sky), so a medium resolved to it answers them
-   * as its cover over that ground lights it, not by the one cloud on the
-   * ray.
-   * It answers a debug view (setDebugView) as a fragment chunk does,
-   * `if (SCENE_DEBUG(name)) sceneDebugOut(rgb);`, covering what is behind
-   * with `rgb`; under a view it does not answer it lets all through. Its uniforms, `buffer`
-   * declarations and textures are a custom shader's (setShader):
-   * setShaderUniform, setShaderBuffer and setShaderTexture reach them.
-   * Throws TypeError without a fragment chunk and Error with the GLSL log
-   * when it fails to compile (or defines no userVolume, or a userMedium
-   * without userMediumRange).
+   * (setExposure) reads it: once a frame `volume` also runs from the eye along
+   * four rays in a cone of 3 degrees about the sun (the share they pass dims
+   * the sun the meter reads) and four cosine-weighted over the sky's
+   * hemisphere (the share they pass dims the sky's light, and their light down
+   * counts as an overcast sky's), so under an overcast deck the meter reads
+   * the deck's light, not the sun it hides (the first 8 volumes in tree
+   * order). The meter's rays stand for the light over the scene the view sees:
+   * their `volume::footprint(t)` is at least the geometric mean of the view's
+   * opaque distances (over a 4 x 4 grid of it; 20 km where all is sky), so a
+   * medium resolved to it answers them as its cover over that ground lights
+   * it, not by the one cloud on the ray.
    *
-   * The hook may instead be a brokernel module (`module`, its source;
-   * `file` names it in errors), registered as `hook` beside the engine's
-   * modules (src/scene/vulkan/shaders/common/*.bk, draw/volume.bk) and
-   * compiled by brass, with the same meaning throughout. `modules` gives
-   * it the app's own modules to import, `{ name: source }` (the names
-   * scene, atmosphere, lighting, custom, volume, near and hook are the
-   * engine's and refused):
+   * The module declares the node's values in set 4 (`common/custom.bk`): a
+   * `uniform<Params>` at `@binding(4, 0)`, whose fields `setShaderUniform`
+   * sets by name (32-bit scalars and vectors); textures at `@binding(4, 1)` to
+   * `@binding(4, 8)` (`texture2d`, `texture2d_array`, `texture3d`;
+   * `setShaderTexture`) read through `custom::linear`, `custom::repeat`,
+   * `custom::repeat_s` or `custom::nearest`; and `buffer`/`read_buffer`s at
+   * `@binding(4, 14)` to `@binding(4, 19)` (`setShaderBuffer`), an unbound one
+   * of `.len() == 0`. `SCENE_DEBUG(name)` tests a debug view, and a Light's
+   * `debug` (`vec4<f32>(rgb, 1.0)`) answers it, covering what is behind with
+   * `rgb`; under a view it does not answer it lets all through. Errors carry
+   * brokernel's diagnostics, or name a set-4 resource the set does not hold.
+   * `BRO_KERNEL_SPIRV_DUMP=<dir>` writes each compiled stage's SPIR-V there
+   * (`<entry>.<hash>.spv`), for `spirv-dis`.
    *
-   *   pub fn volume(ray: volume::Ray) -> volume::Light
-   *   pub fn medium_range() -> f32          (with medium, for the near grid)
-   *   pub fn medium(pos: vec3<f32>, dir: vec3<f32>, footprint: f32) -> volume::Medium
-   *
-   * ray.dir, ray.scene_dist and ray.near are userVolume's dir, sceneDist and
-   * volumeNearEnd(), ray.pixel the centre of the pixel it is marched in (to
-   * offset steps by); volume::light(radiance, transmittance, depth) makes its
-   * answer, and volume::sun_light, volume::sky_light, volume::footprint,
-   * lighting::to_sun() and scene::camera are the chunk's helpers. A
-   * Medium's scatter0..3 and extinction are userMedium's four parts. The
-   * module declares the node's values in set 4 (common/custom.bk): a
-   * `uniform<Params>` at binding 0, whose fields setShaderUniform sets by
-   * name (32-bit scalars and vectors); textures at bindings 1 to 8
-   * (texture2d, texture2d_array, texture3d; setShaderTexture) read through
-   * custom::linear, repeat, repeat_s or nearest, which the module picks; and
-   * `buffer`/`read_buffer`s at bindings 14 to 19 (setShaderBuffer), an
-   * unbound one of len() 0. SCENE_DEBUG(name) tests a debug view, and a
-   * Light's `debug` (alpha 1) answers it. Errors carry brokernel's
-   * diagnostics, or name a set-4 resource the set does not hold.
-   * BRO_KERNEL_SPIRV_DUMP=<dir> writes each compiled stage's SPIR-V there
-   * (<entry>.<hash>.spv), for spirv-dis.
-   *
-   * @param {{fragment?: string, module?: string, file?: string, modules?: Object<string, string>, uniforms?: Object<string, number|number[]>, name?: string}} opts
+   * @param {{module: string, file?: string, modules?: Object<string, string>, uniforms?: Object<string, number|number[]>, name?: string}} opts
    * @returns {SceneNode}
    * @example
    * // Uniform haze, 1 km visibility, lit by the sun and the sky.
    * scene.createVolume({
-   *   fragment: `uniform float u_sigma;
-   *     void userVolume(vec3 dir, float sceneDist, inout vec3 radiance,
-   *                     inout float transmittance, inout float depth) {
-   *       float d = min(sceneDist, 5000.0);
-   *       transmittance = exp(-u_sigma * d);
-   *       vec3 p = dir * d * 0.5;
-   *       radiance = (volumeSunLight(p) / 12.57 + volumeSkyLight(p, vec3(0, 1, 0))) * (1.0 - transmittance);
-   *       depth = d * 0.5;
+   *   module: `
+   *     module hook;
+   *     import volume;
+   *     struct Params { sigma: f32 }
+   *     @binding(4, 0) var params: uniform<Params>;
+   *     pub fn volume(ray: volume::Ray) -> volume::Light {
+   *       let d: f32 = min(ray.scene_dist, 5000.0);
+   *       let t: f32 = exp(-params.sigma * d);
+   *       let p: vec3<f32> = ray.dir * (d * 0.5);
+   *       let rad: vec3<f32> = (volume::sun_light(p) / 12.57 + volume::sky_light(p, vec3<f32>(0.0, 1.0, 0.0))) * (1.0 - t);
+   *       return volume::light(rad, t, d * 0.5);
    *     }`,
-   *   uniforms: { u_sigma: 0.003 },
+   *   uniforms: { sigma: 0.003 },
    * });
    */
   createVolume(opts) {}
@@ -856,27 +838,27 @@ class SceneGraph {
   setPendingWork(kind, count) {}
 
   /**
-   * Show a debug view: what the scene's custom chunks answering
-   * `SCENE_DEBUG(name)` put out with `sceneDebugOut(rgb)` (a mesh's fragment
-   * chunk, setShader; a volume's, createVolume), each colour as is, unlit
-   * and with no air, at an exposure of 1 through a linear tone map (the
+   * Show a debug view: what the scene's custom shader modules answering
+   * `SCENE_DEBUG(name)` put out in `out.debug = vec4<f32>(rgb, 1.0)` (a mesh's
+   * fragment hook, setShader; a volume's, createVolume), each colour as is,
+   * unlit and with no air, at an exposure of 1 through a linear tone map (the
    * display's encoding applied), with no sky, bloom, colour grading or SSR.
    * A surface that does not answer is a dim grey lit from the eye (0.06 to
    * 0.26), for where things are; a volume that does not answer lets all
-   * through. Any name a chunk tests is a view; one no chunk tests shows
+   * through. Any name a module tests is a view; one no module tests shows
    * all grey. The views are the debugging lens on a world's own data (the
    * share of a cell under water, a tile's level, a march's step count),
    * shown without editing its shaders. null (or '') shows none.
    * @param {string|null} name
    * @example
-   *   scene.setDebugView('water');  // a chunk: if (SCENE_DEBUG(water)) sceneDebugOut(vec3(share));
+   *   scene.setDebugView('water');  // a module: if (SCENE_DEBUG(water)) { out.debug = vec4<f32>(vec3<f32>(share), 1.0); }
    *   perf.settle(); screenshot('water.png');
    *   scene.setDebugView(null);
    */
   setDebugView(name) {}
 
   /**
-   * The debug view shown and every view a chunk has named so far.
+   * The debug view shown and every view a shader module has named so far.
    * @returns {{shown: string|null, views: string[]}}
    */
   debugViews() {}

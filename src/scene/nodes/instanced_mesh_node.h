@@ -326,16 +326,12 @@ public:
     // identically to every instance in its own frame. The shadow pass runs
     // the same hook before the instance rows, so the shadow moves with it.
 
-    void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
-        customShader_ = CustomShaderState::make(std::move(vertexChunk),
-                                                std::move(fragmentChunk));
-        bumpChangeGeneration();
-    }
     void setCustomShaderModule(std::string module, std::string file,
-                               std::vector<std::pair<std::string, std::string>> modules,
+                               std::vector<std::pair<std::string, std::string>> modules = {},
                                bool hasVertex = false) {
         customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file),
-                                                      std::move(modules), hasVertex);
+                                                      std::move(modules));
+        if (hasVertex) customShader_->hasVertex = true;
         bumpChangeGeneration();
     }
     void clearCustomShader() {

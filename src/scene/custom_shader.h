@@ -1,6 +1,15 @@
 #pragma once
 
+// Per-node custom shader state: the brokernel module source, imported helper
+// modules, and numeric uniform overrides. Graphics-API-independent; the
+// backend compiles and caches the module by `key`.
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,98 +20,81 @@ class ComputeBuffer;
 
 namespace bro::scene {
 
-// Custom-shader state shared by MeshNode and InstancedMeshNode: user GLSL
-// chunks spliced into the mesh uber-shaders (see the //__USER_CHUNK__
-// markers in mesh.vert / mesh.frag / mesh_instanced.vert / shadow.vert).
-// A node stores only sources + numeric uniform values — the compiled
-// program variants live in SceneRenderer's cache, keyed by `key` plus a
-// variant tag, so identical sources across nodes share one program per
-// variant. Compilation/validation happens in the renderer
-// (SceneGraph::compileCustomShader) BEFORE this state is set, so a node
-// with custom-shader state always maps to a linked program.
-
 struct CustomShaderUniform {
-    std::string name;      // a chunk's carries the `u_` user-namespace prefix; a module's is its field's
-    int comps = 1;         // 1..4 → float / vec2 / vec3 / vec4
-    float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::string name;
+    int comps = 1; // 1..4
+    std::array<float, 4> v = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
-struct CustomShaderState {
-    std::string vertexChunk;
-    std::string fragmentChunk;
-    // A brokernel hook (scene_vk_kernel_hook.h) in place of the chunks: its
-    // module's source, and the file diagnostics name.
-    std::string module;
-    std::string moduleFile;
-    std::vector<std::pair<std::string, std::string>> modules;   // the app's it imports: name, source
-    bool hasVertex = false;
-    std::string key;       // program-cache key: vertex + '\x1f' + fragment, or '\x1d' + module
-    std::vector<CustomShaderUniform> uniforms;
+/// A GPU buffer (a KernelBuffer) bound by name to a custom shader's
+/// `@binding(4, 14..19) var name: read_buffer<T>;` declaration.
+struct CustomShaderBuffer {
+    std::string name;
+    std::shared_ptr<render::ComputeBuffer> buffer;
+};
 
-    static std::unique_ptr<CustomShaderState> make(std::string vertexChunk,
-                                                   std::string fragmentChunk) {
-        auto st = std::make_unique<CustomShaderState>();
-        st->key = vertexChunk + '\x1f' + fragmentChunk;
-        st->hasVertex = !vertexChunk.empty();
-        st->vertexChunk = std::move(vertexChunk);
-        st->fragmentChunk = std::move(fragmentChunk);
-        return st;
+inline void bindCustomShaderBuffer(std::vector<CustomShaderBuffer>& list,
+                                   const std::string& name,
+                                   std::shared_ptr<render::ComputeBuffer> buffer) {
+    for (auto it = list.begin(); it != list.end(); ++it) {
+        if (it->name == name) {
+            if (!buffer) list.erase(it);
+            else it->buffer = std::move(buffer);
+            return;
+        }
     }
-    static std::unique_ptr<CustomShaderState> makeModule(std::string module, std::string file,
-                                                         std::vector<std::pair<std::string, std::string>> modules,
-                                                         bool hasVertex = false) {
-        auto st = std::make_unique<CustomShaderState>();
-        st->key = '\x1d' + module;
-        for (const auto& [name, source] : modules) st->key += '\x1e' + name + '\x1f' + source;
-        st->module = std::move(module);
-        st->hasVertex = hasVertex;
-        st->moduleFile = std::move(file);
-        st->modules = std::move(modules);
-        return st;
-    }
+    if (buffer) list.push_back({name, std::move(buffer)});
+}
+
+struct CustomShaderState {
+    std::string module;       // a brokernel hook module
+    std::string moduleFile;   // its filename in compile errors
+    /// Modules the hook imports beside the engine's (name, source).
+    std::vector<std::pair<std::string, std::string>> modules;
+    std::string key;
+    std::vector<CustomShaderUniform> uniforms;
+    bool hasVertex = false;   // module defines fn vertex
+
     bool isModule() const { return !module.empty(); }
 
-    /// Set (or update) a numeric user-uniform value. Values are plain floats
-    /// — nothing JS-owned — and are uploaded per draw, so two nodes sharing
-    /// a program can carry different values.
+    static std::unique_ptr<CustomShaderState> make(
+        std::string mod, std::string file,
+        std::vector<std::pair<std::string, std::string>> extra = {}) {
+        auto s = std::make_unique<CustomShaderState>();
+        s->module = std::move(mod);
+        s->moduleFile = file.empty() ? "<module>" : std::move(file);
+        s->modules = std::move(extra);
+        static const std::regex kVertexRe(R"(\bfn\s+vertex\s*\()");
+        s->hasVertex = std::regex_search(s->module, kVertexRe);
+        size_t h = std::hash<std::string>{}(s->module);
+        for (const auto& m : s->modules) {
+            h ^= std::hash<std::string>{}(m.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<std::string>{}(m.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
+        s->key = "bk_" + std::to_string(h);
+        return s;
+    }
+
+    static std::unique_ptr<CustomShaderState> makeModule(
+        std::string mod, std::string file,
+        std::vector<std::pair<std::string, std::string>> extra = {}) {
+        return make(std::move(mod), std::move(file), std::move(extra));
+    }
+
     void setUniform(const std::string& name, int comps, const float* vals) {
-        if (comps < 1) comps = 1;
-        if (comps > 4) comps = 4;
         for (auto& u : uniforms) {
             if (u.name == name) {
                 u.comps = comps;
-                for (int i = 0; i < comps; ++i) u.v[i] = vals[i];
+                for (int i = 0; i < 4; ++i) u.v[i] = i < comps ? vals[i] : 0.0f;
                 return;
             }
         }
         CustomShaderUniform u;
         u.name = name;
         u.comps = comps;
-        for (int i = 0; i < comps; ++i) u.v[i] = vals[i];
+        for (int i = 0; i < 4; ++i) u.v[i] = i < comps ? vals[i] : 0.0f;
         uniforms.push_back(std::move(u));
     }
 };
-
-// A GPU buffer a custom shader reads in place: a `buffer <type> u_name[];`
-// declaration of its chunk, bound by name (setShaderBuffer). Kept on the
-// node apart from CustomShaderState, as the sampler textures are, so a new
-// setShader() keeps what is bound. The node holds the buffer while bound;
-// the buffer itself is released once the GPU is done with it.
-struct CustomShaderBuffer {
-    std::string name;
-    std::shared_ptr<render::ComputeBuffer> buffer;
-};
-
-/// Bind `buffer` to `name`, or unbind it when `buffer` is null.
-inline void bindCustomShaderBuffer(std::vector<CustomShaderBuffer>& buffers, const std::string& name,
-                                   std::shared_ptr<render::ComputeBuffer> buffer) {
-    for (auto it = buffers.begin(); it != buffers.end(); ++it) {
-        if (it->name != name) continue;
-        if (buffer) it->buffer = std::move(buffer);
-        else buffers.erase(it);
-        return;
-    }
-    if (buffer) buffers.push_back({name, std::move(buffer)});
-}
 
 } // namespace bro::scene

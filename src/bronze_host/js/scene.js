@@ -466,21 +466,8 @@
     });
 
     accessor(SceneNode.prototype, "hasShader", function () { return __bro_native.scene.SceneNode_hasShader(this); }, undefined);
-    fn(SceneNode.prototype, "setShader", function setShader(opts) {
-        if (!opts || typeof opts !== 'object') throw new TypeError("setShader expects an options object");
-        if (opts.vertex !== undefined && typeof opts.vertex !== 'string') throw new TypeError("vertex must be a string");
-        if (opts.fragment !== undefined && typeof opts.fragment !== 'string') throw new TypeError("fragment must be a string");
-        if (!opts.vertex && !opts.fragment) throw new TypeError("at least one of vertex or fragment must be provided");
-        if (opts.uniforms && typeof opts.uniforms === 'object') {
-            for (const k of Object.keys(opts.uniforms)) {
-                if (!k.startsWith('u_')) throw new TypeError("Uniform names must start with 'u_'");
-                const v = opts.uniforms[k];
-                if (typeof v !== 'number' && !Array.isArray(v) && !ArrayBuffer.isView(v)) throw new TypeError("Uniform values must be numeric");
-            }
-        }
-        const err = __bro_native.scene.SceneNode_setShader(this, opts.vertex || "", opts.fragment || "", opts.uniforms ? JSON.stringify(opts.uniforms) : "");
-        if (err && err.length > 0) throw new Error(err);
-        return this;
+    fn(SceneNode.prototype, "setShader", function setShader(opts, file, modules) {
+        return this.setShaderModule(opts, file, modules);
     });
     fn(SceneNode.prototype, "clearShader", function clearShader() { __bro_native.scene.SceneNode_clearShader(this); return this; });
     fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules) {
@@ -495,11 +482,19 @@
         if (file !== undefined && typeof file !== 'string') throw new TypeError("file must be a string");
         if (modules !== undefined && (modules === null || typeof modules !== 'object'))
             throw new TypeError("modules must map names to sources");
+        if (uniforms !== undefined) {
+            if (uniforms === null || typeof uniforms !== 'object')
+                throw new TypeError("uniforms must be an object");
+            for (const k of Object.keys(uniforms)) {
+                const v = uniforms[k];
+                if (typeof v !== 'number' && !Array.isArray(v) && !ArrayBuffer.isView(v))
+                    throw new TypeError("Uniform values must be numeric");
+            }
+        }
         const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "", modules ? JSON.stringify(modules) : "");
         if (err && err.length > 0) throw new Error(err);
-        if (uniforms && typeof uniforms === 'object')
+        if (uniforms)
             for (const k of Object.keys(uniforms)) this.setShaderUniform(k, uniforms[k]);
-        if (err && err.length > 0) throw new Error(err);
         return this;
     });
     fn(SceneNode.prototype, "setShaderUniform", function setShaderUniform(name, val) {

@@ -1,12 +1,12 @@
-// Custom shaders on the non-static mesh pipelines — the skinned and
+// Custom shader modules on the non-static mesh pipelines — the skinned and
 // instanced program variants plus shadow-pass displacement added on top of
 // test_custom_shader.js's static coverage. Exercises the SKINNED /
 // INSTANCED custom variants of SceneMeshDrawer::program (vulkan/draw/scene_mesh_drawer.cpp),
 // the grouped custom sub-passes in render3D (scene_renderer.cpp), the
-// spliced shadow variants + caster routing (PassShadow::customPipeline in
-// vulkan/shadow/pass_shadow.cpp — a vertex-displaced mesh casts the DISPLACED
-// silhouette, fragment-only keeps the default depth program), and the
-// setShader bindings accepting skinned + instanced nodes.
+// shadow variants + caster routing (SceneCasterDrawer::customPipeline in
+// vulkan/shadow/scene_caster_drawer.cpp — a vertex-displaced mesh casts the
+// DISPLACED silhouette, fragment-only keeps the default depth program), and
+// the setShader bindings accepting skinned + instanced nodes.
 
 function regionChannel(img, ch, x0, y0, x1, y1) {
     let sum = 0, n = 0;
@@ -37,18 +37,6 @@ function patchBrightness(img, cx, cy, r) {
     return n ? sum / n : 0;
 }
 
-// Count pixels whose RGBA differs by more than `tol` in any channel.
-function diffCount(a, b, tol) {
-    let n = 0;
-    for (let i = 0; i < a.data.length; i += 4) {
-        if (Math.abs(a.data[i]     - b.data[i])     > tol ||
-            Math.abs(a.data[i + 1] - b.data[i + 1]) > tol ||
-            Math.abs(a.data[i + 2] - b.data[i + 2]) > tol ||
-            Math.abs(a.data[i + 3] - b.data[i + 3]) > tol) n++;
-    }
-    return n;
-}
-
 function makeScene(size) {
     const cv = document.createElement('canvas');
     cv.setAttribute('width', String(size));
@@ -63,16 +51,18 @@ function dropScene(s) {
     flush();
 }
 
-// Fragment chunk that zeroes the PBR inputs and emits a pure emissive color
+// Fragment hook that zeroes the PBR inputs and emits a pure emissive color
 // (exact output under linear tonemap, gamma 1).
 const emitFrag = (r, g, b) => `
-    void userFragment(inout vec3 baseColor, inout vec3 normal,
-                      inout float metallic, inout float roughness,
-                      inout vec3 emissive, inout float alpha) {
-        baseColor = vec3(0.0);
-        metallic  = 0.0;
-        roughness = 1.0;
-        emissive  = vec3(${r.toFixed(1)}, ${g.toFixed(1)}, ${b.toFixed(1)});
+    module hook;
+    import mesh;
+    pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+        var out = s;
+        out.base_color = vec3<f32>(0.0);
+        out.metallic  = 0.0;
+        out.roughness = 1.0;
+        out.emissive  = vec3<f32>(${r.toFixed(1)}, ${g.toFixed(1)}, ${b.toFixed(1)});
+        return out;
     }`;
 
 const probe = makeScene(64);
@@ -140,9 +130,8 @@ if (!probe.scene) {
         assert(patchChannel(imgDefault, 0, sx, sy, 3) > 60,
             'skinned strip renders red before setShader');
 
-        // setShader no longer throws on skinned meshes; fragment hook runs
-        // through the SKINNED program variant.
-        node.setShader({ fragment: emitFrag(0, 1, 0) });
+        // Fragment hook runs through the SKINNED program variant.
+        node.setShader({ module: emitFrag(0, 1, 0) });
         assert(node.hasShader === true, 'hasShader true on skinned node');
         const imgGreen = scn.captureFrame();
         assert(patchChannel(imgGreen, 1, sx, sy, 3) > 200 &&
@@ -176,11 +165,22 @@ if (!probe.scene) {
         // Vertex displacement runs POST-skin: +1.0 x shifts the whole posed
         // figure right, so the arm lands at x in [0,1] and vacates x ~ -0.6.
         node.setShader({
-            vertex: `
-                void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                    pos.x += 1.0;
+            module: `
+                module hook;
+                import mesh;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.x += 1.0;
+                    return out;
+                }
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic = 0.0;
+                    out.roughness = 1.0;
+                    out.emissive = vec3<f32>(0.0, 1.0, 0.0);
+                    return out;
                 }`,
-            fragment: emitFrag(0, 1, 0),
         });
         const imgShift = scn.captureFrame();
         const [dx, dy] = project(0.4, 1, 0);       // displaced arm
@@ -222,12 +222,9 @@ if (!probe.scene) {
             instancesFromTransforms: new Float32Array([...xf(1.2, 0)]) });
 
         assert(shaded.hasShader === false, 'instanced hasShader false initially');
-        shaded.setShader({ fragment: emitFrag(0, 1, 0) });
+        shaded.setShader({ module: emitFrag(0, 1, 0) });
         assert(shaded.hasShader === true, 'instanced hasShader true after setShader');
 
-        // fov 60 @ z=4: x=±1.2 -> px ~128/2 ± 1.2*55.4 -> ~-2/64/130... use
-        // measured centers: x=-1.2 -> ~px 12 (hmm, keep patches inside the
-        // instance quads: half-size 0.5 box -> ~±14 px around each center).
         const k = (SIZE / 2) / Math.tan(30 * Math.PI / 180) / 4;  // px per unit
         const cx = (x) => Math.round(SIZE / 2 + x * k);
         const cy = SIZE / 2;
@@ -244,11 +241,22 @@ if (!probe.scene) {
         // Vertex displacement (mesh-local, pre-instance-transform): +1.0 y
         // moves every instance's box up by 1 in its own frame.
         shaded.setShader({
-            vertex: `
-                void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                    pos.y += 1.0;
+            module: `
+                module hook;
+                import mesh;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.y += 1.0;
+                    return out;
+                }
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.0);
+                    out.metallic = 0.0;
+                    out.roughness = 1.0;
+                    out.emissive = vec3<f32>(0.0, 1.0, 0.0);
+                    return out;
                 }`,
-            fragment: emitFrag(0, 1, 0),
         });
         const img2 = scn.captureFrame();
         const upY = Math.round(SIZE / 2 - 1.0 * k);
@@ -306,7 +314,7 @@ if (!probe.scene) {
 
         // Fragment-only shader first: silhouette must be UNCHANGED (the
         // caster keeps the shared default shadow program).
-        blocker.setShader({ fragment: emitFrag(0, 1, 0) });
+        blocker.setShader({ module: emitFrag(0, 1, 0) });
         const fragOnly = scn.captureFrame();
         const foOrig = patchBrightness(fragOnly, ox, oy, 3);
         const foMoved = patchBrightness(fragOnly, mx, my, 3);
@@ -318,12 +326,17 @@ if (!probe.scene) {
         // Uniform-driven vertex displacement: the blocker AND its shadow
         // move +1.5 x together.
         blocker.setShader({
-            vertex: `
-                uniform float u_dx;
-                void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                    pos.x += u_dx;
+            module: `
+                module hook;
+                import mesh;
+                struct Params { dx: f32 }
+                @binding(4, 0) var params: uniform<Params>;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.x += params.dx;
+                    return out;
                 }`,
-            uniforms: { u_dx: 1.5 },
+            uniforms: { dx: 1.5 },
         });
         blocker.cullMargin = 1.5;   // displacement exceeds the mesh AABB
         const disp = scn.captureFrame();
@@ -339,27 +352,28 @@ if (!probe.scene) {
             'displaced blocker visible at its new position');
 
         // Live uniform update drives the shadow, not just the color pass.
-        blocker.setShaderUniform('u_dx', 0.0);
+        blocker.setShaderUniform('dx', 0.0);
         const back = scn.captureFrame();
         assert(patchBrightness(back, ox, oy, 3) < baseOrig * 1.3 + 8 &&
                patchBrightness(back, mx, my, 3) > baseMoved * 0.8,
             'setShaderUniform moves the shadow back live');
 
-        // A chunk referencing an engine uniform (uWindTime) must compile in
-        // the SHADOW variant too — the mirrored declarations in shadow.vert
-        // sit before the splice point, so the displaced silhouette still
-        // lands (regression guard for the marker-in-comment splice bug: a
-        // failed shadow compile would silently fall back to the undisplaced
-        // default program and this shadow would not move).
+        // A hook referencing an engine uniform (scene::camera.wind_params.x)
+        // must compile in the SHADOW variant too.
         blocker.setShader({
-            vertex: `
-                void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
-                    pos.x += 1.5 + 0.0 * uWindTime;
+            module: `
+                module hook;
+                import scene;
+                import mesh;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.x += 1.5 + 0.0 * scene::camera.wind_params.x;
+                    return out;
                 }`,
         });
         const windRef = scn.captureFrame();
         assert(patchBrightness(windRef, mx, my, 3) < baseMoved * 0.8,
-            'engine-uniform-referencing chunk still displaces the shadow');
+            'engine-uniform-referencing hook still displaces the shadow');
 
         // clearShader restores the default pipeline + silhouette.
         blocker.clearShader();

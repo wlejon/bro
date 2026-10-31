@@ -14,7 +14,7 @@
 #include "scene/vulkan/frame/scene_frame_graph.h"
 #include "scene/vulkan/frame/scene_targets.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
-#include "scene/vulkan/frame/scene_vk_shader_compiler.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_gpu_timer.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
@@ -473,31 +473,28 @@ int main() {
     targets.cleanup(allocator);
     std::cout << "PASSED" << std::endl;
 
-    // Every built-in shader compiled from the source tree (what
-    // BRO_SCENE_SHADER_SOURCE does at run time) is word for word the SPIR-V
-    // the build embedded, variants and their DEFINES included, and makes a
-    // module the device (and the validation layer) accepts.
-    std::cout << "[Test] Built-in shaders from source match the embedded SPIR-V... " << std::flush;
+    // Built-in brokernel stages compile from their embedded sources and make
+    // valid Vulkan shader modules.
+    std::cout << "[Test] Built-in brokernel stages compile to SPIR-V... " << std::flush;
     {
-        const std::string dir = SceneVkShaderCompiler::buildShaderSourceDir();
+        const std::string dir = buildShaderSourceDir();
         assert(!dir.empty());
-        for (int i = 0; i < static_cast<int>(BuiltinSceneShader::Count); ++i) {
-            const auto shader = static_cast<BuiltinSceneShader>(i);
-            const auto& embedded = SceneVkShaderCompiler::embeddedSpirv(shader);
+        static constexpr const char* kMeshEntries[] = {
+            "mesh_vert", "mesh_instanced_vert", "mesh_skinned_vert",
+            "mesh_scatter_vert", "mesh_tube_vert", "mesh_veg_vert", "mesh_instanced_veg_vert",
+            "mesh_frag", "mesh_cuts_frag", "mesh_indirect_frag", "mesh_indirect_cuts_frag",
+            "mesh_veg_frag", "mesh_bark_frag",
+        };
+        for (const char* entry : kMeshEntries) {
+            KernelHookStage st;
             std::string err;
-            const auto fromSource = SceneVkShaderCompiler::compileBuiltinFromSource(shader, dir, &err);
-            if (fromSource != embedded) {
-                std::cerr << "\nFAILED: " << SceneVkShaderCompiler::builtinName(shader) << ": "
-                          << (fromSource.empty() ? "did not compile: " + err : "differs from the embedded SPIR-V")
-                          << " (" << fromSource.size() << " vs " << embedded.size() << " words)" << std::endl;
-                return 1;
-            }
-            VkShaderModule module = SceneVkShaderCompiler::createModule(device.device(), embedded);
+            assert(compileKernelMeshStage(entry, st, err) && !st.spirv.empty());
+            VkShaderModule module = SceneVkShaderModule::create(device.device(), st.spirv);
             assert(module != VK_NULL_HANDLE);
-            SceneVkShaderCompiler::destroyModule(device.device(), module);
+            SceneVkShaderModule::destroy(device.device(), module);
         }
     }
-    std::cout << "PASSED (" << static_cast<int>(BuiltinSceneShader::Count) << " shaders)" << std::endl;
+    std::cout << "PASSED" << std::endl;
 
     // The world service's compute path: a compute kind's granted jobs record
     // into the frame's compute stream (the async compute queue where the
@@ -519,14 +516,14 @@ int main() {
                                       true));
         assert(out.mappedData);
         const char* src =
-            "#version 450\n"
-            "layout(local_size_x = 64) in;\n"
-            "layout(set = 0, binding = 0) buffer Out { uint v[]; } o;\n"
-            "layout(push_constant) uniform P { uint base; } p;\n"
-            "void main() { o.v[gl_GlobalInvocationID.x] = p.base + gl_GlobalInvocationID.x; }\n";
-        const auto spirv = SceneVkShaderCompiler::compileGlsl(src, VK_SHADER_STAGE_COMPUTE_BIT);
-        assert(!spirv.empty());
-        VkShaderModule cs = SceneVkShaderCompiler::createModule(device.device(), spirv);
+            "struct Push { base: u32, }\n"
+            "@binding(0, 0) var o: buffer<u32>;\n"
+            "@compute @workgroup_size(64, 1, 1)\n"
+            "fn main(p: Push) { o[global_id_x()] = p.base + (global_id_x() as u32); }\n";
+        KernelHookStage stage;
+        std::string stageErr;
+        assert(compileKernelStage("test_world_compute.bk", src, "main", stage, stageErr) && !stage.spirv.empty());
+        VkShaderModule cs = SceneVkShaderModule::create(device.device(), stage.spirv);
         VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
                                              nullptr};
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -642,7 +639,7 @@ int main() {
         vkDestroyPipeline(device.device(), pipeline, nullptr);
         vkDestroyPipelineLayout(device.device(), layout, nullptr);
         vkDestroyDescriptorSetLayout(device.device(), setLayout, nullptr);
-        SceneVkShaderCompiler::destroyModule(device.device(), cs);
+        SceneVkShaderModule::destroy(device.device(), cs);
         allocator.destroyBuffer(out);
     }
 
@@ -652,14 +649,14 @@ int main() {
     std::cout << "[Test] Shader set B: twins, switch, identical tree... " << std::flush;
     {
         namespace fs = std::filesystem;
-        const std::string srcDir = SceneVkShaderCompiler::buildShaderSourceDir();
+        const std::string srcDir = buildShaderSourceDir();
         const fs::path tmp = fs::temp_directory_path() / "bro_shader_set_test";
         std::error_code ec;
         fs::remove_all(tmp, ec);
         fs::copy(srcDir, tmp, fs::copy_options::recursive, ec);
         assert(!ec);
         const auto setSide = [&](const char* from, const char* to) {
-            const fs::path f = tmp / "shadow" / "shadow_pages_layout.h";
+            const fs::path f = tmp / "common" / "scene.bk";
             std::ifstream in(f, std::ios::binary);
             std::stringstream ss;
             ss << in.rdbuf();
@@ -671,16 +668,16 @@ int main() {
             std::ofstream(f, std::ios::binary | std::ios::trunc) << text;
         };
 
-        // A run-time compute shader that reads a constant of the tree's.
+        // A brokernel compute stage that reads a constant of common/scene.bk.
         const char* src =
-            "#version 450\n"
-            "#include \"shadow/shadow_pages_layout.h\"\n"
-            "layout(local_size_x = 1) in;\n"
-            "layout(set = 0, binding = 0) buffer Out { uint v[]; } o;\n"
-            "void main() { o.v[0] = uint(SP_LOCAL_ENTRIES); }\n";
-        const auto spirv = SceneVkShaderCompiler::compileGlsl(src, VK_SHADER_STAGE_COMPUTE_BIT);
-        assert(!spirv.empty());
-        VkShaderModule cs = SceneVkShaderCompiler::createModule(device.device(), spirv);
+            "import scene;\n"
+            "@binding(0, 0) var o: buffer<u32>;\n"
+            "@compute @workgroup_size(1, 1, 1)\n"
+            "fn main() { o[0] = scene::HDR_MAX as u32; }\n";
+        KernelHookStage stage;
+        std::string stageErr;
+        assert(compileKernelStage("test_set_b.bk", src, "main", stage, stageErr) && !stage.spirv.empty());
+        VkShaderModule cs = SceneVkShaderModule::create(device.device(), stage.spirv);
         VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
                                              nullptr};
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -695,7 +692,7 @@ int main() {
         assert(vkCreatePipelineLayout(device.device(), &pli, nullptr, &layout) == VK_SUCCESS);
         VkPipeline pipeline = createComputePipeline(device.device(), cs, layout, "shader set test");
         assert(pipeline != VK_NULL_HANDLE);
-        SceneVkShaderCompiler::destroyModule(device.device(), cs);   // (the twin is made from the recipe)
+        SceneVkShaderModule::destroy(device.device(), cs);   // (the twin is made from the recipe)
 
         SceneVkBuffer out;
         assert(allocator.createBuffer(sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -721,7 +718,7 @@ int main() {
             context.queue().wait(device.lastFrameTicket());
             return *static_cast<const uint32_t*>(out.mappedData);
         };
-        assert(run() == SP_LOCAL_ENTRIES);
+        assert(run() == 64000u);
         assert(!useShaderSet(1));   // (no set B yet)
 
         // The identical tree: nothing differs, nothing twinned.
@@ -729,18 +726,18 @@ int main() {
         std::string err;
         assert(loadShaderSetB(tmp.string(), &info, &err));
         assert(info.differing == 0 && info.twinned == 0 && info.failed.empty());
-        assert(useShaderSet(1) && run() == SP_LOCAL_ENTRIES);
+        assert(useShaderSet(1) && run() == 64000u);
         assert(useShaderSet(0));
 
         // The constant changed in B's tree: the pipeline twinned, the switch
         // binds it, back to A binds A's.
-        setSide("#define SP_LOCAL_ENTRIES        85", "#define SP_LOCAL_ENTRIES        77");
+        setSide("pub const HDR_MAX: f32 = 64000.0;", "pub const HDR_MAX: f32 = 77.0;");
         assert(loadShaderSetB(tmp.string(), &info, &err));
         assert(info.twinned >= 1 && info.differing >= 1 && info.failed.empty());
-        assert(run() == SP_LOCAL_ENTRIES);
+        assert(run() == 64000u);
         assert(useShaderSet(1));
         assert(run() == 77u);
-        assert(useShaderSet(0) && run() == SP_LOCAL_ENTRIES);
+        assert(useShaderSet(0) && run() == 64000u);
         assert(!loadShaderSetB((tmp / "none").string(), &info, &err) && !err.empty());
 
         const int twinned = shaderSetInfo().twinned;
