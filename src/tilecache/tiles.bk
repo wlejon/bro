@@ -162,6 +162,21 @@ pub fn cells(t: Tile, p: Point, tile_size: i32, border: i32) -> Cells {
     return Cells { i00: base, i10: base + 1, i01: base + cells_n, i11: base + cells_n + 1, f: cc - c0 };
 }
 
+// Where p is in a texture array filled from a layer's pool, a slot a part
+// packed atlas x atlas a layer (setShaderTexture({ buffer:
+// cache.layer(name), layers: capacity, atlas })): (u, v) of the image and
+// the layer, so that hardware filtering there reads what cells() would,
+// tile t's borders included, across tiles without a seam given a border.
+pub fn atlas_uvw(t: Tile, p: Point, tile_size: i32, border: i32, atlas: i32) -> vec3<f32> {
+    let n = exp2(t.level as f32);
+    let c = vec2<f32>(border as f32) + (vec2<f32>(p.u, p.v) * n - vec2<f32>(t.x as f32, t.y as f32)) * (tile_size as f32);
+    let per = atlas * atlas;
+    let cell = t.slot % per;
+    let at = vec2<f32>((cell % atlas) as f32, (cell / atlas) as f32);
+    let uv = (at + c / ((tile_size + 2 * border) as f32)) / (atlas as f32);
+    return vec3<f32>(uv.x, uv.y, (t.slot / per) as f32);
+}
+
 // The level whose cells are `w` across where a root's cells at level 0 are
 // `w0` (fractional: between two, as a mip's), clamped to [0, max_level].
 pub fn level_for(w: f32, w0: f32, max_level: i32) -> f32 {

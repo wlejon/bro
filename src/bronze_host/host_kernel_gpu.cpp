@@ -176,7 +176,10 @@ std::shared_ptr<Device> s_device;
 } // namespace
 
 std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v) {
-    const std::shared_ptr<brokernel::api::GpuBuffer> buffer = brokernel::api::bufferOf(v);
+    return computeBufferOf(brokernel::api::bufferOf(v));
+}
+
+std::shared_ptr<render::ComputeBuffer> computeBufferOf(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer) {
     const auto* own = dynamic_cast<const Buffer*>(buffer.get());
     return own ? own->computeBuffer() : nullptr;
 }

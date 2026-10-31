@@ -15,7 +15,8 @@
 //   (d) `layers` makes a slot a sampler2DArray of slices and `repeat` wraps
 //       its coordinates (MeshNode::setCustomShaderTextureArray).
 //   (e) `buffer` makes a KernelBuffer the texels, copied every frame
-//       (MeshNode::setCustomShaderTextureBuffer).
+//       (MeshNode::setCustomShaderTextureBuffer), as floats or `format`
+//       'unorm16'.
 //   (f) `depth` makes a slot a sampler3D, filtered across its z slices.
 
 function patchBrightness(img, cx, cy, r) {
@@ -430,6 +431,22 @@ if (!boot.scene) {
         try { quad.setShaderTexture('u_field', { buffer, width: N, height: N, layers: L + 1, channels: 2 }); }
         catch (e) { threw = e instanceof RangeError; }
         assert(threw, 'a buffer smaller than the texels is a RangeError');
+
+        // format 'unorm16': two 16-bit channels a 32-bit word, read as 0 to 1.
+        const words = new Int32Array(N * N * L);
+        for (let l = 0; l < L; l++)
+            words.fill((Math.round(65535 * 0.25 * (l + 1)) | (Math.round(65535 * 0.75) << 16)), l * N * N, (l + 1) * N * N);
+        const packed = bro.kernel.createBuffer(words);
+        quad.setShaderTexture('u_field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm16' });
+        for (let l = 0; l < L; l++) {
+            const r = at(centre, centre, l, false), g = at(centre, centre, l, true);
+            assert(Math.abs(r - 255 * 0.25 * (l + 1)) < 6 && Math.abs(g - 191.25) < 6,
+                `unorm16 slice ${l} reads its halves as 0 to 1 (${r.toFixed(1)}, ${g.toFixed(1)})`);
+        }
+        threw = false;
+        try { quad.setShaderTexture('u_field', { buffer: packed, width: N, height: N, layers: L, channels: 2, format: 'unorm12' }); }
+        catch (e) { threw = e instanceof RangeError; }
+        assert(threw, 'an unknown format is a RangeError');
 
         dropScene(s);
     }

@@ -215,7 +215,14 @@ const terrain = bro.tiles.createCache({
 // cache.layer(name) the layer's whole pool as a KernelBuffer: producers
 //                   write it (a batch's tiles at their slots), and a scene
 //                   node's custom shader binds it (setShaderBuffer, scene-
-//                   nodes-api.js) and reads tile `slot` at slot * cells * cells
+//                   nodes-api.js) and reads tile `slot` at slot * cells * cells,
+//                   or binds it as a texture array, a slot a part
+//                   (setShaderTexture({ buffer, width: cells, height: cells,
+//                   layers: capacity, atlas, channels, format }); atlas k
+//                   packs k x k slots a layer, as a capacity past the GPU's
+//                   array layers needs) for one filtered fetch at
+//                   tiles::atlas_uvw; each update's produced slots are
+//                   logged on the pool, so only those are copied
 // cache.lookup      KernelBuffer: every ready tile's slot by (root, level, x,
 //                   y), a hash table rewritten once an update's batch is
 //                   produced (after its dispatches, so a tile is found once
@@ -282,6 +289,10 @@ function frame(camera, patch) {
 //       the bilinear weights: interior cell i is centred at (i + 0.5) /
 //       tileSize across the tile; with a border of 1 or more filtering
 //       crosses tiles without a seam, without one the outermost cells hold
+//   tiles::atlas_uvw(tile, p, tileSize, border, atlas) -> vec3<f32>   where
+//       p is in a texture array bound from a layer's pool (cache.layer
+//       above): (u, v, layer), the tile's borders included, so one filtered
+//       sample there gives what cells() would
 //   tiles::level_for(w, w0, maxLevel) -> f32   the level whose cells are w
 //       across where level 0's are w0, fractional (blend two, as mips)
 //

@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <span>
 
 namespace bro::scene::vk {
 
@@ -143,6 +144,9 @@ public:
     /// source), on the upload stream: after the frame's compute work, ahead
     /// of its draws. The image is sampleable afterwards.
     void copyBufferToImage(SceneVkImage& image, VkBuffer source);
+    /// The same for some regions of mip 0 alone; the other texels keep
+    /// theirs. Nothing is recorded for no regions.
+    void copyBufferToImageRegions(SceneVkImage& image, VkBuffer source, std::span<const VkBufferImageCopy> regions);
 
     void destroyImage(SceneVkImage& image);
 

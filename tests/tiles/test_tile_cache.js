@@ -10,7 +10,8 @@
 //   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
 //   - a GPU-time budget sizes the batches;
-//   - a layer's pool binds to a scene node; bad options are refused.
+//   - a layer's pool binds to a scene node, as a buffer or a texture array
+//     copied slot by slot as tiles are produced; bad options are refused.
 
 if (!bro.kernel.available || !bro.tiles) {
     skipTest('bro.kernel is compiled out of this build');
@@ -408,6 +409,57 @@ if (!bro.kernel.available || !bro.tiles) {
         try { node.setShaderBuffer('u_tiles', cache.layer('height')); } catch (e) { bindErr = e; }
         assert(bindErr === null, 'a layer pool binds to a scene node: ' + (bindErr && bindErr.message));
         sc.captureFrame();
+
+        // Bound as a texture array, a slot a part, a texel of a tile's
+        // layer is its cell; only the slots an update produces are copied
+        // after the first, so a write to the pool no update produced does
+        // not show, and a tile produced again does.
+        sc.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 4], target: [0, 0, 0] });
+        sc.setToneMap({ mode: 'linear', gamma: 1.0 });
+        const tex = makeCache({ capacity: 64 });
+        assert(settle(tex, near), 'the textured cache settles');
+        const quad = sc.createMesh({ mesh: 'box', color: 'white' });
+        quad.setShader({
+            fragment: `
+                uniform sampler2DArray u_cells;
+                uniform vec3 u_at;
+                void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
+                                  inout float roughness, inout vec3 emissive, inout float alpha) {
+                    baseColor = vec3(0.0);
+                    metallic = 0.0;
+                    roughness = 1.0;
+                    emissive = vec3(clamp(textureLod(u_cells, u_at, 0.0).r * 0.1 + 0.5, 0.0, 1.0));
+                }`,
+            uniforms: { u_at: [0.5, 0.5, 0] },
+        });
+        // Two by two slots a layer (tiles::atlas_uvw).
+        quad.setShaderTexture('u_cells', { buffer: tex.layer('height'), width: T, height: T, layers: tex.capacity, atlas: 2 });
+        const pool = new Float32Array(tex.capacity * T * T);
+        const cellAt = (slot) => (slot * T + T / 2) * T + T / 2;
+        const shown = (slot) => {
+            const cell = slot % 4, c = (T / 2 + 0.5) / T;
+            quad.setShaderUniform('u_at', [((cell % 2) + c) / 2, (Math.floor(cell / 2) + c) / 2, Math.floor(slot / 4)]);
+            const img = sc.captureFrame();
+            const i = (Math.floor(img.height / 2) * img.width + Math.floor(img.width / 2)) * 4;
+            return img.data[i];
+        };
+        const expect = (v) => 255 * Math.min(1, Math.max(0, v * 0.1 + 0.5));
+        const slot = tex.drawn[0].slot;
+        tex.layer('height').read(pool);
+        const first = shown(slot);
+        assert(Math.abs(first - expect(pool[cellAt(slot)])) < 4,
+               `a tile's texel is its cell (${first} for ${pool[cellAt(slot)].toFixed(3)})`);
+        tex.layer('height').write(new Float32Array([pool[cellAt(slot)] + 3]), cellAt(slot) * 4);
+        tex.update(near);
+        const unproduced = shown(slot);
+        assert(Math.abs(unproduced - first) < 4, `a slot no update produced is not copied again (${unproduced})`);
+        tex.clear();
+        assert(settle(tex, near), 'the cleared cache settles');
+        tex.layer('height').read(pool);
+        const again = tex.drawn.find((t) => t.slot === slot) ? slot : tex.drawn[0].slot;
+        const reproduced = shown(again);
+        assert(Math.abs(reproduced - expect(pool[cellAt(again)])) < 4,
+               `a slot produced again is copied (${reproduced} for ${pool[cellAt(again)].toFixed(3)})`);
     }
 
     // The errors a script gets.

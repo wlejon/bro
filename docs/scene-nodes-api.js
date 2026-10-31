@@ -593,11 +593,22 @@ class SceneNode {
    * that draws the node, after the kernel dispatches before it, so a kernel
    * writing a field each frame is sampled with hardware bilinear filtering (and
    * `repeat`, a toroidal grid's wrap) instead of four buffer loads and their
-   * mixes. A buffer smaller than the texels is a RangeError. Returns the
-   * node.
+   * mixes. `format` is how a channel is stored in the buffer: 'float32'
+   * (the default), 'unorm8' or 'unorm16' (an unsigned integer read as 0 to
+   * 1) or 'float16'; the shader reads floats whichever it is, and a format
+   * the GPU cannot filter fails the draw's binding (logged), as does an
+   * image past its limits (2048 array layers is common). `atlas` (an
+   * integer, 1 by default) packs atlas x atlas of the buffer's `layers` into
+   * each layer of the image, part i at cell i % atlas² (row-major) of layer
+   * floor(i / atlas²), the image width * atlas by height * atlas: more
+   * parts than the GPU has layers. A buffer whose writer logs the parts it
+   * rewrites, as a tile cache's layer pools do (one part a slot,
+   * bro.tiles), has only those parts copied after the first. A buffer
+   * smaller than the texels is a RangeError, as is an atlas below 1 or one
+   * above 1 without `layers`. Returns the node.
    *
    * @param {string} name
-   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number}} opts
+   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number, format?: 'float32'|'unorm8'|'unorm16'|'float16', atlas?: number}} opts
    * @returns {SceneNode}
    * @example
    * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .rg:

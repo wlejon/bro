@@ -260,17 +260,48 @@ VkBuffer SceneGpuResources::skinAttributes(const SkinnedMeshNode& node, size_t v
 }
 
 bool SceneGpuResources::createUserTexture(MeshNode::UserTexture& tex, UserTexture& out) {
-    const uint32_t layers = tex.layers > 0 ? static_cast<uint32_t>(tex.layers) : 1;
-    const VkFormat format = tex.channels == 1   ? VK_FORMAT_R32_SFLOAT
-                            : tex.channels == 2 ? VK_FORMAT_R32G32_SFLOAT
-                                                : VK_FORMAT_R32G32B32A32_SFLOAT;
+    // An atlas slot's parts go atlas x atlas a layer (MeshNode::UserTexture::atlas).
+    const uint32_t atlas = tex.source ? static_cast<uint32_t>(std::max(tex.atlas, 1)) : 1u;
+    const uint32_t parts = tex.layers > 0 ? static_cast<uint32_t>(tex.layers) : 1;
+    const uint32_t layers = (parts + atlas * atlas - 1) / (atlas * atlas);
+    const uint32_t width = static_cast<uint32_t>(tex.w) * atlas, height = static_cast<uint32_t>(tex.h) * atlas;
+    VkPhysicalDeviceProperties device{};
+    vkGetPhysicalDeviceProperties(allocator_.device().physicalDevice(), &device);
+    const VkPhysicalDeviceLimits& limits = device.limits;
+    const uint32_t maxSide = tex.volume ? limits.maxImageDimension3D : limits.maxImageDimension2D;
+    if ((tex.volume ? layers > limits.maxImageDimension3D : layers > limits.maxImageArrayLayers) ||
+        width > maxSide || height > maxSide) {
+        LOG_ERROR("SceneGpuResources: shader texture %s (%ux%u x %u) is past this GPU's limits (%u a side, %u layers)",
+                  tex.name.c_str(), width, height, layers, maxSide, limits.maxImageArrayLayers);
+        return false;
+    }
+    using Enc = MeshNode::UserTexture::Encoding;
+    const int ci = tex.channels == 1 ? 0 : tex.channels == 2 ? 1 : 2;
+    static constexpr VkFormat kFormats[4][3] = {
+        {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT},
+        {VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM, VK_FORMAT_R8G8B8A8_UNORM},
+        {VK_FORMAT_R16_UNORM, VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16B16A16_UNORM},
+        {VK_FORMAT_R16_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT},
+    };
+    const Enc enc = tex.source ? tex.encoding : Enc::Float32;
+    const VkFormat format = kFormats[static_cast<int>(enc)][ci];
     out.expand3 = tex.channels == 3;
-    out.texelBytes = (tex.channels == 1 ? 1u : tex.channels == 2 ? 2u : 4u) * sizeof(float);
+    out.texelBytes = (tex.channels == 1 ? 1u : tex.channels == 2 ? 2u : 4u) *
+                     static_cast<uint32_t>(MeshNode::encodingBytes(enc));
+    if (enc != Enc::Float32) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(allocator_.device().physicalDevice(), format, &props);
+        if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+            LOG_ERROR("SceneGpuResources: shader texture %s: this GPU does not filter its encoding",
+                      tex.name.c_str());
+            return false;
+        }
+    }
     const uint32_t mips = tex.mipmap ? mipCount(tex.w, tex.h) : 1;
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     if (mips > 1) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    if (!allocator_.createImage(static_cast<uint32_t>(tex.w), static_cast<uint32_t>(tex.h), format, usage,
+    if (!allocator_.createImage(width, height, format, usage,
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out.image, mips, VK_SAMPLE_COUNT_1_BIT,
                                 VK_IMAGE_ASPECT_COLOR_BIT, tex.volume ? 1u : layers, 0,
                                 tex.layers > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D,
@@ -332,15 +363,51 @@ const SceneVkImage* SceneGpuResources::userTexture(uint32_t id, MeshNode::UserTe
         }
         entry.generation = tex.generation;
         entry.copiedRender = 0;
+        entry.copiedLog = 0;
         tex.subUpdates.clear();
         tex.sliceUpdates.clear();
         if (!tex.source) noteTextureUpload(texels * entry.texelBytes);
     }
     if (tex.source) {
-        if (entry.copiedRender != render_) {
-            allocator_.copyBufferToImage(entry.image, tex.source->buffer());
-            entry.copiedRender = render_;
+        if (entry.copiedRender == render_) return &entry.image;
+        entry.copiedRender = render_;
+        // A buffer whose writer logs the parts it rewrites has those alone
+        // copied once the image holds the rest; any other, all of it. Part
+        // p (w x h, packed in the buffer one after another) is layer p, or
+        // with an atlas cell p % atlas^2 of layer p / atlas^2.
+        const render::ComputeBuffer& src = *tex.source;
+        const uint32_t parts = tex.layers > 0 ? static_cast<uint32_t>(tex.layers) : 1;
+        const uint32_t atlas = static_cast<uint32_t>(std::max(tex.atlas, 1));
+        const bool logged = parts > 1 && !tex.volume && src.layerParts() == parts;
+        const bool all = !logged || entry.copiedLog == 0;
+        if (atlas == 1 && all) {
+            allocator_.copyBufferToImage(entry.image, src.buffer());
+        } else if (all || src.layerCount() != entry.copiedLog) {
+            const uint32_t w = static_cast<uint32_t>(tex.w), h = static_cast<uint32_t>(tex.h);
+            const VkDeviceSize partBytes = VkDeviceSize{w} * h * entry.texelBytes;
+            const VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            std::vector<VkBufferImageCopy> regions;
+            for (uint32_t p = 0; p < parts; ++p) {
+                if (!all && src.layerStamp(p) <= entry.copiedLog) continue;
+                // Neighbouring layers go in one region.
+                if (atlas == 1 && !regions.empty()) {
+                    VkBufferImageCopy& last = regions.back();
+                    if (last.imageSubresource.baseArrayLayer + last.imageSubresource.layerCount == p) {
+                        ++last.imageSubresource.layerCount;
+                        continue;
+                    }
+                }
+                const uint32_t cell = p % (atlas * atlas);
+                VkBufferImageCopy r{};
+                r.bufferOffset = partBytes * p;
+                r.imageSubresource = {aspect, 0, p / (atlas * atlas), 1};
+                r.imageOffset = {static_cast<int32_t>((cell % atlas) * w), static_cast<int32_t>((cell / atlas) * h), 0};
+                r.imageExtent = {w, h, 1};
+                regions.push_back(r);
+            }
+            allocator_.copyBufferToImageRegions(entry.image, src.buffer(), regions);
         }
+        entry.copiedLog = logged ? std::max<uint64_t>(src.layerCount(), 1) : 0;
         return &entry.image;
     }
 

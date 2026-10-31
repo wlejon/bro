@@ -704,7 +704,7 @@ bool bro_scene_SceneGraph_keepAlive_get(void* self);
 void bro_scene_SceneGraph_keepAlive_set(void* self, bool v);
 bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t bufferBits);
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y, int32_t width, int32_t height, const float* data, uint32_t dataCount, bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume);
-bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width, int32_t height, int32_t layers, int32_t channels, bool repeat, bool volume);
+bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width, int32_t height, int32_t layers, int32_t channels, bool repeat, bool volume, int32_t encoding, int32_t atlas);
 void bro_scene_SceneNode_setBaseColorTextureData(void* self, int32_t width, int32_t height, const uint8_t* data, uint32_t len);
 void bro_scene_SceneNode_clearBaseColorTexture(void* self);
 void bro_scene_SceneNode_setEmissionTextureData(void* self, int32_t width, int32_t height, const uint8_t* data, uint32_t len);

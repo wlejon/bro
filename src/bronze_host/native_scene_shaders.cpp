@@ -343,7 +343,7 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
 
 bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width,
                                                 int32_t height, int32_t layers, int32_t channels, bool repeat,
-                                                bool volume) {
+                                                bool volume, int32_t encoding, int32_t atlas) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
     const Rooted value(ev::fromBits(bufferBits));
@@ -360,14 +360,25 @@ bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, ui
         ev::throwRangeError("setShaderTexture: channels must be 1, 2 or 4 for a buffer");
         return false;
     }
+    using Enc = scene::MeshNode::UserTexture::Encoding;
+    if (encoding < 0 || encoding > static_cast<int32_t>(Enc::Float16)) {
+        ev::throwRangeError("setShaderTexture: format is 'float32', 'unorm8', 'unorm16' or 'float16'");
+        return false;
+    }
+    const Enc enc = static_cast<Enc>(encoding);
+    if (atlas < 1 || (atlas > 1 && (volume || layers <= 0))) {
+        ev::throwRangeError("setShaderTexture: atlas is at least 1, and above 1 only for layers");
+        return false;
+    }
     const uint64_t bytes = static_cast<uint64_t>(std::max(width, 0)) * static_cast<uint64_t>(std::max(height, 0)) *
-                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) * 4u;
+                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) *
+                           static_cast<uint64_t>(scene::MeshNode::encodingBytes(enc));
     if (buffer->size() < bytes) {
-        ev::throwRangeError("setShaderTexture: the buffer holds fewer than width * height * layers * channels floats");
+        ev::throwRangeError("setShaderTexture: the buffer holds fewer than width * height * layers texels");
         return false;
     }
     return static_cast<scene::MeshNode*>(n)->setCustomShaderTextureBuffer(name, width, height, layers, channels,
-                                                                           std::move(buffer), repeat, volume);
+                                                                           std::move(buffer), repeat, volume, enc, atlas);
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,

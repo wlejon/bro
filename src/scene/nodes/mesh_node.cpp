@@ -180,6 +180,8 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
         t.layers = 0;
         t.volume = false;
         t.source.reset();
+        t.encoding = UserTexture::Encoding::Float32;
+        t.atlas = 1;
         t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
         t.w = width;
         t.h = height;
@@ -278,6 +280,8 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
         t.subUpdates.clear();
         t.sliceUpdates.clear();       // written against the old shape
         t.source.reset();
+        t.encoding = UserTexture::Encoding::Float32;
+        t.atlas = 1;
         t.w = width;
         t.h = height;
         t.layers = layers;
@@ -341,7 +345,8 @@ bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
 
 bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
                                             int channels, std::shared_ptr<render::ComputeBuffer> source,
-                                            bool repeat, bool volume) {
+                                            bool repeat, bool volume, UserTexture::Encoding encoding,
+                                            int atlas) {
     auto it = std::find_if(userTextures_.begin(), userTextures_.end(),
                            [&](const UserTexture& t) { return t.name == name; });
     if (width <= 0 || height <= 0 || !source) {
@@ -352,8 +357,10 @@ bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, 
         return true;
     }
     if (channels != 1 && channels != 2 && channels != 4) return false;
+    if (atlas < 1 || (atlas > 1 && (volume || layers <= 0))) return false;
     const uint64_t bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) *
-                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) * sizeof(float);
+                           static_cast<uint64_t>(std::max(layers, 1)) * static_cast<uint64_t>(channels) *
+                           static_cast<uint64_t>(encodingBytes(encoding));
     if (source->size() < bytes) return false;
     if (it == userTextures_.end()) {
         if ((int)userTextures_.size() >= maxUserTextures()) return false;
@@ -374,6 +381,8 @@ bool MeshNode::setCustomShaderTextureBuffer(const std::string& name, int width, 
     t.repeat = repeat;
     t.clampT = false;
     t.source = std::move(source);
+    t.encoding = encoding;
+    t.atlas = atlas;
     t.generation = nextResourceGeneration();
     bumpChangeGeneration();
     return true;

@@ -8,6 +8,8 @@
     const fn = (obj, name, value) =>
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
     const EMPTY_F32 = new Float32Array(0);
+    // setShaderTexture({ buffer, format }), in MeshNode::UserTexture::Encoding's order.
+    const TEXTURE_FORMATS = ["float32", "unorm8", "unorm16", "float16"];
     const EMPTY_F64 = new Float64Array(0);
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
     const toF32 = (v) => v instanceof Float32Array ? v : (typeof v === 'number' ? new Float32Array([v]) : (Array.isArray(v) ? Float32Array.from(v) : EMPTY_F32));
@@ -590,8 +592,12 @@
         if (volume && (opts.depth | 0) <= 0 && (opts.width | 0) > 0) throw new RangeError("setShaderTexture: depth must be positive");
         const layers = volume ? opts.depth | 0 : opts.layers | 0;
         if (opts.buffer) {
+            // format: how each channel is stored in the buffer.
+            const format = opts.format === undefined ? 0 : TEXTURE_FORMATS.indexOf(opts.format);
+            if (format < 0) throw new RangeError("setShaderTexture: format is 'float32', 'unorm8', 'unorm16' or 'float16'");
             __bro_native.scene.SceneNode_setShaderTextureBuffer(this, name, opts.buffer, opts.width | 0, opts.height | 0,
-                                                                layers, opts.channels || 1, !!opts.repeat, volume);
+                                                                layers, opts.channels || 1, !!opts.repeat, volume, format,
+                                                                opts.atlas === undefined ? 1 : opts.atlas | 0);
             return this;
         }
         const isSub = opts.x !== undefined || opts.y !== undefined;

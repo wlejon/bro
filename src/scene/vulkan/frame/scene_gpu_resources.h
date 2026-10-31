@@ -130,6 +130,7 @@ private:
         uint32_t texelBytes = 0;
         bool expand3 = false;
         uint64_t copiedRender = 0;   // the render (render_) a buffer slot was last copied in
+        uint64_t copiedLog = 0;      // the source's layer log count copied up to (0: none yet)
     };
     struct Skin {
         SceneVkBuffer buffer;

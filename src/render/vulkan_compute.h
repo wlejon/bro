@@ -35,11 +35,27 @@ public:
     /// (an empty buffer still has room for a shader's discarded access).
     VkDeviceSize capacity() const { return capacity_; }
 
+    /// A log of which of the buffer's `layers` equal parts its writer has
+    /// rewritten, for a consumer that copies it part by part (a texture
+    /// array filled from it): each markLayers() stamps the parts it names
+    /// with the next count, so a consumer that copied everything up to count
+    /// c recopies exactly the parts stamped after c. A buffer never marked
+    /// has no log, and is copied whole. Marking with another part count
+    /// starts a new log, every part stamped. Page thread only, like writes.
+    void markLayers(std::span<const uint32_t> parts, uint32_t layers);
+    /// The log's count (0: never marked) and its part count.
+    uint64_t layerCount() const { return layerCount_; }
+    uint32_t layerParts() const { return static_cast<uint32_t>(layerStamps_.size()); }
+    /// The count at which part `layer` was last marked.
+    uint64_t layerStamp(uint32_t layer) const { return layer < layerStamps_.size() ? layerStamps_[layer] : 0; }
+
 private:
     friend class VulkanCompute;
     ComputeBuffer() = default;
     void release();
 
+    std::vector<uint64_t> layerStamps_;
+    uint64_t layerCount_ = 0;
     std::shared_ptr<ComputeOwner> owner_;
     VkBuffer buffer_ = VK_NULL_HANDLE;
     uint64_t allocId_ = 0;

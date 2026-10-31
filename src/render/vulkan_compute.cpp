@@ -48,6 +48,14 @@ ComputeBuffer::~ComputeBuffer() {
     ctx->frames().defer([ctx, buffer = buffer_, alloc = allocId_] { ctx->destroyBuffer(buffer, alloc); });
 }
 
+void ComputeBuffer::markLayers(std::span<const uint32_t> parts, uint32_t layers) {
+    if (layers == 0) return;
+    ++layerCount_;
+    if (layerStamps_.size() != layers) layerStamps_.assign(layers, layerCount_);
+    for (uint32_t p : parts)
+        if (p < layers) layerStamps_[p] = layerCount_;
+}
+
 void ComputeBuffer::release() {
     if (owner_ && owner_->context) owner_->context->destroyBuffer(buffer_, allocId_);
     buffer_ = VK_NULL_HANDLE;

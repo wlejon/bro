@@ -16,6 +16,8 @@ namespace bro::bronze_host {
 /// the engine to read in place (a custom shader's `buffer`); null for any
 /// other value, a view included.
 std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v);
+/// The same for a buffer createEngineBuffer made (null for a view).
+std::shared_ptr<render::ComputeBuffer> computeBufferOf(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer);
 
 /// A KernelBuffer's storage made by the engine (brokernel::api::bufferValue
 /// gives the script one), reading zero; null (and `err`) without a device.

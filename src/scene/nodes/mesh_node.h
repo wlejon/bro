@@ -446,8 +446,25 @@ public:
         // A slot filled on the GPU (setCustomShaderTextureBuffer): its texels
         // are this buffer's, copied into the image every frame the node
         // draws, so it follows what kernels write there; `data` stays empty.
+        // A buffer whose writer marks the layers it rewrites
+        // (ComputeBuffer::markLayers, as a tile cache's layer pools are)
+        // has only those layers copied.
         std::shared_ptr<render::ComputeBuffer> source;
+        // How a buffer slot's channels are stored: 32-bit floats, normalized
+        // 8- or 16-bit unsigned integers, or half floats. The shader reads
+        // floats whichever it is.
+        enum class Encoding { Float32, Unorm8, Unorm16, Float16 };
+        Encoding encoding = Encoding::Float32;
+        // A buffer array slot's parts packed atlas x atlas a layer: the
+        // buffer's `layers` parts of w x h, part i in layer i / atlas^2 at
+        // cell i % atlas^2 (row-major), so a buffer of more parts than a GPU
+        // has array layers still binds. The image is w * atlas x h * atlas.
+        int atlas = 1;
     };
+    /// Bytes of one channel of `e`.
+    static int encodingBytes(UserTexture::Encoding e) {
+        return e == UserTexture::Encoding::Float32 ? 4 : e == UserTexture::Encoding::Unorm8 ? 1 : 2;
+    }
 
     /// Stage a float texture for the named user sampler.
     /// `data` must hold width*height*channels floats; pass data=nullptr (or a zero
@@ -504,10 +521,15 @@ public:
     /// releases the slot. False when a new name would exceed
     /// maxUserTextures(), `channels` is not 1, 2 or 4, or the buffer is
     /// smaller than the texels. `volume`: the layers are a 3D texture's z,
-    /// read through a sampler3D.
+    /// read through a sampler3D. `encoding`: how each channel is stored
+    /// (UserTexture::Encoding). `atlas` > 1 packs atlas x atlas of the
+    /// layers into each layer of the image (UserTexture::atlas; not with
+    /// `volume`).
     bool setCustomShaderTextureBuffer(const std::string& name, int width, int height, int layers,
                                       int channels, std::shared_ptr<render::ComputeBuffer> source,
-                                      bool repeat, bool volume = false);
+                                      bool repeat, bool volume = false,
+                                      UserTexture::Encoding encoding = UserTexture::Encoding::Float32,
+                                      int atlas = 1);
 
     /// Release the named slot; the name no longer counts against the budget.
     void clearCustomShaderTexture(const std::string& name);

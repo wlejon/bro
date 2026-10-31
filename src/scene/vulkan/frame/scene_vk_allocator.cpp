@@ -235,15 +235,23 @@ bool SceneVkAllocator::uploadImage(SceneVkImage& image, const void* data, VkDevi
 }
 
 void SceneVkAllocator::copyBufferToImage(SceneVkImage& image, VkBuffer source) {
-    if (!image.isValid() || source == VK_NULL_HANDLE) return;
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {render::imageAspectFor(image.format), 0, 0, image.arrayLayers};
+    copy.imageExtent = {image.width, image.height, image.depth};
+    copyBufferToImageRegions(image, source, {&copy, 1});
+}
+
+void SceneVkAllocator::copyBufferToImageRegions(SceneVkImage& image, VkBuffer source,
+                                                std::span<const VkBufferImageCopy> regions) {
+    if (!image.isValid() || source == VK_NULL_HANDLE || regions.empty()) return;
     VkCommandBuffer cmd = device_.uploadCommands();
     const VkImageAspectFlags aspect = render::imageAspectFor(image.format);
     const VkImageSubresourceRange whole{aspect, 0, image.mipLevels, 0, image.arrayLayers};
+    // Texels not copied keep theirs: the old layout is kept rather than
+    // discarded.
     render::cmdTransitionImage(cmd, image.image, whole, image.currentLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkBufferImageCopy copy{};
-    copy.imageSubresource = {aspect, 0, 0, image.arrayLayers};
-    copy.imageExtent = {image.width, image.height, image.depth};
-    vkCmdCopyBufferToImage(cmd, source, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    vkCmdCopyBufferToImage(cmd, source, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()), regions.data());
     render::cmdTransitionImage(cmd, image.image, whole, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     image.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

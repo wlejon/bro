@@ -348,6 +348,13 @@ Value js_update(Value self, std::span<const Value> args) {
             return ev::throwValue(thrown);
         }
         for (const tilecache::Production& p : batch) c->tree.markReady(p.id);
+        // The slots rewritten, so a texture array filled from a layer's pool
+        // (setShaderTexture({ buffer: cache.layer(name), layers: capacity }))
+        // copies those alone.
+        std::vector<uint32_t> slots(batch.size());
+        for (size_t i = 0; i < batch.size(); ++i) slots[i] = batch[i].slot;
+        for (const Layer& l : c->layers)
+            if (auto buffer = computeBufferOf(l.pool)) buffer->markLayers(slots, c->tree.config().capacity);
         // Written after the producers' dispatches, so the GPU finds a tile
         // once its cells are there; a slot taken from an evicted tile is gone
         // from it in the same write.
