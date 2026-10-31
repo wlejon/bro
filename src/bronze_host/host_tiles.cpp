@@ -330,15 +330,15 @@ Value js_update(Value self, std::span<const Value> args) {
     // range for a ready tile.
     const bool retired = retireBatches(*c);
     collectRanges(*c);
-    c->tree.select(v);
+    const uint32_t dropped = c->tree.select(v);
 
     pace(*c);
     const std::vector<tilecache::Production> batch = c->tree.takeProductions(c->batchSize);
     render::VulkanCompute* compute = engineCompute();
-    // The lookup without the tiles whose slots the batch takes, before the
-    // batch: its work waits for what is submitted before it, so no ray reads
-    // a slot as it is rewritten.
-    if (retired || !batch.empty()) writeLookup(*c);
+    // The lookup without the tiles whose slots the batch takes (or that
+    // select dropped out of date), before the batch: its work waits for what
+    // is submitted before it, so no ray reads a slot as it is rewritten.
+    if (retired || dropped || !batch.empty()) writeLookup(*c);
     if (!batch.empty() && compute) compute->beginBackground();
     if (!batch.empty()) {
         std::string err;

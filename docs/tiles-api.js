@@ -274,9 +274,14 @@ const terrain = bro.tiles.createCache({
 //                   the new parent), so the view keeps its detail while it
 //                   changes over. A texture filled from a layer changes as
 //                   each batch is done; a shader reading the pool itself
-//                   may read a slot as it is rewritten. A tile no view wants
-//                   stays out of date until one does. A batch taken before
-//                   the refresh is out of date once ready, and goes again.
+//                   may read a slot as it is rewritten. A ready tile no view
+//                   wants is never produced again, so the next update drops
+//                   it (it leaves the lookup and frees its slot; produced
+//                   afresh if a view wants it later): a reader asking finer
+//                   than the view wants, where an earlier view refined, never
+//                   finds cells made for what has changed since. A batch
+//                   taken before the refresh is out of date once ready, and
+//                   goes again (or is dropped, once ready, if unwanted).
 // cache.stale       wanted tiles out of date since a refresh (in pending)
 
 function frame(camera, patch) {

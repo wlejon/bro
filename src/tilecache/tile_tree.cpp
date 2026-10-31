@@ -271,7 +271,7 @@ double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* 
     return n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
 }
 
-void TileTree::select(const View& view) {
+uint32_t TileTree::select(const View& view) {
     ++frame_;
     eye_ = view.position;
     wanted_.clear();
@@ -306,7 +306,22 @@ void TileTree::select(const View& view) {
         count += 4;
         for (uint32_t k = 0; k < 4; ++k) offer(ensureChild(i, k));
     }
+    // Out of date and unwanted: evicted. One being produced again keeps its
+    // slot until it lands, and goes on a later select if still unwanted.
+    uint32_t dropped = 0;
+    if (generation_ > 0) {
+        for (const int32_t v : slotNode_) {
+            if (v < 0) continue;
+            Node& n = nodes_[v];
+            if (stale(n) && !n.again && !wantedNow(n)) {
+                evict(n);
+                ++stats_.evicted;
+                ++dropped;
+            }
+        }
+    }
     prune();
+    return dropped;
 }
 
 int32_t TileTree::slotOf(const TileId& id) const {

@@ -342,11 +342,44 @@ void testLongFlight() {
     check(tree.stats().evicted > 1000, "and evicted as it went (" + std::to_string(tree.stats().evicted) + ")");
 }
 
+// After a refresh, a ready tile the view no longer wants is never produced
+// again, so it gives up its slot (a lookup must not find its old cells);
+// the wanted ones stay ready, out of date, until produced again.
+void testRefreshDropsUnwanted() {
+    Config c = planeConfig(4096);
+    c.pixelsPerCell = 64;   // views wanting a few hundred tiles: both fit
+    TileTree tree(c);
+    bool parentFirst = true;
+    tree.select(viewAt(-400, 5, -400));
+    produceAll(tree, 64, parentFirst);
+    // The finest tile under the first view.
+    TileId fine{};
+    for (const DrawTile& d : tree.drawSet())
+        if (d.id.level > fine.level) fine = d.id;
+    check(fine.level > 2 && tree.slotOf(fine) >= 0, "the first view refines (level " + std::to_string(fine.level) + ")");
+    tree.select(viewAt(400, 5, 400));
+    produceAll(tree, 64, parentFirst);
+    check(tree.slotOf(fine) >= 0, "a tile the view left stays ready while the cache has room (wanted " +
+                                      std::to_string(tree.wanted()) + ", resident " + std::to_string(tree.resident()) +
+                                      ", evicted " + std::to_string(tree.stats().evicted) + ")");
+    tree.refresh();
+    const uint32_t dropped = tree.select(viewAt(400, 5, 400));
+    check(dropped > 0 && tree.slotOf(fine) < 0,
+          "after a refresh it is no longer ready (" + std::to_string(dropped) + " unwanted tiles dropped)");
+    check(tree.stale() == tree.wanted(), "every wanted tile stays ready, out of date (" + std::to_string(tree.stale()) +
+                                             " of " + std::to_string(tree.wanted()) + ")");
+    checkCover(tree, 1, "after the refresh, before producing again");
+    check(tree.select(viewAt(400, 5, 400)) == 0, "a second select drops nothing more");
+    produceAll(tree, 64, parentFirst);
+    check(tree.stale() == 0 && tree.pending() == 0, "produced again, nothing is out of date");
+}
+
 } // namespace
 
 int main() {
     testPlaneSelection();
     testEvictionAndRefill();
+    testRefreshDropsUnwanted();
     testCubeSphere();
     testFrustum();
     testRanges();

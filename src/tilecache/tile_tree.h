@@ -151,8 +151,13 @@ public:
 
     const Config& config() const { return config_; }
 
-    /// Pick the tiles `view` wants (replacing the previous choice).
-    void select(const View& view);
+    /// Pick the tiles `view` wants (replacing the previous choice). A ready
+    /// tile out of date (refresh) that the view does not want gives up its
+    /// slot: nothing would produce it again, so a lookup must not find its
+    /// old cells (a reader asking finer than the view wants, where an
+    /// earlier view refined). Returns how many did, so the caller's lookup
+    /// can be written without them.
+    uint32_t select(const View& view);
 
     /// Up to `n` missing wanted tiles to produce now, each with a slot, each
     /// one's parent ready or taken by an earlier call (never in the same
@@ -200,7 +205,8 @@ public:
     /// Forget every tile (a world's producer changed): all slots free.
     void clear();
     /// Every ready tile's cells are out of date (what its producer reads
-    /// changed: a sun, a parameter): each stays ready, drawn and found, and
+    /// changed: a sun, a parameter): each the view wants stays ready, drawn
+    /// and found (the next select drops the rest), and
     /// takeProductions hands the wanted ones out again, after the missing
     /// ones, into their own slots, a parent before its children, so the old
     /// cells serve until the new are ready. A tile taken before the refresh

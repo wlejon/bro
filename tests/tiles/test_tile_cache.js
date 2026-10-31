@@ -11,7 +11,8 @@
 //   - a producer that throws leaves the batch missing, and the next update
 //     offers them again;
 //   - a refresh produces every wanted tile again in place, parents first,
-//     still drawn meanwhile;
+//     still drawn meanwhile, and drops from the lookup the ready tiles no
+//     view wants;
 //   - the batches pace themselves by the frames;
 //   - a layer's pool binds to a scene node, as a buffer or a texture array
 //     copied slot by slot as tiles are produced; bad options are refused.
@@ -439,6 +440,36 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(finest === N, `and is at least as fine as the drawn tile there (${finest} of ${N})`);
     assert(slotOk === N, `its cells are in its slot, the border included (${slotOk} of ${N})`);
     assert(minDot > 0.99999, `filtering the cells around it gives its direction (cos ${minDot})`);
+
+    // After a refresh, a ready tile no view wants leaves the lookup: nothing
+    // would produce it again, so a reader asking finer than the view wants
+    // (where an earlier view refined) never finds cells made for what has
+    // changed since. The directions near the first view's point, found again
+    // from the far side of the globe, in a cache with room for both views.
+    const roomy = bro.tiles.createCache({
+        domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },
+        tileSize: LT, border: LB, capacity: 4096, maxLevel: 7, producePerUpdate: 64, pixelsPerCell: 64,
+        layers: { dirs: 12, slots: 4 },
+        produce(batch) { kDirs.dispatch([LC, LC, batch.count], batch.table, this.layer('dirs'), this.layer('slots')); },
+    });
+    const nearLevels = () => {
+        kFind.dispatch([N], roomy.lookup, qBuf, roomy.layer('dirs'), roomy.layer('slots'), outBuf, 7);
+        const r = outBuf.read(new Float32Array(N * 9));
+        return Array.from({ length: N / 2 }, (_, j) => r[9 * 2 * j + 1]);
+    };
+    assert(settle(roomy, { position: [30, 104, -20], fov: 60, viewportHeight: 720 }), 'a roomier cube-sphere settles');
+    const nearBefore = nearLevels(), wantedNear = roomy.wanted;
+    const away = { position: [-30, -104, 20], fov: 60, viewportHeight: 720 };
+    assert(settle(roomy, away), 'and settles from its far side');
+    const nearKept = nearLevels();
+    assert(nearKept.every((l, j) => l === nearBefore[j]) && Math.min(...nearBefore) > 1 && roomy.stats.evicted === 0,
+           `the tiles the view left are still found while the cache has room (levels ${Math.min(...nearKept)}-` +
+           `${Math.max(...nearKept)}; ${wantedNear} then ${roomy.wanted} wanted, ${roomy.stats.evicted} evicted)`);
+    roomy.refresh();
+    roomy.update(away);
+    const nearAfter = nearLevels();
+    assert(nearAfter.every((l, j) => l < nearBefore[j]),
+           `after a refresh they are not; the coarser tiles the view wants are (levels ${Math.min(...nearAfter)}-${Math.max(...nearAfter)})`);
 
     // A layer's pool is a KernelBuffer a scene node reads in place.
     const cv = document.createElement('canvas');
