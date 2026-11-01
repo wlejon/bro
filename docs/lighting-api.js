@@ -88,7 +88,13 @@
  *    square root of the light there (de Vries-Rose): dusk and night read
  *    dim instead of lifted to day. It is kept within 1 stop brighter and
  *    3 darker than the reflected reading, so shade and night are still
- *    seen; with the atmosphere off the reflected meter stands. Volumes
+ *    seen, but brightened no further than puts the pixel at highPercent
+ *    1.5 stops over middle grey (where the tone curve's shoulder begins):
+ *    a frame half night or space, a terminator seen from orbit, reads low
+ *    on the reflected meter, and its lit half is not taken past white.
+ *    An eye above the air reads the sun through the air its ray crosses,
+ *    none where it passes over it. With the atmosphere off the reflected
+ *    meter stands. Volumes
  *    (scene.createVolume) dim the sun it reads by the share they pass from
  *    the eye toward it (over a cone of a few degrees) and the sky by the
  *    share they pass over its hemisphere, cosine-weighted as an incident

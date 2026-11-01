@@ -7,6 +7,11 @@ import atmosphere;
 const BINS: i32 = 128;
 const MIDDLE_GREY: f32 = 0.18;
 const METER_RAYS: i32 = 4;
+// How far over middle grey the incident meter's brightening may take the
+// frame's highlights (exposure_comp): 1.5 stops, where the tone curve's
+// shoulder begins (at 2.5, its white, a twilight terminator seen from orbit
+// was still a white glare).
+const HIGHLIGHT_STOPS: f32 = 1.5;
 
 struct ExposureState {
     ev: f32,
@@ -129,11 +134,16 @@ fn exposure_comp(u: ExposurePush) {
         var sum: f32 = 0.0;
         var weight: f32 = 0.0;
         let bin_width = (u.max_log2 - u.min_log2) / 128.0;
+        // The log2 luminance of the pixel at high_percent: the highlights.
+        var high_log2: f32 = u.min_log2;
         for (var b: i32 = 0; b < BINS; b += 1) {
             let n = tile[b] as f32;
             let take = max(0.0, min(below + n, hi) - max(below, lo));
             sum += take * (u.min_log2 + ((b as f32) + 0.5) * bin_width);
             weight += take;
+            if (below < hi) {
+                high_log2 = u.min_log2 + ((b as f32) + 0.5) * bin_width;
+            }
             below += n;
         }
         if (weight > 0.0) {
@@ -154,9 +164,11 @@ fn exposure_comp(u: ExposurePush) {
                     froxel: z4,
                     froxel_view_proj: mat4f(z4, z4, z4, z4),
                 };
-                let r_clamped = clamp(max(u.r, u.rb), u.rb, u.rt);
-                let tr_uv = atmosphere::transmittance_uv(atm, r_clamped, u.mu_s);
-                let tr = t_transmittance.sample_lod(tr_uv, 0.0).xyz * atmosphere::planet_shadow(atm, max(u.r, u.rb), u.mu_s);
+                // (Above the air, from where the sun's ray enters it, or whole.)
+                let entry = atmosphere::from_above(atm, max(u.r, u.rb), u.mu_s);
+                let tr_uv = atmosphere::transmittance_uv(atm, entry.x, entry.y);
+                let tr = mix(vec3<f32>(1.0), t_transmittance.sample_lod(tr_uv, 0.0).xyz, entry.z)
+                         * atmosphere::planet_shadow(atm, max(u.r, u.rb), u.mu_s);
                 let lum_vec = vec3<f32>(0.2126, 0.7152, 0.0722);
                 var e_inc: f32 = u.sun_lux * dot(tr, lum_vec);
 
@@ -196,7 +208,14 @@ fn exposure_comp(u: ExposurePush) {
                 if (ev_inc < knee) {
                     ev_inc = knee - 0.5 * (knee - ev_inc);
                 }
-                metered = clamp(ev_inc, reflected - u.brighter, reflected + u.darker);
+                // Brightening for the dark of the frame stops short of
+                // clipping its highlights: the pixel at high_percent at most
+                // HIGHLIGHT_STOPS over middle grey. Where the frame is half
+                // night or space (a terminator seen from orbit) the
+                // reflected reading is low and reflected + darker alone took
+                // the sunlit half 6 stops past white.
+                let keep = high_log2 - log2(1.2 * MIDDLE_GREY) - HIGHLIGHT_STOPS;
+                metered = clamp(ev_inc, reflected - u.brighter, max(reflected + u.darker, keep));
             }
             metered = clamp(metered, u.min_ev, u.max_ev);
         }

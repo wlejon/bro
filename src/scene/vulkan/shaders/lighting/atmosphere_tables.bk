@@ -36,8 +36,9 @@ fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
 }
 
 fn sun_trans_combined(atm: atmosphere::Atmosphere, r: f32, mu_s: f32) -> vec3<f32> {
-    let uv = atmosphere::transmittance_uv(atm, clamp(r, atm.shell.x, atm.shell.y), mu_s);
-    return t_transmittance.sample_lod(uv, 0.0).xyz * atmosphere::planet_shadow(atm, r, mu_s);
+    let e = atmosphere::from_above(atm, r, mu_s);
+    let t = t_transmittance.sample_lod(atmosphere::transmittance_uv(atm, e.x, e.y), 0.0).xyz;
+    return mix(vec3<f32>(1.0), t, e.z) * atmosphere::planet_shadow(atm, r, mu_s);
 }
 
 fn step_weight(ext: vec3<f32>, step_t: vec3<f32>, dt: f32) -> vec3<f32> {

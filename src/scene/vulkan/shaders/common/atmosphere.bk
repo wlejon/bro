@@ -161,7 +161,28 @@ pub fn transmittance_r_mu(atm: Atmosphere, uv: vec2<f32>) -> vec2<f32> {
 
 // The air's transmittance from radius r (inside the shell) along mu to the top.
 pub fn transmittance_to_top(atm: Atmosphere, table: texture2d<vec4<f32>>, s: sampler, r: f32, mu: f32) -> vec3<f32> {
-    return table.sample_lod(s, transmittance_uv(atm, clamp(r, atm.shell.x, atm.shell.y), mu), 0.0).xyz;
+    let e = from_above(atm, r, mu);
+    let t = table.sample_lod(s, transmittance_uv(atm, e.x, e.y), 0.0).xyz;
+    return mix(vec3<f32>(1.0), t, e.z);
+}
+
+// A point at radius r looking along mu, as the table takes it: inside the
+// shell, itself; above it, where its ray enters the air (at the top, the
+// cosine there). z is 1 where the ray crosses air, 0 where it never enters
+// it and the light comes through whole. Clamped to the top
+// instead, a point in orbit saw a low sun through the whole air along the
+// shell's tangent, where its ray passes over it.
+pub fn from_above(atm: Atmosphere, r: f32, mu: f32) -> vec3<f32> {
+    let rt = atm.shell.y;
+    if (r <= rt) {
+        return vec3<f32>(max(r, atm.shell.x), mu, 1.0);
+    }
+    let disc = r * r * (mu * mu - 1.0) + rt * rt;
+    if (mu >= 0.0 || disc < 0.0) {
+        return vec3<f32>(rt, 1.0, 0.0);
+    }
+    let d = -r * mu - sqrt(disc);
+    return vec3<f32>(rt, (r * mu + d) / rt, 1.0);
 }
 
 // From a point anywhere (above the shell too) along a ray that does not hit
