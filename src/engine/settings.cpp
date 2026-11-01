@@ -116,7 +116,6 @@ void Settings::applyAppOverrides(const GraphicsConfig& gfx, const InputConfig& i
     defaults_.graphics.height = gfx.height;
     defaults_.graphics.vsync = gfx.vsync;
     defaults_.graphics.resizable = gfx.resizable;
-    defaults_.graphics.maxFrameIntervalMs = gfx.maxFrameIntervalMs;
     defaults_.graphics.maxFps = gfx.maxFps;
 
     InputSettings inpDef;
@@ -131,10 +130,6 @@ void Settings::applyAppOverrides(const GraphicsConfig& gfx, const InputConfig& i
     if (inp.doubleClickDistancePx != inpDef.doubleClickDistancePx) {
         appOverrides_.input.doubleClickDistancePx = inp.doubleClickDistancePx;
         appPresence_.insert("input.doubleClickDistancePx");
-    }
-    if (inp.overlayToggleKey != inpDef.overlayToggleKey) {
-        appOverrides_.input.overlayToggleKey = inp.overlayToggleKey;
-        appPresence_.insert("input.overlayToggleKey");
     }
 
     resolve();
@@ -247,10 +242,6 @@ std::string Settings::getString(const std::string& key) const {
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g.maxFps);
         return buf;
     }
-    if (key == "graphics.maxFrameIntervalMs") {
-        char buf[64]; snprintf(buf, sizeof(buf), "%g", g.maxFrameIntervalMs);
-        return buf;
-    }
 
     if (key == "audio.masterVolume") {
         char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(a.masterVolume));
@@ -278,7 +269,6 @@ std::string Settings::getString(const std::string& key) const {
         char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(i.doubleClickDistancePx));
         return buf;
     }
-    if (key == "input.overlayToggleKey") return std::to_string(i.overlayToggleKey);
 
     if (key == "appearance.colorScheme") return resolved_.appearance.colorScheme;
 
@@ -475,7 +465,6 @@ void Settings::resolveGraphics() {
     if (userPresence_.count("graphics.fullscreen")) r.fullscreen = userOverrides_.graphics.fullscreen;
     if (userPresence_.count("graphics.vsync")) r.vsync = userOverrides_.graphics.vsync;
     if (userPresence_.count("graphics.resizable")) r.resizable = userOverrides_.graphics.resizable;
-    if (userPresence_.count("graphics.maxFrameIntervalMs")) r.maxFrameIntervalMs = userOverrides_.graphics.maxFrameIntervalMs;
     if (userPresence_.count("graphics.maxFps")) r.maxFps = userOverrides_.graphics.maxFps;
 }
 
@@ -501,12 +490,10 @@ void Settings::resolveInput() {
     if (appPresence_.count("input.scrollSpeed")) r.scrollSpeed = appOverrides_.input.scrollSpeed;
     if (appPresence_.count("input.doubleClickThresholdMs")) r.doubleClickThresholdMs = appOverrides_.input.doubleClickThresholdMs;
     if (appPresence_.count("input.doubleClickDistancePx")) r.doubleClickDistancePx = appOverrides_.input.doubleClickDistancePx;
-    if (appPresence_.count("input.overlayToggleKey")) r.overlayToggleKey = appOverrides_.input.overlayToggleKey;
 
     if (userPresence_.count("input.scrollSpeed")) r.scrollSpeed = userOverrides_.input.scrollSpeed;
     if (userPresence_.count("input.doubleClickThresholdMs")) r.doubleClickThresholdMs = userOverrides_.input.doubleClickThresholdMs;
     if (userPresence_.count("input.doubleClickDistancePx")) r.doubleClickDistancePx = userOverrides_.input.doubleClickDistancePx;
-    if (userPresence_.count("input.overlayToggleKey")) r.overlayToggleKey = userOverrides_.input.overlayToggleKey;
 
     // Merge action bindings: engine defaults < app overrides < user overrides
     r.actionBindings = defaults_.input.actionBindings;
@@ -569,7 +556,6 @@ void Settings::applyToLayer(SettingsData& data, std::set<std::string>& presence,
     if (key == "graphics.fullscreen") { data.graphics.fullscreen = (value == "true"); return; }
     if (key == "graphics.vsync") { data.graphics.vsync = (value == "true"); return; }
     if (key == "graphics.resizable") { data.graphics.resizable = (value == "true"); return; }
-    if (key == "graphics.maxFrameIntervalMs") { data.graphics.maxFrameIntervalMs = std::stod(value); return; }
     if (key == "graphics.maxFps") { data.graphics.maxFps = std::stod(value); return; }
 
     // Audio
@@ -582,7 +568,6 @@ void Settings::applyToLayer(SettingsData& data, std::set<std::string>& presence,
     if (key == "input.scrollSpeed") { data.input.scrollSpeed = std::stof(value); return; }
     if (key == "input.doubleClickThresholdMs") { data.input.doubleClickThresholdMs = std::stod(value); return; }
     if (key == "input.doubleClickDistancePx") { data.input.doubleClickDistancePx = std::stof(value); return; }
-    if (key == "input.overlayToggleKey") { data.input.overlayToggleKey = static_cast<uint32_t>(std::stoul(value)); return; }
 
     // Appearance
     if (key == "appearance.colorScheme") {

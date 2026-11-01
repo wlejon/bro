@@ -88,7 +88,6 @@ let modes = bro.settings.getDisplayModes();
 | `graphics.fullscreen` | bool | false | Fullscreen mode |
 | `graphics.vsync` | bool | true | Vertical sync (FIFO_RELAXED where the surface has it, else FIFO; off is MAILBOX or IMMEDIATE) |
 | `graphics.resizable` | bool | true | Whether the window can be resized |
-| `graphics.maxFrameIntervalMs` | number | 8.0 | Layout/raster throttle in ms (0 = uncapped) |
 | `graphics.maxFps` | number | 0 | Present-rate cap independent of vsync (0 = uncapped). Also settable via the `maxFps` manifest key. The window is always clamped to 30 fps while it lacks input focus, regardless of this value. |
 
 ### Audio (`audio.*`)
@@ -107,7 +106,6 @@ let modes = bro.settings.getDisplayModes();
 | `input.scrollSpeed` | float | 48.0 | Pixels per mouse wheel tick |
 | `input.doubleClickThresholdMs` | number | 500.0 | Max time between clicks for double-click (ms) |
 | `input.doubleClickDistancePx` | float | 5.0 | Max movement between clicks for double-click (px) |
-| `input.overlayToggleKey` | int | 1073741889 | SDL keycode for system overlay toggle (F8) |
 
 ### Appearance (`appearance.*`)
 
@@ -302,7 +300,7 @@ Settings changed via `bro.settings.set()` take effect immediately:
 | `graphics.vsync` | Recreates the swapchain with the new present mode |
 | `graphics.width/height` | Resizes window (windowed mode only) |
 | `graphics.resizable` | Toggles window resizability |
-| `graphics.maxFrameIntervalMs` | Changes render throttle |
+| `graphics.maxFps` | Changes the present-rate cap |
 | `audio.masterVolume` | Adjusts master gain |
 | `audio.muted` | Mutes/unmutes audio |
 | `input.*` | Updates input behavior immediately |

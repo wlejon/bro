@@ -277,12 +277,10 @@ void Engine::construct(const EngineConfig& config) {
     auto& inp = settings_->input();
     viewportWidth_ = gfx.width;
     viewportHeight_ = gfx.height;
-    uiFrameIntervalMs_ = gfx.maxFrameIntervalMs;
     frameCapIntervalMs_ = gfx.maxFps > 0.0 ? 1000.0 / gfx.maxFps : 0.0;
     inputConfig_.scrollSpeed = inp.scrollSpeed;
     inputConfig_.doubleClickThresholdMs = inp.doubleClickThresholdMs;
     inputConfig_.doubleClickDistancePx = inp.doubleClickDistancePx;
-    inputConfig_.overlayToggleKey = inp.overlayToggleKey;
 
     engineNowMs_ = displayMode_ == DisplayMode::Headless ? virtualTime_
                                                          : util::currentTimeMs();
@@ -540,8 +538,6 @@ void Engine::construct(const EngineConfig& config) {
                                        static_cast<uint32_t>(g.height));
             if ((key == "resizable" || key == "*") && window_)
                 window_->setResizable(g.resizable);
-            if (key == "maxFrameIntervalMs" || key == "*")
-                uiFrameIntervalMs_ = g.maxFrameIntervalMs;
             if (key == "maxFps" || key == "*")
                 frameCapIntervalMs_ = g.maxFps > 0.0 ? 1000.0 / g.maxFps : 0.0;
         }
@@ -555,7 +551,6 @@ void Engine::construct(const EngineConfig& config) {
             inputConfig_.scrollSpeed = inpSettings.scrollSpeed;
             inputConfig_.doubleClickThresholdMs = inpSettings.doubleClickThresholdMs;
             inputConfig_.doubleClickDistancePx = inpSettings.doubleClickDistancePx;
-            inputConfig_.overlayToggleKey = inpSettings.overlayToggleKey;
         }
         if (category == "appearance" || category == "*") {
             applyColorScheme();

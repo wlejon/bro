@@ -105,7 +105,6 @@ void jsonGraphics(const engine::GraphicsSettings& g, std::string& out) {
     out += ",\"fullscreen\":"; jsonBool(g.fullscreen, out);
     out += ",\"vsync\":"; jsonBool(g.vsync, out);
     out += ",\"resizable\":"; jsonBool(g.resizable, out);
-    out += ",\"maxFrameIntervalMs\":"; jsonNumber(g.maxFrameIntervalMs, out);
     out += ",\"maxFps\":"; jsonNumber(g.maxFps, out);
     out += '}';
 }
@@ -122,7 +121,6 @@ void jsonInput(const engine::InputSettings& i, std::string& out) {
     out += "{\"scrollSpeed\":"; jsonNumber(i.scrollSpeed, out);
     out += ",\"doubleClickThresholdMs\":"; jsonNumber(i.doubleClickThresholdMs, out);
     out += ",\"doubleClickDistancePx\":"; jsonNumber(i.doubleClickDistancePx, out);
-    out += ",\"overlayToggleKey\":"; jsonNumber(static_cast<double>(i.overlayToggleKey), out);
     out += '}';
 }
 

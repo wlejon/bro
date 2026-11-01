@@ -187,11 +187,11 @@ select {
 
     var caps = [
         { label: 'Uncapped', value: 0 },
-        { label: '30 FPS', value: 33.33 },
-        { label: '60 FPS', value: 16.67 },
-        { label: '120 FPS', value: 8.33 },
-        { label: '144 FPS', value: 6.94 },
-        { label: '240 FPS', value: 4.17 }
+        { label: '30 FPS', value: 30 },
+        { label: '60 FPS', value: 60 },
+        { label: '120 FPS', value: 120 },
+        { label: '144 FPS', value: 144 },
+        { label: '240 FPS', value: 240 }
     ];
     for (var i = 0; i < caps.length; i++) {
         var opt = document.createElement('option');
@@ -234,10 +234,10 @@ select {
             vsyncCb.className = 'checkbox';
         }
 
-        var interval = all.graphics.maxFrameIntervalMs;
+        var maxFps = all.graphics.maxFps;
         var best = '0';
         for (var i = 0; i < caps.length; i++) {
-            if (Math.abs(caps[i].value - interval) < 0.5) {
+            if (Math.abs(caps[i].value - maxFps) < 0.5) {
                 best = caps[i].value.toString();
                 break;
             }
@@ -262,7 +262,7 @@ select {
     });
 
     fpsCap.addEventListener('change', function() {
-        bro.settings.set('graphics.maxFrameIntervalMs', parseFloat(fpsCap.value));
+        bro.settings.set('graphics.maxFps', parseFloat(fpsCap.value));
     });
 
     resetBtn.addEventListener('click', function() {

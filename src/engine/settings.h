@@ -24,7 +24,6 @@ struct GraphicsSettings {
     bool fullscreen = false;
     bool vsync = true;
     bool resizable = true;
-    double maxFrameIntervalMs = 8.0;
     double maxFps = 0.0;  // present-rate cap independent of vsync (0 = uncapped)
 };
 
@@ -55,7 +54,6 @@ struct InputSettings {
     float scrollSpeed = 48.0f;
     double doubleClickThresholdMs = 500.0;
     float doubleClickDistancePx = 5.0f;
-    uint32_t overlayToggleKey = 0x40000041u; // platform::kc::F8
     std::vector<ActionBinding> actionBindings;
 };
 

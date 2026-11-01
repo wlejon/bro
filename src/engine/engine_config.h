@@ -47,7 +47,6 @@ struct InputConfig {
     float scrollSpeed = 48.0f;             // pixels per mouse wheel tick
     double doubleClickThresholdMs = 500.0; // max time between clicks for dblclick
     float doubleClickDistancePx = 5.0f;    // max movement between clicks for dblclick
-    uint32_t overlayToggleKey = 0x40000041u; // SDLK_F8; 0 = disabled
 };
 
 struct EngineConfig {
