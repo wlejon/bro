@@ -16,7 +16,9 @@ namespace bro::layout {
 // browsers, the document loads nothing: its <image>s show data: URIs only.
 
 // Paint a decoded SVG image (its `svgMarkup`) into (x, y, w, h). The parsed
-// document is kept per image (by its pixels id), so repaints do not reparse.
+// document is kept per image (by its pixels id), so repaints do not reparse;
+// into a RecordingRenderer, so are the commands painted at a size, replayed
+// as a span (Cmd_ReplaySpan) where the image is drawn again.
 void paintSvgImage(render::Renderer* r, const render::DecodedImage& img,
                    float x, float y, float w, float h);
 

@@ -3,7 +3,9 @@
 #include "layout/svg_paint.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "render/command_buffer.h"
 #include "render/image_store.h"
+#include "render/recording_renderer.h"
 #include "render/renderer.h"
 #include "render/svg_image.h"
 #include "util/string_utils.h"
@@ -111,17 +113,43 @@ bool painter(render::Renderer* r, const char* data, size_t len, float w, float h
 void paintSvgImage(render::Renderer* r, const render::DecodedImage& img, float x, float y, float w, float h) {
     if (!r || img.svgMarkup.empty()) return;
     // Parsed once per image (the page thread's), bounded: an evicted image
-    // reparses if it paints again.
-    thread_local std::unordered_map<uint64_t, std::shared_ptr<SvgImageDoc>> cache;
-    std::shared_ptr<SvgImageDoc> doc;
-    if (auto it = cache.find(img.id); it != cache.end()) {
-        doc = it->second;
-    } else {
-        doc = parseSvgImage(img.svgMarkup.data(), img.svgMarkup.size());
+    // reparses if it paints again. Recorded once per image and size too: a
+    // recording renderer gets the commands it recorded the first time, at
+    // the box's corner, rather than a walk of the document every repaint.
+    // A new decode is a new image (its pixels id), so a changed image
+    // records again.
+    struct Entry {
+        std::shared_ptr<SvgImageDoc> doc;
+        float recW = 0, recH = 0;
+        std::shared_ptr<const render::CommandBuffer> recorded;
+    };
+    thread_local std::unordered_map<uint64_t, Entry> cache;
+    auto it = cache.find(img.id);
+    if (it == cache.end()) {
         if (cache.size() >= 256) cache.clear();
-        cache[img.id] = doc;
+        it = cache.emplace(img.id, Entry{parseSvgImage(img.svgMarkup.data(), img.svgMarkup.size())}).first;
     }
-    if (doc) paintDoc(r, *doc, x, y, w, h);
+    Entry& e = it->second;
+    if (!e.doc) return;
+    auto* rec = dynamic_cast<render::RecordingRenderer*>(r);
+    if (!rec) {
+        paintDoc(r, *e.doc, x, y, w, h);
+        return;
+    }
+    if (!e.recorded || e.recW != w || e.recH != h) {
+        auto span = std::make_shared<render::CommandBuffer>();
+        render::CommandBuffer* outer = rec->buffer();
+        rec->setBuffer(span.get());
+        paintDoc(rec, *e.doc, 0, 0, w, h);
+        rec->setBuffer(outer);
+        e.recorded = std::move(span);
+        e.recW = w;
+        e.recH = h;
+    }
+    rec->save();
+    rec->translate(x, y);
+    rec->recordSpan(e.recorded);
+    rec->restore();
 }
 
 void installSvgImagePainter() { render::setSvgPainter(&painter); }
