@@ -22,8 +22,15 @@ namespace {
 // The engine while it runs: the device, its buffers and programs hold this,
 // and the shutdown hook clears it. The context is looked up at each use,
 // since realms are installed before the engine's Vulkan context comes up.
+struct Program;
+
 struct Device {
     engine::Engine* engine = nullptr;
+    // Every program made (page thread): one never dispatched holds its
+    // driver objects in its build until the shutdown hook destroys them,
+    // while the device still stands (a handle's program is made with the
+    // handle, KernelModule.kernel, whether or not it is ever run).
+    std::vector<std::weak_ptr<Program>> programs;
 
     render::VulkanContext* context() const {
         render::VulkanContext* ctx = engine ? engine->vulkanContext() : nullptr;
@@ -161,6 +168,8 @@ public:
         program->build = std::async(std::launch::async, [compute, desc = std::move(desc)] {
             return compute->buildPipeline(desc);
         });
+        std::erase_if(device_->programs, [](const std::weak_ptr<Program>& p) { return p.expired(); });
+        device_->programs.push_back(program);
         return program;
     }
 
@@ -295,6 +304,15 @@ void installKernelGpu(engine::Engine& engine) {
     s_device->engine = &engine;
     brokernel::api::setGpuDevice(std::make_shared<KernelGpu>(s_device));
     engine.addShutdownHook([device = s_device] {
+        // A program never dispatched still holds its build: destroyed now,
+        // before the device goes. One a dispatch adopted is the compute's
+        // own and goes with it.
+        for (const std::weak_ptr<Program>& weak : device->programs) {
+            if (std::shared_ptr<Program> p = weak.lock(); p && p->build.valid()) {
+                render::ComputePipelineBuild unused = p->build.get();
+            }
+        }
+        device->programs.clear();
         device->engine = nullptr;
         brokernel::api::setGpuDevice(nullptr);
     });
