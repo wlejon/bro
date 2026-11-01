@@ -5,7 +5,7 @@
 // the instanced-mesh operations (updateInstance, setInstancedMesh,
 // setAtlasGrid, setScatterSegments, setTubeSegments, updateInstances) and
 // PhysicsNode.syncToPhysics, plus the setter-method spellings (setAlphaCutoff,
-// setDoubleSided) apps used before the accessors existed.
+// setDoubleSided) beside the accessors.
 //
 // Entered after js/scene.js, which is what put SceneNode on globalThis, and
 // js/scene_graph.js (installSceneModule, host_js_modules.cpp), which is what

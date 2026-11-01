@@ -1,11 +1,11 @@
 // HostClass: the three-call class shape from host_image.cpp, factored so the
 // rest of the layer can take it a family at a time.
 //
-// WHAT IT REPLACES. Every wrapper here used to be a bare handle cell with its
-// methods closed over PER INSTANCE — a fresh copy of every method object for
-// every AudioParam, every WebGL buffer, every Blob — and `instanceof` answering
-// false for all of them, because the registered name was either a namespace
-// object or a makeBrandConstructor stub that had no prototype to brand with.
+// WHY. A bare handle cell with its methods closed over PER INSTANCE would
+// mint a fresh copy of every method object for every AudioParam, every WebGL
+// buffer, every Blob, and `instanceof` would answer false for all of them,
+// because a namespace object or a makeBrandConstructor stub has no prototype
+// to brand with.
 //
 // THE SHAPE, and why each step is what it is:
 //
@@ -26,7 +26,7 @@
 // by (class, realm), held per thread because a realm belongs to one thread. A
 // prototype is mutable and app code can reach it, so a realm sharing another's
 // would let one app change what another's `div.appendChild` does; and a Worker
-// installing the same file-scope class used to overwrite the main thread's
+// installing the same file-scope class would overwrite the main thread's
 // pointers with its own heap's. A destroyed realm's entries are dropped
 // (ev::addRealmDestroyHook), so its classes are collectable with it.
 //
@@ -112,8 +112,8 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
     ev::addRealmDestroyHook(&dropRealmSlots);
     Slots& s = slots();
     releaseSlots(s);
-    // A class the program may name but not construct — what makeBrandConstructor
-    // used to be, except that this one can actually brand, because it has a
+    // A class the program may name but not construct — like makeBrandConstructor,
+    // except that this one can actually brand, because it has a
     // prototype its instances are born on.
     ev::NativeFn ctorBody = body;
     if (!ctorBody) {

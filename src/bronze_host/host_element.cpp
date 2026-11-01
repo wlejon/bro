@@ -339,10 +339,8 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
 }
 
 void decorateElementProto(ObjectBuilder& b) {
-    // The event-target trio, shared like everything else here. It used to be
-    // the one part of the element surface that was per instance, because
-    // installElementEventTarget took an ElementSource that captured a single
-    // element; passing no source makes it read the receiver instead, so
+    // The event-target trio, shared like everything else here. Passing no
+    // ElementSource makes installElementEventTarget read the receiver, so
     // `a.addEventListener === b.addEventListener` for any two elements — which
     // is what the web says and what `document.createElement('img')` has to
     // satisfy against `new Image()`.

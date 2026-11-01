@@ -10,7 +10,7 @@
 // `AbortController`, `WebSocket`, `EventSource`, `FormData`, `structuredClone`,
 // the streams, `crypto`, `indexedDB`, `TreeWalker`, `EventTarget`,
 // `MessageChannel` — which brokit already ships as bronze-compiled JS and C++
-// (../brokit/src/api), and which this layer used to duplicate by hand.
+// (../brokit/src/api).
 //
 // What is NOT installed from brokit, and why: `console` aside, every brokit
 // installer that would REPLACE a value this layer binds to the engine is

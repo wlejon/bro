@@ -26,12 +26,10 @@
 // mirrors how the other optional towers report themselves.
 //
 // -----------------------------------------------------------------------------
-// Tensors: there is no AI tensor type any more
+// Tensors: there is no AI tensor type
 // -----------------------------------------------------------------------------
 //
-// The old surface had its own `AITensor` class with rows/cols/get/set/
-// toArray/fromArray/copyFrom. It is GONE. Every argument that used to take
-// one now takes either:
+// Every tensor argument takes either:
 //
 //   - a bro.tensor GpuTensor handle (see docs/tensor-api.js), or
 //   - a plain Float32Array, which the binding views IN PLACE as an

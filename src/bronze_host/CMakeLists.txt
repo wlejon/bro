@@ -672,11 +672,6 @@ else()
 endif()
 
 # --- No app targets here, deliberately ---
-# What used to live below this line was the link-time app binding:
-# BRO_BRONZE_APP_OBJ, BRO_BRONZE_BUILD_APP, a bro_bronze_add_host() function and
-# a BRO_BRONZE_APPS list that produced one bro-bronze-host-<name> executable per
-# compiled app. All of it existed to answer a question the build no longer asks.
-#
 # An app is a directory that carries its own module now (app.dll / app.so /
 # app.dylib, src/bronze_host/app_module.h), which the stock bro and bro-headless
 # load at startup. "Another app" is another folder, not another link of

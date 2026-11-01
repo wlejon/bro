@@ -43,7 +43,7 @@ class HostClass {
 public:
     // Mint, decorate, and register `name`. `body` runs for `new Name(...)`;
     // pass nullptr for a class the program may name but not construct, which
-    // is what makeBrandConstructor used to be — except that this one brands.
+    // is like makeBrandConstructor — except that this one brands.
     // Call once, from the family's install function.
     void install(const char* name, uint32_t arity, ev::NativeFn body,
                  const std::function<void(ObjectBuilder&)>& decorate);

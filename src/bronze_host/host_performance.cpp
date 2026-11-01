@@ -7,9 +7,9 @@
 // with frames, which is also what keeps it honest under bro.time pause and
 // headless virtual time.
 //
-// The User Timing half used to come from brokit's timers polyfill, which bro
-// no longer installs (host_timers.cpp owns the timers, on the engine clock);
-// it is kept here on the SAME clock, because a `measure` between two marks
+// The User Timing half lives here, not in brokit's timers polyfill, which bro
+// does not install (host_timers.cpp owns the timers, on the engine clock);
+// it is kept on the SAME clock, because a `measure` between two marks
 // taken across advanceTime() steps must answer the virtual span, not a wall
 // one. Entries are PerformanceEntry-shaped plain objects: {name, entryType,
 // startTime, duration} plus `detail` on a mark, which is what every profiler

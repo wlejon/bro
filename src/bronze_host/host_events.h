@@ -99,11 +99,7 @@ dom::Document* listenerRealm(const ListenerRef& ref);
 
 // `dispatchEvent(desc)` from compiled code, where `desc` is a plain
 // `{type, bubbles, cancelable, detail}` object rather than a `new
-// CustomEvent(...)`. That was forced when nothing here could be built on a
-// chosen prototype; it no longer is — embed::makeHandle takes one, and
-// host_image.cpp works the shape end to end — so a real CustomEvent class
-// is buildable and merely unwritten. The descriptor stays until it is: it is
-// the documented channel and compiled code already speaks it. Answers
+// CustomEvent(...)`: the documented channel, which compiled code speaks. Answers
 // `!defaultPrevented`, as the web's dispatchEvent does, or a pending
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
