@@ -1,5 +1,5 @@
 // Exponential-squared + height fog (scene.setFog {density, heightFalloff,
-// startDistance}) — exercises the fogFactorFor path in mesh.frag. All
+// startDistance}) — exercises fog_factor in shaders/common/lighting.bk. All
 // assertions are comparative (fog on vs off / low vs high) so they're robust
 // to GPU variance. Emissive white boxes make the un-fogged base color
 // deterministic; linear tonemap + gamma 1 keeps readback values linear.

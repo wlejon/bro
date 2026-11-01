@@ -1,6 +1,6 @@
 // The instanced draw modes beyond plain instance rows, by their pixels:
 //   - branch tubes (setTubeSegments): walls built in the vertex shader from
-//     segment records alone, and their shadow (shadow_tube.vert);
+//     segment records alone, and their shadow (shadow.bk's shadow_tube_vert);
 //   - foliage scatter (setScatterSegments): one leaf per instance, placed in
 //     the vertex shader along its segment, deterministically;
 //   - static batching (staticBatch): every instance merged into one mesh with

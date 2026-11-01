@@ -2,7 +2,7 @@
 // node transform (the parser coerced the array with JS_ToFloat64 → NaN),
 // so the mesh silently vanished. Now the array form sets per-axis scale,
 // and the renderer transforms normals with the model's inverse-transpose
-// (uNormalMat in mesh.vert) so lighting stays correct under non-uniform
+// (draw/mesh_main.bk) so lighting stays correct under non-uniform
 // scale instead of skewing normals toward the stretched axis.
 
 const canvas = document.createElement('canvas');

@@ -120,7 +120,7 @@ endif()
 # which `cmake --build` passes only with --parallel; the ~210 projects' up-to-
 # date checks alone then take ~27 s, and independent links queue behind each
 # other. MSBuild reads a Directory.Build.rsp beside the project it builds, so
-# every build in this tree is parallel (a no-op build 27 s to 8 s, a one-.glsl
+# every build in this tree is parallel (a no-op build 27 s to 8 s, a one-shader
 # touch 64 s to 36 s).
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/Directory.Build.rsp" CONTENT "-m\n")

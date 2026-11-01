@@ -1,4 +1,4 @@
-// A species' bark settings reach the bark build of mesh.frag through the
+// A species' bark settings reach the bark shader (draw/bark.bk) through the
 // vegetation records' bark word (broflora packBarkWord): barkFurrow cuts the
 // plates deeper (more contrast on the trunk), barkMoss greens it. Drawn as
 // GPU tubes (emitBranchTubes, MeshKind::Tube), compared on the trunk's

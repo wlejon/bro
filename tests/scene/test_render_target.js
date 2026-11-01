@@ -1,10 +1,10 @@
 // Test render-target plumbing in the 3D scene renderer — the depth-texture
 // FBO attachment (post-tonemap unlit-overlay occlusion), soft particles
-// (scene-depth alpha fade in particles3d.frag, gated per Particles3DNode by
+// (scene-depth alpha fade in draw/particles.bk, gated per Particles3DNode by
 // `softness`), setRenderScale (internal FBO chain at canvas * scale), and
 // setMSAA (multisampled HDR passes resolved before tonemap). Exercises
-// src/scene/scene_renderer.cpp (ensureMeshFBO / ensureMSAAFBO / resolve
-// ordering), vulkan/frame/pass_snapshot.cpp (scene-depth snapshot blit),
+// src/scene/scene_renderer.cpp (render targets and resolve ordering),
+// vulkan/frame/pass_snapshot.cpp (scene-depth snapshot blit),
 // vulkan/post/pass_postfx.cpp (shared depth attachment, scaled chains), and
 // the setRenderScale / setMSAA / softness natives in src/bronze_host/native_scene_*.cpp.
 

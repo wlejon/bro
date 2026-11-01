@@ -1,6 +1,6 @@
 // Test scene.createSkinnedMesh — GPU skinning (SkinnedMeshNode).
-// Exercises src/scene/nodes/skinned_mesh_node.cpp, the SKINNED variants of
-// mesh.vert / shadow.vert, and the createSkinnedMesh / setSkinningMatrices
+// Exercises src/scene/nodes/skinned_mesh_node.cpp, the skinned vertex stages
+// of draw/mesh_main.bk and shadow/shadow.bk, and the createSkinnedMesh / setSkinningMatrices
 // bindings in scene subsystem.
 //
 // Procedural 2-bone test rig: a flat vertical strip (x in [-0.2,0.2],
