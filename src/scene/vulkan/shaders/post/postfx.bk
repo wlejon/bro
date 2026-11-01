@@ -528,6 +528,34 @@ fn volume_reproject(in_uv: vec2<f32>, depth: f32, inv_view_proj: mat4f, prev_vie
     return vec3<f32>(uv, 1.0);
 }
 
+// tex at uv by Catmull-Rom, in five bilinear taps (the four corners of its
+// 4 x 4 have weights too small to matter; Jimenez 2016, "Filmic SMAA"): the
+// history a moving view resamples every render keeps its detail, which
+// bilinear taps blur a little more each render. At a texel's centre it is
+// the texel.
+fn sample_catmull_rom(tex: sampler2d<vec4<f32>>, uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(tex.size(0).x as f32, tex.size(0).y as f32);
+    let p = uv * size;
+    let c = floor(p - vec2<f32>(0.5, 0.5)) + vec2<f32>(0.5, 0.5);
+    let f = p - c;
+    let w0 = f * (vec2<f32>(-0.5, -0.5) + f * (vec2<f32>(1.0, 1.0) - f * 0.5));
+    let w1 = vec2<f32>(1.0, 1.0) + f * f * (vec2<f32>(-2.5, -2.5) + f * 1.5);
+    let w2 = f * (vec2<f32>(0.5, 0.5) + f * (vec2<f32>(2.0, 2.0) - f * 1.5));
+    let w3 = f * f * (vec2<f32>(-0.5, -0.5) + f * 0.5);
+    let w12 = w1 + w2;
+    let t0 = (c - vec2<f32>(1.0, 1.0)) / size;
+    let t3 = (c + vec2<f32>(2.0, 2.0)) / size;
+    let t12 = (c + w2 / w12) / size;
+    let a = w12.x * w0.y;
+    let b = w0.x * w12.y;
+    let m = w12.x * w12.y;
+    let d = w3.x * w12.y;
+    let e = w12.x * w3.y;
+    let sum = tex.sample(vec2<f32>(t12.x, t0.y)) * a + tex.sample(vec2<f32>(t0.x, t12.y)) * b
+            + tex.sample(t12) * m + tex.sample(vec2<f32>(t3.x, t12.y)) * d + tex.sample(vec2<f32>(t12.x, t3.y)) * e;
+    return sum / (a + b + m + d + e);
+}
+
 // The march nearest frame pixel px (texel), and whether it is px's own.
 fn volume_texel(px: vec2<i32>, o: vec2<i32>, last: vec2<i32>) -> vec2<i32> {
     return clamp(vec2<i32>((px.x - o.x + 1) / 2, (px.y - o.y + 1) / 2), vec2<i32>(0), last);
@@ -619,7 +647,7 @@ fn volume_own(px: vec2<i32>, o: vec2<i32>) -> f32 {
             weight = weight + w;
         }
     }
-    var l = u_last.sample(r.xy) + delta / max(weight, 1e-6);
+    var l = sample_catmull_rom(u_last, r.xy) + delta / max(weight, 1e-6);
     let moved = length((r.xy - in_uv) * full);
     l = mix(l, clamp(l, lo, hi), clamp(moved, 0.0, 1.0));
     set_frag_output(0, vec4<f32>(max(l.xyz, vec3<f32>(0.0)), clamp(l.w, 0.0, 1.0)));
@@ -691,7 +719,7 @@ fn volume_own(px: vec2<i32>, o: vec2<i32>) -> f32 {
         set_frag_output(1, vec4<f32>(marches / 16.0, 0.0, 0.0, 0.0));
         return;
     }
-    let h = clamp(u_history.sample(r.xy), lo, hi);
+    let h = clamp(sample_catmull_rom(u_history, r.xy), lo, hi);
     let held = floor(u_count.sample(r.xy).x * 16.0 + 0.5);
     var out: vec4<f32> = h;
     marches = held;
