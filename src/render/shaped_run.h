@@ -394,24 +394,14 @@ private:
     // every hit would cost more than the occasional refill.
     static constexpr std::size_t kMaxEntries = 1 << 15;
 
-    // 1:1 codepoint→glyph with coverage-based fallback — the pre-shaping
-    // behaviour, kept as the BRO_WITH_TEXT_SHAPING=OFF path so the renderers
-    // have exactly one text code path either way.
-    static void buildUnshaped(ShapedRun& run, ShapedRun::Builder& b,
-                              std::string_view utf8, const SkFont& primary,
-                              SkFontStyle style, SkFontMgr* fontMgr,
-                              FontFallbackCache& fallback);
-
     std::unordered_map<Key, std::unique_ptr<ShapedRun>, KeyHash> cache_;
     uint64_t hits_ = 0;
     uint64_t misses_ = 0;
 
-#if BRO_WITH_TEXT_SHAPING
     sk_sp<SkUnicode>          unicode_;
     std::unique_ptr<SkShaper> shaper_;
     bool                      shaperTried_ = false;
     bool ensureShaper();
-#endif
 };
 
 } // namespace bro::render

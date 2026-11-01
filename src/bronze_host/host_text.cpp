@@ -63,10 +63,6 @@ static const render::ShapedRun* shapeArgs(std::span<const Value> a, std::string&
 Value makeBroTextValue() {
     ObjectBuilder t;
 
-    t.accessor("bidiAvailable", [](Value, std::span<const Value>) -> Value {
-        return ev::fromBool(render::bidi::available());
-    }, nullptr);
-
     t.def("shape", 2, [](Value, std::span<const Value> a) -> Value {
         std::string text;
         Opts opts;

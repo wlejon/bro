@@ -1,7 +1,6 @@
 #pragma once
 
 #include "layout/box.h"
-#include "layout/cluster_caret.h"
 #include "render/renderer.h"
 #include "render/bidi.h"
 #include "render/shaped_run.h"
@@ -83,12 +82,10 @@ public:
 
     // --- caret geometry, answered from the shaper's cluster map -------------
     //
-    // Each of these falls back to the interface default — prefix measurement,
-    // the pre-shaping behaviour — when the shaped run is unavailable, which is
-    // the case for a backend with no shaper as well as when the cluster path
-    // is switched off. See layout/cluster_caret.h.
+    // A run that could not be shaped (empty text) answers with the interface
+    // default.
 
-    bool clusterAware() const override { return clusterCaretEnabled(); }
+    bool clusterAware() const override { return true; }
 
     CaretXPair caretXAtOffset(std::string_view text, int byteOffset,
                               std::string_view fontFamily, float fontSize,
@@ -208,7 +205,7 @@ public:
     // the Unicode bidi character classes, which live down in bro::render. This
     // is the whole of the connection between the two.
 
-    bool bidiAware() const override { return render::bidi::available(); }
+    bool bidiAware() const override { return true; }
 
     void bidiLevels(std::string_view text, bool rtlBase,
                     std::vector<uint8_t>& out) override {
@@ -232,7 +229,7 @@ private:
     // immediate and nothing here holds on to one.
     const render::ShapedRun* shaped(std::string_view text, std::string_view family,
                                     float size, std::string_view weight) {
-        if (!clusterCaretEnabled() || text.empty()) return nullptr;
+        if (text.empty()) return nullptr;
         measureCalls++;
         return renderer_->shapeText(text, makeRef(family, size, weight));
     }

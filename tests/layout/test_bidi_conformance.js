@@ -25,7 +25,6 @@ const fs = require('fs');
 const path = require('path');
 
 assert(typeof bro.text === 'object' && bro.text, 'bro.text exists');
-assert(bro.text.bidiAvailable === true, 'bidi is compiled in');
 
 // Headless has no __dirname, and the suite runner inherits whatever working
 // directory the developer launched it from, so find the corpus by walking up

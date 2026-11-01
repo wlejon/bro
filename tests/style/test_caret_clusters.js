@@ -11,9 +11,6 @@
 // methods provably agree there. The interesting assertions — kerned pairs,
 // ligatures — are the ones that are allowed to differ, and they may only
 // differ toward the shaped truth.
-//
-// Set BRO_CLUSTER_CARET=0 to run the whole engine on the prefix fallback
-// instead; see src/layout/cluster_caret.h.
 
 const ARIAL   = { family: 'Arial', size: 16 };
 const CALIBRI = { family: 'Calibri', size: 40 };

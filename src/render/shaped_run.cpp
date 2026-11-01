@@ -26,13 +26,11 @@
 #include <unordered_map>
 #endif
 
-#if BRO_WITH_TEXT_SHAPING
 #include <modules/skshaper/include/SkShaper.h>
 #include <modules/skshaper/include/SkShaper_harfbuzz.h>
 #include <modules/skshaper/include/SkShaper_skunicode.h>
 #include <modules/skunicode/include/SkUnicode.h>
 #include <modules/skunicode/include/SkUnicode_bidi.h>
-#endif
 
 namespace bro::render {
 
@@ -550,7 +548,6 @@ std::vector<ShapedRun::ClusterOutline> ShapedRun::clusterOutlines(Spacing spacin
 
 namespace {
 
-#if BRO_WITH_TEXT_SHAPING
 // Collects SkShaper output straight into a ShapedRun's flat arrays. The
 // alternative (SkTextBlobBuilderRunHandler) throws away the cluster map, which
 // is the entire reason this layer exists.
@@ -621,7 +618,6 @@ void appendCssFeatures(std::string_view list, std::size_t textLen,
                        value, 0, textLen});
     }
 }
-#endif  // BRO_WITH_TEXT_SHAPING
 
 }  // namespace
 
@@ -649,7 +645,6 @@ TextShapingEngine::~TextShapingEngine() = default;
 
 void TextShapingEngine::clear() { cache_.clear(); }
 
-#if BRO_WITH_TEXT_SHAPING
 bool TextShapingEngine::ensureShaper() {
     if (shaperTried_) return shaper_ != nullptr;
     shaperTried_ = true;
@@ -658,12 +653,12 @@ bool TextShapingEngine::ensureShaper() {
     // tables plus the ICU bidi subset are all it needs.
     unicode_ = SkUnicodes::Bidi::Make();
     if (!unicode_) {
-        LOG_WARN("SkUnicode bidi factory unavailable — text falls back to unshaped glyphs");
+        LOG_ERROR("SkUnicode bidi factory unavailable: no text is drawn");
         return false;
     }
     shaper_ = SkShapers::HB::ShapeDontWrapOrReorder(unicode_, nullptr);
     if (!shaper_) {
-        LOG_WARN("HarfBuzz shaper unavailable — text falls back to unshaped glyphs");
+        LOG_ERROR("HarfBuzz shaper unavailable: no text is drawn");
         return false;
     }
     return true;
@@ -697,7 +692,6 @@ private:
     std::size_t currentEnd_ = 0;
     std::size_t utf8Bytes_ = 0;
 };
-#endif
 
 const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
                                           const SkFont& primary,
@@ -727,8 +721,6 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
     b.setText(utf8);
     b.setBaseDirection(direction);
 
-    bool shaped = false;
-#if BRO_WITH_TEXT_SHAPING
     if (ensureShaper()) {
         // Split on font coverage using the renderer-wide FontFallbackCache so
         // repeated glyph fallbacks across DOM nodes (e.g. a Unicode grid) hit
@@ -768,16 +760,7 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
                            *language, features.empty() ? nullptr : features.data(),
                            features.size(), std::numeric_limits<SkScalar>::max(), &handler);
             b.setNaturalWidth(handler.pen().fX);
-            shaped = true;
         }
-    }
-#endif
-    if (!shaped) {
-        // No shaper (BRO_WITH_TEXT_SHAPING=OFF, or the factory failed): 1:1
-        // codepoint→glyph with per-run coverage fallback — exactly the
-        // behaviour every renderer had before shaping existed, expressed
-        // through the same ShapedRun surface so there is only one draw path.
-        buildUnshaped(*run, b, utf8, primary, style, fontMgr, fallback);
     }
 
     b.finish();
@@ -785,70 +768,6 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
     if (cache_.size() >= kMaxEntries) cache_.clear();
     cache_.emplace(std::move(key), std::move(run));
     return raw;
-}
-
-void TextShapingEngine::buildUnshaped(ShapedRun& run, ShapedRun::Builder& b,
-                                      std::string_view utf8,
-                                      const SkFont& primary,
-                                      SkFontStyle style,
-                                      SkFontMgr* fontMgr,
-                                      FontFallbackCache& fallback) {
-    (void)run;
-    auto textRuns = splitTextForFallback(utf8, primary, fontMgr, style, fallback);
-    float pen = 0.0f;
-    for (const auto& tr : textRuns) {
-        // Walk codepoints so each glyph keeps a byte-accurate cluster value.
-        std::vector<SkGlyphID> glyphs;
-        std::vector<uint32_t>  clusters;
-        std::size_t i = tr.start;
-        const std::size_t end = tr.start + tr.length;
-        while (i < end) {
-            const unsigned char c0 = static_cast<unsigned char>(utf8[i]);
-            std::size_t n = 1;
-            if      ((c0 & 0x80) == 0x00) n = 1;
-            else if ((c0 & 0xE0) == 0xC0) n = 2;
-            else if ((c0 & 0xF0) == 0xE0) n = 3;
-            else if ((c0 & 0xF8) == 0xF0) n = 4;
-            if (i + n > end) n = end - i;
-            SkUnichar cp = 0;
-            switch (n) {
-                case 1: cp = c0; break;
-                case 2: cp = ((c0 & 0x1F) << 6) | (utf8[i + 1] & 0x3F); break;
-                case 3: cp = ((c0 & 0x0F) << 12) | ((utf8[i + 1] & 0x3F) << 6) |
-                             (utf8[i + 2] & 0x3F); break;
-                default: cp = ((c0 & 0x07) << 18) | ((utf8[i + 1] & 0x3F) << 12) |
-                              ((utf8[i + 2] & 0x3F) << 6) | (utf8[i + 3] & 0x3F); break;
-            }
-            // Bidi formatting characters (LRM/RLE/PDF/RLI/...) drive level
-            // resolution and are never drawn. HarfBuzz drops them for us as
-            // default-ignorables; this path has to be told, or a font that
-            // does not map them contributes a .notdef box per control.
-            if (!bidi::isFormattingChar(static_cast<uint32_t>(cp))) {
-                glyphs.push_back(tr.font.unicharToGlyph(cp));
-                clusters.push_back(static_cast<uint32_t>(i));
-            }
-            i += n;
-        }
-        if (glyphs.empty()) continue;
-
-        std::vector<SkScalar> widths(glyphs.size());
-        tr.font.getWidths(SkSpan<const SkGlyphID>(glyphs.data(), glyphs.size()),
-                          SkSpan<SkScalar>(widths.data(), widths.size()));
-
-        const std::size_t first = b.glyphs().size();
-        b.grow(glyphs.size());
-        b.addRun(tr.font, first, glyphs.size(), 0);
-        for (std::size_t k = 0; k < glyphs.size(); ++k) {
-            const std::size_t g = first + k;
-            b.glyphs()[g]    = glyphs[k];
-            b.clusters()[g]  = clusters[k];
-            b.positions()[g] = SkPoint{pen, 0.0f};
-            b.offsets()[g]   = SkPoint{0.0f, 0.0f};
-            b.advances()[g]  = widths[k];
-            pen += widths[k];
-        }
-    }
-    b.setNaturalWidth(pen);
 }
 
 } // namespace bro::render

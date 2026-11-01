@@ -3,13 +3,11 @@
 #include <algorithm>
 #include <cstring>
 
-#if BRO_WITH_ICU_BIDI
 // The ONE translation unit in bro that sees an ICU header. Everything ICU
 // declares here is renamed to a `_skia` suffix by the defines the build sets on
 // this file's target — see third_party/skia/skia_modules.cmake.
 #include <unicode/ubidi.h>
 #include <unicode/utypes.h>
-#endif
 
 namespace bro::render::bidi {
 
@@ -176,10 +174,6 @@ std::vector<LevelRun> Paragraph::runs() const {
     return out;
 }
 
-#if BRO_WITH_ICU_BIDI
-
-bool available() { return true; }
-
 Paragraph resolveParagraph(std::string_view utf8, BaseDirection base, Override ov) {
     Paragraph out;
     out.paragraphLevel = (base == BaseDirection::RTL) ? 1 : 0;
@@ -303,26 +297,5 @@ std::vector<int32_t> reorderVisual(const std::vector<Level>& runLevels) {
                         out.data());
     return out;
 }
-
-#else  // !BRO_WITH_ICU_BIDI
-
-bool available() { return false; }
-
-Paragraph resolveParagraph(std::string_view utf8, BaseDirection base, Override) {
-    Paragraph out;
-    out.paragraphLevel = (base == BaseDirection::RTL) ? 1 : 0;
-    out.levels.assign(utf8.size(), out.paragraphLevel);
-    out.resettableToParagraph.assign(utf8.size(), false);
-    return out;
-}
-
-std::vector<int32_t> reorderVisual(const std::vector<Level>& runLevels) {
-    // No bidi: logical order is visual order.
-    std::vector<int32_t> out(runLevels.size());
-    for (std::size_t i = 0; i < out.size(); ++i) out[i] = static_cast<int32_t>(i);
-    return out;
-}
-
-#endif  // BRO_WITH_ICU_BIDI
 
 } // namespace bro::render::bidi

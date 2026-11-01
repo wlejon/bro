@@ -19,8 +19,7 @@ enabling text shaping needed no Skia rebuild: the shaping code was never in the
 ## What the bundle must contain
 
 Everything already there (`include/`, `src/`, `modules/`, expat) **plus** the
-four trees below. Text shaping (`BRO_WITH_TEXT_SHAPING`, ON in every profile)
-does not build without them, and `skia_modules.cmake` hard-fails at configure
+four trees below. Text shaping (every build) does not build without them, and `skia_modules.cmake` hard-fails at configure
 time naming the missing files.
 
 | Path (relative to the tarball root) | Why |
@@ -158,8 +157,5 @@ cmake --build build --config Release
 ```
 
 A bundle missing any shaping source makes `cmake -B build` stop with a
-`FATAL_ERROR` that names the exact files and the three ways out (republish,
-`tools/git-sync-deps`, or `-DBRO_WITH_TEXT_SHAPING=OFF`). It does not silently
-fall back to the primitive shaper: once the render layer shapes text, a
-primitive-shaper build renders ligatures, kerning and Arabic joining wrong, and
-a build that quietly produces incorrect text is worse than one that stops.
+`FATAL_ERROR` that names the exact files and the two ways out (republish, or
+`tools/git-sync-deps`). There is no unshaped build: all text is shaped.

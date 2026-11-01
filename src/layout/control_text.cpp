@@ -1,6 +1,5 @@
 #include "layout/control_text.h"
 
-#include "layout/cluster_caret.h"
 #include "render/shaped_run.h"
 
 // The caret geometry that needs the shaper lives here rather than in the
@@ -14,14 +13,14 @@ namespace bro::layout {
 namespace {
 
 // Shape the run text[start, end) — the exact string the control draws as one
-// piece — or null when there is no shaper or the cluster path is off. The run
+// piece — or null for an empty span. The run
 // belongs to the renderer's cache and is invalidated by the next shaping miss,
 // so callers use it and drop it.
 const render::ShapedRun* shapedRunFor(const std::string& text,
                                       size_t start, size_t end,
                                       const render::FontRef& fr,
                                       render::Renderer* r) {
-    if (!r || !clusterCaretEnabled() || end <= start || end > text.size()) return nullptr;
+    if (!r || end <= start || end > text.size()) return nullptr;
     return r->shapeText(std::string_view(text).substr(start, end - start), fr);
 }
 

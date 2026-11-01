@@ -90,13 +90,8 @@ struct Paragraph {
     std::vector<LevelRun> runs() const;
 };
 
-/// True when the ICU bidi subset was compiled in. With it OFF every function
-/// here still works and reports a single LTR run, which is what a build without
-/// text shaping had before bidi existed.
-bool available();
-
-/// Resolve `utf8` against `base`. Never fails: with bidi unavailable, or on
-/// empty input, the result is one uniform run at the base level (Auto → LTR).
+/// Resolve `utf8` against `base`. Never fails: on empty input the result is
+/// one uniform run at the base level (Auto → LTR).
 Paragraph resolveParagraph(std::string_view utf8,
                            BaseDirection base,
                            Override ov = Override::Normal);

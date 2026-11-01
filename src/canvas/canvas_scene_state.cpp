@@ -469,9 +469,8 @@ void CanvasScene::recordText(bool stroke, const std::string& text, float x, floa
         tw = run->width();
         cmd.blob = run->makeBlob();
     } else {
-        // Shaping produced nothing (empty after validation, or a build with
-        // BRO_WITH_TEXT_SHAPING off and no glyphs). Fall back to the raw
-        // string so the replay path still has something to draw.
+        // Shaping produced nothing (empty after validation): measure the
+        // raw string so the replay path still has something to draw.
         tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
     }
 

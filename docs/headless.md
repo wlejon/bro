@@ -289,7 +289,6 @@ every key optional, defaults as shown.
 | `bro.text.cacheStats()` | `{hits, misses}` for the shaping cache. Useful for asserting that a re-render reused shaped runs instead of re-shaping. |
 | `bro.text.bidi(text [, base, override])` | Run UAX #9 over `text` → `{paragraphLevel, uniform, levels, runs}`. `base` is `"auto"` (default, P2/P3), `"ltr"` or `"rtl"`; a truthy `override` applies a directional override. `levels` has one entry **per codepoint**; `runs` is `[{start, end, level}]` in byte offsets. |
 | `bro.text.bidiReorder(levels)` | Rule L2 applied to an array of levels → the logical index for each visual slot. |
-| `bro.text.bidiAvailable` | Boolean, not a function: whether a bidi resolver is compiled in. |
 
 ### Performance
 

@@ -122,13 +122,6 @@
  * Diagnostic window onto text shaping, cluster mapping, and bidi resolution.
  */
 /**
- * Whether the UAX #9 Bidirectional algorithm engine is compiled in and available.
- * @readonly
- * @type {boolean}
- */
-bro.text.bidiAvailable;
-
-/**
  * Shape a text string with font and spacing options.
  *
  * @param {string} text - UTF-8 text string to shape

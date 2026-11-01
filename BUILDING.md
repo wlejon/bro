@@ -260,10 +260,9 @@ source bundle, which is not buildable.
 Whichever route you take, the Skia **source** tree must carry the shaping
 modules: `modules/skshaper`, `modules/skunicode`, and the bundled HarfBuzz and
 ICU sources. bro compiles those itself (`third_party/skia/skia_modules.cmake`)
-rather than taking them from the pre-built lib, and `BRO_WITH_TEXT_SHAPING`
-defaults ON in every profile. A hand-built or older bundle that lacks them will
-configure with shaping silently unavailable, which is a different renderer: no
-ligatures, no cursive joining, no bidi. See `third_party/skia/BUNDLE.md`.
+rather than taking them from the pre-built lib, in every profile: all text is
+shaped. Configure stops, naming the missing files, on a hand-built or older
+bundle that lacks them. See `third_party/skia/BUNDLE.md`.
 
 ## Build commands
 

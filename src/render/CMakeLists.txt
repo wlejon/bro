@@ -9,12 +9,7 @@
 add_library(bro_bidi STATIC bidi.cpp)
 target_include_directories(bro_bidi PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_bidi PUBLIC bro_util)
-if(BRO_WITH_TEXT_SHAPING)
-    target_link_libraries(bro_bidi PRIVATE skia_icu_bidi_api)
-    target_compile_definitions(bro_bidi PRIVATE BRO_WITH_ICU_BIDI=1)
-else()
-    target_compile_definitions(bro_bidi PRIVATE BRO_WITH_ICU_BIDI=0)
-endif()
+target_link_libraries(bro_bidi PRIVATE skia_icu_bidi_api)
 
 # --- The render module's GPU stages (brokernel) ---
 #
