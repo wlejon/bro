@@ -518,12 +518,11 @@ const ny = nm.normals[nm.width * nm.height + 0];           // plane 1
 // All five load the same way: `bro.vision.loadXxx(path, { device })`, where
 // `path` is a weights directory or a single .safetensors file. All five expose
 // `device` and a single inference method published under BOTH names —
-// `detect()` (the original) and `estimate()` (the bronze port's name) — which
-// are the same function, so pick either. Both take `(image, opts?)` and accept
+// `detect()` and `estimate()` — which are the same function, so pick either. Both take `(image, opts?)` and accept
 // `opts.onDone` for the async form. Every result carries a drawable `image`.
 //
-// Result planes likewise carry both spellings, an FP32 plane under the original
-// key and a byte or Int32 plane under the port's key; each section names them.
+// Result planes likewise carry two keys, an FP32 plane under one and a byte or
+// Int32 plane under the other; each section names them.
 
 /**
  * HED soft edges.
@@ -627,7 +626,7 @@ const rembg = bro.vision.loadBirefnet(
 
 /**
  * Birefnet.removeBackground(image, opts?) — also published as `estimate()`,
- * the bronze port's name for the same function.
+ * the same function.
  * @param {{width,height,data}|string} image
  * @param {Object} [opts]
  * @param {number}   [opts.modelSize]  override the load-time resolution for

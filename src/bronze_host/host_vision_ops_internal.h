@@ -79,8 +79,7 @@ inline bool visionFloatsOpt(Value opts, const char* key, std::vector<float>& out
 }
 
 // The two-line guard every wrapped op opens with: refuse a second op while
-// one is in flight on the same model, the way the old binding's `busy` flag
-// did. The worker reads the model's own workspace, so overlapping calls on
+// one is in flight on the same model. The worker reads the model's own workspace, so overlapping calls on
 // one model are two threads in one brotensor arena.
 #define BRO_VISION_BEGIN(modelPtr, opName)                                     \
     if (!visionMarkBusy(modelPtr)) {                                           \

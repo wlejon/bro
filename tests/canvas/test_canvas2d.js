@@ -1,5 +1,5 @@
 // Test Canvas 2D API — path ops, transforms, drawing, text measurement.
-// Exercises the canvas_bindings.cpp surface via headless.
+// Exercises the bronze_host/host_canvas2d*.cpp surface via headless.
 
 // --- Setup: create a <canvas> in the DOM and get the 2d context ---
 var canvas = document.createElement('canvas');

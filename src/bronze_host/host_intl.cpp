@@ -553,8 +553,8 @@ std::string formatDateTimeDetails(Value dateIn, const DateTimeOptions& opt) {
 
 // One `{type, value}` part — the shape every Intl formatToParts answers with.
 // A formatter that does not track where its pieces came from reports the whole
-// string as a single `literal`, which is what the spec permits and what the
-// old stack returned for DateTimeFormat, ListFormat and RelativeTimeFormat:
+// string as a single `literal`, which is what the spec permits and what
+// DateTimeFormat, ListFormat and RelativeTimeFormat return here:
 // a caller that maps over the parts and joins the values gets `format()` back,
 // which is the invariant it actually relies on. Without the method at all,
 // that same caller throws.

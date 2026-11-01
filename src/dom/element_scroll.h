@@ -6,9 +6,7 @@
 // it has to survive the fact that layout is ASYNC (the classic
 // `el.scrollTop = el.scrollHeight` runs in the same turn as the append it is
 // following, when neither number is known yet), it dirties the document so the
-// new offset is painted, and it fires a trusted `scroll` event. All four were
-// inline in the old QuickJS binding and all four went missing when the binding
-// was rewritten as a setter on dom::Element::setScrollTopValue.
+// new offset is painted, and it fires a trusted `scroll` event.
 //
 // They live here, in the DOM layer, because they are properties of scrolling
 // and not of who asked for it: scrollIntoView, a compiled program calling

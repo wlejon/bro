@@ -3,8 +3,8 @@
 //
 // Each keeps both spellings the sibling publishes (`edge`/`edges`,
 // `line`/`lines`, `segments`/`lines`, `bodies`/`poses`, `classes`/`segments`)
-// and both method names (`detect` is the pre-transition one, `estimate` what
-// the bronze port renamed it to), and each gets its `image` ImageBitmap back:
+// and both method names (`detect` and `estimate`), and each gets an `image`
+// ImageBitmap:
 // the edge and line probabilities as gray, MLSD's segments as white strokes
 // on transparent black, OpenPose through the library's own canonical
 // skeleton canvas, SegFormer through the library's ADE20K palette.
@@ -22,7 +22,7 @@ namespace bro::bronze_host {
 
 namespace {
 
-// A unit-scalar plane as the byte plane the port's key carries.
+// A unit-scalar plane as the byte plane the second key carries.
 std::vector<uint8_t> toBytes(const std::vector<float>& unit) {
     std::vector<uint8_t> out(unit.size());
     for (std::size_t i = 0; i < unit.size(); ++i) {
@@ -198,7 +198,7 @@ Value mlsdDetect(Value thisIn, std::span<const Value> args) {
         res.set("width", ev::fromDouble(lm.width));
         res.set("height", ev::fromDouble(lm.height));
         res.set("segments", arr.get());
-        res.set("lines", arr.get());  // the port's name for the same array
+        res.set("lines", arr.get());  // the second name for the same array
         res.set("image", bmp.get());
         return res.get();
     };
@@ -265,7 +265,7 @@ Value openposeDetect(Value thisIn, std::span<const Value> args) {
         res.set("width", ev::fromDouble(pose.width));
         res.set("height", ev::fromDouble(pose.height));
         res.set("bodies", bodies.get());
-        res.set("poses", bodies.get());  // the port's name for the same array
+        res.set("poses", bodies.get());  // the second name for the same array
         res.set("image", bmp.get());
         return res.get();
     };
@@ -319,7 +319,7 @@ Value segformerDetect(Value thisIn, std::span<const Value> args) {
             res.set("classes", c.get());
         }
         {
-            // `segments` is the port's name, as Int32.
+            // `segments` is the second name, as Int32.
             ev::Persistent s(bvm::makeInt32Array(asI32.data(), asI32.size()));
             res.set("segments", s.get());
         }

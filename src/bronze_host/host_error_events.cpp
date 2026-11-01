@@ -13,7 +13,7 @@
 //      fires; `preventDefault()` cancels.
 //
 // A cancelled error is the page saying it handled it, so the caller skips its
-// log line. The old QuickJS runtime did the same from its dispatchHostHook.
+// log line.
 //
 // bronze records no source position on an Error, so `filename`/`lineno`/
 // `colno` are empty and zero; `message` is `Uncaught Name: message`, the text

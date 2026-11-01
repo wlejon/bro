@@ -6,10 +6,9 @@
 // hidden <input type=file> opened from a styled button, a details/summary
 // disclosure toggled from a menu.
 //
-// Regression: the bronze port's click() dispatched a MouseEvent and stopped.
-// No focus, no form submit, no reset, no checkbox toggle, no summary toggle,
-// no label forwarding, and no `disabled` gate — a disabled button's listeners
-// still ran.
+// Covered: form submit, reset, checkbox toggle, summary toggle, label
+// forwarding, and the `disabled` gate — a disabled button's listeners do not
+// run.
 
 const root = document.getElementById('root');
 

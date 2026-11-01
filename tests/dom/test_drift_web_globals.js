@@ -1,12 +1,11 @@
-// Two platform globals the QuickJS engine used to provide for free and the
-// bronze port does not: a constructible TouchEvent family, and DOMException's
-// legacy code table.
+// Two platform globals bro installs itself: a constructible TouchEvent
+// family, and DOMException's legacy code table.
 //
 // A harness that synthesises input writes
-// `new TouchEvent('touchstart', {touches: [new Touch({...})]})`; the port
-// installed the class as a brand only, so that read as "not constructible".
-// And `e.code === DOMException.NOT_FOUND_ERR` compared undefined to undefined
-// — true for every exception there is.
+// `new TouchEvent('touchstart', {touches: [new Touch({...})]})`, so the class
+// must be constructible, not a brand only. And without the code table
+// `e.code === DOMException.NOT_FOUND_ERR` compares undefined to undefined —
+// true for every exception there is.
 
 // --- Touch / TouchList / TouchEvent are constructible ---------------------
 assert(typeof Touch === 'function', 'Touch is a constructor');

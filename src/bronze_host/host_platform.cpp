@@ -102,8 +102,7 @@ Value makeQueueMicrotask() {
 // which display these describe, and a snapshot taken at install time would
 // still be describing the first one.
 //
-// HEADLESS PINS TO THE WINDOW, matching what bro's own window.screen does
-// (window_bindings.cpp) and for the same reason: a test that printed the real
+// HEADLESS PINS TO THE WINDOW, because a test that printed the real
 // desktop size would pass or fail depending on whose desk it ran on.
 void screenDims(bool avail, double& w, double& h) {
     engine::Engine* e = hostEngine();

@@ -280,10 +280,9 @@
     //
     // The 25 `*_ERR` constants DOM Level 1 defined and the DOM standard still
     // requires, plus the `code` a caught exception is checked against. The
-    // old stack got these for free: QuickJS shipped DOMException itself and
-    // carried the whole legacy table. bronze does not, so the DOMException on
-    // globalThis is brokit's two-field stand-in (abort.js), and code that
-    // branches on `e.code === DOMException.NOT_FOUND_ERR` read
+    // DOMException on globalThis is brokit's two-field stand-in (abort.js),
+    // which carries no legacy table; without these, code that branches on
+    // `e.code === DOMException.NOT_FOUND_ERR` reads
     // `undefined === undefined` — true for every exception, which is worse
     // than throwing.
     //

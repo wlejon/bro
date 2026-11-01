@@ -1,4 +1,4 @@
-// The SceneNode members restored after the bronze port (js/scene_extras.js
+// The hand-registered SceneNode members (js/scene_extras.js
 // over native_scene_extras.cpp): the per-type accessors, the instanced-mesh
 // operations, syncToPhysics, and the scalar lookAt(x, y, z) form.
 

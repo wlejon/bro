@@ -1,13 +1,12 @@
 // BiRefNet (background removal) and StyleGAN3 (generate / synthesize /
 // invert) on bro's job machine.
 //
-// BiRefNet's result is the one place the old binding used TWO bitmaps:
-// `matte` (the alpha plane as gray) and `image` (the source pixels with
-// their alpha replaced — the ready-to-draw cutout). Both are back. The
-// typed-array planes stay where the sibling put them: `alpha` (Float32),
-// `mask` (the matte as bytes, the bronze port's name for it) and `data`
-// (the cutout RGBA). Only `matte` changes type, from the byte plane to the
-// ImageBitmap it was before the transition — `mask` is the same bytes.
+// BiRefNet's result is the one place with TWO bitmaps: `matte` (the alpha
+// plane as gray) and `image` (the source pixels with their alpha replaced —
+// the ready-to-draw cutout). The typed-array planes stay where the sibling
+// put them: `alpha` (Float32), `mask` (the matte as bytes) and `data` (the
+// cutout RGBA). Only `matte` changes type, from the sibling's byte plane to
+// an ImageBitmap — `mask` is the same bytes.
 //
 // StyleGAN3 renders at 256²-1024², which is tens of milliseconds of GPU work
 // per frame and several seconds for an inversion, so all three of its ops
@@ -396,7 +395,7 @@ void installVisionGenerativeOps() {
     {
         ObjectBuilder proto(bvm::g_birefnetClass.prototype());
         proto.def("removeBackground", 2, birefnetRemoveBackground);
-        // `estimate` is the bronze port's name for the same body.
+        // `estimate` is the second name for the same body.
         proto.def("estimate", 2, birefnetRemoveBackground);
     }
     {

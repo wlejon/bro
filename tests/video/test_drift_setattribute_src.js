@@ -4,9 +4,8 @@
 // markup generically — a templating helper that walks {src: url} and calls
 // setAttribute for every key — only ever uses the attribute one. The property
 // setter creates the media control and calls load(); the attribute setter has
-// to do the same for an element that already has a control, which is what the
-// old binding did and what the bronze port dropped: the attribute changed, the
-// file was never opened, and `loadedmetadata` never fired.
+// to do the same for an element that already has a control, or the attribute
+// changes, the file is never opened, and `loadedmetadata` never fires.
 
 const os = require('os');
 const path = require('path');

@@ -35,7 +35,7 @@ extern "C" void bro_physics_setMotionType(int32_t tag, bool isStatic);
 
 // Physics.moveKinematic is hand-written in js/physics.js for the same reason: the public
 // member has always taken either (tag, x, y, z, dt) or (tag, x, y, z, qx, qy,
-// qz, qw, dt) — the QuickJS binding dispatched on argc — and a native has one
+// qz, qw, dt), and a native has one
 // arity, so each form is its own entry point and js/physics.js picks by the
 // arguments it was given. Both are declared and registered here.
 extern "C" void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt);

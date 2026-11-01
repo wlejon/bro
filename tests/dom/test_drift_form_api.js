@@ -1,11 +1,11 @@
 // The form surface: the HTMLFormElement members, the control reflections, and
 // constraint validation.
 //
-// Regression: the bronze port had none of `form.elements`, `submit()`,
-// `reset()`, `requestSubmit()`, `input.form`, `maxLength`, `minLength`,
-// `pattern` or `size`, and its `checkValidity()` on a <form> ran the CONTROL
-// check against the form itself — which has no value and no constraints, so it
-// always answered true and `validity` reported nothing at all.
+// Covers `form.elements`, `submit()`, `reset()`, `requestSubmit()`,
+// `input.form`, `maxLength`, `minLength`, `pattern` and `size`, and that
+// `checkValidity()` on a <form> walks its controls rather than running the
+// CONTROL check against the form itself — which has no value and no
+// constraints, so it would always answer true.
 
 const root = document.getElementById('root');
 

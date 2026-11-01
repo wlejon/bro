@@ -1,8 +1,6 @@
 // SceneGraph.unprojectLocal(x, y) -> { origin, dir } and its inverse
 // projectLocal(x, y, z) -> { x, y, depth, behind }, for every way a camera is
-// set: scene.setCamera (perspective + orthographic) and a camera node. The
-// bronze port had turned unprojectLocal into unprojectLocal(node, [x, y]),
-// which answered [] under setCamera.
+// set: scene.setCamera (perspective + orthographic) and a camera node.
 
 const canvas = document.createElement('canvas');
 canvas.style.width = '400px';

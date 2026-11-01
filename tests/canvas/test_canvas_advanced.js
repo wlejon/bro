@@ -1,7 +1,7 @@
 // Advanced Canvas 2D tests — gradients, line dash, drawImage, font, complex paths.
 // Complements tests/canvas/test_canvas2d.js by exercising the gradient/pattern,
-// image source, and line dash paths in runtime/canvas_bindings.cpp and
-// src/canvas/canvas2d.cpp.
+// image source, and line dash paths in src/bronze_host/host_canvas2d*.cpp and
+// src/canvas/.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '200');

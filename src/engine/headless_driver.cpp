@@ -71,9 +71,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     // Suppress the WER "bro-headless.exe has stopped working" dialog that
     // Windows shows after an unhandled crash/abort() — headless is driven
     // by scripts/CI that need the process to just die with a nonzero exit,
-    // not block on a click. (Lived in src/headless/main.cpp until the
-    // QuickJS removal dropped it; the driver is the one entry every
-    // headless host shares, so it belongs here.)
+    // not block on a click. The driver is the one entry every headless
+    // host shares, so it belongs here.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 #ifdef _DEBUG
     // Debug CRT's assert() otherwise ALSO pops its own blocking "Debug

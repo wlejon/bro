@@ -6,9 +6,9 @@
 // box's fields read back out. `clientWidth` is content PLUS padding and zero
 // for a non-replaced inline; `scrollHeight` is the unclamped content height
 // plus padding, never less than clientHeight; `scrollTop` clamps, defers, and
-// fires an event. The bronze port answered `contentRect.width` and friends for
-// all of them — close enough to look right on a plain <div> and wrong for
-// anything with padding, which is most of a real UI.
+// fires an event. Answering `contentRect.width` and friends for all of them
+// would look right on a plain <div> and be wrong for anything with padding,
+// which is most of a real UI.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
@@ -119,7 +119,7 @@ bool isInlineDisplay(dom::Element* el) {
 }
 
 // The `width`/`height` CONTENT attributes, which <canvas> and <img> carry and
-// which the old binding fell back to when layout had produced no box yet —
+// which geometry falls back to when layout has produced no box yet —
 // a canvas measured before its first frame still has to report its size.
 double attrDimension(dom::Element* el, const char* name) {
     if (!el || !el->hasAttribute(name)) return 0.0;

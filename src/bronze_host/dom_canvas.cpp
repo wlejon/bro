@@ -47,8 +47,7 @@ struct CanvasState {
     bool hasGl = false;
     // The context type this canvas was first asked for. A canvas has ONE
     // context mode for its life (HTML: getContext with a different type on a
-    // canvas already in a mode answers null), and the QuickJS-era cache was
-    // keyed on exactly that rule. Without it `getContext('webgl') ||
+    // canvas already in a mode answers null). Without it `getContext('webgl') ||
     // getContext('2d')` gives one element both a WebGL drawing buffer and a
     // CanvasScene, and the compositor draws both.
     std::string contextType;
@@ -57,7 +56,7 @@ struct CanvasState {
 // The drawing-buffer resize behind `canvas.width = w` / `canvas.height = h`
 // and the width/height attributes. The bitmap of a 2D canvas follows the
 // intrinsic size (a zero is a real, empty bitmap there); a WebGL drawing
-// buffer keeps its size on a zero, as the old binding guarded, because a 0x0
+// buffer keeps its size on a zero, because a 0x0
 // drawing buffer is an error every following draw repeats.
 void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
     if (!cs || !cs->el) return;

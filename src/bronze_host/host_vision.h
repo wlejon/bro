@@ -3,30 +3,30 @@
 // bro's half of `bro.vision`.
 //
 // brovisionml ships the whole model surface (brovisionml_api, installed once
-// per realm by host_sibling_apis.cpp), but two things about the old QuickJS
-// binding could never live in a standalone sibling, and both are restored
-// here, on top of the sibling rather than instead of it:
+// per realm by host_sibling_apis.cpp), but two things `bro.vision` offers
+// cannot live in a standalone sibling, so they are built here, on top of the
+// sibling rather than instead of it:
 //
-//   1. ImageBitmaps. The old binding returned `image` (and BiRefNet's
-//      `matte`) as engine-minted ImageBitmaps a program could hand straight
-//      to drawImage/texImage2D. An ImageBitmap is an SkImage behind a bro
+//   1. ImageBitmaps. `image` (and BiRefNet's `matte`) come back as
+//      engine-minted ImageBitmaps a program can hand straight to
+//      drawImage/texImage2D. An ImageBitmap is an SkImage behind a bro
 //      host class (host_imagebitmap.cpp), so the sibling returns the pixel
 //      planes as typed arrays and says in as many words that the caller
 //      rasterizes. bro is that caller. Every wrapped op keeps the sibling's
 //      typed-array fields AND adds the bitmaps back.
 //
 //   2. Async. A depth pass or a SAM everything-sweep is tens to hundreds of
-//      milliseconds; running it inside the JS call drops frames. The old
-//      binding took an `onDone` callback, ran the model on a worker thread
-//      and delivered the result on the JS thread from the engine's frame
-//      pump, returning an AsyncHandle with `.cancel()`. A sibling that owns
+//      milliseconds; running it inside the JS call drops frames. An op given
+//      an `onDone` callback runs the model on a worker thread and delivers
+//      the result on the JS thread from the engine's frame pump, returning
+//      an AsyncHandle with `.cancel()`. A sibling that owns
 //      no event loop cannot do that either.
 //
 // WHY THE OPS ARE RE-DRIVEN HERE rather than wrapped around a call to the
 // sibling's own method. The compute has to happen off the JS thread, and a
 // bronze realm belongs to exactly one thread — calling the sibling's native
-// method from a worker would race the main thread's heap. So the split is
-// the one the old binding used: parse and validate on the JS thread, run the
+// method from a worker would race the main thread's heap. So the split is:
+// parse and validate on the JS thread, run the
 // model (plain C++, no Values) on the worker, build the result on the JS
 // thread. The synchronous path runs the SAME compute and the SAME builder
 // inline, so `op(img)` and `op(img, {onDone})` cannot disagree — that is
@@ -86,7 +86,7 @@ void shutdownVisionJobs();
 // the message reaches `done` as `error`. `build` and `release` run on the JS
 // thread. `release` clears the model's busy flag and drops the keep-alive
 // root, and runs BEFORE the callback so an onDone that starts the next op on
-// the same model finds it free — the chained-step case the old binding named.
+// the same model finds it free — the chained-step case.
 using VisionComputeFn = std::function<void(const std::atomic<bool>& cancel)>;
 using VisionBuildFn = std::function<Value()>;
 using VisionReleaseFn = std::function<void()>;
@@ -112,8 +112,7 @@ void visionClearBusy(const void* model);
 // ---------------------------------------------------------------------------
 // Rasterizers (host_vision_jobs.cpp)
 // ---------------------------------------------------------------------------
-// Each returns an ImageBitmap Value (null if the size is empty). These are
-// the old binding's makeBitmap family, unchanged in what they produce.
+// Each returns an ImageBitmap Value (null if the size is empty).
 
 // RGBA8 straight through.
 Value visionBitmapRGBA(const uint8_t* rgba, int w, int h);

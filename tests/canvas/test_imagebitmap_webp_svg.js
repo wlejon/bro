@@ -2,9 +2,9 @@
 //
 // The image decode ladder behind every host image (Image / <img> /
 // createImageBitmap) is one function: WebP (bro's own libwebp), then the
-// broimage codecs (PNG/JPEG/...), then SVG rasterized by the svg module. The
-// pre-bronze bindings decoded all three for a Blob and for an <img src="x.svg">
-// handed to drawImage; the port had dropped WebP and SVG from both.
+// broimage codecs (PNG/JPEG/...), then SVG rasterized through layout's SVG
+// traversal. All three decode for a Blob and for an <img src="x.svg"> handed
+// to drawImage.
 
 const fs = require('fs');
 const os = require('os');

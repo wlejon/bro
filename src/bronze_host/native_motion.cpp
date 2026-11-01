@@ -4,7 +4,7 @@
 // generate() sits in a per-thread slot that js/motion.js reads member by
 // member right after the call.
 //
-// The pipeline is a port of the QuickJS-era motion_bindings.cpp: load() builds
+// The pipeline: load() builds
 // the denoiser + FSQ decoder + generator from an ARDY checkpoint directory and
 // the tokenizer + encoder from a merged LLM2Vec directory; generate() embeds the
 // prompt, samples the hybrid token sequence window by window, detokenizes it to

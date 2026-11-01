@@ -8,9 +8,8 @@
 // `el.textContent = obj.label` (label absent, so null) must not end up
 // printing "null" at the user.
 //
-// Regression: the bronze port guarded these with `if (!isObject(v))` and then
-// called toUtf8, and `isObject(null)` is false in bronze — so null fell
-// through the guard and stringified.
+// The trap: `isObject(null)` is false in bronze, so a setter guarded with
+// `if (!isObject(v))` before toUtf8 lets null through to be stringified.
 
 const root = document.getElementById('root');
 

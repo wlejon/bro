@@ -1,7 +1,7 @@
 // Engine gamepad handling — platform gamepad events in, W3C-standard-layout
 // state out. These are Engine member function implementations (same split style
 // as input_handling.cpp). The JS surface (navigator.getGamepads() snapshots,
-// connection events' `gamepad` payload) is built by js/gamepad_bindings.cpp
+// connection events' `gamepad` payload) is built by bronze_host/dom_gamepad.cpp
 // from the GamepadState slots owned here.
 //
 // Two producers feed the same path:

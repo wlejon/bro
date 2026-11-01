@@ -107,7 +107,7 @@ void settle(VisionJob& job) {
 
     // BEFORE the callback: an onDone that synchronously starts the next op
     // on the same model has to find it free, which is the chained-step case
-    // (step i kicking step i+1) the old binding called out.
+    // (step i kicking step i+1).
     if (job.release) job.release();
 
     Value onDone = job.onDone.get();

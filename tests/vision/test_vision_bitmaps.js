@@ -1,9 +1,8 @@
-// bro.vision results carry ImageBitmaps again (src/bronze_host/host_vision*.cpp).
+// bro.vision results carry ImageBitmaps (src/bronze_host/host_vision*.cpp).
 //
-// The old QuickJS binding returned `image` — and BiRefNet's `matte` — as
-// engine-minted ImageBitmaps; the bronze port moved the models into
-// brovisionml, which cannot mint one, so they came back as typed arrays only.
-// bro re-drives the ops and rasterizes the planes back into bitmaps WITHOUT
+// `image` — and BiRefNet's `matte` — are engine-minted ImageBitmaps. The
+// models live in brovisionml, which cannot mint one and returns typed arrays,
+// so bro re-drives the ops and rasterizes the planes into bitmaps WITHOUT
 // taking the typed-array planes away.
 //
 // WEIGHTS-FREE. Every model op needs a checkpoint (brovisionml's loaders

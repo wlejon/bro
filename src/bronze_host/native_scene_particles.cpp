@@ -34,8 +34,7 @@ bool colorOf(const nlohmann::json& v, bromath::Color& out) {
     return false;
 }
 
-// The emitter half of the options, as the QuickJS binding's applyParticleOpts
-// read them. maxParticles runs first (it reallocates the pool) and burst last.
+// The emitter half of the options. maxParticles runs first (it reallocates the pool) and burst last.
 void applyParticleOpts(scene::ParticleNode* node, const nlohmann::json& j) {
     if (auto it = j.find("maxParticles"); it != j.end() && it->is_number())
         node->setMaxParticles(it->get<int>());

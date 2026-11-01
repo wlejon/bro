@@ -440,11 +440,10 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
 // which phase, whether the default has been prevented, and the three methods
 // that reach the live dom::Event. Everything else — `type`, `bubbles`, and
 // above all `detail` — is left exactly as the program wrote it, which is the
-// whole point. Copying the descriptor into a fresh object (what the port did)
-// loses object identity, and a `detail` that is not a string loses its
-// contents as well: it went out through JSON.stringify and came back as text,
-// so a function, a DOM node or a class instance in a CustomEvent's payload
-// arrived as `[object Object]` or vanished.
+// whole point. Copying the descriptor into a fresh object would lose object
+// identity, and a `detail` round-tripped through JSON.stringify would lose
+// its contents as well: a function, a DOM node or a class instance in a
+// CustomEvent's payload would arrive as `[object Object]` or vanish.
 Value decorateProvidedEventValue(Value provided, dom::Event& e, const LiveEventPtr& live) {
     ObjectBuilder b(provided);
     {

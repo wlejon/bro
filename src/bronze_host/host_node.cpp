@@ -403,8 +403,8 @@ void installNodeTree(ObjectBuilder& b) {
         // {composed: true} asks for the root of the COMPOSED tree, which means
         // the walk steps out of a shadow tree onto its host instead of stopping
         // at the ShadowRoot. It is how a component finds the document it is
-        // living in, and ignoring the option — which is what the port did —
-        // hands it its own shadow root instead, where none of its
+        // living in, and ignoring the option would hand it its own shadow
+        // root instead, where none of its
         // document-level lookups resolve.
         bool composed = false;
         if (!a.empty() && ev::isObject(a[0])) {

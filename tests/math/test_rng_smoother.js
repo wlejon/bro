@@ -1,6 +1,6 @@
 // bro.math.Rng — deterministic SplitMix64 generator, and bro.math.Smoother —
 // one-pole exponential ramp. Brief coverage alongside SpatialHash3D since all
-// three share the math_bindings.cpp module.
+// three live in bronze_host/host_math_classes.cpp.
 
 assert(bro.math.Rng === Rng, 'Rng aliased onto bro.math');
 assert(bro.math.Smoother === Smoother, 'Smoother aliased onto bro.math');

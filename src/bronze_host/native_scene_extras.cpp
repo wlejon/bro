@@ -1,4 +1,4 @@
-// The SceneNode members the bronze port left behind: per-type accessors
+// The SceneNode members outside the generated scene natives: per-type accessors
 // (alphaCutoff, doubleSided, interior, priority, emissiveColor, radius,
 // fillColor / strokeColor / strokeWidth, autoSync, pixelsPerUnit, billboard,
 // nearClipDist, frameIndex) and the instanced-mesh operations (updateInstance,
@@ -9,8 +9,7 @@
 // the wrapper over them, entered after js/scene.js and js/scene_graph.js.
 //
 // Every accessor answers for the node types it applies to and is a no-op /
-// undefined elsewhere, which is what the old per-type `.prop` bindings did
-// and what an app that reads `node.radius` off a mesh expects (undefined,
+// undefined elsewhere, which is what an app that reads `node.radius` off a mesh expects (undefined,
 // not a throw).
 
 #include "bronze_host/native_scene_internal.h"
@@ -171,7 +170,7 @@ void bro_scene_SceneNode_emissiveColor_set(void* self, const double* v, uint32_t
     else im->setEmissiveColor(c[0], c[1], c[2]);
 }
 // Emissive is a plain 0..1 triple, not a linearized bromath::Color: a CSS
-// string maps channel/255 straight, as the array form and the old binding did.
+// string maps channel/255 straight, as the array form does.
 void bro_scene_SceneNode_emissiveColorCss_set(void* self, const char* css) {
     uint8_t r, g, b, a;
     if (!css || !canvas::parseCSSColor(css, r, g, b, a)) return;

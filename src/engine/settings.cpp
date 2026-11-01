@@ -10,7 +10,7 @@
 namespace bro::engine {
 
 // ---------------------------------------------------------------------------
-// JSON persistence helpers (same pattern as storage_bindings.cpp)
+// JSON persistence helpers
 // ---------------------------------------------------------------------------
 
 static std::string escapeJson(const std::string& s) {

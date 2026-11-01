@@ -5,11 +5,9 @@
 // `input.validity`, `input.validationMessage`, `input.willValidate`,
 // `input.checkValidity()`, `form.checkValidity()` and the validation step
 // `form.requestSubmit()` runs are all ONE computation over the DOM, and none of
-// it needs a JS realm. It used to live inline in the QuickJS element binding;
-// the bronze port kept only three of the ten constraints (customError,
-// required-empty, pattern) and dropped the form-wide walk entirely, so
-// `form.checkValidity()` ran the ELEMENT check on the <form> — which has no
-// value and no constraints — and answered true for every form ever written.
+// it needs a JS realm. `form.checkValidity()` is the form-wide walk over its
+// controls, not the element check run on the <form>, which has no value and
+// no constraints and would answer true for every form.
 //
 // The one piece that genuinely needs a realm is `pattern`: HTML defines it as
 // an ECMAScript RegExp (named groups, lookbehind, \u{...}), which is the JS

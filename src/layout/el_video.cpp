@@ -925,7 +925,7 @@ void ElVideo::pumpEvents(bool advanceClock) {
 
 // ── Inert stub — video-less build (no libvpx/webm/Opus, no vcpkg). <video>
 // elements still exist and their HTMLMediaElement JS surface stays callable
-// (element_bindings.cpp is core), but nothing decodes: the element paints a
+// (bronze_host/host_element_video.cpp is core), but nothing decodes: the element paints a
 // black content box and all media state reads as empty/paused. pipeline_ is
 // always null and no video/* headers are pulled in.
 namespace bro::layout {

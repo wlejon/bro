@@ -79,7 +79,7 @@ public:
     GizmoManager(const GizmoManager&) = delete;
     GizmoManager& operator=(const GizmoManager&) = delete;
 
-    // --- JS-facing API (called from gizmo_bindings.cpp) -------------------
+    // --- JS-facing API (called from bronze_host/native_scene_gizmo.cpp) ----
 
     void show() { config_.visible = true; }
     void hide() { config_.visible = false; }

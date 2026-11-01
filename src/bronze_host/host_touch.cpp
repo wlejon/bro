@@ -175,12 +175,11 @@ Value gestureEventConstructor(Value self, std::span<const Value> a) {
 }  // namespace
 
 void installTouchGlobals() {
-    // Constructible, all four: the old stack shipped these as JS polyfill
-    // classes (dom_polyfills.js) and a program that synthesises a touch —
-    // a test harness, a library's own input emulation — calls
+    // Constructible, all four: a program that synthesises a touch — a test
+    // harness, a library's own input emulation — calls
     // `new TouchEvent('touchstart', {touches: [new Touch({...})]})` and hands
-    // the result to dispatchEvent. Installing them as brands only, which the
-    // port did, turned every one of those calls into "not constructible".
+    // the result to dispatchEvent. Brands only would make every one of those
+    // calls "not constructible".
     g_touchClass.install("Touch", 1, touchConstructor, [](ObjectBuilder&) {});
 
     g_touchListClass.install("TouchList", 0, touchListConstructor, [](ObjectBuilder& b) {

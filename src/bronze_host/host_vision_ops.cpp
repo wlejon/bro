@@ -186,8 +186,8 @@ Value normalEstimate(Value thisIn, std::span<const Value> args) {
         {
             ev::Persistent n(bvm::makeFloat32Array(nm.normals.data(), nm.normals.size()));
             res.set("normals", n.get());
-            // `normal` is the bronze port's name for the same plane; both
-            // spellings stay published, as they are in the sibling.
+            // `normal` is the second name for the same plane; both
+            // spellings are published, as they are in the sibling.
             res.set("normal", n.get());
         }
         res.set("image", bmp.get());

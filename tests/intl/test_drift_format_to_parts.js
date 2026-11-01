@@ -1,10 +1,9 @@
-// `formatToParts` on the three Intl formatters that lost it in the port.
+// `formatToParts` on DateTimeFormat, ListFormat and RelativeTimeFormat.
 //
-// Intl.NumberFormat kept it; DateTimeFormat, ListFormat and RelativeTimeFormat
-// did not, so a caller that maps over the parts — the normal way to style the
-// currency symbol differently from the digits, or to wrap the unit in a
-// <span> — threw "not a function" instead. These three formatters do not
-// track where their pieces came from, so, as in the old stack, they report the
+// A caller maps over the parts — the normal way to style the currency symbol
+// differently from the digits, or to wrap the unit in a <span> — so the
+// method has to exist. These three formatters do not track where their
+// pieces came from, so they report the
 // formatted string as a single `literal` part: the invariant a caller relies
 // on is that joining the values reproduces `format()`, and that holds.
 

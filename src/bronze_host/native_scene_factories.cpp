@@ -146,7 +146,7 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value optsIn) {
     applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
 }
 
-// The createInstancedMesh option surface the old binding read: material,
+// The createInstancedMesh option surface read here: material,
 // texture maps, the atlas grid and static batching. Transform / name keys
 // are applied by the JS wrapper's applyNodeOpts, the instance buffers by
 // setInstances, and scatter / tube by js/scene_extras.js.

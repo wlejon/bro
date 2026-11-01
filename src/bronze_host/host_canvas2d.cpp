@@ -246,7 +246,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 // An unknown string is ignored and the state keeps its value,
-                // as the HTML spec says for lineCap and as the old binding did.
+                // as the HTML spec says for lineCap.
                 std::string s = ev::toUtf8(a[0]);
                 if (s == "butt") cs->setLineCap(0);
                 else if (s == "round") cs->setLineCap(1);

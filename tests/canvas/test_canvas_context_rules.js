@@ -1,10 +1,10 @@
-// Canvas context rules restored from the pre-bronze bindings:
+// Canvas context rules:
 //   - one context TYPE per canvas: after getContext('2d'), getContext('webgl2')
 //     answers null (and vice versa), as the HTML spec says;
 //   - a WebGL canvas's width/height setters resize the drawing buffer and a
 //     zero-size assignment is refused rather than allocating an empty FBO;
 //   - fillStyle / strokeStyle read back as "rgba(r,g,b,a.aa)" with a two-decimal
-//     alpha, the format the old getter used and canvas libraries parse;
+//     alpha, the format canvas libraries parse;
 //   - an unknown lineCap / lineJoin string is ignored (the old value stays);
 //   - getLineDash returns the list as set — an odd-length list is not doubled
 //     at set time (the painter doubles it, as the spec says).

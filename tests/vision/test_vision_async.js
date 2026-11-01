@@ -1,10 +1,9 @@
 // bro.vision heavy ops run off the JS thread
 // (src/bronze_host/host_vision_jobs.cpp).
 //
-// The old QuickJS binding took an `onDone` callback, ran the model on a
-// worker thread and delivered the result from the engine's frame pump; the
-// bronze port made every op synchronous, so a depth pass blocked the frame.
-// This checks the restored contract:
+// An op given an `onDone` callback runs the model on a worker thread and
+// delivers the result from the engine's frame pump, so a depth pass does not
+// block the frame. This checks the contract:
 //
 //   * no onDone  -> the result, synchronously;
 //   * onDone     -> a handle with cancel() and `done`, and onDone(result,

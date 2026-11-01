@@ -1,4 +1,4 @@
-// Factory option keys and getters the bronze port had dropped:
+// Factory option keys and getters:
 //   createInstancedMesh: staticBatch, atlasCols / atlasRows (+ getters), unlit
 //   createShape: shape, cornerRadius, anchorX / anchorY, stroke, points
 //   createSprite: anchorX / anchorY, name

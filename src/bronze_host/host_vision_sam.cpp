@@ -3,8 +3,7 @@
 // setImage (the ViT encode) and segmentEverything (the grid sweep) are the
 // two expensive halves; segment is the cheap per-click decode and is here
 // only so the whole class takes `onDone` uniformly. Every mask carries its
-// `image` ImageBitmap again — the dodger-blue overlay the old binding drew
-// (30, 144, 255) — beside the `data` bytes the sibling returns.
+// `image` ImageBitmap — a dodger-blue overlay (30, 144, 255) — beside the `data` bytes the sibling returns.
 //
 // The prompt readers below mirror brovisionml/src/api/native_vision_sam.cpp:
 // the array form ([[x,y], ...]) and the object form ([{x, y, label?}, ...]),
