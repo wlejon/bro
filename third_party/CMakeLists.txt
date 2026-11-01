@@ -105,8 +105,7 @@ endif()
 # that already exists). Linux's Skia uses the system libjpeg broimage finds
 # too, and Windows' carries none.
 set(_skia_jpeg_inc "${CMAKE_CURRENT_LIST_DIR}/skia/src/third_party/externals/libjpeg-turbo/src")
-if(APPLE AND NOT TARGET broimage_jpeg_turbo
-   AND NOT (DEFINED BROIMAGE_WITH_JPEG_TURBO AND NOT BROIMAGE_WITH_JPEG_TURBO))
+if(APPLE AND NOT TARGET broimage_jpeg_turbo)
     if(NOT EXISTS "${_skia_jpeg_inc}/jpeglib.h")
         bro_dependency(libjpeg-turbo SOURCE_ONLY)
         set(_skia_jpeg_cfg_dir "${CMAKE_BINARY_DIR}/skia_jpeg_inc")
@@ -123,7 +122,6 @@ if(APPLE AND NOT TARGET broimage_jpeg_turbo
     endif()
     add_library(broimage_jpeg_turbo INTERFACE)
     target_include_directories(broimage_jpeg_turbo SYSTEM INTERFACE ${_skia_jpeg_inc})
-    target_compile_definitions(broimage_jpeg_turbo INTERFACE BROIMAGE_HAS_JPEG_TURBO=1)
     # A program that links broimage without drawing anything (bromux) still
     # needs the symbols: only the jpeg objects come out of the archive.
     target_link_libraries(broimage_jpeg_turbo INTERFACE skia)
