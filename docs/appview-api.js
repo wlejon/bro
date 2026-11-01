@@ -41,8 +41,8 @@
  *     its timers, Workers, sound, watchers and child processes
  *     (`<terminal>`, `child_process`).
  *
- * Not yet in an app's view, as in any sub-document: `getContext('webgl2')`
- * and `getContext('scene')` answer null.
+ * Not yet in an app's view, as in any sub-document: `getContext('webgl2')`,
+ * `getContext('scene')` and `getContext('kernel')` answer null.
  *
  * An `<iframe>` of the page's own folder is the page's own app, and reaches
  * and is reached as a same-origin frame is on the web (docs/iframe-api.js).

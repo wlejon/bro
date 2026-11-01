@@ -51,7 +51,7 @@ These are the test harness, the developer driving the app, not the app's own act
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`). Also waits for the image decodes started so far (they run off the page thread, [image-api.js](image-api.js)), so after `img.src = p; flush();` the image is complete and drawable; its `load` event is still a task for the next turn. Paints and screenshots likewise wait for the pictures they show. `advanceTime`'s own per-step flushes leave the 3D scenes' render pending: it is drawn when the clock moves on (the next step), by a capture, or before a read of what a render drew (`perf.gpuFrameMs()`, `plantStats()`, `grassStats()`), so `advanceTime(50); frameImage()` draws the scene once, for the frame captured, not four times. A `flush()` you call draws them at once: after `advanceTime` it is a second render of the same frame, so leave it out of a loop that captures. |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
 | `skipTest(reason)` | This environment cannot test the script's subject (weights absent, feature compiled out): the run exits 77, which `tests/run_tests.sh` reports as SKIP — never as a pass. Something that also failed still fails the run. The script keeps running, so do nothing further after it. |
-| `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` returned null. On a run with no GPU device (`--no-gpu`) or with the feature compiled out it skips like `skipTest`; on a GPU run a null context is a bug, and it fails the run. |
+| `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` / `getContext('kernel')` returned null (or `bro.kernel.gpu` is false). On a run with no GPU device (`--no-gpu`) or with the feature compiled out it skips like `skipTest`; on a GPU run a null context is a bug, and it fails the run. |
 | `writeFile(path, data)` | Write `data` to `path` and return the byte count. A string is written as UTF-8; an `ArrayBuffer` or TypedArray is written verbatim (a view writes only its own range, not the whole buffer). Missing parent directories are created, like `screenshot()`. Throws on anything else object-shaped, and on an open/write failure, naming the path. Headless-only, so a bake/export tool can drop an asset next to its test; a shipped app gets no filesystem write from this. |
 
 ### Screenshots
@@ -902,7 +902,7 @@ draws its contents as of the last upload.
 ### CPU mode (`--no-gpu`)
 
 - Skia on the CPU through the same record → replay → composite pipeline, so iframes, system panels and a device scale above 1 render as on the GPU
-- No WebGL and no 3D scene: `getContext('webgl2')` / `getContext('scene')` return `null`. `bro.gpu.available` is the ML/compute backend, not this.
+- No WebGL, no 3D scene and no GPU kernels: `getContext('webgl2')` / `getContext('scene')` / `getContext('kernel')` return `null` and `bro.kernel.gpu` is false. `bro.gpu.available` is the ML/compute backend, not this.
 - Never chosen silently: a headless boot that finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`); pass `--no-gpu` to choose it
 
 ### Virtual time

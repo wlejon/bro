@@ -3,6 +3,7 @@
 // premultiplied-alpha textured triangles under dynamic rendering.
 
 #include "render/vulkan_presenter.h"
+#include "render/kernel_shader.h"
 #include "render/pixel_convert.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
@@ -12,18 +13,6 @@
 #include <cstdint>
 
 namespace bro::render {
-
-namespace {
-
-// Built from src/render/shaders/ by bro_spirv_embed.
-const uint32_t kPresentQuadVertSpv[] =
-#include "present_quad.vert.spv.h"
-;
-const uint32_t kPresentOverlayFragSpv[] =
-#include "present_overlay.frag.spv.h"
-;
-
-} // namespace
 
 bool VulkanPresenter::initBlendResources() {
     VkDevice device = context_.device();
@@ -96,13 +85,19 @@ VkPipeline VulkanPresenter::blendPipeline(VkFormat targetFormat) {
 
     VkDevice device = context_.device();
     VkShaderModule modules[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    const uint32_t* code[2] = {kPresentQuadVertSpv, kPresentOverlayFragSpv};
-    const size_t size[2] = {sizeof(kPresentQuadVertSpv), sizeof(kPresentOverlayFragSpv)};
+    // shaders/present.bk, compiled by brokernel.
+    std::string err;
+    const KernelShader shaders[2] = {renderKernelShader(RenderKernelSource::Present, "present_quad_vert", &err),
+                                     renderKernelShader(RenderKernelSource::Present, "present_overlay_frag", &err)};
+    if (!shaders[0] || !shaders[1]) {
+        LOG_ERROR("VulkanPresenter: present.bk does not compile: %s", err.c_str());
+        return VK_NULL_HANDLE;
+    }
     for (int i = 0; i < 2; ++i) {
         VkShaderModuleCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        info.codeSize = size[i];
-        info.pCode = code[i];
+        info.codeSize = shaders[i].spirv.size() * sizeof(uint32_t);
+        info.pCode = shaders[i].spirv.data();
         if (vkCreateShaderModule(device, &info, nullptr, &modules[i]) != VK_SUCCESS) {
             LOG_ERROR("VulkanPresenter: Failed to create blend shader module");
             if (modules[0]) vkDestroyShaderModule(device, modules[0], nullptr);
@@ -115,7 +110,7 @@ VkPipeline VulkanPresenter::blendPipeline(VkFormat targetFormat) {
         stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[i].stage = i == 0 ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
         stages[i].module = modules[i];
-        stages[i].pName = "main";
+        stages[i].pName = shaders[i].entry.c_str();
     }
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};

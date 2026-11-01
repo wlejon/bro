@@ -561,7 +561,9 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
     // ancestor positions it), plus the pass's root offset (document scroll;
     // the compositor shifts HTML and quads together by the engine inset), and
     // carries the active overflow/scroll clip for the compositor to re-apply.
-    if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext() || elem->iframeDoc()) && visible) {
+    if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext() || elem->kernelCanvas() ||
+         elem->iframeDoc()) &&
+        visible) {
         noteVolatile(SpanMiss::LayerBreak);
         LayerBreak lb;
         lb.element = elem;
@@ -587,6 +589,8 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
             emit(render::CanvasLayerSource{static_cast<canvas::CanvasScene*>(elem->canvasScene())->sceneId()});
         } else if (elem->webglContext()) {
             emit(render::WebGLLayerSource{elem->nodeId()});
+        } else if (elem->kernelCanvas()) {
+            emit(render::KernelCanvasLayerSource{elem->nodeId()});
         } else {
             emit(render::IframeLayerSource{elem->iframeDocId()});
         }

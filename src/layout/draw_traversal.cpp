@@ -206,8 +206,8 @@ ScrollLayerVeto scanScrollLayerContent(dom::Element* root) {
             int z = 0;
             if (!getZIndex(s, z) && z < 0) { found = ScrollLayerVeto::Positioned; return; }
         }
-        if (e->canvasScene() || e->webglContext() || e->sceneGraph() || e->iframeDoc() || e->terminalControl() ||
-            e->remoteViewControl()) {
+        if (e->canvasScene() || e->webglContext() || e->kernelCanvas() || e->sceneGraph() || e->iframeDoc() ||
+            e->terminalControl() || e->remoteViewControl()) {
             found = ScrollLayerVeto::LayerContent;
             return;
         }

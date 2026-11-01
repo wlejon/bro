@@ -1,6 +1,6 @@
 #include "webgl/vulkan/webgl_vk_glsl.h"
 #include "webgl/vulkan/webgl_vk_spirv.h"
-#include "render/glsl_compiler.h"
+#include "webgl/glsl_compiler.h"
 
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
@@ -676,9 +676,9 @@ TypeInfo typeInfo(GLenum type) {
 
 bool compile(const std::string& source, GLenum type, std::string& log) {
     log.clear();
-    auto lock = render::acquireGlslang();
+    auto lock = webgl::acquireGlslang();
     if (!lock.owns_lock()) {
-        log = "ERROR: the shader compiler failed to initialise\n";
+        log ="ERROR: the shader compiler failed to initialise\n";
         return false;
     }
     const EShLanguage stage = type == GL_VERTEX_SHADER ? EShLangVertex : EShLangFragment;
@@ -691,7 +691,7 @@ LinkResult link(const std::string& vertexSource, const std::string& fragmentSour
                 const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits,
                 const FeedbackRequest& feedback) {
     LinkResult result;
-    auto lock = render::acquireGlslang();
+    auto lock = webgl::acquireGlslang();
     if (!lock.owns_lock()) {
         result.log = "ERROR: the shader compiler failed to initialise\n";
         return result;

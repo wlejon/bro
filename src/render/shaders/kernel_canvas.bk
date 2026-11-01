@@ -1,0 +1,35 @@
+// A 'kernel' canvas's present (render/kernel_canvas.h): the buffer's texels,
+// rows packed tight from `offset` (in texels), stored into the image the
+// canvas's layer samples. One invocation a texel; a copy engine's
+// buffer-to-image copy runs at a fraction of the bandwidth this does.
+
+struct BlitPush {
+    width: i32,
+    height: i32,
+    offset: i32,
+    pad: i32,
+}
+
+@binding(0, 0) var src_rgba8: read_buffer<u32>;
+@binding(0, 1) @format(rgba8) var dst_rgba8: image2d<vec4<f32>>;
+
+@binding(0, 0) var src_rgba32f: read_buffer<vec4<f32>>;
+@binding(0, 1) @format(rgba32f) var dst_rgba32f: image2d<vec4<f32>>;
+
+@compute @workgroup_size(16, 16, 1)
+fn blit_rgba8(u: BlitPush) {
+    let p = global_id().xy;
+    if (p.x >= u.width || p.y >= u.height) {
+        return;
+    }
+    dst_rgba8.store(p, unpack_unorm4x8(src_rgba8[u.offset + p.y * u.width + p.x]));
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn blit_rgba32f(u: BlitPush) {
+    let p = global_id().xy;
+    if (p.x >= u.width || p.y >= u.height) {
+        return;
+    }
+    dst_rgba32f.store(p, src_rgba32f[u.offset + p.y * u.width + p.x]);
+}

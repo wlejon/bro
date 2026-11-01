@@ -1,5 +1,14 @@
 find_package(Vulkan REQUIRED)
 
+# --- GLSL -> SPIR-V ---
+#
+# The in-process glslang wrapper (glsl_compiler.h): WebGL2's alone, since
+# GLSL is only web content's.
+add_library(bro_glsl STATIC glsl_compiler.cpp)
+target_include_directories(bro_glsl PUBLIC ${bro_SOURCE_DIR}/src)
+target_link_libraries(bro_glsl PUBLIC brass PRIVATE glslang::glslang glslang::glslang-default-resource-limits)
+target_compile_features(bro_glsl PUBLIC cxx_std_20)
+
 add_library(bro_webgl STATIC
     webgl2_context.cpp
     vulkan/webgl_vk_canvas.cpp
@@ -45,4 +54,7 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_webgl_test tests/test_webgl_vulkan.cpp)
     target_link_libraries(bro_vulkan_webgl_test PRIVATE bro_webgl bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_webgl_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_glsl_compiler_test tests/test_glsl_compiler.cpp)
+    target_link_libraries(bro_glsl_compiler_test PRIVATE bro_glsl)
 endif()

@@ -1,6 +1,6 @@
 #include "render/frame_damage.h"
 
-#include "render/glsl_compiler.h"
+#include "render/kernel_shader.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
@@ -95,22 +95,7 @@ void diffFrames(const uint8_t* older, const uint8_t* newer, uint32_t width, uint
 
 namespace {
 
-// One workgroup per tile, one invocation per pixel: a pixel that differs
-// marks its tile. The alpha is left out (scanout is XRGB: it is undefined).
-constexpr const char* kDiffShader = R"(#version 450
-layout(local_size_x = 16, local_size_y = 16) in;
-layout(set = 0, binding = 0) uniform sampler2D newer;
-layout(set = 0, binding = 1) uniform sampler2D older;
-layout(set = 0, binding = 2, std430) buffer Flags { uint flags[]; };
-layout(push_constant) uniform Params { uvec2 size; uint tilesX; } pc;
-void main() {
-    uvec2 p = gl_GlobalInvocationID.xy;
-    if (p.x >= pc.size.x || p.y >= pc.size.y) return;
-    vec3 a = texelFetch(newer, ivec2(p), 0).rgb;
-    vec3 b = texelFetch(older, ivec2(p), 0).rgb;
-    if (any(notEqual(a, b))) flags[gl_WorkGroupID.y * pc.tilesX + gl_WorkGroupID.x] = 1u;
-}
-)";
+// shaders/frame_diff.bk: one workgroup per tile.
 static_assert(kDamageTile == 16, "the shader's workgroup is one tile");
 
 struct PushConstants {
@@ -122,11 +107,12 @@ struct PushConstants {
 GpuFrameDiff::GpuFrameDiff(VulkanContext& ctx) : ctx_(ctx) {
     VkDevice dev = ctx_.device();
     std::string log;
-    const std::vector<uint32_t> spirv = compileGlslToSpirv(kDiffShader, ShaderStage::Compute, &log);
-    if (spirv.empty()) {
+    const KernelShader shader = renderKernelShader(RenderKernelSource::FrameDiff, "frame_diff_comp", &log);
+    if (!shader) {
         LOG_WARN("GpuFrameDiff: the diff shader does not compile: %s", log.c_str());
         return;
     }
+    const std::vector<uint32_t>& spirv = shader.spirv;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -179,7 +165,7 @@ GpuFrameDiff::GpuFrameDiff(VulkanContext& ctx) : ctx_(ctx) {
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
-    ci.stage.pName = "main";
+    ci.stage.pName = shader.entry.c_str();
     ci.layout = pipelineLayout_;
     if (vkCreateComputePipelines(dev, ctx_.pipelineCache(), 1, &ci, nullptr, &pipeline_) != VK_SUCCESS) {
         LOG_WARN("GpuFrameDiff: creating the diff pipeline failed");

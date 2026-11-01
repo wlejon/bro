@@ -53,6 +53,7 @@ bool eqLayerSource(const LayerSource& a, const LayerSource& b) {
             const T& y = std::get<T>(b);
             if constexpr (std::is_same_v<T, CanvasLayerSource>) return x.sceneId == y.sceneId;
             else if constexpr (std::is_same_v<T, WebGLLayerSource>) return x.elementId == y.elementId;
+            else if constexpr (std::is_same_v<T, KernelCanvasLayerSource>) return x.elementId == y.elementId;
             else if constexpr (std::is_same_v<T, SceneLayerSource>) return x.elementId == y.elementId;
             else if constexpr (std::is_same_v<T, IframeLayerSource>) return x.docId == y.docId;
             else if constexpr (std::is_same_v<T, TerminalLayerSource>) return x.layerId == y.layerId;

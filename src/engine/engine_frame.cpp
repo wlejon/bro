@@ -55,11 +55,23 @@ dom::Element* Engine::liveElementOf(const WebGLEntry& entry) const {
     return node ? static_cast<dom::Element*>(node) : nullptr;
 }
 
+dom::Element* Engine::liveElementOf(const KernelCanvasEntry& entry) const {
+    if (!entry.element || !entry.document) return nullptr;
+    if (!dom::Document::isLiveDocument(entry.document)) return nullptr;
+    auto* node = entry.document->resolveNode(entry.element, entry.elementId);
+    return node ? static_cast<dom::Element*>(node) : nullptr;
+}
+
 void Engine::pruneDeadWebGLContexts() {
     webglEntries_.erase(
         std::remove_if(webglEntries_.begin(), webglEntries_.end(),
             [this](const WebGLEntry& e) { return e.element && !liveElementOf(e); }),
         webglEntries_.end());
+    // A kernel canvas's display goes with its canvas the same way.
+    kernelCanvases_.erase(
+        std::remove_if(kernelCanvases_.begin(), kernelCanvases_.end(),
+            [this](const KernelCanvasEntry& e) { return !liveElementOf(e); }),
+        kernelCanvases_.end());
 }
 
 void Engine::syncWebGLCanvasSizes() {

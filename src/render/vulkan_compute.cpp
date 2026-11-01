@@ -677,6 +677,15 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
     return r;
 }
 
+bool VulkanCompute::recordGraphics(const std::function<void(VkCommandBuffer)>& fn) {
+    if (!context_ || background_ || !fn) return false;
+    VkCommandBuffer cmd = commands();
+    if (cmd == VK_NULL_HANDLE) return false;
+    fn(cmd);
+    current().pendingBarrier = true;
+    return true;
+}
+
 uint64_t VulkanCompute::flush() { return flushStream(graphicsStream_, false); }
 
 uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {

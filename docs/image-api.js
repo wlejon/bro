@@ -13,8 +13,9 @@
  * frames. The two exceptions are the builders (`gradient`, `alloc`) and the
  * decoders, which necessarily hand back a fresh buffer.
  *
- * The GPU half of the namespace — `bro.image.gpu.colormap` / `fbm2D`, a
- * WebGL2 *renderer* that draws to a canvas rather than filling a typed array —
+ * The GPU half of the namespace — `bro.image.gpu.colormap` / `fbm2D`,
+ * brokernel kernels that draw to a 'kernel' canvas rather than filling a
+ * typed array —
  * is documented separately in **docs/image-gpu-api.js**. It lives in bro, not
  * in broimage; it shares the namespace for ergonomics only (CPU `lookup` is
  * the GPU `colormap`, both eating a `bro.image.gradient()` LUT).

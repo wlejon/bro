@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -228,6 +229,12 @@ public:
     bool read(const ComputeBuffer& buffer, VkDeviceSize offset, void* out, VkDeviceSize size);
     /// The same copy, not waited for: null on failure.
     std::shared_ptr<ComputeReadback> readLater(const ComputeBuffer& buffer, VkDeviceSize offset, VkDeviceSize size);
+    /// Record `fn`'s commands in the graphics stream, after every operation
+    /// recorded so far (their writes visible to its compute and transfer
+    /// stages); the operations recorded after it wait for its compute and
+    /// transfer writes. Work of the render module's own over the stream's
+    /// buffers (a 'kernel' canvas's present). False in the background stream.
+    bool recordGraphics(const std::function<void(VkCommandBuffer)>& fn);
 
     /// Submit what is recorded. Returns its ticket on the graphics queue, or
     /// the last submission's when nothing was recorded since.

@@ -8,7 +8,9 @@
  * point kernel per call (a height for physics, the camera, placement), a
  * grid kernel over a grid of cells into typed arrays; and on the GPU: a grid
  * kernel dispatched on the engine's own Vulkan device over KernelBuffers
- * (section 6). One source compiles for the CPU and the GPU together.
+ * (section 6), its pixels shown in the page by a 'kernel' canvas (section
+ * 8). One source compiles for the CPU and the GPU together. brokernel is the
+ * one way an app programs the GPU; WebGL2 is there for web content.
  *
  * GPU code is f32. f64 is the CPU's: a kernel marked `@cpu` has no GPU build
  * and may use it (absolute positions on an Earth-radius world, a noise
@@ -26,7 +28,7 @@
  * (brokernel README.md).
  *
  * Mounted in every realm (the page's and a Worker's) when `BRO_WITH_KERNEL`
- * is enabled (the app, desktop and full profiles); a build without it has
+ * is enabled (every profile, minimal included); a build without it has
  * `bro.kernel.available === false`. The GPU half is the main thread's only:
  * a Worker has `bro.kernel.gpu === false`.
  */
@@ -238,4 +240,53 @@ if (bro.kernel.gpu) {
             job = null;
         }
     }
+}
+
+// ============================================================================
+// 8. canvas.getContext('kernel'): a KernelBuffer shown in the page
+// ============================================================================
+//
+// A <canvas> whose context is 'kernel' shows the pixels of a KernelBuffer: an
+// app's own 2D GPU drawing (bro.image.gpu's colormap and fbm2D are made this
+// way, image-gpu-api.js). Nothing is read back: present() records a store of
+// the buffer's texels into the image the canvas's compositor layer samples
+// (a compute pass, at the GPU's bandwidth), in the graphics stream after
+// every dispatch so far, and the next frame shows it.
+// The canvas keeps showing it until the next present.
+//
+//   ctx.canvas
+//   ctx.present(buffer, { format = 'rgba8', byteOffset = 0 })
+//
+// The buffer holds canvas.width × canvas.height texels from byteOffset (a
+// multiple of the texel's size), rows top to bottom, packed tight (a grid
+// kernel's [x, y] store over the canvas's size): 'rgba8' is one u32 a pixel,
+// `r | g << 8 | b << 16 | a << 24`; 'rgba32f' a vec4<f32>. Colour is
+// premultiplied by alpha. The texels are taken at present(), so the buffer
+// may be dispatched into again at once.
+//
+// Main thread only, like the GPU half; null in an iframe's document and on
+// a canvas that has another context (and the other contexts are null on it).
+// Errors: a non-KernelBuffer or an unknown format throws a TypeError; texels
+// past the buffer's end or a bad byteOffset (negative, fractional, not a
+// whole texel) a RangeError; present() inside
+// bro.kernel.background a TypeError (the copy belongs to the frame).
+
+if (bro.kernel.gpu) {
+    const draw = bro.kernel.compile(`
+        @kernel @grid(2)
+        fn k_rings(g: grid<2>, out: write_store<u32, 2>, t: f32) {
+            let d = length(vec2<f32>(g.x() as f32 - 160.0, g.y() as f32 - 120.0));
+            let v = (sin(d * 0.1 - t) * 0.5 + 0.5) * 255.0;
+            out[g.x(), g.y()] = (v as u32) | ((v as u32) << 8u) | (255u << 16u) | (255u << 24u);
+        }
+    `).kernel('k_rings');
+    const canvas = document.querySelector('canvas');   // width 320, height 240
+    const ctx = canvas.getContext('kernel');
+    const pixels = bro.kernel.createBuffer(320 * 240 * 4);
+    function tick(ms) {
+        draw.dispatch([320, 240], pixels, ms * 0.004);
+        ctx.present(pixels);
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
 }

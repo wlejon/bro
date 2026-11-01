@@ -5,7 +5,7 @@
 // available — the swapchain following its window. Run with
 // BRO_VK_VALIDATION=1 to also fail on any validation error.
 
-#include "render/glsl_compiler.h"
+#include "render/kernel_shader.h"
 #include "render/skia_gpu.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
@@ -243,27 +243,32 @@ void testPresenterOffscreen(render::VulkanContext& ctx) {
     ctx.destroyImage(blue.image, blue.id);
 }
 
-// A real window: the swapchain follows its size, minimizing presents nothing,
-// and the vsync preference switches the present mode.
-void testGlslCompiler() {
-    std::cout << "[glsl] in-process GLSL -> SPIR-V, diagnostics on failure" << std::endl;
-    const char* good =
-        "#version 450\n"
-        "layout(location = 0) out vec4 outColor;\n"
-        "void main() { outColor = vec4(1.0, 0.0, 0.0, 1.0); }\n";
-    std::string log;
-    auto spirv = render::compileGlslToSpirv(good, render::ShaderStage::Fragment, &log);
-    CHECK(spirv.size() > 5 && spirv[0] == 0x07230203u);
-    // Memoised: the same source answers the same words.
-    CHECK(render::compileGlslToSpirv(good, render::ShaderStage::Fragment) == spirv);
-
-    log.clear();
-    auto bad = render::compileGlslToSpirv("#version 450\nvoid main() { undeclared = 1; }\n",
-                                          render::ShaderStage::Fragment, &log);
-    CHECK(bad.empty());
-    CHECK(log.find("undeclared") != std::string::npos);
+// The render module's brokernel stages compile, once each.
+void testKernelShaders() {
+    std::cout << "[kernel] the render stages' brokernel -> SPIR-V" << std::endl;
+    const std::pair<render::RenderKernelSource, const char*> stages[] = {
+        {render::RenderKernelSource::Present, "present_quad_vert"},
+        {render::RenderKernelSource::Present, "present_overlay_frag"},
+        {render::RenderKernelSource::FrameDiff, "frame_diff_comp"},
+        {render::RenderKernelSource::KernelCanvas, "blit_rgba8"},
+        {render::RenderKernelSource::KernelCanvas, "blit_rgba32f"},
+    };
+    for (const auto& [source, entry] : stages) {
+        std::string err;
+        const render::KernelShader shader = render::renderKernelShader(source, entry, &err);
+        if (!shader) std::cerr << entry << ": " << err << std::endl;
+        CHECK(shader.spirv.size() > 5 && shader.spirv[0] == 0x07230203u);
+        CHECK(!shader.entry.empty());
+        // Kept: the same stage answers the same words.
+        CHECK(render::renderKernelShader(source, entry).spirv == shader.spirv);
+    }
+    std::string err;
+    CHECK(!render::renderKernelShader(render::RenderKernelSource::Present, "no_such_entry", &err));
+    CHECK(!err.empty());
 }
 
+// A real window: the swapchain follows its size, minimizing presents nothing,
+// and the vsync preference switches the present mode.
 void testSwapchain() {
     platform::WindowConfig wcfg;
     wcfg.title = "bro_vulkan_test";
@@ -452,7 +457,7 @@ int main() {
     setenv("BRO_PIPELINE_CACHE_DIR", cacheDir.string().c_str(), 1);
 #endif
 
-    testGlslCompiler();
+    testKernelShaders();
     std::string cacheFile;
     {
         render::VulkanContextConfig cfg;

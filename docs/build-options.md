@@ -33,7 +33,9 @@ cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (add
 
 `util · platform · render · svg · layout · dom · canvas · webgl · engine ·
 headless` + Skia · SDL (Vulkan) · Vulkan 1.3 (headers + loader; MoltenVK on
-macOS) · glslang (in-process GLSL → SPIR-V, built from source) · brokit · htmlayout ·
+macOS) · brokernel (the GPU language: bro's own GPU stages, the presenter's
+included, compiled in process by brass to SPIR-V) · glslang (WebGL2's GLSL → SPIR-V,
+built from source) · brokit · htmlayout ·
 **broimage (tensor-free)** · brolink (dependency-free; the agent control channel and
 `bro-ctl`, [agent-control.md](agent-control.md)). A complete
 HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan presentation.
@@ -47,7 +49,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | **on** | on | on | on | self-contained, no vcpkg; on in every profile because `<audio>`/Web Audio is core HTML |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | on | needs `3D` (bromesh) |
-| `BRO_WITH_KERNEL` | brokernel + its `bro.kernel` binding | off | on | on | on | over brass, which bro always has; no vcpkg |
+| `BRO_WITH_KERNEL` | brokernel's `bro.kernel` binding | **on** | on | on | on | brokernel itself is core; no vcpkg. On in every profile: it is how an app programs the GPU |
 | `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). See [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
 | `BRO_WITH_WEBP` | libwebp decoder | **on** | **on** | on | on | compiled from the Skia source bundle alongside HarfBuzz, so `.webp` decodes the same on every platform. Off = `.webp` does not decode anywhere |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | off | on | on | **needs vcpkg** |

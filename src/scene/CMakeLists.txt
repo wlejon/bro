@@ -195,6 +195,6 @@ if(BRO_BUILD_TESTS)
     # and SPIR-V 1.5 compute shader formal verification.
     add_executable(bro_sdf_gpu_tracer_test tests/test_sdf_gpu_tracer.cpp)
     target_link_libraries(bro_sdf_gpu_tracer_test PRIVATE bro_scene bro_engine bro_dom bro_engine
-                          bro_render bro_platform bro_util bro_glsl bromesh bromath brass skia Vulkan::Vulkan)
+                          bro_render bro_platform bro_util bromesh bromath brass skia Vulkan::Vulkan)
     target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()

@@ -235,7 +235,7 @@ option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_
 option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_audio})
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
-option(BRO_WITH_KERNEL   "brokernel kernel language for world code (bro.kernel)" ${_d_render})
+option(BRO_WITH_KERNEL   "bro.kernel: brokernel, the GPU language, from script" ON)
 option(BRO_WITH_TEXT_SHAPING "HarfBuzz text shaping + UAX#9 bidi (Skia modules)" ${_d_shaping})
 # Build the stock bro/bro-headless/bro-server executables. A host application
 # that embeds the engine (add_subdirectory(bro), link bro_engine, supply its
@@ -494,7 +494,7 @@ set(BROMPRIS_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brom
 set(BROPULSE_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for bropulse" FORCE)
 set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broime" FORCE)
 set(BROREMOTE_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broremote" FORCE)
-set(BROKERNEL_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for brokernel" FORCE)
+set(BROKERNEL_ENABLE_API     ${BRO_WITH_KERNEL} CACHE BOOL "Build Bronze JavaScript API for brokernel" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,

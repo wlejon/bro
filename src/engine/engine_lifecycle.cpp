@@ -162,6 +162,7 @@ void Engine::teardown() {
     canvasSceneRegistry_.clear();
 
     webglEntries_.clear();
+    kernelCanvases_.clear();
     destroyAllIframes();
     destroySystemPanels();
 

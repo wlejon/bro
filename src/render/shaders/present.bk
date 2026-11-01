@@ -1,0 +1,19 @@
+// The presenter's compositing stages (vulkan_presenter_blend.cpp): one
+// compositor layer drawn over the target, its blending pipeline state.
+//  - present_quad_vert:    full-screen triangle from vertex_index() alone (no
+//                          vertex buffer), UV (0, 0) top-left; the viewport
+//                          places it
+//  - present_overlay_frag: the layer's image sampled at that UV
+
+@binding(0, 0) var overlay: sampler2d<vec4<f32>>;
+
+@vertex fn present_quad_vert() {
+    let vid = vertex_index();
+    let uv = vec2<f32>(((vid << 1) & 2) as f32, (vid & 2) as f32);
+    set_vertex_output(0, uv);
+    set_vertex_position(vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0));
+}
+
+@fragment fn present_overlay_frag(@location(0) uv: vec2<f32>) {
+    set_frag_output(0, overlay.sample(uv));
+}

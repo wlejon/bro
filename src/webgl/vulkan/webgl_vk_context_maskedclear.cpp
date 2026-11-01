@@ -7,7 +7,7 @@
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/vulkan/webgl_vk_formats.h"
-#include "render/glsl_compiler.h"
+#include "webgl/glsl_compiler.h"
 #include "util/log.h"
 
 #include <cstring>
@@ -26,9 +26,9 @@ struct ClearPush {
 constexpr const char* kPushBlock =
     "layout(push_constant) uniform ClearPush { uvec4 color; float depth; } pc;\n";
 
-VkShaderModule shaderModule(VkDevice device, const std::string& source, render::ShaderStage stage) {
+VkShaderModule shaderModule(VkDevice device, const std::string& source, webgl::ShaderStage stage) {
     std::string log;
-    const std::vector<uint32_t> spirv = render::compileGlslToSpirv(source, stage, &log);
+    const std::vector<uint32_t> spirv = webgl::compileGlslToSpirv(source, stage, &log);
     if (spirv.empty()) {
         LOG_ERROR("WebGLVkContext: masked clear shader failed: %s", log.c_str());
         return VK_NULL_HANDLE;
@@ -64,7 +64,7 @@ VkShaderModule WebGLVkContext::maskedClearShader(uint32_t colorMask) {
     auto it = maskedClear_.fragments.find(key);
     if (it != maskedClear_.fragments.end()) return it->second;
     const std::string source = std::string("#version 450\n") + kPushBlock + decls + "void main() {\n" + body + "}\n";
-    VkShaderModule module = shaderModule(context_.device(), source, render::ShaderStage::Fragment);
+    VkShaderModule module = shaderModule(context_.device(), source, webgl::ShaderStage::Fragment);
     if (module != VK_NULL_HANDLE) maskedClear_.fragments.emplace(key, module);
     return module;
 }
@@ -86,7 +86,7 @@ bool WebGLVkContext::maskedClearResources() {
                                    "    vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
                                    "    gl_Position = vec4(p * 2.0 - 1.0, pc.depth, 1.0);\n"
                                    "}\n";
-        maskedClear_.vertex = shaderModule(dev, source, render::ShaderStage::Vertex);
+        maskedClear_.vertex = shaderModule(dev, source, webgl::ShaderStage::Vertex);
     }
     return maskedClear_.vertex != VK_NULL_HANDLE;
 }

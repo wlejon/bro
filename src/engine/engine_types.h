@@ -12,6 +12,7 @@
 namespace bro::dom { class Document; class Element; }
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace bro::scene { class SceneGraph; }
+namespace bro::render { class KernelCanvas; }
 
 namespace bro::engine {
 
@@ -49,6 +50,14 @@ struct SelectionSnapshot {
 /// through Engine::liveElementOf (document + elementId resolve it safely).
 struct WebGLEntry {
     std::unique_ptr<webgl::WebGL2RenderingContext> context;
+    dom::Element* element = nullptr;  // non-owning
+    dom::Document* document = nullptr;
+    uint32_t elementId = 0;
+};
+
+/// 'kernel' canvases' displays, kept as WebGL contexts are.
+struct KernelCanvasEntry {
+    std::unique_ptr<render::KernelCanvas> canvas;
     dom::Element* element = nullptr;  // non-owning
     dom::Document* document = nullptr;
     uint32_t elementId = 0;

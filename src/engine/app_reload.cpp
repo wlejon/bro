@@ -249,6 +249,7 @@ void Engine::performAppReload() {
     canvasSceneRegistry_.clear();
 
     webglEntries_.clear();
+    kernelCanvases_.clear();
 
     for (auto& d : iframeDocs_)
         if (d) {

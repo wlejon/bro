@@ -1,29 +1,28 @@
 // Test bro.image.gpu.colormap — both uniform-range and autoRange paths.
 //
-// We construct a noise field with a known range, render it through a
-// 2-stop black→white LUT, and read pixels back via getPixel.
+// We construct a field with a known range, render it through a 2-stop
+// black→white LUT onto a 'kernel' canvas, and read the composited pixels.
 //
 // Uniform-range mode: lo/hi are supplied; the lowest source value maps to
 // black (0), the highest to white (255).
 //
-// autoRange mode: the engine computes (min, max) via GPU reduction. On the
-// first frame the EMA blend k=1 so the smoothed range == raw, and we expect
-// the same black/white mapping as above without supplying lo/hi.
+// autoRange mode: the range is a GPU reduction of the field. On the first
+// frame the blend is k=1, so the kept range == raw, and we expect the same
+// black/white mapping as above without supplying lo/hi.
 
 const root = document.getElementById('root');
 const W = 32, H = 32;
 
-root.innerHTML = `<canvas id="cv" width="${W}" height="${H}" style="width:${W}px;height:${H}px"></canvas>`;
+root.innerHTML = `<canvas id="cv" width="${W}" height="${H}" style="position:absolute;left:0;top:0;width:${W}px;height:${H}px"></canvas>`;
 flush();
 
 const cv = document.getElementById('cv');
-const gl = cv.getContext('webgl2');
-if (!gl) missingGpuContext('webgl2');
-else runWithWebGL();
+if (!bro.kernel.gpu) missingGpuContext('kernel');
+else run();
 
-function runWithWebGL() {
+function run() {
 
-// Build a noise field that's exactly 0..1 with a diagonal ramp.
+// A field that's exactly 0..1 with a diagonal ramp.
 const src = new Float32Array(W * H);
 for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -34,12 +33,10 @@ for (let y = 0; y < H; y++) {
 // 2-stop black→white LUT.
 const lut = bro.image.gradient([[0, 0, 0, 0], [1, 255, 255, 255]], 256);
 
-// Read pixels directly from the WebGL canvas backing — bypasses any page
-// composite latency between drawArrays and the next flush().
-const pxBuf = new Uint8Array(W * H * 4);
+// The red channel at the four corners, from one composite.
 function sampleR() {
-    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
-    return [pxBuf[0], pxBuf[(W - 1) * 4], pxBuf[(H - 1) * W * 4], pxBuf[((H - 1) * W + W - 1) * 4]];
+    const px = getPixels(0, 0, W, H).data;
+    return [px[0], px[(W - 1) * 4], px[(H - 1) * W * 4], px[((H - 1) * W + W - 1) * 4]];
 }
 function assertSpansBlackToWhite(label) {
     const rs = sampleR();
@@ -51,14 +48,14 @@ function assertSpansBlackToWhite(label) {
 
 // ----- uniform-range mode -----
 bro.image.gpu.colormap(cv, src, lut, { lo: 0, hi: 1 });
-flush();
 assertSpansBlackToWhite('uniform');
+// Row 0 of the field is the canvas's top row: (0,0) is the field's minimum.
+assert(sampleR()[0] < 20, 'field row 0 at the top: top-left is dark');
+assert(sampleR()[3] > 235, 'bottom-right is bright');
 
 // ----- autoRange mode -----
-// k=1 on the first frame, so the smoothed range == raw min/max == (0, 1).
-// We don't pass lo/hi.
+// k=1 on the first frame, so the kept range == raw min/max == (0, 1).
 bro.image.gpu.colormap(cv, src, lut, { autoRange: true });
-flush();
 assertSpansBlackToWhite('autoRange first frame');
 
 // Second frame with a narrower field. With ema=1 the new range takes effect
@@ -70,33 +67,23 @@ for (let y = 0; y < H; y++) {
     }
 }
 bro.image.gpu.colormap(cv, src2, lut, { autoRange: true, ema: 1.0 });
-flush();
 assertSpansBlackToWhite('autoRange rescaled');
 
 // ----- a constant field should NOT explode (invSpan guard) -----
-const flatVal = 0.5;
 const src3 = new Float32Array(W * H);
-src3.fill(flatVal);
+src3.fill(0.5);
 bro.image.gpu.colormap(cv, src3, lut, { autoRange: true, ema: 1.0 });
-flush();
 const flatRs = sampleR();
 for (let i = 1; i < flatRs.length; i++) {
-    // With hi==lo, invSpan is 0 -> t=0 for all pixels -> color = lut[0] = black.
-    // Whatever the engine picks, the result must be deterministic across the
-    // canvas (no NaN, no flicker between corners).
+    // With hi==lo, invSpan is 0 -> t=0 for all pixels -> color = lut[0].
+    // The result must be the same across the canvas (no NaN).
     assert(flatRs[i] === flatRs[0],
         'constant field renders uniformly (got mismatched corners: ' + flatRs + ')');
 }
 
 // ----- regenerate:false reuses the cached field (no src needed) -----
-// Re-do the autoRange render of the ramp with regenerate:false; we should
-// still get the spanning gradient because noiseTex still holds src.
-// First populate the cache via a regen call.
 bro.image.gpu.colormap(cv, src, lut, { autoRange: true, ema: 1.0 });
-flush();
-// Now skip upload and re-display.
 bro.image.gpu.colormap(cv, null, lut, { regenerate: false, autoRange: true });
-flush();
 assertSpansBlackToWhite('regenerate:false reuses cached field');
 
 // regenerate:false without a prior cache throws.
@@ -110,6 +97,19 @@ try {
     threw = /no cached/.test(e.message);
 }
 assert(threw, 'colormap: regenerate:false without cache throws');
+
+// A canvas with another context cannot take the colormap.
+const other = document.createElement('canvas');
+other.width = W; other.height = H;
+document.getElementById('root').appendChild(other);
+other.getContext('2d');
+threw = false;
+try {
+    bro.image.gpu.colormap(other, src, lut, { lo: 0, hi: 1 });
+} catch (e) {
+    threw = /'kernel' context/.test(e.message);
+}
+assert(threw, "colormap: a 2d canvas has no 'kernel' context");
 
 root.innerHTML = '';
 }

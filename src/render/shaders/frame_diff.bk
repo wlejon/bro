@@ -1,0 +1,29 @@
+// GpuFrameDiff (frame_damage.cpp): which 16 x 16 tiles of a frame differ from
+// the frame before it. One workgroup per tile, one invocation per pixel: a
+// pixel that differs marks its tile. The alpha is left out (scanout is XRGB:
+// it is undefined).
+
+struct DiffPush {
+    width: i32,
+    height: i32,
+    tiles_x: i32,
+    pad: i32,
+}
+
+@binding(0, 0) var newer: sampler2d<vec4<f32>>;
+@binding(0, 1) var older: sampler2d<vec4<f32>>;
+@binding(0, 2) var flags: buffer<u32>;
+
+@compute @workgroup_size(16, 16, 1)
+fn frame_diff_comp(u: DiffPush) {
+    let p = global_id().xy;
+    if (p.x >= u.width || p.y >= u.height) {
+        return;
+    }
+    let a = newer.fetch(p, 0).xyz;
+    let b = older.fetch(p, 0).xyz;
+    if (a.x != b.x || a.y != b.y || a.z != b.z) {
+        let t = workgroup_id().xy;
+        flags[t.y * u.tiles_x + t.x] = 1u;
+    }
+}

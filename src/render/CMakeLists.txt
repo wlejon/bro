@@ -16,26 +16,28 @@ else()
     target_compile_definitions(bro_bidi PRIVATE BRO_WITH_ICU_BIDI=0)
 endif()
 
-# --- GLSL -> SPIR-V ---
+# --- The render module's GPU stages (brokernel) ---
 #
-# The in-process glslang wrapper (glsl_compiler.h) on its own, so the build
-# tool that compiles bro's built-in shaders links nothing but glslang.
-add_library(bro_glsl STATIC glsl_compiler.cpp)
-target_include_directories(bro_glsl PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_glsl PUBLIC brass PRIVATE glslang::glslang glslang::glslang-default-resource-limits)
-target_compile_features(bro_glsl PUBLIC cxx_std_20)
-
-add_executable(bro_spirv_embed tools/spirv_embed.cpp)
-target_link_libraries(bro_spirv_embed PRIVATE bro_glsl)
-
-if(POLICY CMP0147)
-    cmake_policy(SET CMP0147 NEW)   # Visual Studio: custom commands in parallel
-endif()
-set(RENDER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_spv")
+# shaders/*.bk, embedded as strings (<file>.src.h) and compiled in process by
+# brass to SPIR-V when first used (kernel_shader.h).
+set(RENDER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_bk")
 file(MAKE_DIRECTORY "${RENDER_GEN_DIR}")
-set(RENDER_SPV_HEADERS "")
-bro_spirv_header(RENDER_SPV_HEADERS "${RENDER_GEN_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/present_quad.vert" vert)
-bro_spirv_header(RENDER_SPV_HEADERS "${RENDER_GEN_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/present_overlay.frag" frag)
+set(RENDER_BK_HEADERS "")
+foreach(_pair "present:kBkPresentSrc" "frame_diff:kBkFrameDiffSrc" "kernel_canvas:kBkKernelCanvasSrc")
+    string(REPLACE ":" ";" _pair "${_pair}")
+    list(GET _pair 0 _bk)
+    list(GET _pair 1 _var)
+    set(_in "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${_bk}.bk")
+    set(_out "${RENDER_GEN_DIR}/${_bk}.bk.src.h")
+    add_custom_command(
+        OUTPUT  "${_out}"
+        COMMAND ${CMAKE_COMMAND} -DINPUT="${_in}" -DOUTPUT="${_out}" -DVAR_NAME="${_var}"
+                -P "${bro_SOURCE_DIR}/cmake/embed_js.cmake"
+        DEPENDS "${_in}" "${bro_SOURCE_DIR}/cmake/embed_js.cmake"
+        COMMENT "Embedding render/shaders/${_bk}.bk"
+    )
+    list(APPEND RENDER_BK_HEADERS "${_out}")
+endforeach()
 
 # --- Render library (Vulkan) ---
 find_package(Vulkan REQUIRED)
@@ -80,7 +82,9 @@ add_library(bro_render STATIC
     animated_image.cpp
     software_cursor.cpp
     remote_picture.cpp
-    ${RENDER_SPV_HEADERS}
+    kernel_shader.cpp
+    kernel_canvas.cpp
+    ${RENDER_BK_HEADERS}
 )
 if(WIN32)
     # The remote viewer's zero-copy path: decoder D3D11 pictures into Vulkan.
@@ -89,7 +93,8 @@ if(WIN32)
 endif()
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_render PRIVATE ${RENDER_GEN_DIR})
-target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi bro_glsl broimage::broimage Vulkan::Vulkan)
+target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi broimage::broimage Vulkan::Vulkan)
+target_link_libraries(bro_render PRIVATE brokernel)
 
 # WebP decoding. Its own small library rather than a part of bro_render,
 # because bro has two independent image entry points that must agree — the

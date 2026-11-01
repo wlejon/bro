@@ -27,6 +27,11 @@
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #endif
+#if BRO_WITH_KERNEL
+#include "bronze_host/host_kernel_gpu.h"
+#include "render/kernel_canvas.h"
+#include "render/vulkan_compute.h"
+#endif
 
 namespace bro::bronze_host {
 
@@ -203,6 +208,57 @@ Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Elem
     return ev::setPrototype(b.get(), proto);
 }
 
+#if BRO_WITH_KERNEL
+// KernelCanvasContext — getContext('kernel') (docs/kernel-api.js): the
+// canvas shows a KernelBuffer's texels, copied on the GPU into the image its
+// layer composites (render::KernelCanvas), after the kernels that wrote them.
+HostClass g_kernelCanvasClass;
+
+Value makeKernelCanvasContextValue(const ev::Persistent& canvasRoot, dom::Element* el) {
+    if (firstInRealm(&g_kernelCanvasClass)) g_kernelCanvasClass.install("KernelCanvasContext", 0, nullptr, nullptr);
+    ObjectBuilder b;
+    b.set("canvas", canvasRoot.get());
+    b.def("present", 1, [el](Value, std::span<const Value> a) -> Value {
+        CanvasState* cs = canvasStateFor(el);
+        auto* eng = hostEngine();
+        auto* display = cs && cs->el ? static_cast<render::KernelCanvas*>(cs->el->kernelCanvas()) : nullptr;
+        if (!display || !eng) return ev::throwTypeError("KernelCanvasContext.present: the canvas has no display");
+        std::shared_ptr<render::ComputeBuffer> buffer = computeBufferOf(argAt(a, 0));
+        if (!buffer) return ev::throwTypeError("KernelCanvasContext.present: the buffer is not a KernelBuffer");
+        render::KernelCanvas::Format format = render::KernelCanvas::Format::RGBA8;
+        double offset = 0.0;
+        Value opts = argAt(a, 1);
+        if (ev::isObject(opts)) {
+            Value f = ev::getProperty(opts, "format");
+            if (!ev::isUndefined(f)) {
+                const std::string name = ev::toUtf8(f);
+                if (name == "rgba32f") format = render::KernelCanvas::Format::RGBA32F;
+                else if (name != "rgba8")
+                    return ev::throwTypeError("KernelCanvasContext.present: format is 'rgba8' or 'rgba32f', not '" +
+                                              name + "'");
+            }
+            Value o = ev::getProperty(opts, "byteOffset");
+            if (!ev::isUndefined(o)) offset = ev::toDouble(o);
+        }
+        if (!(offset >= 0.0) || offset != static_cast<double>(static_cast<uint64_t>(offset)))
+            return ev::throwRangeError("KernelCanvasContext.present: byteOffset is not a byte count");
+        render::VulkanCompute* compute = engineCompute();
+        if (compute && compute->inBackground())
+            return ev::throwTypeError("KernelCanvasContext.present: inside bro.kernel.background");
+        const int w = canvasWidthOf(cs), h = canvasHeightOf(cs);
+        std::string err;
+        if (w <= 0 || h <= 0 ||
+            !display->present(*buffer, static_cast<uint64_t>(offset), static_cast<uint32_t>(w),
+                              static_cast<uint32_t>(h), format, &err))
+            return ev::throwRangeError("KernelCanvasContext.present: " + (err.empty() ? "the canvas has no pixels" : err));
+        eng->requestPresent();
+        return ev::undefined();
+    });
+    Value proto = g_kernelCanvasClass.prototype();
+    return ev::setPrototype(b.get(), proto);
+}
+#endif
+
 }  // namespace
 
 void cleanupCanvasForElement(dom::Element* el) {
@@ -350,6 +406,24 @@ Value makeCanvasValue(dom::Element* el) {
             ev::setProperty(canvasRoot.get(), "__bro_ctxbmp__", ctxRoot.get());
             cs->contextType = type;
             return ctxRoot.get();
+        }
+        if (type == "kernel") {
+#if BRO_WITH_KERNEL
+            if (inChildCompartment()) return ev::null();
+            auto* eng = hostEngine();
+            if (!eng) return ev::null();
+            dom::Document* curDoc = currentHostDocument();
+            if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
+            Value existing = ev::getProperty(canvasRoot.get(), "__bro_ctxkernel__");
+            if (ev::isObject(existing)) return existing;
+            if (!eng->createKernelCanvas(cs->el)) return ev::null();
+            ev::Persistent ctxRoot(makeKernelCanvasContextValue(canvasRoot, cs->el));
+            ev::setProperty(canvasRoot.get(), "__bro_ctxkernel__", ctxRoot.get());
+            cs->contextType = type;
+            return ctxRoot.get();
+#else
+            return ev::null();
+#endif
         }
         if (type == "scene") {
 #if BRO_WITH_3D

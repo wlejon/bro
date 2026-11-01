@@ -17,6 +17,7 @@
 #include "dom/element.h"
 #include "platform/window.h"
 #include "render/pixel_convert.h"
+#include "render/vulkan_compute.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_presenter.h"
 #include "util/log.h"
@@ -378,6 +379,17 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                     // presenter's submission samples it (queue order does the rest).
                     entry.context->flush();
                     placeLayerImage(entry.context->drawingBuffer(), quad);
+                    return;
+                }
+            },
+            [&](const render::KernelCanvasLayerSource& src) {
+                for (auto& entry : kernelCanvases_) {
+                    if (!entry.canvas || entry.elementId != src.elementId || !liveElementOf(entry)) continue;
+                    // The copies its presents recorded go before the
+                    // presenter's submission samples the image.
+                    if (vulkanContext_) vulkanContext_->compute().flush();
+                    frameKeyAdd(entry.canvas->generation());
+                    placeLayerImage(entry.canvas->image(), quad);
                     return;
                 }
             },

@@ -15,6 +15,8 @@ namespace bro::render {
 struct CanvasLayerSource { uint64_t sceneId = 0; };
 /// A WebGL canvas: the <canvas> element's node id.
 struct WebGLLayerSource { uint32_t elementId = 0; };
+/// A 'kernel' canvas (render::KernelCanvas): the <canvas> element's node id.
+struct KernelCanvasLayerSource { uint32_t elementId = 0; };
 /// A 3D scene's output image: the scene element's node id.
 struct SceneLayerSource { uint32_t elementId = 0; };
 /// An <iframe> sub-document: its IframeDoc id (never recycled).
@@ -94,7 +96,7 @@ struct ClientWindowRef {
 
 using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
                                  TerminalLayerSource, DmabufLayerSource, ClientWindowsLayerSource,
-                                 RemoteViewLayerSource, ScrollLayerSource>;
+                                 RemoteViewLayerSource, ScrollLayerSource, KernelCanvasLayerSource>;
 
 /// Where a layer lands, in the surface space of the HTML painted around it
 /// (CSS px; content space for the app document), and the overflow/scroll

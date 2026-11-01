@@ -1,5 +1,4 @@
 #include "scene/sdf_gpu_tracer.h"
-#include "render/glsl_compiler.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "scene/scene_renderer.h"
@@ -18,14 +17,6 @@ namespace {
 
 int g_checks = 0;
 int g_failures = 0;
-
-void setEnv(const char* name, const char* value) {
-#if defined(_WIN32)
-    _putenv_s(name, value ? value : "");
-#else
-    if (value) setenv(name, value, 1); else unsetenv(name);
-#endif
-}
 
 void check(bool ok, const std::string& what) {
     ++g_checks;
@@ -352,84 +343,6 @@ void testVulkanGpuComputeExecutionAndParity() {
     check(parityOk, "Vulkan GPU traceRaysGpu hit distances, normals, soft shadows & AO match CPU reference");
 }
 
-void testGlslCompilerRelaxedPrecisionAndComputeAudit() {
-    // 1. Fragment shader with bounded math (sin, cos, clamp, mix) + unbounded world position
-    const char* fragSrc = R"(#version 450
-layout(location = 0) in vec3 vWorldPos;
-layout(location = 1) in vec2 vUv;
-layout(location = 0) out vec4 outColor;
-void main() {
-    float wave = sin(vUv.x * 6.2831853) * 0.5 + 0.5;
-    float rim = clamp(cos(vUv.y * 3.1415926), 0.0, 1.0);
-    float tonemapped = mix(wave, rim, 0.35);
-    float worldDist = vWorldPos.x * 4096.0;
-    outColor = vec4(tonemapped, wave * rim, clamp(worldDist, 0.0, 1.0), 1.0);
-}
-)";
-
-    bro::render::GlslCompileOptions fragOpts;
-    fragOpts.promoteRelaxedPrecision = true;
-    fragOpts.maxAbsFp16 = 1024.0f;
-    fragOpts.assumeStageInputsUnitRange = true;
-
-    const auto fragRes = bro::render::GlslCompiler::compileAndOptimize(
-        fragSrc, bro::render::ShaderStage::Fragment, fragOpts);
-    check(fragRes.ok(), "GlslCompiler::compileAndOptimize compiles fragment shader");
-    check(fragRes.relaxedPrecision.enabled && fragRes.relaxedPrecision.parseOk,
-          "GlslCompiler RelaxedPrecision pass parses fragment SPIR-V cleanly");
-    check(fragRes.relaxedPrecision.promotedCount > 0,
-          "GlslCompiler RelaxedPrecision promotes bounded fragment float ops to FP16");
-
-    // 2. Compute shader audited by brass::spirv::audit_compute_shader_binary
-    const char* compSrc = R"(#version 450
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-layout(std430, binding = 0) buffer OutBuf {
-    float data[];
-} outBuf;
-shared float tile[64];
-void main() {
-    uint lid = gl_LocalInvocationID.x & 63u;
-    float s = sin(float(lid) * 0.1) * 0.5 + 0.5;
-    tile[lid] = s;
-    barrier();
-    uint gid = gl_GlobalInvocationID.x;
-    outBuf.data[gid] = tile[lid] / (max(s, 0.01) + 0.001);
-}
-)";
-
-    bro::render::GlslCompileOptions compOpts;
-    compOpts.promoteRelaxedPrecision = true;
-    compOpts.auditComputeShader = true;
-
-    const auto compRes = bro::render::GlslCompiler::compileAndOptimize(
-        compSrc, bro::render::ShaderStage::Compute, compOpts);
-    check(compRes.ok(), "GlslCompiler::compileAndOptimize compiles compute shader");
-    check(compRes.relaxedPrecision.promotedCount > 0,
-          "GlslCompiler RelaxedPrecision promotes bounded compute float ops");
-    check(compRes.computeAudit.audited && compRes.computeAudit.valid,
-          "GlslCompiler static compute audit validates compute SPIR-V");
-    check(compRes.computeAudit.barriersUniform && compRes.computeAudit.sharedBoundsOk &&
-          compRes.computeAudit.divSqrtOk && compRes.computeAudit.provenSafe,
-          "GlslCompiler static compute audit proves uniform barrier, shared bounds & safe division");
-    check(compRes.computeAudit.localSize[0] == 64,
-          "GlslCompiler static compute audit extracts workgroup local_size_x = 64");
-
-    // 3. Environment variable toggles BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1
-    setEnv("BRO_SHADER_RELAXED_PRECISION", "1");
-    setEnv("BRO_AUDIT_COMPUTE_SHADERS", "1");
-    std::string log;
-    const auto envSpirv = bro::render::compileGlslToSpirv(
-        compSrc, bro::render::ShaderStage::Compute, &log);
-    setEnv("BRO_SHADER_RELAXED_PRECISION", nullptr);
-    setEnv("BRO_AUDIT_COMPUTE_SHADERS", nullptr);
-
-    check(!envSpirv.empty(), "compileGlslToSpirv succeeds with BRO_SHADER_RELAXED_PRECISION=1 and BRO_AUDIT_COMPUTE_SHADERS=1");
-    check(bro::render::GlslCompiler::lastRelaxedPrecisionStats().promotedCount > 0,
-          "BRO_SHADER_RELAXED_PRECISION=1 records promoted RelaxedPrecision stats");
-    check(bro::render::GlslCompiler::lastComputeAuditStats().provenSafe,
-          "BRO_AUDIT_COMPUTE_SHADERS=1 records proven-safe compute audit stats");
-}
-
 } // namespace
 
 int main() {
@@ -451,7 +364,6 @@ int main() {
     testConeTracedSoftShadowsAndAmbientOcclusion();
     testLiveCsgParameterUpdateWithoutMeshing();
     testVulkanGpuComputeExecutionAndParity();
-    testGlslCompilerRelaxedPrecisionAndComputeAudit();
 
     SdfGpuTracer::releasePipelines();
     SceneRenderer::setDefaultVulkanContext(nullptr);

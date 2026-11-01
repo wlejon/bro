@@ -1,70 +1,54 @@
-// Test bro.image.gpu.fbm2D — GLSL Simplex FBm rendered straight to canvas,
-// bypassing the CPU-side noise gen and upload.
+// Test bro.image.gpu.fbm2D — Simplex FBm made by a brokernel kernel on the
+// GPU and coloured onto a 'kernel' canvas, with no CPU noise or upload.
 
 const W = 64, H = 64;
 document.getElementById('root').innerHTML =
-    `<canvas id="cv" width="${W}" height="${H}" style="width:${W}px;height:${H}px"></canvas>`;
+    `<canvas id="cv" width="${W}" height="${H}" style="position:absolute;left:0;top:0;width:${W}px;height:${H}px"></canvas>`;
 flush();
 
 const cv = document.getElementById('cv');
-const gl = cv.getContext('webgl2');
-if (!gl) missingGpuContext('webgl2');
-else runWithWebGL();
+if (!bro.kernel.gpu) missingGpuContext('kernel');
+else run();
 
-function runWithWebGL() {
+function run() {
 
 const lut = bro.image.gradient([[0, 0, 0, 0], [1, 255, 255, 255]], 256);
-const pxBuf = new Uint8Array(W * H * 4);
+const pixels = () => getPixels(0, 0, W, H).data;
 
-function corners() {
-    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
-    return [pxBuf[0], pxBuf[(W - 1) * 4],
-            pxBuf[(H - 1) * W * 4], pxBuf[((H - 1) * W + W - 1) * 4]];
-}
-
-// 1) Single-octave Simplex at a chunky frequency: the field naturally spans
-//    its full range across a 64×64 patch. autoRange + ema=1 means the LUT
-//    maps min→black and max→white this frame, so we expect dark and bright
-//    samples on the canvas.
+// 1) Single-octave Simplex at a chunky frequency: the field spans its full
+//    range across a 64×64 patch. autoRange + ema=1 maps min→black and
+//    max→white this frame, so dark and bright pixels are on the canvas.
 bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.05,
     octaves: 1,
     seed: 1337,
     autoRange: true, ema: 1.0,
 });
-flush();
-let rs = corners();
-let mn = Math.min.apply(null, rs);
-let mx = Math.max.apply(null, rs);
-// Single octave at one offset can be unlucky — also peek at the histogram
-// of the entire 64×64 to be sure.
-gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
+let px = pixels();
 let minR = 255, maxR = 0;
 for (let i = 0; i < W * H; i++) {
-    const r = pxBuf[i * 4];
+    const r = px[i * 4];
     if (r < minR) minR = r;
     if (r > maxR) maxR = r;
 }
 assert(minR < 20, 'fbm2D: black appears (got min ' + minR + ')');
 assert(maxR > 235, 'fbm2D: white appears (got max ' + maxR + ')');
 
-// 2) Different seed → visibly different field. Fingerprint the first row
+// 2) Different seed → visibly different field. Fingerprint the middle row
 //    and assert it changes when we change the seed.
 function rowFingerprint() {
-    gl.readPixels(0, H / 2, W, 1, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
+    const row = getPixels(0, H / 2, W, 1).data;
     let s = 0;
-    for (let i = 0; i < W; i++) s = (s * 31 + pxBuf[i * 4]) | 0;
+    for (let i = 0; i < W; i++) s = (s * 31 + row[i * 4]) | 0;
     return s;
 }
 bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.05, octaves: 1, seed: 1337, autoRange: true, ema: 1.0,
 });
-flush();
 const fpA = rowFingerprint();
 bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.05, octaves: 1, seed: 9999, autoRange: true, ema: 1.0,
 });
-flush();
 const fpB = rowFingerprint();
 assert(fpA !== fpB, 'fbm2D: seed change shifts the field');
 
@@ -73,11 +57,10 @@ bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.02, octaves: 8, gain: 0.5, lacunarity: 2.0,
     seed: 1337, autoRange: true, ema: 1.0,
 });
-flush();
-gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
-let r0 = pxBuf[0], differs = false;
+px = pixels();
+let differs = false;
 for (let i = 1; i < W * H; i++) {
-    if (pxBuf[i * 4] !== r0) { differs = true; break; }
+    if (px[i * 4] !== px[0]) { differs = true; break; }
 }
 assert(differs, 'fbm2D 8-octave: output is not constant');
 
@@ -86,15 +69,14 @@ bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.05, octaves: 1, seed: 1337,
     lo: -1.0, hi: 1.0,   // simplex range roughly [-1, 1]
 });
-flush();
-gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, pxBuf);
+px = pixels();
 let any = false;
 for (let i = 0; i < W * H; i++) {
-    if (pxBuf[i * 4] > 0 && pxBuf[i * 4] < 255) { any = true; break; }
+    if (px[i * 4] > 0 && px[i * 4] < 255) { any = true; break; }
 }
 assert(any, 'fbm2D uniform-range: some midtone pixel present');
 
-// 5) Unsupported type throws clearly.
+// 5) Unsupported type and octave count throw clearly.
 let threw = false;
 try {
     bro.image.gpu.fbm2D(cv, lut, { frequency: 0.05, type: 'Perlin' });
@@ -102,10 +84,17 @@ try {
     threw = /not implemented/.test(e.message);
 }
 assert(threw, 'fbm2D: unsupported type throws "not implemented"');
+threw = false;
+try {
+    bro.image.gpu.fbm2D(cv, lut, { frequency: 0.05, octaves: 17 });
+} catch (e) {
+    threw = e instanceof RangeError;
+}
+assert(threw, 'fbm2D: octaves past 16 throw a RangeError');
 
 // 6) viewRect: pre-render a wider tile, then slide a window across it.
-// Sized tile (3W × H), regenerated once. Each subsequent fbm2D call with
-// regenerate:false slides a viewRect across without rerunning the FBm.
+// A 3W × H tile, made once; each regenerate:false call slides the viewRect
+// across it without running the FBm again.
 const TILE_W = W * 3;
 bro.image.gpu.fbm2D(cv, lut, {
     frequency: 0.05, octaves: 1, seed: 1337,
@@ -113,29 +102,24 @@ bro.image.gpu.fbm2D(cv, lut, {
     autoRange: true, ema: 1.0,
     viewRect: { x: 0, y: 0, w: W, h: H },
 });
-flush();
 const fpAt0 = rowFingerprint();
 
-// Same tile, slide to x = W (one full canvas width across).
 bro.image.gpu.fbm2D(cv, lut, {
     regenerate: false,
     autoRange: true, ema: 1.0,
     viewRect: { x: W, y: 0, w: W, h: H },
 });
-flush();
 const fpAtW = rowFingerprint();
 assert(fpAt0 !== fpAtW,
     'viewRect slide reveals different sub-region of the tile (' +
     fpAt0 + ' vs ' + fpAtW + ')');
 
-// Same tile, slide back to x=0 — should reproduce the original fingerprint
-// (the underlying noiseTex is unchanged; only the viewport moves).
+// Back to x=0 reproduces the first view: the field is unchanged.
 bro.image.gpu.fbm2D(cv, lut, {
     regenerate: false,
     autoRange: true, ema: 1.0,
     viewRect: { x: 0, y: 0, w: W, h: H },
 });
-flush();
 const fpAt0Again = rowFingerprint();
 assert(fpAt0 === fpAt0Again,
     'regenerate:false leaves the tile intact across slides');

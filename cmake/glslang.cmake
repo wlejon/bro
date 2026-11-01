@@ -1,9 +1,8 @@
-# glslang.cmake — the one GLSL -> SPIR-V compiler bro uses, linked in-process.
+# glslang.cmake — WebGL2's GLSL -> SPIR-V compiler, linked in-process.
 #
-# Every shader bro compiles goes through glslang: the 3D scene's built-in
-# shaders at build time (via the bro_spirv_embed tool), and the clipmap
-# terrain, custom scene shaders and WebGL programs at run time (via
-# render/glsl_compiler.h). One compiler, one set of rules, on every platform.
+# GLSL is web content's alone: WebGL programs compile through glslang at run
+# time (webgl/glsl_compiler.h, and its C++ API for their reflection). bro's
+# own GPU code is brokernel, compiled by brass.
 #
 # It is built from source, statically, at a pinned release, rather than found
 # on the system: distro packages ship it as a shared library (or as shaderc's
@@ -42,66 +41,3 @@ if(NOT TARGET glslang::glslang OR NOT TARGET glslang::glslang-default-resource-l
     message(FATAL_ERROR "bro: glslang ${BRO_GLSLANG_VERSION} did not define glslang::glslang "
                         "and glslang::glslang-default-resource-limits")
 endif()
-
-# bro_spirv_header(<out_var> <gen_dir> <glsl_file> <vert|frag|comp>
-#                  [NAME <variant>] [SYMBOL <ns::symbol>] [INCLUDE_DIR <dir>]
-#                  [DEFINES <define>...] [DEPENDS <file>...])
-#
-# Compiles <glsl_file> at build time with bro_spirv_embed (src/render/tools)
-# into <gen_dir>/<name>.spv.h and appends that header to <out_var>, for a
-# target to list among its sources and #include. DEFINES are #defined (to 1)
-# after the #version line; a variant built that way names its header with
-# NAME (<variant>.spv.h) so it does not collide with the plain build.
-#
-# With SYMBOL the output is instead <name>.spv.cpp, a translation unit of its
-# own defining `extern const uint32_t <symbol>[]` and `<symbol>Words`, so a
-# shader edit recompiles that one small file.
-#
-# INCLUDE_DIR is the directory every `#include "name"` is a path from (by
-# default the shader's own directory).
-#
-# The tool writes a depfile of the files the shader actually #includes, so
-# editing one reruns only the shaders that pull it in; DEPENDS adds others.
-#
-# A cross build cannot run a tool it built for the target, so it names a
-# host build of the tool with -DBRO_SPIRV_EMBED=<path>.
-set(BRO_SPIRV_EMBED "" CACHE FILEPATH "Host bro_spirv_embed, for cross builds")
-function(bro_spirv_header out_var gen_dir glsl_file stage)
-    cmake_parse_arguments(_spv "" "NAME;SYMBOL;INCLUDE_DIR" "DEFINES;DEPENDS" ${ARGN})
-    set(_includeDir "")
-    if(_spv_INCLUDE_DIR)
-        set(_includeDir --include-dir "${_spv_INCLUDE_DIR}")
-    endif()
-    get_filename_component(_name "${glsl_file}" NAME)
-    if(_spv_NAME)
-        set(_name "${_spv_NAME}")
-    endif()
-    if(_spv_SYMBOL)
-        set(_out "${gen_dir}/${_name}.spv.cpp")
-        set(_mode --cpp "${_spv_SYMBOL}")
-    else()
-        set(_out "${gen_dir}/${_name}.spv.h")
-        set(_mode "")
-    endif()
-    if(BRO_SPIRV_EMBED)
-        set(_tool "${BRO_SPIRV_EMBED}")
-        set(_tool_dep "${BRO_SPIRV_EMBED}")
-    elseif(CMAKE_CROSSCOMPILING)
-        message(FATAL_ERROR "bro: a cross build compiles its shaders with a host tool; "
-                            "build bro_spirv_embed for the host and pass -DBRO_SPIRV_EMBED=<path>")
-    else()
-        set(_tool "$<TARGET_FILE:bro_spirv_embed>")
-        set(_tool_dep bro_spirv_embed)
-    endif()
-    get_filename_component(_outName "${_out}" NAME)
-    add_custom_command(
-        OUTPUT  "${_out}"
-        COMMAND "${_tool}" ${stage} "${glsl_file}" "${_out}" ${_mode}
-                --depfile "${_out}.d" ${_includeDir} ${_spv_DEFINES}
-        DEPENDS "${glsl_file}" ${_spv_DEPENDS} ${_tool_dep}
-        DEPFILE "${_out}.d"
-        COMMENT "SPIR-V ${_name} -> ${_outName}"
-        VERBATIM
-    )
-    set(${out_var} ${${out_var}} "${_out}" PARENT_SCOPE)
-endfunction()

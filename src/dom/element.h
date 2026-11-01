@@ -602,6 +602,11 @@ public:
     void setWebglContext(void* ctx) { webglContext_ = ctx; }
     void* webglContext() const { return webglContext_; }
 
+    // A 'kernel' canvas's display (render::KernelCanvas; opaque pointer — set
+    // by engine, read by draw traversal). It lives as long as the canvas.
+    void setKernelCanvas(void* canvas) { kernelCanvas_ = canvas; }
+    void* kernelCanvas() const { return kernelCanvas_; }
+
     // Scene graph (opaque pointer — set by engine, read by draw traversal for
     // 3D layer compositing). Non-null means the element HAS a live scene graph,
     // not merely that it once did: every engine path that reclaims a graph
@@ -808,6 +813,7 @@ private:
     void* canvasScene_ = nullptr;
     void (*canvasSceneOnDestroy_)(void*) = nullptr;
     void* webglContext_ = nullptr;
+    void* kernelCanvas_ = nullptr;
     void* sceneGraph_ = nullptr;
     void* iframeDoc_ = nullptr;
     uint64_t iframeDocId_ = 0;

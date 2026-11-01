@@ -197,10 +197,10 @@ if(BRO_WITH_FLORA OR BRO_WITH_3D)
     bro_dependency(broflora)
 endif()
 
-# --- brokernel (the kernel language for world code: brass to SPIR-V + native) ---
-if(BRO_WITH_KERNEL)
-    bro_dependency(brokernel OPTIONS BROKERNEL_BUILD_TESTS=OFF BROKERNEL_BUILD_BENCH=OFF)
-endif()
+# --- brokernel (the GPU language: brass to SPIR-V + native) ---
+# Every profile: the engine's own GPU stages are brokernel (the presenter's
+# included). BRO_WITH_KERNEL adds its script binding, bro.kernel.
+bro_dependency(brokernel OPTIONS BROKERNEL_BUILD_TESTS=OFF BROKERNEL_BUILD_BENCH=OFF)
 
 # --- brogameagent (game AI: navmesh, pathfinding, steering, behavior trees) ---
 # Embedded by value in the 3D scene graph, so 3D forces GAMEAI on.

@@ -893,6 +893,22 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
     return webglCtx;
 }
 
+render::KernelCanvas* Engine::createKernelCanvas(dom::Element* canvas) {
+    if (!vulkanContext_ || !canvas) return nullptr;
+    if (canvas->kernelCanvas()) return static_cast<render::KernelCanvas*>(canvas->kernelCanvas());
+    std::shared_ptr<render::KernelCanvasBlit> blit = kernelCanvasBlit_.lock();
+    if (!blit) {
+        blit = std::make_shared<render::KernelCanvasBlit>(*vulkanContext_);
+        if (!blit->valid()) LOG_ERROR("kernel canvas: %s", blit->error().c_str());
+        kernelCanvasBlit_ = blit;
+    }
+    auto display = std::make_unique<render::KernelCanvas>(*vulkanContext_, std::move(blit));
+    render::KernelCanvas* out = display.get();
+    canvas->setKernelCanvas(out);
+    kernelCanvases_.push_back({std::move(display), canvas, canvas->document(), canvas->nodeId()});
+    return out;
+}
+
 canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     if (!canvas) return nullptr;
     if (canvas->canvasScene()) {

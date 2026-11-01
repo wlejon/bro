@@ -31,6 +31,7 @@
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
 #include "render/damage.h"
+#include "render/kernel_canvas.h"
 #include "util/asset_mounts.h"
 
 
@@ -352,6 +353,9 @@ public:
     scene::SceneGraph* createSceneContext(dom::Element* canvas);
     size_t sceneContextCount() const;
     webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas);
+    /// The display of a 'kernel' canvas (docs/kernel-api.js): null without a
+    /// GPU device.
+    render::KernelCanvas* createKernelCanvas(dom::Element* canvas);
     canvas::CanvasScene* createCanvasContext(dom::Element* canvas);
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
@@ -1210,8 +1214,12 @@ private:
     canvas::CanvasScene* canvasSceneById(uint64_t id) const;
 
     std::vector<WebGLEntry> webglEntries_;
+    std::vector<KernelCanvasEntry> kernelCanvases_;
+    // The kernel canvases' shared store pipelines: alive while one is.
+    std::weak_ptr<render::KernelCanvasBlit> kernelCanvasBlit_;
     // The entry's canvas while it is alive (in the document or not), else null.
     dom::Element* liveElementOf(const WebGLEntry& entry) const;
+    dom::Element* liveElementOf(const KernelCanvasEntry& entry) const;
     // Drops the contexts whose canvas is gone. A canvas out of the document
     // keeps its context, as in a browser: put back, it shows what it drew.
     void pruneDeadWebGLContexts();
