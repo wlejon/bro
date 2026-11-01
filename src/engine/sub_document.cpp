@@ -300,8 +300,7 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
             // The canvas's own surface is drawn and snapshotted directly.
-            render::SkiaGpu::Lock lock =
-                renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
+            render::SkiaGpu::Lock lock = renderer->skiaGpu()->lock();
             scene->flushStaged();
             auto img = scene->displayImage();
             if (!img) return;
@@ -334,15 +333,11 @@ void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     replayBufferWithInlineCanvas(renderer, d.cmdBuffer);
     renderer->switchSurface(prev);
     // The compositor reads what is published, never the surface being drawn:
-    // a CPU snapshot, or the GPU image once the frame's work is submitted.
-    if (d.surface.isGpu()) {
-        renderer->afterSubmit([&published = d.published, image = d.surface.image]() mutable {
-            published.publish(std::move(image));
-        });
-        std::swap(d.surface, d.spare);
-    } else {
-        d.published.publish(d.surface.surface->makeImageSnapshot());
-    }
+    // the GPU image once the frame's work is submitted.
+    renderer->afterSubmit([&published = d.published, image = d.surface.image]() mutable {
+        published.publish(std::move(image));
+    });
+    std::swap(d.surface, d.spare);
 }
 
 std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
@@ -368,7 +363,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
     SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
     {
-        render::SkiaGpu::Lock lock = skia->skiaGpu() ? skia->skiaGpu()->lock() : render::SkiaGpu::Lock();
+        render::SkiaGpu::Lock lock = skia->skiaGpu()->lock();
         if (!surf.surface->readPixels(info, pixels.data(), w * 4, 0, 0)) pixels.clear();
     }
     skia->releaseLayerSurface(surf);

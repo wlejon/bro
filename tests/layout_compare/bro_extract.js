@@ -1,5 +1,5 @@
 // Extracts DOM properties from the loaded app using bro-headless.
-// Usage: bro-headless --no-gpu --width 800 --height 600 <case-dir> bro_extract.js
+// Usage: bro-headless --width 800 --height 600 <case-dir> bro_extract.js
 // Output path is passed via BRO_EXTRACT_OUTPUT env var or defaults to 'bro_output.json'.
 
 // --- inline the extraction function ---

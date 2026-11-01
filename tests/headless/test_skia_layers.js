@@ -1,11 +1,8 @@
 // Skia's layers through the frame composite: the page, a 2D canvas, an iframe
-// sub-document, at 1x and 2x. With a Vulkan device these are GPU surfaces the
-// presenter samples in place (no readback); with BRO_SKIA_GPU=0 they are CPU
-// pixels through the same composite. (--no-gpu is the separate direct-raster
-// path, which draws neither iframes nor at 2x.) The pixels must agree either
-// way, so every probe is a
-// flat interior colour (exact up to rounding) or an edge checked for being a
-// blend of its two sides, never a particular anti-aliasing.
+// sub-document, at 1x and 2x: GPU surfaces the presenter samples in place (no
+// readback). Every probe is a flat interior colour (exact up to rounding) or
+// an edge checked for being a blend of its two sides, never a particular
+// anti-aliasing.
 //
 // What a broken GPU path shows here: a layer missing (the clear colour), a
 // stale frame (the canvas's first drawing after it was redrawn), an iframe

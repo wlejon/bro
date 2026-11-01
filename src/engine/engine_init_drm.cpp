@@ -97,8 +97,10 @@ void Engine::initDrm(const EngineConfig& config) {
         }
     });
 
+    render::SkiaGpu* skiaGpu = createSkiaGpu();
+    if (!skiaGpu) throw std::runtime_error("DRM Skia initialization failed (no Ganesh context on the device)");
     auto skia = std::make_unique<render::SkiaRenderer>();
-    if (vulkanPresenter_) skia->setGpu(createSkiaGpu());
+    skia->setGpu(skiaGpu);
     renderer_ = std::move(skia);
 
     LOG_INFO("Engine: DRM display mode initialized (%ux%u)", viewportWidth_, viewportHeight_);

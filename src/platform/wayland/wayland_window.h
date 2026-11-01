@@ -30,7 +30,6 @@ public:
     GraphicsBackend backend() const override { return backend_; }
 
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override;
-    bool presentPixels(const void* pixels, int width, int height, int stride, bool bgra) override;
     void setVSync(bool enabled) override { vsyncPref_ = enabled; }
     bool vsyncPreference() const override { return vsyncPref_; }
     void beforePresent(uint64_t tag) override;
@@ -176,10 +175,6 @@ private:
     bool earlyFrame_ = false;  // a frame went early for input since the last callback
     std::vector<PresentedFrame> presented_;
     bool feedbackSeen_ = false;
-
-    // Software presentation: two shm buffers, the one not in use is drawn.
-    std::shared_ptr<browl::ShmPool> shmPool_;
-    std::shared_ptr<browl::ShmBuffer> shmBuffers_[2];
 };
 
 }  // namespace bro::platform::wl

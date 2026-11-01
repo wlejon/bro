@@ -23,7 +23,6 @@ inline constexpr int kWindowPosUnset = INT_MIN;
 struct GraphicsConfig {
     int width = 1920;
     int height = 1080;
-    bool useGPU = true;       // Vulkan; --no-gpu: CPU raster (software window when windowed)
     bool resizable = true;    // whether the window can be resized
     bool vsync = true;        // true = adaptive or standard vsync; false = uncapped
     double maxFrameIntervalMs = 8.0;  // layout/raster throttle (0 = uncapped)

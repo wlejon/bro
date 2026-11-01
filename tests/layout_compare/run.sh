@@ -89,7 +89,7 @@ for case_name in "${CASES[@]}"; do
         cat "$SCRIPT_DIR/bro_extract.js"
     } > "$tmp_script"
 
-    if ! "$BRO_HEADLESS" --no-gpu --width 800 --height 600 "$case_dir" "$tmp_script" 2>&1; then
+    if ! "$BRO_HEADLESS" --width 800 --height 600 "$case_dir" "$tmp_script" 2>&1; then
         echo "  ERROR: Bro extraction failed"
         ERRORS=$((ERRORS + 1))
         rm -f "$tmp_script"

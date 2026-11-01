@@ -248,8 +248,7 @@ void SceneRenderer::render3D() {
         static bool warned = false;
         if (!warned) {
             warned = true;
-            LOG_WARN("scene: no Vulkan context — the 3D pass is disabled for this "
-                     "process (CPU raster path). 2D canvas content still draws.");
+            LOG_WARN("scene: no Vulkan context (bro-server) — the 3D pass is disabled for this process");
         }
         return;
     }

@@ -376,9 +376,9 @@ void installHeadlessFrame(engine::Engine& engine) {
 
     // setScrollLayerVerify(on) -> the previous setting
     //
-    // After each partial raster of a scroll layer (CPU surfaces), the same
+    // After each partial raster of the page in the frame loop, the same
     // recording rastered whole beside it and compared pixel for pixel; the
-    // pixels that differ count in perf.stats().paint.scrollLayers.partialMismatch.
+    // pixels that differ count in perf.stats().paint.pagePartialMismatch.
     ev::registerGlobal("setScrollLayerVerify", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
             const bool was = engine::ScrollLayerSet::verifyPartial();
@@ -884,10 +884,6 @@ void installHeadlessFrame(engine::Engine& engine) {
                                         ev::fromDouble(static_cast<double>(sl.piecesReused))));
                 slo.set(ev::setProperty(slo.get(), "rasters",
                                         ev::fromDouble(static_cast<double>(engine.scrollLayerRasters()))));
-                slo.set(ev::setProperty(slo.get(), "partialRasters",
-                                        ev::fromDouble(static_cast<double>(engine.scrollLayerPartialRasters()))));
-                slo.set(ev::setProperty(slo.get(), "partialMismatch",
-                                        ev::fromDouble(static_cast<double>(engine.scrollLayerPartialMismatch()))));
                 for (size_t i = 1; i < static_cast<size_t>(layout::ScrollLayerVeto::Count); ++i)
                     veto.set(ev::setProperty(veto.get(),
                                              layout::scrollLayerVetoName(static_cast<layout::ScrollLayerVeto>(i)),

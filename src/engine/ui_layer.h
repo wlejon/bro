@@ -13,12 +13,11 @@
 
 namespace bro::engine {
 
-/// An HTML layer: a Skia surface from one of the raster thread's pools — its
-/// GPU image (`image`) when Skia draws on the GPU, else the CPU surface. The
-/// layer covers the whole pass (content space for the app document).
+/// An HTML layer: the GPU image of a Skia surface from one of the raster
+/// thread's pools. The layer covers the whole pass (content space for the
+/// app document).
 struct HtmlLayer {
-    sk_sp<SkSurface> surface;    // CPU
-    render::SkiaImageRef image;  // GPU
+    render::SkiaImageRef image;
 };
 
 /// One entry in the per-frame composite list, built by the raster thread as

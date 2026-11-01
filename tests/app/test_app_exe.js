@@ -27,8 +27,6 @@ if (!fs.existsSync(windowed) || !fs.existsSync(stub)) {
     skipTest('no windowed bro / bro-app-stub beside ' + headless);
 } else if (isMac) {
     skipTest('macOS apps are bundles; app executables are not built there yet');
-} else if (process.env.BRO_TEST_ALLOW_RASTER === '1') {
-    skipTest('no GPU: the executable runs the windowed bro');
 } else {
     run();
 }

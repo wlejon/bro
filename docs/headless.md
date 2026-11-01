@@ -5,7 +5,7 @@ Headless mode for bro runs the full engine pipeline (GPU rendering, real fonts, 
 ## Usage
 
 ```
-bro-headless [--no-gpu] [--width N] [--height N] <app-directory> [script.js | -e "expr" ...] [-- args...]
+bro-headless [--width N] [--height N] <app-directory> [script.js | -e "expr" ...] [-- args...]
 ```
 
 - With `.js` file = **script mode** (runs file, then exits)
@@ -18,11 +18,10 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 
 | Flag | Description |
 |------|-------------|
-| `--no-gpu`, `--cpu` | Disable GPU rendering: Skia draws the same layers on the CPU and the frame composites on the CPU (iframes, system panels and the device scale included), with no WebGL and no 3D scene. For CI environments without a GPU. |
 | `--audio`, `--real-audio` | Open the real audio device and mic (PipeWire on Linux when a daemon is running, else SDL; `BROAUDIO_BACKEND=pipewire\|sdl\|null` overrides). Off by default: headless runs the DSP graph with no device attached, so a test never claims the machine's sound hardware. |
 | `--width N` | Viewport width in pixels (default: 1920) |
 | `--height N` | Viewport height in pixels (default: 1080) |
-| `--device-scale-factor S` | Render as a HiDPI display with `S` device px per CSS px (default 1): `devicePixelRatio`, `@media (resolution)` and every captured frame follow, layout and input stay in CSS px. Same as calling `setDeviceScaleFactor(S)` first. `--no-gpu` renders at the scale too. |
+| `--device-scale-factor S` | Render as a HiDPI display with `S` device px per CSS px (default 1): `devicePixelRatio`, `@media (resolution)` and every captured frame follow, layout and input stay in CSS px. Same as calling `setDeviceScaleFactor(S)` first. |
 | `--splash` | Show the startup splash. Off by default in headless: its canvas animation leaks into early screenshots; opt in only to exercise the splash lifecycle. It also turns on the corner work-status panel (docs/system-panels.md "Background work"), off otherwise in headless. |
 | `--no-splash` | Explicitly disable the splash (the default). |
 | `--notification <args>` | Start as a click on one of the app's notifications would: the page hears `notificationclick` after load (see [sys-api.js](sys-api.js)). |
@@ -51,7 +50,7 @@ These are the test harness, the developer driving the app, not the app's own act
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`). Also waits for the image decodes started so far (they run off the page thread, [image-api.js](image-api.js)), so after `img.src = p; flush();` the image is complete and drawable; its `load` event is still a task for the next turn. Paints and screenshots likewise wait for the pictures they show. `advanceTime`'s own per-step flushes leave the 3D scenes' render pending: it is drawn when the clock moves on (the next step), by a capture, or before a read of what a render drew (`perf.gpuFrameMs()`, `plantStats()`, `grassStats()`), so `advanceTime(50); frameImage()` draws the scene once, for the frame captured, not four times. A `flush()` you call draws them at once: after `advanceTime` it is a second render of the same frame, so leave it out of a loop that captures. |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
 | `skipTest(reason)` | This environment cannot test the script's subject (weights absent, feature compiled out): the run exits 77, which `tests/run_tests.sh` reports as SKIP — never as a pass. Something that also failed still fails the run. The script keeps running, so do nothing further after it. |
-| `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` / `getContext('kernel')` returned null (or `bro.kernel.gpu` is false). On a run with no GPU device (`--no-gpu`) or with the feature compiled out it skips like `skipTest`; on a GPU run a null context is a bug, and it fails the run. |
+| `missingGpuContext(kind)` | Call when `getContext('webgl2')` / `getContext('scene')` / `getContext('kernel')` returned null (or `bro.kernel.gpu` is false). With the feature compiled out it skips like `skipTest`; otherwise a null context is a bug, and it fails the run. |
 | `writeFile(path, data)` | Write `data` to `path` and return the byte count. A string is written as UTF-8; an `ArrayBuffer` or TypedArray is written verbatim (a view writes only its own range, not the whole buffer). Missing parent directories are created, like `screenshot()`. Throws on anything else object-shaped, and on an open/write failure, naming the path. Headless-only, so a bake/export tool can drop an asset next to its test; a shipped app gets no filesystem write from this. |
 
 ### Screenshots
@@ -65,7 +64,7 @@ These are the test harness, the developer driving the app, not the app's own act
 | `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at **document** coordinates, the same space `getBoundingClientRect()` reports in, so a probe can be compared against a measured rect with no inset arithmetic. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. Engine chrome (menu bar, docked inspector) insets the document within the frame; `getPixel` folds that in for you. Out-of-document coordinates return all zeroes. |
 | `frameImage()` | The whole composited frame in device px, as ImageData (`{width, height, data}`): what `screenshot()` writes, for comparing frames in script. |
 | `presentedImage()` | The frame the windowed frame loop (`runFrames`) last presented, in device px, as ImageData (null before any): what a window would show, compositor-only frames (a scroll layer moved with no record) included, where `frameImage()` records and rasters a frame of its own. |
-| `setScrollLayerVerify(on)` | After each partial raster, raster the same recording whole beside it and compare pixel for pixel (a partial raster must equal a whole one): a scroll layer's (CPU surfaces: `--no-gpu`), counted in `perf.stats().paint.scrollLayers.partialMismatch`, and the page's own in the frame loop (`runFrames`; GPU or CPU, read back), counted in `perf.stats().paint.pagePartialMismatch` beside `pagePartialRasters`; why a pass of a changed page was whole instead is counted always, in `pageWholeHistory` (its pool copy's recording out of the damage history's reach), `pageWholeCover` (what reaches the damage could not be bounded: a path clip, a layer) and `pageWholeArea` (it reached most of the surface). Returns the previous setting. |
+| `setScrollLayerVerify(on)` | After each partial raster, raster the same recording whole beside it and compare pixel for pixel (a partial raster must equal a whole one): the page's own in the frame loop (`runFrames`, read back), counted in `perf.stats().paint.pagePartialMismatch` beside `pagePartialRasters`; why a pass of a changed page was whole instead is counted always, in `pageWholeHistory` (its pool copy's recording out of the damage history's reach), `pageWholeCover` (what reaches the damage could not be bounded: a path clip, a layer) and `pageWholeArea` (it reached most of the surface). Returns the previous setting. |
 | `setPaintCache(on)` | Turn the paint span cache on or off for every pass from here on (it is on by default); returns the previous setting. Off records everything and leaves the cache as it was: `frameImage()` with it on and off is the A/B tests/layout/test_paint_cache_fuzz.js runs after every step. |
 | `getPixels(x, y, w, h)` | A `w`×`h` block of `getPixel` probes from **one** composite, as `{width, height, data}` with `data` a `Uint8ClampedArray` of RGBA (ImageData-shaped). Same document coordinates and sampling as `getPixel`; texels outside the document are zeroes. Use it for any scan: each `getPixel` call composites and reads back the whole window, so a loop of a few thousand probes costs a few thousand frames (seconds on a GPU, minutes on a software device such as Lavapipe). |
 | `getFramePixel(x, y)` | Same readback in **frame** coordinates: the whole composited window including engine chrome. Only needed when asserting something about the chrome itself (e.g. that the menu bar occupies the top strip); app content is easier to probe with `getPixel`. |
@@ -301,7 +300,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `perf.threadCpuMs()` | The main thread's own CPU time in milliseconds (fine-grained: `CLOCK_THREAD_CPUTIME_ID`, or the thread's cycle count over the TSC rate on Windows). Use it to bound the engine's own work in a test that must hold on a loaded machine: wall time also counts the time other processes had the core, CPU time does not. It does not count waiting (on a lock, the GPU, a sleep). |
 | `perf.reset()` | Zero the counters. |
 | `perf.stats()` | The counters since the last reset (CPU style/layout only). |
-| `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from Vulkan timestamp queries written at the start and end of each scene's render (summed over the page's scenes). Blocking: it waits for that render's submission, so each call returns an isolated per-frame GPU cost. `perf.gpuFrameMs({ wait: false })` waits for nothing: it returns the oldest render that has finished and was not read yet (the previous answer when none has), so a loop reading it every frame reads each render once, a frame or so behind, and its frames overlap the GPU's as a window's do. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. A GPU kept busy frame after frame can slow down after a minute or so (a laptop or APU's sustained power limit: on halo the same frames ran 2 to 4 times as long), so a long trace should let the GPU rest between frames (`wallSleep`, about twice the frame's time). |
+| `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from Vulkan timestamp queries written at the start and end of each scene's render (summed over the page's scenes). Blocking: it waits for that render's submission, so each call returns an isolated per-frame GPU cost. `perf.gpuFrameMs({ wait: false })` waits for nothing: it returns the oldest render that has finished and was not read yet (the previous answer when none has), so a loop reading it every frame reads each render once, a frame or so behind, and its frames overlap the GPU's as a window's do. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page or before the first scene flush. A GPU kept busy frame after frame can slow down after a minute or so (a laptop or APU's sustained power limit: on halo the same frames ran 2 to 4 times as long), so a long trace should let the GPU rest between frames (`wallSleep`, about twice the frame's time). |
 | `perf.gpuPasses()` | The last timed 3D scene render's GPU milliseconds pass by pass, `{ name: ms, ..., compute: {...} }` (below). The first call turns the per-pass timestamps on and returns `{}`. |
 | `perf.pendingWork()` | The 3D scenes' settle state: what they still build or converge for the current view, one string a kind of work (`["pipelines: 3 building", "exposure: 0.42 EV from its meter"]`), `[]` once settled. See "Settling a scene" below. |
 | `perf.kernelTimes()` | The GPU milliseconds of every `bro.kernel` dispatch the GPU has finished since the last call, summed by kernel: `{ k_detail: { ms, dispatches }, ... }`; a kernel run in the background stream between the frames (a tile cache's production, tiles-api.js) is listed apart as `"k_detail (background)": { ms, dispatches, background: true }`. The first call turns the timestamps on (two queries a dispatch; nothing is written before it) and returns `{}`. Waits for nothing, so read it after a blocking read or a few flushed frames. |
@@ -575,7 +574,7 @@ Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occ
 
 ## Integration tests
 
-The `tests/` directory contains integration tests that exercise the engine via `bro-headless` on its default GPU path, the same renderer, WebGL, and layer compositing the shipping runtime uses. (`--no-gpu` selects the CPU raster fallback, which is a different code path; running the suite there would leave the real one untested.) Run them with:
+The `tests/` directory contains integration tests that exercise the engine via `bro-headless`, the same renderer, WebGL, and layer compositing the shipping runtime uses. Run them with:
 
 ```bash
 bash tests/run_tests.sh          # run all tests
@@ -631,8 +630,6 @@ assert(fired, 'timer fired after advancing past deadline');
 ```
 
 ## Rendering
-
-`BRO_SKIA_GPU=0` keeps Skia on the CPU (raster layers uploaded to the composite) to compare against the GPU path; anti-aliased edges can differ by a few levels, flat colours and `getImageData`/`putImageData` round trips match exactly.
 
 ### WebGL2 support matrix
 
@@ -898,11 +895,9 @@ accepted and changes nothing: the upload is ordered after every draw already
 recorded, so it can never race one. Drawing from a buffer while it is mapped
 draws its contents as of the last upload.
 
-### CPU mode (`--no-gpu`)
+### No Vulkan device
 
-- Skia on the CPU through the same record → replay → composite pipeline, so iframes, system panels and a device scale above 1 render as on the GPU
-- No WebGL, no 3D scene and no GPU kernels: `getContext('webgl2')` / `getContext('scene')` / `getContext('kernel')` return `null` and `bro.kernel.gpu` is false. `bro.gpu.available` is the ML/compute backend, not this.
-- Never chosen silently: a headless boot that finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`); pass `--no-gpu` to choose it
+Headless renders on the GPU only: a boot that finds no usable Vulkan device fails (`Fatal: Headless Vulkan initialization failed`).
 
 ### Virtual time
 

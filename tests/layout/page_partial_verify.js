@@ -1,5 +1,5 @@
-// Driven by tests/layout/test_page_partial_verify.js (in its own process, and
-// in a child bro-headless --no-gpu): the page's own partial raster in the
+// Driven by tests/layout/test_page_partial_verify.js (in a child
+// bro-headless): the page's own partial raster in the
 // frame loop, each pass checked against the same recording rastered whole
 // (setScrollLayerVerify), on a page of rounded cells with a rounded clip over
 // a gradient and text every twenty rows, one cell toggled a frame.

@@ -20,16 +20,12 @@
 
 const seed = Number(process.env.PAINT_FUZZ_SEED || 1) >>> 0;
 const STEPS = Number(process.env.PAINT_FUZZ_STEPS || 150);
-// PAINT_FUZZ_VERIFY_PARTIAL=1: each partial raster (a scroll layer's, with
-// --no-gpu where they are rastered in part; the page's own, on either) is
-// also rastered whole and must match it pixel for pixel, not only the oracle
+// PAINT_FUZZ_VERIFY_PARTIAL=1: each partial raster of the page is also
+// rastered whole and must match it pixel for pixel, not only the oracle
 // within its tolerance.
 const verifyPartial = process.env.PAINT_FUZZ_VERIFY_PARTIAL === '1';
 if (verifyPartial) setScrollLayerVerify(true);
-const mismatch = () => {
-    const p = perf.stats().paint;
-    return p.scrollLayers.partialMismatch + p.pagePartialMismatch;
-};
+const mismatch = () => perf.stats().paint.pagePartialMismatch;
 // PAINT_FUZZ_ROUNDED=1: the scroller's rows clip under border radii (steps.js).
 const fuzz = PaintFuzz.create(seed, { rounded: process.env.PAINT_FUZZ_ROUNDED === '1' });
 fuzz.build();
@@ -76,7 +72,7 @@ for (let i = 0; i < STEPS && !failed; ++i) {
 }
 const ps = perf.stats().paint;
 console.log(`PAINT_FUZZ seed=${seed} steps=${history.length} ${failed ? 'FAILED' : 'ok'} edgePixels=${edgePixels} ` +
-            `pagePartial=${ps.pagePartialRasters} layerPartial=${ps.scrollLayers.partialRasters} reused=${ps.reused} ` +
+            `pagePartial=${ps.pagePartialRasters} reused=${ps.reused} ` +
             `recorded=${ps.recorded} layers=${ps.scrollLayers.layers} layersReused=${ps.scrollLayers.reused} ` +
             `pieces=${ps.scrollLayers.pieces} piecesReused=${ps.scrollLayers.piecesReused} ` +
             `misses=${JSON.stringify(ps.misses)}`);

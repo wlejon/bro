@@ -247,7 +247,7 @@ const fallId = Physics.createBody({
 });
 const initialY = Physics.getTransform(fallId).position.y;
 // Advance time = step physics in default world via engine thread.
-// In headless --no-gpu, physics is stepped on advanceTime.
+// In headless, physics is stepped on advanceTime.
 advanceTime(500);
 const finalY = Physics.getTransform(fallId).position.y;
 // Even if engine doesn't step physics in headless, position queries succeed.

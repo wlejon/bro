@@ -283,7 +283,6 @@ void Engine::processPendingIframeReloads() {
         // until the new one paints instead of flashing blank.
         render::LayerSurface salvaged, salvagedSpare;
         int salvagedW = 0, salvagedH = 0;
-        sk_sp<SkImage> salvagedFrame;
         render::SkiaImageRef salvagedGpuFrame;
         bool haveSalvage = false;
         for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
@@ -292,7 +291,6 @@ void Engine::processPendingIframeReloads() {
                 salvagedSpare = std::move((*it)->spare);
                 salvagedW = (*it)->surfW;
                 salvagedH = (*it)->surfH;
-                salvagedFrame = (*it)->published.get();
                 salvagedGpuFrame = (*it)->published.gpu();
                 haveSalvage = true;
                 teardownIframeDoc(it->get());
@@ -319,7 +317,6 @@ void Engine::processPendingIframeReloads() {
             nd->surfW = salvagedW;
             nd->surfH = salvagedH;
             if (salvagedGpuFrame) nd->published.publish(std::move(salvagedGpuFrame));
-            else nd->published.publish(std::move(salvagedFrame));
         } else {
             queueIframeSurfaceFree(std::move(salvaged));
             queueIframeSurfaceFree(std::move(salvagedSpare));

@@ -691,14 +691,6 @@ public:
     }
     // Scroll layer surfaces rastered (frame passes and captures), since startup.
     uint64_t scrollLayerRasters() const { return baseScrollLayers_.rasters() + captureScrollLayers_.rasters(); }
-    // Of those parts rastered from their last pixels (only what moved in or changed drawn).
-    uint64_t scrollLayerPartialRasters() const {
-        return baseScrollLayers_.partialRasters() + captureScrollLayers_.partialRasters();
-    }
-    // Pixels a partial raster drew otherwise than a whole one (ScrollLayerSet::setVerifyPartial).
-    uint64_t scrollLayerPartialMismatch() const {
-        return baseScrollLayers_.partialMismatch() + captureScrollLayers_.partialMismatch();
-    }
     // The same of the page's own partial raster (replayAppLayers), checked
     // under ScrollLayerSet::setVerifyPartial too.
     uint64_t pagePartialMismatch() const { return pagePartialMismatch_.load(std::memory_order_relaxed); }
@@ -1045,7 +1037,6 @@ private:
     SubDocRef iframeSubDoc(IframeDoc& d);
     SubDocRef windowHostSubDoc(WindowHost& h);
     void quiesceRasterForCapture();
-    std::vector<uint8_t> readPublishedFrame(const PublishedFrame& frame, int& outW, int& outH);
     void queueIframeSurfaceFree(render::SkiaRenderer::LayerSurface&& surf);
     void drainIframeSurfaceFrees(render::SkiaRenderer* renderer);
 

@@ -95,12 +95,11 @@ struct WindowHost {
     PublishedFrame published;                  // what compositeWindowHosts presents
     SubDocRecord recorded;                     // recordSubDoc / replaySubDoc
 
-    // Presentation (windowed with Vulkan): the window's own swapchain, and a
-    // window-sized surface the published frame is drawn onto over clearColor.
-    // Declared after `window` so they are destroyed before it.
+    // Presentation (windowed): the window's own swapchain and presenter,
+    // which draw the published frame over clearColor. Declared after
+    // `window` so they are destroyed before it.
     std::unique_ptr<render::VulkanSwapchain> swapchain;
     std::unique_ptr<render::VulkanPresenter> presenter;
-    sk_sp<SkSurface> presentSurface;
 
     WindowHost();
     ~WindowHost();

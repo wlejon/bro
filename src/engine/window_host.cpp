@@ -105,8 +105,8 @@ bool Engine::isWindowHostDocument(const dom::Document* doc) const {
 }
 
 uint64_t Engine::openWindowHost(const WindowHostOptions& opts) {
-    // No primary window (Server mode, or --no-gpu headless where SDL video
-    // was never initialized) — there is nothing to share a swap chain with.
+    // No primary window (Server mode, or a headless run whose hidden window
+    // could not be made) — there is nothing to share a swap chain with.
     if (!window_) return 0;
 
     auto host = std::make_unique<WindowHost>();
@@ -198,10 +198,6 @@ void Engine::processPendingWindowHosts() {
             }
         };
         h->window = tryCreate(cfg);
-        if (!h->window && cfg.backend != platform::GraphicsBackend::Software) {
-            cfg.backend = platform::GraphicsBackend::Software;
-            h->window = tryCreate(cfg);
-        }
         if (!h->window) {
             LOG_ERROR("bro.window.open: secondary window creation failed (id=%llu)",
                       static_cast<unsigned long long>(h->id));
@@ -248,8 +244,7 @@ void Engine::processPendingWindowHosts() {
 }
 
 // A windowed host on the Vulkan context gets its own swapchain and presenter.
-// Headless hosts are never presented (capture() renders them on demand), and
-// a software-backend host presents through its window's framebuffer.
+// Headless hosts are never presented (capture() renders them on demand).
 void Engine::createWindowHostPresenter(WindowHost& h) {
     if (displayMode_ != DisplayMode::Windowed || !vulkanContext_ || !h.window ||
         h.window->backend() != platform::GraphicsBackend::Vulkan)
@@ -281,41 +276,21 @@ void Engine::compositeWindowHosts() {
 
     for (auto& h : windowHosts_) {
         if (!h->window || h->pendingClose || h->minimized) continue;
-        if (!h->presenter && h->window->backend() != platform::GraphicsBackend::Software) continue;
+        if (!h->presenter) continue;
         int pw = 0, ph = 0;
         h->window->getSizeInPixels(pw, ph);
         if (pw <= 0 || ph <= 0) continue;
 
-        // A GPU frame is sampled in place over the clear color — in device
-        // px at the host's render scale, like the drawable: 1:1.
-        if (render::SkiaImageRef image = h->published.gpu(); image && h->presenter) {
-            render::PresentFrame frame;
+        // The published frame is sampled in place over the clear color — in
+        // device px at the host's render scale, like the drawable: 1:1.
+        render::PresentFrame frame;
+        if (render::SkiaImageRef image = h->published.gpu()) {
             render::PresentImage& layer = frame.images.emplace_back(render::PresentImage::at1to1(
                 image->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, image->width, image->height));
             layer.view = image->view;
-            std::copy(std::begin(h->clearColor), std::end(h->clearColor), std::begin(frame.clearColor));
-            h->presenter->present(frame);
-            h->presentSurface.reset();
-            continue;
         }
-        if (!h->presentSurface || h->presentSurface->width() != pw || h->presentSurface->height() != ph)
-            h->presentSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pw, ph));
-        if (!h->presentSurface) continue;
-
-        SkCanvas* canvas = h->presentSurface->getCanvas();
-        canvas->clear(SkColor4f{h->clearColor[0], h->clearColor[1], h->clearColor[2], h->clearColor[3]});
-        // The published frame is in device px at the host's render scale,
-        // like the drawable: drawn 1:1.
-        if (sk_sp<SkImage> frame = h->published.get()) canvas->drawImage(frame, 0.0f, 0.0f);
-
-        if (h->presenter) {
-            h->presenter->presentSurface(h->presentSurface.get());
-        } else {
-            SkPixmap pm;
-            if (h->presentSurface->peekPixels(&pm))
-                h->window->presentPixels(pm.addr(), pm.width(), pm.height(), static_cast<int>(pm.rowBytes()),
-                                         pm.colorType() == kBGRA_8888_SkColorType);
-        }
+        std::copy(std::begin(h->clearColor), std::end(h->clearColor), std::begin(frame.clearColor));
+        h->presenter->present(frame);
     }
 }
 

@@ -220,7 +220,7 @@ bool SkiaGpu::init() {
     backend.fMemoryAllocator = skgpu::VulkanMemoryAllocators::Make(backend, skgpu::ThreadSafe::kNo);
     memoryAllocator_ = backend.fMemoryAllocator;
     if (!backend.fMemoryAllocator) {
-        LOG_ERROR("SkiaGpu: Skia could not create its Vulkan memory allocator; drawing on the CPU");
+        LOG_ERROR("SkiaGpu: Skia could not create its Vulkan memory allocator");
         std::lock_guard<std::mutex> lock(gRoutesMutex);
         std::erase_if(gRoutes, [&](const Route& r) { return r.owner == &vulkan_.queue(); });
         return false;
@@ -235,7 +235,7 @@ bool SkiaGpu::init() {
     options.fPersistentCache = persistentCache_.get();
     context_ = GrDirectContexts::MakeVulkan(backend, options);
     if (!context_) {
-        LOG_ERROR("SkiaGpu: Skia could not create a Vulkan context on this device; drawing on the CPU");
+        LOG_ERROR("SkiaGpu: Skia could not create a Vulkan context on this device");
         std::lock_guard<std::mutex> lock(gRoutesMutex);
         std::erase_if(gRoutes, [&](const Route& r) { return r.owner == &vulkan_.queue(); });
         return false;

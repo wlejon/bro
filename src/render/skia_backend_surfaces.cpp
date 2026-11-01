@@ -1,12 +1,9 @@
-// SkiaRenderer's surfaces: the raster frame surface, the compositing layer
-// surfaces (GPU with a SkiaGpu, CPU raster without), and pixel readback for
-// screenshots. The engine composites the layers and VulkanPresenter shows
+// SkiaRenderer's surfaces: the frame surface, the compositing layer surfaces
+// (GPU surfaces of its SkiaGpu), and pixel readback for screenshots. The engine composites the layers and VulkanPresenter shows
 // them.
 
 #include "render/skia_backend.h"
 #include "render/skia_gpu.h"
-#include "broimage/encode.h"
-#include "render/pixel_convert.h"
 #include "render/shared_pixels_image.h"
 #include "util/log.h"
 
@@ -25,14 +22,13 @@
 namespace bro::render {
 
 void SkiaRenderer::beginFrame(int width, int height) {
-    // On the GPU every layer is drawn into a surface of its own
-    // (switchSurface) and the presenter samples those: the frame's own
-    // surface is only the canvas between them and is never read, so there it
-    // is one pixel rather than a window-sized bitmap cleared every frame.
-    if (gpu_) width = height = 1;
-    if (!surface_ || surface_->width() != width || surface_->height() != height) {
-        surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
-    }
+    // Every layer is drawn into a GPU surface of its own (switchSurface) and
+    // the presenter samples those: the frame's own surface is only the canvas
+    // between them and is never read, so it is one pixel rather than a
+    // window-sized bitmap cleared every frame.
+    (void)width;
+    (void)height;
+    if (!surface_) surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(1, 1));
 
     canvas_ = surface_ ? surface_->getCanvas() : nullptr;
     if (canvas_) enterCanvas();
@@ -49,7 +45,7 @@ void SkiaRenderer::endFrame() {
     canvas_ = nullptr;
     inFrame_ = false;
 
-    if (gpu_ && !touched_.empty()) {
+    if (!touched_.empty()) {
         SkiaGpu::Lock lock = gpu_->lock();
         std::vector<SkSurface*> surfaces;
         surfaces.reserve(touched_.size());
@@ -145,7 +141,7 @@ void SkiaRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy, 
         // texture, mips and all, was made off this thread; if its staging
         // copy is still being written, the rest of that is waited for here
         // (gpu_image_upload.h), never the copy's GPU ticket.
-        if (!e.texture && !e.upload && gpu_) {
+        if (!e.texture && !e.upload) {
             if ((e.upload = gpu_->findUpload(px.id, /*claim=*/true)) && e.upload->ensureSubmitted()) {
                 SkiaGpu::Lock lock = gpu_->lock();
                 if (sk_sp<SkImage> tex = e.upload->image(*gpu_)) {
@@ -175,8 +171,7 @@ void SkiaRenderer::evictGpuImages(bool all) {
     // longer: a replaced source just stops matching).
     constexpr uint64_t kEvictAfterFrames = 60;
     if (gpuImages_.empty() && sharedImages_.empty()) return;
-    SkiaGpu::Lock lock;
-    if (gpu_) lock = gpu_->lock();
+    SkiaGpu::Lock lock = gpu_->lock();
     for (auto it = gpuImages_.begin(); it != gpuImages_.end();) {
         if (all || it->second.lastFrame + kEvictAfterFrames < imageFrame_) it = gpuImages_.erase(it);
         else ++it;
@@ -196,8 +191,7 @@ void SkiaRenderer::putSurfaceRect(const sk_sp<SkSurface>& src, SkIPoint srcOrigi
         canvas_ = nullptr;
         surface_ = nullptr;
     }
-    SkiaGpu::Lock lock;
-    if (gpu_) lock = gpu_->lock();
+    SkiaGpu::Lock lock = gpu_->lock();
     sk_sp<SkImage> picture = src->makeImageSnapshot();
     SkCanvas* c = dst->getCanvas();
     if (!picture || !c) return;
@@ -211,7 +205,7 @@ void SkiaRenderer::putSurfaceRect(const sk_sp<SkSurface>& src, SkIPoint srcOrigi
     c->drawImage(picture, static_cast<float>(srcOrigin.fX), static_cast<float>(srcOrigin.fY), SkSamplingOptions(),
                  &put);
     c->restore();
-    if (gpu_ && inFrame_ && std::find(touched_.begin(), touched_.end(), dst) == touched_.end())
+    if (inFrame_ && std::find(touched_.begin(), touched_.end(), dst) == touched_.end())
         touched_.push_back(dst);
 }
 
@@ -236,35 +230,12 @@ void SkiaRenderer::enterCanvas(const SkIRect* damage, SkIPoint origin) {
 }
 
 SkiaRenderer::LayerSurface SkiaRenderer::createLayerSurface(int width, int height) {
-    if (gpu_) return gpu_->makeSurface(width, height);
-    return {SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height)), nullptr};
+    return gpu_->makeSurface(width, height);
 }
 
 void SkiaRenderer::fitLayerSurface(LayerSurface& surf, int width, int height) {
     if (surf.surface && surf.surface->width() == width && surf.surface->height() == height) return;
     surf = createLayerSurface(width, height);
-}
-
-bool SkiaRenderer::saveScreenshot(const std::string& path) {
-    if (!surface_) return false;
-
-    SkPixmap pixmap;
-    if (!surface_->peekPixels(&pixmap)) return false;
-
-    const int w = pixmap.width(), h = pixmap.height();
-    std::vector<uint8_t> rgba = pixmapToRgba(pixmap);
-    if (rgba.empty()) return false;
-
-    return broimage::encode_png_file(path, rgba.data(), w, h, 4);
-}
-
-std::vector<uint8_t> SkiaRenderer::capturePixels() {
-    if (!surface_) return {};
-
-    SkPixmap pixmap;
-    if (!surface_->peekPixels(&pixmap)) return {};
-
-    return pixmapToRgba(pixmap);
 }
 
 } // namespace bro::render

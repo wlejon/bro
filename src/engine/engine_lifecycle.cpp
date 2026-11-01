@@ -295,8 +295,7 @@ bool Engine::updateDeviceScale() {
         deviceScale_.render = window_->getPixelDensity();
         deviceScale_.ratio = window_->getDevicePixelRatio();
     } else {
-        // Headless follows the configured factor, on the GPU and on the CPU
-        // (--no-gpu) alike: both draw through the same layer pipeline.
+        // Headless follows the configured factor.
         deviceScale_.ratio = deviceScale_.configured;
         deviceScale_.render = deviceScale_.configured;
     }

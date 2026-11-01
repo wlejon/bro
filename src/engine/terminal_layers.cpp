@@ -81,15 +81,11 @@ void TerminalLayers::replay(render::SkiaRenderer* renderer) {
         renderer->switchSurface(prev);
         ++replays_;
         // The compositor reads what is published, never the surface being
-        // drawn: a CPU snapshot, or the GPU image once the frame is submitted.
-        if (e->surface.isGpu()) {
-            renderer->afterSubmit([&published = e->published, image = e->surface.image]() mutable {
-                published.publish(std::move(image));
-            });
-            std::swap(e->surface, e->spare);
-        } else {
-            e->published.publish(e->surface.surface->makeImageSnapshot());
-        }
+        // drawn: the GPU image once the frame is submitted.
+        renderer->afterSubmit([&published = e->published, image = e->surface.image]() mutable {
+            published.publish(std::move(image));
+        });
+        std::swap(e->surface, e->spare);
     }
 }
 

@@ -135,8 +135,7 @@ bump dependency versions, update the baseline in `vcpkg.json` **and** the
 matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 
 Every platform needs **Vulkan 1.3** (headers and loader) to build and a Vulkan
-1.3 device with dynamic rendering and timeline semaphores to render (`--no-gpu`
-draws with Skia on the CPU without one, minus WebGL and the 3D scene). Shaders need no tool: bro compiles GLSL
+1.3 device with dynamic rendering and timeline semaphores to render. Shaders need no tool: bro compiles GLSL
 to SPIR-V with **glslang**, built from source and linked in-process
 (`cmake/glslang.cmake` downloads a pinned release at configure, like Skia;
 `-DFETCHCONTENT_SOURCE_DIR_GLSLANG=<checkout>` builds offline). The compiled

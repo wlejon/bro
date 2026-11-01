@@ -21,7 +21,7 @@
 # A JS test that cannot test its subject in this environment says so with
 # skipTest(reason) (weights absent, feature compiled out) or, when
 # getContext('webgl2' / 'scene') returned null, missingGpuContext(kind) — which
-# SKIPs only on a run with no GPU (BRO_TEST_ALLOW_RASTER) and FAILS otherwise.
+# SKIPs only when the feature is compiled out and FAILS otherwise.
 # bro-headless then exits 77 and the test is reported SKIP, never PASS.
 #
 # Also runs bro's C++ test binaries (the `native` group: the Vulkan core,
@@ -38,11 +38,8 @@
 # instead, as clients of the compositor at $WAYLAND_DISPLAY (a desktop
 # session, or a nested headless one) — Linux only.
 #
-# Runs on the GPU path (headless's default) so the
-# tests exercise the same renderer, WebGL, and layer compositing that ship —
-# CPU-only raster is a different code path and would leave those untested. A
-# test whose engine silently fell back to raster is reported as a FAIL for that
-# reason (see run_one_test); BRO_TEST_ALLOW_RASTER=1 permits it.
+# Needs a Vulkan device: a test whose engine could not bring one up is
+# reported as a FAIL for that reason (see run_one_test).
 #
 # Vulkan validation: where the Khronos validation layer is installed, every
 # test runs with BRO_VK_VALIDATION=1 and a validation error FAILS the test
@@ -311,15 +308,10 @@ VK_DRIVER=$(echo "$VK_PROBE_OUTPUT" | sed -n 's/.*(Driver \([^)]*\)).*/\1/p' | h
 if [[ -n "$VK_DEVICE" ]]; then
     echo "  Vulkan: $VK_DEVICE (Driver $VK_DRIVER)"
 else
-    # Do not use silent fallbacks that hide missing features or bugs.
-    if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]]; then
-        echo "ERROR: Vulkan initialization failed or no Vulkan device found."
-        echo "       Vulkan is required for tests. To allow CPU raster fallback, set BRO_TEST_ALLOW_RASTER=1."
-        echo "$VK_PROBE_OUTPUT" | grep -iE "Vulkan|SDL|failed|error|Fatal" | head -10 | sed 's/^/       /'
-        exit 1
-    else
-        echo "  Vulkan: initialization failed — continuing with CPU raster fallback (BRO_TEST_ALLOW_RASTER=1)"
-    fi
+    echo "ERROR: Vulkan initialization failed or no Vulkan device found."
+    echo "       Vulkan is required for tests."
+    echo "$VK_PROBE_OUTPUT" | grep -iE "Vulkan|SDL|failed|error|Fatal" | head -10 | sed 's/^/       /'
+    exit 1
 fi
 
 # --- Vulkan validation --------------------------------------------------------
@@ -445,15 +437,10 @@ run_one_test() {
     fi
 
     # A C++ test binary (`native:<name>`): exit 0 passes, 77 skips, anything
-    # else fails. Under BRO_TEST_ALLOW_RASTER there is no Vulkan device for
-    # the GPU ones to use, so those are skipped rather than failed.
+    # else fails.
     if [[ "$1" == native:* ]]; then
         local NAME="${1#native:}" BIN
         BIN="$BRO_DIR/$NAME$EXE_SUFFIX"
-        if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" && "$NAME" == bro_vulkan_* ]]; then
-            echo "  SKIP  $REL  (no GPU: BRO_TEST_ALLOW_RASTER=1)"
-            return 3
-        fi
         # In a scratch directory: some write their output to the cwd
         # (bro_videoencodetest's encode_test.webm), which must not be the repo.
         local NATIVE_CWD
@@ -495,10 +482,6 @@ run_one_test() {
     # host grants it the ask capabilities, as a headless run's.
     if [[ "$1" == windowed:* ]]; then
         local NAME="${1#windowed:}" BIN="$BRO_DIR/bro$EXE_SUFFIX"
-        if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
-            echo "  SKIP  $REL  (no GPU: BRO_TEST_ALLOW_RASTER=1)"
-            return 3
-        fi
         local APP RUN_CWD
         APP="$(to_win_path "$SCRIPT_DIR/windowed/$NAME")"
         # bro writes its log to bro.log in the cwd: a scratch one, read back.
@@ -577,9 +560,6 @@ run_one_test() {
     esac
 
     local EXTRA_TEST_ARGS=( "--grant" "$GRANTS" )
-    if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
-        EXTRA_TEST_ARGS+=( "--no-gpu" )
-    fi
 
     if [[ -n "$TIMEOUT_BIN" ]]; then
         OUTPUT=$(env "${EXTRA_ENV[@]}" "$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP_FOR_RUN" "$TEST_FILE" 2>&1)
@@ -590,18 +570,12 @@ run_one_test() {
     fi
     [[ -n "$CONF_HOME" ]] && rm -rf "$CONF_HOME"
 
-    # The engine fails fast or throws if Vulkan initialization fails when GPU is configured.
-    # Catch any Vulkan failure and fail loud and clear.
-    # BRO_TEST_ALLOW_RASTER=1 opts out for a deliberate raster-only run on a box with no Vulkan at all.
-    if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]] &&
-       [[ "$OUTPUT" == *"continuing with CPU raster fallback"* ||
-          "$OUTPUT" == *"falling back to CPU raster rendering"* ||
-          "$OUTPUT" == *"Headless Vulkan init failed"* ||
-          "$OUTPUT" == *"Headless Vulkan initialization failed"* ||
+    # The engine fails fast when Vulkan initialization fails: say so loud and clear.
+    if [[ "$OUTPUT" == *"Headless Vulkan initialization failed"* ||
+          "$OUTPUT" == *"Headless Skia initialization failed"* ||
           "$OUTPUT" == *"Vulkan initialization failed"* ]]; then
         echo "  FAIL  $REL  (NO GPU — Vulkan init failed)"
-        echo "$OUTPUT" | grep -iE "Vulkan|SDL|GPU init failed|Fatal" | head -5 | sed 's/^/        /'
-        echo "        Set BRO_TEST_ALLOW_RASTER=1 to run anyway (GPU paths untested)."
+        echo "$OUTPUT" | grep -iE "Vulkan|SDL|Skia|Fatal" | head -5 | sed 's/^/        /'
         return 1
     fi
 

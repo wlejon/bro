@@ -104,7 +104,7 @@ bro.app.manifest;
 
 /**
  * The command line after the app directory, verbatim. bro takes out only its
- * own flags (--no-gpu, --no-splash, --splash, --drm, --new-instance) and only
+ * own flags (--no-splash, --splash, --drm, --new-instance) and only
  * before a `--`; the `--` itself is passed through. Under bro-headless it is
  * what follows `--`.
  * @readonly @type {string[]}

@@ -57,8 +57,8 @@ SkiaRenderer::~SkiaRenderer() {
     shaper_.clear();
     fonts_.clear();
     // GPU objects go under the context lock.
-    if (gpu_) {
-        evictGpuImages(/*all=*/true);
+    evictGpuImages(/*all=*/true);
+    {
         SkiaGpu::Lock lock = gpu_->lock();
         recorder_.reset();
         touched_.clear();
@@ -743,14 +743,6 @@ void SkiaRenderer::setClipPolygon(std::span<const render::PointF> points) {
     }
     pb.close();
     canvas_->clipPath(pb.detach(), SkClipOp::kIntersect, /*doAntiAlias=*/true);
-}
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer() {
-    LOG_INFO("Creating SkiaRenderer (Skia raster)");
-    return std::make_unique<SkiaRenderer>();
 }
 
 } // namespace bro::render

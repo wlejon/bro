@@ -220,8 +220,6 @@ static void printUsage() {
         "\n"
         "CLI flags:\n"
         "  --no-splash / --splash  Disable or force the startup splash screen.\n"
-        "  --no-gpu                Run without Vulkan: CPU-rendered frames shown in a\n"
-        "                          software window (no 3D scenes or WebGL).\n"
         "  --drm                   Run bare-metal on Linux DRM/KMS display with seat & libinput.\n"
         "  --new-instance          Start a new instance of a single-instance app instead of\n"
         "                          handing the arguments to the running one.\n"
@@ -310,7 +308,6 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     // included.
     bool cliNoSplash = false;
     bool cliSplash   = false;
-    bool cliNoGpu    = false;
     bool cliDrm      = false;
     bool cliNewInstance = false;
     // A click on one of the app's notifications started this run: its
@@ -353,7 +350,6 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
         if (!dashDash) {
             if (a == "--no-splash")    { cliNoSplash = true; continue; }
             if (a == "--splash")       { cliSplash = true; continue; }
-            if (a == "--no-gpu")       { cliNoGpu = true; continue; }
             if (a == "--drm")          { cliDrm = true; continue; }
             if (a == "--new-instance") { cliNewInstance = true; continue; }
             if (a == "--notification") { expectNotificationArgs = true; continue; }
@@ -388,7 +384,6 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     // CLI overrides — applied last so they win over bro.json.
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
-    if (cliNoGpu)    config.graphics.useGPU = false;
     if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
     // Added to what the launch resolved (the project manager's own grants).
     config.hostGrants.insert(config.hostGrants.end(), cliGrants.begin(), cliGrants.end());

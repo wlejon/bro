@@ -64,7 +64,7 @@ enum class CursorShape {
 /// How a window's frames reach the screen.
 enum class GraphicsBackend {
     Vulkan,    // a VulkanSwapchain presents to the window's VkSurfaceKHR
-    Software,  // no GPU: CPU frames go through Window::presentPixels
+    Software,  // no surface: headless's hidden window, which presents nothing
 };
 
 /// What createWindow builds.
@@ -194,9 +194,6 @@ public:
     /// presents through a copy across the bus to the display's GPU, each
     /// frame; device selection prefers the one that does not.
     virtual bool displayAdapterLuid(uint8_t luid[8]) const { (void)luid; return false; }
-    /// Software backend: copy a frame of 32-bit pixels to the window and show
-    /// it, clipped to the window. False on failure or for a Vulkan window.
-    virtual bool presentPixels(const void* pixels, int width, int height, int stride, bool bgra) = 0;
     /// Record the vsync preference; the engine applies it to the swapchain.
     virtual void setVSync(bool enabled) = 0;
     virtual bool vsyncPreference() const = 0;

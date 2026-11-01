@@ -32,9 +32,8 @@ class SkiaGpu;         // render/skia_gpu.h
 // ---------------------------------------------------------------------------
 // SkiaRenderer -- the UI (HTML/CSS) through Skia
 //
-// With a SkiaGpu (setGpu) its layer surfaces are GPU surfaces whose images
-// VulkanPresenter composites in place; without one, CPU raster surfaces whose
-// pixels it uploads. Drawing on a GPU surface is recorded into a deferred
+// Its layer surfaces are GPU surfaces of its SkiaGpu (setGpu) whose images
+// VulkanPresenter composites in place. Drawing on a GPU surface is recorded into a deferred
 // display list without the SkiaGpu lock — the raster thread replays a page
 // while the main thread's canvases use the context — and only drawing that
 // list into the surface, when drawing moves off it, takes the lock (briefly).
@@ -145,8 +144,8 @@ public:
                            float cx, float cy, float angleDeg,
                            std::span<const ColorStop> stops) override;
 
-    /// Draw on the GPU through `gpu` from now on (null: the CPU). Before the
-    /// first layer surface is made.
+    /// Draw on the GPU through `gpu`: right after construction, before
+    /// anything is drawn.
     void setGpu(SkiaGpu* gpu) { gpu_ = gpu; }
     SkiaGpu* skiaGpu() const override { return gpu_; }
 
@@ -204,8 +203,6 @@ public:
 
     SkCanvas* getCanvas() const override { return canvas_; }
     SkSurface* surface() const override { return surface_.get(); }
-    bool saveScreenshot(const std::string& path) override;
-    std::vector<uint8_t> capturePixels() override;
 
 private:
     SkColor toSkColor(bromath::Color c) const;
@@ -314,10 +311,5 @@ private:
     // (one entry per face; getOrCreateFont runs CSS font matching over them).
     std::vector<CustomFontFace> customFonts_;
 };
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer();
 
 } // namespace bro::render

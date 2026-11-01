@@ -100,8 +100,8 @@ public:
     // when its latest recordings stand there (nothing under the scroller
     // stamped, nothing volatile in them, no scroller in it), its window holds
     // the view there, and the move from the pass's scroll is by whole device
-    // pixels at `scale`. False: the page has to be recorded for it. On the
-    // GPU a move by an odd number of device pixels leaves its surfaces off
+    // pixels at `scale`. False: the page has to be recorded for it. A move
+    // by an odd number of device pixels leaves its surfaces off
     // the even grid they were rastered on (evenPhase): placed right, but
     // antialiased on the other parity; `rasterDue` then asks for a raster
     // pass (no record), which rasters it at the phase of its live scroll.
@@ -117,8 +117,7 @@ public:
     // the phase they were rastered at, the scroll to place them by, and its
     // thumbs.
     struct Picture {
-        sk_sp<SkImage> image;              // a CPU picture
-        render::SkiaImageRef gpu;          // or a GPU one
+        render::SkiaImageRef gpu;
     };
     struct ThumbShown {
         Picture picture;
@@ -145,40 +144,25 @@ public:
         return it != layers_.end() && it->second->seen;
     }
     size_t size() const { return layers_.size(); }
-    // Layer surfaces rastered whole (a part each), and from the last one's
-    // pixels with only what moved in or changed drawn (rasterPart), since startup.
+    // Layer surfaces rastered (a part each), since startup.
     uint64_t rasters() const { return rasters_.load(std::memory_order_relaxed); }
-    uint64_t partialRasters() const { return partialRasters_.load(std::memory_order_relaxed); }
     // A check for tests (headless setScrollLayerVerify): after each partial
-    // raster, the same recording rastered whole beside it and compared pixel
-    // for pixel; the pixels that differ, since startup. Partial must be whole.
+    // raster of the page (Engine::replayAppLayers), the same recording
+    // rastered whole beside it and compared pixel for pixel.
     static void setVerifyPartial(bool on);
     static bool verifyPartial();
-    uint64_t partialMismatch() const { return partialMismatch_.load(std::memory_order_relaxed); }
 
 private:
     // One recording of a layer and the surfaces it is rastered into.
     struct Part {
         // Recorded by the main thread, read by the raster thread's replay.
         render::CommandBuffer cmd;  // content space
-        // The recording before it, when that was the one last rastered
-        // (prevValid): what changed between them is what a raster draws.
-        render::CommandBuffer prevCmd;
-        bool prevValid = false;
         std::vector<uint32_t> entries;  // a piece's: the elements whose paint it holds
         bool reusable = false;
         bool recorded = true;  // recorded since it was last rastered
-        // The raster thread's: its surfaces (on the GPU drawn in turn, the
-        // last raster in the spare once swapped; on the CPU one, the last
-        // raster in it), where the CPU one holds its last raster (window,
-        // phase, scale; valid false: nothing to keep), and the scratch a
-        // partial raster draws in.
-        struct Holds {
-            bool valid = false;
-            float winX = 0, winY = 0, phaseX = 0, phaseY = 0, scale = 0;
-        };
-        render::LayerSurface surface, spare, scratch;
-        Holds holds;
+        // The raster thread's: its surfaces, drawn in turn (the last raster
+        // in the spare once swapped).
+        render::LayerSurface surface, spare;
         int surfW = 0, surfH = 0;
     };
     struct Layer {
@@ -230,22 +214,9 @@ private:
         uint64_t shownPasses = 0;  // the pass Shown is of
         bool published = false;
     };
-    // A CPU part's raster in place: its surface holds the last raster where
-    // this one goes, and only what changed in its recording since is drawn
-    // again. False: draw it whole (too much changed, or what changed is not
-    // known). On the GPU a layer is rastered whole: a raster there costs a
-    // recording of its own per surface and a put-back, about what the whole
-    // layer does (scroll_layers.cpp, ScrollLayerSet::replay).
-    bool rasterPart(render::SkiaRenderer* renderer, const Layer& l, Part& p, float px, float py, float s, int w,
-                    int h);
     uint32_t pass_;
     std::unordered_map<uint32_t, std::unique_ptr<Layer>> layers_;
     std::atomic<uint64_t> rasters_{0};
-    std::atomic<uint64_t> partialRasters_{0};
-    std::atomic<uint64_t> partialMismatch_{0};
-    // Its surfaces are the GPU's, so placed on even device pixels (evenPhase):
-    // set by the raster thread, read by scrollTo (rasterDue).
-    std::atomic<bool> evenGrid_{false};
 };
 
 }  // namespace bro::engine

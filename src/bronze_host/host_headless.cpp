@@ -202,18 +202,16 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 1, "skipTest"));
 
-    // 5c. missingGpuContext(kind): getContext(kind) returned null. Only a run
-    // with no GPU device (--no-gpu, or a Vulkan device that would not come up
-    // under BRO_TEST_ALLOW_RASTER) or a build without the feature is allowed
-    // that: it SKIPs. On a GPU run a null 'webgl2' / 'scene' context is a bug
-    // and FAILS the run, instead of passing it untested.
+    // 5c. missingGpuContext(kind): getContext(kind) returned null. Only a
+    // build without the feature is allowed that: it SKIPs. Otherwise a null
+    // 'webgl2' / 'scene' context is a bug and FAILS the run, instead of
+    // passing it untested.
     regBoth("missingGpuContext", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             std::string kind = a.empty() ? "gpu" : ev::toUtf8(a[0]);
             const bool compiledOut = kind == "scene" && !BRO_WITH_3D;
-            if (engine.vulkanContext() == nullptr || compiledOut) {
-                LOG_INFO("SKIP: no '%s' context (%s)", kind.c_str(),
-                         compiledOut ? "3D compiled out" : "no GPU device");
+            if (compiledOut) {
+                LOG_INFO("SKIP: no '%s' context (3D compiled out)", kind.c_str());
                 s_testSkipped = true;
             } else {
                 LOG_ERROR("ASSERTION FAILED: getContext('%s') returned null on a GPU run",

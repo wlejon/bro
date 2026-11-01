@@ -100,7 +100,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
     int width = 1920, height = 1080;
     float deviceScale = 1.0f;
-    bool useGPU = true;
     bool realAudio = false;
     int cliSplash = -1;
     std::string appDir;
@@ -129,8 +128,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "                  Render at S device px per CSS px, as a HiDPI display\n"
                 "                  would (devicePixelRatio, screenshots S times the\n"
                 "                  viewport; default: 1)\n"
-                "  --cpu           Use software renderer\n"
-                "  --no-gpu        Use software renderer\n"
                 "  --real-audio    Enable real audio output\n"
                 "  --audio         Enable real audio output\n"
                 "  --splash        Show splash screen during load\n"
@@ -172,8 +169,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         } else if (strcmp(argv[i], "--device-scale-factor") == 0 && i + 1 < argc) {
             deviceScale = static_cast<float>(atof(argv[++i]));
             if (!(deviceScale > 0.0f)) deviceScale = 1.0f;
-        } else if (strcmp(argv[i], "--cpu") == 0 || strcmp(argv[i], "--no-gpu") == 0) {
-            useGPU = false;
         } else if (strcmp(argv[i], "--real-audio") == 0 || strcmp(argv[i], "--audio") == 0) {
             realAudio = true;
         } else if (strcmp(argv[i], "--splash") == 0) {
@@ -339,7 +334,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.realAudio = realAudio;
         config.graphics.width = width;
         config.graphics.height = height;
-        config.graphics.useGPU = useGPU;
         config.deviceScaleFactor = deviceScale;
         config.showSplash = (cliSplash == 1);
         config.hostProvidesCompiledApp =

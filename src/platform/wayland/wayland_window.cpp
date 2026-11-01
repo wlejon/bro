@@ -22,8 +22,6 @@ namespace bro::platform::wl {
 
 namespace {
 
-constexpr uint32_t kShmXrgb8888 = 1;  // WL_SHM_FORMAT_XRGB8888
-
 browl::CursorShape browlCursor(CursorShape s) {
     using B = browl::CursorShape;
     switch (s) {
@@ -81,9 +79,6 @@ WaylandWindow::~WaylandWindow() {
         if (browl::Seat* seat = conn_.seat()) seat->unlock_pointer();
     }
     conn_.removeWindow(this);
-    shmBuffers_[0].reset();
-    shmBuffers_[1].reset();
-    shmPool_.reset();
     window_.reset();
     conn_.display().flush();
 }
@@ -165,56 +160,6 @@ bool WaylandWindow::createVulkanSurface(VkInstance instance, VkSurfaceKHR* surfa
         LOG_ERROR("vkCreateWaylandSurfaceKHR failed: %d", static_cast<int>(r));
         return false;
     }
-    return true;
-}
-
-bool WaylandWindow::presentPixels(const void* pixels, int width, int height, int stride, bool bgra) {
-    if (backend_ != GraphicsBackend::Software || !pixels || width <= 0 || height <= 0) return false;
-    int pw = 0, ph = 0;
-    getSizeInPixels(pw, ph);
-    if (pw <= 0 || ph <= 0) return false;
-    const size_t frameBytes = static_cast<size_t>(pw) * static_cast<size_t>(ph) * 4;
-    if (!shmPool_ || !shmBuffers_[0] || shmBuffers_[0]->width() != pw || shmBuffers_[0]->height() != ph) {
-        shmBuffers_[0].reset();
-        shmBuffers_[1].reset();
-        shmPool_ = conn_.display().create_shm_pool(frameBytes * 2);
-        if (!shmPool_) return false;
-        shmBuffers_[0] = shmPool_->allocate_buffer(pw, ph, pw * 4, kShmXrgb8888);
-        shmBuffers_[1] = shmPool_->allocate_buffer(pw, ph, pw * 4, kShmXrgb8888);
-        if (!shmBuffers_[0] || !shmBuffers_[1]) return false;
-    }
-    browl::ShmBuffer* buf = nullptr;
-    for (int attempt = 0; attempt < 50 && !buf; ++attempt) {
-        for (auto& b : shmBuffers_)
-            if (!b->is_busy()) { buf = b.get(); break; }
-        if (!buf) conn_.pump(2);
-    }
-    if (!buf) return false;
-
-    // Copy, clipped to the window, as XRGB8888 (BGRA in memory).
-    auto* dst = static_cast<uint8_t*>(buf->data());
-    std::memset(dst, 0, frameBytes);
-    const int rows = std::min(height, ph), cols = std::min(width, pw);
-    for (int y = 0; y < rows; ++y) {
-        const auto* s = static_cast<const uint8_t*>(pixels) + static_cast<size_t>(y) * stride;
-        uint8_t* d = dst + static_cast<size_t>(y) * pw * 4;
-        if (bgra) {
-            std::memcpy(d, s, static_cast<size_t>(cols) * 4);
-        } else {
-            for (int x = 0; x < cols; ++x) {
-                d[x * 4 + 0] = s[x * 4 + 2];
-                d[x * 4 + 1] = s[x * 4 + 1];
-                d[x * 4 + 2] = s[x * 4 + 0];
-                d[x * 4 + 3] = 0xff;
-            }
-        }
-    }
-    beforePresent(0);
-    window_->attach_buffer(buf->wl_buffer_ptr());
-    buf->set_busy(true);
-    window_->damage(0, 0, pw, ph);
-    window_->commit();
-    conn_.display().flush();
     return true;
 }
 

@@ -1,9 +1,8 @@
 // Frame composition: a frame's layers as one PresentFrame — GPU images (3D
-// scenes, WebGL canvases, and with Skia on the GPU every HTML, canvas and
-// iframe layer) the presenter draws in place, and the CPU composite of any
-// CPU-drawn layers between them — and its presentation: windowed through the
-// VulkanPresenter (or the software window surface without Vulkan), headless
-// as pixels for a capture.
+// scenes, WebGL canvases, every HTML, canvas and iframe layer) the presenter
+// draws in place, and the CPU composite of any CPU-drawn layers between them
+// — and its presentation: windowed through the VulkanPresenter, headless as
+// pixels for a capture.
 
 #include "engine/engine.h"
 #include "engine/app_runtime.h"
@@ -227,15 +226,11 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
         std::visit(Overloaded{
             [&](const HtmlLayer& html) {
                 // Content space, 1:1 in device px, below the inset.
-                if (html.image) {
+                if (html.image)
                     placeSkiaImage(html.image,
                                    SkRect::MakeXYWH(0.0f, at.oy * at.sy, static_cast<float>(html.image->width),
                                                     static_cast<float>(html.image->height)),
                                    nullptr);
-                } else if (html.surface) {
-                    if (auto img = html.surface->makeImageSnapshot())
-                        if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
-                }
             },
             [&](const render::ScrollLayerSource& src) {
                 // A scroller's content: its window's picture where the
@@ -265,14 +260,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                                                          float(h));
                     };
                     const ScrollLayerSet::Picture& pic = t.picture;
-                    if (pic.gpu) {
-                        placeSkiaImage(pic.gpu, thumbDst(int(pic.gpu->width), int(pic.gpu->height)), nullptr);
-                    } else if (pic.image) {
-                        if (SkCanvas* canvas = frameSegmentCanvas()) {
-                            const SkRect d = thumbDst(pic.image->width(), pic.image->height());
-                            canvas->drawImage(pic.image, d.left(), d.top());
-                        }
-                    }
+                    if (pic.gpu) placeSkiaImage(pic.gpu, thumbDst(int(pic.gpu->width), int(pic.gpu->height)), nullptr);
                     return;
                 }
                 // The content, or a piece: a run of its positioned
@@ -289,25 +277,13 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                         std::round((quad.x + s.winX - s.scrollX) * at.sx - s.phaseX),
                         std::round((quad.y + at.oy + s.winY - s.scrollY) * at.sy - s.phaseY), float(w), float(h));
                 };
-                if (pic.gpu) {
-                    placeSkiaImage(pic.gpu, dstFor(int(pic.gpu->width), int(pic.gpu->height)), &quad, true);
-                } else if (pic.image) {
-                    if (SkCanvas* canvas = frameSegmentCanvas()) {
-                        canvas->save();
-                        SkRect c;
-                        if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, false);
-                        const SkRect d = dstFor(pic.image->width(), pic.image->height());
-                        canvas->drawImage(pic.image, d.left(), d.top());
-                        canvas->restore();
-                    }
-                }
+                if (pic.gpu) placeSkiaImage(pic.gpu, dstFor(int(pic.gpu->width), int(pic.gpu->height)), &quad, true);
             },
             [&](const render::IframeLayerSource& src) {
                 IframeDoc* d = iframeDocById(src.docId);
                 if (!d) return;
                 frameKeyAdd(d->published.generation());
                 if (render::SkiaImageRef image = d->published.gpu()) placeSkiaImage(image, at.dst(quad), &quad);
-                else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), quad);
             },
             [&](const render::TerminalLayerSource& src) {
                 const PublishedFrame* p = terminalLayers_ ? terminalLayers_->published(src.layerId) : nullptr;
@@ -319,18 +295,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                     const SkRect d = at.dst(quad);
                     return SkRect::MakeXYWH(std::round(d.left()), std::round(d.top()), float(w), float(h));
                 };
-                if (render::SkiaImageRef image = p->gpu()) {
+                if (render::SkiaImageRef image = p->gpu())
                     placeSkiaImage(image, dstFor(int(image->width), int(image->height)), &quad);
-                } else if (sk_sp<SkImage> img = p->get()) {
-                    if (SkCanvas* canvas = frameSegmentCanvas()) {
-                        canvas->save();
-                        SkRect c;
-                        if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, true);
-                        const SkRect d = dstFor(img->width(), img->height());
-                        canvas->drawImage(img, d.left(), d.top());
-                        canvas->restore();
-                    }
-                }
             },
             [&](const render::RemoteViewLayerSource& src) {
                 // A remote screen, letterboxed inside the content box (its
@@ -607,12 +573,6 @@ bool Engine::presentCurrentFrame(bool mayHold) {
         // Headless frames of the windowed pipeline present to the offscreen
         // target, paced as a 60 Hz FIFO swapchain would pace them.
         presented = presentHeadlessPipelineFrame(frame);
-    } else if (!vulkanPresenter_ && window_ && window_->backend() == platform::GraphicsBackend::Software &&
-               frame.below) {
-        // No GPU, so no GPU layer: the CPU composite is the frame.
-        const render::PresentPixels& p = frame.below;
-        presented = window_->presentPixels(p.pixels, static_cast<int>(p.width), static_cast<int>(p.height),
-                                           static_cast<int>(p.stride), p.bgra);
     }
     // Only a frame presented by the path that may hold its repeats keys
     // them: a compile or panel frame in between always re-presents.

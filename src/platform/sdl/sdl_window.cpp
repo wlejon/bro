@@ -267,29 +267,6 @@ void SdlWindow::raise() {
     }
 }
 
-bool SdlWindow::presentPixels(const void* pixels, int width, int height, int stride, bool bgra) {
-    if (m_backend != GraphicsBackend::Software || !pixels) return false;
-    SDL_Surface* target = SDL_GetWindowSurface(m_window);
-    if (!target) {
-        LOG_ERROR("SDL_GetWindowSurface failed: %s", SDL_GetError());
-        return false;
-    }
-    SDL_Surface* src = SDL_CreateSurfaceFrom(width, height,
-                                             bgra ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888,
-                                             const_cast<void*>(pixels), stride);
-    if (!src) {
-        LOG_ERROR("SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
-        return false;
-    }
-    // The frame is premultiplied UI over nothing: copy, don't blend.
-    SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
-    SDL_FillSurfaceRect(target, nullptr, SDL_MapSurfaceRGB(target, 0, 0, 0));
-    const bool ok = SDL_BlitSurface(src, nullptr, target, nullptr) && SDL_UpdateWindowSurface(m_window);
-    if (!ok) LOG_ERROR("Software present failed: %s", SDL_GetError());
-    SDL_DestroySurface(src);
-    return ok;
-}
-
 void SdlWindow::setTitle(const std::string& title) {
     m_title = title;
     SDL_SetWindowTitle(m_window, title.c_str());

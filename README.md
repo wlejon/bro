@@ -123,7 +123,6 @@ Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a
 ```bash
 bro-headless ../broworkshop/demos/dom-lab test.js                           # script file
 bro-headless ../broworkshop/demos/dom-lab -e "document.querySelector('#btn').click()"
-bro-headless --no-gpu ../broworkshop/demos/dom-lab                          # CPU-only (CI)
 ```
 
 Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.

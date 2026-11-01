@@ -189,11 +189,10 @@ bool Engine::absorbLayerScroll(dom::Element* e, float scrollLeft, float scrollTo
 
 namespace {
 
-// The UILayer for an HTML layer surface: its GPU image, or the CPU surface.
+// The UILayer for an HTML layer surface: its GPU image.
 UILayer htmlLayerOf(const render::LayerSurface& s) {
     HtmlLayer html;
-    if (s.isGpu()) html.image = s.image;
-    else html.surface = s.surface;
+    html.image = s.image;
     UILayer layer;
     layer.content = std::move(html);
     return layer;
@@ -395,7 +394,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         renderer->switchSurface(origSurface);
         const SkImageInfo info = SkImageInfo::MakeN32Premul(surfW, surfH);
         std::vector<uint32_t> a(static_cast<size_t>(surfW) * surfH), b(a.size());
-        render::SkiaGpu::Lock lock = renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
+        render::SkiaGpu::Lock lock = renderer->skiaGpu()->lock();
         for (size_t k = 0; k < whole.size() && k <= static_cast<size_t>(htmlLayerIdx); ++k) {
             if (!whole[k].surface || !pool[k].surface) continue;
             if (!pool[k].surface->readPixels(info, a.data(), surfW * 4, 0, 0) ||
@@ -507,8 +506,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
             // The canvas's own surface is drawn and snapshotted directly.
-            render::SkiaGpu::Lock lock =
-                renderer->skiaGpu() ? renderer->skiaGpu()->lock() : render::SkiaGpu::Lock();
+            render::SkiaGpu::Lock lock = renderer->skiaGpu()->lock();
             scene->flushStaged();
             auto img = scene->displayImage();
             if (!img) return;
@@ -612,13 +610,7 @@ std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& out
     if (!el) return {};
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (!skia || !recordingRenderer_ || !drawTraversal_) {
-        // No main-thread Skia renderer (e.g. --no-gpu CPU renderer): fall back
-        // to the frame the raster thread last published, if any.
-        IframeDoc* d = iframeDocForElement(el);
-        if (!d) return {};
-        return readPublishedFrame(d->published, outW, outH);
-    }
+    if (!skia || !recordingRenderer_ || !drawTraversal_) return {};
 
     quiesceRasterForCapture();
     processPendingIframeReloads();
@@ -640,8 +632,7 @@ std::vector<uint8_t> Engine::captureWindowHost(uint64_t id, int& outW, int& outH
     if (!h || !h->document) return {};
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (!skia || !recordingRenderer_ || !drawTraversal_)
-        return readPublishedFrame(h->published, outW, outH);
+    if (!skia || !recordingRenderer_ || !drawTraversal_) return {};
 
     quiesceRasterForCapture();
     syncWindowHostBox(*h);
@@ -659,21 +650,6 @@ void Engine::quiesceRasterForCapture() {
     if (!framePresenter_) return;
     while (framePresenter_->isRasterBusyOrRequested())
         std::this_thread::yield();
-}
-
-// Fallback shared by both capture paths: the frame the last replay published,
-// with no re-record.
-std::vector<uint8_t> Engine::readPublishedFrame(const PublishedFrame& frame, int& outW, int& outH) {
-    outW = 0;
-    outH = 0;
-    sk_sp<SkImage> img = frame.get();
-    SkPixmap pixmap;
-    if (!img || !img->peekPixels(&pixmap)) return {};
-    auto pixels = render::pixmapToRgba(pixmap);
-    if (pixels.empty()) return {};
-    outW = pixmap.width();
-    outH = pixmap.height();
-    return pixels;
 }
 
 } // namespace bro::engine
