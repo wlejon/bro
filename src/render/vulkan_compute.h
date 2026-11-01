@@ -299,11 +299,12 @@ private:
         bool pendingBarrier = false;
         uint64_t lastTicket = 0;
     };
-    // The stream recording now: the background one only on an async queue
-    // (else background work is the graphics stream's).
+    // The stream recording now. The background one is held to the frame's
+    // end on a device without an async queue too, and then submitted to the
+    // graphics queue.
     Stream& current() { return recordingBackground() ? backgroundStream_ : graphicsStream_; }
     bool async() const;
-    bool recordingBackground() const { return background_ && async(); }
+    bool recordingBackground() const { return background_; }
     uint64_t flushStream(Stream& s, bool isBackground);
     VulkanQueue& queueFor(bool isBackground) const;
 

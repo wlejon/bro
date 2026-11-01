@@ -14,8 +14,10 @@ namespace bro::render {
 namespace {
 
 constexpr VkDeviceSize kBufferGranule = 256;
-// Timestamp queries for timed dispatches, two a dispatch, in a ring.
-constexpr uint32_t kTimedQueries = 8192;
+// Timestamp queries for timed dispatches, two a dispatch, in a ring. 4096 at
+// most: MoltenVK backs a pool with a Metal counter sample buffer of 32 KB at
+// most, and a larger pool falls back to emulated stamps that time nothing.
+constexpr uint32_t kTimedQueries = 4096;
 // And for spans, two a span.
 constexpr uint32_t kSpanQueries = 256;
 // And for background submissions, two a submission.
@@ -40,7 +42,7 @@ bool fail(std::string* error, const std::string& msg) {
 }
 
 // The queue a ticket is on: the background stream's is the async compute
-// queue (a background ticket exists only where there is one).
+// queue where there is one, else the graphics queue.
 VulkanQueue& queueOf(VulkanContext& context, bool background) {
     VulkanQueue* async = background ? context.asyncComputeQueue() : nullptr;
     return async ? *async : context.queue();
@@ -359,7 +361,7 @@ VkCommandBuffer VulkanCompute::commands() {
     if (s.open == VK_NULL_HANDLE) {
         context_->frames().ensureFrame();
         const bool bg = recordingBackground();
-        s.open = bg ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
+        s.open = bg && async() ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
         // A background submission is timed whole, from when its work starts
         // (after the graphics it waits for) to its end: what it takes of the
         // gap between frames.
@@ -411,8 +413,7 @@ void VulkanCompute::beginBackground() {
 
 uint64_t VulkanCompute::endBackground() {
     if (!context_ || !background_) return 0;
-    const bool wasAsync = recordingBackground();
-    const uint64_t ticket = wasAsync ? markBackground() : flush();
+    const uint64_t ticket = markBackground();
     background_ = false;
     return ticket;
 }
@@ -424,15 +425,15 @@ uint64_t VulkanCompute::markBackground() {
 
 bool VulkanCompute::backgroundComplete(uint64_t ticket) const {
     if (!context_) return false;
-    return async() ? owner_->backgroundSerialComplete(ticket) : context_->queue().isComplete(ticket);
+    return owner_->backgroundSerialComplete(ticket);
 }
 
 void VulkanCompute::releaseBackground() {
-    if (context_ && async()) flushStream(backgroundStream_, true);
+    if (context_) flushStream(backgroundStream_, true);
 }
 
 void VulkanCompute::finishBackground() {
-    if (!context_ || !async()) return;
+    if (!context_) return;
     flushStream(backgroundStream_, true);
     if (backgroundStream_.lastTicket) queueFor(true).wait(backgroundStream_.lastTicket);
 }
@@ -461,9 +462,11 @@ void VulkanCompute::collectBackgroundStamps() {
 }
 
 void VulkanCompute::acquireBackground(uint64_t serial) {
-    if (!async()) return;
+    if (!context_) return;
     // Wanted before the frame's end released it: it goes now.
     if (serial > owner_->backgroundSubmitted) flushStream(backgroundStream_, true);
+    // On one queue, submission order is all the graphics work after it needs.
+    if (!async()) return;
     const uint64_t ticket = owner_->backgroundTicket(serial);
     if (!ticket || ticket <= acquire_) return;
     acquire_ = ticket;
@@ -690,14 +693,19 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
         // After the graphics queue's work so far: the writes it reads (this
         // stream's graphics work recorded before it included), and frames
         // still drawing from what it rewrites.
+        // Without an async queue it goes to the graphics queue, after
+        // everything there in submission order.
         flush();
-        if (const uint64_t g = context_->queue().lastSubmittedTicket())
-            waits.push_back({context_->queue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, g});
+        if (async()) {
+            if (const uint64_t g = context_->queue().lastSubmittedTicket())
+                waits.push_back({context_->queue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, g});
+        }
         const bool stamped = backgroundStamped_;
         if (stamped) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, backgroundPool_,
                                          backgroundStampQuery_ + 1);
         backgroundStamped_ = false;
-        ticket = context_->frames().submitCompute(cmd, std::move(waits));
+        ticket = async() ? context_->frames().submitCompute(cmd, std::move(waits))
+                         : context_->frames().submit(cmd, std::move(waits));
         if (stamped && ticket) backgroundStamps_.push_back({backgroundStampQuery_, ticket});
         // The serials handed out so far are this submission's (a failed
         // one's complete at once: there is nothing to wait for).
