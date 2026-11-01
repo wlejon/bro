@@ -2,22 +2,14 @@
 
 // Rooted: an ev::Persistent that reads as a Value.
 //
-// The embed GC contract (bronze embed.h) makes a raw Value stale after any
-// allocating call, and a property read is one: getProperty and getElement may
-// run a getter. A function that reads an options object field after field, or
-// walks an array element by element, therefore cannot hold the object in a
-// plain Value. It roots it once instead:
+// A Value in a plain C++ local already stays current across allocating calls
+// (bronze embed.h, "THE GC CONTRACT": the collector pins what the stack
+// names). A Rooted is a root of its own wherever it lives, so it also holds a
+// Value as a member of a host struct or a capture kept past the frame. Each
+// use converts to the value's current address:
 //
-//     bool readThing(Value optsIn, Thing& out) {
-//         const Rooted opts(optsIn);
-//         out.a = getPropNumber(opts, "a", 0);   // each use re-reads the slot
-//         out.b = getPropNumber(opts, "b", 0);
-//     }
-//
-// Each use converts to the value's CURRENT address. The argument-order rule
-// still applies: a use that sits beside an allocating argument in the same
-// call (`setProperty(o, "k", fromUtf8(s))`) may be read before that argument
-// runs, so build the allocating argument in its own statement first.
+//     const Rooted opts(optsIn);
+//     out.a = getPropNumber(opts, "a", 0);
 
 #include "embed/embed.h"
 

@@ -240,8 +240,6 @@ void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
     }
     if (!observed) return;
 
-    // Each fromUtf8 allocates, so the element, the callback and the earlier
-    // strings are rooted before the next one is made.
     ev::Persistent elVal(hostElementValue(el));
     ev::Persistent cb(ev::getProperty(elVal.get(), "attributeChangedCallback"));
     if (ev::isFunction(cb.get())) {

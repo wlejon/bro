@@ -515,9 +515,7 @@ void installBroWindowOpen(Value broWinIn) {
 
 namespace {
 
-// Calls each listener with (this = handle, event). Both are re-read from
-// their roots per call: every ev::call allocates, so a raw Value held from
-// one iteration to the next would be stale.
+// Calls each listener with (this = handle, event).
 void fireHandleListeners(const std::vector<ev::Persistent>& listeners,
                          const ev::Persistent& handle, const ev::Persistent& event) {
     for (auto& fn : listeners) {

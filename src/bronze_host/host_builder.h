@@ -4,9 +4,10 @@
 // bulk-data readers over typed arrays and plain arrays, and ObjectBuilder,
 // which builds a host object property by property in a fixed order.
 //
-// GC DISCIPLINE (the one rule of this layer): bronze's heap is a moving
-// semispace collector. A Value held in a plain C++ variable is stale after
-// the next allocating embed call; anything held across one lives in a
+// GC DISCIPLINE: bronze's heap is a moving collector, but it never moves or
+// frees what the thread's stack and registers name (bronze embed.h, "THE GC
+// CONTRACT"), so a Value in a plain C++ local stays current across allocating
+// embed calls. A Value kept in heap memory or across frames lives in a
 // bronze::embed::Persistent. Pointers from embed::typedArrayInfo() die at the
 // next bronze allocation — every binding that takes one hands it to the call
 // that consumes it (which copies) before any embed call that could allocate,
@@ -284,8 +285,7 @@ struct ObjectBuilder {
     }
 
     void def(const char* name, uint32_t arity, ev::NativeFn fn) {
-        // hostProfileWrap is the identity unless BRO_HOST_PROFILE=1 (host_profile.h);
-        // makeFunction allocates, so it runs BEFORE obj.get() is read.
+        // hostProfileWrap is the identity unless BRO_HOST_PROFILE=1 (host_profile.h).
         //
         // The name is passed on, and it is a fact rather than a courtesy: a
         // host method standing in for a web-platform one answers for that

@@ -510,8 +510,6 @@ Value js_update(Value self, std::span<const Value> args) {
         b.set("table", c->tableValue.get());
         const Rooted arg(b.get());
         const Rooted produce(ev::getProperty(selfRoot, "produce"));
-        // (Taken after the read above: a raw Value is stale once anything
-        // allocates, and the batch moved under a copy taken before it.)
         const Value argv = arg;
         const ev::CallResult r = ev::call(produce, selfRoot, std::span<const Value>(&argv, 1));
         if (r.thrown) {

@@ -142,8 +142,6 @@ void WorkerInstance::threadFunc() {
     };
 
     {
-        // registerGlobal allocates, so the global is read afresh for the
-        // setProperty rather than reused from before it.
         ev::Persistent globalThis(ev::globalValue("globalThis").value);
         ev::registerGlobal("self", globalThis.get());
         ev::setProperty(globalThis.get(), "self", globalThis.get());
@@ -238,8 +236,6 @@ void WorkerInstance::threadFunc() {
     bk::installUtil();
     bk::installBuffer();
     {
-        // registerGlobal allocates, so globalThis is rooted for the second
-        // read rather than reused raw.
         ev::GlobalValue gtv = ev::globalValue("globalThis");
         if (gtv.found && ev::isObject(gtv.value)) {
             ev::Persistent gt(gtv.value);

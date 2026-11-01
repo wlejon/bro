@@ -7,10 +7,10 @@
 // host_builder.h is the other half: ObjectBuilder and the argument readers.
 // A file that needs both includes both.
 //
-// THE GC RULE, restated because most of the host layer exists to obey it: a
-// Value held across an allocating embed call is stale. Host state that must
-// outlive such a call lives in an ev::Persistent — and a Persistent must never
-// be owned by anything a HANDLE FINALIZER destroys. A finalizer runs
+// THE GC RULE: a Value in a C++ local stays current across allocating embed
+// calls (the collector pins what the stack names; bronze embed.h). Host state
+// kept in heap memory or across frames lives in an ev::Persistent — and a
+// Persistent must never be owned by anything a HANDLE FINALIZER destroys. A finalizer runs
 // mid-collection and may not call back into the embed API (embed.h says so),
 // and ~Persistent IS the embed API. That single rule is why the payload
 // structs in this layer are plain host memory and every callback lives as an

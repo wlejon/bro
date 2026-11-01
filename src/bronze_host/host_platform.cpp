@@ -323,9 +323,6 @@ void installDialogPump(engine::Engine& engine) {
 }
 
 void installPlatformGlobals() {
-    // Each value is registered (which roots it) the moment it is made, and
-    // the globalThis copies are read back from the registry: every make*
-    // allocates, so a raw Value held across the next one would be stale.
     struct Entry { const char* name; Value (*make)(); };
     const Entry entries[] = {
         {"queueMicrotask", makeQueueMicrotask},

@@ -89,8 +89,6 @@ void clearWindowName(uint64_t scopeId) {
 
 void installWindowGlobal(engine::Engine* enginePtr) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
-    // The global object through the builder's root: every set/def below
-    // allocates, so a raw copy of it would not survive the block.
     ObjectBuilder b(gt.value);
     ev::registerGlobal("window", b.get());
     ev::registerGlobal("self", b.get());
@@ -280,8 +278,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
     // Registered before installWorkerGlobals' no-op `postMessage` stub,
     // whose found-guard then leaves this one in place.
     // A window property that is also a registered global: set on the
-    // window, then registered from a fresh read of the window (b.set
-    // allocates, so the value made before it is not reused raw).
+    // window, then registered.
     auto setAndRegister = [&b](const char* name, Value v) {
         b.set(name, v);
         ev::registerGlobal(name, ev::getProperty(b.get(), name));

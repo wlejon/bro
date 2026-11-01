@@ -40,8 +40,6 @@ bool testPatternWithRegExp(const std::string& pattern, const std::string& value)
     ev::GlobalValue reCtor = ev::globalValue("RegExp");
     if (!reCtor.found || !ev::isFunction(reCtor.value)) return true;
     ev::Persistent ctor(reCtor.value);
-    // Every Value that has to outlive the next allocation is rooted as it is
-    // made: `fromUtf8` collects, and a raw Value made before it is stale after.
     ev::Persistent source(ev::fromUtf8("^(?:" + pattern + ")$"));
     ev::Persistent flags(ev::fromUtf8("u"));
 

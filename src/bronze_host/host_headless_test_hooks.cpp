@@ -433,8 +433,6 @@ void installHeadlessTestHooks(engine::Engine& engine) {
     });
 
     host.def("log", 0, [](Value, std::span<const Value>) {
-        // fromUtf8 allocates, so the string is built in its own statement and
-        // the array is read back from its root after it (embed.h, THE TRAP).
         ev::Persistent arr(ev::parseJson("[]").value);
         for (size_t i = 0; i < g_callLog.size(); ++i) {
             ev::Persistent s(ev::fromUtf8(g_callLog[i]));

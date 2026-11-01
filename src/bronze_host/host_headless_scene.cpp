@@ -296,8 +296,6 @@ void installHeadlessScenePerf(engine::Engine& engine,
             // 16 ms long): the page's frame and the render it asks for.
             const double stepMs = std::clamp(optNumber(opts, "stepMs", budget), 0.01, 16.0);
             ev::Persistent step(ev::isObject(opts) ? ev::getProperty(opts, "step") : ev::undefined());
-            // Read now: `opts` is a raw Value, stale once the frames below
-            // have run script and collected.
             const ev::Persistent conv(ev::isObject(opts) ? ev::getProperty(opts, "converge") : ev::undefined());
             if (!ev::isUndefined(step.get()) && !ev::isFunction(step.get()))
                 return ev::throwTypeError("measure: step must be a function");

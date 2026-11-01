@@ -40,8 +40,6 @@ bool readMatrix2DInit(Value initIn, SkMatrix& out) {
     static const char* kLong[6] = {"m11", "m12", "m21", "m22", "m41", "m42"};
     if (ev::isObject(init)) {
         for (int i = 0; i < 6; ++i) {
-            // Read each member to a double straight away: getProperty
-            // allocates, so no Value is held across the next call.
             const bool hasShort = !ev::isUndefined(ev::getProperty(init, kShort[i]));
             const double s = hasShort ? ev::toDouble(ev::getProperty(init, kShort[i])) : 0.0;
             const bool hasLong = !ev::isUndefined(ev::getProperty(init, kLong[i]));
@@ -101,9 +99,6 @@ struct PatternSource {
 };
 
 PatternSource resolvePatternSource(Value srcIn) {
-    // Rooted: hostImageOf and hostElementOf read a property by name, which
-    // allocates, so a plain copy is stale by the next probe (a GC-stress run
-    // faulted in hostElementOf on an ImageData argument).
     const Rooted src(srcIn);
     PatternSource out;
     if (auto* bmp = hostImageBitmapOfMut(src)) {

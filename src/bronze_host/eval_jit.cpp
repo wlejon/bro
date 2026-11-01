@@ -422,8 +422,6 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     }
 
     if (res.thrown && !hasImportStmt(code)) {
-        // toUtf8 allocates, so the thrown value is rooted across it and read
-        // back: the caller reports res.value, which must not be stale.
         bronze::embed::Persistent thrownRoot(res.value);
         std::string errStr = bronze::embed::toUtf8(thrownRoot.get());
         res.value = thrownRoot.get();

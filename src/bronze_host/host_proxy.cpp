@@ -52,9 +52,8 @@ struct TrapPack {
     ev::Persistent methods;
 };
 
-// The elements of an argument list, each rooted as it is read: every
-// getElement allocates, so neither the list nor an element read earlier
-// survives the next read as a raw Value.
+// The elements of an argument list, each rooted: a vector is heap memory,
+// which the collector's stack scan does not see.
 std::vector<ev::Persistent> listElements(Value listIn) {
     std::vector<ev::Persistent> out;
     if (!ev::isObject(listIn)) return out;
