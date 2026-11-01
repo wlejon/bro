@@ -793,8 +793,8 @@ class SceneGraph {
   setWind(opts) {}
 
   /**
-   * The wind field at a world point now, exactly as the vegetation shaders
-   * evaluate it (the same noise and formulas in float), so a script can make
+   * The wind field at a world point now, as the vegetation shaders evaluate
+   * it (the same brokernel source, run on the CPU), so a script can make
    * particles, flags or sounds follow the gust that is bending the trees.
    * `windAt(x, y, z)`, `windAt([x, y, z])` or `windAt(x, z)`; the height is
    * ignored.

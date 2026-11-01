@@ -31,6 +31,7 @@ function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
 endfunction()
 
+embed_vk_shader(common/wind.bk                  kBkWindSrc)
 embed_vk_shader(common/scene.bk                 kBkSceneSrc)
 embed_vk_shader(common/atmosphere.bk            kBkAtmosphereSrc)
 embed_vk_shader(common/lighting.bk              kBkLightingSrc)
@@ -95,6 +96,7 @@ add_library(bro_scene STATIC
     nodes/tile_world_mesh.cpp
     nodes/tile_world_objects.cpp
     world/world_service.cpp
+    world/wind_field.cpp
     world/shadow_pages.cpp
     world/shadow_pages_plan.cpp
     vulkan/frame/scene_vk_device.cpp

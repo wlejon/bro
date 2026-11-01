@@ -2,6 +2,7 @@
 module vegetation;
 
 import scene;
+import wind;
 from scene import camera;
 
 const VEG_REFERENCE_WIND: f32 = 10.0;
@@ -82,7 +83,7 @@ pub fn plant_of(model: mat4f, v0: vec4<f32>, v3: vec4<f32>) -> VegPlant {
     let sh = w & 63u;
     let shape = select(sh == 0u, 0.0, VEG_SHAPE_RANGE.x + (VEG_SHAPE_RANGE.y - VEG_SHAPE_RANGE.x) * ((sh - 1u) as f32) / 62.0);
     let root_abs = root + camera.eye_world.xyz;
-    let seed = scene::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)));
+    let seed = wind::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)));
     return VegPlant { root: root, height: height, trunk: trunk, seed: seed, shape: shape };
 }
 
@@ -414,7 +415,7 @@ pub fn sway(model: mat4f, v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<
 
 fn veg_tree_tone(model: mat4f, v0: vec4<f32>) -> f32 {
     let root_abs = scene::mul4(model, vec4<f32>(v0.xyz, 1.0)).xyz + camera.eye_world.xyz;
-    return scene::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)) + vec2<i32>(17, 3));
+    return wind::wind_hash(vec2<i32>(floor(root_abs.xz * 8.0)) + vec2<i32>(17, 3));
 }
 
 fn veg_tree_leaf_tint(tree: f32) -> vec3<f32> {

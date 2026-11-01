@@ -1,0 +1,96 @@
+// The scene's wind field: a steady wind whose direction drifts slowly, with
+// gusts that travel downwind as bands. One source for both sides: the scene
+// shaders evaluate it on the GPU through scene.bk's camera-block wrappers
+// (wind_at, wind_gust_at_time), and scene.windAt() evaluates it on the CPU
+// through brokernel's CPU build of the same functions (scene/world/
+// wind_field.cpp), so a script and a shader agree on where a gust is.
+//
+// The field at one moment is what the camera block carries (wind_field,
+// wind_gust): the drifted direction, the steady speed now, the gust bands'
+// speed, the gust amount, and 1 / the band length along and across the wind.
+// The host computes those from what setWind set (scene/world/wind_field.h).
+module wind;
+
+// Integer-hash value noise in [0, 1).
+pub fn wind_hash(p: vec2<i32>) -> f32 {
+    var h: u32 = (p.x as u32) * 374761393u + (p.y as u32) * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return (h as f32) / 4294967296.0;
+}
+
+// Value noise in [-1, 1].
+pub fn wind_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let ii = vec2<i32>(i);
+    let a = wind_hash(ii);
+    let b = wind_hash(ii + vec2<i32>(1, 0));
+    let c = wind_hash(ii + vec2<i32>(0, 1));
+    let d = wind_hash(ii + vec2<i32>(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+const WIND_SIMPLEX_GRID: f32 = 0.38;
+
+fn wind_simplex_corner(c: vec2<i32>, d: vec2<f32>) -> f32 {
+    var t: f32 = 0.5 - dot(d, d);
+    if t <= 0.0 { return 0.0; }
+    let a = wind_hash(c) * 6.2831853;
+    t *= t;
+    return t * t * (cos(a) * d.x + sin(a) * d.y);
+}
+
+// Simplex gradient noise, about [-0.8, 0.8] with the value noise's spread:
+// the gusts. No plateaus at the lattice points, so a gust band does not trace
+// the lattice; smooth to its second derivative.
+pub fn wind_simplex(p_in: vec2<f32>) -> f32 {
+    let f2: f32 = 0.36602540378;
+    let g2: f32 = 0.21132486540;
+    let p = p_in * WIND_SIMPLEX_GRID;
+    let i = floor(p + (p.x + p.y) * f2);
+    let d0 = p - i + (i.x + i.y) * g2;
+    let o = select(d0.x > d0.y, vec2<i32>(1, 0), vec2<i32>(0, 1));
+    let d1 = d0 - vec2<f32>(o) + g2;
+    let d2 = d0 - 1.0 + 2.0 * g2;
+    let ii = vec2<i32>(i);
+    return 80.0 * (wind_simplex_corner(ii, d0) +
+                   wind_simplex_corner(ii + o, d1) +
+                   wind_simplex_corner(ii + vec2<i32>(1, 1), d2));
+}
+
+const GUST_SOFT: f32 = 0.06;
+
+// max(x, 0) with its corner rounded by a hyperbola: a gust starts with no
+// kink and no jump in its acceleration.
+fn wind_soft_ramp(x: f32) -> f32 {
+    return 0.5 * (x + sqrt(x * x + GUST_SOFT * GUST_SOFT));
+}
+
+// The gust at absolute world xz at time t: 0 between bands, up to ~1.7 x
+// gust in one (its mean over the field 0.34 x gust). `dir` is the drifted
+// direction, `inv_len` 1 / the band length along and across it; `fine` adds
+// the second octave.
+pub fn wind_gust(xz: vec2<f32>, t: f32, dir: vec2<f32>, gust_speed: f32, gust: f32, inv_len: vec2<f32>,
+                 fine: bool) -> f32 {
+    if gust <= 0.0 { return 0.0; }
+    let along = dot(xz, dir) - t * gust_speed;
+    let across = dot(xz, vec2<f32>(-dir.y, dir.x));
+    var g: f32 = wind_simplex(vec2<f32>(along * inv_len.x, across * inv_len.y)) * 0.5 + 0.5;
+    if fine {
+        g += 0.35 * wind_simplex(vec2<f32>(along * inv_len.x * 3.18 + 5.3, across * inv_len.y * 4.17));
+    }
+    return wind_soft_ramp(g - 0.45) * 2.4 * gust;
+}
+
+// The wind at absolute world xz at time t: (velocity x, 0, velocity z, gust),
+// m/s horizontal. `base` is the steady speed now.
+pub fn wind_velocity(xz: vec2<f32>, t: f32, dir: vec2<f32>, base: f32, gust_speed: f32, gust: f32,
+                     inv_len: vec2<f32>) -> vec4<f32> {
+    let g = wind_gust(xz, t, dir, gust_speed, gust, inv_len, true);
+    let spd = base + g * 4.0;
+    let wobble = wind_noise(vec2<f32>(dot(xz, dir) * 0.03 - t * 0.3, t * 0.1)) * 0.25;
+    let v = (dir + vec2<f32>(-dir.y, dir.x) * wobble) * spd;
+    return vec4<f32>(v.x, 0.0, v.y, g);
+}

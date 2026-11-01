@@ -9,6 +9,8 @@
 // function of where the camera really is (height fog, the atmosphere).
 module scene;
 
+import wind;
+
 pub struct Camera {
     view: mat4f,
     proj: mat4f,
@@ -23,7 +25,7 @@ pub struct Camera {
     // x: time (s), y: frequency, z: the eye's phase (dot(eye.xz, (0.3, 0.5))
     // mod 2 pi), w: the oscillator clock, time mod the wind clock's period.
     wind_params: vec4<f32>,
-    // The wind field (scene/world/wind_field.h): xy its horizontal direction
+    // The wind field (common/wind.bk): xy its horizontal direction
     // (x, z; unit, drifting), z its steady speed (m/s), w the gusts' travel
     // speed (m/s).
     wind_field: vec4<f32>,
@@ -126,69 +128,11 @@ pub fn wind_delta(pos: vec3<f32>, bend: f32) -> vec3<f32> {
     return camera.wind.xyz * (phase * camera.wind.w * bend);
 }
 
-// --- The wind field (scene/world/wind_field.h) -----------------------------
-
-pub fn wind_hash(p: vec2<i32>) -> f32 {
-    var h: u32 = (p.x as u32) * 374761393u + (p.y as u32) * 668265263u;
-    h = (h ^ (h >> 13u)) * 1274126177u;
-    h = h ^ (h >> 16u);
-    return (h as f32) / 4294967296.0;
-}
-
-pub fn wind_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = p - i;
-    let u = f * f * (3.0 - 2.0 * f);
-    let ii = vec2<i32>(i);
-    let a = wind_hash(ii);
-    let b = wind_hash(ii + vec2<i32>(1, 0));
-    let c = wind_hash(ii + vec2<i32>(0, 1));
-    let d = wind_hash(ii + vec2<i32>(1, 1));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
-}
-
-const WIND_SIMPLEX_GRID: f32 = 0.38;
-
-fn wind_simplex_corner(c: vec2<i32>, d: vec2<f32>) -> f32 {
-    var t: f32 = 0.5 - dot(d, d);
-    if t <= 0.0 { return 0.0; }
-    let a = wind_hash(c) * 6.2831853;
-    t *= t;
-    return t * t * (cos(a) * d.x + sin(a) * d.y);
-}
-
-pub fn wind_simplex(p_in: vec2<f32>) -> f32 {
-    let f2: f32 = 0.36602540378;
-    let g2: f32 = 0.21132486540;
-    let p = p_in * WIND_SIMPLEX_GRID;
-    let i = floor(p + (p.x + p.y) * f2);
-    let d0 = p - i + (i.x + i.y) * g2;
-    let o = select(d0.x > d0.y, vec2<i32>(1, 0), vec2<i32>(0, 1));
-    let d1 = d0 - vec2<f32>(o) + g2;
-    let d2 = d0 - 1.0 + 2.0 * g2;
-    let ii = vec2<i32>(i);
-    return 80.0 * (wind_simplex_corner(ii, d0) +
-                   wind_simplex_corner(ii + o, d1) +
-                   wind_simplex_corner(ii + vec2<i32>(1, 1), d2));
-}
-
-const GUST_SOFT: f32 = 0.06;
-
-fn wind_soft_ramp(x: f32) -> f32 {
-    return 0.5 * (x + sqrt(x * x + GUST_SOFT * GUST_SOFT));
-}
+// --- The wind field (common/wind.bk), at the camera block's state ----------
 
 pub fn wind_gust_at_time(xz: vec2<f32>, t: f32, fine: bool) -> f32 {
-    if camera.wind_gust.x <= 0.0 { return 0.0; }
-    let d = camera.wind_field.xy;
-    let along = dot(xz, d) - t * camera.wind_field.w;
-    let across = dot(xz, vec2<f32>(-d.y, d.x));
-    let k = camera.wind_gust.yz;
-    var g: f32 = wind_simplex(vec2<f32>(along * k.x, across * k.y)) * 0.5 + 0.5;
-    if fine {
-        g += 0.35 * wind_simplex(vec2<f32>(along * k.x * 3.18 + 5.3, across * k.y * 4.17));
-    }
-    return wind_soft_ramp(g - 0.45) * 2.4 * camera.wind_gust.x;
+    return wind::wind_gust(xz, t, camera.wind_field.xy, camera.wind_field.w, camera.wind_gust.x,
+                           camera.wind_gust.yz, fine);
 }
 
 const WIND_CLOCK_PERIOD: f32 = 256.0;
@@ -203,12 +147,6 @@ pub fn wind_gust_at(xz: vec2<f32>) -> f32 {
 }
 
 pub fn wind_at(pos: vec3<f32>) -> vec4<f32> {
-    let xz = pos.xz + camera.eye_world.xz;
-    let g = wind_gust_at(xz);
-    let d = camera.wind_field.xy;
-    let spd = camera.wind_field.z + g * 4.0;
-    let t = camera.wind_params.x;
-    let wobble = wind_noise(vec2<f32>(dot(xz, d) * 0.03 - t * 0.3, t * 0.1)) * 0.25;
-    let v = (d + vec2<f32>(-d.y, d.x) * wobble) * spd;
-    return vec4<f32>(v.x, 0.0, v.y, g);
+    return wind::wind_velocity(pos.xz + camera.eye_world.xz, camera.wind_params.x, camera.wind_field.xy,
+                               camera.wind_field.z, camera.wind_field.w, camera.wind_gust.x, camera.wind_gust.yz);
 }

@@ -20,6 +20,7 @@
 #include <sstream>
 #include <unordered_map>
 
+#include "wind.bk.src.h"
 #include "scene.bk.src.h"
 #include "atmosphere.bk.src.h"
 #include "lighting.bk.src.h"
@@ -81,7 +82,7 @@ std::string engineSource(const char* file, const char* embedded) {
 }
 
 constexpr const char* kEngineModules[] = {
-    "scene", "atmosphere", "lighting", "custom", "volume", "near",
+    "wind", "scene", "atmosphere", "lighting", "custom", "volume", "near",
     "vegetation", "procedural", "bark", "mesh", "hook"
 };
 
@@ -98,6 +99,7 @@ bool checkModuleNames(const std::string& file, const KernelHookModules& modules,
 
 void registerCommonModules(brokernel::Compiler& compiler, const KernelHookModules& modules) {
     for (const auto& [name, source] : modules) compiler.register_module(name, source);
+    compiler.register_module("wind", engineSource("common/wind.bk", kBkWindSrc));
     compiler.register_module("scene", engineSource("common/scene.bk", kBkSceneSrc));
     compiler.register_module("atmosphere", engineSource("common/atmosphere.bk", kBkAtmosphereSrc));
     compiler.register_module("lighting", engineSource("common/lighting.bk", kBkLightingSrc));

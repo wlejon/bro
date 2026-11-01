@@ -1,19 +1,18 @@
 #pragma once
 
 // The scene's wind field: a steady wind whose direction drifts slowly, with
-// gusts that travel downwind as bands. Vegetation (and later grass and
-// particles) bends with it on the GPU; scripts read the same field with
-// scene.windAt(). This header is the CPU twin of wind_at() /
-// wind_gust_at() in shaders/common/scene.bk: the same integer-hash value
-// noise and the same formulas in float, so a script and a shader agree on
-// where a gust is.
+// gusts that travel downwind as bands. The field itself is one brokernel
+// source, shaders/common/wind.bk: vegetation (and later grass and particles)
+// bends with it on the GPU, and scripts read it with scene.windAt(), which
+// evaluates the same functions through brokernel's CPU build (windAt below).
+// This header is the host's half: what setWind sets, and the field's state
+// at a moment, which the camera block carries to the shaders.
 //
 // It sits beside the legacy wind (setWind's direction / strength /
 // frequency: a single sine on vertex colour R), which it leaves alone.
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 
 namespace bro::scene {
 
@@ -69,7 +68,7 @@ inline bool windFieldCalm(const WindFieldState& s) { return s.base <= 0.0f && s.
 inline float windSwayReach(const WindFieldParams& p, float height) {
     if (height <= 0.0f) return 0.0f;
     const float base = std::max(0.0f, p.speed) * 1.28f;
-    // (0.5 + 0.85 * 0.9 - 0.45) * 2.4 = 1.96 at most (windSimplex stays
+    // (0.5 + 0.85 * 0.9 - 0.45) * 2.4 = 1.96 at most (wind_simplex stays
     // within +-0.9), padded.
     const float gu = 2.16f * std::max(0.0f, p.gust);
     const float calm = std::min(base / 2.5f, 3.0f);
@@ -81,80 +80,14 @@ inline float windSwayReach(const WindFieldParams& p, float height) {
     return trunk * (1.0f + trunk * 0.1f / std::max(height, 1.0f)) + limb + 0.25f;
 }
 
-/// Integer-hash value noise in [-1, 1] (sceneWindNoise).
-inline float windHash(int32_t x, int32_t y) {
-    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    h = h ^ (h >> 16);
-    return static_cast<float>(h) / 4294967296.0f;
-}
-inline float windNoise(float px, float py) {
-    const float ix = std::floor(px), iy = std::floor(py);
-    const float fx = px - ix, fy = py - iy;
-    const float ux = fx * fx * (3.0f - 2.0f * fx), uy = fy * fy * (3.0f - 2.0f * fy);
-    const int32_t x = static_cast<int32_t>(ix), y = static_cast<int32_t>(iy);
-    const float a = windHash(x, y), b = windHash(x + 1, y);
-    const float c = windHash(x, y + 1), d = windHash(x + 1, y + 1);
-    const float ab = a + (b - a) * ux, cd = c + (d - c) * ux;
-    return (ab + (cd - ab) * uy) * 2.0f - 1.0f;
-}
-
-/// Simplex gradient noise, about [-0.8, 0.8] with the value noise's spread
-/// (sceneWindSimplex): the gusts. No plateaus at the lattice points, so a
-/// gust band does not trace the lattice; smooth to its second derivative.
-inline float windSimplexCorner(int32_t x, int32_t y, float dx, float dy) {
-    float t = 0.5f - dx * dx - dy * dy;
-    if (t <= 0.0f) return 0.0f;
-    const float a = windHash(x, y) * 6.2831853f;
-    t *= t;
-    return t * t * (std::cos(a) * dx + std::sin(a) * dy);
-}
-inline constexpr float kWindSimplexGrid = 0.38f;   // SCENE_WIND_SIMPLEX_GRID
-inline float windSimplex(float px, float py) {
-    constexpr float F2 = 0.36602540378f, G2 = 0.21132486540f;
-    px *= kWindSimplexGrid;
-    py *= kWindSimplexGrid;
-    const float ix = std::floor(px + (px + py) * F2), iy = std::floor(py + (px + py) * F2);
-    const float d0x = px - ix + (ix + iy) * G2, d0y = py - iy + (ix + iy) * G2;
-    const int32_t ox = d0x > d0y ? 1 : 0, oy = 1 - ox;
-    const int32_t x = static_cast<int32_t>(ix), y = static_cast<int32_t>(iy);
-    return 80.0f * (windSimplexCorner(x, y, d0x, d0y) +
-                    windSimplexCorner(x + ox, y + oy, d0x - ox + G2, d0y - oy + G2) +
-                    windSimplexCorner(x + 1, y + 1, d0x - 1.0f + 2.0f * G2, d0y - 1.0f + 2.0f * G2));
-}
-
-/// max(x, 0) with its corner rounded by a hyperbola (sceneWindSoftRamp): a
-/// gust starts with no kink and no jump in its acceleration.
-inline constexpr float kWindGustSoft = 0.06f;
-inline float windSoftRamp(float x) { return 0.5f * (x + std::sqrt(x * x + kWindGustSoft * kWindGustSoft)); }
-
 /// The oscillator clock's period (s): common/scene.bk's
 /// WIND_CLOCK_PERIOD, the camera block's windParams.w.
 inline constexpr double kWindClockPeriod = 256.0;
 
-/// The gust at absolute world (x, z): 0 between bands, up to ~1.7 x gust in one
-/// (its mean over the field 0.34 x gust).
-inline float windGustAt(const WindFieldState& s, float x, float z) {
-    if (s.gust <= 0.0f) return 0.0f;
-    const float along = x * s.dirX + z * s.dirZ - s.time * s.gustSpeed;
-    const float across = -x * s.dirZ + z * s.dirX;
-    const float g = windSimplex(along * s.invAlong, across * s.invAcross) * 0.5f + 0.5f +
-                    0.35f * windSimplex(along * s.invAlong * 3.18f + 5.3f, across * s.invAcross * 4.17f);
-    return windSoftRamp(g - 0.45f) * 2.4f * s.gust;
-}
-
-/// Wind velocity (m/s, horizontal) and gust at absolute world (x, z).
+/// Wind velocity (m/s, horizontal) and gust at absolute world (x, z):
+/// wind.bk's wind_velocity, run on the CPU (its build is made once, on the
+/// first call). All zero when the kernel could not be built (logged).
 struct WindSample { float velocity[3]; float gust; float speed; };
-inline WindSample windAt(const WindFieldState& s, float x, float z) {
-    WindSample w{};
-    w.gust = windGustAt(s, x, z);
-    const float spd = s.base + w.gust * 4.0f;
-    const float wobble = windNoise((x * s.dirX + z * s.dirZ) * 0.03f - s.time * 0.3f, s.time * 0.1f) * 0.25f;
-    w.velocity[0] = (s.dirX - s.dirZ * wobble) * spd;
-    w.velocity[1] = 0.0f;
-    w.velocity[2] = (s.dirZ + s.dirX * wobble) * spd;
-    w.speed = std::sqrt(w.velocity[0] * w.velocity[0] + w.velocity[2] * w.velocity[2]);
-    return w;
-}
+WindSample windAt(const WindFieldState& s, float x, float z);
 
 }  // namespace bro::scene
