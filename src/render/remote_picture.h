@@ -1,7 +1,7 @@
 #pragma once
 
 // A remote viewer's decoded pictures as images the compositor samples: the
-// <remoteview> element's layer (engine/remote_views.cpp). bro.remote.connect
+// <remoteview> element's layer (bronze_host/host_remote_view.cpp). bro.remote.connect
 // sessions (broremote's ViewerSession) decode; these two get the result onto
 // bro's Vulkan device.
 //

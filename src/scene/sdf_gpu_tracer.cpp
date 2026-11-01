@@ -254,7 +254,7 @@ Value* lowerCustomExprSpirv(
             }
             case SdfExprOp::Sin:
             case SdfExprOp::Cos: {
-                // Polynomial approximation or GLSL intrinsic inside guarded branch
+                // Not lowered yet: the argument passes through unchanged.
                 regs[i] = reg(ins.a);
                 break;
             }

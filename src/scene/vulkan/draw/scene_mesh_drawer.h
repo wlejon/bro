@@ -240,7 +240,7 @@ private:
         bool medium = false;
         VkShaderModule fsNear = VK_NULL_HANDLE;
         PipelineVariants nearPipelines;
-        // A brokernel hook's stages' entry points ("main" for GLSL).
+        // A brokernel hook's stages' entry points.
         std::string vsEntry = "main";
         std::string fsEntry = "main";
         std::string fsCutsEntry = "main";

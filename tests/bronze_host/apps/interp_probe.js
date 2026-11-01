@@ -1,6 +1,6 @@
 // The interpreter bridge: `new Function(source)` in COMPILED code, compiled by
 // the engine's script realm, and the value boundary that makes the result
-// usable (src/bronze_host/host_interp.h).
+// usable (src/bronze_host/eval.cpp).
 //
 // Every line is `APP <name>=<value>` and every expectation beside it was
 // derived from the spec and from what the bridge promises BEFORE the first

@@ -1,5 +1,5 @@
 // A smooth surface under the atmosphere mirrors the sky itself
-// (common/scene_lighting.glsl's sceneAmbient: the sky-view table along R
+// (shaders/common/lighting.bk's ambient: the sky-view table along R
 // low in the air, not the sky light's smooth SH).
 // Verifies, from 10 m over a level mirror (white, metallic, roughness 0.04)
 // looking at the horizon, the sun behind the eye: the mirror k rows under

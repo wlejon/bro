@@ -2,15 +2,13 @@
 // bro.wake binding and report whether the detector fires.
 //
 // Run from bro repo root:
-//   ./build/Debug/bro-headless.exe ../broworkshop tests/smoke_wake_positive.js
+//   ./build/Debug/bro-headless.exe ../broworkshop tests/manual/smoke_wake_positive.js
 //
 // Picks up a small selection of clean and noisy positives from the
 // raw-level (AGC-free recipe) dataset. Each is replayed in 10 ms chunks at
 // 16 kHz (the wake model's native rate). bro.wake.feed pushes the samples
 // RAW through the shared listen host's bus — no AGC anywhere; the model is
-// level-invariant by training. The SDL resampler that the live mic uses is
-// exercised separately, against broaudio's shared tap, by
-// tests/smoke_mic_chunks.js.
+// level-invariant by training.
 
 const FS = require('node:fs');
 

@@ -44,10 +44,9 @@ static Document* findDocument(Node* node) {
 // This lives in the DOM layer on purpose. Layout invalidation is a consequence
 // of the tree changing shape, not of *who* changed it, and leaving it to every
 // caller made the raw mutators a trap: a node appended through them never got a
-// layout adapter and silently never rendered. Only the JS bindings remembered
-// to compensate (js_element_appendChild's markChildListChanged), so engine C++
-// hit the trap and patched it locally (input_handling.cpp's caret text node),
-// and any host calling Node::appendChild from C++ hit it with no clue why.
+// layout adapter and silently never rendered, and any caller that forgot to
+// compensate — the JS host, engine C++ such as the editing caret's text node,
+// any host calling Node::appendChild from C++ — hit it with no clue why.
 //
 // What deliberately stays OUT of here, because it is realm-scoped rather than
 // tree-scoped and needs a JSContext the DOM layer does not have:

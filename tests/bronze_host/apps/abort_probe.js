@@ -17,7 +17,7 @@
 //   2. A signal carries its abort across the frame boundary that fetch settles
 //      on. `fetch(url, {signal})` followed by `signal.abort()` in the SAME turn
 //      must reject: the read has not happened yet, and this is the whole of
-//      cancellation here (src/bronze_host/host_fetch.cpp says so).
+//      cancellation here (brokit's src/api/fetch.cpp says so).
 //
 //   3. The host does not trust `signal.aborted`. It is an ordinary writable
 //      property — the app can assign it — and the host decides on its own copy
@@ -101,7 +101,7 @@ say('throwIf.aborted', thrownAborted);
 
 // ---------------------------------------------------------------------------
 // The statics — a namespace here, because a host function cannot carry one
-// (src/bronze_host/host_abort.cpp quotes the runtime message)
+// (brokit's src/api/js/abort.js quotes the runtime message)
 // ---------------------------------------------------------------------------
 
 const preAborted = AbortSignal.abort();

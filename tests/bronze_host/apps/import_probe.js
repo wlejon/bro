@@ -1,5 +1,5 @@
 // A non-constant `import()` in COMPILED code, answered by the page's
-// realm (src/bronze_host/host_interp.h, the third seam). bronze resolves
+// realm (src/bronze_host/eval.cpp). bronze resolves
 // every import whose specifier it can read at compile time into the compiled
 // graph; one it cannot — built from a variable, as below — reaches the
 // runtime's dynamic-import host, and bro's answer is the module loader the

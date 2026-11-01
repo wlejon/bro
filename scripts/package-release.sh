@@ -320,7 +320,7 @@ if [[ -x "$BRONZE_EXE" ]]; then
     done
 
     # The shared runtime, from bronze's own output directory (CMAKE_BINARY_DIR/
-    # shared, per cmake/bronze_shared_runtime.cmake). On Windows what a module
+    # shared, per bronze's cmake/bronze_shared_runtime.cmake). On Windows what a module
     # LINKS against is the import library, so both it and the DLL come across;
     # elsewhere the shared object is both.
     SHARED_SRC="$BUILD_DIR/shared"

@@ -16,7 +16,7 @@ namespace bro::scene::vk {
 bool SceneShadowPages::setup(SceneGpu& gpu) {
     allocator_ = &gpu.allocator;
     // A unit's first guess: a plants page's unit (a texel or an element,
-    // ShadowPageWant::units) about what biomes' cost, a still page's what
+    // ShadowPageWant::units) about what a plants page's element costs, a still page's what
     // one costs. Both are drawn the next frame (the frame's plan is made
     // before the service runs), so that frame's budget pays for them.
     kind_ = gpu.world.addKind(this, {"shadow pages", WorldSchedule::Raster, 4e-7f, true});

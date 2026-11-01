@@ -10,7 +10,7 @@
 // absorbs), lit by a sun of a given illuminance at the top. The GPU half
 // (scene/vulkan/lighting/scene_atmosphere.h, shaders/common/atmosphere.bk)
 // makes its tables from these numbers; the functions below are the tables'
-// parametrisations, shared word for word with the GLSL, so a test can read
+// parametrisations, shared word for word with atmosphere.bk, so a test can read
 // a table back and look it up as the shaders do (bro_atmosphere_test).
 //
 // The defaults are Earth's (Hillaire's values: Rayleigh at 680/550/440 nm,

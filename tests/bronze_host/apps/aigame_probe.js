@@ -1,4 +1,4 @@
-// bro.ai.game from COMPILED code (src/bronze_host/host_ai_game.cpp): the
+// bro.ai.game from COMPILED code (brogameagent's src/api/host_ai_game.cpp): the
 // namespace the interpreted bindings publish (docs/ai-game-api.js), over the
 // same brogameagent objects the `AI` global wraps. What only this check
 // catches: a compiled program that binds `bro.ai.game` at module load and

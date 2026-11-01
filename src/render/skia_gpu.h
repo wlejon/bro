@@ -118,7 +118,7 @@ public:
 
     /// uploadImage / preloadImage on the process's upload target: the first
     /// SkiaGpu initialised and still alive (the engine's). Null / no-op
-    /// without one (CPU rendering). Any thread.
+    /// without one (bro-server's RasterRenderer). Any thread.
     static std::shared_ptr<GpuImageUpload> uploadToTarget(const SharedPixels& px);
     static void preloadOnTarget(const SharedPixels& px);
     /// findUpload(pixelsId, claim = false) on the upload target.

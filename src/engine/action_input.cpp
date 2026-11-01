@@ -15,7 +15,7 @@
 // bro.settings.getActionStrength()/isActionPressed().
 //
 // Per-device edge production stays with the device code (keyboard in
-// input_handling.cpp, gamepad buttons in gamepad.cpp) — they all funnel into
+// input_keyboard.cpp, gamepad buttons in gamepad.cpp) — they all funnel into
 // dispatchActionEventForKey() here.
 
 #include "engine/engine.h"
@@ -49,7 +49,7 @@ static int mouseBindingButton(const std::string& key) {
 }
 
 // MouseEvent.buttons bit for a DOM button index. Mirrors domButtonMask in
-// input_handling.cpp (DOM swaps right (2) and middle (4) relative to 1<<n).
+// input_common.cpp (DOM swaps right (2) and middle (4) relative to 1<<n).
 static int actionDomButtonMask(int domButton) {
     switch (domButton) {
         case 0: return 1;   // left

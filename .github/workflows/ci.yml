@@ -238,20 +238,11 @@ jobs:
 
   # The onramp. `cmake -B build -DBRO_PROFILE=minimal` is what BUILDING.md tells
   # someone to run when they have just cloned and do not have vcpkg, so it is the
-  # first thing a newcomer's machine actually does -- and until this job existed,
-  # nothing checked it. Three separate things were broken in it at once:
-  #
-  #   * bro.media's compiled-out stub sat outside its own #include block, so the
-  #     TU did not compile with BRO_WITH_VIDEO off at all;
-  #   * curl linked a zstd it found on PATH next to the one basisu bundles, so
-  #     every executable failed at link -- on machines with vcpkg installed, and
-  #     only those, which is the worst way for a build to break;
-  #   * bro.gizmo and bro.impostor were guarded at their call sites rather than
-  #     stubbed, so they vanished instead of reporting themselves unavailable.
-  #
-  # None of it was visible from the app profile, where every one of those flags
-  # is on and the #else branches are never even parsed. Hence a job whose whole
-  # job is to have the flags off.
+  # first thing a newcomer's machine actually does. Compiled-out stubs, link
+  # order with a stray zstd on PATH, and features that must report themselves
+  # unavailable are none of them visible from the app profile, where every
+  # flag is on and the #else branches are never even parsed. Hence a job whose
+  # whole job is to have the flags off.
   #
   # Deliberately bare: no vcpkg, no brass, no bronze, nothing in the configure
   # line that BUILDING.md does not print. If this job needs a flag added to keep

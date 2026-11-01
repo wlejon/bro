@@ -30,7 +30,7 @@
 // model (plain C++, no Values) on the worker, build the result on the JS
 // thread. The synchronous path runs the SAME compute and the SAME builder
 // inline, so `op(img)` and `op(img, {onDone})` cannot disagree — that is
-// what tests/vision/vision_async.js asserts.
+// what tests/vision/test_vision_async.js asserts.
 //
 // Everything the compute needs comes from brovisionml's own api headers
 // (the wrapper structs, the image reader, the typed-array makers,

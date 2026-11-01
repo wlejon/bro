@@ -1,16 +1,15 @@
 // <img src="*.svg"> honours the document's intrinsic size and the CSS box.
 //
-// Real desktop icons the old SkSVGDOM rasterizer drew wrong, each
-// synthesized here in the same shape:
+// Real desktop icon shapes that are easy to draw wrong, each synthesized
+// here:
 //  - htop: width/height in mm (+ viewBox) — a physical unit is CSS px at
-//    96/in, and Skia's root, left to itself, laid the content out at its own
-//    90 dpi size over the requested box (wrong scale, clipped);
-//  - nvtop: width="200" with a 52.9 viewBox — the root's absolute size beat
-//    the box, drawing at 200px into a 48px image;
+//    96/in, and the content must fill the requested box, not lay out at its
+//    own 90 dpi size over it (wrong scale, clipped);
+//  - nvtop: width="200" with a 52.9 viewBox — the box must beat the root's
+//    absolute size, not draw at 200px into a 48px image;
 //  - KDE breeze (Discover, Spectacle): no viewBox, minified number lists like
-//    translate(-384.57-499.8) that Skia's parser rejected, so the whole
-//    transform was dropped and the content drew hundreds of px off-canvas
-//    (a blank box);
+//    translate(-384.57-499.8), which must parse, or the whole transform drops
+//    and the content draws hundreds of px off-canvas (a blank box);
 //  - one attribute per line (Inkscape), and a compact matrix().
 
 const fs = require('fs');

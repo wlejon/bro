@@ -1,7 +1,7 @@
 // bro_vulkan_test: the shared GPU frame/submission core (VulkanQueue,
 // VulkanFrames), the presenter's offscreen composite + readback, Skia's
-// Ganesh-Vulkan context on the shared device (SkiaGpu), the in-process
-// GLSL compiler, the persisted pipeline cache, and — where a display is
+// Ganesh-Vulkan context on the shared device (SkiaGpu), the render module's
+// brokernel stages, the persisted pipeline cache, and — where a display is
 // available — the swapchain following its window. Run with
 // BRO_VK_VALIDATION=1 to also fail on any validation error.
 

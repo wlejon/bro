@@ -1,13 +1,13 @@
 // SVG paints through one renderer: the native traversal (layout/svg_paint),
 // inline and as an image. Each fixture in tests/layout/svg/ renders inline
-// and through <img>, and is compared with renders taken from the SkSVGDOM
-// renderer bro used before (tests/layout/svg/ref/<name>.{inline,img}.png).
+// and through <img>, and is compared with reference renders made by Skia's
+// SVG module (tests/layout/svg/ref/<name>.{inline,img}.png).
 // The bar is visible equivalence, not identical pixels: a small mean
-// difference and few pixels far off. Where the old renderer was wrong, the
+// difference and few pixels far off. Where the reference is wrong, the
 // region is left out of the comparison and probed for the right answer
 // instead. The inline and <img> renders of one fixture must agree with each
-// other closely, as one traversal paints both. Text, textPath runs and the
-// formerly fallback-only children report real geometry.
+// other closely, as one traversal paints both. Text, textPath runs and every
+// other child report real geometry.
 
 const fs = require('fs');
 const path = require('path');
@@ -68,15 +68,15 @@ const px = (shot, x, y) => {
 };
 const near = (c, want, tol = 40) => c.every((v, k) => Math.abs(v - want[k]) <= tol);
 
-// Per fixture: rects [x, y, w, h] where the old renderer was wrong, for the
+// Per fixture: rects [x, y, w, h] where the reference is wrong, for the
 // inline and the <img> comparisons, and probes of what is right there.
 const cases = {
     text_paint: {},
-    text_path: { img: [[0, 30, W, 60]] },               // old <img> dropped the <use href> guide
+    text_path: { img: [[0, 30, W, 60]] },               // reference <img> lacks the <use href> guide
     mask: {},
-    markers: { img: [[0, 0, W, H]] },                   // old <img> dropped every marker
+    markers: { img: [[0, 0, W, H]] },                   // reference <img> lacks every marker
     filter_blur: {},
-    // The old renderer took flood-color as already linear in a linearRGB
+    // The reference renderer took flood-color as already linear in a linearRGB
     // filter, so its floods came out too light.
     filter_color: {
         both: [[100, 40, 40, 40], [0, 80, 80, 40]],
@@ -85,7 +85,7 @@ const cases = {
             assert(near(px(s, 120, 59), [255, 217, 51], 12), 'flood: ' + px(s, 120, 59));
         },
     },
-    // feDropShadow was not in SkSVGDOM.
+    // The reference renderer has no feDropShadow.
     filter_shadow: {
         both: [[0, 0, 80, 60]],
         probe(s) {

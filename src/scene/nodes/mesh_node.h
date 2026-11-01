@@ -485,7 +485,7 @@ public:
                                    int width, int height, const float* data);
     /// Stage (or, with a zero extent or layers <= 0, release) an ARRAY
     /// sampler slot: `layers` slices of width x height x channels floats,
-    /// read in GLSL through a sampler2DArray of the same name. Allocation
+    /// read in the shader hook through a texture array of the same name. Allocation
     /// alone — the slices start as zeros; fill them with
     /// setCustomShaderTextureArrayLayer. Calling this again with the same
     /// shape keeps the GPU storage and every slice already written; a new shape

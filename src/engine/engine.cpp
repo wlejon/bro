@@ -116,7 +116,7 @@ void Engine::setTimePaused(bool paused)
 
 
 // Input handling methods (handleMouse*, handleKey*, handleTextInput,
-// handleWheel, advanceFocus, dispatchInputEvent) are in input_handling.cpp.
+// handleWheel, advanceFocus, dispatchInputEvent) are in the input_*.cpp files.
 
 
 dom::Element* Engine::hitTest(float x, float y) {
