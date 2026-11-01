@@ -6,11 +6,15 @@
 
 #include <brokernel/brokernel.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -100,9 +104,59 @@ void registerCommonModules(brokernel::Compiler& compiler, const KernelHookModule
     compiler.register_module("custom", engineSource("common/custom.bk", kBkCustomSrc));
 }
 
-brokernel::CompileResult compileVolumeStage(const char* stageFile, const char* stageEmbedded, const char* entry,
-                                            const std::string& near, const std::string& hook,
-                                            const KernelHookModules& modules) {
+// Every hook stage compiled, by all it is compiled from (the stage's file and
+// entry, the hook, the app's modules, a volume's near module): a module set
+// on a node compiles each stage once, on a thread of its own, and a draw
+// that first takes a stage finds it built when warmMeshHook started it, or
+// the module's check when it was set compiled it. The page thread's alone
+// (a pipeline built off the frame records its create-info here, on the page
+// thread; only the driver's build is off it), and a compile thread touches
+// only its own stage's future, so nothing here is shared. Not cached while
+// the engine's shaders are read from the source tree (they change under the
+// key) or set B compiles.
+using StageResult = std::shared_ptr<const brokernel::CompileResult>;
+using StageFuture = std::shared_future<StageResult>;
+constexpr size_t kMaxStages = 256;
+
+std::string stageKey(const char* stageFile, const char* entry, const std::string& near, const std::string& hook,
+                     const KernelHookModules& modules) {
+    std::string key = stageFile;
+    for (const char* s : {entry, near.c_str(), hook.c_str()}) {
+        key += '\x1f';
+        key += s;
+    }
+    for (const auto& [name, source] : modules) {
+        key += '\x1e';
+        key += name;
+        key += '\x1f';
+        key += source;
+    }
+    return key;
+}
+
+StageFuture stageFuture(std::string key, std::function<brokernel::CompileResult()> compile) {
+    const auto run = [compile] { return std::make_shared<const brokernel::CompileResult>(compile()); };
+    if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) {
+        std::promise<StageResult> p;
+        p.set_value(run());
+        return p.get_future().share();
+    }
+    static std::unordered_map<std::string, StageFuture> s_stages;
+    if (auto it = s_stages.find(key); it != s_stages.end()) return it->second;
+    if (s_stages.size() >= kMaxStages) {
+        for (auto it = s_stages.begin(); it != s_stages.end();) {
+            const bool done = it->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            it = done ? s_stages.erase(it) : std::next(it);
+        }
+    }
+    StageFuture f = std::async(std::launch::async, run).share();
+    s_stages.emplace(std::move(key), f);
+    return f;
+}
+
+brokernel::CompileResult buildVolumeStage(const char* stageFile, const char* stageEmbedded, const char* entry,
+                                          const std::string& near, const std::string& hook,
+                                          const KernelHookModules& modules) {
     brokernel::Compiler compiler;
     registerCommonModules(compiler, modules);
     compiler.register_module("volume", engineSource("draw/volume.bk", kBkVolumeSrc));
@@ -114,8 +168,20 @@ brokernel::CompileResult compileVolumeStage(const char* stageFile, const char* s
     return compiler.compile_source(engineSource(stageFile, stageEmbedded), stageFile, opts);
 }
 
-brokernel::CompileResult compileMeshOrShadowEntry(const char* stageFile, const char* stageEmbedded, const char* entry,
-                                                  const std::string& hook, const KernelHookModules& modules) {
+StageFuture volumeStage(const char* stageFile, const char* stageEmbedded, const char* entry,
+                        const std::string& near, const std::string& hook, const KernelHookModules& modules) {
+    return stageFuture(stageKey(stageFile, entry, near, hook, modules),
+                       [=] { return buildVolumeStage(stageFile, stageEmbedded, entry, near, hook, modules); });
+}
+
+brokernel::CompileResult compileVolumeStage(const char* stageFile, const char* stageEmbedded, const char* entry,
+                                            const std::string& near, const std::string& hook,
+                                            const KernelHookModules& modules) {
+    return *volumeStage(stageFile, stageEmbedded, entry, near, hook, modules).get();
+}
+
+brokernel::CompileResult buildMeshOrShadowEntry(const char* stageFile, const char* stageEmbedded, const char* entry,
+                                                const std::string& hook, const KernelHookModules& modules) {
     brokernel::Compiler compiler;
     registerCommonModules(compiler, modules);
     compiler.register_module("vegetation", engineSource("common/vegetation.bk", kBkVegetationSrc));
@@ -129,14 +195,28 @@ brokernel::CompileResult compileMeshOrShadowEntry(const char* stageFile, const c
     return compiler.compile_source(engineSource(stageFile, stageEmbedded), stageFile, opts);
 }
 
+StageFuture meshOrShadowStage(const char* stageFile, const char* stageEmbedded, const char* entry,
+                              const std::string& hook, const KernelHookModules& modules) {
+    return stageFuture(stageKey(stageFile, entry, std::string(), hook, modules),
+                       [=] { return buildMeshOrShadowEntry(stageFile, stageEmbedded, entry, hook, modules); });
+}
+
+StageFuture meshStage(const char* entry, const std::string& hook, const KernelHookModules& modules) {
+    return meshOrShadowStage("draw/mesh_main.bk", kBkMeshMainSrc, entry, hook, modules);
+}
+
+StageFuture shadowStage(const char* entry, const std::string& hook, const KernelHookModules& modules) {
+    return meshOrShadowStage("shadow/shadow.bk", kBkShadowSrc, entry, hook, modules);
+}
+
 brokernel::CompileResult compileMeshEntry(const char* entry, const std::string& hook,
                                           const KernelHookModules& modules) {
-    return compileMeshOrShadowEntry("draw/mesh_main.bk", kBkMeshMainSrc, entry, hook, modules);
+    return *meshStage(entry, hook, modules).get();
 }
 
 brokernel::CompileResult compileShadowEntry(const char* entry, const std::string& hook,
                                             const KernelHookModules& modules) {
-    return compileMeshOrShadowEntry("shadow/shadow.bk", kBkShadowSrc, entry, hook, modules);
+    return *shadowStage(entry, hook, modules).get();
 }
 
 // BRO_KERNEL_SPIRV_DUMP=<dir> writes each stage's SPIR-V there as
@@ -188,6 +268,12 @@ const char* fragmentEntry(bool hasLight, bool indirect, bool cuts) {
     }
     if (indirect) return cuts ? "mesh_hook_indirect_cuts_frag" : "mesh_hook_indirect_frag";
     return cuts ? "mesh_hook_cuts_frag" : "mesh_hook_frag";
+}
+
+const char* shadowEntry(ShadowCaster caster, bool cutout) {
+    if (caster == ShadowCaster::Skinned) return "shadow_hook_skinned_vert";
+    if (caster == ShadowCaster::Instanced) return cutout ? "shadow_hook_instanced_cutout_vert" : "shadow_hook_instanced_vert";
+    return cutout ? "shadow_hook_cutout_vert" : "shadow_hook_vert";
 }
 
 void noteStageRecipe(std::string name, const std::vector<uint32_t>& words,
@@ -410,20 +496,34 @@ bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string
                              const std::string& file, const KernelHookModules& modules,
                              KernelHookStage& out, std::string& err) {
     const std::string hook = debug_views::expand(module, "scene::debug_view()");
-    const char* vsEntry = "shadow_hook_vert";
-    if (caster == ShadowCaster::Skinned) {
-        vsEntry = "shadow_hook_skinned_vert";
-    } else if (caster == ShadowCaster::Instanced) {
-        vsEntry = cutout ? "shadow_hook_instanced_cutout_vert" : "shadow_hook_instanced_vert";
-    } else if (cutout) {
-        vsEntry = "shadow_hook_cutout_vert";
-    }
+    const char* vsEntry = shadowEntry(caster, cutout);
     const brokernel::CompileResult vsRes = compileShadowEntry(vsEntry, hook, modules);
     if (!takeStage(vsRes, vsEntry, out, err)) {
         err = file + ": " + err;
         return false;
     }
     return true;
+}
+
+void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
+                  const KernelHookModules& modules) {
+    const std::string hook = debug_views::expand(module, "scene::debug_view()");
+    static const std::regex kVertex(R"(\bfn\s+vertex\s*\()");
+    static const std::regex kFragment(R"(\bfn\s+fragment\s*\()");
+    static const std::regex kLight(R"(\bfn\s+light\s*\()");
+    const bool hasVertex = std::regex_search(hook, kVertex);
+    const bool hasLight = std::regex_search(hook, kLight);
+    if (hasVertex) {
+        meshStage(vertexEntryForTarget(target), hook, modules);
+        const ShadowCaster caster = target == SceneRenderer::CustomShaderTarget::Skinned     ? ShadowCaster::Skinned
+                                  : target == SceneRenderer::CustomShaderTarget::Instanced ? ShadowCaster::Instanced
+                                                                                           : ShadowCaster::Static;
+        for (const bool cutout : {false, true}) shadowStage(shadowEntry(caster, cutout), hook, modules);
+    }
+    if (std::regex_search(hook, kFragment)) {
+        for (const bool indirect : {false, true})
+            for (const bool cuts : {false, true}) meshStage(fragmentEntry(hasLight, indirect, cuts), hook, modules);
+    }
 }
 
 } // namespace bro::scene::vk

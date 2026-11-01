@@ -10,6 +10,7 @@
 #include <brokernel/api.h>
 #include <brokernel/brokernel.h>
 
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -88,8 +89,15 @@ private:
     size_t bytes_;
 };
 
+// A kernel's pipeline, its driver objects built on a thread of their own from
+// when the program is made (the driver's compile is not the frame's), which
+// touches nothing else; the first dispatch takes them, waiting only if they
+// are not in by then, and adopts them on the page thread.
 struct Program final : brokernel::api::GpuProgram {
+    std::vector<uint32_t> spirv;   // what the build reads
+    std::future<render::ComputePipelineBuild> build;
     std::shared_ptr<render::ComputePipeline> pipeline;
+    std::string error;
 };
 
 // What the device can run, in brass's terms: a kernel's SPIR-V capabilities
@@ -142,16 +150,19 @@ public:
             if (err) *err = "kernel '" + kernel.name + "' cannot run on " + ctx.deviceProperties().deviceName + ":\n" + missing;
             return nullptr;
         }
+        auto program = std::make_shared<Program>();
+        program->spirv = spirv.words;
         render::ComputePipelineDesc desc;
-        desc.spirv = spirv.words;
+        desc.spirv = program->spirv;
         desc.entry = spirv.entry;
         desc.pushConstantBytes = spirv.push_constant_bytes;
         for (int i = 0; i < 3; ++i) desc.localSize[i] = kernel.local_size[i] ? kernel.local_size[i] : 1;
         desc.localSizeSpecConstants = spirv.local_size_spec_constants;
         desc.label = kernel.name;
-        auto program = std::make_shared<Program>();
-        program->pipeline = ctx.compute().createPipeline(desc, err);
-        if (!program->pipeline) return nullptr;
+        const render::VulkanCompute* compute = &ctx.compute();
+        program->build = std::async(std::launch::async, [compute, desc = std::move(desc)] {
+            return compute->buildPipeline(desc);
+        });
         return program;
     }
 
@@ -163,8 +174,14 @@ public:
             if (err) *err = bad;
             return false;
         }
-        const auto& pipeline = *static_cast<Program&>(program).pipeline;
-        if (device_->context()->compute().dispatch(pipeline, block, launch.groups)) return true;
+        render::VulkanCompute& compute = device_->context()->compute();
+        auto& p = static_cast<Program&>(program);
+        if (p.build.valid()) p.pipeline = compute.adoptPipeline(p.build.get(), &p.error);
+        if (!p.pipeline) {
+            if (err) *err = p.error;
+            return false;
+        }
+        if (compute.dispatch(*p.pipeline, block, launch.groups)) return true;
         if (err) *err = "the GPU dispatch of '" + kernel.name + "' failed";
         return false;
     }

@@ -84,6 +84,14 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
                                    const KernelHookModules& modules, bool hasLight, bool indirect, bool cuts,
                                    KernelHookStage& out, std::string& err);
 
+/// Start compiling, each on a thread of its own, the stages a mesh hook set
+/// for `target` may draw with: its vertex stage, its fragment stage's
+/// variants (indirect, cuts) and its shadow casters. A stage is compiled once
+/// for all its callers, so the draw that first takes one finds it built
+/// rather than compiling it in the frame.
+void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
+                  const KernelHookModules& modules);
+
 /// Compile a mesh hook's shadow-caster vertex stage.
 bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module,
                              const std::string& file, const KernelHookModules& modules,

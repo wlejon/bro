@@ -327,6 +327,7 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
     vk::KernelMeshHook hook;
     if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut)) return false;
     hasVertexOut = hook.hasVertex;
+    vk::warmMeshHook(target, module, modules);
     return true;
 }
 

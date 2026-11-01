@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <new>
 #include <utility>
 
 namespace bro::render {
@@ -240,29 +241,73 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
     return b;
 }
 
+ComputePipelineBuild::~ComputePipelineBuild() {
+    // Never adopted: no submission used it.
+    if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, pipeline, nullptr);
+    if (layout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, layout, nullptr);
+}
+
+ComputePipelineBuild::ComputePipelineBuild(ComputePipelineBuild&& o) noexcept
+    : device(o.device), layout(o.layout), pipeline(o.pipeline), pushBytes(o.pushBytes), label(std::move(o.label)),
+      error(std::move(o.error)) {
+    o.layout = VK_NULL_HANDLE;
+    o.pipeline = VK_NULL_HANDLE;
+}
+
+ComputePipelineBuild& ComputePipelineBuild::operator=(ComputePipelineBuild&& o) noexcept {
+    if (this != &o) {
+        this->~ComputePipelineBuild();
+        new (this) ComputePipelineBuild(std::move(o));
+    }
+    return *this;
+}
+
 std::shared_ptr<ComputePipeline> VulkanCompute::createPipeline(const ComputePipelineDesc& desc, std::string* error) {
-    if (!available()) {
-        fail(error, "the GPU device cannot reach buffers by address");
+    return adoptPipeline(buildPipeline(desc), error);
+}
+
+std::shared_ptr<ComputePipeline> VulkanCompute::adoptPipeline(ComputePipelineBuild&& build, std::string* error) {
+    if (build.pipeline == VK_NULL_HANDLE) {
+        fail(error, build.error.empty() ? "no pipeline" : build.error);
         return nullptr;
+    }
+    std::shared_ptr<ComputePipeline> p(new ComputePipeline());
+    p->pushBytes_ = build.pushBytes;
+    p->layout_ = build.layout;
+    p->pipeline_ = build.pipeline;
+    build.layout = VK_NULL_HANDLE;
+    build.pipeline = VK_NULL_HANDLE;
+    p->owner_ = owner_;
+    p->label_ = std::make_shared<const std::string>(std::move(build.label));
+    owner_->pipelines.insert(p.get());
+    return p;
+}
+
+ComputePipelineBuild VulkanCompute::buildPipeline(const ComputePipelineDesc& desc) const {
+    ComputePipelineBuild b;
+    if (!available()) {
+        b.error = "the GPU device cannot reach buffers by address";
+        return b;
     }
     if (desc.spirv.empty()) {
-        fail(error, "no SPIR-V");
-        return nullptr;
+        b.error = "no SPIR-V";
+        return b;
     }
     const VkDevice dev = context_->device();
+    b.device = dev;
     const VkPhysicalDeviceLimits& limits = context_->deviceProperties().limits;
     if (desc.pushConstantBytes > limits.maxPushConstantsSize) {
-        fail(error, "push constants take " + std::to_string(desc.pushConstantBytes) + " bytes; the device allows " +
-                        std::to_string(limits.maxPushConstantsSize));
-        return nullptr;
+        b.error = "push constants take " + std::to_string(desc.pushConstantBytes) + " bytes; the device allows " +
+                  std::to_string(limits.maxPushConstantsSize);
+        return b;
     }
     const uint64_t threads = uint64_t{desc.localSize[0]} * desc.localSize[1] * desc.localSize[2];
     if (threads == 0 || threads > limits.maxComputeWorkGroupInvocations ||
         desc.localSize[0] > limits.maxComputeWorkGroupSize[0] || desc.localSize[1] > limits.maxComputeWorkGroupSize[1] ||
         desc.localSize[2] > limits.maxComputeWorkGroupSize[2]) {
-        fail(error, "workgroup size " + std::to_string(desc.localSize[0]) + "x" + std::to_string(desc.localSize[1]) +
-                        "x" + std::to_string(desc.localSize[2]) + " exceeds the device limits");
-        return nullptr;
+        b.error = "workgroup size " + std::to_string(desc.localSize[0]) + "x" + std::to_string(desc.localSize[1]) +
+                  "x" + std::to_string(desc.localSize[2]) + " exceeds the device limits";
+        return b;
     }
 
     VkShaderModuleCreateInfo smi{};
@@ -271,21 +316,22 @@ std::shared_ptr<ComputePipeline> VulkanCompute::createPipeline(const ComputePipe
     smi.pCode = desc.spirv.data();
     VkShaderModule module = VK_NULL_HANDLE;
     if (vkCreateShaderModule(dev, &smi, nullptr, &module) != VK_SUCCESS) {
-        fail(error, "vkCreateShaderModule failed for '" + desc.entry + "'");
-        return nullptr;
+        b.error = "vkCreateShaderModule failed for '" + desc.entry + "'";
+        return b;
     }
 
-    std::shared_ptr<ComputePipeline> p(new ComputePipeline());
-    p->pushBytes_ = desc.pushConstantBytes;
+    b.pushBytes = desc.pushConstantBytes;
+    b.label = desc.label.empty() ? desc.entry : desc.label;
     VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, desc.pushConstantBytes};
     VkPipelineLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     lci.pushConstantRangeCount = desc.pushConstantBytes ? 1u : 0u;
     lci.pPushConstantRanges = &range;
-    if (vkCreatePipelineLayout(dev, &lci, nullptr, &p->layout_) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(dev, &lci, nullptr, &b.layout) != VK_SUCCESS) {
         vkDestroyShaderModule(dev, module, nullptr);
-        fail(error, "vkCreatePipelineLayout failed for '" + desc.entry + "'");
-        return nullptr;
+        b.layout = VK_NULL_HANDLE;
+        b.error = "vkCreatePipelineLayout failed for '" + desc.entry + "'";
+        return b;
     }
 
     const VkSpecializationMapEntry entries[3] = {
@@ -298,18 +344,14 @@ std::shared_ptr<ComputePipeline> VulkanCompute::createPipeline(const ComputePipe
     pci.stage.module = module;
     pci.stage.pName = desc.entry.c_str();
     pci.stage.pSpecializationInfo = desc.localSizeSpecConstants ? &spec : nullptr;
-    pci.layout = p->layout_;
-    const VkResult res = vkCreateComputePipelines(dev, context_->pipelineCache(), 1, &pci, nullptr, &p->pipeline_);
+    pci.layout = b.layout;
+    const VkResult res = vkCreateComputePipelines(dev, context_->pipelineCache(), 1, &pci, nullptr, &b.pipeline);
     vkDestroyShaderModule(dev, module, nullptr);
     if (res != VK_SUCCESS) {
-        vkDestroyPipelineLayout(dev, p->layout_, nullptr);
-        fail(error, "vkCreateComputePipelines failed for '" + desc.entry + "' (" + std::to_string(res) + ")");
-        return nullptr;
+        b.pipeline = VK_NULL_HANDLE;
+        b.error = "vkCreateComputePipelines failed for '" + desc.entry + "' (" + std::to_string(res) + ")";
     }
-    p->owner_ = owner_;
-    p->label_ = std::make_shared<const std::string>(desc.label.empty() ? desc.entry : desc.label);
-    owner_->pipelines.insert(p.get());
-    return p;
+    return b;
 }
 
 VkCommandBuffer VulkanCompute::commands() {

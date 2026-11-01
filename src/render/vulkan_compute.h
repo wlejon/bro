@@ -79,6 +79,27 @@ struct ComputePipelineDesc {
     std::string label;
 };
 
+/// A compute pipeline's driver objects, made on any thread
+/// (VulkanCompute::buildPipeline: the driver's compile, which may take a
+/// while, kept off the frame) and handed to the page thread, which adopts
+/// them (adoptPipeline) into a ComputePipeline it owns from then on. Nothing
+/// the page thread keeps is touched while it is built. Destroyed with it
+/// when never adopted. Move-only.
+struct ComputePipelineBuild {
+    VkDevice device = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;   // null: failed, `error` says why
+    uint32_t pushBytes = 0;
+    std::string label;
+    std::string error;
+
+    ComputePipelineBuild() = default;
+    ComputePipelineBuild(ComputePipelineBuild&& o) noexcept;
+    ComputePipelineBuild& operator=(ComputePipelineBuild&& o) noexcept;
+    ComputePipelineBuild(const ComputePipelineBuild&) = delete;
+    ~ComputePipelineBuild();
+};
+
 /// The GPU time of a label's dispatches.
 struct ComputeTime {
     std::string label;
@@ -192,6 +213,10 @@ public:
 
     std::shared_ptr<ComputeBuffer> createBuffer(VkDeviceSize size, std::string* error = nullptr);
     std::shared_ptr<ComputePipeline> createPipeline(const ComputePipelineDesc& desc, std::string* error = nullptr);
+    /// createPipeline in two halves: the driver's objects, on any thread
+    /// (it reads only the device), then adopted here, on the page thread.
+    ComputePipelineBuild buildPipeline(const ComputePipelineDesc& desc) const;
+    std::shared_ptr<ComputePipeline> adoptPipeline(ComputePipelineBuild&& build, std::string* error = nullptr);
 
     /// Copy `size` bytes from `data` (now) to `buffer` at `offset`.
     bool write(ComputeBuffer& buffer, VkDeviceSize offset, const void* data, VkDeviceSize size);
