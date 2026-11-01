@@ -1,5 +1,6 @@
 #include "engine/app_runtime.h"
 
+#include "layout/svg_image.h"
 #include "platform/desktop_notifications.h"
 #include "platform/desktop_single_instance.h"
 #include "platform/window_system.h"
@@ -279,6 +280,9 @@ bool loadIconPixels(const std::string& path, int size, int& width, int& height, 
     std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     if (bytes.empty()) return false;
     if (render::looksLikeSvg(bytes.data(), bytes.size())) {
+        // Read with no engine too (bro --build-exe stamps the icon), so the
+        // painter the engine installs at construction is installed here.
+        layout::installSvgImagePainter();
         float sw = 0, sh = 0;
         render::svgIntrinsicSize(bytes.data(), bytes.size(), sw, sh);
         int w = size, h = size;
