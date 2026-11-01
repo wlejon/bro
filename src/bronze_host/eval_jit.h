@@ -12,8 +12,7 @@ class Engine;
 
 namespace bro::bronze_host {
 
-/// Checks whether in-memory JIT evaluation is disabled via environment variables
-/// (e.g. BRO_DISABLE_JIT=1, BRO_EVAL_AOT=1, BRO_NO_JIT=1).
+/// Checks whether in-memory JIT evaluation is disabled (BRO_DISABLE_JIT=1).
 bool isJitDisabled();
 
 /// Pins the tier every in-process compile runs at when BRO_JIT_TIER names one

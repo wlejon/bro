@@ -73,15 +73,9 @@ struct GlslCompileResult {
 /// WebGL programs use glslang directly (acquireGlslang) because linking them
 /// needs its reflection.
 ///
-/// When `BRO_SHADER_RELAXED_PRECISION=1` is set in the environment, fragment
-/// and compute shaders are automatically passed through
-/// `brass::spirv::promote_relaxed_precision` (#113). When
-/// `BRO_AUDIT_COMPUTE_SHADERS=1` is set, compute shaders are audited with
-/// `brass::spirv::audit_compute_shader_binary` (#87).
-///
 /// Returns the SPIR-V words, or an empty vector with glslang's diagnostics in
 /// `*log` (when given) if the source does not compile. Successful results are
-/// memoised by (stage, flags, source), since the same variant is often requested
+/// memoised by (stage, source), since the same variant is often requested
 /// again (a material rebuilt, a terrain recreated). Thread-safe, and compiles
 /// on several threads at once run in parallel.
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,

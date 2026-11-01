@@ -4,8 +4,6 @@
 //  * and, logged for the record (TERMINAL_LAYER_PERF in bro.log), the frame
 //    cost of a full-screen terminal redrawn every frame with synchronized
 //    output (mode 2026) beside a page with some weight.
-// Under BRO_TERMINAL_LAYER=0 (terminals painted inline with the page) it
-// only measures: the comparison the layer is judged against.
 
 function frames(n) {
     return new Promise((resolve) => {
@@ -86,10 +84,9 @@ async function run() {
         return;
     }
     await forMs(200);
-    const layered = bro.terminal.stats().layered;
     assert(t.cols > 60 && t.rows > 30, 'the terminal fills most of the window: ' + t.cols + 'x' + t.rows);
 
-    if (layered) {
+    {
         // Page changes only: the terminal's layer is left alone.
         const beforeFeed = bro.terminal.stats().layerRecords;
         t.feed('idle');
@@ -117,8 +114,7 @@ async function run() {
     await sustained(1000, false);  // warm up
     const termOnly = await sustained(3000, false);
     const both = await sustained(3000, true);
-    console.log('TERMINAL_LAYER_PERF ' + JSON.stringify({ layered, cols: t.cols, rows: t.rows, termOnly, both }));
-    if (!layered) skipTest('BRO_TERMINAL_LAYER=0: measured only');
+    console.log('TERMINAL_LAYER_PERF ' + JSON.stringify({ cols: t.cols, rows: t.rows, termOnly, both }));
 }
 
 const watchdog = setTimeout(() => {

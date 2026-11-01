@@ -314,7 +314,7 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         o.set("cachesAll", ev::fromBool(cachesAll));
         return o.get();
     });
-    // The per-animation frame budget in MB (BRO_IMAGE_ANIM_MB), for decodes
+    // The per-animation frame budget in MB (32 by default), for decodes
     // that start after the call.
     host.def("setImageAnimationBudgetMB", 1, [](Value, std::span<const Value> a) -> Value {
         if (!a.empty() && ev::isNumber(a[0]))

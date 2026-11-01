@@ -46,9 +46,7 @@ void wakeWindowLoop() {
 }  // namespace
 
 void Engine::installMainLoopWaker() {
-    const char* env = std::getenv("BRO_IDLE_WAIT");
-    idleWaitEnabled_ = !(env && std::strcmp(env, "0") == 0);
-    if (!idleWaitEnabled_ || !eventLoop_ || !eventLoop_->canWaitEvents()) return;
+    if (!eventLoop_ || !eventLoop_->canWaitEvents()) return;
     {
         std::lock_guard<std::mutex> lk(g_wakeMu);
         g_wakeLoop = eventLoop_.get();
@@ -63,7 +61,6 @@ void Engine::removeMainLoopWaker() {
 }
 
 bool Engine::windowIdle() const {
-    if (!idleWaitEnabled_) return false;
     // Headless frames of the windowed pipeline wait on the event loop when
     // there is one, else they sleep (idleWait).
     if (!headlessPipeline_ && (!eventLoop_ || !eventLoop_->canWaitEvents())) return false;

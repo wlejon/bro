@@ -650,14 +650,8 @@ void Document::resolveStylesRecursive(Element* elem,
         // table spans, and the <svg> size finishComputedStyle reads); not when
         // the sheet forces `inherit` onto a non-inherited property, which makes
         // every parent value an input.
-        // BRO_STYLE_SHARE=0 turns sharing off (every element resolves in full),
-        // for comparing against it.
-        static const bool kShareOn = [] {
-            const char* v = std::getenv("BRO_STYLE_SHARE");
-            return !(v && std::strcmp(v, "0") == 0);
-        }();
         const std::string& tag = elem->tagName();
-        const bool keyable = kShareOn && !cascade_.usesForcedInherit();
+        const bool keyable = !cascade_.usesForcedInherit();
         StyleShareKey& key = keyScratch_;
         if (keyable) {
             cascade_.styleAttributes(*adapter, key.attributes);

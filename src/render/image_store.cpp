@@ -266,10 +266,6 @@ ImageStore& ImageStore::instance() {
 }
 
 ImageStore::ImageStore() : impl_(std::make_unique<Impl>()) {
-    if (const char* mb = std::getenv("BRO_IMAGE_CACHE_MB")) {
-        const long long v = std::atoll(mb);
-        if (v >= 0) impl_->budget = static_cast<size_t>(v) << 20;
-    }
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     impl_->maxWorkers = std::clamp(hw / 2, 2u, 4u);
 }

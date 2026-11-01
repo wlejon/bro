@@ -141,8 +141,7 @@ public:
     static void settleAll(bool on);
     /// Whether frames skip what is not yet built (a window's
     /// policy) or wait for it (headless's): vk::pipeline_async::async(), set
-    /// for this process from now on (perf.asyncShaders), the environment's
-    /// BRO_ASYNC_SHADERS not consulted.
+    /// for this process from now on (perf.asyncShaders).
     static void setAsyncShaders(bool on);
     static bool asyncShaders();
 

@@ -194,9 +194,7 @@
  *
  * Performance. Every <terminal> is its own compositor layer, recorded only
  * when the terminal changes. A busy terminal therefore re-records only
- * itself, and a page change never re-records a terminal. Set
- * BRO_TERMINAL_LAYER=0 in the environment to paint terminals inline with the
- * page instead; that mode exists only for comparison.
+ * itself, and a page change never re-records a terminal.
  * `bro.terminal.stats()` and `layerRecords` count the recordings.
  */
 
@@ -223,9 +221,8 @@ const terminal = {
    * Lifetime counters. `layerRecords` counts how often any terminal's layer
    * was recorded. `pageRecords` and `pageInvalidations` count the page's
    * cached paint being re-recorded and being invalidated; those two move
-   * only in the windowed frame loop. `layered` is false under
-   * BRO_TERMINAL_LAYER=0.
-   * @returns {{layered: boolean, layerRecords: number, pageRecords: number, pageInvalidations: number}}
+   * only in the windowed frame loop.
+   * @returns {{layerRecords: number, pageRecords: number, pageInvalidations: number}}
    * @example
    *   const before = bro.terminal.stats();
    *   // ... a busy terminal for a second ...

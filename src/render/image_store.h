@@ -22,7 +22,7 @@
 // (util::wakeMainLoop), and nothing here ever calls back into script.
 //
 // MEMORY. Ready entries count their pixel bytes against a budget (default
-// 512 MB, BRO_IMAGE_CACHE_MB to change it); past it the least recently used
+// 512 MB); past it the least recently used
 // ready entries leave the cache. Leaving the cache frees nothing still in
 // use: an element (or a recording) holding the request keeps its pixels, and
 // they go when the last holder lets go. A pending request is never evicted.

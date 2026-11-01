@@ -24,16 +24,8 @@ constexpr size_t kDefaultBudgetMB = 32;
 constexpr size_t kMaxWindow = 8;
 constexpr size_t kMinWindow = 2;
 
-size_t budgetFromEnv() {
-    if (const char* mb = std::getenv("BRO_IMAGE_ANIM_MB")) {
-        const long long v = std::atoll(mb);
-        if (v >= 0) return static_cast<size_t>(v) << 20;
-    }
-    return kDefaultBudgetMB << 20;
-}
-
 std::atomic<size_t>& budget() {
-    static std::atomic<size_t> b{budgetFromEnv()};
+    static std::atomic<size_t> b{kDefaultBudgetMB << 20};
     return b;
 }
 

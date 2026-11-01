@@ -295,7 +295,7 @@ void Engine::construct(const EngineConfig& config) {
     serverStartTime_ = util::currentTimeMs();
 
     // A window's frames skip what is still building; headless frames, read
-    // back at once, wait for it (BRO_ASYNC_SHADERS overrides).
+    // back at once, wait for it (perf.asyncShaders overrides).
 #if BRO_WITH_3D
     scene::vk::pipeline_async::setAsync(displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm);
 #endif
@@ -448,13 +448,7 @@ void Engine::construct(const EngineConfig& config) {
     // The page's first script compiles on its own thread from here; its run
     // (initAppRealm) takes the program. Windowed, the device below comes up
     // on this thread meanwhile; headless, it is already coming up on its own.
-    // BRO_STARTUP_OVERLAP=0 keeps the order bro had (device, then the page
-    // compiled when it runs), to measure what the overlap is worth or to
-    // rule it out.
-    const char* overlapEnv = std::getenv("BRO_STARTUP_OVERLAP");
-    const bool overlapPage = (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) &&
-                             !(overlapEnv && std::string(overlapEnv) == "0");
-    if (overlapPage) beginPageCompile();
+    if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) beginPageCompile();
 
     if (displayMode_ == DisplayMode::Headless) {
         if (gpuInit.joinable()) gpuInit.join();

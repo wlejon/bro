@@ -631,16 +631,6 @@ void collectForSweep() {
         LOG_INFO("gc: DOM sweep collection in %.1f ms (quiet %.0f ms)", s.stats.lastCollectMs, s.quietMs);
 }
 
-bool sweepEnabled() {
-    // BRO_DOM_SWEEP=0 turns the sweep off: the before half of a leak
-    // measurement, and the switch to reach for if it is ever suspected.
-    static const bool enabled = [] {
-        const char* v = std::getenv("BRO_DOM_SWEEP");
-        return !(v && v[0] == '0');
-    }();
-    return enabled;
-}
-
 }  // namespace
 
 void hostSweepPromote(HostNodeState* st) {
@@ -670,7 +660,6 @@ void hostSweepTouchNode(const dom::Node* node) {
 }
 
 void hostDomSweepFrame(double dtMs) {
-    if (!sweepEnabled()) return;
     SweepState& s = sweep();
     if (s.running || !intrinsics()) return;
     s.running = true;
@@ -730,7 +719,6 @@ void hostDomSweepFrame(double dtMs) {
 }
 
 void hostDomSweepNow() {
-    if (!sweepEnabled()) return;
     SweepState& s = sweep();
     if (s.running || !intrinsics()) return;
     s.running = true;

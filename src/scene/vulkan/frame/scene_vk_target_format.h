@@ -28,12 +28,9 @@ namespace pipeline_async {
 /// (false). The engine turns it on for a window (no frame waits, so the
 /// window never stops answering) and leaves it off in headless, whose
 /// renders are read back at once (tests, stills) and must hold everything.
-/// BRO_ASYNC_SHADERS=1 / 0 overrides either: a headless run measuring boot
-/// frames as a window has them sets 1.
+/// perf.asyncShaders sets it from script (a test settling one scene each
+/// way in one process).
 void setAsync(bool on);
-/// The same, the environment not consulted (perf.asyncShaders: a test
-/// settling one scene each way in one process).
-void forceAsync(bool on);
 bool async();
 struct Capture {
     std::shared_future<VkPipeline> future;

@@ -211,12 +211,7 @@ std::atomic<int> s_inFlight{0};
 std::atomic<int> s_skips{0};
 std::atomic<bool> s_async{false};
 }
-void setAsync(bool on) {
-    const char* v = std::getenv("BRO_ASYNC_SHADERS");
-    if (v && *v) on = std::strcmp(v, "0") != 0;
-    s_async.store(on, std::memory_order_relaxed);
-}
-void forceAsync(bool on) { s_async.store(on, std::memory_order_relaxed); }
+void setAsync(bool on) { s_async.store(on, std::memory_order_relaxed); }
 bool async() { return s_async.load(std::memory_order_relaxed); }
 Capture*& current() {
     thread_local Capture* c = nullptr;

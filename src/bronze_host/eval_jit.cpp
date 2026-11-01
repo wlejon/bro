@@ -39,8 +39,6 @@ namespace bro::bronze_host {
 bool isJitDisabled() {
     static bool disabled = [] {
         const char* val = std::getenv("BRO_DISABLE_JIT");
-        if (!val) val = std::getenv("BRO_EVAL_AOT");
-        if (!val) val = std::getenv("BRO_NO_JIT");
         return val && (std::strcmp(val, "1") == 0 || std::strcmp(val, "true") == 0);
     }();
     return disabled;
@@ -162,7 +160,7 @@ void awaitScriptCompletion(engine::Engine& engine, const std::string& filename) 
 
 // The on-disk code cache (bronze src/eval/code_cache.h, docs/code-cache.md):
 // in the per-user cache directory unless BRO_CODE_CACHE=0 turns it off;
-// BRO_CODE_CACHE_DIR moves it and BRO_CODE_CACHE_MAX_MB bounds it.
+// BRO_CODE_CACHE_DIR moves it. It is held to 512 MB.
 void configureCodeCache(bronze::eval::EvalOptions& opts) {
     static const std::string dir = [] {
         const char* off = std::getenv("BRO_CODE_CACHE");
@@ -170,15 +168,8 @@ void configureCodeCache(bronze::eval::EvalOptions& opts) {
         if (const char* d = std::getenv("BRO_CODE_CACHE_DIR"); d && *d) return std::string(d);
         return util::userCacheDir() + "/code-cache";
     }();
-    static const uint64_t maxBytes = [] {
-        if (const char* mb = std::getenv("BRO_CODE_CACHE_MAX_MB")) {
-            const long long v = std::atoll(mb);
-            if (v > 0) return static_cast<uint64_t>(v) << 20;
-        }
-        return uint64_t{512} << 20;
-    }();
     opts.codeCacheDir = dir;
-    opts.codeCacheMaxBytes = maxBytes;
+    opts.codeCacheMaxBytes = uint64_t{512} << 20;
 }
 
 const char* cacheStatusName(bronze::eval::CodeCacheStatus s) {

@@ -448,8 +448,6 @@ Value makeBroTerminalValue() {
     // probe read these).
     o.def("stats", 0, [](Value, std::span<const Value>) -> Value {
         ObjectBuilder s;
-        // False under BRO_TERMINAL_LAYER=0: terminals paint inline with the page.
-        s.set("layered", ev::fromBool(engine::terminalLayersEnabled()));
         s.set("layerRecords", ev::fromDouble(double(layout::ElTerminal::totalLayerRecords())));
         auto* eng = hostEngine();
         s.set("pageRecords", ev::fromDouble(eng ? double(eng->frameStats().baseRecords) : 0.0));

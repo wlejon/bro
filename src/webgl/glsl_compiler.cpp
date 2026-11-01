@@ -28,11 +28,6 @@ std::unordered_map<std::string, std::vector<uint32_t>> s_memo;
 thread_local GlslRelaxedPrecisionStats tl_lastRelaxedStats{};
 thread_local GlslComputeAuditStats tl_lastAuditStats{};
 
-bool envFlagEnabled(const char* name) {
-    const char* v = std::getenv(name);
-    return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 || std::strcmp(v, "ON") == 0);
-}
-
 glslang_stage_t toGlslangStage(ShaderStage stage) {
     switch (stage) {
         case ShaderStage::Vertex:   return GLSLANG_STAGE_VERTEX;
@@ -206,38 +201,19 @@ GlslCompileResult compileGlslToSpirvWithOptions(
 
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log) {
-    const bool envRelaxed = envFlagEnabled("BRO_SHADER_RELAXED_PRECISION") &&
-                            (stage == ShaderStage::Fragment || stage == ShaderStage::Compute);
-    const bool envAudit = envFlagEnabled("BRO_AUDIT_COMPUTE_SHADERS") &&
-                          stage == ShaderStage::Compute;
-
     std::string key;
-    key.reserve(source.size() + 6);
+    key.reserve(source.size() + 2);
     key.push_back(static_cast<char>('0' + static_cast<int>(stage)));
-    key.push_back(envRelaxed ? 'R' : 'r');
-    key.push_back(envAudit ? 'A' : 'a');
     key.push_back('|');
     key.append(source);
 
-    if (!envRelaxed && !envAudit) {
+    {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (auto it = s_memo.find(key); it != s_memo.end()) return it->second;
     }
 
     std::vector<uint32_t> spirv = compileRawGlslToSpirv(source, stage, log);
     if (spirv.empty()) return {};
-
-    if (envRelaxed) {
-        promoteSpirvRelaxedPrecision(spirv);
-    }
-    if (envAudit) {
-        const auto audit = auditComputeSpirv(spirv);
-        if (!audit.provenSafe && log) {
-            for (const auto& f : audit.findings) {
-                appendLog(log, "[audit] ", (f + "\n").c_str());
-            }
-        }
-    }
 
     std::lock_guard<std::mutex> lock(s_mutex);
     s_memo[key] = spirv;

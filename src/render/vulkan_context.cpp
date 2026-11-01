@@ -48,9 +48,8 @@ const std::vector<const char*> kRequiredDeviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-bool envFlag(const char* a, const char* b) {
-    const char* v = std::getenv(a);
-    if (!v) v = std::getenv(b);
+bool envFlag(const char* name) {
+    const char* v = std::getenv(name);
     return v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0 || strcmp(v, "TRUE") == 0);
 }
 
@@ -94,15 +93,9 @@ DeviceFeatureSupport queryFeatureSupport(VkPhysicalDevice dev) {
 VulkanContext::VulkanContext(const VulkanContextConfig& config)
     : config_(config)
 {
-    // Environment overrides: BRO_VK_VALIDATION (or BRO_VULKAN_VALIDATION) and
-    // BRO_VK_DEVICE (or BRO_VULKAN_DEVICE).
-    if (std::getenv("BRO_VK_VALIDATION") || std::getenv("BRO_VULKAN_VALIDATION"))
-        config_.enableValidation = envFlag("BRO_VK_VALIDATION", "BRO_VULKAN_VALIDATION");
-    if (const char* dev = std::getenv("BRO_VK_DEVICE")) {
-        config_.preferredDeviceIndex = std::atoi(dev);
-    } else if (const char* dev2 = std::getenv("BRO_VULKAN_DEVICE")) {
-        config_.preferredDeviceIndex = std::atoi(dev2);
-    }
+    // Environment overrides: BRO_VK_VALIDATION and BRO_VK_DEVICE.
+    if (std::getenv("BRO_VK_VALIDATION")) config_.enableValidation = envFlag("BRO_VK_VALIDATION");
+    if (const char* dev = std::getenv("BRO_VK_DEVICE")) config_.preferredDeviceIndex = std::atoi(dev);
 }
 
 VulkanContext::~VulkanContext() {
@@ -322,7 +315,7 @@ bool VulkanContext::createInstance() {
         populateDebugMessengerCreateInfo(debugCreateInfo);
         debugCreateInfo.pNext = createInfo.pNext;
         createInfo.pNext = &debugCreateInfo;
-        if (envFlag("BRO_VK_SYNC_VALIDATION", "BRO_VULKAN_SYNC_VALIDATION")) {
+        if (envFlag("BRO_VK_SYNC_VALIDATION")) {
             validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
             validationFeatures.enabledValidationFeatureCount = 1;
             validationFeatures.pEnabledValidationFeatures = &syncFeature;

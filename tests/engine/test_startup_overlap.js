@@ -13,7 +13,6 @@
 // ~175 ms, together ~163 ms; with the page's host globals and compile also
 // under the device, music's first frame went from ~323 to ~236 ms, warm
 // code cache.)
-// BRO_STARTUP_OVERLAP=0 compiles after the GPU instead, as bro did.
 
 const s = bro.app.startup;
 assert(s && typeof s.graphics === 'object', 'bro.app.startup.graphics: ' + JSON.stringify(s));

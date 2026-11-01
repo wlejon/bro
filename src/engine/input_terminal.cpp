@@ -180,23 +180,15 @@ void Engine::pumpTerminals() {
     // deterministic); windowed on the wall clock.
     const double now = displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs();
     bool repaint = false;
-    const bool layered = terminalLayersEnabled();
     layout::ElTerminal::forEach([&](layout::ElTerminal& t) {
         dom::Element* el = t.element();
         dom::Document* doc = el ? el->document() : nullptr;
         const bool focused = windowFocused_ && doc && doc->activeElement() == el;
-        // A repaint is the terminal's own layer: the page is not re-recorded
-        // (unless the layers are off, BRO_TERMINAL_LAYER=0).
-        if (t.pump(now, focused, deviceScale_.render)) {
-            repaint = true;
-            if (!layered && doc) doc->markPaintDirty();
-        }
+        // A repaint is the terminal's own layer: the page is not re-recorded.
+        if (t.pump(now, focused, deviceScale_.render)) repaint = true;
         if (t.takeCursorChanged() && el && hoveredElement_.get() == el) updateCursorFromHover(el);
     });
-    if (repaint) {
-        if (layered) uiDirty_ = true;
-        else markAppBaseDirty();
-    }
+    if (repaint) uiDirty_ = true;
 }
 
 void Engine::awaitTerminalEcho(double frameStart) {

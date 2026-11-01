@@ -12,19 +12,10 @@
 
 namespace bro::engine {
 
-bool terminalLayersEnabled() {
-    static const bool on = [] {
-        const char* v = std::getenv("BRO_TERMINAL_LAYER");
-        return !(v && v[0] == '0' && v[1] == '\0');
-    }();
-    return on;
-}
-
 TerminalLayers::TerminalLayers() = default;
 TerminalLayers::~TerminalLayers() = default;
 
 void TerminalLayers::record(float scale) {
-    if (!terminalLayersEnabled()) return;
     std::unordered_map<uint64_t, bool> live;
     layout::ElTerminal::forEach([&](layout::ElTerminal& t) {
         std::shared_ptr<layout::TermLayer> layer = t.layer();

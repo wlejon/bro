@@ -87,7 +87,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setLayerBreakCallback([this](const layout::DrawTraversal::LayerBreak& lb) {
         recordingRenderer_->recordLayerBreak(lb.source, lb.quad);
     });
-    drawTraversal_->setTerminalLayers(!promotedOnly && terminalLayersEnabled());
+    drawTraversal_->setTerminalLayers(!promotedOnly);
     // A shell host's client windows go where its desktop level ends,
     // interleaved with the frames it draws for them (window_frames.h).
     bool hasCompositor = false;

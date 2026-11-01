@@ -119,8 +119,7 @@
  *     ctx.drawImage(img, 0, 0);
  *
  * Decoded pictures are cached by source (a file by path, size and mtime; a
- * data: or blob: URL by its bytes), bounded by memory (512 MB, or
- * `BRO_IMAGE_CACHE_MB`), least recently used out first. The same `src` on
+ * data: or blob: URL by its bytes), bounded by memory (512 MB), least recently used out first. The same `src` on
  * another element, or in a CSS `background-image`, reuses the picture: that
  * element is `complete` as soon as `src` is set (its `load` is still a task).
  *
@@ -726,11 +725,10 @@ bro.image.openFrames = function(src) {};
 //     clipped out, display:none, detached or in a hidden window it requests
 //     no repaints and decodes nothing, so an idle page costs nothing. Shown
 //     again, it is on the frame its clock has reached.
-//   - Frames are budgeted per animation by BRO_IMAGE_ANIM_MB (default 32 MB
-//     of RGBA): one whose frames fit decodes them all once and keeps them; a
+//   - Frames are budgeted per animation at 32 MB of RGBA: one whose frames fit decodes them all once and keeps them; a
 //     bigger one is streamed, decoded ahead on the image decoder threads in a
 //     window of 2-8 frames within the budget. They count against the image
-//     cache (BRO_IMAGE_CACHE_MB) like any picture.
+//     cache like any picture.
 
 /**
  * Read the raw EXIF Orientation tag: 1 Normal, 2 FlipH, 3 Rotate180,

@@ -194,7 +194,7 @@ void SceneRenderer::setPageWork(const std::string& kind, int count) {
 
 void SceneRenderer::settleAll(bool on) { WorldService::settleAll(on); }
 
-void SceneRenderer::setAsyncShaders(bool on) { vk::pipeline_async::forceAsync(on); }
+void SceneRenderer::setAsyncShaders(bool on) { vk::pipeline_async::setAsync(on); }
 bool SceneRenderer::asyncShaders() { return vk::pipeline_async::async(); }
 
 namespace {

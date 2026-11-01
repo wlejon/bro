@@ -25,15 +25,10 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 |---|---|
 | `BRO_CODE_CACHE=0` | no cache |
 | `BRO_CODE_CACHE_DIR=<dir>` | another directory |
-| `BRO_CODE_CACHE_MAX_MB=<n>` | the trim limit |
-
-## SPIR-V cache
-
-GLSL compiled at run time (WebGL programs) is kept as SPIR-V in `<user cache dir>/spirv-cache/`, a file a source named by a 128-bit hash of the stage and the source, so a second run skips glslang. `BRO_SPIRV_CACHE=0` turns it off. Deleting it is always safe.
 
 ## Pipelines built off the frame thread
 
-The scene's graphics pipelines (the mesh drawer's, the shadow casters') and its async compute pipelines are built on threads of their own, never on the frame thread: a draw is skipped until its pipeline is in, and `scene.pendingWork()` says `pipelines: 3 building` meanwhile. Whatever a frame skips for a pipeline still coming says so (`pipelines: 2 draws skipped last frame`), so `perf.settle` waits for a frame that skips nothing, and the shadow pages, which cache what was drawn into them, are all drawn again once a frame skips nothing. That is a window's policy (`bro`, `bro --drm`): its frames never wait, so the OS never sees it stop answering. Headless renders are read back at once (tests, stills), so there a frame waits for what it draws; `BRO_ASYNC_SHADERS=1` gives headless the window's behaviour (to measure boot frames as a window has them), `0` gives a window the wait.
+The scene's graphics pipelines (the mesh drawer's, the shadow casters') and its async compute pipelines are built on threads of their own, never on the frame thread: a draw is skipped until its pipeline is in, and `scene.pendingWork()` says `pipelines: 3 building` meanwhile. Whatever a frame skips for a pipeline still coming says so (`pipelines: 2 draws skipped last frame`), so `perf.settle` waits for a frame that skips nothing, and the shadow pages, which cache what was drawn into them, are all drawn again once a frame skips nothing. That is a window's policy (`bro`, `bro --drm`): its frames never wait, so the OS never sees it stop answering. Headless renders are read back at once (tests, stills), so there a frame waits for what it draws; `perf.asyncShaders(true)` gives a headless run the window's behaviour (to measure boot frames as a window has them).
 
 ## Vulkan pipeline cache
 

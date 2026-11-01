@@ -19,16 +19,6 @@ namespace bro::scene::vk::stalls {
 constexpr double kSlowRenderMs = 100.0;
 constexpr double kStepMs = 10.0;
 
-/// kSlowRenderMs, or BRO_SLOW_RENDER_MS (read once) to name shorter stalls.
-inline double slowRenderMs() {
-    static const double ms = [] {
-        const char* e = std::getenv("BRO_SLOW_RENDER_MS");
-        const double v = e ? std::atof(e) : 0.0;
-        return v > 0.0 ? v : kSlowRenderMs;
-    }();
-    return ms;
-}
-
 inline double nowMs() {
     using namespace std::chrono;
     return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
@@ -80,7 +70,7 @@ public:
     /// The render is over: logged when it was slow.
     void finish() const {
         const double total = nowMs() - start_;
-        if (total < slowRenderMs()) return;
+        if (total < kSlowRenderMs) return;
         const Counts& c = counts();
         std::string parts;
         for (const Part& p : parts_) {

@@ -1,6 +1,6 @@
 // WebGL's GLSL -> SPIR-V compiler (webgl/glsl_compiler.h): diagnostics and
 // the memo, and the brass SPIR-V passes it can run (RelaxedPrecision
-// promotion, the static compute audit), by option and by environment.
+// promotion, the static compute audit), by option.
 
 #include "webgl/glsl_compiler.h"
 
@@ -21,14 +21,6 @@ void check(bool ok, const std::string& what) {
     if (ok) return;
     ++g_failures;
     std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-}
-
-void setEnv(const char* name, const char* value) {
-#if defined(_WIN32)
-    _putenv_s(name, value ? value : "");
-#else
-    if (value) setenv(name, value, 1); else unsetenv(name);
-#endif
 }
 
 void testCompileAndDiagnostics() {
@@ -99,19 +91,9 @@ void main() {
               compRes.computeAudit.divSqrtOk && compRes.computeAudit.provenSafe,
           "the audit proves uniform barriers, shared bounds and safe division");
     check(compRes.computeAudit.localSize[0] == 64, "the audit reads local_size_x = 64");
-
-    // The same passes by environment.
-    setEnv("BRO_SHADER_RELAXED_PRECISION", "1");
-    setEnv("BRO_AUDIT_COMPUTE_SHADERS", "1");
-    std::string log;
-    const auto envSpirv = compileGlslToSpirv(compSrc, ShaderStage::Compute, &log);
-    setEnv("BRO_SHADER_RELAXED_PRECISION", nullptr);
-    setEnv("BRO_AUDIT_COMPUTE_SHADERS", nullptr);
-    check(!envSpirv.empty(), "compileGlslToSpirv compiles under both variables");
     check(GlslCompiler::lastRelaxedPrecisionStats().promotedCount > 0,
-          "BRO_SHADER_RELAXED_PRECISION=1 records promoted RelaxedPrecision stats");
-    check(GlslCompiler::lastComputeAuditStats().provenSafe,
-          "BRO_AUDIT_COMPUTE_SHADERS=1 records proven-safe compute audit stats");
+          "the promotion's stats are recorded");
+    check(GlslCompiler::lastComputeAuditStats().provenSafe, "the audit's stats are recorded");
 }
 
 } // namespace

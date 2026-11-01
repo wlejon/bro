@@ -250,9 +250,7 @@ bro.app.logFile;
  * executable ran the unit from its ahead-of-time module, docs/apps.md, so
  * the compile times are the module's load) and `overlapMs` (how much of
  * that work ran before `readyAtMs`). Every field is -1 (and `codeCache` '')
- * when nothing compiled ahead: a page with no script, or
- * `BRO_STARTUP_OVERLAP=0`, which keeps the old order (the device, then the
- * page) for comparing the two.
+ * when nothing compiled ahead: a page with no script.
  * @readonly @type {{loadedMs: number, firstFrameMs: number,
  *                   graphics: {windowMs: number, gpuMs: number, totalMs: number,
  *                              startAtMs: number, readyAtMs: number},

@@ -28,7 +28,7 @@
 // resumes from where it stopped instead of decoding its way there).
 //
 // FRAMES AND MEMORY (the budget). An animation whose frames all fit in the
-// animation budget — BRO_IMAGE_ANIM_MB, default 32 MB of RGBA per animation —
+// animation budget — 32 MB of RGBA per animation —
 // decodes every frame once, on the decoder thread that decoded the first, and
 // keeps them. A bigger one is streamed: a sequential decoder
 // (broimage::FrameDecoder, which holds one composed canvas) runs on the image
@@ -48,7 +48,7 @@ namespace bro::render {
 
 struct DecodedImage;
 
-// The per-animation budget in bytes (BRO_IMAGE_ANIM_MB; set for tests).
+// The per-animation budget in bytes (set for tests).
 size_t animationBudgetBytes();
 void setAnimationBudgetBytes(size_t bytes);
 

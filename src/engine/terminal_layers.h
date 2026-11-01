@@ -25,11 +25,6 @@ namespace bro::render { class SkiaRenderer; }
 
 namespace bro::engine {
 
-// BRO_TERMINAL_LAYER=0 draws every <terminal> inline in the page's paint
-// instead, re-recording the page for each terminal frame: the comparison the
-// layer is measured against (docs/terminal-api.js, "Performance").
-bool terminalLayersEnabled();
-
 class TerminalLayers {
 public:
     TerminalLayers();

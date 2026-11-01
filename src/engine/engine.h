@@ -427,7 +427,7 @@ public:
     void releaseHeapOnHeldFrame();
     /// Caps the C heap's arenas (engine_memory.cpp): glibc otherwise makes
     /// up to eight per core as threads contend, each holding its own free
-    /// memory. BRO_MALLOC_ARENAS overrides; 0 leaves glibc's default.
+    /// memory. Four arenas.
     static void configureHeap();
     void dismissSplash() {
         if (splashVisible_) {
@@ -1645,8 +1645,7 @@ private:
     PipelineRun pipelineRun_;
     void installMainLoopWaker();
     void removeMainLoopWaker();
-    bool idleWaitEnabled_ = true;  // BRO_IDLE_WAIT=0 turns it off
-    bool idleHeld_ = false;        // this frame was held by windowIdle
+    bool idleHeld_ = false;       // this frame was held by windowIdle
     // The longest idle wait: what is only polled each frame (fetch and
     // socket completions, ML jobs, audio events) is picked up within it.
     static constexpr double kIdlePollMs = 16.0;

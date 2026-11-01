@@ -419,9 +419,7 @@ void Engine::configureHeap() {
     static bool done = false;
     if (done) return;
     done = true;
-    int arenas = 4;
-    if (const char* env = std::getenv("BRO_MALLOC_ARENAS")) arenas = std::atoi(env);
-    if (arenas > 0) mallopt(M_ARENA_MAX, arenas);
+    mallopt(M_ARENA_MAX, 4);
 #endif
 }
 
