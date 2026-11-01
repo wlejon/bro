@@ -187,6 +187,58 @@ struct StrokeStyle {
 
 enum class PathFillRule : uint8_t { NonZero, EvenOdd };
 
+// How an SVG mask layer turns what is drawn into it into coverage
+// (Renderer::saveLayerMask): its luminance times its alpha (mask-type:
+// luminance, the SVG default) or its alpha alone.
+enum class MaskMode : uint8_t { Luminance, Alpha };
+
+// One primitive of an SVG <filter>, resolved to user space by the SVG paint
+// traversal (layout/svg_filter.cpp). A filter is a list of these in document
+// order; `in`/`in2` name an earlier primitive by index, or one of the
+// standard inputs below. Variable-length data (merge inputs, matrix values,
+// transfer tables) lives in a float span passed beside the
+// list, addressed by (dataOffset, dataLen). Trivially copyable: stored inline
+// in recorded draw commands.
+struct SvgFilterPrimitive {
+    enum class Kind : uint8_t {
+        GaussianBlur,      // p0, p1 = stdDeviation x, y
+        Offset,            // p0, p1 = dx, dy
+        ColorMatrix,       // data = 20 values (row-major 4x5, offsets in 0..1)
+        Blend,             // mode = BlendMode
+        Composite,         // mode = CompositeOp; p0..p3 = k1..k4 (arithmetic)
+        Flood,             // color
+        Merge,             // data = input indices
+        DropShadow,        // p0, p1 = dx, dy; p2, p3 = stdDeviation x, y; color
+        ComponentTransfer, // data = 4 transfer functions (see layout/svg_filter.cpp)
+        Morphology,        // mode = 0 erode, 1 dilate; p0, p1 = radius x, y
+        Turbulence,        // mode = 0 turbulence, 1 fractalNoise; p0, p1 = base
+                           // frequency; p2 = octaves; p3 = seed; p4 = stitch
+        Tile,              // tiles `in`'s subregion over this one
+        DisplacementMap,   // mode = x channel | y channel << 4 (0 R, 1 G, 2 B, 3 A); p0 = scale
+        DiffuseLighting,   // p0 = surfaceScale, p1 = diffuseConstant; color; light below
+        SpecularLighting,  // p0 = surfaceScale, p1 = specularConstant, p2 = exponent; color
+        Passthrough,       // `in`, unchanged (feImage and unknown primitives)
+    };
+    enum CompositeOp : uint8_t { Over, In, Out, Atop, Xor, Arithmetic };
+    static constexpr int16_t kSourceGraphic = -1;
+    static constexpr int16_t kSourceAlpha = -2;
+
+    Kind    kind = Kind::Passthrough;
+    uint8_t mode = 0;
+    bool    linearRGB = true;          // color-interpolation-filters
+    int16_t in = kSourceGraphic;
+    int16_t in2 = kSourceGraphic;
+    float   x = 0, y = 0, w = 0, h = 0;  // primitive subregion, user space
+    float   p[6] = {0, 0, 0, 0, 0, 0};
+    bromath::Color color{0, 0, 0, 1};
+    // Lighting: light kind (0 distant, 1 point, 2 spot) and its parameters
+    // (distant: azimuth, elevation; point: x, y, z; spot: x, y, z, pointsAt
+    // x, y, z, specularExponent, limitingConeAngle).
+    uint8_t lightKind = 0;
+    float   light[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint32_t dataOffset = 0, dataLen = 0;
+};
+
 // How a scaled image is sampled (CSS image-rendering). Smooth is bilinear,
 // mipmapped where the image is drawn smaller than it is (auto, smooth,
 // high-quality); Pixelated is nearest-neighbour (pixelated, crisp-edges).
@@ -353,15 +405,6 @@ public:
                                   float /*sh*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/,
                                   ImageSampling /*sampling*/ = ImageSampling::Smooth) {}
 
-    // Render SVG markup (an entire <svg>...</svg> document or fragment) into
-    // the rect (x, y, w, h). Backends parse via SkSVGDOM. The recording layer
-    // copies the bytes into its arena so replay on another thread is safe.
-    // Default implementation is a no-op so backends without SVG support don't
-    // need to implement this.
-    virtual void drawSvgMarkup(const char* /*data*/, size_t /*len*/,
-                               float /*x*/, float /*y*/,
-                               float /*w*/, float /*h*/) {}
-
     // SVG drawing primitives
     virtual void drawCircle(float cx, float cy, float r,
                             bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
@@ -392,6 +435,22 @@ public:
                                ? stroke.color : bromath::Color{0, 0, 0, 0};
         drawPath(d, f, s, strokeStyle.width);
     }
+
+    // SVG text painted like drawSvgPath: `text` shaped as drawText shapes it,
+    // its glyphs filled and stroked with solid or gradient paint (so text stays
+    // text: glyph caches, not outlines). Default draws a solid fill as text.
+    virtual void drawSvgText(std::string_view text, float x, float y, FontRef font,
+                             TextDirection direction,
+                             const GradientPaint& fill, std::span<const ColorStop> /*fillStops*/,
+                             const GradientPaint& /*stroke*/, std::span<const ColorStop> /*strokeStops*/,
+                             const StrokeStyle& /*strokeStyle*/, std::span<const float> /*dash*/) {
+        if (fill.kind == GradientPaint::Kind::Solid) drawText(text, x, y, font, fill.color, direction);
+    }
+    // The recorded form of drawSvgText: glyphs shaped at record time.
+    virtual void drawSvgTextBlob(const SkTextBlob* /*blob*/, float /*x*/, float /*y*/,
+                                 const GradientPaint& /*fill*/, std::span<const ColorStop> /*fillStops*/,
+                                 const GradientPaint& /*stroke*/, std::span<const ColorStop> /*strokeStops*/,
+                                 const StrokeStyle& /*strokeStyle*/, std::span<const float> /*dash*/) {}
 
     // Intersect the clip with an arbitrary SVG path (for SVG clipPath). Caller
     // must save/restore. Default is a no-op (no clipping) so backends can adopt
@@ -437,6 +496,25 @@ public:
     // the current clip. Default falls back to a plain save() (normal
     // source-over) so backends can adopt incrementally.
     virtual void saveLayerWithBlend(BlendMode mode) { (void)mode; save(); }
+
+    // SVG mask: a layer whose content, on the matching restore(), becomes the
+    // coverage of what is already in the enclosing layer (destination-in),
+    // through `mode`. The SVG traversal draws the masked content into a
+    // saveLayerAlpha(255) group, then the mask's children into this layer
+    // inside that group, then restores both. Default: the mask content is
+    // drawn invisibly and nothing is masked.
+    virtual void saveLayerMask(MaskMode mode) { (void)mode; saveLayerAlpha(0); }
+
+    // SVG filter: a layer passed through the filter graph `prims` (data:
+    // their variable-length parameters) on the matching restore(). (x, y, w,
+    // h) is the filter region in the current user space; the result is
+    // clipped to it. Default: unfiltered.
+    virtual void saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                        std::span<const float> data,
+                                        float x, float y, float w, float h) {
+        (void)prims; (void)data; (void)x; (void)y; (void)w; (void)h;
+        save();
+    }
 
     // CSS backdrop-filter: replace what is already drawn under the box
     // (x, y, w, h), clipped to its border radii, with that content passed

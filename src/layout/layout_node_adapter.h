@@ -551,8 +551,9 @@ private:
         // subtree that was just built.
         elem->takeStructureDirty();
 
-        // SVG is a replaced element — its content is rendered by SkSVGDOM,
-        // not by CSS layout. Don't descend into SVG children.
+        // SVG is a replaced element — its content is painted by the SVG
+        // traversal (layout/svg_paint.h), not by CSS layout. Don't descend
+        // into SVG children.
         if (elem->svgControl()) return;
 
         // <select> and <textarea> are widget-replaced: their children

@@ -31,7 +31,7 @@ cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (add
 
 ### Tier 0: CORE (always on, no flag)
 
-`util · platform · render · svg · layout · dom · canvas · webgl · engine ·
+`util · platform · render · layout · dom · canvas · webgl · engine ·
 headless` + Skia · SDL (Vulkan) · Vulkan 1.3 (headers + loader; MoltenVK on
 macOS) · brokernel (the GPU language: bro's own GPU stages, the presenter's
 included, compiled in process by brass to SPIR-V) · glslang (WebGL2's GLSL → SPIR-V,

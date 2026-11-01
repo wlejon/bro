@@ -62,6 +62,13 @@ public:
     void drawText(std::string_view text, float x, float y,
                   FontRef font, bromath::Color color,
                   TextDirection direction = TextDirection::LTR) override;
+    // Shaping is a query like measureText: the measuring renderer's cache.
+    const ShapedRun* shapeText(std::string_view text, FontRef font,
+                               bool disableLigatures = false,
+                               TextDirection direction = TextDirection::LTR) override {
+        return measureRenderer_ ? measureRenderer_->shapeText(text, font, disableLigatures, direction)
+                                : nullptr;
+    }
     TextMetrics measureText(std::string_view text, FontRef font,
                             TextDirection direction = TextDirection::LTR) override;
     void drawTextEx(std::string_view text, float x, float y,
@@ -82,8 +89,6 @@ public:
     void drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
                           float x, float y, float w, float h,
                           ImageSampling sampling = ImageSampling::Smooth) override;
-    void drawSvgMarkup(const char* data, size_t len,
-                       float x, float y, float w, float h) override;
 
     void drawCircle(float cx, float cy, float r,
                     bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
@@ -96,6 +101,10 @@ public:
     void drawPolyline(std::span<const PointF> points,
                       bromath::Color stroke, float strokeWidth) override;
     void drawSvgPath(std::string_view d, PathFillRule rule,
+                     const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                     const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                     const StrokeStyle& strokeStyle, std::span<const float> dash) override;
+    void drawSvgText(std::string_view text, float x, float y, FontRef font, TextDirection direction,
                      const GradientPaint& fill, std::span<const ColorStop> fillStops,
                      const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
                      const StrokeStyle& strokeStyle, std::span<const float> dash) override;
@@ -118,6 +127,10 @@ public:
     void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
     void saveLayerWithBlend(BlendMode mode) override;
+    void saveLayerMask(MaskMode mode) override;
+    void saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                std::span<const float> data,
+                                float x, float y, float w, float h) override;
     void drawBackdropFilter(std::span<const CssFilterParams> filters,
                             float x, float y, float w, float h, const Radii& r,
                             float opacity) override;

@@ -50,7 +50,8 @@ struct DecodedImage {
     int height = 0;
     // Straight-alpha RGBA8, top-down, width*height*4. For an SVG, the markup
     // rasterized at its intrinsic size (empty when it has none) — what a
-    // canvas or WebGL consumer draws; the painter draws `svgMarkup` instead.
+    // canvas or WebGL consumer draws; the page paints `svgMarkup` through
+    // the SVG traversal instead (layout/svg_image.h).
     std::vector<uint8_t> rgba;
     bool isSvg = false;
     std::string svgMarkup;

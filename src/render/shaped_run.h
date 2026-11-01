@@ -33,6 +33,7 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkFontMgr.h>
 #include <include/core/SkFontStyle.h>
+#include <include/core/SkPath.h>
 #include <include/core/SkPoint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkRefCnt.h>
@@ -179,6 +180,18 @@ public:
     /// origin. Safe to hand to another thread (this is how RecordingRenderer
     /// gets shaping off the raster thread entirely). Returns null when empty.
     sk_sp<SkTextBlob> makeBlob(Spacing spacing = {}) const;
+
+    /// The glyph outlines, one entry per cluster in visual order: the
+    /// cluster's glyphs as one path relative to its own pen position, with
+    /// that pen x and its advance. Text painted as geometry (SVG text with a
+    /// stroke or a paint server, glyphs placed along a textPath) goes through
+    /// this; glyphs with no outline (colour bitmaps) contribute nothing.
+    struct ClusterOutline {
+        SkPath path;
+        float  x = 0.0f;
+        float  advance = 0.0f;
+    };
+    std::vector<ClusterOutline> clusterOutlines(Spacing spacing = {}) const;
 
     // Write access for the shaping code only. Everything a shaping backend
     // needs to fill in, and nothing a consumer can reach — glyph arrays stay

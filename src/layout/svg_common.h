@@ -7,6 +7,8 @@
 #include <include/core/SkMatrix.h>
 #include <include/core/SkRect.h>
 
+#include <bromath/color.h>
+
 namespace bro::dom { class Element; }
 
 // Shared SVG parsing helpers used by both the geometry path
@@ -56,5 +58,42 @@ std::string shapeToPathData(const dom::Element* el);
 // Tight fill bounding box of a path 'd' string (geometry only, no stroke).
 // Returns false when the path has no points.
 bool pathBounds(const std::string& d, SkRect& out);
+
+// A computed-style value, or `fallback` (the SVG property's initial value)
+// when the cascade left it unset. Inside a <use> instance (UseInstanceScope)
+// an inherited property the instantiated element does not set itself comes
+// from the <use>, as the instance's shadow tree inherits from it rather than
+// from where the template sits (usually <defs>). "Sets itself" is read as its
+// value differing from its DOM parent's.
+std::string styleOr(const dom::Element* el, const char* prop, const char* fallback);
+float styleFloat(const dom::Element* el, const char* prop, float fallback);
+
+// While alive, `target`'s subtree paints as an instance of `use`. Scopes nest
+// (a use inside a symbol); the innermost applies first. Per thread.
+class UseInstanceScope {
+public:
+    UseInstanceScope(const dom::Element* target, const dom::Element* use);
+    ~UseInstanceScope();
+    UseInstanceScope(const UseInstanceScope&) = delete;
+    UseInstanceScope& operator=(const UseInstanceScope&) = delete;
+};
+
+// A color keyword/function, honoring `currentColor`. False for none or
+// anything unparsable.
+bool resolveColor(const std::string& v, const bromath::Color& current, bromath::Color& out);
+
+// The element's `color`, the value currentColor names.
+bromath::Color currentColorOf(const dom::Element* el);
+
+// The id a `url(#id)` reference names (quotes and whitespace tolerated); ""
+// when `v` is not one. `rest` (optional) receives what follows the `)`, the
+// fallback a paint reference may carry.
+std::string urlRef(const std::string& v, std::string* rest = nullptr);
+
+// The element's href (SVG 2) or xlink:href.
+const std::string& hrefOf(const dom::Element* el);
+
+// The element an `href="#id"` names, through `root`'s ids; null otherwise.
+const dom::Element* hrefTarget(const dom::Element* el, const dom::Element* root);
 
 } // namespace bro::layout::svgcommon

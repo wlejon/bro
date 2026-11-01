@@ -1,6 +1,6 @@
 #include "render/image_codecs.h"
 
-#include "svg/svg_renderer.h"
+#include "render/svg_image.h"
 
 #if BRO_WITH_WEBP
 #include "render/webp_image.h"
@@ -22,12 +22,12 @@ namespace {
 // is not an image to broimage; the image store keeps such markup for the
 // painter, which draws vectors at whatever size the box has.
 bool svgSniff(const uint8_t* d, std::size_t n) {
-    return svg::looksLikeSvg(reinterpret_cast<const char*>(d), n);
+    return looksLikeSvg(reinterpret_cast<const char*>(d), n);
 }
 
 bool svgProbe(const uint8_t* d, std::size_t n, int& w, int& h, int& channels) {
     float fw = 0, fh = 0;
-    svg::svgIntrinsicSize(reinterpret_cast<const char*>(d), n, fw, fh);
+    svgIntrinsicSize(reinterpret_cast<const char*>(d), n, fw, fh);
     if (fw < 1.0f || fh < 1.0f) return false;
     w = static_cast<int>(fw);
     h = static_cast<int>(fh);
@@ -38,7 +38,7 @@ bool svgProbe(const uint8_t* d, std::size_t n, int& w, int& h, int& channels) {
 bool svgDecode(const uint8_t* d, std::size_t n, broimage::Image& out, std::string* why) {
     int w = 0, h = 0;
     std::vector<uint8_t> rgba;
-    if (!svg::rasterizeSvgMarkup(reinterpret_cast<const char*>(d), n, 0, 0, w, h, rgba) || rgba.empty()) {
+    if (!rasterizeSvgMarkup(reinterpret_cast<const char*>(d), n, 0, 0, w, h, rgba) || rgba.empty()) {
         if (why) *why = "the SVG has no intrinsic size or did not parse";
         return false;
     }

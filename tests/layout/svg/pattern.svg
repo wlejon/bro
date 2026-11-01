@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120">
+  <defs>
+    <pattern id="checker" patternUnits="userSpaceOnUse" width="16" height="16">
+      <rect width="8" height="8" fill="#303030"/>
+      <rect x="8" y="8" width="8" height="8" fill="#303030"/>
+    </pattern>
+    <pattern id="dots" width="0.25" height="0.25">
+      <circle cx="6" cy="6" r="4" fill="#e04040"/>
+    </pattern>
+    <pattern id="stripes" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
+      <rect width="5" height="10" fill="#2060c0"/>
+    </pattern>
+    <pattern id="vb" patternUnits="userSpaceOnUse" width="20" height="20" viewBox="0 0 10 10">
+      <path d="M0 10 L5 0 L10 10 Z" fill="#40a040"/>
+    </pattern>
+  </defs>
+  <rect x="4" y="4" width="72" height="52" fill="url(#checker)"/>
+  <rect x="84" y="4" width="72" height="52" fill="url(#dots)" stroke="#000" stroke-width="1"/>
+  <circle cx="40" cy="88" r="28" fill="url(#stripes)"/>
+  <rect x="84" y="62" width="72" height="54" fill="none" stroke="url(#vb)" stroke-width="12"/>
+</svg>

@@ -56,14 +56,14 @@ bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
     std::string tag = lower(el->tagName());
     if (isNonRendered(tag)) return false;
 
-    if (tag == "text" || tag == "tspan") {
+    if (tag == "text" || tag == "tspan" || tag == "textpath") {
         if (!meas) return false;   // no font backend → no measurable box
         SkRect tb;
         if (!svgTextElementBounds(el, *meas, tb)) return false;
         out.joinRect(tb);
         return true;
     }
-    if (tag == "rect" || tag == "image") {
+    if (tag == "rect" || tag == "image" || tag == "foreignobject") {
         float w = attrFloat(el, "width"), h = attrFloat(el, "height");
         if (w < 0 || h < 0) return false;
         float x = attrFloat(el, "x"), y = attrFloat(el, "y");

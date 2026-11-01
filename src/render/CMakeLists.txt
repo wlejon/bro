@@ -79,6 +79,7 @@ add_library(bro_render STATIC
     image_store.cpp
     image_source.cpp
     image_codecs.cpp
+    svg_image.cpp
     animated_image.cpp
     software_cursor.cpp
     remote_picture.cpp
@@ -93,7 +94,7 @@ if(WIN32)
 endif()
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_render PRIVATE ${RENDER_GEN_DIR})
-target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi broimage::broimage Vulkan::Vulkan)
+target_link_libraries(bro_render PUBLIC bro_platform skia skia_shaper bro_util bro_bidi broimage::broimage Vulkan::Vulkan)
 target_link_libraries(bro_render PRIVATE brokernel)
 
 # WebP decoding. Its own small library rather than a part of bro_render,

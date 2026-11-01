@@ -3,6 +3,7 @@
 #include "layout/box.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
+#include "layout/svg_paint.h"
 
 namespace bro::dom { class Element; }
 
@@ -16,7 +17,8 @@ public:
     void draw(render::Renderer* renderer,
               dom::Element* elem,
               const htmlayout::layout::LayoutBox& box,
-              float offsetX, float offsetY);
+              float offsetX, float offsetY,
+              const SvgImageResolver& images);
 
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }

@@ -11,6 +11,7 @@
 #include "dom/element_geometry.h"
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
+#include "layout/svg_image.h"
 #include "engine/overflow.h"
 #include "engine/overlay.h"
 #include "engine/replaced_elements.h"
@@ -162,6 +163,9 @@ void Engine::construct(const EngineConfig& config) {
     editUndo_ = std::make_unique<DomUndoHistories>();
     // Before the engine's threads exist, so they share a few arenas.
     configureHeap();
+    // Before any image decodes: rasterizing an SVG image paints it with the
+    // layout's SVG traversal.
+    layout::installSvgImagePainter();
     // Under DRM bro is the display server: no desktop window system, and so
     // no SDL video. Chosen before anything asks the platform layer a question.
     if (displayMode_ == DisplayMode::Drm)

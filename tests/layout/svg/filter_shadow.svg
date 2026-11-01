@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120">
+  <defs>
+    <filter id="ds" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="4" dy="4" stdDeviation="3" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="morph">
+      <feMorphology operator="dilate" radius="2"/>
+    </filter>
+    <filter id="ct" color-interpolation-filters="sRGB">
+      <feComponentTransfer>
+        <feFuncR type="table" tableValues="1 0"/>
+        <feFuncG type="linear" slope="0.5" intercept="0.25"/>
+        <feFuncB type="gamma" amplitude="1" exponent="0.5" offset="0"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
+  <rect x="14" y="14" width="56" height="40" rx="6" fill="#4070e0" filter="url(#ds)"/>
+  <path d="M100 16 L140 16 L120 52 Z" fill="none" stroke="#c03030" stroke-width="2" filter="url(#morph)"/>
+  <rect x="14" y="70" width="132" height="40" fill="#60c0a0" filter="url(#ct)"/>
+</svg>

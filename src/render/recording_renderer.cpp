@@ -158,16 +158,6 @@ void RecordingRenderer::drawImage(const void* data, size_t len,
     buffer_->append(cmd);
 }
 
-void RecordingRenderer::drawSvgMarkup(const char* data, size_t len,
-                                      float x, float y, float w, float h) {
-    if (!buffer_) { measureRenderer_->drawSvgMarkup(data, len, x, y, w, h); return; }
-    Cmd_DrawSvgMarkup cmd{};
-    cmd.dataOffset = buffer_->pushBytes(data, len);
-    cmd.dataLen = static_cast<uint32_t>(len);
-    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
-    buffer_->append(cmd);
-}
-
 void RecordingRenderer::drawPixelsRGBA(const uint8_t* rgba,
                                        int srcW, int srcH, int stride,
                                        float x, float y, float w, float h) {
@@ -275,6 +265,40 @@ void RecordingRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
     buffer_->append(cmd);
 }
 
+void RecordingRenderer::drawSvgText(std::string_view text, float x, float y, FontRef font,
+                                    TextDirection direction,
+                                    const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                    const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                    const StrokeStyle& strokeStyle, std::span<const float> dash) {
+    if (!buffer_) {
+        measureRenderer_->drawSvgText(text, x, y, font, direction, fill, fillStops, stroke, strokeStops,
+                                      strokeStyle, dash);
+        return;
+    }
+    // Shaped at record time, as drawTextEx does.
+    const ShapedRun* run = measureRenderer_->shapeText(text, font, false, direction);
+    if (!run) return;
+    sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{});
+    if (!blob) return;
+    Cmd_DrawSvgText cmd{};
+    cmd.blobIndex = buffer_->pushTextBlob(std::move(blob));
+    auto [toff, tlen] = buffer_->pushString(text);
+    cmd.textOffset = toff; cmd.textLen = tlen;
+    auto [ffoff, fflen] = buffer_->pushString(font.family);
+    cmd.familyOffset = ffoff; cmd.familyLen = fflen;
+    cmd.fontSize = font.size; cmd.fontWeight = font.weight; cmd.fontItalic = font.italic;
+    cmd.direction = direction;
+    auto [foff, fcnt] = buffer_->pushSpan(fillStops);
+    cmd.fillStopsOffset = foff; cmd.fillStopsLen = fcnt;
+    auto [soff, scnt] = buffer_->pushSpan(strokeStops);
+    cmd.strokeStopsOffset = soff; cmd.strokeStopsLen = scnt;
+    auto [doff, dcnt] = buffer_->pushSpan(dash);
+    cmd.dashArrOffset = doff; cmd.dashArrLen = dcnt;
+    cmd.x = x; cmd.y = y;
+    cmd.fill = fill; cmd.stroke = stroke; cmd.strokeStyle = strokeStyle;
+    buffer_->append(cmd);
+}
+
 void RecordingRenderer::clipSvgPath(std::string_view d, PathFillRule rule) {
     if (!buffer_) {
         measureRenderer_->clipSvgPath(d, rule);
@@ -366,6 +390,24 @@ void RecordingRenderer::saveLayerWithBlend(BlendMode mode) {
     if (!buffer_) { measureRenderer_->saveLayerWithBlend(mode); return; }
     buffer_->noteLayer();
     buffer_->append(Cmd_SaveLayerWithBlend{mode});
+}
+void RecordingRenderer::saveLayerMask(MaskMode mode) {
+    if (!buffer_) { measureRenderer_->saveLayerMask(mode); return; }
+    buffer_->noteLayer();
+    buffer_->append(Cmd_SaveLayerMask{mode});
+}
+void RecordingRenderer::saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                               std::span<const float> data,
+                                               float x, float y, float w, float h) {
+    if (!buffer_) { measureRenderer_->saveLayerWithSvgFilter(prims, data, x, y, w, h); return; }
+    Cmd_SaveLayerWithSvgFilter cmd{};
+    auto [po, pn] = buffer_->pushSpan(prims);
+    auto [dof, dn] = buffer_->pushSpan(data);
+    cmd.primsOffset = po; cmd.primsLen = pn;
+    cmd.dataOffset = dof; cmd.dataLen = dn;
+    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    buffer_->noteLayer();
+    buffer_->append(cmd);
 }
 void RecordingRenderer::setClip(float x, float y, float w, float h) {
     if (!buffer_) { measureRenderer_->setClip(x, y, w, h); return; }

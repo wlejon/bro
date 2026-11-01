@@ -1,6 +1,6 @@
 // <img src="*.svg"> honours the document's intrinsic size and the CSS box.
 //
-// Real desktop icons the rasterizer (src/svg) used to draw wrong, each
+// Real desktop icons the old SkSVGDOM rasterizer drew wrong, each
 // synthesized here in the same shape:
 //  - htop: width/height in mm (+ viewBox) — a physical unit is CSS px at
 //    96/in, and Skia's root, left to itself, laid the content out at its own

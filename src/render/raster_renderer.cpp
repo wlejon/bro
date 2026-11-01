@@ -4,7 +4,6 @@
 #include "render/font_generation.h"
 #include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
-#include "svg/svg_renderer.h"
 
 #include <include/core/SkBitmap.h>
 #include <include/core/SkM44.h>
@@ -359,10 +358,21 @@ void RasterRenderer::drawSharedPixels(const SharedPixels& px, float sx, float sy
                               /*mipmaps=*/true);
 }
 
-void RasterRenderer::drawSvgMarkup(const char* data, size_t len,
-                                   float x, float y, float w, float h) {
+void RasterRenderer::saveLayerMask(MaskMode mode) {
     if (!canvas_) return;
-    bro::svg::renderSvgMarkupToCanvas(canvas_, data, len, x, y, w, h);
+    SkPaint paint;
+    SetMaskLayerPaint(mode, paint);
+    canvas_->saveLayer(nullptr, &paint);
+}
+
+void RasterRenderer::saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                            std::span<const float> data,
+                                            float x, float y, float w, float h) {
+    if (!canvas_) return;
+    const SkRect region = SkRect::MakeXYWH(x, y, w, h);
+    SkPaint paint;
+    paint.setImageFilter(BuildSvgFilterGraph(prims, data, region));
+    canvas_->saveLayer(SkCanvas::SaveLayerRec(&region, &paint));
 }
 
 void RasterRenderer::drawCircle(float cx, float cy, float r,
@@ -700,24 +710,21 @@ static sk_sp<SkShader> makeSvgShader(const GradientPaint& gp, std::span<const Co
     return nullptr;
 }
 
-void RasterRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
-                                 const GradientPaint& fill, std::span<const ColorStop> fillStops,
-                                 const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
-                                 const StrokeStyle& ss, std::span<const float> dash) {
-    if (!canvas_ || d.empty()) return;
-    auto pathOpt = SkParsePath::FromSVGString(std::string(d).c_str());
-    if (!pathOpt) return;
-    SkPath path = *pathOpt;
-    path.setFillType(rule == PathFillRule::EvenOdd ? SkPathFillType::kEvenOdd
-                                                   : SkPathFillType::kWinding);
+// The fill pass, then the stroke pass, of an SVG shape or text: `draw` draws
+// the geometry with each paint.
+template <typename Draw>
+static void paintSvgPasses(const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                           const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                           const StrokeStyle& ss, std::span<const float> dash,
+                           SkColor fillColor, SkColor strokeColor, Draw&& draw) {
     if (fill.kind != GradientPaint::Kind::None) {
         SkPaint paint;
         paint.setStyle(SkPaint::kFill_Style);
         paint.setAntiAlias(true);
         if (fill.kind == GradientPaint::Kind::Solid) {
-            if (fill.color.a > 0) { paint.setColor(toSkColor(fill.color)); canvas_->drawPath(path, paint); }
+            if (fill.color.a > 0) { paint.setColor(fillColor); draw(paint); }
         } else if (auto sh = makeSvgShader(fill, fillStops)) {
-            paint.setShader(sh); canvas_->drawPath(path, paint);
+            paint.setShader(sh); draw(paint);
         }
     }
     if (stroke.kind != GradientPaint::Kind::None && ss.width > 0) {
@@ -736,11 +743,46 @@ void RasterRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
             paint.setPathEffect(SkDashPathEffect::Make(SkSpan(dash.data(), dash.size()), ss.dashOffset));
         }
         if (stroke.kind == GradientPaint::Kind::Solid) {
-            if (stroke.color.a > 0) { paint.setColor(toSkColor(stroke.color)); canvas_->drawPath(path, paint); }
+            if (stroke.color.a > 0) { paint.setColor(strokeColor); draw(paint); }
         } else if (auto sh = makeSvgShader(stroke, strokeStops)) {
-            paint.setShader(sh); canvas_->drawPath(path, paint);
+            paint.setShader(sh); draw(paint);
         }
     }
+}
+
+void RasterRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
+                                 const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                 const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                 const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || d.empty()) return;
+    auto pathOpt = SkParsePath::FromSVGString(std::string(d).c_str());
+    if (!pathOpt) return;
+    SkPath path = *pathOpt;
+    path.setFillType(rule == PathFillRule::EvenOdd ? SkPathFillType::kEvenOdd
+                                                   : SkPathFillType::kWinding);
+    paintSvgPasses(fill, fillStops, stroke, strokeStops, ss, dash, toSkColor(fill.color),
+                   toSkColor(stroke.color), [&](const SkPaint& p) { canvas_->drawPath(path, p); });
+}
+
+void RasterRenderer::drawSvgText(std::string_view text, float x, float y, FontRef font,
+                                 TextDirection direction,
+                                 const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                 const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                 const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || text.empty()) return;
+    const ShapedRun* run = shapeText(text, font, false, direction);
+    if (!run) return;
+    sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{});
+    drawSvgTextBlob(blob.get(), x, y, fill, fillStops, stroke, strokeStops, ss, dash);
+}
+
+void RasterRenderer::drawSvgTextBlob(const SkTextBlob* blob, float x, float y,
+                                     const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                     const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                     const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || !blob) return;
+    paintSvgPasses(fill, fillStops, stroke, strokeStops, ss, dash, toSkColor(fill.color),
+                   toSkColor(stroke.color), [&](const SkPaint& p) { canvas_->drawTextBlob(blob, x, y, p); });
 }
 
 void RasterRenderer::clipSvgPath(std::string_view d, PathFillRule rule) {

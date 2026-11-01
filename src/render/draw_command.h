@@ -52,7 +52,6 @@ struct Cmd_DrawText {
 struct Cmd_DrawLine        { float x1, y1, x2, y2; bromath::Color color; float thickness; };
 struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; uint64_t imageId; };  // arena: encoded bytes
 struct Cmd_DrawPixelsRGBA  { uint32_t pixelsOffset; int srcW, srcH, stride; float x, y, w, h; }; // arena: rgba8
-struct Cmd_DrawSvgMarkup   { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: utf8 markup
 // Shared pixels by reference: `index` names an entry of the buffer's
 // SharedPixels table (CommandBuffer::pushSharedPixels), which keeps them alive.
 struct Cmd_DrawSharedPixels { uint32_t index; float sx, sy, sw, sh, x, y, w, h; ImageSampling sampling; };
@@ -73,6 +72,24 @@ struct Cmd_DrawSvgPath {
     StrokeStyle strokeStyle;
     PathFillRule rule;
 };
+// SVG text with paint-server fill/stroke: a pre-shaped blob (the string and
+// font are kept for comparing two recordings), stops and dash in the arena.
+struct Cmd_DrawSvgText {
+    uint32_t blobIndex;
+    uint32_t textOffset, textLen;               // arena: char[]
+    uint32_t familyOffset, familyLen;           // arena: char[]
+    float fontSize;
+    int fontWeight;
+    bool fontItalic;
+    TextDirection direction;
+    uint32_t fillStopsOffset, fillStopsLen;     // arena: ColorStop[]
+    uint32_t strokeStopsOffset, strokeStopsLen; // arena: ColorStop[]
+    uint32_t dashArrOffset, dashArrLen;         // arena: float[]
+    float x, y;
+    GradientPaint fill;
+    GradientPaint stroke;
+    StrokeStyle strokeStyle;
+};
 struct Cmd_ClipSvgPath { uint32_t pathOffset, pathLen; PathFillRule rule; }; // arena: char[]
 
 struct Cmd_Save              {};
@@ -80,6 +97,9 @@ struct Cmd_Restore           {};
 struct Cmd_SaveLayerAlpha    { uint8_t alpha; };
 struct Cmd_SaveLayerWithFilter { uint32_t filtersOffset, filtersLen; float x, y, w, h; }; // arena: CssFilterParams[]
 struct Cmd_SaveLayerWithBlend  { BlendMode mode; };
+struct Cmd_SaveLayerMask       { MaskMode mode; };
+// arena: SvgFilterPrimitive[] and float[] (their data)
+struct Cmd_SaveLayerWithSvgFilter { uint32_t primsOffset, primsLen, dataOffset, dataLen; float x, y, w, h; };
 struct Cmd_DrawBackdropFilter  { uint32_t filtersOffset, filtersLen; float x, y, w, h; Radii r; float opacity; }; // arena: CssFilterParams[]
 struct Cmd_Translate         { float dx, dy; };
 struct Cmd_Scale             { float sx, sy; };
@@ -146,7 +166,6 @@ using DrawCommand = std::variant<
     Cmd_DrawLine,
     Cmd_DrawImage,
     Cmd_DrawPixelsRGBA,
-    Cmd_DrawSvgMarkup,
     Cmd_DrawSharedPixels,
     Cmd_DrawCircle,
     Cmd_DrawEllipse,
@@ -154,12 +173,15 @@ using DrawCommand = std::variant<
     Cmd_DrawPolygon,
     Cmd_DrawPolyline,
     Cmd_DrawSvgPath,
+    Cmd_DrawSvgText,
     Cmd_ClipSvgPath,
     Cmd_Save,
     Cmd_Restore,
     Cmd_SaveLayerAlpha,
     Cmd_SaveLayerWithFilter,
     Cmd_SaveLayerWithBlend,
+    Cmd_SaveLayerMask,
+    Cmd_SaveLayerWithSvgFilter,
     Cmd_DrawBackdropFilter,
     Cmd_Translate,
     Cmd_Scale,

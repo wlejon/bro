@@ -5,7 +5,6 @@
 #include "render/shadow_ninepatch.h"
 #include "render/shared_pixels_image.h"
 #include "render/system_font_mgr.h"
-#include "svg/svg_renderer.h"
 #include "util/log.h"
 
 #include <cstring>
@@ -689,10 +688,23 @@ void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int s
                            imageSamplingOptions(ImageSampling::Smooth, /*mipmaps=*/false));
 }
 
-void SkiaRenderer::drawSvgMarkup(const char* data, size_t len,
-                                 float x, float y, float w, float h) {
+void SkiaRenderer::saveLayerMask(MaskMode mode) {
     if (!canvas_) return;
-    bro::svg::renderSvgMarkupToCanvas(canvas_, data, len, x, y, w, h);
+    SkPaint paint;
+    SetMaskLayerPaint(mode, paint);
+    canvas_->saveLayer(nullptr, &paint);
+}
+
+void SkiaRenderer::saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                          std::span<const float> data,
+                                          float x, float y, float w, float h) {
+    if (!canvas_) return;
+    // The layer bounds are the filter region: the source graphic is clipped
+    // to it, and the graph crops its output to it.
+    const SkRect region = SkRect::MakeXYWH(x, y, w, h);
+    SkPaint paint;
+    paint.setImageFilter(BuildSvgFilterGraph(prims, data, region));
+    canvas_->saveLayer(SkCanvas::SaveLayerRec(&region, &paint));
 }
 
 void SkiaRenderer::setClip(float x, float y, float w, float h) {

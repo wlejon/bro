@@ -8,6 +8,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
+#include "layout/svg_image.h"
 #include "layout/el_video.h"
 #include "layout/el_terminal.h"
 #include "layout/el_remote_view.h"
@@ -539,7 +540,11 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
         // and box: every change to those stamps it, so it is cached like any
         // other box. Draw the SVG control, then return (no child traversal)
         if (visible) {
-            elem->svgControl()->draw(renderer_, elem, box, offsetX, offsetY);
+            // An <image> inside it decodes through the same store as <img>.
+            const SvgImageResolver images = [this, elem](const std::string& href) {
+                return paintImage(href, true, elem);
+            };
+            elem->svgControl()->draw(renderer_, elem, box, offsetX, offsetY, images);
         }
         if (needsClip) {
             renderer_->restore();
@@ -777,9 +782,8 @@ void DrawTraversal::paintElement(dom::Element* elem, float offsetX, float offset
 
                         if (needClip) { renderer_->save(); renderer_->setClip(ix, iy, iw, ih); }
                         if (pic->isSvg) {
-                            // Recorded; replayer re-parses and draws the SVG markup at the fitted rect.
-                            renderer_->drawSvgMarkup(pic->svgMarkup.data(), pic->svgMarkup.size(),
-                                                     dx, dy, dw, dh);
+                            // Painted by the SVG traversal at the fitted rect.
+                            paintSvgImage(renderer_, *pic, dx, dy, dw, dh);
                         } else {
                             // By reference: the recording keeps the decoded
                             // pixels alive, and a backend uploads them once.

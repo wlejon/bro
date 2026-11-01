@@ -4,8 +4,12 @@
 #include "dom/text_node.h"
 #include "render/renderer.h"
 
+#include <include/core/SkMatrix.h>
+#include <include/utils/SkParsePath.h>
+
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
@@ -14,26 +18,24 @@ namespace bro::layout {
 using svgcommon::lower;
 using svgcommon::attrOf;
 using svgcommon::attrFloat;
+using svgcommon::styleOr;
+using svgcommon::styleFloat;
+
+SvgPathMeasure::SvgPathMeasure(const std::string& d) {
+    auto path = SkParsePath::FromSVGString(d.c_str());
+    if (!path) return;
+    SkContourMeasureIter it(*path, /*forceClosed=*/false);
+    measure_ = it.next();
+}
+
+float SvgPathMeasure::length() const { return measure_ ? measure_->length() : 0.0f; }
+
+bool SvgPathMeasure::place(float dist, SkPoint& pos, SkVector& tangent) const {
+    if (!measure_ || dist < 0.0f || dist > measure_->length()) return false;
+    return measure_->getPosTan(dist, &pos, &tangent);
+}
 
 namespace {
-
-// ---- computed-style accessors ----------------------------------------------
-
-std::string styleOr(const dom::Element* el, const char* prop, const char* fallback) {
-    const auto& cs = el->computedStyle();
-    auto it = cs.find(prop);
-    if (it != cs.end() && !it->second.empty()) return it->second;
-    return fallback;
-}
-
-float styleFloat(const dom::Element* el, const char* prop, float fallback) {
-    const auto& cs = el->computedStyle();
-    auto it = cs.find(prop);
-    if (it == cs.end() || it->second.empty()) return fallback;
-    char* end = nullptr;
-    float f = std::strtof(it->second.c_str(), &end);
-    return end == it->second.c_str() ? fallback : f;
-}
 
 int parseWeight(const std::string& w) {
     if (w == "bold") return 700;
@@ -137,7 +139,53 @@ struct WalkState {
     float cx = 0, cy = 0;
     bool prevSpace = true;   // trims leading whitespace
     bool any = false;
+    const std::string* pathD = nullptr;   // inside a <textPath>
 };
+
+// The outermost <svg> around `el`: the scope its href ids resolve in.
+const dom::Element* svgScopeOf(const dom::Element* el) {
+    const dom::Element* scope = el;
+    for (const dom::Element* p = el; p; p = p->parentElement())
+        if (lower(p->tagName()) == "svg") scope = p;
+    return scope;
+}
+
+void walk(const dom::Element* el, bool isRoot, WalkState& st);
+void startChunk(WalkState& st, int anchor, render::TextDirection dir);
+
+// <textPath>: its text is laid along the referenced path (or its own `path`),
+// starting at startOffset, as a chunk of its own. Without a usable path its
+// text is not rendered.
+void walkTextPath(const dom::Element* tp, WalkState& st) {
+    std::string d;
+    if (const dom::Element* target = svgcommon::hrefTarget(tp, svgScopeOf(tp)))
+        d = svgcommon::shapeToPathData(target);
+    if (d.empty()) d = attrOf(tp, "path");
+    if (d.empty()) return;
+    SvgPathMeasure measure(d);
+    if (!measure.valid()) return;
+
+    float start = 0.0f;
+    const std::string& so = attrOf(tp, "startOffset");
+    if (!so.empty()) {
+        char* end = nullptr;
+        start = std::strtof(so.c_str(), &end);
+        if (end != so.c_str() && *end == '%') start = start / 100.0f * measure.length();
+    }
+    const float saveX = st.cx, saveY = st.cy;
+    const std::string* savePath = st.pathD;
+    st.cx = start;
+    st.cy = 0.0f;
+    st.pathD = &d;
+    startChunk(st, anchorMode(tp), baseDirection(tp));
+    walk(tp, /*isRoot=*/false, st);
+    // Text after the path continues from where the text before it ended,
+    // in a chunk of its own.
+    st.pathD = savePath;
+    st.cx = saveX;
+    st.cy = saveY;
+    startChunk(st, anchorMode(tp->parentElement() ? tp->parentElement() : tp), baseDirection(tp));
+}
 
 void startChunk(WalkState& st, int anchor, render::TextDirection dir) {
     st.chunks.push_back(Chunk{st.runs.size(), anchor, dir});
@@ -181,11 +229,14 @@ void walk(const dom::Element* el, bool isRoot, WalkState& st) {
             run.styleEl = el;
             run.font = font;
             run.direction = dir;
+            if (st.pathD) run.pathD = *st.pathD;
             st.runs.push_back(std::move(run));
             st.cx += w;
         } else if (child->nodeType() == dom::NodeType::Element) {
             auto* ce = static_cast<dom::Element*>(child);
-            if (isTextContainer(lower(ce->tagName()))) walk(ce, false, st);
+            const std::string ctag = lower(ce->tagName());
+            if (isTextContainer(ctag)) walk(ce, false, st);
+            else if (ctag == "textpath" && !st.pathD) walkTextPath(ce, st);
         }
     }
 }
@@ -333,6 +384,30 @@ bool svgTextElementBounds(const dom::Element* el, SvgTextMeasurer& m, SkRect& ou
         if (!wantAll && !belongsTo(run.styleEl, el, root)) continue;
         float rl = run.x, rt = run.baseline - run.ascent;
         float rr = run.x + run.width, rb = run.baseline + run.descent;
+        if (!run.pathD.empty()) {
+            // On a path: the union of the run's box swept along it, sampled
+            // every half em (the glyphs placed there are about that wide).
+            SvgPathMeasure pm(run.pathD);
+            const float step = std::max(1.0f, run.font.size * 0.5f);
+            const int n = std::max(1, static_cast<int>(std::ceil(run.width / step)));
+            bool placed = false;
+            float pl = 0, pt = 0, pr = 0, pb = 0;
+            for (int k = 0; k <= n; ++k) {
+                const float along = run.x + run.width * static_cast<float>(k) / static_cast<float>(n);
+                SkPoint pos;
+                SkVector tan;
+                if (!pm.place(along, pos, tan)) continue;
+                const SkVector nrm{-tan.fY, tan.fX};
+                for (float across : {run.baseline - run.ascent, run.baseline + run.descent}) {
+                    const float px = pos.fX + nrm.fX * across, py = pos.fY + nrm.fY * across;
+                    if (!placed) { pl = pr = px; pt = pb = py; placed = true; }
+                    pl = std::min(pl, px); pr = std::max(pr, px);
+                    pt = std::min(pt, py); pb = std::max(pb, py);
+                }
+            }
+            if (!placed) continue;
+            rl = pl; rt = pt; rr = pr; rb = pb;
+        }
         if (!any) { l = rl; t = rt; r = rr; b = rb; any = true; }
         else {
             l = std::min(l, rl); t = std::min(t, rt);

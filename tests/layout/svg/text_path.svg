@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="120" viewBox="0 0 160 120">
+  <defs>
+    <path id="curve" d="M 10 90 Q 80 0 150 90"/>
+  </defs>
+  <use href="#curve" fill="none" stroke="#c0c0c0" stroke-width="1"/>
+  <text font-family="Arial" font-size="17" fill="#204080">
+    <textPath xlink:href="#curve" startOffset="6">Along the curve path</textPath>
+  </text>
+  <text x="10" y="112" font-family="Arial" font-size="14" fill="#802020">plain baseline</text>
+</svg>

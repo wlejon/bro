@@ -59,8 +59,6 @@ public:
     void drawSharedPixels(const SharedPixels& px, float sx, float sy, float sw, float sh,
                           float x, float y, float w, float h,
                           ImageSampling sampling = ImageSampling::Smooth) override;
-    void drawSvgMarkup(const char* data, size_t len,
-                       float x, float y, float w, float h) override;
 
     void drawCircle(float cx, float cy, float r,
                     bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
@@ -76,6 +74,14 @@ public:
                      const GradientPaint& fill, std::span<const ColorStop> fillStops,
                      const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
                      const StrokeStyle& strokeStyle, std::span<const float> dash) override;
+    void drawSvgText(std::string_view text, float x, float y, FontRef font, TextDirection direction,
+                     const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                     const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                     const StrokeStyle& strokeStyle, std::span<const float> dash) override;
+    void drawSvgTextBlob(const SkTextBlob* blob, float x, float y,
+                         const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                         const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                         const StrokeStyle& strokeStyle, std::span<const float> dash) override;
     void clipSvgPath(std::string_view d, PathFillRule rule) override;
 
     void drawBoxShadow(float x, float y, float w, float h,
@@ -95,6 +101,10 @@ public:
     void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
     void saveLayerWithBlend(BlendMode mode) override;
+    void saveLayerMask(MaskMode mode) override;
+    void saveLayerWithSvgFilter(std::span<const SvgFilterPrimitive> prims,
+                                std::span<const float> data,
+                                float x, float y, float w, float h) override;
     void drawBackdropFilter(std::span<const CssFilterParams> filters,
                             float x, float y, float w, float h, const Radii& r,
                             float opacity) override;

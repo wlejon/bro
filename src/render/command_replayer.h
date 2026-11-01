@@ -61,11 +61,14 @@ private:
         std::vector<PointF> points;                       // SetClipPolygon
     };
     struct OpenFrame {
-        enum SaveKind { Plain, LayerAlpha, LayerFilter, LayerBlend } saveKind = Plain;
+        enum SaveKind { Plain, LayerAlpha, LayerFilter, LayerBlend, LayerMask, LayerSvgFilter } saveKind = Plain;
         uint8_t alpha = 255;                              // LayerAlpha
         std::vector<CssFilterParams> filters;              // LayerFilter
-        float flx = 0, fly = 0, flw = 0, flh = 0;          // LayerFilter bounds
+        float flx = 0, fly = 0, flw = 0, flh = 0;          // LayerFilter / LayerSvgFilter bounds
         BlendMode blendMode{};                             // LayerBlend
+        MaskMode maskMode{};                               // LayerMask
+        std::vector<SvgFilterPrimitive> svgPrims;          // LayerSvgFilter
+        std::vector<float> svgData;                        // LayerSvgFilter
         std::vector<StackOp> ops;
     };
 

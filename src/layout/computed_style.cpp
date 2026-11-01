@@ -117,8 +117,8 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
         // SVG geometry presentation attributes: SVG2 makes width/height on
         // shapes (rect, image, use, foreignObject…) real CSS geometry
         // properties, and Chromium's getComputedStyle reports them as px
-        // lengths sourced from the attribute. bro renders SVG subtrees via
-        // SkSVGDOM — the children have no layout boxes — so resolve straight
+        // lengths sourced from the attribute. bro paints SVG subtrees with its
+        // SVG traversal — the children have no layout boxes — so resolve straight
         // from the attribute for any element inside an <svg>.
         {
             bool insideSvg = false;

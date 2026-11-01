@@ -3,6 +3,7 @@
 // gradients, repeating forms included — with background-blend-mode.
 
 #include "layout/draw_traversal_internal.h"
+#include "layout/svg_image.h"
 #include "render/image_store.h"
 
 #include <algorithm>
@@ -116,7 +117,7 @@ void DrawTraversal::drawBackground(const PaintBox& pb, float x, float y, float w
                     const render::SharedPixels px = render::sharedPixelsOf(pic);
                     auto drawTile = [&](float tx, float ty, float tw, float th) {
                         if (pic->isSvg)
-                            renderer_->drawSvgMarkup(pic->svgMarkup.data(), pic->svgMarkup.size(), tx, ty, tw, th);
+                            paintSvgImage(renderer_, *pic, tx, ty, tw, th);
                         else
                             renderer_->drawSharedPixels(px, 0, 0, static_cast<float>(pic->width),
                                                         static_cast<float>(pic->height), tx, ty, tw, th, sampling);

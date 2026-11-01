@@ -2,6 +2,8 @@
 // and SVG paths filled and stroked with solid or gradient paint.
 
 #include "render/skia_backend.h"
+#include "render/shaped_run.h"
+#include <include/core/SkTextBlob.h>
 
 #include <include/core/SkPath.h>
 #include <include/effects/SkDashPathEffect.h>
@@ -167,28 +169,23 @@ static sk_sp<SkShader> makeSvgShader(const GradientPaint& gp, std::span<const Co
     return nullptr;
 }
 
-void SkiaRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
-                               const GradientPaint& fill, std::span<const ColorStop> fillStops,
-                               const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
-                               const StrokeStyle& ss, std::span<const float> dash) {
-    if (!canvas_ || d.empty()) return;
-    auto pathOpt = SkParsePath::FromSVGString(std::string(d).c_str());
-    if (!pathOpt) return;
-    SkPath path = *pathOpt;
-    path.setFillType(rule == PathFillRule::EvenOdd ? SkPathFillType::kEvenOdd
-                                                   : SkPathFillType::kWinding);
-    // Fill
+// The fill pass, then the stroke pass, of an SVG shape or text: `draw` draws
+// the geometry with each paint.
+template <typename Draw>
+static void paintSvgPasses(const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                           const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                           const StrokeStyle& ss, std::span<const float> dash,
+                           SkColor fillColor, SkColor strokeColor, Draw&& draw) {
     if (fill.kind != GradientPaint::Kind::None) {
         SkPaint paint;
         paint.setStyle(SkPaint::kFill_Style);
         paint.setAntiAlias(true);
         if (fill.kind == GradientPaint::Kind::Solid) {
-            if (fill.color.a > 0) { paint.setColor(toSkColor(fill.color)); canvas_->drawPath(path, paint); }
+            if (fill.color.a > 0) { paint.setColor(fillColor); draw(paint); }
         } else if (auto sh = makeSvgShader(fill, fillStops)) {
-            paint.setShader(sh); canvas_->drawPath(path, paint);
+            paint.setShader(sh); draw(paint);
         }
     }
-    // Stroke
     if (stroke.kind != GradientPaint::Kind::None && ss.width > 0) {
         SkPaint paint;
         paint.setStyle(SkPaint::kStroke_Style);
@@ -205,11 +202,46 @@ void SkiaRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
             paint.setPathEffect(SkDashPathEffect::Make(SkSpan(dash.data(), dash.size()), ss.dashOffset));
         }
         if (stroke.kind == GradientPaint::Kind::Solid) {
-            if (stroke.color.a > 0) { paint.setColor(toSkColor(stroke.color)); canvas_->drawPath(path, paint); }
+            if (stroke.color.a > 0) { paint.setColor(strokeColor); draw(paint); }
         } else if (auto sh = makeSvgShader(stroke, strokeStops)) {
-            paint.setShader(sh); canvas_->drawPath(path, paint);
+            paint.setShader(sh); draw(paint);
         }
     }
+}
+
+void SkiaRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
+                               const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                               const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                               const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || d.empty()) return;
+    auto pathOpt = SkParsePath::FromSVGString(std::string(d).c_str());
+    if (!pathOpt) return;
+    SkPath path = *pathOpt;
+    path.setFillType(rule == PathFillRule::EvenOdd ? SkPathFillType::kEvenOdd
+                                                   : SkPathFillType::kWinding);
+    paintSvgPasses(fill, fillStops, stroke, strokeStops, ss, dash, toSkColor(fill.color),
+                   toSkColor(stroke.color), [&](const SkPaint& p) { canvas_->drawPath(path, p); });
+}
+
+void SkiaRenderer::drawSvgText(std::string_view text, float x, float y, FontRef font,
+                               TextDirection direction,
+                               const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                               const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                               const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || text.empty()) return;
+    const ShapedRun* run = shapeText(text, font, false, direction);
+    if (!run) return;
+    sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{});
+    drawSvgTextBlob(blob.get(), x, y, fill, fillStops, stroke, strokeStops, ss, dash);
+}
+
+void SkiaRenderer::drawSvgTextBlob(const SkTextBlob* blob, float x, float y,
+                                   const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                   const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                   const StrokeStyle& ss, std::span<const float> dash) {
+    if (!canvas_ || !blob) return;
+    paintSvgPasses(fill, fillStops, stroke, strokeStops, ss, dash, toSkColor(fill.color),
+                   toSkColor(stroke.color), [&](const SkPaint& p) { canvas_->drawTextBlob(blob, x, y, p); });
 }
 
 void SkiaRenderer::clipSvgPath(std::string_view d, PathFillRule rule) {

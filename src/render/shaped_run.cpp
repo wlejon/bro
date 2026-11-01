@@ -10,7 +10,9 @@
 #include <vector>
 
 #include <include/core/SkMatrix.h>
+#include <include/core/SkPathBuilder.h>
 #include <include/core/SkTextBlob.h>
+#include <optional>
 
 #ifdef __APPLE__
 #include <CoreText/CoreText.h>
@@ -512,6 +514,34 @@ sk_sp<SkTextBlob> ShapedRun::makeBlob(Spacing spacing) const {
         }
     }
     return builder.make();
+}
+
+std::vector<ShapedRun::ClusterOutline> ShapedRun::clusterOutlines(Spacing spacing) const {
+    std::vector<ClusterOutline> out;
+    if (glyphs_.empty()) return out;
+    // Which run (font) each glyph belongs to.
+    std::vector<uint32_t> runOf(glyphs_.size(), 0);
+    for (uint32_t r = 0; r < runs_.size(); ++r)
+        for (std::size_t k = 0; k < runs_[r].count; ++k) runOf[runs_[r].first + k] = r;
+    out.reserve(clusters_.size());
+    forEachClusterPen(spacing, [&](std::size_t idx, float penX, float) {
+        const Cluster& c = clusters_[idx];
+        ClusterOutline co;
+        co.x = penX;
+        co.advance = c.advance + (c.isWordSep ? spacing.word : 0.0f);
+        const float natural = positions_[c.glyphFirst].fX;
+        SkPathBuilder b;
+        for (uint32_t k = 0; k < c.glyphCount; ++k) {
+            const std::size_t g = c.glyphFirst + k;
+            if (g >= glyphs_.size() || runOf[g] >= runs_.size()) continue;
+            std::optional<SkPath> gp = runs_[runOf[g]].font.getPath(glyphs_[g]);
+            if (!gp || gp->isEmpty()) continue;
+            b.addPath(*gp, positions_[g].fX - natural + offsets_[g].fX, positions_[g].fY + offsets_[g].fY);
+        }
+        co.path = b.detach();
+        out.push_back(std::move(co));
+    });
+    return out;
 }
 
 // ===========================================================================

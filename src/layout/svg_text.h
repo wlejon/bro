@@ -3,7 +3,9 @@
 #include <string>
 #include <vector>
 
+#include <include/core/SkContourMeasure.h>
 #include <include/core/SkRect.h>
+#include <include/core/SkRefCnt.h>
 
 #include "render/bidi.h"
 
@@ -71,6 +73,25 @@ struct SvgTextRun {
     // same one to drawText or it re-shapes against a different base and the
     // glyphs stop matching the width the pen-walk reserved for them.
     render::TextDirection direction = render::TextDirection::LTR;
+    // On a <textPath>: the path's data. `x` is then the distance along the
+    // path to the run's left edge and `baseline` the offset across it (dy,
+    // baseline shifts), and each glyph cluster is placed and rotated onto the
+    // path at its midpoint (SvgPathMeasure).
+    std::string pathD;
+};
+
+// Distance along a path → point and unit tangent, for text on a path. The
+// first contour of the path, as browsers lay text along.
+class SvgPathMeasure {
+public:
+    explicit SvgPathMeasure(const std::string& d);
+    bool valid() const { return measure_ != nullptr; }
+    float length() const;
+    // False when `dist` is off either end (that glyph is not rendered).
+    bool place(float dist, SkPoint& pos, SkVector& tangent) const;
+
+private:
+    sk_sp<SkContourMeasure> measure_;
 };
 
 // Lay out a <text> element into anchored, positioned runs.

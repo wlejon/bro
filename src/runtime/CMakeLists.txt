@@ -57,7 +57,7 @@ bro_move_aside_before_link(libbro)
 # as whole archives so the library carries the full C++ surface rather than
 # only what the entry points reach.
 set(_bro_engine_archives
-    bro_util bro_platform bro_svg bro_bidi bro_render bro_dom bro_layout
+    bro_util bro_platform bro_bidi bro_render bro_dom bro_layout
     bro_canvas bro_glsl bro_webgl bro_audio_inference bro_steam bro_engine bro_bronze_host bro_bronze_js)
 foreach(_t bro_tile bro_terminal bro_a11y bro_compositor bro_physics bro_scene bro_net bro_video bro_webp bro_avif)
     if(TARGET ${_t})

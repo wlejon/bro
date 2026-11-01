@@ -1,7 +1,7 @@
 #include "render/image_store.h"
 #include "render/skia_gpu.h"
 
-#include "svg/svg_renderer.h"
+#include "render/svg_image.h"
 #include "util/log.h"
 #include "util/main_loop_wake.h"
 
@@ -98,7 +98,7 @@ bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage
         return false;
     }
     const char* chars = reinterpret_cast<const char*>(bytes);
-    if (svg::looksLikeSvg(chars, len)) {
+    if (looksLikeSvg(chars, len)) {
         // Markup for the painter (it draws vectors at any size), and a raster
         // at the intrinsic size for the consumers that need pixels. An SVG
         // without an intrinsic size is still a usable image; it has no raster.
@@ -106,7 +106,7 @@ bool decodeImageData(const uint8_t* bytes, size_t len, bool orient, DecodedImage
         out.svgMarkup.assign(chars, len);
         // The raster is broimage's registered SVG codec (image_codecs.h).
         float sw = 0, sh = 0;
-        svg::svgIntrinsicSize(chars, len, sw, sh);
+        svgIntrinsicSize(chars, len, sw, sh);
         broimage::Image raster;
         if (broimage::decode_memory(bytes, len, raster) && !raster.pixels.empty()) {
             out.width = raster.width;
@@ -182,9 +182,9 @@ bool probeImageData(const uint8_t* bytes, size_t len, bool orient, int& width, i
     if (!bytes || len == 0) return false;
     registerImageCodecs();
     const char* chars = reinterpret_cast<const char*>(bytes);
-    if (svg::looksLikeSvg(chars, len)) {
+    if (looksLikeSvg(chars, len)) {
         float sw = 0, sh = 0;
-        svg::svgIntrinsicSize(chars, len, sw, sh);
+        svgIntrinsicSize(chars, len, sw, sh);
         width = static_cast<int>(sw);
         height = static_cast<int>(sh);
         isSvg = true;

@@ -3,7 +3,7 @@
 #include "platform/desktop_notifications.h"
 #include "platform/desktop_single_instance.h"
 #include "platform/window_system.h"
-#include "svg/svg_renderer.h"
+#include "render/svg_image.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
 
@@ -278,15 +278,15 @@ bool loadIconPixels(const std::string& path, int size, int& width, int& height, 
     if (!f) return false;
     std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     if (bytes.empty()) return false;
-    if (svg::looksLikeSvg(bytes.data(), bytes.size())) {
+    if (render::looksLikeSvg(bytes.data(), bytes.size())) {
         float sw = 0, sh = 0;
-        svg::svgIntrinsicSize(bytes.data(), bytes.size(), sw, sh);
+        render::svgIntrinsicSize(bytes.data(), bytes.size(), sw, sh);
         int w = size, h = size;
         if (sw > 0 && sh > 0) {
             if (sw >= sh) h = (std::max)(1, static_cast<int>(size * sh / sw + 0.5f));
             else w = (std::max)(1, static_cast<int>(size * sw / sh + 0.5f));
         }
-        return svg::rasterizeSvgMarkup(bytes.data(), bytes.size(), w, h, width, height, rgba);
+        return render::rasterizeSvgMarkup(bytes.data(), bytes.size(), w, h, width, height, rgba);
     }
     broimage::Image img;
     if (!broimage::decode_memory(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), img)) return false;

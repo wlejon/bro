@@ -93,9 +93,6 @@ bool sameCommand(const CommandBuffer& A, const DrawCommand& a, const CommandBuff
                        x.w == y.w && x.h == y.h &&
                        eqMem(A.bytesAt(x.pixelsOffset), B.bytesAt(y.pixelsOffset),
                              static_cast<size_t>(x.srcH) * static_cast<size_t>(x.stride));
-            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgMarkup>) {
-                return x.x == y.x && x.y == y.y && x.w == y.w && x.h == y.h &&
-                       eqArena(A, x.dataOffset, x.dataLen, B, y.dataOffset, y.dataLen, 1);
             } else if constexpr (std::is_same_v<T, Cmd_DrawSharedPixels>) {
                 const SharedPixels* pa = A.sharedPixelsAt(x.index);
                 const SharedPixels* pb = B.sharedPixelsAt(y.index);
@@ -123,12 +120,33 @@ bool sameCommand(const CommandBuffer& A, const DrawCommand& a, const CommandBuff
                        eqArena(A, x.strokeStopsOffset, x.strokeStopsLen, B, y.strokeStopsOffset, y.strokeStopsLen,
                                sizeof(ColorStop)) &&
                        eqArena(A, x.dashArrOffset, x.dashArrLen, B, y.dashArrOffset, y.dashArrLen, sizeof(float));
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgText>) {
+                return x.x == y.x && x.y == y.y && x.fontSize == y.fontSize && x.fontWeight == y.fontWeight &&
+                       x.fontItalic == y.fontItalic && x.direction == y.direction &&
+                       eqGradient(x.fill, y.fill) && eqGradient(x.stroke, y.stroke) &&
+                       x.strokeStyle.width == y.strokeStyle.width &&
+                       x.strokeStyle.miterLimit == y.strokeStyle.miterLimit &&
+                       x.strokeStyle.dashOffset == y.strokeStyle.dashOffset &&
+                       x.strokeStyle.cap == y.strokeStyle.cap && x.strokeStyle.join == y.strokeStyle.join &&
+                       eqArena(A, x.textOffset, x.textLen, B, y.textOffset, y.textLen, 1) &&
+                       eqArena(A, x.familyOffset, x.familyLen, B, y.familyOffset, y.familyLen, 1) &&
+                       eqArena(A, x.fillStopsOffset, x.fillStopsLen, B, y.fillStopsOffset, y.fillStopsLen,
+                               sizeof(ColorStop)) &&
+                       eqArena(A, x.strokeStopsOffset, x.strokeStopsLen, B, y.strokeStopsOffset, y.strokeStopsLen,
+                               sizeof(ColorStop)) &&
+                       eqArena(A, x.dashArrOffset, x.dashArrLen, B, y.dashArrOffset, y.dashArrLen, sizeof(float));
             } else if constexpr (std::is_same_v<T, Cmd_ClipSvgPath>) {
                 return x.rule == y.rule && eqArena(A, x.pathOffset, x.pathLen, B, y.pathOffset, y.pathLen, 1);
             } else if constexpr (std::is_same_v<T, Cmd_SaveLayerAlpha>) {
                 return x.alpha == y.alpha;
-            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
+            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithBlend> ||
+                                 std::is_same_v<T, Cmd_SaveLayerMask>) {
                 return x.mode == y.mode;
+            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithSvgFilter>) {
+                return x.x == y.x && x.y == y.y && x.w == y.w && x.h == y.h &&
+                       eqArena(A, x.primsOffset, x.primsLen, B, y.primsOffset, y.primsLen,
+                               sizeof(SvgFilterPrimitive)) &&
+                       eqArena(A, x.dataOffset, x.dataLen, B, y.dataOffset, y.dataLen, sizeof(float));
             } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithFilter>) {
                 return x.x == y.x && x.y == y.y && x.w == y.w && x.h == y.h &&
                        eqArena(A, x.filtersOffset, x.filtersLen, B, y.filtersOffset, y.filtersLen,
@@ -191,9 +209,19 @@ struct Walker {
                 if constexpr (std::is_same_v<T, Cmd_Save>) {
                     save();
                 } else if constexpr (std::is_same_v<T, Cmd_SaveLayerAlpha> ||
-                                     std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
+                                     std::is_same_v<T, Cmd_SaveLayerWithBlend> ||
+                                     std::is_same_v<T, Cmd_SaveLayerMask>) {
                     save();
                     cur.inLayer = true;
+                } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithSvgFilter>) {
+                    save();
+                    cur.inLayer = true;
+                    if (!cur.inFilter) {
+                        // An SVG filter's output is clipped to its region,
+                        // which the traversal resolved: nothing reaches past it.
+                        cur.inFilter = true;
+                        cur.filterBounds = cur.m.mapRect(SkRect::MakeXYWH(c.x, c.y, c.w, c.h).makeSorted());
+                    }
                 } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithFilter>) {
                     save();
                     cur.inLayer = true;
@@ -252,7 +280,8 @@ struct Walker {
 bool isStateCommand(const DrawCommand& c) {
     return std::holds_alternative<Cmd_Save>(c) || std::holds_alternative<Cmd_Restore>(c) ||
            std::holds_alternative<Cmd_SaveLayerAlpha>(c) || std::holds_alternative<Cmd_SaveLayerWithFilter>(c) ||
-           std::holds_alternative<Cmd_SaveLayerWithBlend>(c) || std::holds_alternative<Cmd_Translate>(c) ||
+           std::holds_alternative<Cmd_SaveLayerWithBlend>(c) || std::holds_alternative<Cmd_SaveLayerMask>(c) ||
+           std::holds_alternative<Cmd_SaveLayerWithSvgFilter>(c) || std::holds_alternative<Cmd_Translate>(c) ||
            std::holds_alternative<Cmd_Scale>(c) || std::holds_alternative<Cmd_Rotate>(c) ||
            std::holds_alternative<Cmd_Concat>(c) || std::holds_alternative<Cmd_Concat4x4>(c) ||
            std::holds_alternative<Cmd_SetClip>(c) || std::holds_alternative<Cmd_SetClipRRect>(c) ||
@@ -320,7 +349,7 @@ bool commandBounds(const CommandBuffer& buf, const DrawCommand& cmd, SkRect& r) 
                 r = SkRect::MakeLTRB(c.x1, c.y1, c.x2, c.y2).makeSorted();
                 r.outset(c.thickness, c.thickness);
             } else if constexpr (std::is_same_v<T, Cmd_DrawImage> || std::is_same_v<T, Cmd_DrawPixelsRGBA> ||
-                                 std::is_same_v<T, Cmd_DrawSvgMarkup> || std::is_same_v<T, Cmd_DrawSharedPixels>) {
+                                 std::is_same_v<T, Cmd_DrawSharedPixels>) {
                 rect(c.x, c.y, c.w, c.h, 0);
             } else if constexpr (std::is_same_v<T, Cmd_DrawCircle>) {
                 rect(c.cx - c.r, c.cy - c.r, 2 * c.r, 2 * c.r, c.strokeWidth);
@@ -343,6 +372,12 @@ bool commandBounds(const CommandBuffer& buf, const DrawCommand& cmd, SkRect& r) 
                 // the limit.
                 const float reach = c.strokeStyle.width * std::max(1.0f, c.strokeStyle.miterLimit);
                 r.outset(reach, reach);
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgText>) {
+                const SkTextBlob* blob = buf.textBlobAt(c.blobIndex);
+                if (!blob) { ok = false; return; }
+                r = blob->bounds().makeOffset(c.x, c.y);
+                const float reach = c.strokeStyle.width * std::max(1.0f, c.strokeStyle.miterLimit);
+                r.outset(reach + 1.0f, reach + 1.0f);
             } else if constexpr (std::is_same_v<T, Cmd_FillLinearGradient> ||
                                  std::is_same_v<T, Cmd_FillRadialGradient> ||
                                  std::is_same_v<T, Cmd_FillConicGradient>) {

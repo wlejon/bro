@@ -1,5 +1,6 @@
 #include "layout/svg_common.h"
 #include "dom/element.h"
+#include "layout/draw_traversal.h"   // DrawTraversal::tryParseColor
 
 #include <include/core/SkPath.h>
 #include <include/utils/SkParsePath.h>
@@ -251,6 +252,135 @@ bool pathBounds(const std::string& d, SkRect& out) {
     if (!p || p->countPoints() == 0) return false;
     out = p->computeTightBounds();
     return true;
+}
+
+namespace {
+
+struct UseInstance {
+    const dom::Element* target;
+    const dom::Element* use;
+};
+thread_local std::vector<UseInstance> tUseInstances;
+
+const std::string* rawStyle(const dom::Element* el, const char* prop) {
+    const auto& cs = el->computedStyle();
+    auto it = cs.find(prop);
+    return it != cs.end() && !it->second.empty() ? &it->second : nullptr;
+}
+
+bool sameValue(const std::string* a, const std::string* b) {
+    return a == b || (a && b && *a == *b);
+}
+
+bool isInheritedSvgProperty(std::string_view p) {
+    static constexpr std::string_view kInherited[] = {
+        "fill", "fill-opacity", "fill-rule", "stroke", "stroke-opacity", "stroke-width",
+        "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray",
+        "stroke-dashoffset", "clip-rule", "color", "visibility", "font-family", "font-size",
+        "font-weight", "font-style", "text-anchor", "dominant-baseline", "direction",
+        "letter-spacing", "word-spacing", "marker-start", "marker-mid", "marker-end",
+        "paint-order", "color-interpolation-filters",
+    };
+    for (std::string_view k : kInherited)
+        if (k == p) return true;
+    return false;
+}
+
+// `el`'s value of `prop` with the innermost `level` use instances applied.
+const std::string* instanceStyle(const dom::Element* el, const char* prop, size_t level) {
+    if (level == 0 || !isInheritedSvgProperty(prop)) return rawStyle(el, prop);
+    const UseInstance& inst = tUseInstances[level - 1];
+    const std::string* v = rawStyle(el, prop);
+    for (const dom::Element* cur = el; cur;) {
+        const dom::Element* p = cur->parentElement();
+        const bool differs = !p || !sameValue(rawStyle(cur, prop), rawStyle(p, prop));
+        if (cur == inst.target)
+            return differs ? v : instanceStyle(inst.use, prop, level - 1);
+        if (differs) return v;   // set on the way up: the element's own value
+        cur = p;
+    }
+    return instanceStyle(el, prop, level - 1);   // not inside this instance
+}
+
+const std::string* lookupStyle(const dom::Element* el, const char* prop) {
+    return tUseInstances.empty() ? rawStyle(el, prop) : instanceStyle(el, prop, tUseInstances.size());
+}
+
+} // namespace
+
+UseInstanceScope::UseInstanceScope(const dom::Element* target, const dom::Element* use) {
+    tUseInstances.push_back({target, use});
+}
+
+UseInstanceScope::~UseInstanceScope() { tUseInstances.pop_back(); }
+
+std::string styleOr(const dom::Element* el, const char* prop, const char* fallback) {
+    const std::string* v = lookupStyle(el, prop);
+    return v ? *v : std::string(fallback);
+}
+
+float styleFloat(const dom::Element* el, const char* prop, float fallback) {
+    const std::string* v = lookupStyle(el, prop);
+    if (!v) return fallback;
+    char* end = nullptr;
+    float f = std::strtof(v->c_str(), &end);
+    if (end == v->c_str()) return fallback;
+    if (*end == '%') f /= 100.0f;   // opacity-like properties: 50% == 0.5
+    return f;
+}
+
+namespace {
+bool ieq(const std::string& a, const char* b) {
+    size_t n = 0;
+    for (; b[n]; ++n) {
+        if (n >= a.size()) return false;
+        if (std::tolower(static_cast<unsigned char>(a[n])) !=
+            std::tolower(static_cast<unsigned char>(b[n]))) return false;
+    }
+    return n == a.size();
+}
+} // namespace
+
+bool resolveColor(const std::string& v, const bromath::Color& current, bromath::Color& out) {
+    if (v.empty() || ieq(v, "none") || ieq(v, "transparent")) {
+        if (ieq(v, "transparent")) { out = bromath::Color{0, 0, 0, 0}; return true; }
+        return false;
+    }
+    if (ieq(v, "currentcolor")) { out = current; return true; }
+    return DrawTraversal::tryParseColor(v, out);
+}
+
+bromath::Color currentColorOf(const dom::Element* el) {
+    bromath::Color c{0, 0, 0, 1};
+    resolveColor(styleOr(el, "color", "black"), bromath::Color{0, 0, 0, 1}, c);
+    return c;
+}
+
+std::string urlRef(const std::string& v, std::string* rest) {
+    size_t a = v.find_first_not_of(" \t\n\r");
+    if (a == std::string::npos || v.compare(a, 4, "url(") != 0) return {};
+    size_t close = v.find(')', a);
+    std::string ref = v.substr(a + 4, close == std::string::npos ? std::string::npos : close - a - 4);
+    if (rest) *rest = close == std::string::npos ? std::string() : v.substr(close + 1);
+    ref.erase(std::remove(ref.begin(), ref.end(), '"'), ref.end());
+    ref.erase(std::remove(ref.begin(), ref.end(), '\''), ref.end());
+    if (size_t h = ref.find('#'); h != std::string::npos) ref = ref.substr(h + 1);
+    size_t s = ref.find_first_not_of(" \t");
+    if (s == std::string::npos) return {};
+    return ref.substr(s, ref.find_last_not_of(" \t") - s + 1);
+}
+
+const std::string& hrefOf(const dom::Element* el) {
+    const std::string& h = attrOf(el, "href");
+    if (!h.empty()) return h;
+    return attrOf(el, "xlink:href");
+}
+
+const dom::Element* hrefTarget(const dom::Element* el, const dom::Element* root) {
+    const std::string& h = hrefOf(el);
+    if (h.size() < 2 || h[0] != '#') return nullptr;
+    const dom::Element* t = findById(root, h.substr(1));
+    return t == el ? nullptr : t;
 }
 
 } // namespace bro::layout::svgcommon

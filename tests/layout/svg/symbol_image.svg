@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="120" viewBox="0 0 160 120">
+  <defs>
+    <symbol id="star" viewBox="0 0 20 20">
+      <path d="M10 1 L12.6 7.2 L19.5 7.6 L14.2 12 L15.9 18.8 L10 15 L4.1 18.8 L5.8 12 L0.5 7.6 L7.4 7.2 Z" fill="#e0a000"/>
+    </symbol>
+    <clipPath id="clip">
+      <circle cx="40" cy="88" r="26"/>
+    </clipPath>
+  </defs>
+  <use href="#star" x="4" y="4" width="40" height="40"/>
+  <use xlink:href="#star" x="52" y="4" width="60" height="40"/>
+  <use href="#star" x="120" y="10" width="28" height="28" fill="#000"/>
+  <rect x="10" y="58" width="60" height="60" fill="#a0d0f0" clip-path="url(#clip)"/>
+  <text x="40" y="94" font-family="Arial" font-size="16" text-anchor="middle" fill="#103060" clip-path="url(#clip)">clip</text>
+  <switch>
+    <rect x="90" y="60" width="60" height="25" fill="#60b060"/>
+    <rect x="90" y="88" width="60" height="25" fill="#b06060"/>
+  </switch>
+</svg>

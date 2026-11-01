@@ -9,9 +9,10 @@ library always matches the headers:
 | `skia-src-m147.tar.gz` | the **source bundle** — the subset of the Skia tree bro compiles and includes |
 | `skia-{windows-x64,linux-x64,macos-arm64}-…` | the prebuilt Skia **core** static library |
 
-The core library is only the GN `skia` + `pathops` targets. Every Skia *module*
-— `svg`, `skshaper`, `skunicode`, `skresources` — plus HarfBuzz and the ICU bidi
-subset is compiled from the source bundle by `skia_modules.cmake`. That is why
+The core library is only the GN `skia` + `pathops` targets. The Skia *modules*
+bro uses — `skshaper` and `skunicode` — plus HarfBuzz and the ICU bidi subset
+are compiled from the source bundle by `skia_modules.cmake` (target
+`skia_shaper`). Skia's `svg` module is not built: bro paints SVG itself. That is why
 enabling text shaping needed no Skia rebuild: the shaping code was never in the
 `.lib` to begin with.
 

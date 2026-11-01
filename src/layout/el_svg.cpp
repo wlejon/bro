@@ -76,7 +76,8 @@ void ElSvg::getContentSize(float& w, float& h) {
 void ElSvg::draw(render::Renderer* renderer,
                  dom::Element* elem,
                  const htmlayout::layout::LayoutBox& box,
-                 float offsetX, float offsetY) {
+                 float offsetX, float offsetY,
+                 const SvgImageResolver& images) {
     if (!renderer || !elem) return;
 
     float x = box.contentRect.x + offsetX;
@@ -85,23 +86,10 @@ void ElSvg::draw(render::Renderer* renderer,
     float h = box.contentRect.height;
     if (w <= 0 || h <= 0) return;
 
-    // Native path: walk the live DOM subtree and emit Renderer primitives with
-    // the cascaded SVG paint (respecting document CSS, currentColor, gradients,
-    // stroke styling). This runs at record time on the main thread; the emitted
+    // Walk the live DOM subtree and emit Renderer primitives with the cascaded
+    // SVG paint. This runs at record time on the main thread; the emitted
     // commands replay DOM-free.
-    if (svgSubtreeNativelySupported(elem)) {
-        paintSvgSubtree(renderer, elem, x, y, w, h);
-        return;
-    }
-
-    // Fallback for features the native traversal doesn't handle yet (text,
-    // filters, masks, patterns, markers, raster images): serialize the subtree
-    // and let Skia's SkSVGDOM render it. The recording renderer copies the
-    // markup bytes into its arena so replay stays DOM-free. The serializer is
-    // Skia-shaped: href→xlink:href, <use>-of-<symbol> expanded inline.
-    std::string markup = dom::serializeSvgForRenderer(elem);
-    if (markup.empty()) return;
-    renderer->drawSvgMarkup(markup.data(), markup.size(), x, y, w, h);
+    paintSvgSubtree(renderer, elem, x, y, w, h, images);
 }
 
 } // namespace bro::layout

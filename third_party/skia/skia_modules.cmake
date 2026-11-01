@@ -1,17 +1,16 @@
 # Skia modules — compiled from source against the pre-built Skia core library.
 #
 # The pre-built skia.lib is only the GN `skia` + `pathops` targets; every Skia
-# *module* (svg, skshaper, skresources, skunicode) is absent from it, so we
-# compile those here from the source bundle in src/.
+# *module* bro uses (skshaper, skunicode) is absent from it, so we compile
+# those here from the source bundle in src/. (SVG is bro's own: layout/svg_*.)
 #
 # Targets built here:
-#   skia_svg        modules/svg + modules/skresources + modules/skshaper
-#                   (+ modules/skunicode, SkDOM/SkXMLParser, expat) — the target
-#                   bro links.
+#   skia_shaper     modules/skshaper (+ modules/skunicode) — the target bro
+#                   links.
 #   skia_harfbuzz   HarfBuzz (unity build)                   [text shaping only]
 #   skia_icu_bidi   ICU's UAX#9 bidi subset (14 .cpp)        [text shaping only]
 #
-# With BRO_WITH_TEXT_SHAPING=ON (the default in every profile) skia_svg also
+# With BRO_WITH_TEXT_SHAPING=ON (the default in every profile) skia_shaper
 # carries real HarfBuzz shaping: SkShaper_harfbuzz.cpp + SkShaper_skunicode.cpp
 # + the bidi-only SkUnicode (modules/skunicode over the ICU bidi subset). With
 # it OFF only the 1:1-codepoint primitive shaper is built.
@@ -177,11 +176,8 @@ if(BRO_WITH_TEXT_SHAPING)
 endif()
 
 # ---------------------------------------------------------------------------
-# Skia modules: svg + skresources + skshaper (+ skunicode when shaping)
+# Skia modules: skshaper (+ skunicode when shaping)
 # ---------------------------------------------------------------------------
-
-file(GLOB _svg_sources      "${_skia_src}/modules/svg/src/*.cpp")
-file(GLOB _skresources_src  "${_skia_src}/modules/skresources/src/*.cpp")
 
 set(_skshaper_sources
     "${_skia_src}/modules/skshaper/src/SkShaper.cpp"
@@ -214,55 +210,27 @@ else()
     set(_skunicode_sources "")
 endif()
 
-# Skia's XML/DOM parser (SkDOM + SkXMLParser) and expat — these may not be
-# included in the pre-built skia.lib (e.g. Windows builds without system expat).
-# Compiling them here is harmless if they're already in skia.lib (linker dedupes).
-set(_xml_sources
-    "${_skia_src}/src/xml/SkDOM.cpp"
-    "${_skia_src}/src/xml/SkXMLParser.cpp"
-    "${_skia_src}/src/xml/SkXMLWriter.cpp"
-)
-set(_expat_sources
-    "${_skia_src}/third_party/externals/expat/expat/lib/xmlparse.c"
-    "${_skia_src}/third_party/externals/expat/expat/lib/xmlrole.c"
-    "${_skia_src}/third_party/externals/expat/expat/lib/xmltok.c"
-)
-
-add_library(skia_svg STATIC
-    ${_svg_sources}
-    ${_skresources_src}
+add_library(skia_shaper STATIC
     ${_skshaper_sources}
     ${_skunicode_sources}
-    ${_xml_sources}
-    ${_expat_sources}
 )
 
 # --- Include paths ---
 # Skia source root (for include/core/..., src/..., modules/.../include/...)
-target_include_directories(skia_svg PRIVATE "${_skia_src}")
+target_include_directories(skia_shaper PRIVATE "${_skia_src}")
 
-# Module public headers — consumers of skia_svg get these too
-target_include_directories(skia_svg PUBLIC
-    "${_skia_src}/modules/svg/include"
+# Module public headers — consumers of skia_shaper get these too
+target_include_directories(skia_shaper PUBLIC
     "${_skia_src}/modules/skshaper/include"
-    "${_skia_src}/modules/skresources/include"
     "${_skia_src}/modules/skunicode/include"
     "${_skia_src}/modules/skshaper/utils"
 )
 
-# Expat headers (bundled in Skia's third_party)
-target_include_directories(skia_svg PRIVATE
-    "${_skia_src}/third_party/externals/expat/expat/lib"
-    "${_skia_src}/third_party/expat/include/expat_config"
-)
-
 # --- Defines ---
-target_compile_definitions(skia_svg PUBLIC
-    SK_ENABLE_SVG
+target_compile_definitions(skia_shaper PUBLIC
     SK_SHAPER_PRIMITIVE_AVAILABLE
 )
-target_compile_definitions(skia_svg PRIVATE
-    XML_STATIC
+target_compile_definitions(skia_shaper PRIVATE
     SKSHAPER_IMPLEMENTATION=1
     SKUNICODE_IMPLEMENTATION=1
 )
@@ -270,7 +238,7 @@ target_compile_definitions(skia_svg PRIVATE
 if(BRO_WITH_TEXT_SHAPING)
     # PUBLIC: SkShapers::BestAvailable() is a header-only inline that switches on
     # these, so every consumer must see them (FactoryHelpers.h says so verbatim).
-    target_compile_definitions(skia_svg PUBLIC
+    target_compile_definitions(skia_shaper PUBLIC
         SK_SHAPER_HARFBUZZ_AVAILABLE
         SK_SHAPER_UNICODE_AVAILABLE
         SK_UNICODE_AVAILABLE
@@ -282,26 +250,26 @@ if(BRO_WITH_TEXT_SHAPING)
     # compile with the exact same set the bidi subset was built with or the
     # calls resolve to names that do not exist. Copied verbatim from Skia's
     # modules/skunicode/BUILD.gn bidi_subset target.
-    target_compile_definitions(skia_svg PRIVATE
+    target_compile_definitions(skia_shaper PRIVATE
         U_DISABLE_RENAMING=0
         U_USING_ICU_NAMESPACE=0
         U_LIB_SUFFIX_C_NAME=_skia
         U_HAVE_LIB_SUFFIX=1
         U_DISABLE_VERSION_SUFFIX=1
     )
-    target_link_libraries(skia_svg PRIVATE skia_harfbuzz skia_icu_bidi)
+    target_link_libraries(skia_shaper PRIVATE skia_harfbuzz skia_icu_bidi)
 else()
-    target_compile_definitions(skia_svg PUBLIC BRO_WITH_TEXT_SHAPING=0)
+    target_compile_definitions(skia_shaper PUBLIC BRO_WITH_TEXT_SHAPING=0)
 endif()
 
 # --- Link pre-built Skia core ---
-target_link_libraries(skia_svg PUBLIC skia)
+target_link_libraries(skia_shaper PUBLIC skia)
 
 # MSVC: disable noisy warnings from Skia source
 if(MSVC)
-    target_compile_options(skia_svg PRIVATE /W0)
+    target_compile_options(skia_shaper PRIVATE /W0)
 else()
-    target_compile_options(skia_svg PRIVATE -w)
+    target_compile_options(skia_shaper PRIVATE -w)
 endif()
 
 # ---------------------------------------------------------------------------

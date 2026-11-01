@@ -21,6 +21,11 @@ void CommandReplayer::replayOpenStackOnto(Renderer* dst) {
                                          frame.flw, frame.flh);
                 break;
             case OpenFrame::LayerBlend:  dst->saveLayerWithBlend(frame.blendMode); break;
+            case OpenFrame::LayerMask:   dst->saveLayerMask(frame.maskMode); break;
+            case OpenFrame::LayerSvgFilter:
+                dst->saveLayerWithSvgFilter(frame.svgPrims, frame.svgData, frame.flx, frame.fly,
+                                            frame.flw, frame.flh);
+                break;
         }
         for (auto& op : frame.ops) {
             switch (op.kind) {
@@ -46,7 +51,8 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             // frame/layer/surface markers puts something on the surface.
             if constexpr (!(std::is_same_v<T, Cmd_Save> || std::is_same_v<T, Cmd_Restore> ||
                             std::is_same_v<T, Cmd_SaveLayerAlpha> || std::is_same_v<T, Cmd_SaveLayerWithFilter> ||
-                            std::is_same_v<T, Cmd_SaveLayerWithBlend> || std::is_same_v<T, Cmd_Translate> ||
+                            std::is_same_v<T, Cmd_SaveLayerWithBlend> || std::is_same_v<T, Cmd_SaveLayerMask> ||
+                            std::is_same_v<T, Cmd_SaveLayerWithSvgFilter> || std::is_same_v<T, Cmd_Translate> ||
                             std::is_same_v<T, Cmd_Scale> || std::is_same_v<T, Cmd_Rotate> ||
                             std::is_same_v<T, Cmd_Concat> || std::is_same_v<T, Cmd_Concat4x4> ||
                             std::is_same_v<T, Cmd_SetClip> || std::is_same_v<T, Cmd_SetClipRRect> ||
@@ -104,10 +110,6 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             } else if constexpr (std::is_same_v<T, Cmd_DrawImage>) {
                 dst_->drawImage(buffer.bytesAt(c.dataOffset), c.dataLen,
                                 c.x, c.y, c.w, c.h, c.imageId);
-            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgMarkup>) {
-                dst_->drawSvgMarkup(reinterpret_cast<const char*>(
-                                        buffer.bytesAt(c.dataOffset)),
-                                    c.dataLen, c.x, c.y, c.w, c.h);
             } else if constexpr (std::is_same_v<T, Cmd_DrawPixelsRGBA>) {
                 dst_->drawPixelsRGBA(reinterpret_cast<const uint8_t*>(
                                          buffer.bytesAt(c.pixelsOffset)),
@@ -135,6 +137,11 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                                   c.fill, buffer.spanAt<ColorStop>(c.fillStopsOffset, c.fillStopsLen),
                                   c.stroke, buffer.spanAt<ColorStop>(c.strokeStopsOffset, c.strokeStopsLen),
                                   c.strokeStyle, buffer.spanAt<float>(c.dashArrOffset, c.dashArrLen));
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgText>) {
+                dst_->drawSvgTextBlob(buffer.textBlobAt(c.blobIndex), c.x, c.y,
+                                      c.fill, buffer.spanAt<ColorStop>(c.fillStopsOffset, c.fillStopsLen),
+                                      c.stroke, buffer.spanAt<ColorStop>(c.strokeStopsOffset, c.strokeStopsLen),
+                                      c.strokeStyle, buffer.spanAt<float>(c.dashArrOffset, c.dashArrLen));
             } else if constexpr (std::is_same_v<T, Cmd_ClipSvgPath>) {
                 dst_->clipSvgPath(buffer.stringAt(c.pathOffset, c.pathLen), c.rule);
 
@@ -161,6 +168,19 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
                 dst_->saveLayerWithBlend(c.mode);
                 OpenFrame f; f.saveKind = OpenFrame::LayerBlend; f.blendMode = c.mode;
+                openStack_.push_back(std::move(f));
+            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerMask>) {
+                dst_->saveLayerMask(c.mode);
+                OpenFrame f; f.saveKind = OpenFrame::LayerMask; f.maskMode = c.mode;
+                openStack_.push_back(std::move(f));
+            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithSvgFilter>) {
+                auto prims = buffer.spanAt<SvgFilterPrimitive>(c.primsOffset, c.primsLen);
+                auto data = buffer.spanAt<float>(c.dataOffset, c.dataLen);
+                dst_->saveLayerWithSvgFilter(prims, data, c.x, c.y, c.w, c.h);
+                OpenFrame f; f.saveKind = OpenFrame::LayerSvgFilter;
+                f.svgPrims.assign(prims.begin(), prims.end());
+                f.svgData.assign(data.begin(), data.end());
+                f.flx = c.x; f.fly = c.y; f.flw = c.w; f.flh = c.h;
                 openStack_.push_back(std::move(f));
             } else if constexpr (std::is_same_v<T, Cmd_Translate>) {
                 dst_->translate(c.dx, c.dy);
