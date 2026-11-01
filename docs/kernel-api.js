@@ -23,9 +23,7 @@
  * reorder float arithmetic and the f32 transcendentals (sin, exp, pow,
  * inverse square root, ...) are the device's own; on the CPU multiply-adds
  * fuse into FMAs. So a kernel's two builds agree to a few f32 ulps, not to
- * the bit. A kernel marked `@precise` rounds every operation on both targets
- * as written, with polynomial transcendentals, and its builds agree exactly
- * (brokernel README.md).
+ * the bit (brokernel README.md).
  *
  * Mounted in every realm (the page's and a Worker's) when `BRO_WITH_KERNEL`
  * is enabled (every profile, minimal included); a build without it has

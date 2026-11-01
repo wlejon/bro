@@ -3,9 +3,9 @@
 
 #include "embed/embed.h"
 #include "eval/eval.h"
-#include <brass/runtime/deterministic_math.hpp>
 
 #include <bit>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -495,7 +495,7 @@ void test_cpp_and_js_verified_capsules() {
 }
 
 void test_closed_world_determinism_and_det_fp() {
-    std::printf("[6/6] Closed-world AST+IL determinism audit & brass_det_* FP lockstep (#156)...\n");
+    std::printf("[6/6] Closed-world AST+IL determinism audit & transcendental ticks (#156)...\n");
 
     // 1. Alias bypasses, transitive helpers, and outer mutable state must be rejected
     auto mathAliasAudit = bro::net::verifyRollbackTickSource(R"JS(
@@ -540,10 +540,11 @@ void test_closed_world_determinism_and_det_fp() {
     ASSERT_TRUE(!outerMutAudit.hazards.empty());
     ASSERT_EQ(outerMutAudit.hazards[0].kind, std::string("external-state-access"));
 
-    // 2. Transcendental math with "use deterministic" is accepted and matches brass_det_* bit-for-bit
-    const double x = 0.7, y = 1.2, z = 0.3;
-    const double expected0 = brass_det_sin(x) + brass_det_cos(y);
-    const double expected1 = brass_det_atan2(y, x) + brass_det_pow(x, 1.5) + brass_det_pow(y, 2.5);
+    // 2. Transcendental math is no hazard, and the tick computes what the
+    //    platform's libm does on this machine.
+    const double x = 0.7, y = 1.2;
+    const double expected0 = std::sin(x) + std::cos(y);
+    const double expected1 = std::atan2(y, x) + std::pow(x, 1.5) + std::pow(y, 2.5);
 
     std::vector<uint8_t> expectedBytes(2 * sizeof(double));
     std::memcpy(expectedBytes.data(), &expected0, sizeof(double));
@@ -579,9 +580,8 @@ void test_closed_world_determinism_and_det_fp() {
                     throw new Error("Expected outer mutable let access to fail verifyDeterministic");
                 }
 
-                // Tick with "use deterministic" using Math.sin, Math.cos, Math.atan2, Math.pow, **
+                // A tick using Math.sin, Math.cos, Math.atan2, Math.pow, **
                 const detTickSrc = `(state, inputs, frame) => {
-                    "use deterministic";
                     const x = 0.7;
                     const y = 1.2;
                     state[0] = Math.sin(x) + Math.cos(y);
@@ -589,7 +589,7 @@ void test_closed_world_determinism_and_det_fp() {
                 }`;
                 const vDet = bro.net.verifyDeterministic(detTickSrc);
                 if (!vDet.determinismLintPassed || !vDet.valid || vDet.hazardCount !== 0) {
-                    throw new Error("Expected 'use deterministic' transcendental tick to pass: " + JSON.stringify(vDet));
+                    throw new Error("Expected transcendental tick to pass: " + JSON.stringify(vDet));
                 }
 
                 const session = bro.net.createRollbackSession({

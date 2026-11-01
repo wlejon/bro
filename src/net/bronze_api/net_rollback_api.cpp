@@ -306,9 +306,7 @@ Value createRollbackSessionValue(std::span<const Value> args) {
 
     if (tickVal.get().isString()) {
         tickSource = ev::toUtf8(tickVal.get());
-        bronze::eval::DeterministicFpScope detScope(true);
         bronze::eval::EvalOptions evalOpts;
-        evalOpts.deterministicFp = true;
         std::string expr = "(" + tickSource + ")";
         auto evalRes = bronze::eval::evalScript(expr, evalOpts);
         if (evalRes.thrown || !ev::isFunction(evalRes.value)) {
@@ -384,7 +382,6 @@ Value createRollbackSessionValue(std::span<const Value> args) {
     host->session = std::make_unique<net::RollbackSession>(
         cfg,
         [rawHost](std::vector<uint8_t>& stateBytes, std::span<const int32_t> inputs, uint32_t frame) {
-            bronze::eval::DeterministicFpScope detScope(true);
             restoreJsStateBytes(*rawHost, stateBytes);
             if (ev::isFunction(rawHost->tickFn.get())) {
                 ev::Persistent inArr(ev::makeArray(inputs.size()));

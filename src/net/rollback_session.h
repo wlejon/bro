@@ -26,10 +26,11 @@ struct DeterminismAuditResult {
     std::string errorSummary;
 };
 
-// Audits a JS tick function's source code using bronze's static determinism lint
-// (rejecting Date/performance/Math.random/transcendental Math/for..in/host I/O
-// hazards and checking IL + x86_64/AArch64 LIR parity) and computes a SHA-256
-// hex source audit digest.
+// Audits a JS tick function's source code using bronze's static replay lint
+// (rejecting Date/performance/Math.random/for..in/outer state/host I/O
+// hazards) and computes a SHA-256 hex source audit digest. Floating-point math
+// is the platform's: a tick replays the same on one machine, not to the bit
+// across machines.
 DeterminismAuditResult verifyRollbackTickSource(std::string_view tickSource);
 
 struct VerifiedCapsule {

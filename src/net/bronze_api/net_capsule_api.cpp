@@ -238,9 +238,7 @@ Value loadVerifiedCapsuleValue(std::span<const Value> args) {
         return ev::throwError(vres.reason.c_str());
     }
 
-    bronze::eval::DeterministicFpScope detScope(true);
     bronze::eval::EvalOptions evalOpts;
-    evalOpts.deterministicFp = true;
 
     std::string evalExpr = "(" + cap.source + "\n)";
     auto evalRes = bronze::eval::evalScript(evalExpr, evalOpts);
