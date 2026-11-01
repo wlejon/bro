@@ -43,11 +43,16 @@ function open(round) {
   // Not yet in a sub-document (docs/appview-api.js); this changes when they are.
   assert(!r.opened.includes('webgl2') && !r.opened.includes('scene'), `${round}: WebGL and the scene answer null`);
   assert(r.pid > 0 && alive(r.pid), `${round}: its child process runs (${r.pid})`);
-  // The heartbeat is beating before the app stops.
+  // The heartbeat is beating before the app stops: within 2 s, as a loaded
+  // machine may hold the worker's 20 ms interval back well past one beat.
   wallSleep(100);
   const before = fs.readFileSync(r.heartbeat, 'utf8');
-  wallSleep(100);
-  assert(fs.readFileSync(r.heartbeat, 'utf8') !== before, `${round}: the worker's heartbeat beats`);
+  let beatWait = 0;
+  while (fs.readFileSync(r.heartbeat, 'utf8') === before && beatWait < 2000) {
+    wallSleep(20);
+    beatWait += 20;
+  }
+  assert(fs.readFileSync(r.heartbeat, 'utf8') !== before, `${round}: the worker's heartbeat beats (${beatWait} ms)`);
   return r;
 }
 
