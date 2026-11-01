@@ -182,3 +182,68 @@ pub fn atlas_uvw(t: Tile, p: Point, tile_size: i32, border: i32, atlas: i32) -> 
 pub fn level_for(w: f32, w0: f32, max_level: i32) -> f32 {
     return clamp(log2(w0 / max(w, 1.0e-30)), 0.0, max_level as f32);
 }
+
+// ── The batch table ─────────────────────────────────────────────────────────
+//
+// A produce(batch)'s table (docs/tiles-api.js), RECORD_VEC4S vec4<i32> a
+// record (a kernel's read_store<vec4<i32>, 1>): each tile anchored at its
+// frame's centre rounded to f32, with everything that places its cells in
+// f32 about it. GPU code is f32: a cell's offset from the anchor is small
+// where its absolute position is not.
+pub const RECORD_VEC4S: i32 = 9;
+pub struct Record {
+    slot: i32,
+    parent: i32,        // the parent's slot, -1 for a root
+    root: i32,
+    level: i32,
+    x: i32,
+    y: i32,
+    quadrant: vec2<i32>,
+    anchor: vec3<f32>,  // the frame's centre in base coordinates, rounded to f32
+    extent: f32,
+    lost: vec3<f32>,    // the centre less the anchor
+    radius: f32,
+    u: vec3<f32>,       // the frame's axes: base(s, t) = centre + (s - 0.5) u + (t - 0.5) v
+    v: vec3<f32>,
+    dir_hi: vec3<f32>,  // the surface's normal at the anchor (cube-sphere: normalize(anchor)), hi + lo
+    dir_lo: vec3<f32>,
+    point: vec3<f32>,   // the anchor's surface point less the tile's center
+}
+pub fn record<B>(table: B, i: i32) -> Record {
+    let r = i * RECORD_VEC4S;
+    let a = table[r];
+    let b = table[r + 1];
+    let c = bitcast<vec4<f32>>(table[r + 2]);
+    let d = bitcast<vec4<f32>>(table[r + 3]);
+    return Record {
+        slot: a.x, parent: a.y, root: a.z, level: a.w, x: b.x, y: b.y, quadrant: vec2<i32>(b.z, b.w),
+        anchor: c.xyz, extent: c.w, lost: d.xyz, radius: d.w,
+        u: bitcast<vec4<f32>>(table[r + 4]).xyz, v: bitcast<vec4<f32>>(table[r + 5]).xyz,
+        dir_hi: bitcast<vec4<f32>>(table[r + 6]).xyz, dir_lo: bitcast<vec4<f32>>(table[r + 7]).xyz,
+        point: bitcast<vec4<f32>>(table[r + 8]).xyz,
+    };
+}
+
+// The base point at (s, t) of the frame, less the anchor.
+pub fn frame_offset(rec: Record, s: f32, t: f32) -> vec3<f32> {
+    return rec.lost + rec.u * (s - 0.5) + rec.v * (t - 0.5);
+}
+
+// On a cube-sphere, normalize(anchor + d) less normalize(anchor), for a
+// base offset d from the anchor, to f32's precision of the offset itself:
+// |anchor + d| = |anchor| + g with g = (2 anchor.d + d.d) / (|anchor| +
+// |anchor + d|), which holds no difference of large numbers.
+pub fn sphere_offset(rec: Record, d: vec3<f32>) -> vec3<f32> {
+    let l = length(rec.anchor);
+    let grow = 2.0 * dot(rec.anchor, d) + dot(d, d);
+    let l2 = sqrt(l * l + grow);
+    let g = grow / (l + l2);
+    return (d - rec.dir_hi * g) / l2;
+}
+
+// A surface point h above the base at base offset d (cube-sphere radius
+// `radius`), less the tile's center: what a producer writes as a vertex.
+pub fn sphere_vertex(rec: Record, d: vec3<f32>, radius: f32, h: f32) -> vec3<f32> {
+    let dd = sphere_offset(rec, d);
+    return dd * radius + (rec.dir_hi + dd) * h + rec.point;
+}

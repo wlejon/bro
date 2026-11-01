@@ -59,7 +59,7 @@ struct ExposurePush {
 shared var tile: array<u32, 128>;
 shared var is_last: u32;
 
-@compute @fast @workgroup_size(16, 16, 1)
+@compute @workgroup_size(16, 16, 1)
 fn exposure_comp(u: ExposurePush) {
     let i = local_index();
     if (u.mode < 0.5) {

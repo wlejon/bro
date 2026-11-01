@@ -3,14 +3,27 @@
  * @summary Documentation and examples for the `bro.kernel` JavaScript API.
  *
  * `bro.kernel` compiles brokernel source (../brokernel, a WGSL-like kernel
- * language for world code: f64 positions, grids, stencils and typed stores
- * as constructs, FastNoise2's nodes as `std::noise`) and runs its kernels on
- * the CPU: a point kernel per call (a height for physics, the camera,
- * placement), a grid kernel over a grid of cells into typed arrays; and on
- * the GPU: a grid kernel dispatched on the engine's own Vulkan device over
- * KernelBuffers (section 6). One source compiles for the CPU and the GPU
- * together; they compute the same values (the language's rules, brokernel
- * README.md).
+ * language for world code: grids, stencils and typed stores as constructs,
+ * FastNoise2's nodes as `std::noise`) and runs its kernels on the CPU: a
+ * point kernel per call (a height for physics, the camera, placement), a
+ * grid kernel over a grid of cells into typed arrays; and on the GPU: a grid
+ * kernel dispatched on the engine's own Vulkan device over KernelBuffers
+ * (section 6). One source compiles for the CPU and the GPU together.
+ *
+ * GPU code is f32. f64 is the CPU's: a kernel marked `@cpu` has no GPU build
+ * and may use it (absolute positions on an Earth-radius world, a noise
+ * lattice's cell); every other kernel is compiled for the GPU too, and f64 in
+ * one is a compile error at the f64. Work about a large world is done in f64
+ * on the CPU at an anchor near the work (a tile's centre, the camera) and
+ * handed to the GPU as f32 offsets from it (tiles-api.js's batch table).
+ *
+ * Math is the hardware's fast path: on the GPU the driver may fuse and
+ * reorder float arithmetic and the f32 transcendentals (sin, exp, pow,
+ * inverse square root, ...) are the device's own; on the CPU multiply-adds
+ * fuse into FMAs. So a kernel's two builds agree to a few f32 ulps, not to
+ * the bit. A kernel marked `@precise` rounds every operation on both targets
+ * as written, with polynomial transcendentals, and its builds agree exactly
+ * (brokernel README.md).
  *
  * Mounted in every realm (the page's and a Worker's) when `BRO_WITH_KERNEL`
  * is enabled (the app, desktop and full profiles); a build without it has
@@ -31,14 +44,16 @@ console.log('brokernel', bro.kernel.version);
 // diagnostics (its directory, if any, is dropped).
 //
 // A compile error throws an Error whose message is the formatted diagnostics
-// and whose `diagnostics` is [{ severity, file, line, column, message }].
+// and whose `diagnostics` is [{ severity, file, line, column, message }]
+// (f64 reached from a kernel that is not @cpu is one, at the f64).
 
 const mod = bro.kernel.compile(`
     import std::noise::*;
     from world::shape import ridge;
 
-    // A point kernel: no grid; called once per position.
-    @kernel
+    // A point kernel: no grid; called once per position. f64 positions far
+    // from the origin: a @cpu kernel, with no GPU build.
+    @kernel @cpu
     fn k_height(x: f64, y: f64, z: f64, seed: i32) -> f32 {
         let p = vec3<f64>(x, y, z) * 0.0005;
         return ridge(fbm_simplex<f64, 3>(p, 6, 2.0, 0.5, 0.0, seed) as f32);
@@ -139,9 +154,9 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 // ============================================================================
 //
 // `bro.kernel.gpu` is true once the engine's Vulkan device is up (it can
-// reach buffers by address and compute in 64-bit integers; f64 kernels also
-// need shaderFloat64). The work runs in the engine's graphics stream, in the
-// order it is asked for, before any later frame's draws.
+// reach buffers by address and compute in 64-bit integers). The work runs in
+// the engine's graphics stream, in the order it is asked for, before any
+// later frame's draws. A @cpu kernel has no GPU build: its dispatch throws.
 //
 // bro.kernel.createBuffer(byteLength | typedArray) -> KernelBuffer: GPU
 // memory, reading zero, or holding the typed array's bytes. A KernelBuffer is

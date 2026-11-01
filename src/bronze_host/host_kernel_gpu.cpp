@@ -109,7 +109,6 @@ brass::gpu::VulkanDeviceCaps capsOf(const render::VulkanContext& ctx) {
     caps.info.name = ctx.deviceProperties().deviceName;
     caps.buffer_device_address = f.bufferDeviceAddress;
     caps.shader_int64 = f.shaderInt64;
-    caps.shader_float64 = f.shaderFloat64;
     caps.shader_int16 = f.shaderInt16;
     caps.storage_buffer_8bit = f.storageBuffer8Bit;
     caps.storage_buffer_16bit = f.storageBuffer16Bit;
@@ -117,7 +116,6 @@ brass::gpu::VulkanDeviceCaps capsOf(const render::VulkanContext& ctx) {
     caps.subgroup_shuffle = f.subgroupShuffle;
     caps.buffer_float32_atomic_add = f.bufferFloat32AtomicAdd;
     caps.shared_float32_atomic_add = f.sharedFloat32AtomicAdd;
-    caps.buffer_float64_atomic_add = f.bufferFloat64AtomicAdd;
     caps.buffer_int64_atomics = f.bufferInt64Atomics;
     caps.shared_int64_atomics = f.sharedInt64Atomics;
     caps.subgroup_size = f.subgroupSize;

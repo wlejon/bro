@@ -33,11 +33,12 @@ struct VulkanQueueFamilyIndices {
 
 /// What compute shaders compiled outside bro (brokernel's SPIR-V) may use:
 /// the device features behind their capabilities, each enabled where the
-/// device has it, and the limits a pipeline is checked against.
+/// device has it, and the limits a pipeline is checked against. No f64:
+/// GPU code is f32 (consumer GPUs run doubles at a small fraction of the
+/// f32 rate, and MoltenVK has none), so shaderFloat64 is never enabled.
 struct VulkanComputeFeatures {
     bool bufferDeviceAddress = false;   // PhysicalStorageBufferAddresses: buffers reached by address
     bool shaderInt64 = false;
-    bool shaderFloat64 = false;
     bool shaderInt16 = false;
     bool storageBuffer8Bit = false;
     bool storageBuffer16Bit = false;
@@ -45,7 +46,6 @@ struct VulkanComputeFeatures {
     bool sharedInt64Atomics = false;
     bool bufferFloat32AtomicAdd = false;  // VK_EXT_shader_atomic_float
     bool sharedFloat32AtomicAdd = false;
-    bool bufferFloat64AtomicAdd = false;
     bool subgroupBasic = false;           // in the compute stage
     bool subgroupShuffle = false;
     uint32_t subgroupSize = 0;

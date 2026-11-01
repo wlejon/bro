@@ -102,13 +102,30 @@
 //
 // batch (the argument to produce):
 //   count               its tiles, 1 to producePerUpdate
-//   table               KernelBuffer of `count` records of 24 float64
-//                       (integers exact) for kernels, record i at 24 * i:
-//                         0 slot, 1 parentSlot (-1 for a root), 2 root,
-//                         3 level, 4 x, 5 y, 6 quadrant x, 7 quadrant y,
-//                         8-10 frame corner, 11-13 frame u, 14-16 frame v,
-//                         17-19 center, 20 extent, 21 radius, 22-23 0
-//                       (the tile fields below). Written before produce is
+//   table               KernelBuffer of `count` records of 36 words for
+//                       kernels (GPU code is f32), record i at word 36 * i,
+//                       read as nine vec4<i32> by tiles::record (section 3):
+//                         int32 0 slot, 1 parentSlot (-1 for a root), 2 root,
+//                         3 level, 4 x, 5 y, 6 quadrant x, 7 quadrant y;
+//                         float32 8-10 anchor, 11 extent, 12-14 lost,
+//                         15 radius, 16-18 frame u, 20-22 frame v,
+//                         24-26 dirHi, 28-30 dirLo, 32-34 point (19, 23,
+//                         27, 31, 35 are 0).
+//                       The tile is anchored at its frame's centre rounded
+//                       to f32 (`anchor`, base coordinates), and every other
+//                       float places its cells about it: `lost` the centre
+//                       less the anchor, so base(s, t) = anchor + lost +
+//                       (s - 0.5) u + (t - 0.5) v; dirHi + dirLo the base
+//                       surface's normal at the anchor (a cube-sphere's
+//                       normalize(anchor); a plane's (0, 1, 0)); `point` the
+//                       anchor's base surface point less the tile's center.
+//                       A cell's offset from the anchor is small, so f32
+//                       holds it at any scale where its absolute position
+//                       would not: tiles::sphere_vertex gives a cube-sphere
+//                       vertex relative to the center. Work that needs an
+//                       absolute position (a noise lattice's cell) is done
+//                       on the CPU in f64 at the tile's `anchor` (below) and
+//                       handed to the kernel. Written before produce is
 //                       called, it lands before the producer's dispatches;
 //                       the same KernelBuffer every update
 //   tiles               the same tiles as objects, for the CPU:
@@ -126,9 +143,11 @@
 //                         for (s, t) in [0, 1]^2 across its interior. A
 //                         plane's base coordinates are the world's; a
 //                         cube-sphere's are the cube's ([-1, 1]^3), and the
-//                         world point is center + normalize(base) * radius. A
-//                         kernel given these in f64 places each cell exactly
-//                         at any scale.
+//                         world point is center + normalize(base) * radius
+//     anchor              { base, dir }: the table's anchor and dirHi, f32
+//                         values: CPU work in f64 about the tile (a noise
+//                         lattice's cell at the anchor's point) starts from
+//                         these, so it lines up with the kernel's offsets
 //     center, radius      the tile's bounding sphere (the one cache.drawn
 //                         reports): a kernel that writes positions relative
 //                         to `center` keeps them small enough for f32. The
@@ -156,18 +175,16 @@
 // Roots from a function of the plane; children their parent plus detail
 // that sums to zero over each 2x2 block. One kernel, the whole batch.
 const mod = bro.kernel.compile(`
+    import tiles;
     @kernel @grid(3)
-    fn k_produce(g: grid<3>, table: read_store<f64, 1>, pool: rw_store<f32, 3>, cells: f32) {
-        let r = g.z() * 24;
-        let slot = table[r] as i32;
-        let parent = table[r + 1] as i32;
+    fn k_produce(g: grid<3>, table: read_store<vec4<i32>, 1>, pool: rw_store<f32, 3>, cells: f32) {
+        let rec = tiles::record(table, g.z());
         let fx = g.x() as f32;
         let fy = g.y() as f32;
-        if (parent < 0) {
-            let step = (table[r + 20] as f32) / cells;
-            let x = (table[r + 8] as f32) + (fx + 0.5) * step;
-            let z = (table[r + 10] as f32) + (fy + 0.5) * step;
-            pool[g.x(), g.y(), slot] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
+        if (rec.parent < 0) {
+            // A root's plane spans 2048 m: its absolute coordinates are small.
+            let b = rec.anchor + tiles::frame_offset(rec, (fx + 0.5) / cells, (fy + 0.5) / cells);
+            pool[g.x(), g.y(), rec.slot] = sin(b.x * 0.11) * cos(b.z * 0.07) * 4.0;
             return;
         }
         let half = cells * 0.5;
@@ -175,11 +192,11 @@ const mod = bro.kernel.compile(`
         let py = floor(fy * 0.5);
         let sx = (fx - 2.0 * px) * 2.0 - 1.0;
         let sy = (fy - 2.0 * py) * 2.0 - 1.0;
-        let p = pool[((table[r + 6] as f32) * half + px) as i32, ((table[r + 7] as f32) * half + py) as i32, parent];
-        let amp = 8.0 / exp2(table[r + 3] as f32);
-        pool[g.x(), g.y(), slot] = p + amp * sin(px * 12.9898 + py * 78.233) * sx * sy;
+        let p = pool[((rec.quadrant.x as f32) * half + px) as i32, ((rec.quadrant.y as f32) * half + py) as i32, rec.parent];
+        let amp = 8.0 / exp2(rec.level as f32);
+        pool[g.x(), g.y(), rec.slot] = p + amp * sin(px * 12.9898 + py * 78.233) * sx * sy;
     }
-`, { file: 'terrain.bk' });
+`, { file: 'terrain.bk', modules: { tiles: bro.tiles.module } });
 
 const terrain = bro.tiles.createCache({
     domain: { type: 'plane', origin: [0, 0], size: 4096, roots: [2, 2] },
@@ -338,6 +355,19 @@ function frame(camera, patch) {
 //       sample there gives what cells() would
 //   tiles::level_for(w, w0, maxLevel) -> f32   the level whose cells are w
 //       across where level 0's are w0, fractional (blend two, as mips)
+//
+// And a produce(batch)'s table (section 1), taken by any container of
+// vec4<i32> (a kernel's read_store<vec4<i32>, 1>):
+//
+//   tiles::record(table, i) -> Record { slot, parent, root, level, x, y,
+//       quadrant, anchor, extent, lost, radius, u, v, dir_hi, dir_lo, point }
+//       batch record i (tiles::RECORD_VEC4S vec4s a record)
+//   tiles::frame_offset(rec, s, t) -> vec3<f32>   base(s, t) less the anchor
+//   tiles::sphere_offset(rec, d) -> vec3<f32>   on a cube-sphere,
+//       normalize(anchor + d) less normalize(anchor) for a base offset d,
+//       good to f32 of the offset (no difference of large numbers)
+//   tiles::sphere_vertex(rec, d, radius, h) -> vec3<f32>   the surface point
+//       h above the base at offset d, less the tile's center: a vertex
 //
 // A cube-sphere point's (u, v) is f32: good to a millionth of a face, about
 // level 14 of a 64-cell tile.

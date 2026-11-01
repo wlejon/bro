@@ -8,7 +8,7 @@ if (!bro.kernel.available) {
     const mod = bro.kernel.compile(`
         import std::noise::*;
 
-        @kernel
+        @kernel @cpu
         fn k_height(x: f64, y: f64, z: f64, seed: i32) -> f32 {
             return fbm_simplex<f64, 3>(vec3<f64>(x, y, z) * 0.001, 5, 2.0, 0.5, 0.0, seed) as f32;
         }

@@ -109,7 +109,7 @@ fn atm_segment(atm: atmosphere::Atmosphere, ro: vec3<f32>, rd: vec3<f32>) -> Seg
     return SegmentResult { hit: t1 > t0, t0: t0, t1: t1, ground: ground };
 }
 
-@compute @fast @workgroup_size(8, 8, 1)
+@compute @workgroup_size(8, 8, 1)
 fn atmosphere_transmittance(@binding(0, 3) @format(rgba16f) out_transmittance: write_image2d<vec4<f32>>) {
     let gid = global_id();
     let px = gid.xy;
@@ -133,7 +133,7 @@ fn atmosphere_transmittance(@binding(0, 3) @format(rgba16f) out_transmittance: w
     out_transmittance.store(px, vec4<f32>(exp(-depth * dt), 1.0));
 }
 
-@compute @fast @workgroup_size(64, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn atmosphere_multiscatter(@binding(0, 3) @format(rgba16f) out_multi_scatter: write_image2d<vec4<f32>>) {
     let wgid = workgroup_id();
     let px = wgid.xy;
@@ -202,7 +202,7 @@ fn atmosphere_multiscatter(@binding(0, 3) @format(rgba16f) out_multi_scatter: wr
     }
 }
 
-@compute @fast @workgroup_size(64, 1, 1)
+@compute @workgroup_size(64, 1, 1)
 fn atmosphere_skylight(@binding(0, 3) @format(rgba16f) out_sky_light: image3d<vec4<f32>>) {
     let wgid = workgroup_id();
     let px = wgid.xy;
@@ -312,7 +312,7 @@ fn atmosphere_skylight(@binding(0, 3) @format(rgba16f) out_sky_light: image3d<ve
     }
 }
 
-@compute @fast @workgroup_size(8, 8, 1)
+@compute @workgroup_size(8, 8, 1)
 fn atmosphere_skyview(@binding(0, 3) @format(rgba16f) out_sky_view: write_image2d<vec4<f32>>) {
     let gid = global_id();
     let px = gid.xy;
@@ -339,7 +339,7 @@ fn atmosphere_skyview(@binding(0, 3) @format(rgba16f) out_sky_view: write_image2
     out_sky_view.store(px, vec4<f32>(l * atmosphere::TABLE_SCALE, 1.0));
 }
 
-@compute @fast @workgroup_size(32, 2, 1)
+@compute @workgroup_size(32, 2, 1)
 fn atmosphere_aerial(
     @binding(0, 3) @format(rgba16f) out_inscatter: image3d<vec4<f32>>,
     @binding(0, 4) @format(rgba16f) out_transmittance: image3d<vec4<f32>>

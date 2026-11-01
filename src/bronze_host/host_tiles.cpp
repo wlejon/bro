@@ -36,10 +36,54 @@ using tilecache::DrawTile;
 // same way and get a camera-relative position to f64 accuracy).
 constexpr uint32_t kRecordInts = 16;
 
-// A batch table record, 24 float64 (integers exact): slot, parentSlot (-1
-// for a root), root, level, x, y, quadrant x, quadrant y, frame corner.xyz,
-// u.xyz, v.xyz, the bounding sphere's center.xyz, extent, radius, 0, 0.
-constexpr uint32_t kTableDoubles = 24;
+// A batch table record, 36 words (docs/tiles-api.js): int32 slot,
+// parentSlot (-1 for a root), root, level, x, y, quadrant x, quadrant y,
+// then float32 anchor.xyz, extent, (frame centre - anchor).xyz, radius,
+// u.xyz, 0, v.xyz, 0, dirHi.xyz, 0, dirLo.xyz, 0, (anchor's surface point -
+// center).xyz, 0. Everything a kernel needs to place a cell in f32 relative
+// to the tile: the anchor is the frame's centre rounded to f32, and every
+// other float is small beside it or exact.
+constexpr uint32_t kTableWords = 36;
+
+// The f32 anchor of a tile and what places its cells about it.
+struct TileAnchor {
+    float base[3];      // the frame's centre in base coordinates, rounded
+    float lost[3];      // the centre less base
+    float dirHi[3];     // the base surface's normal at the anchor (cube-sphere: normalize(base)), rounded
+    float dirLo[3];     // what the rounding lost
+    float point[3];     // the anchor's surface point less the tile's center
+};
+
+TileAnchor anchorOf(const tilecache::Domain& d, const tilecache::Domain::Frame& f, const tilecache::Vec3d& center) {
+    TileAnchor a{};
+    const double c[3] = {f.corner.x + 0.5 * (f.du.x + f.dv.x), f.corner.y + 0.5 * (f.du.y + f.dv.y),
+                         f.corner.z + 0.5 * (f.du.z + f.dv.z)};
+    double base[3], n[3];
+    for (int k = 0; k < 3; ++k) {
+        a.base[k] = static_cast<float>(c[k]);
+        base[k] = a.base[k];
+        a.lost[k] = static_cast<float>(c[k] - base[k]);
+    }
+    double surface[3];
+    if (d.kind == tilecache::Domain::Kind::CubeSphere) {
+        const double l = std::sqrt(base[0] * base[0] + base[1] * base[1] + base[2] * base[2]);
+        const double dc[3] = {d.center.x, d.center.y, d.center.z};
+        for (int k = 0; k < 3; ++k) {
+            n[k] = base[k] / l;
+            surface[k] = dc[k] + n[k] * d.radius;
+        }
+    } else {
+        n[0] = 0; n[1] = 1; n[2] = 0;
+        for (int k = 0; k < 3; ++k) surface[k] = base[k];
+    }
+    const double ce[3] = {center.x, center.y, center.z};
+    for (int k = 0; k < 3; ++k) {
+        a.dirHi[k] = static_cast<float>(n[k]);
+        a.dirLo[k] = static_cast<float>(n[k] - a.dirHi[k]);
+        a.point[k] = static_cast<float>(surface[k] - ce[k]);
+    }
+    return a;
+}
 
 // The lookup (tilecache/tiles.bk): int4 records, the first [mask, 0, 0, 0],
 // then mask + 1 entries, a ready tile at the first free one from
@@ -210,6 +254,13 @@ Value tileObject(Cache& c, const tilecache::Production& p) {
     const tilecache::Bounds b = c.tree.bounds(p.id);
     t.set("center", vec3(b.center));
     t.set("radius", b.radius);
+    // The batch table's anchor (f32 values): what a producer anchors its own
+    // f64 work at on the CPU, so it lines up with the table's offsets.
+    const TileAnchor a = anchorOf(d, f, b.center);
+    ev::ObjectBuilder anchor;
+    anchor.set("base", vec3({a.base[0], a.base[1], a.base[2]}));
+    anchor.set("dir", vec3({a.dirHi[0], a.dirHi[1], a.dirHi[2]}));
+    t.set("anchor", anchor.get());
     if (p.parentSlot >= 0) {
         ev::ObjectBuilder parent;
         parent.set("slot", p.parentSlot);
@@ -428,21 +479,28 @@ Value js_update(Value self, std::span<const Value> args) {
         }
         // The batch on the GPU, for kernels that produce it in one dispatch.
         const tilecache::Domain& d = c->tree.config().domain;
-        std::vector<double> records(batch.size() * kTableDoubles, 0.0);
+        std::vector<int32_t> records(batch.size() * kTableWords, 0);
         for (size_t i = 0; i < batch.size(); ++i) {
             const tilecache::Production& p = batch[i];
-            double* r = records.data() + i * kTableDoubles;
+            int32_t* r = records.data() + i * kTableWords;
             const tilecache::Domain::Frame f = d.frame(p.id);
             const tilecache::Bounds b = c->tree.bounds(p.id);
-            const double v[] = {static_cast<double>(p.slot), static_cast<double>(p.parentSlot),
-                                static_cast<double>(p.id.root), static_cast<double>(p.id.level),
-                                static_cast<double>(p.id.x), static_cast<double>(p.id.y),
-                                static_cast<double>(p.id.x & 1u), static_cast<double>(p.id.y & 1u),
-                                f.corner.x, f.corner.y, f.corner.z, f.du.x, f.du.y, f.du.z, f.dv.x, f.dv.y, f.dv.z,
-                                b.center.x, b.center.y, b.center.z, d.tileExtent(p.id), b.radius};
-            std::copy(std::begin(v), std::end(v), r);
+            const TileAnchor a = anchorOf(d, f, b.center);
+            const int32_t ints[8] = {static_cast<int32_t>(p.slot), p.parentSlot, static_cast<int32_t>(p.id.root),
+                                     static_cast<int32_t>(p.id.level), static_cast<int32_t>(p.id.x),
+                                     static_cast<int32_t>(p.id.y), static_cast<int32_t>(p.id.x & 1u),
+                                     static_cast<int32_t>(p.id.y & 1u)};
+            std::copy(std::begin(ints), std::end(ints), r);
+            const float floats[28] = {a.base[0], a.base[1], a.base[2], static_cast<float>(d.tileExtent(p.id)),
+                                      a.lost[0], a.lost[1], a.lost[2], static_cast<float>(b.radius),
+                                      static_cast<float>(f.du.x), static_cast<float>(f.du.y), static_cast<float>(f.du.z), 0.0f,
+                                      static_cast<float>(f.dv.x), static_cast<float>(f.dv.y), static_cast<float>(f.dv.z), 0.0f,
+                                      a.dirHi[0], a.dirHi[1], a.dirHi[2], 0.0f,
+                                      a.dirLo[0], a.dirLo[1], a.dirLo[2], 0.0f,
+                                      a.point[0], a.point[1], a.point[2], 0.0f};
+            std::memcpy(r + 8, floats, sizeof(floats));
         }
-        c->table->write(0, records.data(), records.size() * sizeof(double), &err);
+        c->table->write(0, records.data(), records.size() * sizeof(int32_t), &err);
 
         ev::ArrayBuilder tiles(batch.size());
         for (size_t i = 0; i < batch.size(); ++i) tiles.set(static_cast<uint32_t>(i), tileObject(*c, batch[i]));
@@ -672,7 +730,7 @@ Value js_createCache(Value, std::span<const Value> args) {
         if (!cache->rangePool) return ev::throwError("bro.tiles.createCache: " + err);
     }
 
-    cache->table = createEngineBuffer(size_t{kTableDoubles} * sizeof(double) * cache->producePerUpdate, &err);
+    cache->table = createEngineBuffer(size_t{kTableWords} * sizeof(int32_t) * cache->producePerUpdate, &err);
     if (!cache->table) return ev::throwError("bro.tiles.createCache: " + err);
     cache->tableValue.set(brokernel::api::bufferValue(cache->table));
 

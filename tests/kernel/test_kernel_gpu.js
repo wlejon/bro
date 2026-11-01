@@ -1,7 +1,8 @@
 // Headless test for bro.kernel's GPU half: kernels dispatched on the engine's
 // Vulkan device over KernelBuffers agree with run() on the CPU (a stencil, a
-// gather returning a value per cell, f64 noise over a grid), dispatches run
-// in order, stores stay bounded, and the errors a script gets for bad calls.
+// gather returning a value per cell, noise over a grid), dispatches run in
+// order, stores stay bounded, f64 stays on the CPU, and the errors a script
+// gets for bad calls.
 assert(typeof bro.kernel === 'object', 'bro.kernel namespace exists');
 if (!bro.kernel.available) {
     skipTest('bro.kernel is compiled out of this build');
@@ -24,7 +25,14 @@ if (!bro.kernel.available) {
         }
 
         @kernel @grid(2)
-        fn k_field(g: grid<2>, out: write_store<f32, 2>, origin: vec3<f64>, seed: i32) {
+        fn k_field(g: grid<2>, out: write_store<f32, 2>, origin: vec3<f32>, seed: i32) {
+            let p = origin + vec3<f32>(g.x() as f32, g.y() as f32, 0.0) * 0.0375;
+            out[g.x(), g.y()] = fbm_simplex<f32, 3>(p, 5, 2.0, 0.5, 0.0, seed);
+        }
+
+        // f64 far from the origin: a CPU kernel's, which has no GPU build.
+        @kernel @cpu @grid(2)
+        fn k_far(g: grid<2>, out: write_store<f32, 2>, origin: vec3<f64>, seed: i32) {
             let p = origin + vec3<f64>(g.x() as f64, g.y() as f64, 0.0) * 37.5;
             out[g.x(), g.y()] = fbm_simplex<f64, 3>(p * 0.001, 5, 2.0, 0.5, 0.0, seed) as f32;
         }
@@ -110,15 +118,36 @@ if (!bro.kernel.available) {
     const got = returns.read(new Float32Array(5));
     assert([...got].join(',') === '10,30,0,0,20', 'out-of-bounds gathers read zero on the GPU: ' + [...got].join(','));
 
-    // f64 noise over a grid far from the origin, with a vector argument.
+    // Noise over a grid, with a vector argument. GPU code takes the
+    // hardware's fast math (fused multiply-adds, the device's
+    // transcendentals), so the builds agree to a few f32 ulps, not to the bit.
     const field = mod.kernel('k_field');
-    const FW = 64, FH = 32, origin = [2293560.0, 3058080.0, 5096800.0];
+    const FW = 64, FH = 32, origin = [3.25, -1.5, 0.75];
     const fieldBuf = bro.kernel.createBuffer(FW * FH * 4);
     field.dispatch([FW, FH], fieldBuf, origin, 1337);
     const cpuField = new Float32Array(FW * FH);
     field.run([FW, FH], cpuField, origin, 1337);
     assert(cpuField.some((v) => v !== 0), 'the CPU field is not empty');
-    agree(fieldBuf.read(new Float32Array(FW * FH)), cpuField, 1e-5, 'f64 fbm field');
+    // Fast math: the builds fuse multiply-adds at different sites, which the
+    // octaves' doubling amplifies (5 octaves: ~1e-3 at most), and a point on
+    // a simplex's edge may take its neighbour.
+    agree(fieldBuf.read(new Float32Array(FW * FH)), cpuField, 2e-3, 'fbm field');
+
+    // f64 is the CPU's: a @cpu kernel runs, and has no GPU build.
+    const far = mod.kernel('k_far');
+    const farField = new Float32Array(FW * FH);
+    far.run([FW, FH], farField, [2293560.0, 3058080.0, 5096800.0], 1337);
+    assert(farField.some((v) => v !== 0), 'a @cpu f64 field runs on the CPU');
+    let farThrown = null;
+    try { far.dispatch([FW, FH], fieldBuf, [0, 0, 0], 1337); } catch (e) { farThrown = e; }
+    assert(farThrown && /@cpu/.test(farThrown.message), 'and its dispatch is refused: ' + (farThrown && farThrown.message));
+    // A GPU kernel that uses f64 is a compile error naming the site.
+    let f64Thrown = null;
+    try {
+        bro.kernel.compile('@kernel @grid(1)\nfn k_bad(g: grid<1>, out: write_store<f32, 1>, x: f32) {\n    let y = (x as f64) * 2.0;\n    out[g.x()] = y as f32;\n}', { file: 'bad.bk' });
+    } catch (e) { f64Thrown = e; }
+    assert(f64Thrown && /f64 in GPU kernel 'k_bad'/.test(f64Thrown.message) && f64Thrown.diagnostics?.[0]?.line === 3,
+           'f64 in a GPU kernel fails to compile at its line: ' + (f64Thrown && f64Thrown.message));
 
     // The errors a script gets.
     const throws = (fn, check, what) => {

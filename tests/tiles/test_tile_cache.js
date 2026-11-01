@@ -28,24 +28,23 @@ if (!bro.kernel.available || !bro.tiles) {
     // cell plus detail that sums to zero over each 2x2 block, so the child
     // averages back to the parent.
     const mod = bro.kernel.compile(`
+        import tiles;
         @kernel @grid(3)
-        fn k_produce(g: grid<3>, table: read_store<f64, 1>, pool: rw_store<f32, 3>, cells: f32) {
-            let r = g.z() * 24;
-            let slot = table[r] as i32;
-            let parent = table[r + 1] as i32;
+        fn k_produce(g: grid<3>, table: read_store<vec4<i32>, 1>, pool: rw_store<f32, 3>, cells: f32) {
+            let rec = tiles::record(table, g.z());
+            let slot = rec.slot;
+            let parent = rec.parent;
             let fx = g.x() as f32;
             let fy = g.y() as f32;
             if (parent < 0) {
-                let step = (table[r + 20] as f32) / cells;
-                let x = (table[r + 8] as f32) + (fx + 0.5) * step;
-                let z = (table[r + 10] as f32) + (fy + 0.5) * step;
-                pool[g.x(), g.y(), slot] = sin(x * 0.11) * cos(z * 0.07) * 4.0;
+                let b = rec.anchor + tiles::frame_offset(rec, (fx + 0.5) / cells, (fy + 0.5) / cells);
+                pool[g.x(), g.y(), slot] = sin(b.x * 0.11) * cos(b.z * 0.07) * 4.0;
                 return;
             }
             let half = cells * 0.5;
-            let qx = table[r + 6] as f32;
-            let qy = table[r + 7] as f32;
-            let amp = 0.5 / exp2(table[r + 3] as f32);
+            let qx = rec.quadrant.x as f32;
+            let qy = rec.quadrant.y as f32;
+            let amp = 0.5 / exp2(rec.level as f32);
             let px = floor(fx * 0.5);
             let py = floor(fy * 0.5);
             let sx = (fx - 2.0 * px) * 2.0 - 1.0;
@@ -57,15 +56,14 @@ if (!bro.kernel.available || !bro.tiles) {
 
         // A range of [lo, hi] for every tile of the batch at level <= upTo.
         @kernel @grid(1)
-        fn k_report(g: grid<1>, table: read_store<f64, 1>, ranges: write_store<f32, 1>,
+        fn k_report(g: grid<1>, table: read_store<vec4<i32>, 1>, ranges: write_store<f32, 1>,
                     lo: f32, hi: f32, upTo: f32) {
-            let r = g.x() * 24;
-            if ((table[r + 3] as f32) > upTo) { return; }
-            let slot = table[r] as i32;
-            ranges[2 * slot] = lo;
-            ranges[2 * slot + 1] = hi;
+            let rec = tiles::record(table, g.x());
+            if ((rec.level as f32) > upTo) { return; }
+            ranges[2 * rec.slot] = lo;
+            ranges[2 * rec.slot + 1] = hi;
         }
-    `, { file: 'tiles.bk' });
+    `, { file: 'tiles.bk', modules: { tiles: bro.tiles.module } });
     const kProduce = mod.kernel('k_produce'), kReport = mod.kernel('k_report');
 
     const SIZE = 64, T = 16;
@@ -299,16 +297,24 @@ if (!bro.kernel.available || !bro.tiles) {
         domain: { type: 'cubeSphere', radius: 100, center: [0, 0, 0] },
         tileSize: T, capacity: 256, maxLevel: 6, layers: { height: 4 },
         produce: (batch) => {
-            // The table holds what the tile objects do.
-            const table = batch.table.read(new Float64Array(batch.count * 24));
+            // The table holds what the tile objects do, about an f32 anchor.
+            const words = batch.table.read(new Int32Array(batch.count * 36));
+            const floats = new Float32Array(words.buffer);
+            const f32 = Math.fround;
             batch.tiles.forEach((tile, i) => {
-                const r = table.subarray(i * 24, i * 24 + 24);
+                const r = words.subarray(i * 36, i * 36 + 36), x = floats.subarray(i * 36, i * 36 + 36);
                 const f = tile.frame;
+                const c = f.corner.map((v, k) => v + 0.5 * (f.u[k] + f.v[k]));
+                const [b0, b1, b2] = tile.anchor.base, l = Math.sqrt(b0 * b0 + b1 * b1 + b2 * b2);
+                const n = tile.anchor.base.map((v) => v / l);
                 const same = r[0] === tile.slot && r[1] === (tile.parent ? tile.parent.slot : -1) &&
                     r[2] === tile.root && r[3] === tile.level && r[4] === tile.x && r[5] === tile.y &&
-                    [...f.corner, ...f.u, ...f.v, ...tile.center].every((v, k) => r[8 + k] === v) &&
-                    r[20] === tile.extent && r[21] === tile.radius &&
-                    (!tile.parent || (r[6] === tile.parent.quadrant[0] && r[7] === tile.parent.quadrant[1]));
+                    (!tile.parent || (r[6] === tile.parent.quadrant[0] && r[7] === tile.parent.quadrant[1])) &&
+                    [0, 1, 2].every((k) => x[8 + k] === tile.anchor.base[k] && tile.anchor.base[k] === f32(c[k]) &&
+                        x[12 + k] === f32(c[k] - x[8 + k]) && x[16 + k] === f32(f.u[k]) && x[20 + k] === f32(f.v[k]) &&
+                        x[24 + k] === tile.anchor.dir[k] && x[24 + k] === f32(n[k]) && x[28 + k] === f32(n[k] - x[24 + k]) &&
+                        x[32 + k] === f32(n[k] * 100 - tile.center[k])) &&
+                    x[11] === f32(tile.extent) && x[15] === f32(tile.radius);
                 tableOk = tableOk && same;
                 if (tile.level === 0 && !tile.parent) produced0.push(tile.root);
                 // The frame's far corner, pushed onto the sphere, is the point
@@ -326,7 +332,7 @@ if (!bro.kernel.available || !bro.tiles) {
     let frameErr = 0, diagMin = Infinity, diagMax = 0, tableOk = true;
     assert(settle(sphere, { position: [0, 103, 0], fov: 60, viewportHeight: 720 }), 'a cube-sphere settles');
     assert(produced0.length === 6, `its six faces are roots (${produced0.length})`);
-    assert(tableOk, 'the batch table holds each tile\'s slot, parent, id, quadrant, frame, center, extent and radius');
+    assert(tableOk, 'the batch table holds each tile\'s slot, parent, id, quadrant, anchored frame, extent and radius');
     assert(frameErr < 1e-9, `a tile's frame corner on the sphere is its origin (${frameErr})`);
     assert(diagMin > 0.8 && diagMax < 2.2, `and its frame spans the tile (diagonal / extent in [${diagMin}, ${diagMax}])`);
     const top = sphere.drawn.filter((t) => t.root === 2);
@@ -340,19 +346,17 @@ if (!bro.kernel.available || !bro.tiles) {
     const looked = bro.kernel.compile(`
         import tiles;
         @kernel @grid(3)
-        fn k_dirs(g: grid<3>, table: read_store<f64, 1>, dirs: rw_store<f32, 1>, slots: rw_store<f32, 1>) {
-            let r = g.z() * 24;
-            let slot = table[r] as i32;
-            let s = ((g.x() as f64) - ${LB}.0 + 0.5) / ${LT}.0;
-            let t = ((g.y() as f64) - ${LB}.0 + 0.5) / ${LT}.0;
-            let b = vec3<f64>(table[r + 8], table[r + 9], table[r + 10])
-                  + vec3<f64>(table[r + 11], table[r + 12], table[r + 13]) * s
-                  + vec3<f64>(table[r + 14], table[r + 15], table[r + 16]) * t;
-            let d = normalize(b);
+        fn k_dirs(g: grid<3>, table: read_store<vec4<i32>, 1>, dirs: rw_store<f32, 1>, slots: rw_store<f32, 1>) {
+            let rec = tiles::record(table, g.z());
+            let slot = rec.slot;
+            let s = ((g.x() as f32) - ${LB}.0 + 0.5) / ${LT}.0;
+            let t = ((g.y() as f32) - ${LB}.0 + 0.5) / ${LT}.0;
+            // The direction as the anchor's plus the offset from it.
+            let d = (rec.dir_hi + rec.dir_lo) + tiles::sphere_offset(rec, tiles::frame_offset(rec, s, t));
             let i = (slot * ${LC} + g.y()) * ${LC} + g.x();
-            dirs[3 * i] = d.x as f32;
-            dirs[3 * i + 1] = d.y as f32;
-            dirs[3 * i + 2] = d.z as f32;
+            dirs[3 * i] = d.x;
+            dirs[3 * i + 1] = d.y;
+            dirs[3 * i + 2] = d.z;
             slots[i] = slot as f32;
         }
         fn filtered(dirs: read_store<f32, 1>, c: tiles::Cells, k: i32) -> f32 {
@@ -441,6 +445,58 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(finest === N, `and is at least as fine as the drawn tile there (${finest} of ${N})`);
     assert(slotOk === N, `its cells are in its slot, the border included (${slotOk} of ${N})`);
     assert(minDot > 0.99999, `filtering the cells around it gives its direction (cos ${minDot})`);
+
+    // At Earth's radius a kernel places a tile's vertices in f32 about its
+    // anchor (tiles::sphere_vertex), relative to the tile's center: against
+    // the same points in f64 on the CPU they hold to a few parts in 10^7 of
+    // the tile, under a millimetre on the deep tiles.
+    const ER = 6371000, VT = 8;
+    const kVertex = bro.kernel.compile(`
+        import tiles;
+        @kernel @grid(3)
+        fn k_vertex(g: grid<3>, table: read_store<vec4<i32>, 1>, out: rw_store<f32, 1>) {
+            let rec = tiles::record(table, g.z());
+            let d = tiles::frame_offset(rec, ((g.x() as f32) + 0.5) / ${VT}.0, ((g.y() as f32) + 0.5) / ${VT}.0);
+            let p = tiles::sphere_vertex(rec, d, ${ER}.0, 0.0);
+            let i = ((rec.slot * ${VT} + g.y()) * ${VT} + g.x()) * 3;
+            out[i] = p.x;
+            out[i + 1] = p.y;
+            out[i + 2] = p.z;
+        }
+    `, { file: 'vertex.bk', modules: { tiles: bro.tiles.module } }).kernel('k_vertex');
+    const placed = new Map();
+    const earth = bro.tiles.createCache({
+        domain: { type: 'cubeSphere', radius: ER, center: [0, 0, 0] },
+        tileSize: VT, capacity: 512, maxLevel: 22, producePerUpdate: 64, layers: { v: 12 },
+        produce(batch) {
+            kVertex.dispatch([VT, VT, batch.count], batch.table, this.layer('v'));
+            for (const t of batch.tiles) placed.set(t.slot, t);
+        },
+    });
+    const surfacePoint = [0.3 * ER, 0.9 * ER, -0.2 * ER].map((c, k, a) => c / Math.hypot(...a) * (ER + 40));
+    for (let i = 0; i < 48; i++) {
+        earth.update({ position: surfacePoint, fov: 60, viewportHeight: 720 });
+        advanceTime(16);
+    }
+    const verts = earth.layer('v').read(new Float32Array(512 * VT * VT * 3));
+    let deepLevel = 0, deepErr = 0, relErr = 0;
+    for (const t of earth.drawn) {
+        const tile = placed.get(t.slot);
+        if (!tile || tile.level !== t.level || tile.x !== t.x || tile.y !== t.y) continue;
+        const f = tile.frame;
+        for (let y = 0; y < VT; y++) for (let x = 0; x < VT; x++) {
+            const s = (x + 0.5) / VT, q = (y + 0.5) / VT;
+            const b = f.corner.map((c, k) => c + f.u[k] * s + f.v[k] * q), l = Math.hypot(...b);
+            const i = ((t.slot * VT + y) * VT + x) * 3;
+            const e = Math.hypot(...[0, 1, 2].map((k) => verts[i + k] - (b[k] / l * ER - tile.center[k])));
+            relErr = Math.max(relErr, e / tile.extent);
+            if (t.level >= 16) deepErr = Math.max(deepErr, e);
+        }
+        deepLevel = Math.max(deepLevel, t.level);
+    }
+    assert(deepLevel >= 16, `an Earth-radius cache refines toward its surface (level ${deepLevel})`);
+    assert(relErr < 5e-7 && deepErr < 1e-3,
+           `its vertices placed in f32 about the anchors match f64 (${relErr.toExponential(2)} of a tile, ${(deepErr * 1000).toFixed(3)} mm deep)`);
 
     // After a refresh, a ready tile no view wants leaves the lookup: nothing
     // would produce it again, so a reader asking finer than the view wants

@@ -734,7 +734,6 @@ bool VulkanContext::createLogicalDevice() {
     compute.bufferInt64Atomics = have12.shaderBufferInt64Atomics == VK_TRUE;
     compute.sharedInt64Atomics = have12.shaderSharedInt64Atomics == VK_TRUE;
     compute.shaderInt64 = deviceFeatures_.shaderInt64 == VK_TRUE;
-    compute.shaderFloat64 = deviceFeatures_.shaderFloat64 == VK_TRUE;
     compute.shaderInt16 = deviceFeatures_.shaderInt16 == VK_TRUE;
     {
         VkPhysicalDeviceSubgroupProperties subgroup{};
@@ -774,7 +773,6 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
     deviceFeatures.shaderStorageImageExtendedFormats = VK_TRUE;
     deviceFeatures.shaderInt64 = available.shaderInt64;
-    deviceFeatures.shaderFloat64 = available.shaderFloat64;
     deviceFeatures.shaderInt16 = available.shaderInt16;
     deviceFeatures_ = deviceFeatures;
 
@@ -837,8 +835,12 @@ bool VulkanContext::createLogicalDevice() {
         probe(atomicFloatFeatures);
         compute.bufferFloat32AtomicAdd = atomicFloatFeatures.shaderBufferFloat32AtomicAdd == VK_TRUE;
         compute.sharedFloat32AtomicAdd = atomicFloatFeatures.shaderSharedFloat32AtomicAdd == VK_TRUE;
-        compute.bufferFloat64AtomicAdd = atomicFloatFeatures.shaderBufferFloat64AtomicAdd == VK_TRUE;
-        if (compute.bufferFloat32AtomicAdd || compute.sharedFloat32AtomicAdd || compute.bufferFloat64AtomicAdd) {
+        // f32 only: GPU code has no f64.
+        atomicFloatFeatures.shaderBufferFloat64Atomics = VK_FALSE;
+        atomicFloatFeatures.shaderBufferFloat64AtomicAdd = VK_FALSE;
+        atomicFloatFeatures.shaderSharedFloat64Atomics = VK_FALSE;
+        atomicFloatFeatures.shaderSharedFloat64AtomicAdd = VK_FALSE;
+        if (compute.bufferFloat32AtomicAdd || compute.sharedFloat32AtomicAdd) {
             enabledExtensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         } else {
             chain = atomicFloatFeatures.pNext;
