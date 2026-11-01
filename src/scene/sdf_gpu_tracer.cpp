@@ -141,74 +141,6 @@ inline float evalAoWithKernel(
     return std::clamp(1.0f - intensity * occ, 0.0f, 1.0f);
 }
 
-inline SdfTraceHit traceSingleRayWithKernel(
-    const bromesh::SdfGraph& graph,
-    int rootNode,
-    PointEvalFn pointFn,
-    GradEvalFn gradFn,
-    const SdfRay& ray,
-    const SdfTraceConfig& cfg) {
-    SdfTraceHit result;
-    const bromath::Vec3 dir = normalizeSafe(ray.dir);
-    const int maxSteps = std::clamp(cfg.maxSteps, 1, 2048);
-    const float eps = std::max(cfg.hitEpsilon, 1e-6f);
-    float t = std::max(ray.tMin, 0.0f);
-    const float tMax = std::max(ray.tMax, t);
-
-    for (int step = 0; step < maxSteps; ++step) {
-        const bromath::Vec3 p{
-            ray.origin.x + dir.x * t,
-            ray.origin.y + dir.y * t,
-            ray.origin.z + dir.z * t
-        };
-        const float d = evalWithKernel(graph, rootNode, pointFn, p.x, p.y, p.z);
-        result.distance = d;
-        result.steps = step + 1;
-
-        if (d < eps) {
-            result.hit = true;
-            result.t = t;
-            result.position = p;
-            result.normal = evalNormalWithKernel(
-                graph, rootNode, pointFn, gradFn, p, cfg.normalEpsilon);
-
-            const float bias = std::max(cfg.shadowMinT, eps * 4.0f);
-            const bromath::Vec3 offsetPos{
-                p.x + result.normal.x * bias,
-                p.y + result.normal.y * bias,
-                p.z + result.normal.z * bias
-            };
-            if (cfg.computeShadow) {
-                result.softShadow = evalSoftShadowWithKernel(
-                    graph, rootNode, pointFn,
-                    offsetPos, cfg.lightDir, cfg.shadowK,
-                    cfg.shadowMinT, cfg.shadowMaxT, cfg.shadowSteps);
-            }
-            if (cfg.computeAo) {
-                result.ambientOcclusion = evalAoWithKernel(
-                    graph, rootNode, pointFn,
-                    p, result.normal,
-                    cfg.aoSteps, cfg.aoStepSize, cfg.aoIntensity);
-            }
-            return result;
-        }
-
-        t += d;
-        if (t > tMax) {
-            result.t = t;
-            result.position = {
-                ray.origin.x + dir.x * t,
-                ray.origin.y + dir.y * t,
-                ray.origin.z + dir.z * t
-            };
-            break;
-        }
-    }
-
-    result.t = t;
-    return result;
-}
-
 #if defined(BROMESH_HAS_BRASS_JIT)
 
 using brass::BasicBlock;
@@ -812,68 +744,9 @@ SdfTraceHit SdfGpuTracer::traceRay(
     const SdfRay& ray,
     const SdfTraceConfig& cfg,
     int rootNode) {
-    if (graph.empty()) return {};
-    const auto compiled = bromesh::JitSdfCompiler::instance().compile(graph, rootNode);
-    return traceSingleRayWithKernel(
-        graph, rootNode, compiled.pointFn, compiled.gradFn, ray, cfg);
-}
-
-void SdfGpuTracer::traceRaysCpu(
-    const bromesh::SdfGraph& graph,
-    std::span<const SdfRay> rays,
-    std::vector<SdfTraceHit>& outHits,
-    const SdfTraceConfig& cfg,
-    int rootNode,
-    bool parallel) {
-    outHits.assign(rays.size(), SdfTraceHit{});
-    if (graph.empty() || rays.empty()) return;
-
-    const auto compiled = bromesh::JitSdfCompiler::instance().compile(graph, rootNode);
-    PointEvalFn pointFn = compiled.pointFn;
-    GradEvalFn gradFn = compiled.gradFn;
-
-#if defined(BROMESH_HAS_BRASS_JIT)
-    if (parallel && rays.size() >= 16) {
-        brass::codegen::parallel_for(
-            0,
-            static_cast<int64_t>(rays.size()),
-            [&](int64_t begin, int64_t end) {
-                for (int64_t i = begin; i < end; ++i) {
-                    const size_t idx = static_cast<size_t>(i);
-                    outHits[idx] = traceSingleRayWithKernel(
-                        graph, rootNode, pointFn, gradFn, rays[idx], cfg);
-                }
-            },
-            16);
-        return;
-    }
-#else
-    (void)parallel;
-#endif
-    for (size_t i = 0; i < rays.size(); ++i) {
-        outHits[i] = traceSingleRayWithKernel(
-            graph, rootNode, pointFn, gradFn, rays[i], cfg);
-    }
-}
-
-void SdfGpuTracer::traceRays(
-    const bromesh::SdfGraph& graph,
-    std::span<const SdfRay> rays,
-    std::vector<SdfTraceHit>& outHits,
-    const SdfTraceConfig& cfg,
-    int rootNode,
-    bool parallel) {
-    if (graph.empty() || rays.empty()) {
-        outHits.assign(rays.size(), SdfTraceHit{});
-        return;
-    }
-    if (vulkanAvailable()) {
-        bool usedGpu = false;
-        if (traceRaysGpu(graph, rays, outHits, cfg, rootNode, &usedGpu) && usedGpu) {
-            return;
-        }
-    }
-    traceRaysCpu(graph, rays, outHits, cfg, rootNode, parallel);
+    std::vector<SdfTraceHit> hits;
+    if (!traceRays(graph, std::span<const SdfRay>(&ray, 1), hits, cfg, rootNode)) return {};
+    return hits[0];
 }
 
 bool SdfGpuTracer::updateNodeParams(

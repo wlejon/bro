@@ -68,23 +68,13 @@ struct SdfSpirvAuditSummary {
     std::vector<std::string> diagnostics;
 };
 
-/// Live GPU SDF sphere-tracer, cone-traced soft-shadow & ambient-occlusion evaluator,
-/// and SPIR-V 1.5 compute shader compiler + formal verifier. The GPU half
-/// dispatches on the engine's device (SceneRenderer::defaultVulkanContext()'s
-/// render::VulkanCompute), so it runs on the main thread.
+/// GPU SDF sphere-tracer and grid evaluator, SPIR-V 1.5 compute shader
+/// compiler + formal verifier, and point queries of the field (distance,
+/// normal, soft shadow, ambient occlusion). Tracing and grids dispatch on the
+/// engine's device (SceneRenderer::defaultVulkanContext()'s
+/// render::VulkanCompute), so they run on the main thread.
 class SdfGpuTracer {
 public:
-    /// Returns true if the engine's device can run the compute kernels here
-    /// (render::VulkanCompute::available) and BRO_SDF_FORCE_CPU is not set.
-    static bool vulkanAvailable();
-
-    /// Returns the name of the engine's Vulkan device (or empty string if unavailable).
-    static std::string vulkanDeviceName();
-
-    /// Returns true if the most recent traceRays / traceRaysGpu / evaluateGridGpu call
-    /// dispatched on the GPU.
-    static bool lastTraceUsedVulkanGpu();
-
     /// Returns the number of compiled compute pipelines cached.
     static uint32_t cachedVulkanPipelineCount();
 
@@ -110,35 +100,27 @@ public:
     static SdfSpirvAuditSummary auditSpirvBinary(std::span<const uint32_t> words);
 
     /// Evaluate a 3D SDF distance grid on the Vulkan compute queue using the compiled
-    /// SPIR-V 1.5 `eval_sdf_gpu` kernel (with automatic CPU fallback if Vulkan is unavailable).
-    static bool evaluateGridGpu(
+    /// SPIR-V 1.5 `eval_sdf_gpu` kernel. False (and an empty field) when the
+    /// kernel could not be built or dispatched.
+    static bool evaluateGrid(
         const bromesh::SdfGraph& graph,
         int dimX,
         int dimY,
         int dimZ,
         const bromath::AABB3& bounds,
         std::vector<float>& outField,
-        int rootNode = -1,
-        bool* usedVulkanOut = nullptr);
+        int rootNode = -1);
 
-    /// Dispatch a batch of SDF sphere-tracing rays on the Vulkan compute queue using the
-    /// compiled SPIR-V 1.5 `trace_sdf_rays` kernel (with automatic CPU fallback).
-    static bool traceRaysGpu(
+    /// Sphere-trace a batch of rays on the Vulkan compute queue with the compiled
+    /// SPIR-V 1.5 `trace_sdf_rays` kernel: hit, distance, normal, cone-traced soft
+    /// shadow and ambient occlusion per ray. False (every hit a miss) when the
+    /// kernel could not be built or dispatched.
+    static bool traceRays(
         const bromesh::SdfGraph& graph,
         std::span<const SdfRay> rays,
         std::vector<SdfTraceHit>& outHits,
         const SdfTraceConfig& cfg = {},
-        int rootNode = -1,
-        bool* usedVulkanOut = nullptr);
-
-    /// CPU fallback batch sphere-tracer (`parallel_for`).
-    static void traceRaysCpu(
-        const bromesh::SdfGraph& graph,
-        std::span<const SdfRay> rays,
-        std::vector<SdfTraceHit>& outHits,
-        const SdfTraceConfig& cfg = {},
-        int rootNode = -1,
-        bool parallel = true);
+        int rootNode = -1);
 
     /// Evaluate the signed distance at world-space point `p` using JIT-compiled native
     /// code (with scalar fallback).
@@ -176,23 +158,12 @@ public:
         float intensity = 1.5f,
         int rootNode = -1);
 
-    /// Sphere-trace a single ray against `graph`, computing hit position, analytic normal,
-    /// cone-traced soft shadow, and ambient occlusion.
+    /// Sphere-trace one ray: traceRays with a batch of one.
     static SdfTraceHit traceRay(
         const bromesh::SdfGraph& graph,
         const SdfRay& ray,
         const SdfTraceConfig& cfg = {},
         int rootNode = -1);
-
-    /// Sphere-trace a batch of rays against `graph` on the Vulkan GPU (when available)
-    /// or CPU `parallel_for` without any Marching Cubes triangle rebuild.
-    static void traceRays(
-        const bromesh::SdfGraph& graph,
-        std::span<const SdfRay> rays,
-        std::vector<SdfTraceHit>& outHits,
-        const SdfTraceConfig& cfg = {},
-        int rootNode = -1,
-        bool parallel = true);
 
     /// Mutate the float parameters (`f0..f3`) of an existing node in `graph` in-place
     /// for interactive CSG / blend weight / transform editing without rebuilding topology.

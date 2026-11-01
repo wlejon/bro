@@ -475,17 +475,16 @@ class SDFGraph {
 
   // --- Evaluation and sphere tracing ----------------------------------------
   //
-  // The *Gpu forms compile the graph to a SPIR-V compute kernel and dispatch
-  // it on the engine's Vulkan device (cached per graph hash), falling back to
-  // the CPU when there is none: `bro.mesh.sdfVulkanAvailable()`,
-  // `bro.mesh.sdfVulkanDeviceName()`, and `bro.mesh.sdfLastTraceUsedGpu()`
-  // after a call say which ran. BRO_SDF_FORCE_CPU=1 keeps them on the CPU.
+  // Tracing and grids compile the graph to a SPIR-V compute kernel and
+  // dispatch it on the engine's Vulkan device (cached per graph hash). The
+  // point queries (evalPoint, evalNormal, softShadow, ambientOcclusion) run
+  // the graph's JIT-compiled distance function on the CPU.
 
   /** Distance at a point. @param {Array<number>|number} p -  [x,y,z], or three loose numbers. @returns {number} */
   evalPoint(p) {}
 
   /**
-   * Sphere-trace one ray on the CPU.
+   * Sphere-trace one ray (a batch of one).
    * @param {Array<number>} origin @param {Array<number>} dir
    * @param {Object} [cfg] -  maxSteps, hitEpsilon, lightDir, shadowK, aoSteps, ...
    * @returns {{hit: boolean, t: number, distance: number, position: number[], normal: number[],
@@ -499,16 +498,16 @@ class SDFGraph {
    * hit: t, normal xyz, softShadow, ambientOcclusion, hit (1/0), steps.
    * @param {Float32Array} rays @param {Object} [cfg] @returns {Float32Array}
    */
-  traceRaysGpu(rays, cfg) {}
+  traceRays(rays, cfg) {}
 
   /**
    * The distance at every cell of a grid spanning [min, max] (cell i at
    * min + i * (max - min) / (dim - 1)), x fastest.
    * @param {{dimX?: number, dimY?: number, dimZ?: number, resolution?: number,
    *          min?: number[], max?: number[]}} opts
-   * @returns {{dimX: number, dimY: number, dimZ: number, usedVulkanGpu: boolean, field: Float32Array}}
+   * @returns {{dimX: number, dimY: number, dimZ: number, field: Float32Array}}
    */
-  evaluateGridGpu(opts) {}
+  evaluateGrid(opts) {}
 
 }
 

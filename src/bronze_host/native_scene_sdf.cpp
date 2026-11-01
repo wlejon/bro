@@ -286,7 +286,7 @@ Value implTraceRays(const bromesh::SdfGraph& g, std::span<const Value> args) {
     int rootNode = hasArg(args, 2) ? i32At(args, 2) : -1;
     scene::SdfTraceConfig cfg = parseTraceConfig(argAt(args, 1), &rootNode);
     std::vector<scene::SdfTraceHit> hits;
-    scene::SdfGpuTracer::traceRays(g, rays, hits, cfg, rootNode, true);
+    scene::SdfGpuTracer::traceRays(g, rays, hits, cfg, rootNode);
 
     std::vector<float> packed(numRays * 8);
     for (size_t i = 0; i < numRays; ++i) {
@@ -334,7 +334,7 @@ Value implToMesh(Value selfObj, std::span<const Value> args) {
     return r.thrown ? ev::null() : r.value;
 }
 
-Value implEvaluateGridGpu(const bromesh::SdfGraph& g, std::span<const Value> args) {
+Value implEvaluateGrid(const bromesh::SdfGraph& g, std::span<const Value> args) {
     int dimX = 32, dimY = 32, dimZ = 32;
     bromath::AABB3 bounds{{-2.0f, -2.0f, -2.0f}, {2.0f, 2.0f, 2.0f}};
     int rootNode = -1;
@@ -370,14 +370,12 @@ Value implEvaluateGridGpu(const bromesh::SdfGraph& g, std::span<const Value> arg
     }
 
     std::vector<float> field;
-    bool usedVulkan = false;
-    scene::SdfGpuTracer::evaluateGridGpu(g, dimX, dimY, dimZ, bounds, field, rootNode, &usedVulkan);
+    if (!scene::SdfGpuTracer::evaluateGrid(g, dimX, dimY, dimZ, bounds, field, rootNode)) return ev::null();
 
     ObjectBuilder out;
     out.set("dimX", ev::fromDouble(dimX));
     out.set("dimY", ev::fromDouble(dimY));
     out.set("dimZ", ev::fromDouble(dimZ));
-    out.set("usedVulkanGpu", ev::fromBool(usedVulkan));
     out.set("field", makeFloat32Array(field));
     return out.get();
 }
@@ -449,8 +447,7 @@ Value implRenderSdfToBuffer(const bromesh::SdfGraph& g, std::span<const Value> a
     }
 
     std::vector<scene::SdfTraceHit> hits;
-    bool usedVulkan = false;
-    scene::SdfGpuTracer::traceRaysGpu(g, rays, hits, cfg, rootNode, &usedVulkan);
+    if (!scene::SdfGpuTracer::traceRays(g, rays, hits, cfg, rootNode)) return ev::null();
 
     std::vector<float> packed(totalPixels * 8);
     for (size_t i = 0; i < totalPixels; ++i) {
@@ -469,7 +466,6 @@ Value implRenderSdfToBuffer(const bromesh::SdfGraph& g, std::span<const Value> a
     ObjectBuilder out;
     out.set("width", ev::fromDouble(width));
     out.set("height", ev::fromDouble(height));
-    out.set("usedVulkanGpu", ev::fromBool(usedVulkan));
     out.set("hits", makeFloat32Array(packed));
     return out.get();
 }
@@ -512,13 +508,9 @@ void attachSdfFunctionsToObject(ObjectBuilder& b) {
         auto* g = unwrapSdfGraph(argAt(a, 0));
         return g ? implTraceRays(*g, a.empty() ? a : a.subspan(1)) : makeFloat32Array({});
     });
-    b.def("traceSdfRaysGpu", 4, [](Value, std::span<const Value> a) -> Value {
+    b.def("evaluateSdfGrid", 2, [](Value, std::span<const Value> a) -> Value {
         auto* g = unwrapSdfGraph(argAt(a, 0));
-        return g ? implTraceRays(*g, a.empty() ? a : a.subspan(1)) : makeFloat32Array({});
-    });
-    b.def("evaluateSdfGridGpu", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* g = unwrapSdfGraph(argAt(a, 0));
-        return g ? implEvaluateGridGpu(*g, a.empty() ? a : a.subspan(1)) : ev::null();
+        return g ? implEvaluateGrid(*g, a.empty() ? a : a.subspan(1)) : ev::null();
     });
     b.def("renderSdfToBuffer", 2, [](Value, std::span<const Value> a) -> Value {
         auto* g = unwrapSdfGraph(argAt(a, 0));
@@ -526,15 +518,6 @@ void attachSdfFunctionsToObject(ObjectBuilder& b) {
     });
     b.def("sdfToMesh", 2, [](Value, std::span<const Value> a) -> Value {
         return a.empty() ? ev::null() : implToMesh(a[0], a.subspan(1));
-    });
-    b.def("sdfVulkanAvailable", 0, [](Value, std::span<const Value>) -> Value {
-        return ev::fromBool(scene::SdfGpuTracer::vulkanAvailable());
-    });
-    b.def("sdfVulkanDeviceName", 0, [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8(scene::SdfGpuTracer::vulkanDeviceName());
-    });
-    b.def("sdfLastTraceUsedGpu", 0, [](Value, std::span<const Value>) -> Value {
-        return ev::fromBool(scene::SdfGpuTracer::lastTraceUsedVulkanGpu());
     });
     b.def("updateSdfNode", 6, [](Value, std::span<const Value> a) -> Value {
         auto* g = unwrapSdfGraph(argAt(a, 0));
@@ -591,13 +574,9 @@ void installSdfGraphGpuExtensions() {
                 auto* g = unwrapSdfGraph(self);
                 return g ? implTraceRays(*g, a) : makeFloat32Array({});
             });
-            proto.def("traceRaysGpu", 3, [](Value self, std::span<const Value> a) -> Value {
+            proto.def("evaluateGrid", 1, [](Value self, std::span<const Value> a) -> Value {
                 auto* g = unwrapSdfGraph(self);
-                return g ? implTraceRays(*g, a) : makeFloat32Array({});
-            });
-            proto.def("evaluateGridGpu", 1, [](Value self, std::span<const Value> a) -> Value {
-                auto* g = unwrapSdfGraph(self);
-                return g ? implEvaluateGridGpu(*g, a) : ev::null();
+                return g ? implEvaluateGrid(*g, a) : ev::null();
             });
             proto.def("renderToBuffer", 1, [](Value self, std::span<const Value> a) -> Value {
                 auto* g = unwrapSdfGraph(self);

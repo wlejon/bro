@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -16,16 +15,6 @@
 namespace bro::scene {
 
 namespace {
-
-thread_local bool tl_lastTraceUsedVulkan = false;
-
-bool forceCpuEnv() {
-    static const bool force = [] {
-        const char* v = std::getenv("BRO_SDF_FORCE_CPU");
-        return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0);
-    }();
-    return force;
-}
 
 inline bromath::Vec3 normalizeRayDir(bromath::Vec3 v) {
     const float lenSq = v.x * v.x + v.y * v.y + v.z * v.z;
@@ -64,9 +53,8 @@ uint64_t hashTraceConfig(const SdfTraceConfig& cfg) {
     return h;
 }
 
-// The engine's compute, when its device can run these kernels.
+// The engine's compute (null before the engine's device is up).
 render::VulkanCompute* engineCompute() {
-    if (forceCpuEnv()) return nullptr;
     render::VulkanContext* ctx = SceneRenderer::defaultVulkanContext();
     if (!ctx || !ctx->isValid() || !ctx->compute().available()) return nullptr;
     return &ctx->compute();
@@ -117,19 +105,6 @@ struct PushBlock {
 
 } // namespace
 
-bool SdfGpuTracer::vulkanAvailable() {
-    return engineCompute() != nullptr;
-}
-
-std::string SdfGpuTracer::vulkanDeviceName() {
-    if (!engineCompute()) return {};
-    return SceneRenderer::defaultVulkanContext()->deviceProperties().deviceName;
-}
-
-bool SdfGpuTracer::lastTraceUsedVulkanGpu() {
-    return tl_lastTraceUsedVulkan;
-}
-
 uint32_t SdfGpuTracer::cachedVulkanPipelineCount() {
     return static_cast<uint32_t>(pipelineCache().pipelines.size());
 }
@@ -140,17 +115,14 @@ void SdfGpuTracer::releasePipelines() {
     cache.compute = nullptr;
 }
 
-bool SdfGpuTracer::evaluateGridGpu(
+bool SdfGpuTracer::evaluateGrid(
     const bromesh::SdfGraph& graph,
     int dimX,
     int dimY,
     int dimZ,
     const bromath::AABB3& bounds,
     std::vector<float>& outField,
-    int rootNode,
-    bool* usedVulkanOut) {
-    tl_lastTraceUsedVulkan = false;
-    if (usedVulkanOut) *usedVulkanOut = false;
+    int rootNode) {
     if (dimX <= 0 || dimY <= 0 || dimZ <= 0 || graph.empty()) {
         outField.clear();
         return false;
@@ -186,29 +158,20 @@ bool SdfGpuTracer::evaluateGridGpu(
             const uint32_t groups[3] = {static_cast<uint32_t>((total + 255) / 256), 1, 1};
             if (compute->dispatch(*pipeline, push.bytes, groups) &&
                 compute->read(*outBuf, 0, outField.data(), byteSize)) {
-                tl_lastTraceUsedVulkan = true;
-                if (usedVulkanOut) *usedVulkanOut = true;
                 return true;
             }
         }
     }
-
-    // On the CPU: JitSdfCompiler::evaluateVolume.
-    auto vol = bromesh::JitSdfCompiler::instance().evaluateVolume(
-        graph, dimX, dimY, dimZ, bounds, rootNode, true);
-    outField = std::move(vol.field);
-    return !outField.empty();
+    outField.clear();
+    return false;
 }
 
-bool SdfGpuTracer::traceRaysGpu(
+bool SdfGpuTracer::traceRays(
     const bromesh::SdfGraph& graph,
     std::span<const SdfRay> rays,
     std::vector<SdfTraceHit>& outHits,
     const SdfTraceConfig& cfg,
-    int rootNode,
-    bool* usedVulkanOut) {
-    tl_lastTraceUsedVulkan = false;
-    if (usedVulkanOut) *usedVulkanOut = false;
+    int rootNode) {
     outHits.assign(rays.size(), SdfTraceHit{});
     if (graph.empty() || rays.empty()) return false;
 
@@ -271,15 +234,11 @@ bool SdfGpuTracer::traceRaysGpu(
                         h.distance = evalPoint(graph, h.position, rootNode);
                     }
                 }
-                tl_lastTraceUsedVulkan = true;
-                if (usedVulkanOut) *usedVulkanOut = true;
                 return true;
             }
         }
     }
-
-    traceRaysCpu(graph, rays, outHits, cfg, rootNode, true);
-    return true;
+    return false;
 }
 
 } // namespace bro::scene
