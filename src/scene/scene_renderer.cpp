@@ -71,7 +71,7 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         // Wind sway displaces vertices in world space by at most
         // |windDir| * strength * windMask (per-vertex bend <= 1). cullMargin
         // is the user's promise about custom-vertex-shader displacement —
-        // the engine can't infer it from GLSL (see setCullMargin).
+        // the engine can't infer it from the hook's code (see setCullMargin).
         // Vegetation sways in the wind field instead, by at most its reach.
         const float pad = m->vegetationHeight() > 0.0f
                               ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) + m->cullMargin()
@@ -210,10 +210,9 @@ SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
 }
 } // namespace
 
-bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error,
-                                  const std::vector<std::string>& defines) {
+bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error) {
     vk::ShaderSetInfo info;
-    if (!vk::loadShaderSetB(dir, &info, error, defines)) return false;
+    if (!vk::loadShaderSetB(dir, &info, error)) return false;
     out = summaryOf(info);
     return true;
 }

@@ -153,9 +153,7 @@ public:
         int shaders = 0, differing = 0, pipelines = 0, twinned = 0;
         std::vector<std::string> failed;
     };
-    /// `defines`: names every shader of set B is compiled with (#define NAME 1).
-    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error,
-                              const std::vector<std::string>& defines = {});
+    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error);
     /// 0 (A) or 1 (B, once loaded); false when it cannot be.
     static bool useShaderSet(int set);
     static int shaderSet();

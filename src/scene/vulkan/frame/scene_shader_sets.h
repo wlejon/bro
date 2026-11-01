@@ -47,8 +47,6 @@ void noteSpirv(std::shared_ptr<ShaderRecipe> recipe);
 bool compilingSetB();
 /// The tree set B's compiles read their sources from ("" otherwise).
 const std::string& setBSourceDir();
-/// Optional define names passed to loadShaderSetB.
-const std::vector<std::string>& setBDefines();
 
 /// SceneVkShaderModule notes each module it makes and forgets it at destroy.
 void noteModule(VkShaderModule module, const uint32_t* code, size_t sizeBytes);
@@ -74,9 +72,8 @@ struct ShaderSetInfo {
 
 /// Load set B from the shader tree at `dir` (it must hold common/scene.bk),
 /// replacing a set loaded before. False with the reason in *error when the
-/// tree is not one or a define name is not an identifier.
-bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error,
-                    const std::vector<std::string>& defines = {});
+/// tree is not one.
+bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error);
 /// The set the scene binds from now on: 0 (A) or 1 (B; only once loaded).
 bool useShaderSet(int set);
 int activeShaderSet();
