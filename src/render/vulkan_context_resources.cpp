@@ -82,6 +82,13 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     VkMemoryRequirements memRequirements;
     vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
+    if (memRequirements.size > maxAllocationSize_) {
+        LOG_ERROR("VulkanContext: a %zu-byte buffer is larger than the device allocates at once (%zu)",
+                  static_cast<size_t>(memRequirements.size), static_cast<size_t>(maxAllocationSize_));
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        return false;
+    }
 
     uint32_t memType = findMemoryType(memRequirements.memoryTypeBits, properties);
     if (memType == kNoMemoryType) {
@@ -230,6 +237,11 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     VkMemoryRequirements memRequirements;
     vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
+    if (memRequirements.size > maxAllocationSize_) {
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        return false;
+    }
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;

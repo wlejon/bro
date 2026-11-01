@@ -94,6 +94,9 @@ public:
     const VulkanQueueFamilyIndices& queueFamilies() const { return queueIndices_; }
     const VkPhysicalDeviceProperties& deviceProperties() const { return deviceProperties_; }
     const VkPhysicalDeviceMemoryProperties& memoryProperties() const { return memoryProperties_; }
+    /// The largest single allocation the device takes (maxMemoryAllocationSize):
+    /// a buffer needing more is refused before it reaches vkAllocateMemory.
+    VkDeviceSize maxAllocationSize() const { return maxAllocationSize_; }
 
     /// The effective API version: the lower of what the instance asked for
     /// (1.3) and what the device supports.
@@ -266,6 +269,7 @@ private:
     VkPhysicalDeviceProperties deviceProperties_{};
     VkPhysicalDeviceMemoryProperties memoryProperties_{};
     VkPhysicalDeviceFeatures deviceFeatures_{};
+    VkDeviceSize maxAllocationSize_ = ~VkDeviceSize{0};
     std::vector<std::string> instanceExtensions_;
     std::vector<std::string> deviceExtensions_;
 

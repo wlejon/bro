@@ -599,6 +599,13 @@ bool VulkanContext::selectPhysicalDevice(VkSurfaceKHR compatibleSurface, const u
     vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties_);
     vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures_);
     apiVersion_ = std::min<uint32_t>(VK_API_VERSION_1_3, deviceProperties_.apiVersion);  // what the instance asked for
+    {
+        VkPhysicalDeviceMaintenance3Properties maintenance3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES};
+        VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        props2.pNext = &maintenance3;
+        vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+        if (maintenance3.maxMemoryAllocationSize > 0) maxAllocationSize_ = maintenance3.maxMemoryAllocationSize;
+    }
     return true;
 }
 
