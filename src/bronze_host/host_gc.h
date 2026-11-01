@@ -30,15 +30,14 @@ enum : uint32_t {
 
 /// Called by the engine once a frame is presented (or held), before the next
 /// one starts: the one place the host collects during an animation. It runs
-/// what hostNotifyIdleFrame decided on (idle, periodic, pressure), a full
-/// collection once after the page has booted (promoting its boot data in one
+/// what hostNotifyIdleFrame decided on (idle, periodic, pressure), a marking
+/// cycle once after the page has booted (promoting its boot data in one
 /// copy), and otherwise collects ahead of the heap's own triggers: a minor
 /// collection once eden is half full, and the old generation incrementally,
-/// a marking cycle started once it has grown halfway to its threshold and
-/// carried on in slices over the following frames, each frame's GC work kept
-/// within a budget (BRO_GC_FRAME_MS, 0.5 ms), then finished and swept in
-/// slices; BRO_GC_INCREMENTAL=0 instead collects it whole once it is near its
-/// threshold. The pauses then fall in the time the frame left before the next
+/// a marking cycle paced from the promotion rate to finish by 80% of its
+/// threshold and carried on in slices over the following frames, each
+/// frame's GC work kept within a 0.5 ms budget, then finished and swept in
+/// slices. The pauses then fall in the time the frame left before the next
 /// one rather than inside a frame. Returns the kGcWork bits of what it did.
 uint32_t hostCollectBetweenFrames();
 
@@ -48,9 +47,8 @@ uint32_t hostCollectBetweenFrames();
 /// (0.7 ms of an eight-thread first minor). Called where a pause costs
 /// nothing: the first between-frames slot (hostCollectBetweenFrames, which
 /// then collects the boot data) and, in headless, after the page's first
-/// frame, before the test script runs. A no-op before the main realm exists,
-/// after the first call, and under BRO_GC_PRESTART_HELPERS=0 (the A/B switch:
-/// the first collection to want them creates them, as before).
+/// frame, before the test script runs. A no-op before the main realm exists
+/// and after the first call.
 void hostStartGcHelpers();
 
 /// The marking cycles hostCollectBetweenFrames has run (perf.stats().bronze):

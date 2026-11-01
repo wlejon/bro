@@ -55,14 +55,14 @@ constexpr double kPressureQuietMs = 100.0;                 // quiet this long: c
 // collection once eden is this full, a full one once the old generation has
 // grown this near its threshold. A frame allocating more than the rest of
 // eden still collects where it fills it. Eden's capacity is the collector's
-// adaptive limit (brass HeapConfig::adaptive_eden), which shrinks while much
-// of each eden survives so a minor collection's copying stays short; the
+// adaptive limit (brass docs/gc_contract.md "Adaptive eden"), which shrinks
+// while much of each eden survives so a minor collection's copying stays short; the
 // fill is of that limit, so the early collection keeps the same bound.
 constexpr double kBetweenFramesEdenFill = 0.5;
 constexpr double kBetweenFramesOldFill = 0.75;
 
-// The old generation is collected incrementally between frames
-// (BRO_GC_INCREMENTAL, on unless 0) by marking cycles (bronze embed_gc.h),
+// The old generation is collected incrementally between frames by marking
+// cycles (bronze embed_gc.h),
 // paced: a cycle starts as late as lets it finish, at the frame budget's
 // slices, by the time the old generation has grown to kCycleTargetFill of
 // its threshold, judged from the promotion rate (old growth a frame, a
@@ -89,8 +89,8 @@ constexpr double kDefaultMarkMsPerMB = 0.75;
 constexpr double kCyclePaceMaxFactor = 2.0;
 // And a cycle still marking at this is finished now, one longer pause
 // between frames, rather than by the heap's trigger inside a frame. While a
-// cycle marks, the threshold the heap reports is its own plus brass's
-// HeapConfig::cycle_headroom (a quarter): the growth that would finish the
+// cycle marks, the threshold the heap reports is its own plus a quarter of
+// it (brass's headroom for an open cycle): the growth that would finish the
 // cycle at an allocation. So the fills a cycle is paced and fallen back at
 // are of that, and a cycle behind its estimate (one the boot started on a
 // threshold left from a heap built in one turn) has that room to finish at
@@ -98,13 +98,13 @@ constexpr double kCyclePaceMaxFactor = 2.0;
 constexpr double kCycleFallbackFill = 0.9;
 // The promotion rate's running average: the weight of each frame.
 constexpr double kPromotionRateWeight = 0.05;
-// The GC work a frame aims at, in ms (BRO_GC_FRAME_MS): a minor collection
+// The GC work a frame aims at, in ms: a minor collection
 // due this frame comes out of it first, then a mark or sweep slice gets what
 // is left, but a mark slice never less than kMinMarkSliceMs, so a program
 // whose every frame fills eden still gets its marking done. The planet runs
 // at 360 frames a second, 2.8 ms each; half a millisecond of that is the
 // collector's.
-constexpr double kDefaultFrameBudgetMs = 0.5;
+constexpr double kFrameBudgetMs = 0.5;
 // brass runs a slice on its marker threads only when its budget is over
 // 0.2 ms (below that, starting and joining them costs too much of it), and a
 // slice on one thread marks several times less: a shorter one is not worth
@@ -112,8 +112,8 @@ constexpr double kDefaultFrameBudgetMs = 0.5;
 constexpr double kMinMarkSliceMs = 0.25;
 // A sweep slice shorter than this waits for the next frame.
 constexpr double kMinSweepSliceMs = 0.05;
-// The finish marks the young generation in place with the old one (brass
-// HeapConfig::finish_promote_all) and rescans the dirty cards, so its pause
+// The finish marks the young generation in place with the old one and
+// rescans the dirty cards, so its pause
 // grows with the live young data. A cycle whose marking is done with eden
 // this full runs a minor collection first, and a slice after it in the same
 // slot, which leaves one frame's allocation in eden at the finish; what that
@@ -129,16 +129,14 @@ double s_pressureWaitedMs = 0.0;
 uint64_t s_bytesAfterLastGc = 0;
 bool s_collectedForCurrentIdle = false;
 bool s_pressurePending = false;
-// A full collection the frame's policy decided on, run between frames.
+// A collection the frame's policy decided on, run between frames.
 const char* s_requested = nullptr;
-bool s_requestedIsIdleSpell = false;  // it counts as the idle spell's collection
-// The page's boot data is still young: the first frames' slot promotes it
-// with a full collection, so it is copied once rather than aged through two
-// minor collections mid-animation. Incrementally (BRO_GC_INCREMENTAL) the
-// boot's collection is a marking cycle instead (s_bootCycle), started once
-// a sweep left by the boot is done: a stop-the-world full of a page that
-// built a large heap in its boot turn is that heap's whole marking in one
-// pause (94 ms at 1 GB), in the first frame.
+// The page's boot data is still young: the first frames' slot collects it
+// with a marking cycle (s_bootCycle), started once a sweep left by the boot
+// is done, so it is promoted once rather than aged through two minor
+// collections mid-animation, and not in a stop-the-world full, which for a
+// page that built a large heap in its boot turn is that heap's whole marking
+// in one pause (94 ms at 1 GB), in the first frame.
 bool s_bootCollected = false;
 bool s_bootCycle = false;
 std::atomic<int> s_evalDepth{0};
@@ -176,58 +174,23 @@ double s_promotionPerFrame = 0.0;
 uint64_t s_lastOldGrowth = 0;
 double s_markMsPerMB = kDefaultMarkMsPerMB;
 
-// BRO_GC_PRESSURE=0 turns the memory-pressure collection off; BRO_GC_LOG=1
-// logs every collection this file starts, with why and how long it took.
-bool envFlag(const char* name, bool fallback) {
-    const char* v = std::getenv(name);
-    if (!v || !*v) return fallback;
-    return !(v[0] == '0' && v[1] == '\0');
-}
-bool pressureEnabled() {
-    static const bool on = envFlag("BRO_GC_PRESSURE", true);
-    return on;
-}
+// BRO_GC_LOG=1 logs every collection this file starts, with why and how long
+// it took.
 bool gcLogEnabled() {
-    static const bool on = envFlag("BRO_GC_LOG", false);
+    static const bool on = [] {
+        const char* v = std::getenv("BRO_GC_LOG");
+        return v && *v && !(v[0] == '0' && v[1] == '\0');
+    }();
     return on;
-}
-// BRO_GC_INCREMENTAL=0: the old generation is collected as before, a full
-// collection between frames once it nears its threshold (the A/B switch).
-bool incrementalEnabled() {
-    static const bool on = envFlag("BRO_GC_INCREMENTAL", true);
-    return on;
-}
-double envNumber(const char* name, double fallback, double lo, double hi) {
-    const char* v = std::getenv(name);
-    if (!v || !*v) return fallback;
-    char* end = nullptr;
-    const double d = std::strtod(v, &end);
-    if (end == v || *end != '\0' || !(d >= lo && d <= hi)) {
-        LOG_ERROR("gc: %s=%s is not a number in [%g, %g]", name, v, lo, hi);
-        std::abort();
-    }
-    return d;
-}
-double frameBudgetMs() {
-    static const double ms = envNumber("BRO_GC_FRAME_MS", kDefaultFrameBudgetMs, 0.01, 1000.0);
-    return ms;
-}
-// BRO_GC_CYCLE_START: a fixed fill of the threshold a cycle starts at, in
-// place of the paced start; 0 starts one as soon as the last is swept, for
-// measuring cycles on a heap that seldom grows that far. -1: paced.
-double fixedStartFill() {
-    static const double f = envNumber("BRO_GC_CYCLE_START", -1.0, -1.0, kBetweenFramesOldFill);
-    return f;
 }
 
 void collectFor(const char* why);
 
 // Collections the frame's policy decides on run after the frame is
 // presented, not in the frame (hostCollectBetweenFrames).
-void requestFor(const char* why, bool idleSpell = true) {
+void requestFor(const char* why) {
     if (s_requested) return;
     s_requested = why;
-    s_requestedIsIdleSpell = idleSpell;
 }
 
 bool underMemoryPressure() {
@@ -386,13 +349,13 @@ void hostNotifyIdleFrame(double dtMs) {
         // frame, or, if it never has one, once the pressure has waited
         // kPressureMaxWaitMs: not in the frame that made it (a big bitmap
         // arriving is a frame the page is busy showing it).
-        if (!s_pressurePending && pressureEnabled() && underMemoryPressure()) {
+        if (!s_pressurePending && underMemoryPressure()) {
             s_pressurePending = true;
             s_pressureWaitedMs = 0.0;
         } else if (s_pressurePending) {
             s_pressureWaitedMs += delta;
             if (s_pressureWaitedMs >= kPressureMaxWaitMs) {
-                requestFor("pressure (busy)", /*idleSpell=*/false);
+                requestFor("pressure (busy)");
             }
         }
     }
@@ -479,11 +442,9 @@ double markEstimateMs(const bronze::embed::HeapPressure& p) {
 // kBetweenFramesOldFill.
 bool cycleDue(const bronze::embed::HeapPressure& p, double fill) {
     if (p.fullThreshold == 0) return false;
-    const double fixed = fixedStartFill();
-    if (fixed >= 0.0) return fill >= fixed;
     if (fill >= kBetweenFramesOldFill) return true;
     if (fill < kCycleStartMin) return false;
-    const double needed = kCyclePaceMargin * markEstimateMs(p) / frameBudgetMs() + kCycleFinishFrames;
+    const double needed = kCyclePaceMargin * markEstimateMs(p) / kFrameBudgetMs + kCycleFinishFrames;
     return framesUntil(p, kCycleTargetFill) <= needed;
 }
 
@@ -493,7 +454,7 @@ bool cycleDue(const bronze::embed::HeapPressure& p, double fill) {
 // a cycle that marks what was estimated; past the estimate, a quarter of it
 // is taken to be left.
 double markBudgetMs(const bronze::embed::HeapPressure& p) {
-    const double budget = frameBudgetMs();
+    const double budget = kFrameBudgetMs;
     const double left = std::max(s_cycle.estimateMs - s_cycle.markMs, 0.25 * s_cycle.estimateMs);
     const double frames = std::max(1.0, framesUntil(p, kCycleTargetFill) - kCycleFinishFrames);
     return std::clamp(left / frames, budget, kCyclePaceMaxFactor * budget);
@@ -585,7 +546,7 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         }
         if (!(f.work & kGcWorkMinor)) minorIfDue(p, f);
         const double paced = markBudgetMs(p);
-        if (paced > frameBudgetMs()) {
+        if (paced > kFrameBudgetMs) {
             s_cycle.behind = true;
             f.note = "paced: a larger slice to finish in time";
         }
@@ -605,7 +566,7 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         return;
     }
     minorIfDue(p, f);
-    const double budget = frameBudgetMs() - f.total();
+    const double budget = kFrameBudgetMs - f.total();
     // The boot's cycle waits for the sweep like a paced one (it is not due:
     // its start would finish the sweep in its own pause).
     const bool due = cycleDue(p, fill);
@@ -657,7 +618,6 @@ void hostStartGcHelpers() {
     static bool started = false;
     if (started || !isWebHostGlobalsInstalled()) return;
     started = true;
-    if (!envFlag("BRO_GC_PRESTART_HELPERS", true)) return;
     const auto t0 = std::chrono::steady_clock::now();
     const unsigned helpers = bronze::embed::startGcHelperThreads();
     if (gcLogEnabled()) LOG_INFO("gc: %u helper threads started in %.3f ms", helpers, msSince(t0));
@@ -671,17 +631,13 @@ uint32_t hostCollectBetweenFrames() {
     hostStartGcHelpers();
     FrameGc f;
     if (!s_bootCollected) {
-        if (incrementalEnabled()) {
-            s_bootCollected = true;
-            s_bootCycle = true;
-        } else {
-            requestFor("boot", /*idleSpell=*/false);
-        }
+        s_bootCollected = true;
+        s_bootCycle = true;
     }
     // A busy page under memory pressure is collected by a cycle like any
     // other (its native memory comes back at the finish, a few frames on)
     // rather than in one pause in the middle of what keeps it busy.
-    if (s_requested && incrementalEnabled() && std::strcmp(s_requested, "pressure (busy)") == 0) {
+    if (s_requested && std::strcmp(s_requested, "pressure (busy)") == 0) {
         s_requested = nullptr;
         s_pressurePending = false;
         s_timeSinceLastGcMs = 0.0;
@@ -698,41 +654,20 @@ uint32_t hostCollectBetweenFrames() {
         f.log();
         return f.work;
     }
-    // What is left stops the world even incrementally, as it must or may:
-    // the idle, periodic and quiet-pressure collections are asked for only on
-    // a quiescent page (no animation frame pending, nothing in flight), whose
-    // next frame is not waiting on this one, and which wants its memory back
-    // now rather than a cycle's frames on; and BRO_GC_INCREMENTAL=0 asks for
-    // every collection so.
+    // What is left stops the world: the idle, periodic and quiet-pressure
+    // collections are asked for only on a quiescent page (no animation frame
+    // pending, nothing in flight), whose next frame is not waiting on this
+    // one, and which wants its memory back now rather than a cycle's frames
+    // on.
     if (s_requested) {
-        const bool wasIdle = s_collectedForCurrentIdle;
-        const bool idleSpell = s_requestedIsIdleSpell;
         const auto t0 = std::chrono::steady_clock::now();
         collectFor(s_requested);
         f.fullMs = msSince(t0);
         f.work |= kGcWorkFull;
-        // One made for the boot or a busy page's pressure is not the idle
-        // spell's: the page still gets that when it settles.
-        if (!idleSpell) s_collectedForCurrentIdle = wasIdle;
         f.log();
         return f.work;
     }
-    const bronze::embed::HeapPressure p = bronze::embed::heapPressure();
-    if (incrementalEnabled()) {
-        cycleStep(p, f);
-        f.log();
-        return f.work;
-    }
-    if (p.fullThreshold > 0 &&
-        static_cast<double>(p.oldGrowth) >= kBetweenFramesOldFill * static_cast<double>(p.fullThreshold)) {
-        const auto t0 = std::chrono::steady_clock::now();
-        collectFor("old generation near its threshold");
-        f.fullMs = msSince(t0);
-        f.work |= kGcWorkFull;
-        f.log();
-        return f.work;
-    }
-    minorIfDue(p, f);
+    cycleStep(bronze::embed::heapPressure(), f);
     f.log();
     return f.work;
 }

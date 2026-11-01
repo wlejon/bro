@@ -3,8 +3,8 @@
 // hostCollectBetweenFrames (src/bronze_host/host_gc.cpp) collects what the
 // page built before its first frame in the first between-frames slot. A page
 // that builds a large heap in that turn made it one full collection of all of
-// it in the first frame (94 ms at 1 GB). Incrementally (BRO_GC_INCREMENTAL,
-// the default) the slot starts a marking cycle instead, once any sweep the
+// it in the first frame (94 ms at 1 GB). The slot starts a marking cycle
+// instead, once any sweep the
 // boot left is done, and the cycle is paced over the frames like any other.
 // This builds old data in the script's own turn, then checks that the first
 // frames open a cycle, that it finishes across frames, and that no full

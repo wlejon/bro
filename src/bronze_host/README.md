@@ -69,18 +69,16 @@ frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
   page starts a marking cycle instead, and so does the boot: the first slot
   starts a cycle (once a sweep the boot left is swept), paced like any other,
   where a stop-the-world full of a page that built a large heap in its boot
-  turn was all of its marking in the first frame (94 ms at 1 GB). Under
-  `BRO_GC_INCREMENTAL=0` the boot is a full collection, as before;
+  turn was all of its marking in the first frame (94 ms at 1 GB);
 - a minor collection once eden is half its adaptive limit;
 - the old generation incrementally (bronze `embed_gc.h`), by paced marking
   cycles. A cycle starts as late as lets it finish by 80% of the old
-  generation's full-collection threshold at the frame's GC budget
-  (`BRO_GC_FRAME_MS`, 0.5 ms): the growth left to 80%, at the promotion rate
+  generation's full-collection threshold at the frame's GC budget (0.5 ms):
+  the growth left to 80%, at the promotion rate
   (old growth a frame, a running average), against the marking the last
   cycle took per MB of its threshold (times 1.5, plus four frames for the
-  finish); never below 20% of the threshold, always by 75% (where the
-  stop-the-world policy collects). So cycles run about as rarely as the
-  stop-the-world fulls did, and a minor collection inside one, which costs
+  finish); never below 20% of the threshold, always by 75%. So cycles run
+  about as rarely as stop-the-world fulls at 75% would, and a minor collection inside one, which costs
   more (it shades what it promotes), is rare. Each frame then gets a mark
   slice of what is left of the budget after a minor collection, never less
   than 0.25 ms, and more (up to twice the budget) when the estimate says the
@@ -93,27 +91,21 @@ frame (the flight recorder's `gc` phase, with `gcWork` naming what ran:
 - A cycle still marking at 90% of the threshold is finished at once, one
   longer pause between frames, before the heap's own trigger would finish it
   at an allocation inside a frame. While a cycle marks, the threshold is the
-  heap's plus brass's cycle headroom (`HeapConfig::cycle_headroom`, a
-  quarter; `BRASS_GC_CYCLE_HEADROOM=0` for A/B), the growth at which the heap
+  heap's plus a quarter of it (brass's headroom for an open cycle), the
+  growth at which the heap
   itself would finish it, so a cycle that falls behind (the boot's, on a
   threshold left from a heap built in one turn) still finishes at its slices
   rather than in one pause of the marking left (32 ms at 1 GB). A host that
   never slices still gets the heap's own collections.
-- A slice marks on brass's parked marker threads (`BRASS_GC_MARK_POOL=0`
-  creates and joins them per slice, as before, which cost a 0.4 ms slice
-  most of its parallelism). The same threads copy a parallel minor
+- A slice marks on brass's parked marker threads. The same threads copy a parallel minor
   collection. `hostStartGcHelpers` creates them once, in the first
   between-frames slot (headless: after the page's first frame, before the
   test script), through bronze `embed::startGcHelperThreads`, rather than in
   the first collection that wants them, where creating seven took 0.7 ms of
-  its pause. `BRO_GC_PRESTART_HELPERS=0` leaves them to that collection, for
-  A/B. Workers' heaps never start theirs ahead: most never collect in
+  its pause. Workers' heaps never start theirs ahead: most never collect in
   parallel.
 
-`BRO_GC_INCREMENTAL=0` restores the stop-the-world policy (a full collection
-between frames at 75% of the threshold), for A/B. `BRO_GC_CYCLE_START`
-(a fraction) fixes where cycles start in place of the paced start; 0 keeps one
-always open, for measuring them on a heap that seldom grows that far. `BRO_GC_LOG=1` logs
+`BRO_GC_LOG=1` logs
 a line per frame that collected (`gc: between frames 0.61 ms: minor 0.35
 mark 0.26`) and one per cycle with its frames, the fills it started and finished at, its
 slices against the estimate, finish and sweep, and the promotion rate;
