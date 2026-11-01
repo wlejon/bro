@@ -467,8 +467,7 @@ The module image is written by brass's own PE / ELF writer: **no compiler or
 linker is needed on the machine**, on Windows or Linux. A unit whose module is
 still current is kept; the build's own log is `build.log` in the directory, and
 `bro --exe-info` prints its summary as `aot.*` lines. A unit that fails to
-compile is reported and simply runs on the JIT. `BRO_APP_AOT=0` skips the
-build, and makes a launch ignore the directory (for comparing the two).
+compile is reported and simply runs on the JIT.
 
 **Checked at every launch.** Each unit has a record (`<unit>.bzm`) beside its
 module (`<unit>-<stamp>.dll` / `.so`) naming everything the compile read: the

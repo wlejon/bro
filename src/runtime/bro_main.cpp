@@ -396,7 +396,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
         bro::engine::setCurrentAppExecutable(exe->exePath);
         // The page's scripts, compiled ahead of time beside the executable
         // (bronze_host/app_aot.h); a unit without a current module compiles.
-        if (bro::engine::appExeAotEnabled()) config.aotDir = bro::engine::appExeAotDir(exe->exePath);
+        config.aotDir = bro::engine::appExeAotDir(exe->exePath);
         // BRO_EXE_DIR is where an app finds bro's other executables: bro's
         // directory, not the one its own executable was installed into.
 #ifdef _WIN32

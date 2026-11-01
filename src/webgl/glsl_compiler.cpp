@@ -1,7 +1,5 @@
 #include "webgl/glsl_compiler.h"
 
-#include <brass/target/spirv/spirv_binary_reader.hpp>
-#include <brass/target/spirv/spirv_relaxed_precision.hpp>
 #include <glslang/Include/glslang_c_interface.h>
 #include <glslang/Public/resource_limits_c.h>
 
@@ -24,9 +22,6 @@ namespace {
 std::mutex s_mutex;
 bool s_initialized = false;
 std::unordered_map<std::string, std::vector<uint32_t>> s_memo;
-
-thread_local GlslRelaxedPrecisionStats tl_lastRelaxedStats{};
-thread_local GlslComputeAuditStats tl_lastAuditStats{};
 
 glslang_stage_t toGlslangStage(ShaderStage stage) {
     switch (stage) {
@@ -116,89 +111,6 @@ std::unique_lock<std::mutex> acquireGlslang() {
     return lock;
 }
 
-GlslRelaxedPrecisionStats promoteSpirvRelaxedPrecision(
-    std::vector<uint32_t>& spirv,
-    float maxAbsFp16,
-    bool assumeStageInputsUnitRange) {
-    GlslRelaxedPrecisionStats stats;
-    stats.enabled = true;
-    brass::spirv::SpirvRelaxedPrecisionOptions opts;
-    opts.max_abs_fp16 = maxAbsFp16;
-    opts.assume_stage_inputs_unit_range = assumeStageInputsUnitRange;
-    const auto rep = brass::spirv::promote_relaxed_precision(spirv, opts);
-    stats.parseOk = rep.parse_ok;
-    stats.totalFloatDefs = rep.total_float_defs;
-    stats.provenBoundedDefs = rep.proven_bounded_defs;
-    stats.promotedCount = rep.promoted_count;
-    stats.alreadyRelaxedCount = rep.already_relaxed_count;
-    stats.keptFp32Count = rep.kept_fp32_count;
-    stats.error = rep.error;
-    tl_lastRelaxedStats = stats;
-    return stats;
-}
-
-GlslComputeAuditStats auditComputeSpirv(const std::vector<uint32_t>& spirv) {
-    GlslComputeAuditStats stats;
-    stats.audited = true;
-    const auto rep = brass::spirv::audit_compute_shader_binary(spirv);
-    stats.parseOk = rep.parse_ok;
-    stats.structuralOk = rep.structural_ok;
-    stats.dominanceOk = rep.dominance_ok;
-    stats.barriersUniform = rep.barriers_uniform;
-    stats.sharedBoundsOk = rep.shared_bounds_ok;
-    stats.divSqrtOk = rep.div_sqrt_ok;
-    stats.valid = rep.parse_ok && rep.structural_ok && rep.dominance_ok;
-    stats.provenSafe = rep.ok();
-    stats.numFunctions = rep.num_functions;
-    stats.numBlocks = rep.num_blocks;
-    stats.numInstructions = rep.num_instructions;
-    stats.hazardCount = static_cast<uint32_t>(rep.hazards.size());
-    stats.divisionCount = static_cast<uint32_t>(rep.divisions.size());
-    uint32_t safeDivs = 0;
-    for (const auto& d : rep.divisions) {
-        if (d.proven_safe) ++safeDivs;
-    }
-    stats.provenSafeDivisions = safeDivs;
-    stats.barrierCount = static_cast<uint32_t>(rep.barriers.size());
-    stats.localSize = rep.local_size;
-    stats.findings.reserve(rep.hazards.size());
-    for (const auto& h : rep.hazards) {
-        stats.findings.push_back(h.message);
-    }
-    tl_lastAuditStats = stats;
-    return stats;
-}
-
-GlslCompileResult compileGlslToSpirvWithOptions(
-    std::string_view source, ShaderStage stage,
-    const GlslCompileOptions& options) {
-    GlslCompileResult result;
-    result.spirv = compileRawGlslToSpirv(source, stage, &result.errorLog);
-    if (result.spirv.empty()) return result;
-
-    if (options.promoteRelaxedPrecision &&
-        (stage == ShaderStage::Fragment || stage == ShaderStage::Compute)) {
-        result.relaxedPrecision = promoteSpirvRelaxedPrecision(
-            result.spirv,
-            options.maxAbsFp16,
-            options.assumeStageInputsUnitRange);
-    }
-
-    if (options.auditComputeShader && stage == ShaderStage::Compute) {
-        result.computeAudit = auditComputeSpirv(result.spirv);
-        if (options.failOnUnprovenCompute && !result.computeAudit.provenSafe) {
-            appendLog(&result.errorLog,
-                      "compute audit failed: ",
-                      result.computeAudit.findings.empty()
-                          ? "unproven hazard"
-                          : result.computeAudit.findings.front().c_str());
-            result.spirv.clear();
-        }
-    }
-
-    return result;
-}
-
 std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage stage,
                                          std::string* log) {
     std::string key;
@@ -218,31 +130,6 @@ std::vector<uint32_t> compileGlslToSpirv(std::string_view source, ShaderStage st
     std::lock_guard<std::mutex> lock(s_mutex);
     s_memo[key] = spirv;
     return spirv;
-}
-
-GlslCompileResult GlslCompiler::compileAndOptimize(
-    std::string_view source, ShaderStage stage,
-    const GlslCompileOptions& options) {
-    return compileGlslToSpirvWithOptions(source, stage, options);
-}
-
-GlslRelaxedPrecisionStats GlslCompiler::promoteRelaxedPrecision(
-    std::vector<uint32_t>& spirv,
-    float maxAbsFp16,
-    bool assumeStageInputsUnitRange) {
-    return promoteSpirvRelaxedPrecision(spirv, maxAbsFp16, assumeStageInputsUnitRange);
-}
-
-GlslComputeAuditStats GlslCompiler::auditCompute(const std::vector<uint32_t>& spirv) {
-    return auditComputeSpirv(spirv);
-}
-
-GlslRelaxedPrecisionStats GlslCompiler::lastRelaxedPrecisionStats() {
-    return tl_lastRelaxedStats;
-}
-
-GlslComputeAuditStats GlslCompiler::lastComputeAuditStats() {
-    return tl_lastAuditStats;
 }
 
 } // namespace bro::webgl

@@ -325,7 +325,6 @@ int usage() {
 // The executable's scripts, compiled ahead of time beside it. A failure only
 // costs the launch a JIT compile, so it is a note, never the build's failure.
 void buildExeAot(const std::string& appDir, const std::string& exe, bool quiet) {
-    if (!appExeAotEnabled()) return;
     std::string summary, err;
     const bool ok = buildAppExeAot(appDir, exe, summary, err);
     if (!ok) std::fprintf(stderr, "bro: scripts of %s not compiled ahead of time: %s\n", exe.c_str(), err.c_str());

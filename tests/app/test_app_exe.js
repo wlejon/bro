@@ -153,14 +153,6 @@ function run() {
         until(() => { try { return info(exe)['aot.built'] === '1'; } catch (e) { return false; } }, 60000,
             'the rebuild after an unreadable record');
         assert(launch(exe).report.codeCache === 'aot', 'and the rebuilt module runs');
-
-        // BRO_APP_AOT=0 runs without it (for comparing the two).
-        const off = cp.spawnSync(exe, ['--no-splash'], {
-            env: { ...baseEnv, BRO_APP_AOT: '0', BRO_TEST_EXE_OUT: path.join(scratch, 'off.json') },
-            cwd: scratch, timeout: 90000, encoding: 'utf8' });
-        assert(off.status === 0, 'BRO_APP_AOT=0 launch exited ' + off.status);
-        const offReport = JSON.parse(fs.readFileSync(path.join(scratch, 'off.json'), 'utf8'));
-        assert(offReport.codeCache !== 'aot', 'BRO_APP_AOT=0 compiles the page: ' + offReport.codeCache);
     }
 
     // ---- the app changed: run under bro, rebuild behind --------------------------

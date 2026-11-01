@@ -122,9 +122,6 @@ bool buildAppExe(const std::string& appDir, const AppDescriptor& manifest, const
 /// (bronze_host/app_aot.h): `<exe without extension>.aot` beside it.
 std::string appExeAotDir(const std::string& exePath);
 
-/// Whether app executables carry AOT-compiled scripts: unless BRO_APP_AOT=0.
-bool appExeAotEnabled();
-
 /// Compile the app's page scripts ahead of time into appExeAotDir(exePath),
 /// by running `bro-headless <appDir> --aot-build <dir>` (its output goes to
 /// `<dir>/build.log`). Units whose module is still current are kept. `summary`

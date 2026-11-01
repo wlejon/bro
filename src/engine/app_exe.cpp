@@ -399,11 +399,6 @@ std::string appExeAotDir(const std::string& exePath) {
     return u8str(p);
 }
 
-bool appExeAotEnabled() {
-    const char* v = std::getenv("BRO_APP_AOT");
-    return !(v && std::string(v) == "0");
-}
-
 namespace {
 
 // aot.txt (bronze_host/app_aot.cpp writes it): key=value lines.
