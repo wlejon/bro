@@ -5,6 +5,7 @@
 #include "scene/scene_renderer.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -304,6 +305,15 @@ public:
 
     /// Camera eye position (for lighting calculations).
     const bromath::Vec3& cameraEye() const { return cameraEye_; }
+
+    /// Where the scene's origin lies in a larger world, in f64. A world kept
+    /// about the camera for precision (moved under a camera held at the
+    /// origin, a planet's say) gives it each frame, so what the renderer
+    /// keeps over frames (the volumes' history) follows the camera's true
+    /// motion: the eye's motion between renders is its own plus the
+    /// origin's. Nothing else reads it.
+    void setCameraOrigin(const std::array<double, 3>& origin) { cameraOrigin_ = origin; }
+    const std::array<double, 3>& cameraOrigin() const { return cameraOrigin_; }
 
     /// False for an orthographic camera. Anything deriving world-units-per-
     /// pixel has to branch on this: under perspective that quantity depends on
@@ -648,6 +658,7 @@ private:
     bromath::Mat4 viewMatrix_;
     bromath::Mat4 projectionMatrix_;
     bromath::Vec3 cameraEye_;
+    std::array<double, 3> cameraOrigin_{0.0, 0.0, 0.0};
 
     // Cached camera intrinsics — needed by the shadow planner (which walks
     // the view-frustum corners). Set by every setCamera*() entry point.

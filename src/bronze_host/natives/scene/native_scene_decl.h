@@ -503,7 +503,7 @@ void bro_scene_SceneGraph_destroyNode(void* self, void* node);
 // bro.scene.SceneGraph.prototype.setCamera
 //   registered at __bro_native.scene.SceneGraph_setCamera
 //   opts_fov_given, opts_near_given, opts_far_given, opts_aspect_given, opts_mode_given, opts_size_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len, bool opts_aspect_given, double opts_aspect, const double* opts_quaternion, uint32_t opts_quaternion_len, bool opts_mode_given, const char* opts_mode, bool opts_size_given, double opts_size);
+void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len, bool opts_aspect_given, double opts_aspect, const double* opts_quaternion, uint32_t opts_quaternion_len, bool opts_mode_given, const char* opts_mode, bool opts_size_given, double opts_size, const double* opts_origin, uint32_t opts_origin_len);
 
 // bro.scene.SceneGraph.prototype.createCamera
 //   registered at __bro_native.scene.SceneGraph_createCamera

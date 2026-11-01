@@ -49,6 +49,12 @@ projection. With no canvas size yet the omitted case falls back to 4/3.
 target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {string} [mode] -  "perspective" (default) or "orthographic" / "ortho".
  * @property {number} [size] -  Orthographic view height in world units (default 10).
+ * @property {Array<number>} [origin] - setCamera only: where the scene's origin lies in a larger world,
+[x,y,z] in f64 (kept until given again; default [0,0,0]). A world kept about the camera for precision
+(a planet moved under a camera held at [0,0,0]) passes its camera's true position each frame, so what
+the renderer carries over frames follows the camera's real motion: the volumes' history reprojects by
+the eye's motion plus the origin's. Without it a world moved under a still camera smears its volumes
+along the motion.
  */
 
 /**

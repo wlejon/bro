@@ -12,7 +12,8 @@
 //     read to the opaque depth or its range, the march on from ray.near seen
 //     through it, and a medium in one part of the four is cover;
 //   - a module without volume, or a medium without medium_range, is refused;
-//   - temporal reconstruction averages per-render noise;
+//   - temporal reconstruction averages per-render noise, and follows a world
+//     moved under a still camera that gives its origin;
 //   - the incident exposure meter reads the volume's rays at the scene's
 //     footprint scale.
 
@@ -257,6 +258,50 @@ if (!probe.scene) {
     for (let y = 20; y < 24; y++) for (let x = 20; x < 24; x++) patch.push(px(im, x, y).slice(0, 2).join('/'));
     assert(wrong === 0, `every pixel holds its own ray's light (${wrong} of 1024 do not; ${patch.join(' ')})`);
     scene.destroyNode(parity);
+
+    // A world moved under a camera held still (setCamera's origin, as a
+    // planet kept about its camera does) reconstructs as the camera moving
+    // through it does: stripes fixed on the ground at y = 0, the camera
+    // flying across them, match frame for frame. Without the origin the
+    // history stays where the view was and smears them.
+    const stripes = `
+        module hook;
+        import volume;
+        struct Params { eye: vec3<f32> }
+        @binding(4, 0) var params: uniform<Params>;
+        pub fn volume(ray: volume::Ray) -> volume::Light {
+            let t = -params.eye.y / min(ray.dir.y, -0.01);
+            let w = params.eye + ray.dir * t;
+            let s = step(0.5, fract(w.x * 0.7 + w.z * 0.3));
+            return volume::light(vec3<f32>(s), 0.0, t);
+        }`;
+    const look = [0.35, -0.75, -0.55];
+    const fly = (held, origin) => {
+        const sc = freshScene(S).scene;
+        const vol = sc.createVolume({ module: stripes, uniforms: { eye: [0, 3, 0] } });
+        let im = null;
+        for (let i = 0; i < 24; i++) {
+            const eye = [0.11 * i, 3, -0.04 * i];
+            vol.setShaderUniform('eye', eye);
+            if (held) {
+                sc.setCamera({ fov: 50, near: 0.1, far: 100, eye: [0, 0, 0], target: look,
+                               origin: origin ? eye : [0, 0, 0] });
+            } else {
+                sc.setCamera({ fov: 50, near: 0.1, far: 100, eye, target: [eye[0] + look[0], eye[1] + look[1], eye[2] + look[2]] });
+            }
+            im = sc.captureFrame();
+        }
+        return im;
+    };
+    const differ = (a, b) => {
+        let d = 0;
+        for (let y = 8; y < S - 8; y++) for (let x = 8; x < S - 8; x++) d += Math.abs(px(a, x, y)[0] - px(b, x, y)[0]);
+        return d / ((S - 16) * (S - 16));
+    };
+    const moving = fly(false), withOrigin = fly(true, true), without = fly(true, false);
+    const dOrigin = differ(moving, withOrigin), dWithout = differ(moving, without);    assert(dOrigin < 2 && dWithout > 4 * Math.max(dOrigin, 1),
+           `a world moved under a still camera with its origin given reconstructs as a moving camera does ` +
+           `(mean difference ${dOrigin.toFixed(2)}; ${dWithout.toFixed(2)} without the origin)`);
 
     threw = null;
     try {

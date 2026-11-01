@@ -111,7 +111,7 @@ void bro_scene_SceneGraph_cameraEye_get(void* self, bronze_native_buffer* out) {
 }
 
 // setCamera({fov, near, far, aspect, eye|position, target|lookAt, up,
-//            quaternion, mode, size}) — the imperative view. quaternion
+//            quaternion, mode, size, origin}) — the imperative view. quaternion
 // wins over target/up/mode; mode "ortho[graphic]" uses size (view height)
 // in place of fov.
 void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov,
@@ -123,9 +123,13 @@ void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts
                                    bool opts_aspect_given, double opts_aspect,
                                    const double* opts_quaternion, uint32_t opts_quaternion_len,
                                    bool opts_mode_given, const char* opts_mode,
-                                   bool opts_size_given, double opts_size) {
+                                   bool opts_size_given, double opts_size,
+                                   const double* opts_origin, uint32_t opts_origin_len) {
     auto* g = graphOf(self);
     if (!g) return;
+    // Left as it was when not given: a world moved under the camera gives it
+    // with every view.
+    if (opts_origin && opts_origin_len >= 3) g->setCameraOrigin({opts_origin[0], opts_origin[1], opts_origin[2]});
     float fov = opts_fov_given ? static_cast<float>(opts_fov * 3.141592653589793 / 180.0) : (60.0f * 3.141592653589793f / 180.0f);
     float nearP = opts_near_given ? static_cast<float>(opts_near) : 0.1f;
     float farP = opts_far_given ? static_cast<float>(opts_far) : 1000.0f;

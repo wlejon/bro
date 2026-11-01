@@ -347,7 +347,13 @@ void PassVolume::record(SceneFrame& frame) {
     std::memcpy(u.prevViewProj, prevViewProj_.data, sizeof(u.prevViewProj));
     const bromath::Mat4 inv = bromath::minverse(frame.view.relViewProj);
     std::memcpy(u.invViewProj, inv.data, sizeof(u.invViewProj));
-    const bromath::Vec3 delta = frame.view.eye - prevEye_;
+    // The eye's motion in the larger world: its own and its origin's (a
+    // world moved under a camera held still moves the eye just as far).
+    const std::array<double, 3>& origin = frame.view.origin;
+    const bromath::Vec3 delta = frame.view.eye - prevEye_ +
+                                bromath::Vec3{static_cast<float>(origin[0] - prevOrigin_[0]),
+                                              static_cast<float>(origin[1] - prevOrigin_[1]),
+                                              static_cast<float>(origin[2] - prevOrigin_[2])};
     u.eyeDelta[0] = delta.x;
     u.eyeDelta[1] = delta.y;
     u.eyeDelta[2] = delta.z;
@@ -401,6 +407,7 @@ void PassVolume::record(SceneFrame& frame) {
     lastIndex_ = frame.view.frameIndex;
     prevViewProj_ = frame.view.relViewProj;
     prevEye_ = frame.view.eye;
+    prevOrigin_ = origin;
 }
 
 void PassVolume::drawPair(VkCommandBuffer cmd, const SceneVkImage& light, const SceneVkImage& r8, VkPipeline pipeline,

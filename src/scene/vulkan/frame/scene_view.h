@@ -24,6 +24,7 @@
 #include <bromath/mat.h>
 #include <bromath/vec.h>
 
+#include <array>
 #include <cstdint>
 
 namespace bro::scene {
@@ -57,6 +58,9 @@ struct SceneView {
     bromath::Mat4 invRelView;
     bromath::Mat4 invProj;
     bromath::Vec3 eye{0.0f, 0.0f, 0.0f};
+    /// The scene origin's place in a larger world (SceneGraph::cameraOrigin):
+    /// passes that reproject over frames add its change to the eye's.
+    std::array<double, 3> origin{0.0, 0.0, 0.0};
     float nearZ = 0.1f;
     float farZ = 100.0f;
     bool perspective = true;

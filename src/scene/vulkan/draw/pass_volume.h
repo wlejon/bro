@@ -151,6 +151,7 @@ private:
     uint64_t lastVolumes_ = 0;
     bromath::Mat4 prevViewProj_;
     bromath::Vec3 prevEye_{0.0f, 0.0f, 0.0f};
+    std::array<double, 3> prevOrigin_{0.0, 0.0, 0.0};
 };
 
 class PassVolumeComposite final : public ScenePass {

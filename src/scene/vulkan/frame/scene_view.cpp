@@ -57,8 +57,10 @@ SceneView SceneView::make(const bromath::Mat4& view, const bromath::Mat4& projec
 }
 
 SceneView SceneView::fromCamera(const SceneGraph& graph, uint32_t width, uint32_t height) {
-    return make(graph.viewMatrix(), graph.projectionMatrix(), graph.cameraEye(), graph.cameraNearZ(),
-                graph.cameraFarZ(), graph.cameraIsPerspective(), width, height);
+    SceneView v = make(graph.viewMatrix(), graph.projectionMatrix(), graph.cameraEye(), graph.cameraNearZ(),
+                       graph.cameraFarZ(), graph.cameraIsPerspective(), width, height);
+    v.origin = graph.cameraOrigin();
+    return v;
 }
 
 SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
