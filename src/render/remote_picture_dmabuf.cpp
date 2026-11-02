@@ -110,7 +110,7 @@ std::shared_ptr<const BridgedPicture> DmabufPictureBridge::importPicture(
 
     auto importRes = impl_->dmabufCtx->import_dmabuf(attrs);
     if (!importRes) {
-        if (err) *err = importRes.error().message;
+        if (err) *err = std::string(importRes.error_message());
         return nullptr;
     }
     auto vkImg = std::move(importRes.value());
