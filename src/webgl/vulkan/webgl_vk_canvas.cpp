@@ -8,8 +8,8 @@
 
 namespace bro::webgl::vk {
 
-WebGLVkCanvas::WebGLVkCanvas(render::VulkanContext& context)
-    : context_(context)
+WebGLVkCanvas::WebGLVkCanvas(render::VulkanContext& context, const ContextAttributes& attributes)
+    : context_(context), attributes_(attributes)
 {
 }
 
@@ -52,19 +52,21 @@ void WebGLVkCanvas::cleanup() {
     if (dev == VK_NULL_HANDLE) return;
 
     render::VulkanContext* ctx = &context_;
-    struct Dead { VkImage image; VkImageView view; uint64_t allocId; };
-    Dead color{colorImage_, colorView_, colorAllocId_};
-    Dead depth{depthImage_, depthView_, depthAllocId_};
+    struct Dead { VkImage image; VkImageView view; VkImageView extraView; uint64_t allocId; };
+    Dead color{colorImage_, colorView_, presentView_, colorAllocId_};
+    Dead depth{depthImage_, depthView_, VK_NULL_HANDLE, depthAllocId_};
     if (color.image != VK_NULL_HANDLE || depth.image != VK_NULL_HANDLE) {
         context_.frames().defer([ctx, dev, color, depth] {
             for (const Dead& d : {color, depth}) {
                 if (d.view != VK_NULL_HANDLE) vkDestroyImageView(dev, d.view, nullptr);
+                if (d.extraView != VK_NULL_HANDLE) vkDestroyImageView(dev, d.extraView, nullptr);
                 if (d.image != VK_NULL_HANDLE) ctx->destroyImage(d.image, d.allocId);
             }
         });
     }
     colorImage_ = VK_NULL_HANDLE;
     colorView_ = VK_NULL_HANDLE;
+    presentView_ = VK_NULL_HANDLE;
     colorMemory_ = VK_NULL_HANDLE;
     colorAllocId_ = 0;
     colorOffset_ = 0;
@@ -81,22 +83,37 @@ void WebGLVkCanvas::cleanup() {
 void WebGLVkCanvas::recordInit(VkCommandBuffer cmd) {
     if (!needsInit_ || cmd == VK_NULL_HANDLE) return;
     needsInit_ = false;
+    // Fresh images: nothing to keep, and nothing used them before.
+    colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    clearImages(cmd);
+}
+
+void WebGLVkCanvas::recordClear(VkCommandBuffer cmd) {
+    if (cmd == VK_NULL_HANDLE) return;
+    if (needsInit_) {
+        recordInit(cmd);
+        return;
+    }
+    clearImages(cmd);
+}
+
+// The images' transitions run from their current layouts, so they wait for
+// what read or wrote them last (the compositor's sampling included).
+void WebGLVkCanvas::clearImages(VkCommandBuffer cmd) {
     if (colorImage_ != VK_NULL_HANDLE) {
         const VkImageSubresourceRange range = render::colorRange();
-        render::cmdTransitionImage(cmd, colorImage_, range, VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionColor(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkClearColorValue clear{};
+        if (opaque()) clear.float32[3] = 1.0f;
         vkCmdClearColorImage(cmd, colorImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
-        colorLayout_ = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
     if (depthImage_ != VK_NULL_HANDLE) {
         const VkImageSubresourceRange range{render::imageAspectFor(depthFormat_), 0, 1, 0, 1};
-        render::cmdTransitionImage(cmd, depthImage_, range, VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionDepth(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkClearDepthStencilValue clear{1.0f, 0};
         vkCmdClearDepthStencilImage(cmd, depthImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
-        depthLayout_ = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
     }
 }
@@ -132,6 +149,10 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
     if (vkCreateImageView(dev, &viewInfo, nullptr, &colorView_) != VK_SUCCESS) {
         return false;
     }
+    if (opaque()) {
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_ONE;
+        if (vkCreateImageView(dev, &viewInfo, nullptr, &presentView_) != VK_SUCCESS) return false;
+    }
     colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
     needsInit_ = true;
     return true;
@@ -139,9 +160,15 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
 
 bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
     VkDevice dev = context_.device();
-    // GL's default framebuffer is DEPTH24_STENCIL8; the same Vulkan format as
-    // a renderbuffer of that format, so depth blits between them work.
-    depthFormat_ = depthStencilFormat(context_.physicalDevice(), GL_DEPTH24_STENCIL8);
+    // GL's default framebuffer is DEPTH24_STENCIL8 with both, DEPTH_COMPONENT24
+    // or STENCIL_INDEX8 with one: the same Vulkan format as a renderbuffer of
+    // that format, so depth blits between them work.
+    depthFormat_ = VK_FORMAT_UNDEFINED;
+    if (!attributes_.depth && !attributes_.stencil) return true;
+    const GLenum internalformat = !attributes_.stencil ? GL_DEPTH_COMPONENT24
+                                  : !attributes_.depth ? GL_STENCIL_INDEX8
+                                                       : GL_DEPTH24_STENCIL8;
+    depthFormat_ = depthStencilFormat(context_.physicalDevice(), internalformat);
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;

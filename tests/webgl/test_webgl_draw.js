@@ -10,7 +10,7 @@ canvas.setAttribute('height', '64');
 document.body.appendChild(canvas);
 flush();
 
-const gl = canvas.getContext('webgl2');
+const gl = canvas.getContext('webgl2', { stencil: true });
 if (!gl) {
     missingGpuContext('webgl2');
 } else {

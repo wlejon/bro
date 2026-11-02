@@ -200,34 +200,34 @@ void refuseDomSource3D(webgl::WebGL2RenderingContext* c, const char* who) {
 
 }  // namespace
 
-void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
-    b.def("createTexture", 0, [c](Value, std::span<const Value>) {
+void installWebGLTextures(ObjectBuilder& b) {
+    defMethod(b, "createTexture", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Texture, gl->createTexture().id) : ev::null();
     });
-    b.def("deleteTexture", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Texture);
         if (auto* gl = live(c)) gl->deleteTexture({id});
         forgetWebGLObject(c, WebGLCell::Texture, id);
         return ev::undefined();
     });
-    b.def("bindTexture", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "bindTexture", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->bindTexture(u32At(a, 0), {idOf(argAt(a, 1), WebGLCell::Texture)});
         return ev::undefined();
     });
-    b.def("isTexture", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isTexture({idOf(argAt(a, 0), WebGLCell::Texture)}) != GL_FALSE);
     });
-    b.def("activeTexture", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "activeTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->activeTexture(u32At(a, 0));
         return ev::undefined();
     });
-    b.def("texParameteri", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texParameteri", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
-    b.def("texParameterf", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texParameterf", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
@@ -235,7 +235,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // texImage2D: the 6-arg DOM-source form, or the 9/10-arg form whose
     // pixels are null, a PIXEL_UNPACK_BUFFER offset, a typed array (with
     // WebGL 2's srcOffset), or a DOM source of the given size.
-    b.def("texImage2D", 9, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texImage2D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         // Short calls are padded to arity with undefined, so the 6-arg
         // DOM-source call announces itself by an OBJECT where the 9-arg form
         // has `border` (a number, required to be 0).
@@ -275,7 +275,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // texSubImage2D: the 7-arg DOM-source form (three.js's default WebGL 2
     // path: texStorage2D, then this), or the 9/10-arg form.
-    b.def("texSubImage2D", 9, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texSubImage2D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isObject(argAt(a, 6))) {
             uploadSource(c, argAt(a, 6), "texSubImage2D", [&](const SourcePixels& src) {
                 if (auto* gl = live(c))
@@ -311,7 +311,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    b.def("texStorage2D", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texStorage2D", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->texStorage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
                              i32At(a, 4));
@@ -321,7 +321,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // The 3D family. Not an optional extra: WebGLState's constructor builds
     // its empty TEXTURE_2D_ARRAY / TEXTURE_3D textures with texImage3D, so a
     // renderer cannot even be CONSTRUCTED without it.
-    b.def("texImage3D", 10, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texImage3D", 10, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLenum target = u32At(a, 0), format = u32At(a, 7), type = u32At(a, 8);
         const GLint level = i32At(a, 1), internalformat = i32At(a, 2), border = i32At(a, 6);
         const GLsizei width = i32At(a, 3), height = i32At(a, 4), depth = i32At(a, 5);
@@ -343,7 +343,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("texSubImage3D", 11, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texSubImage3D", 11, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLenum target = u32At(a, 0), format = u32At(a, 8), type = u32At(a, 9);
         const GLint level = i32At(a, 1), x = i32At(a, 2), y = i32At(a, 3), z = i32At(a, 4);
         const GLsizei width = i32At(a, 5), height = i32At(a, 6), depth = i32At(a, 7);
@@ -364,13 +364,13 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("texStorage3D", 6, [c](Value, std::span<const Value> a) {
+    defMethod(b, "texStorage3D", 6, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
                              i32At(a, 4), i32At(a, 5));
         return ev::undefined();
     });
-    b.def("generateMipmap", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "generateMipmap", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->generateMipmap(u32At(a, 0));
         return ev::undefined();
     });
@@ -378,7 +378,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // Compressed uploads: a view (with the WebGL 2 srcOffset /
     // srcLengthOverride tail, in elements), or imageSize + a byte offset
     // into the bound PIXEL_UNPACK_BUFFER.
-    b.def("compressedTexImage2D", 7, [c](Value, std::span<const Value> a) {
+    defMethod(b, "compressedTexImage2D", 7, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 6))) {
             if (auto* gl = live(c))
                 gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
@@ -391,7 +391,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("compressedTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
+    defMethod(b, "compressedTexSubImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
             if (auto* gl = live(c))
                 gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
@@ -404,7 +404,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("compressedTexImage3D", 8, [c](Value, std::span<const Value> a) {
+    defMethod(b, "compressedTexImage3D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
             if (auto* gl = live(c))
                 gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
@@ -417,7 +417,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("compressedTexSubImage3D", 10, [c](Value, std::span<const Value> a) {
+    defMethod(b, "compressedTexSubImage3D", 10, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 9))) {
             if (auto* gl = live(c))
                 gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
@@ -432,19 +432,19 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    b.def("copyTexImage2D", 8, [c](Value, std::span<const Value> a) {
+    defMethod(b, "copyTexImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->copyTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
                                i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
-    b.def("copyTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
+    defMethod(b, "copyTexSubImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                                   i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
-    b.def("copyTexSubImage3D", 9, [c](Value, std::span<const Value> a) {
+    defMethod(b, "copyTexSubImage3D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
                                   i32At(a, 5), i32At(a, 6), i32At(a, 7), i32At(a, 8));
@@ -452,31 +452,31 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     // --- WebGLSampler ---
-    b.def("createSampler", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "createSampler", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Sampler, gl->createSampler().id) : ev::null();
     });
-    b.def("deleteSampler", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteSampler", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const webgl::WebGLSampler s = samplerOf(argAt(a, 0));
         if (auto* gl = live(c)) gl->deleteSampler(s);
         forgetWebGLObject(c, WebGLCell::Sampler, s.id);
         return ev::undefined();
     });
-    b.def("bindSampler", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "bindSampler", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
         return ev::undefined();
     });
-    b.def("samplerParameteri", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "samplerParameteri", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
-    b.def("samplerParameterf", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "samplerParameterf", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1),
                                   static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
-    b.def("getSamplerParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getSamplerParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         GLenum pname = u32At(a, 1);
@@ -486,7 +486,7 @@ void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::fromDouble(gl->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));
     });
-    b.def("isSampler", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isSampler", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isSampler(samplerOf(argAt(a, 0))) != GL_FALSE);
     });

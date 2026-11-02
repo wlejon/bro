@@ -59,6 +59,7 @@ GLint WebGLVkContext::getShaderParameter(WebGLShader s, GLenum pname) {
     if (pname == GL_COMPILE_STATUS) return it->second.compileStatus ? GL_TRUE : GL_FALSE;
     if (pname == GL_SHADER_TYPE) return static_cast<GLint>(it->second.type);
     if (pname == GL_DELETE_STATUS) return it->second.deleteStatus ? GL_TRUE : GL_FALSE;
+    if (pname == GL_COMPLETION_STATUS_KHR && parallelCompileEnabled_) return GL_TRUE;
     return 0;
 }
 
@@ -350,6 +351,11 @@ GLint WebGLVkContext::getProgramParameter(WebGLProgram p, GLenum pname) {
         case GL_LINK_STATUS: return prog.linkStatus ? GL_TRUE : GL_FALSE;
         case GL_DELETE_STATUS: return prog.deleteStatus ? GL_TRUE : GL_FALSE;
         case GL_VALIDATE_STATUS: return prog.validateStatus ? GL_TRUE : GL_FALSE;
+        case GL_COMPLETION_STATUS_KHR:
+            // linkProgram links before it returns.
+            if (parallelCompileEnabled_) return GL_TRUE;
+            setSyntheticError(GL_INVALID_ENUM);
+            return 0;
         case GL_ATTACHED_SHADERS: return (prog.vertShaderId != 0 ? 1 : 0) + (prog.fragShaderId != 0 ? 1 : 0);
         case GL_ACTIVE_ATTRIBUTES: return static_cast<GLint>(prog.iface.attribs.size());
         case GL_ACTIVE_UNIFORMS: return static_cast<GLint>(prog.iface.uniforms.size());

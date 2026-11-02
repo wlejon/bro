@@ -7,8 +7,10 @@
 
 namespace bro::webgl::vk {
 
-WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& context, GLuint firstObjectId)
-    : context_(context), stream_(context), canvas_(context), pipelineCache_(context)
+WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& context,
+                               const ContextAttributes& attributes, GLuint firstObjectId)
+    : context_(context), stream_(context), canvas_(context, attributes),
+      preserveDrawingBuffer_(attributes.preserveDrawingBuffer), pipelineCache_(context)
 {
     nextObjectId_ = firstObjectId;
     canvas_.init(width, height);

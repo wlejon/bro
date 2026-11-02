@@ -17,6 +17,7 @@
 // the backend, which copies it, in the statement that reads it.
 
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_class.h"
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/webgl2_context.h"
@@ -121,25 +122,55 @@ inline WebGLBackend* live(webgl::WebGL2RenderingContext* c) {
 // Family installers
 // ---------------------------------------------------------------------------
 
-// Each takes the under-construction context object and the context.
-// webgl_context.cpp calls them in one fixed order; the order of def() calls
-// inside each is likewise fixed. `c` outlives the program: the Engine owns it
-// until teardown, and nothing bronze finalizes ever dereferences it.
+// The payload of a context object: the tag (host_class.h) in WebGLCell::kind's
+// position, so neither unwrap mistakes one for the other, and the context.
+// `c` outlives the program: the Engine owns it until teardown, and nothing
+// bronze finalizes ever dereferences it.
+struct WebGLContextCell {
+    uint32_t tag = kHostWebGLContextTag;
+    webgl::WebGL2RenderingContext* context = nullptr;
+};
+
+// The context a WebGL2RenderingContext object stands for; nullptr for any
+// other value.
+inline webgl::WebGL2RenderingContext* contextOf(Value v) {
+    auto* cell = static_cast<WebGLContextCell*>(ev::handleData(v));
+    return cell && cell->tag == kHostWebGLContextTag ? cell->context : nullptr;
+}
+
+// A method of WebGL2RenderingContext.prototype: `fn(c, args)` runs against
+// the context `this` is, and a call on anything else is the TypeError a
+// browser throws for one ("Illegal invocation").
+template <typename F>
+void defMethod(ObjectBuilder& b, const char* name, uint32_t arity, F fn) {
+    b.def(name, arity, [fn](Value self, std::span<const Value> a) -> Value {
+        webgl::WebGL2RenderingContext* c = contextOf(self);
+        if (!c) return ev::throwTypeError("Illegal invocation");
+        return fn(c, a);
+    });
+}
+
+// The families of WebGL2RenderingContext.prototype. dom_globals_webgl.cpp
+// calls them in one fixed order; the order of the definitions inside each is
+// likewise fixed, so the prototype's shape is reproducible run to run.
 void installWebGLConstants(ObjectBuilder& b);
 void installWebGLConstants(const HostClass& cls);
-void installWebGLState(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installWebGLTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
+void installWebGLState(ObjectBuilder& b);
+void installWebGLBuffers(ObjectBuilder& b);
+void installWebGLShaders(ObjectBuilder& b);
+void installWebGLTextures(ObjectBuilder& b);
+void installWebGLFramebuffers(ObjectBuilder& b);
+void installWebGLQueries(ObjectBuilder& b);
+void installWebGLTransformFeedback(ObjectBuilder& b);
 
-// The whole context object: constants + every family + gl.canvas +
-// drawingBufferWidth/Height + prototype branded with WebGL2RenderingContext.
-// `canvasValue` is the host canvas object (dom_globals.cpp) so gl.canvas
-// answers live width/height. ALLOCATES heavily; returns the finished object.
+// The context's object: a WebGL2RenderingContext instance for `c`, whose one
+// own property, `canvas`, is `canvasValue` (the host canvas object, so
+// gl.canvas reads the live width/height). ALLOCATES.
 Value createWebGLContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue);
+// The WebGLBuffer, WebGLTexture, ... WebGLUniformLocation interfaces, one per
+// WebGLCell kind, installed into the current realm: no constructor, the
+// prototype each object of that kind is born on.
+void installWebGLObjectClasses();
 
 const HostClass& webgl2RenderingContextHostClass();
 void installWebGLGlobals();

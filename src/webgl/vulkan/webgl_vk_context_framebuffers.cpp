@@ -260,15 +260,23 @@ WebGLVkContext::Surface WebGLVkContext::attachmentSurface(const VkFboAttachment&
     return s;
 }
 
+// Every use of the drawing buffer's images starts here, so this is where a
+// shown drawing buffer is cleared (presented()).
 WebGLVkContext::Surface WebGLVkContext::canvasSurface(bool depth) {
     Surface s;
     if (!canvas_.isValid()) return s;
+    if (canvasClearPending_) {
+        canvasClearPending_ = false;
+        endRendering();
+        canvas_.recordClear(commands());
+    }
     s.source = depth ? Surface::Source::CanvasDepth : Surface::Source::CanvasColor;
     s.image = depth ? canvas_.depthImage() : canvas_.colorImage();
     s.view = depth ? canvas_.depthView() : canvas_.colorView();
     s.format = depth ? canvas_.depthFormat() : canvas_.colorFormat();
     s.width = canvas_.width();
     s.height = canvas_.height();
+    s.alphaOne = !depth && canvas_.opaque();
     if (s.image == VK_NULL_HANDLE) s.source = Surface::Source::None;
     return s;
 }

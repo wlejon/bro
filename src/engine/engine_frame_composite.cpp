@@ -345,6 +345,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                     // presenter's submission samples it (queue order does the rest).
                     entry.context->flush();
                     placeLayerImage(entry.context->drawingBuffer(), quad);
+                    entry.context->presented();
                     return;
                 }
             },

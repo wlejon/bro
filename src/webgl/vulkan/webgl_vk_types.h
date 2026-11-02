@@ -300,6 +300,12 @@ struct VkFeedbackVarying {
 /// the record of each vertex the draw captures; FeedbackPush says which,
 /// from offset kFeedbackPushOffset of the push constants.
 constexpr uint32_t kFeedbackBinding = 112;
+
+/// Texture units: 32 a stage, 64 a program (each sampler is visible only to
+/// the stages that use it), as far as the device's descriptor limits allow
+/// (getParameter). Samplers take descriptor bindings below 64.
+constexpr uint32_t kMaxStageTextureUnits = 32;
+constexpr uint32_t kMaxTextureUnits = 64;
 constexpr uint32_t kMaxFeedbackBuffers = 4;
 constexpr uint32_t kFeedbackPushOffset = 16;
 struct FeedbackPush {

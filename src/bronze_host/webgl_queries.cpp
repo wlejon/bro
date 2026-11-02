@@ -104,6 +104,21 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
             if (auto* gl = live(c)) gl->queryCounter(idOf(argAt(a, 0), WebGLCell::Query), u32At(a, 1));
             return ev::undefined();
         });
+    } else if (name == "KHR_parallel_shader_compile") {
+        def("MAX_SHADER_COMPILER_THREADS_KHR", 0x91B0);
+        def("COMPLETION_STATUS_KHR", 0x91B1);
+        o.def("maxShaderCompilerThreadsKHR", 1, [c](Value, std::span<const Value> a) {
+            if (auto* gl = live(c)) gl->maxShaderCompilerThreads(u32At(a, 0));
+            return ev::undefined();
+        });
+    } else if (name == "EXT_color_buffer_half_float") {
+        def("RGBA16F_EXT", 0x881A);
+        def("RGB16F_EXT", 0x881B);
+        def("FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT", 0x8211);
+        def("UNSIGNED_NORMALIZED_EXT", 0x8C17);
+    } else if (name == "WEBGL_debug_renderer_info") {
+        def("UNMASKED_VENDOR_WEBGL", 0x9245);
+        def("UNMASKED_RENDERER_WEBGL", 0x9246);
     } else if (name == "BRO_buffer_map") {
         def("MAP_READ_BIT", 0x0001);
         def("MAP_WRITE_BIT", 0x0002);
@@ -161,8 +176,8 @@ GLenum textureBindingTarget(GLenum pname) {
 
 } // namespace
 
-void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
-    b.def("getParameter", 1, [c](Value, std::span<const Value> a) {
+void installWebGLQueries(ObjectBuilder& b) {
+    defMethod(b, "getParameter", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         GLenum pname = u32At(a, 0);
@@ -176,6 +191,11 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::fromUtf8("Bro");
             case 0x1F01:  // GL_RENDERER
                 return ev::fromUtf8("Bro Vulkan");
+            case 0x9245:    // UNMASKED_VENDOR_WEBGL
+            case 0x9246: {  // UNMASKED_RENDERER_WEBGL
+                std::string info;
+                return gl->unmaskedRendererInfo(pname, info) ? ev::fromUtf8(info) : ev::null();
+            }
 
             // Float parameters
             case 0x0B73:  // GL_DEPTH_CLEAR_VALUE
@@ -314,6 +334,14 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x84FD:  // GL_MAX_TEXTURE_LOD_BIAS
                 return ev::fromDouble(gl->getParameterFloat(pname));
 
+            // The stencil masks are GLuint: all ones is 4294967295, not -1.
+            case 0x0B93:  // GL_STENCIL_VALUE_MASK
+            case 0x0B98:  // GL_STENCIL_WRITEMASK
+            case 0x8CA4:  // GL_STENCIL_BACK_VALUE_MASK
+            case 0x8CA5:  // GL_STENCIL_BACK_WRITEMASK
+            case 0x91B0:  // MAX_SHADER_COMPILER_THREADS_KHR
+                return ev::fromDouble(static_cast<GLuint>(gl->getParameterInt(pname)));
+
             // Default: integer parameter (all the MAX_* limits included).
             default:
                 return ev::fromDouble(gl->getParameterInt(pname));
@@ -323,7 +351,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // getExtension: the extension's object (its constants, and methods for
     // the few that have them), the same one on every call; null when the
     // extension is not supported or the context is lost.
-    b.def("getExtension", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getExtension", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
         if (ev::isObject(nameV) || !live(c)) return ev::null();
         std::string name = ev::toUtf8(nameV);
@@ -333,7 +361,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return webglExtension(c, name, [c, &name] { return makeExtension(c, name); });
     });
 
-    b.def("getIndexedParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getIndexedParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl || a.size() < 2) return ev::null();
         uint32_t pname = u32At(a, 0);
@@ -354,7 +382,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
     });
 
-    b.def("getSupportedExtensions", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "getSupportedExtensions", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         const std::vector<std::string> exts = gl->supportedExtensions();
@@ -365,7 +393,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // Every precision is highp: shaders compile with precision qualifiers
     // dropped (32-bit floats and ints throughout).
-    b.def("getShaderPrecisionFormat", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getShaderPrecisionFormat", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (!live(c)) return ev::null();
         const GLenum type = u32At(a, 1);
         const bool integer = type >= 0x8DF3 && type <= 0x8DF5;  // LOW_INT .. HIGH_INT
@@ -376,77 +404,83 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return o.get();
     });
 
-    b.def("isContextLost", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "isContextLost", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         return ev::fromBool(c->isContextLost());
     });
 
-    b.def("getContextAttributes", 0, [c](Value, std::span<const Value>) {
+    // What the context was granted (webgl::ContextAttributes).
+    defMethod(b, "getContextAttributes", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         if (c->isContextLost()) return ev::null();
+        const webgl::ContextAttributes& at = c->attributes();
+        using PP = webgl::ContextAttributes::PowerPreference;
+        const char* pp = at.powerPreference == PP::LowPower          ? "low-power"
+                         : at.powerPreference == PP::HighPerformance ? "high-performance"
+                                                                     : "default";
         ObjectBuilder o;
-        o.set("alpha", ev::fromBool(true));
-        o.set("depth", ev::fromBool(true));
-        o.set("stencil", ev::fromBool(true));
-        o.set("antialias", ev::fromBool(false));
-        o.set("premultipliedAlpha", ev::fromBool(true));
-        o.set("preserveDrawingBuffer", ev::fromBool(false));
-        Value pp = ev::fromUtf8("default");
-        o.set("powerPreference", pp);
-        o.set("failIfMajorPerformanceCaveat", ev::fromBool(false));
-        o.set("desynchronized", ev::fromBool(false));
+        o.set("alpha", ev::fromBool(at.alpha));
+        o.set("depth", ev::fromBool(at.depth));
+        o.set("stencil", ev::fromBool(at.stencil));
+        o.set("antialias", ev::fromBool(at.antialias));
+        o.set("premultipliedAlpha", ev::fromBool(at.premultipliedAlpha));
+        o.set("preserveDrawingBuffer", ev::fromBool(at.preserveDrawingBuffer));
+        o.set("powerPreference", ev::fromUtf8(pp));
+        o.set("failIfMajorPerformanceCaveat", ev::fromBool(at.failIfMajorPerformanceCaveat));
+        o.set("desynchronized", ev::fromBool(at.desynchronized));
+        o.set("xrCompatible", ev::fromBool(at.xrCompatible));
         return o.get();
     });
 
     // --- WebGLSync ---
-    b.def("fenceSync", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "fenceSync", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Sync, gl->fenceSync(u32At(a, 0), u32At(a, 1))) : ev::null();
     });
-    b.def("deleteSync", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteSync", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Sync);
         if (auto* gl = live(c)) gl->deleteSync(id);
         forgetWebGLObject(c, WebGLCell::Sync, id);
         return ev::undefined();
     });
-    b.def("clientWaitSync", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "clientWaitSync", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::fromDouble(0x911D);  // WAIT_FAILED
         return ev::fromDouble(gl->clientWaitSync(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), numAt(a, 2)));
     });
-    b.def("waitSync", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "waitSync", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->waitSync(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), numAt(a, 2));
         return ev::undefined();
     });
-    b.def("getSyncParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getSyncParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         GLint v = 0;
         if (!gl || !gl->getSyncParameter(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), v)) return ev::null();
         return ev::fromDouble(v);
     });
-    b.def("isSync", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isSync", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isSync(idOf(argAt(a, 0), WebGLCell::Sync)) != GL_FALSE);
     });
 
     // --- WebGLQuery ---
-    b.def("createQuery", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "createQuery", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Query, gl->createQuery()) : ev::null();
     });
-    b.def("deleteQuery", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteQuery", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Query);
         if (auto* gl = live(c)) gl->deleteQuery(id);
         forgetWebGLObject(c, WebGLCell::Query, id);
         return ev::undefined();
     });
-    b.def("beginQuery", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "beginQuery", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->beginQuery(u32At(a, 0), idOf(argAt(a, 1), WebGLCell::Query));
         return ev::undefined();
     });
-    b.def("endQuery", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "endQuery", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->endQuery(u32At(a, 0));
         return ev::undefined();
     });
-    b.def("getQuery", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getQuery", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         if (u32At(a, 1) == 0x8864 /* QUERY_COUNTER_BITS_EXT */)
@@ -457,7 +491,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return webglObject(c, WebGLCell::Query, gl->currentQuery(u32At(a, 0)));
     });
-    b.def("getQueryParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getQueryParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         const GLenum pname = u32At(a, 1);
         uint64_t v = 0;
@@ -465,13 +499,13 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         if (pname == 0x8867 /* QUERY_RESULT_AVAILABLE */) return ev::fromBool(v != 0);
         return ev::fromDouble(static_cast<double>(v));
     });
-    b.def("isQuery", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isQuery", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isQuery(idOf(argAt(a, 0), WebGLCell::Query)) != GL_FALSE);
     });
 
     // --- Internalformat ---
-    b.def("getInternalformatParameter", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getInternalformatParameter", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         GLenum target = u32At(a, 0);
@@ -486,7 +520,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     // --- WebGL2 parameter queries ---
-    b.def("getTexParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getTexParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         webgl::TexParameterValue v;
         if (!gl || !gl->getTexParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
@@ -497,7 +531,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
     });
 
-    b.def("getFramebufferAttachmentParameter", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getFramebufferAttachmentParameter", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         WebGLBackend::AttachmentParameter p;
         if (!gl || !gl->getFramebufferAttachmentParameter(u32At(a, 0), u32At(a, 1), u32At(a, 2), p) || p.isNull)
@@ -507,31 +541,31 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::fromDouble(p.value);
     });
 
-    b.def("getRenderbufferParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getRenderbufferParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return gl ? ev::fromDouble(gl->getRenderbufferParameter(u32At(a, 0), u32At(a, 1))) : ev::null();
     });
 
-    b.def("getBufferParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getBufferParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         GLint v = 0;
         if (!gl || !gl->getBufferParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
         return ev::fromDouble(v);
     });
 
-    b.def("getVertexAttrib", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getVertexAttrib", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         webgl::GLValue v;
         if (!gl || !gl->getVertexAttrib(u32At(a, 0), u32At(a, 1), v)) return ev::null();
         return glValue(c, v);
     });
 
-    b.def("getVertexAttribOffset", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getVertexAttribOffset", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromDouble(gl ? static_cast<double>(gl->getVertexAttribOffset(u32At(a, 0), u32At(a, 1))) : 0);
     });
 
-    b.def("getUniform", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getUniform", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         webgl::GLValue v;
         if (!gl || !gl->getUniform({idOf(argAt(a, 0), WebGLCell::Program)}, locOf(argAt(a, 1)), v))
@@ -541,7 +575,7 @@ void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- WebXR ---
     // There is no XR device, so makeXRCompatible rejects with AbortError.
-    b.def("makeXRCompatible", 0, [](Value, std::span<const Value>) {
+    defMethod(b, "makeXRCompatible", 0, [](webgl::WebGL2RenderingContext*, std::span<const Value>) {
         ev::Persistent p{ev::createPromise()};
         ev::Persistent err{hostMakeDomError("AbortError", "WebXR is not supported")};
         ev::rejectPromise(p.get(), err.get());

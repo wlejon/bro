@@ -1,11 +1,9 @@
-// Assembly of the WebGL2 context object a bronze-compiled program sees, and
-// the object wrappers it hands out. Methods and constants land on the
-// instance with reproducible property shape.
-//
-// Registration order is FIXED: constants first, then the families in the
-// order below, then the instance extras. Every step is a source-ordered
-// def()/set() sequence — nothing unordered ever feeds property creation, so
-// the object's shape is byte-for-byte reproducible run to run.
+// The WebGL2 context object a program sees and the object wrappers it hands
+// out. The context is a WebGL2RenderingContext instance: its methods,
+// accessors and constants are the prototype's (dom_globals_webgl.cpp), and
+// its one own property is `canvas`. Each object is an instance of its interface
+// (WebGLBuffer, WebGLTexture, ... WebGLUniformLocation), born on that
+// interface's prototype.
 
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_class.h"
@@ -21,8 +19,30 @@ uint64_t objectKey(uint32_t kind, GLuint id) { return static_cast<uint64_t>(kind
 
 void cellDtor(void* data) { delete static_cast<WebGLCell*>(data); }
 
-// ALLOCATES (makeHandle).
-Value makeCell(const WebGLCell& cell) { return ev::makeHandle(new WebGLCell(cell), cellDtor); }
+// One interface per WebGLCell kind, indexed by the kind.
+HostClass g_objectClasses[WebGLCell::Query + 1];
+constexpr const char* kObjectClassNames[WebGLCell::Query + 1] = {
+    nullptr,
+    "WebGLBuffer",
+    "WebGLTexture",
+    "WebGLProgram",
+    "WebGLShader",
+    "WebGLFramebuffer",
+    "WebGLRenderbuffer",
+    "WebGLVertexArrayObject",
+    "WebGLUniformLocation",
+    "WebGLSampler",
+    "WebGLSync",
+    "WebGLTransformFeedback",
+    "WebGLQuery",
+};
+
+// ALLOCATES (make).
+Value makeCell(const WebGLCell& cell) {
+    return g_objectClasses[cell.kind].make(new WebGLCell(cell), cellDtor);
+}
+
+void contextCellDtor(void* data) { delete static_cast<WebGLContextCell*>(data); }
 
 // A context's wrappers: its objects by (kind, name), its extensions by name.
 struct Wrappers {
@@ -87,37 +107,25 @@ Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
     return makeCell(cell);
 }
 
+void installWebGLObjectClasses() {
+    for (uint32_t kind = WebGLCell::Buffer; kind <= WebGLCell::Query; ++kind)
+        g_objectClasses[kind].install(kObjectClassNames[kind], 0, nullptr, nullptr);
+}
+
 Value createWebGLContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue) {
-    // The canvas object must survive everything the build below allocates.
+    // The canvas object must survive the instance's allocation.
     ev::Persistent canvas(canvasValue);
-
-    ObjectBuilder b;
-    installWebGLConstants(b);
-    installWebGLState(b, c);
-    installWebGLBuffers(b, c);
-    installWebGLShaders(b, c);
-    installWebGLTextures(b, c);
-    installWebGLFramebuffers(b, c);
-    installWebGLQueries(b, c);
-    installWebGLTransformFeedback(b, c);
-
-    // gl.canvas — the real host canvas object, so three.js's
-    // state.reset()-era reads of gl.canvas.width/height see the live drawing
-    // buffer size instead of a snapshot.
+    c->addTeardownCallback([](webgl::WebGL2RenderingContext* ctx) { detachWebGLMappings(ctx); });
+    auto* cell = new WebGLContextCell;
+    cell->context = c;
+    ObjectBuilder b(webgl2RenderingContextHostClass().make(cell, contextCellDtor));
+    // gl.canvas, an own data property as CanvasRenderingContext2D's is: the
+    // real host canvas object, so three.js's reads of gl.canvas.width/height
+    // see the live drawing buffer size. It is also the collector's edge from
+    // the context to its canvas: a program holding the context holds the
+    // canvas, as a plain property and no root.
     b.set("canvas", canvas.get());
-
-    // drawingBufferWidth/Height, live from the drawing buffer's size.
-    b.accessor("drawingBufferWidth",
-               [c](Value, std::span<const Value>) { return ev::fromDouble(c->canvasWidth()); },
-               nullptr);
-    b.accessor("drawingBufferHeight",
-               [c](Value, std::span<const Value>) { return ev::fromDouble(c->canvasHeight()); },
-               nullptr);
-
-    // Branded with WebGL2RenderingContext prototype:
-    // `gl instanceof WebGL2RenderingContext === true` and
-    // `gl.constructor.name === "WebGL2RenderingContext"`.
-    return ev::setPrototype(b.get(), webgl2RenderingContextHostClass().prototype());
+    return b.get();
 }
 
 }  // namespace bro::bronze_host

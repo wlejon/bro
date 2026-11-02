@@ -3,9 +3,25 @@
 
 namespace bro::webgl {
 
-WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device)
-    : width_(width), height_(height), device_(device),
-      backend_(std::make_unique<vk::WebGLVkContext>(width, height, device)) {}
+namespace {
+
+// What a context can grant of what it was asked: everything but a
+// multisampled or unpremultiplied drawing buffer, desynchronized
+// presentation and XR.
+ContextAttributes granted(ContextAttributes a) {
+    a.antialias = false;
+    a.premultipliedAlpha = true;
+    a.desynchronized = false;
+    a.xrCompatible = false;
+    return a;
+}
+
+}  // namespace
+
+WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
+                                               const ContextAttributes& requested)
+    : width_(width), height_(height), device_(device), attributes_(granted(requested)),
+      backend_(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_)) {}
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
     for (auto& cb : teardownCallbacks_)
@@ -25,7 +41,7 @@ render::LayerImage WebGL2RenderingContext::drawingBuffer() const {
     if (!backend_) return out;
     const vk::WebGLVkCanvas& canvas = backend_->canvas();
     out.image = canvas.colorImage();
-    out.view = canvas.colorView();
+    out.view = canvas.presentView();
     out.layout = canvas.colorLayout();
     out.format = canvas.colorFormat();
     out.width = canvas.width();
@@ -35,6 +51,10 @@ render::LayerImage WebGL2RenderingContext::drawingBuffer() const {
 
 void WebGL2RenderingContext::flush() {
     if (backend_) backend_->flush();
+}
+
+void WebGL2RenderingContext::presented() {
+    if (backend_) backend_->presented();
 }
 
 bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
@@ -69,7 +89,7 @@ WebGL2RenderingContext::ContextEvent WebGL2RenderingContext::takeContextEvent() 
     if (e == ContextEvent::Restored) {
         // WebGL 1.0 5.15.4 "restore the context": a fresh drawing buffer and
         // default state; names continue, so no lost object's names a new one.
-        backend_ = std::make_unique<vk::WebGLVkContext>(width_, height_, device_, nextObjectId_);
+        backend_ = std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, nextObjectId_);
         lost_ = false;
         lostErrorPending_ = false;
     }

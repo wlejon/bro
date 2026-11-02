@@ -33,15 +33,15 @@ Value makeActiveInfo(const webgl::WebGLActiveInfo& info) {
 
 }  // namespace
 
-void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+void installWebGLShaders(ObjectBuilder& b) {
     // --- Shaders ---
-    b.def("createShader", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "createShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         webgl::WebGLShader s = gl->createShader(u32At(a, 0));
         return webglObject(c, WebGLCell::Shader, s.id, s.type);
     });
-    b.def("deleteShader", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         if (cell) {
             const GLuint id = cell->id;
@@ -50,7 +50,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("shaderSource", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "shaderSource", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         Value src = argAt(a, 1);
         if (cell && !ev::isObject(src)) {
@@ -58,19 +58,19 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
-    b.def("getShaderSource", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getShaderSource", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         auto* gl = live(c);
         if (!gl || !cell) return ev::null();
         return ev::fromUtf8(gl->getShaderSource({cell->id, cell->shaderType}));
     });
-    b.def("compileShader", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "compileShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         auto* gl = live(c);
         if (gl && cell) gl->compileShader({cell->id, cell->shaderType});
         return ev::undefined();
     });
-    b.def("getShaderParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getShaderParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         auto* gl = live(c);
         if (!gl || !cell) return ev::null();
@@ -81,47 +81,51 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::fromBool(gl->getShaderParameter({cell->id, cell->shaderType}, pname) != GL_FALSE);
             case GL_SHADER_TYPE:
                 return ev::fromDouble(cell->shaderType);
+            case GL_COMPLETION_STATUS_KHR:  // with KHR_parallel_shader_compile
+                if (gl->getShaderParameter({cell->id, cell->shaderType}, pname) == GL_TRUE) return ev::fromBool(true);
+                gl->setSyntheticError(GL_INVALID_ENUM);
+                return ev::null();
             default:
                 gl->setSyntheticError(GL_INVALID_ENUM);
                 return ev::null();
         }
     });
-    b.def("getShaderInfoLog", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getShaderInfoLog", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         auto* gl = live(c);
         if (!gl || !cell) return ev::null();
         return ev::fromUtf8(gl->getShaderInfoLog({cell->id, cell->shaderType}));
     });
-    b.def("isShader", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         auto* gl = live(c);
         return ev::fromBool(gl && cell && gl->isShader({cell->id, cell->shaderType}) != GL_FALSE);
     });
 
     // --- Programs ---
-    b.def("createProgram", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "createProgram", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Program, gl->createProgram().id) : ev::null();
     });
-    b.def("deleteProgram", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Program);
         if (auto* gl = live(c)) gl->deleteProgram({id});
         forgetWebGLObject(c, WebGLCell::Program, id);
         return ev::undefined();
     });
-    b.def("attachShader", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "attachShader", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* sh = cellOf(argAt(a, 1), WebGLCell::Shader);
         auto* gl = live(c);
         if (gl && sh) gl->attachShader({idOf(argAt(a, 0), WebGLCell::Program)}, {sh->id, sh->shaderType});
         return ev::undefined();
     });
-    b.def("detachShader", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "detachShader", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* sh = cellOf(argAt(a, 1), WebGLCell::Shader);
         auto* gl = live(c);
         if (gl && sh) gl->detachShader({idOf(argAt(a, 0), WebGLCell::Program)}, {sh->id, sh->shaderType});
         return ev::undefined();
     });
-    b.def("getAttachedShaders", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getAttachedShaders", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         const std::vector<GLuint> ids = gl->attachedShaders({idOf(argAt(a, 0), WebGLCell::Program)});
@@ -131,19 +135,19 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return hostArrayOf(ids.size(),
                            [&](size_t i) { return webglObject(c, WebGLCell::Shader, ids[i], types[i]); });
     });
-    b.def("linkProgram", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "linkProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->linkProgram({idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
-    b.def("validateProgram", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "validateProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->validateProgram({idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
-    b.def("useProgram", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "useProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->useProgram({idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
-    b.def("getProgramParameter", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getProgramParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         const webgl::WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
@@ -153,70 +157,71 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case GL_LINK_STATUS:
             case GL_DELETE_STATUS:
             case GL_VALIDATE_STATUS:
+            case GL_COMPLETION_STATUS_KHR:
                 return ev::fromBool(value != 0);
             default:
                 return ev::fromDouble(value);
         }
     });
-    b.def("getProgramInfoLog", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getProgramInfoLog", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         return ev::fromUtf8(gl->getProgramInfoLog({idOf(argAt(a, 0), WebGLCell::Program)}));
     });
-    b.def("isProgram", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isProgram({idOf(argAt(a, 0), WebGLCell::Program)}) != GL_FALSE);
     });
 
     // --- Locations and introspection ---
-    b.def("bindAttribLocation", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "bindAttribLocation", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 2);
         auto* gl = live(c);
         if (gl && !ev::isObject(name))
             gl->bindAttribLocation({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), ev::toUtf8(name));
         return ev::undefined();
     });
-    b.def("getAttribLocation", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getAttribLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
         auto* gl = live(c);
         if (!gl || ev::isObject(name)) return ev::fromDouble(-1);
         return ev::fromDouble(gl->getAttribLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
     });
-    b.def("getFragDataLocation", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getFragDataLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
         auto* gl = live(c);
         if (!gl || ev::isObject(name)) return ev::fromDouble(-1);
         return ev::fromDouble(gl->getFragDataLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
     });
-    b.def("getUniformLocation", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getUniformLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
         auto* gl = live(c);
         if (!gl || ev::isObject(name)) return ev::null();
         return wrapUniformLocation(
             gl->getUniformLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
     });
-    b.def("getActiveAttrib", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getActiveAttrib", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         return makeActiveInfo(gl->getActiveAttrib({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
     });
-    b.def("getActiveUniform", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getActiveUniform", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         return makeActiveInfo(gl->getActiveUniform({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
     });
-    b.def("getUniformBlockIndex", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getUniformBlockIndex", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
         auto* gl = live(c);
         if (!gl || ev::isObject(name)) return ev::fromDouble(4294967295.0);  // INVALID_INDEX
         return ev::fromDouble(gl->getUniformBlockIndex({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
     });
-    b.def("getActiveUniformBlockName", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getActiveUniformBlockName", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         return ev::fromUtf8(gl->getActiveUniformBlockName({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
     });
-    b.def("getUniformIndices", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getUniformIndices", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         Value namesVal = argAt(a, 1);
         if (!live(c) || !ev::isObject(namesVal)) return ev::null();
@@ -236,7 +241,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         auto indices = gl->getUniformIndices(prog, names);
         return hostArrayOf(indices.size(), [&indices](size_t i) { return ev::fromDouble(indices[i]); });
     });
-    b.def("getActiveUniforms", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getActiveUniforms", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         uint32_t pname = u32At(a, 2);
         SmallBuffer<uint32_t, 64> storage;
@@ -253,7 +258,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             return ev::fromDouble(params[i]);
         });
     });
-    b.def("getActiveUniformBlockParameter", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "getActiveUniformBlockParameter", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
@@ -273,67 +278,67 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::fromDouble(gl->getActiveUniformBlockParameteri(prog, blockIndex, pname));
         }
     });
-    b.def("uniformBlockBinding", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniformBlockBinding", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniformBlockBinding({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), u32At(a, 2));
         return ev::undefined();
     });
 
     // --- Scalar uniforms ---
-    b.def("uniform1f", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform1f", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform1f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-    b.def("uniform2f", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform2f", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniform2f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
-    b.def("uniform3f", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform3f", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniform3f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)));
         return ev::undefined();
     });
-    b.def("uniform4f", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform4f", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniform4f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)),
                           static_cast<float>(numAt(a, 4)));
         return ev::undefined();
     });
-    b.def("uniform1i", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform1i", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform1i(locOf(argAt(a, 0)), i32At(a, 1));
         return ev::undefined();
     });
-    b.def("uniform2i", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform2i", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform2i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
-    b.def("uniform3i", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform3i", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform3i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3));
         return ev::undefined();
     });
-    b.def("uniform4i", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform4i", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniform4i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                           i32At(a, 4));
         return ev::undefined();
     });
-    b.def("uniform1ui", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform1ui", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform1ui(locOf(argAt(a, 0)), u32At(a, 1));
         return ev::undefined();
     });
-    b.def("uniform2ui", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform2ui", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform2ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2));
         return ev::undefined();
     });
-    b.def("uniform3ui", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform3ui", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->uniform3ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3));
         return ev::undefined();
     });
-    b.def("uniform4ui", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "uniform4ui", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->uniform4ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3),
                            u32At(a, 4));
@@ -346,7 +351,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     using Ctx = WebGLBackend;
     auto defFv = [&](const char* name, int comps,
                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLfloat*)) {
-        b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
+        defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<float, 64> storage;
             const float* p = nullptr;
             size_t n = 0;
@@ -367,7 +372,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     };
     auto defIv = [&](const char* name, int comps,
                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLint*)) {
-        b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
+        defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<int32_t, 64> storage;
             const int32_t* p = nullptr;
             size_t n = 0;
@@ -388,7 +393,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     };
     auto defUiv = [&](const char* name, int comps,
                       void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLuint*)) {
-        b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
+        defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<uint32_t, 64> storage;
             const uint32_t* p = nullptr;
             size_t n = 0;
@@ -424,7 +429,7 @@ void installWebGLShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     auto defMat = [&](const char* name, int comps,
                       void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, GLboolean,
                                       const GLfloat*)) {
-        b.def(name, 3, [c, comps, fn](Value, std::span<const Value> a) {
+        defMethod(b, name, 3, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<float, 64> storage;
             const float* p = nullptr;
             size_t n = 0;

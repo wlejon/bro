@@ -101,6 +101,7 @@ void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
 void decorateInputProto(ObjectBuilder& b);  // HTMLInputElement.prototype
+void decorateCanvasProto(ObjectBuilder& b);  // HTMLCanvasElement.prototype (dom_canvas.cpp)
 void decorateElementValidity(ObjectBuilder& b);
 void decorateElementMutate(ObjectBuilder& b);
 void decorateElementInteraction(ObjectBuilder& b);

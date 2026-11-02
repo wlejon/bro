@@ -33,6 +33,7 @@
 #include "render/damage.h"
 #include "render/kernel_canvas.h"
 #include "util/asset_mounts.h"
+#include "webgl/webgl_types.h"
 
 
 #include <atomic>
@@ -352,7 +353,8 @@ public:
 
     scene::SceneGraph* createSceneContext(dom::Element* canvas);
     size_t sceneContextCount() const;
-    webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas);
+    webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas,
+                                                       const webgl::ContextAttributes& attributes = {});
     /// The display of a 'kernel' canvas (docs/kernel-api.js): null without a
     /// GPU device.
     render::KernelCanvas* createKernelCanvas(dom::Element* canvas);

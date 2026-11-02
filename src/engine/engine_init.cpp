@@ -842,7 +842,8 @@ void Engine::dispatchDocumentReadyEvents() {
     mediaEventsArmed_ = true;
 }
 
-webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas) {
+webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas,
+                                                           const webgl::ContextAttributes& attributes) {
     if (!vulkanContext_) return nullptr;
 
     if (canvas && canvas->webglContext()) {
@@ -868,7 +869,7 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
         cw = attrInt("width", cw);
         ch = attrInt("height", ch);
     }
-    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_);
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_, attributes);
     auto* webglCtx = ctx2.get();
     if (canvas) canvas->setWebglContext(webglCtx);
     webglEntries_.push_back({std::move(ctx2), canvas, canvas ? canvas->document() : nullptr,

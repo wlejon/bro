@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
 
 namespace bro::webgl::vk {
 
@@ -68,14 +69,15 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
         case GL_MAX_VARYING_COMPONENTS: return getParameterInt(GL_MAX_VARYING_VECTORS) * 4;
         case GL_MAX_VERTEX_OUTPUT_COMPONENTS: return clampInt(L.maxVertexOutputComponents);
         case GL_MAX_FRAGMENT_INPUT_COMPONENTS: return clampInt(L.maxFragmentInputComponents);
-        // Samplers: one descriptor set per program, 32 texture units. Each
+        // Samplers: one descriptor set per program (kMaxTextureUnits). Each
         // sampler is visible only to the stages that use it, so a stage is
         // bounded by the per-stage limit and the program by the set limit.
         case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
         case GL_MAX_TEXTURE_IMAGE_UNITS:
-            return clampInt(std::min({16u, L.maxPerStageDescriptorSamplers, L.maxPerStageDescriptorSampledImages}));
+            return clampInt(std::min({kMaxStageTextureUnits, L.maxPerStageDescriptorSamplers,
+                                      L.maxPerStageDescriptorSampledImages}));
         case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
-            return clampInt(std::min({32u, L.maxDescriptorSetSamplers, L.maxDescriptorSetSampledImages,
+            return clampInt(std::min({kMaxTextureUnits, L.maxDescriptorSetSamplers, L.maxDescriptorSetSampledImages,
                                       2 * static_cast<uint32_t>(getParameterInt(GL_MAX_TEXTURE_IMAGE_UNITS))}));
         // Uniform blocks: the default block takes one uniform-buffer slot.
         case GL_MAX_UNIFORM_BUFFER_BINDINGS: return static_cast<GLint>(kMaxUniformBufferBindings);
@@ -107,6 +109,7 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
             if (drawFboId_ == 0) {
                 bits = framebufferBits(canvasDrawBuffer_ == GL_BACK ? canvas_.colorFormat() : VK_FORMAT_UNDEFINED,
                                        canvas_.depthFormat(), canvas_.depthFormat());
+                if (canvas_.opaque()) bits.alpha = 0;
             } else if (auto it = framebuffers_.find(drawFboId_); it != framebuffers_.end()) {
                 const VkFramebufferResource& fbo = it->second;
                 VkFormat color = VK_FORMAT_UNDEFINED;
@@ -154,6 +157,9 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
             return static_cast<GLint>(pname == GL_IMPLEMENTATION_COLOR_READ_FORMAT ? format : type);
         }
         case GL_READ_BUFFER: return static_cast<GLint>(readBufferState());
+        case GL_MAX_SHADER_COMPILER_THREADS_KHR:
+            if (!parallelCompileEnabled_) break;
+            return static_cast<GLint>(maxShaderCompilerThreads_);
 
         // --- Tracked state ---
         case GL_DEPTH_FUNC: return depthFunc_;
@@ -210,7 +216,14 @@ bool WebGLVkContext::formatSupports(VkFormat format, VkFormatFeatureFlags featur
 }
 
 std::vector<std::string> WebGLVkContext::supportedExtensions() const {
-    std::vector<std::string> exts = {"EXT_color_buffer_float", "BRO_buffer_map", "WEBGL_lose_context"};
+    // Compiles finish inside compileShader / linkProgram, so a parallel
+    // compile is always complete; the device names itself to
+    // WEBGL_debug_renderer_info.
+    std::vector<std::string> exts = {"EXT_color_buffer_float", "BRO_buffer_map", "WEBGL_lose_context",
+                                     "KHR_parallel_shader_compile", "WEBGL_debug_renderer_info"};
+    // The 16-bit float formats render (and blend) on every Vulkan device.
+    if (formatSupports(VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+        exts.emplace_back("EXT_color_buffer_half_float");
     if (anisotropicFiltering()) exts.emplace_back("EXT_texture_filter_anisotropic");
     // Compressed formats the device samples natively, and only those.
     for (std::string& name : compressedTextureExtensions()) exts.push_back(std::move(name));
@@ -233,7 +246,40 @@ bool WebGLVkContext::enableExtension(const std::string& name) {
         return true;
     }
     const std::vector<std::string> exts = supportedExtensions();
-    return std::find(exts.begin(), exts.end(), name) != exts.end();
+    if (std::find(exts.begin(), exts.end(), name) == exts.end()) return false;
+    // COMPLETION_STATUS_KHR and the UNMASKED_* strings are enums from now on.
+    if (name == "KHR_parallel_shader_compile") parallelCompileEnabled_ = true;
+    if (name == "WEBGL_debug_renderer_info") rendererInfoEnabled_ = true;
+    return true;
+}
+
+bool WebGLVkContext::unmaskedRendererInfo(GLenum pname, std::string& out) {
+    if (!rendererInfoEnabled_ || (pname != GL_UNMASKED_VENDOR_WEBGL && pname != GL_UNMASKED_RENDERER_WEBGL)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return false;
+    }
+    const VkPhysicalDeviceProperties& props = context_.deviceProperties();
+    if (pname == GL_UNMASKED_RENDERER_WEBGL) {
+        out = props.deviceName;
+        return true;
+    }
+    // The PCI vendor ids Vulkan reports, and the Khronos ids of the rest.
+    switch (props.vendorID) {
+        case 0x1002: out = "AMD"; break;
+        case 0x10DE: out = "NVIDIA"; break;
+        case 0x8086: out = "Intel"; break;
+        case 0x106B: out = "Apple"; break;
+        case 0x13B5: out = "ARM"; break;
+        case 0x5143: out = "Qualcomm"; break;
+        case 0x1010: out = "Imagination Technologies"; break;
+        case 0x10005: out = "Mesa"; break;
+        default: {
+            char id[16];
+            std::snprintf(id, sizeof id, "0x%04X", props.vendorID);
+            out = id;
+        }
+    }
+    return true;
 }
 
 // The limits GL types as 64-bit.

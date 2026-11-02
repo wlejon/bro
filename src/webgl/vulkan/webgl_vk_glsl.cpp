@@ -20,9 +20,12 @@ constexpr const char* kDefaultBlockName = "BroDefaultUniforms";
 // glslang maps samplers from binding 0, uniform blocks from kBlockShift and
 // the default block (a block of its own on Vulkan) to kDefaultBlockBinding
 // plus that shift. Every binding the program ends up with is read back from
-// the reflection; these only keep the three ranges apart.
-constexpr int kBlockShift = 32;
-constexpr int kDefaultBlockBinding = 64;
+// the reflection; these only keep the three ranges apart: samplers below
+// kMaxTextureUnits, the 36 blocks after them, the default block after those
+// and below kFeedbackBinding.
+constexpr int kBlockShift = static_cast<int>(kMaxTextureUnits);
+constexpr int kDefaultBlockBinding = 40;
+static_assert(kBlockShift + kDefaultBlockBinding < static_cast<int>(kFeedbackBinding));
 
 const auto kMessages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
 
@@ -133,7 +136,9 @@ std::string preamble(EShLanguage stage, Dialect dialect, const std::string& src,
         return out;
     }
 
-    out += "#define GL_FRAGMENT_PRECISION_HIGH 1\n";
+    // Every precision is highp here; stating the defaults is what keeps
+    // glslang from saying so in every fragment shader's info log.
+    out += "precision highp float;\nprecision highp int;\n#define GL_FRAGMENT_PRECISION_HIGH 1\n";
     if (dialect == Dialect::Es100) {
         out += "#define varying in\n#define gl_FragDepthEXT gl_FragDepth\n";
         if (mentions(src, "gl_FragData")) {
@@ -389,6 +394,10 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
         const TypeInfo t = typeInfo(u.type);
 
         if (r.index >= 0 && r.index == defaultBlock) {
+            // A default-block uniform is active only where live code reads
+            // it: reflection lists every member of the block, and marks the
+            // stages of those it found dereferenced.
+            if (r.stages == 0) continue;
             u.offset = static_cast<uint32_t>(r.offset);
             u.arrayStride = u.size > 1 ? std140ArrayStride(u.type) : 0;
             u.matrixStride = t.isMatrix() ? 16 : 0;

@@ -28,6 +28,26 @@ using GLchar = char;
 using GLint64 = int64_t;
 using GLuint64 = uint64_t;
 
+/// WebGLContextAttributes: what getContext was asked for (the IDL's
+/// defaults here), and, once the context is made, what it was granted —
+/// which getContextAttributes answers. The drawing buffer has an alpha,
+/// depth and stencil buffer exactly when asked; it is never multisampled
+/// (antialias is granted false) and always premultiplied (the compositor
+/// blends premultiplied alpha). Without preserveDrawingBuffer, the drawing
+/// buffer reads as cleared once the compositor has shown it.
+struct ContextAttributes {
+    bool alpha = true;
+    bool depth = true;
+    bool stencil = false;
+    bool antialias = true;
+    bool premultipliedAlpha = true;
+    bool preserveDrawingBuffer = false;
+    bool failIfMajorPerformanceCaveat = false;
+    bool desynchronized = false;
+    bool xrCompatible = false;
+    enum class PowerPreference : uint8_t { Default, LowPower, HighPerformance } powerPreference = PowerPreference::Default;
+};
+
 /// One getTexParameter answer: an integer (enums included), a float or a
 /// boolean, as the parameter is typed.
 struct TexParameterValue {
@@ -287,8 +307,8 @@ using bro::webgl::GLuint64;
 #define GL_STENCIL_BACK_FUNC 0x8800
 #define GL_STENCIL_BACK_PASS_DEPTH_FAIL 0x8802
 #define GL_STENCIL_BACK_PASS_DEPTH_PASS 0x8803
-#define GL_STENCIL_BACK_REF 0x8CA4
-#define GL_STENCIL_BACK_VALUE_MASK 0x8CA3
+#define GL_STENCIL_BACK_REF 0x8CA3
+#define GL_STENCIL_BACK_VALUE_MASK 0x8CA4
 #define GL_STENCIL_BACK_WRITEMASK 0x8CA5
 #define GL_STENCIL_BITS 0x0D57
 #define GL_STENCIL_BUFFER_BIT 0x00000400
@@ -503,6 +523,12 @@ using bro::webgl::GLuint64;
 #define GL_UNPACK_FLIP_Y_WEBGL 0x9240
 #define GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL 0x9241
 #define GL_UNPACK_COLORSPACE_CONVERSION_WEBGL 0x9243
+
+// --- WEBGL_debug_renderer_info, KHR_parallel_shader_compile ---
+#define GL_UNMASKED_VENDOR_WEBGL 0x9245
+#define GL_UNMASKED_RENDERER_WEBGL 0x9246
+#define GL_MAX_SHADER_COMPILER_THREADS_KHR 0x91B0
+#define GL_COMPLETION_STATUS_KHR 0x91B1
 
 // --- Texture state ---
 #define GL_TEXTURE_IMMUTABLE_FORMAT 0x912F

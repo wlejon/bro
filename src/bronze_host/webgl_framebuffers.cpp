@@ -12,45 +12,45 @@
 
 namespace bro::bronze_host {
 
-void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+void installWebGLFramebuffers(ObjectBuilder& b) {
     // --- Framebuffers ---
-    b.def("createFramebuffer", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "createFramebuffer", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Framebuffer, gl->createFramebuffer().id) : ev::null();
     });
-    b.def("deleteFramebuffer", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteFramebuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Framebuffer);
         if (auto* gl = live(c)) gl->deleteFramebuffer({id});
         forgetWebGLObject(c, WebGLCell::Framebuffer, id);
         return ev::undefined();
     });
-    b.def("bindFramebuffer", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "bindFramebuffer", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->bindFramebuffer(u32At(a, 0), {idOf(argAt(a, 1), WebGLCell::Framebuffer)});
         return ev::undefined();
     });
-    b.def("isFramebuffer", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isFramebuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isFramebuffer({idOf(argAt(a, 0), WebGLCell::Framebuffer)}) != GL_FALSE);
     });
-    b.def("framebufferTexture2D", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "framebufferTexture2D", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->framebufferTexture2D(u32At(a, 0), u32At(a, 1), u32At(a, 2),
                                      {idOf(argAt(a, 3), WebGLCell::Texture)}, i32At(a, 4));
         return ev::undefined();
     });
-    b.def("framebufferTextureLayer", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "framebufferTextureLayer", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->framebufferTextureLayer(u32At(a, 0), u32At(a, 1), {idOf(argAt(a, 2), WebGLCell::Texture)},
                                         i32At(a, 3), i32At(a, 4));
         return ev::undefined();
     });
-    b.def("framebufferRenderbuffer", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "framebufferRenderbuffer", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->framebufferRenderbuffer(u32At(a, 0), u32At(a, 1), u32At(a, 2),
                                         {idOf(argAt(a, 3), WebGLCell::Renderbuffer)});
         return ev::undefined();
     });
-    b.def("checkFramebufferStatus", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "checkFramebufferStatus", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromDouble(gl ? gl->checkFramebufferStatus(u32At(a, 0)) : 0x8CDD /* FRAMEBUFFER_UNSUPPORTED */);
     });
@@ -58,7 +58,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     // readPixels(x, y, w, h, format, type, dstView) into a typed array —
     // the backend checks the view holds the result before writing — or
     // readPixels(..., offset) into the bound PIXEL_PACK_BUFFER.
-    b.def("readPixels", 7, [c](Value, std::span<const Value> a) {
+    defMethod(b, "readPixels", 7, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::undefined();
         GLint x = i32At(a, 0), y = i32At(a, 1);
@@ -76,7 +76,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         return ev::undefined();
     });
 
-    b.def("readBuffer", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "readBuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->readBuffer(u32At(a, 0));
         return ev::undefined();
     });
@@ -85,7 +85,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     // which uint32Data copies into host storage via embed element reads —
     // the copy is what the backend consumes, so the reads' allocations are
     // harmless.
-    b.def("drawBuffers", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "drawBuffers", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
@@ -101,7 +101,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     // spec's length rule: COLOR needs 4 values past srcOffset, DEPTH/STENCIL
     // 1; short is INVALID_VALUE and no call. Same host-copy note as
     // drawBuffers above.
-    b.def("clearBufferfv", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "clearBufferfv", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<float, 16> storage;
         const float* p = nullptr;
         size_t n = 0;
@@ -116,7 +116,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         }
         return ev::undefined();
     });
-    b.def("clearBufferiv", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "clearBufferiv", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<int32_t, 16> storage;
         const int32_t* p = nullptr;
         size_t n = 0;
@@ -131,7 +131,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         }
         return ev::undefined();
     });
-    b.def("clearBufferuiv", 3, [c](Value, std::span<const Value> a) {
+    defMethod(b, "clearBufferuiv", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
@@ -146,14 +146,14 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         }
         return ev::undefined();
     });
-    b.def("clearBufferfi", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "clearBufferfi", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->clearBufferfi(u32At(a, 0), i32At(a, 1),
                               static_cast<GLfloat>(numAt(a, 2)), i32At(a, 3));
         return ev::undefined();
     });
 
-    b.def("blitFramebuffer", 10, [c](Value, std::span<const Value> a) {
+    defMethod(b, "blitFramebuffer", 10, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->blitFramebuffer(i32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                                 i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7),
@@ -162,7 +162,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     });
 
     // invalidate{Sub}Framebuffer(target, attachments[, x, y, width, height]).
-    b.def("invalidateFramebuffer", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "invalidateFramebuffer", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
@@ -170,7 +170,7 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
         if (auto* gl = live(c)) gl->invalidateFramebuffer(u32At(a, 0), std::span<const GLenum>(p, n));
         return ev::undefined();
     });
-    b.def("invalidateSubFramebuffer", 6, [c](Value, std::span<const Value> a) {
+    defMethod(b, "invalidateSubFramebuffer", 6, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         SmallBuffer<uint32_t, 16> storage;
         const uint32_t* p = nullptr;
         size_t n = 0;
@@ -182,30 +182,30 @@ void installWebGLFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c
     });
 
     // --- Renderbuffers ---
-    b.def("createRenderbuffer", 0, [c](Value, std::span<const Value>) {
+    defMethod(b, "createRenderbuffer", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         return gl ? webglObject(c, WebGLCell::Renderbuffer, gl->createRenderbuffer().id) : ev::null();
     });
-    b.def("deleteRenderbuffer", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "deleteRenderbuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Renderbuffer);
         if (auto* gl = live(c)) gl->deleteRenderbuffer({id});
         forgetWebGLObject(c, WebGLCell::Renderbuffer, id);
         return ev::undefined();
     });
-    b.def("bindRenderbuffer", 2, [c](Value, std::span<const Value> a) {
+    defMethod(b, "bindRenderbuffer", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->bindRenderbuffer(u32At(a, 0), {idOf(argAt(a, 1), WebGLCell::Renderbuffer)});
         return ev::undefined();
     });
-    b.def("isRenderbuffer", 1, [c](Value, std::span<const Value> a) {
+    defMethod(b, "isRenderbuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         return ev::fromBool(gl && gl->isRenderbuffer({idOf(argAt(a, 0), WebGLCell::Renderbuffer)}) != GL_FALSE);
     });
-    b.def("renderbufferStorage", 4, [c](Value, std::span<const Value> a) {
+    defMethod(b, "renderbufferStorage", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c)) gl->renderbufferStorage(u32At(a, 0), u32At(a, 1), i32At(a, 2), i32At(a, 3));
         return ev::undefined();
     });
-    b.def("renderbufferStorageMultisample", 5, [c](Value, std::span<const Value> a) {
+    defMethod(b, "renderbufferStorageMultisample", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (auto* gl = live(c))
             gl->renderbufferStorageMultisample(u32At(a, 0), i32At(a, 1), u32At(a, 2),
                                                i32At(a, 3), i32At(a, 4));

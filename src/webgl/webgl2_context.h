@@ -24,8 +24,14 @@ namespace bro::webgl {
 /// value.
 class WebGL2RenderingContext {
 public:
-    WebGL2RenderingContext(int width, int height, render::VulkanContext& device);
+    /// `requested` is what getContext was asked for; attributes() is what
+    /// the context grants (ContextAttributes).
+    WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
+                           const ContextAttributes& requested = {});
     ~WebGL2RenderingContext();
+
+    /// What getContextAttributes answers.
+    const ContextAttributes& attributes() const { return attributes_; }
 
     WebGL2RenderingContext(const WebGL2RenderingContext&) = delete;
     WebGL2RenderingContext& operator=(const WebGL2RenderingContext&) = delete;
@@ -48,6 +54,8 @@ public:
     render::LayerImage drawingBuffer() const;
     /// Submit the recorded work: the engine is about to sample the canvas.
     void flush();
+    /// The engine has shown the drawing buffer (vk::WebGLVkContext::presented).
+    void presented();
     /// The canvas as tightly packed, top-down RGBA (canvasWidth() x
     /// canvasHeight()). False while lost.
     bool readCanvasPixels(std::vector<uint8_t>& out);
@@ -71,6 +79,7 @@ private:
     int width_;
     int height_;
     render::VulkanContext& device_;
+    ContextAttributes attributes_;
     std::unique_ptr<vk::WebGLVkContext> backend_;
     std::vector<TeardownCallback> teardownCallbacks_;
 

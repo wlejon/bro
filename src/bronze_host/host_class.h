@@ -113,5 +113,6 @@ inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;  // 'VENC'
 inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
 inline constexpr uint32_t kHostAnimationTag = 0x414E494Du;  // 'ANIM'
 inline constexpr uint32_t kHostWorkerTag = 0x574F524Bu;     // 'WORK'
+inline constexpr uint32_t kHostWebGLContextTag = 0x57474C32u;  // 'WGL2'
 
 }  // namespace bro::bronze_host

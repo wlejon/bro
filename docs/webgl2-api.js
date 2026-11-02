@@ -9,9 +9,54 @@
  * Includes buffer objects, textures, shaders, programs, framebuffers, renderbuffers,
  * vertex array objects, samplers, queries, and sync primitives.
  *
- * Note: `WebGL2RenderingContext` and `WebGLRenderingContext` are global constructors,
- * while handle types (`WebGLBuffer`, `WebGLTexture`, `WebGLProgram`, etc.) are
- * interface types returned by context methods (`createBuffer()`, `createTexture()`, etc.).
+ * Every interface is a global: `WebGL2RenderingContext`, `WebGLRenderingContext`
+ * and the handle types (`WebGLBuffer`, `WebGLTexture`, `WebGLProgram`, `WebGLShader`,
+ * `WebGLFramebuffer`, `WebGLRenderbuffer`, `WebGLVertexArrayObject`, `WebGLQuery`,
+ * `WebGLSampler`, `WebGLSync`, `WebGLTransformFeedback`, `WebGLUniformLocation`).
+ * None can be constructed; each object a context hands out is an instance of its
+ * type (`gl.createBuffer() instanceof WebGLBuffer`). The context's methods,
+ * constants and the `drawingBufferWidth` / `drawingBufferHeight` accessors
+ * live on `WebGL2RenderingContext.prototype` (a context's one own property is
+ * `canvas`), and calling one on anything but a context throws a TypeError
+ * ("Illegal invocation"). `getContext`, `toDataURL`, `toBlob`, `width` and
+ * `height` live on `HTMLCanvasElement.prototype`.
+ *
+ * Context attributes (`canvas.getContext('webgl2', attributes)`), as granted and
+ * as `getContextAttributes()` reports them:
+ * - `alpha` (default true), `depth` (true), `stencil` (false): the drawing buffer
+ *   has that buffer exactly when asked. Without `alpha` its alpha is one — clears
+ *   and draws keep it there, `ALPHA_BITS` is 0, `DST_ALPHA` reads one, readPixels
+ *   and copies read one — and it composites opaque.
+ * - `antialias`: always granted false (the drawing buffer is never multisampled;
+ *   render to a multisampled renderbuffer and blit for MSAA).
+ * - `premultipliedAlpha`: always granted true (the compositor blends premultiplied).
+ * - `preserveDrawingBuffer` (false): once the compositor has shown the drawing
+ *   buffer, it reads as cleared (transparent black, opaque black without alpha;
+ *   depth 1, stencil 0) to the next draw, read or copy — a `clear()` of all of it
+ *   being the clear it was owed. With it, the drawing buffer keeps its contents.
+ * - `powerPreference` (`'default'`, `'low-power'`, `'high-performance'`): kept
+ *   and reported (one GPU serves every context); another string is a TypeError.
+ * - `failIfMajorPerformanceCaveat`: reported as asked; `desynchronized` and
+ *   `xrCompatible`: granted false.
+ *
+ * Limits are the Vulkan device's, capped where a WebGL implementation is:
+ * `MAX_TEXTURE_IMAGE_UNITS` / `MAX_VERTEX_TEXTURE_IMAGE_UNITS` are 32 and
+ * `MAX_COMBINED_TEXTURE_IMAGE_UNITS` 64 wherever the device's per-stage and
+ * per-set descriptor limits allow.
+ *
+ * Programs report what the linked shaders use: `ACTIVE_UNIFORMS` and
+ * `getActiveUniform` list only the uniforms live code reads (plus every member
+ * of a uniform block), and `getUniformLocation` of a declared but unread uniform
+ * is null. A compile or link with nothing to say has an empty info log.
+ *
+ * Extensions beyond the core: `EXT_color_buffer_float`, `EXT_color_buffer_half_float`,
+ * `EXT_float_blend`, `OES_texture_float_linear`, `EXT_texture_filter_anisotropic`,
+ * the compressed formats the device samples, `EXT_disjoint_timer_query_webgl2`,
+ * `KHR_parallel_shader_compile` (compiles are synchronous: `COMPLETION_STATUS_KHR`
+ * is true as soon as `compileShader` / `linkProgram` return),
+ * `WEBGL_debug_renderer_info` (`UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL`
+ * name the Vulkan device), `WEBGL_lose_context` and `BRO_buffer_map`. An
+ * extension's enums are enums only after its `getExtension`.
  * @example
  * const gl = canvas.getContext('webgl2');
  *   gl.clearColor(0.0, 0.0, 0.0, 1.0);

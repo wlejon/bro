@@ -3,6 +3,7 @@
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/vulkan/webgl_vk_formats.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -30,6 +31,20 @@ static MaskReach colorReach(const GLboolean mask[4]) {
 static MaskReach stencilReach(GLuint writeMask) {
     const GLuint m = writeMask & 0xFF;
     return m == 0 ? MaskReach::None : m == 0xFF ? MaskReach::Whole : MaskReach::Part;
+}
+
+// Whether clear(mask) writes every pixel of every buffer the drawing buffer
+// has, as presented()'s pending clear would.
+bool WebGLVkContext::clearCoversCanvas(GLbitfield mask) const {
+    if (scissorTest_ || canvasDrawBuffer_ != GL_BACK) return false;
+    if (!(mask & GL_COLOR_BUFFER_BIT) || colorReach(colorMask_) != MaskReach::Whole) return false;
+    const VkImageAspectFlags aspects =
+        canvas_.depthFormat() == VK_FORMAT_UNDEFINED ? 0 : render::imageAspectFor(canvas_.depthFormat());
+    if ((aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && !((mask & GL_DEPTH_BUFFER_BIT) && depthMask_)) return false;
+    if ((aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
+        !((mask & GL_STENCIL_BUFFER_BIT) && stencilReach(stencilWriteMaskFront_) == MaskReach::Whole))
+        return false;
+    return true;
 }
 
 // Record `count` clears over the pass's render area, cut to the scissor box
@@ -71,6 +86,8 @@ void WebGLVkContext::clear(GLbitfield mask) {
     }
     // RASTERIZER_DISCARD discards clears too (ES 3.0 4.2.3).
     if (rasterizerDiscardEnabled_) return;
+    // A clear of the whole shown drawing buffer is the clear it was owed.
+    if (canvasClearPending_ && drawFboId_ == 0 && clearCoversCanvas(mask)) canvasClearPending_ = false;
     beginRendering();
     if (!inRenderPass_) return;
 
@@ -96,7 +113,8 @@ void WebGLVkContext::clear(GLbitfield mask) {
             }
             atts[count].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             atts[count].colorAttachment = i;
-            atts[count].clearValue.color = {{clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]}};
+            atts[count].clearValue.color = {{clearColor_[0], clearColor_[1], clearColor_[2],
+                                             pass_.color[i].alphaOne ? 1.0f : clearColor_[3]}};
             ++count;
         }
     }
@@ -153,7 +171,8 @@ void WebGLVkContext::clearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloa
         }
         att.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         att.colorAttachment = static_cast<uint32_t>(drawbuffer);
-        att.clearValue.color = {{values[0], values[1], values[2], values[3]}};
+        att.clearValue.color = {{values[0], values[1], values[2],
+                                 pass_.color[drawbuffer].alphaOne ? 1.0f : values[3]}};
         count = 1;
     }
     clearAttachments(&att, count);

@@ -81,6 +81,38 @@ void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
 
 std::unordered_map<dom::Element*, std::unique_ptr<CanvasState>> s_canvases;
 
+// getContext('webgl2', attributes): the WebGLContextAttributes dictionary,
+// each member its IDL default when absent. A value read from the dictionary
+// may run a getter; each is converted before the next is read. False for a
+// powerPreference that is not a WebGLPowerPreference (a TypeError).
+bool contextAttributesOf(Value options, webgl::ContextAttributes& out) {
+    out = {};
+    if (!ev::isObject(options)) return true;
+    ev::Persistent opts(options);
+    auto flag = [&opts](const char* name, bool& member) {
+        Value v = ev::getProperty(opts.get(), name);
+        if (!ev::isUndefined(v)) member = ev::toBool(v);
+    };
+    flag("alpha", out.alpha);
+    flag("depth", out.depth);
+    flag("stencil", out.stencil);
+    flag("antialias", out.antialias);
+    flag("premultipliedAlpha", out.premultipliedAlpha);
+    flag("preserveDrawingBuffer", out.preserveDrawingBuffer);
+    flag("failIfMajorPerformanceCaveat", out.failIfMajorPerformanceCaveat);
+    flag("desynchronized", out.desynchronized);
+    flag("xrCompatible", out.xrCompatible);
+    Value pp = ev::getProperty(opts.get(), "powerPreference");
+    if (!ev::isUndefined(pp)) {
+        const std::string name = ev::toUtf8(pp);
+        using PP = webgl::ContextAttributes::PowerPreference;
+        if (name == "low-power") out.powerPreference = PP::LowPower;
+        else if (name == "high-performance") out.powerPreference = PP::HighPerformance;
+        else if (name != "default") return false;
+    }
+    return true;
+}
+
 CanvasState* canvasStateFor(dom::Element* el) {
     if (!el) return nullptr;
     auto it = s_canvases.find(el);
@@ -271,23 +303,34 @@ void clearHostCanvases() {
 
 namespace {
 
+// A canvas element's object: an element born on HTMLCanvasElement.prototype
+// (decorateCanvasProto), with the drawing-buffer state its members read.
 Value makeCanvasValue(dom::Element* el) {
     auto& slot = s_canvases[el];
     if (!slot) {
         slot = std::make_unique<CanvasState>();
         slot->el = el;
     }
-    CanvasState* cs = slot.get();
-
     ObjectBuilder b(makeElementHandleObject(el));
     installElementCore(b, el);
+    Value built = b.get();
+    noteHostElementValue(el, built);
+    return built;
+}
 
+}  // namespace
+
+// HTMLCanvasElement.prototype: the members every canvas shares, each reading
+// its element from the receiver (host_html_interfaces.cpp installs it).
+void decorateCanvasProto(ObjectBuilder& b) {
     b.accessor("width",
-               [el](Value, std::span<const Value>) {
+               [](Value self, std::span<const Value>) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    return ev::fromDouble(canvasWidthOf(cs));
                },
-               [el](Value, std::span<const Value> a) {
+               [](Value self, std::span<const Value> a) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    if (!cs || !cs->el) return ev::undefined();
                    int w = i32At(a, 0);
@@ -296,11 +339,13 @@ Value makeCanvasValue(dom::Element* el) {
                    return ev::undefined();
                });
     b.accessor("height",
-               [el](Value, std::span<const Value>) {
+               [](Value self, std::span<const Value>) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    return ev::fromDouble(canvasHeightOf(cs));
                },
-               [el](Value, std::span<const Value> a) {
+               [](Value self, std::span<const Value> a) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    if (!cs || !cs->el) return ev::undefined();
                    int h = i32At(a, 0);
@@ -310,7 +355,8 @@ Value makeCanvasValue(dom::Element* el) {
                });
 
     b.accessor("clientWidth",
-               [el](Value, std::span<const Value>) {
+               [](Value self, std::span<const Value>) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    if (!cs || !cs->el) return ev::fromDouble(0);
                    if (auto* eng = hostEngine()) {
@@ -322,7 +368,8 @@ Value makeCanvasValue(dom::Element* el) {
                },
                nullptr);
     b.accessor("clientHeight",
-               [el](Value, std::span<const Value>) {
+               [](Value self, std::span<const Value>) {
+                   dom::Element* el = hostElementOf(self);
                    CanvasState* cs = canvasStateFor(el);
                    if (!cs || !cs->el) return ev::fromDouble(0);
                    if (auto* eng = hostEngine()) {
@@ -334,7 +381,8 @@ Value makeCanvasValue(dom::Element* el) {
                },
                nullptr);
 
-    b.def("getBoundingClientRect", 0, [el](Value, std::span<const Value>) {
+    b.def("getBoundingClientRect", 0, [](Value self, std::span<const Value>) {
+        dom::Element* el = hostElementOf(self);
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return makeHostRectValue(0, 0, 0, 0);
         dom::AbsoluteRect r = borderBoxOf(cs->el);
@@ -350,7 +398,8 @@ Value makeCanvasValue(dom::Element* el) {
         bRect.set("y", ev::fromDouble(r.y));
         return bRect.get();
     });
-    b.def("setAttribute", 2, [el](Value, std::span<const Value> a) {
+    b.def("setAttribute", 2, [](Value self, std::span<const Value> a) {
+        dom::Element* el = hostElementOf(self);
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return ev::undefined();
         Value nameV = argAt(a, 0);
@@ -370,7 +419,8 @@ Value makeCanvasValue(dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("getContext", 1, [el](Value thisVal, std::span<const Value> a) {
+    b.def("getContext", 1, [](Value thisVal, std::span<const Value> a) {
+        dom::Element* el = hostElementOf(thisVal);
         // `thisVal` is a plain copy, current only at entry, and almost every
         // call below allocates: root it first. The canvas object and each
         // context value built here live in Persistents, read back with get()
@@ -451,7 +501,10 @@ Value makeCanvasValue(dom::Element* el) {
         if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
         Value existing = ev::getProperty(canvasRoot.get(), "__bro_gl__");
         if (cs->hasGl && ev::isObject(existing)) return existing;
-        webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el);
+        webgl::ContextAttributes attributes;
+        if (!contextAttributesOf(argAt(a, 1), attributes))
+            return ev::throwTypeError("getContext: powerPreference is not a WebGLPowerPreference");
+        webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el, attributes);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;
         ev::Persistent glRoot(createWebGLContextValue(ctx, canvasRoot.get()));
@@ -461,7 +514,8 @@ Value makeCanvasValue(dom::Element* el) {
         return glRoot.get();
     });
 
-    b.def("toDataURL", 2, [el](Value, std::span<const Value> a) -> Value {
+    b.def("toDataURL", 2, [](Value self, std::span<const Value> a) -> Value {
+        dom::Element* el = hostElementOf(self);
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return ev::fromUtf8("data:,");
         std::string type = "image/png";
@@ -484,7 +538,8 @@ Value makeCanvasValue(dom::Element* el) {
         return ev::fromUtf8(url);
     });
 
-    b.def("toBlob", 3, [el](Value, std::span<const Value> a) -> Value {
+    b.def("toBlob", 3, [](Value self, std::span<const Value> a) -> Value {
+        dom::Element* el = hostElementOf(self);
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return ev::undefined();
         if (a.empty() || !ev::isFunction(a[0])) {
@@ -533,13 +588,7 @@ Value makeCanvasValue(dom::Element* el) {
         }
         return ev::undefined();
     });
-
-    Value built = b.get();
-    noteHostElementValue(el, built);
-    return built;
 }
-
-}  // namespace
 
 Value makeCanvasElementValue(dom::Element* el) {
     return makeCanvasValue(el);

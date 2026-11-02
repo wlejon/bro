@@ -15,7 +15,7 @@ document.body.style.margin = '0';
 document.body.appendChild(canvas);
 flush();
 
-const gl = canvas.getContext('webgl2');
+const gl = canvas.getContext('webgl2', { stencil: true, preserveDrawingBuffer: true });
 if (!gl) {
     missingGpuContext('webgl2');
 } else {

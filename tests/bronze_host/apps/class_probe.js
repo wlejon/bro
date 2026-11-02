@@ -226,10 +226,12 @@ say('canvas.isElement', canvas instanceof HTMLElement);
 // element reads.
 say('canvas.inheritsElementMethod', canvas.getAttribute === div.getAttribute);
 // setAttribute is one it DOES override, because writing width or height has to
-// resize the drawing buffer. The own property shadows the shared one.
-say('canvas.ownOverrideWins',
-    Object.prototype.hasOwnProperty.call(canvas, 'width') &&
-    Object.prototype.hasOwnProperty.call(canvas, 'setAttribute') &&
+// resize the drawing buffer. HTMLCanvasElement.prototype's shadows Element's,
+// and like every other member it is the prototype's, not the canvas's.
+say('canvas.protoOverrideWins',
+    !Object.prototype.hasOwnProperty.call(canvas, 'width') &&
+    !Object.prototype.hasOwnProperty.call(canvas, 'setAttribute') &&
+    canvas.setAttribute === HTMLCanvasElement.prototype.setAttribute &&
     canvas.setAttribute !== div.setAttribute);
 
 // A text node is NOT an element: it is built on the bare handle shape, and

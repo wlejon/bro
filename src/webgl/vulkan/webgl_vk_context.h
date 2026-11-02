@@ -26,7 +26,10 @@ namespace bro::webgl::vk {
 /// pending until getError.
 class WebGLVkContext {
 public:
-    WebGLVkContext(int width, int height, render::VulkanContext& context, GLuint firstObjectId = 1);
+    /// `attributes` are those the context was granted (its drawing buffer's
+    /// alpha, depth, stencil and preservation).
+    WebGLVkContext(int width, int height, render::VulkanContext& context, const ContextAttributes& attributes = {},
+                   GLuint firstObjectId = 1);
     ~WebGLVkContext();
 
     /// The name the next created object gets.
@@ -47,6 +50,12 @@ public:
 
     /// Read canvas color pixels as top-down RGBA bytes.
     bool readCanvasPixels(std::vector<uint8_t>& out);
+
+    /// The compositor has shown the drawing buffer. Without
+    /// preserveDrawingBuffer it is cleared before anything next draws to,
+    /// reads or copies it (WebGL 1.0 2.2) — unless that is a clear() of all
+    /// of it, which makes the clear redundant.
+    void presented() { canvasClearPending_ = !preserveDrawingBuffer_; }
 
     // =================================================================
     // WebGL2 API Commands
@@ -107,6 +116,14 @@ public:
     /// extension's formats are accepted from then on.
     std::vector<std::string> supportedExtensions() const;
     bool enableExtension(const std::string& name);
+    /// WEBGL_debug_renderer_info's UNMASKED_VENDOR_WEBGL /
+    /// UNMASKED_RENDERER_WEBGL: the Vulkan device's vendor and name. False
+    /// (INVALID_ENUM raised) until the extension is enabled.
+    bool unmaskedRendererInfo(GLenum pname, std::string& out);
+    /// KHR_parallel_shader_compile's maxShaderCompilerThreadsKHR: kept for
+    /// getParameter, with no other effect (compiles are synchronous, so
+    /// COMPLETION_STATUS_KHR is always true).
+    void maxShaderCompilerThreads(GLuint count) { maxShaderCompilerThreads_ = count; }
 
     // --- Buffers ---
     WebGLBuffer createBuffer();
@@ -643,6 +660,9 @@ private:
     QuerySlots timestampSlots_{VK_QUERY_TYPE_TIMESTAMP, {}, {}, {}};
     GLuint activeTimerQuery_ = 0;
     bool timerQueriesEnabled_ = false;   // EXT_disjoint_timer_query_webgl2 was enabled
+    bool parallelCompileEnabled_ = false;  // KHR_parallel_shader_compile was enabled
+    bool rendererInfoEnabled_ = false;     // WEBGL_debug_renderer_info was enabled
+    GLuint maxShaderCompilerThreads_ = 0xFFFFFFFFu;  // KHR_parallel_shader_compile's (no effect)
     uint32_t timestampBits_ = 0;         // 0: the queue cannot time
     float timestampPeriodNs_ = 0.0f;
     bool timerQueriesSupported() const;
@@ -823,6 +843,9 @@ private:
     render::VulkanContext& context_;
     WebGLVkStream stream_;
     WebGLVkCanvas canvas_;
+    bool preserveDrawingBuffer_ = false;
+    bool canvasClearPending_ = false;  // presented(), not yet cleared
+    bool clearCoversCanvas(GLbitfield mask) const;
     WebGLVkPipelineCache pipelineCache_;
 
     bool inRenderPass_ = false;
@@ -927,7 +950,7 @@ private:
     bool unpackFlipY_ = false;
     bool unpackPremultiplyAlpha_ = false;
     GLint unpackColorspaceConversion_ = 0x9244; // BROWSER_DEFAULT_WEBGL
-    bool ditherEnabled_ = false;
+    bool ditherEnabled_ = true;  // GL's initial state (ES 3.0 table 6.13)
     bool polygonOffsetFillEnabled_ = false;
     bool rasterizerDiscardEnabled_ = false;
     bool sampleAlphaToCoverageEnabled_ = false;
@@ -953,11 +976,11 @@ private:
     std::array<IndexedBuffer, kMaxUniformBufferBindings> boundUniformBuffers_{};
 
     GLuint activeTextureUnit_ = 0;
-    std::array<GLuint, 32> boundTextures2D_{};
-    std::array<GLuint, 32> boundTexturesCubeMap_{};
-    std::array<GLuint, 32> boundTextures2DArray_{};
-    std::array<GLuint, 32> boundTextures3D_{};
-    std::array<GLuint, 32> boundSamplers_{};
+    std::array<GLuint, kMaxTextureUnits> boundTextures2D_{};
+    std::array<GLuint, kMaxTextureUnits> boundTexturesCubeMap_{};
+    std::array<GLuint, kMaxTextureUnits> boundTextures2DArray_{};
+    std::array<GLuint, kMaxTextureUnits> boundTextures3D_{};
+    std::array<GLuint, kMaxTextureUnits> boundSamplers_{};
 };
 
 } // namespace bro::webgl::vk
