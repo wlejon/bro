@@ -360,6 +360,28 @@ public:
     }
 
     // Write layout results back to the DOM element/text node
+    // Write layout results back to the DOM element/text node
+    void syncBoxToElementQuiet() {
+        if (pseudoHost_ && !pseudoIsText_) {
+            auto& hostBox = pseudoHost_->pseudoBoxMut(pseudoWhich_);
+            hostBox = box;
+            for (auto& child : children_) child->syncBoxToElementQuiet();
+            if (pseudoBeforeAdapter_) pseudoBeforeAdapter_->syncBoxToElementQuiet();
+            if (pseudoAfterAdapter_)  pseudoAfterAdapter_->syncBoxToElementQuiet();
+            return;
+        } else if (pseudoHost_ && pseudoIsText_) {
+            auto& hostBox = pseudoHost_->pseudoBoxMut(pseudoWhich_);
+            hostBox.textRuns = box.textRuns;
+        } else if (elem_) {
+            elem_->setLayoutBoxQuiet(box);
+        } else if (textNode_) {
+            textNode_->setLayoutBox(box);
+        }
+        for (auto& child : children_) child->syncBoxToElementQuiet();
+        if (pseudoBeforeAdapter_) pseudoBeforeAdapter_->syncBoxToElementQuiet();
+        if (pseudoAfterAdapter_)  pseudoAfterAdapter_->syncBoxToElementQuiet();
+    }
+
     void syncBoxToElement() {
         if (pseudoHost_ && !pseudoIsText_) {
             // Pseudo-element wrapper: stash its computed box on the host

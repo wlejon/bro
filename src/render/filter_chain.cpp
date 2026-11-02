@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include <include/core/SkBitmap.h>
 #include <include/core/SkCanvas.h>
+#include <include/core/SkImage.h>
 #include <include/core/SkColor.h>
 #include <include/core/SkRRect.h>
 #include <include/core/SkColorFilter.h>
@@ -444,6 +446,36 @@ sk_sp<SkImageFilter> BuildSvgFilterGraph(std::span<const SvgFilterPrimitive> pri
                     out.f = spec ? SkImageFilters::SpotLitSpecular(loc, at, L[6], cone, lc, p.p[0], p.p[1], p.p[2],
                                                                    in, crop)
                                  : SkImageFilters::SpotLitDiffuse(loc, at, L[6], cone, lc, p.p[0], p.p[1], in, crop);
+                }
+                break;
+            }
+            case SvgKind::Image: {
+                const int iw = static_cast<int>(p.p[4]);
+                const int ih = static_cast<int>(p.p[5]);
+                auto v = dataAt(p);
+                if (iw > 0 && ih > 0 && v.size() >= static_cast<size_t>(iw) * static_cast<size_t>(ih) * 2) {
+                    SkBitmap bm;
+                    bm.allocPixels(SkImageInfo::Make(iw, ih, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType));
+                    uint8_t* dst = static_cast<uint8_t*>(bm.getPixels());
+                    const int n = iw * ih;
+                    for (int k = 0; k < n; ++k) {
+                        const uint16_t rg = static_cast<uint16_t>(v[k * 2 + 0]);
+                        const uint16_t ba = static_cast<uint16_t>(v[k * 2 + 1]);
+                        dst[k * 4 + 0] = static_cast<uint8_t>(rg & 0xFFu);
+                        dst[k * 4 + 1] = static_cast<uint8_t>((rg >> 8) & 0xFFu);
+                        dst[k * 4 + 2] = static_cast<uint8_t>(ba & 0xFFu);
+                        dst[k * 4 + 3] = static_cast<uint8_t>((ba >> 8) & 0xFFu);
+                    }
+                    bm.setImmutable();
+                    const SkRect srcRect = SkRect::MakeWH(static_cast<float>(iw), static_cast<float>(ih));
+                    const SkRect dstRect = SkRect::MakeXYWH(p.p[0], p.p[1], p.p[2], p.p[3]);
+                    sk_sp<SkImageFilter> imgF = SkImageFilters::Image(
+                        bm.asImage(), srcRect, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                    out.f = SkImageFilters::Offset(0, 0, std::move(imgF), crop);
+                    out.linear = false;
+                } else {
+                    out.f = SkImageFilters::Shader(SkShaders::Color(SK_ColorTRANSPARENT), crop);
+                    out.linear = false;
                 }
                 break;
             }

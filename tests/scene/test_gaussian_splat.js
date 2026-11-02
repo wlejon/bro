@@ -223,6 +223,30 @@ if (!scene) {
     assert(along > 100 && across < along / 4,
         `a splat along world (1,1) runs up-right on screen (along ${along}, across ${across})`);
     tilted.destroy();
+
+    // Depth testing against opaque geometry without writing depth between splats:
+    // Camera is at (0, 0, 5) looking at the origin.
+    const redCloud = oneSplat(0, 0, 0);
+    redCloud.sh = new Float32Array([(1 - 0.5) / C0, (0 - 0.5) / C0, (0 - 0.5) / C0]);
+    const depthSplat = scene.createGaussianSplat({ cloud: redCloud });
+    const occluder = scene.createMesh({
+        primitive: 'box',
+        size: [2, 2, 0.2],
+        position: [0, 0, -2], // behind splat
+        material: { baseColor: [0, 1, 0, 1], unlit: true },
+    });
+    const imgSplatFront = scene.captureFrame();
+    const centerIdx = (64 * imgSplatFront.width + 64) * 4;
+    assert(imgSplatFront.data[centerIdx] > imgSplatFront.data[centerIdx + 1],
+        'splat in front of opaque mesh remains visible');
+
+    occluder.position = [0, 0, 2]; // in front of splat
+    const imgMeshFront = scene.captureFrame();
+    assert(imgMeshFront.data[centerIdx + 1] > imgMeshFront.data[centerIdx] &&
+           imgMeshFront.data[centerIdx + 1] > 100,
+        'opaque mesh in front of splat depth-occludes it');
+    occluder.destroy();
+    depthSplat.destroy();
     flush();
 }
 

@@ -370,6 +370,7 @@ public:
 
     // Layout box (set by htmlayout::layout::layoutTree)
     const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
+    void setLayoutBoxQuiet(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
     void setLayoutBox(const htmlayout::layout::LayoutBox& box) {
         if (paintGeometryDiffers(layoutBox_, box)) notePaintChanged();
         layoutBox_ = box;

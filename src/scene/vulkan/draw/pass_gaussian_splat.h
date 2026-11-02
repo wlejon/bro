@@ -25,6 +25,7 @@ class PassGaussianSplat final : public ScenePass {
 public:
     const char* name() const override { return "splats"; }
     bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
     void releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids) override;

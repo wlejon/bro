@@ -89,6 +89,44 @@ private:
     uint64_t imports_ = 0;
 };
 
+struct DmabufPlaneDesc {
+    int fd = -1;
+    uint32_t offset = 0;
+    uint32_t pitch = 0;
+};
+
+class DmabufPictureBridge {
+public:
+    /// Main thread. Null (with *err saying why) where it cannot work: not
+    /// Linux / BRO_WITH_DMABUF, or the Vulkan device lacks DMA-BUF import.
+    static std::shared_ptr<DmabufPictureBridge> create(VulkanContext& context, std::string* err);
+    ~DmabufPictureBridge();
+    DmabufPictureBridge(const DmabufPictureBridge&) = delete;
+    DmabufPictureBridge& operator=(const DmabufPictureBridge&) = delete;
+
+    /// Imports a single-plane / supported DRM format modifier DMA-BUF picture
+    /// into a Vulkan image. Returns nullptr (with *err) when the format or
+    /// modifier is unsupported (e.g. multi-plane NV12 without a sampler YCbCr
+    /// conversion), allowing fallback to PictureMemory::Cpu.
+    std::shared_ptr<const BridgedPicture> importPicture(
+        uint32_t drmFormat, uint64_t modifier,
+        uint32_t width, uint32_t height,
+        uint32_t planeCount, const DmabufPlaneDesc* planes,
+        std::shared_ptr<void> keepalive, std::string* err);
+
+    /// Main thread. The picture's Vulkan image, in SHADER_READ_ONLY_OPTIMAL.
+    LayerImage image(const BridgedPicture& picture);
+
+    uint64_t imports() const { return imports_.load(std::memory_order_relaxed); }
+
+    struct Impl;
+
+private:
+    explicit DmabufPictureBridge(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+    std::atomic<uint64_t> imports_{0};
+};
+
 /// CPU pixel layouts RemotePictureUploader takes (brovideo::PixelFormat's
 /// values).
 enum class RemotePixels : uint8_t { RGBA8 = 0, NV12 = 1, BGRA8 = 2 };

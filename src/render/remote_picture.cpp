@@ -194,4 +194,21 @@ void D3D11PictureBridge::importPending() {}
 LayerImage D3D11PictureBridge::image(const BridgedPicture&) { return {}; }
 #endif
 
+#if !(defined(__linux__) && defined(BRO_WITH_DMABUF) && BRO_WITH_DMABUF)
+struct DmabufPictureBridge::Impl {};
+DmabufPictureBridge::DmabufPictureBridge(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+DmabufPictureBridge::~DmabufPictureBridge() = default;
+std::shared_ptr<DmabufPictureBridge> DmabufPictureBridge::create(VulkanContext&, std::string* err) {
+    if (err) *err = "DMA-BUF pictures exist only on Linux with BRO_WITH_DMABUF";
+    return nullptr;
+}
+std::shared_ptr<const BridgedPicture> DmabufPictureBridge::importPicture(
+    uint32_t, uint64_t, uint32_t, uint32_t, uint32_t, const DmabufPlaneDesc*,
+    std::shared_ptr<void>, std::string* err) {
+    if (err) *err = "no DMA-BUF bridge here";
+    return nullptr;
+}
+LayerImage DmabufPictureBridge::image(const BridgedPicture&) { return {}; }
+#endif
+
 }  // namespace bro::render

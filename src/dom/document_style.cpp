@@ -330,7 +330,9 @@ void Document::finishComputedStyle(Element* elem, htmlayout::css::ComputedStyle&
     // the height from an intrinsic aspect ratio.
     {
         const std::string& tag = elem->tagName();
-        if (tag == "svg" || tag == "SVG") {
+        if (tag == "svg" || tag == "SVG" || tag == "foreignobject" || tag == "FOREIGNOBJECT") {
+            if ((tag == "foreignobject" || tag == "FOREIGNOBJECT") && computed.find("display") == computed.end())
+                computed["display"] = "block";
             for (const char* prop : {"width", "height"}) {
                 if (computed.find(prop) != computed.end()) continue;
                 const std::string& v = elem->getAttribute(prop);
@@ -655,7 +657,7 @@ void Document::resolveStylesRecursive(Element* elem,
         StyleShareKey& key = keyScratch_;
         if (keyable) {
             cascade_.styleAttributes(*adapter, key.attributes);
-            if (tag == "svg" || tag == "SVG") {
+            if (tag == "svg" || tag == "SVG" || tag == "foreignobject" || tag == "FOREIGNOBJECT") {
                 for (const char* attr : {"width", "height"}) {
                     key.attributes += attr;
                     key.attributes += '=';

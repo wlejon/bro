@@ -144,6 +144,8 @@ struct State {
     engine::Engine* engine = nullptr;
     std::unordered_map<uint64_t, std::unique_ptr<View>> views;
     std::shared_ptr<render::D3D11PictureBridge> bridge;
+    std::shared_ptr<render::DmabufPictureBridge> dmabufBridge;
+    bool dmabufFallbackCpu = false;
     bool bridgeTried = false;
     std::string bridgeError;
 };
@@ -219,7 +221,18 @@ void ensureBridge() {
     if (g.bridge) LOG_INFO("remoteview: decoded pictures go to the compositor on the GPU (D3D11 -> Vulkan)");
     else LOG_INFO("remoteview: pictures are uploaded from the CPU (%s)", g.bridgeError.c_str());
 #else
+#if defined(__linux__) && defined(BRO_WITH_DMABUF) && BRO_WITH_DMABUF
+    render::VulkanContext* ctx = g.engine ? g.engine->vulkanContext() : nullptr;
+    if (ctx && ctx->isValid()) {
+        g.dmabufBridge = render::DmabufPictureBridge::create(*ctx, &g.bridgeError);
+    } else {
+        g.bridgeError = "no Vulkan device";
+    }
+    if (g.dmabufBridge) LOG_INFO("remoteview: DMA-BUF -> Vulkan bridge ready (with CPU fallback for multi-plane NV12)");
+    else LOG_INFO("remoteview: decoded pictures (VA-API NV12 / Raw RGBA) are uploaded to Vulkan (%s)", g.bridgeError.c_str());
+#else
     LOG_INFO("remoteview: decoded pictures (VA-API NV12 / Raw RGBA) are uploaded to Vulkan");
+#endif
 #endif
 }
 
@@ -275,7 +288,35 @@ void takePicture(View& v, layout::ElRemoteView& rv) {
     if (!v.session->take_frame(v.frame, v.info)) return;
     ++v.pictures;
     broremote::DecodedFrame& f = v.frame;
-    if (f.memory == brovideo::PictureMemory::D3D11) {
+    if (f.memory == brovideo::PictureMemory::Dmabuf) {
+        if (!g.dmabufBridge || f.gpu.plane_count == 0) {
+            g.dmabufFallbackCpu = true;
+            ++v.unshown;
+            f.gpu = {};
+            return;
+        }
+        render::DmabufPlaneDesc planes[4]{};
+        for (uint32_t i = 0; i < f.gpu.plane_count && i < 4; ++i) {
+            planes[i].fd = f.gpu.planes[i].fd;
+            planes[i].offset = f.gpu.planes[i].offset;
+            planes[i].pitch = f.gpu.planes[i].pitch;
+        }
+        std::string err;
+        auto pic = g.dmabufBridge->importPicture(
+            f.gpu.drm_format, f.gpu.modifier, f.width, f.height,
+            f.gpu.plane_count, planes, std::move(f.gpu.keepalive), &err);
+        f.gpu = {};
+        if (!pic) {
+            g.dmabufFallbackCpu = true;
+            v.unshownWhy = err;
+            ++v.unshown;
+            return;
+        }
+        releaseLater(std::move(v.shown));
+        v.shown = std::move(pic);
+        v.showUploaded = false;
+        ++v.bridged;
+    } else if (f.memory == brovideo::PictureMemory::D3D11) {
         if (f.gpu.texture || !f.gpu.keepalive) {
             ++v.unshown;  // the bridge could not convert it
             f.gpu = {};
@@ -365,6 +406,7 @@ public:
         if (!v) return {};
         serial = v->serial;
         if (v->shown && g.bridge) return g.bridge->image(*v->shown);
+        if (v->shown && g.dmabufBridge) return g.dmabufBridge->image(*v->shown);
         if (v->showUploaded && v->uploader) return v->uploader->image();
         return {};
     }
@@ -489,8 +531,8 @@ Value statsValue(View* v, layout::ElRemoteView& rv) {
     o.set("presented", ev::fromDouble(v ? double(v->presented) : 0.0));
     o.set("streamWidth", ev::fromDouble(double(rv.streamWidth())));
     o.set("streamHeight", ev::fromDouble(double(rv.streamHeight())));
-    o.set("bridge", ev::fromBool(g.bridge != nullptr));
-    o.set("bridgeImports", ev::fromDouble(g.bridge ? double(g.bridge->imports()) : 0.0));
+    o.set("bridge", ev::fromBool(g.bridge != nullptr || (g.dmabufBridge != nullptr && !g.dmabufFallbackCpu)));
+    o.set("bridgeImports", ev::fromDouble(g.bridge ? double(g.bridge->imports()) : (g.dmabufBridge ? double(g.dmabufBridge->imports()) : 0.0)));
     o.set("bridgeConversions", ev::fromDouble(g.bridge ? double(g.bridge->conversions()) : 0.0));
     if (!g.bridge && g.bridgeTried && !g.bridgeError.empty()) o.set("bridgeError", ev::fromUtf8(g.bridgeError));
     return o.get();
@@ -596,6 +638,7 @@ void installRemoteViewHost(engine::Engine& engine) {
         g.views.clear();
         if (g.engine) g.engine->setRemoteViewHost(nullptr);
         g.bridge.reset();
+        g.dmabufBridge.reset();
     });
 }
 

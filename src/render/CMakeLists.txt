@@ -136,6 +136,7 @@ endif()
 if(BRO_WITH_DMABUF)
     target_sources(bro_render PRIVATE
         vulkan_dmabuf_importer.cpp
+        remote_picture_dmabuf.cpp
         kms_direct_presenter.cpp
         scanout_capture.cpp
     )

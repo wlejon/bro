@@ -9,6 +9,9 @@
 #include "layout/svg_text.h"
 #include "layout/css_shadow.h"
 #include "layout/draw_traversal_internal.h"   // parseCSSFilter
+#include "layout/layout_node_adapter.h"
+#include "layout/skia_text_metrics.h"
+#include "dom/document.h"
 #include "dom/element.h"
 #include "render/image_store.h"
 #include "render/renderer.h"
@@ -189,7 +192,8 @@ SkRect svgObjectBounds(SvgPaintCtx& ctx, const dom::Element* el) {
     }
     if (tag == "image" || tag == "foreignobject") {
         return SkRect::MakeXYWH(attrFloat(el, "x"), attrFloat(el, "y"),
-                                attrFloat(el, "width"), attrFloat(el, "height"));
+                                attrFloat(el, "width", styleFloat(el, "width", 0.0f)),
+                                attrFloat(el, "height", styleFloat(el, "height", 0.0f)));
     }
     SkRect b = SkRect::MakeEmpty();
     pathBounds(shapeToPathData(el), b);
@@ -612,6 +616,41 @@ void paintImage(SvgPaintCtx& ctx, const dom::Element* el) {
     r->restore();
 }
 
+void paintForeignObject(SvgPaintCtx& ctx, const dom::Element* el) {
+    if (isHidden(el) || !ctx.r || ctx.depth >= SvgPaintCtx::kMaxDepth) return;
+    const float x = attrFloat(el, "x", styleFloat(el, "x", 0.0f));
+    const float y = attrFloat(el, "y", styleFloat(el, "y", 0.0f));
+    const float w = attrFloat(el, "width", styleFloat(el, "width", 0.0f));
+    const float h = attrFloat(el, "height", styleFloat(el, "height", 0.0f));
+    if (w <= 0 || h <= 0) return;
+
+    dom::Element* fo = const_cast<dom::Element*>(el);
+    SkiaTextMetrics metrics(ctx.r);
+    auto layoutRoot = LayoutNodeAdapter::buildTree(fo);
+    htmlayout::layout::Viewport vp{w, h};
+    htmlayout::layout::layoutTree(layoutRoot.get(), vp, metrics);
+    layoutRoot->syncBoxToElementQuiet();
+    auto rootBox = fo->layoutBox();
+    rootBox.contentRect.x = rootBox.padding.left + rootBox.border.left;
+    rootBox.contentRect.y = rootBox.padding.top + rootBox.border.top;
+    rootBox.contentRect.width = std::max(0.0f, w - (rootBox.padding.left + rootBox.padding.right) - (rootBox.border.left + rootBox.border.right));
+    rootBox.contentRect.height = std::max(0.0f, h - (rootBox.padding.top + rootBox.padding.bottom) - (rootBox.border.top + rootBox.border.bottom));
+    fo->setLayoutBoxQuiet(rootBox);
+
+    render::Renderer* r = ctx.r;
+    r->save();
+    const std::string ov = styleOr(el, "overflow", "hidden");
+    if (ov != "visible") r->setClip(x, y, w, h);
+    r->translate(x, y);
+    DrawTraversal dt(r);
+    dt.setViewport(static_cast<int>(std::ceil(w)), static_cast<int>(std::ceil(h)), 0);
+    if (fo->document()) dt.setBasePath(fo->document()->basePath());
+    ++ctx.depth;
+    dt.drawSubtree(fo, 0.0f, 0.0f);
+    --ctx.depth;
+    r->restore();
+}
+
 // ---- the node walk ---------------------------------------------------------------
 
 // The first direct child of a <switch> whose conditions hold. Only
@@ -661,6 +700,8 @@ void paintContent(SvgPaintCtx& ctx, const dom::Element* el, const std::string& t
         ctx.r->restore();
     } else if (tag == "image") {
         paintImage(ctx, el);
+    } else if (tag == "foreignobject") {
+        paintForeignObject(ctx, el);
     } else {
         std::string d = shapeToPathData(el);
         if (!d.empty()) {

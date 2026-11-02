@@ -222,7 +222,8 @@ struct SvgFilterPrimitive {
         DisplacementMap,   // mode = x channel | y channel << 4 (0 R, 1 G, 2 B, 3 A); p0 = scale
         DiffuseLighting,   // p0 = surfaceScale, p1 = diffuseConstant; color; light below
         SpecularLighting,  // p0 = surfaceScale, p1 = specularConstant, p2 = exponent; color
-        Passthrough,       // `in`, unchanged (feImage and unknown primitives)
+        Image,             // p0..p3 = dst x, y, w, h; p4, p5 = src w, h; data = packed RGBA8
+        Passthrough,       // `in`, unchanged (unknown primitives)
     };
     enum CompositeOp : uint8_t { Over, In, Out, Atop, Xor, Arithmetic };
     static constexpr int16_t kSourceGraphic = -1;

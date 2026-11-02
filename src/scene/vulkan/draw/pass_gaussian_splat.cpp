@@ -68,6 +68,16 @@ void PassGaussianSplat::releaseNodes(SceneGpu& gpu, std::span<const uint32_t> id
     }
 }
 
+bool PassGaussianSplat::active(const SceneFrame& frame) const {
+    for (SceneNode* n : frame.lists.nodes) {
+        if (n->type() == SceneNode::Type::GaussianSplat &&
+            static_cast<const GaussianSplatNode*>(n)->splatCount() > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void PassGaussianSplat::declare(const SceneFrame&, PassIO& io) const {
     io.hdr();
 }
@@ -115,7 +125,7 @@ void PassGaussianSplat::record(SceneFrame& frame) {
                  .setCullMode(VK_CULL_MODE_NONE)
                  .setTarget(frame.hdrTarget)
                  .setColorBlendAttachment(0, blend)
-                 .enableDepthTest(false);
+                 .enableDepthTest(/*depthWrite=*/false, depth::compareCloser());
                 return b.build(device_->device(), layout_);
             });
             if (!pipeline) return;

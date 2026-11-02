@@ -49,6 +49,7 @@ extern "C" void bro_notification_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_vision_wildlife_main();
+extern "C" void bro_vision_wildlife_bursts_main();
 extern "C" void bro_core_main();
 extern "C" void bro_net_main();
 extern "C" void bro_physics_main();
@@ -155,6 +156,7 @@ void installImageGpuModule() {
 // only when called, so it needs nothing but the `bro.vision` it mounts on.
 void installVisionWildlifeModule() {
     bronze::embed::runEntry(bro_vision_wildlife_main);
+    bronze::embed::runEntry(bro_vision_wildlife_bursts_main);
     adoptGlobalProperty("__bro_vision_wildlife");
     mountOnNamespace("vision", "wildlife", "__bro_vision_wildlife");
 }

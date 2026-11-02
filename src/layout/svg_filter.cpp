@@ -4,11 +4,18 @@
 
 #include "layout/svg_paint_internal.h"
 #include "layout/svg_common.h"
+#include "layout/svg_image.h"
 #include "dom/element.h"
 #include "render/filter_chain.h"
+#include "render/image_store.h"
+#include "render/raster_renderer.h"
+
+#include <include/core/SkImageInfo.h>
+#include <include/core/SkSurface.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
@@ -82,6 +89,53 @@ bromath::Color colorProp(const dom::Element* el, const char* colorName, const ch
         }
     }
     return c;
+}
+
+bool packRgbaToFloats(const uint8_t* rgba, int w, int h,
+                      SvgFilterPrimitive& p, std::vector<float>& data,
+                      float dstX, float dstY, float dstW, float dstH) {
+    if (!rgba || w <= 0 || h <= 0 || dstW <= 0 || dstH <= 0) return false;
+    constexpr int kMaxDim = 512;
+    int outW = w, outH = h;
+    std::vector<uint8_t> resampled;
+    const uint8_t* src = rgba;
+    if (w > kMaxDim || h > kMaxDim) {
+        const float s = std::min(static_cast<float>(kMaxDim) / static_cast<float>(w),
+                                 static_cast<float>(kMaxDim) / static_cast<float>(h));
+        outW = std::max(1, static_cast<int>(std::lround(w * s)));
+        outH = std::max(1, static_cast<int>(std::lround(h * s)));
+        resampled.resize(static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4);
+        for (int y = 0; y < outH; ++y) {
+            const int sy = std::clamp(static_cast<int>(y * h / outH), 0, h - 1);
+            for (int x = 0; x < outW; ++x) {
+                const int sx = std::clamp(static_cast<int>(x * w / outW), 0, w - 1);
+                const uint8_t* sp = rgba + (static_cast<size_t>(sy) * w + sx) * 4;
+                uint8_t* dp = resampled.data() + (static_cast<size_t>(y) * outW + x) * 4;
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2]; dp[3] = sp[3];
+            }
+        }
+        src = resampled.data();
+    }
+    p.kind = Kind::Image;
+    p.p[0] = dstX;
+    p.p[1] = dstY;
+    p.p[2] = dstW;
+    p.p[3] = dstH;
+    p.p[4] = static_cast<float>(outW);
+    p.p[5] = static_cast<float>(outH);
+    p.dataOffset = static_cast<uint32_t>(data.size());
+    const size_t n = static_cast<size_t>(outW) * static_cast<size_t>(outH);
+    data.reserve(data.size() + n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        const uint16_t rg = static_cast<uint16_t>(src[i * 4 + 0]) |
+                            (static_cast<uint16_t>(src[i * 4 + 1]) << 8);
+        const uint16_t ba = static_cast<uint16_t>(src[i * 4 + 2]) |
+                            (static_cast<uint16_t>(src[i * 4 + 3]) << 8);
+        data.push_back(static_cast<float>(rg));
+        data.push_back(static_cast<float>(ba));
+    }
+    p.dataLen = static_cast<uint32_t>(data.size() - p.dataOffset);
+    return true;
 }
 
 } // namespace
@@ -296,9 +350,72 @@ bool buildSvgFilter(const SvgPaintCtx& ctx, const dom::Element* el, const SkRect
                 break;
             }
         } else if (tag == "feimage") {
-            // An image source this traversal does not resolve paints nothing.
             p.kind = Kind::Flood;
             p.color = bromath::Color{0, 0, 0, 0};
+            const dom::Element* target = hrefTarget(fe, ctx.root);
+            if (target && ctx.depth < SvgPaintCtx::kMaxDepth && p.w > 0 && p.h > 0) {
+                const int rw = std::clamp(static_cast<int>(std::ceil(p.w)), 1, 512);
+                const int rh = std::clamp(static_cast<int>(std::ceil(p.h)), 1, 512);
+                render::RasterRenderer rr;
+                rr.beginFrame(rw, rh);
+                rr.clear(bromath::Color{0, 0, 0, 0});
+                rr.scale(static_cast<float>(rw) / p.w, static_cast<float>(rh) / p.h);
+                if (attrOf(fe, "x").empty() && attrOf(fe, "y").empty())
+                    rr.translate(-p.x, -p.y);
+                if (primObb)
+                    rr.scale(bbox.width(), bbox.height());
+                SvgPaintCtx subCtx = ctx;
+                subCtx.r = &rr;
+                subCtx.depth = ctx.depth + 1;
+                const std::string ttag = lower(target->tagName());
+                if (ttag == "symbol") {
+                    const std::string& vb = attrOf(target, "viewBox");
+                    if (!vb.empty()) {
+                        SkMatrix vm = viewportMatrix(p.w, p.h, vb, attrOf(target, "preserveAspectRatio"));
+                        rr.concat(vm.getScaleX(), vm.getSkewY(), vm.getSkewX(),
+                                  vm.getScaleY(), vm.getTranslateX(), vm.getTranslateY());
+                    }
+                    for (const dom::Element* c : target->children()) svgPaintNode(subCtx, c);
+                } else {
+                    svgPaintNode(subCtx, target);
+                }
+                rr.endFrame();
+                if (rr.surface()) {
+                    std::vector<uint8_t> px(static_cast<size_t>(rw) * static_cast<size_t>(rh) * 4, 0);
+                    const SkImageInfo info = SkImageInfo::Make(rw, rh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+                    if (rr.surface()->readPixels(info, px.data(), static_cast<size_t>(rw) * 4, 0, 0))
+                        packRgbaToFloats(px.data(), rw, rh, p, data, p.x, p.y, p.w, p.h);
+                }
+            } else if (!target && ctx.images && *ctx.images && p.w > 0 && p.h > 0) {
+                const std::string& href = hrefOf(fe);
+                std::shared_ptr<const render::DecodedImage> img = href.empty() ? nullptr : (*ctx.images)(href);
+                if (img) {
+                    if (img->isSvg && img->rgba.empty()) {
+                        const int rw = std::clamp(static_cast<int>(std::ceil(p.w)), 1, 512);
+                        const int rh = std::clamp(static_cast<int>(std::ceil(p.h)), 1, 512);
+                        render::RasterRenderer rr;
+                        rr.beginFrame(rw, rh);
+                        rr.clear(bromath::Color{0, 0, 0, 0});
+                        paintSvgImage(&rr, *img, 0, 0, static_cast<float>(rw), static_cast<float>(rh));
+                        rr.endFrame();
+                        if (rr.surface()) {
+                            std::vector<uint8_t> px(static_cast<size_t>(rw) * static_cast<size_t>(rh) * 4, 0);
+                            const SkImageInfo info = SkImageInfo::Make(rw, rh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+                            if (rr.surface()->readPixels(info, px.data(), static_cast<size_t>(rw) * 4, 0, 0))
+                                packRgbaToFloats(px.data(), rw, rh, p, data, p.x, p.y, p.w, p.h);
+                        }
+                    } else if (!img->rgba.empty() && img->width > 0 && img->height > 0) {
+                        char vb[96];
+                        std::snprintf(vb, sizeof vb, "0 0 %d %d", img->width, img->height);
+                        SkMatrix m = viewportMatrix(p.w, p.h, vb, attrOf(fe, "preserveAspectRatio"));
+                        const SkRect dst = m.mapRect(SkRect::MakeWH(static_cast<float>(img->width),
+                                                                    static_cast<float>(img->height)))
+                                            .makeOffset(p.x, p.y);
+                        packRgbaToFloats(img->rgba.data(), img->width, img->height, p, data,
+                                         dst.fLeft, dst.fTop, dst.width(), dst.height());
+                    }
+                }
+            }
         } else {
             p.kind = Kind::Passthrough;
         }

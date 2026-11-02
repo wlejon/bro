@@ -9,6 +9,7 @@
 
 add_library(bro_steam STATIC
     steam_service.cpp
+    steam_lobbies_voice.cpp
     steam_flat.cpp
 )
 target_include_directories(bro_steam PUBLIC ${bro_SOURCE_DIR}/src)

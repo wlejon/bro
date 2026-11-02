@@ -97,6 +97,7 @@ public:
 
     // Draw a single element and its subtree (used for overlays)
     void drawElement(dom::Element* elem, float offsetX, float offsetY);
+    void drawSubtree(dom::Element* root, float offsetX = 0.0f, float offsetY = 0.0f);
 
     // The decoded picture behind an image URL (a CSS url(), an <img> src)
     // for painting: the shared store's (render/image_store.h), decoded off

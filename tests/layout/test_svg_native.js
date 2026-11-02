@@ -178,4 +178,29 @@ const u = rect('u');
 assert(Math.abs(u.left - 110) < 1 && Math.abs(u.top - 180) < 1 && Math.abs(u.width - 20) < 1,
        `use of a symbol ${u.left},${u.top} ${u.width}x${u.height}`);
 
+// <feImage> (#id element reference and data URI image) and <foreignObject> painting.
+document.body.innerHTML =
+    '<svg width=160 height=120 style="position:absolute;left:0;top:0">' +
+    '<defs>' +
+    '  <rect id=stamp x=0 y=0 width=40 height=40 fill="#00c040"/>' +
+    '  <filter id=fi_ref x="0%" y="0%" width="100%" height="100%">' +
+    '    <feImage href="#stamp" x=10 y=10 width=40 height=40/>' +
+    '  </filter>' +
+    '  <filter id=fi_uri x="0%" y="0%" width="100%" height="100%">' +
+    '    <feImage href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==" x=60 y=10 width=40 height=40 preserveAspectRatio="none"/>' +
+    '  </filter>' +
+    '</defs>' +
+    '<rect x=10 y=10 width=40 height=40 filter="url(#fi_ref)"/>' +
+    '<rect x=60 y=10 width=40 height=40 filter="url(#fi_uri)"/>' +
+    '<foreignObject x=10 y=60 width=100 height=40>' +
+    '  <div style="width:80px;height:30px;background:#2060e0"></div>' +
+    '</foreignObject>' +
+    '</svg>';
+for (let i = 0; i < 20; i++) { flush(); advanceTime(16); }
+flush();
+const shot2 = getPixels(0, 0, W, H);
+assert(near(px(shot2, 25, 25), [0, 192, 64], 30), 'feImage #id reference paints green: ' + px(shot2, 25, 25));
+assert(near(px(shot2, 75, 25), [255, 0, 0], 30), 'feImage data: URI paints red: ' + px(shot2, 75, 25));
+assert(near(px(shot2, 30, 75), [32, 96, 224], 30), 'foreignObject HTML child paints blue: ' + px(shot2, 30, 75));
+
 console.log('svg native: done');

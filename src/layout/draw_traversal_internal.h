@@ -198,4 +198,10 @@ inline float styleLengthPx(const htmlayout::css::ComputedStyle& cs, const char* 
     return v;
 }
 
+// Stacking-context / containing-block helpers (draw_traversal.cpp).
+dom::Element* absoluteContainingBlock(dom::Element* elem);
+dom::Element* fixedContainingBlock(dom::Element* elem);
+bool getZIndex(const htmlayout::css::ComputedStyle& s, int& outZ);
+bool createsStackingContext(dom::Element* elem, bool isRoot);
+
 } // namespace bro::layout

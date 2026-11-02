@@ -19,6 +19,7 @@ add_library(bro_engine STATIC
     engine_frame_composite.cpp
     engine_compile_frame.cpp
     engine_init.cpp
+    engine_init_subsystems.cpp
     engine_init_drm.cpp
     engine_run_drm.cpp
     engine_drm_cursor.cpp
@@ -81,6 +82,7 @@ add_library(bro_engine STATIC
     replaced_elements.cpp
     replaced_elements_input.cpp
     system_panels.cpp
+    system_panels_input.cpp
     shader_status.cpp
     iframe.cpp
     sub_document.cpp
