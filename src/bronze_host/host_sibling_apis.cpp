@@ -125,6 +125,8 @@
 #if defined(_WIN32)
 #include <brocompositor/win/shell_backend.h>
 #include "platform/window.h"
+#elif defined(__APPLE__)
+#include <brocompositor/mac/shell_backend.h>
 #endif
 #endif
 #if BRO_WITH_WL
@@ -642,46 +644,56 @@ void installSiblingApis(engine::Engine& engine) {
 #if defined(_WIN32)
         static std::unique_ptr<brocompositor::win::ShellBackend> s_winShellBackend;
         if (engine.displayMode() != engine::DisplayMode::Headless) {
-            brocompositor::win::ShellConfig sCfg;
-            sCfg.recover = true;
-            sCfg.report_existing = true;
+            brocompositor::win::ShellConfig sCfg; sCfg.recover = true; sCfg.report_existing = true;
             std::string sErr;
             s_winShellBackend = brocompositor::win::ShellBackend::create(sCfg, &sErr);
             if (!s_winShellBackend) {
                 LOG_WARN("brocompositor: win::ShellBackend::create failed: %s", sErr.c_str());
             } else {
-                auto eqPtr = std::shared_ptr<brocompositor::EventQueue>(
-                    &s_winShellBackend->events(), [](brocompositor::EventQueue*) {});
-                brocompositor::api::setEventQueue(eqPtr);
-                brocompositor::api::setCommandSink(
-                    [](const std::vector<brocompositor::Command>& cmds) -> size_t {
-                        if (s_winShellBackend) return s_winShellBackend->execute(cmds);
-                        return cmds.size();
-                    });
+                brocompositor::api::setEventQueue(std::shared_ptr<brocompositor::EventQueue>(
+                    &s_winShellBackend->events(), [](brocompositor::EventQueue*) {}));
+                brocompositor::api::setCommandSink([](const std::vector<brocompositor::Command>& cmds) -> size_t {
+                    return s_winShellBackend ? s_winShellBackend->execute(cmds) : cmds.size();
+                });
                 brocompositor::api::setWindowIconSource(
                     [](brocompositor::WindowId id, int32_t size) -> std::optional<brocompositor::WindowIcon> {
-                        if (s_winShellBackend) return s_winShellBackend->window_icon(id, size);
-                        return std::nullopt;
+                        return s_winShellBackend ? s_winShellBackend->window_icon(id, size) : std::nullopt;
                     });
-                // The session's shell in place of Explorer (helm as the
-                // Winlogon shell): its window is the shell window, kept
-                // beneath the applications until an overlay raises it,
-                // and its panels reserve the work area every application
-                // sees (bro.compositor.setShellOverlay / reserveEdge).
+                // Session shell (Explorer replacement): stays beneath apps until an
+                // overlay raises it, and reserves work-area edges.
                 if (engine.isDesktopShell()) {
                     brocompositor::api::ShellRole role;
                     role.is_desktop_shell = [] { return s_winShellBackend && s_winShellBackend->is_desktop_shell(); };
-                    role.set_overlay = [](bool on) {
-                        return s_winShellBackend && s_winShellBackend->set_shell_raised(on);
+                    role.set_overlay = [](bool on) { return s_winShellBackend && s_winShellBackend->set_shell_raised(on); };
+                    role.reserve_edge = [](brocompositor::MonitorId m, brocompositor::Edge e, int32_t t) {
+                        return s_winShellBackend ? s_winShellBackend->reserve_edge(m, e, t) : brocompositor::kNoReservation;
                     };
-                    role.reserve_edge = [](brocompositor::MonitorId monitor, brocompositor::Edge edge,
-                                           int32_t thickness) {
-                        return s_winShellBackend ? s_winShellBackend->reserve_edge(monitor, edge, thickness)
-                                                 : brocompositor::kNoReservation;
+                    role.release_edge = [](brocompositor::ReservationId id) { return s_winShellBackend && s_winShellBackend->release_edge(id); };
+                    brocompositor::api::setShellRole(std::move(role));
+                }
+            }
+        }
+#elif defined(__APPLE__)
+        static std::unique_ptr<brocompositor::mac::ShellBackend> s_macShellBackend;
+        if (engine.displayMode() != engine::DisplayMode::Headless) {
+            std::string sErr;
+            brocompositor::mac::ShellConfig sCfg; sCfg.recover = true; sCfg.report_existing = true;
+            s_macShellBackend = brocompositor::mac::ShellBackend::create(sCfg, &sErr);
+            if (!s_macShellBackend) {
+                LOG_WARN("brocompositor: mac::ShellBackend::create failed: %s", sErr.c_str());
+            } else {
+                brocompositor::api::setEventQueue(std::shared_ptr<brocompositor::EventQueue>(
+                    &s_macShellBackend->events(), [](brocompositor::EventQueue*) {}));
+                brocompositor::api::setCommandSink([](const std::vector<brocompositor::Command>& cmds) -> size_t {
+                    return s_macShellBackend ? s_macShellBackend->execute(cmds) : cmds.size();
+                });
+                if (engine.isDesktopShell()) {
+                    brocompositor::api::ShellRole role;
+                    role.is_desktop_shell = [] { return s_macShellBackend != nullptr; };
+                    role.reserve_edge = [](brocompositor::MonitorId m, brocompositor::Edge e, int32_t t) {
+                        return s_macShellBackend ? s_macShellBackend->reserve_edge(m, e, t) : brocompositor::kNoReservation;
                     };
-                    role.release_edge = [](brocompositor::ReservationId id) {
-                        return s_winShellBackend && s_winShellBackend->release_edge(id);
-                    };
+                    role.release_edge = [](brocompositor::ReservationId id) { return s_macShellBackend && s_macShellBackend->release_edge(id); };
                     brocompositor::api::setShellRole(std::move(role));
                 }
             }
@@ -713,6 +725,9 @@ void installSiblingApis(engine::Engine& engine) {
             brocompositor::api::setShellRole({});
             brocompositor::api::setWindowIconSource({});
             s_winShellBackend.reset();
+#elif defined(__APPLE__)
+            brocompositor::api::setShellRole({});
+            s_macShellBackend.reset();
 #endif
         });
     }

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "bronze_host/host_compartment.h"
+#include "bronze_host/host_node_sweep.h"
 
 namespace bro::bronze_host {
 
@@ -22,9 +23,28 @@ namespace {
 struct ParsedDocEntry {
     std::unique_ptr<dom::Document> doc;
     uint64_t compartmentId = 0;
+    SweepGroup* sweepGroup = nullptr;
+    bool sweepAlone = false;
+    bool newlyCreated = true;
 };
 
 std::vector<ParsedDocEntry> s_parsedDocs;
+
+ParsedDocEntry* findParsedDoc(const dom::Document* doc) {
+    if (!doc) return nullptr;
+    for (auto& e : s_parsedDocs) {
+        if (e.doc.get() == doc) return &e;
+    }
+    return nullptr;
+}
+
+void teardownParsedDoc(dom::Document* doc) {
+    if (!doc) return;
+    hostSweepForgetDocument(doc);
+    clearHostElementsForDocument(doc);
+    clearHostDocument(doc);
+    forgetDocumentOwner(doc);
+}
 
 }  // namespace
 
@@ -51,13 +71,62 @@ dom::Document* parseXmlIntoNewDocument(const std::string& xml) {
 }
 }  // namespace
 
+bool isParsedDocument(const dom::Document* doc) {
+    return findParsedDoc(doc) != nullptr;
+}
+
+void takeNewParsedDocuments(std::vector<dom::Document*>& out) {
+    out.clear();
+    for (auto& e : s_parsedDocs) {
+        if (e.doc && e.newlyCreated) {
+            e.newlyCreated = false;
+            out.push_back(e.doc.get());
+        }
+    }
+}
+
+void collectAllParsedDocuments(std::vector<dom::Document*>& out) {
+    out.clear();
+    for (auto& e : s_parsedDocs) {
+        if (e.doc) {
+            e.newlyCreated = false;
+            out.push_back(e.doc.get());
+        }
+    }
+}
+
+SweepGroup* parsedDocumentSweepGroup(const dom::Document* doc) {
+    ParsedDocEntry* e = findParsedDoc(doc);
+    return e ? e->sweepGroup : nullptr;
+}
+
+void setParsedDocumentSweepGroup(dom::Document* doc, SweepGroup* g) {
+    if (ParsedDocEntry* e = findParsedDoc(doc)) e->sweepGroup = g;
+}
+
+bool parsedDocumentSweepAlone(const dom::Document* doc) {
+    ParsedDocEntry* e = findParsedDoc(doc);
+    return e && e->sweepAlone;
+}
+
+void setParsedDocumentSweepAlone(dom::Document* doc, bool alone) {
+    if (ParsedDocEntry* e = findParsedDoc(doc)) e->sweepAlone = alone;
+}
+
+void destroyParsedDocument(dom::Document* doc) {
+    if (!doc) return;
+    for (auto it = s_parsedDocs.begin(); it != s_parsedDocs.end(); ++it) {
+        if (it->doc.get() == doc) {
+            teardownParsedDoc(doc);
+            s_parsedDocs.erase(it);
+            return;
+        }
+    }
+}
+
 void clearParsedDocuments() {
     for (auto& entry : s_parsedDocs) {
-        if (entry.doc) {
-            clearHostElementsForDocument(entry.doc.get());
-            clearHostDocument(entry.doc.get());
-            forgetDocumentOwner(entry.doc.get());
-        }
+        if (entry.doc) teardownParsedDoc(entry.doc.get());
     }
     s_parsedDocs.clear();
 }
@@ -65,11 +134,7 @@ void clearParsedDocuments() {
 void clearParsedDocumentsForCompartment(uint64_t compartmentId) {
     for (auto it = s_parsedDocs.begin(); it != s_parsedDocs.end(); ) {
         if (it->compartmentId == compartmentId) {
-            if (it->doc) {
-                clearHostElementsForDocument(it->doc.get());
-                clearHostDocument(it->doc.get());
-                forgetDocumentOwner(it->doc.get());
-            }
+            if (it->doc) teardownParsedDoc(it->doc.get());
             it = s_parsedDocs.erase(it);
         } else {
             ++it;

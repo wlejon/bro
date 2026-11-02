@@ -2,6 +2,7 @@
 #include "render/vulkan_compute.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_util.h"
+#include "scene/vulkan/frame/scene_shader_sets.h"
 #include "util/log.h"
 
 #include <cstring>
@@ -42,6 +43,7 @@ bool SceneVkDevice::init() {
         return false;
     }
     frameEndHook_ = context_.frames().addFrameEndHook([this] { flushUploads(); });
+    shader_sets::noteDeviceQueue(context_.device(), &context_.queue());
     initialized_ = true;
     return true;
 }
@@ -51,6 +53,7 @@ void SceneVkDevice::shutdown() {
     flushUploads();
     context_.frames().removeFrameEndHook(frameEndHook_);
     frameEndHook_ = 0;
+    shader_sets::noteDeviceQueue(context_.device(), nullptr);
     // Layouts that bake the sampler in are destroyed by now; sets still in
     // flight may reference it, so it goes once the GPU is done.
     if (shadowCompareSampler_ != VK_NULL_HANDLE) {

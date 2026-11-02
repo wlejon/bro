@@ -14,6 +14,7 @@
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_matchmedia.h"
+#include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_web_animations.h"
 
 #include "engine/engine.h"
@@ -78,6 +79,10 @@ namespace {
 // it). Every compartment's `document` is its own object over its own
 // document, so nothing here follows the running code.
 dom::Document* documentFor(dom::Document* fixed) {
+    if (fixed) {
+        if (!dom::Document::isLiveDocument(fixed)) return nullptr;
+        hostSweepTouchDocument(fixed);
+    }
     dom::Document* doc = fixed ? fixed : (hostEngine() ? hostEngine()->document() : nullptr);
     if (doc) doc->setElementClonedCallback(&fireElementCloned);
     return doc;
@@ -732,7 +737,7 @@ Value makeDocumentValue(dom::Document* fixed) {
 }
 
 namespace {
-std::unordered_map<dom::Document*, ev::Persistent> s_docWrappers;
+std::unordered_map<dom::Document*, std::unique_ptr<ev::Persistent>> s_docWrappers;
 }
 
 // The app's document object (it follows the engine's document), as
@@ -741,8 +746,15 @@ static ev::Persistent s_appDocumentValue;
 
 void setAppDocumentValue(Value v) { s_appDocumentValue.set(v); }
 
+ev::Persistent* hostDocumentWrapperSlot(dom::Document* doc) {
+    if (!doc) return nullptr;
+    auto it = s_docWrappers.find(doc);
+    if (it == s_docWrappers.end() || !it->second) return nullptr;
+    return it->second.get();
+}
+
 Value hostDocumentValue(dom::Document* doc) {
-    if (!doc) return ev::null();
+    if (!doc || !dom::Document::isLiveDocument(doc)) return ev::null();
     // Only to the code of the compartment that owns it: a document object's
     // methods act on its document whoever holds them, so another
     // compartment's is never handed out (null, as a cross-origin frame's
@@ -753,17 +765,20 @@ Value hostDocumentValue(dom::Document* doc) {
         ev::GlobalValue g = ev::globalValue("document");
         if (g.found) return g.value;
     }
-    auto it = s_docWrappers.find(doc);
-    if (it != s_docWrappers.end() && !ev::isUndefined(it->second.get())) {
-        return it->second.get();
+    hostSweepTouchDocument(doc);
+    auto& slot = s_docWrappers[doc];
+    if (!slot) slot = std::make_unique<ev::Persistent>();
+    if (!ev::isUndefined(slot->get())) {
+        return slot->get();
     }
     Value v = makeDocumentValue(doc);
-    s_docWrappers[doc].set(v);
+    slot->set(v);
     return v;
 }
 
 void clearHostDocument(dom::Document* doc) {
     if (!doc) return;
+    hostSweepForgetDocument(doc);
     s_docWrappers.erase(doc);
     removeHostMediaQueriesForDocument(doc);
 }

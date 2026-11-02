@@ -148,6 +148,9 @@ inline void hostSweepTouch(HostNodeState* st) {
     if (st && st->sweepGroup) hostSweepPromote(st);
 }
 void hostSweepTouchNode(const dom::Node* node);
+void hostSweepPromoteDocument(dom::Document* doc);
+void hostSweepTouchDocument(dom::Document* doc);
+void hostSweepForgetDocument(dom::Document* doc);
 
 // Once per frame from the frame seam: a budgeted slice of the work.
 void hostDomSweepFrame(double dtMs);

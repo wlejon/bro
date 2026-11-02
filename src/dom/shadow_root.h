@@ -50,24 +50,6 @@ public:
     // registered is skipped, so the walk can run on every child-list change.
     void registerStyleElements(Document* doc);
 
-    // Generate scoped CSS (prefixes all selectors with scope attribute)
-    std::string scopedCSS() const;
-
-    // Parsed CSS rule for inline style application
-    struct CSSRule {
-        std::string selector;  // original selector (e.g. ".card-title", ":host")
-        std::string properties; // CSS declarations (e.g. "color: red; font-size: 14px")
-    };
-
-    // Parse styleSheets into rules
-    std::vector<CSSRule> parsedRules() const;
-
-    // Resolve inline styles for a given element by matching shadow CSS rules
-    std::string resolveInlineStyles(Element* elem) const;
-
-    // Get :host styles
-    std::string hostStyles() const;
-
     // Slot distribution
     struct SlotAssignment {
         Element* slot = nullptr;

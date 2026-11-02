@@ -2,6 +2,12 @@ add_library(bro_physics STATIC
     physics_decomposition.cpp
     physics_penetration.cpp
     physics_world.cpp
+    physics_bodies.cpp
+    physics_constraints.cpp
+    physics_character.cpp
+    physics_vehicles.cpp
+    physics_ragdoll_soft.cpp
+    physics_queries.cpp
 )
 
 target_include_directories(bro_physics PUBLIC ${bro_SOURCE_DIR}/src)

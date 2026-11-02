@@ -7,6 +7,7 @@
 #include "embed/embed.h"
 
 #include <string>
+#include <vector>
 
 namespace bro::dom {
 class Document;
@@ -17,11 +18,14 @@ namespace bro::bronze_host {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
+struct SweepGroup;
+
 void installParserGlobal();
 
-// A detached document parsed from `html`, owned for the life of the process
-// like every DOMParser result; what document.implementation.createHTMLDocument
-// hands back as well.
+// A detached document parsed from `html` (DOMParser /
+// document.implementation.createHTMLDocument); owned by the parser registry
+// until the detached-DOM sweep proves neither its Document wrapper nor any
+// Node wrapper inside it is reachable from JavaScript.
 dom::Document* parseIntoNewDocument(const std::string& html);
 
 // A full document surface — the queries, the factories, the element accessors —
@@ -30,5 +34,16 @@ dom::Document* parseIntoNewDocument(const std::string& html);
 // documentFor() says why. Defined there, beside the builder it shares.
 Value makeDocumentValue(dom::Document* fixed);
 Value hostDocumentValue(dom::Document* doc);
+ev::Persistent* hostDocumentWrapperSlot(dom::Document* doc);
+
+// Parsed-document hooks used by the detached-DOM sweep (host_node_sweep.cpp).
+bool isParsedDocument(const dom::Document* doc);
+void takeNewParsedDocuments(std::vector<dom::Document*>& out);
+void collectAllParsedDocuments(std::vector<dom::Document*>& out);
+SweepGroup* parsedDocumentSweepGroup(const dom::Document* doc);
+void setParsedDocumentSweepGroup(dom::Document* doc, SweepGroup* g);
+bool parsedDocumentSweepAlone(const dom::Document* doc);
+void setParsedDocumentSweepAlone(dom::Document* doc, bool alone);
+void destroyParsedDocument(dom::Document* doc);
 
 }  // namespace bro::bronze_host

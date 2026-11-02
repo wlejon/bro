@@ -23,6 +23,10 @@
 #include <string>
 #include <vector>
 
+namespace bro::render {
+class VulkanQueue;
+}
+
 namespace bro::scene::vk {
 
 class SceneVkPipelineBuilder;
@@ -40,6 +44,10 @@ struct ShaderRecipe {
 };
 
 namespace shader_sets {
+
+/// SceneVkDevice registers its graphics queue so destroyTwins() waits under
+/// VulkanQueue's submit lock instead of calling raw vkDeviceWaitIdle.
+void noteDeviceQueue(VkDevice device, render::VulkanQueue* queue);
 
 /// The compiler notes each blob it hands out with its recipe.
 void noteSpirv(std::shared_ptr<ShaderRecipe> recipe);

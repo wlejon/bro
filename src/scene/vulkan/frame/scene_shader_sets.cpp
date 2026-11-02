@@ -1,4 +1,7 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_queue.h"
+#include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "util/log.h"
 
@@ -23,6 +26,7 @@ uint64_t hashWords(const uint32_t* w, size_t n) {
 
 struct PipelineRecord {
     VkDevice device = VK_NULL_HANDLE;
+    render::VulkanQueue* queue = nullptr;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     std::optional<SceneVkPipelineBuilder> builder;   // graphics; compute when empty
     std::string name;                               // compute: its stats label
@@ -48,6 +52,18 @@ std::unordered_map<VkShaderModule, std::shared_ptr<ShaderRecipe>>& modules() {
 std::unordered_map<VkPipeline, PipelineRecord>& pipelines() {
     static std::unordered_map<VkPipeline, PipelineRecord> m;
     return m;
+}
+std::unordered_map<VkDevice, render::VulkanQueue*>& deviceQueues() {
+    static std::unordered_map<VkDevice, render::VulkanQueue*> m;
+    return m;
+}
+render::VulkanQueue* queueForDevice(VkDevice device) {
+    auto it = deviceQueues().find(device);
+    if (it != deviceQueues().end() && it->second) return it->second;
+    if (auto* ctx = SceneRenderer::defaultVulkanContext()) {
+        if (ctx->device() == device) return &ctx->queue();
+    }
+    return nullptr;
 }
 
 std::atomic<int> s_active{0};
@@ -110,8 +126,12 @@ void destroyTwins() {
     for (auto& [p, rec] : ps) {
         if (!rec.twin) continue;
         // (Replacing the whole set is a teardown of the twins: the frames
-        // that bound them may still be on the GPU.)
-        if (idle.insert(rec.device).second) vkDeviceWaitIdle(rec.device);
+        // that bound them may still be on the GPU. Wait via VulkanQueue so
+        // submitMutex_ serialises with concurrent queue submissions.)
+        if (idle.insert(rec.device).second) {
+            render::VulkanQueue* q = rec.queue ? rec.queue : queueForDevice(rec.device);
+            if (q) q->waitIdle();
+        }
         vkDestroyPipeline(rec.device, rec.twin, nullptr);
         rec.twin = VK_NULL_HANDLE;
     }
@@ -125,6 +145,19 @@ std::shared_ptr<ShaderRecipe> recipeOf(VkShaderModule m) {
 } // namespace
 
 namespace shader_sets {
+
+void noteDeviceQueue(VkDevice device, render::VulkanQueue* queue) {
+    if (!device) return;
+    std::lock_guard<std::recursive_mutex> g(lock());
+    if (queue) {
+        deviceQueues()[device] = queue;
+    } else {
+        deviceQueues().erase(device);
+        for (auto& [p, rec] : pipelines()) {
+            if (rec.device == device) rec.queue = nullptr;
+        }
+    }
+}
 
 void noteSpirv(std::shared_ptr<ShaderRecipe> recipe) {
     if (t_compilingB || !recipe || recipe->words.empty()) return;
@@ -167,6 +200,7 @@ void noteGraphicsPipeline(VkDevice device, VkPipelineLayout layout, const SceneV
     std::lock_guard<std::recursive_mutex> g(lock());
     PipelineRecord rec;
     rec.device = device;
+    rec.queue = queueForDevice(device);
     rec.layout = layout;
     rec.builder = builder;
     for (const auto& st : builder.stages()) {
@@ -186,6 +220,7 @@ void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModul
     if (!r) return;
     PipelineRecord rec;
     rec.device = device;
+    rec.queue = queueForDevice(device);
     rec.layout = layout;
     rec.name = name ? name : "";
     rec.entry = entry ? entry : "main";

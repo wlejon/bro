@@ -303,6 +303,7 @@ bro_check_sibling(broremote    _d_linux_win_render _d_remote)
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
 option(BRO_WITH_AVIF     "AVIF images: dav1d AV1 decode (vcpkg)"            ${_d_svc})
+option(BRO_WITH_WEBP     "WebP image decoding (libwebp from the Skia source bundle)" ON)
 option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
 option(BRO_WITH_CONF     "Settings store with schemas and watchers (broconf)" ${_d_conf})
 option(BRO_WITH_THEMES   "Colour schemes + WCAG/APCA contrast (brothemes)"   ${_d_themes})
@@ -491,8 +492,8 @@ set(BROKERNEL_ENABLE_API     ${BRO_WITH_KERNEL} CACHE BOOL "Build Bronze JavaScr
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA KERNEL
-    NET VIDEO STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
-    DECOR CLIP MPRIS PULSE IME REMOTE
+    NET VIDEO AVIF WEBP STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
+    DMABUF DECOR CLIP MPRIS PULSE IME REMOTE
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
