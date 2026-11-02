@@ -79,6 +79,7 @@ bool sameCommand(const CommandBuffer& A, const DrawCommand& a, const CommandBuff
             } else if constexpr (std::is_same_v<T, Cmd_DrawText>) {
                 return x.x == y.x && x.y == y.y && x.fontSize == y.fontSize && x.fontWeight == y.fontWeight &&
                        x.fontItalic == y.fontItalic && x.fontLigatures == y.fontLigatures &&
+                       x.fontGeometric == y.fontGeometric &&
                        x.letterSpacing == y.letterSpacing && x.wordSpacing == y.wordSpacing && x.blur == y.blur &&
                        eqColor(x.color, y.color) &&
                        (x.blobIndex == CommandBuffer::kNoTextBlob) == (y.blobIndex == CommandBuffer::kNoTextBlob) &&

@@ -119,6 +119,7 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     cmd.fontWeight = font.weight;
     cmd.fontItalic = font.italic;
     cmd.fontLigatures = font.ligatures;
+    cmd.fontGeometric = font.geometric;
 
     cmd.x = x; cmd.y = y;
     cmd.color = color;

@@ -374,6 +374,7 @@ private:
         TextDirection direction;
         Ligatures     ligatures;
         std::string   features;      // FontRef::features; empty for nearly all text
+        bool          geometric;     // FontRef::geometric: unhinted advances and glyphs
         // Script is derived from the text itself and language is the process
         // locale, so neither adds information to this key today. Note what is
         // NOT here: letter-spacing and word-spacing. Spacing does not change
@@ -381,7 +382,7 @@ private:
         bool operator==(const Key& o) const {
             return size == o.size && weight == o.weight && italic == o.italic &&
                    direction == o.direction && ligatures == o.ligatures &&
-                   text == o.text && family == o.family && features == o.features;
+                   geometric == o.geometric && text == o.text && family == o.family && features == o.features;
         }
     };
     struct KeyHash {

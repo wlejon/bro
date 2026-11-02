@@ -264,6 +264,7 @@ private:
         float size;
         int weight;
         bool italic;
+        bool geometric;
         bool operator==(const FontKey&) const = default;
     };
     struct FontKeyHash {
@@ -275,6 +276,7 @@ private:
             mix(std::hash<float>{}(k.size));
             mix(std::hash<int>{}(k.weight));
             mix(std::hash<bool>{}(k.italic));
+            mix(std::hash<bool>{}(k.geometric));
             return h;
         }
     };

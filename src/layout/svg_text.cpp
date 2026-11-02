@@ -348,18 +348,22 @@ bool belongsTo(const dom::Element* runEl, const dom::Element* el,
 
 } // namespace
 
+render::FontRef svgFontRef(const SvgFont& f) {
+    render::FontRef ref{f.family, f.size, f.weight, f.italic};
+    ref.geometric = true;
+    return ref;
+}
+
 float RendererTextMeasurer::advance(const std::string& text, const SvgFont& f,
                                    render::TextDirection dir) {
     if (!r) return 0.0f;
-    return r->measureText(text,
-        render::FontRef{f.family, f.size, f.weight, f.italic}, dir).width;
+    return r->measureText(text, svgFontRef(f), dir).width;
 }
 
 void RendererTextMeasurer::vmetrics(const SvgFont& f, float& ascent,
                                     float& descent, float& xHeight) {
     if (!r) { ascent = f.size * 0.8f; descent = f.size * 0.2f; xHeight = f.size * 0.5f; return; }
-    auto tm = r->measureText("",
-        render::FontRef{f.family, f.size, f.weight, f.italic});
+    auto tm = r->measureText("", svgFontRef(f));
     ascent = tm.ascent; descent = tm.descent; xHeight = tm.xHeight;
 }
 

@@ -292,7 +292,7 @@ bool RasterRenderer::registerCustomFont(const std::string& family, const FontByt
 }
 
 const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
-    FontKey key{std::string(ref.family), ref.size, ref.weight, ref.italic};
+    FontKey key{std::string(ref.family), ref.size, ref.weight, ref.italic, ref.geometric};
     auto it = fonts_.find(key);
     if (it != fonts_.end()) return &it->second;
 
@@ -311,6 +311,7 @@ const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
     // quantizes every advance and drifts a run's width away from what the
     // font actually specifies. Browsers position text subpixel; so do we.
     sk_font->setSubpixel(true);
+    if (ref.geometric) applyGeometricOutlines(*sk_font);
     applyFontSynthesis(*sk_font, custom);
     auto [ins, _] = fonts_.emplace(std::move(key),
         FontEntry{ std::move(typeface), std::move(sk_font), style });

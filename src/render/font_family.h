@@ -64,6 +64,10 @@ CustomFontMatch matchCustomFontFace(const std::vector<CustomFontFace>& faces,
 // Apply a match's synthesis to a font built from its face.
 void applyFontSynthesis(SkFont& font, const CustomFontMatch& match);
 
+// FontRef::geometric: no hinting, linear (unhinted) metrics, no baseline
+// snap, so drawn glyphs, their advances and their outlines all agree.
+void applyGeometricOutlines(SkFont& font);
+
 // resolveFontFamilyList with @font-face faces consulted first for each name
 // in the list, the way a browser's font list puts web fonts ahead of local
 // ones. `match` reports the custom face chosen (face null when the name

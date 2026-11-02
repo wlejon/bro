@@ -208,9 +208,10 @@ struct InkKey {
     uint32_t face;
     SkGlyphID glyph;
     float size, scaleX, skewX;
+    SkFontHinting hinting;
     bool operator==(const InkKey& o) const {
         return face == o.face && glyph == o.glyph && size == o.size &&
-               scaleX == o.scaleX && skewX == o.skewX;
+               scaleX == o.scaleX && skewX == o.skewX && hinting == o.hinting;
     }
 };
 struct InkKeyHash {
@@ -218,14 +219,15 @@ struct InkKeyHash {
         size_t h = std::hash<uint32_t>()(k.face) * 31u + k.glyph;
         h = h * 31u + std::hash<float>()(k.size);
         h = h * 31u + std::hash<float>()(k.scaleX);
-        return h * 31u + std::hash<float>()(k.skewX);
+        h = h * 31u + std::hash<float>()(k.skewX);
+        return h * 31u + static_cast<size_t>(k.hinting);
     }
 };
 
 SkRect rasterInkBounds(const SkFont& font, SkGlyphID glyph, const SkRect& mask) {
     if (mask.isEmpty()) return mask;
     const InkKey key{font.getTypeface() ? font.getTypeface()->uniqueID() : 0u, glyph,
-                     font.getSize(), font.getScaleX(), font.getSkewX()};
+                     font.getSize(), font.getScaleX(), font.getSkewX(), font.getHinting()};
     static std::mutex lock;
     static std::unordered_map<InkKey, SkRect, InkKeyHash> cache;
     {
@@ -636,6 +638,7 @@ std::size_t TextShapingEngine::KeyHash::operator()(const Key& k) const noexcept 
     mix(static_cast<std::size_t>(k.italic));
     mix(static_cast<std::size_t>(k.direction));
     mix(static_cast<std::size_t>(k.ligatures));
+    mix(static_cast<std::size_t>(k.geometric));
     if (!k.features.empty()) mix(std::hash<std::string_view>{}(k.features));
     return h;
 }
@@ -709,7 +712,8 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
 
     Key key{std::string(utf8), std::string(family), primary.getSize(),
             style.weight(), style.slant() != SkFontStyle::kUpright_Slant,
-            direction, ligatures, std::string(cssFeatures)};
+            direction, ligatures, std::string(cssFeatures),
+            primary.getHinting() == SkFontHinting::kNone && primary.isLinearMetrics()};
     if (auto it = cache_.find(key); it != cache_.end()) {
         ++hits_;
         return it->second.get();

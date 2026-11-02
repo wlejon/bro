@@ -104,6 +104,11 @@ struct FontRef {
     // must outlive the call; the shaper copies it into its cache key. Part of
     // what a run measures, so layout's TextMetrics carries the same string.
     std::string_view features;
+    // Glyphs as geometry, the way SVG text is drawn: unhinted outlines and
+    // advances (no grid fitting, no baseline snap), so a run measures, fills,
+    // strokes and bends along a textPath as its outlines are, and scales
+    // with its transform. HTML text leaves it off and keeps the hinted font.
+    bool             geometric = false;
 };
 
 // CSS filter primitive — a single function in a `filter:` chain. The list is

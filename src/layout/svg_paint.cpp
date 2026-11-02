@@ -114,9 +114,7 @@ SkMatrix useTransform(const dom::Element* use, const dom::Element* target) {
 
 // ---- text -------------------------------------------------------------------
 
-render::FontRef fontRefOf(const SvgTextRun& run) {
-    return render::FontRef{run.font.family, run.font.size, run.font.weight, run.font.italic};
-}
+render::FontRef fontRefOf(const SvgTextRun& run) { return svgFontRef(run.font); }
 
 // The glyph outlines of a run, in the <text> element's user space: along the
 // baseline, or each cluster placed and rotated onto the run's textPath.

@@ -10,7 +10,7 @@
 #include "render/bidi.h"
 
 namespace bro::dom { class Element; }
-namespace bro::render { class Renderer; }
+namespace bro::render { class Renderer; struct FontRef; }
 
 // Shared SVG <text> layout. A single pen-walk over a <text> subtree produces
 // positioned glyph runs; both the native paint traversal (svg_paint.cpp) and
@@ -30,6 +30,13 @@ struct SvgFont {
     int         weight = 400;
     bool        italic = false;
 };
+
+// The render font of SVG text: FontRef::geometric, so it is measured, drawn
+// and outlined unhinted (glyphs as geometry, as Skia's SVG module draws them),
+// never with the grid-fitted font of HTML text. Hinted advances would place a
+// run's drawn glyphs apart from its outlines, which textPath, clip paths and
+// paint-server text use.
+render::FontRef svgFontRef(const SvgFont& f);
 
 // Abstract text measurement. Both implementations ultimately call the same
 // Skia/DirectWrite backend, so advances and vertical metrics agree.

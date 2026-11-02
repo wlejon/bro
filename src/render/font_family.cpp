@@ -1,6 +1,9 @@
 #include "render/font_family.h"
 #include "render/system_font_mgr.h"
 
+#include <include/core/SkFont.h>
+#include <include/core/SkFontTypes.h>
+
 #include <chrono>
 #include <sstream>
 #include <string>
@@ -101,6 +104,12 @@ void applyFontSynthesis(SkFont& font, const CustomFontMatch& match) {
     if (match.syntheticBold) font.setEmbolden(true);
     // Skia's (and Blink's) synthetic oblique: a 1/4 horizontal skew.
     if (match.syntheticItalic) font.setSkewX(-0.25f);
+}
+
+void applyGeometricOutlines(SkFont& font) {
+    font.setHinting(SkFontHinting::kNone);
+    font.setLinearMetrics(true);
+    font.setBaselineSnap(false);
 }
 
 sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
