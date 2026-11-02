@@ -335,6 +335,13 @@ bool startAppScriptCompile(engine::Engine& engine, const std::string& code, cons
     ahead->filename = filename.empty() ? "<eval>" : filename;
     ahead->moduleFile = moduleFile && !filename.empty();
     ahead->opts = scriptEvalOptions(engine, filename, moduleFile);
+    // The run (evalAppScript) hands bronze a module handle, which keeps the
+    // program for the life of the process; a compile with no handle in view
+    // cannot know that, so it is said here. Without it the program's
+    // functions lack BRONZE_ABI_FN_FLAG_DIRECT_CALL and every call through a
+    // function value goes through bronze_dynamic_call and rtEnterJs (5-7x
+    // slower for a small callee).
+    ahead->opts.livesForProcess = true;
     // A current ahead-of-time module is the compile, already done.
     if (loadAheadAotUnit(engine, ahead->code, ahead->opts)) return false;
     // Everything the compile reads from this thread's runtime, captured here:
