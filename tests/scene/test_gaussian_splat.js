@@ -230,10 +230,13 @@ if (!scene) {
     redCloud.sh = new Float32Array([(1 - 0.5) / C0, (0 - 0.5) / C0, (0 - 0.5) / C0]);
     const depthSplat = scene.createGaussianSplat({ cloud: redCloud });
     const occluder = scene.createMesh({
-        primitive: 'box',
-        size: [2, 2, 0.2],
-        position: [0, 0, -2], // behind splat
-        material: { baseColor: [0, 1, 0, 1], unlit: true },
+        mesh: 'box',
+        halfW: 1,
+        halfH: 1,
+        halfD: 0.1,
+        z: -2, // behind splat
+        color: [0, 1, 0, 1],
+        emissive: 1,
     });
     const imgSplatFront = scene.captureFrame();
     const centerIdx = (64 * imgSplatFront.width + 64) * 4;
