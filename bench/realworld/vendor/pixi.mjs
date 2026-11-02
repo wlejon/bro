@@ -1,0 +1,1 @@
+../../../../bronze/tests/oracle/pixi/pixi.mjs
