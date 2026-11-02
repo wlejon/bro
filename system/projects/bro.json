@@ -1,5 +1,6 @@
 {
     "title": "Bro",
     "width": 1100,
-    "height": 720
+    "height": 720,
+    "permissions": ["files", "spawn"]
 }

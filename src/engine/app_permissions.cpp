@@ -293,6 +293,25 @@ void AppPermissions::configure(const PermissionsSetup& setup) {
                       g.c_str(), capabilityNameList().c_str());
         }
     }
+    if (!setup.appDir.empty()) {
+        const std::string target = canonicalPath(setup.appDir);
+        const fs::path res = u8path(util::resourceDir());
+        bool isBuiltInProjects = false;
+        for (const fs::path& base : {res, res.parent_path(), res.parent_path().parent_path()}) {
+            std::error_code ec;
+            const fs::path cand = base / "system" / "projects";
+            if (fs::is_directory(cand, ec) && canonicalPath(u8str(cand)) == target) {
+                isBuiltInProjects = true;
+                break;
+            }
+        }
+        if (isBuiltInProjects) {
+            for (const char* cap : {"files", "spawn"})
+                if (!contains(hostGrants_, cap)) hostGrants_.push_back(cap);
+            std::error_code dirEc;
+            fs::create_directories(u8path(grantStorePath()).parent_path(), dirEc);
+        }
+    }
     applyStore(store, stamp);
     everGranted_.clear();
     lastUsed_.clear();

@@ -35,8 +35,9 @@ const USER_DIR = userDataDir();
 const REGISTRY_PATH = path.join(USER_DIR, 'projects.json');
 
 function ensureUserDir() {
-    try { fs.mkdirSync(USER_DIR, { recursive: true }); }
-    catch (e) { console.error('mkdir userDir failed:', e); }
+    try {
+        if (!fs.existsSync(USER_DIR)) fs.mkdirSync(USER_DIR, { recursive: true });
+    } catch (e) { console.error('mkdir userDir failed:', e); }
 }
 
 // ─── Registry ─────────────────────────────────────────────────────────────

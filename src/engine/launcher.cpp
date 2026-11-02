@@ -1,13 +1,17 @@
 #include "engine/launcher.h"
 
 #include "engine/app_manifest.h"
+#include "engine/app_permissions.h"
 #include "engine/app_runtime.h"
 #include "engine/config_loader.h"
 #include "util/exe_dir.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -19,6 +23,60 @@
 namespace bro::engine {
 
 namespace {
+
+namespace fs = std::filesystem;
+
+fs::path u8path(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
+
+std::string u8str(const fs::path& p) {
+    std::u8string u = p.generic_u8string();
+    return std::string(u.begin(), u.end());
+}
+
+std::string getEnv(const char* name) {
+#ifdef _WIN32
+    std::wstring wname(name, name + std::char_traits<char>::length(name));
+    DWORD n = GetEnvironmentVariableW(wname.c_str(), nullptr, 0);
+    if (n == 0) return {};
+    std::wstring buf(n, L'\0');
+    n = GetEnvironmentVariableW(wname.c_str(), buf.data(), n);
+    buf.resize(n);
+    return u8str(fs::path(buf));
+#else
+    const char* v = std::getenv(name);
+    return v ? std::string(v) : std::string();
+#endif
+}
+
+// Ensures the user-data directory that system/projects stores projects.json in
+// exists before the script runs: on Windows and macOS that folder also holds
+// bro's grant store (grants.json), and checkFs refuses a script-side mkdirSync
+// on an ancestor of a protected file.
+void ensureProjectsUserDir() {
+    fs::path dir;
+#if defined(_WIN32)
+    std::string base = getEnv("APPDATA");
+    if (base.empty()) {
+        std::string home = getEnv("USERPROFILE");
+        if (!home.empty()) base = u8str(u8path(home) / "AppData" / "Roaming");
+    }
+    if (!base.empty()) dir = u8path(base) / "bro";
+#elif defined(__APPLE__)
+    std::string home = getEnv("HOME");
+    if (!home.empty()) dir = u8path(home) / "Library" / "Application Support" / "bro";
+#else
+    std::string base = getEnv("XDG_DATA_HOME");
+    if (base.empty() || !u8path(base).is_absolute()) {
+        std::string home = getEnv("HOME");
+        if (!home.empty()) base = u8str(u8path(home) / ".local" / "share");
+    }
+    if (!base.empty()) dir = u8path(base) / "bro";
+#endif
+    if (!dir.empty()) {
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+    }
+}
 
 bool fileExists(const std::string& path) {
     std::ifstream f(path);
@@ -134,12 +192,27 @@ bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
             config.appDir = dir;
         } else if (fileExists(dir + "/system/projects/index.html")) {
             config.appDir = dir + "/system/projects";
-            // The project manager is bro's own, not an app the user installed:
-            // bro as its host grants what it is for, reading and writing the
-            // user's project folders and its registry, and launching projects.
-            config.hostGrants = {"files", "spawn"};
         } else {
             return false;
+        }
+    }
+
+    // The project manager (system/projects) is bro's own, not an app the user
+    // installed: whether reached with no argument or named directly, bro as its
+    // host grants what it is for (reading and writing the user's project
+    // folders and its registry, and launching projects) and ensures the
+    // registry's parent directory exists.
+    if (!config.appDir.empty()) {
+        const std::string builtInProjects = util::resourceDir() + "/system/projects";
+        if (fileExists(builtInProjects + "/index.html") &&
+            canonicalPath(config.appDir) == canonicalPath(builtInProjects)) {
+            for (const char* cap : {"files", "spawn"}) {
+                if (std::find(config.hostGrants.begin(), config.hostGrants.end(), cap) ==
+                    config.hostGrants.end()) {
+                    config.hostGrants.emplace_back(cap);
+                }
+            }
+            ensureProjectsUserDir();
         }
     }
 

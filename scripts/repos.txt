@@ -69,7 +69,7 @@ broclip         desktop   dep        public   win,linux,mac    bronze,brass
 brompris        desktop   dep        public   win,linux,mac    brodbus,bronze,brass
 bropulse        desktop   dep        public   win,linux,mac    bronze,brass
 broime          desktop   dep        public   win,linux,mac    brosearch,bronze,brass
-brovideo        desktop   dep        public   win,linux        brodmabuf
+brovideo        desktop   dep        public   win,linux,mac    brodmabuf
 broremote       desktop   dep        public   win,linux        brovideo,brolink,bronze,brass
 broworkshop     app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro
