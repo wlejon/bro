@@ -333,10 +333,10 @@ void installGameAiApi() {
 void installSiblingApis(engine::Engine& engine) {
     static engine::Engine* s_activeEngine = nullptr;
     const bool installHooks = (s_activeEngine != &engine);
-    s_activeEngine = &engine;
+    if (!s_activeEngine) s_activeEngine = &engine;
     if (installHooks) {
-        engine.addShutdownHook([eng = &engine] {
-            if (s_activeEngine == eng) s_activeEngine = nullptr;
+        engine.addShutdownHook([&engine] {
+            if (s_activeEngine == &engine) s_activeEngine = nullptr;
         });
     }
 #if BRO_WITH_AUDIO

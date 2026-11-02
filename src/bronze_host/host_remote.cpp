@@ -52,6 +52,21 @@
 
 #include <broremote/api.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <d3d11.h>
+#include <d3d11_4.h>
+#include <wrl/client.h>
+#endif
+#include <cstdlib>
+#include <cstring>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -65,7 +80,7 @@ namespace {
 namespace ev = bronze::embed;
 using engine::DisplayMode;
 
-struct RemoteHost {
+struct RemoteHostState {
     engine::Engine* engine = nullptr;
     broremote::Server* server = nullptr;
     broremote::ServerConfig config;
@@ -83,11 +98,24 @@ struct RemoteHost {
     // diffed against for its damage (render/frame_damage.h).
     std::shared_ptr<std::vector<uint8_t>> lastCpuPixels;
     int lastCpuW = 0, lastCpuH = 0;
+#if defined(_WIN32)
+    Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> d3dTextures[2];
+    uint32_t d3dWidth = 0;
+    uint32_t d3dHeight = 0;
+    uint32_t d3dSlot = 0;
+    bool d3dSlotValid[2] = {false, false};
+    uint32_t d3dPrevBandY0 = 0;
+    uint32_t d3dPrevBandY1 = 0;
+    bool d3dDeviceFailed = false;
+#endif
 #if BRO_WITH_DMABUF && defined(__linux__)
     render::KmsDirectPresenter* kms = nullptr;  // the presenter whose listener is ours
 #endif
 };
-RemoteHost g_host;
+using RemoteHost = RemoteHostState;
+RemoteHostState g_host;
 
 // Stream pixels and CSS px, for the pointer the viewer is told about.
 float cssToFrame(float css, int cssExtent, int frameExtent) {
@@ -139,6 +167,9 @@ void setFeeding(bool on) {
     g_host.feeding = on;
     g_host.damageGap = true;
     g_host.lastCpuPixels.reset();
+#if defined(_WIN32)
+    g_host.d3dSlotValid[0] = g_host.d3dSlotValid[1] = false;
+#endif
     engine::Engine& e = *g_host.engine;
     render::VulkanPresenter* presenter = e.vulkanPresenter();
     g_host.lastCpuFrameMs = -std::numeric_limits<double>::infinity();
@@ -186,6 +217,107 @@ void setFeeding(bool on) {
 
 // Windowed and headless: the composited frame read back to the CPU, at most
 // `fps` a second on the engine's activity clock (virtual in headless).
+#if defined(_WIN32)
+bool wantsD3D11Frame() {
+    if (!g_host.server || g_host.d3dDeviceFailed) return false;
+    const char* env = std::getenv("BRO_REMOTE_D3D11");
+    if (env && env[0] != '\0' && std::strcmp(env, "0") == 0) return false;
+    if (auto st = g_host.server->stream()) {
+        const auto* cap = brovideo::best(st->codec, brovideo::Direction::Encode);
+        return cap && cap->hardware && cap->backend == brovideo::Backend::MediaFoundation;
+    }
+    for (broremote::Codec c : g_host.config.codecs) {
+        if (const auto* cap = brovideo::best(c, brovideo::Direction::Encode)) {
+            return cap->hardware && cap->backend == brovideo::Backend::MediaFoundation;
+        }
+    }
+    return false;
+}
+
+Microsoft::WRL::ComPtr<ID3D11Texture2D> uploadD3D11Frame(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                         const broremote::Frame& frame) {
+    if (!wantsD3D11Frame()) return nullptr;
+    if (!g_host.d3dDevice || !g_host.d3dContext) {
+        static const D3D_FEATURE_LEVEL kLevels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+                                                    D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, kLevels,
+                                       static_cast<UINT>(std::size(kLevels)), D3D11_SDK_VERSION, &g_host.d3dDevice,
+                                       nullptr, &g_host.d3dContext);
+        if (FAILED(hr)) {
+            hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                   kLevels, static_cast<UINT>(std::size(kLevels)), D3D11_SDK_VERSION,
+                                   &g_host.d3dDevice, nullptr, &g_host.d3dContext);
+        }
+        if (FAILED(hr) || !g_host.d3dDevice || !g_host.d3dContext) {
+            g_host.d3dDeviceFailed = true;
+            g_host.d3dDevice.Reset();
+            g_host.d3dContext.Reset();
+            return nullptr;
+        }
+        Microsoft::WRL::ComPtr<ID3D11Multithread> mt;
+        if (SUCCEEDED(g_host.d3dDevice.As(&mt)) && mt) mt->SetMultithreadProtected(TRUE);
+    }
+    if (g_host.d3dWidth != w || g_host.d3dHeight != h || !g_host.d3dTextures[0] || !g_host.d3dTextures[1]) {
+        g_host.d3dTextures[0].Reset();
+        g_host.d3dTextures[1].Reset();
+        g_host.d3dSlotValid[0] = g_host.d3dSlotValid[1] = false;
+        g_host.d3dSlot = 0;
+        g_host.d3dPrevBandY0 = 0;
+        g_host.d3dPrevBandY1 = h;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = w;
+        td.Height = h;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        for (int i = 0; i < 2; ++i) {
+            if (FAILED(g_host.d3dDevice->CreateTexture2D(&td, nullptr, &g_host.d3dTextures[i]))) {
+                g_host.d3dTextures[0].Reset();
+                g_host.d3dTextures[1].Reset();
+                return nullptr;
+            }
+        }
+        g_host.d3dWidth = w;
+        g_host.d3dHeight = h;
+    }
+    const uint32_t slot = g_host.d3dSlot & 1u;
+    g_host.d3dSlot = slot ^ 1u;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> tex = g_host.d3dTextures[slot];
+    const uint32_t rowPitch = w * 4;
+    if (frame.damage_known) {
+        uint32_t curY0 = h, curY1 = 0;
+        for (const auto& r : frame.damage) {
+            curY0 = std::min(curY0, r.y);
+            curY1 = std::max(curY1, std::min(h, r.y + r.height));
+        }
+        if (g_host.d3dSlotValid[slot]) {
+            const uint32_t y0 = std::min(curY0, g_host.d3dPrevBandY0);
+            const uint32_t y1 = std::max(curY1, g_host.d3dPrevBandY1);
+            if (y1 > y0) {
+                D3D11_BOX box{0, y0, 0, w, y1, 1};
+                const uint8_t* src = rgba + static_cast<size_t>(y0) * rowPitch;
+                g_host.d3dContext->UpdateSubresource(tex.Get(), 0, &box, src, rowPitch, 0);
+            }
+        } else {
+            g_host.d3dContext->UpdateSubresource(tex.Get(), 0, nullptr, rgba, rowPitch, 0);
+            g_host.d3dSlotValid[slot] = true;
+        }
+        g_host.d3dPrevBandY0 = curY0;
+        g_host.d3dPrevBandY1 = curY1;
+    } else {
+        g_host.d3dContext->UpdateSubresource(tex.Get(), 0, nullptr, rgba, rowPitch, 0);
+        g_host.d3dSlotValid[slot] = true;
+        g_host.d3dPrevBandY0 = 0;
+        g_host.d3dPrevBandY1 = h;
+    }
+    return tex;
+}
+#endif
+
 void submitCpuFrame() {
     engine::Engine& e = *g_host.engine;
     const DisplayMode mode = e.displayMode();
@@ -231,7 +363,14 @@ void submitCpuFrame() {
     g_host.lastCpuW = w;
     g_host.lastCpuH = h;
     // The buffer lives until the server is done with it.
+#if defined(_WIN32)
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> d3dTex =
+        uploadD3D11Frame(pixels->data(), static_cast<uint32_t>(w), static_cast<uint32_t>(h), frame);
+    frame.d3d11 = d3dTex.Get();
+    g_host.server->submit(frame, [pixels, d3dTex] {});
+#else
     g_host.server->submit(frame, [pixels] {});
+#endif
 }
 
 engine::Engine::DeviceInput toDeviceInput(const broremote::InputEvent& in) {
@@ -338,7 +477,17 @@ void installRemoteHost(engine::Engine& engine) {
         engine.addShutdownHook([eng = &engine] {
             broremote::api::shutdownRemote();
             if (s_hookedEngine == eng) s_hookedEngine = nullptr;
-            if (g_host.engine == eng) g_host.engine = nullptr;
+            if (g_host.engine == eng) {
+                g_host.engine = nullptr;
+#if defined(_WIN32)
+                g_host.d3dTextures[0].Reset();
+                g_host.d3dTextures[1].Reset();
+                g_host.d3dContext.Reset();
+                g_host.d3dDevice.Reset();
+                g_host.d3dWidth = g_host.d3dHeight = 0;
+                g_host.d3dSlotValid[0] = g_host.d3dSlotValid[1] = false;
+#endif
+            }
         });
         // The viewer side: <remoteview> and bro.remote.connect()'s sessions.
         installRemoteViewHost(engine);

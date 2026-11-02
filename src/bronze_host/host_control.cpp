@@ -88,6 +88,8 @@ constexpr const char* kSettleSource = R"JS((function (id, v, thrown, reply) {
 }))JS";
 
 struct EvalState {
+    engine::Engine* ownerEngine = nullptr;
+    ev::Realm* ownerRealm = nullptr;
     ev::Persistent* settle = nullptr;  // never freed: lives as long as the realm
     ev::Persistent* reply = nullptr;
     uint64_t nextId = 1;
@@ -105,12 +107,14 @@ std::map<uint64_t, std::shared_ptr<LocalResult>> g_local;
 uint64_t g_localNext = 1;
 
 bool ensureSettle(engine::Engine& engine, std::string* why) {
-    if (g_eval.settle) return true;
+    if (g_eval.settle && g_eval.ownerEngine == &engine && g_eval.ownerRealm == ev::currentRealm()) return true;
     auto res = evalScriptJitResult(engine, kSettleSource, "<bro-ctl>");
     if (res.thrown || !ev::isFunction(res.value)) {
         if (why) *why = "could not compile the eval helper";
         return false;
     }
+    g_eval.ownerEngine = &engine;
+    g_eval.ownerRealm = ev::currentRealm();
     g_eval.settle = new ev::Persistent(res.value);
     g_eval.reply = new ev::Persistent(ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
@@ -241,6 +245,26 @@ std::vector<ClientDone> g_clientDone;          // under g_clientMu
 std::map<uint64_t, ev::Persistent*> g_clientCb;  // engine thread
 uint64_t g_clientNext = 1;
 ev::Persistent* g_inboxNs = nullptr;  // the compiled namespace, once read
+engine::Engine* g_inboxOwnerEngine = nullptr;
+ev::Realm* g_inboxOwnerRealm = nullptr;
+
+void clearEvalState(const char* why) {
+    for (auto& [id, call] : g_eval.pending) {
+        if (call && !call->done()) call->fail(why);
+    }
+    g_eval.pending.clear();
+    g_eval.settle = nullptr;
+    g_eval.reply = nullptr;
+    g_eval.ownerEngine = nullptr;
+    g_eval.ownerRealm = nullptr;
+}
+
+void clearInboxState() {
+    g_clientCb.clear();
+    g_inboxNs = nullptr;
+    g_inboxOwnerEngine = nullptr;
+    g_inboxOwnerRealm = nullptr;
+}
 
 void clientFinished(uint64_t id, bool ok, std::string payload, std::string file) {
     {
@@ -562,16 +586,33 @@ constexpr const char* kInboxSource = R"JS((function (native) {
 }))JS";
 
 void installInboxNamespace(engine::Engine& engine) {
+    static bool realmHookInstalled = false;
+    if (!realmHookInstalled) {
+        realmHookInstalled = true;
+        ev::addRealmDestroyHook([](ev::Realm* r) {
+            if (g_eval.ownerRealm == r) clearEvalState("realm destroyed");
+            if (g_inboxOwnerRealm == r) clearInboxState();
+        });
+    }
+    if (!g_inboxOwnerEngine || g_inboxOwnerEngine == &engine || g_inboxOwnerRealm == ev::currentRealm()) {
+        clearInboxState();
+        g_inboxOwnerEngine = &engine;
+        g_inboxOwnerRealm = ev::currentRealm();
+    }
+    if (false) {
     // A reload's new realm starts over: the old one's callbacks are dropped
     // (their Persistents leaked rather than freed against a gone realm).
     g_clientCb.clear();
     g_inboxNs = nullptr;
+    }
     static engine::Engine* pumpingEngine = nullptr;
     if (pumpingEngine != &engine) {
         pumpingEngine = &engine;
         engine.addFramePump(pumpControlClient);
         engine.addShutdownHook([&engine] {
             if (pumpingEngine == &engine) pumpingEngine = nullptr;
+            if (g_eval.ownerEngine == &engine) clearEvalState("engine shut down");
+            if (g_inboxOwnerEngine == &engine) clearInboxState();
         });
     }
     ev::GlobalValue broG = ev::globalValue("bro");
@@ -579,7 +620,8 @@ void installInboxNamespace(engine::Engine& engine) {
     ev::Persistent bro(broG.value);
     ev::Persistent getter(ev::makeFunction(
         [&engine](Value, std::span<const Value>) -> Value {
-            if (g_inboxNs) return g_inboxNs->get();
+            if (g_inboxNs && g_inboxOwnerEngine == &engine && g_inboxOwnerRealm == ev::currentRealm())
+                return g_inboxNs->get();
             auto res = evalScriptJitResult(engine, kInboxSource, "<bro.inbox>");
             if (res.thrown || !ev::isFunction(res.value)) {
                 LOG_ERROR("bro.inbox: could not compile the namespace");
@@ -597,8 +639,14 @@ void installInboxNamespace(engine::Engine& engine) {
                 LOG_ERROR("bro.inbox: %s", ev::toUtf8(ns.value).c_str());
                 return ev::undefined();
             }
-            g_inboxNs = new ev::Persistent(ns.value);
-            return g_inboxNs->get();
+            if (!g_inboxOwnerEngine || (g_inboxOwnerEngine == &engine && g_inboxOwnerRealm == ev::currentRealm())) {
+                g_inboxNs = new ev::Persistent(ns.value);
+                g_inboxOwnerEngine = &engine;
+                g_inboxOwnerRealm = ev::currentRealm();
+            }
+            return ns.value;
+
+
         },
         0, "get inbox"));
     ev::defineAccessor(bro.get(), "inbox", getter.get(), ev::undefined());
@@ -628,6 +676,12 @@ std::string controlOutputPath(const std::vector<std::string>& argv) {
 }  // namespace
 
 void installControlCommands(engine::Engine& engine) {
+    if (!g_eval.ownerEngine || g_eval.ownerEngine == &engine || g_eval.ownerRealm == ev::currentRealm()) {
+        clearEvalState("realm reloaded");
+        g_eval.ownerEngine = &engine;
+        g_eval.ownerRealm = ev::currentRealm();
+    }
+    if (false) {
     // Reset any cached realm handles from a prior realm (app hot-reload or
     // previous Engine instance) and fail any in-flight eval calls.
     for (auto& [id, call] : g_eval.pending) {
@@ -637,6 +691,7 @@ void installControlCommands(engine::Engine& engine) {
     g_eval.settle = nullptr;
     g_eval.reply = nullptr;
 
+    }
     engine::ControlServer& s = engine.control();
     s.registerCommand("eval",
                       "<javascript> [--timeout=10000]  run in the page's realm; prints the completion value "
