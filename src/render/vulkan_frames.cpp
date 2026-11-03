@@ -116,7 +116,8 @@ void VulkanFrames::recycle(Slot& slot) {
     slot.used = false;
 
     // A frame that needed more than one upload chunk gets one chunk big
-    // enough for all of it next time, so the arena settles at one buffer.
+    // enough for all of it next time (up to 4 chunks), so the arena settles
+    // at one buffer without pinning a huge transient burst forever.
     if (slot.uploads.size() > 1) {
         VkDeviceSize total = 0;
         for (auto& chunk : slot.uploads) {
@@ -124,7 +125,7 @@ void VulkanFrames::recycle(Slot& slot) {
             destroyUploadChunk(chunk);
         }
         slot.uploads.clear();
-        addUploadChunk(slot, total);
+        addUploadChunk(slot, std::min(total, kUploadChunkSize * 4));
     }
     for (auto& chunk : slot.uploads) chunk.used = 0;
 
@@ -301,6 +302,35 @@ VkDescriptorSet VulkanFrames::allocDescriptorSet(VkDescriptorSetLayout layout) {
 
 void VulkanFrames::defer(std::function<void()> destroy) {
     pending_.push_back(std::move(destroy));
+}
+
+bool VulkanFrames::reclaimCompleted(bool wait) {
+    if (!context_ || serial_ == 0) return false;
+    Slot& slot = slots_[frameIndex()];
+    if (slot.openCommandBuffers > 0) return false;
+    const uint64_t gfxTicket = queue().retireTicket();
+    VulkanQueue* compute = context_->asyncComputeQueue();
+    const uint64_t compTicket = compute ? compute->lastSubmittedTicket() : 0;
+    if (wait) {
+        if (gfxTicket > 0 && !queue().wait(gfxTicket)) return false;
+        if (compTicket > 0 && compute && !compute->wait(compTicket)) return false;
+    } else {
+        if (gfxTicket > 0 && !queue().isComplete(gfxTicket)) return false;
+        if (compTicket > 0 && compute && !compute->isComplete(compTicket)) return false;
+    }
+    for (auto& s : slots_) {
+        auto defs = std::move(s.deferred);
+        s.deferred.clear();
+        for (auto& fn : defs) fn();
+    }
+    auto pend = std::move(pending_);
+    pending_.clear();
+    for (auto& fn : pend) fn();
+
+    slot.ticket = gfxTicket;
+    slot.computeTicket = compTicket;
+    recycle(slot);
+    return true;
 }
 
 VulkanFrames::HookId VulkanFrames::addFrameEndHook(std::function<void()> hook) {

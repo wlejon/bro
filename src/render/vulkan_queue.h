@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -74,7 +75,8 @@ public:
     /// completed — presents included: after a present that is the *next*
     /// submission's ticket (a later batch is what orders after a present).
     uint64_t retireTicket() const;
-    bool isComplete(uint64_t ticket) const { return ticket <= completedTicket(); }
+    bool isComplete(uint64_t ticket) const { return isDeviceLost() || ticket <= completedTicket(); }
+    bool isDeviceLost() const { return deviceLost_.load(std::memory_order_relaxed); }
 
     /// Block until `ticket` has completed. A ticket not yet submitted (from
     /// retireTicket) is made real with an empty submission first. Returns
@@ -97,10 +99,13 @@ public:
     VkQueue queue() const { return queue_; }
 
 private:
+    void noteFailure(const char* where, VkResult res);
+
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     VkSemaphore timeline_ = VK_NULL_HANDLE;
+    std::atomic<bool> deviceLost_{false};
 
     mutable std::mutex submitMutex_;
     uint64_t lastTicket_ = 0;      // guarded by submitMutex_

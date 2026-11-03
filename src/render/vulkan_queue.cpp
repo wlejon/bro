@@ -12,6 +12,7 @@ bool VulkanQueue::init(VkDevice device, VkQueue graphicsQueue, VkQueue presentQu
     device_ = device;
     queue_ = graphicsQueue;
     presentQueue_ = presentQueue ? presentQueue : graphicsQueue;
+    deviceLost_.store(false, std::memory_order_relaxed);
 
     VkSemaphoreTypeCreateInfo typeInfo{};
     typeInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -60,7 +61,20 @@ void VulkanQueue::shutdown() {
     device_ = VK_NULL_HANDLE;
 }
 
+void VulkanQueue::noteFailure(const char* where, VkResult res) {
+    if (res == VK_ERROR_DEVICE_LOST) {
+        if (!deviceLost_.exchange(true, std::memory_order_relaxed)) {
+            LOG_ERROR("VulkanQueue: device lost (VK_ERROR_DEVICE_LOST) in %s "
+                      "(likely the GPU watchdog: a submission ran over ~2 s)",
+                      where);
+        }
+        return;
+    }
+    LOG_ERROR("VulkanQueue: %s failed (%d)", where, res);
+}
+
 uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
+    if (isDeviceLost()) return 0;
     std::vector<VkSemaphore> waitSems;
     std::vector<VkPipelineStageFlags> waitStages;
     std::vector<uint64_t> waitValues;
@@ -79,6 +93,7 @@ uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
     signalValues.push_back(0);  // filled under the lock
 
     std::lock_guard<std::mutex> lock(submitMutex_);
+    if (isDeviceLost()) return 0;
     const uint64_t ticket = lastTicket_ + 1;
     signalValues.back() = ticket;
 
@@ -102,7 +117,7 @@ uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
 
     VkResult res = vkQueueSubmit(queue_, 1, &info, VK_NULL_HANDLE);
     if (res != VK_SUCCESS) {
-        LOG_ERROR("VulkanQueue: vkQueueSubmit failed (%d)", res);
+        noteFailure("vkQueueSubmit", res);
         return 0;
     }
     lastTicket_ = ticket;
@@ -111,6 +126,7 @@ uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
 }
 
 VkResult VulkanQueue::submitForeign(uint32_t count, const VkSubmitInfo* batches, VkFence fence) {
+    if (isDeviceLost()) return VK_ERROR_DEVICE_LOST;
     // The foreign batches wait and signal binary semaphores only, so the
     // timeline values cover just the signal list: 0 for each binary semaphore
     // (ignored), the ticket for ours.
@@ -122,6 +138,7 @@ VkResult VulkanQueue::submitForeign(uint32_t count, const VkSubmitInfo* batches,
     std::vector<uint64_t> signalValues(signalSems.size(), 0);
 
     std::lock_guard<std::mutex> lock(submitMutex_);
+    if (isDeviceLost()) return VK_ERROR_DEVICE_LOST;
     const uint64_t ticket = lastTicket_ + 1;
     signalValues.back() = ticket;
 
@@ -138,7 +155,7 @@ VkResult VulkanQueue::submitForeign(uint32_t count, const VkSubmitInfo* batches,
     all.push_back(last);
     VkResult res = vkQueueSubmit(queue_, static_cast<uint32_t>(all.size()), all.data(), fence);
     if (res != VK_SUCCESS) {
-        LOG_ERROR("VulkanQueue: foreign vkQueueSubmit failed (%d)", res);
+        noteFailure("foreign vkQueueSubmit", res);
         return res;
     }
     lastTicket_ = ticket;
@@ -171,9 +188,12 @@ uint64_t VulkanQueue::retireTicket() const {
 
 bool VulkanQueue::wait(uint64_t ticket, uint64_t timeoutNs) {
     if (ticket == 0 || timeline_ == VK_NULL_HANDLE) return true;
+    if (isDeviceLost()) return false;
     if (ticket > lastSubmittedTicket() && submit(QueueSubmit{}) < ticket) {
-        LOG_ERROR("VulkanQueue: waiting for ticket %llu that will never be submitted",
-                  static_cast<unsigned long long>(ticket));
+        if (!isDeviceLost()) {
+            LOG_ERROR("VulkanQueue: waiting for ticket %llu that will never be submitted",
+                      static_cast<unsigned long long>(ticket));
+        }
         return false;
     }
     VkSemaphoreWaitInfo info{};
@@ -182,9 +202,7 @@ bool VulkanQueue::wait(uint64_t ticket, uint64_t timeoutNs) {
     info.pSemaphores = &timeline_;
     info.pValues = &ticket;
     VkResult res = vkWaitSemaphores(device_, &info, timeoutNs);
-    if (res != VK_SUCCESS && res != VK_TIMEOUT)
-        LOG_ERROR("VulkanQueue: waiting for ticket %llu failed (%d)",
-                  static_cast<unsigned long long>(ticket), res);
+    if (res != VK_SUCCESS && res != VK_TIMEOUT) noteFailure("waiting for ticket", res);
     return res == VK_SUCCESS;
 }
 

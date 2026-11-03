@@ -164,6 +164,7 @@ SkiaGpu::MemoryStats SkiaGpu::targetMemoryStats() {
             m.ganeshVmaUsed = static_cast<size_t>(used);
         }
     }
+    gpu->vulkan_.compute().reclaim();
     const VulkanAllocatorStats s = gpu->vulkan_.memoryPool().stats();
     m.poolHostVisibleBytes = s.hostVisibleBytes;
     m.poolDeviceOnlyBytes = s.deviceOnlyBytes;

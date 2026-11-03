@@ -14,6 +14,11 @@ namespace bro::render {
 namespace {
 
 constexpr VkDeviceSize kBufferGranule = 256;
+constexpr VkDeviceSize kDeferredReclaimBytes = 32ull * 1024 * 1024;
+// Maximum dispatches recorded into one graphics command buffer before
+// submitting it, so long dispatch loops do not build one multi-second
+// submission that trips the OS GPU watchdog (TDR).
+constexpr uint32_t kMaxDispatchesPerSubmit = 64;
 // Timestamp queries for timed dispatches, two a dispatch, in a ring. 4096 at
 // most: MoltenVK backs a pool with a Metal counter sample buffer of 32 KB at
 // most, and a larger pool falls back to emulated stamps that time nothing.
@@ -54,10 +59,27 @@ VulkanQueue& queueOf(VulkanContext& context, bool background) {
 // ComputeBuffer / ComputePipeline
 
 ComputeBuffer::~ComputeBuffer() {
+    releaseDeferred();
+}
+
+void ComputeBuffer::releaseDeferred() {
     if (!owner_ || !owner_->context) return;
     owner_->buffers.erase(this);
+    if (buffer_ == VK_NULL_HANDLE && allocId_ == 0) return;
     VulkanContext* ctx = owner_->context;
-    ctx->frames().defer([ctx, buffer = buffer_, alloc = allocId_] { ctx->destroyBuffer(buffer, alloc); });
+    const VkBuffer buffer = buffer_;
+    const uint64_t alloc = allocId_;
+    const VkDeviceSize cap = capacity_;
+    buffer_ = VK_NULL_HANDLE;
+    allocId_ = 0;
+    address_ = 0;
+    size_ = 0;
+    capacity_ = 0;
+    owner_->deferredBytes += cap;
+    ctx->frames().defer([ctx, owner = owner_, cap, buffer, alloc] {
+        owner->deferredBytes = owner->deferredBytes > cap ? owner->deferredBytes - cap : 0;
+        ctx->destroyBuffer(buffer, alloc);
+    });
 }
 
 void ComputeBuffer::markLayers(std::span<const uint32_t> parts, uint32_t layers) {
@@ -216,6 +238,7 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
         fail(error, "the GPU device cannot reach buffers by address");
         return nullptr;
     }
+    if (!background_ && owner_->deferredBytes >= kDeferredReclaimBytes) reclaim();
     const VkDeviceSize capacity = std::max(kBufferGranule, (size + kBufferGranule - 1) / kBufferGranule * kBufferGranule);
     std::shared_ptr<ComputeBuffer> b(new ComputeBuffer());
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -227,8 +250,15 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
                                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     if (!context_->createBuffer(capacity, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, b->buffer_, memory, offset,
                                 b->allocId_, mapped)) {
-        fail(error, "could not allocate a " + std::to_string(capacity) + "-byte GPU buffer");
-        return nullptr;
+        if (!background_ && owner_->deferredBytes > 0) {
+            reclaim();
+        }
+        if (b->buffer_ == VK_NULL_HANDLE &&
+            !context_->createBuffer(capacity, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, b->buffer_, memory, offset,
+                                    b->allocId_, mapped)) {
+            fail(error, "could not allocate a " + std::to_string(capacity) + "-byte GPU buffer");
+            return nullptr;
+        }
     }
     b->owner_ = owner_;
     b->address_ = context_->bufferAddress(b->buffer_);
@@ -510,7 +540,15 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timePool_, query + 1);
         timed_.push_back({pipeline.label_, query, 0, recordingBackground()});
     }
-    current().pendingBarrier = true;
+    Stream& s = current();
+    s.pendingBarrier = true;
+    if (++s.openDispatches >= kMaxDispatchesPerSubmit && !recordingBackground()) {
+        const uint64_t prev = s.prevBatchTicket;
+        const uint64_t ticket = flush();
+        if (!ticket) return false;
+        if (prev > 0 && !queueFor(false).wait(prev)) return false;
+        s.prevBatchTicket = ticket;
+    }
     return true;
 }
 
@@ -643,6 +681,10 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
     const uint64_t ticket = bg ? flushStream(backgroundStream_, true) : flush();
     if (!ticket || !queueFor(bg).wait(ticket)) return false;
     std::memcpy(out, readbackMapped_, static_cast<size_t>(size));
+    if (!bg) {
+        graphicsStream_.prevBatchTicket = 0;
+        if (backgroundStream_.open == VK_NULL_HANDLE) context_->frames().reclaimCompleted(/*wait=*/false);
+    }
     return true;
 }
 
@@ -688,6 +730,14 @@ bool VulkanCompute::recordGraphics(const std::function<void(VkCommandBuffer)>& f
 
 uint64_t VulkanCompute::flush() { return flushStream(graphicsStream_, false); }
 
+void VulkanCompute::reclaim() {
+    if (!context_ || !owner_ || background_) return;
+    if (backgroundStream_.open != VK_NULL_HANDLE) return;
+    flush();
+    graphicsStream_.prevBatchTicket = 0;
+    context_->frames().reclaimCompleted(/*wait=*/true);
+}
+
 uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
     if (!context_ || s.open == VK_NULL_HANDLE) return s.lastTicket;
     // Everything submitted after this sees what the work wrote.
@@ -696,6 +746,7 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
     const VkCommandBuffer cmd = s.open;
     s.open = VK_NULL_HANDLE;
     s.pendingBarrier = false;
+    s.openDispatches = 0;
     std::vector<SemaphoreWait> waits;
     uint64_t ticket = 0;
     if (isBackground) {

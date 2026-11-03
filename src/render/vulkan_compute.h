@@ -51,6 +51,9 @@ public:
     /// The count at which part `layer` was last marked.
     uint64_t layerStamp(uint32_t layer) const { return layer < layerStamps_.size() ? layerStamps_[layer] : 0; }
 
+    /// Release the buffer's GPU memory once in-flight work finishes.
+    void releaseDeferred();
+
 private:
     friend class VulkanCompute;
     ComputeBuffer() = default;
@@ -239,6 +242,9 @@ public:
     /// Submit what is recorded. Returns its ticket on the graphics queue, or
     /// the last submission's when nothing was recorded since.
     uint64_t flush();
+    /// Flush open graphics work (when not in background) and reclaim completed
+    /// deferred frees and transient frame buffers.
+    void reclaim();
 
     /// Record into the background stream until endBackground(): work for
     /// the gap between frames rather than inside one, on the async compute
@@ -304,7 +310,9 @@ private:
     struct Stream {
         VkCommandBuffer open = VK_NULL_HANDLE;
         bool pendingBarrier = false;
+        uint32_t openDispatches = 0;
         uint64_t lastTicket = 0;
+        uint64_t prevBatchTicket = 0;
     };
     // The stream recording now. The background one is held to the frame's
     // end on a device without an async queue too, and then submitted to the
@@ -376,6 +384,7 @@ struct ComputeOwner {
     std::unordered_set<ComputeBuffer*> buffers;
     std::unordered_set<ComputePipeline*> pipelines;
     std::unordered_set<ComputeReadback*> readbacks;
+    VkDeviceSize deferredBytes = 0;
     // Timestamps: ns a tick (0 until known, negative when there are none)
     // and the valid bits' mask.
     double timestampNs = 0.0;

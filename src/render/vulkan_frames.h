@@ -103,6 +103,12 @@ public:
     /// the end of the current frame.
     void defer(std::function<void()> destroy);
 
+    /// When no command buffers are open in the current slot and all submitted
+    /// GPU work has completed (waiting first when `wait` is true), run all
+    /// pending deferred callbacks and recycle the current slot's transient
+    /// command buffers, upload chunks, and descriptor pools.
+    bool reclaimCompleted(bool wait = false);
+
     /// Register `hook` to run when the current frame closes (at the next
     /// beginFrame, before the closing frame's ticket is taken). Consumers that
     /// record into frame command buffers across calls — WebGL, the scene's

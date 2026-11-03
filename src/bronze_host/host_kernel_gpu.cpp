@@ -38,10 +38,25 @@ struct Device {
     }
 };
 
+constexpr const char* kDeviceLostError =
+    "device lost (likely the GPU watchdog: a submission ran over ~2 s)";
+
+bool isDeviceLost(render::VulkanContext& ctx) {
+    return ctx.queue().isDeviceLost() ||
+           (ctx.asyncComputeQueue() && ctx.asyncComputeQueue()->isDeviceLost());
+}
+
 bool lost(const Device& d, std::string* err) {
-    if (d.context()) return false;
-    if (err) *err = "no GPU device";
-    return true;
+    render::VulkanContext* ctx = d.context();
+    if (!ctx) {
+        if (err) *err = "no GPU device";
+        return true;
+    }
+    if (isDeviceLost(*ctx)) {
+        if (err) *err = kDeviceLostError;
+        return true;
+    }
+    return false;
 }
 
 class Buffer final : public brokernel::api::GpuBuffer {
@@ -56,14 +71,17 @@ public:
     bool write(size_t offset, const void* data, size_t n, std::string* err) override {
         if (lost(*device_, err)) return false;
         if (device_->context()->compute().write(*buffer_, offset, data, n)) return true;
-        if (err) *err = "the GPU buffer write failed";
+        if (err) *err = isDeviceLost(*device_->context()) ? kDeviceLostError : "the GPU buffer write failed";
         return false;
     }
     bool read(size_t offset, void* out, size_t n, std::string* err) override {
         if (lost(*device_, err)) return false;
         if (device_->context()->compute().read(*buffer_, offset, out, n)) return true;
-        if (err) *err = "the GPU buffer read failed";
+        if (err) *err = isDeviceLost(*device_->context()) ? kDeviceLostError : "the GPU buffer read failed";
         return false;
+    }
+    void destroy() override {
+        if (buffer_) buffer_->releaseDeferred();
     }
 
 private:
@@ -146,6 +164,10 @@ public:
         return std::make_shared<Buffer>(device_, std::move(buffer));
     }
 
+    void reclaim() override {
+        if (render::VulkanContext* ctx = device_->context()) ctx->compute().reclaim();
+    }
+
     std::shared_ptr<brokernel::api::GpuProgram> createProgram(const brokernel::CompiledKernel& kernel,
                                                               std::string* err) override {
         if (lost(*device_, err)) return nullptr;
@@ -189,7 +211,10 @@ public:
             return false;
         }
         if (compute.dispatch(*p.pipeline, block, launch.groups)) return true;
-        if (err) *err = "the GPU dispatch of '" + kernel.name + "' failed";
+        if (err) {
+            *err = isDeviceLost(*device_->context()) ? kDeviceLostError
+                                                     : ("the GPU dispatch of '" + kernel.name + "' failed");
+        }
         return false;
     }
 
@@ -208,7 +233,8 @@ std::shared_ptr<render::ComputeBuffer> computeBufferOf(bronze::Value v) {
 
 std::shared_ptr<render::ComputeBuffer> computeBufferOf(const std::shared_ptr<brokernel::api::GpuBuffer>& buffer) {
     const auto* own = dynamic_cast<const Buffer*>(buffer.get());
-    return own ? own->computeBuffer() : nullptr;
+    return own && own->computeBuffer() && own->computeBuffer()->buffer() != VK_NULL_HANDLE ? own->computeBuffer()
+                                                                                           : nullptr;
 }
 
 std::shared_ptr<brokernel::api::GpuBuffer> createEngineBuffer(size_t bytes, std::string* err) {

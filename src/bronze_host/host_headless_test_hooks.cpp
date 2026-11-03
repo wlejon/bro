@@ -472,6 +472,11 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         return ev::undefined();
     });
 
+    host.def("gc", 0, [](Value, std::span<const Value>) {
+        ev::collectGarbage();
+        return ev::undefined();
+    });
+
     // The process's memory by where it lives: committed regions by kind, the
     // CRT heaps' busy and free bytes, and what sits outside every heap
     // (host_mem_probe.cpp). `true` adds a size histogram of the busy blocks.

@@ -162,4 +162,56 @@ if (!bro.kernel.available) {
     throws(() => outBuf.write(new Float32Array(2), W * H * 4 - 4), (e) => e instanceof RangeError, 'a write past the end');
     throws(() => bro.kernel.compile('@kernel fn k_p(v: f32) -> f32 { return v; }').kernel('k_p').dispatch(1, 1),
            (e) => e instanceof TypeError && /eval\(\)/.test(e.message), 'dispatch of a point kernel');
+
+    // KernelBuffer.destroy() releases GPU memory once in-flight work finishes;
+    // any later use of the buffer throws.
+    const deadBuf = bro.kernel.createBuffer(new Float32Array([1, 2, 3, 4]));
+    blur.dispatch([2, 2], deadBuf, outBuf);
+    deadBuf.destroy();
+    deadBuf.destroy(); // idempotent
+    throws(() => deadBuf.byteLength, (e) => /destroyed/.test(e.message), 'byteLength of a destroyed KernelBuffer');
+    throws(() => deadBuf.read(new Float32Array(4)), (e) => /destroyed/.test(e.message), 'read of a destroyed KernelBuffer');
+    throws(() => deadBuf.write(new Float32Array(4)), (e) => /destroyed/.test(e.message), 'write of a destroyed KernelBuffer');
+    throws(() => blur.dispatch([2, 2], deadBuf, outBuf), (e) => /destroyed/.test(e.message),
+           'dispatch with a destroyed KernelBuffer');
+
+    // Dropping handles in a loop: forcing a collection frees their Vulkan
+    // memory, and allocating past the pressure budget collects automatically
+    // without advanceTime() so neither device-local nor upload pool memory
+    // grows unboundedly.
+    __host.gc();
+    const baseGpu = __host.memory().gpu;
+    (() => {
+        for (let i = 0; i < 16; i++) {
+            bro.kernel.createBuffer(1024 * 1024);
+        }
+    })();
+    __host.gc();
+    const sweptGpu = __host.memory().gpu;
+    assert(sweptGpu.poolAllocations === baseGpu.poolAllocations,
+           `GC frees unreferenced KernelBuffers (${baseGpu.poolAllocations} -> ${sweptGpu.poolAllocations} allocations)`);
+
+    const scratch = new Float32Array(1024);
+    for (let i = 0; i < 96; i++) {
+        const transient = bro.kernel.createBuffer(2 * 1024 * 1024);
+        transient.write(scratch);
+    }
+    const afterLoopGpu = __host.memory().gpu;
+    assert(afterLoopGpu.poolDeviceOnlyBytes <= baseGpu.poolDeviceOnlyBytes + 80 * 1024 * 1024,
+           `external memory pressure reclaims unreferenced KernelBuffers (${afterLoopGpu.poolDeviceOnlyBytes} bytes vs base ${baseGpu.poolDeviceOnlyBytes})`);
+
+    // A long dispatch chain (> kMaxDispatchesPerSubmit) splits into bounded
+    // submissions automatically before read().
+    const ping = bro.kernel.createBuffer(src);
+    const pong = bro.kernel.createBuffer(W * H * 4);
+    let cpuA = new Float32Array(src), cpuB = new Float32Array(W * H);
+    for (let i = 0; i < 100; i++) {
+        blur.dispatch([W, H], ping, pong);
+        blur.dispatch([W, H], pong, ping);
+        blur.run([W, H], cpuA, cpuB);
+        blur.run([W, H], cpuB, cpuA);
+    }
+    agree(ping.read(new Float32Array(W * H)), cpuA, 1e-4, '200-dispatch chain');
+    ping.destroy();
+    pong.destroy();
 }

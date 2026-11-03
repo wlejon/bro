@@ -165,6 +165,8 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 //   buffer.write(typedArray, byteOffset = 0)   // copied now, lands before later dispatches
 //   buffer.read(typedArray, byteOffset = 0)    // fills it after every dispatch so far
 //                                              // (blocks until they are done); returns it
+//   buffer.destroy()                           // releases its GPU memory once in-flight work finishes;
+//                                              // any later use of the buffer throws
 //
 // kernel.dispatch(grid, ...args) takes run()'s arguments with a KernelBuffer
 // for each store. A kernel that returns a value returns a new KernelBuffer of
