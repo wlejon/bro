@@ -75,6 +75,10 @@ public:
     /// completed — presents included: after a present that is the *next*
     /// submission's ticket (a later batch is what orders after a present).
     uint64_t retireTicket() const;
+    /// retireTicket(), made real now: after a present an empty submission
+    /// takes the ticket, so it completes as soon as the work so far has, not
+    /// with whatever is submitted next. For a ticket kept to wait on later.
+    uint64_t sealTicket();
     bool isComplete(uint64_t ticket) const { return isDeviceLost() || ticket <= completedTicket(); }
     bool isDeviceLost() const { return deviceLost_.load(std::memory_order_relaxed); }
 

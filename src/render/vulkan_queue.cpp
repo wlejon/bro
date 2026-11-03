@@ -186,6 +186,15 @@ uint64_t VulkanQueue::retireTicket() const {
     return lastTicket_ + (presentedSince_ ? 1 : 0);
 }
 
+uint64_t VulkanQueue::sealTicket() {
+    {
+        std::lock_guard<std::mutex> lock(submitMutex_);
+        if (!presentedSince_) return lastTicket_;
+    }
+    const uint64_t ticket = submit(QueueSubmit{});
+    return ticket != 0 ? ticket : retireTicket();
+}
+
 bool VulkanQueue::wait(uint64_t ticket, uint64_t timeoutNs) {
     if (ticket == 0 || timeline_ == VK_NULL_HANDLE) return true;
     if (isDeviceLost()) return false;

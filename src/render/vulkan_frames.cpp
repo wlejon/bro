@@ -90,7 +90,10 @@ void VulkanFrames::beginFrame() {
             LOG_ERROR("VulkanFrames: frame %llu ended with %u command buffer(s) never submitted",
                       static_cast<unsigned long long>(serial_), closing.openCommandBuffers);
         }
-        closing.ticket = queue().retireTicket();
+        // Sealed, not lazy: the next submission is the next frame's work, and
+        // waiting on that when this slot comes round again would hold the CPU
+        // for the GPU time of the frame after this one.
+        closing.ticket = queue().sealTicket();
         if (VulkanQueue* compute = context_->asyncComputeQueue()) closing.computeTicket = compute->lastSubmittedTicket();
         for (auto& fn : pending_) closing.deferred.push_back(std::move(fn));
         pending_.clear();

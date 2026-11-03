@@ -105,6 +105,15 @@ struct SimVulkanState {
         return lastTicket + (presentedSince ? 1 : 0);
     }
 
+    // An empty batch after a present takes the retire ticket now.
+    uint64_t sealTicket() {
+        if (presentedSince) {
+            ++lastTicket;
+            presentedSince = false;
+        }
+        return lastTicket;
+    }
+
     bool isComplete(uint64_t t) const { return t <= completedTicket; }
 
     uint64_t submitGraphics() {
@@ -190,7 +199,7 @@ struct SimVulkanState {
             if (!closing.used && !isComplete(nextSlot.ticket)) {
                 return;
             }
-            closing.ticket = retireTicket();
+            closing.ticket = sealTicket();
             closing.computeTicket = computeLastTicket;
             for (auto& r : pending) {
                 // Any resource deferred during this frame may also depend on
