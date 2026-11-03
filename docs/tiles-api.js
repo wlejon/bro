@@ -16,6 +16,10 @@
 // - Selection is error-driven: a tile splits while its cells project larger
 //   than `pixelsPerCell` pixels at the camera, down to `maxLevel`, within
 //   `capacity` resident tiles (the tile projecting largest splits first).
+//   With `detail`, also while the error its producer says splitting it
+//   would take away projects larger than `pixelsPerDetail`: tiles go where
+//   the world has something to show (a rough range, a coast) and flat sea
+//   or plain stays coarse, `pixelsPerCell` then only bounding how coarse.
 // - A tile is produced after its parent, in a later batch, and can read it:
 //   its record names the parent's slot and the quarter of it the tile
 //   covers, so a child refines what its parent holds rather than replacing
@@ -96,6 +100,11 @@
 //                     reported ancestor's, else [minHeight, maxHeight]
 //   pixelsPerCell     a tile splits while a cell spans more pixels than this
 //                     (default 2)
+//   detail            true gives the cache a `detail` store for producers to
+//                     report what splitting each tile would take away
+//                     (default false), and selection by it
+//   pixelsPerDetail   with `detail`: a tile also splits while its detail
+//                     projects larger than this many pixels (default 1)
 //   producePerUpdate  tiles produced per update() (default 8): the most a
 //                     batch holds, as paced by the frames
 //   produce(batch)    fills the update's batch; `this` is the cache
@@ -168,6 +177,16 @@
 // read NaN until written; NaN (or lo > hi) is no report. The cache reads
 // them back once the GPU is done, without waiting, and selection narrows a
 // frame or two after the tile is produced.
+//
+// With `detail`, a producer writes a tile's detail into cache.detail at
+// float32 slot: the size, in domain units, of the error splitting it would
+// take away from what it draws (how far its children's surface leaves its
+// own, say: on self-similar ground the tile's own cells tell, as the rms of
+// its odd vertices against the even ones about them, scaled by the share the
+// next level keeps; demos/planet's k_split_detail). It is read back as ranges
+// are (NaN or negative: no report). A tile without a report takes half its
+// nearest reported ancestor's a level, and one with none splits by its
+// cells alone, so a fresh region refines a level or two ahead of its reports.
 //
 // A produce that throws leaves the batch missing; update() rethrows, and
 // later updates offer it again.
@@ -277,6 +296,8 @@ const terrain = bro.tiles.createCache({
 //                   parent (tiles::parent_of) costs one search
 // cache.ranges      with `ranges`: KernelBuffer of capacity * 2 float32, a
 //                   tile's reported [lo, hi] at 2 * slot; else null
+// cache.detail      with `detail`: KernelBuffer of capacity float32, a tile's
+//                   reported detail at slot; else null
 // cache.pending     wanted tiles not yet produced or out of date (0 once
 //                   settled); every
 //                   live cache's, and its range batches in flight, report
@@ -284,13 +305,19 @@ const terrain = bro.tiles.createCache({
 // cache.wanted      tiles the last update selected
 // cache.resident    tiles holding data
 // cache.cells, cache.capacity
-// cache.stats       { produced, evicted } since creation, and rangesInFlight:
-//                   batches whose ranges the GPU has not handed back yet;
+// cache.stats       { produced, evicted } since creation, and reportsInFlight:
+//                   batches whose ranges or detail the GPU has not handed
+//                   back yet;
 //                   batchSize, the most the next batch holds; tileMs, a
 //                   produced tile's GPU ms (-1 before a batch is timed),
 //                   and levelMs, by level (-1 where none was timed)
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
+// cache.destroy()   releases its GPU memory (every pool, the draw list, the
+//                   lookup, ranges, detail) once the work in flight is done,
+//                   rather than when the cache is collected: a cache made
+//                   over again (a new setting) frees the old one's at once.
+//                   Any later use of the cache or its KernelBuffers throws
 // cache.refresh()   every ready tile is out of date (what produce reads has
 //                   changed: a sun, a parameter) but stays ready, drawn and
 //                   in the lookup; the next updates hand the wanted ones to

@@ -116,6 +116,7 @@ struct Cache {
     Cache(const Cache&) = delete;
     Cache& operator=(const Cache&) = delete;
     tilecache::TileTree tree;
+    bool destroyed = false;      // destroy(): its GPU memory is released
     uint32_t border = 0;
     uint32_t cells = 0;          // a tile's cells along an edge, borders included
     uint32_t producePerUpdate = 8;
@@ -129,14 +130,17 @@ struct Cache {
     ev::Persistent tableValue;
 
     // `ranges`: two float32 a slot, the [lo, hi] its producer wrote at
-    // 2 * slot, read back without waiting and given to the tree.
+    // 2 * slot; `detail`: one float32 a slot, the error its split would take
+    // away. Each batch's are read back without waiting and given to the tree.
     std::shared_ptr<brokernel::api::GpuBuffer> rangePool;
-    struct RangeReadback {
-        std::shared_ptr<render::ComputeReadback> readback;
+    std::shared_ptr<brokernel::api::GpuBuffer> detailPool;
+    struct Report {
+        std::shared_ptr<render::ComputeReadback> ranges, detail;
         uint32_t firstSlot = 0;
         std::vector<tilecache::Production> tiles;
+        bool ready() const { return (!ranges || ranges->ready()) && (!detail || detail->ready()); }
     };
-    std::deque<RangeReadback> rangeReadbacks;
+    std::deque<Report> reports;
 
     // The next batch's most tiles (pace()): up to producePerUpdate.
     uint32_t batchSize = 1;
@@ -180,7 +184,20 @@ ev::HostClass g_cacheClass;
 Cache* cacheOf(Value self, const char* what) {
     auto* c = static_cast<Cache*>(g_cacheClass.unwrap(self));
     if (!c) ev::throwTypeError(std::string(what) + ": not a TileCache");
+    if (c->destroyed) ev::throwTypeError(std::string(what) + ": the TileCache was destroyed");
     return c;
+}
+
+// Its GPU memory, released once the work in flight is done: every pool and
+// table it made. Its KernelBuffers throw from then on, as a destroyed one's do.
+void destroyCache(Cache& c) {
+    c.destroyed = true;
+    for (Layer& l : c.layers) l.pool->destroy();
+    for (auto* b : {&c.drawList, &c.lookup, &c.table, &c.rangePool, &c.detailPool})
+        if (*b) (*b)->destroy();
+    c.reports.clear();
+    c.inFlight.clear();
+    c.tree.clear();
 }
 
 double numberOr(Value obj, const char* key, double fallback) {
@@ -217,18 +234,21 @@ Value vec3(const tilecache::Vec3d& v) {
     return a.get();
 }
 
-// The ranges producers wrote, for the readbacks the GPU has finished: each
-// tile still in the slot it was produced into gets its range.
-void collectRanges(Cache& c) {
-    while (!c.rangeReadbacks.empty() && c.rangeReadbacks.front().readback->ready()) {
-        const Cache::RangeReadback& rb = c.rangeReadbacks.front();
-        const auto* f = static_cast<const float*>(rb.readback->data());
+// The ranges and detail producers wrote, for the readbacks the GPU has
+// finished: each tile still in the slot it was produced into gets its own.
+void collectReports(Cache& c) {
+    while (!c.reports.empty() && c.reports.front().ready()) {
+        const Cache::Report& rb = c.reports.front();
+        const auto* ranges = rb.ranges ? static_cast<const float*>(rb.ranges->data()) : nullptr;
+        const auto* detail = rb.detail ? static_cast<const float*>(rb.detail->data()) : nullptr;
         for (const tilecache::Production& p : rb.tiles) {
             if (c.tree.slotOf(p.id) != static_cast<int32_t>(p.slot)) continue;
-            const float* r = f + 2 * (p.slot - rb.firstSlot);
-            if (std::isfinite(r[0]) && std::isfinite(r[1])) c.tree.setRange(p.id, {r[0], r[1]});
+            const uint32_t k = p.slot - rb.firstSlot;
+            if (ranges && std::isfinite(ranges[2 * k]) && std::isfinite(ranges[2 * k + 1]))
+                c.tree.setRange(p.id, {ranges[2 * k], ranges[2 * k + 1]});
+            if (detail && std::isfinite(detail[k])) c.tree.setDetail(p.id, detail[k]);
         }
-        c.rangeReadbacks.pop_front();
+        c.reports.pop_front();
     }
 }
 
@@ -445,10 +465,10 @@ Value js_update(Value self, std::span<const Value> args) {
         v.tanHalfX = tanHalf * numberOr(view, "viewportWidth", height * 16.0 / 9.0) / height;
         v.frustum = true;
     }
-    // Ready first: a batch's ranges come back with it, and the tree takes a
-    // range for a ready tile.
+    // Ready first: a batch's reports come back with it, and the tree takes
+    // them for a ready tile.
     const bool retired = retireBatches(*c);
-    collectRanges(*c);
+    collectReports(*c);
     const uint32_t dropped = c->tree.select(v);
 
     pace(*c);
@@ -471,12 +491,13 @@ Value js_update(Value self, std::span<const Value> args) {
     }
     if (!batch.empty()) {
         std::string err;
-        // A producer that writes no range leaves NaN, which is no range: a
-        // slot's last tile's must not stand in for it.
-        if (c->rangePool) {
-            const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
+        // A producer that writes no range or detail leaves NaN, which is no
+        // report: a slot's last tile's must not stand in for it.
+        const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
+        if (c->rangePool)
             for (const tilecache::Production& p : batch) c->rangePool->write(size_t{8} * p.slot, none, sizeof(none), &err);
-        }
+        if (c->detailPool)
+            for (const tilecache::Production& p : batch) c->detailPool->write(size_t{4} * p.slot, none, sizeof(float), &err);
         // The batch on the GPU, for kernels that produce it in one dispatch.
         const tilecache::Domain& d = c->tree.config().domain;
         std::vector<int32_t> records(batch.size() * kTableWords, 0);
@@ -521,17 +542,19 @@ Value js_update(Value self, std::span<const Value> args) {
             return ev::throwValue(thrown);
         }
     }
-    if (c->rangePool && !batch.empty()) {
-        Cache::RangeReadback rb;
+    if ((c->rangePool || c->detailPool) && !batch.empty()) {
+        Cache::Report rb;
         uint32_t last = 0;
         rb.firstSlot = UINT32_MAX;
         for (const tilecache::Production& p : batch) {
             rb.firstSlot = std::min(rb.firstSlot, p.slot);
             last = std::max(last, p.slot);
         }
-        rb.readback = engineReadLater(c->rangePool, size_t{8} * rb.firstSlot, size_t{8} * (last - rb.firstSlot + 1));
+        const size_t n = last - rb.firstSlot + 1;
+        if (c->rangePool) rb.ranges = engineReadLater(c->rangePool, size_t{8} * rb.firstSlot, size_t{8} * n);
+        if (c->detailPool) rb.detail = engineReadLater(c->detailPool, size_t{4} * rb.firstSlot, size_t{4} * n);
         rb.tiles = batch;
-        if (rb.readback) c->rangeReadbacks.push_back(std::move(rb));
+        if ((!c->rangePool || rb.ranges) && (!c->detailPool || rb.detail)) c->reports.push_back(std::move(rb));
     }
     if (!batch.empty()) {
         // Ready once the GPU has done it (retireBatches, a later update).
@@ -583,9 +606,13 @@ void decorateCache(ev::ObjectBuilder& b) {
         Cache* c = cacheOf(self, "TileCache.clear");
         c->tree.clear();
         c->drawn.clear();
-        c->rangeReadbacks.clear();
+        c->reports.clear();
         c->inFlight.clear();   // their slots are free; later batches run after them
         writeLookup(*c);
+        return ev::undefined();
+    });
+    b.def("destroy", 0, [](Value self, std::span<const Value>) -> Value {
+        destroyCache(*cacheOf(self, "TileCache.destroy"));
         return ev::undefined();
     });
     b.def("refresh", 0, [](Value self, std::span<const Value>) -> Value {
@@ -601,6 +628,10 @@ void decorateCache(ev::ObjectBuilder& b) {
     b.accessor("ranges", [](Value self, std::span<const Value>) -> Value {
         const Cache* c = cacheOf(self, "TileCache.ranges");
         return c->rangePool ? brokernel::api::bufferValue(c->rangePool) : ev::null();
+    });
+    b.accessor("detail", [](Value self, std::span<const Value>) -> Value {
+        const Cache* c = cacheOf(self, "TileCache.detail");
+        return c->detailPool ? brokernel::api::bufferValue(c->detailPool) : ev::null();
     });
     b.accessor("drawn", js_drawn);
     b.accessor("drawList", [](Value self, std::span<const Value>) -> Value {
@@ -630,7 +661,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         ev::ObjectBuilder o;
         o.set("produced", static_cast<double>(s.produced));
         o.set("evicted", static_cast<double>(s.evicted));
-        o.set("rangesInFlight", static_cast<double>(c->rangeReadbacks.size()));
+        o.set("reportsInFlight", static_cast<double>(c->reports.size()));
         o.set("batchSize", static_cast<double>(c->batchSize));
         o.set("tileMs", c->tileMs);
         ev::ArrayBuilder levels(static_cast<uint32_t>(c->levelMs.size()));
@@ -694,6 +725,10 @@ Value js_createCache(Value, std::span<const Value> args) {
         return ev::throwRangeError("bro.tiles.createCache: minHeight is at most maxHeight");
     cfg.pixelsPerCell = numberOr(opts, "pixelsPerCell", 2.0);
     if (!(cfg.pixelsPerCell > 0)) return ev::throwRangeError("bro.tiles.createCache: pixelsPerCell is positive");
+    const bool detail = ev::toBool(ev::getProperty(opts, "detail"));
+    cfg.pixelsPerDetail = detail ? numberOr(opts, "pixelsPerDetail", 1.0) : 0.0;
+    if (detail && !(cfg.pixelsPerDetail > 0))
+        return ev::throwRangeError("bro.tiles.createCache: pixelsPerDetail is positive");
 
     auto cache = std::make_unique<Cache>(cfg);
     cache->border = integer(opts, "border", 0, 0, 64);
@@ -727,6 +762,10 @@ Value js_createCache(Value, std::span<const Value> args) {
         cache->rangePool = createEngineBuffer(size_t{8} * cfg.capacity, &err);
         if (!cache->rangePool) return ev::throwError("bro.tiles.createCache: " + err);
     }
+    if (detail) {
+        cache->detailPool = createEngineBuffer(size_t{4} * cfg.capacity, &err);
+        if (!cache->detailPool) return ev::throwError("bro.tiles.createCache: " + err);
+    }
 
     cache->table = createEngineBuffer(size_t{kTableWords} * sizeof(int32_t) * cache->producePerUpdate, &err);
     if (!cache->table) return ev::throwError("bro.tiles.createCache: " + err);
@@ -742,20 +781,21 @@ Value js_createCache(Value, std::span<const Value> args) {
 
 void installTiles(engine::Engine& engine) {
     // What the caches still owe their views, as perf.settle waits for it:
-    // wanted tiles not produced, and height ranges not read back (the tree
-    // refines a tile's selection by them).
+    // wanted tiles not produced, and height ranges and detail not read back
+    // (the tree refines a tile's selection by them).
     static engine::Engine* s_reporting = nullptr;
     g_engine = &engine;
     if (s_reporting != &engine) {
         s_reporting = &engine;
         engine.addPendingWorkSource([](std::vector<std::string>& out) {
-            uint32_t pending = 0, ranges = 0;
+            uint32_t pending = 0, reports = 0;
             for (const Cache* c : s_live) {
+                if (c->destroyed) continue;
                 pending += c->tree.pending();
-                ranges += static_cast<uint32_t>(c->rangeReadbacks.size());
+                reports += static_cast<uint32_t>(c->reports.size());
             }
             if (pending > 0) out.push_back("tiles: " + std::to_string(pending) + " wanted not produced");
-            if (ranges > 0) out.push_back("tiles: " + std::to_string(ranges) + " height range batches in flight");
+            if (reports > 0) out.push_back("tiles: " + std::to_string(reports) + " batch reports in flight");
         });
     }
     g_cacheClass.install("TileCache", 0, nullptr, decorateCache, /*global=*/false);

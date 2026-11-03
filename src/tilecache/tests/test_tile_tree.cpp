@@ -311,6 +311,59 @@ void testRanges() {
     check(deepest >= 18, "and the ground below still refines (level " + std::to_string(deepest) + ")");
 }
 
+// Detail: a tile without a report takes half its parent's, and selection by
+// it spends tiles where splitting takes something away. A plane flat over
+// x < 0 (every tile there reports 0) and rough over x > 0 (a tile's detail
+// is its cell), seen from 200 m over the line between them: the flat half
+// stays at the cell floor, the rough half refines as a 1 px cell rule would.
+void testDetail() {
+    Config c = planeConfig(65536);
+    c.pixelsPerCell = 16;
+    c.pixelsPerDetail = 1;
+    TileTree tree(c);
+    const TileId root{0, 0, 0, 0}, deep{0, 3, 5, 2};
+    check(tree.detail(deep) == -1, "no detail reported: none");
+    tree.setDetail(root, 64);
+    check(tree.detail(deep) == 8, "a tile takes half its parent's detail a level (" + std::to_string(tree.detail(deep)) + ")");
+    tree.setDetail(deep, std::nan(""));
+    tree.setDetail(deep, -1);
+    check(tree.detail(deep) == 8, "a NaN or negative detail is refused");
+
+    const View v = viewAt(0.3, 200, 7.1);
+    bool parentFirst = true;
+    for (int round = 0; round < 16; ++round) {
+        tree.select(v);
+        produceAll(tree, 4096, parentFirst);
+        // A producer reports every tile it makes, drawn or split.
+        for (const Production& p : tree.readyTiles()) {
+            const bool flat = c.domain.point(p.id, 0.5, 0.5).x < 0;
+            tree.setDetail(p.id, flat && p.id.level > 0 ? 0.0 : c.domain.tileExtent(p.id) / c.tileSize);
+        }
+    }
+    tree.select(v);
+    produceAll(tree, 4096, parentFirst);
+    uint32_t flatDeep = 0, roughDeep = 0;
+    for (const DrawTile& d : tree.drawSet())
+        (c.domain.point(d.id, 0.5, 0.5).x < 0 ? flatDeep : roughDeep) =
+            std::max(c.domain.point(d.id, 0.5, 0.5).x < 0 ? flatDeep : roughDeep, d.id.level);
+    check(roughDeep >= flatDeep + 3, "rough ground refines past flat ground (levels " + std::to_string(roughDeep) +
+                                         " and " + std::to_string(flatDeep) + ")");
+    Config cells = planeConfig(65536);
+    cells.pixelsPerCell = 1;
+    TileTree byCells(cells);
+    for (int round = 0; round < 16; ++round) {
+        byCells.select(v);
+        produceAll(byCells, 4096, parentFirst);
+    }
+    uint32_t cellDeep = 0;
+    for (const DrawTile& d : byCells.drawSet())
+        if (c.domain.point(d.id, 0.5, 0.5).x >= 0) cellDeep = std::max(cellDeep, d.id.level);
+    check(roughDeep == cellDeep, "the rough half refines as a 1 px cell rule does (" + std::to_string(roughDeep) +
+                                     " and " + std::to_string(cellDeep) + ")");
+    check(tree.wanted() < byCells.wanted(), "and the flat half costs less (" + std::to_string(tree.wanted()) + " of " +
+                                                std::to_string(byCells.wanted()) + " wanted)");
+}
+
 // A long flight: the tree keeps nodes only for what it still needs, so the
 // tiles it knows stay within a few capacities however far the view goes, and
 // the draw set covers the domain at every step.
@@ -403,6 +456,7 @@ int main() {
     testCubeSphere();
     testFrustum();
     testRanges();
+    testDetail();
     testLongFlight();
     std::printf("bro_tilecache_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

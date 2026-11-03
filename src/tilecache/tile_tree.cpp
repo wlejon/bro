@@ -141,6 +141,31 @@ void TileTree::resolve(Node& n) const {
     n.range = n.hasOwn ? n.own
             : n.parent >= 0 ? nodes_[n.parent].range
                             : HeightRange{config_.minHeight, config_.maxHeight};
+    n.detail = n.hasDetail ? n.ownDetail
+             : n.parent >= 0 && nodes_[n.parent].detail >= 0 ? 0.5 * nodes_[n.parent].detail
+                                                             : -1.0;
+}
+
+void TileTree::setDetail(const TileId& id, double d) {
+    if (!(d >= 0)) return;   // NaN or negative: no report
+    Node& n = nodes_[ensure(id)];
+    n.ownDetail = d;
+    n.hasDetail = true;
+    n.detail = d;
+}
+
+double TileTree::detail(const TileId& id) const {
+    TileId t = id;
+    int32_t i = find(t);
+    double scale = 1;
+    while (i < 0 && t.level > 0) {
+        t = t.parent();
+        i = find(t);
+        scale *= 0.5;
+    }
+    for (; i >= 0; i = nodes_[i].parent, scale *= 0.5)
+        if (nodes_[i].hasDetail) return nodes_[i].ownDetail * scale;
+    return -1;
 }
 
 HeightRange TileTree::range(const TileId& id) const {
@@ -268,7 +293,10 @@ double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* 
     const double dv = up > n.range.hi ? up - n.range.hi : (up < bottom ? bottom - up : 0.0);
     const double sphere = length(sub(view.position, b.center)) - b.radius;
     const double dist = std::max({sphere, std::sqrt(dh * dh + dv * dv), n.cell * 1e-3});
-    return n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
+    const double cells = n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
+    if (config_.pixelsPerDetail > 0 && n.detail >= 0)
+        return std::max(cells, n.detail / dist * view.projScale / config_.pixelsPerDetail);
+    return cells;
 }
 
 uint32_t TileTree::select(const View& view) {

@@ -9,7 +9,9 @@
 //   - select() picks the tiles a view wants: from the roots, the tile whose
 //     cells project largest on screen is split first, until every leaf's
 //     cells project under `pixelsPerCell` or the wanted tree fills the cache
-//     (Nanite's error-driven choice, rather than distance bands).
+//     (Nanite's error-driven choice, rather than distance bands); with
+//     `pixelsPerDetail`, also while the error its split would take away
+//     (its producer's report, setDetail) projects larger than that.
 //   - Every wanted tile has a slot in the GPU pools; the parents of wanted
 //     tiles are wanted too, so a child can always be derived from its parent
 //     (refinement: a world's producer reads the parent's slot) and a draw can
@@ -114,6 +116,14 @@ struct Config {
     double minHeight = 0;
     double maxHeight = 0;
     double pixelsPerCell = 2;    // split while a cell projects larger than this
+    // With pixelsPerDetail > 0, a tile also splits while its detail (setDetail:
+    // the size of the error its split would take away from what it draws)
+    // projects larger than pixelsPerDetail pixels. A tile without a report
+    // takes half its parent's (detail shrinks with the cells, as the cell
+    // rule assumes everywhere); one with no reported ancestor splits by its
+    // cells alone. pixelsPerCell then says how coarse a tile may draw
+    // whatever it holds: flat ground keeps coarse tiles, rough ground splits.
+    double pixelsPerDetail = 0;
 };
 
 struct View {
@@ -202,6 +212,13 @@ public:
     /// the tile (cleared by clear(); a tile pruned once the tree outgrows a
     /// few capacities falls back to its ancestor's).
     void setRange(const TileId& id, HeightRange r);
+    /// The size of the error splitting `id` would take away (its producer's
+    /// estimate, in domain units: what its children add to its surface, say),
+    /// for selection with pixelsPerDetail. Negative or NaN is no report. Kept
+    /// as ranges are.
+    void setDetail(const TileId& id, double d);
+    /// The tile's detail: its own once set, else half its parent's, else -1.
+    double detail(const TileId& id) const;
     /// The slot of a ready tile, or -1.
     int32_t slotOf(const TileId& id) const;
     /// Every ready tile and its slot, wanted or not (what a lookup can find:
@@ -243,6 +260,11 @@ private:
         HeightRange own;
         bool hasOwn = false;
         HeightRange range;
+        // Its own detail once set; `detail` the one it is selected by (its
+        // own, else half its parent's, else -1), resolved as range is.
+        double ownDetail = 0;
+        bool hasDetail = false;
+        double detail = -1;
         // Residency.
         int32_t slot = -1;
         State state = State::Missing;
@@ -266,7 +288,7 @@ private:
     int32_t ensure(const TileId& id);
     int32_t ensureChild(int32_t parent, uint32_t i);
     int32_t makeNode(const TileId& id, int32_t parent);
-    /// range from the node's own, else its parent's resolved range.
+    /// range and detail from the node's own, else its parent's resolved ones.
     void resolve(Node& n) const;
     /// Drops the nodes nothing needs (not wanted, not resident, no child
     /// kept) once the tree holds far more than its capacity.

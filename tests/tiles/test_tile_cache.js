@@ -54,6 +54,14 @@ if (!bro.kernel.available || !bro.tiles) {
             pool[g.x(), g.y(), slot] = p + d * sx * sy;
         }
 
+        // Detail: none over x < half (flat), a cell's width over the rest.
+        @kernel @grid(1)
+        fn k_detail(g: grid<1>, table: read_store<vec4<i32>, 1>, detail: write_store<f32, 1>, half: f32, cells: f32) {
+            let rec = tiles::record(table, g.x());
+            let flat = rec.level > 0 && rec.anchor.x < half;
+            detail[rec.slot] = select(flat, 0.0, rec.extent / cells);
+        }
+
         // A range of [lo, hi] for every tile of the batch at level <= upTo.
         @kernel @grid(1)
         fn k_report(g: grid<1>, table: read_store<vec4<i32>, 1>, ranges: write_store<f32, 1>,
@@ -64,7 +72,7 @@ if (!bro.kernel.available || !bro.tiles) {
             ranges[2 * rec.slot + 1] = hi;
         }
     `, { file: 'tiles.bk', modules: { tiles: bro.tiles.module } });
-    const kProduce = mod.kernel('k_produce'), kReport = mod.kernel('k_report');
+    const kProduce = mod.kernel('k_produce'), kReport = mod.kernel('k_report'), kDetail = mod.kernel('k_detail');
 
     const SIZE = 64, T = 16;
     let planeFrameOk = true, batches = 0, sameBatchParent = 0;
@@ -291,6 +299,38 @@ if (!bro.kernel.available || !bro.tiles) {
     const r0 = tight.drawn[0], w0 = wide.drawn.find((t) => tileKey(t) === tileKey(r0));
     if (w0) assert(r0.radius < w0.radius && r0.center.every((c, i) => c === w0.center[i]),
                    'a narrower range shrinks the bounds about the same center');
+
+    // Detail: over a plane flat on its x < 32 half, seen from 20 m above the
+    // line between the halves, the flat half stays at the 16 px cell floor
+    // while the other refines as a 2 px cell rule does, for fewer tiles.
+    const detailed = makeCache({
+        capacity: 4096, maxLevel: 6, pixelsPerCell: 16, detail: true, pixelsPerDetail: 2,
+        produce: function (batch) {
+            produce.call(this, batch);
+            kDetail.dispatch([batch.count], batch.table, this.detail, SIZE / 2, T);
+        },
+    });
+    const byCells = makeCache({ capacity: 4096, maxLevel: 6, pixelsPerCell: 2 });
+    const line = { position: [32.3, 20, 20.1], fov: 60, viewportHeight: 720 };    assert(settleRanged(detailed, line) && settleRanged(byCells, line), 'caches by detail and by cells settle');
+    checkCoverage(detailed, 'detail');
+    const deepestOver = (c, flat) => Math.max(...c.drawn.filter((t) => ((t.x + 0.5) * SIZE / (1 << t.level) < SIZE / 2) === flat)
+                                                     .map((t) => t.level));
+    assert(deepestOver(detailed, false) === deepestOver(byCells, false),
+           `rough ground refines as the cell rule does (level ${deepestOver(detailed, false)} and ${deepestOver(byCells, false)})`);
+    assert(deepestOver(detailed, true) + 2 <= deepestOver(detailed, false),
+           `flat ground stays coarse (level ${deepestOver(detailed, true)} by ${deepestOver(detailed, false)})`);
+    assert(detailed.drawCount < byCells.drawCount, `for fewer tiles (${detailed.drawCount} drawn, ${byCells.drawCount} by cells)`);
+    assert(makeCache({}).detail === null, 'a cache without detail has no detail store');
+
+    // destroy() frees a cache now; using it afterwards throws.
+    const doomed = makeCache({});
+    const doomedPool = doomed.layer('height');
+    doomed.destroy();
+    let refused = 0;
+    for (const use of [() => doomed.update(line), () => doomed.drawCount, () => doomedPool.read(new Float32Array(1))]) {
+        try { use(); } catch (e) { refused++; }
+    }
+    assert(refused === 3, `a destroyed cache and its pools refuse use (${refused} of 3)`);
 
     // A cube-sphere refines toward a camera above its surface.
     const sphere = bro.tiles.createCache({
