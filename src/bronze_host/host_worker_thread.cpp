@@ -269,6 +269,7 @@ void WorkerInstance::threadFunc() {
     if (!workerBase.empty()) {
         brokit::api::addFsBasePath(workerBase);
         brokit::api::addFetchBasePath(workerBase);
+        brokit::api::setRequireBasePath(std::filesystem::path(std::u8string(workerBase.begin(), workerBase.end())));
         brokit::api::setIndexedDBPath(workerBase);
     }
     // `bro`: bro.net / bro.net.sync over this thread's own subscriber, the

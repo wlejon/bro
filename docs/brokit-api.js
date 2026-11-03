@@ -40,7 +40,13 @@
 //
 //   Relative paths resolve against the directory of the file that CALLS require
 //   (as in Node), so a module can require its own siblings wherever it is loaded
-//   from. A module is evaluated once and cached by resolved path: two requires of
+//   from. Each module gets its own require, so one a function of the module
+//   makes later (from a timer or an event) still resolves from the module's
+//   folder. A page's classic scripts (inline or src) are one program named for
+//   the page, so they, and the handlers they leave, resolve against the app's
+//   folder (a worker's, against its base); a <script type="module" src> file,
+//   against its own folder. Never the working directory, unless the realm has no
+//   app (a bare bronze runtime). A module is evaluated once and cached by resolved path: two requires of
 //   the same file share one instance, so module-level state is real state. Both
 //   `module.exports = {...}` and `exports.foo = ...` work, and the module sees
 //   __filename / __dirname.

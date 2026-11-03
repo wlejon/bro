@@ -9,6 +9,7 @@
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_global_sync.h"
 
+#include "api/api.h"  // brokit::api::RequireDirGuard
 #include "cli/driver.h"
 #include "embed/embed.h"
 #include "modules/modules.h"
@@ -22,6 +23,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -461,6 +463,15 @@ bool evalScript(engine::Engine& engine, const std::string& code, const std::stri
 bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename,
                    bool moduleFile) {
     ev::ModuleHandle handle = 0;
+    // A module script file's require('./x') resolves against its own folder
+    // while its top level runs (docs/brokit-api.js: the calling file's).
+    // Classic scripts are one program named for the page, and use the app
+    // directory brokit falls back to (host_brokit.cpp).
+    std::optional<brokit::api::RequireDirGuard> requireDir;
+    if (moduleFile) {
+        const std::filesystem::path file(std::u8string(filename.begin(), filename.end()));
+        requireDir.emplace(file.parent_path());
+    }
     const bool ok = evalScriptImpl(engine, code, filename, &handle, moduleFile);
     // Recorded on failure too: a top level that threw halfway still
     // registered its spans, and they are still the reload's to retire.

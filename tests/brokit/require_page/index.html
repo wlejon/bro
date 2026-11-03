@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>require from a page</title></head>
+<body>
+<script>
+// A classic page script: no file of its own, so require resolves against the
+// app's folder, now and from a timer it leaves behind.
+const a = require('./lib/a.js');
+window.REQ = { inline: a.who() };
+setTimeout(() => {
+    window.REQ.timer = require('./lib/b.js').v;
+    // a.js's own require, called after a.js loaded: still a.js's folder
+    window.REQ.lazy = a.lazy();
+}, 0);
+</script>
+<script type="module" src="lib/m.js"></script>
+</body></html>

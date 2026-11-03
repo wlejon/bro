@@ -224,6 +224,10 @@ void installBrokitGlobals(engine::Engine& engine) {
     if (!engine.appDir().empty()) {
         bk::addFsBasePath(engine.appDir());
         bk::addFetchBasePath(engine.appDir());
+        // require('./x.js') from a page script (or a handler it left) has
+        // no calling file on brokit's stack; it resolves against the app
+        const std::string& app = engine.appDir();
+        bk::setRequireBasePath(std::filesystem::path(std::u8string(app.begin(), app.end())));
         bk::setIndexedDBPath(engine.appDir());
     }
 
