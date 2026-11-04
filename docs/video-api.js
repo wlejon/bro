@@ -628,6 +628,7 @@ const near = bro.media.peaks('vod.m3u8', { buckets: 6000, from: 3600, to: 3660 }
 //       codec,                               'mp3' 'flac' 'vorbis' 'opus' 'pcm'
 //                                            'float' 'aac' 'alac' ...
 //       container,                           'mp3' 'flac' 'ogg' 'wav' 'mp4'
+//                                            'webm' 'matroska'
 //       picture }                            { mime, bytes: Uint8Array } — the
 //                                            front cover, else the first
 //                                            picture — or null
@@ -652,6 +653,19 @@ const near = bro.media.peaks('vod.m3u8', { buckets: 6000, from: 3600, to: 3660 }
 //   WAV         LIST/INFO, an "id3 " chunk                  data size / byte rate
 //   MP4 / M4A   moov/udta/meta/ilst: ©nam ©ART ©alb aART    edit list, else mdhd
 //               trkn disk ©day ©gen gnre covr
+//   WebM /      Tags/SimpleTag (flat as ffmpeg writes        Segment Info Duration
+//   Matroska    them, or levelled track 30 / album 50),      x TimecodeScale
+//               an image attachment ("cover.*" first)
+//
+//   For WebM / Matroska (.webm .weba .mkv .mka) codec, sampleRate and channels
+//   are the first audio track's: a video with no audio track has its duration
+//   and an empty codec. bitrate is the audio track's BPS statistic where the
+//   muxer wrote one (mkvmerge does), else 0. Only the top level up to the first
+//   Cluster is read, and the SeekHead is followed to what lies past the
+//   Clusters (Tags and Attachments often sit at the end), so a multi-GB video
+//   answers in a few reads. A live recording (MediaRecorder: unknown sizes, no
+//   Duration) has duration 0, and tags written after its first Cluster are not
+//   found.
 //
 //   Tags are read on every platform; whether an M4A PLAYS is the AAC decoder's
 //   business (see createStreamFromFile in audio-engine-api.js). It is not a

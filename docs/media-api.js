@@ -213,7 +213,8 @@ bro.media.peaks = function(path, options) {};
 bro.media.thumbnails = function(path, options) {};
 
 /**
- *  Read audio container metadata tags and duration without decoding audio samples.
+ *  Read a media file's tags, duration and audio format without decoding it: MP3, FLAC, Ogg,
+ *  WAV, MP4/M4A and WebM/Matroska (see video-api.js for what each container gives).
  *
  * @param {string} path
  * @returns {{title: string, artist: string, album: string, albumArtist: string, track: number, trackTotal: number, disc: number, discTotal: number, year: number, genre: string, duration: number, sampleRate: number, channels: number, bitrate: number, codec: string, container: string, picture: {mime: string, bytes: Uint8Array}|null}|null}
