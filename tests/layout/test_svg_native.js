@@ -75,7 +75,9 @@ const cases = {
     // The reference is the traversal's render, unhinted SVG text: against
     // Chromium's (Linux, Liberation Sans) it is mean 2.6, 1.3% far, where
     // Skia's SVG module's render was 4.6 and 3.2% from Chromium, outside
-    // this test's bar.
+    // this test's bar. Its glyphs are the system's Arial, so a platform whose
+    // Arial is another font has its own reference (ref/text_paint.*.win32.png:
+    // Windows' Arial, 2.3% far from Liberation Sans).
     text_paint: {},
     text_path: { img: [[0, 30, W, 60]] },               // reference <img> lacks the <use href> guide
     mask: {},
@@ -138,8 +140,13 @@ const cases = {
 for (const name of Object.keys(cases)) {
     const c = cases[name];
     const shot = render(name);
-    const refInline = decodePng(DIR + 'ref/' + name + '.inline.png');
-    const refImg = decodePng(DIR + 'ref/' + name + '.img.png');
+    // A reference of this platform's own, where its fonts differ, else the shared one.
+    const ref = (kind) => {
+        const own = DIR + 'ref/' + name + '.' + kind + '.' + process.platform + '.png';
+        return decodePng(fs.existsSync(path.resolve(own)) ? own : DIR + 'ref/' + name + '.' + kind + '.png');
+    };
+    const refInline = ref('inline');
+    const refImg = ref('img');
     const both = c.both || [];
     const ri = compare(shot.inline, refInline, both.concat(c.inline || []));
     const rm = compare(shot.img, refImg, both.concat(c.img || []));
