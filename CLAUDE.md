@@ -181,7 +181,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
 | `profiler-api.js` | `bro.profiler`: bronze's sampling profiler from script: `start({hz, threads})` / `stop({callers, report})` → per-function self/total + tier (interpreter / tier 1 / tier 2 / aot / native), caller edges, text; zero cost while stopped |
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
-| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis + `tags` (ID3/Vorbis/FLAC/WAV/MP4 tags, cover, length; worker-callable), `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
+| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis + `tags` (ID3/Vorbis/FLAC/WAV/MP4/Matroska-WebM tags, cover, length; worker-callable), `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `media-api.js` | `VideoEncoder` (WebM/VP9 + Opus), `GifEncoder` (GIF89a), and `bro.media` (`peaks`, `thumbnails`, `tags` (metadata, duration, rate, codec, container), `canDecode`) class & method signatures |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in; the page's own app, reached as a same-origin frame |
 | `appview-api.js` | `<appview src=dir>`: another app running inline as a compartment of its own: its own `bro.app` identity and grants, `permissionrequest` prompts answered by the page, `expose(name, fn)` → `bro.app.host[name]` across the membrane, postMessage only, `start`/`stop`/`running` |
