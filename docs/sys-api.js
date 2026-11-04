@@ -232,8 +232,9 @@ bro.sys.tray.on('itemAdded', (item) => {
 
 const procs = bro.sys.processes.list(); // or bro.sys.listProcesses()
 for (const p of procs.slice(0, 5)) {
-    // { pid, ppid, uid, name, exe, cmdline, state, cpuPercent, rssBytes, vsizeBytes, threads, startTimeMs }
-    console.log(`[${p.pid}] ${p.name} — CPU: ${p.cpuPercent.toFixed(1)}%, RSS: ${p.rssBytes} B`);
+    // { pid, ppid, name, cmdline, state, user, uid, rssBytes, vszBytes, cpuTimeMs, threads }
+    // (cpuTimeMs is cumulative: sample twice for a CPU percentage)
+    console.log(`[${p.pid}] ${p.name} — CPU time: ${p.cpuTimeMs} ms, RSS: ${p.rssBytes} B`);
 }
 
 // Send a signal to a process (default SIGTERM = 15):
