@@ -41,6 +41,9 @@ if(WIN32)
     target_sources(bro_platform PRIVATE desktop_notifications_win.cpp)
     # The session's screen and input for a bro that is the OS shell (desktop_session.h).
     target_sources(bro_platform PRIVATE desktop_session_win.cpp)
+    # The desktop's pixels (screen_grab.h): DXGI duplication, GDI fallback.
+    target_sources(bro_platform PRIVATE screen_grab_win.cpp)
+    target_link_libraries(bro_platform PRIVATE d3d11 shcore)
     # Its keyboard: hotkeys through a low-level hook (desktop_hotkeys.h).
     target_sources(bro_platform PRIVATE desktop_shell_keyboard_win.cpp)
     target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid runtimeobject)
@@ -60,6 +63,10 @@ elseif(APPLE)
     target_sources(bro_platform PRIVATE desktop_notifications_mac.mm)
     set_source_files_properties(desktop_notifications_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(bro_platform PRIVATE "-framework AppKit" "-framework UserNotifications")
+    # The desktop's pixels (screen_grab.h): ScreenCaptureKit.
+    target_sources(bro_platform PRIVATE screen_grab_mac.mm)
+    set_source_files_properties(screen_grab_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(bro_platform PRIVATE "-framework ScreenCaptureKit" "-framework CoreGraphics")
 endif()
 # The agent control channel's transport (control_socket.cpp, control_protocol.h).
 target_link_libraries(bro_platform PUBLIC brolink)
@@ -102,6 +109,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BRO_WITH_WL AND TARGET browl)
     # Vulkan::Vulkan for vkGetInstanceProcAddr (vkCreateWaylandSurfaceKHR).
     target_link_libraries(bro_platform PRIVATE browl Vulkan::Vulkan)
     set(_bro_have_wayland 1)
+endif()
+# The desktop's pixels on Linux (screen_grab.h): wlr-screencopy through browl.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(_bro_have_wayland)
+        target_sources(bro_platform PRIVATE screen_grab_wayland.cpp)
+    else()
+        target_sources(bro_platform PRIVATE screen_grab_none.cpp)
+    endif()
 endif()
 target_compile_definitions(bro_platform PRIVATE BRO_HAVE_WAYLAND_BACKEND=${_bro_have_wayland})
 

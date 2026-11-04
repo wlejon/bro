@@ -156,7 +156,7 @@ fi
 TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 # The capabilities a JS test's run is granted (src/engine/capabilities.cpp's
 # catalogue): those a user decides, and those only a host can grant.
-ASK_GRANTS="files,net,spawn,mic,env,mpris,wl,displays,clip,pulse,remote,sys.power,sys.audio,sys.network,sys.bluetooth,sys.notifications,sys.tray,sys.processes,sys.journal,sys.disks"
+ASK_GRANTS="files,net,spawn,mic,env,mpris,wl,displays,clip,pulse,remote,screen,sys.power,sys.audio,sys.network,sys.bluetooth,sys.notifications,sys.tray,sys.processes,sys.journal,sys.disks"
 SHELL_GRANTS="shell,compositor,seat,cred,portal,permissions"
 
 # --- Staleness gate ---------------------------------------------------------

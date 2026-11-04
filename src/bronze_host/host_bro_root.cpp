@@ -28,6 +28,7 @@
 #include "bronze_host/host_permissions.h"
 #include "bronze_host/host_solve.h"
 #include "bronze_host/host_window_open.h"
+#include "bronze_host/host_screen_capture.h"
 #include "engine/engine.h"
 #include "util/log.h"
 #if BRO_WITH_3D
@@ -357,7 +358,11 @@ void installBroRoots(engine::Engine& engine) {
     {
         // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
-        if (ev::isObject(broWin)) installBroWindowOpen(broWin);
+        if (ev::isObject(broWin)) {
+            ev::Persistent w(broWin);
+            installBroWindowOpen(w.get());
+            installBroWindowScreenCapture(w.get());
+        }
     }
 
     std::string err;

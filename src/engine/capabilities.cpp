@@ -21,6 +21,7 @@ constexpr Capability kCatalogue[] = {
     {"clip", K::Ask, "read the clipboard history"},
     {"pulse", K::Ask, "change audio routing and volumes"},
     {"remote", K::Ask, "share this screen with a remote viewer and take its input"},
+    {"screen", K::Ask, "see everything on your screen, other apps' windows included"},
     {"sys.power", K::Ask, "read power state and suspend, reboot or power off"},
     {"sys.audio", K::Ask, "change system audio devices and volumes"},
     {"sys.network", K::Ask, "change network connections"},
@@ -58,8 +59,11 @@ std::string capabilityForNamespace(std::string_view ns) {
     // files, net, spawn and mic are exercised through many surfaces (checked
     // where each is exercised), never as one bro.<name> object (env is
     // process.env and /proc's environ files). bro.mic is
-    // one of mic's surfaces, gated at the capture itself.
-    if (ns == "shell" || ns == "files" || ns == "net" || ns == "spawn" || ns == "mic" || ns == "env") return {};
+    // one of mic's surfaces, gated at the capture itself. screen is
+    // bro.window.captureScreen's desktop capture, gated in that call.
+    if (ns == "shell" || ns == "files" || ns == "net" || ns == "spawn" || ns == "mic" || ns == "env" ||
+        ns == "screen")
+        return {};
     const Capability* c = findCapability(ns);
     return c ? std::string(c->name) : std::string();
 }

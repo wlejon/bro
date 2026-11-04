@@ -1,8 +1,9 @@
-// desktop_session.h on Windows: GDI reads the composited screen (DWM's
-// output, so other apps' windows are in it), SendInput injects into the
+// desktop_session.h on Windows: the composited screen is screen_grab.h's
+// (DXGI duplication, GDI where it cannot), SendInput injects into the
 // session's input stream, ahead of low-level hooks and RegisterHotKey.
 #include "platform/desktop_session.h"
 #include "platform/desktop_platform.h"
+#include "platform/screen_grab.h"
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -79,47 +80,23 @@ bool captureScreenRect(int x, int y, int width, int height, std::vector<uint8_t>
         if (why) *why = "empty screen rectangle";
         return false;
     }
-    HDC screen = GetDC(nullptr);
-    if (!screen) {
-        if (why) *why = "GetDC failed (no interactive desktop?)";
+    screen::Grab g;
+    std::string err;
+    if (screen::grab(x, y, width, height, g, err) != screen::Status::Ok) {
+        if (why) *why = err;
         return false;
     }
-    HDC mem = CreateCompatibleDC(screen);
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = width;
-    bi.bmiHeader.biHeight = -height;  // top-down
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    void* bits = nullptr;
-    HBITMAP bmp = mem ? CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
-    bool ok = false;
-    if (bmp && bits) {
-        HGDIOBJ old = SelectObject(mem, bmp);
-        ok = BitBlt(mem, 0, 0, width, height, screen, x, y, SRCCOPY | CAPTUREBLT) != 0;
-        SelectObject(mem, old);
-        if (ok) {
-            GdiFlush();
-            const size_t n = static_cast<size_t>(width) * height;
-            rgba.resize(n * 4);
-            const uint8_t* src = static_cast<const uint8_t*>(bits);
-            for (size_t i = 0; i < n; ++i) {
-                rgba[i * 4 + 0] = src[i * 4 + 2];
-                rgba[i * 4 + 1] = src[i * 4 + 1];
-                rgba[i * 4 + 2] = src[i * 4 + 0];
-                rgba[i * 4 + 3] = 255;
-            }
-        } else if (why) {
-            *why = "BitBlt from the screen failed (session not on the console?)";
-        }
-    } else if (why) {
-        *why = "could not allocate the capture bitmap";
+    if (g.x == x && g.y == y && g.width == width && g.height == height) {
+        rgba = std::move(g.rgba);
+        return true;
     }
-    if (bmp) DeleteObject(bmp);
-    if (mem) DeleteDC(mem);
-    ReleaseDC(nullptr, screen);
-    return ok;
+    // Part of the rectangle is off the desktop: that part reads black.
+    rgba.assign(static_cast<size_t>(width) * height * 4, 0);
+    for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
+    for (int row = 0; row < g.height; ++row)
+        std::memcpy(rgba.data() + (static_cast<size_t>(g.y - y + row) * width + (g.x - x)) * 4,
+                    g.rgba.data() + static_cast<size_t>(row) * g.width * 4, static_cast<size_t>(g.width) * 4);
+    return true;
 }
 
 bool sendKey(uint32_t evdevCode, bool pressed) {

@@ -21,8 +21,10 @@
 
 #include "broimage/encode.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -90,6 +92,72 @@ bool Engine::captureScreen(const std::string& path, std::string* why) {
 #endif
     if (!screenshot(path)) return fail("the engine composite could not be captured to " + path);
     return true;
+}
+
+std::vector<platform::screen::Display> Engine::desktopDisplays(std::string* why) {
+#if BRO_WITH_DMABUF
+    if (displayMode_ == DisplayMode::Drm) {
+        // The display bro scans out to, by the size of its last frame.
+        platform::screen::Grab g;
+        std::string err;
+        if (grabDesktop(0, 0, 0, 0, g, err) != platform::screen::Status::Ok) {
+            if (why) *why = err;
+            return {};
+        }
+        platform::screen::Display d;
+        d.name = "scanout";
+        d.width = g.width;
+        d.height = g.height;
+        d.primary = true;
+        return {d};
+    }
+#endif
+    return platform::screen::displays(why);
+}
+
+platform::screen::Status Engine::grabDesktop(int x, int y, int width, int height, platform::screen::Grab& out,
+                                             std::string& why, bool cursor) {
+#if BRO_WITH_DMABUF
+    if (displayMode_ == DisplayMode::Drm) {
+        auto* kms = vulkanPresenter_ ? vulkanPresenter_->kmsDirectPresenter() : nullptr;
+        if (!kms) {
+            why = "no KMS presenter";
+            return platform::screen::Status::Failed;
+        }
+        std::vector<uint8_t> rgba;
+        uint32_t w = 0, h = 0;
+        if (!kms->readLastFrame(rgba, w, h, &why)) return platform::screen::Status::Failed;
+        if (width <= 0 || height <= 0) {
+            x = 0;
+            y = 0;
+            width = static_cast<int>(w);
+            height = static_cast<int>(h);
+        }
+        const int x0 = std::max(x, 0), y0 = std::max(y, 0);
+        const int x1 = std::min(x + width, static_cast<int>(w)), y1 = std::min(y + height, static_cast<int>(h));
+        if (x1 <= x0 || y1 <= y0) {
+            why = "the rectangle is outside the screen";
+            return platform::screen::Status::Failed;
+        }
+        out.x = x0;
+        out.y = y0;
+        out.width = x1 - x0;
+        out.height = y1 - y0;
+        out.backend = "kms";
+        if (out.width == static_cast<int>(w) && out.height == static_cast<int>(h)) {
+            out.rgba = std::move(rgba);
+        } else {
+            out.rgba.resize(static_cast<size_t>(out.width) * out.height * 4);
+            for (int row = 0; row < out.height; ++row)
+                std::memcpy(out.rgba.data() + static_cast<size_t>(row) * out.width * 4,
+                            rgba.data() + (static_cast<size_t>(y0 + row) * w + x0) * 4,
+                            static_cast<size_t>(out.width) * 4);
+        }
+        for (size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // scanout is XRGB
+        return platform::screen::Status::Ok;
+    }
+#endif
+    return platform::screen::grab(x, y, width, height, out, why, cursor);
 }
 
 void Engine::pollScreenCaptureTriggers() {

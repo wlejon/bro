@@ -330,6 +330,77 @@ bro.window.hotkeyRouting;
 bro.window.captureScreen('/tmp/desktop.png');
 
 /**
+ * @typedef {Object} CaptureDisplay
+ * @property {number} index - what `captureScreen({display})` names; primary first
+ * @property {string} name - the OS's name for it ('\\\\.\\DISPLAY1', 'Built-in Retina Display', 'DP-1')
+ * @property {number} x - left edge on the virtual desktop, pixels
+ * @property {number} y - top edge on the virtual desktop, pixels
+ * @property {number} width - pixels
+ * @property {number} height - pixels
+ * @property {number} scale - the OS's content scale for it (1.5 = 150%)
+ * @property {boolean} primary
+ */
+
+/**
+ * The displays a desktop capture can read, in the pixels it reads them in: Windows' virtual
+ * desktop (physical pixels), macOS's global display space times the largest display scale (a
+ * Retina display at full resolution), a Wayland compositor's outputs, or the one scanout display
+ * under DRM. Not gated (it is the monitor layout, not their contents); empty where nothing can
+ * be captured.
+ * @returns {CaptureDisplay[]}
+ */
+bro.window.captureDisplays();
+
+/**
+ * @typedef {Object} DesktopCapture
+ * @property {number} x - the captured rectangle's left edge on the virtual desktop
+ * @property {number} y
+ * @property {number} width
+ * @property {number} height
+ * @property {number} display - the display's index, or -1 for the whole desktop
+ * @property {string} backend - 'dxgi' | 'gdi' | 'dxgi+gdi' | 'screencapturekit' | 'wlr-screencopy' | 'kms'
+ * @property {Uint8Array} [pixels] - RGBA8, top-down, opaque, width * height * 4 (unless `pixels: false`)
+ * @property {string} [path] - the PNG written, when `path` was given
+ */
+
+/**
+ * Captures the desktop itself: every app's windows, as the OS composited them (the pointer only
+ * when asked).
+ * The same call on every platform: DXGI Desktop Duplication on Windows (GDI where an output cannot
+ * be duplicated), ScreenCaptureKit on macOS 14+, wlr-screencopy on a Wayland compositor that has
+ * it (helm, sway, Hyprland; not GNOME or KDE, which only offer the desktop portal's interactive
+ * screenshot), bro's own scanout under DRM. Headless reads the real desktop too.
+ *
+ * Gated by the `screen` capability (docs/apps.md, Permissions): undeclared or refused, the promise
+ * rejects with `code: 'EACCES'`; a `path` outside what the app may write rejects the same way,
+ * with `path`. Other rejections carry a code too: 'EPERM' when the OS refuses (macOS without the
+ * Screen Recording permission, which macOS asks the user for on the first refusal; Windows while
+ * the screen is locked), 'ENOTSUP' when there is no desktop to read (no display, a Wayland
+ * compositor without screencopy, a build without a backend), 'EINVAL' for bad options, 'EIO'
+ * otherwise. The message says what happened.
+ *
+ * The string / no-argument form above is unchanged: synchronous, and outside DRM the app's own
+ * composite. A screenshot app hides its own window first (`bro.window.setOpacity(0)` and a frame
+ * or two), since the capture shows whatever is on screen.
+ *
+ * @param {Object} options
+ * @param {number|'primary'|'all'} [options.display='all'] an index from captureDisplays()
+ * @param {{x:number, y:number, width:number, height:number}} [options.rect] a part of it, in
+ *        pixels from the display's top-left corner (the desktop's, for 'all'); clipped to it
+ * @param {string} [options.path] also write the capture there as a PNG
+ * @param {boolean} [options.pixels=true] false: leave `pixels` out (only the file is wanted)
+ * @param {boolean} [options.cursor=false] draw the pointer in (Windows, macOS, Wayland; not under DRM)
+ * @returns {Promise<DesktopCapture>}
+ *
+ * @example
+ * const shot = await bro.window.captureScreen({ display: 'primary' });
+ * ctx.putImageData(new ImageData(new Uint8ClampedArray(shot.pixels.buffer), shot.width, shot.height), 0, 0);
+ * await bro.window.captureScreen({ display: 0, rect: { x: 100, y: 100, width: 640, height: 480 },
+ *                                  path: bro.app.dataDir + '/region.png', pixels: false });
+ */
+bro.window.captureScreen({ display: 'all' });
+
+/**
  * Registers a global hotkey: a chord that reaches the app whichever window has the keyboard.
  *
  * Accelerators: modifiers (Ctrl/Control, Alt/Option, Shift, Super/Meta/Cmd/Win,

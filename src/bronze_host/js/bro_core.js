@@ -204,10 +204,24 @@
     // OS), 'none' (headless: simulate them).
     accessor(bro.window, 'hotkeyRouting', () => __bro_native.window.hotkeyRouting, undefined);
 
-    // A PNG of what is on screen (docs/screen-capture.md): under DRM the frame
-    // KMS scans out (client windows + shell), elsewhere the app's composite.
-    // Returns the path written, or null (the reason is logged).
-    fn(bro.window, 'captureScreen', function captureScreen(path) {
+    // What is on screen (docs/screen-capture.md). With options, the desktop
+    // itself, every app's windows (host_screen_capture.cpp, the `screen`
+    // capability): a Promise of { x, y, width, height, display, backend,
+    // pixels, path }. With a path or nothing, the old synchronous PNG: under
+    // DRM the frame KMS scans out, elsewhere the app's composite; the path
+    // written, or null (the reason is logged).
+    const captureDesktop = bro.window._captureDesktop;
+    delete bro.window._captureDesktop;
+    fn(bro.window, 'captureScreen', function captureScreen(pathOrOptions) {
+        if (pathOrOptions !== null && typeof pathOrOptions === 'object') {
+            if (typeof captureDesktop !== 'function') {
+                const e = new Error('bro.window.captureScreen: desktop capture is not available in this realm');
+                e.code = 'ENOTSUP';
+                return Promise.reject(e);
+            }
+            return captureDesktop(pathOrOptions);
+        }
+        const path = pathOrOptions;
         const written = __bro_native.window.captureScreen(path === undefined || path === null ? '' : String(path));
         return written ? written : null;
     });

@@ -23,6 +23,7 @@
 #include "engine/window_host.h"
 #include "engine/engine_drm.h"
 #include "platform/window.h"
+#include "platform/screen_grab.h"
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
 #include "dom/scroll_absorber.h"
@@ -502,6 +503,14 @@ public:
     /// Elsewhere: the engine's own composite (screenshot()). False, with
     /// `why`, when there is nothing to read or the file cannot be written.
     bool captureScreen(const std::string& path, std::string* why = nullptr);
+    /// The desktop's pixels, every app's windows (bro.window.captureScreen
+    /// with options): under DRM the scanout (one display at 0,0), elsewhere
+    /// the OS's (platform/screen_grab.h). Rectangle and result in virtual
+    /// desktop pixels; width/height 0 is the whole desktop. `cursor` draws
+    /// the pointer in (not under DRM, whose cursor is a plane of its own).
+    platform::screen::Status grabDesktop(int x, int y, int width, int height, platform::screen::Grab& out,
+                                         std::string& why, bool cursor = false);
+    std::vector<platform::screen::Display> desktopDisplays(std::string* why = nullptr);
     /// The out-of-process triggers for captureScreen under DRM: SIGUSR2, or a
     /// request file in the runtime dir. Polled by the DRM frame loop.
     void pollScreenCaptureTriggers();

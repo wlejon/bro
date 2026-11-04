@@ -112,6 +112,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_worker_thread.cpp
     host_window_open.cpp
     host_window_message.cpp
+    host_screen_capture.cpp
     host_compartment.cpp
     host_global_sync.cpp
     host_membrane.cpp

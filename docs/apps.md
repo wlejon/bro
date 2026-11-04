@@ -197,6 +197,7 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 | `env` | `process.env` beyond the variables every app sees (below), changing the real environment, and (Linux) any process's `/proc/<pid>/environ` | ask |
 | `mpris` | the `bro.mpris` namespace: media players' state and controls, and publishing one | ask |
 | `wl`, `displays`, `clip`, `pulse`, `remote` | the `bro.<name>` namespace | ask |
+| `screen` | the desktop's pixels, other apps' windows included: `bro.window.captureScreen({...})` ([screen-capture.md](screen-capture.md)); the old `captureScreen(path)` of bro's own frame needs nothing | ask |
 | `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes`, `sys.journal`, `sys.disks` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`, and its `ioCounters` is the machine's disk and network counters) | ask |
 | `shell` | the desktop shell's role (input routing, the DRM compositor host; `Engine::isShellApp()`) | shell |
 | `compositor`, `seat`, `cred`, `portal` | the `bro.<name>` namespace | shell |
