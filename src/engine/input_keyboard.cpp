@@ -232,6 +232,25 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (platform::hasPrimaryMod(mod) &&
         (keycode == platform::kc::C || keycode == platform::kc::X || keycode == platform::kc::V)) {
 
+        // The page's keydown comes first, as in a browser: a listener that
+        // cancels it stops the copy / cut / paste. Shift+C and Shift+X are
+        // the page's own chords (only Shift+V still pastes, as plain text).
+        {
+            dom::Element* kdTarget = document_->activeElement();
+            if (!kdTarget) kdTarget = document_->body();
+            if (kdTarget) {
+                auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+                evt.setIsComposing(compositionActive());
+                dispatchEvent(kdTarget, evt);
+                if (evt.defaultPrevented()) {
+                    dropTextAfterKeyDown_ = true;
+                    return;
+                }
+            }
+            if (!document_) return;
+            if ((mod & platform::kmod::Shift) && keycode != platform::kc::V) return;
+        }
+
         auto* activeEl = document_->activeElement();
         dom::Element* target = activeEl ? activeEl : document_->body();
 
