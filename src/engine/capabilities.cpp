@@ -29,6 +29,7 @@ constexpr Capability kCatalogue[] = {
     {"sys.tray", K::Ask, "act as the desktop's system tray"},
     {"sys.processes", K::Ask, "list and signal processes"},
     {"sys.journal", K::Ask, "read the system journal, every service's logs"},
+    {"sys.disks", K::Ask, "mount, unmount and eject drives and read their health"},
     // --- the host's alone ---
     {"shell", K::Shell, "be the desktop shell (own the compositor's input and frames)"},
     {"compositor", K::Shell, "manage every window on the desktop"},
@@ -39,7 +40,7 @@ constexpr Capability kCatalogue[] = {
 };
 
 constexpr const char* kSysMembers[] = {
-    "power", "audio", "network", "bluetooth", "notifications", "tray", "processes", "journal",
+    "power", "audio", "network", "bluetooth", "notifications", "tray", "processes", "journal", "disks",
 };
 
 }  // namespace

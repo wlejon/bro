@@ -5,7 +5,7 @@
 
 /**
  * `bro.sys` provides desktop system daemon and hardware state integration across
- * 8 sub-namespaces:
+ * 9 sub-namespaces:
  * - `bro.sys.power`: Battery/AC state, power actions (suspend/reboot/powerOff), and inhibitors
  * - `bro.sys.audio`: PipeWire / PulseAudio device enumeration, volume, mute, and default routing
  * - `bro.sys.network`: NetworkManager / OS interfaces, Wi-Fi scanning/connecting, and VPN control
@@ -14,9 +14,10 @@
  * - `bro.sys.tray`: StatusNotifierWatcher / system tray host, item activation, and DBusMenu inspection
  * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases)
  * - `bro.sys.journal`: the systemd journal (Linux): structured queries, backward paging, live follow
+ * - `bro.sys.disks`: UDisks2 drives and block devices (Linux): mount, unmount, eject, power off, SMART
  *
  * Gated member by member (docs/apps.md, Permissions): each of `bro.sys.power`, `.audio`,
- * `.network`, `.bluetooth`, `.notifications`, `.tray`, `.processes` and `.journal` needs its own
+ * `.network`, `.bluetooth`, `.notifications`, `.tray`, `.processes`, `.journal` and `.disks` needs its own
  * capability, `sys.<member>` (`sys.processes` also covers the top-level `listProcesses` /
  * `killProcess`). A member the app declares is asked for at first touch; until granted it is
  * the unavailable stub (`available === false`, `reason`, every call throws), while the
@@ -299,3 +300,65 @@ const boots = await bro.sys.journal.boots();
 const units = await bro.sys.journal.values('_SYSTEMD_UNIT');
 
 bro.sys.journal.priorities;   // ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']
+
+// ============================================================================
+// 9. Disks (`bro.sys.disks`, Linux; capability sys.disks)
+// ============================================================================
+//
+// UDisks2 over D-Bus, never udisksctl or smartctl: the drives and block devices
+// the daemon sees, mount/unmount, eject and power off, and SMART health. polkit
+// decides who may act: the active local session usually may mount, unmount and
+// eject removable media; a call it refuses rejects with polkit's message (and
+// a polkit agent, where one runs, may ask the user first). Snapshots are
+// synchronous; actions and SMART reads return Promises. Off Linux, or without a
+// UDisks2 daemon, `available` is false and `reason` says why.
+//
+// Drive:
+//   { id (UDisks object path), vendor, model, serial, revision, wwn, size (bytes),
+//     connectionBus ('usb' | 'sdio' | 'ieee1394' | '' internal), media, rotationRate
+//     (rpm; 0 non-rotating, -1 unknown), removable, mediaRemovable, mediaAvailable,
+//     ejectable, canPowerOff, optical, seat, sortKey,
+//     smartKind ('nvme' | 'ata' | null), smartSupported }
+// Block:
+//   { id, device ('/dev/sda1'), preferredDevice, drive (Drive id or ''), size, readOnly,
+//     usage ('filesystem' | 'crypto' | 'raid' | 'other' | ''), type ('ext4', 'vfat', ...),
+//     label, uuid, hintSystem, hintIgnore, hintAuto, hintName, hintIcon,
+//     partition ({ number, table (Block id), type, name, uuid, offset } or null),
+//     partitionTable ('gpt' | 'dos' | ''), isFilesystem, mountPoints (string[]), mounted,
+//     loopBackingFile, cryptoBackingDevice }
+// Smart:
+//   { drive, kind, supported, enabled, updated (ms or null), failing,
+//     assessment ('good' | 'warning' | 'failing' | 'unknown'),
+//     temperatureC, powerOnHours, percentUsed (NVMe wear), availableSpare, spareThreshold,
+//     badSectors (ATA: UDisks' bad-sector count), powerCycles, unsafeShutdowns, mediaErrors,
+//     bytesRead, bytesWritten (each a number or null where the drive does not say),
+//     criticalWarnings (NVMe: 'spare', 'temperature', 'degraded', 'readonly', ...),
+//     selftestStatus, attributes: [{ id, name, value, worst, threshold, raw, unit, failing }] }
+
+const disks = bro.sys.disks;
+const { available, reason, drives, blocks } = disks.getState();
+disks.getDrives();                       // Drive[]
+disks.getBlocks();                       // Block[]
+disks.getDrive(drives[0].id);            // Drive or null
+const stick = disks.getBlock('/dev/sdb1');   // by device path or id; Block or null
+
+// Mount a filesystem; resolves with where it went (/run/media/<user>/<label>):
+const where = await disks.mount(stick.id, { options: 'ro' });   // { fstype, options } optional
+await disks.unmount(stick.id);                 // { force: true } for a lazy unmount
+// Eject the medium (optical, card readers) or power the drive off (USB): both
+// unmount the drive's mounted filesystems first.
+await disks.eject(stick.drive);
+await disks.powerOff(stick.drive);
+
+// SMART: NVMe health log or ATA attributes, read without privileges where the
+// daemon allows (it caches; `updated` says when it last read the drive).
+const health = await disks.smart(drives[0].id);
+console.log(health.assessment, health.temperatureC, health.powerOnHours, health.percentUsed);
+
+// Changes, as UDisks reports them: driveAdded / driveChanged (Drive), driveRemoved ({ id }),
+// blockAdded / blockChanged (Block), blockRemoved ({ id }), mounted / unmounted /
+// mountChanged ({ block, mountPoints, previous }), availability ({ available }); and
+// 'change' after each one: { type, drive | block | id | available }.
+const onChange = (c) => console.log(c.type);
+disks.on('change', onChange);
+disks.off('change', onChange);
