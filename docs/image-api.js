@@ -437,8 +437,12 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 //         first sample.
 //   HEIC  the system's decoder only — bro carries no HEVC decoder. Windows:
 //         WIC, which needs the HEVC Video Extensions from the Microsoft Store
-//         (and the HEIF Image Extensions); macOS: ImageIO; Linux: none.
-//         `decodeSupport` says which, and why not.
+//         (and the HEIF Image Extensions); macOS: ImageIO; Linux: the
+//         system's libheif (libheif.so.1, with its libde265 HEVC decoder),
+//         opened at run time when it is installed — never linked or
+//         shipped; BROIMAGE_LIBHEIF names another library to open.
+//         `decodeSupport` says which, and why not (on Linux without
+//         libheif: install it).
 //
 // HDR: a PQ (transfer 16) or HLG (18) image is tone-mapped to SDR — linear
 // light by the PQ EOTF (or HLG's inverse OETF plus a 1000-nit OOTF), SDR
@@ -459,7 +463,7 @@ bro.image.alloc = function(w, h, channels, dtype) {};
 // output. Not read: image sequences past their first frame, depth and other
 // non-alpha auxiliary images, derived `iovl` overlays, gain maps (the base
 // SDR image shows), and HEVC tiles inside a grid where the system decoder
-// takes the file whole (the OS decodes the whole HEIC, grids included).
+// takes the file whole (the system decodes the whole HEIC, grids included).
 
 /**
  * Whether this bro can decode a type: 'probably' or ''. Takes a MIME type
@@ -475,8 +479,9 @@ bro.image.canDecode = function(type) {};
 /**
  * `canDecode` with the reason: `{supported, reason}`. `reason` is '' when
  * supported, else what a decode of that type will report, e.g. "HEIC needs
- * the HEVC Video Extensions from the Microsoft Store (...)" or "HEIC is not
- * supported on this platform: ...".
+ * the HEVC Video Extensions from the Microsoft Store (...)" on Windows or
+ * "HEIC needs libheif (libheif.so.1), which is not installed: install
+ * libheif from the system's packages (...)" on Linux.
  * @param {string} type MIME type or extension
  * @returns {{supported:boolean, reason:string}}
  */

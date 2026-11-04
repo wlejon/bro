@@ -1,12 +1,15 @@
-// HEIC decodes through the operating system's decoder only — bro carries no
-// HEVC decoder: WIC on Windows (with the Microsoft Store's HEVC Video
-// Extensions), ImageIO on macOS, nothing on Linux. broimage's own HEIF
-// reader still sizes the image and reads its orientation everywhere, and a
-// decode that cannot happen says why.
+// HEIC decodes through the system's decoder only — bro carries no HEVC
+// decoder: WIC on Windows (with the Microsoft Store's HEVC Video
+// Extensions), ImageIO on macOS, the system's libheif on Linux (opened at
+// run time when installed). broimage's own HEIF reader still sizes the
+// image and reads its orientation everywhere, and a decode that cannot
+// happen says why; the test skips there.
 //
-// The fixture (tests/image/fixtures/heic_quadrants.heic) was made by WIC's
-// HEIF encoder (broimage's test_heif_os, BROIMAGE_HEIC_FIXTURE_OUT): 64x48,
-// red top-left, green bottom-left, blue on the right.
+// The fixtures (tests/image/fixtures): heic_quadrants.heic was made by WIC's
+// HEIF encoder (broimage's test_heif_os, BROIMAGE_HEIC_FIXTURE_OUT),
+// heic_thumb.heic by libheif's heif-enc (-t 16, so a 16x12 thumbnail item,
+// coded 64x64 with a clean aperture): both 64x48, red top-left, green
+// bottom-left, blue on the right.
 
 import { readPrimary, writeHeif, irot, imir } from './heif_build.js';
 
@@ -40,7 +43,7 @@ if (!support.supported) {
   const img = bro.image.decodeOriented(heic);
   assert(img.width === 0 && img.error === support.reason, 'a HEIC decode fails with that reason: ' + img.error);
   if (process.platform === 'win32') assert(/HEVC Video Extensions/.test(support.reason), 'Windows names the Store extension');
-  if (process.platform === 'linux') assert(/not supported on this platform/.test(support.reason), 'Linux says unsupported');
+  if (process.platform === 'linux') assert(/install libheif/.test(support.reason), 'Linux says to install libheif: ' + support.reason);
   skipTest('no HEIC decoder here: ' + support.reason);
 } else {
   const img = bro.image.decodeOriented(heic);
@@ -54,6 +57,19 @@ if (!support.supported) {
   assert(up.width === 48 && up.height === 64, 'the turned HEIC decodes upright: ' + up.width + 'x' + up.height);
   assert(near(px(up, 36, 48), [255, 0, 0], 32) && near(px(up, 12, 48), [0, 255, 0], 32) &&
          near(px(up, 24, 16), [0, 0, 255], 32), 'upright HEIC colours ' + show(px(up, 36, 48)) + show(px(up, 12, 48)));
+
+  // A box no bigger than the thumbnail item is served from it, as a photo
+  // browser's grid asks; a bigger one decodes the image (its clean aperture
+  // taken, 64x48 of the coded 64x64).
+  const thumbFile = new Uint8Array(fs.readFileSync(path.resolve('tests/image/fixtures/heic_thumb.heic')));
+  const small = bro.image.decodeScaled(thumbFile, { width: 16, height: 16 });
+  assert(small.path === 'heif-thumbnail' && small.width === 16 && small.height === 12,
+         'a 16 px box uses the thumbnail item: ' + JSON.stringify({ path: small.path, w: small.width, h: small.height, e: small.error }));
+  assert(near(px(small, 4, 3), [255, 0, 0], 48) && near(px(small, 12, 6), [0, 0, 255], 48), 'thumbnail colours ' + show(px(small, 4, 3)));
+  const big = bro.image.decodeScaled(thumbFile, { width: 64, height: 64 });
+  assert(big.path === 'full' && big.sourceWidth === 64 && big.sourceHeight === 48 && big.width === 64 && big.height === 48,
+         'a 64 px box decodes the image: ' + JSON.stringify({ path: big.path, w: big.width, h: big.height, e: big.error }));
+  assert(near(px(big, 16, 12), [255, 0, 0], 32) && near(px(big, 16, 36), [0, 255, 0], 32), 'full decode colours');
 
   // <img>
   const dir = path.join(os.tmpdir(), 'bro_img_heic_' + process.pid + '_' + Date.now());
