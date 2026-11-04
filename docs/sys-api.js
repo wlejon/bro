@@ -12,7 +12,8 @@
  * - `bro.sys.bluetooth`: BlueZ adapter control, discovery, pairing, and device connection
  * - `bro.sys.notifications`: Desktop notification daemon (`org.freedesktop.Notifications`), history, and DND
  * - `bro.sys.tray`: StatusNotifierWatcher / system tray host, item activation, and DBusMenu inspection
- * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases)
+ * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases),
+ *   and the machine's disk and network byte counters (`ioCounters`, every platform)
  * - `bro.sys.journal`: the systemd journal (Linux): structured queries, backward paging, live follow
  * - `bro.sys.disks`: UDisks2 drives and block devices (Linux): mount, unmount, eject, power off, SMART
  *
@@ -241,6 +242,52 @@ for (const p of procs.slice(0, 5)) {
 
 // Send a signal to a process (default SIGTERM = 15):
 // bro.sys.processes.kill(pid, 15); // or bro.sys.killProcess(pid, 15)
+
+// bro.sys.processes.ioCounters()
+//   → { timestamp,                          ms on a monotonic clock, when read
+//       disks: [{ name,                     'sda' 'nvme0n1' | 'PhysicalDrive0' | 'disk0'
+//                 readBytes, writeBytes,
+//                 reads, writes }],         completed operations
+//       interfaces: [{ name,                'eth0' | 'Ethernet' 'Wi-Fi' | 'en0'
+//                      loopback,
+//                      rxBytes, txBytes,
+//                      rxPackets, txPackets }] }
+//
+//   The machine's disk and network counters, cumulative since boot (or since
+//   the device appeared): a rate is the difference of two snapshots over the
+//   difference of their timestamps. Machine-wide, not per process; it sits
+//   under sys.processes as the activity monitor's other half. No elevation on
+//   any platform. Synchronous and cheap (a few reads; poll at 1 Hz). Every
+//   platform, unlike bro.sys.disks (UDisks2, Linux), which is the drives'
+//   identity and actions rather than their traffic.
+//
+//   Disks are whole physical disks, never partitions:
+//     Linux    /proc/diskstats, the devices in /sys/block with a `device` link
+//              (so no loop, dm-*, zram or md); 512-byte sectors
+//     Windows  IOCTL_DISK_PERFORMANCE on each \\.\PhysicalDriveN
+//     macOS    each IOBlockStorageDriver's Statistics, named by its BSD name
+//   Interfaces:
+//     Linux    /proc/net/dev: every interface, up or not (loopback from
+//              /sys/class/net/<if>/type)
+//     Windows  GetIfTable2: interfaces that are up, filter drivers left out;
+//              named by their alias (Hyper-V's vSwitch/vEthernet pairs both
+//              appear, as a bridge and its ports do on Linux)
+//     macOS    interfaces that are up, exact 64-bit counters from the
+//              interface MIB
+//   Add up the interfaces that are not loopback for "network throughput";
+//   virtual adapters (bridges, VPNs, vEthernet) can count a packet twice.
+
+let last = bro.sys.processes.ioCounters();
+setInterval(() => {
+    const now = bro.sys.processes.ioCounters();
+    const dt = (now.timestamp - last.timestamp) / 1000;
+    const sum = (list, key, keep = () => true) => list.filter(keep).reduce((n, x) => n + x[key], 0);
+    const notLoop = (n) => !n.loopback;
+    const readBps = (sum(now.disks, 'readBytes') - sum(last.disks, 'readBytes')) / dt;
+    const rxBps = (sum(now.interfaces, 'rxBytes', notLoop) - sum(last.interfaces, 'rxBytes', notLoop)) / dt;
+    console.log(`disk read ${readBps.toFixed(0)} B/s, network in ${rxBps.toFixed(0)} B/s`);
+    last = now;
+}, 1000);
 
 // ============================================================================
 // 8. The systemd journal (`bro.sys.journal`, Linux; capability sys.journal)
