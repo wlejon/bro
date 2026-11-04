@@ -5,7 +5,7 @@
 
 /**
  * `bro.sys` provides desktop system daemon and hardware state integration across
- * 7 sub-namespaces:
+ * 8 sub-namespaces:
  * - `bro.sys.power`: Battery/AC state, power actions (suspend/reboot/powerOff), and inhibitors
  * - `bro.sys.audio`: PipeWire / PulseAudio device enumeration, volume, mute, and default routing
  * - `bro.sys.network`: NetworkManager / OS interfaces, Wi-Fi scanning/connecting, and VPN control
@@ -13,9 +13,10 @@
  * - `bro.sys.notifications`: Desktop notification daemon (`org.freedesktop.Notifications`), history, and DND
  * - `bro.sys.tray`: StatusNotifierWatcher / system tray host, item activation, and DBusMenu inspection
  * - `bro.sys.processes`: Process table inspection and signaling (`list`, `kill`, plus top-level aliases)
+ * - `bro.sys.journal`: the systemd journal (Linux): structured queries, backward paging, live follow
  *
  * Gated member by member (docs/apps.md, Permissions): each of `bro.sys.power`, `.audio`,
- * `.network`, `.bluetooth`, `.notifications`, `.tray` and `.processes` needs its own
+ * `.network`, `.bluetooth`, `.notifications`, `.tray`, `.processes` and `.journal` needs its own
  * capability, `sys.<member>` (`sys.processes` also covers the top-level `listProcesses` /
  * `killProcess`). A member the app declares is asked for at first touch; until granted it is
  * the unavailable stub (`available === false`, `reason`, every call throws), while the
@@ -239,3 +240,62 @@ for (const p of procs.slice(0, 5)) {
 
 // Send a signal to a process (default SIGTERM = 15):
 // bro.sys.processes.kill(pid, 15); // or bro.sys.killProcess(pid, 15)
+
+// ============================================================================
+// 8. The systemd journal (`bro.sys.journal`, Linux; capability sys.journal)
+// ============================================================================
+//
+// Read through libsystemd's sd_journal, never journalctl: the system journal
+// and the user's own, as far as the user may read them (the systemd-journal,
+// adm or wheel group sees every service). Every query runs on a thread of its
+// own and returns a Promise; a follow runs on its own thread and calls back on
+// the page's thread. Off Linux `available` is false and `reason` says why.
+//
+// JournalQueryOptions (every key optional):
+//   unit / units   'sshd.service' or an array: records of any of these system or user units
+//   priority       0..7 or 'emerg' 'alert' 'crit' 'err' 'warning' 'notice' 'info' 'debug':
+//                  that priority and more severe
+//   boot           'current' / 0 this boot, -1 / -2 ... the boots before it, or a boot id
+//   since, until   ms since the epoch, or a Date
+//   match          { FIELD: value | [values] }: one field's values are alternatives,
+//                  different fields must all hold ({ _COMM: 'sshd', _UID: 1000 })
+//   text           case-insensitive substring of MESSAGE
+//   before         a cursor: only records older than it (the next page back)
+//   after          follow only: start after this cursor (else new records only)
+//   limit          records per page (default 200)
+//   allFields      add `fields`, every field of each record
+//
+// JournalEntry:
+//   { cursor, time (ms since the epoch), realtimeUs, monotonicUs, bootId,
+//     priority (0..7 or null), message, unit, identifier (SYSLOG_IDENTIFIER or _COMM),
+//     pid, hostname, transport ('journal' | 'syslog' | 'kernel' | 'stdout' | ...),
+//     fields? ({ FIELD: value }, with allFields) }
+
+// The newest 100 warnings and worse of this boot, oldest first:
+const page = await bro.sys.journal.query({ boot: 'current', priority: 'warning', limit: 100 });
+// page = { entries: JournalEntry[], before: cursor | null, more: boolean }
+for (const e of page.entries) console.log(new Date(e.time), e.unit || e.identifier, e.message);
+
+// The page before it (scrolling back): pass `before`.
+if (page.more) {
+    const older = await bro.sys.journal.query({ boot: 'current', priority: 'warning', limit: 100,
+                                                before: page.before });
+}
+
+// Live, from the newest record already shown, so nothing is missed between the
+// query and the follow:
+const newest = page.entries.at(-1);
+const follow = bro.sys.journal.follow(
+    { boot: 'current', priority: 'warning', after: newest ? newest.cursor : undefined,
+      onError: (err) => console.log('follow ended:', err.message) },
+    (entries) => { for (const e of entries) console.log(e.message); });   // batches, oldest first
+// follow = { id, close() }
+follow.close();
+
+// The boots in the journal, oldest first: [{ id, offset (0 = newest), first, last (ms) }]
+const boots = await bro.sys.journal.boots();
+
+// The distinct values of a field, sorted: the units that logged, say.
+const units = await bro.sys.journal.values('_SYSTEMD_UNIT');
+
+bro.sys.journal.priorities;   // ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']

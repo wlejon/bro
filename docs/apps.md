@@ -197,7 +197,7 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 | `env` | `process.env` beyond the variables every app sees (below), changing the real environment, and (Linux) any process's `/proc/<pid>/environ` | ask |
 | `mpris` | the `bro.mpris` namespace: media players' state and controls, and publishing one | ask |
 | `wl`, `displays`, `clip`, `pulse`, `remote` | the `bro.<name>` namespace | ask |
-| `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`) | ask |
+| `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes`, `sys.journal` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`) | ask |
 | `shell` | the desktop shell's role (input routing, the DRM compositor host; `Engine::isShellApp()`) | shell |
 | `compositor`, `seat`, `cred`, `portal` | the `bro.<name>` namespace | shell |
 | `permissions` | `bro.permissions`, every app's grants ([permissions-api.js](permissions-api.js)) | shell |

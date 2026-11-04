@@ -195,7 +195,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `thumb-api.js` | `bro.thumb`: FreeDesktop thumbnailer cache and generator with dimensions and format sniffing |
 | `seat-api.js` | `bro.seat`: session state, VT switching, lock screen events, and idle inhibition |
 | `cred-api.js` | `bro.cred`: lock screen authentication, PAM, biometrics (fprintd), Secret Service, and polkit agent |
-| `sys-api.js` | `bro.sys`: power/battery, PipeWire audio, NetworkManager Wi-Fi/Ethernet, Bluetooth, notifications, and StatusNotifierItem tray |
+| `sys-api.js` | `bro.sys`: power/battery, PipeWire audio, NetworkManager Wi-Fi/Ethernet, Bluetooth, notifications, StatusNotifierItem tray, processes, and the systemd journal (`journal`: query/page/follow, promises) |
 | `displays-api.js` | `bro.displays`: display snapshot, test-then-revert configuration, night light, and backlight brightness |
 | `portal-api.js` | `bro.portal`: XDG Desktop Portal backends for file chooser, screenshot, screencast, and open URI |
 | `compositor-api.js` | `bro.compositor`: window-management policy, workspace switching, tiling/floating layout modes, and event hooks |
