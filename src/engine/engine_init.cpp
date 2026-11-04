@@ -403,6 +403,17 @@ void Engine::construct(const EngineConfig& config) {
         gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
         windowDoneAt = sinceStartMs();
     } else if (displayMode_ == DisplayMode::Windowed) {
+        // Preload the Vulkan loader / ICD and create VkInstance on a worker
+        // thread while the main thread creates the window and begins compiling
+        // the page's initial script.
+        render::VulkanContextConfig vkCfg;
+        vkCfg.headless = false;
+        vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
+        gpuInit = std::thread([this, &gpuMs]() {
+            const double t0 = util::currentTimeMs();
+            vulkanContext_->preloadInstance();
+            gpuMs += util::currentTimeMs() - t0;
+        });
         {
             window_ = platform::createWindow(primaryWindowConfig(config, gfx, platform::GraphicsBackend::Vulkan));
 
@@ -437,6 +448,7 @@ void Engine::construct(const EngineConfig& config) {
                 LOG_WARN("bro.json clickThrough: this window system cannot pass input through a window");
         }
         gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
+        windowDoneAt = sinceStartMs();
     } else if (displayMode_ == DisplayMode::Drm) {
         initDrm(config);
     } else {
@@ -461,13 +473,11 @@ void Engine::construct(const EngineConfig& config) {
     } else if (displayMode_ == DisplayMode::Windowed) {
         // The device is chosen against the window's surface (VulkanContext::
         // init), and the surface stays on this thread (a Cocoa view must be
-        // made on the main thread), so the device comes up here while the
-        // page's compile runs on its own.
+        // made on the main thread), while VkInstance creation has already been
+        // preloaded on gpuInit alongside window creation and the page compile.
+        if (gpuInit.joinable()) gpuInit.join();
         const double gpuStart = util::currentTimeMs();
         {
-            render::VulkanContextConfig vkCfg;
-            vkCfg.headless = false;
-            vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
             if (!vulkanContext_->init(window_.get())) {
                 throw std::runtime_error("Windowed Vulkan context initialization failed");
             }
@@ -488,7 +498,7 @@ void Engine::construct(const EngineConfig& config) {
             auto skia = std::make_unique<render::SkiaRenderer>();
             skia->setGpu(skiaGpu);
             renderer_ = std::move(skia);
-            gpuMs = util::currentTimeMs() - gpuStart;
+            gpuMs += util::currentTimeMs() - gpuStart;
             gpuReadyAt = sinceStartMs();
         }
     }
@@ -496,12 +506,9 @@ void Engine::construct(const EngineConfig& config) {
         gfxTiming.gpuMs = gpuMs;
         gfxTiming.readyAtMs = gpuReadyAt;
         // The window and the device only, not the audio and the page's host
-        // globals that run between them (beginPageCompile): headless, until
-        // the later of the two is done; windowed, one after the other.
-        if (displayMode_ == DisplayMode::Headless)
-            gfxTiming.totalMs = std::max(windowDoneAt, gpuReadyAt) - gfxTiming.startAtMs;
-        else
-            gfxTiming.totalMs = gfxTiming.windowMs + std::max(gpuMs, 0.0);
+        // globals that run between them (beginPageCompile): both headless and
+        // windowed overlap GPU bringup with window creation.
+        gfxTiming.totalMs = std::max(windowDoneAt, gpuReadyAt) - gfxTiming.startAtMs;
         noteGraphicsStartup(gfxTiming);
     }
     deviceScale_.configured = config.deviceScaleFactor;

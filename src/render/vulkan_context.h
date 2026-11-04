@@ -76,6 +76,11 @@ public:
     VulkanContext(const VulkanContext&) = delete;
     VulkanContext& operator=(const VulkanContext&) = delete;
 
+    /// Preload the Vulkan loader and create the VkInstance (plus debug
+    /// messenger when validation is enabled) on a background thread while the
+    /// main thread creates the window. init() reuses the preloaded instance.
+    bool preloadInstance();
+
     /// Create the instance, pick a physical device, create the logical device,
     /// the queue owner and the frame ring. With `presentTarget` (windowed), the
     /// chosen device and present queue family must be able to present to a
@@ -244,7 +249,7 @@ public:
     bool canPresentTo(VkSurfaceKHR surface) const;
 
 private:
-    bool createInstance();
+    bool createInstance(bool preloading = false);
     bool setupDebugMessenger();
     // displayLuid: the adapter driving the window's display, preferred; null
     // where unknown (headless, or a window system that does not say).

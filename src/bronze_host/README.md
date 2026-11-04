@@ -162,7 +162,7 @@ keys, search). No
 - MutationObserver adds `unobserve(target)`; `addedNodes` / `removedNodes`
   hold at most one node; comment `data` changes are not observed.
 - ResizeObserver reports once per frame.
-- `DOMParser` documents are never freed. Appending a parsed node adopts it.
+- `DOMParser` documents are tracked in `HostRealm::parsedDocuments` and freed by the detached-DOM sweep (`host_node_sweep.cpp`) once neither their document wrapper nor any parsed node in the tree remains reachable from JS. Appending a parsed node into the main document adopts it out of the parsed document first.
 - `VideoEncoder` / `GifEncoder`: no `VideoFrame`; `addCanvasFrame` takes a 2D
   canvas only (use `addViewportFrame` for WebGL/scene); call `finish()` or the
   file has no trailer.

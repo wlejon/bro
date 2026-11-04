@@ -102,14 +102,49 @@ VulkanContext::~VulkanContext() {
     cleanup();
 }
 
-bool VulkanContext::init(platform::Window* presentTarget) {
-    if (!createInstance()) {
-        LOG_ERROR("Vulkan: Failed to create VkInstance");
+bool VulkanContext::preloadInstance() {
+    if (instance_ != VK_NULL_HANDLE) return true;
+    if (!createInstance(/*preloading=*/true)) {
         return false;
     }
-
     if (config_.enableValidation) {
         setupDebugMessenger();
+    }
+    return true;
+}
+
+bool VulkanContext::init(platform::Window* presentTarget) {
+    if (instance_ != VK_NULL_HANDLE && !config_.headless) {
+        // Verify the preloaded instance covers every surface extension the
+        // window system ended up choosing; recreate synchronously if not.
+        const auto required = platform::windowSystem().vulkanInstanceExtensions();
+        bool allPresent = !required.empty();
+        for (const auto& req : required) {
+            if (std::find(instanceExtensions_.begin(), instanceExtensions_.end(), req) ==
+                instanceExtensions_.end()) {
+                allPresent = false;
+                break;
+            }
+        }
+        if (!allPresent) {
+            if (debugMessenger_ != VK_NULL_HANDLE) {
+                destroyDebugUtilsMessenger(instance_, debugMessenger_, nullptr);
+                debugMessenger_ = VK_NULL_HANDLE;
+            }
+            vkDestroyInstance(instance_, nullptr);
+            instance_ = VK_NULL_HANDLE;
+            instanceExtensions_.clear();
+        }
+    }
+
+    if (instance_ == VK_NULL_HANDLE) {
+        if (!createInstance(/*preloading=*/false)) {
+            LOG_ERROR("Vulkan: Failed to create VkInstance");
+            return false;
+        }
+        if (config_.enableValidation) {
+            setupDebugMessenger();
+        }
     }
 
     // Choose the device against a surface on the window it will present to,
@@ -224,7 +259,7 @@ void VulkanContext::cleanup() {
     }
 }
 
-bool VulkanContext::createInstance() {
+bool VulkanContext::createInstance(bool preloading) {
     std::vector<const char*> validationLayers;
     if (config_.enableValidation) {
         validationLayers = getAvailableValidationLayers();
@@ -264,9 +299,28 @@ bool VulkanContext::createInstance() {
     auto hasExt = [&](const char* name) { return hasExtension(availExts, name); };
 
     // Windowed: the surface extensions the window system's windows need.
+    // When preloading alongside window creation on a worker thread, enable all
+    // WSI surface extensions the loader offers so we do not touch SDL video
+    // state while the main thread is initializing it.
     std::vector<std::string> surfaceExtensions;
     if (!config_.headless) {
-        surfaceExtensions = platform::windowSystem().vulkanInstanceExtensions();
+        if (preloading) {
+            static constexpr const char* kCandidateSurfaceExts[] = {
+                "VK_KHR_surface",
+                "VK_KHR_wayland_surface",
+                "VK_KHR_xcb_surface",
+                "VK_KHR_xlib_surface",
+                "VK_EXT_headless_surface",
+                "VK_KHR_win32_surface",
+                "VK_EXT_metal_surface",
+                "VK_MVK_macos_surface",
+            };
+            for (const char* cand : kCandidateSurfaceExts) {
+                if (hasExt(cand)) surfaceExtensions.emplace_back(cand);
+            }
+        } else {
+            surfaceExtensions = platform::windowSystem().vulkanInstanceExtensions();
+        }
         if (surfaceExtensions.empty()) {
             LOG_ERROR("Vulkan: the window system named no surface extensions");
             return false;
