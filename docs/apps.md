@@ -180,6 +180,36 @@ See [app-api.js](app-api.js).
 `bro-headless` claims the channel only with `--single-instance`, so parallel
 test runs of one app never hand off to each other.
 
+## Scheduled launches
+
+`bro.app.schedule(id, when, {args, wake})` has the OS start the app at a
+time, closed or not and across reboots ([app-api.js](app-api.js)); that is
+how an alarm rings with its app closed. The OS runs
+
+```
+<executable> --scheduled <name> [<app folder>] <args...>
+```
+
+where the executable is the app's own when it was installed with one, else
+the stock `bro` with the app's folder (so a folder app that moves or is
+deleted no longer launches). `--scheduled` is bro's: the run deletes the OS
+entry and bro's record of it before anything else, so each launch happens
+once, then runs as any launch does with `args` (a running single instance
+gets them as an `instance` event); `bro.app.scheduledLaunch` names it.
+
+| OS | The entry | Missed while off or asleep | `wake` |
+|---|---|---|---|
+| Windows | a Task Scheduler task `bro-<id>-<launch>-<hash>` in the root folder, the user's interactive token (runs while they are logged on, no elevation) | runs when the machine is back | wakes it |
+| Linux | `~/.config/systemd/user/bro-....timer` + `.service`, enabled and started over D-Bus; the service carries the session's display variables from scheduling time | `Persistent=true`: runs at the next login | `WakeSystem=` |
+| macOS | `~/Library/LaunchAgents/bro-....plist`, booted into the GUI domain; whole minutes (at `when` or up to a minute after) | runs on wake | no |
+
+bro keeps a record of each beside its other state (`<user data>/schedule/`,
+`<BRO_APP_HOME>/schedule` in a scratch profile), which `bro.app.scheduled()`
+lists; an entry deleted with the OS's own tools drops out of it.
+Scheduling needs the `schedule` capability. `bro-headless` records the
+launches and reaches no OS (as `bro.app.open` starts nothing) unless
+`BRO_SCHEDULE_OS=1`, and then its launches run `bro-headless` on the app.
+
 ## Permissions
 
 An app reaches outside itself only through capabilities granted to it, one
@@ -197,6 +227,7 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 | `env` | `process.env` beyond the variables every app sees (below), changing the real environment, and (Linux) any process's `/proc/<pid>/environ` | ask |
 | `mpris` | the `bro.mpris` namespace: media players' state and controls, and publishing one | ask |
 | `wl`, `displays`, `clip`, `pulse`, `remote` | the `bro.<name>` namespace | ask |
+| `schedule` | `bro.app.schedule`: the OS starting the app at a time ([Scheduled launches](#scheduled-launches)) | ask |
 | `screen` | the desktop's pixels, other apps' windows included: `bro.window.captureScreen({...})` ([screen-capture.md](screen-capture.md)); the old `captureScreen(path)` of bro's own frame needs nothing | ask |
 | `sys.power`, `sys.audio`, `sys.network`, `sys.bluetooth`, `sys.notifications`, `sys.tray`, `sys.processes`, `sys.journal`, `sys.disks` | that member of `bro.sys` (`sys.processes` also `bro.sys.listProcesses`/`killProcess`, and its `ioCounters` is the machine's disk and network counters) | ask |
 | `shell` | the desktop shell's role (input routing, the DRM compositor host; `Engine::isShellApp()`) | shell |

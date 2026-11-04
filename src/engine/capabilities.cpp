@@ -22,6 +22,7 @@ constexpr Capability kCatalogue[] = {
     {"pulse", K::Ask, "change audio routing and volumes"},
     {"remote", K::Ask, "share this screen with a remote viewer and take its input"},
     {"screen", K::Ask, "see everything on your screen, other apps' windows included"},
+    {"schedule", K::Ask, "start itself at times it chooses, while it is closed and after a restart"},
     {"sys.power", K::Ask, "read power state and suspend, reboot or power off"},
     {"sys.audio", K::Ask, "change system audio devices and volumes"},
     {"sys.network", K::Ask, "change network connections"},
@@ -60,9 +61,10 @@ std::string capabilityForNamespace(std::string_view ns) {
     // where each is exercised), never as one bro.<name> object (env is
     // process.env and /proc's environ files). bro.mic is
     // one of mic's surfaces, gated at the capture itself. screen is
-    // bro.window.captureScreen's desktop capture, gated in that call.
+    // bro.window.captureScreen's desktop capture and schedule
+    // bro.app.schedule, each gated in that call.
     if (ns == "shell" || ns == "files" || ns == "net" || ns == "spawn" || ns == "mic" || ns == "env" ||
-        ns == "screen")
+        ns == "screen" || ns == "schedule")
         return {};
     const Capability* c = findCapability(ns);
     return c ? std::string(c->name) : std::string();

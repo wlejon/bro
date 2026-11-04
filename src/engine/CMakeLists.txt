@@ -72,6 +72,7 @@ add_library(bro_engine STATIC
     app_install.cpp
     app_manifest.cpp
     app_runtime.cpp
+    app_schedule.cpp
     config_loader.cpp
     capabilities.cpp
     grant_store.cpp

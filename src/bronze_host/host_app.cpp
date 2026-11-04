@@ -12,6 +12,8 @@
 //   bro.app.spawn(args, {newInstance})      start another process of this app
 //   bro.app.open(id, args, {newInstance})   start another app, found by id
 //   bro.app.find(id)                        where open(id) would find it
+//   bro.app.schedule(id, when, {args,wake}) the OS starts the app then (engine/app_schedule.h)
+//   bro.app.unschedule(id) / scheduled() / scheduledLaunch
 //   instance events                         js/bro_core.js, over _setInstanceDispatcher
 //
 // Everything here is the same for an app.dll and a page compiled at boot.
@@ -23,6 +25,7 @@
 #include "bronze_host/host_values.h"
 #include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/app_schedule.h"
 #include "engine/capabilities.h"
 #include "engine/config_loader.h"
 #include "engine/engine.h"
@@ -32,6 +35,8 @@
 #include "util/log.h"
 #include "util/process_spawn.h"
 
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -269,6 +274,23 @@ Value appOpenValue(const AppOpen& o) {
     }
     b.set("cwd", ev::fromUtf8(o.cwd));
     b.set("spawned", ev::fromBool(o.spawned));
+    return b.get();
+}
+
+Value scheduledValue(const engine::ScheduledLaunch& s) {
+    ObjectBuilder b;
+    b.set("id", ev::fromUtf8(s.id));
+    b.set("when", ev::fromDouble(static_cast<double>(s.whenMs)));
+    {
+        ev::Persistent v(strings(s.args));
+        b.set("args", v.get());
+    }
+    b.set("wake", ev::fromBool(s.wake));
+    {
+        ev::Persistent v(strings(s.command));
+        b.set("command", v.get());
+    }
+    b.set("backend", ev::fromUtf8(engine::scheduleBackend()));
     return b.get();
 }
 
@@ -589,6 +611,106 @@ Value makeBroAppValue() {
         ev::resolvePromise(promise.get(), result.get());
         return promise.get();
     });
+
+    // ---- scheduled launches (engine/app_schedule.h) ----------------------
+
+    // schedule(id, when, {args, wake}) -> Promise<{ id, when, args, wake,
+    // command, backend }>: the OS starts this app at `when` (a Date, ms since
+    // the epoch, or a date string), running or not, after a reboot too.
+    // `schedule` is the capability; the launch reaches the app as a launch
+    // with `args` (an `instance` event when a single instance is running).
+    o.def("schedule", 3, [](Value, std::span<const Value> a) -> Value {
+        ev::Persistent promise(ev::createPromise());
+        auto reject = [&](const std::string& msg, const char* code) -> Value {
+            ev::Persistent err(makeErrorValue("bro.app.schedule: " + msg));
+            ev::Persistent c(ev::fromUtf8(code));
+            if (ev::isObject(err.get())) ev::setProperty(err.get(), "code", c.get());
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        };
+        if (inChildCompartment()) return reject("only the app's top-level page schedules launches", "EPERM");
+        const std::string id = hasArg(a, 0) && ev::isString(a[0]) ? ev::toUtf8(a[0]) : std::string();
+        if (!engine::isValidScheduleId(id))
+            return reject("the id must be 1-64 letters, digits, '.', '-' or '_'", "EINVAL");
+        double when = std::nan("");
+        if (hasArg(a, 1)) {
+            ev::Persistent w(a[1]);
+            if (ev::isNumber(w.get())) {
+                when = ev::toDouble(w.get());
+            } else {
+                // A Date (anything with getTime), or a string a Date reads.
+                ev::Persistent date(w.get());
+                if (ev::isString(w.get())) {
+                    auto ctor = ev::globalValue("Date");
+                    if (ctor.found) {
+                        ev::Persistent c(ctor.value);
+                        const Value arg = w.get();
+                        auto r = ev::construct(c.get(), std::span<const Value>(&arg, 1));
+                        if (!r.thrown) date.set(r.value);
+                    }
+                }
+                if (ev::isObject(date.get())) {
+                    ev::Persistent getTime(ev::getProperty(date.get(), "getTime"));
+                    if (ev::isFunction(getTime.get())) {
+                        auto r = ev::call(getTime.get(), date.get(), {});
+                        if (!r.thrown && ev::isNumber(r.value)) when = ev::toDouble(r.value);
+                    }
+                }
+            }
+        }
+        if (!std::isfinite(when)) return reject("`when` must be a Date, a time in ms or a date string", "EINVAL");
+        const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   std::chrono::system_clock::now().time_since_epoch())
+                                                   .count());
+        if (when < now - 1000) return reject("`when` is in the past", "EINVAL");
+        std::vector<std::string> args;
+        bool wake = false;
+        if (hasArg(a, 2) && ev::isObject(a[2])) {
+            ev::Persistent opts(a[2]);
+            ev::Persistent av(ev::getProperty(opts.get(), "args"));
+            if (!ev::isUndefined(av.get())) args = readStrings(av.get());
+            wake = ev::toBool(ev::getProperty(opts.get(), "wake"));
+        }
+        if (std::string refused = engine::appPermissions().use("schedule", "bro.app.schedule(" + id + ")");
+            !refused.empty())
+            return reject(refused, "EACCES");
+
+        const engine::AppRuntimeInfo& app = compartmentApp();
+        std::vector<std::string> launcher;
+        auto* eng = hostEngine();
+        if (eng && eng->displayMode() == engine::DisplayMode::Headless) {
+            // A headless run's real launches (BRO_SCHEDULE_OS=1) are headless too.
+            launcher = {native(exePath()), native(app.dir), "--"};
+        } else {
+            launcher = launchCommand(app.id, native(app.dir), false, {});
+        }
+        engine::ScheduledLaunch s;
+        std::string why;
+        if (!engine::scheduleAppLaunch(app, id, static_cast<int64_t>(when), args, wake, launcher, s, why))
+            return reject(why, "EIO");
+        ev::Persistent v(scheduledValue(s));
+        ev::resolvePromise(promise.get(), v.get());
+        return promise.get();
+    });
+
+    // unschedule(id) -> boolean: whether a launch `id` of this app was pending.
+    o.def("unschedule", 1, [](Value, std::span<const Value> a) -> Value {
+        const std::string id = hasArg(a, 0) && ev::isString(a[0]) ? ev::toUtf8(a[0]) : std::string();
+        return ev::fromBool(engine::unscheduleAppLaunch(compartmentApp(), id));
+    });
+
+    // scheduled() -> [{ id, when, args, wake, command, backend }], soonest first.
+    o.def("scheduled", 0, [](Value, std::span<const Value>) -> Value {
+        const std::vector<engine::ScheduledLaunch> list = engine::scheduledAppLaunches(compartmentApp());
+        return hostArrayOf(list.size(), [&list](size_t i) { return scheduledValue(list[i]); });
+    });
+
+    // scheduledLaunch -> { id, when, args } when a schedule started this run, else null.
+    o.accessor("scheduledLaunch", [](Value, std::span<const Value>) -> Value {
+        const auto& l = engine::launchedBySchedule();
+        if (!l) return ev::null();
+        return scheduledValue(*l);
+    }, nullptr);
 
     o.def("_setInstanceDispatcher", 1, [](Value, std::span<const Value> a) -> Value {
         // The app's top-level page hears launches; an <iframe>'s realm runs

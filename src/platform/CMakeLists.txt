@@ -44,6 +44,9 @@ if(WIN32)
     # The desktop's pixels (screen_grab.h): DXGI duplication, GDI fallback.
     target_sources(bro_platform PRIVATE screen_grab_win.cpp)
     target_link_libraries(bro_platform PRIVATE d3d11 shcore)
+    # Scheduled launches (app_schedule.h): Task Scheduler.
+    target_sources(bro_platform PRIVATE app_schedule_win.cpp)
+    target_link_libraries(bro_platform PRIVATE taskschd oleaut32)
     # Its keyboard: hotkeys through a low-level hook (desktop_hotkeys.h).
     target_sources(bro_platform PRIVATE desktop_shell_keyboard_win.cpp)
     target_link_libraries(bro_platform PRIVATE shell32 ole32 uuid runtimeobject)
@@ -67,6 +70,8 @@ elseif(APPLE)
     target_sources(bro_platform PRIVATE screen_grab_mac.mm)
     set_source_files_properties(screen_grab_mac.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(bro_platform PRIVATE "-framework ScreenCaptureKit" "-framework CoreGraphics")
+    # Scheduled launches (app_schedule.h): launchd user agents.
+    target_sources(bro_platform PRIVATE app_schedule_launchd.cpp)
 endif()
 # The agent control channel's transport (control_socket.cpp, control_protocol.h).
 target_link_libraries(bro_platform PUBLIC brolink)
@@ -116,6 +121,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_sources(bro_platform PRIVATE screen_grab_wayland.cpp)
     else()
         target_sources(bro_platform PRIVATE screen_grab_none.cpp)
+    endif()
+    # Scheduled launches (app_schedule.h): systemd user timers over D-Bus.
+    if(TARGET brodbus::brodbus)
+        target_sources(bro_platform PRIVATE app_schedule_systemd.cpp)
+        target_link_libraries(bro_platform PRIVATE brodbus::brodbus)
+    else()
+        target_sources(bro_platform PRIVATE app_schedule_none.cpp)
     endif()
 endif()
 target_compile_definitions(bro_platform PRIVATE BRO_HAVE_WAYLAND_BACKEND=${_bro_have_wayland})

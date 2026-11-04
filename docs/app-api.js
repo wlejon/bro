@@ -321,3 +321,74 @@ bro.app.permissions;
  *   else showOffline();
  */
 bro.app.requestPermission = function(name) {};
+
+// ── Scheduled launches ───────────────────────────────────────────────────────
+
+/**
+ * A launch the OS will start (docs/apps.md, "Scheduled launches").
+ * @typedef {Object} ScheduledLaunch
+ * @property {string} id        The app's name for it.
+ * @property {number} when      When, ms since the epoch.
+ * @property {string[]} args    What the launch hands the app (its bro.app.argv,
+ *                              or an `instance` event's argv).
+ * @property {boolean} wake     Whether it wakes the machine from sleep.
+ * @property {string[]} command The command line the OS runs.
+ * @property {string} backend   'task-scheduler' | 'systemd' | 'launchd', or
+ *                              'recorded' headless.
+ */
+
+/**
+ * Have the OS start this app at `when`, whether or not it is running then,
+ * after a reboot too: an alarm clock's ring, a reminder, a nightly job. The
+ * launch is the app's ordinary launch with `args` (bro.app.argv;
+ * bro.app.scheduledLaunch says a schedule started it); a single-instance
+ * app that is already running gets an `instance` event with them instead.
+ * Each launch happens once, and the launch itself removes it; schedule the
+ * next one from there. Scheduling an id again moves it.
+ *
+ * Backends: Task Scheduler on Windows (a task for the user, no elevation),
+ * a systemd user timer on Linux, a launchd user agent on macOS, which
+ * launches on the minute (at `when` or up to a minute after). A launch
+ * missed while the machine was off or asleep runs when it is back; with
+ * `wake` the machine wakes for it from sleep (Windows, Linux; not macOS).
+ * An installed app is started by its own executable when it has one, a
+ * folder app by `bro <folder>`, so moving or deleting the folder breaks the
+ * launch. Needs the `schedule` capability; only the app's top-level page
+ * schedules. Headless records the launches (scheduled() lists them) and
+ * reaches no OS, unless BRO_SCHEDULE_OS=1.
+ *
+ * @param {string} id   1-64 of letters, digits, '.', '-', '_'.
+ * @param {Date|number|string} when  A Date, ms since the epoch, or a date string.
+ * @param {{args?: string[], wake?: boolean}} [options]
+ * @returns {Promise<ScheduledLaunch>} Rejects with `code` 'EACCES' (refused),
+ *   'EINVAL' (bad id, unreadable or past time) or 'EIO' (the OS refused; the
+ *   message says why).
+ * @example
+ *   // An alarm at 7:30 tomorrow.
+ *   const t = new Date(); t.setDate(t.getDate() + 1); t.setHours(7, 30, 0, 0);
+ *   await bro.app.schedule('alarm-3', t, { args: ['--ring', 'alarm-3'], wake: true });
+ *   // ... and on that launch:
+ *   if (bro.app.scheduledLaunch) ring(bro.app.scheduledLaunch.args[1]);
+ */
+bro.app.schedule = function(id, when, options) {};
+
+/**
+ * Cancel a pending launch of this app.
+ * @param {string} id
+ * @returns {boolean} Whether there was one.
+ */
+bro.app.unschedule = function(id) {};
+
+/**
+ * This app's pending launches, soonest first. One removed with the OS's own
+ * tools is gone from it too.
+ * @returns {ScheduledLaunch[]}
+ */
+bro.app.scheduled = function() {};
+
+/**
+ * The scheduled launch that started this run, or null.
+ * @readonly
+ * @type {ScheduledLaunch|null}
+ */
+bro.app.scheduledLaunch;

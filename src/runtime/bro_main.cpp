@@ -9,6 +9,7 @@
 #include "engine/launcher.h"
 #include "engine/app_runtime.h"
 #include "engine/app_exe.h"
+#include "engine/app_schedule.h"
 #include "engine/capabilities.h"
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
@@ -317,6 +318,10 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     std::string cliNotification;
     bool cliNotificationCom = false;
     bool expectNotificationArgs = false;
+    // `--scheduled <name>`: the OS started this run for bro.app.schedule
+    // (engine/app_schedule.h).
+    std::string cliScheduled;
+    bool expectScheduled = false;
     // An app's own executable has its target built in: every positional
     // argument is the app's. The one exception is the app folder a Windows
     // toast's activator command names after --notification-activated (it is
@@ -333,6 +338,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     bool dashDash = false;
     for (const std::string& a : args) {
         if (expectNotificationArgs) { cliNotification = a; expectNotificationArgs = false; continue; }
+        if (expectScheduled) { cliScheduled = a; expectScheduled = false; continue; }
         if (expectGrant) {
             bro::engine::appendGrantList(a, cliGrants);
             expectGrant = false;
@@ -353,6 +359,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
             if (a == "--drm")          { cliDrm = true; continue; }
             if (a == "--new-instance") { cliNewInstance = true; continue; }
             if (a == "--notification") { expectNotificationArgs = true; continue; }
+            if (a == "--scheduled") { expectScheduled = true; continue; }
             if (!exe && a == "--grant") { expectGrant = true; continue; }
             if (a == "--notification-activated") { cliNotificationCom = true; continue; }
             if (cliNotificationCom && (a == "-Embedding" || a == "/Embedding")) continue;
@@ -429,6 +436,10 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
                                                            /*bareLaunch=*/!haveTarget && !exe);
         if (!cliNotification.empty()) bro::platform::desktop::noteLaunchNotification(cliNotification);
     }
+
+    // A scheduled launch happens once: its OS entry and record go now, before
+    // a running single instance is handed the arguments.
+    if (!cliScheduled.empty()) bro::engine::completeScheduledLaunch(cliScheduled);
 
     // A single-instance app (`"singleInstance": true`): a launch while one is
     // running hands its argv and working directory over and exits, before

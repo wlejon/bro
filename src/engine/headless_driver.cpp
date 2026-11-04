@@ -4,6 +4,7 @@
 #include "engine/config_loader.h"
 #include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
+#include "engine/app_schedule.h"
 #include "engine/capabilities.h"
 #include "engine/control.h"
 
@@ -112,6 +113,14 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::string aotBuildDir;
     std::vector<std::string> hostGrants;
 
+    // bro.app.schedule records a headless run's launches and reaches no OS,
+    // as bro.app.open starts nothing, unless BRO_SCHEDULE_OS=1 (a test of
+    // the real backend; its launches then run bro-headless).
+    {
+        const char* os = std::getenv("BRO_SCHEDULE_OS");
+        setScheduleRecordOnly(!(os && std::strcmp(os, "1") == 0));
+    }
+
     bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
         if (passThrough) {
@@ -185,6 +194,9 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             // instance does.
             launchNotification = argv[++i];
             bro::platform::desktop::noteLaunchNotification(launchNotification);
+        } else if (strcmp(argv[i], "--scheduled") == 0 && i + 1 < argc) {
+            // The OS started this run for bro.app.schedule: it happens once.
+            completeScheduledLaunch(argv[++i]);
         } else if (strcmp(argv[i], "--print-host-globals") == 0) {
             printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
