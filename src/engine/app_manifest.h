@@ -108,6 +108,12 @@ std::vector<std::string> installedAppRoots();
 /// Support/bro/apps). Under BRO_APP_HOME=<dir>, <dir>/bro/apps for both.
 std::string installRoot(bool system);
 
+/// The scratch profile's directory (BRO_APP_HOME, made absolute), or "" when
+/// bro runs on the user's own profile. Everything an install registers with
+/// the system (desktop entries, Start menu shortcuts) goes under it too, so a
+/// scratch install never reaches the real launchers.
+std::string scratchProfileHome();
+
 /// The installed app directory for `id`, or "" when none is installed.
 std::string findInstalledApp(const std::string& id);
 

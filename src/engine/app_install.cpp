@@ -225,6 +225,9 @@ std::string applicationsDir(bool system) {
     (void)system;
     return {};
 #else
+    // A scratch profile's entries stay in it (app_manifest.h scratchProfileHome).
+    if (std::string scratch = scratchProfileHome(); !scratch.empty())
+        return u8str(u8path(scratch) / "applications");
     if (system) return "/usr/local/share/applications";
     std::string dataHome = envOr("XDG_DATA_HOME", "");
     if (dataHome.empty() || dataHome[0] != '/') dataHome = u8str(u8path(envOr("HOME", ".")) / ".local" / "share");

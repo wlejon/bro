@@ -9,6 +9,13 @@
 #include <SDL3/SDL_messagebox.h>
 
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace bro::platform {
 
@@ -108,6 +115,37 @@ private:
 
 enum : int { kBtnCancel = 0, kBtnOk = 1 };
 
+#if defined(__linux__)
+bool onPath(const char* program) {
+    const char* path = std::getenv("PATH");
+    if (!path) return false;
+    std::string dirs(path);
+    size_t at = 0;
+    while (at <= dirs.size()) {
+        size_t colon = dirs.find(':', at);
+        if (colon == std::string::npos) colon = dirs.size();
+        const std::string dir = dirs.substr(at, colon - at);
+        at = colon + 1;
+        if (dir.empty()) continue;
+        if (::access((dir + "/" + program).c_str(), X_OK) == 0) return true;
+    }
+    return false;
+}
+
+// Whether SDL can show a message box here without crashing. On Linux SDL's
+// message box is zenity (its Wayland driver's, which bro's own Wayland
+// window system reaches through SDL's bootstrap drivers too) or its X11 one;
+// without zenity and with no X server (a Wayland-only session such as
+// helm's) SDL ends in X11_ShowMessageBox, which crashes rather than failing.
+bool messageBoxAvailable() {
+    if (onPath("zenity")) return true;
+    const char* display = std::getenv("DISPLAY");
+    return display && *display;
+}
+#else
+bool messageBoxAvailable() { return true; }
+#endif
+
 class SdlDialogs final : public DialogBackend {
 public:
     std::optional<bool> messageBox(Window* parent, const std::string& message,
@@ -127,6 +165,12 @@ public:
         data.numbuttons = nButtons;
         data.buttons = buttons;
 
+        if (!messageBoxAvailable()) {
+            LOG_WARN("[dialog] no message box here (SDL needs zenity on Linux, or an X "
+                     "display): %s",
+                     message.c_str());
+            return std::nullopt;
+        }
         int pressed = kBtnCancel;
         if (!SDL_ShowMessageBox(&data, &pressed)) {
             LOG_WARN("[dialog] message box unavailable: %s", SDL_GetError());

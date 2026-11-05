@@ -12,6 +12,7 @@
 
 #include "engine/app_exe.h"
 
+#include "engine/app_manifest.h"
 #include "engine/app_runtime.h"
 #include "util/log.h"
 
@@ -312,8 +313,12 @@ std::string startMenuShortcutPath(const std::string& name, bool system) {
     // The user's Programs folder is %APPDATA%\Microsoft\Windows\Start Menu\
     // Programs; reading it through APPDATA lets a test (or a portable setup)
     // point it elsewhere, the way the install root follows LOCALAPPDATA.
+    // A scratch profile's shortcuts stay in it (app_manifest.h scratchProfileHome).
+    const std::string scratch = scratchProfileHome();
     const wchar_t* appdata = system ? nullptr : _wgetenv(L"APPDATA");
-    if (appdata && *appdata) {
+    if (!scratch.empty()) {
+        p = u8path(scratch) / L"Start Menu" / L"Programs";
+    } else if (appdata && *appdata) {
         p = fs::path(appdata) / L"Microsoft" / L"Windows" / L"Start Menu" / L"Programs";
     } else {
         PWSTR base = nullptr;

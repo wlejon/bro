@@ -372,7 +372,9 @@ Installed folder apps live in one directory per app, named by id:
 
 Under `BRO_APP_HOME=<dir>` the one install root, user and system alike, is
 `<dir>/bro/apps`: a test or scratch profile neither finds the machine's
-installed apps nor installs over them.
+installed apps nor installs over them. What an install registers stays in the
+profile too (desktop entries in `<dir>/applications`, Start menu shortcuts in
+`<dir>/Start Menu/Programs`), so the real launchers never list a scratch app.
 
 ```
 bro --install <app-dir> [--link] [--system] [--exec <bro>] [--no-exe]

@@ -316,20 +316,28 @@ namespace {
 // Settled at the first question, before any script runs: an app that may
 // change the environment must not move the install roots bro protects and
 // identifies installs by.
-std::string scratchAppsRoot() {
-    static const std::string root = [] {
-        const std::string home = getEnv("BRO_APP_HOME");
-        if (home.empty()) return std::string();
-        fs::path h = u8path(home);
+std::string scratchHome() {
+    static const std::string home = [] {
+        const std::string env = getEnv("BRO_APP_HOME");
+        if (env.empty()) return std::string();
+        fs::path h = u8path(env);
         std::error_code ec;
         fs::path abs = fs::absolute(h, ec);
         if (!ec) h = abs;
-        return u8str((h / "bro" / "apps").lexically_normal());
+        return u8str(h.lexically_normal());
     }();
-    return root;
+    return home;
+}
+
+std::string scratchAppsRoot() {
+    const std::string home = scratchHome();
+    if (home.empty()) return {};
+    return u8str((u8path(home) / "bro" / "apps").lexically_normal());
 }
 
 }  // namespace
+
+std::string scratchProfileHome() { return scratchHome(); }
 
 std::string installRoot(bool system) {
     if (std::string scratch = scratchAppsRoot(); !scratch.empty()) return scratch;

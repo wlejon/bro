@@ -190,26 +190,26 @@ function run() {
 
     // ---- --install builds it and points the launcher at it ------------------------
     {
-        const data = path.join(scratch, 'install');
-        const env = isWin ? { LOCALAPPDATA: data, APPDATA: path.join(scratch, 'roaming') } : { XDG_DATA_HOME: data };
+        const env = {};
         broCli(['--install', app], env);
         // Under BRO_APP_HOME the install root is <BRO_APP_HOME>/bro/apps
-        // (docs/apps.md), its executables beside it in bro/bin; the desktop
-        // entry and Start menu shortcut stay where the platform says.
+        // (docs/apps.md), its executables beside it in bro/bin, and what it
+        // registers stays in the profile too: <BRO_APP_HOME>/applications,
+        // <BRO_APP_HOME>/Start Menu/Programs. The real launchers never see it.
+        const shortcutDir = path.join(baseEnv.BRO_APP_HOME, 'Start Menu', 'Programs', 'Bro Apps');
         const installed = path.join(baseEnv.BRO_APP_HOME, 'bro', 'apps', 'org.bro.test.ExeApp');
         const built = path.join(baseEnv.BRO_APP_HOME, 'bro', 'bin', isWin ? 'org-bro-test-ExeApp.exe' : 'org-bro-test-ExeApp');
         assert(fs.existsSync(built), '--install built ' + built);
         const bi = info(built, env);
         assert(norm(bi.app) === norm(installed) && bi.state === 'current', 'for the installed copy: ' + JSON.stringify(bi));
         if (isWin) {
-            const lnk = path.join(scratch, 'roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Bro Apps',
-                'Exe App.lnk');
+            const lnk = path.join(shortcutDir, 'Exe App.lnk');
             assert(fs.existsSync(lnk), 'Start menu shortcut at ' + lnk);
             assert(bi['win.shortcut.AppUserModelID'] === 'org.bro.test.ExeApp',
                 'the shortcut carries the AppUserModelID: ' + JSON.stringify(bi));
             assert(norm(bi['win.shortcut.target']) === norm(built), 'and starts the executable: ' + bi['win.shortcut.target']);
         } else {
-            const de = fs.readFileSync(path.join(data, 'applications', 'org.bro.test.ExeApp.desktop'), 'utf8');
+            const de = fs.readFileSync(path.join(baseEnv.BRO_APP_HOME, 'applications', 'org.bro.test.ExeApp.desktop'), 'utf8');
             const lines = de.split(/\r?\n/);
             const exec = lines.find((l) => l.startsWith('Exec='));
             assert(exec && (exec === 'Exec=' + built || exec.startsWith('Exec=' + built + ' ')),
@@ -220,8 +220,7 @@ function run() {
         assert(!fs.existsSync(built), '--uninstall removed the executable');
         assert(!fs.existsSync(aotDirOf(built)), 'and its AOT directory');
         if (isWin) {
-            assert(!fs.existsSync(path.join(scratch, 'roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs',
-                'Bro Apps', 'Exe App.lnk')), 'and the shortcut');
+            assert(!fs.existsSync(path.join(shortcutDir, 'Exe App.lnk')), 'and the shortcut');
         }
     }
 
