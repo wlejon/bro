@@ -41,6 +41,10 @@ void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccess
     vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 1, &b, 0, nullptr, 0, nullptr);
 }
 
+// Past this many ranges held since the last barrier, the next operation
+// waits for all of them (the checks stay short).
+constexpr size_t kMaxTrackedRanges = 1024;
+
 bool fail(std::string* error, const std::string& msg) {
     if (error) *error = msg;
     return false;
@@ -267,9 +271,9 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
     owner_->buffers.insert(b.get());
 
     // It reads zero until written.
-    VkCommandBuffer cmd = commands();
+    const ComputeAccess fill{b->address_, capacity, true};
+    VkCommandBuffer cmd = commands({&fill, 1});
     vkCmdFillBuffer(cmd, b->buffer_, 0, VK_WHOLE_SIZE, 0);
-    current().pendingBarrier = true;
     return b;
 }
 
@@ -386,7 +390,7 @@ ComputePipelineBuild VulkanCompute::buildPipeline(const ComputePipelineDesc& des
     return b;
 }
 
-VkCommandBuffer VulkanCompute::commands() {
+VkCommandBuffer VulkanCompute::commands(std::span<const ComputeAccess> access) {
     Stream& s = current();
     if (s.open == VK_NULL_HANDLE) {
         context_->frames().ensureFrame();
@@ -418,18 +422,38 @@ VkCommandBuffer VulkanCompute::commands() {
         // ordered by the semaphore its submission waits on.)
         memoryBarrier(s.open, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT, kComputeStages,
                       kComputeAccess);
-        s.pendingBarrier = false;
-    } else if (s.pendingBarrier) {
-        barrier();
+        s.reads.clear();
+        s.writes.clear();
     }
+    // After the operations recorded before it that it conflicts with: a
+    // read waits for the writes to its range (read after write), a write
+    // for the reads and writes (write after read, write after write). One
+    // barrier orders it after all of them; the rest run beside it.
+    const auto overlaps = [](const std::vector<Range>& held, const Range& r) {
+        for (const Range& h : held)
+            if (h.begin < r.end && r.begin < h.end) return true;
+        return false;
+    };
+    const auto rangeOf = [](const ComputeAccess& a) {
+        return Range{a.address, a.bytes > ~0ull - a.address ? ~0ull : a.address + a.bytes};
+    };
+    bool wait = s.reads.size() + s.writes.size() + access.size() > kMaxTrackedRanges;
+    for (size_t i = 0; i < access.size() && !wait; ++i) {
+        if (access[i].bytes == 0) continue;
+        const Range r = rangeOf(access[i]);
+        wait = overlaps(s.writes, r) || (access[i].write && overlaps(s.reads, r));
+    }
+    if (wait) barrier(s);
+    for (const ComputeAccess& a : access)
+        if (a.bytes != 0) (a.write ? s.writes : s.reads).push_back(rangeOf(a));
     return s.open;
 }
 
-void VulkanCompute::barrier() {
-    Stream& s = current();
+void VulkanCompute::barrier(Stream& s) {
     memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, kComputeStages,
                   kComputeAccess);
-    s.pendingBarrier = false;
+    s.reads.clear();
+    s.writes.clear();
 }
 
 bool VulkanCompute::async() const { return context_ && context_->asyncComputeQueue() != nullptr; }
@@ -502,7 +526,7 @@ void VulkanCompute::acquireBackground(uint64_t serial) {
     acquire_ = ticket;
     // A graphics submission to carry the wait, at the latest when the frame
     // ends, before anything that reads the work (consumers flush() first).
-    commands();
+    commands({});
 }
 
 bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void* data, VkDeviceSize size) {
@@ -511,17 +535,18 @@ bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void
     UploadSlice slice = context_->frames().allocUpload(size, 4);
     if (!slice) return false;
     std::memcpy(slice.mapped, data, static_cast<size_t>(size));
-    VkCommandBuffer cmd = commands();
+    const ComputeAccess to{buffer.address_ + offset, size, true};
+    VkCommandBuffer cmd = commands({&to, 1});
     const VkBufferCopy copy{slice.offset, offset, size};
     vkCmdCopyBuffer(cmd, slice.buffer, buffer.buffer_, 1, &copy);
-    current().pendingBarrier = true;
     return true;
 }
 
-bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3]) {
+bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
+                             std::span<const ComputeAccess> access) {
     if (!context_ || pipeline.pipeline_ == VK_NULL_HANDLE || push.size() != pipeline.pushBytes_) return false;
     if (groups[0] == 0 || groups[1] == 0 || groups[2] == 0) return true;
-    VkCommandBuffer cmd = commands();
+    VkCommandBuffer cmd = commands(access);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline_);
     if (!push.empty()) {
         vkCmdPushConstants(cmd, pipeline.layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(push.size()),
@@ -541,7 +566,6 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
         timed_.push_back({pipeline.label_, query, 0, recordingBackground()});
     }
     Stream& s = current();
-    s.pendingBarrier = true;
     if (++s.openDispatches >= kMaxDispatchesPerSubmit && !recordingBackground()) {
         const uint64_t prev = s.prevBatchTicket;
         const uint64_t ticket = flush();
@@ -596,7 +620,7 @@ std::shared_ptr<ComputeSpan> VulkanCompute::beginSpan() {
     span->query_ = owner_->freeSpans.back();
     span->background_ = recordingBackground();
     owner_->freeSpans.pop_back();
-    VkCommandBuffer cmd = commands();
+    VkCommandBuffer cmd = commands({});
     vkCmdResetQueryPool(cmd, owner_->spanPool, span->query_, 2);
     // At the bottom: once everything before it is done, so the span holds
     // only its own work.
@@ -606,7 +630,7 @@ std::shared_ptr<ComputeSpan> VulkanCompute::beginSpan() {
 
 void VulkanCompute::endSpan(ComputeSpan& span) {
     if (!context_ || span.owner_ != owner_ || span.ticket_) return;
-    VkCommandBuffer cmd = commands();
+    VkCommandBuffer cmd = commands({});
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span.query_ + 1);
     span.ticket_ = span.background_ ? markBackground() : flush();
 }
@@ -671,12 +695,12 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
         }
         readbackSize_ = grown;
     }
-    VkCommandBuffer cmd = commands();
+    const ComputeAccess from{buffer.address_ + offset, size, false};
+    VkCommandBuffer cmd = commands({&from, 1});
     const VkBufferCopy copy{offset, 0, size};
     vkCmdCopyBuffer(cmd, buffer.buffer_, readback_, 1, &copy);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
-    current().pendingBarrier = true;
     const bool bg = recordingBackground();
     const uint64_t ticket = bg ? flushStream(backgroundStream_, true) : flush();
     if (!ticket || !queueFor(bg).wait(ticket)) return false;
@@ -707,12 +731,12 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
     }
     r->size_ = size;
     owner_->readbacks.insert(r.get());
-    VkCommandBuffer cmd = commands();
+    const ComputeAccess from{buffer.address_ + offset, size, false};
+    VkCommandBuffer cmd = commands({&from, 1});
     const VkBufferCopy copy{offset, 0, size};
     vkCmdCopyBuffer(cmd, buffer.buffer_, r->buffer_, 1, &copy);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
-    current().pendingBarrier = true;
     r->background_ = recordingBackground();
     r->ticket_ = r->background_ ? markBackground() : flush();
     if (!r->ticket_) return nullptr;
@@ -721,10 +745,10 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
 
 bool VulkanCompute::recordGraphics(const std::function<void(VkCommandBuffer)>& fn) {
     if (!context_ || background_ || !fn) return false;
-    VkCommandBuffer cmd = commands();
+    // What it touches is not known: after everything, before everything.
+    VkCommandBuffer cmd = commands(kAnyAccess);
     if (cmd == VK_NULL_HANDLE) return false;
     fn(cmd);
-    current().pendingBarrier = true;
     return true;
 }
 
@@ -745,7 +769,8 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     const VkCommandBuffer cmd = s.open;
     s.open = VK_NULL_HANDLE;
-    s.pendingBarrier = false;
+    s.reads.clear();
+    s.writes.clear();
     s.openDispatches = 0;
     std::vector<SemaphoreWait> waits;
     uint64_t ticket = 0;

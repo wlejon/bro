@@ -104,6 +104,19 @@ struct ComputePipelineBuild {
     ~ComputePipelineBuild();
 };
 
+/// A byte range of buffer memory an operation reads or writes, by device
+/// address: what VulkanCompute orders recorded work by. An operation waits
+/// only for earlier ones it conflicts with: a read for the writes to its
+/// range, a write for the reads and writes to it.
+struct ComputeAccess {
+    uint64_t address = 0;
+    uint64_t bytes = 0;
+    bool write = false;
+};
+/// Every byte, written: an operation whose accesses are not known, ordered
+/// after everything recorded before it and before everything after it.
+inline constexpr ComputeAccess kAnyAccess[1] = {{0, ~0ull, true}};
+
 /// The GPU time of a label's dispatches.
 struct ComputeTime {
     std::string label;
@@ -144,6 +157,9 @@ private:
 /// a compute buffer (flush()), or the frame's end. Each recorded operation
 /// sees every earlier one's writes; work submitted after a flush sees them
 /// all (vertex, index, indirect, shader and transfer reads alike).
+/// Operations are ordered by the buffer ranges they touch (ComputeAccess):
+/// a barrier goes between two only where one writes what the other reads
+/// or writes, so a run of independent dispatches overlaps on the GPU.
 ///
 /// Owned by VulkanContext (compute()). Main thread.
 /// Bytes of a buffer copied into host memory without waiting: the copy is
@@ -225,8 +241,11 @@ public:
     /// Copy `size` bytes from `data` (now) to `buffer` at `offset`.
     bool write(ComputeBuffer& buffer, VkDeviceSize offset, const void* data, VkDeviceSize size);
     /// Dispatch `groups` workgroups of `pipeline` with `push` as its
-    /// push-constant block (pushConstantBytes() long).
-    bool dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3]);
+    /// push-constant block (pushConstantBytes() long). `access` is every
+    /// buffer range it reads or writes (the default: unknown, ordered
+    /// against everything).
+    bool dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
+                  std::span<const ComputeAccess> access = kAnyAccess);
     /// Copy `size` bytes of `buffer` at `offset` into `out`, after every
     /// operation recorded so far: submits them and waits for that ticket.
     bool read(const ComputeBuffer& buffer, VkDeviceSize offset, void* out, VkDeviceSize size);
@@ -290,9 +309,9 @@ public:
     void acquireBackground(uint64_t ticket);
 
     /// Time every dispatch on the GPU from now on (timestamps either side of
-    /// it; the dispatches before it are already finished by the barrier
-    /// each one starts with), or stop. Off by default: it costs two queries
-    /// a dispatch.
+    /// it), or stop. Off by default: it costs two queries a dispatch.
+    /// Dispatches that run together (nothing orders them) each count the
+    /// time they share, so their sum can pass the time they took.
     void setTiming(bool on);
     bool timing() const { return timing_; }
     /// The GPU time of the dispatches the GPU has finished since the last
@@ -307,9 +326,17 @@ public:
 
 private:
     // What a stream records into: the graphics one, and the background one.
+    // The buffer ranges the operations recorded since the open buffer's
+    // last barrier read and wrote: what the next operation may have to wait
+    // for (ComputeAccess).
+    struct Range {
+        uint64_t begin = 0;
+        uint64_t end = 0;
+    };
     struct Stream {
         VkCommandBuffer open = VK_NULL_HANDLE;
-        bool pendingBarrier = false;
+        std::vector<Range> reads;
+        std::vector<Range> writes;
         uint32_t openDispatches = 0;
         uint64_t lastTicket = 0;
         uint64_t prevBatchTicket = 0;
@@ -323,8 +350,11 @@ private:
     uint64_t flushStream(Stream& s, bool isBackground);
     VulkanQueue& queueFor(bool isBackground) const;
 
-    VkCommandBuffer commands();
-    void barrier();
+    // The open command buffer of the current stream, after a barrier for
+    // whatever recorded before `access` conflicts with; `access` is then
+    // what the operation recorded next touches.
+    VkCommandBuffer commands(std::span<const ComputeAccess> access = kAnyAccess);
+    void barrier(Stream& s);
     // The timestamp period and valid bits into owner_, once: false when the
     // queue writes no timestamps.
     bool timestamps();

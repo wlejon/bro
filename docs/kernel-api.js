@@ -172,6 +172,14 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 // for each store. A kernel that returns a value returns a new KernelBuffer of
 // one value per cell, laid out as run()'s typed array; one that returns
 // nothing returns undefined. Stores are bounded as on the CPU (section 5).
+// Each dispatch sees every earlier one's writes, and dispatches that touch
+// no common bytes (neither writes what the other reads or writes) run side
+// by side on the GPU: a stream waits only where a store's range, or a
+// buffer's write or read, meets one written (or, for a write, read) since
+// its last wait. Many small independent dispatches therefore cost about
+// their longest, not their sum; a kernel with image, sampler, uniform or
+// bound-buffer parameters waits for everything before it, and everything
+// after waits for it.
 //
 // A scene draws from a KernelBuffer in place, with no read back: a node's
 // custom shader declares `@binding(4, 14) var heights: read_buffer<f32>;`

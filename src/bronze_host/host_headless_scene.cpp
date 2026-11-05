@@ -286,9 +286,25 @@ void installHeadlessScenePerf(engine::Engine& engine,
             if (!ev::isUndefined(step.get()) && !ev::isFunction(step.get()))
                 return ev::throwTypeError("measure: step must be a function");
             HeldClock clock(engine, held);
-            // (The first calls turn the stamps on.)
+            // (The first calls turn the stamps on.) `kernels: false` leaves the
+            // dispatches untimed for the run: their stamps serialize the GPU's
+            // work (VulkanCompute::setTiming), so the refinement's ms are then
+            // those of its dispatches overlapped as they run unmeasured.
             framePasses(engine);
-            if (render::VulkanContext* ctx = engine.vulkanContext()) ctx->compute().setTiming(true);
+            const bool timeKernels = optBool(opts, "kernels", true);
+            struct TimingScope {
+                render::VulkanCompute* compute = nullptr;
+                bool was = false;
+                ~TimingScope() {
+                    if (compute) compute->setTiming(was);
+                }
+            } timingScope;
+            if (render::VulkanContext* ctx = engine.vulkanContext()) {
+                timingScope.compute = &ctx->compute();
+                timingScope.was = ctx->compute().timing();
+                ctx->compute().setTiming(timeKernels);
+                if (timeKernels) timingScope.compute = nullptr;
+            }
             int i = 0;
             // One frame: step(i), then the frame, its GPU work waited on.
             // False when step threw (the throw is the measure's).

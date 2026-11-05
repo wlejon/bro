@@ -1,4 +1,4 @@
-// perf.measure({ frames, warm, step, budget, stepMs }): a run of frames with
+// perf.measure({ frames, warm, step, budget, stepMs, kernels }): a run of frames with
 // step(i) before each, one page frame (rAF) and one render a frame, each
 // frame's scene GPU ms and kernel GPU ms waited on, summarised, and the
 // frames over the budget listed with what they went on.
@@ -66,6 +66,14 @@ if (!scene) {
         assert(typeof r.spill === 'number' && r.spill >= r.over, `frames whose refinement overran the interval (${r.spill})`);
     }
     assert(Math.abs(r.budget - 1000 / 360) < 1e-9, 'the budget is a 360 Hz frame by default');
+
+    // kernels: false runs the dispatches untimed (their stamps serialize
+    // them): the refinement still measured whole, the kernels by name not.
+    if (gpuKernel) {
+        const u = perf.measure({ frames: 6, warm: 1, kernels: false });
+        assert(u.refine.mean > 0, `untimed, the refinement's GPU ms (${JSON.stringify(u.refine)})`);
+        assert(!(u.backgroundBy['k_fill'] > 0) && u.kernels.mean === 0, `and no kernel's own (${JSON.stringify(u.backgroundBy)})`);
+    }
 
     // Over a budget of nothing every frame is a spike, with its breakdown.
     const all = perf.measure({ frames: 4, budget: 0 });

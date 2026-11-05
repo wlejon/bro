@@ -151,6 +151,52 @@ brass::gpu::VulkanDeviceCaps capsOf(const render::VulkanContext& ctx) {
     return caps;
 }
 
+// The buffer ranges a launch of `kernel` reads and writes, so its dispatch
+// waits only for the earlier work it conflicts with (render::ComputeAccess):
+// each store's address and element count, read or written as declared, and
+// the returns' store, written. False where that is not all it can touch (a
+// resource bound by descriptor, or arguments not laid out as expected): the
+// dispatch is then ordered against everything.
+bool launchAccesses(const brokernel::CompiledKernel& kernel, const brokernel::GpuLaunch& launch,
+                    std::vector<render::ComputeAccess>& out) {
+    out.clear();
+    const auto& args = launch.args;
+    const auto addressAt = [&](uint32_t i, uint64_t& address) {
+        if (i >= args.size() || args[i].kind() != brass::gpu::VulkanArg::Kind::U64 || args[i].bits() == 0) return false;
+        address = args[i].bits();
+        return true;
+    };
+    for (const brokernel::KernelParamInfo& p : kernel.params) {
+        switch (p.role) {
+            case brokernel::ParamRole::Store:
+            case brokernel::ParamRole::Stencil: {
+                uint64_t address = 0;
+                if (p.mir_param_count != 2 || !addressAt(p.mir_param_index, address)) return false;
+                const uint64_t count = args[p.mir_param_index + 1].bits();
+                out.push_back({address, count * p.element_bytes, p.access != brokernel::AccessMode::Read});
+                break;
+            }
+            case brokernel::ParamRole::Image:
+            case brokernel::ParamRole::Sampler:
+            case brokernel::ParamRole::Uniform:
+            case brokernel::ParamRole::Buffer:
+                return false;
+            default:
+                break;
+        }
+    }
+    if (!kernel.return_type.is_void()) {
+        // The last argument: one value a cell of the grid, at most the
+        // threads launched.
+        uint64_t address = 0;
+        if (args.empty() || !addressAt(static_cast<uint32_t>(args.size() - 1), address)) return false;
+        uint64_t threads = 1;
+        for (int i = 0; i < 3; ++i) threads *= uint64_t{launch.groups[i]} * launch.local_size[i];
+        out.push_back({address, threads * std::max<uint64_t>(kernel.return_byte_size, 4), true});
+    }
+    return kernel.block_bindings.empty();
+}
+
 class KernelGpu final : public brokernel::api::GpuDevice {
 public:
     explicit KernelGpu(std::shared_ptr<Device> device) : device_(std::move(device)) {}
@@ -210,7 +256,11 @@ public:
             if (err) *err = p.error;
             return false;
         }
-        if (compute.dispatch(*p.pipeline, block, launch.groups)) return true;
+        const bool known = launchAccesses(kernel, launch, access_);
+        if (compute.dispatch(*p.pipeline, block, launch.groups,
+                             known ? std::span<const render::ComputeAccess>(access_)
+                                   : std::span<const render::ComputeAccess>(render::kAnyAccess)))
+            return true;
         if (err) {
             *err = isDeviceLost(*device_->context()) ? kDeviceLostError
                                                      : ("the GPU dispatch of '" + kernel.name + "' failed");
@@ -220,6 +270,7 @@ public:
 
 private:
     std::shared_ptr<Device> device_;
+    std::vector<render::ComputeAccess> access_;   // a dispatch's, reused
 };
 
 // One device for every main-thread realm (the page and its iframes).
