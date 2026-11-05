@@ -18,6 +18,7 @@
 #include "bronze_host/host_rooted.h"
 
 #include "embed/embed.h"
+#include "embed/embed_fast_function.h"
 #include "runtime/array.h"
 
 #include <cmath>
@@ -297,6 +298,28 @@ struct ObjectBuilder {
         // this builder, DOM included, for the same reason hostProfileWrap's
         // comment gives: they all funnel through one place.
         ev::Persistent f(ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name));
+        obj.set(ev::setProperty(obj.get(), name, f.get()));
+    }
+
+    // def() through bronze's fast host-call path (embed_fast_function.h):
+    // `fn` has NativeFn's signature but is called through a function pointer,
+    // with no std::function and no rooted argument block — the arguments are
+    // a stack copy the collector's conservative scan keeps current, so the
+    // callback may still allocate and read its arguments afterwards. What it
+    // gives up is the shadow-stack frame NativeFn opens: a callback that uses
+    // bronze runtime::Rooted<> directly (rather than embed API or Rooted
+    // from host_rooted.h, a Persistent) must open its own. For the entry
+    // points a program calls per draw (WebGL).
+    //
+    // Under BRO_HOST_PROFILE the method is installed through def() instead,
+    // so the profiler still times it (host_profile.h).
+    template <typename F>
+    void defFast(const char* name, uint32_t arity, F&& fn) {
+        if (hostProfileEnabled()) {
+            def(name, arity, ev::NativeFn(std::forward<F>(fn)));
+            return;
+        }
+        ev::Persistent f(ev::makeFastFunction(std::forward<F>(fn), arity, name));
         obj.set(ev::setProperty(obj.get(), name, f.get()));
     }
 

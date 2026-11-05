@@ -26,6 +26,7 @@
 
 #include <functional>
 #include <string>
+#include <type_traits>
 
 namespace bro::bronze_host {
 
@@ -141,13 +142,33 @@ inline webgl::WebGL2RenderingContext* contextOf(Value v) {
 // A method of WebGL2RenderingContext.prototype: `fn(c, args)` runs against
 // the context `this` is, and a call on anything else is the TypeError a
 // browser throws for one ("Illegal invocation").
+//
+// Every method is installed on the fast host-call path (ObjectBuilder::
+// defFast): three.js makes ~15k of these calls a frame. Its contract holds for
+// every family, the allocating ones included (create*, get*, getParameter,
+// the uploads): the arguments in `a` stay current across allocations as they
+// do under def(), and nothing here roots through bronze's runtime::Rooted<>.
+template <typename F>
+Value callWebGLMethod(F& fn, Value self, std::span<const Value> a) {
+    webgl::WebGL2RenderingContext* c = contextOf(self);
+    if (!c) return ev::throwTypeError("Illegal invocation");
+    return fn(c, a);
+}
+
 template <typename F>
 void defMethod(ObjectBuilder& b, const char* name, uint32_t arity, F fn) {
-    b.def(name, arity, [fn](Value self, std::span<const Value> a) -> Value {
-        webgl::WebGL2RenderingContext* c = contextOf(self);
-        if (!c) return ev::throwTypeError("Illegal invocation");
-        return fn(c, a);
-    });
+    if constexpr (std::is_empty_v<F> && std::is_default_constructible_v<F>) {
+        // A captureless body (nearly all of them): the installed callable is
+        // captureless too, so the function carries no boxed state to load.
+        b.defFast(name, arity, [](Value self, std::span<const Value> a) -> Value {
+            F body{};
+            return callWebGLMethod(body, self, a);
+        });
+    } else {
+        b.defFast(name, arity, [fn](Value self, std::span<const Value> a) mutable -> Value {
+            return callWebGLMethod(fn, self, a);
+        });
+    }
 }
 
 // The families of WebGL2RenderingContext.prototype. dom_globals_webgl.cpp
