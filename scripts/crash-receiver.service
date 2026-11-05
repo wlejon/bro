@@ -1,0 +1,16 @@
+# systemd user unit for scripts/crash-receiver.js (docs/apps.md, "Crash reports").
+#   mkdir -p ~/crash-receiver && cp scripts/crash-receiver.js ~/crash-receiver/
+#   cp scripts/crash-receiver.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now crash-receiver
+#   loginctl enable-linger $USER    # keep it running with nobody logged in
+[Unit]
+Description=bro crash report receiver
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/node %h/crash-receiver/crash-receiver.js --port 8787 --dir %h/crash-reports
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

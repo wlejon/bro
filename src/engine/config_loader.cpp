@@ -88,6 +88,10 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     std::string title = getString("title");
     if (!title.empty()) config.title = title;
 
+    // Where crash reports go: a project root's key reaches every app in it.
+    std::string crashReports = getString("crashReports");
+    if (!crashReports.empty()) config.crashReportUrl = crashReports;
+
     // Project-root keys.
     std::string defaultApp = getString("default_app");
     if (!defaultApp.empty() && config.appDir.empty()) config.appDir = defaultApp;

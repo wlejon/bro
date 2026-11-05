@@ -45,9 +45,42 @@ namespace {
 
 constexpr int kContextCap = 512;
 char g_context[kContextCap] = {0};
+// The program the banner names ("bro", "bro-headless"): a literal, read
+// without allocation from a faulted thread.
+const char* g_program = "bro";
 
 std::atomic<int> g_dumps{0};
 std::atomic<bool> g_installed{false};
+// CrashMode::Exit: the process ends at once (no system box). Otherwise the
+// crash goes on to the system's own handling (WER) after the report.
+bool g_exitOnCrash = true;
+
+#ifdef _WIN32
+// Where the minidump goes (setCrashDumpPath), written by a faulted thread:
+// a fixed buffer, no allocation.
+constexpr int kDumpPathCap = 1024;
+wchar_t g_dumpPath[kDumpPathCap] = {0};
+std::atomic<bool> g_dumpWritten{false};
+
+// Every thread's stack and registers and the loaded modules: what a crash
+// on another machine is read from, against the PDBs of the build it ran.
+void writeMinidump(EXCEPTION_POINTERS* ep) {
+    if (g_dumpPath[0] == L'\0' || g_dumpWritten.exchange(true)) return;
+    HANDLE file = CreateFileW(g_dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    MINIDUMP_EXCEPTION_INFORMATION mei{};
+    mei.ThreadId = GetCurrentThreadId();
+    mei.ExceptionPointers = ep;
+    mei.ClientPointers = FALSE;
+    const auto type = static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules |
+                                                 MiniDumpWithIndirectlyReferencedMemory);
+    const BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type,
+                                      ep ? &mei : nullptr, nullptr, nullptr);
+    CloseHandle(file);
+    if (ok) std::fprintf(stderr, "  minidump %ls\n", g_dumpPath);
+}
+#endif
 
 // At most a handful of dumps: a fault inside the handler, or a guard-page
 // pattern that fires repeatedly, must not turn a crash report into a
@@ -261,11 +294,11 @@ void report(const char* how, EXCEPTION_POINTERS* ep) {
     std::fflush(stdout);
     const EXCEPTION_RECORD* r = ep->ExceptionRecord;
     std::fprintf(stderr,
-                 "\n=== bro-headless crash (%s) ===\n"
+                 "\n=== %s crash (%s) ===\n"
                  "  code    0x%08lX  %s\n"
                  "  address 0x%016llx\n"
                  "  thread  %lu\n",
-                 how, static_cast<unsigned long>(r->ExceptionCode),
+                 g_program, how, static_cast<unsigned long>(r->ExceptionCode),
                  codeName(r->ExceptionCode),
                  reinterpret_cast<unsigned long long>(r->ExceptionAddress),
                  static_cast<unsigned long>(GetCurrentThreadId()));
@@ -288,8 +321,11 @@ void report(const char* how, EXCEPTION_POINTERS* ep) {
 
 LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* ep) {
     if (g_dumps.fetch_add(1) < kMaxDumps) report("unhandled", ep);
+    writeMinidump(ep);
     std::fflush(stdout);
     std::fflush(stderr);
+    // The system's own handling next (WER's dumps and box), when asked for.
+    if (!g_exitOnCrash) return EXCEPTION_CONTINUE_SEARCH;
     // Go with the code the fault actually carried, so a caller reading the
     // exit status sees the same crash it would have seen without us.
     TerminateProcess(GetCurrentProcess(), ep->ExceptionRecord->ExceptionCode);
@@ -484,7 +520,7 @@ void printRegisters(void* uctx) {
 
 void signalHandler(int sig, siginfo_t* info, void* uctx) {
     std::fflush(stdout);
-    std::fprintf(stderr, "\n=== bro-headless crash (%s) ===\n", signalName(sig));
+    std::fprintf(stderr, "\n=== %s crash (%s) ===\n", g_program, signalName(sig));
     if (info != nullptr && sig != SIGABRT) {
         std::fprintf(stderr, "  code    %d %s\n", info->si_code,
                      codeName(sig, info->si_code));
@@ -557,11 +593,12 @@ void signalHandler(int sig) {
                        : sig == SIGILL  ? "SIGILL"
                        : sig == SIGFPE  ? "SIGFPE"
                                         : "signal";
-    std::fprintf(stderr, "\n=== bro-headless crash (%s) ===\n", name);
+    std::fprintf(stderr, "\n=== %s crash (%s) ===\n", g_program, name);
     if (g_context[0] != '\0') {
         std::fprintf(stderr, "  running %s\n", g_context);
     }
     if (g_dumps.fetch_add(1) < kMaxDumps) walkHere();
+    writeMinidump(nullptr);
     std::fprintf(stderr, "=== end crash ===\n");
     std::fflush(stderr);
     // Re-raise through the default disposition so the process dies with the
@@ -573,8 +610,21 @@ void signalHandler(int sig) {
 
 } // namespace
 
-void installCrashHandler() {
+void setCrashDumpPath(const std::string& path) {
+#ifdef _WIN32
+    g_dumpPath[0] = L'\0';
+    if (path.empty()) return;
+    const int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, g_dumpPath, kDumpPathCap);
+    if (n <= 0) g_dumpPath[0] = L'\0';
+#else
+    (void)path;
+#endif
+}
+
+void installCrashHandler(const char* program, CrashMode mode) {
     if (g_installed.exchange(true)) return;
+    g_program = program;
+    g_exitOnCrash = mode == CrashMode::Exit;
 
     // The whole reason the crashes were silent. A redirected stdout is fully
     // buffered by the CRT, so up to 4 KB of the last thing the run said dies
@@ -586,9 +636,10 @@ void installCrashHandler() {
 
 #ifdef _WIN32
     // No modal "program has stopped working" box: a crashed headless run must
-    // exit, not wait for a click that will never come.
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
-                 SEM_NOOPENFILEERRORBOX);
+    // exit, not wait for a click that will never come. A windowed app leaves
+    // the system's handling (WER, its LocalDumps) as it was.
+    if (g_exitOnCrash)
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     SetUnhandledExceptionFilter(unhandledFilter);
     AddVectoredExceptionHandler(/*first=*/1, vectoredHandler);
 

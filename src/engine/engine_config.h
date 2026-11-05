@@ -94,6 +94,10 @@ struct EngineConfig {
     // Why the app's bro.json could not be read (config_loader.cpp), "" when
     // it was. The Engine refuses to start with one.
     std::string manifestError;
+    // bro.json "crashReports": the URL a crashed run's log (and minidump) is
+    // POSTed to by the next launch, "" for none (util/crash_reports.h,
+    // docs/apps.md "Crash reports").
+    std::string crashReportUrl;
     // This process is the session's desktop shell over a system compositor
     // (helm as the Winlogon shell on Windows). Agent control then serves
     // "display" without BRO_CONTROL, as a DRM bro does, and its screenshots

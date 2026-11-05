@@ -145,6 +145,44 @@ no running process is writing is deleted, except the newest five, kept for a
 look after a crash. (The anonymous `bro.log` / `bro-<pid>.log` in a working
 directory follow the same rule.)
 
+## Crash reports
+
+A windowed bro arms the crash handler (`util/crash_handler.h`) before
+anything else. A crash writes a report to the log: the exception or signal,
+the faulting address and a stack, symbolised where the PDBs sit beside the
+executable, else module+offset. It also writes a minidump of every thread
+to `<id>.dmp` beside the log (Windows). Then the crash goes on to the
+system's own handling (Windows Error Reporting), as it would without the
+handler. A run that returns from `main` ends its log with `bro: clean exit`.
+
+The next launch of the app, before it truncates the log for itself, keeps
+the previous log in `crashes/` beside it as `<id>-<time>.log` (with its
+`.dmp`) when it holds a crash report or lacks the clean-exit line (a run
+killed outright, or one that hung and was ended). A log another running
+instance still writes is left alone. It is kept whether or not anything
+sends it.
+
+`"crashReports": "<url>"` in bro.json (an app's, or a project root's for every
+app in it) sends what was kept: from a background thread at launch, each
+report is POSTed to `<url>?report=<name>&file=log` (the log's last 4 MB, as
+text), then `&file=dmp` (the minidump, up to 64 MB), with headers
+`X-Bro-App`, `X-Bro-App-Name`, `X-Bro-App-Version`, `X-Bro-Engine` (the engine
+build), `X-Bro-Host` (the computer's name) and `X-Bro-Report-Kind` (`crash`
+or `unclean-exit`). A report the receiver accepted (2xx) is renamed
+`*.sent`, and the newest five sent ones stay. One it did not take (no
+network, receiver down) waits for a later launch. The engine sends it, not
+the app, so no capability is asked for.
+
+`scripts/crash-receiver.js` is a receiver: plain Node, no dependencies. It
+stores each report under `<dir>/<app>/<name>/` (`log`, `dmp`, `meta.json`)
+and lists them at `/`. `scripts/crash-receiver.service` runs it as a
+systemd user service. Anyone who can reach its port can send and read
+reports, so it belongs on a private network.
+
+A minidump is read against the PDBs of the exact build that wrote it (the
+`X-Bro-Engine` stamp names it). A distribution that ships without PDBs keeps
+its build's PDBs to read its reports.
+
 ## Single instance
 
 With `"singleInstance": true`, the first launch claims a per-user channel named

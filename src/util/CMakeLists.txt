@@ -1,4 +1,4 @@
-add_library(bro_util STATIC log.cpp string_utils.cpp time.cpp interrupt.cpp asset_mounts.cpp asset_path.cpp object_url.cpp remote_asset.cpp user_dirs.cpp model_dirs.cpp model_fetch.cpp sha.cpp json_in.cpp exe_dir.cpp process_spawn.cpp storage_file.cpp crash_handler.cpp main_loop_wake.cpp subresource_access.cpp)
+add_library(bro_util STATIC log.cpp string_utils.cpp time.cpp interrupt.cpp asset_mounts.cpp asset_path.cpp object_url.cpp remote_asset.cpp user_dirs.cpp model_dirs.cpp model_fetch.cpp sha.cpp json_in.cpp exe_dir.cpp process_spawn.cpp storage_file.cpp crash_handler.cpp crash_reports.cpp main_loop_wake.cpp subresource_access.cpp)
 target_include_directories(bro_util PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_util PUBLIC bromath::bromath)
 # model_fetch.cpp's download thread.
@@ -19,4 +19,11 @@ endif()
 if(TARGET libcurl_static)
     target_link_libraries(bro_util PRIVATE libcurl_static)
     target_compile_definitions(bro_util PRIVATE BRO_HAVE_CURL)
+endif()
+
+if(BRO_BUILD_TESTS)
+    # Crash reports: which logs a launch keeps, and the send.
+    add_executable(bro_crash_reports_test tests/test_crash_reports.cpp)
+    target_link_libraries(bro_crash_reports_test PRIVATE bro_util)
+    target_compile_features(bro_crash_reports_test PRIVATE cxx_std_20)
 endif()

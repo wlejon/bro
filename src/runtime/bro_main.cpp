@@ -11,6 +11,8 @@
 #include "engine/app_exe.h"
 #include "engine/app_schedule.h"
 #include "engine/capabilities.h"
+#include "util/crash_handler.h"
+#include "util/crash_reports.h"
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -289,6 +291,10 @@ static void attachParentConsole() {
 namespace bro::runtime {
 
 int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
+    // A crash reports its reason and stack to stderr, which is the app's log
+    // once the launch redirects it there: the log of a crash on a user's
+    // machine ends with why, not mid-line.
+    bro::util::installCrashHandler("bro", bro::util::CrashMode::System);
     const std::vector<std::string> args = utf8Args(argc, argv);
 
     // App management (`bro --install <dir>`, docs/apps.md) prints and exits,
@@ -461,8 +467,16 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
             std::error_code ec;
             std::filesystem::create_directories(std::filesystem::path(std::u8string(
                 dirs.logDir.begin(), dirs.logDir.end())), ec);
+            // The last run's log, kept when it crashed or never exited
+            // cleanly, before this run truncates it (util/crash_reports.h).
+            const std::string dumpFile = dirs.logDir + "/" + config.appId + ".dmp";
+            bro::util::keepCrashedLog(dirs.logFile, dumpFile);
             logFile = redirectLogToFile(dirs.logFile, config.appId);
+            // A crash of this run leaves a minidump beside the log it owns.
+            if (logFile == dirs.logFile) bro::util::setCrashDumpPath(dumpFile);
             if (logFile.empty()) logFile = redirectLogToFile();
+            bro::util::sendCrashReports(dirs.logDir, {config.crashReportUrl, config.appId, config.manifest.name,
+                                                      config.manifest.version, bro::engine::engineVersion()});
             // The app's window and engine settings live with its config.
             std::filesystem::create_directories(std::filesystem::path(std::u8string(
                 dirs.config.begin(), dirs.config.end())), ec);
@@ -511,6 +525,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     config.hostProvidesCompiledApp = appModule.has_value();
 
     int exitCode = 0;
+    bool fatal = false;
     try {
         bro::engine::Engine engine(config);
         // The compiled top level runs here: after the Engine (the host globals
@@ -528,6 +543,7 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
         exitCode = 1;
+        fatal = true;
     }
     // Before static destruction: the channel's server thread is a static
     // std::thread, and destroying it still joinable would terminate().
@@ -538,6 +554,9 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
         fprintf(stderr, "Vulkan validation: %u error(s)\n", errors);
         exitCode = 1;
     }
+    // The log's last line: the next launch sends a log without it as a
+    // crash report (a fatal error is reported too).
+    if (!fatal) bro::util::noteCleanExit();
     return exitCode;
 }
 

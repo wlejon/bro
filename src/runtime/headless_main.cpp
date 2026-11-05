@@ -19,7 +19,7 @@ int bro::runtime::runHeadlessMain(int argc, char* argv[]) {
     // to a file, which is exactly when the CRT starts buffering, and a run
     // that renders for an hour and then segfaults used to discard every line
     // it had written along with the reason it died.
-    bro::util::installCrashHandler();
+    bro::util::installCrashHandler("bro-headless");
 
     bro::engine::HeadlessHooks hooks;
     hooks.providesCompiledApp = [](const std::string& appDir) {

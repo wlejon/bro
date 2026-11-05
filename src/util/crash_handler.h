@@ -34,9 +34,20 @@
 
 namespace bro::util {
 
+// What happens after the report. Exit: the process ends at once, with no
+// system box (a headless run must never wait for a click). System: the crash
+// goes on to the system's own handling afterwards (Windows Error Reporting,
+// its LocalDumps), as a windowed app's would without the handler.
+enum class CrashMode { Exit, System };
+
 // Unbuffer the standard streams and install the crash handlers. Idempotent;
-// call it as the first thing in main().
-void installCrashHandler();
+// call it as the first thing in main(). `program` (a literal) names the
+// report: "=== <program> crash (...) ===".
+void installCrashHandler(const char* program, CrashMode mode = CrashMode::Exit);
+
+// Where a crash writes a minidump (Windows: every thread's stack, the
+// modules), "" for none. Set once the log is known; the report names it.
+void setCrashDumpPath(const std::string& path);
 
 // Breadcrumb for the crash report: what the host is running right now. Kept in
 // a fixed buffer written with no allocation, so the handler can read it from a
