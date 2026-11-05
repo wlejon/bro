@@ -108,7 +108,9 @@ jobs:
         if: matrix.cuda
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: "12.6.2"
+          # 12.8+ for Blackwell (sm_120, RTX 50xx) cubins; 12.9 is what the
+          # local Windows packaging tree (build-dist) builds with.
+          cuda: "12.9.1"
           method: network
           use-github-cache: true
           # Linux only: install just the build sub-packages, not the full "cuda"
@@ -195,9 +197,10 @@ jobs:
             # namespace undefined), and sm_70/sm_75 (Volta/Turing) have FP16 WMMA
             # but no BF16 fragment type (incomplete-type error). `all-major`
             # includes all of those. Target Ampere and later — the arches this
-            # BF16 code can actually run on. -real cubins for the common arches +
-            # a newest-arch PTX tail for forward compatibility.
-            CUDA_ARCHS="80-real;86-real;89-real;90-real;90-virtual"
+            # BF16 code can actually run on. -real cubins for Ampere, Ada, Hopper
+            # and Blackwell (RTX 50xx) + a newest-arch PTX tail for forward
+            # compatibility.
+            CUDA_ARCHS="80-real;86-real;89-real;90-real;120-real;120-virtual"
             GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           elif [ "$RUNNER_OS" = "macOS" ]; then
             # macOS: compile the Metal backend IN (also opt-in, same reason). Metal
