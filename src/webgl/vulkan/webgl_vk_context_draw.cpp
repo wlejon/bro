@@ -356,7 +356,11 @@ bool WebGLVkContext::resolveProgramBindings(VkProgramResource& prog, bool& chang
 // draw of the same program in the same segment reuses that set. The samplers
 // and blocks are resolved again only when bindingSerial_ has moved since the
 // program's last successful draw (nothing they are resolved from changed
-// otherwise, so they would resolve the same, without error).
+// otherwise, so they would resolve the same, without error). The default
+// block is a dynamic uniform buffer over the upload chunk its slice is in:
+// new uniform values stage a new slice and change only the dynamic offset,
+// unless the slice lands in another chunk. The set is bound only when it,
+// the pipeline layout or that offset differs from what the pass has bound.
 bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog, DrawShape& shape) {
     const ProgramInterface& iface = prog.iface;
     const uint64_t serial = stream_.segmentSerial();
@@ -375,12 +379,18 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
 
     if (iface.defaultBlockBinding >= 0 &&
         (!sameSegment || prog.drawUniforms.buffer == VK_NULL_HANDLE || prog.drawUniformVersion != prog.uniformVersion)) {
+        // The stream aligns every slice to minUniformBufferOffsetAlignment at
+        // least, as a dynamic offset must be; the slice lies inside its chunk,
+        // so offset + range stays within the buffer.
         render::UploadSlice slice = stage(prog.uniformBytes.data(), prog.uniformBytes.size(),
                                           context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
         if (!slice) return false;
-        prog.drawUniforms = {slice.buffer, slice.offset, prog.uniformBytes.size()};
+        if (slice.buffer != prog.drawUniforms.buffer || prog.drawUniforms.range != prog.uniformBytes.size()) {
+            prog.drawUniforms = {slice.buffer, 0, prog.uniformBytes.size()};
+            prog.drawSet = VK_NULL_HANDLE;
+        }
+        prog.drawUniformOffset = static_cast<uint32_t>(slice.offset);
         prog.drawUniformVersion = prog.uniformVersion;
-        prog.drawSet = VK_NULL_HANDLE;
     }
 
     if (iface.feedbackBuffers > 0) {
@@ -416,7 +426,7 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
         if (iface.defaultBlockBinding >= 0)
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set,
                               static_cast<uint32_t>(iface.defaultBlockBinding), 0, 1,
-                              VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &prog.drawUniforms, nullptr});
+                              VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, nullptr, &prog.drawUniforms, nullptr});
         for (uint32_t b = 0; b < captures.size(); ++b)
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, kFeedbackBinding + b, 0, 1,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &captures[b], nullptr});
@@ -424,10 +434,16 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
         prog.drawSet = set;
     }
     prog.drawSegmentSerial = serial;
-    if (bound_.descriptorSet != prog.drawSet || bound_.pipelineLayout != prog.pipelineLayout) {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &prog.drawSet, 0,
-                                nullptr);
+    // One dynamic offset (the default block, the set's only dynamic
+    // descriptor) or none.
+    const uint32_t dynamicCount = iface.defaultBlockBinding >= 0 ? 1 : 0;
+    const uint32_t dynamicOffset = dynamicCount ? prog.drawUniformOffset : 0;
+    if (bound_.descriptorSet != prog.drawSet || bound_.pipelineLayout != prog.pipelineLayout ||
+        bound_.dynamicOffset != dynamicOffset) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &prog.drawSet,
+                                dynamicCount, &dynamicOffset);
         bound_.descriptorSet = prog.drawSet;
+        bound_.dynamicOffset = dynamicOffset;
     }
     return true;
 }

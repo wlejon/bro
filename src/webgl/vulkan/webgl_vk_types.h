@@ -421,11 +421,16 @@ struct VkProgramResource {
     // segment when nothing changed (webgl_vk_context_draw.cpp). Descriptor
     // sets and the uniform slice come from the segment, so they never
     // outlive it. The images and blocks are resolved again only when the
-    // context's binding serial has moved since drawResolvedSerial.
+    // context's binding serial has moved since drawResolvedSerial. The
+    // default block is a dynamic uniform buffer: the set holds the upload
+    // chunk (drawUniforms, offset 0) and each draw binds its slice's
+    // offset in it (drawUniformOffset), so new uniform values rewrite the
+    // set only when their slice lands in another chunk.
     uint64_t drawSegmentSerial = 0;
     uint64_t uniformVersion = 1;
     uint64_t drawUniformVersion = 0;
     VkDescriptorBufferInfo drawUniforms{};
+    uint32_t drawUniformOffset = 0;
     uint64_t drawResolvedSerial = 0;
     std::vector<VkDescriptorImageInfo> drawImages;
     std::vector<VkDescriptorBufferInfo> drawBlocks;

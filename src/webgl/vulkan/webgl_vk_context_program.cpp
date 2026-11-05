@@ -125,6 +125,8 @@ void WebGLVkContext::releaseProgramExecutable(VkProgramResource& prog) {
     prog.pipelineMemo = {};
     prog.drawSegmentSerial = 0;
     prog.drawUniformVersion = 0;
+    prog.drawUniforms = {};
+    prog.drawUniformOffset = 0;
     prog.drawResolvedSerial = 0;
     prog.drawImages.clear();
     prog.drawBlocks.clear();
@@ -181,7 +183,7 @@ void WebGLVkContext::detachShader(WebGLProgram p, WebGLShader s) {
 }
 
 // One descriptor set layout for the program — its samplers, uniform blocks
-// and default-block buffer at the bindings glslang gave them — and the
+// and default-block buffer (dynamic) at the bindings glslang gave them — and the
 // pipeline layout adding the fragment stage's FragmentPush.
 bool WebGLVkContext::buildProgramLayouts(VkProgramResource& prog) {
     const ProgramInterface& iface = prog.iface;
@@ -198,9 +200,11 @@ bool WebGLVkContext::buildProgramLayouts(VkProgramResource& prog) {
         else
             it->descriptorCount = std::max(it->descriptorCount, b.arrayElement + 1);
     }
+    // The default block is the set's only dynamic descriptor (its one
+    // dynamic offset): a draw moves it to its uniform slice without a new set.
     if (iface.defaultBlockBinding >= 0)
-        bindings.push_back({static_cast<uint32_t>(iface.defaultBlockBinding), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                            VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
+        bindings.push_back({static_cast<uint32_t>(iface.defaultBlockBinding),
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
     for (uint32_t b = 0; b < iface.feedbackBuffers; ++b)
         bindings.push_back({kFeedbackBinding + b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT,
                             nullptr});

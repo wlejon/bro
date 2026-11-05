@@ -104,6 +104,7 @@ struct QuerySlots {
 struct PassBindings {
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    uint32_t dynamicOffset = 0;  // the set's default-block offset, when it has one
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     FragmentPush fragmentPush{};
     bool fragmentPushSet = false;
