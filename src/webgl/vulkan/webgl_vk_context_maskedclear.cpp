@@ -156,7 +156,7 @@ void WebGLVkContext::clearMasked(uint32_t colorMask, const uint32_t color[4], bo
     std::memcpy(push.color, color, sizeof(push.color));
     vkCmdPushConstants(cmd, maskedClear_.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(push), &push);
-    setDynamicState(cmd, pass_.extent);
+    setDynamicState(cmd, pass_.extent, false);
     // The whole target, whatever the GL viewport (clears ignore it).
     const VkViewport vp{0.0f, 0.0f, static_cast<float>(pass_.extent.width),
                         static_cast<float>(pass_.extent.height), 0.0f, 1.0f};

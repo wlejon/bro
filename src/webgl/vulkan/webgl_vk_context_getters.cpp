@@ -74,7 +74,7 @@ bool WebGLVkContext::getUniform(WebGLProgram p, WebGLUniformLocation loc, GLValu
     }
     const VkUniformLocation& slot = prog.iface.locations[static_cast<size_t>(loc.location)];
     const VkUniformInfo& u = prog.iface.uniforms[slot.uniform];
-    const glsl::TypeInfo t = glsl::typeInfo(u.type);
+    const glsl::TypeInfo& t = u.typeInfo;
     out = GLValue{};
 
     if (t.kind == glsl::TypeInfo::Kind::Sampler) {

@@ -190,6 +190,7 @@ void WebGLVkContext::enable(GLenum cap) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }
+    pipelineStateChanged();
     if (cap == GL_BLEND) blendEnabled_ = true;
     else if (cap == GL_DEPTH_TEST) depthTestEnabled_ = true;
     else if (cap == GL_CULL_FACE) cullFaceEnabled_ = true;
@@ -207,6 +208,7 @@ void WebGLVkContext::disable(GLenum cap) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }
+    pipelineStateChanged();
     if (cap == GL_BLEND) blendEnabled_ = false;
     else if (cap == GL_DEPTH_TEST) depthTestEnabled_ = false;
     else if (cap == GL_CULL_FACE) cullFaceEnabled_ = false;
@@ -237,8 +239,17 @@ GLboolean WebGLVkContext::isEnabled(GLenum cap) {
     return GL_FALSE;
 }
 
-void WebGLVkContext::depthFunc(GLenum func) { depthFunc_ = func; }
-void WebGLVkContext::depthMask(GLboolean flag) { depthMask_ = flag; }
+// The setters of state the pipeline key reads (everything but the dynamic
+// state: viewport, scissor, depth range, depth bias, blend color, line
+// width) call pipelineStateChanged().
+void WebGLVkContext::depthFunc(GLenum func) {
+    depthFunc_ = func;
+    pipelineStateChanged();
+}
+void WebGLVkContext::depthMask(GLboolean flag) {
+    depthMask_ = flag;
+    pipelineStateChanged();
+}
 void WebGLVkContext::depthRange(GLfloat zNear, GLfloat zFar) {
     if (zNear > zFar) {
         setSyntheticError(GL_INVALID_OPERATION);  // WebGL forbids an inverted range
@@ -252,16 +263,19 @@ void WebGLVkContext::blendFunc(GLenum sfactor, GLenum dfactor) {
 }
 void WebGLVkContext::blendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) {
     blendSrcRGB_ = srcRGB; blendDstRGB_ = dstRGB; blendSrcAlpha_ = srcAlpha; blendDstAlpha_ = dstAlpha;
+    pipelineStateChanged();
 }
 void WebGLVkContext::blendEquation(GLenum mode) { blendEquationSeparate(mode, mode); }
 void WebGLVkContext::blendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) {
     blendEqRGB_ = modeRGB; blendEqAlpha_ = modeAlpha;
+    pipelineStateChanged();
 }
 void WebGLVkContext::blendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
     blendColor_[0] = r; blendColor_[1] = g; blendColor_[2] = b; blendColor_[3] = a;
 }
 void WebGLVkContext::colorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
     colorMask_[0] = r; colorMask_[1] = g; colorMask_[2] = b; colorMask_[3] = a;
+    pipelineStateChanged();
 }
 
 void WebGLVkContext::stencilFunc(GLenum func, GLint ref, GLuint mask) {
@@ -278,6 +292,7 @@ void WebGLVkContext::stencilFuncSeparate(GLenum face, GLenum func, GLint ref, GL
         stencilRefBack_ = ref;
         stencilValueMaskBack_ = mask;
     }
+    pipelineStateChanged();
 }
 void WebGLVkContext::stencilOp(GLenum fail, GLenum zfail, GLenum zpass) {
     stencilOpSeparate(0x0408 /* GL_FRONT_AND_BACK */, fail, zfail, zpass);
@@ -293,6 +308,7 @@ void WebGLVkContext::stencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, G
         stencilPassDepthFailBack_ = zfail;
         stencilPassDepthPassBack_ = zpass;
     }
+    pipelineStateChanged();
 }
 void WebGLVkContext::stencilMask(GLuint mask) {
     stencilMaskSeparate(0x0408 /* GL_FRONT_AND_BACK */, mask);
@@ -304,10 +320,17 @@ void WebGLVkContext::stencilMaskSeparate(GLenum face, GLuint mask) {
     if (face == GL_BACK || face == 0x0408) {
         stencilWriteMaskBack_ = mask;
     }
+    pipelineStateChanged();
 }
 
-void WebGLVkContext::cullFace(GLenum mode) { cullFaceMode_ = mode; }
-void WebGLVkContext::frontFace(GLenum mode) { frontFaceMode_ = mode; }
+void WebGLVkContext::cullFace(GLenum mode) {
+    cullFaceMode_ = mode;
+    pipelineStateChanged();
+}
+void WebGLVkContext::frontFace(GLenum mode) {
+    frontFaceMode_ = mode;
+    pipelineStateChanged();
+}
 void WebGLVkContext::lineWidth(GLfloat width) {
     if (!(width > 0.0f)) {
         setSyntheticError(GL_INVALID_VALUE);  // also NaN
@@ -322,6 +345,7 @@ void WebGLVkContext::polygonOffset(GLfloat factor, GLfloat units) {
 void WebGLVkContext::sampleCoverage(GLfloat value, GLboolean invert) {
     sampleCoverageValue_ = std::clamp(value, 0.0f, 1.0f);
     sampleCoverageInvert_ = invert != GL_FALSE;
+    pipelineStateChanged();
 }
 void WebGLVkContext::hint(GLenum target, GLenum mode) {
     if ((target != GL_GENERATE_MIPMAP_HINT && target != GL_FRAGMENT_SHADER_DERIVATIVE_HINT) ||

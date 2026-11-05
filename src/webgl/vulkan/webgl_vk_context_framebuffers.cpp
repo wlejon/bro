@@ -45,7 +45,7 @@ bool isFramebufferTarget(GLenum target) {
 
 } // namespace
 
-VkImageAspectFlags WebGLVkContext::Surface::aspects() const {
+VkImageAspectFlags PassSurface::aspects() const {
     return render::imageAspectFor(format);
 }
 

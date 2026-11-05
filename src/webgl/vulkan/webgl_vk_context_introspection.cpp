@@ -109,6 +109,7 @@ void WebGLVkContext::uniformBlockBinding(WebGLProgram p, GLuint blockIndex, GLui
         return;
     }
     prog.blockBindings[blockIndex] = bindingPoint;
+    bindingsChanged();
 }
 
 WebGLActiveInfo WebGLVkContext::getActiveAttrib(WebGLProgram p, GLuint index) {

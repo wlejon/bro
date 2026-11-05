@@ -97,6 +97,10 @@ public:
     /// the GPU is done with them.
     void evictShaders(VkShaderModule vert, VkShaderModule frag);
 
+    /// Changes whenever pipelines are destroyed (clear, evictShaders): a
+    /// pipeline remembered under an older generation may be gone.
+    uint64_t generation() const { return generation_; }
+
 private:
     VkPipeline createPipeline(const PipelineKey& key, VkPipelineLayout layout);
 
@@ -105,6 +109,7 @@ private:
     PipelineKey lastKey_{};
     VkPipelineLayout lastLayout_ = VK_NULL_HANDLE;
     VkPipeline lastPipeline_ = VK_NULL_HANDLE;
+    uint64_t generation_ = 1;
 };
 
 } // namespace bro::webgl::vk

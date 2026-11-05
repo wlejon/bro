@@ -106,7 +106,7 @@ void WebGLVkContext::setUniformValues(WebGLUniformLocation loc, GLsizei count, U
     uint32_t element = 0;
     VkUniformInfo* u = uniformTarget(loc, count, prog, element);
     if (!u || !data || count == 0) return;
-    const glsl::TypeInfo t = glsl::typeInfo(u->type);
+    const glsl::TypeInfo& t = u->typeInfo;
     const uint32_t n = std::min(static_cast<uint32_t>(count), static_cast<uint32_t>(u->size) - element);
 
     if (t.kind == glsl::TypeInfo::Kind::Sampler) {
@@ -124,6 +124,7 @@ void WebGLVkContext::setUniformValues(WebGLUniformLocation loc, GLsizei count, U
         }
         const VkSamplerBinding& s = prog->iface.samplers[static_cast<size_t>(u->sampler)];
         for (uint32_t i = 0; i < n; ++i) prog->samplerUnits[s.firstUnit + element + i] = static_cast<uint32_t>(units[i]);
+        bindingsChanged();
         return;
     }
 
@@ -172,7 +173,7 @@ void WebGLVkContext::setUniformMatrices(WebGLUniformLocation loc, GLsizei count,
     uint32_t element = 0;
     VkUniformInfo* u = uniformTarget(loc, count, prog, element);
     if (!u || !value || count == 0) return;
-    const glsl::TypeInfo t = glsl::typeInfo(u->type);
+    const glsl::TypeInfo& t = u->typeInfo;
     if (!t.isMatrix() || t.columns != columns || t.rows != rows) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;

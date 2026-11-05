@@ -144,52 +144,105 @@ bool WebGLVkContext::vertexFormatSupported(VkFormat format) {
     return (props.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
 }
 
-bool WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape, PipelineKey& key,
-                                      std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets) {
-    VkVAOResource& vao = *currentVao_;
+// How each of the program's inputs is fed from the current VAO (a constant,
+// the array's own buffer, or decoded elements) and the vertex input state
+// that makes; equal layouts share an id, so pipelines remembered per program
+// hold across VAOs that read the same way.
+void WebGLVkContext::buildVertexLayout(const VkProgramResource& prog, VkVAOResource& vao, uint32_t validMask) {
+    VaoInputCache& c = vao.inputs;
+    c = VaoInputCache{};
+    VertexLayout& layout = c.layout;
     uint32_t count = 0;
-    for (const VkVertexInput& in : prog.iface.vertexInputs) {
+    const auto& inputs = prog.iface.vertexInputs;
+    for (size_t i = 0; i < inputs.size() && i < c.paths.size(); ++i) {
+        const VkVertexInput& in = inputs[i];
+        const uint32_t loc = in.location;
+        if (loc >= vao.attributes.size()) continue;  // Skip
+        const VkVertexAttribute& attr = vao.attributes[loc];
+        if (!attr.enabled) {
+            VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            if (in.kind == VkVertexInput::Kind::Int) format = VK_FORMAT_R32G32B32A32_SINT;
+            if (in.kind == VkVertexInput::Kind::Uint) format = VK_FORMAT_R32G32B32A32_UINT;
+            layout.attributes[count] = {loc, count, format, 0};
+            layout.bindings[count] = {count, 0, VK_VERTEX_INPUT_RATE_VERTEX};
+            c.paths[i] = VaoInputCache::Path::Generic;
+            count++;
+            continue;
+        }
+        const uint32_t divisor = attr.divisor;
+        const VkVertexInputRate rate = divisor > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX;
+        const VkFormat format = glTypeToVkFormat(attr.type, attr.size, attr.normalized, attr.isInteger);
+        const bool divisorNative = divisor <= 1 || context_.vertexAttributeDivisor();
+        if (vertexFormatSupported(format) && divisorNative && (validMask & (1u << i))) {
+            const uint32_t stride = attr.stride != 0 ? static_cast<uint32_t>(attr.stride) : elementBytes(attr);
+            layout.attributes[count] = {loc, count, format, 0};
+            layout.bindings[count] = {count, stride, rate};
+            if (divisor > 1) layout.divisors[count] = divisor;
+            c.paths[i] = VaoInputCache::Path::Direct;
+        } else {
+            // A format the device cannot fetch, or a divisor it cannot step
+            // by: the draw decodes the elements into 32-bit components.
+            const uint32_t components = packedType(attr.type) ? 4 : static_cast<uint32_t>(attr.size);
+            layout.attributes[count] = {loc, count, decodedFormat(attr), 0};
+            layout.bindings[count] = {count, components * 4, rate};
+            c.paths[i] = VaoInputCache::Path::Decode;
+        }
+        count++;
+    }
+    layout.count = count;
+    c.linkSerial = prog.linkSerial;
+    c.version = vao.version;
+    c.validMask = validMask;
+
+    for (const auto& [known, id] : vertexLayouts_) {
+        if (known == layout) {
+            c.layoutId = id;
+            return;
+        }
+    }
+    if (vertexLayouts_.size() >= 256) vertexLayouts_.clear();  // ids stay unique; only sharing is lost
+    c.layoutId = nextLayoutId_++;
+    vertexLayouts_.emplace_back(layout, c.layoutId);
+}
+
+const VaoInputCache* WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape,
+                                                      std::vector<VkBuffer>& vbos,
+                                                      std::vector<VkDeviceSize>& offsets) {
+    VkVAOResource& vao = *currentVao_;
+    const auto& inputs = prog.iface.vertexInputs;
+    const size_t n = std::min(inputs.size(), vao.inputs.paths.size());
+
+    // What the draw reads must be there, of the shader's kinds, and long
+    // enough for the elements it fetches.
+    std::array<VkBufferResource*, 16> bufs{};
+    uint32_t validMask = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const VkVertexInput& in = inputs[i];
         const uint32_t loc = in.location;
         if (loc >= vao.attributes.size()) continue;
         const VkVertexAttribute& attr = vao.attributes[loc];
         if (!attr.enabled) {
-            // A disabled array reads the attribute's constant value: a zero
-            // stride binding over the segment's copy of the generic values,
-            // which must be of the kind the shader declares (WebGL 2 5.11).
+            // A disabled array reads the attribute's constant value, which
+            // must be of the kind the shader declares (WebGL 2 5.11).
             if (genericAttribKinds_[loc] != in.kind) {
                 LOG_ERROR("WebGLVkContext: vertex attribute %u's value is not of the shader input's type", loc);
                 setSyntheticError(GL_INVALID_OPERATION);
-                return false;
+                return nullptr;
             }
-            if (genericAttribSerial_ != stream_.segmentSerial() || !genericAttribSlice_) {
-                genericAttribSlice_ = stage(genericAttribs_.data(), sizeof(genericAttribs_));
-                genericAttribSerial_ = stream_.segmentSerial();
-            }
-            if (!genericAttribSlice_) return false;
-            VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
-            if (in.kind == VkVertexInput::Kind::Int) format = VK_FORMAT_R32G32B32A32_SINT;
-            if (in.kind == VkVertexInput::Kind::Uint) format = VK_FORMAT_R32G32B32A32_UINT;
-            key.attributes[count] = {loc, count, format, 0};
-            key.bindings[count] = {count, 0, VK_VERTEX_INPUT_RATE_VERTEX};
-            vbos.push_back(genericAttribSlice_.buffer);
-            offsets.push_back(genericAttribSlice_.offset + loc * 16);
-            count++;
             continue;
         }
-
         auto bIt = attr.bufferId != 0 ? buffers_.find(attr.bufferId) : buffers_.end();
         if (bIt == buffers_.end()) {
             LOG_ERROR("WebGLVkContext: vertex attribute %u is enabled with no buffer", loc);
             setSyntheticError(GL_INVALID_OPERATION);
-            return false;
+            return nullptr;
         }
         if (arrayKind(attr) != in.kind) {
             LOG_ERROR("WebGLVkContext: vertex attribute %u's array is not of the shader input's type", loc);
             setSyntheticError(GL_INVALID_OPERATION);
-            return false;
+            return nullptr;
         }
         VkBufferResource& buf = bIt->second;
-
         // The elements the draw fetches: per vertex, or one per `divisor`
         // instances.
         const uint32_t divisor = attr.divisor;
@@ -201,51 +254,64 @@ bool WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, const DrawS
             attr.offset + (end - 1) * stride + elemBytes > static_cast<uint64_t>(buf.shadowData.size())) {
             LOG_ERROR("WebGLVkContext: vertex attribute %u reads past the end of its buffer", loc);
             setSyntheticError(GL_INVALID_OPERATION);
-            return false;
+            return nullptr;
         }
-
-        const VkFormat format = glTypeToVkFormat(attr.type, attr.size, attr.normalized, attr.isInteger);
-        const bool divisorNative = divisor <= 1 || context_.vertexAttributeDivisor();
-        if (vertexFormatSupported(format) && divisorNative && buf.isValid()) {
-            key.attributes[count] = {loc, count, format, 0};
-            key.bindings[count] = {count, static_cast<uint32_t>(stride),
-                                   divisor > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
-            if (divisor > 1) key.divisors[count] = divisor;
-            vbos.push_back(buf.buffer);
-            offsets.push_back(attr.offset);
-            count++;
-            continue;
-        }
-
-        // A format the device cannot fetch, or a divisor it cannot step by:
-        // decode the fetched elements into 32-bit components in the
-        // segment's upload memory, one per vertex (or per instance), at the
-        // index the draw fetches them by.
-        const VkFormat decoded = decodedFormat(attr);
-        const uint32_t components = packedType(attr.type) ? 4 : static_cast<uint32_t>(attr.size);
-        const uint32_t outStride = components * 4;
-        const uint32_t outEnd = divisor > 1 ? shape.instances : end;
-        const uint32_t outFirst = divisor > 0 ? 0 : first;
-        if (!syncShadow(buf)) return false;
-        render::UploadSlice slice = stage(nullptr, std::max<VkDeviceSize>(outEnd, 1) * outStride, 4);
-        if (!slice) return false;
-        auto* out = static_cast<uint8_t*>(slice.mapped);
-        for (uint32_t i = outFirst; i < outEnd; ++i) {
-            const uint32_t element = divisor > 1 ? i / divisor : i;
-            uint32_t v[4];
-            decodeElement(attr, buf.shadowData.data() + attr.offset + element * stride, v);
-            std::memcpy(out + static_cast<size_t>(i) * outStride, v, outStride);
-        }
-        key.attributes[count] = {loc, count, decoded, 0};
-        key.bindings[count] = {count, outStride,
-                               divisor > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
-        vbos.push_back(slice.buffer);
-        offsets.push_back(slice.offset);
-        count++;
+        bufs[i] = &buf;
+        if (buf.isValid()) validMask |= 1u << i;
     }
-    key.attributeCount = count;
-    key.bindingCount = count;
-    return true;
+
+    const VaoInputCache& c = vao.inputs;
+    if (c.linkSerial != prog.linkSerial || c.version != vao.version || c.validMask != validMask)
+        buildVertexLayout(prog, vao, validMask);
+
+    for (size_t i = 0; i < n; ++i) {
+        switch (c.paths[i]) {
+            case VaoInputCache::Path::Skip: break;
+            case VaoInputCache::Path::Generic: {
+                // A zero stride binding over the segment's copy of the
+                // generic values.
+                if (genericAttribSerial_ != stream_.segmentSerial() || !genericAttribSlice_) {
+                    genericAttribSlice_ = stage(genericAttribs_.data(), sizeof(genericAttribs_));
+                    genericAttribSerial_ = stream_.segmentSerial();
+                }
+                if (!genericAttribSlice_) return nullptr;
+                vbos.push_back(genericAttribSlice_.buffer);
+                offsets.push_back(genericAttribSlice_.offset + inputs[i].location * 16);
+                break;
+            }
+            case VaoInputCache::Path::Direct:
+                vbos.push_back(bufs[i]->buffer);
+                offsets.push_back(vao.attributes[inputs[i].location].offset);
+                break;
+            case VaoInputCache::Path::Decode: {
+                // Decode the fetched elements into 32-bit components in the
+                // segment's upload memory, one per vertex (or per instance),
+                // at the index the draw fetches them by.
+                const VkVertexAttribute& attr = vao.attributes[inputs[i].location];
+                VkBufferResource& buf = *bufs[i];
+                const uint32_t divisor = attr.divisor;
+                const uint32_t end = divisor == 0 ? shape.end : (shape.instances + divisor - 1) / divisor;
+                const uint64_t stride = attr.stride != 0 ? static_cast<uint64_t>(attr.stride) : elementBytes(attr);
+                const uint32_t outStride = c.layout.bindings[vbos.size()].stride;
+                const uint32_t outEnd = divisor > 1 ? shape.instances : end;
+                const uint32_t outFirst = divisor > 0 ? 0 : shape.first;
+                if (!syncShadow(buf)) return nullptr;
+                render::UploadSlice slice = stage(nullptr, std::max<VkDeviceSize>(outEnd, 1) * outStride, 4);
+                if (!slice) return nullptr;
+                auto* out = static_cast<uint8_t*>(slice.mapped);
+                for (uint32_t e = outFirst; e < outEnd; ++e) {
+                    const uint32_t element = divisor > 1 ? e / divisor : e;
+                    uint32_t v[4];
+                    decodeElement(attr, buf.shadowData.data() + attr.offset + element * stride, v);
+                    std::memcpy(out + static_cast<size_t>(e) * outStride, v, outStride);
+                }
+                vbos.push_back(slice.buffer);
+                offsets.push_back(slice.offset);
+                break;
+            }
+        }
+    }
+    return &c;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +324,7 @@ void WebGLVkContext::enableVertexAttribArray(GLuint index) {
         return;
     }
     currentVao_->attributes[index].enabled = true;
+    ++currentVao_->version;
 }
 
 void WebGLVkContext::disableVertexAttribArray(GLuint index) {
@@ -266,6 +333,7 @@ void WebGLVkContext::disableVertexAttribArray(GLuint index) {
         return;
     }
     currentVao_->attributes[index].enabled = false;
+    ++currentVao_->version;
 }
 
 namespace {
@@ -310,6 +378,7 @@ void WebGLVkContext::vertexAttribPointer(GLuint index, GLint size, GLenum type, 
     attr.stride = stride;
     attr.offset = offset;
     attr.bufferId = boundArrayBuffer_;
+    ++currentVao_->version;
 }
 
 void WebGLVkContext::vertexAttribIPointer(GLuint index, GLint size, GLenum type, GLsizei stride,
@@ -327,6 +396,7 @@ void WebGLVkContext::vertexAttribIPointer(GLuint index, GLint size, GLenum type,
     attr.stride = stride;
     attr.offset = offset;
     attr.bufferId = boundArrayBuffer_;
+    ++currentVao_->version;
 }
 
 void WebGLVkContext::vertexAttribDivisor(GLuint index, GLuint divisor) {
@@ -335,6 +405,7 @@ void WebGLVkContext::vertexAttribDivisor(GLuint index, GLuint divisor) {
         return;
     }
     currentVao_->attributes[index].divisor = divisor;
+    ++currentVao_->version;
 }
 
 } // namespace bro::webgl::vk

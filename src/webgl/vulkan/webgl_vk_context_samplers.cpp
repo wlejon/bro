@@ -136,6 +136,7 @@ WebGLSampler WebGLVkContext::createSampler() {
 
 void WebGLVkContext::deleteSampler(WebGLSampler s) {
     if (samplers_.erase(s.id) == 0) return;
+    bindingsChanged();
     for (GLuint& unit : boundSamplers_)
         if (unit == s.id) unit = 0;
 }
@@ -150,6 +151,7 @@ void WebGLVkContext::bindSampler(GLuint unit, WebGLSampler s) {
         return;
     }
     boundSamplers_[unit] = s.id;
+    bindingsChanged();
 }
 
 void WebGLVkContext::samplerParameteri(WebGLSampler s, GLenum pname, GLint param) {

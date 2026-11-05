@@ -142,9 +142,12 @@ void WebGLVkPipelineCache::clear() {
     pipelines_.clear();
     lastPipeline_ = VK_NULL_HANDLE;
     lastLayout_ = VK_NULL_HANDLE;
+    ++generation_;
 }
 
 void WebGLVkPipelineCache::evictShaders(VkShaderModule vert, VkShaderModule frag) {
+    if (vert == VK_NULL_HANDLE && frag == VK_NULL_HANDLE) return;  // a program never linked
+    ++generation_;
     VkDevice dev = context_.device();
     if (lastKey_.vertShader == vert || lastKey_.fragShader == frag) {
         lastPipeline_ = VK_NULL_HANDLE;

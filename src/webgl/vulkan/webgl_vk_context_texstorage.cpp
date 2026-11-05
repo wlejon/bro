@@ -93,6 +93,7 @@ bool WebGLVkContext::validateLevelSize(GLenum target, GLint level, GLsizei width
 // image anyway). A failed allocation leaves the texture as it was.
 bool WebGLVkContext::allocateTexture(VkTextureResource& tex, const TexFormat& tf, uint32_t width, uint32_t height,
                                      uint32_t depth, uint32_t levels) {
+    bindingsChanged();
     const bool cube = tex.target == GL_TEXTURE_CUBE_MAP;
     const bool is3D = tex.is3D();
     const bool array = tex.target == GL_TEXTURE_2D_ARRAY;

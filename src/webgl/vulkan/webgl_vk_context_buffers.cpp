@@ -13,6 +13,7 @@ WebGLBuffer WebGLVkContext::createBuffer() {
 }
 
 void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
+    bindingsChanged();  // uniform buffer bindings drop it
     auto it = buffers_.find(buf.id);
     if (it != buffers_.end()) {
         releaseBuffer(it->second);
@@ -162,6 +163,7 @@ void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf
     }
     boundUniformBuffers_[index] = {buf.id, 0, 0};
     boundUniformBuffer_ = buf.id;
+    bindingsChanged();
 }
 
 // The range is checked against the buffer when a draw uses it (it may be
@@ -193,6 +195,7 @@ void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer bu
     }
     boundUniformBuffers_[index] = {buf.id, buf.id != 0 ? offset : 0, buf.id != 0 ? size : 0};
     boundUniformBuffer_ = buf.id;
+    bindingsChanged();
 }
 
 GLuint WebGLVkContext::indexedBuffer(GLenum target, GLuint index) {
@@ -241,6 +244,7 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
     }
 
     VkBufferResource& res = buffers_[bufId];
+    bindingsChanged();  // a uniform block's range is checked against the size, and storage may be new
     // Re-specifying a mapped buffer unmaps it (ES 3.0 2.10.3); its contents
     // are replaced, so nothing is written back.
     res.isMapped = false;

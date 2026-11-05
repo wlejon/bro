@@ -200,11 +200,48 @@ struct VkVertexAttribute {
     GLuint divisor = 0;
 };
 
+/// The vertex input state a pipeline reads a program's inputs with: input
+/// i of `count` is attribute i, from binding i.
+struct VertexLayout {
+    uint32_t count = 0;
+    VkVertexInputAttributeDescription attributes[16]{};
+    VkVertexInputBindingDescription bindings[16]{};
+    uint32_t divisors[16]{};  // per binding: the instance divisor when other than 0 or 1
+
+    bool operator==(const VertexLayout& o) const {
+        if (count != o.count) return false;
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto &a = attributes[i], &b = o.attributes[i];
+            const auto &c = bindings[i], &d = o.bindings[i];
+            if (a.location != b.location || a.binding != b.binding || a.format != b.format || a.offset != b.offset ||
+                c.binding != d.binding || c.stride != d.stride || c.inputRate != d.inputRate ||
+                divisors[i] != o.divisors[i])
+                return false;
+        }
+        return true;
+    }
+};
+
+/// How a draw feeds a program's vertex input i from a VAO, and the layout
+/// that makes: worked out when the program, the VAO's arrays or which of
+/// their buffers have storage change, not every draw.
+struct VaoInputCache {
+    enum class Path : uint8_t { Skip, Generic, Direct, Decode };
+    uint64_t linkSerial = 0;   // the program's link; 0: nothing cached
+    uint64_t version = 0;      // VkVAOResource::version
+    uint32_t validMask = 0;    // bit i: input i's buffer has storage
+    uint64_t layoutId = 0;     // equal for equal layouts
+    std::array<Path, 16> paths{};
+    VertexLayout layout;
+};
+
 /// Vertex Array Object (VAO) state.
 struct VkVAOResource {
     std::array<VkVertexAttribute, 16> attributes{};
     GLuint elementArrayBufferId = 0;
     bool everBound = false;  // isVertexArray: true once bound
+    uint64_t version = 1;    // bumped by every change to `attributes`
+    VaoInputCache inputs;
 };
 
 /// A shader object: its source and the result of the last compileShader.
@@ -235,11 +272,24 @@ struct VkVertexInput {
     enum class Kind : uint8_t { Float, Int, Uint } kind = Kind::Float;
 };
 
+namespace glsl {
+/// What a GLSL type enum (GL_FLOAT_VEC3, GL_FLOAT_MAT2x4, GL_SAMPLER_2D...) is
+/// made of: component kind, and columns x rows (a vector is 1 x n).
+struct TypeInfo {
+    enum class Kind : uint8_t { Float, Int, Uint, Bool, Sampler, Unknown } kind = Kind::Unknown;
+    uint8_t columns = 1;
+    uint8_t rows = 1;
+    bool isMatrix() const { return columns > 1; }
+    uint32_t components() const { return static_cast<uint32_t>(columns) * rows; }
+};
+} // namespace glsl
+
 /// An active uniform, as getActiveUniform / getActiveUniforms report it: a
 /// default-block value, a sampler, or a member of a uniform block.
 struct VkUniformInfo {
     std::string name;       // GL name; an array's ends in "[0]"
     GLenum type = GL_FLOAT;
+    glsl::TypeInfo typeInfo;  // of `type`, for the setters
     GLint size = 1;         // array length, 1 when not an array
     GLint blockIndex = -1;  // GL uniform block, -1 for the default block
     // Layout in its block (std140). Default-block values are laid out the
@@ -364,16 +414,34 @@ struct VkProgramResource {
     std::vector<uint32_t> samplerUnits;    // texture unit per sampler element
     std::vector<GLuint> blockBindings;     // GL binding point per uniform block
 
+    // Unique to each executable a link made (0 before the first).
+    uint64_t linkSerial = 0;
+
     // What the last draw bound, reused by the next draw in the same stream
     // segment when nothing changed (webgl_vk_context_draw.cpp). Descriptor
     // sets and the uniform slice come from the segment, so they never
-    // outlive it.
+    // outlive it. The images and blocks are resolved again only when the
+    // context's binding serial has moved since drawResolvedSerial.
     uint64_t drawSegmentSerial = 0;
     uint64_t uniformVersion = 1;
     uint64_t drawUniformVersion = 0;
     VkDescriptorBufferInfo drawUniforms{};
-    std::vector<uint64_t> drawBindingKey;
+    uint64_t drawResolvedSerial = 0;
+    std::vector<VkDescriptorImageInfo> drawImages;
+    std::vector<VkDescriptorBufferInfo> drawBlocks;
+    std::vector<VkDescriptorBufferInfo> drawCaptures;
     VkDescriptorSet drawSet = VK_NULL_HANDLE;
+
+    // The pipeline of the last draw, and what it was made for: reused while
+    // none of those has changed, without building or hashing a key.
+    struct PipelineMemo {
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        uint64_t stateSerial = 0;      // WebGLVkContext's pipelineStateSerial_
+        uint64_t layoutId = 0;         // VaoInputCache::layoutId
+        uint64_t cacheGeneration = 0;  // WebGLVkPipelineCache::generation()
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkBool32 restart = VK_FALSE;
+    } pipelineMemo;
 
     bool isValid() const { return linkStatus; }
 };

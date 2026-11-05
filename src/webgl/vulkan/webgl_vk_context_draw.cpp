@@ -10,8 +10,6 @@ namespace bro::webgl::vk {
 
 namespace {
 
-uint64_t handleBits(const void* h) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(h)); }
-
 // What a sampler uniform's type reads: float (or depth, uncompared),
 // signed or unsigned integer texels, or a depth comparison.
 enum class SamplerKind : uint8_t { Float, Int, Uint, Shadow };
@@ -83,12 +81,14 @@ VkProgramResource* WebGLVkContext::drawProgram(const char* what) {
     return &prog;
 }
 
-void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog, const DrawShape& shape,
-                                      PipelineKey& key, VkExtent2D& extent) {
-    key.vertShader = prog.vertModule;
-    key.fragShader = prog.fragModule;
-    key.topology = glTopologyToVk(mode);
-    key.primitiveRestartEnable = shape.restart ? VK_TRUE : VK_FALSE;
+// Every GL state read here is set through a setter that calls
+// pipelineStateChanged() (webgl_vk_context.cpp), and pass_ only by
+// beginRendering / endRendering, which call it too.
+const PipelineKey& WebGLVkContext::fixedPipelineKey() {
+    if (fixedKeySerial_ == pipelineStateSerial_) return fixedKey_;
+    fixedKeySerial_ = pipelineStateSerial_;
+    PipelineKey& key = fixedKey_;
+    key = PipelineKey{};
     key.depthBiasEnable = polygonOffsetFillEnabled_ ? VK_TRUE : VK_FALSE;
 
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
@@ -135,7 +135,6 @@ void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog
     if (colorMask_[2]) key.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
     if (colorMask_[3]) key.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
 
-    extent = pass_.extent;
     key.colorAttachmentCount = pass_.colorCount;
     for (uint32_t i = 0; i < 8; ++i)
         key.colorAttachmentFormats[i] = i < pass_.colorCount && pass_.color[i] ? pass_.color[i].format
@@ -158,10 +157,43 @@ void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog
             key.sampleMask = (sampleCoverageInvert_ ? ~mask : mask) & all;
         }
     }
+    return key;
+}
+
+// The pipeline for this draw: the program's last one when nothing it was
+// made for has changed, else from the pipeline cache by the full key.
+VkPipeline WebGLVkContext::drawPipeline(GLenum mode, VkProgramResource& prog, const DrawShape& shape,
+                                        const VaoInputCache& inputs) {
+    const VkPrimitiveTopology topology = glTopologyToVk(mode);
+    const VkBool32 restart = shape.restart ? VK_TRUE : VK_FALSE;
+    VkProgramResource::PipelineMemo& memo = prog.pipelineMemo;
+    if (memo.pipeline != VK_NULL_HANDLE && memo.stateSerial == pipelineStateSerial_ &&
+        memo.layoutId == inputs.layoutId && memo.topology == topology && memo.restart == restart &&
+        memo.cacheGeneration == pipelineCache_.generation())
+        return memo.pipeline;
+
+    PipelineKey key = fixedPipelineKey();
+    key.vertShader = prog.vertModule;
+    key.fragShader = prog.fragModule;
+    key.topology = topology;
+    key.primitiveRestartEnable = restart;
+    const VertexLayout& layout = inputs.layout;
+    key.attributeCount = layout.count;
+    key.bindingCount = layout.count;
+    std::memcpy(key.attributes, layout.attributes, sizeof(key.attributes));
+    std::memcpy(key.bindings, layout.bindings, sizeof(key.bindings));
+    std::memcpy(key.divisors, layout.divisors, sizeof(key.divisors));
+    const VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, prog.pipelineLayout);
+    if (pipeline == VK_NULL_HANDLE) {
+        memo = {};
+        return VK_NULL_HANDLE;
+    }
+    memo = {pipeline, pipelineStateSerial_, inputs.layoutId, pipelineCache_.generation(), topology, restart};
+    return pipeline;
 }
 
 // The fixed-function values every pipeline takes as dynamic state.
-void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent) {
+void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent, bool discard) {
     // The canvas is drawn top-down (a negative viewport height maps GL's
     // bottom-up NDC onto it); a framebuffer object in GL's own row order.
     const bool flipped = pass_.topDown;
@@ -172,10 +204,14 @@ void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent) {
     vp.height = flipped ? -viewport_.height : viewport_.height;
     vp.minDepth = depthNear_;
     vp.maxDepth = depthFar_;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
+    bound_.setViewport(cmd, vp);
 
     VkRect2D sc{};
-    if (scissorTest_) {
+    if (discard) {
+        // RASTERIZER_DISCARD while capturing: the vertex stage runs, no
+        // fragment does (an empty scissor; the pipeline keeps its fragment
+        // state).
+    } else if (scissorTest_) {
         int32_t x0 = std::max(0, scissor_.offset.x);
         int32_t top = scissorTop(extent);
         int32_t y0 = std::max(0, top);
@@ -188,15 +224,15 @@ void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent) {
     } else {
         sc.extent = extent;
     }
-    vkCmdSetScissor(cmd, 0, 1, &sc);
+    bound_.setScissor(cmd, sc);
 
     // GL offsets depth by factor * DZ + units * r; Vulkan by its slope and
     // constant factors, the same terms.
-    vkCmdSetDepthBias(cmd, polygonOffsetUnits_, 0.0f, polygonOffsetFactor_);
-    vkCmdSetBlendConstants(cmd, blendColor_);
+    bound_.setDepthBias(cmd, polygonOffsetUnits_, polygonOffsetFactor_);
+    bound_.setBlendConstants(cmd, blendColor_);
     if (context_.wideLines()) {
         const float* range = context_.deviceProperties().limits.lineWidthRange;
-        vkCmdSetLineWidth(cmd, std::clamp(lineWidth_, range[0], range[1]));
+        bound_.setLineWidth(cmd, std::clamp(lineWidth_, range[0], range[1]));
     }
 }
 
@@ -244,38 +280,38 @@ bool WebGLVkContext::uniformBlockRange(const VkProgramResource& prog, size_t blo
     return true;
 }
 
-// Bind the program's samplers, uniform blocks and default-block uniforms as
-// one descriptor set. The set comes from the stream segment and is written
-// once, before any command uses it; a draw whose bindings match the previous
-// draw of the same program in the same segment reuses that set.
-bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog, DrawShape& shape) {
-    const ProgramInterface& iface = prog.iface;
-    const uint64_t serial = stream_.segmentSerial();
-    const bool sameSegment = prog.drawSegmentSerial == serial;
+namespace {
 
+bool sameImages(const std::vector<VkDescriptorImageInfo>& a, const std::vector<VkDescriptorImageInfo>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].sampler != b[i].sampler || a[i].imageView != b[i].imageView || a[i].imageLayout != b[i].imageLayout)
+            return false;
+    return true;
+}
+
+bool sameBuffers(const std::vector<VkDescriptorBufferInfo>& a, const std::vector<VkDescriptorBufferInfo>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].buffer != b[i].buffer || a[i].offset != b[i].offset || a[i].range != b[i].range) return false;
+    return true;
+}
+
+} // namespace
+
+// The program's uniform block ranges and sampler images from the current
+// bindings, with WebGL's draw-time errors (false). `changed` is set when
+// they differ from what the program's descriptor set was written with.
+bool WebGLVkContext::resolveProgramBindings(VkProgramResource& prog, bool& changed) {
+    changed = false;
+    const ProgramInterface& iface = prog.iface;
     auto& blocks = drawBlocks_;
     blocks.resize(iface.uniformBlocks.size());
     for (size_t i = 0; i < blocks.size(); ++i)
         if (!uniformBlockRange(prog, i, blocks[i])) return false;
 
-    if (iface.defaultBlockBinding >= 0 &&
-        (!sameSegment || prog.drawUniforms.buffer == VK_NULL_HANDLE || prog.drawUniformVersion != prog.uniformVersion)) {
-        render::UploadSlice slice = stage(prog.uniformBytes.data(), prog.uniformBytes.size(),
-                                          context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
-        if (!slice) return false;
-        prog.drawUniforms = {slice.buffer, slice.offset, prog.uniformBytes.size()};
-        prog.drawUniformVersion = prog.uniformVersion;
-    }
-
-    auto& captures = drawCaptures_;
-    captures.clear();
-    if (iface.feedbackBuffers > 0) feedbackDescriptors(prog, shape, captures);
-
     auto& images = drawImages_;
     images.resize(iface.samplerUnitCount);
-    auto& key = drawKey_;
-    key.clear();
-    key.reserve(images.size() * 2 + blocks.size() * 3 + 2 + captures.size() * 2);
     for (const VkSamplerBinding& s : iface.samplers) {
         const SamplerKind want = samplerKind(s.type);
         for (uint32_t e = 0; e < s.count; ++e) {
@@ -303,34 +339,75 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
                 }
             }
             images[s.firstUnit + e] = {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            key.push_back(handleBits(view));
-            key.push_back(handleBits(sampler));
         }
     }
-    for (const VkDescriptorBufferInfo& b : blocks) {
-        key.push_back(handleBits(b.buffer));
-        key.push_back(b.offset);
-        key.push_back(b.range);
+
+    if (!sameBuffers(blocks, prog.drawBlocks) || !sameImages(images, prog.drawImages)) {
+        prog.drawBlocks.assign(blocks.begin(), blocks.end());
+        prog.drawImages.assign(images.begin(), images.end());
+        changed = true;
     }
-    key.push_back(handleBits(prog.drawUniforms.buffer));
-    key.push_back(prog.drawUniforms.offset);
-    for (const VkDescriptorBufferInfo& b : captures) {
-        key.push_back(handleBits(b.buffer));
-        key.push_back(b.offset);
+    return true;
+}
+
+// Bind the program's samplers, uniform blocks and default-block uniforms as
+// one descriptor set. The set comes from the stream segment and is written
+// once, before any command uses it; a draw whose bindings match the previous
+// draw of the same program in the same segment reuses that set. The samplers
+// and blocks are resolved again only when bindingSerial_ has moved since the
+// program's last successful draw (nothing they are resolved from changed
+// otherwise, so they would resolve the same, without error).
+bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog, DrawShape& shape) {
+    const ProgramInterface& iface = prog.iface;
+    const uint64_t serial = stream_.segmentSerial();
+    const bool sameSegment = prog.drawSegmentSerial == serial;
+    // A null drawSet is rewritten below: whatever changes what the set holds
+    // nulls it on the spot, so a draw that fails after the change still
+    // leaves the next one to write it.
+    if (!sameSegment) prog.drawSet = VK_NULL_HANDLE;
+
+    if (prog.drawResolvedSerial != bindingSerial_) {
+        bool changed = false;
+        if (!resolveProgramBindings(prog, changed)) return false;
+        if (changed) prog.drawSet = VK_NULL_HANDLE;
+        prog.drawResolvedSerial = bindingSerial_;
     }
 
-    if (!sameSegment || prog.drawSet == VK_NULL_HANDLE || key != prog.drawBindingKey) {
+    if (iface.defaultBlockBinding >= 0 &&
+        (!sameSegment || prog.drawUniforms.buffer == VK_NULL_HANDLE || prog.drawUniformVersion != prog.uniformVersion)) {
+        render::UploadSlice slice = stage(prog.uniformBytes.data(), prog.uniformBytes.size(),
+                                          context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
+        if (!slice) return false;
+        prog.drawUniforms = {slice.buffer, slice.offset, prog.uniformBytes.size()};
+        prog.drawUniformVersion = prog.uniformVersion;
+        prog.drawSet = VK_NULL_HANDLE;
+    }
+
+    if (iface.feedbackBuffers > 0) {
+        auto& captures = drawCaptures_;
+        captures.clear();
+        feedbackDescriptors(prog, shape, captures);
+        if (!sameBuffers(captures, prog.drawCaptures)) {
+            prog.drawCaptures.assign(captures.begin(), captures.end());
+            prog.drawSet = VK_NULL_HANDLE;
+        }
+    }
+
+    if (prog.drawSet == VK_NULL_HANDLE) {
         VkDescriptorSet set = stream_.allocDescriptorSet(prog.setLayout);
         if (set == VK_NULL_HANDLE) {
             setSyntheticError(GL_OUT_OF_MEMORY);
             return false;
         }
+        const auto& blocks = prog.drawBlocks;
+        const auto& captures = prog.drawCaptures;
         auto& writes = drawWrites_;
         writes.clear();
         writes.reserve(iface.samplers.size() + blocks.size() + captures.size() + 1);
         for (const VkSamplerBinding& s : iface.samplers)
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, s.binding, 0, s.count,
-                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[s.firstUnit], nullptr, nullptr});
+                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prog.drawImages[s.firstUnit], nullptr,
+                              nullptr});
         for (size_t i = 0; i < blocks.size(); ++i) {
             const VkUniformBlockInfo& b = iface.uniformBlocks[i];
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, b.descriptorBinding,
@@ -345,13 +422,12 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &captures[b], nullptr});
         vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         prog.drawSet = set;
-        prog.drawBindingKey.assign(key.begin(), key.end());
     }
     prog.drawSegmentSerial = serial;
-    if (boundDescriptorSet_ != prog.drawSet || boundPipelineLayout_ != prog.pipelineLayout) {
+    if (bound_.descriptorSet != prog.drawSet || bound_.pipelineLayout != prog.pipelineLayout) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &prog.drawSet, 0,
                                 nullptr);
-        boundDescriptorSet_ = prog.drawSet;
+        bound_.descriptorSet = prog.drawSet;
     }
     return true;
 }
@@ -366,53 +442,44 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape
     offsets.clear();
     if (rasterizerDiscardEnabled_ && !shape.feedback) {
         // Nothing reaches the framebuffer: the draw only has its errors.
-        PipelineKey key{};
-        bindVertexInputs(prog, shape, key, vbos, offsets);
+        bindVertexInputs(prog, shape, vbos, offsets);
         return false;
     }
     beginRendering();
     if (!inRenderPass_) return false;
     VkCommandBuffer cmd = commands();
 
-    PipelineKey key{};
-    VkExtent2D extent{};
-    buildPipelineKey(mode, prog, shape, key, extent);
-    if (!bindVertexInputs(prog, shape, key, vbos, offsets)) return false;
-
-    VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, prog.pipelineLayout);
+    const VaoInputCache* inputs = bindVertexInputs(prog, shape, vbos, offsets);
+    if (!inputs) return false;
+    VkPipeline pipeline = drawPipeline(mode, prog, shape, *inputs);
     if (pipeline == VK_NULL_HANDLE) {
         LOG_ERROR("WebGLVkContext: Failed to obtain graphics pipeline");
         setSyntheticError(GL_INVALID_OPERATION);
         return false;
     }
     if (!bindProgramResources(cmd, prog, shape)) return false;
-    if (boundPipeline_ != pipeline) {
+    if (bound_.pipeline != pipeline) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        boundPipeline_ = pipeline;
+        bound_.pipeline = pipeline;
     }
+    const VkExtent2D extent = pass_.extent;
     const FragmentPush push =
         pass_.topDown ? FragmentPush{static_cast<float>(extent.height), -1.0f} : FragmentPush{};
-    if (!fragmentPushInitialized_ || boundPipelineLayout_ != prog.pipelineLayout ||
-        std::memcmp(&lastFragmentPush_, &push, sizeof(push)) != 0) {
+    if (!bound_.fragmentPushSet || bound_.pipelineLayout != prog.pipelineLayout ||
+        std::memcmp(&bound_.fragmentPush, &push, sizeof(push)) != 0) {
         vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-        lastFragmentPush_ = push;
-        fragmentPushInitialized_ = true;
+        bound_.fragmentPush = push;
+        bound_.fragmentPushSet = true;
     }
-    boundPipelineLayout_ = prog.pipelineLayout;
+    bound_.pipelineLayout = prog.pipelineLayout;
     if (!prog.iface.feedbackVaryings.empty()) {
         const FeedbackPush capture = shape.feedback ? shape.feedbackPush : FeedbackPush{};
         vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, kFeedbackPushOffset,
                            sizeof(capture), &capture);
     }
-    setDynamicState(cmd, extent);
-    // RASTERIZER_DISCARD while capturing: the vertex stage runs, no fragment
-    // does (an empty scissor; the pipeline keeps its fragment state).
-    if (rasterizerDiscardEnabled_) {
-        const VkRect2D none{};
-        vkCmdSetScissor(cmd, 0, 1, &none);
-    }
+    setDynamicState(cmd, extent, rasterizerDiscardEnabled_);
     if (!vbos.empty())
-        vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vbos.size()), vbos.data(), offsets.data());
+        bound_.bindVertexBuffers(cmd, static_cast<uint32_t>(vbos.size()), vbos.data(), offsets.data());
     return true;
 }
 

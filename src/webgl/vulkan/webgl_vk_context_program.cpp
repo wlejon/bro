@@ -119,9 +119,18 @@ void WebGLVkContext::releaseProgramExecutable(VkProgramResource& prog) {
     }
     prog.setLayout = VK_NULL_HANDLE;
     prog.pipelineLayout = VK_NULL_HANDLE;
+    // Whatever the next link makes is a new executable: nothing a draw
+    // remembered of this one (pipeline, vertex layouts, descriptors) holds.
+    prog.linkSerial = nextLinkSerial_++;
+    prog.pipelineMemo = {};
     prog.drawSegmentSerial = 0;
     prog.drawUniformVersion = 0;
+    prog.drawResolvedSerial = 0;
+    prog.drawImages.clear();
+    prog.drawBlocks.clear();
+    prog.drawCaptures.clear();
     prog.drawSet = VK_NULL_HANDLE;
+    bindingsChanged();
 }
 
 void WebGLVkContext::destroyProgram(GLuint id) {

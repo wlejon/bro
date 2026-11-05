@@ -90,7 +90,7 @@ void WebGLVkContext::drawIndices(GLenum mode, VkProgramResource& prog, VkBuffer 
                                  VkIndexType type, uint32_t count, DrawShape& shape) {
     if (!prepareDraw(mode, prog, shape)) return;
     VkCommandBuffer cmd = commands();
-    vkCmdBindIndexBuffer(cmd, buffer, offset, type);
+    bound_.bindIndexBuffer(cmd, buffer, offset, type);
     vkCmdDrawIndexed(cmd, count, shape.instances, 0, 0, 0);
 }
 

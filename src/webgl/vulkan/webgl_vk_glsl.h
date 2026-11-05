@@ -45,15 +45,7 @@ LinkResult link(const std::string& vertexSource, const std::string& fragmentSour
                 const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits,
                 const FeedbackRequest& feedback = {});
 
-/// What a GLSL type enum (GL_FLOAT_VEC3, GL_FLOAT_MAT2x4, GL_SAMPLER_2D...) is
-/// made of: component kind, and columns x rows (a vector is 1 x n).
-struct TypeInfo {
-    enum class Kind : uint8_t { Float, Int, Uint, Bool, Sampler, Unknown } kind = Kind::Unknown;
-    uint8_t columns = 1;
-    uint8_t rows = 1;
-    bool isMatrix() const { return columns > 1; }
-    uint32_t components() const { return static_cast<uint32_t>(columns) * rows; }
-};
+/// What a GLSL type enum is made of (TypeInfo is in webgl_vk_types.h).
 TypeInfo typeInfo(GLenum type);
 
 } // namespace bro::webgl::vk::glsl

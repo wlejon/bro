@@ -7,6 +7,7 @@
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace bro::webgl::vk {
@@ -130,6 +131,7 @@ void WebGLVkContext::transitionTextureRange(VkCommandBuffer cmd, VkTextureResour
 }
 
 void WebGLVkContext::releaseBuffer(VkBufferResource& res) {
+    bindingsChanged();  // a descriptor may name it
     if (res.buffer != VK_NULL_HANDLE || res.allocId != 0) {
         render::VulkanContext* ctx = &context_;
         VkBuffer buffer = res.buffer;
@@ -152,6 +154,7 @@ void WebGLVkContext::releaseBuffer(VkBufferResource& res) {
 }
 
 void WebGLVkContext::releaseTexture(VkTextureResource& tex) {
+    bindingsChanged();  // a descriptor may name its views
     render::VulkanContext* ctx = &context_;
     VkDevice dev = context_.device();
     VkImage image = tex.image;
@@ -260,7 +263,11 @@ void WebGLVkContext::beginRendering() {
     beginOcclusionSlot(cmd);
     pass_ = target;
     inRenderPass_ = true;
+    // A new command buffer state (nothing bound or set), and a pass the
+    // pipeline key and the feedback-loop check read.
     resetPassBindingState();
+    pipelineStateChanged();
+    bindingsChanged();
 }
 
 void WebGLVkContext::endRendering() {
@@ -294,6 +301,77 @@ void WebGLVkContext::endRendering() {
     release(pass_.depth);
     release(pass_.stencil);
     pass_ = RenderTarget{};
+    pipelineStateChanged();
+    bindingsChanged();
+}
+
+// ---------------------------------------------------------------------------
+// What the open pass has bound (PassBindings, webgl_vk_context_state.h)
+// ---------------------------------------------------------------------------
+
+void PassBindings::setViewport(VkCommandBuffer cmd, const VkViewport& vp) {
+    if ((dynamicSet & kViewport) && std::memcmp(&viewport, &vp, sizeof(vp)) == 0) return;
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    viewport = vp;
+    dynamicSet |= kViewport;
+}
+
+void PassBindings::setScissor(VkCommandBuffer cmd, const VkRect2D& sc) {
+    if ((dynamicSet & kScissor) && std::memcmp(&scissor, &sc, sizeof(sc)) == 0) return;
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    scissor = sc;
+    dynamicSet |= kScissor;
+}
+
+void PassBindings::setDepthBias(VkCommandBuffer cmd, float constant, float slope) {
+    if ((dynamicSet & kDepthBias) && std::memcmp(&depthBiasConstant, &constant, 4) == 0 &&
+        std::memcmp(&depthBiasSlope, &slope, 4) == 0)
+        return;
+    vkCmdSetDepthBias(cmd, constant, 0.0f, slope);
+    depthBiasConstant = constant;
+    depthBiasSlope = slope;
+    dynamicSet |= kDepthBias;
+}
+
+void PassBindings::setBlendConstants(VkCommandBuffer cmd, const float c[4]) {
+    if ((dynamicSet & kBlendConstants) && std::memcmp(blendConstants, c, sizeof(blendConstants)) == 0) return;
+    vkCmdSetBlendConstants(cmd, c);
+    std::memcpy(blendConstants, c, sizeof(blendConstants));
+    dynamicSet |= kBlendConstants;
+}
+
+void PassBindings::setLineWidth(VkCommandBuffer cmd, float width) {
+    if ((dynamicSet & kLineWidth) && std::memcmp(&lineWidth, &width, 4) == 0) return;
+    vkCmdSetLineWidth(cmd, width);
+    lineWidth = width;
+    dynamicSet |= kLineWidth;
+}
+
+void PassBindings::bindVertexBuffers(VkCommandBuffer cmd, uint32_t count, const VkBuffer* buffers,
+                                     const VkDeviceSize* offsets) {
+    uint32_t first = count, last = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (i < vertexBufferCount && vertexBuffers[i] == buffers[i] && vertexOffsets[i] == offsets[i]) continue;
+        first = std::min(first, i);
+        last = i;
+    }
+    if (first < count) {
+        vkCmdBindVertexBuffers(cmd, first, last - first + 1, buffers + first, offsets + first);
+        for (uint32_t i = first; i <= last; ++i) {
+            vertexBuffers[i] = buffers[i];
+            vertexOffsets[i] = offsets[i];
+        }
+    }
+    // Bindings past `count` keep what they had: count only grows.
+    vertexBufferCount = std::max(vertexBufferCount, count);
+}
+
+void PassBindings::bindIndexBuffer(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkIndexType type) {
+    if (indexBuffer == buffer && indexOffset == offset && indexType == type) return;
+    vkCmdBindIndexBuffer(cmd, buffer, offset, type);
+    indexBuffer = buffer;
+    indexOffset = offset;
+    indexType = type;
 }
 
 } // namespace bro::webgl::vk

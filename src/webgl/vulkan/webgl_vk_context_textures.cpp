@@ -41,6 +41,7 @@ WebGLTexture WebGLVkContext::createTexture() {
 void WebGLVkContext::deleteTexture(WebGLTexture tex) {
     auto it = tex.id != 0 ? textures_.find(tex.id) : textures_.end();
     if (it == textures_.end()) return;
+    bindingsChanged();
     // Detached from the bound framebuffers (GL leaves other framebuffers
     // naming it, now incomplete); the open pass may render into it.
     for (GLuint fboId : {drawFboId_, readFboId_}) {
@@ -81,6 +82,7 @@ void WebGLVkContext::bindTexture(GLenum target, WebGLTexture tex) {
         }
         it->second.target = target;
     }
+    bindingsChanged();
     switch (target) {
         case GL_TEXTURE_CUBE_MAP: boundTexturesCubeMap_[activeTextureUnit_] = tex.id; break;
         case GL_TEXTURE_2D_ARRAY: boundTextures2DArray_[activeTextureUnit_] = tex.id; break;
@@ -113,7 +115,10 @@ GLuint WebGLVkContext::boundTexture(GLenum target) const {
     }
 }
 
+// Every call that changes a texture (its images, levels or parameters)
+// finds it here, so this is where draws learn to resolve their samplers again.
 VkTextureResource* WebGLVkContext::textureForTarget(GLenum target, uint8_t allowed) {
+    bindingsChanged();
     const bool ok = ((allowed & k2DTargets) && (target == GL_TEXTURE_2D || isCubeFace(target))) ||
                     ((allowed & k3DTargets) && (target == GL_TEXTURE_3D || target == GL_TEXTURE_2D_ARRAY)) ||
                     ((allowed & kTextureTargets) && isTextureTarget(target));
@@ -137,6 +142,7 @@ VkTextureResource* WebGLVkContext::textureForTarget(GLenum target, uint8_t allow
 // One sampling parameter of a texture or sampler object; false (with the GL
 // error) for a name or value GL refuses.
 bool WebGLVkContext::setSamplerParameter(SamplerState& state, GLenum pname, GLint i, GLfloat f, bool isFloat) {
+    bindingsChanged();
     // Enum-valued names take the float form's value rounded, as GL does.
     const GLint v = isFloat ? static_cast<GLint>(std::lround(f)) : i;
     switch (pname) {

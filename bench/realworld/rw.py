@@ -135,9 +135,12 @@ def build_aot(d, entry):
                          capture_output=True, text=True, check=True)
     (d / "app.host-globals").write_text(res.stdout)
     env = dict(os.environ, BRONZE_SHARED_RT_LIB=str(RT_LIB), BRO_PROJECT_ROOT=str(BRO_ROOT))
+    # RW_BRONZE_FLAGS: extra `bronze build` flags, e.g. `--feedback-out /abs/x.tfb`
+    # for a type-feedback instrumented app.so (bronze docs/type-feedback.md).
+    extra = os.environ.get("RW_BRONZE_FLAGS", "").split()
     res = subprocess.run([str(BRONZE), "build", str(entry), "-o", str(d / "app.so"), "--emit-shared",
-                          "--host-globals", str(d / "app.host-globals"), "--native-manifest", str(natives)],
-                         env=env, capture_output=True, text=True)
+                          "--host-globals", str(d / "app.host-globals"), "--native-manifest", str(natives)]
+                         + extra, env=env, capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError("bronze build failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
 

@@ -3,6 +3,7 @@
 #include "render/vulkan_context.h"
 #include "webgl/webgl_objects.h"
 #include "webgl/vulkan/webgl_vk_types.h"
+#include "webgl/vulkan/webgl_vk_context_state.h"
 #include "webgl/vulkan/webgl_vk_canvas.h"
 #include "webgl/vulkan/webgl_vk_pipeline.h"
 #include "webgl/vulkan/webgl_vk_stream.h"
@@ -525,39 +526,9 @@ private:
     Readback readback_;
 
     // Framebuffers (webgl_vk_context_framebuffers.cpp, _blit.cpp, _clear.cpp,
-    // _readback.cpp). A Surface is one image a framebuffer reads or writes:
-    // a texture level/layer, a renderbuffer, or the canvas's color or depth
-    // image. Textures stay sampleable between passes (a pass moves its
-    // attachments to attachment layout and back); renderbuffers and the
-    // canvas stay wherever they were last used.
-    struct Surface {
-        enum class Source : uint8_t { None, Texture, Renderbuffer, CanvasColor, CanvasDepth };
-        Source source = Source::None;
-        VkTextureResource* tex = nullptr;   // Texture / Renderbuffer storage
-        VkImage image = VK_NULL_HANDLE;
-        VkImageView view = VK_NULL_HANDLE;  // the attached level + layer, every aspect
-        VkFormat format = VK_FORMAT_UNDEFINED;
-        uint32_t width = 0, height = 0;     // of the attached level
-        uint32_t level = 0, layer = 0;      // the subresource (a 3D texture's layer is 0 ...
-        int32_t z = 0;                      // ... and its slice is z)
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-        bool alphaOne = false;              // an RGB format stored as RGBA: alpha stays one
-        explicit operator bool() const { return source != Source::None; }
-        // The canvas is stored top-down; framebuffer objects in GL row order.
-        bool topDown() const { return source == Source::CanvasColor || source == Source::CanvasDepth; }
-        VkImageAspectFlags aspects() const;
-    };
-    // What a pass over the draw framebuffer renders into: color[i] is what
-    // fragment output i writes (DRAW_BUFFERi), empty for NONE.
-    struct RenderTarget {
-        std::array<Surface, 8> color{};
-        uint32_t colorCount = 0;
-        Surface depth;    // the depth attachment, when it has a depth aspect
-        Surface stencil;  // the stencil attachment, when it has a stencil aspect
-        VkExtent2D extent{};
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-        bool topDown = false;
-    };
+    // _readback.cpp); Surface and RenderTarget are in webgl_vk_context_state.h.
+    using Surface = PassSurface;
+    using RenderTarget = PassTarget;
     static constexpr GLenum kColorAttachment0 = 0x8CE0;
     VkFramebufferResource* framebufferForTarget(GLenum target, GLuint& id);
     GLenum framebufferStatus(GLuint id);
@@ -580,33 +551,8 @@ private:
     void releaseScratch(VkTextureResource& tex);
     void clearAttachments(const VkClearAttachment* atts, uint32_t count);
 
-    // What one draw fetches: vertices [first, end) of the per-vertex arrays
-    // for `instances` instances, and whether its indices restart primitives.
-    struct DrawShape {
-        uint32_t first = 0, end = 0;
-        uint32_t instances = 1;
-        bool restart = false;
-        bool feedback = false;      // captures (transform feedback active)
-        FeedbackPush feedbackPush;  // where its records go
-    };
-
-    // An indexed buffer binding; size 0 is bindBufferBase's whole buffer.
-    struct IndexedBuffer {
-        GLuint buffer = 0;
-        GLintptr offset = 0;
-        GLsizeiptr size = 0;
-    };
-
     // Transform feedback objects (webgl_vk_context_feedback.cpp); 0 is the
     // default one.
-    struct FeedbackObject {
-        std::array<IndexedBuffer, kMaxFeedbackBuffers> buffers{};
-        bool everBound = false;
-        bool active = false, paused = false;
-        GLenum primitiveMode = 0;
-        GLuint program = 0;    // the program capturing
-        uint32_t records = 0;  // vertices captured since beginTransformFeedback
-    };
     std::unordered_map<GLuint, FeedbackObject> feedbacks_{{0, FeedbackObject{}}};
     GLuint boundFeedback_ = 0;
     VkBufferResource feedbackPlaceholder_;  // bound while a capturing program is not capturing
@@ -639,24 +585,6 @@ private:
     std::vector<GLuint> downloadCandidates_;
 
     // Queries (webgl_vk_context_queries.cpp)
-    struct QueryObject {
-        GLenum target = 0;              // 0 until first begun
-        std::vector<uint32_t> slots;    // the occlusion slots of the last run
-        uint64_t ticket = 0;            // the submission its last use is in
-        bool pending = false;           // used in the open command buffer
-        uint64_t count = 0;             // samples (summed) or primitives written
-        std::vector<uint32_t> stamps;   // timer queries: their timestamp slots
-    };
-    /// Vulkan query slots of one type, handed out from 64-slot pools and
-    /// retired with the ticket of their last use.
-    struct QuerySlots {
-        VkQueryType type = VK_QUERY_TYPE_OCCLUSION;
-        std::vector<VkQueryPool> pools;
-        std::vector<uint32_t> free;
-        std::vector<std::pair<uint64_t, std::vector<uint32_t>>> retired;
-        VkQueryPool pool(uint32_t slot) const { return pools[slot / 64]; }
-        static uint32_t index(uint32_t slot) { return slot % 64; }
-    };
     QuerySlots timestampSlots_{VK_QUERY_TYPE_TIMESTAMP, {}, {}, {}};
     GLuint activeTimerQuery_ = 0;
     bool timerQueriesEnabled_ = false;   // EXT_disjoint_timer_query_webgl2 was enabled
@@ -793,10 +721,16 @@ private:
     // Drawing (webgl_vk_context_draw.cpp)
     bool prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape& shape);
     int32_t scissorTop(VkExtent2D extent) const;
-    void buildPipelineKey(GLenum mode, const VkProgramResource& prog, const DrawShape& shape, PipelineKey& key,
-                          VkExtent2D& extent);
-    void setDynamicState(VkCommandBuffer cmd, VkExtent2D extent);
+    /// The pipeline key's fixed-function half (everything but the shaders,
+    /// topology, restart and vertex input) from the GL state and the open
+    /// pass, rebuilt only when pipelineStateChanged() has been called since.
+    const PipelineKey& fixedPipelineKey();
+    VkPipeline drawPipeline(GLenum mode, VkProgramResource& prog, const DrawShape& shape, const VaoInputCache& inputs);
+    /// The dynamic state of a draw (`discard`: RASTERIZER_DISCARD's empty
+    /// scissor), recording only values the open pass does not have set.
+    void setDynamicState(VkCommandBuffer cmd, VkExtent2D extent, bool discard);
     bool bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog, DrawShape& shape);
+    bool resolveProgramBindings(VkProgramResource& prog, bool& changed);
     GLuint textureForSampler(GLenum type, uint32_t unit) const;
     bool sampledByPass(const VkTextureResource& tex, uint32_t base, uint32_t count) const;
     bool uniformBlockRange(const VkProgramResource& prog, size_t block, VkDescriptorBufferInfo& out);
@@ -810,35 +744,47 @@ private:
                      VkIndexType type, uint32_t count, DrawShape& shape);
 
     // Vertex inputs (webgl_vk_context_vertices.cpp)
-    /// The program's inputs as vertex bindings: false (with the GL error)
-    /// when an array the draw reads is missing, of the wrong kind, or too
-    /// short for the vertices it fetches.
-    bool bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape, PipelineKey& key,
-                          std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
+    /// The program's inputs as vertex bindings, and the vertex input state
+    /// the pipeline reads them with (cached on the VAO): null (with the GL
+    /// error) when an array the draw reads is missing, of the wrong kind, or
+    /// too short for the vertices it fetches.
+    const VaoInputCache* bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape,
+                                          std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
+    void buildVertexLayout(const VkProgramResource& prog, VkVAOResource& vao, uint32_t validMask);
     bool vertexFormatSupported(VkFormat format);
     std::array<uint8_t, 256> vertexFormatSupport_{};  // 0: unqueried, 1: no, 2: yes
     mutable std::array<VkFormatFeatureFlags, 256> formatFeaturesLow_{};
     mutable std::array<uint8_t, 256> formatFeaturesValid_{};
+    // Distinct vertex layouts seen, each with its id, so that VAOs reading
+    // the same layout share pipeline memos (bounded; cleared when full).
+    std::vector<std::pair<VertexLayout, uint64_t>> vertexLayouts_;
+    uint64_t nextLayoutId_ = 1;
 
-    // Reused scratch buffers and open-pass binding state for prepareDraw / bindProgramResources.
+    // Reused scratch buffers for prepareDraw / bindProgramResources.
     std::vector<VkBuffer> drawVbos_;
     std::vector<VkDeviceSize> drawOffsets_;
     std::vector<VkDescriptorBufferInfo> drawBlocks_;
     std::vector<VkDescriptorBufferInfo> drawCaptures_;
     std::vector<VkDescriptorImageInfo> drawImages_;
-    std::vector<uint64_t> drawKey_;
     std::vector<VkWriteDescriptorSet> drawWrites_;
-    VkPipeline boundPipeline_ = VK_NULL_HANDLE;
-    VkDescriptorSet boundDescriptorSet_ = VK_NULL_HANDLE;
-    VkPipelineLayout boundPipelineLayout_ = VK_NULL_HANDLE;
-    FragmentPush lastFragmentPush_{};
-    bool fragmentPushInitialized_ = false;
-    void resetPassBindingState() {
-        boundPipeline_ = VK_NULL_HANDLE;
-        boundDescriptorSet_ = VK_NULL_HANDLE;
-        boundPipelineLayout_ = VK_NULL_HANDLE;
-        fragmentPushInitialized_ = false;
-    }
+
+    // What the open pass's command buffer has bound (webgl_vk_context_state.h).
+    PassBindings bound_;
+    void resetPassBindingState() { bound_.reset(); }
+
+    // Draw caches. pipelineStateSerial_ changes with every GL state the
+    // pipeline key's fixed-function half reads, and with the pass; programs
+    // remember the pipeline of their last draw against it.
+    // bindingSerial_ changes with every binding or object state a program's
+    // descriptors are resolved from (textures, samplers, uniform buffers,
+    // sampler units, block bindings, the pass a texture may be attached to).
+    uint64_t pipelineStateSerial_ = 1;
+    uint64_t fixedKeySerial_ = 0;
+    PipelineKey fixedKey_{};
+    uint64_t bindingSerial_ = 1;
+    uint64_t nextLinkSerial_ = 1;
+    void pipelineStateChanged() { ++pipelineStateSerial_; }
+    void bindingsChanged() { ++bindingSerial_; }
 
     render::VulkanContext& context_;
     WebGLVkStream stream_;

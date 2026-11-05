@@ -392,6 +392,7 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
         u.type = static_cast<GLenum>(r.glDefineType);
         u.size = std::max(1, r.size);
         const TypeInfo t = typeInfo(u.type);
+        u.typeInfo = t;
 
         if (r.index >= 0 && r.index == defaultBlock) {
             // A default-block uniform is active only where live code reads
