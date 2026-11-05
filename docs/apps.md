@@ -242,10 +242,15 @@ Declaring grants nothing; a capability the app did not declare is denied
 without anyone being asked; a name that is not a capability fails the launch.
 
 **Asking.** An *ask* capability the app declared and the user has not decided
-is asked for the first time it is used on the main thread: a native dialog
-names the app and what it tried, and the answer is kept. Used from a Worker
+is asked for the first time it is used on the main thread: a prompt names the
+app and what it tried, and the answer is kept. Who shows the prompt: an app
+running inline in a host page (an `<appview>`) asks its host page
+(`permissionrequest`); otherwise, when a desktop shell serves the session's
+prompts, the shell does (below); otherwise a native dialog. Used from a Worker
 first, it is refused with a message saying to ask on the main thread
-(`bro.app.requestPermission`). `bro-headless` answers with `setDialogAnswer`
+(`bro.app.requestPermission`). `bro-headless` asks a shell serving its
+scratch profile (`BRO_APP_HOME`; never the desktop's own shell), and
+otherwise answers with `setDialogAnswer`
 (docs/headless.md); a run that never chose an answer is refused and nothing is
 kept. A gated namespace the app declared but has not been granted is a stub
 that asks on first touch, and is the live namespace from then on if allowed.
@@ -256,6 +261,32 @@ Every native that touches a file, starts a process, connects, captures
 sound or reads the environment asks one gate, bronze's
 (`embed/embed_access.h`), which brokit and every sibling library call and
 bro answers from these rules.
+
+**The shell's prompts.** A desktop session may have no native dialog at all
+(helm's Wayland-only session has neither zenity nor X), so the desktop shell
+shows the prompts itself. A shell (a host granted the `permissions` shell
+capability) serves them once it subscribes to `bro.permissions`' `'request'`
+([permissions-api.js](permissions-api.js)), and stops when it unsubscribes,
+so a shell without a prompt UI never swallows them. The channel is a local
+brolink endpoint of application `bro-prompt`: one per user (a `0600` socket
+in the user's private runtime directory, `$XDG_RUNTIME_DIR/bro-prompt/session.sock`;
+on Windows a pipe per logon session whose DACL admits only the user), both
+ends checking that the other runs as the same user. Under
+`BRO_APP_HOME=<dir>` the endpoint's name is derived from the scratch profile
+(`scratch-<hash>`), so an app run in a scratch profile reaches only a shell
+run in the same one, never the user's real shell. An app with no host page
+to ask connects there; if nobody listens it falls back to the dialog, as on
+any other desktop. Otherwise it sends its name, id, identity and folder, the
+capability and what it was trying to do, and waits on its main thread as
+the modal dialog does (its window's events pumped; a quit ends the wait).
+The shell answers only allow or deny, and the asking app keeps the decision
+for its own identity, exactly as with the dialog's answer: the shell never
+writes a grant on a requester's say-so, so a process claiming to be another
+app can only ever grant itself. A request the shell drops, a shell that
+stops serving or goes away, and an app that quits mid-prompt are no answer:
+refused, nothing kept, asked again at the next use. The shell names the
+capability from its own catalogue, never from the requester's text, and
+drops a request for anything that is not an ask capability.
 
 **While the app runs.** Every bro process reads the grant store again
 within a quarter second of a change: `bro --revoke-app` in a terminal, the

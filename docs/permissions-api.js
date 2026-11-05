@@ -31,6 +31,7 @@
  *   }
  *   bro.permissions.set('org.helm.Recorder', 'mic', 'allow');
  *   bro.permissions.on('change', () => refresh());
+ *   bro.permissions.on('request', (req) => askTheUser(req).then((ok) => req.respond(ok)));
  *   bro.permissions.devMode = false;
  */
 
@@ -132,6 +133,63 @@ bro.permissions.removePicked = function(app, path) {};
  */
 bro.permissions.on = function(type, listener) {};
 bro.permissions.off = function(type, listener) {};
+
+/**
+ * @typedef {Object} PermissionRequest
+ * An app asking the user for a capability (docs/apps.md, "The shell's
+ * prompts"). The `app` fields are what the asking process says about itself:
+ * the shell's answer only ever decides for that process's own identity, as
+ * the process keeps it, so a liar can grant only itself.
+ * @property {'request'} type
+ * @property {number} id       Unique among this process's requests.
+ * @property {{name: string, id: string, identity: string, dir: string, pid: number}} app
+ *                             Its bro.json name and id, its identity
+ *                             (`install:<id>` or `path:<dir>`), its folder, and
+ *                             the process that asked (from the connection,
+ *                             not its say-so).
+ * @property {string} capability  An ask capability (any other is dropped unseen).
+ * @property {string} summary  What it lets an app do, from this process's own
+ *                             catalogue ("start other programs").
+ * @property {string} what     What the app was trying to do ("start git",
+ *                             "reading /home/me/notes.txt"); may be ''.
+ * @property {''|'allowed'|'denied'|'dropped'|'cancelled'} settled  '' while outstanding.
+ * @property {function(boolean|null): boolean} respond  The user's answer: true
+ *                             allows, false denies; null drops it with no
+ *                             answer (refused, nothing kept, asked again
+ *                             next time). False when it was settled already.
+ */
+
+/**
+ * Serve the session's permission prompts: the apps that would otherwise show
+ * a native dialog ask here instead (docs/apps.md, "The shell's prompts"). The
+ * first 'request' listener starts serving, removing the last stops it (each
+ * outstanding request is then cancelled); a shell without a prompt UI never
+ * subscribes, so the apps fall back to the dialog. Several requests, from
+ * several apps, may be outstanding at once; each stays open until answered.
+ * 'cancel' is the asker gone first (it quit, crashed, or this process stopped
+ * serving): `{ type: 'cancel', id, request }`; the request is settled
+ * 'cancelled' and respond() returns false. Only a process the host granted
+ * `permissions` has bro.permissions, so only the shell can serve prompts.
+ *
+ * @example
+ *   bro.permissions.on('request', (req) => {
+ *     showPrompt(`${req.app.name} wants to ${req.summary}`, req.what)
+ *       .then((allow) => req.respond(allow));
+ *   });
+ *   bro.permissions.on('cancel', (e) => dismissPrompt(e.id));
+ *
+ * @param {'request'|'cancel'} type
+ * @param {function(PermissionRequest|{type: 'cancel', id: number, request: PermissionRequest}): void} listener
+ */
+bro.permissions.on = function(type, listener) {};
+
+/**
+ * Whether this process serves the prompts now: false before a 'request'
+ * listener, and when another live shell of the session (or of the same
+ * scratch profile) already serves them.
+ * @type {boolean}
+ */
+bro.permissions.serving;
 
 /**
  * Dev mode: every app is granted every ask capability it declares, over the

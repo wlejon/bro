@@ -13,8 +13,10 @@
 //     (the grant store, grant_store.h) or dev mode is on.
 // A shell capability comes from the host alone. One the manifest does not
 // declare is denied without asking. One declared and undecided is asked for
-// on its first use on the main thread (a native OK / Cancel dialog; headless
-// answers through setDialogAnswer), and the answer is kept; a Worker cannot
+// on its first use on the main thread (the desktop shell's prompt where one
+// serves the session, platform/permission_prompts.h, else a native OK / Cancel
+// dialog; headless answers through setDialogAnswer), and the answer is kept;
+// a Worker cannot
 // ask, so there it is denied until granted.
 //
 // Files (checkFs): beyond what `files` grants, an app writes only to its own
@@ -123,7 +125,7 @@ public:
     const std::string& appName() const { return appName_; }
 
     /// Who asks the user about this app's undecided capabilities. Unset (or
-    /// answering Unhandled), bro's native dialog asks. An app running inline
+    /// answering Unhandled), the shell's prompt or else bro's native dialog asks. An app running inline
     /// in a host page (an <appview>) has its host page ask instead: Allow /
     /// Deny is the user's answer, kept like the dialog's; Pending means the
     /// host is asking in its own time, so this use is refused (not kept) and

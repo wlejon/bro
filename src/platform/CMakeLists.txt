@@ -21,7 +21,7 @@ add_library(bro_platform STATIC
     # desktop integration
     desktop_platform.cpp desktop_bell.cpp desktop_progress.cpp
     desktop_notifications.cpp desktop_tray.cpp desktop_hotkeys.cpp
-    desktop_single_instance.cpp control_socket.cpp)
+    desktop_single_instance.cpp control_socket.cpp permission_prompts.cpp)
 target_include_directories(bro_platform PUBLIC ${bro_SOURCE_DIR}/src)
 if(TARGET SDL3::SDL3)
     target_link_libraries(bro_platform PRIVATE SDL3::SDL3)
@@ -73,7 +73,8 @@ elseif(APPLE)
     # Scheduled launches (app_schedule.h): launchd user agents.
     target_sources(bro_platform PRIVATE app_schedule_launchd.cpp)
 endif()
-# The agent control channel's transport (control_socket.cpp, control_protocol.h).
+# The agent control channel's transport (control_socket.cpp, control_protocol.h)
+# and the shell's permission prompts (permission_prompts.cpp).
 target_link_libraries(bro_platform PUBLIC brolink)
 
 find_package(Vulkan REQUIRED)

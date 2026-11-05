@@ -3,6 +3,8 @@
 #include "engine/capabilities.h"
 #include "engine/install_record.h"
 #include "platform/dialogs.h"
+#include "platform/desktop_platform.h"
+#include "platform/permission_prompts.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
 
@@ -450,7 +452,31 @@ std::string AppPermissions::use(std::string_view cap, const std::string& what, b
     else if (hosted == AskAnswer::Deny) answer = false;
     else if (hosted == AskAnswer::Pending)
         return refusal(cap, what, "its host page is asking for it; try again once it is answered");
-    else answer = platform::Dialogs::askPermission(question);
+    else {
+        // The desktop shell's prompt when one serves this session (or this
+        // scratch profile), else the platform's dialog. The shell answers
+        // allow or deny; what is kept is kept below, for this app's own
+        // identity, whoever answered.
+        // A headless run (a test harness) reaches a shell only in a scratch
+        // profile, where the shell is another run of the same test: never the
+        // user's desktop, where nobody is waiting for it.
+        platform::prompts::Question q;
+        q.appName = appName_;
+        q.appId = appId_;
+        q.identity = identity_;
+        q.dir = appDir_;
+        q.capability = std::string(cap);
+        q.what = what;
+        const std::string scratch = scratchProfileHome();
+        const bool mayReachShell = !scratch.empty() || !platform::desktop::isHeadless();
+        switch (mayReachShell ? platform::prompts::ask(platform::prompts::endpointName(scratch), q)
+                              : platform::prompts::AskResult::NoShell) {
+            case platform::prompts::AskResult::Allow: answer = true; break;
+            case platform::prompts::AskResult::Deny: answer = false; break;
+            case platform::prompts::AskResult::NoAnswer: break;
+            case platform::prompts::AskResult::NoShell: answer = platform::Dialogs::askPermission(question); break;
+        }
+    }
     lock.lock();
     // Answered in the meantime (another prompt for the same capability).
     j = judge(cap);

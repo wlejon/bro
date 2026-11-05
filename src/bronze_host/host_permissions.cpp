@@ -15,7 +15,8 @@
 //     --revoke-app`, the shell's bro.permissions.set) is read within a
 //     quarter second, what it took back is revoked, and what is held open
 //     under it is closed (installPermissionsPump);
-//   - bro.permissions, the shell's view of every app's grants.
+//   - bro.permissions, the shell's view of every app's grants, and its
+//     'request' / 'cancel' prompts (host_permission_prompts.h).
 //
 // The privileged namespaces' sibling natives are reached only through the
 // namespace object: none registers a __bro_native entry or a global of its
@@ -24,6 +25,7 @@
 
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_permission_prompts.h"
 #include "bronze_host/host_permissions.h"
 #include "bronze_host/host_proxy.h"
 #include "engine/app_permissions.h"
@@ -381,14 +383,21 @@ Value makeBroPermissionsValue() {
         return ev::fromBool(true);
     });
     // on('change', fn) / off('change', fn): the store changed, from any process.
+    // on('request' | 'cancel', fn): the session's permission prompts
+    // (host_permission_prompts.h), served while a 'request' listener is on.
     o.def("on", 2, [](Value, std::span<const Value> a) -> Value {
-        if (a.size() < 2 || !ev::isString(a[0]) || ev::toUtf8(a[0]) != "change" || !ev::isFunction(a[1]))
-            return ev::throwTypeError("bro.permissions.on('change', listener)");
+        if (a.size() < 2 || !ev::isString(a[0]) || !ev::isFunction(a[1]))
+            return ev::throwTypeError("bro.permissions.on('change' | 'request' | 'cancel', listener)");
+        const std::string type = ev::toUtf8(a[0]);
+        if (addPromptListener(type, a[1])) return ev::undefined();
+        if (type != "change")
+            return ev::throwTypeError("bro.permissions.on('change' | 'request' | 'cancel', listener)");
         changeListeners().push_back(std::make_shared<ev::Persistent>(a[1]));
         return ev::undefined();
     });
     o.def("off", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2 || !ev::isFunction(a[1])) return ev::undefined();
+        if (ev::isString(a[0]) && removePromptListener(ev::toUtf8(a[0]), a[1])) return ev::undefined();
         auto& ls = changeListeners();
         for (auto it = ls.begin(); it != ls.end(); ++it) {
             if ((*it)->get().rawBits() == a[1].rawBits()) {
@@ -398,6 +407,9 @@ Value makeBroPermissionsValue() {
         }
         return ev::undefined();
     });
+    // serving: whether this process serves the session's prompts now.
+    o.accessor("serving",
+        [](Value, std::span<const Value>) -> Value { return ev::fromBool(servingPermissionPrompts()); }, nullptr);
     // devMode: every app granted every ask capability it declares.
     o.accessor("devMode",
         [](Value, std::span<const Value>) -> Value { return ev::fromBool(engine::loadGrantStore().devMode); },
@@ -494,6 +506,7 @@ void installPermissionsPump(engine::Engine& engine) {
         // The other threads' turn to revalidate comes at their own loops;
         // this one's is here (a Worker's grant check is the same gate).
         bronze::embed::revalidateHeldAccess();
+        pumpPermissionPrompts();
         const double now = util::currentTimeMs();
         if (now - *lastPollMs < 250.0) return;
         *lastPollMs = now;
@@ -501,6 +514,7 @@ void installPermissionsPump(engine::Engine& engine) {
         appPermissions().flushUsage();
     });
     engine.addShutdownHook([verify] {
+        stopPermissionPrompts();
         if (verify->worker.joinable()) verify->worker.join();
         appPermissions().flushUsage(/*force=*/true);
     });
