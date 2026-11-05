@@ -320,8 +320,10 @@ void report(const char* how, EXCEPTION_POINTERS* ep) {
 }
 
 LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* ep) {
-    if (g_dumps.fetch_add(1) < kMaxDumps) report("unhandled", ep);
+    // The dump first: the symbolised walk loads symbols and allocates, and a
+    // process that died of exhausted memory may not get through it.
     writeMinidump(ep);
+    if (g_dumps.fetch_add(1) < kMaxDumps) report("unhandled", ep);
     std::fflush(stdout);
     std::fflush(stderr);
     // The system's own handling next (WER's dumps and box), when asked for.
@@ -597,8 +599,10 @@ void signalHandler(int sig) {
     if (g_context[0] != '\0') {
         std::fprintf(stderr, "  running %s\n", g_context);
     }
-    if (g_dumps.fetch_add(1) < kMaxDumps) walkHere();
+    std::fflush(stderr);
+    // The dump before the walk, which may not survive exhausted memory.
     writeMinidump(nullptr);
+    if (g_dumps.fetch_add(1) < kMaxDumps) walkHere();
     std::fprintf(stderr, "=== end crash ===\n");
     std::fflush(stderr);
     // Re-raise through the default disposition so the process dies with the
