@@ -16,7 +16,7 @@
 #include "platform/desktop_notifications.h"
 #include "platform/desktop_platform.h"
 
-using bro::engine::parseConfig;
+#include "engine/launcher.h"
 using bro::engine::findAncestorProjectRoot;
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
@@ -261,55 +261,16 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
 #endif
 
-        {
-            auto isJsonFile = [](const std::string& s) {
-                return s.size() >= 5 && s.substr(s.size() - 5) == ".json";
-            };
-            auto dirOf = [](const std::string& p) -> std::string {
-                size_t i = p.find_last_of("/\\");
-                return (i == std::string::npos) ? std::string(".") : p.substr(0, i);
-            };
-            auto isAbsolute = [](const std::string& p) {
-                return !p.empty() && (p[0] == '/' || p[0] == '\\' ||
-                                      (p.size() >= 2 && p[1] == ':'));
-            };
-
-            if (isJsonFile(appDir) && std::ifstream(appDir).good()) {
-                std::string targetDir = dirOf(appDir);
-                bool isProject = false;
-                parseConfig(appDir, config, &isProject);
-                if (isProject) {
-                    config.projectRoot = targetDir;
-                    if (config.appDir.empty()) config.appDir = targetDir;
-                    else if (!isAbsolute(config.appDir)) config.appDir = targetDir + "/" + config.appDir;
-                } else {
-                    config.appDir = targetDir;
-                }
-            } else {
-                std::string broJson = appDir + "/bro.json";
-                if (std::ifstream(broJson).good()) {
-                    bool isProject = false;
-                    parseConfig(broJson, config, &isProject);
-                    if (isProject) {
-                        config.projectRoot = appDir;
-                        if (config.appDir.empty()) config.appDir = appDir;
-                        else if (!isAbsolute(config.appDir)) config.appDir = appDir + "/" + config.appDir;
-                    } else {
-                        config.appDir = appDir;
-                    }
-                } else {
-                    config.appDir = appDir;
-                }
-            }
-
-            // The nearest ancestor project, else the parent's (launcher.cpp).
-            const bool launchedProject = !config.projectRoot.empty();
-            if (config.projectRoot.empty() && !config.appDir.empty()) {
-                config.projectRoot = findAncestorProjectRoot(config.appDir);
-            }
+        // The same resolution as bro (launcher.cpp): an app directory, a
+        // project (its default_app, then that app's own bro.json for its
+        // identity and permissions), a bro.json, or an installed app's id.
+        if (!bro::engine::resolveLaunchTarget(appDir, config)) {
+            // Neither bro.json nor index.html: headless still runs a script
+            // against the directory, in the project it lies in.
+            config.appDir = appDir;
+            config.projectRoot = findAncestorProjectRoot(config.appDir);
             if (config.projectRoot.empty()) config.projectRoot = inheritedProjectRoot(config.appDir);
-            // A project found either way names its own lib/system directories.
-            if (!launchedProject) applyProjectDirNames(config.projectRoot, config);
+            applyProjectDirNames(config.projectRoot, config);
         }
 
         config.appDir = absolutize(config.appDir);
