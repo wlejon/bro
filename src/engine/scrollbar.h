@@ -44,6 +44,13 @@ public:
     /// prefers-color-scheme setting).
     static Colors colorsFor(const htmlayout::css::ComputedStyle& style, bool preferDark);
 
+    /// The bar's thickness for an element: CSS `scrollbar-width` — `auto`
+    /// (or unset) is `fallback`, `thin` half of it, `none` 0 (no bar: the
+    /// element still scrolls), and a length in px (a bro extension, for a
+    /// bar meant to be found and dragged, as on a 4K screen) that length,
+    /// at most 64.
+    static float thicknessFor(const htmlayout::css::ComputedStyle& style, float fallback);
+
     Scrollbar();
     explicit Scrollbar(Style style);
 
@@ -52,16 +59,18 @@ public:
     /// trackH: height of the track (usually the element's border-box height).
     /// contentH: total content height. viewH: visible height.
     /// scrollOffset: current scroll position (0 = top).
+    /// `thickness`: the bar's width across its axis (thicknessFor), or below
+    /// 0 for style().width.
     ScrollbarMetrics layout(float trackX, float trackY, float trackH,
                             float contentH, float viewH,
-                            float scrollOffset) const;
+                            float scrollOffset, float thickness = -1.0f) const;
 
     /// The horizontal bar: the same geometry turned on its side. trackW is the
     /// track's length (usually the border-box width), style().width its
     /// thickness; contentW/viewW/scrollOffset are along x.
     ScrollbarMetrics layoutHorizontal(float trackX, float trackY, float trackW,
                                       float contentW, float viewW,
-                                      float scrollOffset) const;
+                                      float scrollOffset, float thickness = -1.0f) const;
 
     /// Draw the scrollbar (track + thumb) using the given metrics.
     void draw(render::Renderer* renderer, const ScrollbarMetrics& m,

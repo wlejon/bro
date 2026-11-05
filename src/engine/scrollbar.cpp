@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string_view>
 
 namespace bro::engine {
 
@@ -13,21 +15,24 @@ Scrollbar::Scrollbar(Style style) : style_(style) {}
 
 ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,
                                    float contentH, float viewH,
-                                   float scrollOffset) const {
+                                   float scrollOffset, float thickness) const {
     ScrollbarMetrics m;
-    if (contentH <= viewH || viewH <= 0) {
+    if (contentH <= viewH || viewH <= 0 || thickness == 0.0f) {
         m.visible = false;
         return m;
     }
+    const float t = thickness < 0.0f ? style_.width : thickness;
 
     m.visible = true;
     m.trackX = trackX;
     m.trackY = trackY;
-    m.trackW = style_.width;
+    m.trackW = t;
     m.trackH = trackH;
 
+    // A wide bar keeps a thumb long enough to find and grab on a long list
+    // (three times its width), where the plain one may shrink to its minimum.
     float thumbRatio = viewH / contentH;
-    m.thumbH = std::max(thumbRatio * trackH, style_.minThumbHeight);
+    m.thumbH = std::min(trackH, std::max({thumbRatio * trackH, style_.minThumbHeight, 3.0f * t}));
 
     float scrollRange = contentH - viewH;
     float thumbRange = trackH - m.thumbH;
@@ -42,9 +47,9 @@ ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,
 
 ScrollbarMetrics Scrollbar::layoutHorizontal(float trackX, float trackY, float trackW,
                                              float contentW, float viewW,
-                                             float scrollOffset) const {
+                                             float scrollOffset, float thickness) const {
     // Lay the bar out as a vertical one along x, then turn it on its side.
-    ScrollbarMetrics v = layout(trackY, trackX, trackW, contentW, viewW, scrollOffset);
+    ScrollbarMetrics v = layout(trackY, trackX, trackW, contentW, viewW, scrollOffset, thickness);
     ScrollbarMetrics m;
     m.horizontal = true;
     m.visible = v.visible;
@@ -52,12 +57,28 @@ ScrollbarMetrics Scrollbar::layoutHorizontal(float trackX, float trackY, float t
     m.trackX = trackX;
     m.trackY = trackY;
     m.trackW = trackW;
-    m.trackH = style_.width;
+    m.trackH = v.trackW;
     m.thumbX = v.thumbY;
     m.thumbW = v.thumbH;
     m.thumbY = trackY;
-    m.thumbH = style_.width;
+    m.thumbH = v.trackW;
     return m;
+}
+
+float Scrollbar::thicknessFor(const htmlayout::css::ComputedStyle& style, float fallback) {
+    auto it = style.find("scrollbar-width");
+    if (it == style.end()) return fallback;
+    const std::string& v = it->second;
+    if (v.empty() || v == "auto") return fallback;
+    if (v == "thin") return fallback * 0.5f;
+    if (v == "none") return 0.0f;
+    // A length: px (or a bare number). Anything else is the default.
+    char* end = nullptr;
+    const float n = std::strtof(v.c_str(), &end);
+    if (end == v.c_str() || n <= 0.0f) return fallback;
+    const std::string_view unit(end);
+    if (!unit.empty() && unit != "px") return fallback;
+    return std::min(n, 64.0f);
 }
 
 namespace {

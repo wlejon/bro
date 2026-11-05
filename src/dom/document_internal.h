@@ -65,7 +65,7 @@ inline uint8_t propFlags(const std::string& p) {
             "z-index", "user-select", "-webkit-user-select",
             "caret-color", "accent-color", "fill", "stroke", "stroke-width",
             "clip-path", "mask", "will-change", "-webkit-text-fill-color",
-            "text-emphasis-color", "scrollbar-color", "color-scheme",
+            "text-emphasis-color", "scrollbar-color", "scrollbar-width", "color-scheme",
             "object-position", "image-rendering",
         };
         static const char* kInherited[] = {

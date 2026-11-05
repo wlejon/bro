@@ -144,18 +144,21 @@ ElementScrollbarLayout layoutElementScrollbars(dom::Element* elem,
     const float bw = lbox.fullWidth();
     const float bh = lbox.fullHeight();
     const auto& es = scrollbar.style();
+    // The element's own thickness (scrollbar-width); `none` shows no bar.
+    const float t = Scrollbar::thicknessFor(style, es.width);
+    if (t <= 0.0f) return out;
     // When both bars show, each leaves the other its corner.
-    const float corner = (maxST > 0.0f && maxSL > 0.0f) ? es.width + es.margin : 0.0f;
+    const float corner = (maxST > 0.0f && maxSL > 0.0f) ? t + es.margin : 0.0f;
 
     if (maxST > 0.0f) {
         const float viewH = lbox.contentRect.height;
-        out.v = scrollbar.layout(bx + bw - es.width - es.margin, by, bh - corner,
-                                 viewH + maxST, viewH, dom::clampedScrollTopOf(elem));
+        out.v = scrollbar.layout(bx + bw - t - es.margin, by, bh - corner,
+                                 viewH + maxST, viewH, dom::clampedScrollTopOf(elem), t);
     }
     if (maxSL > 0.0f) {
         const float viewW = lbox.contentRect.width;
-        out.h = scrollbar.layoutHorizontal(bx, by + bh - es.width - es.margin, bw - corner,
-                                           viewW + maxSL, viewW, dom::clampedScrollLeftOf(elem));
+        out.h = scrollbar.layoutHorizontal(bx, by + bh - t - es.margin, bw - corner,
+                                           viewW + maxSL, viewW, dom::clampedScrollLeftOf(elem), t);
     }
     return out;
 }
