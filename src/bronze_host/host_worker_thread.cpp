@@ -503,9 +503,12 @@ void WorkerInstance::threadFunc() {
         // A grant taken back while the app runs: what this Worker holds open
         // under it closes here (embed/embed_access.h).
         bronze::embed::revalidateHeldAccess();
-        if (ev::microtasksPending()) {
-            ev::drainMicrotasks();
-        }
+        // Every turn, pending microtasks or not: the checkpoint also runs the
+        // deferred finalizers, among them the ones that free an ArrayBuffer's
+        // external block, and a Worker whose handlers never await would
+        // otherwise keep every buffer it was ever handed (a decode worker's
+        // pixels, 24 MB a photo).
+        ev::drainMicrotasks();
         flushRejections();
 
         bool hasPendingWork = false;

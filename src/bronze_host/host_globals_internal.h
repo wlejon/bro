@@ -31,7 +31,12 @@ struct HostImageBitmap {
     int width = 0;
     int height = 0;
     bool closed = false;
+    // What this bitmap told the collector it holds (ev::adjustExternalMemory):
+    // its pixels, and its texture when it has one. Taken back on detach and
+    // in the destructor.
+    int64_t externalBytes = 0;
 
+    ~HostImageBitmap();
     const uint8_t* rgba() const;  // null when closed / empty
     // close(), a transfer, transferFromImageBitmap: detached, and everything
     // it held let go now rather than when the wrapper is collected.

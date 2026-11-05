@@ -115,6 +115,12 @@ static Value makeBitmapValue(std::shared_ptr<const render::DecodedImage> px, sk_
             else bmp->upload = render::SkiaGpu::uploadToTarget(shared);
         }
         bmp->pixels = std::move(px);
+        // A handle is a few words of heap over megabytes of pixels: counted,
+        // so a page that drops its bitmaps without close() still collects
+        // them (an image viewer stepping through photos held 40 GB without).
+        const int64_t bytes = static_cast<int64_t>(bmp->pixels->rgba.size());
+        bmp->externalBytes = bmp->upload ? 2 * bytes : bytes;
+        ev::adjustExternalMemory(bmp->externalBytes);
     }
     return g_imageBitmapClass.make(bmp, hostImageBitmapDtor);
 }
@@ -125,7 +131,13 @@ const uint8_t* HostImageBitmap::rgba() const {
     return !closed && pixels && !pixels->rgba.empty() ? pixels->rgba.data() : nullptr;
 }
 
+HostImageBitmap::~HostImageBitmap() {
+    if (externalBytes) ev::adjustExternalMemory(-externalBytes);
+}
+
 void HostImageBitmap::detach() {
+    if (externalBytes) ev::adjustExternalMemory(-externalBytes);
+    externalBytes = 0;
     closed = true;
     width = 0;
     height = 0;
