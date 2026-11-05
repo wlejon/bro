@@ -545,6 +545,14 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
             }
         }
         if (!(f.work & kGcWorkMinor)) minorIfDue(p, f);
+        if ((f.work & kGcWorkMinor) && !bronze::embed::heapPressure().marking) {
+            // The minor promoted past the full threshold, and the heap's
+            // escalation to a full collection finished the cycle: no slice
+            // is left to mark (brass stops the process on one).
+            logCycleEnd("finished by the heap after a minor");
+            s_cycle = Cycle{};
+            return;
+        }
         const double paced = markBudgetMs(p);
         if (paced > kFrameBudgetMs) {
             s_cycle.behind = true;
