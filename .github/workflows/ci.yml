@@ -42,6 +42,7 @@ env:
   # Without this sccache silently falls back to per-runner LOCAL DISK, which is
   # wiped between runs — 0% hits, every object recompiled (measured 0/1220).
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
   build:
@@ -97,6 +98,9 @@ jobs:
       # is MoltenVK behind the Khronos loader, both from Homebrew.
       - name: Ninja, tools and Vulkan (macOS)
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: brew install ninja nasm bash coreutils molten-vk vulkan-loader vulkan-headers vulkan-validationlayers
 
       # Put cl.exe on PATH so Windows can use the Ninja generator below — the
@@ -154,7 +158,7 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          GEN_ARGS=""
+          GEN_ARGS="-G Ninja"
           if [ "$RUNNER_OS" = "Windows" ]; then
             # Ninja (with the MSVC env set above) so the sccache compiler
             # launcher is actually honored. Embedded debug info (/Z7) instead
@@ -278,6 +282,9 @@ jobs:
 
       - name: Ninja, tools and Vulkan (macOS)
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: brew install ninja nasm molten-vk vulkan-loader vulkan-headers
 
       - name: MSVC dev environment (Windows)
@@ -297,7 +304,7 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          GEN_ARGS=""
+          GEN_ARGS="-G Ninja"
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DVCPKG_MANIFEST_MODE=OFF"
           elif [ "$RUNNER_OS" = "macOS" ]; then

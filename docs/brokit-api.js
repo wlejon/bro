@@ -70,7 +70,6 @@
 // NODE-COMPATIBLE MODULES (via require)
 // =============================================================================
 
-
 // -----------------------------------------------------------------------------
 // fs, require('fs')
 // -----------------------------------------------------------------------------
@@ -80,6 +79,7 @@ const fs = require('fs');
 // ── Sync ──
 
 fs.readFileSync(path, encoding);         // encoding: 'utf-8' | undefined (→ ArrayBuffer)
+fs.readFileSliceSync(path, offset, length); // → ArrayBuffer of up to length bytes from offset
 fs.writeFileSync(path, data, encoding);
 fs.appendFileSync(path, data, encoding);
 fs.statSync(path);                       // → { size, mtimeMs, mode, mtime, isFile(), isDirectory(), isSymbolicLink() }

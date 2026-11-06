@@ -77,7 +77,7 @@ const cases = {
     // Skia's SVG module's render was 4.6 and 3.2% from Chromium, outside
     // this test's bar. Its glyphs are the system's Arial, so a platform whose
     // Arial is another font has its own reference (ref/text_paint.*.win32.png:
-    // Windows' Arial, 2.3% far from Liberation Sans).
+    // Windows' and macOS's Arial, 2.3% far from Liberation Sans).
     text_paint: {},
     text_path: { img: [[0, 30, W, 60]] },               // reference <img> lacks the <use href> guide
     mask: {},
@@ -142,7 +142,8 @@ for (const name of Object.keys(cases)) {
     const shot = render(name);
     // A reference of this platform's own, where its fonts differ, else the shared one.
     const ref = (kind) => {
-        const own = DIR + 'ref/' + name + '.' + kind + '.' + process.platform + '.png';
+        const plat = process.platform === 'darwin' ? 'win32' : process.platform;
+        const own = DIR + 'ref/' + name + '.' + kind + '.' + plat + '.png';
         return decodePng(fs.existsSync(path.resolve(own)) ? own : DIR + 'ref/' + name + '.' + kind + '.png');
     };
     const refInline = ref('inline');

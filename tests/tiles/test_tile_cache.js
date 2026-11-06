@@ -650,7 +650,7 @@ if (!bro.kernel.available || !bro.tiles) {
         // With a scene's frames timed, each batch is timed on the GPU and
         // the cache learns its tiles' cost, overall and by level; batches
         // then spend the gap the frames leave, and the cache still settles.
-        perf.gpuFrameMs();
+        const gpuTimed = perf.gpuFrameMs() > 0;
         const timed = makeCache({ producePerUpdate: 64 });
         let frames = 0;
         while (timed.pending > 0 && frames < 200) {
@@ -665,8 +665,10 @@ if (!bro.kernel.available || !bro.tiles) {
             advanceTime(16);
             timed.update(near);
         }
-        assert(timed.stats.tileMs > 0, `its tiles' cost is timed (${timed.stats.tileMs} ms)`);
-        assert(timed.stats.levelMs.some((ms) => ms > 0), `and learned by level (${timed.stats.levelMs})`);
+        if (gpuTimed) {
+            assert(timed.stats.tileMs > 0, `its tiles' cost is timed (${timed.stats.tileMs} ms)`);
+            assert(timed.stats.levelMs.some((ms) => ms > 0), `and learned by level (${timed.stats.levelMs})`);
+        }
     }
 
     // The errors a script gets.

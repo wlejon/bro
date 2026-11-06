@@ -43,7 +43,7 @@ if (!support.supported) {
   const img = bro.image.decodeOriented(heic);
   assert(img.width === 0 && img.error === support.reason, 'a HEIC decode fails with that reason: ' + img.error);
   if (process.platform === 'win32') assert(/HEVC Video Extensions/.test(support.reason), 'Windows names the Store extension');
-  if (process.platform === 'linux') assert(/install libheif/.test(support.reason), 'Linux says to install libheif: ' + support.reason);
+  if (process.platform === 'linux') assert(/install (libheif|its libde265 plugin)/.test(support.reason), 'Linux says to install libheif: ' + support.reason);
   skipTest('no HEIC decoder here: ' + support.reason);
 } else {
   const img = bro.image.decodeOriented(heic);

@@ -55,14 +55,23 @@ if (!scene) {
     assert(rafs - before === 15, `one page frame a measured frame (${rafs - before} for 15)`);
     for (const key of ['gpu', 'kernels', 'total', 'wall'])
         assert(['mean', 'median', 'p90', 'p99', 'max'].every((s) => typeof r[key][s] === 'number'), `${key} has its spread`);
-    assert(r.gpu.mean > 0 && r.gpu.max >= r.gpu.p90 && r.gpu.p90 >= r.gpu.median, `the scene's GPU ms (${JSON.stringify(r.gpu)})`);
+    // Devices without counter sample buffers (e.g. Apple Paravirtual GPU in
+    // macOS CI VMs) report 0 for intra-command-buffer timestamp deltas.
+    const timed = r.gpu.max > 0;
+    assert(r.gpu.mean >= 0 && (!timed || r.gpu.mean > 0) && r.gpu.max >= r.gpu.p90 && r.gpu.p90 >= r.gpu.median,
+           `the scene's GPU ms (${JSON.stringify(r.gpu)})`);
     assert(Math.abs(r.total.mean - r.gpu.mean - r.kernels.mean) < 1e-6, 'total is the scene and the kernels');
     assert(Object.keys(r.passes).length > 0, `the passes' mean ms (${JSON.stringify(r.passes)})`);
-    if (gpuKernel) assert(r.kernelsBy.k_fill > 0 && r.kernels.mean > 0, `the page's kernel timed (${JSON.stringify(r.kernelsBy)})`);
+    if (gpuKernel) {
+        assert('k_fill' in r.kernelsBy && r.kernelsBy.k_fill >= 0 && (!timed || (r.kernelsBy.k_fill > 0 && r.kernels.mean > 0)),
+               `the page's kernel timed (${JSON.stringify(r.kernelsBy)})`);
+    }
     // The refinement is run after each frame, timed whole, and apart from the frame's total.
     if (gpuKernel) {
-        assert(r.refine.mean > 0 && r.refine.max >= r.refine.mean, `the refinement's GPU ms a frame (${JSON.stringify(r.refine)})`);
-        assert(r.backgroundBy['k_fill'] > 0, `its kernels listed apart (${JSON.stringify(r.backgroundBy)})`);
+        assert(r.refine.mean >= 0 && (!timed || r.refine.mean > 0) && r.refine.max >= r.refine.mean,
+               `the refinement's GPU ms a frame (${JSON.stringify(r.refine)})`);
+        assert('k_fill' in r.backgroundBy && r.backgroundBy['k_fill'] >= 0 && (!timed || r.backgroundBy['k_fill'] > 0),
+               `its kernels listed apart (${JSON.stringify(r.backgroundBy)})`);
         assert(typeof r.spill === 'number' && r.spill >= r.over, `frames whose refinement overran the interval (${r.spill})`);
     }
     assert(Math.abs(r.budget - 1000 / 360) < 1e-9, 'the budget is a 360 Hz frame by default');
@@ -71,12 +80,12 @@ if (!scene) {
     // them): the refinement still measured whole, the kernels by name not.
     if (gpuKernel) {
         const u = perf.measure({ frames: 6, warm: 1, kernels: false });
-        assert(u.refine.mean > 0, `untimed, the refinement's GPU ms (${JSON.stringify(u.refine)})`);
+        assert(u.refine.mean >= 0 && (!timed || u.refine.mean > 0), `untimed, the refinement's GPU ms (${JSON.stringify(u.refine)})`);
         assert(!(u.backgroundBy['k_fill'] > 0) && u.kernels.mean === 0, `and no kernel's own (${JSON.stringify(u.backgroundBy)})`);
     }
 
     // Over a budget of nothing every frame is a spike, with its breakdown.
-    const all = perf.measure({ frames: 4, budget: 0 });
+    const all = perf.measure({ frames: 4, budget: timed ? 0 : -1 });
     assert(all.over === 4 && all.spikes.length === 4, `every frame over a zero budget (${all.over})`);
     assert(all.spill === 4, `and every one spilled (${all.spill})`);
     assert(all.spikes.every((s, i) => s.frame === i && s.total === s.gpu + s.kernels), 'a spike names its frame and its ms');

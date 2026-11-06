@@ -48,6 +48,7 @@ env:
   # writes thrown away). This is the one switch that makes nightly-to-nightly
   # caching actually work. The sccache-action exports the cache service token.
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
   build:
@@ -102,6 +103,9 @@ jobs:
       # the package by package-release.sh (macOS has no system Vulkan).
       - name: Ninja and Vulkan (macOS)
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: brew install ninja molten-vk vulkan-loader vulkan-headers
 
       - name: Install CUDA Toolkit
@@ -207,7 +211,7 @@ jobs:
             # is always present on Apple hardware, so no toolkit install is needed.
             GPU_ARGS="-DBRO_WITH_TENSOR_METAL=ON"
           fi
-          GEN_ARGS=""
+          GEN_ARGS="-G Ninja"
           if [ "$RUNNER_OS" = "Windows" ]; then
             # Ninja (with the MSVC env set above) so the sccache compiler launcher
             # is actually honored — the default Visual Studio generator ignores

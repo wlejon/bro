@@ -94,7 +94,9 @@ const shellScript = writeScript(
     '                late: e.request.respond(true) });\n' +
     '});\n' +
     'console.log("SERVING:" + bro.permissions.serving);\n' +
-    'for (let i = 0; i < 6000 && !fs.existsSync(' + JSON.stringify(stopFile) + '); i++) { advanceTime(16); wallSleep(16); }\n' +
+    'for (let i = 0; i < 6000 && (!fs.existsSync(' + JSON.stringify(stopFile) + ') ||\n' +
+    '     (seen.some((e) => e.kind === "request" && e.capability === "net") &&\n' +
+    '      !seen.some((e) => e.kind === "cancel"))); i++) { advanceTime(16); wallSleep(16); }\n' +
     report('seen'));
 
 let shellOut = '';
