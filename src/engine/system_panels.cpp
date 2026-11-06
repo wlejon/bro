@@ -648,11 +648,11 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     });
 
     traversal.setBasePath(doc.document->basePath());
-    traversal.draw(doc.document->documentElement(), 0, 0,
-                   static_cast<float>(vpW), static_cast<float>(vpH));
-
-    drawElementScrollbars(renderer, doc.document->documentElement(),
-                          0.0f, 0.0f);
+    drawWithElementScrollbars(traversal, renderer, doc.document->documentElement(), 0.0f, 0.0f, 0.0f, nullptr, nullptr,
+                              [&] {
+                                  traversal.draw(doc.document->documentElement(), 0, 0,
+                                                 static_cast<float>(vpW), static_cast<float>(vpH));
+                              });
 
     traversal.setLayerBreakCallback(nullptr);
 }

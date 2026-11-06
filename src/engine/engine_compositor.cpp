@@ -112,11 +112,17 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     // all land in content space automatically.
     if (document_ && document_->documentElement()) {
         drawTraversal_->setBasePath(document_->basePath());
-        drawTraversal_->draw(document_->documentElement(),
-                             0, -scrollY,
-                             contentW, contentH, /*viewportTop=*/0);
+        auto walk = [&] {
+            drawTraversal_->draw(document_->documentElement(),
+                                 0, -scrollY,
+                                 contentW, contentH, /*viewportTop=*/0);
+        };
+        // The element scrollbars are the base's, each where its scroller is in the paint order.
+        if (promotedOnly) walk();
+        else drawWithElementScrollbars(*drawTraversal_, recordingRenderer_.get(), document_->documentElement(),
+                                       0.0f, -scrollY, deviceScale_.render, scrollLayers, recordingRenderer_.get(), walk);
 
-        // Selection / inspector / overlay / scrollbars are base-only chrome —
+        // Selection / inspector / overlay are base-only chrome —
         // they belong to the cached base, never the on-top promoted layer.
         if (!promotedOnly) {
             drawSelectionHighlight(recordingRenderer_.get(), -scrollY);
@@ -151,10 +157,6 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                              document_->mediaContext().colorScheme == "dark")
                        : Scrollbar::schemeColors(
                              document_->mediaContext().colorScheme == "dark"));
-
-            drawElementScrollbars(recordingRenderer_.get(),
-                                  document_->documentElement(),
-                                  0.0f, -scrollY, deviceScale_.render, scrollLayers, recordingRenderer_.get());
         }
     }
 
@@ -335,15 +337,10 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // client window with nothing over it can then be shown as that window's
     // buffer alone (direct scanout).
     uint64_t drawsAtSwitch = 0;
-    // A scroll layer's thumbs are recorded after everything the base draws:
-    // they go above its last HTML layer, splitting none.
-    std::vector<UILayer> thumbs;
+    // A scroll layer's thumbs split the page like any layer: they are
+    // recorded where their scroller's bars are in the paint order, so what
+    // paints over the scroller (a popup) is over its thumb too.
     replayer.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad& quad) {
-        if (const auto* sl = std::get_if<render::ScrollLayerSource>(&source);
-            sl && (sl->part == render::ScrollLayerSource::ThumbV || sl->part == render::ScrollLayerSource::ThumbH)) {
-            thumbs.push_back(UILayer::of(source, quad));
-            return;
-        }
         int prevIdx = htmlLayerIdx;
         htmlLayerIdx++;
         // A partial pass splits at the same breaks as the recording its pool
@@ -383,10 +380,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         whole.push_back(renderer->createLayerSurface(surfW, surfH));
         renderer->switchSurface(whole[0].surface);
         render::CommandReplayer wr(renderer);
-        wr.setLayerBreakHandler([&](const render::LayerSource& source, const render::LayerQuad&) {
-            if (const auto* sl = std::get_if<render::ScrollLayerSource>(&source);
-                sl && (sl->part == render::ScrollLayerSource::ThumbV || sl->part == render::ScrollLayerSource::ThumbH))
-                return;
+        wr.setLayerBreakHandler([&](const render::LayerSource&, const render::LayerQuad&) {
             whole.push_back(renderer->createLayerSurface(surfW, surfH));
             renderer->switchSurface(whole.back().surface);
         });
@@ -406,7 +400,6 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         }
     }
     if (htmlLayerIdx == 0 || replayer.draws() != drawsAtSwitch) outLayers.push_back(htmlLayerOf(pool[htmlLayerIdx]));
-    outLayers.insert(outLayers.end(), thumbs.begin(), thumbs.end());
     if (held) {
         held->baseGen = baseGen;
         held->scale = scale;

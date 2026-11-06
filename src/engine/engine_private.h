@@ -281,15 +281,18 @@ public:
     void noteHoverRecheck() { hoverRecheckPending_ = true; }
 private:
     bool systemHandleWheel(float x, float y, float dx, float dy);
-    // Every scroll container's bars under `root`, their thumbs on whole
-    // device pixels at `scale` (0: as laid out). With `layers`, the thumb of
-    // a scroller composited as a scroll layer is a layer break `recorder`
-    // records after all of them (ScrollLayerSet::setThumb); only its track
-    // is painted.
-    void drawElementScrollbars(render::Renderer* renderer,
-                               dom::Element* root,
-                               float offsetX, float offsetY, float scale = 0.0f,
-                               ScrollLayerSet* layers = nullptr, render::RecordingRenderer* recorder = nullptr);
+    // Run `draw` (the traversal's walk of `root`) with every scroll
+    // container's bars under `root` painted where the stacking walk puts its
+    // scroller (DrawTraversal::setScrollbarPainter), so a box painted over a
+    // scroller (a popup, a menu) is over its bars too; the ones the walk does
+    // not reach are painted after it. Thumbs on whole device pixels at `scale`
+    // (0: as laid out). With `layers`, the thumb of a scroller composited as
+    // a scroll layer is a layer break `recorder` records over its track
+    // (ScrollLayerSet::setThumb); only its track is painted.
+    void drawWithElementScrollbars(layout::DrawTraversal& traversal, render::Renderer* renderer,
+                                   dom::Element* root, float offsetX, float offsetY, float scale,
+                                   ScrollLayerSet* layers, render::RecordingRenderer* recorder,
+                                   const std::function<void()>& draw);
     void updateSelectionSnapshot();
     void drawSelectionHighlight(render::Renderer* renderer, float docOffsetY);
     bool systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat);

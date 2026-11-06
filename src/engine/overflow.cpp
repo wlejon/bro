@@ -214,7 +214,7 @@ dom::Element* findElementScrollbarHit(
     float absY = lbox.contentRect.y + offsetY;
 
     // Recurse into composed children FIRST to find the deepest match. Clamped
-    // offsets, matching what was painted (drawElementScrollbars uses the same
+    // offsets, matching what was painted (drawWithElementScrollbars uses the same
     // layout), so the scrollbar we hit-test is the one on screen.
     float childOffsetX = absX - dom::clampedScrollLeftOf(elem);
     float childOffsetY = absY - dom::clampedScrollTopOf(elem);

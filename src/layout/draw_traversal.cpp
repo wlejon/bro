@@ -217,7 +217,10 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     spanSnapped_ = false;
     snapOriginX_ = snapOriginY_ = 0.0f;
     transformDepth_ = 0;
+    ownedBars_.clear();
+    if (rootSC && scrollbarPaint_) assignScrollbars(rootSC.get());
     if (rootSC) paintStackingContext(rootSC.get(), false, true);
+    ownedBars_.clear();
     // Then the top layer, above everything, each entry over its ::backdrop.
     if (rootSC) paintTopLayer(root);
     if (activeCache_) prunePaintCache(*activeCache_);
@@ -738,8 +741,10 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     // non-SC descendants (they paint separately below).
     // In PromotedOnly above a promoted root this is suppressed (recursion into
     // children below still runs to reach deeper promoted subtrees).
-    if (!suppressSelf)
+    if (!suppressSelf) {
         drawElementContent(sc->root, sc->offsetX, sc->offsetY);
+        markBarsPainted(sc, nullptr);
+    }
 
     // Step 2: child SCs with z-index < 0, sorted by zIndex then tree order.
     std::vector<StackingContext*> negSCs, autoSCs, posSCs;
@@ -826,8 +831,10 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
         std::vector<WalkItem> items;
         items.reserve(step6.size());
         for (auto& item : step6) items.push_back({item.elem, std::move(item.paint)});
-        paintWalkItems(items);
+        // This context's scrollbars go among these, each after what is inside its scroller.
+        paintWalkItems(items, sc);
     }
+    flushBars(sc, nullptr);
 
     // Step 7: child SCs with positive z-index.
     std::sort(posSCs.begin(), posSCs.end(), [](auto* a, auto* b) {

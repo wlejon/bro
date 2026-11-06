@@ -129,6 +129,18 @@ public:
     };
     using LayerBreakCallback = std::function<void(const LayerBreak&)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
+    // Element scrollbars, painted where the stacking walk puts each one: after
+    // its scroller's content and the positioned boxes inside it, before the
+    // next box of its stacking context that is not inside it and before that
+    // context's positive z-index children. `scrollers` is in tree order;
+    // `paint(scroller)` draws one's bars at the point it is called. A
+    // scroller the walk does not reach (the top layer, a skipped promoted
+    // subtree) is never passed to `paint`: the caller draws what is left.
+    using ScrollbarPainter = std::function<void(dom::Element*)>;
+    void setScrollbarPainter(std::vector<dom::Element*> scrollers, ScrollbarPainter paint) {
+        scrollbarScrollers_ = std::move(scrollers);
+        scrollbarPaint_ = std::move(paint);
+    }
     // A <terminal> as its own layer (render::TerminalLayerSource) instead of
     // drawn inline: the app document's pass, whose compositor places it.
     void setTerminalLayers(bool on) { terminalLayers_ = on; }
@@ -287,7 +299,22 @@ private:
         dom::Element* elem;
         std::function<void()> paint;
     };
-    void paintWalkItems(std::vector<WalkItem>& items);
+    // `barsOf`: the stacking context whose scrollbars this run of items
+    // places (step 6), or null.
+    void paintWalkItems(std::vector<WalkItem>& items, const StackingContext* barsOf = nullptr);
+    // The scrollbars of a stacking context's scrollers (setScrollbarPainter):
+    // each owned by the context whose walk paints it, and shown after its
+    // anchor (the positioned box it is in, or the context's own step 1).
+    struct OwnedBars {
+        dom::Element* scroller = nullptr;
+        dom::Element* anchor = nullptr;  // null: painted with the context's step 1
+        bool painted = false;            // its anchor has painted: due
+        bool drawn = false;
+    };
+    void assignScrollbars(const StackingContext* rootSC);
+    void markBarsPainted(const StackingContext* sc, const dom::Element* anchor);
+    // Draw the due bars of `sc` whose scroller does not hold `next` (null: all due).
+    void flushBars(const StackingContext* sc, const dom::Element* next);
     void paintScrollPiece(dom::Element* scroller, std::vector<WalkItem>& items, size_t from, size_t to);
     bool paintScrollLayer(dom::Element* elem, const htmlayout::css::ComputedStyle& style,
                           const htmlayout::layout::LayoutBox& box, bool visible, float x, float y, float bw,
@@ -439,6 +466,9 @@ private:
     // Whether `elem`'s border box meets the viewport and the active clip.
     bool boxOnScreen(dom::Element* elem) const;
     LayerBreakCallback layerBreakCb_;
+    std::vector<dom::Element*> scrollbarScrollers_;
+    ScrollbarPainter scrollbarPaint_;
+    std::unordered_map<const StackingContext*, std::vector<OwnedBars>> ownedBars_;
     bool terminalLayers_ = false;
     bool shellClientWindows_ = false;
     const std::vector<ClientWindowSlot>* clientSlots_ = nullptr;

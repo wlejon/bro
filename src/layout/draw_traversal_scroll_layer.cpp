@@ -202,18 +202,74 @@ bool DrawTraversal::clipInPiece(const ClipRect& c) const {
     return c.owner && c.owner != pieceScroller_ && withinElement(c.owner, pieceScroller_);
 }
 
-void DrawTraversal::paintWalkItems(std::vector<WalkItem>& items) {
+void DrawTraversal::paintWalkItems(std::vector<WalkItem>& items, const StackingContext* barsOf) {
     for (size_t i = 0; i < items.size();) {
+        if (barsOf) flushBars(barsOf, items[i].elem);
         dom::Element* scroller = pieceScrollerOf(items[i].elem);
         size_t j = i + 1;
         if (!scroller) {
             items[i].paint();
-            i = j;
-            continue;
+        } else {
+            while (j < items.size() && pieceScrollerOf(items[j].elem) == scroller) ++j;
+            paintScrollPiece(scroller, items, i, j);
         }
-        while (j < items.size() && pieceScrollerOf(items[j].elem) == scroller) ++j;
-        paintScrollPiece(scroller, items, i, j);
+        if (barsOf)
+            for (size_t k = i; k < j; ++k) markBarsPainted(barsOf, items[k].elem);
         i = j;
+    }
+}
+
+namespace {
+
+// Whether `e` is `box` or in its layout subtree.
+bool insideBox(const dom::Element* e, const dom::Element* box) {
+    for (; e; e = e->layoutParent())
+        if (e == box) return true;
+    return false;
+}
+
+void collectContexts(const StackingContext* sc,
+                     std::unordered_map<const dom::Element*, const StackingContext*>& roots,
+                     std::unordered_map<const dom::Element*, const StackingContext*>& positioned) {
+    roots[sc->root] = sc;
+    for (const auto& pe : sc->positionedNonSC) positioned[pe.elem] = sc;
+    for (const auto& c : sc->children) collectContexts(c.get(), roots, positioned);
+}
+
+}  // namespace
+
+void DrawTraversal::assignScrollbars(const StackingContext* rootSC) {
+    std::unordered_map<const dom::Element*, const StackingContext*> roots, positioned;
+    collectContexts(rootSC, roots, positioned);
+    for (dom::Element* s : scrollbarScrollers_) {
+        // The context that paints it is the nearest one at or above it; the
+        // positioned box nearest it (below that context) is when it paints.
+        dom::Element* anchor = nullptr;
+        for (dom::Element* e = s; e; e = e->layoutParent()) {
+            auto r = roots.find(e);
+            if (r != roots.end()) {
+                ownedBars_[r->second].push_back({s, anchor});
+                break;
+            }
+            if (!anchor && positioned.count(e)) anchor = e;
+        }
+    }
+}
+
+void DrawTraversal::markBarsPainted(const StackingContext* sc, const dom::Element* anchor) {
+    auto it = ownedBars_.find(sc);
+    if (it == ownedBars_.end()) return;
+    for (OwnedBars& b : it->second)
+        if (b.anchor == anchor) b.painted = true;
+}
+
+void DrawTraversal::flushBars(const StackingContext* sc, const dom::Element* next) {
+    auto it = ownedBars_.find(sc);
+    if (it == ownedBars_.end()) return;
+    for (OwnedBars& b : it->second) {
+        if (!b.painted || b.drawn || (next && insideBox(next, b.scroller))) continue;
+        b.drawn = true;
+        scrollbarPaint_(b.scroller);
     }
 }
 

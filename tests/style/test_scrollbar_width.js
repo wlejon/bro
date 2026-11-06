@@ -50,6 +50,28 @@ assert(wide >= 23 && wide <= 25, `24px is a 24px bar, got ${wide}`);
     assert(el.scrollTop > 50, `a click on the wide track pages, scrollTop ${el.scrollTop}`);
 }
 
+// Bars are painted where their scroller is in the paint order: a positioned
+// box over the scroller (a popup) covers its bar; the scroller's own
+// positioned children (a virtual list's cells) stay under it.
+{
+    const host = document.createElement('div');
+    host.innerHTML =
+        '<div id="cells" style="position:absolute;left:300px;top:20px;width:200px;height:120px;overflow-y:scroll;' +
+        'scrollbar-width:24px;scrollbar-color: rgb(220,0,0) rgb(0,0,220);background:#000">' +
+        '<div style="position:relative;height:2000px">' +
+        '<div style="position:absolute;left:0;top:0;width:200px;height:2000px;background:rgb(0,200,0)"></div></div></div>' +
+        '<div id="pop" style="position:fixed;left:440px;top:60px;width:100px;height:40px;z-index:5;background:rgb(240,240,0)"></div>';
+    root.appendChild(host);
+    flush();
+    const r = document.getElementById('cells').getBoundingClientRect();
+    const under = getPixel(Math.floor(r.right - 10), Math.floor(r.top + 5));
+    assert(under.r > 150 && under.g < 100, `the bar over the scroller's own positioned cell (thumb red): ${JSON.stringify(under)}`);
+    const covered = getPixel(Math.floor(r.right - 10), 80);
+    assert(covered.r > 200 && covered.g > 200 && covered.b < 60, `the popup over the bar: ${JSON.stringify(covered)}`);
+    host.remove();
+    flush();
+}
+
 // `none` still scrolls.
 {
     const el = document.getElementById('none');

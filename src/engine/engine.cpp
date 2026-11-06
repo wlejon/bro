@@ -541,11 +541,14 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
     }
 }
 
-void Engine::drawElementScrollbars(render::Renderer* renderer,
-                                   dom::Element* root,
-                                   float offsetX, float offsetY, float scale,
-                                   ScrollLayerSet* layers, render::RecordingRenderer* recorder) {
-    if (!renderer || !root || !root->document()) return;
+void Engine::drawWithElementScrollbars(layout::DrawTraversal& traversal, render::Renderer* renderer,
+                                       dom::Element* root, float offsetX, float offsetY, float scale,
+                                       ScrollLayerSet* layers, render::RecordingRenderer* recorder,
+                                       const std::function<void()>& draw) {
+    if (!renderer || !root || !root->document()) {
+        draw();
+        return;
+    }
     dom::Document* doc = root->document();
     const bool preferDark = doc->mediaContext().colorScheme == "dark";
     auto displayNone = [](const dom::Element* el) {
@@ -563,7 +566,9 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         std::vector<uint32_t> path;  // composed child indexes from `root`
         dom::Element* elem;
         float x, y;                  // its content box, in draw space
+        bool nested = false;         // inside another scroll container
     };
+    const auto& containers = doc->scrollContainers();
     std::vector<Bars> found;
     std::vector<dom::Element*> stale;
     std::vector<dom::Element*> chain;
@@ -580,6 +585,9 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         if (layers)
             for (size_t i = 1; i < chain.size(); ++i) layers->setHasNestedScroller(chain[i]->nodeId());
         for (size_t i = chain.size() - 1; i > 0; --i) {
+            if (chain[i] != root && chain[i] != doc->documentElement() && chain[i] != doc->body() &&
+                containers.count(chain[i]))
+                b.nested = true;
             const auto& pbox = chain[i]->layoutBox();
             b.x += pbox.contentRect.x - dom::clampedScrollLeftOf(chain[i]);
             b.y += pbox.contentRect.y - dom::clampedScrollTopOf(chain[i]);
@@ -591,21 +599,14 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
     for (dom::Element* el : stale) doc->forgetScrollContainer(el);
     std::sort(found.begin(), found.end(), [](const Bars& a, const Bars& b) { return a.path < b.path; });
 
-    // A scroll layer's thumbs are the compositor's: each is a layer break
-    // after every bar, its quad the thumb at scroll 0.
-    struct ThumbBreak {
-        render::ScrollLayerSource source;
-        render::LayerQuad quad;
-    };
-    std::vector<ThumbBreak> thumbs;
-    for (const Bars& b : found) {
+    auto paint = [&](const Bars& b) {
         // Both bars (right edge, bottom edge) by the same rules; the offsets
         // are clamped like the draw traversal clamps, since an offset past the
         // end would otherwise put the thumb outside its track. The thumb
         // starts on a whole device pixel, where the compositor puts one it
         // moves.
         ElementScrollbarLayout bars = layoutElementScrollbars(b.elem, b.x, b.y, elementScrollbar_);
-        if (!bars.v.visible && !bars.h.visible) continue;
+        if (!bars.v.visible && !bars.h.visible) return;
         Scrollbar::snapThumb(bars.v, scale);
         Scrollbar::snapThumb(bars.h, scale);
         const auto colors = Scrollbar::colorsFor(b.elem->computedStyle(), preferDark);
@@ -613,7 +614,7 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         if (!layers || !recorder || !layers->placed(id)) {
             if (bars.v.visible) elementScrollbar_.draw(renderer, bars.v, colors);
             if (bars.h.visible) elementScrollbar_.draw(renderer, bars.h, colors);
-            continue;
+            return;
         }
         // Its scroll range and thumb travel as Scrollbar::layout has them.
         const auto& lbox = b.elem->layoutBox();
@@ -626,18 +627,42 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
             const float thumbRange = a == 0 ? m.trackH - m.thumbH : m.trackW - m.thumbW;
             layers->setThumb(id, a, m.thumbW, m.thumbH, a == 0 ? m.thumbX : m.thumbY, content - view, thumbRange,
                              elementScrollbar_.thumbColor(colors));
-            ThumbBreak t;
-            t.source = render::ScrollLayerSource{
-                id, layers->scrollLayerPass(),
-                a == 0 ? render::ScrollLayerSource::ThumbV : render::ScrollLayerSource::ThumbH};
-            t.quad.x = a == 0 ? m.thumbX : m.trackX;
-            t.quad.y = a == 0 ? m.trackY : m.thumbY;
-            t.quad.w = m.thumbW;
-            t.quad.h = m.thumbH;
-            thumbs.push_back(t);
+            // The compositor's thumb: a layer break over its track, its quad the thumb at scroll 0.
+            render::LayerQuad quad;
+            quad.x = a == 0 ? m.thumbX : m.trackX;
+            quad.y = a == 0 ? m.trackY : m.thumbY;
+            quad.w = m.thumbW;
+            quad.h = m.thumbH;
+            recorder->recordLayerBreak(
+                render::ScrollLayerSource{id, layers->scrollLayerPass(),
+                                          a == 0 ? render::ScrollLayerSource::ThumbV : render::ScrollLayerSource::ThumbH},
+                quad);
         }
+    };
+
+    // Each where the walk puts its scroller; then the ones it did not reach.
+    // One inside another scroll container is left to the end: the walk would
+    // draw it on the page, where the outer one's scroll layer (when it is
+    // one) covers it.
+    std::unordered_map<const dom::Element*, size_t> index;
+    std::vector<dom::Element*> order;
+    order.reserve(found.size());
+    for (size_t i = 0; i < found.size(); ++i) {
+        if (found[i].nested) continue;
+        index[found[i].elem] = i;
+        order.push_back(found[i].elem);
     }
-    for (const ThumbBreak& t : thumbs) recorder->recordLayerBreak(t.source, t.quad);
+    std::vector<bool> drawn(found.size(), false);
+    traversal.setScrollbarPainter(std::move(order), [&](dom::Element* e) {
+        auto it = index.find(e);
+        if (it == index.end() || drawn[it->second]) return;
+        drawn[it->second] = true;
+        paint(found[it->second]);
+    });
+    draw();
+    traversal.setScrollbarPainter({}, nullptr);
+    for (size_t i = 0; i < found.size(); ++i)
+        if (!drawn[i]) paint(found[i]);
 }
 
 
