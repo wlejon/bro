@@ -258,7 +258,7 @@ means. Nothing assumes an app is friendly. The catalogue is one table,
 
 | Capability | Gates | Kind |
 |---|---|---|
-| `files` | files beyond the app's own (below), through `fs`, sqlite, `bro.vfs`, `bro.search` and `bro.thumb` alike; `bro.apps`' default apps and recent files | ask |
+| `files` | files beyond the app's own (below), through `fs`, sqlite, `bro.vfs`, `bro.search` and `bro.thumb` alike; `bro.apps`' default apps and recent files. A preview `bro.thumb` hands back (its `path`, in the shared cache in home) of a file the app may read is the app's to read for that run, so an `<img>` of it loads | ask |
 | `net` | `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `net`, `http`'s servers and clients, `WebSocketServer`, `bro.models`' downloads, `bro.net`, the page's subresources over http(s) (`<img>`, CSS `url()`, `@import`, `@font-face`, scripts, `<video>`, `<iframe>`) | ask |
 | `spawn` | `child_process`, `bro.app.spawn`, `bro.app.open`, `bro.apps.launch`, `<terminal>` | ask |
 | `mic` | `getUserMedia`, `bro.mic`, `bro.listen`, system loopback capture | ask |
@@ -363,7 +363,9 @@ and `/lib`, and the model directories (`bro.models.dirs`). With `files` it
 reads and writes anywhere. A file or folder the user picks in a file dialog
 (open, save, folder, sync or async) or drops on the window is the app's to
 read and write from then on (a folder with everything in it), kept with its
-grants. Paths are resolved (`..`, links) before deciding. No app writes bro's
+grants. A preview `bro.thumb` makes of a file the app may read is the app's
+to read for the run (the library tells the gate, bronze's
+`AccessKind::ReadDerived`), never kept. Paths are resolved (`..`, links) before deciding. No app writes bro's
 own state (the grant store and usage file, the install roots, bro's
 executable and resource directories), with `files` or without. On Linux no
 app reads a process's memory (`/proc/<pid>/mem`) or writes this process's

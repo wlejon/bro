@@ -37,6 +37,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::engine {
@@ -96,6 +97,10 @@ public:
     /// The powerbox: what the user picked or dropped is the app's to read and
     /// write (a folder, all under it), now and in later runs.
     void grantPicked(const std::vector<std::string>& paths);
+    /// A file a library made for the app from one it may read (bro.thumb's
+    /// preview in the shared thumbnail cache) is the app's to read for this
+    /// run, never kept (bronze::embed::AccessKind::ReadDerived).
+    void grantDerivedRead(const std::string& path);
 
     /// Read the grant store again (it changed: `bro --revoke-app`, the
     /// shell's bro.permissions.set, another process's prompt). What it no
@@ -178,6 +183,7 @@ private:
     std::vector<std::string> everGranted_;
     // Canonical, comparable forms (canonicalPath below).
     std::vector<std::string> writeRoots_, readRoots_, picked_, protected_;
+    std::unordered_set<std::string> derived_;  // grantDerivedRead's, canonical files
     std::string storeFile_;  // the grant store, canonical (canonicalPath)
     std::string home_;
     std::string procSelf_;   // Linux: /proc/<pid>, this process's own

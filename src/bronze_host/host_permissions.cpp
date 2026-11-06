@@ -452,6 +452,9 @@ void installAccessPolicy() {
                 // config folder.
                 if (appPermissions().ownsConfChange(subject)) return {};
                 return appPermissions().use("files", subject, mayAsk);
+            case AccessKind::ReadDerived:
+                appPermissions().grantDerivedRead(subject);
+                return {};
         }
         return "unknown access";
     });

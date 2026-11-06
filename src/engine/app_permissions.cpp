@@ -322,6 +322,7 @@ void AppPermissions::configure(const PermissionsSetup& setup) {
     writeRoots_.clear();
     readRoots_.clear();
     protected_.clear();
+    derived_.clear();
     std::error_code ec;
     const std::string temp = u8str(fs::temp_directory_path(ec));
     for (const std::string& d : {setup.dirs.config, setup.dirs.data, setup.dirs.cache, setup.dirs.logDir, temp})
@@ -567,7 +568,7 @@ std::string AppPermissions::checkFs(const std::string& path, bool write, bool ma
                 procEntry(p, pid2, entry2) && (entry2 == "environ" || entry2.ends_with("/environ"));
             if (!environFile) {
                 if (home_.empty() || !pathWithin(p, home_)) return {};
-                if (underAny(p, readRoots_) || underAny(p, picked_)) return {};
+                if (underAny(p, readRoots_) || underAny(p, picked_) || derived_.count(p)) return {};
             }
         }
     }
@@ -636,6 +637,13 @@ void AppPermissions::grantPicked(const std::vector<std::string>& paths) {
     // here could pass over another process's write landing just after), and
     // changes nothing.
     if (!ok) LOG_WARN("permissions: %s; the picked files are the app's for this run only", err.c_str());
+}
+
+void AppPermissions::grantDerivedRead(const std::string& path) {
+    if (path.empty()) return;
+    const std::string p = checkedPath(path);  // as checkFs compares it
+    std::lock_guard<std::mutex> lock(mu_);
+    if (configured_) derived_.insert(p);
 }
 
 bool AppPermissions::storeChanged() {
