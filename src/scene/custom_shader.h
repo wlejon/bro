@@ -144,8 +144,17 @@ struct ShaderStageExecStat {
     uint64_t uval = 0;
 };
 
+// A source function's instructions in a stage: its own, and with the
+// functions it called (the stage's SPIR-V is one inlined function).
+struct ShaderFunctionCost {
+    std::string name;
+    uint32_t self = 0;
+    uint32_t total = 0;
+};
+
 struct ShaderStageStats {
     bool present = false;
+    std::vector<ShaderFunctionCost> functionCosts;   // largest total first
     uint32_t spirvBytes = 0;
     uint32_t instructions = 0;
     uint32_t arithmetic = 0;
@@ -154,7 +163,6 @@ struct ShaderStageStats {
     uint32_t stores = 0;
     uint32_t branches = 0;
     uint32_t loops = 0;
-    uint32_t functions = 0;
     uint32_t sgprs = 0;
     uint32_t vgprs = 0;
     uint32_t scratchBytes = 0;

@@ -261,6 +261,7 @@ private:
         std::vector<uint32_t> vsSpirv;
         std::vector<uint32_t> fsSpirv;
         std::vector<uint32_t> nearSpirv;
+        std::vector<StageFunctionCost> vsCosts, fsCosts, nearCosts;
         std::vector<KernelProbeSlot> probes;
     };
 

@@ -22,9 +22,11 @@ std::string toLowerAscii(std::string_view s) {
 }
 
 void fillStageStats(const std::vector<uint32_t>& spirv,
+                    const std::vector<StageFunctionCost>& costs,
                     VkShaderStageFlagBits stageBit,
                     const std::vector<render::PipelineExecutableStats>& execs,
                     ShaderStageStats& dst) {
+    for (const auto& c : costs) dst.functionCosts.push_back({c.name, c.self, c.total});
     if (!spirv.empty()) {
         const bro::SpirvStaticStats s = bro::analyzeSpirvStaticStats(spirv);
         dst.present = true;
@@ -36,7 +38,6 @@ void fillStageStats(const std::vector<uint32_t>& spirv,
         dst.stores = s.stores;
         dst.branches = s.branches;
         dst.loops = s.loops;
-        dst.functions = s.functions;
     }
     for (const auto& ex : execs) {
         if ((ex.stages & stageBit) == 0) continue;
@@ -127,15 +128,15 @@ bool SceneMeshDrawer::shaderStats(const CustomShaderState& cs, MeshKind kind, bo
         if (isVolume) {
             KernelVolumeHook hook;
             if (!compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs)) return false;
-            fillStageStats(hook.main.spirv, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
-            if (hook.medium) fillStageStats(hook.nearPass.spirv, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.nearStage);
+            fillStageStats(hook.main.spirv, hook.main.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
+            if (hook.medium) fillStageStats(hook.nearPass.spirv, hook.nearPass.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.nearStage);
             return true;
         }
         KernelMeshHook hook;
         if (!compileKernelMeshHook(shaderTargetForKind(kind), cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs))
             return false;
-        if (hook.hasFragment) fillStageStats(hook.fs.spirv, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
-        if (hook.hasVertex) fillStageStats(hook.vs.spirv, VK_SHADER_STAGE_VERTEX_BIT, {}, out.vertex);
+        if (hook.hasFragment) fillStageStats(hook.fs.spirv, hook.fs.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
+        if (hook.hasVertex) fillStageStats(hook.vs.spirv, hook.vs.costs, VK_SHADER_STAGE_VERTEX_BIT, {}, out.vertex);
         return true;
     }
 
@@ -193,8 +194,8 @@ bool SceneMeshDrawer::shaderStats(const CustomShaderState& cs, MeshKind kind, bo
         pipeline ? render::queryPipelineExecutableStats(device_, pipeline)
                  : std::vector<render::PipelineExecutableStats>{};
 
-    fillStageStats(prog->fsSpirv, VK_SHADER_STAGE_FRAGMENT_BIT, execs, out.fragment);
-    fillStageStats(prog->vsSpirv, VK_SHADER_STAGE_VERTEX_BIT, execs, out.vertex);
+    fillStageStats(prog->fsSpirv, prog->fsCosts, VK_SHADER_STAGE_FRAGMENT_BIT, execs, out.fragment);
+    fillStageStats(prog->vsSpirv, prog->vsCosts, VK_SHADER_STAGE_VERTEX_BIT, execs, out.vertex);
 
     if (isVolume && prog->medium) {
         VkPipeline nearPipe = prog->nearPipelines.get(0u, TargetFormat{}, [&] {
@@ -213,7 +214,7 @@ bool SceneMeshDrawer::shaderStats(const CustomShaderState& cs, MeshKind kind, bo
         const std::vector<render::PipelineExecutableStats> nearExecs =
             nearPipe ? render::queryPipelineExecutableStats(device_, nearPipe)
                      : std::vector<render::PipelineExecutableStats>{};
-        fillStageStats(prog->nearSpirv, VK_SHADER_STAGE_FRAGMENT_BIT, nearExecs, out.nearStage);
+        fillStageStats(prog->nearSpirv, prog->nearCosts, VK_SHADER_STAGE_FRAGMENT_BIT, nearExecs, out.nearStage);
     }
     return true;
 }

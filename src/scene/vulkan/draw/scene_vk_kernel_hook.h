@@ -21,9 +21,18 @@ namespace bro::scene::vk {
 
 enum class ShadowCaster { Static, Skinned, Instanced };
 
+// A source function's share of a stage (brokernel's function_costs: its own
+// instructions, and with those of the functions it called).
+struct StageFunctionCost {
+    std::string name;
+    uint32_t self = 0;
+    uint32_t total = 0;
+};
+
 struct KernelHookStage {
     std::vector<uint32_t> spirv;
     std::string entry;   // its OpEntryPoint
+    std::vector<StageFunctionCost> costs;   // largest total first
 };
 
 struct KernelProbeSlot {

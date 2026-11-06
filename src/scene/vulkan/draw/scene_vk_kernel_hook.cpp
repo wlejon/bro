@@ -329,6 +329,8 @@ bool takeStage(const brokernel::CompileResult& result, const char* entry, Kernel
     }
     out.spirv = k->spirv.words;
     out.entry = k->spirv.entry;
+    out.costs.clear();
+    for (const auto& c : k->function_costs) out.costs.push_back({c.name, c.self, c.total});
     dumpStage(out);
     return true;
 }

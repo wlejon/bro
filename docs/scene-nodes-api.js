@@ -590,7 +590,10 @@ class SceneNode {
 
   /**
    * Static SPIR-V instruction breakdown (`spirvBytes`, `instructions`, `arithmetic`,
-   * `samples`, `loads`, `stores`, `branches`, `loops`, `functions`) and hardware
+   * `samples`, `loads`, `stores`, `branches`, `loops`), the stage by source
+   * function (`functions: [{ name, self, total, share }]`, as kernel.stats():
+   * what each function's body built, with its callees', and that share of the
+   * stage; the entry first) and hardware
    * pipeline executable statistics (`sgprs`, `vgprs`, `scratchBytes`, `executables`)
    * for the node's custom shader stages (`fragment`, `vertex`, `near`).
    *

@@ -331,6 +331,10 @@ if (!probeCtx.scene) {
             assert(kst.spirvBytes > 0 && kst.instructions > 0 && kst.arithmetic > 0,
                 `kernel.stats() reports static SPIR-V counts (bytes=${kst.spirvBytes}, inst=${kst.instructions}, arith=${kst.arithmetic})`);
             assert(Array.isArray(kst.executables), 'kernel.stats().executables is an array');
+            assert(Array.isArray(kst.functions) && kst.functions.length > 0 &&
+                   kst.functions[0].name === 'saxpy' && kst.functions[0].share === 1 &&
+                   kst.functions[0].total >= kst.functions[0].self,
+                `kernel.stats().functions leads with the kernel at share 1 (${JSON.stringify(kst.functions)})`);
         }
 
         const s = freshScene(SIZE);
@@ -352,6 +356,10 @@ if (!probeCtx.scene) {
         assert(nst.fragment.spirvBytes > 0 && nst.fragment.instructions > 0 && nst.fragment.arithmetic > 0,
             `fragment shaderStats reports SPIR-V counts (bytes=${nst.fragment.spirvBytes}, inst=${nst.fragment.instructions})`);
         assert(Array.isArray(nst.fragment.executables), 'fragment.executables is an array');
+        const ff = nst.fragment.functions;
+        assert(Array.isArray(ff) && ff.length > 1 && ff[0].share === 1 &&
+               ff.some((f) => f.name === 'hook::fragment' && f.self > 0),
+            `fragment.functions attributes the stage to source functions, the hook among them (${JSON.stringify(ff && ff.slice(0, 4))})`);
 
         const pst = perf.shaderStats(m);
         assert(pst && pst.fragment && pst.fragment.instructions === nst.fragment.instructions,

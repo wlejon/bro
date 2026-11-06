@@ -274,6 +274,7 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
             prog->vs = SceneVkShaderModule::create(device_, hook.vs.spirv);
             prog->vsEntry = hook.vs.entry;
             prog->vsSpirv = std::move(hook.vs.spirv);
+            prog->vsCosts = std::move(hook.vs.costs);
         } else {
             prog->vsEntry = kVsPassthroughEntries[static_cast<int>(target)];
         }
@@ -281,6 +282,7 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
             prog->fs = SceneVkShaderModule::create(device_, hook.fs.spirv);
             prog->fsEntry = hook.fs.entry;
             prog->fsSpirv = std::move(hook.fs.spirv);
+            prog->fsCosts = std::move(hook.fs.costs);
         }
         ok = (!hook.hasVertex || prog->vs) && (!hook.hasFragment || prog->fs);
         if (!ok) err = "Failed to create VkShaderModule";

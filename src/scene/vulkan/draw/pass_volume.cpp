@@ -522,10 +522,12 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShade
         prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
         prog->fsEntry = hook.main.entry;
         prog->fsSpirv = std::move(hook.main.spirv);
+        prog->fsCosts = std::move(hook.main.costs);
         if (hook.medium) {
             prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
             prog->fsNearEntry = hook.nearPass.entry;
             prog->nearSpirv = std::move(hook.nearPass.spirv);
+            prog->nearCosts = std::move(hook.nearPass.costs);
         }
         ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
         if (!ok) err = "Failed to create VkShaderModule";

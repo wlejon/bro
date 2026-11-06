@@ -114,9 +114,13 @@ height.params;      // what a call passes, in order (the grid parameter is not p
 // and `cells`: the grid axes the kernel accesses it at (below), 0 for none.
 
 // kernel.stats() -> { spirvBytes, instructions, arithmetic, samples, loads,
-//                     stores, branches, loops, functions: [{ name, instructions, share }],
+//                     stores, branches, loops, functions: [{ name, self, total, share }],
 //                     executables: [{ name, description, stats }] }
-//   Static SPIR-V instruction breakdown and per-function shares, plus hardware
+//   Static SPIR-V instruction breakdown, plus the stage by source function:
+//   every call is inlined, so each function's `self` counts the instructions
+//   its own body built, `total` adds its callees', `share` is total over the
+//   whole stage; largest total first, the kernel itself (everything) first of
+//   all. Plus hardware
 //   pipeline executable statistics (registers, spills, etc.) when VK_KHR_pipeline_executable_properties
 //   is supported by the GPU.
 //

@@ -205,7 +205,15 @@ const char* bro_scene_SceneNode_shaderStatsJson(void* self) {
         j["stores"] = s.stores;
         j["branches"] = s.branches;
         j["loops"] = s.loops;
-        j["functions"] = s.functions;
+        // Source functions by what each built (the stage is one inlined
+        // function): self, total with its callees, total's share of the stage.
+        json fns = json::array();
+        const double whole = s.functionCosts.empty() ? 0.0 : double(s.functionCosts.front().total);
+        for (const auto& c : s.functionCosts) {
+            fns.push_back({{"name", c.name}, {"self", c.self}, {"total", c.total},
+                           {"share", whole > 0.0 ? c.total / whole : 0.0}});
+        }
+        j["functions"] = std::move(fns);
         j["sgprs"] = s.sgprs;
         j["vgprs"] = s.vgprs;
         j["scratchBytes"] = s.scratchBytes;
