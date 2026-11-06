@@ -407,5 +407,34 @@ if (!probeCtx.scene) {
         dropScene(s);
     }
 
+    // A probe beside buffer reads made through a generic function's buffer
+    // parameter (tiles::probe(table, ...), as the planet's ground does).
+    {
+        const s = freshScene(SIZE);
+        const m = s.scene.createMesh({ mesh: 'box', color: '#ffffff' });
+        let err = null;
+        try {
+            m.setShader({
+                module: `
+                    module hook;
+                    import mesh;
+                    import tiles;
+                    @binding(4, 19) var lut: read_buffer<vec4<i32>>;
+                    pub fn fragment(v: mesh::Vertex, inout s: mesh::Surface) {
+                        let slot = tiles::probe(lut, 0, 0, 0, 0);
+                        s.base_color = vec3<f32>(0.0);
+                        s.emissive = vec3<f32>(probe("slot", f32(slot.x) * 0.0 + 0.5));
+                    }
+                `,
+            });
+        } catch (e) { err = String(e && e.message || e); }
+        assert(err === null, `a probe compiles beside a generic buffer read (${err})`);
+        if (err === null) {
+            const hit = s.scene.probe(SIZE / 2, SIZE / 2);
+            assert(Math.abs(hit.slot - 0.5) < 1e-3, `probe "slot" == 0.5 (${JSON.stringify(hit)})`);
+        }
+        dropScene(s);
+    }
+
     console.log('shader wishlist tests passed');
 }
