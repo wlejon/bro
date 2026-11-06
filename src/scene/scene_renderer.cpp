@@ -202,7 +202,9 @@ bool SceneRenderer::asyncShaders() { return vk::pipeline_async::async(); }
 namespace {
 SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
     SceneRenderer::ShaderSetSummary s;
+    s.loaded = i.loaded;
     s.dir = i.dir;
+    s.sources = i.sources;
     s.shaders = i.shaders;
     s.differing = i.differing;
     s.pipelines = i.pipelines;
@@ -212,9 +214,10 @@ SceneRenderer::ShaderSetSummary summaryOf(const vk::ShaderSetInfo& i) {
 }
 } // namespace
 
-bool SceneRenderer::loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error) {
+bool SceneRenderer::loadShaderSet(const std::string& dir, const std::unordered_map<std::string, std::string>& sources,
+                                  ShaderSetSummary& out, std::string* error) {
     vk::ShaderSetInfo info;
-    if (!vk::loadShaderSetB(dir, &info, error)) return false;
+    if (!vk::loadShaderSetB(dir, sources, &info, error)) return false;
     out = summaryOf(info);
     return true;
 }

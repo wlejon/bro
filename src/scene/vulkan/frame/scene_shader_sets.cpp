@@ -69,7 +69,14 @@ render::VulkanQueue* queueForDevice(VkDevice device) {
 std::atomic<int> s_active{0};
 uint64_t s_generation = 0;     // set B's load, counted from 1; 0 = none loaded
 std::string s_dirB;
+shader_sets::ShaderSources s_sourcesB;
 thread_local bool t_compilingB = false;
+
+std::string setBLabel() {
+    std::string s = s_dirB;
+    for (const auto& [name, _] : s_sourcesB) s += (s.empty() ? "" : ", ") + name;
+    return s;
+}
 thread_local bool t_buildingTwin = false;
 
 // Set B's SPIR-V of a recipe, made once a load.
@@ -89,7 +96,7 @@ void compileB(ShaderRecipe& r) {
     if (r.bWords.empty()) {
         r.bError = err.empty() ? std::string("did not compile") : err;
         LOG_ERROR("Shader set B: %s did not compile from %s; it keeps set A's:\n%s",
-                  r.name.empty() ? "shader" : r.name.c_str(), s_dirB.c_str(), r.bError.c_str());
+                  r.name.empty() ? "shader" : r.name.c_str(), setBLabel().c_str(), r.bError.c_str());
     }
     r.bDiffers = !r.bWords.empty() && r.bWords != r.words;
 }
@@ -172,6 +179,11 @@ const std::string& setBSourceDir() {
     return t_compilingB ? s_dirB : s_none;
 }
 
+const ShaderSources& setBSources() {
+    static const ShaderSources s_none;
+    return t_compilingB ? s_sourcesB : s_none;
+}
+
 void noteModule(VkShaderModule module, const uint32_t* code, size_t sizeBytes) {
     if (!module || !code) return;
     const size_t n = sizeBytes / sizeof(uint32_t);
@@ -231,20 +243,26 @@ void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModul
 
 } // namespace shader_sets
 
-bool loadShaderSetB(const std::string& dirIn, ShaderSetInfo* info, std::string* error) {
+bool loadShaderSetB(const std::string& dirIn, const shader_sets::ShaderSources& sources, ShaderSetInfo* info,
+                    std::string* error) {
     std::string dir = dirIn;
     for (char& c : dir)
         if (c == '\\') c = '/';
     if (!dir.empty() && dir.back() != '/') dir += '/';
-    if (dir.empty() || !std::ifstream(dir + "common/scene.bk")) {
+    if (dir.empty() && sources.empty()) {
+        if (error) *error = "shader set: neither a shader tree nor sources given";
+        return false;
+    }
+    if (!dir.empty() && !std::ifstream(dir + "common/scene.bk")) {
         if (error) *error = "shader set: " + dirIn + " holds no common/scene.bk";
         return false;
     }
     std::lock_guard<std::recursive_mutex> g(lock());
     destroyTwins();
     s_dirB = dir;
+    s_sourcesB = sources;
     ++s_generation;
-    LOG_INFO("Shader set B: %s", dir.c_str());
+    LOG_INFO("Shader set B: %s", setBLabel().c_str());
     for (auto& [p, rec] : pipelines()) buildTwin(rec);
     if (info) *info = shaderSetInfo();
     return true;
@@ -263,7 +281,10 @@ int activeShaderSet() { return s_active.load(std::memory_order_relaxed); }
 ShaderSetInfo shaderSetInfo() {
     std::lock_guard<std::recursive_mutex> g(lock());
     ShaderSetInfo info;
+    info.loaded = s_generation != 0;
     info.dir = s_dirB;
+    for (const auto& [name, _] : s_sourcesB) info.sources.push_back(name);
+    std::sort(info.sources.begin(), info.sources.end());
     std::unordered_set<const ShaderRecipe*> seen;
     for (auto& [p, rec] : pipelines()) {
         ++info.pipelines;

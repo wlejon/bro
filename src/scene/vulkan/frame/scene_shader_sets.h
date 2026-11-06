@@ -2,9 +2,11 @@
 
 // A second set of the scene's shaders, for A/B measurement in one process
 // (docs/headless.md "Shader A/B"). Set A is what the scene runs (the
-// embedded brokernel sources, or BRO_SCENE_SHADER_SOURCE's); set B is the
-// same shaders compiled from another source tree (the layout
-// BRO_SCENE_SHADER_SOURCE takes). Both stay compiled: every scene pipeline
+// embedded brokernel sources, or BRO_SCENE_SHADER_SOURCE's, and the app's
+// hooks as given); set B is the same shaders compiled from another source
+// tree (the layout BRO_SCENE_SHADER_SOURCE takes) and/or with sources given
+// by name (a hook's own file, a module given to a hook, an engine shader
+// file such as 'common/lighting.bk'). Both stay compiled: every scene pipeline
 // whose SPIR-V differs under B gets a twin built from B's, and the scene
 // binds the twin while B is the active set, so switching costs a flag and no
 // compile.
@@ -21,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::render {
@@ -55,6 +58,9 @@ void noteSpirv(std::shared_ptr<ShaderRecipe> recipe);
 bool compilingSetB();
 /// The tree set B's compiles read their sources from ("" otherwise).
 const std::string& setBSourceDir();
+/// The sources set B's compiles take by name (empty otherwise).
+using ShaderSources = std::unordered_map<std::string, std::string>;
+const ShaderSources& setBSources();
 
 /// SceneVkShaderModule notes each module it makes and forgets it at destroy.
 void noteModule(VkShaderModule module, const uint32_t* code, size_t sizeBytes);
@@ -70,7 +76,9 @@ void noteComputePipeline(VkDevice device, VkPipelineLayout layout, VkShaderModul
 
 /// What loading set B found.
 struct ShaderSetInfo {
+    bool loaded = false;
     std::string dir;
+    std::vector<std::string> sources;   // the names given sources
     int shaders = 0;          // distinct shaders live pipelines are built of
     int differing = 0;        // of those, whose SPIR-V differs under B
     int pipelines = 0;        // live scene pipelines
@@ -78,10 +86,12 @@ struct ShaderSetInfo {
     std::vector<std::string> failed;  // shaders that did not compile from B (they keep A's)
 };
 
-/// Load set B from the shader tree at `dir` (it must hold common/scene.bk),
-/// replacing a set loaded before. False with the reason in *error when the
-/// tree is not one.
-bool loadShaderSetB(const std::string& dir, ShaderSetInfo* info, std::string* error);
+/// Load set B from the shader tree at `dir` (it must hold common/scene.bk;
+/// "" for set A's engine shaders) with `sources` by name over it, replacing
+/// a set loaded before. False with the reason in *error when the tree is
+/// not one, or when neither is given.
+bool loadShaderSetB(const std::string& dir, const shader_sets::ShaderSources& sources, ShaderSetInfo* info,
+                    std::string* error);
 /// The set the scene binds from now on: 0 (A) or 1 (B; only once loaded).
 bool useShaderSet(int set);
 int activeShaderSet();

@@ -64,7 +64,14 @@ const std::string& shaderSourceDir() {
 }
 
 std::string shaderSource(const char* fileName, const char* embedded) {
-    const std::string& dir = shader_sets::compilingSetB() ? shader_sets::setBSourceDir() : shaderSourceDir();
+    // Set B's: a file given by name, else its tree, else set A's.
+    const bool setB = shader_sets::compilingSetB();
+    if (setB) {
+        const auto& given = shader_sets::setBSources();
+        if (auto it = given.find(fileName); it != given.end()) return it->second;
+    }
+    const std::string& dir = setB && !shader_sets::setBSourceDir().empty() ? shader_sets::setBSourceDir()
+                                                                         : shaderSourceDir();
     if (!dir.empty()) {
         std::ifstream f(dir + fileName);
         if (f) {
@@ -368,6 +375,39 @@ void noteStageRecipe(std::string name, const std::vector<uint32_t>& words,
     shader_sets::noteSpirv(std::move(r));
 }
 
+// A hook's text and modules as set B's compiles take them: its own file, or
+// a module given to it, replaced where set B gives a source of that name.
+struct HookInputs {
+    std::string module;
+    KernelHookModules modules;
+};
+HookInputs hookInputs(const std::string& file, const std::string& module, const KernelHookModules& modules) {
+    HookInputs in{module, modules};
+    const auto& given = shader_sets::setBSources();
+    if (given.empty()) return in;
+    if (auto it = given.find(file); it != given.end()) in.module = it->second;
+    for (auto& [name, text] : in.modules) {
+        if (auto it = given.find(name); it != given.end()) text = it->second;
+    }
+    return in;
+}
+
+// A hook stage's recipe: the hook compiled again (as set B's compiles take
+// it), that stage's SPIR-V.
+using HookStageCompile = std::function<bool(std::vector<uint32_t>& words, std::string& err)>;
+void noteHookRecipe(const std::string& file, const char* stage, const std::vector<uint32_t>& words,
+                    HookStageCompile compile) {
+    noteStageRecipe(file + ":" + stage, words, [compile](std::string* errOut) {
+        std::vector<uint32_t> w;
+        std::string err;
+        if (!compile(w, err)) {
+            if (errOut) *errOut = std::move(err);
+            return std::vector<uint32_t>{};
+        }
+        return w;
+    });
+}
+
 } // namespace
 
 bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string& err) {
@@ -498,10 +538,28 @@ void bumpKernelHookReloadGeneration() {
     s_reloadGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
-bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
+bool compileKernelVolumeHook(const std::string& module0, const std::string& file, const KernelHookModules& modules0,
                              KernelVolumeHook& out, std::string& err,
                              const KernelHookKnobs& knobs, bool enableProbes) {
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string& module = in.module;
+    const KernelHookModules& modules = in.modules;
     if (!checkModuleNames(file, modules, err)) return false;
+    const auto noteRecipes = [&] {
+        if (shader_sets::compilingSetB() || enableProbes) return;
+        for (const bool nearPass : {false, true}) {
+            if (nearPass && !out.medium) continue;
+            const std::vector<uint32_t>& words = nearPass ? out.nearPass.spirv : out.main.spirv;
+            if (words.empty()) continue;
+            noteHookRecipe(file, nearPass ? "volume_near" : "volume_main", words,
+                           [module0, file, modules0, knobs, nearPass](std::vector<uint32_t>& w, std::string& e) {
+                               KernelVolumeHook h;
+                               if (!compileKernelVolumeHook(module0, file, modules0, h, e, knobs, false)) return false;
+                               w = nearPass ? h.nearPass.spirv : h.main.spirv;
+                               return true;
+                           });
+        }
+    };
     const std::string hook = debug_views::expand(module, "scene::debug_view()");
     static const std::regex kMedium(R"(\bfn\s+medium\s*\()");
     out.medium = std::regex_search(hook, kMedium);
@@ -523,16 +581,21 @@ bool compileKernelVolumeHook(const std::string& module, const std::string& file,
             compileVolumeStage("draw/volume_near.bk", kBkVolumeNearSrc, "volume_near", near, hook, modules, knobs, false);
         if (!takeStage(nearPass, "volume_near", out.nearPass, err)) return fail();
         if (!out.iface.fromKernel({&main, &nearPass}, err)) return fail();
+        noteRecipes();
         return true;
     }
     if (!out.iface.fromKernel({&main}, err)) return fail();
+    noteRecipes();
     return true;
 }
 
-bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
-                           const std::string& file, const KernelHookModules& modules,
+bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module0,
+                           const std::string& file, const KernelHookModules& modules0,
                            KernelMeshHook& out, std::string& err,
                            const KernelHookKnobs& knobs, bool enableProbes) {
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string& module = in.module;
+    const KernelHookModules& modules = in.modules;
     if (!checkModuleNames(file, modules, err)) return false;
     const std::string hook0 = debug_views::expand(module, "scene::debug_view()");
     const auto fail = [&] {
@@ -578,13 +641,29 @@ bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::
     } else {
         if (!out.iface.fromKernel({&fsRes}, err)) return fail();
     }
+    if (!shader_sets::compilingSetB() && !enableProbes) {
+        for (const bool vertex : {true, false}) {
+            if (vertex ? !out.hasVertex : !out.hasFragment) continue;
+            noteHookRecipe(file, vertex ? "vertex" : "fragment", vertex ? out.vs.spirv : out.fs.spirv,
+                           [target, module0, file, modules0, knobs, vertex](std::vector<uint32_t>& w, std::string& e) {
+                               KernelMeshHook h;
+                               if (!compileKernelMeshHook(target, module0, file, modules0, h, e, knobs, false))
+                                   return false;
+                               w = vertex ? h.vs.spirv : h.fs.spirv;
+                               return true;
+                           });
+        }
+    }
     return true;
 }
 
-bool compileKernelMeshHookFragment(const std::string& module, const std::string& file,
-                                   const KernelHookModules& modules, bool hasLight, bool indirect, bool cuts,
+bool compileKernelMeshHookFragment(const std::string& module0, const std::string& file,
+                                   const KernelHookModules& modules0, bool hasLight, bool indirect, bool cuts,
                                    KernelHookStage& out, std::string& err,
                                    const KernelHookKnobs& knobs, bool enableProbes) {
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string& module = in.module;
+    const KernelHookModules& modules = in.modules;
     const std::string hook0 = debug_views::expand(module, "scene::debug_view()");
     std::string hook;
     if (!expandMeshHookVaryings(hook0, file, hook, err)) {
@@ -597,13 +676,28 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
         err = file + ": " + err;
         return false;
     }
+    if (!shader_sets::compilingSetB() && !enableProbes) {
+        noteHookRecipe(file, fsEntry, out.spirv,
+                       [module0, file, modules0, hasLight, indirect, cuts, knobs](std::vector<uint32_t>& w,
+                                                                                 std::string& e) {
+                           KernelHookStage st;
+                           if (!compileKernelMeshHookFragment(module0, file, modules0, hasLight, indirect, cuts, st, e,
+                                                              knobs, false))
+                               return false;
+                           w = st.spirv;
+                           return true;
+                       });
+    }
     return true;
 }
 
-bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module,
-                             const std::string& file, const KernelHookModules& modules,
+bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module0,
+                             const std::string& file, const KernelHookModules& modules0,
                              KernelHookStage& out, std::string& err,
                              const KernelHookKnobs& knobs) {
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string& module = in.module;
+    const KernelHookModules& modules = in.modules;
     const std::string hook0 = debug_views::expand(module, "scene::debug_view()");
     std::string hook;
     if (!expandMeshHookVaryings(hook0, file, hook, err)) {
@@ -615,6 +709,16 @@ bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string
     if (!takeStage(vsRes, vsEntry, out, err)) {
         err = file + ": " + err;
         return false;
+    }
+    if (!shader_sets::compilingSetB()) {
+        noteHookRecipe(file, vsEntry, out.spirv,
+                       [caster, cutout, module0, file, modules0, knobs](std::vector<uint32_t>& w, std::string& e) {
+                           KernelHookStage st;
+                           if (!compileKernelShadowHook(caster, cutout, module0, file, modules0, st, e, knobs))
+                               return false;
+                           w = st.spirv;
+                           return true;
+                       });
     }
     return true;
 }

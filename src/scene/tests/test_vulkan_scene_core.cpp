@@ -724,21 +724,36 @@ int main() {
         // The identical tree: nothing differs, nothing twinned.
         ShaderSetInfo info;
         std::string err;
-        assert(loadShaderSetB(tmp.string(), &info, &err));
+        assert(loadShaderSetB(tmp.string(), {}, &info, &err));
         assert(info.differing == 0 && info.twinned == 0 && info.failed.empty());
         assert(useShaderSet(1) && run() == 64000u);
         assert(useShaderSet(0));
 
         // The constant changed in B's tree: the pipeline twinned, the switch
         // binds it, back to A binds A's.
+        // The engine file given by name, with no tree: the same twin.
+        {
+            std::ifstream in(tmp / "common" / "scene.bk", std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            std::string text = ss.str();
+            const std::string from = "pub const HDR_MAX: f32 = 64000.0;";
+            text.replace(text.find(from), from.size(), "pub const HDR_MAX: f32 = 55.0;");
+            assert(loadShaderSetB("", {{"common/scene.bk", text}}, &info, &err));
+            assert(info.loaded && info.dir.empty() && info.twinned >= 1 && info.failed.empty());
+            assert(useShaderSet(1) && run() == 55u);
+            assert(useShaderSet(0) && run() == 64000u);
+        }
+        assert(!loadShaderSetB("", {}, &info, &err) && !err.empty());
+
         setSide("pub const HDR_MAX: f32 = 64000.0;", "pub const HDR_MAX: f32 = 77.0;");
-        assert(loadShaderSetB(tmp.string(), &info, &err));
+        assert(loadShaderSetB(tmp.string(), {}, &info, &err));
         assert(info.twinned >= 1 && info.differing >= 1 && info.failed.empty());
         assert(run() == 64000u);
         assert(useShaderSet(1));
         assert(run() == 77u);
         assert(useShaderSet(0) && run() == 64000u);
-        assert(!loadShaderSetB((tmp / "none").string(), &info, &err) && !err.empty());
+        assert(!loadShaderSetB((tmp / "none").string(), {}, &info, &err) && !err.empty());
 
         const int twinned = shaderSetInfo().twinned;
         destroyScenePipeline(device.device(), pipeline, nullptr);   // (and its twin)

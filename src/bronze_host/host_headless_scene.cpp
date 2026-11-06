@@ -23,6 +23,7 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #endif
 
@@ -83,6 +84,7 @@ Value fromJson(const nlohmann::json& j) {
 nlohmann::json summaryJson(const scene::SceneRenderer::ShaderSetSummary& s) {
     nlohmann::json j;
     j["dir"] = s.dir;
+    j["sources"] = s.sources;
     j["shaders"] = s.shaders;
     j["differing"] = s.differing;
     j["pipelines"] = s.pipelines;
@@ -96,6 +98,54 @@ std::string absoluteDir(const std::string& dir) {
     const std::filesystem::path p = std::filesystem::absolute(dir, ec);
     std::string s = ec ? dir : p.generic_string();
     return s;
+}
+
+// A shader set as perf.loadShaderSet / compareShaders take it: a shader
+// tree's directory, or { dir, sources: { name: source } }. False (with
+// *error) when it is neither.
+struct ShaderSetArg {
+    std::string dir;
+    std::unordered_map<std::string, std::string> sources;
+};
+bool shaderSetArg(Value v, ShaderSetArg& out, std::string* error) {
+    if (ev::isString(v)) {
+        out.dir = absoluteDir(ev::toUtf8(v));
+        return true;
+    }
+    if (!ev::isObject(v)) {
+        *error = "a shader set is a directory or { dir, sources }";
+        return false;
+    }
+    ev::Persistent held(v);
+    const std::string dir = optString(held.get(), "dir");
+    if (!dir.empty()) out.dir = absoluteDir(dir);
+    ev::Persistent src(ev::getProperty(held.get(), "sources"));
+    if (ev::isUndefined(src.get())) return true;
+    if (!ev::isObject(src.get())) {
+        *error = "a shader set's sources are { name: source }";
+        return false;
+    }
+    auto object = ev::globalValue("Object");
+    if (!object.found) return true;
+    ev::Persistent keysFn(ev::getProperty(object.value, "keys"));
+    const Value arg = src.get();
+    auto keys = ev::call(keysFn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+    if (keys.thrown) {
+        *error = "a shader set's sources could not be read";
+        return false;
+    }
+    ev::Persistent names(keys.value);
+    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(names.get(), "length")));
+    for (uint32_t i = 0; i < n; ++i) {
+        const std::string k = ev::toUtf8(ev::getElement(names.get(), i));
+        const Value s = ev::getProperty(src.get(), k);
+        if (!ev::isString(s)) {
+            *error = "a shader set's source of '" + k + "' is not a string";
+            return false;
+        }
+        out.sources[k] = ev::toUtf8(s);
+    }
+    return true;
 }
 
 struct Summary {
@@ -468,15 +518,17 @@ void installHeadlessScenePerf(engine::Engine& engine,
             if (!a.empty() && !ev::isUndefined(a[0])) scene::SceneRenderer::setAsyncShaders(ev::toBool(a[0]));
             return ev::fromBool(scene::SceneRenderer::asyncShaders());
         });
-    // perf.loadShaderSet(dir): set B from a shader tree.
+    // perf.loadShaderSet(dir | { dir, sources }): set B from a shader tree
+    // and/or sources by name.
     setPerfFn("loadShaderSet", 1,
         [&engine](Value, std::span<const Value> a) -> Value {
-            if (a.empty() || !ev::isString(a[0])) return ev::throwTypeError("loadShaderSet(dir) requires a directory");
-            scene::SceneRenderer::ShaderSetSummary s;
+            ShaderSetArg set;
             std::string err;
-            const std::string dir = absoluteDir(ev::toUtf8(a[0]));
-            requireHarnessPathAccess(engine, dir, false);  // the harness's, not the app's (host_access.h)
-            if (!scene::SceneRenderer::loadShaderSet(dir, s, &err))
+            if (a.empty() || !shaderSetArg(a[0], set, &err))
+                return ev::throwTypeError(("loadShaderSet: " + err).c_str());
+            if (!set.dir.empty()) requireHarnessPathAccess(engine, set.dir, false);  // the harness's (host_access.h)
+            scene::SceneRenderer::ShaderSetSummary s;
+            if (!scene::SceneRenderer::loadShaderSet(set.dir, set.sources, s, &err))
                 return ev::throwTypeError(err.c_str());
             return fromJson(summaryJson(s));
         });
@@ -494,17 +546,25 @@ void installHeadlessScenePerf(engine::Engine& engine,
     setPerfFn("compareShaders", 1,
         [&engine](Value, std::span<const Value> a) -> Value {
             const Value opts = a.empty() ? ev::undefined() : a[0];
-            const std::string dir = optString(opts, "b");
             const int frames = static_cast<int>(std::max(1.0, optNumber(opts, "frames", 60)));
             const int warm = static_cast<int>(std::max(0.0, optNumber(opts, "warm", 4)));
             const bool held = optBool(opts, "held", true);
             scene::SceneRenderer::ShaderSetSummary set = scene::SceneRenderer::shaderSetSummary();
-            if (!dir.empty() && absoluteDir(dir) + "/" != set.dir && absoluteDir(dir) != set.dir) {
+            // `b` given: loaded (sources always; a tree unless it is the one loaded).
+            const Value b = ev::isObject(opts) ? ev::getProperty(opts, "b") : ev::undefined();
+            if (!ev::isUndefined(b)) {
+                ShaderSetArg arg;
                 std::string err;
-                if (!scene::SceneRenderer::loadShaderSet(absoluteDir(dir), set, &err))
-                    return ev::throwTypeError(err.c_str());
+                if (!shaderSetArg(b, arg, &err)) return ev::throwTypeError(("compareShaders: " + err).c_str());
+                const bool same = arg.sources.empty() && (arg.dir + "/" == set.dir || arg.dir == set.dir);
+                if (!same) {
+                    if (!arg.dir.empty()) requireHarnessPathAccess(engine, arg.dir, false);
+                    if (!scene::SceneRenderer::loadShaderSet(arg.dir, arg.sources, set, &err))
+                        return ev::throwTypeError(err.c_str());
+                }
             }
-            if (set.dir.empty()) return ev::throwTypeError("compareShaders: no set B (pass { b: dir })");
+            if (!set.loaded)
+                return ev::throwTypeError("compareShaders: no set B (pass { b: dir } or { b: { sources } })");
             HeldClock clock(engine, held);
             framePasses(engine);   // (the first call turns the stamps on)
             for (int s = 0; s < 2; ++s) {

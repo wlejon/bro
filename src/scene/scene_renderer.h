@@ -150,11 +150,17 @@ public:
     /// from another source tree, twinned beside set A's, for an A/B in one
     /// process (perf.loadShaderSet / perf.useShaderSet / perf.compareShaders).
     struct ShaderSetSummary {
+        bool loaded = false;
         std::string dir;
+        std::vector<std::string> sources;   // names given sources
         int shaders = 0, differing = 0, pipelines = 0, twinned = 0;
         std::vector<std::string> failed;
     };
-    static bool loadShaderSet(const std::string& dir, ShaderSetSummary& out, std::string* error);
+    /// Set B from the shader tree `dir` ("" for set A's engine shaders) and/or
+    /// `sources` by name (a hook's file, a module given to a hook, an engine
+    /// shader file such as "common/lighting.bk").
+    static bool loadShaderSet(const std::string& dir, const std::unordered_map<std::string, std::string>& sources,
+                              ShaderSetSummary& out, std::string* error);
     /// 0 (A) or 1 (B, once loaded); false when it cannot be.
     static bool useShaderSet(int set);
     static int shaderSet();
