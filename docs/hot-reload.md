@@ -8,11 +8,28 @@ bro ../broworkshop/games/torque     # boots, then watches the folder
 
 ## Triggers
 
-- A `.js` / `.mjs` / `.cjs` / `.html` / `.htm` / `.css` file changes under the app dir or the project's `/lib` (not in a dot directory). Changes settle for 300 ms first, so a multi-step save or a checkout is one reload. JSON, assets and settings files never trigger one.
+- A `.js` / `.mjs` / `.cjs` / `.html` / `.htm` / `.css` / `.bk` file changes under the app dir or the project's `/lib` (not in a dot directory). Changes settle for 300 ms first, so a multi-step save or a checkout is one reload. JSON, assets and settings files never trigger one.
 - The `system_reload_app` action (default **F5**, rebindable; [settings.md](settings.md)).
 - `location.reload()`.
 
 App state does not survive a reload.
+
+## Taking a change in place
+
+Before a watcher reload, the window gets a cancelable `sourcechange` event whose `detail.files` names the changed files from the app dir (`kernels/relief.bk`; a file of the project's lib as `/lib/...`). `preventDefault()` keeps the running page, so an app can swap the change in itself: new kernel sources through `bro.kernel.reload`, hook sources through `scene.reloadShaders` ([kernel-api.js](kernel-api.js), [scene-api.js](scene-api.js)), and whatever it made from the changed kernels made again. A change of unknown files (a burst the watcher dropped, the folder replaced) reloads without the event; F5 and `location.reload()` never fire it.
+
+```js
+window.addEventListener('sourcechange', (e) => {
+    if (!e.detail.files.every((f) => f.endsWith('.bk'))) return;   // a script changed: reload
+    e.preventDefault();
+    const read = (f) => require('fs').readFileSync(bro.resolvePath('/app/' + f), 'utf-8');
+    const sources = Object.fromEntries(e.detail.files.map((f) => [f, read(f)]));
+    bro.kernel.reload(sources);
+    scene.reloadShaders(sources);
+});
+```
+
+The planet (`broworkshop/demos/planet`) takes its `.bk` files this way: its `planet.reload(files)` names each by file and as a `planet::` module, then rebuilds the rivers, tiles, clouds, grass and trees that the changed kernels feed.
 
 A watcher reload is held back while the tree looks incomplete (index.html missing, a script it names missing, or a static import naming a file or export that does not exist). The page stays up and the log says why: `Not reloading yet, the source looks incomplete: js/shell.js imports NotificationCenter from js/notify.js, which does not export it`. F5 and `location.reload()` are never held back.
 

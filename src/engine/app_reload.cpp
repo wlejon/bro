@@ -5,6 +5,8 @@
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/event.h"
+#include "dom/event_dispatch.h"
 #include "layout/element_ref_adapter.h"
 #include "render/skia_backend.h"
 #if BRO_WITH_3D
@@ -23,6 +25,7 @@
 #include <brocompositor/api.h>
 #endif
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -75,7 +78,17 @@ bool isWatchedSource(std::string_view relPath) {
     const std::string_view ext = relPath.substr(dot);
     return ext == ".js" || ext == ".mjs" || ext == ".cjs" ||
            ext == ".ts" || ext == ".mts" || ext == ".lua" ||
-           ext == ".html" || ext == ".htm" || ext == ".css";
+           ext == ".html" || ext == ".htm" || ext == ".css" || ext == ".bk";
+}
+
+std::string jsonString(std::string_view s) {
+    std::string out = "\"";
+    for (const char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        if (static_cast<unsigned char>(c) < 0x20) continue;
+        out += c;
+    }
+    return out + '"';
 }
 
 int envSwitch(const char* name, const char* onValue, const char* offValue) {
@@ -155,9 +168,16 @@ void Engine::pollAppWatcher(double nowMs) {
         appWatchPending_ = true;
         appWatchLastChangeMs_ = nowMs;
     };
+    auto markUnknown = [&](const std::string& what) {
+        appWatchChangedUnknown_ = true;
+        markChanged(what);
+    };
+    std::error_code appEc;
+    const std::string appRoot = std::filesystem::absolute(appDir_, appEc).string();
     for (auto it = appWatchers_.begin(); it != appWatchers_.end();) {
         events.clear();
         (*it)->drain(events);
+        const std::string prefix = (*it)->path() == appRoot ? "" : "/lib/";
         bool failed = false;
         for (const auto& ev : events) {
             if (ev.type == brokit::api::FsWatcher::EventType::Error) {
@@ -165,7 +185,7 @@ void Engine::pollAppWatcher(double nowMs) {
                 // whole tree) drops events but leaves the watcher running:
                 // that is a change of unknown files, not a dead watcher.
                 if (ev.filename.rfind("fs.watch ring overflow", 0) == 0) {
-                    markChanged("(many files)");
+                    markUnknown("(many files)");
                     continue;
                 }
                 LOG_WARN("Source watcher on '%s' stopped: %s (re-watching)", (*it)->path().c_str(),
@@ -178,11 +198,14 @@ void Engine::pollAppWatcher(double nowMs) {
                 // step that replaces the folder): this watcher is done, and a
                 // fresh one goes on the folder once it is back.
                 failed = true;
-                markChanged("(the app folder was replaced)");
+                markUnknown("(the app folder was replaced)");
                 break;
             }
             if (!isWatchedSource(ev.filename)) continue;
-            markChanged(ev.filename);
+            std::string file = prefix + ev.filename;
+            if (std::find(appWatchChanged_.begin(), appWatchChanged_.end(), file) == appWatchChanged_.end())
+                appWatchChanged_.push_back(file);
+            markChanged(file);
         }
         if (failed) {
             appWatchRearm_ = true;
@@ -202,6 +225,28 @@ void Engine::pollAppWatcher(double nowMs) {
     }
     if (appWatchPending_ && nowMs - appWatchLastChangeMs_ >= kWatchSettleMs) {
         appWatchPending_ = false;
+        // The page may take the change itself: a `sourcechange` event on the
+        // window names the files, and preventDefault() keeps the running
+        // page (an app swapping changed kernels and shaders in place). A
+        // change of unknown files is always a reload.
+        std::vector<std::string> files = std::move(appWatchChanged_);
+        appWatchChanged_.clear();
+        const bool unknown = appWatchChangedUnknown_;
+        appWatchChangedUnknown_ = false;
+        if (!unknown && !files.empty() && document_) {
+            std::string detail = "{\"files\":[";
+            for (size_t i = 0; i < files.size(); ++i) detail += (i ? "," : "") + jsonString(files[i]);
+            detail += "]}";
+            dom::CustomEvent evt("sourcechange", /*bubbles=*/false, /*cancelable=*/true);
+            evt.setIsTrusted(true);
+            evt.setDetail(detail);
+            dom::dispatchWindowEvent(document_.get(), evt);
+            if (evt.defaultPrevented()) {
+                LOG_INFO("Source change taken by the page, not reloading");
+                appWatchDeferReason_.clear();
+                return;
+            }
+        }
         // A reload throws the running page away, so it only goes ahead on a
         // tree that is whole: every file index.html and its module graph name
         // is there and exports what is imported from it. A tree caught mid-
@@ -223,6 +268,8 @@ void Engine::pollAppWatcher(double nowMs) {
 
 void Engine::performAppReload() {
     LOG_INFO("Reloading app '%s'", appDir_.c_str());
+    appWatchChanged_.clear();
+    appWatchChangedUnknown_ = false;
 
     exitPointerLock();
     overlayMgr_->close();

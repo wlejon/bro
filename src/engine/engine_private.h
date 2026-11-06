@@ -569,6 +569,11 @@ private:
     std::vector<std::unique_ptr<brokit::api::FsWatcher>> appWatchers_;  // app dir, then /lib
     double appWatchLastChangeMs_ = 0.0;
     bool appWatchPending_ = false;
+    // The files changed since the last reload or `sourcechange` event, by path
+    // from the app dir ('/lib/...' under the project's lib); unknown when a
+    // burst overflowed the watcher or the folder was replaced.
+    std::vector<std::string> appWatchChanged_;
+    bool appWatchChangedUnknown_ = false;
     std::string appWatchDeferReason_;   // why the last watcher reload was held back
     bool appWatchRearm_ = false;        // a watcher died; re-create it once the dir is back
     // A page initAppRealm parses instead of index.html, with no scripts or
