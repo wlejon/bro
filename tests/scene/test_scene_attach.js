@@ -90,6 +90,9 @@ if (!scene) {
     flush();
     assert(scene.attached === false && __host.sceneLink(c3).graph === false, 'detach parks the scene');
     let threw = false;
+    try { scene.captureFrame(64, 64); } catch (e) { threw = /detached/.test(e.message); }
+    assert(threw, 'captureFrame of a parked scene throws instead of returning an old frame');
+    threw = false;
     try { scene.attachTo(document.body); } catch (e) { threw = e instanceof TypeError; }
     assert(threw, 'attachTo a non-canvas is a TypeError');
     const c2d = makeCanvas();

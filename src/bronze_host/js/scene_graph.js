@@ -676,6 +676,10 @@
         return out;
     });
     fn(SceneGraph.prototype, "captureFrame", function captureFrame(width, height) {
+        // A parked scene is not rendered, so its targets hold an old frame.
+        if (!this.attached) {
+            throw new Error("captureFrame: the scene is detached; attachTo a canvas of the document first");
+        }
         if (width !== undefined && height !== undefined) {
             __bro_native.scene.SceneGraph_setCanvasSize(this, width, height);
         }

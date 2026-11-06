@@ -1101,6 +1101,8 @@ class SceneGraph {
   toImageData() {}
 
   /**
+   * Renders the scene now and reads it back. Throws on a detached (parked)
+   * scene, which is not rendered: attach it to a canvas first.
    * @param {number} [width]
    * @param {number} [height]
    * @returns {ImageData}
