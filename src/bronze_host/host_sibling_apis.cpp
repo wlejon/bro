@@ -36,6 +36,7 @@
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "util/log.h"
+#include "util/main_loop_wake.h"
 
 #if BRO_WITH_AUDIO
 #include <broaudio/api.h>
@@ -574,6 +575,9 @@ void installSiblingApis(engine::Engine& engine) {
     }
     brothumb::api::installThumb();
     if (installHooks) {
+        // A finished thumbnail wakes a window idling between frames, which
+        // would otherwise settle its promise only at the next input.
+        brothumb::api::setWake(&util::wakeMainLoop);
         engine.addFramePump([] {
             brothumb::api::tickThumbAsync();
             if (ev::microtasksPending()) ev::drainMicrotasks();
