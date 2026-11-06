@@ -791,13 +791,19 @@ pub fn ambient(s: Surface) -> vec3<f32> {
     let f = fresnel_schlick_roughness(n_dot_v, f0, s.roughness);
     let r = reflect(-s.view, s.normal);
     let brdf = brdf_lut.sample(linear, vec2<f32>(n_dot_v, s.roughness)).xy;
+    // The split sum's specular weight: the LUT's scale and bias apply to f0,
+    // its Fresnel already integrated in them. (Scaling f, Fresnel at n.v,
+    // counted it twice: water at grazing reflected about 0.8 of its sky where
+    // the surface sends back about half, and every glossy surface's rim was
+    // brighter than its sky.)
+    let spec_w = f0 * brdf.x + brdf.y;
 
     var probe_w: f32 = 0.0;
     var probe_spec: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
     if lighting.probe_pos.w > 0.5 {
         let raw = probe_radiance(s.position, r, s.roughness);
         probe_w = raw.w;
-        probe_spec = raw.xyz * (f * brdf.x + brdf.y) * lighting.probe_params.x;
+        probe_spec = raw.xyz * spec_w * lighting.probe_params.x;
     }
     var kd: vec3<f32> = (1.0 - f) * (1.0 - s.metallic);
     let kd_open = kd;
@@ -842,7 +848,7 @@ pub fn ambient(s: Surface) -> vec3<f32> {
         if sharp > 0.0 {
             sky = mix(sky, sky_along(r), sharp);
         }
-        let specular = sky * (f * brdf.x + brdf.y) * specular_occ;
+        let specular = sky * spec_w * specular_occ;
         return (kd * irradiance + kd_open * bounce) * s.base_color + mix(specular, probe_spec, probe_w);
     }
     if lighting.ibl_params.x > 0.5 {
@@ -850,7 +856,7 @@ pub fn ambient(s: Surface) -> vec3<f32> {
         let intensity = lighting.ibl_params.y;
         let irradiance = open_sky_irradiance(s.position, ni) + glow;
         let prefiltered = prefilter_map.sample_lod(linear, rotate_y(r, rotation), s.roughness * lighting.ibl_params.w).xyz;
-        let specular = prefiltered * (f * brdf.x + brdf.y) * intensity * specular_occ;
+        let specular = prefiltered * spec_w * intensity * specular_occ;
         return (kd * irradiance + kd_open * bounce) * s.base_color + mix(specular, probe_spec, probe_w);
     }
     return ((lighting.ambient_color.xyz + glow) * diffuse_occ + bounce) * s.base_color * (1.0 - s.metallic) + probe_spec * probe_w;
