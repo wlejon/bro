@@ -197,14 +197,8 @@ void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent, boo
     // The canvas is drawn top-down (a negative viewport height maps GL's
     // bottom-up NDC onto it); a framebuffer object in GL's own row order.
     const bool flipped = pass_.topDown;
-    VkViewport vp{};
-    vp.x = viewport_.x;
-    vp.y = flipped ? static_cast<float>(extent.height) - viewport_.y : viewport_.y;
-    vp.width = viewport_.width;
-    vp.height = flipped ? -viewport_.height : viewport_.height;
-    vp.minDepth = depthNear_;
-    vp.maxDepth = depthFar_;
-    bound_.setViewport(cmd, vp);
+    bound_.setViewport(cmd, viewport_.x, flipped ? static_cast<float>(extent.height) - viewport_.y : viewport_.y,
+                       viewport_.width, flipped ? -viewport_.height : viewport_.height, depthNear_, depthFar_);
 
     VkRect2D sc{};
     if (discard) {

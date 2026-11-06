@@ -242,6 +242,17 @@ struct VkVAOResource {
     bool everBound = false;  // isVertexArray: true once bound
     uint64_t version = 1;    // bumped by every change to `attributes`
     VaoInputCache inputs;
+    // The buffers_ entries the attributes' and the element array's buffer ids
+    // name, resolved once rather than hashed every draw (null: not found, so
+    // looked up again). Each is current while the context's
+    // bufferEraseSerial_ (a buffers_ entry erased, which is all that moves or
+    // frees one) and the id or version it was resolved for are unchanged.
+    std::array<VkBufferResource*, 16> attributeBuffers{};
+    uint64_t attributeBuffersVersion = 0;
+    uint64_t attributeBuffersSerial = 0;
+    VkBufferResource* elementBuffer = nullptr;
+    GLuint elementBufferId = 0;
+    uint64_t elementBufferSerial = 0;
 };
 
 /// A shader object: its source and the result of the last compileShader.

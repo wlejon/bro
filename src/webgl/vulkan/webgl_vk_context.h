@@ -555,6 +555,14 @@ private:
     // default one.
     std::unordered_map<GLuint, FeedbackObject> feedbacks_{{0, FeedbackObject{}}};
     GLuint boundFeedback_ = 0;
+    // The feedbacks_ entry boundFeedback_ names, found once rather than hashed
+    // on every draw: current while boundFeedback_ is the id it was found for
+    // and no entry has been erased since (feedbackEraseSerial_).
+    const FeedbackObject* boundFeedbackObject() const;
+    mutable const FeedbackObject* boundFeedbackCache_ = nullptr;
+    mutable GLuint boundFeedbackCacheId_ = 0;
+    mutable uint64_t boundFeedbackCacheSerial_ = 0;
+    uint64_t feedbackEraseSerial_ = 1;
     VkBufferResource feedbackPlaceholder_;  // bound while a capturing program is not capturing
     bool feedbackCapturing() const;
     void feedbackWritesDone();
@@ -748,6 +756,8 @@ private:
     /// the pipeline reads them with (cached on the VAO): null (with the GL
     /// error) when an array the draw reads is missing, of the wrong kind, or
     /// too short for the vertices it fetches.
+    VkBufferResource* attributeBuffer(VkVAOResource& vao, uint32_t location);
+    VkBufferResource* elementBuffer(VkVAOResource& vao);
     const VaoInputCache* bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape,
                                           std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
     void buildVertexLayout(const VkProgramResource& prog, VkVAOResource& vao, uint32_t validMask);
@@ -858,6 +868,7 @@ private:
 
     // Resource registries
     std::unordered_map<GLuint, VkBufferResource> buffers_;
+    uint64_t bufferEraseSerial_ = 1;  // bumped by every buffers_ erase (VkVAOResource's caches)
     std::unordered_map<GLuint, VkTextureResource> textures_;
     std::unordered_map<GLuint, VkShaderResource> shaders_;
     std::unordered_map<GLuint, VkProgramResource> programs_;

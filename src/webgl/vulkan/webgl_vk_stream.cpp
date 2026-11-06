@@ -17,6 +17,9 @@ constexpr uint32_t kDescriptorSetBudget = 4096;
 constexpr uint32_t kDescriptorSetsPerPool = 256;
 
 VkDeviceSize alignUp(VkDeviceSize v, VkDeviceSize a) {
+    // Vulkan's alignments are powers of two: a mask, not the two 64-bit
+    // divisions every upload of every draw would otherwise pay.
+    if ((a & (a - 1)) == 0) return (v + a - 1) & ~(a - 1);
     return (v + a - 1) / a * a;
 }
 

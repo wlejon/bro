@@ -8,6 +8,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 namespace bro::webgl::vk {
@@ -309,10 +310,17 @@ void WebGLVkContext::endRendering() {
 // What the open pass has bound (PassBindings, webgl_vk_context_state.h)
 // ---------------------------------------------------------------------------
 
-void PassBindings::setViewport(VkCommandBuffer cmd, const VkViewport& vp) {
-    if ((dynamicSet & kViewport) && std::memcmp(&viewport, &vp, sizeof(vp)) == 0) return;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    viewport = vp;
+void PassBindings::setViewport(VkCommandBuffer cmd, float x, float y, float width, float height, float minDepth,
+                               float maxDepth) {
+    // Compared field by field, as bits, against the values in registers: a
+    // VkViewport the caller had just stored and this read back as wider words
+    // stalls on the store-to-load forwarding every draw.
+    auto same = [](float a, float b) { return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b); };
+    if ((dynamicSet & kViewport) && same(viewport.x, x) && same(viewport.y, y) && same(viewport.width, width) &&
+        same(viewport.height, height) && same(viewport.minDepth, minDepth) && same(viewport.maxDepth, maxDepth))
+        return;
+    viewport = {x, y, width, height, minDepth, maxDepth};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
     dynamicSet |= kViewport;
 }
 

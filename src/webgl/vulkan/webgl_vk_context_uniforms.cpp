@@ -181,24 +181,39 @@ void WebGLVkContext::setUniformMatrices(WebGLUniformLocation loc, GLsizei count,
     const uint32_t n = std::min(static_cast<uint32_t>(count), static_cast<uint32_t>(u->size) - element);
     const uint32_t perMatrix = columns * rows;
     bool changed = false;
-    if (!transpose && u->matrixStride == rows * 4) {
-        const size_t matBytes = static_cast<size_t>(perMatrix) * 4;
+    if (!transpose) {
+        // Column by column (one run when the columns are packed): each word
+        // stored and compared in one pass, rather than a memcmp and a memcpy
+        // through the PLT for every matrix of every draw.
+        const bool packed = u->matrixStride == rows * 4;
+        const uint32_t runs = packed ? 1 : columns;
+        const uint32_t words = packed ? perMatrix : rows;
+        uint32_t diff = 0;
         for (uint32_t i = 0; i < n; ++i) {
             const GLfloat* src = value + i * perMatrix;
             uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
-            if (std::memcmp(dst, src, matBytes) != 0) {
-                std::memcpy(dst, src, matBytes);
-                changed = true;
+            for (uint32_t c = 0; c < runs; ++c) {
+                uint8_t* col = dst + c * u->matrixStride;
+                const GLfloat* from = src + c * rows;
+                for (uint32_t w = 0; w < words; ++w) {
+                    uint32_t a, b;
+                    std::memcpy(&a, from + w, 4);
+                    std::memcpy(&b, col + w * 4, 4);
+                    diff |= a ^ b;
+                    std::memcpy(col + w * 4, &a, 4);
+                }
             }
         }
+        changed = diff != 0;
     } else {
         for (uint32_t i = 0; i < n; ++i) {
             const GLfloat* src = value + i * perMatrix;
             uint8_t* dst = prog->uniformBytes.data() + u->offset + (element + i) * u->arrayStride;
-            // std140, column-major: each column a 16-byte-aligned vector.
+            // std140, column-major: each column a 16-byte-aligned vector;
+            // `src` is row-major.
             for (uint32_t c = 0; c < columns; ++c) {
                 for (uint32_t r = 0; r < rows; ++r) {
-                    const GLfloat v = transpose ? src[r * columns + c] : src[c * rows + r];
+                    const GLfloat v = src[r * columns + c];
                     uint8_t* cell = dst + c * u->matrixStride + r * 4;
                     if (std::memcmp(cell, &v, 4) != 0) {
                         std::memcpy(cell, &v, 4);

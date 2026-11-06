@@ -167,14 +167,13 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     }
     VkProgramResource* prog = drawProgram("drawElements");
     if (!prog) return;
-    const GLuint iboId = currentVao_->elementArrayBufferId;
-    auto iboIt = iboId != 0 ? buffers_.find(iboId) : buffers_.end();
-    if (iboIt == buffers_.end()) {
+    VkBufferResource* found = elementBuffer(*currentVao_);
+    if (!found) {
         LOG_ERROR("WebGLVkContext: drawElements called with no element array buffer bound");
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
-    VkBufferResource& ibo = iboIt->second;
+    VkBufferResource& ibo = *found;
     if (offset + static_cast<uint64_t>(count) * bytes > ibo.shadowData.size()) {
         LOG_ERROR("WebGLVkContext: drawElements reads past the end of the element array buffer");
         setSyntheticError(GL_INVALID_OPERATION);

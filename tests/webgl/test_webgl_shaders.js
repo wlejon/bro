@@ -226,6 +226,30 @@ if (!gl) {
     assertPx(drawAndRead(), 128, 64, 191, 255, 'mat2x3 + mat3x2 uniforms');
     gl.deleteProgram(progM23);
 
+    // A mat3 array (std140 pads each column to 16 bytes) set in one call; the
+    // same values again; then values that differ only in the last element of
+    // the second matrix's last column. Each draw sees the values set before it.
+    const progMA = makeProgram(vsPass,
+        '#version 300 es\nprecision highp float;\n' +
+        'uniform mat3 uMA[2];\nout vec4 frag;\n' +
+        'void main(){ frag = vec4(uMA[0][0][0], uMA[1][2][2], uMA[1][1][0], 1.0); }');
+    gl.useProgram(progMA);
+    const locMA = gl.getUniformLocation(progMA, 'uMA');
+    const ma = new Float32Array(18);
+    ma[0] = 0.25;   // uMA[0][0][0]
+    ma[17] = 0.5;   // uMA[1][2][2]
+    ma[12] = 0.75;  // uMA[1][1][0]
+    gl.uniformMatrix3fv(locMA, false, ma);
+    assertPx(drawAndRead(), 64, 128, 191, 255, 'mat3[2] uniform');
+    gl.uniformMatrix3fv(locMA, false, ma);
+    assertPx(drawAndRead(), 64, 128, 191, 255, 'mat3[2] uniform set to the same values');
+    ma[17] = 1.0;
+    gl.uniformMatrix3fv(locMA, false, ma);
+    assertPx(drawAndRead(), 64, 255, 191, 255, 'mat3[2]: one element of the last padded column changed');
+    gl.uniformMatrix3fv(locMA, true, [0.5, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assertPx(drawAndRead(), 128, 255, 191, 255, 'mat3 transposed upload into element 0');
+    gl.deleteProgram(progMA);
+
     // =====================================================================
     // Uniform blocks — UBO round-trip drives draw output
     // =====================================================================

@@ -18,6 +18,7 @@ void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
     if (it != buffers_.end()) {
         releaseBuffer(it->second);
         buffers_.erase(it);
+        ++bufferEraseSerial_;
     }
     if (boundArrayBuffer_ == buf.id) boundArrayBuffer_ = 0;
     if (boundElementArrayBuffer_ == buf.id) boundElementArrayBuffer_ = 0;

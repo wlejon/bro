@@ -67,6 +67,11 @@ inline uint32_t u32At(std::span<const Value> args, size_t i) {
 
 inline int64_t i64At(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0;
+    // A Number in range answers as toInt64 would, without the call.
+    if (args[i].isNumber()) {
+        const double d = args[i].asNumber();
+        if (d > -9223372036854775808.0 && d < 9223372036854775808.0) return static_cast<int64_t>(d);
+    }
     return ev::toInt64(args[i]);
 }
 

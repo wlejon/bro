@@ -205,6 +205,41 @@ void WebGLVkContext::buildVertexLayout(const VkProgramResource& prog, VkVAOResou
     vertexLayouts_.emplace_back(layout, c.layoutId);
 }
 
+namespace {
+
+VkBufferResource* findBuffer(std::unordered_map<GLuint, VkBufferResource>& buffers, GLuint id) {
+    auto it = id != 0 ? buffers.find(id) : buffers.end();
+    return it != buffers.end() ? &it->second : nullptr;
+}
+
+} // namespace
+
+// The buffer attribute `location` of `vao` reads, or null when its id names
+// none. A miss is looked up again every time rather than remembered: an
+// entry can appear for an id without anything being erased (operator[]).
+VkBufferResource* WebGLVkContext::attributeBuffer(VkVAOResource& vao, uint32_t location) {
+    if (vao.attributeBuffersSerial != bufferEraseSerial_ || vao.attributeBuffersVersion != vao.version) {
+        for (size_t i = 0; i < vao.attributes.size(); ++i)
+            vao.attributeBuffers[i] = findBuffer(buffers_, vao.attributes[i].bufferId);
+        vao.attributeBuffersSerial = bufferEraseSerial_;
+        vao.attributeBuffersVersion = vao.version;
+    }
+    VkBufferResource* buf = vao.attributeBuffers[location];
+    return buf ? buf : findBuffer(buffers_, vao.attributes[location].bufferId);
+}
+
+// The buffer `vao`'s element array binding names, or null (looked up again
+// every time, as above).
+VkBufferResource* WebGLVkContext::elementBuffer(VkVAOResource& vao) {
+    if (vao.elementBuffer && vao.elementBufferSerial == bufferEraseSerial_ &&
+        vao.elementBufferId == vao.elementArrayBufferId)
+        return vao.elementBuffer;
+    vao.elementBuffer = findBuffer(buffers_, vao.elementArrayBufferId);
+    vao.elementBufferSerial = bufferEraseSerial_;
+    vao.elementBufferId = vao.elementArrayBufferId;
+    return vao.elementBuffer;
+}
+
 const VaoInputCache* WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, const DrawShape& shape,
                                                       std::vector<VkBuffer>& vbos,
                                                       std::vector<VkDeviceSize>& offsets) {
@@ -231,8 +266,8 @@ const VaoInputCache* WebGLVkContext::bindVertexInputs(const VkProgramResource& p
             }
             continue;
         }
-        auto bIt = attr.bufferId != 0 ? buffers_.find(attr.bufferId) : buffers_.end();
-        if (bIt == buffers_.end()) {
+        VkBufferResource* found = attributeBuffer(vao, loc);
+        if (!found) {
             LOG_ERROR("WebGLVkContext: vertex attribute %u is enabled with no buffer", loc);
             setSyntheticError(GL_INVALID_OPERATION);
             return nullptr;
@@ -242,7 +277,7 @@ const VaoInputCache* WebGLVkContext::bindVertexInputs(const VkProgramResource& p
             setSyntheticError(GL_INVALID_OPERATION);
             return nullptr;
         }
-        VkBufferResource& buf = bIt->second;
+        VkBufferResource& buf = *found;
         // The elements the draw fetches: per vertex, or one per `divisor`
         // instances.
         const uint32_t divisor = attr.divisor;

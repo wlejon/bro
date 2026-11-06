@@ -47,6 +47,7 @@ void WebGLVkContext::deleteTransformFeedback(GLuint id) {
     }
     if (boundFeedback_ == id) boundFeedback_ = 0;
     feedbacks_.erase(it);
+    ++feedbackEraseSerial_;
 }
 
 GLboolean WebGLVkContext::isTransformFeedback(GLuint id) const {
@@ -69,19 +70,32 @@ void WebGLVkContext::bindTransformFeedback(GLenum target, GLuint id) {
     boundFeedback_ = id;
 }
 
+const FeedbackObject* WebGLVkContext::boundFeedbackObject() const {
+    if (boundFeedbackCacheSerial_ != feedbackEraseSerial_ || boundFeedbackCacheId_ != boundFeedback_) {
+        // Only a found entry is remembered: operator[] elsewhere can insert
+        // the missing one without erasing anything.
+        auto it = feedbacks_.find(boundFeedback_);
+        if (it == feedbacks_.end()) return nullptr;
+        boundFeedbackCache_ = &it->second;
+        boundFeedbackCacheId_ = boundFeedback_;
+        boundFeedbackCacheSerial_ = feedbackEraseSerial_;
+    }
+    return boundFeedbackCache_;
+}
+
 bool WebGLVkContext::transformFeedbackActive() const {
-    auto it = feedbacks_.find(boundFeedback_);
-    return it != feedbacks_.end() && it->second.active;
+    const FeedbackObject* f = boundFeedbackObject();
+    return f && f->active;
 }
 
 bool WebGLVkContext::transformFeedbackPaused() const {
-    auto it = feedbacks_.find(boundFeedback_);
-    return it != feedbacks_.end() && it->second.active && it->second.paused;
+    const FeedbackObject* f = boundFeedbackObject();
+    return f && f->active && f->paused;
 }
 
 bool WebGLVkContext::feedbackCapturing() const {
-    auto it = feedbacks_.find(boundFeedback_);
-    return it != feedbacks_.end() && it->second.active && !it->second.paused;
+    const FeedbackObject* f = boundFeedbackObject();
+    return f && f->active && !f->paused;
 }
 
 void WebGLVkContext::beginTransformFeedback(GLenum primitiveMode) {

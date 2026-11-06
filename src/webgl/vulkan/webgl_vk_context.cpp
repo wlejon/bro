@@ -65,6 +65,7 @@ void WebGLVkContext::cleanupVulkanResources() {
 
     for (auto& [id, buf] : buffers_) releaseBuffer(buf);
     buffers_.clear();
+    ++bufferEraseSerial_;
     for (auto& [id, tex] : textures_) releaseTexture(tex);
     textures_.clear();
     for (auto& [id, rb] : renderbuffers_) releaseTexture(rb.storage);

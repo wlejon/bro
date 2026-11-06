@@ -44,6 +44,13 @@ inline T satCast(double d) {
 // WebIDL's conversion for `unsigned long` / `long` (GLenum, GLint, a bitmask),
 // where a large value wraps rather than saturates.
 inline uint32_t jsToUint32(double d) {
+    // Every value a program means as a GLenum, a count or an offset: below
+    // 2^63 in magnitude the int64 cast is defined and truncates toward zero,
+    // and the unsigned conversion is the modulo. NaN fails both tests. The
+    // fmod below compiles to an x87 fprem loop, tens of cycles a call, and
+    // the WebGL binding converts a few arguments on every draw.
+    if (d > -9223372036854775808.0 && d < 9223372036854775808.0)
+        return static_cast<uint32_t>(static_cast<int64_t>(d));
     if (!std::isfinite(d)) return 0;
     const double t = std::trunc(d);
     // fmod is exact and lands any finite value in (-2^32, 2^32), so the int64

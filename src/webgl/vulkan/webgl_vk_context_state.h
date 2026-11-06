@@ -131,7 +131,8 @@ struct PassBindings {
     // Record the value unless the command buffer already has it
     // (webgl_vk_context_commands.cpp; the header is also compiled without
     // Vulkan prototypes).
-    void setViewport(VkCommandBuffer cmd, const VkViewport& vp);
+    void setViewport(VkCommandBuffer cmd, float x, float y, float width, float height, float minDepth,
+                     float maxDepth);
     void setScissor(VkCommandBuffer cmd, const VkRect2D& sc);
     void setDepthBias(VkCommandBuffer cmd, float constant, float slope);
     void setBlendConstants(VkCommandBuffer cmd, const float c[4]);
