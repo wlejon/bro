@@ -1,6 +1,7 @@
 // The OS-neutral half of drags out of an SDL window: the queued drag, the
 // reports, and the stale button release. See sdl_drag.h.
 #include "platform/sdl/sdl_drag.h"
+#include "platform/sdl/sdl_window.h"
 #include "platform/event_loop.h"
 
 #include <SDL3/SDL.h>
@@ -81,14 +82,17 @@ void sdlDeliverDragReports() {
     EventLoop& loop = *g_loop;
     for (const DragReport& r : reports) {
         switch (r.kind) {
+            // Reported in the window's coordinates (pixels on Windows): to CSS px.
             case DragReport::Kind::Motion:
-                if (loop.onOwnDragMotion) loop.onOwnDragMotion(r.windowId, r.x, r.y);
+                if (loop.onOwnDragMotion)
+                    loop.onOwnDragMotion(r.windowId, r.x / sdlCssScaleOf(r.windowId), r.y / sdlCssScaleOf(r.windowId));
                 break;
             case DragReport::Kind::Leave:
                 if (loop.onOwnDragLeave) loop.onOwnDragLeave(r.windowId);
                 break;
             case DragReport::Kind::Drop:
-                if (loop.onOwnDragDrop) loop.onOwnDragDrop(r.windowId, r.x, r.y);
+                if (loop.onOwnDragDrop)
+                    loop.onOwnDragDrop(r.windowId, r.x / sdlCssScaleOf(r.windowId), r.y / sdlCssScaleOf(r.windowId));
                 break;
             case DragReport::Kind::End:
                 if (loop.onOwnDragEnd) loop.onOwnDragEnd(r.action);

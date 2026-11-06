@@ -253,17 +253,18 @@ public:
     virtual void getSize(int& w, int& h) const = 0;
     /// Current drawable size in physical pixels.
     virtual void getSizeInPixels(int& w, int& h) const = 0;
-    /// Drawable pixels per window coordinate: 2.0 for a Retina window on
-    /// macOS, 1.0 where window coordinates already are pixels.
+    /// Drawable pixels per CSS px, the scale the engine renders at: 2.0 for a
+    /// Retina window on macOS, the display scale on Windows (1.5 at 150%;
+    /// window coordinates there are pixels, and SdlWindow converts them to
+    /// CSS px), 1.0 elsewhere.
     virtual float getPixelDensity() const = 0;
     /// The OS scaling factor for the display the window is on (2.0 on a 200%
     /// desktop); re-query after EventLoop::onDisplayScaleChanged.
     virtual float getDisplayScale() const = 0;
     /// What window.devicePixelRatio reports for content in this window. On
-    /// Apple it is the pixel density (CSS px = points, rendered at the backing
-    /// scale). Elsewhere it stays getDisplayScale(), although rendering there
-    /// is 1 device px per CSS px — a known inconsistency left for a Windows /
-    /// X11 follow-up that would render at the display scale too.
+    /// Apple and Windows it is the pixel density (the scale content renders
+    /// at). Elsewhere (SDL on X11) it stays getDisplayScale(), although
+    /// rendering there is 1 device px per CSS px.
     float getDevicePixelRatio() const;
     /// Resize the window (windowed mode only).
     virtual void setWindowSize(uint32_t width, uint32_t height) = 0;

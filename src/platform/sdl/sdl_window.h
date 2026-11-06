@@ -3,6 +3,8 @@
 
 #include "platform/window.h"
 
+#include <cmath>
+
 struct SDL_Window;
 struct SDL_Cursor;
 
@@ -35,6 +37,9 @@ public:
     float getPixelDensity() const override;
     float getDisplayScale() const override;
     void refreshDisplayScale();
+    /// CSS px to SDL window coordinates (m_cssScale).
+    int toWindowUnits(float css) const { return static_cast<int>(std::lround(css * m_cssScale)); }
+    int toCss(int units) const { return static_cast<int>(std::lround(units / m_cssScale)); }
     void setWindowSize(uint32_t width, uint32_t height) override;
     void setPosition(int x, int y) override;
     void getPosition(int& x, int& y) const override;
@@ -104,6 +109,13 @@ private:
     uint32_t m_height = 0;
     float m_opacity = 1.0f;
     float m_displayScale = 1.0f;
+    // Window coordinates (SDL's) per CSS px: on Windows, where SDL's window
+    // coordinates are physical pixels, the display scale (a 4K screen at
+    // 150% shows the page at 150%, as macOS does with points); 1 elsewhere.
+    // Sizes, positions in the window and input are converted at this class
+    // and the event loop, so the engine sees CSS px and a pixel density
+    // (getPixelDensity) it renders at.
+    float m_cssScale = 1.0f;
     bool m_fullscreen = false;
     bool m_flashing = false;
     bool m_vsyncPref = true;
@@ -123,6 +135,10 @@ private:
 /// The SDL window behind a platform Window, or null when it is not one.
 SDL_Window* sdlWindowOf(const Window* window);
 void sdlRefreshWindowDisplayScale(uint32_t windowId);
+/// SDL window coordinates per CSS px of a window (SdlWindow::m_cssScale; 1
+/// for a window that is not ours): divide an event's position by it.
+float sdlCssScale(SDL_Window* window);
+float sdlCssScaleOf(uint32_t windowId);
 /// Every click-through window's applyClickThrough (the event loop, on each pump).
 void sdlApplyClickThrough();
 

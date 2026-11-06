@@ -9,6 +9,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include "broimage/decode.h"
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 #if defined(_WIN32)
@@ -25,6 +26,65 @@
 namespace bro::platform {
 
 namespace {
+
+// SDL window coordinates per CSS px for a window on a display of `scale`:
+// on Windows, where they are physical pixels, the display scale (unless
+// BRO_WINDOWS_DPI_SCALE=0, or the window stands in for the offscreen driver);
+// elsewhere 1 (macOS gives points, and the pixel density does the rest).
+float windowsContentScale(bool keepHidden, float scale) {
+#if defined(_WIN32)
+    static const bool off = [] {
+        const char* v = std::getenv("BRO_WINDOWS_DPI_SCALE");
+        return v && v[0] == '0';
+    }();
+    if (off || keepHidden || !(scale > 0.0f)) return 1.0f;
+    return std::clamp(scale, 0.5f, 8.0f);
+#else
+    (void)keepHidden;
+    (void)scale;
+    return 1.0f;
+#endif
+}
+
+#if defined(_WIN32)
+// A window whose page scales with its display keeps its size in CSS px when
+// it moves to a display of another scale, as a DPI-aware Windows app keeps
+// its size in points: 1000x700 at 100% is 1500x1050 at 150%. SDL keeps the
+// window's pixels instead (it answers WM_GETDPISCALEDSIZE with the same
+// client size and applies that on WM_DPICHANGED), which leaves the page the
+// scale's ratio less room. These two messages are answered here before SDL
+// sees them: the system scales the window linearly, during a drag too, and
+// the rect it suggests is the window's.
+constexpr const wchar_t* kDpiProcProp = L"bro.dpi.proc";
+
+LRESULT CALLBACK keepCssSizeProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    const auto prev = reinterpret_cast<WNDPROC>(GetPropW(hwnd, kDpiProcProp));
+    switch (msg) {
+        case WM_GETDPISCALEDSIZE:
+            return FALSE;  // the system's linear scaling
+        case WM_DPICHANGED: {
+            const RECT* r = reinterpret_cast<const RECT*>(lp);
+            SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(prev));
+            RemovePropW(hwnd, kDpiProcProp);
+            break;
+        default:
+            break;
+    }
+    return prev ? CallWindowProcW(prev, hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void keepCssSizeAcrossDisplays(HWND hwnd) {
+    if (!hwnd || GetPropW(hwnd, kDpiProcProp)) return;
+    const LONG_PTR prev = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+    SetPropW(hwnd, kDpiProcProp, reinterpret_cast<HANDLE>(prev));
+    SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&keepCssSizeProc));
+}
+#endif
 
 SDL_WindowFlags baseWindowFlags(GraphicsBackend backend) {
     SDL_WindowFlags flags = backend == GraphicsBackend::Vulkan ? SDL_WINDOW_VULKAN : 0;
@@ -89,8 +149,10 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
         LOG_WARN("Transparent window: needs the GPU (Vulkan) presentation; this one is opaque");
     if (m_transparent) flags |= SDL_WINDOW_TRANSPARENT;
 
-    m_window = SDL_CreateWindow(cfg.title.c_str(), static_cast<int>(cfg.width),
-                                static_cast<int>(cfg.height), flags);
+    // The size asked for is CSS px: in window coordinates at the scale of the
+    // display it opens on (the primary; corrected below if it is another).
+    m_cssScale = windowsContentScale(m_keepHidden, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
+    m_window = SDL_CreateWindow(cfg.title.c_str(), toWindowUnits(cfg.width), toWindowUnits(cfg.height), flags);
     if (!m_window) {
         const std::string err = SDL_GetError();
         LOG_ERROR("Failed to create SDL window: %s", err.c_str());
@@ -109,6 +171,8 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     }
+    // Scaled with its display (not BRO_WINDOWS_DPI_SCALE=0, not the offscreen stand-in).
+    if (hwnd && windowsContentScale(m_keepHidden, 2.0f) != 1.0f) keepCssSizeAcrossDisplays(hwnd);
 #endif
 
     // Placement only for a visible window: where a hidden window "is" depends
@@ -123,17 +187,18 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
             if (disp && SDL_GetDisplayUsableBounds(disp, &usable)) {
                 int top = 0, left = 0, bottom = 0, right = 0;
                 SDL_GetWindowBordersSize(m_window, &top, &left, &bottom, &right);
+                // In window coordinates (the display's), m_width / m_height being CSS px.
                 int maxW = usable.w - left - right;
                 int maxH = usable.h - top - bottom;
-                int clampedW = std::min<int>(static_cast<int>(m_width), std::max(1, maxW));
-                int clampedH = std::min<int>(static_cast<int>(m_height), std::max(1, maxH));
-                if (clampedW != static_cast<int>(m_width) ||
-                    clampedH != static_cast<int>(m_height)) {
-                    LOG_INFO("Clamped window from %ux%u to %dx%d to fit display %dx%d",
-                             m_width, m_height, clampedW, clampedH, usable.w, usable.h);
+                const int wantW = toWindowUnits(m_width), wantH = toWindowUnits(m_height);
+                int clampedW = std::min<int>(wantW, std::max(1, maxW));
+                int clampedH = std::min<int>(wantH, std::max(1, maxH));
+                if (clampedW != wantW || clampedH != wantH) {
+                    LOG_INFO("Clamped window from %dx%d to %dx%d to fit display %dx%d",
+                             wantW, wantH, clampedW, clampedH, usable.w, usable.h);
                     SDL_SetWindowSize(m_window, clampedW, clampedH);
-                    m_width = static_cast<uint32_t>(clampedW);
-                    m_height = static_cast<uint32_t>(clampedH);
+                    m_width = static_cast<uint32_t>(std::lround(clampedW / m_cssScale));
+                    m_height = static_cast<uint32_t>(std::lround(clampedH / m_cssScale));
                 }
                 SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
             }
@@ -146,11 +211,14 @@ SdlWindow::SdlWindow(const WindowConfig& cfg)
     }
 
     SDL_SetPointerProperty(SDL_GetWindowProperties(m_window), "bro.sdl_window", this);
+    const float openedAt = m_cssScale;
     refreshDisplayScale();
+    // Opened on a display of another scale (cfg.x / cfg.y, displayId): the CSS size at its scale.
+    if (m_cssScale != openedAt) SDL_SetWindowSize(m_window, toWindowUnits(m_width), toWindowUnits(m_height));
 
-    LOG_INFO("Created window \"%s\" (%ux%u) with %s",
+    LOG_INFO("Created window \"%s\" (%ux%u) with %s, %.2f window units per CSS px",
              cfg.title.c_str(), cfg.width, cfg.height,
-             m_backend == GraphicsBackend::Vulkan ? "Vulkan" : "software presentation");
+             m_backend == GraphicsBackend::Vulkan ? "Vulkan" : "software presentation", m_cssScale);
 }
 
 SdlWindow::~SdlWindow() {
@@ -236,6 +304,8 @@ bool SdlWindow::displayAdapterLuid(uint8_t luid[8]) const {
 void SdlWindow::getSize(int& w, int& h) const {
     w = h = 0;
     SDL_GetWindowSize(m_window, &w, &h);
+    w = toCss(w);
+    h = toCss(h);
 }
 
 void SdlWindow::getSizeInPixels(int& w, int& h) const {
@@ -244,8 +314,9 @@ void SdlWindow::getSizeInPixels(int& w, int& h) const {
 }
 
 float SdlWindow::getPixelDensity() const {
+    // Drawable pixels per CSS px: SDL's per window coordinate, times the window coordinates per CSS px.
     float density = SDL_GetWindowPixelDensity(m_window);
-    return density > 0.0f ? density : 1.0f;
+    return (density > 0.0f ? density : 1.0f) * m_cssScale;
 }
 
 void SdlWindow::refreshDisplayScale() {
@@ -255,6 +326,16 @@ void SdlWindow::refreshDisplayScale() {
         if (disp) scale = SDL_GetDisplayContentScale(disp);
     }
     m_displayScale = scale > 0.0f ? scale : 1.0f;
+    m_cssScale = windowsContentScale(m_keepHidden, m_displayScale);
+    if (m_window) SDL_SetFloatProperty(SDL_GetWindowProperties(m_window), "bro.css_scale", m_cssScale);
+}
+
+float sdlCssScale(SDL_Window* window) {
+    return window ? SDL_GetFloatProperty(SDL_GetWindowProperties(window), "bro.css_scale", 1.0f) : 1.0f;
+}
+
+float sdlCssScaleOf(uint32_t windowId) {
+    return sdlCssScale(SDL_GetWindowFromID(static_cast<SDL_WindowID>(windowId)));
 }
 
 float SdlWindow::getDisplayScale() const {
@@ -368,7 +449,7 @@ void SdlWindow::setResizable(bool resizable) {
 }
 
 void SdlWindow::setWindowSize(uint32_t width, uint32_t height) {
-    if (!SDL_SetWindowSize(m_window, static_cast<int>(width), static_cast<int>(height))) {
+    if (!SDL_SetWindowSize(m_window, toWindowUnits(width), toWindowUnits(height))) {
         LOG_ERROR("Failed to set window size: %s", SDL_GetError());
     }
     m_width = width;
@@ -398,7 +479,7 @@ bool SdlWindow::isAlwaysOnTop() const {
 }
 
 void SdlWindow::setMinimumSize(int w, int h) {
-    if (!SDL_SetWindowMinimumSize(m_window, std::max(0, w), std::max(0, h))) {
+    if (!SDL_SetWindowMinimumSize(m_window, toWindowUnits(std::max(0, w)), toWindowUnits(std::max(0, h)))) {
         LOG_ERROR("Failed to set minimum size: %s", SDL_GetError());
     }
 }
@@ -406,10 +487,12 @@ void SdlWindow::setMinimumSize(int w, int h) {
 void SdlWindow::getMinimumSize(int& w, int& h) const {
     w = h = 0;
     SDL_GetWindowMinimumSize(m_window, &w, &h);
+    w = toCss(w);
+    h = toCss(h);
 }
 
 void SdlWindow::setMaximumSize(int w, int h) {
-    if (!SDL_SetWindowMaximumSize(m_window, std::max(0, w), std::max(0, h))) {
+    if (!SDL_SetWindowMaximumSize(m_window, toWindowUnits(std::max(0, w)), toWindowUnits(std::max(0, h)))) {
         LOG_ERROR("Failed to set maximum size: %s", SDL_GetError());
     }
 }
@@ -417,6 +500,8 @@ void SdlWindow::setMaximumSize(int w, int h) {
 void SdlWindow::getMaximumSize(int& w, int& h) const {
     w = h = 0;
     SDL_GetWindowMaximumSize(m_window, &w, &h);
+    w = toCss(w);
+    h = toCss(h);
 }
 
 void SdlWindow::setPosition(int x, int y) {
@@ -555,8 +640,8 @@ void SdlWindow::start() { SDL_StartTextInput(m_window); }
 void SdlWindow::stop() { SDL_StopTextInput(m_window); }
 
 void SdlWindow::setArea(int x, int y, int w, int h, int cursor) {
-    SDL_Rect rect{x, y, w, h};
-    SDL_SetTextInputArea(m_window, &rect, cursor);
+    SDL_Rect rect{toWindowUnits(x), toWindowUnits(y), toWindowUnits(w), toWindowUnits(h)};
+    SDL_SetTextInputArea(m_window, &rect, toWindowUnits(cursor));
 }
 
 // --- Cursor ---
@@ -617,7 +702,7 @@ void SdlWindow::setKeyboardGrab(bool on) {
 }
 
 void SdlWindow::warp(float x, float y) {
-    SDL_WarpMouseInWindow(m_window, x, y);
+    SDL_WarpMouseInWindow(m_window, x * m_cssScale, y * m_cssScale);
 }
 
 } // namespace bro::platform

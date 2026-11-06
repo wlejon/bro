@@ -26,6 +26,7 @@
 // A press the window took keeps it taking input until the release, so a drag
 // that starts on a widget follows the pointer out of it.
 #include "platform/sdl/sdl_click_through.h"
+#include "platform/sdl/sdl_window.h"
 #include "util/log.h"
 #include "util/main_loop_wake.h"
 
@@ -161,8 +162,10 @@ private:
             int ww = 0, wh = 0, pw = 0, ph = 0;
             SDL_GetWindowSize(window_, &ww, &wh);
             SDL_GetWindowSizeInPixels(window_, &pw, &ph);
-            const float sx = pw > 0 ? static_cast<float>(ww) / pw : 1.0f;
-            const float sy = ph > 0 ? static_cast<float>(wh) / ph : 1.0f;
+            // Client pixels to CSS px: to window coordinates, then over the window's CSS scale.
+            const float k = 1.0f / sdlCssScale(window_);
+            const float sx = (pw > 0 ? static_cast<float>(ww) / pw : 1.0f) * k;
+            const float sy = (ph > 0 ? static_cast<float>(wh) / ph : 1.0f) * k;
             takes = test_((p.x + 0.5f) * sx, (p.y + 0.5f) * sy);
         }
         setPassthrough(!takes);

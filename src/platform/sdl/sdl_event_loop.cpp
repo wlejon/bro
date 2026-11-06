@@ -61,17 +61,18 @@ void sdlMacLiveResizeHook(const std::function<void()>* hook);
 namespace {
 
 // SDL delivers finger coordinates normalized to 0-1 across the window;
-// convert to window coordinates so touch flows through the same coordinate
-// space as mouse input. SDL3 mouse events report window coordinates (points,
-// not pixels), and SDL_GetWindowSize returns the same units, so this stays
-// consistent under DPI scaling.
+// convert to CSS px so touch flows through the same coordinate space as
+// mouse input: SDL's window size (points on macOS, pixels on Windows) over
+// the window's CSS scale (sdlCssScale).
 void fingerWindowCoords(const SDL_TouchFingerEvent& tf, float& outX, float& outY) {
     int w = 0, h = 0;
+    float s = 1.0f;
     if (SDL_Window* win = SDL_GetWindowFromID(tf.windowID)) {
         SDL_GetWindowSize(win, &w, &h);
+        s = sdlCssScale(win);
     }
-    outX = tf.x * static_cast<float>(w);
-    outY = tf.y * static_cast<float>(h);
+    outX = tf.x * static_cast<float>(w) / s;
+    outY = tf.y * static_cast<float>(h) / s;
 }
 
 // A gamepad event to the loop's handlers; false for any other event.
@@ -237,6 +238,9 @@ void SdlEventLoop::pollEvents() {
 }
 
 void SdlEventLoop::dispatch(const SDL_Event& event) {
+    // SDL's window coordinates per CSS px of the event's window (1 but on
+    // Windows: sdlCssScale); positions in a window reach the engine in CSS px.
+    auto css = [](uint32_t windowId) { return 1.0f / sdlCssScaleOf(windowId); };
     {
         switch (event.type) {
             case SDL_EVENT_QUIT:
@@ -256,31 +260,35 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
 
             case SDL_EVENT_WINDOW_RESIZED:
                 if (onResize) {
+                    const float k = css(event.window.windowID);
                     onResize(event.window.windowID,
-                             static_cast<uint32_t>(event.window.data1),
-                             static_cast<uint32_t>(event.window.data2));
+                             static_cast<uint32_t>(std::lround(event.window.data1 * k)),
+                             static_cast<uint32_t>(std::lround(event.window.data2 * k)));
                 }
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (onMouseDown) {
+                    const float k = css(event.button.windowID);
                     onMouseDown(event.button.windowID,
-                                event.button.x, event.button.y, event.button.button);
+                                event.button.x * k, event.button.y * k, event.button.button);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (onMouseUp) {
+                    const float k = css(event.button.windowID);
                     onMouseUp(event.button.windowID,
-                              event.button.x, event.button.y, event.button.button);
+                              event.button.x * k, event.button.y * k, event.button.button);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_MOTION:
                 if (onMouseMove) {
+                    const float k = css(event.motion.windowID);
                     onMouseMove(event.motion.windowID,
-                                event.motion.x, event.motion.y,
-                                event.motion.xrel, event.motion.yrel);
+                                event.motion.x * k, event.motion.y * k,
+                                event.motion.xrel * k, event.motion.yrel * k);
                 }
                 break;
 
@@ -320,8 +328,9 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
 
             case SDL_EVENT_MOUSE_WHEEL:
                 if (onWheel) {
+                    const float k = css(event.wheel.windowID);
                     onWheel(event.wheel.windowID,
-                            event.wheel.mouse_x, event.wheel.mouse_y,
+                            event.wheel.mouse_x * k, event.wheel.mouse_y * k,
                             event.wheel.x, event.wheel.y);
                 }
                 break;
@@ -333,8 +342,8 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
                 flushDropGroup();          // defensive: unterminated prior group
                 m_dropActive = true;
                 m_dropWindowId = event.drop.windowID;
-                m_dropX = event.drop.x;
-                m_dropY = event.drop.y;
+                m_dropX = event.drop.x * css(event.drop.windowID);
+                m_dropY = event.drop.y * css(event.drop.windowID);
                 m_dropPaths.clear();
                 break;
 
@@ -344,12 +353,13 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
                         // DROP_BEGIN's position is (0,0) on some backends; the
                         // per-file events carry the real cursor position.
                         m_dropWindowId = event.drop.windowID;
-                        m_dropX = event.drop.x;
-                        m_dropY = event.drop.y;
+                        m_dropX = event.drop.x * css(event.drop.windowID);
+                        m_dropY = event.drop.y * css(event.drop.windowID);
                         m_dropPaths.emplace_back(event.drop.data);
                     } else if (onDropFile) {
+                        const float k = css(event.drop.windowID);
                         onDropFile(event.drop.windowID, { std::string(event.drop.data) },
-                                   event.drop.x, event.drop.y);
+                                   event.drop.x * k, event.drop.y * k);
                     }
                 }
                 break;
@@ -360,8 +370,8 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
 
             case SDL_EVENT_DROP_TEXT:
                 if (onDropText && event.drop.data) {
-                    onDropText(event.drop.windowID,
-                               event.drop.data, event.drop.x, event.drop.y);
+                    onDropText(event.drop.windowID, event.drop.data,
+                               event.drop.x * css(event.drop.windowID), event.drop.y * css(event.drop.windowID));
                 }
                 break;
 
@@ -449,10 +459,21 @@ void SdlEventLoop::dispatch(const SDL_Event& event) {
 
             case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+                const float before = sdlCssScaleOf(event.window.windowID);
                 sdlRefreshWindowDisplayScale(event.window.windowID);
                 if (onDisplayScaleChanged) onDisplayScaleChanged(event.window.windowID);
+                // A new CSS scale is a new CSS size, whether or not the window's pixels changed.
+                SDL_Window* win = SDL_GetWindowFromID(event.window.windowID);
+                if (win && onResize && sdlCssScaleOf(event.window.windowID) != before) {
+                    int w = 0, h = 0;
+                    SDL_GetWindowSize(win, &w, &h);
+                    const float k = css(event.window.windowID);
+                    onResize(event.window.windowID, static_cast<uint32_t>(std::lround(w * k)),
+                             static_cast<uint32_t>(std::lround(h * k)));
+                }
                 break;
+            }
 
             default:
                 break;

@@ -529,7 +529,10 @@ bro.window.moveToDisplay = function(id) {};
 /**
  * Current client-area size of the main window. Windowed, this is the live OS
  * window size (so it reads the new size straight after `setSize`); headless,
- * it is the virtual viewport.
+ * it is the virtual viewport. Sizes are CSS px: on Windows a window on a 150%
+ * display is 1.5 physical pixels per CSS px and renders at that scale
+ * (`devicePixelRatio` 1.5), as a Retina window does with points; the
+ * environment variable `BRO_WINDOWS_DPI_SCALE=0` keeps Windows at 1.
  * @returns {WindowSize}
  */
 bro.window.getSize = function() {};

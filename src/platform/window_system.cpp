@@ -120,7 +120,7 @@ std::string getClipboardText(bool* ok) { return clipboard().getText(ok); }
 // --- Window: the parts every backend shares ---
 
 float Window::getDevicePixelRatio() const {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     return getPixelDensity();
 #else
     return getDisplayScale();
