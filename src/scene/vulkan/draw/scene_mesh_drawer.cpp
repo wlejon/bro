@@ -257,6 +257,7 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
     std::string key = cs.key;
     key += '\x1e';
     key += static_cast<char>('0' + static_cast<int>(kind));
+    if (probeActive_) key += "\x1eprobe";
     auto it = custom_.find(key);
     if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
 
@@ -264,19 +265,22 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
     std::string err;
     const auto target = shaderTarget(kind);
     KernelMeshHook hook;
-    bool ok = compileKernelMeshHook(target, cs.module, cs.moduleFile, cs.modules, hook, err);
+    bool ok = compileKernelMeshHook(target, cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs, probeActive_);
     if (ok) {
         prog->iface = std::move(hook.iface);
         prog->hasLight = hook.hasLight;
+        prog->probes = std::move(hook.probes);
         if (hook.hasVertex) {
             prog->vs = SceneVkShaderModule::create(device_, hook.vs.spirv);
             prog->vsEntry = hook.vs.entry;
+            prog->vsSpirv = std::move(hook.vs.spirv);
         } else {
             prog->vsEntry = kVsPassthroughEntries[static_cast<int>(target)];
         }
         if (hook.hasFragment) {
             prog->fs = SceneVkShaderModule::create(device_, hook.fs.spirv);
             prog->fsEntry = hook.fs.entry;
+            prog->fsSpirv = std::move(hook.fs.spirv);
         }
         ok = (!hook.hasVertex || prog->vs) && (!hook.hasFragment || prog->fs);
         if (!ok) err = "Failed to create VkShaderModule";
@@ -311,7 +315,7 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
                     std::string err;
                     if (!compileKernelMeshHookFragment(draw.custom->module, draw.custom->moduleFile,
                                                        draw.custom->modules, prog.hasLight, indirect, cuts, bin,
-                                                       err)) {
+                                                       err, draw.custom->knobs, probeActive_)) {
                         LOG_ERROR("SceneMeshDrawer: Failed compiling module variant: %s", err.c_str());
                         prog.indirectFailed = true;
                         return VK_NULL_HANDLE;
@@ -327,7 +331,7 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
             }
         }
         return buildPipeline(vs, fs, kind, rasterBits, target, "custom mesh", true, prog.vsEntry.c_str(), fsEntry);
-    }, true);
+    }, !probeActive_);
 }
 
 VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<float>& palette) {
@@ -446,6 +450,21 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
             }
         }
         if (buffer) writer.writeBuffer(CustomShaderInterface::kBuffersBinding + i, buffer, size, 0, kStorage);
+    }
+    if (probeActive_ && !prog.probes.empty()) {
+        const VkDeviceSize probeBytes = ((4 + prog.probes.size() * 5) * sizeof(float) + 15) & ~VkDeviceSize(15);
+        const VkDeviceSize align =
+            frame.gpu.device.context().deviceProperties().limits.minStorageBufferOffsetAlignment;
+        render::UploadSlice slice = frame.gpu.device.frameUpload(probeBytes, std::max<VkDeviceSize>(align, 16));
+        if (slice) {
+            std::memset(slice.mapped, 0, probeBytes);
+            const int32_t tx = prog.isVolume ? (probeX_ / 2) : probeX_;
+            const int32_t ty = prog.isVolume ? (probeY_ / 2) : probeY_;
+            std::memcpy(static_cast<uint8_t*>(slice.mapped) + 0, &tx, 4);
+            std::memcpy(static_cast<uint8_t*>(slice.mapped) + 4, &ty, 4);
+            writer.writeBuffer(23, slice.buffer, probeBytes, slice.offset, kStorage);
+            probeRecords_.push_back({nodeId, static_cast<const float*>(slice.mapped), prog.probes});
+        }
     }
     writer.updateSet(device_, set);
     if (textures) res.pruneUserTextures(nodeId, *textures);

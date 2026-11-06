@@ -343,8 +343,10 @@ public:
     /// invalidate tiles that still hold the displaced depth.
     void setCustomShaderModule(std::string module, std::string file,
                                std::vector<std::pair<std::string, std::string>> modules = {},
-                               bool hasVertex = false) {
-        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file), std::move(modules));
+                               bool hasVertex = false,
+                               std::vector<std::pair<std::string, double>> knobs = {}) {
+        customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file),
+                                                      std::move(modules), std::move(knobs));
         if (hasVertex) customShader_->hasVertex = true;
         bumpChangeGeneration();
     }
@@ -354,6 +356,19 @@ public:
     }
     bool hasCustomShader() const { return customShader_ != nullptr; }
     const CustomShaderState* customShader() const { return customShader_.get(); }
+    CustomShaderState* customShaderMut() { return customShader_.get(); }
+    void setCustomShaderKnobs(std::vector<std::pair<std::string, double>> knobs) {
+        if (customShader_) {
+            customShader_->setKnobs(std::move(knobs));
+            bumpChangeGeneration();
+        }
+    }
+    void bumpCustomShaderReloadGen() {
+        if (customShader_) {
+            customShader_->bumpReloadGen();
+            bumpChangeGeneration();
+        }
+    }
 
     /// Set (or update) a numeric user-uniform value on this node. No-op
     /// without a custom shader installed.

@@ -558,6 +558,21 @@ void installHeadlessScenePerf(engine::Engine& engine,
             j["diff"] = d;
             return fromJson(j);
         });
+    // perf.shaderStats(node): static SPIR-V instruction counts + driver executable stats for a custom-shader node.
+    setPerfFn("shaderStats", 1,
+        [](Value, std::span<const Value> a) -> Value {
+            if (a.empty() || !ev::isObject(a[0])) {
+                return ev::throwTypeError("shaderStats(node) requires a SceneNode");
+            }
+            const ev::Persistent node(a[0]);
+            const ev::Persistent fn(ev::getProperty(node.get(), "shaderStats"));
+            if (!ev::isFunction(fn.get())) {
+                return ev::throwTypeError("shaderStats(node): argument is not a SceneNode with shaderStats()");
+            }
+            ev::CallResult r = ev::call(fn.get(), node.get(), {});
+            if (r.thrown) return ev::throwValue(r.value);
+            return r.value;
+        });
 }
 #endif
 

@@ -226,7 +226,7 @@
         }
         if (isMeshOrInstanced(node) && typeof opts.module === 'string') {
             try {
-                node.setShaderModule(opts.module, opts.file, opts.modules);
+                node.setShaderModule(opts.module, opts.file, opts.modules, opts.knobs);
                 if (opts.uniforms) for (const k of Object.keys(opts.uniforms)) node.setShaderUniform(k, opts.uniforms[k]);
             } catch (e) {
                 node.destroy();

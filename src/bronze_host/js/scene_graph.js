@@ -295,6 +295,15 @@
     fn(SceneGraph.prototype, "debugViews", function debugViews() {
         return JSON.parse(__bro_native.scene.SceneGraph_debugViewsJson(this));
     });
+    fn(SceneGraph.prototype, "reloadShaders", function reloadShaders() {
+        __bro_native.scene.SceneGraph_reloadShaders(this);
+    });
+    fn(SceneGraph.prototype, "probe", function probe(x, y) {
+        if (typeof x !== 'number' || typeof y !== 'number')
+            throw new TypeError("bro.scene.SceneGraph.prototype.probe: (x, y) pixel coordinates are required");
+        const s = __bro_native.scene.SceneGraph_probeJson(this, x | 0, y | 0);
+        return s ? JSON.parse(s) : {};
+    });
     // The ready event: pendingWork() read each animation frame while a
     // listener waits, fired each time it empties ({type, pending: []}).
     const readyListeners = new WeakMap();
@@ -520,7 +529,7 @@
         const node = canon(__bro_native.scene.SceneGraph_createMesh(this, { volume: true }, null));
         if (!node) return undefined;
         try {
-            node.setShaderModule(opts.module, opts.file, opts.modules);
+            node.setShaderModule(opts.module, opts.file, opts.modules, opts.knobs);
             if (opts.uniforms) for (const k of Object.keys(opts.uniforms)) node.setShaderUniform(k, opts.uniforms[k]);
         } catch (e) {
             node.destroy();

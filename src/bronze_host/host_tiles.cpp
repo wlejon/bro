@@ -121,6 +121,7 @@ struct Cache {
     uint32_t cells = 0;          // a tile's cells along an edge, borders included
     uint32_t producePerUpdate = 8;
     std::vector<Layer> layers;
+    std::vector<std::string> invalidatedLayers; // selective layer subset for stale refreshes (empty = all layers)
     std::shared_ptr<brokernel::api::GpuBuffer> drawList;
     std::vector<DrawTile> drawn;
     std::shared_ptr<brokernel::api::GpuBuffer> lookup;
@@ -173,6 +174,7 @@ struct Cache {
     // ready once the GPU has done them.
     struct InFlight {
         std::vector<tilecache::Production> tiles;
+        std::vector<bool> layerMask; // empty = all layers; else per-layer dirty flag
         uint64_t ticket = 0;
         std::shared_ptr<render::ComputeSpan> span;   // its GPU time, when timestamps are there
     };
@@ -197,6 +199,7 @@ void destroyCache(Cache& c) {
         if (*b) (*b)->destroy();
     c.reports.clear();
     c.inFlight.clear();
+    c.invalidatedLayers.clear();
     c.tree.clear();
 }
 
@@ -344,20 +347,7 @@ void writeDrawList(Cache& c) {
 
 // What the next batch may spend, from the milliseconds the frame leaves its
 // refinement (Engine::refineBudgetMs: production runs in the gap after the
-// frame's work) and what this cache's tiles cost. The caches share that
-// budget in proportion to the work each has pending (its pending tiles at
-// its measured ms a tile), and each spends its share on whole tiles in
-// their order (takeProductions' budget), carrying the rest to the next
-// update, so a share under a tile's cost still produces one every few
-// frames, the dearest included. Pacing by a tile count instead (one more
-// while the gap held, half as many once it overran, at least half of
-// producePerUpdate so a coarse heavy view still refined) held the planet's
-// three caches at their floors through a fast turn: its refinement took
-// 1.05 ms of a 0.88 ms gap and 50 of 120 frames would have run into the
-// next; one ms a tile for every level let two batches of the planet's
-// coarse ground (1.3 ms a tile, 16 times a near one) through at 4 to 5 ms.
-// Until a batch is timed (or without timestamps) half of producePerUpdate
-// a batch; without a scene, producePerUpdate.
+// frame's work) and what this cache's tiles cost.
 engine::Engine* g_engine = nullptr;
 void pace(Cache& c) {
     const double budget = g_engine ? g_engine->refineBudgetMs() : -1.0;
@@ -383,8 +373,7 @@ void pace(Cache& c) {
 
 // A retired batch's span into the cache's costs: the mean a tile, and each
 // level in the batch toward its estimate scaled by how far the batch's
-// estimates missed, by the share of the estimate the level held (a batch of
-// one level corrects that level alone; a mixed one, each by its part).
+// estimates missed, by the share of the estimate the level held.
 void timeBatch(Cache& c, const Cache::InFlight& f) {
     if (!f.span || !f.span->ready() || f.tiles.empty()) return;
     const double ms = f.span->ms();
@@ -409,27 +398,32 @@ void timeBatch(Cache& c, const Cache::InFlight& f) {
 }
 
 // The batches the GPU has finished, ready: their slots logged on the layer
-// pools (a texture array filled from one copies those alone), and the
-// graphics queue told to wait for them before it reads any (a wait already
-// passed). True when any were.
+// pools (a texture array filled from one copies those alone, respecting
+// selective layer invalidation masks), and the graphics queue told to wait
+// for them before it reads any. True when any were.
 bool retireBatches(Cache& c) {
     render::VulkanCompute* compute = engineCompute();
     bool any = false;
-    std::vector<uint32_t> slots;
+    std::vector<std::vector<uint32_t>> layerSlots(c.layers.size());
     while (!c.inFlight.empty() && (!compute || compute->backgroundComplete(c.inFlight.front().ticket))) {
         const Cache::InFlight& f = c.inFlight.front();
         for (const tilecache::Production& p : f.tiles) {
             c.tree.markReady(p.id);
-            slots.push_back(p.slot);
+            for (size_t i = 0; i < c.layers.size(); ++i) {
+                if (f.layerMask.empty() || (i < f.layerMask.size() && f.layerMask[i]))
+                    layerSlots[i].push_back(p.slot);
+            }
         }
         if (compute) compute->acquireBackground(f.ticket);
         timeBatch(c, f);
         c.inFlight.pop_front();
         any = true;
     }
-    if (!slots.empty())
-        for (const Layer& l : c.layers)
-            if (auto buffer = computeBufferOf(l.pool)) buffer->markLayers(slots, c.tree.config().capacity);
+    for (size_t i = 0; i < c.layers.size(); ++i) {
+        if (!layerSlots[i].empty())
+            if (auto buffer = computeBufferOf(c.layers[i].pool))
+                buffer->markLayers(layerSlots[i], c.tree.config().capacity);
+    }
     return any;
 }
 
@@ -479,6 +473,29 @@ Value js_update(Value self, std::span<const Value> args) {
             : c->tree.takeProductions(c->batchSize);
     for (const tilecache::Production& p : batch)
         if (std::isfinite(c->spendMs)) c->credit -= c->costOf(p.id.level);
+
+    // Check whether all tiles in the batch are in-place refreshes of ready slots.
+    bool allRefresh = !batch.empty();
+    for (const tilecache::Production& p : batch) {
+        if (c->tree.slotOf(p.id) != static_cast<int32_t>(p.slot)) {
+            allRefresh = false;
+            break;
+        }
+    }
+    const bool selective = allRefresh && !c->invalidatedLayers.empty();
+    std::vector<std::string> activeLayers;
+    std::vector<bool> batchMask;
+    if (selective) {
+        activeLayers = c->invalidatedLayers;
+        batchMask.resize(c->layers.size(), false);
+        for (size_t i = 0; i < c->layers.size(); ++i)
+            batchMask[i] = std::find(activeLayers.begin(), activeLayers.end(), c->layers[i].name) != activeLayers.end();
+    } else {
+        activeLayers.reserve(c->layers.size());
+        for (const Layer& l : c->layers) activeLayers.push_back(l.name);
+    }
+    if (!batch.empty() && c->tree.stale() == 0) c->invalidatedLayers.clear();
+
     render::VulkanCompute* compute = engineCompute();
     // The lookup without the tiles whose slots the batch takes (or that
     // select dropped out of date), before the batch: its work waits for what
@@ -492,12 +509,15 @@ Value js_update(Value self, std::span<const Value> args) {
     if (!batch.empty()) {
         std::string err;
         // A producer that writes no range or detail leaves NaN, which is no
-        // report: a slot's last tile's must not stand in for it.
-        const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
-        if (c->rangePool)
-            for (const tilecache::Production& p : batch) c->rangePool->write(size_t{8} * p.slot, none, sizeof(none), &err);
-        if (c->detailPool)
-            for (const tilecache::Production& p : batch) c->detailPool->write(size_t{4} * p.slot, none, sizeof(float), &err);
+        // report: a slot's last tile's must not stand in for it. Skip wiping
+        // during a selective layer refresh so existing height ranges stay intact.
+        if (!selective) {
+            const float none[2] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
+            if (c->rangePool)
+                for (const tilecache::Production& p : batch) c->rangePool->write(size_t{8} * p.slot, none, sizeof(none), &err);
+            if (c->detailPool)
+                for (const tilecache::Production& p : batch) c->detailPool->write(size_t{4} * p.slot, none, sizeof(float), &err);
+        }
         // The batch on the GPU, for kernels that produce it in one dispatch.
         const tilecache::Domain& d = c->tree.config().domain;
         std::vector<int32_t> records(batch.size() * kTableWords, 0);
@@ -525,10 +545,24 @@ Value js_update(Value self, std::span<const Value> args) {
 
         ev::ArrayBuilder tiles(batch.size());
         for (size_t i = 0; i < batch.size(); ++i) tiles.set(static_cast<uint32_t>(i), tileObject(*c, batch[i]));
+        ev::ArrayBuilder layersArr(activeLayers.size());
+        for (size_t i = 0; i < activeLayers.size(); ++i)
+            layersArr.set(static_cast<uint32_t>(i), activeLayers[i]);
         ev::ObjectBuilder b;
         b.set("count", static_cast<double>(batch.size()));
         b.set("tiles", tiles.get());
         b.set("table", c->tableValue.get());
+        b.set("layers", layersArr.get());
+        b.def("hasLayer", 1, [](Value bSelf, std::span<const Value> hargs) -> Value {
+            if (hargs.empty()) return ev::fromBool(false);
+            const std::string want = ev::toUtf8(hargs[0]);
+            const Rooted arr(ev::getProperty(bSelf, "layers"));
+            if (!ev::isObject(arr)) return ev::fromBool(false);
+            const double n = numberOr(arr, "length", 0);
+            for (uint32_t i = 0; i < n; ++i)
+                if (ev::toUtf8(ev::getElement(arr, i)) == want) return ev::fromBool(true);
+            return ev::fromBool(false);
+        });
         const Rooted arg(b.get());
         const Rooted produce(ev::getProperty(selfRoot, "produce"));
         const Value argv = arg;
@@ -536,6 +570,7 @@ Value js_update(Value self, std::span<const Value> args) {
         if (r.thrown) {
             // The batch stays missing; the next update offers it again.
             const Rooted thrown(r.value);
+            if (selective && c->invalidatedLayers.empty()) c->invalidatedLayers = activeLayers;
             for (const tilecache::Production& p : batch) c->tree.abandon(p.id);
             if (compute) compute->endBackground();
             writeDrawList(*c);
@@ -560,6 +595,7 @@ Value js_update(Value self, std::span<const Value> args) {
         // Ready once the GPU has done it (retireBatches, a later update).
         Cache::InFlight f;
         f.tiles = batch;
+        f.layerMask = std::move(batchMask);
         if (span) compute->endSpan(*span);
         f.span = std::move(span);
         f.ticket = compute ? compute->endBackground() : 0;
@@ -593,6 +629,47 @@ Value js_drawn(Value self, std::span<const Value>) {
     return out.get();
 }
 
+Value js_invalidate(Value self, std::span<const Value> args) {
+    Cache* c = cacheOf(self, "TileCache.invalidate");
+    if (args.empty() || ev::isNull(args[0]) || ev::isUndefined(args[0])) {
+        c->invalidatedLayers.clear();
+        c->tree.refresh();
+        return ev::undefined();
+    }
+    std::vector<std::string> wanted;
+    auto addLayer = [&](const std::string& name) -> bool {
+        bool found = false;
+        for (const Layer& l : c->layers) {
+            if (l.name == name) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+        if (std::find(wanted.begin(), wanted.end(), name) == wanted.end())
+            wanted.push_back(name);
+        return true;
+    };
+    if (ev::isString(args[0])) {
+        const std::string name = ev::toUtf8(args[0]);
+        if (!addLayer(name))
+            return ev::throwRangeError("TileCache.invalidate: no layer '" + name + "'");
+    } else if (ev::isObject(args[0])) {
+        const Rooted arr(args[0]);
+        const double n = numberOr(arr, "length", 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            const std::string name = ev::toUtf8(ev::getElement(arr, i));
+            if (!addLayer(name))
+                return ev::throwRangeError("TileCache.invalidate: no layer '" + name + "'");
+        }
+    } else {
+        return ev::throwTypeError("TileCache.invalidate: layers must be a layer name or array of layer names");
+    }
+    c->invalidatedLayers = std::move(wanted);
+    c->tree.refresh();
+    return ev::undefined();
+}
+
 void decorateCache(ev::ObjectBuilder& b) {
     b.def("update", 1, js_update);
     b.def("layer", 1, [](Value self, std::span<const Value> args) -> Value {
@@ -608,6 +685,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         c->drawn.clear();
         c->reports.clear();
         c->inFlight.clear();   // their slots are free; later batches run after them
+        c->invalidatedLayers.clear();
         writeLookup(*c);
         return ev::undefined();
     });
@@ -615,10 +693,8 @@ void decorateCache(ev::ObjectBuilder& b) {
         destroyCache(*cacheOf(self, "TileCache.destroy"));
         return ev::undefined();
     });
-    b.def("refresh", 0, [](Value self, std::span<const Value>) -> Value {
-        cacheOf(self, "TileCache.refresh")->tree.refresh();
-        return ev::undefined();
-    });
+    b.def("refresh", 1, js_invalidate);
+    b.def("invalidate", 1, js_invalidate);
     b.accessor("stale", [](Value self, std::span<const Value>) -> Value {
         return ev::fromDouble(static_cast<double>(cacheOf(self, "TileCache.stale")->tree.stale()));
     });
@@ -798,6 +874,7 @@ void installTiles(engine::Engine& engine) {
             if (reports > 0) out.push_back("tiles: " + std::to_string(reports) + " batch reports in flight");
         });
     }
+    brokernel::api::registerHostModule("tiles", tilecache::tilesModuleSource());
     g_cacheClass.install("TileCache", 0, nullptr, decorateCache, /*global=*/false);
     const auto bro = ev::globalValue("bro");
     if (!bro.found || !ev::isObject(bro.value)) return;

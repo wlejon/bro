@@ -240,9 +240,27 @@ pub fn composite(dir: vec3<f32>, near: Near, march: Light) -> Composite {
     transmittance *= near.light.w;
     if (scene::debug_view() != 0) {
         let answered = march.debug.w > 0.0;
-        radiance = answered ? march.debug.xyz : vec3<f32>(0.0, 0.0, 0.0);
-        transmittance = answered ? 0.0 : 1.0;
-        depth = 0.0;
+        if (!answered && scene::debug_view() == 1) {
+            let opacity = clamp(1.0 - transmittance, 0.0, 1.0);
+            if (opacity > 0.001 || max(radiance.x, max(radiance.y, radiance.z)) > 0.0) {
+                let t = clamp(0.35 + 0.65 * opacity, 0.0, 1.0);
+                radiance = vec3<f32>(
+                    clamp(1.5 - abs(4.0 * t - 3.0), 0.0, 1.0),
+                    clamp(1.5 - abs(4.0 * t - 2.0), 0.0, 1.0),
+                    clamp(1.5 - abs(4.0 * t - 1.0), 0.0, 1.0)
+                );
+                transmittance = 0.0;
+                depth = 0.0;
+            } else {
+                radiance = vec3<f32>(0.0, 0.0, 0.0);
+                transmittance = 1.0;
+                depth = 0.0;
+            }
+        } else {
+            radiance = answered ? march.debug.xyz : vec3<f32>(0.0, 0.0, 0.0);
+            transmittance = answered ? 0.0 : 1.0;
+            depth = 0.0;
+        }
     }
     transmittance = clamp(transmittance, 0.0, 1.0);
     if (transmittance >= 1.0 && max(radiance.x, max(radiance.y, radiance.z)) <= 0.0) {

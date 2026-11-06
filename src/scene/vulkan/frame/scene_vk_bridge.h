@@ -107,6 +107,11 @@ public:
         return timer_.lastPasses(passes, compute, computed);
     }
 
+    bool shaderStats(const CustomShaderState& cs, MeshKind kind, bool isVolume, NodeShaderStats& out) {
+        return meshes_.shaderStats(cs, kind, isVolume, out);
+    }
+    std::vector<SceneNodeProbeResult> probe(SceneGraph& graph, SceneRenderer& renderer, int x, int y);
+
 private:
     bool ensureReadbackBuffer();
     void recordReadback(VkCommandBuffer cmd);

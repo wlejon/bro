@@ -22,6 +22,7 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
+#include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
 
 #include <vulkan/vulkan.h>
@@ -224,11 +225,21 @@ public:
     static void vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                             std::vector<VkVertexInputAttributeDescription>& attributes);
 
+    /// Query static SPIR-V instruction counts and driver pipeline executable
+    /// stats for a custom shader node.
+    bool shaderStats(const CustomShaderState& cs, MeshKind kind, bool isVolume, NodeShaderStats& out);
+
+    /// Enable fragment `probe()` capture for a single frame at target pixel (x, y).
+    void beginProbe(int x, int y);
+    /// Collect captured probe values after the probe frame completes.
+    std::vector<SceneNodeProbeResult> endProbe(const SceneGraph& graph);
+
 private:
     struct CustomProgram {
         bool failed = false;
         bool indirectFailed = false;
         bool hasLight = false;
+        bool isVolume = false;
         CustomShaderInterface iface;
         VkShaderModule vs = VK_NULL_HANDLE;
         VkShaderModule fs = VK_NULL_HANDLE;
@@ -247,6 +258,10 @@ private:
         std::string fsIndirectEntry = "main";
         std::string fsIndirectCutsEntry = "main";
         std::string fsNearEntry = "main";
+        std::vector<uint32_t> vsSpirv;
+        std::vector<uint32_t> fsSpirv;
+        std::vector<uint32_t> nearSpirv;
+        std::vector<KernelProbeSlot> probes;
     };
 
     template <typename Node>
@@ -293,6 +308,16 @@ private:
     PipelineVariants builtin_;
     std::unordered_map<std::string, std::unique_ptr<CustomProgram>> custom_;
     std::shared_ptr<render::ComputeBuffer> zeroBuffer_;
+
+    struct ProbeRecord {
+        uint32_t nodeId = 0;
+        const float* mapped = nullptr;
+        std::vector<KernelProbeSlot> slots;
+    };
+    bool probeActive_ = false;
+    int probeX_ = 0;
+    int probeY_ = 0;
+    std::vector<ProbeRecord> probeRecords_;
 };
 
 }  // namespace bro::scene::vk

@@ -74,6 +74,7 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
     }
     // The modules it imports beside the engine's: { name: source }.
     std::vector<std::pair<std::string, std::string>> modules;
+    std::vector<std::pair<std::string, double>> knobs;
     if (modulesJson && *modulesJson) {
         auto j = json::parse(modulesJson, nullptr, false);
         if (j.is_discarded() || !j.is_object()) {
@@ -81,6 +82,16 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
             return tl_shaderErr.c_str();
         }
         for (auto it = j.begin(); it != j.end(); ++it) {
+            if (it.key() == "__knobs__" && it.value().is_object()) {
+                for (auto kit = it.value().begin(); kit != it.value().end(); ++kit) {
+                    if (kit.value().is_number()) {
+                        knobs.emplace_back(kit.key(), kit.value().get<double>());
+                    } else if (kit.value().is_boolean()) {
+                        knobs.emplace_back(kit.key(), kit.value().get<bool>() ? 1.0 : 0.0);
+                    }
+                }
+                continue;
+            }
             if (!it.value().is_string()) {
                 tl_shaderErr = "setShaderModule: module '" + it.key() + "' is not a source string";
                 return tl_shaderErr.c_str();
@@ -90,7 +101,7 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
     }
     std::string err;
     bool hasVertex = false;
-    if (!g->compileShaderModule(target, source, name, modules, hasVertex, err)) {
+    if (!g->compileShaderModule(target, source, name, modules, hasVertex, err, knobs)) {
         tl_shaderErr = err.empty() ? "module compilation failed" : err;
         return tl_shaderErr.c_str();
     }
@@ -98,14 +109,160 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
         bool staticVertex = false;
         std::string errStatic;
         g->compileShaderModule(scene::SceneRenderer::CustomShaderTarget::Static, source, name, modules, staticVertex,
-                               errStatic);
+                               errStatic, knobs);
     }
     if (n->type() == scene::SceneNode::Type::Mesh) {
-        static_cast<scene::MeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex);
+        static_cast<scene::MeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex,
+                                                                std::move(knobs));
     } else {
-        static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex);
+        static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderModule(source, name, std::move(modules), hasVertex,
+                                                                         std::move(knobs));
     }
     return "";
+}
+
+const char* bro_scene_SceneNode_setShaderKnobs(void* self, const char* knobsJson) {
+    auto* n = nodeOf(self);
+    auto* cell = nodeCellOf(self);
+    auto* g = cell ? cell->graph() : nullptr;
+    if (!n || !g) {
+        tl_shaderErr = "setShaderKnobs: node or scene destroyed";
+        return tl_shaderErr.c_str();
+    }
+    const scene::CustomShaderState* cs = nullptr;
+    scene::SceneRenderer::CustomShaderTarget target = scene::SceneRenderer::CustomShaderTarget::Static;
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        auto* mn = static_cast<scene::MeshNode*>(n);
+        cs = mn->customShader();
+        if (mn->isVolume()) target = scene::SceneRenderer::CustomShaderTarget::Volume;
+        else if (mn->asSkinnedMesh()) target = scene::SceneRenderer::CustomShaderTarget::Skinned;
+    } else if (n->type() == scene::SceneNode::Type::InstancedMesh) {
+        cs = static_cast<scene::InstancedMeshNode*>(n)->customShader();
+        target = scene::SceneRenderer::CustomShaderTarget::Instanced;
+    } else {
+        tl_shaderErr = "setShaderKnobs: node is not a MeshNode or InstancedMeshNode";
+        return tl_shaderErr.c_str();
+    }
+    if (!cs || !cs->isModule()) {
+        tl_shaderErr = "setShaderKnobs: node has no custom shader module";
+        return tl_shaderErr.c_str();
+    }
+    std::vector<std::pair<std::string, double>> overrides;
+    if (knobsJson && *knobsJson) {
+        auto j = json::parse(knobsJson, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) {
+            tl_shaderErr = "setShaderKnobs: expected an object mapping knob names to numbers/booleans";
+            return tl_shaderErr.c_str();
+        }
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (it.value().is_number()) {
+                overrides.emplace_back(it.key(), it.value().get<double>());
+            } else if (it.value().is_boolean()) {
+                overrides.emplace_back(it.key(), it.value().get<bool>() ? 1.0 : 0.0);
+            } else {
+                tl_shaderErr = "setShaderKnobs: knob '" + it.key() + "' must be a number or boolean";
+                return tl_shaderErr.c_str();
+            }
+        }
+    }
+    std::vector<std::pair<std::string, double>> merged = cs->knobs;
+    for (const auto& [k, v] : overrides) {
+        bool found = false;
+        for (auto& ex : merged) {
+            if (ex.first == k) { ex.second = v; found = true; break; }
+        }
+        if (!found) merged.emplace_back(k, v);
+    }
+    std::string err;
+    bool hasVertex = false;
+    if (!g->compileShaderModule(target, cs->module, cs->moduleFile, cs->modules, hasVertex, err, merged)) {
+        tl_shaderErr = err.empty() ? "knob specialization failed" : err;
+        return tl_shaderErr.c_str();
+    }
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        static_cast<scene::MeshNode*>(n)->setCustomShaderKnobs(std::move(overrides));
+    } else {
+        static_cast<scene::InstancedMeshNode*>(n)->setCustomShaderKnobs(std::move(overrides));
+    }
+    return "";
+}
+
+const char* bro_scene_SceneNode_shaderStatsJson(void* self) {
+    static thread_local std::string tl_statsJson;
+    auto* n = nodeOf(self);
+    auto* cell = nodeCellOf(self);
+    auto* g = cell ? cell->graph() : nullptr;
+    if (!n || !g) return "";
+    scene::NodeShaderStats stats;
+    if (!g->shaderStats(n->id(), stats)) return "";
+    auto stageToJson = [](const scene::ShaderStageStats& s) {
+        json j = json::object();
+        j["spirvBytes"] = s.spirvBytes;
+        j["instructions"] = s.instructions;
+        j["arithmetic"] = s.arithmetic;
+        j["samples"] = s.samples;
+        j["loads"] = s.loads;
+        j["stores"] = s.stores;
+        j["branches"] = s.branches;
+        j["loops"] = s.loops;
+        j["functions"] = s.functions;
+        j["sgprs"] = s.sgprs;
+        j["vgprs"] = s.vgprs;
+        j["scratchBytes"] = s.scratchBytes;
+        json execs = json::array();
+        for (const auto& ex : s.executables) {
+            json ej = json::object();
+            ej["name"] = ex.name;
+            ej["description"] = ex.description;
+            if (ex.isBool) ej["value"] = (ex.uval != 0);
+            else if (ex.isFloat) ej["value"] = ex.fval;
+            else if (ex.ival < 0) ej["value"] = ex.ival;
+            else ej["value"] = ex.uval;
+            execs.push_back(std::move(ej));
+        }
+        j["executables"] = std::move(execs);
+        return j;
+    };
+    json out = json::object();
+    if (stats.fragment.present) out["fragment"] = stageToJson(stats.fragment);
+    if (stats.vertex.present) out["vertex"] = stageToJson(stats.vertex);
+    if (stats.nearStage.present) out["near"] = stageToJson(stats.nearStage);
+    tl_statsJson = out.dump();
+    return tl_statsJson.c_str();
+}
+
+void bro_scene_SceneGraph_reloadShaders(void* self) {
+    if (auto* g = graphOf(self)) g->reloadShaders();
+}
+
+const char* bro_scene_SceneGraph_probeJson(void* self, int32_t x, int32_t y) {
+    static thread_local std::string tl_probeJson;
+    auto* g = graphOf(self);
+    if (!g) return "{}";
+    const auto results = g->probe(x, y);
+    json out = json::object();
+    json nodesObj = json::object();
+    for (const auto& r : results) {
+        json nodeJson = json::object();
+        for (const auto& pv : r.values) {
+            json val;
+            if (pv.components <= 1) {
+                val = pv.values[0];
+            } else {
+                val = json::array();
+                for (int c = 0; c < pv.components; ++c) val.push_back(pv.values[c]);
+            }
+            nodeJson[pv.name] = val;
+            out[pv.name] = val;
+        }
+        nodesObj[r.nodeName] = nodeJson;
+        if (!out.contains(r.nodeName)) {
+            out[r.nodeName] = nodeJson;
+        }
+    }
+    out["nodes"] = std::move(nodesObj);
+    tl_probeJson = out.dump();
+    return tl_probeJson.c_str();
 }
 
 void bro_scene_SceneNode_clearShader(void* self) {

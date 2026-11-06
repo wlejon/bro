@@ -574,14 +574,19 @@ public:
     // --- Custom mesh shaders ---
 
     bool compileVolumeModule(const std::string& module, const std::string& file,
-                             const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut) {
-        return renderer_.compileVolumeModule(module, file, modules, errOut);
+                             const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut,
+                             const std::vector<std::pair<std::string, double>>& knobs = {}) {
+        return renderer_.compileVolumeModule(module, file, modules, errOut, knobs);
     }
     bool compileShaderModule(SceneRenderer::CustomShaderTarget target, const std::string& module,
                              const std::string& file, const std::vector<std::pair<std::string, std::string>>& modules,
-                             bool& hasVertexOut, std::string& errOut) {
-        return renderer_.compileShaderModule(target, module, file, modules, hasVertexOut, errOut);
+                             bool& hasVertexOut, std::string& errOut,
+                             const std::vector<std::pair<std::string, double>>& knobs = {}) {
+        return renderer_.compileShaderModule(target, module, file, modules, hasVertexOut, errOut, knobs);
     }
+    void reloadShaders() { renderer_.reloadShaders(); }
+    bool shaderStats(uint32_t nodeId, NodeShaderStats& out) { return renderer_.shaderStats(nodeId, out); }
+    std::vector<SceneNodeProbeResult> probe(int x, int y) { return renderer_.probe(x, y); }
 
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);

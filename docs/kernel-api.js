@@ -34,14 +34,24 @@
 console.log('brokernel', bro.kernel.version);
 
 // ============================================================================
-// 1. Compiling: bro.kernel.compile(source, { file, modules }) -> KernelModule
+// 1. Compiling: bro.kernel.compile(source, { file, modules, knobs, enableProbes }) -> KernelModule
 // ============================================================================
 //
-// Every kernel of the source is compiled, synchronously. Nothing is read from
-// disk: an import resolves against the standard library (`std::math`,
-// `std::noise`, `std::filter`, `std::sphere`, `std::color`) and the `modules`
-// given, a map of module name to source. `file` names the source in
-// diagnostics (its directory, if any, is dropped).
+// Every kernel of the source is compiled, synchronously. An import resolves
+// against the standard library (`std::math`, `std::noise`, `std::filter`,
+// `std::sphere`, `std::color`), the `modules` map given (`{ name: source }`),
+// any modules registered via `bro.kernel.registerModule(name, source)`, and
+// the app's module resolver installed via `bro.kernel.resolve(fn)` (which is
+// also shared with scene shader hooks in `createMesh` / `createVolume` /
+// `setShaderModule`). `file` names the source in diagnostics.
+//
+// `knobs` (`{ NAME: number }`) overrides `@knob const NAME: T = default;`
+// constants at compile time, and `mod.setKnobs(overrides)` / `kernel.knobs(overrides)`
+// recompiles with new knob values in place.
+//
+// `pub const` values declared in the module are exposed on `mod.consts` as a
+// frozen JS object (`mod.consts.WIND`, etc.), and `pub fn` helper functions can
+// be called directly from JS via `mod.call(fnName, ...args)`.
 //
 // A compile error throws an Error whose message is the formatted diagnostics
 // and whose `diagnostics` is [{ severity, file, line, column, message }]
@@ -51,12 +61,15 @@ const mod = bro.kernel.compile(`
     import std::noise::*;
     from world::shape import ridge;
 
+    @knob const AMP: f32 = 1.0;
+    pub const SEA_LEVEL: f32 = 0.0;
+
     // A point kernel: no grid; called once per position. f64 positions far
     // from the origin: a @cpu kernel, with no GPU build.
     @kernel @cpu
     fn k_height(x: f64, y: f64, z: f64, seed: i32) -> f32 {
         let p = vec3<f64>(x, y, z) * 0.0005;
-        return ridge(fbm_simplex<f64, 3>(p, 6, 2.0, 0.5, 0.0, seed) as f32);
+        return AMP * ridge(fbm_simplex<f64, 3>(p, 6, 2.0, 0.5, 0.0, seed) as f32);
     }
 
     // A grid kernel: one invocation per cell of a 2D grid.
@@ -80,13 +93,15 @@ const mod = bro.kernel.compile(`
             pub fn ridge(v: f32) -> f32 { return 1.0 - abs(v); }
         `,
     },
+    knobs: { AMP: 1.5 },
 });
 
 mod.kernels;                    // ['k_height', 'k_smooth', 'k_lookup']
+mod.consts;                     // { SEA_LEVEL: 0 }
 const height = mod.kernel('k_height');   // a Kernel; throws for an unknown name
 
 // ============================================================================
-// 2. A Kernel's description
+// 2. A Kernel's description, knobs, probes, and stats
 // ============================================================================
 
 height.name;        // 'k_height'
@@ -97,6 +112,20 @@ height.params;      // what a call passes, in order (the grid parameter is not p
 // [{ name: 'x', kind: 'scalar', type: 'f64' }, ..., { name: 'seed', kind: 'scalar', type: 'i32' }]
 // A store's entry also has `access` ('read' | 'write' | 'read_write'), `dimension`,
 // and `cells`: the grid axes the kernel accesses it at (below), 0 for none.
+
+// kernel.stats() -> { spirvBytes, instructions, arithmetic, samples, loads,
+//                     stores, branches, loops, functions: [{ name, instructions, share }],
+//                     executables: [{ name, description, stats }] }
+//   Static SPIR-V instruction breakdown and per-function shares, plus hardware
+//   pipeline executable statistics (registers, spills, etc.) when VK_KHR_pipeline_executable_properties
+//   is supported by the GPU.
+//
+// kernel.knobs(overrides) / mod.setKnobs(overrides)
+//   Recompiles the module with updated `@knob const` values.
+//
+// kernel.probe(coord, grid, ...args) -> { [probeName]: number | number[] }
+//   Runs the kernel with `probe("name", expr)` instrumentation active and
+//   returns the probed values at `coord` (x, [x, y], or [x, y, z]).
 
 // ============================================================================
 // 3. kernel.eval(...args): a point kernel at one point, on the CPU

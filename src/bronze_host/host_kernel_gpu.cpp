@@ -5,6 +5,7 @@
 #include "embed/embed_object_builder.h"
 #include "engine/engine.h"
 #include "render/vulkan_context.h"
+#include "render/vulkan_pipeline_cache.h"
 
 #include <brass/gpu/vulkan_driver.hpp>
 #include <brokernel/api.h>
@@ -119,10 +120,34 @@ private:
 // touches nothing else; the first dispatch takes them, waiting only if they
 // are not in by then, and adopts them on the page thread.
 struct Program final : brokernel::api::GpuProgram {
+    std::shared_ptr<Device> device;
     std::vector<uint32_t> spirv;   // what the build reads
     std::future<render::ComputePipelineBuild> build;
     std::shared_ptr<render::ComputePipeline> pipeline;
     std::string error;
+
+    std::vector<brokernel::api::ExecutableStats> executableStats() override {
+        std::vector<brokernel::api::ExecutableStats> out;
+        if (!device) return out;
+        render::VulkanContext* ctx = device->context();
+        if (!ctx) return out;
+        if (build.valid()) pipeline = ctx->compute().adoptPipeline(build.get(), &error);
+        if (!pipeline || pipeline->pipeline() == VK_NULL_HANDLE) return out;
+        const auto vkStats = render::queryPipelineExecutableStats(ctx->device(), pipeline->pipeline());
+        out.reserve(vkStats.size());
+        for (const auto& exe : vkStats) {
+            brokernel::api::ExecutableStats es;
+            es.name = exe.name;
+            es.description = exe.description;
+            es.subgroupSize = exe.subgroupSize;
+            es.statistics.reserve(exe.statistics.size());
+            for (const auto& s : exe.statistics) {
+                es.statistics.push_back({s.name, s.value});
+            }
+            out.push_back(std::move(es));
+        }
+        return out;
+    }
 };
 
 // What the device can run, in brass's terms: a kernel's SPIR-V capabilities
@@ -224,6 +249,7 @@ public:
             return nullptr;
         }
         auto program = std::make_shared<Program>();
+        program->device = device_;
         program->spirv = spirv.words;
         render::ComputePipelineDesc desc;
         desc.spirv = program->spirv;

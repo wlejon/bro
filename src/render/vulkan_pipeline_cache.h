@@ -2,7 +2,9 @@
 
 #include <vulkan/vulkan.h>
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace bro::render {
 
@@ -60,12 +62,31 @@ private:
 /// device has it): registers, instructions and the like per stage, logged as
 /// each is created, under the name its builder gave it. A diagnostic for
 /// shader cost (which variant is register-bound); off, nothing is captured.
+struct PipelineStatisticEntry {
+    std::string name;
+    std::string description;
+    double value = 0.0;
+    bool isBool = false;
+};
+
+struct PipelineExecutableStats {
+    std::string name;
+    std::string description;
+    uint32_t stages = 0;
+    uint32_t subgroupSize = 0;
+    std::vector<PipelineStatisticEntry> statistics;
+};
+
 bool pipelineStatsEnabled();
 void setPipelineStatsEnabled(bool on);
-/// VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR while enabled, else 0.
+bool pipelineExecutableCaptureEnabled();
+void setPipelineExecutableCaptureEnabled(bool on);
+/// VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR while executable capture or stats logging is enabled, else 0.
 VkPipelineCreateFlags pipelineStatsFlags();
 /// Log `pipeline`'s statistics under `label` (no-op while disabled).
 void logPipelineStats(VkDevice device, VkPipeline pipeline, const std::string& label);
+/// Query executable statistics for `pipeline` when VK_KHR_pipeline_executable_properties is available.
+std::vector<PipelineExecutableStats> queryPipelineExecutableStats(VkDevice device, VkPipeline pipeline);
 
 /// Write `size` bytes to `path` through a per-process temp file renamed over
 /// it, creating the directory: concurrent writers and a crash mid-write never

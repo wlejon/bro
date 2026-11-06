@@ -299,9 +299,21 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
     return false;
 }
 
+pub fn cost_heatmap(t_in: f32) -> vec3<f32> {
+    let t = clamp(t_in, 0.0, 1.0);
+    let r = clamp(1.5 - abs(4.0 * t - 3.0), 0.0, 1.0);
+    let g = clamp(1.5 - abs(4.0 * t - 2.0), 0.0, 1.0);
+    let b = clamp(1.5 - abs(4.0 * t - 1.0), 0.0, 1.0);
+    return vec3<f32>(r, g, b);
+}
+
 pub fn debug_pixel(debug_col: vec4<f32>, n: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
     if (debug_col.w > 0.0) {
         return debug_col.xyz;
+    }
+    if (scene::debug_view() == 1) {
+        let grazing = 1.0 - abs(dot(n, view));
+        return cost_heatmap(0.25 + 0.45 * grazing);
     }
     return vec3<f32>(0.06 + 0.2 * abs(dot(n, view)));
 }

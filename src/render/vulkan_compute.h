@@ -137,6 +137,7 @@ public:
     ComputePipeline& operator=(const ComputePipeline&) = delete;
 
     uint32_t pushConstantBytes() const { return pushBytes_; }
+    VkPipeline pipeline() const { return pipeline_; }
 
 private:
     friend class VulkanCompute;

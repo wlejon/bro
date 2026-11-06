@@ -580,6 +580,25 @@ class SceneNode {
   setShaderModule(source, file, modules) {}
 
   /**
+   * Override `@knob const` values in the node's custom shader module (`{ NAME: value }`),
+   * recompiling the shader stage variants with the new specialization constants.
+   *
+   * @param {Object<string, number>} knobs
+   * @returns {SceneNode}
+   */
+  setShaderKnobs(knobs) {}
+
+  /**
+   * Static SPIR-V instruction breakdown (`spirvBytes`, `instructions`, `arithmetic`,
+   * `samples`, `loads`, `stores`, `branches`, `loops`, `functions`) and hardware
+   * pipeline executable statistics (`sgprs`, `vgprs`, `scratchBytes`, `executables`)
+   * for the node's custom shader stages (`fragment`, `vertex`, `near`).
+   *
+   * @returns {{fragment?: Object, vertex?: Object, near?: Object}|null}
+   */
+  shaderStats() {}
+
+  /**
    * Set one uniform field of the custom shader module's `@binding(4, 0)`
    * uniform struct: a number, or 1 to 4 numbers (f32, vec2, vec3, vec4).
    * Extra components are ignored.

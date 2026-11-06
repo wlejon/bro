@@ -119,7 +119,9 @@ add_library(bro_scene STATIC
     vulkan/world/pass_world_service.cpp
     vulkan/draw/scene_vk_custom_shader.cpp
     vulkan/draw/scene_vk_kernel_hook.cpp
+    vulkan/draw/scene_vk_kernel_hook_varyings.cpp
     vulkan/draw/scene_mesh_drawer.cpp
+    vulkan/draw/scene_mesh_drawer_inspect.cpp
     vulkan/draw/scene_draw_list.cpp
     vulkan/draw/pass_mesh.cpp
     vulkan/draw/pass_decal.cpp
@@ -152,7 +154,7 @@ target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here, as is brokernel (3D forces KERNEL on).
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
-target_link_libraries(bro_scene PRIVATE brokernel)
+target_link_libraries(bro_scene PRIVATE brokernel bro_tilecache)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 

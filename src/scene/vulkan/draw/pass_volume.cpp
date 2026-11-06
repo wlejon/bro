@@ -505,22 +505,27 @@ void PassVolumeComposite::record(SceneFrame& frame) {
 }
 
 SceneMeshDrawer::CustomProgram* SceneMeshDrawer::volumeProgram(const CustomShaderState& cs) {
-    const std::string key = cs.key + "\x1evolume";
+    std::string key = cs.key + "\x1evolume";
+    if (probeActive_) key += "\x1eprobe";
     auto it = custom_.find(key);
     if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
 
     auto prog = std::make_unique<CustomProgram>();
+    prog->isVolume = true;
     std::string err;
     KernelVolumeHook hook;
-    bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err);
+    bool ok = compileKernelVolumeHook(cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs, probeActive_);
     if (ok) {
         prog->iface = std::move(hook.iface);
         prog->medium = hook.medium;
+        prog->probes = std::move(hook.probes);
         prog->fs = SceneVkShaderModule::create(device_, hook.main.spirv);
         prog->fsEntry = hook.main.entry;
+        prog->fsSpirv = std::move(hook.main.spirv);
         if (hook.medium) {
             prog->fsNear = SceneVkShaderModule::create(device_, hook.nearPass.spirv);
             prog->fsNearEntry = hook.nearPass.entry;
+            prog->nearSpirv = std::move(hook.nearPass.spirv);
         }
         ok = prog->fs != VK_NULL_HANDLE && (!hook.medium || prog->fsNear != VK_NULL_HANDLE);
         if (!ok) err = "Failed to create VkShaderModule";

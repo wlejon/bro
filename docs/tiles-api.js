@@ -111,6 +111,10 @@
 //
 // batch (the argument to produce):
 //   count               its tiles, 1 to producePerUpdate
+//   layers              string[]: the layer names to produce for this batch
+//                       (all layers normally, or the subset passed to
+//                       cache.invalidate(layers) during a selective refresh)
+//   hasLayer(name)      true when `name` is in `batch.layers`
 //   table               KernelBuffer of `count` records of 36 words for
 //                       kernels (GPU code is f32), record i at word 36 * i,
 //                       read as nine vec4<i32> by tiles::record (section 3):
@@ -318,23 +322,20 @@ const terrain = bro.tiles.createCache({
 //                   rather than when the cache is collected: a cache made
 //                   over again (a new setting) frees the old one's at once.
 //                   Any later use of the cache or its KernelBuffers throws
-// cache.refresh()   every ready tile is out of date (what produce reads has
+// cache.refresh(layers?) / cache.invalidate(layers?)
+//                   every ready tile is out of date (what produce reads has
 //                   changed: a sun, a parameter) but stays ready, drawn and
 //                   in the lookup; the next updates hand the wanted ones to
 //                   produce again, into their own slots, after the missing
 //                   tiles and ranked as they are, a parent's batch before
 //                   its children's (a child refined from its parent reads
 //                   the new parent), so the view keeps its detail while it
-//                   changes over. A texture filled from a layer changes as
-//                   each batch is done; a shader reading the pool itself
-//                   may read a slot as it is rewritten. A ready tile no view
-//                   wants is never produced again, so the next update drops
-//                   it (it leaves the lookup and frees its slot; produced
-//                   afresh if a view wants it later): a reader asking finer
-//                   than the view wants, where an earlier view refined, never
-//                   finds cells made for what has changed since. A batch
-//                   taken before the refresh is out of date once ready, and
-//                   goes again (or is dropped, once ready, if unwanted).
+//                   changes over. When `layers` (a layer name or array of
+//                   layer names, e.g. `['color']`) is given, `batch.layers`
+//                   and `batch.hasLayer(name)` indicate only those layers for
+//                   refresh batches, and only those layers' GPU pool slices
+//                   are marked dirty for texture array uploads while other
+//                   layers and height ranges remain intact.
 // cache.stale       wanted tiles out of date since a refresh (in pending)
 
 function frame(camera, patch) {
@@ -354,9 +355,11 @@ function frame(camera, patch) {
 // ============================================================================
 //
 // The brokernel module (src/tilecache/tiles.bk) that reads a cache at a
-// point, registered under the name `tiles` by whoever imports it:
-// bro.kernel.compile(src, { modules: { tiles: bro.tiles.module } }), or a
-// volume's createVolume({ module, modules: { tiles: bro.tiles.module } }).
+// point. Scene shader hooks (`createMesh`, `createVolume`, `setShaderModule`)
+// pre-register `tiles` automatically so they can `import tiles;` without
+// passing `modules: { tiles: bro.tiles.module }`. Standalone `bro.kernel.compile`
+// callers can pass `{ modules: { tiles: bro.tiles.module } }` or register it
+// via `bro.kernel.registerModule('tiles', bro.tiles.module)`.
 // Its table argument is the cache's `lookup`, taken by any container of
 // vec4<i32>.
 //

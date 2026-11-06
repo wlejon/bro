@@ -80,6 +80,7 @@ add_library(bro_render STATIC
     remote_picture.cpp
     kernel_shader.cpp
     kernel_canvas.cpp
+    spirv_stats.cpp
     ${RENDER_BK_HEADERS}
 )
 if(WIN32)

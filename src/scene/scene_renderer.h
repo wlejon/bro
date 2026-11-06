@@ -7,6 +7,7 @@
 // reads its settings from here every frame.
 
 #include "render/layer_image.h"
+#include "scene/custom_shader.h"
 #include "scene/exposure.h"
 #include "scene/world/atmosphere.h"
 #include "scene/nodes/light_node.h"
@@ -497,10 +498,16 @@ public:
     /// Compile a volume's brokernel hook module (`file` names it in
     /// diagnostics), so setShaderModule can report errors at set time.
     bool compileVolumeModule(const std::string& module, const std::string& file,
-                             const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut);
+                             const std::vector<std::pair<std::string, std::string>>& modules, std::string& errOut,
+                             const std::vector<std::pair<std::string, double>>& knobs = {});
     bool compileShaderModule(CustomShaderTarget target, const std::string& module, const std::string& file,
                              const std::vector<std::pair<std::string, std::string>>& modules, bool& hasVertexOut,
-                             std::string& errOut);
+                             std::string& errOut,
+                             const std::vector<std::pair<std::string, double>>& knobs = {});
+
+    void reloadShaders();
+    bool shaderStats(uint32_t nodeId, NodeShaderStats& out);
+    std::vector<SceneNodeProbeResult> probe(int x, int y);
 
     // --- What the GPU passes read each frame ---
 

@@ -875,6 +875,26 @@ class SceneGraph {
   debugViews() {}
 
   /**
+   * Reload custom shader modules across all nodes in the scene (re-reading
+   * `.bk` files from disk when `file` names a path on disk, and re-resolving
+   * modules registered via `bro.kernel.registerModule` / `bro.kernel.resolve`).
+   *
+   * @returns {SceneGraph}
+   */
+  reloadShaders() {}
+
+  /**
+   * Render a probing frame for pixel `(x, y)` with `probe("name", expr)` enabled
+   * across custom mesh and volume shaders, returning the probed values written at
+   * `(x, y)` (top-level keys by probe name, plus `byNode` keyed by node name).
+   *
+   * @param {number} x
+   * @param {number} y
+   * @returns {Object}
+   */
+  probe(x, y) {}
+
+  /**
    * `'ready'`: pendingWork() emptied (read each animation frame while a
    * listener waits), `{type: 'ready', pending: []}`; fired again each time
    * new work (a new view's) comes and goes.

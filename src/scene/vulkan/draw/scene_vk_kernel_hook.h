@@ -26,11 +26,18 @@ struct KernelHookStage {
     std::string entry;   // its OpEntryPoint
 };
 
+struct KernelProbeSlot {
+    std::string name;
+    uint32_t index = 0;
+    uint32_t components = 1;
+};
+
 struct KernelVolumeHook {
     KernelHookStage main;       // volume_main.bk
     bool medium = false;        // the hook gives medium (and medium_range)
     KernelHookStage nearPass;   // volume_near.bk, when it does
     CustomShaderInterface iface;
+    std::vector<KernelProbeSlot> probes;
 };
 
 struct KernelMeshHook {
@@ -40,11 +47,19 @@ struct KernelMeshHook {
     KernelHookStage vs;         // empty when !hasVertex (uses built-in passthrough vs)
     KernelHookStage fs;         // empty when !hasFragment (uses built-in mesh_frag)
     CustomShaderInterface iface;
+    std::vector<KernelProbeSlot> probes;
 };
 
 /// Modules the hook imports beside the engine's (the app's own, shared with
 /// its kernels): name and source.
 using KernelHookModules = std::vector<std::pair<std::string, std::string>>;
+using KernelHookKnobs = std::vector<std::pair<std::string, double>>;
+
+uint64_t kernelHookReloadGeneration();
+void bumpKernelHookReloadGeneration();
+
+bool expandMeshHookVaryings(const std::string& hook, const std::string& file,
+                            std::string& outHook, std::string& err);
 
 /// When BRO_SCENE_SHADER_SOURCE is set, the directory (with trailing '/')
 /// shaders are read from instead of their embedded strings; "" otherwise.
@@ -72,17 +87,20 @@ VkShaderModule createKernelStageModule(VkDevice dev, const char* file, const cha
 
 /// Compile a volume's hook module (`file` names it in diagnostics).
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
-                             KernelVolumeHook& out, std::string& err);
+                             KernelVolumeHook& out, std::string& err,
+                             const KernelHookKnobs& knobs = {}, bool enableProbes = false);
 
 /// Compile a mesh's hook module for `target` (`file` names it in diagnostics).
 bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
                            const std::string& file, const KernelHookModules& modules,
-                           KernelMeshHook& out, std::string& err);
+                           KernelMeshHook& out, std::string& err,
+                           const KernelHookKnobs& knobs = {}, bool enableProbes = false);
 
 /// Compile a mesh hook's fragment variant (cuts / indirect output).
 bool compileKernelMeshHookFragment(const std::string& module, const std::string& file,
                                    const KernelHookModules& modules, bool hasLight, bool indirect, bool cuts,
-                                   KernelHookStage& out, std::string& err);
+                                   KernelHookStage& out, std::string& err,
+                                   const KernelHookKnobs& knobs = {}, bool enableProbes = false);
 
 /// Start compiling, each on a thread of its own, the stages a mesh hook set
 /// for `target` may draw with: its vertex stage, its fragment stage's
@@ -90,11 +108,12 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
 /// for all its callers, so the draw that first takes one finds it built
 /// rather than compiling it in the frame.
 void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
-                  const KernelHookModules& modules);
+                  const KernelHookModules& modules, const KernelHookKnobs& knobs = {});
 
 /// Compile a mesh hook's shadow-caster vertex stage.
 bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string& module,
                              const std::string& file, const KernelHookModules& modules,
-                             KernelHookStage& out, std::string& err);
+                             KernelHookStage& out, std::string& err,
+                             const KernelHookKnobs& knobs = {});
 
 } // namespace bro::scene::vk

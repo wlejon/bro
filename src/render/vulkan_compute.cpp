@@ -1,6 +1,7 @@
 #include "render/vulkan_compute.h"
 
 #include "render/vulkan_context.h"
+#include "render/vulkan_pipeline_cache.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
@@ -375,6 +376,7 @@ ComputePipelineBuild VulkanCompute::buildPipeline(const ComputePipelineDesc& des
     VkSpecializationInfo spec{3, entries, sizeof(desc.localSize), desc.localSize};
     VkComputePipelineCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pci.flags = pipelineStatsFlags();
     pci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     pci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pci.stage.module = module;
@@ -386,6 +388,8 @@ ComputePipelineBuild VulkanCompute::buildPipeline(const ComputePipelineDesc& des
     if (res != VK_SUCCESS) {
         b.pipeline = VK_NULL_HANDLE;
         b.error = "vkCreateComputePipelines failed for '" + desc.entry + "' (" + std::to_string(res) + ")";
+    } else {
+        logPipelineStats(dev, b.pipeline, b.label);
     }
     return b;
 }

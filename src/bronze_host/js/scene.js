@@ -466,22 +466,31 @@
     });
 
     accessor(SceneNode.prototype, "hasShader", function () { return __bro_native.scene.SceneNode_hasShader(this); }, undefined);
-    fn(SceneNode.prototype, "setShader", function setShader(opts, file, modules) {
-        return this.setShaderModule(opts, file, modules);
+    fn(SceneNode.prototype, "setShader", function setShader(opts, file, modules, knobs) {
+        return this.setShaderModule(opts, file, modules, knobs);
     });
     fn(SceneNode.prototype, "clearShader", function clearShader() { __bro_native.scene.SceneNode_clearShader(this); return this; });
-    fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules) {
+    fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules, knobs) {
         let uniforms;
         if (source && typeof source === 'object') {
             file = source.file;
             modules = source.modules;
             uniforms = source.uniforms;
+            knobs = source.knobs;
             source = source.module;
+        } else if (file && typeof file === 'object') {
+            const opts = file;
+            file = opts.file;
+            modules = opts.modules;
+            uniforms = opts.uniforms;
+            knobs = opts.knobs;
         }
         if (typeof source !== 'string' || !source) throw new TypeError("setShaderModule expects the module's source");
         if (file !== undefined && typeof file !== 'string') throw new TypeError("file must be a string");
         if (modules !== undefined && (modules === null || typeof modules !== 'object'))
             throw new TypeError("modules must map names to sources");
+        if (knobs !== undefined && (knobs === null || typeof knobs !== 'object'))
+            throw new TypeError("knobs must map names to numbers or booleans");
         if (uniforms !== undefined) {
             if (uniforms === null || typeof uniforms !== 'object')
                 throw new TypeError("uniforms must be an object");
@@ -491,11 +500,27 @@
                     throw new TypeError("Uniform values must be numeric");
             }
         }
-        const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "", modules ? JSON.stringify(modules) : "");
+        let payloadObj = null;
+        if (modules || knobs) {
+            payloadObj = Object.assign({}, modules || {});
+            if (knobs) payloadObj.__knobs__ = knobs;
+        }
+        const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "", payloadObj ? JSON.stringify(payloadObj) : "");
         if (err && err.length > 0) throw new Error(err);
         if (uniforms)
             for (const k of Object.keys(uniforms)) this.setShaderUniform(k, uniforms[k]);
         return this;
+    });
+    fn(SceneNode.prototype, "setShaderKnobs", function setShaderKnobs(knobs) {
+        if (!knobs || typeof knobs !== 'object')
+            throw new TypeError("setShaderKnobs expects an object mapping knob names to numbers or booleans");
+        const err = __bro_native.scene.SceneNode_setShaderKnobs(this, JSON.stringify(knobs));
+        if (err && err.length > 0) throw new Error(err);
+        return this;
+    });
+    fn(SceneNode.prototype, "shaderStats", function shaderStats() {
+        const s = __bro_native.scene.SceneNode_shaderStatsJson(this);
+        return s ? JSON.parse(s) : null;
     });
     fn(SceneNode.prototype, "setShaderUniform", function setShaderUniform(name, val) {
         // A chunk's uniforms are its u_* names, a module's its uniform's fields.

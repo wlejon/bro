@@ -162,12 +162,73 @@ bool writeCacheFile(const std::string& path, const void* data, size_t size) {
 
 namespace {
 bool s_statsEnabled = false;
+bool s_captureEnabled = false;
 }  // namespace
 
 bool pipelineStatsEnabled() { return s_statsEnabled; }
 void setPipelineStatsEnabled(bool on) { s_statsEnabled = on; }
+bool pipelineExecutableCaptureEnabled() { return s_captureEnabled || s_statsEnabled; }
+void setPipelineExecutableCaptureEnabled(bool on) { s_captureEnabled = on; }
 VkPipelineCreateFlags pipelineStatsFlags() {
-    return s_statsEnabled ? VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR : 0;
+    return (s_captureEnabled || s_statsEnabled) ? VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR : 0;
+}
+
+std::vector<PipelineExecutableStats> queryPipelineExecutableStats(VkDevice device, VkPipeline pipeline) {
+    std::vector<PipelineExecutableStats> out;
+    if (!pipelineExecutableCaptureEnabled() || device == VK_NULL_HANDLE || pipeline == VK_NULL_HANDLE) return out;
+    auto getProps = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+        vkGetDeviceProcAddr(device, "vkGetPipelineExecutablePropertiesKHR"));
+    auto getStats = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+        vkGetDeviceProcAddr(device, "vkGetPipelineExecutableStatisticsKHR"));
+    if (!getProps || !getStats) return out;
+    VkPipelineInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    info.pipeline = pipeline;
+    uint32_t count = 0;
+    if (getProps(device, &info, &count, nullptr) != VK_SUCCESS || count == 0) return out;
+    std::vector<VkPipelineExecutablePropertiesKHR> props(count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    if (getProps(device, &info, &count, props.data()) != VK_SUCCESS) return out;
+    out.reserve(count);
+    for (uint32_t e = 0; e < count; ++e) {
+        PipelineExecutableStats exe;
+        exe.name = props[e].name;
+        exe.description = props[e].description;
+        exe.stages = props[e].stages;
+        exe.subgroupSize = props[e].subgroupSize;
+
+        VkPipelineExecutableInfoKHR ei{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+        ei.pipeline = pipeline;
+        ei.executableIndex = e;
+        uint32_t n = 0;
+        if (getStats(device, &ei, &n, nullptr) == VK_SUCCESS && n > 0) {
+            std::vector<VkPipelineExecutableStatisticKHR> stats(n, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+            if (getStats(device, &ei, &n, stats.data()) == VK_SUCCESS) {
+                exe.statistics.reserve(n);
+                for (const auto& s : stats) {
+                    PipelineStatisticEntry entry;
+                    entry.name = s.name;
+                    entry.description = s.description;
+                    switch (s.format) {
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                        entry.isBool = true;
+                        entry.value = s.value.b32 ? 1.0 : 0.0;
+                        break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                        entry.value = static_cast<double>(s.value.i64);
+                        break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                        entry.value = static_cast<double>(s.value.u64);
+                        break;
+                    default:
+                        entry.value = s.value.f64;
+                        break;
+                    }
+                    exe.statistics.push_back(std::move(entry));
+                }
+            }
+        }
+        out.push_back(std::move(exe));
+    }
+    return out;
 }
 
 void logPipelineStats(VkDevice device, VkPipeline pipeline, const std::string& label) {

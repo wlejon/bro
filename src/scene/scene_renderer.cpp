@@ -18,6 +18,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <vector>
 
 namespace bro::scene {
@@ -312,21 +314,106 @@ std::vector<uint8_t> SceneRenderer::readTonemapPixelsRGBA(int& outW, int& outH) 
 
 bool SceneRenderer::compileVolumeModule(const std::string& module, const std::string& file,
                                         const std::vector<std::pair<std::string, std::string>>& modules,
-                                        std::string& errOut) {
+                                        std::string& errOut,
+                                        const std::vector<std::pair<std::string, double>>& knobs) {
     vk::KernelVolumeHook hook;
-    return vk::compileKernelVolumeHook(module, file, modules, hook, errOut);
+    return vk::compileKernelVolumeHook(module, file, modules, hook, errOut, knobs);
 }
 
 bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::string& module, const std::string& file,
                                         const std::vector<std::pair<std::string, std::string>>& modules,
-                                        bool& hasVertexOut, std::string& errOut) {
+                                        bool& hasVertexOut, std::string& errOut,
+                                        const std::vector<std::pair<std::string, double>>& knobs) {
     hasVertexOut = false;
-    if (target == CustomShaderTarget::Volume) return compileVolumeModule(module, file, modules, errOut);
+    if (target == CustomShaderTarget::Volume) return compileVolumeModule(module, file, modules, errOut, knobs);
     vk::KernelMeshHook hook;
-    if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut)) return false;
+    if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut, knobs)) return false;
     hasVertexOut = hook.hasVertex;
-    vk::warmMeshHook(target, module, modules);
+    vk::warmMeshHook(target, module, modules, knobs);
     return true;
+}
+
+void SceneRenderer::reloadShaders() {
+    vk::bumpKernelHookReloadGeneration();
+    auto reloadState = [](CustomShaderState& cs) {
+        if (!cs.moduleFile.empty() && cs.moduleFile.front() != '<') {
+            std::ifstream ifs(cs.moduleFile, std::ios::binary);
+            if (ifs.good()) {
+                std::ostringstream ss;
+                ss << ifs.rdbuf();
+                std::string diskSrc = ss.str();
+                if (!diskSrc.empty()) cs.module = std::move(diskSrc);
+            }
+        }
+        cs.bumpReloadGen();
+    };
+    for (const auto& [id, nodePtr] : graph_.nodes()) {
+        SceneNode* n = nodePtr.get();
+        if (!n) continue;
+        if (n->type() == SceneNode::Type::Mesh) {
+            auto* mn = static_cast<MeshNode*>(n);
+            if (CustomShaderState* cs = mn->customShaderMut()) {
+                reloadState(*cs);
+                mn->bumpChangeGeneration();
+                if (!mn->isVolume()) {
+                    const auto target = mn->asSkinnedMesh() ? CustomShaderTarget::Skinned : CustomShaderTarget::Static;
+                    vk::warmMeshHook(target, cs->module, cs->modules, cs->knobs);
+                }
+            }
+        } else if (n->type() == SceneNode::Type::InstancedMesh) {
+            auto* imn = static_cast<InstancedMeshNode*>(n);
+            if (CustomShaderState* cs = imn->customShaderMut()) {
+                reloadState(*cs);
+                imn->bumpChangeGeneration();
+                vk::warmMeshHook(CustomShaderTarget::Instanced, cs->module, cs->modules, cs->knobs);
+            }
+        }
+    }
+    invalidateShadowPages();
+}
+
+bool SceneRenderer::shaderStats(uint32_t nodeId, NodeShaderStats& out) {
+    SceneNode* n = graph_.findById(nodeId);
+    if (!n) return false;
+    const CustomShaderState* cs = nullptr;
+    bool isVolume = false;
+    vk::MeshKind kind = vk::MeshKind::Static;
+    if (n->type() == SceneNode::Type::Mesh) {
+        auto* mn = static_cast<MeshNode*>(n);
+        cs = mn->customShader();
+        isVolume = mn->isVolume();
+        if (SkinnedMeshNode* sk = mn->asSkinnedMesh(); sk && sk->skinReady()) {
+            kind = vk::MeshKind::Skinned;
+        }
+    } else if (n->type() == SceneNode::Type::InstancedMesh) {
+        auto* imn = static_cast<InstancedMeshNode*>(n);
+        cs = imn->customShader();
+        kind = vk::MeshKind::Instanced;
+    }
+    if (!cs || !cs->isModule()) return false;
+    if (!vkBridge_ && defaultVulkanContext_) {
+        vkBridge_ = std::make_unique<vk::SceneVkBridge>(*defaultVulkanContext_);
+        if (!vkBridge_->init()) vkBridge_.reset();
+    }
+    if (vkBridge_) return vkBridge_->shaderStats(*cs, kind, isVolume, out);
+    vk::SceneMeshDrawer fallbackDrawer;
+    return fallbackDrawer.shaderStats(*cs, kind, isVolume, out);
+}
+
+std::vector<SceneNodeProbeResult> SceneRenderer::probe(int x, int y) {
+    if (!defaultVulkanContext_) return {};
+    if (!vkBridge_) {
+        vkBridge_ = std::make_unique<vk::SceneVkBridge>(*defaultVulkanContext_);
+        if (!vkBridge_->init()) return {};
+    }
+    cullStats_ = CullStats{};
+    cullingActive_ = frustumCullingEnabled_;
+    if (cullingActive_)
+        cameraFrustum_ = makeFrustum(bromath::mmul(graph_.projectionMatrix(), graph_.viewMatrix()));
+    collectLights(frameLights_);
+    if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
+    prepareShadows(frameLights_);
+    return vkBridge_->probe(graph_, *this, x, y);
 }
 
 // --- Colour grading ---------------------------------------------------------

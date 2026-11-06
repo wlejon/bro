@@ -328,9 +328,10 @@ public:
 
     void setCustomShaderModule(std::string module, std::string file,
                                std::vector<std::pair<std::string, std::string>> modules = {},
-                               bool hasVertex = false) {
+                               bool hasVertex = false,
+                               std::vector<std::pair<std::string, double>> knobs = {}) {
         customShader_ = CustomShaderState::makeModule(std::move(module), std::move(file),
-                                                      std::move(modules));
+                                                      std::move(modules), std::move(knobs));
         if (hasVertex) customShader_->hasVertex = true;
         bumpChangeGeneration();
     }
@@ -340,6 +341,19 @@ public:
     }
     bool hasCustomShader() const { return customShader_ != nullptr; }
     const CustomShaderState* customShader() const { return customShader_.get(); }
+    CustomShaderState* customShaderMut() { return customShader_.get(); }
+    void setCustomShaderKnobs(std::vector<std::pair<std::string, double>> knobs) {
+        if (customShader_) {
+            customShader_->setKnobs(std::move(knobs));
+            bumpChangeGeneration();
+        }
+    }
+    void bumpCustomShaderReloadGen() {
+        if (customShader_) {
+            customShader_->bumpReloadGen();
+            bumpChangeGeneration();
+        }
+    }
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
         if (customShader_) {

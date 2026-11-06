@@ -411,4 +411,21 @@ std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) 
     return pixels_;
 }
 
+std::vector<SceneNodeProbeResult> SceneVkBridge::probe(SceneGraph& graph, SceneRenderer& renderer, int x, int y) {
+    if (!ready_) return {};
+    const int cw = graph.canvasWidth() > 0 ? graph.canvasWidth() : renderer.targetWidth();
+    const int ch = graph.canvasHeight() > 0 ? graph.canvasHeight() : renderer.targetHeight();
+    const int tw = renderer.targetWidth();
+    const int th = renderer.targetHeight();
+    const int tx = cw > 0 ? (x * tw) / cw : x;
+    const int ty = ch > 0 ? (y * th) / ch : y;
+    meshes_.beginProbe(tx, ty);
+    CullStats stats{};
+    render3D(graph, renderer, stats);
+    if (device_.lastFrameTicket() != 0) {
+        device_.context().queue().wait(device_.lastFrameTicket());
+    }
+    return meshes_.endProbe(graph);
+}
+
 }  // namespace bro::scene::vk

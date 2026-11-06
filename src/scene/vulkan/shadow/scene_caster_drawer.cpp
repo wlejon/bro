@@ -196,7 +196,7 @@ VkPipeline SceneCasterDrawer::customPipeline(const CustomShaderState& cs, MeshKi
     VkPipeline pipeline = VK_NULL_HANDLE;
     std::string err;
     KernelHookStage stage;
-    if (compileKernelShadowHook(caster, cutout, cs.module, cs.moduleFile, cs.modules, stage, err)) {
+    if (compileKernelShadowHook(caster, cutout, cs.module, cs.moduleFile, cs.modules, stage, err, cs.knobs)) {
         VkShaderModule vs = SceneVkShaderModule::create(device_->device(), stage.spirv);
         if (vs) {
             pipeline = buildPipeline(vs, kind, true, twoSided, cutout, stage.entry.c_str());

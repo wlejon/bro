@@ -861,16 +861,22 @@ bool VulkanContext::createLogicalDevice() {
         restartFeatures.primitiveTopologyPatchListRestart = VK_FALSE;
         if (!listRestart_) chain = restartFeatures.pNext;
     }
-    // BRO_VK_PIPELINE_STATS=1: the driver's statistics of each pipeline
-    // (render::logPipelineStats), a shader-cost diagnostic.
+    // VK_KHR_pipeline_executable_properties: enabled whenever the device
+    // supports it (unless BRO_VK_PIPELINE_STATS=0) so kernel.stats() and
+    // node.shaderStats() can query driver executable statistics; BRO_VK_PIPELINE_STATS=1
+    // also logs every pipeline's statistics as it is built.
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR statsFeatures{};
     statsFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
-    if (const char* s = std::getenv("BRO_VK_PIPELINE_STATS");
-        s && *s && *s != '0' && hasExtension(availExts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
+    const char* statsEnv = std::getenv("BRO_VK_PIPELINE_STATS");
+    const bool statsDisabled = (statsEnv && std::strcmp(statsEnv, "0") == 0);
+    if (!statsDisabled && hasExtension(availExts, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
         probe(statsFeatures);
         if (statsFeatures.pipelineExecutableInfo) {
             enabledExtensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
-            setPipelineStatsEnabled(true);
+            setPipelineExecutableCaptureEnabled(true);
+            if (statsEnv && *statsEnv && *statsEnv != '0') {
+                setPipelineStatsEnabled(true);
+            }
         } else {
             chain = statsFeatures.pNext;
         }
