@@ -864,7 +864,7 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
                                                 const char* modulesJson);
 const char* bro_scene_SceneNode_setShaderKnobs(void* self, const char* knobsJson);
 const char* bro_scene_SceneNode_shaderStatsJson(void* self);
-void bro_scene_SceneGraph_reloadShaders(void* self);
+void bro_scene_SceneGraph_reloadShaders(void* self, const char* sourcesJson);
 const char* bro_scene_SceneGraph_probeJson(void* self, int32_t x, int32_t y);
 void bro_scene_SceneNode_clearShader(void* self);
 void bro_scene_SceneNode_setShaderUniform(void* self, const char* name, const double* vals, uint32_t count);

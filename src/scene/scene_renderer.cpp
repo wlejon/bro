@@ -333,9 +333,9 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
     return true;
 }
 
-void SceneRenderer::reloadShaders() {
+void SceneRenderer::reloadShaders(const std::vector<std::pair<std::string, std::string>>& sources) {
     vk::bumpKernelHookReloadGeneration();
-    auto reloadState = [](CustomShaderState& cs) {
+    auto reloadState = [&sources](CustomShaderState& cs) {
         if (!cs.moduleFile.empty() && cs.moduleFile.front() != '<') {
             std::ifstream ifs(cs.moduleFile, std::ios::binary);
             if (ifs.good()) {
@@ -343,6 +343,12 @@ void SceneRenderer::reloadShaders() {
                 ss << ifs.rdbuf();
                 std::string diskSrc = ss.str();
                 if (!diskSrc.empty()) cs.module = std::move(diskSrc);
+            }
+        }
+        for (const auto& [name, src] : sources) {
+            if (name == cs.moduleFile) cs.module = src;
+            for (auto& m : cs.modules) {
+                if (m.first == name) m.second = src;
             }
         }
         cs.bumpReloadGen();

@@ -124,6 +124,31 @@ if (!probeCtx.scene) {
         assert(centerChannel(img3, 2, 8) > 200 && centerChannel(img3, 0, 8) < 30,
             `reloadShaders picks up updated registered module (b=${centerChannel(img3, 2, 8)})`);
 
+        // reloadShaders({ name: source }): a module the hook was given by
+        // name, and the hook's own file, take the new sources.
+        const TINT = (rgb) => `module wl_given; pub fn tint() -> vec3<f32> { return vec3<f32>(${rgb}); }`;
+        const HOOK = (k) => `
+            module hook;
+            import mesh;
+            import wl_given;
+            pub fn fragment(v: mesh::Vertex, inout s: mesh::Surface) {
+                s.base_color = vec3<f32>(0.0);
+                s.roughness = 1.0;
+                s.emissive = wl_given::tint() * ${k};
+            }
+        `;
+        m.setShaderModule(HOOK('1.0'), 'wl_hook.bk', { wl_given: TINT('1.0, 0.0, 0.0') });
+        const img4 = s.scene.captureFrame();
+        assert(centerChannel(img4, 0, 8) > 200, `a given module renders red (r=${centerChannel(img4, 0, 8)})`);
+        s.scene.reloadShaders({ wl_given: TINT('0.0, 1.0, 0.0') });
+        const img5 = s.scene.captureFrame();
+        assert(centerChannel(img5, 1, 8) > 200 && centerChannel(img5, 0, 8) < 30,
+            `reloadShaders({ name: source }) replaces a given module (g=${centerChannel(img5, 1, 8)})`);
+        s.scene.reloadShaders({ 'wl_hook.bk': HOOK('0.0') });
+        const img6 = s.scene.captureFrame();
+        assert(centerChannel(img6, 1, 8) < 30,
+            `reloadShaders({ file: source }) replaces the hook itself (g=${centerChannel(img6, 1, 8)})`);
+
         dropScene(s);
     }
 

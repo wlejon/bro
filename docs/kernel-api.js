@@ -46,12 +46,33 @@ console.log('brokernel', bro.kernel.version);
 // `setShaderModule`). `file` names the source in diagnostics.
 //
 // `knobs` (`{ NAME: number }`) overrides `@knob const NAME: T = default;`
-// constants at compile time, and `mod.setKnobs(overrides)` / `kernel.knobs(overrides)`
-// recompiles with new knob values in place.
+// constants at compile time; `kernel.knobs(overrides)` recompiles a kernel
+// with new knob values in place, `mod.withKnobs(overrides)` makes a new
+// module with them.
 //
-// `pub const` values declared in the module are exposed on `mod.consts` as a
-// frozen JS object (`mod.consts.WIND`, etc.), and `pub fn` helper functions can
-// be called directly from JS via `mod.call(fnName, ...args)`.
+// `pub const` values declared in the module are exposed on `mod.consts`
+// (`mod.consts.SEA_LEVEL`), `mod.knobs` the `@knob` ones as compiled, and
+// `mod.fn(name)` gives a `pub fn` as a KernelFn (`eval` / `run` / `dispatch`
+// / `probe` / `knobs`, batching the arguments passed as stores).
+//
+// `mod.file` is the file it was compiled as, `mod.imports` the modules it
+// imported, directly or not (sorted names).
+//
+// bro.kernel.reload({ name: source }) -> [{ file, kernels }]
+//   New sources for modules already compiled: every live module whose file
+//   is one of the names, or that imported a module of one, recompiles with
+//   them (every other module keeps the source it was compiled with), all of
+//   them or none (the first compile error throws and nothing changes). Its
+//   Kernels and KernelFns follow in place at their next use, a kernel's own
+//   `knobs` kept; a registered module of a name takes the new source too, so
+//   later compiles and scene hooks see it. Returns each module recompiled,
+//   `kernels` the names whose code changed (their SPIR-V, or for a @cpu
+//   kernel its lowered code), so a caller redoes only what those produced:
+//
+//     const text = readApp('relief.bk');
+//     for (const { file, kernels } of bro.kernel.reload({ 'planet::relief': text }))
+//         if (file === 'planet.bk' && kernels.length) cache.refresh();
+//     scene.reloadShaders({ 'planet::relief': text });   // the hooks importing it
 //
 // A compile error throws an Error whose message is the formatted diagnostics
 // and whose `diagnostics` is [{ severity, file, line, column, message }]
@@ -107,7 +128,8 @@ const height = mod.kernel('k_height');   // a Kernel; throws for an unknown name
 height.name;        // 'k_height'
 height.gridDim;     // 0 for a point kernel, 1 to 3 for a grid kernel
 height.returns;     // 'f32', or null for a kernel that returns nothing
-height.cpuLanes;    // cells a grid kernel's CPU build computes at once (8 or 4 with AVX2, else 1)
+height.cpuLanes;    // cells a grid kernel's CPU build computes at once (8 or 4 with AVX2, else 1);
+                    // a kernel built for the GPU makes its CPU build when first run, eval'd or read here
 height.params;      // what a call passes, in order (the grid parameter is not passed):
 // [{ name: 'x', kind: 'scalar', type: 'f64' }, ..., { name: 'seed', kind: 'scalar', type: 'i32' }]
 // A store's entry also has `access` ('read' | 'write' | 'read_write'), `dimension`,
@@ -124,8 +146,9 @@ height.params;      // what a call passes, in order (the grid parameter is not p
 //   pipeline executable statistics (registers, spills, etc.) when VK_KHR_pipeline_executable_properties
 //   is supported by the GPU.
 //
-// kernel.knobs(overrides) / mod.setKnobs(overrides)
-//   Recompiles the module with updated `@knob const` values.
+// kernel.knobs(overrides)
+//   Recompiles the kernel in place with updated `@knob const` values (kept
+//   across bro.kernel.reload).
 //
 // kernel.probe(coord, grid, ...args) -> { [probeName]: number | number[] }
 //   Runs the kernel with `probe("name", expr)` instrumentation active and

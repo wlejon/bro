@@ -239,8 +239,20 @@ const char* bro_scene_SceneNode_shaderStatsJson(void* self) {
     return tl_statsJson.c_str();
 }
 
-void bro_scene_SceneGraph_reloadShaders(void* self) {
-    if (auto* g = graphOf(self)) g->reloadShaders();
+void bro_scene_SceneGraph_reloadShaders(void* self, const char* sourcesJson) {
+    auto* g = graphOf(self);
+    if (!g) return;
+    // { name: source }: a hook whose file or imported module is a name takes it.
+    std::vector<std::pair<std::string, std::string>> sources;
+    if (sourcesJson && *sourcesJson) {
+        auto j = json::parse(sourcesJson, nullptr, false);
+        if (j.is_object()) {
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                if (it.value().is_string()) sources.emplace_back(it.key(), it.value().get<std::string>());
+            }
+        }
+    }
+    g->reloadShaders(sources);
 }
 
 const char* bro_scene_SceneGraph_probeJson(void* self, int32_t x, int32_t y) {

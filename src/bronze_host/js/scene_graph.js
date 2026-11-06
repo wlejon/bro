@@ -295,8 +295,11 @@
     fn(SceneGraph.prototype, "debugViews", function debugViews() {
         return JSON.parse(__bro_native.scene.SceneGraph_debugViewsJson(this));
     });
-    fn(SceneGraph.prototype, "reloadShaders", function reloadShaders() {
-        __bro_native.scene.SceneGraph_reloadShaders(this);
+    fn(SceneGraph.prototype, "reloadShaders", function reloadShaders(sources) {
+        if (sources !== undefined && (sources === null || typeof sources !== 'object'))
+            throw new TypeError("bro.scene.SceneGraph.prototype.reloadShaders: sources is an object of { name: source }");
+        __bro_native.scene.SceneGraph_reloadShaders(this, sources ? JSON.stringify(sources) : "");
+        return this;
     });
     fn(SceneGraph.prototype, "probe", function probe(x, y) {
         if (typeof x !== 'number' || typeof y !== 'number')

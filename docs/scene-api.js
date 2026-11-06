@@ -878,10 +878,14 @@ class SceneGraph {
    * Reload custom shader modules across all nodes in the scene (re-reading
    * `.bk` files from disk when `file` names a path on disk, and re-resolving
    * modules registered via `bro.kernel.registerModule` / `bro.kernel.resolve`).
+   * `sources` (`{ name: source }`) replaces a hook's own source where its
+   * `file` is a name, and a module given to it in `modules` of that name
+   * (bro.kernel.reload in kernel-api.js does the same for compiled modules).
    *
+   * @param {Object<string, string>} [sources]
    * @returns {SceneGraph}
    */
-  reloadShaders() {}
+  reloadShaders(sources) {}
 
   /**
    * Render a probing frame for pixel `(x, y)` with `probe("name", expr)` enabled

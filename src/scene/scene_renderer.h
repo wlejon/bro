@@ -505,7 +505,10 @@ public:
                              std::string& errOut,
                              const std::vector<std::pair<std::string, double>>& knobs = {});
 
-    void reloadShaders();
+    // Every hook compiles again: its file re-read from disk when it names
+    // one, and a source of `sources` ({name, source}) in place of its file's
+    // or an imported module's of that name.
+    void reloadShaders(const std::vector<std::pair<std::string, std::string>>& sources = {});
     bool shaderStats(uint32_t nodeId, NodeShaderStats& out);
     std::vector<SceneNodeProbeResult> probe(int x, int y);
 

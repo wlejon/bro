@@ -584,7 +584,9 @@ public:
                              const std::vector<std::pair<std::string, double>>& knobs = {}) {
         return renderer_.compileShaderModule(target, module, file, modules, hasVertexOut, errOut, knobs);
     }
-    void reloadShaders() { renderer_.reloadShaders(); }
+    void reloadShaders(const std::vector<std::pair<std::string, std::string>>& sources = {}) {
+        renderer_.reloadShaders(sources);
+    }
     bool shaderStats(uint32_t nodeId, NodeShaderStats& out) { return renderer_.shaderStats(nodeId, out); }
     std::vector<SceneNodeProbeResult> probe(int x, int y) { return renderer_.probe(x, y); }
 
