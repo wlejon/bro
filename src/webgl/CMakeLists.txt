@@ -46,6 +46,9 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_draw.cpp
     vulkan/webgl_vk_stream.cpp
     vulkan/webgl_vk_caps.cpp
+    client/webgl_ring.cpp
+    client/webgl_client.cpp
+    client/webgl_replay.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)

@@ -23,13 +23,11 @@ ContextAttributes granted(ContextAttributes a) {
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
                                                const ContextAttributes& requested)
     : width_(width), height_(height), device_(device), attributes_(granted(requested)),
-      caps_(vk::buildWebGLCaps(device)),
-      backend_(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_, caps_)) {
+      caps_(vk::buildWebGLCaps(device)) {
+    client_.attach(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_, caps_));
     // Work recorded but not yet submitted goes at the frame's end at the
     // latest, so nothing the backend holds outlives the frame it was for.
-    frameEndHook_ = device_.frames().addFrameEndHook([this] {
-        if (backend_) backend_->flush();
-    });
+    frameEndHook_ = device_.frames().addFrameEndHook([this] { client_.flush(); });
 }
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
@@ -45,39 +43,37 @@ void WebGL2RenderingContext::resize(int width, int height) {
     width_ = width;
     height_ = height;
     // The presenter's submissions so far may sample the old images.
-    if (backend_) backend_->resize(width, height, device_.queue().lastSubmittedTicket());
+    if (!lost_) client_.resize(width, height, device_.queue().lastSubmittedTicket());
 }
 
-render::LayerImage WebGL2RenderingContext::drawingBuffer() const {
+render::LayerImage WebGL2RenderingContext::frameEnd() {
     render::LayerImage out;
-    if (!backend_) return out;
-    const vk::WebGLVkCanvas& canvas = backend_->canvas();
+    if (lost_) return out;
+    client_.flush();
+    vk::WebGLVkContext* gl = client_.drained();
+    if (!gl) return out;
+    const vk::WebGLVkCanvas& canvas = gl->canvas();
     out.image = canvas.colorImage();
     out.view = canvas.presentView();
     out.layout = canvas.colorLayout();
     out.format = canvas.colorFormat();
     out.width = canvas.width();
     out.height = canvas.height();
+    client_.presented();
     return out;
 }
 
-void WebGL2RenderingContext::flush() {
-    if (backend_) backend_->flush();
-}
-
-void WebGL2RenderingContext::presented() {
-    if (backend_) backend_->presented();
-}
-
 bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
-    return backend_ && backend_->readCanvasPixels(out);
+    if (lost_) return false;
+    vk::WebGLVkContext* gl = client_.drained();
+    return gl && gl->readCanvasPixels(out);
 }
 
 // WebGL 1.0 5.15.3 "lose the context": the backend and every object go now;
 // the lost event is the engine's to fire, at the canvas, after this turn.
 void WebGL2RenderingContext::loseContext() {
     if (lost_) return;  // its INVALID_OPERATION is unobservable: getError answers NO_ERROR while lost
-    backend_.reset();
+    client_.detach();
     lost_ = true;
     lostErrorPending_ = true;
     restoreAllowed_ = true;
@@ -86,7 +82,7 @@ void WebGL2RenderingContext::loseContext() {
 
 void WebGL2RenderingContext::restoreContext() {
     if (!lost_) {
-        backend_->setSyntheticError(GL_INVALID_OPERATION);
+        client_.syntheticError(GL_INVALID_OPERATION);
         return;
     }
     // Before the lost event has fired, or after it was not cancelled, there
@@ -100,7 +96,7 @@ WebGL2RenderingContext::ContextEvent WebGL2RenderingContext::takeContextEvent() 
     if (e == ContextEvent::Restored) {
         // WebGL 1.0 5.15.4 "restore the context": a fresh drawing buffer and
         // default state; names continue, so no lost object's names a new one.
-        backend_ = std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, caps_);
+        client_.attach(std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, caps_));
         lost_ = false;
         lostErrorPending_ = false;
     }

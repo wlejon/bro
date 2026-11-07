@@ -1,5 +1,6 @@
 #pragma once
 
+#include "webgl/client/webgl_client.h"
 #include "webgl/webgl_types.h"
 
 #include "render/layer_image.h"
@@ -17,14 +18,14 @@ namespace bro::webgl::vk { class WebGLVkContext; struct WebGLCaps; }
 
 namespace bro::webgl {
 
-/// The WebGL2 context of one <canvas>. It owns the backend that implements
+/// The WebGL2 context of one <canvas>. It owns the client (WebGLClient) the
+/// JS binding calls, which encodes the calls for the backend that implements
 /// the API and holds the drawing buffer (vk::WebGLVkContext), and carries
 /// what outlives a backend: the drawing buffer's size, the context-loss
 /// state (WEBGL_lose_context), the object names (one sequence, continued
 /// across a loss), the device's capabilities snapshot (vk::WebGLCaps) and the
-/// frame-end hook that submits the backend's open work. The JS binding calls
-/// the backend directly; while the context is lost there is none, and every
-/// call answers its lost value.
+/// frame-end hook that submits the backend's open work. While the context is
+/// lost there is no backend, and every call answers its lost value.
 class WebGL2RenderingContext {
 public:
     /// `requested` is what getContext was asked for; attributes() is what
@@ -39,8 +40,12 @@ public:
     WebGL2RenderingContext(const WebGL2RenderingContext&) = delete;
     WebGL2RenderingContext& operator=(const WebGL2RenderingContext&) = delete;
 
-    /// The backend WebGL calls run against: null while the context is lost.
-    vk::WebGLVkContext* backend() const { return backend_.get(); }
+    /// What the binding calls: null while the context is lost.
+    WebGLClient* client() { return lost_ ? nullptr : &client_; }
+
+    /// The backend, every command the client holds replayed first, for the
+    /// calls the client does not encode yet: null while the context is lost.
+    vk::WebGLVkContext* backend() { return client_.drained(); }
 
     /// What the device can do: getParameter's constants, the extensions,
     /// precisions and sample counts. The same while lost.
@@ -61,13 +66,11 @@ public:
     int canvasHeight() const { return height_; }
 
     // --- The drawing buffer, for the compositor and toDataURL ---
-    /// The canvas image (its view, current layout and size), for the
-    /// compositor to sample in place; empty while lost.
-    render::LayerImage drawingBuffer() const;
-    /// Submit the recorded work: the engine is about to sample the canvas.
-    void flush();
-    /// The engine has shown the drawing buffer (vk::WebGLVkContext::presented).
-    void presented();
+    /// The compositor is about to show the drawing buffer: submit the work
+    /// recorded so far, mark it shown (vk::WebGLVkContext::presented), and
+    /// answer the canvas image (its view, current layout and size) to sample
+    /// in place, behind that submission in queue order. Empty while lost.
+    render::LayerImage frameEnd();
     /// The canvas as tightly packed, top-down RGBA (canvasWidth() x
     /// canvasHeight()). False while lost.
     bool readCanvasPixels(std::vector<uint8_t>& out);
@@ -93,7 +96,7 @@ private:
     render::VulkanContext& device_;
     ContextAttributes attributes_;
     std::shared_ptr<const vk::WebGLCaps> caps_;
-    std::unique_ptr<vk::WebGLVkContext> backend_;
+    WebGLClient client_;
     render::VulkanFrames::HookId frameEndHook_ = 0;
     std::vector<TeardownCallback> teardownCallbacks_;
 

@@ -3,12 +3,16 @@
 // vector uniform uploads, and the square matrix uploads WebGLUniforms leans
 // on.
 //
+// The uniform calls are encoded by the context's client; the shader and
+// program calls still run on the backend (live(c), every encoded call before
+// them replayed).
+//
 // The *v upload paths read their data through floatData()/int32Data(): a
-// typed array answers a borrowed bronze-heap pointer consumed by the backend
-// in the next statement (nothing between them allocates); a plain JS array is
-// copied into host storage first, because reading its elements goes through
-// embed property reads, which allocate — the copy is what makes the pointer
-// the backend sees immune to that.
+// typed array answers a borrowed bronze-heap pointer the client copies into
+// the command in the next statement (nothing between them allocates); a
+// plain JS array is copied into host storage first, because reading its
+// elements goes through embed property reads, which allocate — the copy is
+// what makes the pointer the client reads immune to that.
 
 #include "bronze_host/webgl_internal.h"
 
@@ -279,68 +283,68 @@ void installWebGLShaders(ObjectBuilder& b) {
         }
     });
     defMethod(b, "uniformBlockBinding", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniformBlockBinding({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), u32At(a, 2));
+        if (auto* cl = client(c))
+            cl->uniformBlockBinding(webgl::WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), u32At(a, 2));
         return ev::undefined();
     });
 
     // --- Scalar uniforms ---
     defMethod(b, "uniform1f", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform1f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)));
+        if (auto* cl = client(c)) cl->uniform1f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
     defMethod(b, "uniform2f", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniform2f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
+        if (auto* cl = client(c))
+            cl->uniform2f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
     defMethod(b, "uniform3f", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniform3f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
+        if (auto* cl = client(c))
+            cl->uniform3f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)));
         return ev::undefined();
     });
     defMethod(b, "uniform4f", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniform4f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
+        if (auto* cl = client(c))
+            cl->uniform4f(locOf(argAt(a, 0)), static_cast<float>(numAt(a, 1)),
                           static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)),
                           static_cast<float>(numAt(a, 4)));
         return ev::undefined();
     });
     defMethod(b, "uniform1i", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform1i(locOf(argAt(a, 0)), i32At(a, 1));
+        if (auto* cl = client(c)) cl->uniform1i(locOf(argAt(a, 0)), i32At(a, 1));
         return ev::undefined();
     });
     defMethod(b, "uniform2i", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform2i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2));
+        if (auto* cl = client(c)) cl->uniform2i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "uniform3i", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform3i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3));
+        if (auto* cl = client(c)) cl->uniform3i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3));
         return ev::undefined();
     });
     defMethod(b, "uniform4i", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniform4i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3),
+        if (auto* cl = client(c))
+            cl->uniform4i(locOf(argAt(a, 0)), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                           i32At(a, 4));
         return ev::undefined();
     });
     defMethod(b, "uniform1ui", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform1ui(locOf(argAt(a, 0)), u32At(a, 1));
+        if (auto* cl = client(c)) cl->uniform1ui(locOf(argAt(a, 0)), u32At(a, 1));
         return ev::undefined();
     });
     defMethod(b, "uniform2ui", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform2ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2));
+        if (auto* cl = client(c)) cl->uniform2ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "uniform3ui", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->uniform3ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3));
+        if (auto* cl = client(c)) cl->uniform3ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3));
         return ev::undefined();
     });
     defMethod(b, "uniform4ui", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->uniform4ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3),
+        if (auto* cl = client(c))
+            cl->uniform4ui(locOf(argAt(a, 0)), u32At(a, 1), u32At(a, 2), u32At(a, 3),
                            u32At(a, 4));
         return ev::undefined();
     });
@@ -348,9 +352,9 @@ void installWebGLShaders(ObjectBuilder& b) {
     // --- Vector uniforms. One shape per element type; the component count
     //     divides the data length into the uniform `count`.
     //     Registration below stays a fixed def() sequence. ---
-    using Ctx = WebGLBackend;
+    using Ctx = webgl::WebGLClient;
     auto defFv = [&](const char* name, int comps,
-                     void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLfloat*)) {
+                     void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLfloat*, size_t)) {
         defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<float, 64> storage;
             const float* p = nullptr;
@@ -363,15 +367,17 @@ void installWebGLShaders(ObjectBuilder& b) {
                     size_t l = static_cast<size_t>(u32At(a, 3));
                     if (l > 0 && l < count) count = l;
                 }
-                auto* gl = live(c);
-                if (gl && count >= static_cast<size_t>(comps))
-                    (gl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                auto* cl = client(c);
+                const size_t uniforms = count / static_cast<size_t>(comps);
+                if (cl && uniforms > 0)
+                    (cl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(uniforms), p + srcOffset,
+                              uniforms * static_cast<size_t>(comps));
             }
             return ev::undefined();
         });
     };
     auto defIv = [&](const char* name, int comps,
-                     void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLint*)) {
+                     void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLint*, size_t)) {
         defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<int32_t, 64> storage;
             const int32_t* p = nullptr;
@@ -384,15 +390,17 @@ void installWebGLShaders(ObjectBuilder& b) {
                     size_t l = static_cast<size_t>(u32At(a, 3));
                     if (l > 0 && l < count) count = l;
                 }
-                auto* gl = live(c);
-                if (gl && count >= static_cast<size_t>(comps))
-                    (gl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                auto* cl = client(c);
+                const size_t uniforms = count / static_cast<size_t>(comps);
+                if (cl && uniforms > 0)
+                    (cl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(uniforms), p + srcOffset,
+                              uniforms * static_cast<size_t>(comps));
             }
             return ev::undefined();
         });
     };
     auto defUiv = [&](const char* name, int comps,
-                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLuint*)) {
+                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLuint*, size_t)) {
         defMethod(b, name, 2, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<uint32_t, 64> storage;
             const uint32_t* p = nullptr;
@@ -405,9 +413,11 @@ void installWebGLShaders(ObjectBuilder& b) {
                     size_t l = static_cast<size_t>(u32At(a, 3));
                     if (l > 0 && l < count) count = l;
                 }
-                auto* gl = live(c);
-                if (gl && count >= static_cast<size_t>(comps))
-                    (gl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                auto* cl = client(c);
+                const size_t uniforms = count / static_cast<size_t>(comps);
+                if (cl && uniforms > 0)
+                    (cl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(uniforms), p + srcOffset,
+                              uniforms * static_cast<size_t>(comps));
             }
             return ev::undefined();
         });
@@ -428,7 +438,7 @@ void installWebGLShaders(ObjectBuilder& b) {
     // --- Matrix uniforms: uniformMatrix{N}fv / {C}x{R}fv(loc, transpose, data). ---
     auto defMat = [&](const char* name, int comps,
                       void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, GLboolean,
-                                      const GLfloat*)) {
+                                      const GLfloat*, size_t)) {
         defMethod(b, name, 3, [comps, fn](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
             SmallBuffer<float, 64> storage;
             const float* p = nullptr;
@@ -441,10 +451,12 @@ void installWebGLShaders(ObjectBuilder& b) {
                     size_t l = static_cast<size_t>(u32At(a, 4));
                     if (l > 0 && l < count) count = l;
                 }
-                auto* gl = live(c);
-                if (gl && count >= static_cast<size_t>(comps))
-                    (gl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps),
-                              boolAt(a, 1) ? GL_TRUE : GL_FALSE, p + srcOffset);
+                auto* cl = client(c);
+                const size_t uniforms = count / static_cast<size_t>(comps);
+                if (cl && uniforms > 0)
+                    (cl->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(uniforms),
+                              static_cast<GLboolean>(boolAt(a, 1) ? GL_TRUE : GL_FALSE), p + srcOffset,
+                              uniforms * static_cast<size_t>(comps));
             }
             return ev::undefined();
         });

@@ -4,17 +4,22 @@
 // family): the cells behind the object values JS holds, their ===-stable
 // wrappers, and the backend each call runs against.
 //
-// Every call goes straight to the context's Vulkan backend
-// (webgl::vk::WebGLVkContext). While the context is lost there is no
-// backend, and each method does nothing and answers what the WebGL spec says
-// a lost context answers: null for objects and queries, false for the is*
-// predicates and isEnabled, -1 for the attribute and fragment-data
-// locations, WAIT_FAILED and FRAMEBUFFER_UNSUPPORTED for the two waits and
-// statuses.
+// A call goes to the context's client (webgl::WebGLClient, client(c)), which
+// encodes it for the Vulkan backend (webgl::vk::WebGLVkContext) or, for a
+// call that answers, runs it on the backend in a sync() round trip. The
+// families not yet encoded call the backend through live(c), which replays
+// everything the client holds first, so every call reaches the backend in API
+// order. While the context is lost there is neither, and each method does
+// nothing and answers what the WebGL spec says a lost context answers: null
+// for objects and queries, false for the is* predicates and isEnabled, -1 for
+// the attribute and fragment-data locations, WAIT_FAILED and
+// FRAMEBUFFER_UNSUPPORTED for the two waits and statuses.
 //
 // The upload contract: a pointer from embed::typedArrayInfo() lives until
-// the next bronze allocation (host_builder.h), and every binding hands it to
-// the backend, which copies it, in the statement that reads it.
+// the next bronze allocation (host_builder.h). An encoded call copies the
+// bytes into its record in the statement that reads the pointer; a live(c)
+// call or a sync() callback hands it to the backend, which copies it (or, for
+// a readback, writes it) before returning, in that statement.
 
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
@@ -114,7 +119,11 @@ inline webgl::WebGLSampler samplerOf(Value v) { return {idOf(v, WebGLCell::Sampl
 // The live backend
 // ---------------------------------------------------------------------------
 
-// What a call runs against: null while the context is lost.
+// What an encoded call goes to: null while the context is lost.
+inline webgl::WebGLClient* client(webgl::WebGL2RenderingContext* c) { return c->client(); }
+
+// What a call not yet encoded runs against, every command before it replayed:
+// null while the context is lost.
 inline WebGLBackend* live(webgl::WebGL2RenderingContext* c) {
     return c ? c->backend() : nullptr;
 }
