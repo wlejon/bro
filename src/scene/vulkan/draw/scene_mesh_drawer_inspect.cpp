@@ -132,11 +132,21 @@ bool SceneMeshDrawer::shaderStats(const CustomShaderState& cs, MeshKind kind, bo
             if (hook.medium) fillStageStats(hook.nearPass.spirv, hook.nearPass.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.nearStage);
             return true;
         }
+        const auto st = shaderTargetForKind(kind);
         KernelMeshHook hook;
-        if (!compileKernelMeshHook(shaderTargetForKind(kind), cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs))
+        if (!compileKernelMeshHook(st, cs.module, cs.moduleFile, cs.modules, hook, err, cs.knobs))
             return false;
-        if (hook.hasFragment) fillStageStats(hook.fs.spirv, hook.fs.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
-        if (hook.hasVertex) fillStageStats(hook.vs.spirv, hook.vs.costs, VK_SHADER_STAGE_VERTEX_BIT, {}, out.vertex);
+        if (!hook.hasFragment) {
+            compileKernelMeshStage("mesh_frag", hook.fs, err);
+        }
+        if (!hook.hasVertex) {
+            constexpr const char* kPassthrough[3] = {
+                "mesh_hook_passthrough_vert", "mesh_skinned_hook_passthrough_vert", "mesh_instanced_hook_passthrough_vert",
+            };
+            compileKernelMeshStage(kPassthrough[static_cast<int>(st)], hook.vs, err);
+        }
+        fillStageStats(hook.fs.spirv, hook.fs.costs, VK_SHADER_STAGE_FRAGMENT_BIT, {}, out.fragment);
+        fillStageStats(hook.vs.spirv, hook.vs.costs, VK_SHADER_STAGE_VERTEX_BIT, {}, out.vertex);
         return true;
     }
 
