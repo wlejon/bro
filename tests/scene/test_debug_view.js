@@ -94,6 +94,34 @@ if (!scene) {
     assert(blue[2] > 60 && blue[0] < 4 && blue[1] < 4, `an answering volume covers with its colour (${blue})`);
     assert(Math.abs(px(img, 20, 44)[0] - red[0]) <= 2, `one that does not answer lets all through (${px(img, 20, 44)})`);
 
+    // A module given to the hook answers a view as the hook's own file does.
+    plane.setShader({
+        module: `
+            module hook;
+            import mesh;
+            import shade;
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                return shade::probe(v, s);
+            }`,
+        modules: {
+            shade: `
+                module shade;
+                import scene;
+                import mesh;
+                pub fn probe(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    if (SCENE_DEBUG(given) && v.pixel.x < 32.0) {
+                        return mesh::debug(s, vec3<f32>(0.0, 0.25, 0.0));
+                    }
+                    return s;
+                }`,
+        },
+    });
+    scene.setDebugView('given');
+    for (let i = 0; i < 12; i++) img = scene.captureFrame();
+    const green = px(img, 20, 44);
+    assert(green[1] > 60 && green[0] < 4 && green[2] < 4, `a given module answers a view (${green})`);
+    assert(scene.debugViews().views.includes('given'), 'debugViews names a given module\'s view');
+
     scene.setDebugView('other');
     for (let i = 0; i < 12; i++) img = scene.captureFrame();
     const g2 = px(img, 20, 44);

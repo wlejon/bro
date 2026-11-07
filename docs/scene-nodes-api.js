@@ -533,6 +533,8 @@ class SceneNode {
    * `if (SCENE_DEBUG(name)) { out.debug = vec4<f32>(rgb, 1.0); }`:
    * `SCENE_DEBUG(name)` is true while the view `name` shows (any identifier
    * names one), and the pixel is then `rgb` as is, unlit and with no air.
+   * It works the same in the `modules` a hook is given (a module using it
+   * imports `scene`).
    *
    * The module declares the node's resources in set 4 (`common/custom.bk`):
    * a `uniform<Params>` at `@binding(4, 0)`, whose fields `setShaderUniform`

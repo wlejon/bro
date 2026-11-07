@@ -384,11 +384,16 @@ struct HookInputs {
 HookInputs hookInputs(const std::string& file, const std::string& module, const KernelHookModules& modules) {
     HookInputs in{module, modules};
     const auto& given = shader_sets::setBSources();
-    if (given.empty()) return in;
-    if (auto it = given.find(file); it != given.end()) in.module = it->second;
-    for (auto& [name, text] : in.modules) {
-        if (auto it = given.find(name); it != given.end()) text = it->second;
+    if (!given.empty()) {
+        if (auto it = given.find(file); it != given.end()) in.module = it->second;
+        for (auto& [name, text] : in.modules) {
+            if (auto it = given.find(name); it != given.end()) text = it->second;
+        }
     }
+    // SCENE_DEBUG(name) works in the modules given to a hook as in its own
+    // file (the hook's own file is expanded by each compile); a module using
+    // it imports scene, as the hook does.
+    for (auto& [name, text] : in.modules) text = debug_views::expand(text, "scene::debug_view()");
     return in;
 }
 
