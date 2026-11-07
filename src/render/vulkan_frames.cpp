@@ -57,6 +57,9 @@ void VulkanFrames::shutdown() {
     frameEndHooks_.clear();
     for (auto& fn : pending_) fn();
     pending_.clear();
+    releaseRetired(true);
+    for (auto& [pool, buffers] : spareComputePools_) vkDestroyCommandPool(device, pool, nullptr);
+    spareComputePools_.clear();
     for (auto& slot : slots_) {
         for (auto& fn : slot.deferred) fn();
         slot.deferred.clear();
@@ -104,11 +107,27 @@ void VulkanFrames::beginFrame() {
 
 void VulkanFrames::recycle(Slot& slot) {
     queue().wait(slot.ticket);
-    // (A frame's graphics waits for its compute, so this is done by now
-    // unless the compute's results went unread.)
-    if (VulkanQueue* compute = context_->asyncComputeQueue()) compute->wait(slot.computeTicket);
+    // A frame's graphics waits for the compute it reads, so this is done by
+    // now unless the compute's results are not read yet (a background job
+    // still running): then what it may still use is retired, not waited for.
+    releaseRetired(false);
+    // A slot that recorded no compute keeps its arenas (that work cannot be
+    // reading them); its deferred destructors wait all the same, as what they
+    // release may be the job's.
+    VulkanQueue* compute = context_->asyncComputeQueue();
+    if (compute && slot.computeTicket && !compute->isComplete(slot.computeTicket)) {
+        if (slot.computeUsed) {
+            retire(slot);
+            return;
+        }
+        Retired r;
+        r.computeTicket = slot.computeTicket;
+        r.deferred = std::move(slot.deferred);
+        retired_.push_back(std::move(r));
+    }
     for (auto& fn : slot.deferred) fn();
     slot.deferred.clear();
+    slot.computeUsed = false;
 
     VkDevice device = context_->device();
     vkResetCommandPool(device, slot.commandPool, 0);
@@ -134,6 +153,67 @@ void VulkanFrames::recycle(Slot& slot) {
 
     for (VkDescriptorPool pool : slot.descriptorPools) vkResetDescriptorPool(device, pool, 0);
     slot.activeDescriptorPool = 0;
+}
+
+void VulkanFrames::retire(Slot& slot) {
+    VkDevice device = context_->device();
+    Retired r;
+    r.computeTicket = slot.computeTicket;
+    r.computePool = slot.computePool;
+    r.computeBuffers = std::move(slot.computeBuffers);
+    r.deferred = std::move(slot.deferred);
+    r.uploads = std::move(slot.uploads);
+    r.descriptorPools = std::move(slot.descriptorPools);
+    retired_.push_back(std::move(r));
+
+    // The graphics half is done: its pool resets as ever. The rest is new
+    // (the uploads and descriptor pools made as they are next wanted).
+    vkResetCommandPool(device, slot.commandPool, 0);
+    slot.nextCommandBuffer = 0;
+    slot.computeBuffers.clear();
+    slot.deferred.clear();
+    slot.uploads.clear();
+    slot.descriptorPools.clear();
+    slot.computePool = VK_NULL_HANDLE;
+    if (!spareComputePools_.empty()) {
+        slot.computePool = spareComputePools_.back().first;
+        slot.computeBuffers = std::move(spareComputePools_.back().second);
+        spareComputePools_.pop_back();
+    } else {
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex = static_cast<uint32_t>(context_->queueFamilies().computeFamily);
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &slot.computePool) != VK_SUCCESS) {
+            LOG_ERROR("VulkanFrames: failed to create a frame compute command pool");
+            slot.computePool = VK_NULL_HANDLE;
+        }
+    }
+    slot.nextComputeBuffer = 0;
+    slot.computeTicket = 0;
+    slot.computeUsed = false;
+    slot.openCommandBuffers = 0;
+    slot.used = false;
+    slot.activeDescriptorPool = 0;
+}
+
+void VulkanFrames::releaseRetired(bool all) {
+    if (retired_.empty()) return;
+    VulkanQueue* compute = context_->asyncComputeQueue();
+    VkDevice device = context_->device();
+    size_t done = 0;
+    for (; done < retired_.size(); ++done) {
+        Retired& r = retired_[done];
+        if (!all && compute && !compute->isComplete(r.computeTicket)) break;
+        for (auto& fn : r.deferred) fn();
+        for (auto& chunk : r.uploads) destroyUploadChunk(chunk);
+        for (VkDescriptorPool pool : r.descriptorPools) vkDestroyDescriptorPool(device, pool, nullptr);
+        if (r.computePool != VK_NULL_HANDLE) {
+            vkResetCommandPool(device, r.computePool, 0);
+            spareComputePools_.emplace_back(r.computePool, std::move(r.computeBuffers));
+        }
+    }
+    retired_.erase(retired_.begin(), retired_.begin() + static_cast<std::ptrdiff_t>(done));
 }
 
 VkCommandBuffer VulkanFrames::nextBuffer(VkCommandPool pool, std::vector<VkCommandBuffer>& buffers, size_t& next) {
@@ -165,6 +245,7 @@ VkCommandBuffer VulkanFrames::beginComputeCommands() {
     ensureFrame();
     Slot& slot = slots_[frameIndex()];
     if (slot.computePool == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    slot.computeUsed = true;
     return nextBuffer(slot.computePool, slot.computeBuffers, slot.nextComputeBuffer);
 }
 
@@ -321,6 +402,7 @@ bool VulkanFrames::reclaimCompleted(bool wait) {
         if (gfxTicket > 0 && !queue().isComplete(gfxTicket)) return false;
         if (compTicket > 0 && compute && !compute->isComplete(compTicket)) return false;
     }
+    releaseRetired(true);
     for (auto& s : slots_) {
         auto defs = std::move(s.deferred);
         s.deferred.clear();

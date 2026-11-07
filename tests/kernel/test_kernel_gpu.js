@@ -110,6 +110,33 @@ if (!bro.kernel.available) {
     while (!after.done && frames < 60) { advanceTime(16); frames++; }
     assert(after.done, 'and later jobs still run');
 
+    // A job longer than the frames in flight does not hold them: each frame
+    // goes on while the GPU still runs it (render::VulkanFrames retires what
+    // its slot lent the job instead of waiting), and its result is whole.
+    {
+        const LW = 8192, LH = 2048, PASSES = 1500;
+        let a = bro.kernel.createBuffer(new Float32Array(LW * LH).fill(3)), b = bro.kernel.createBuffer(LW * LH * 4);
+        const t0 = Date.now();
+        const long = bro.kernel.background(() => {
+            for (let i = 0; i < PASSES; i++) { blur.dispatch([LW, LH], a, b); [a, b] = [b, a]; }
+        });
+        let longest = 0, n = 0;
+        while (!long.done && n < 100000) {
+            const f0 = Date.now();
+            advanceTime(16);
+            longest = Math.max(longest, Date.now() - f0);
+            n++;
+        }
+        const span = Date.now() - t0;
+        assert(long.done, 'a long background job is done');
+        // (A job the GPU finishes within a few frames says nothing either way.)
+        if (span > 60) {
+            assert(longest < span / 2, `frames go on beside a long job: its ${span} ms, the longest frame ${longest} ms over ${n}`);
+        }
+        const mid = a.read(new Float32Array(1), (LH / 2 * LW + LW / 2) * 4)[0];
+        assert(mid === 3, 'the long job ran every pass: ' + mid);
+    }
+
     // A gather returning one value per cell; an index outside the table reads zero.
     const gather = mod.kernel('k_gather');
     const returns = gather.dispatch(5, bro.kernel.createBuffer(new Float32Array([10, 20, 30])),

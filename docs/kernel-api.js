@@ -103,6 +103,16 @@ console.log('brokernel', bro.kernel.version);
 // the page thread and with compileAsync alike: the module comes back without
 // waiting for it. Its first eval or run (or cpuLanes read) waits for it as a
 // compile waits, the window answering; a large kernel takes a second or more.
+// That wait blocks the page's frame: a page that would go on drawing while
+// it is made awaits the module's cpuReady() first.
+//
+// module.cpuReady() -> Promise<void>
+//   Settles once every @cpu kernel of the module has its CPU build (at once
+//   when it has none, or they are built); the frames go on meanwhile.
+//   Headless settles it in the frame after it was asked for.
+//
+//     const m = await bro.kernel.compileAsync(source, { file, modules });
+//     await m.cpuReady();          // m's evals and runs no longer wait
 
 const mod = bro.kernel.compile(`
     import std::noise::*;
@@ -302,7 +312,10 @@ if (bro.kernel.gpu) {
 // field rebuilt into the half of a double buffer it does not draw from. A
 // few small dependent dispatches are far from filling the GPU, so in the
 // frame's own stream they lengthen the frame by all of their latency. (A
-// tile cache's production runs here already, tiles-api.js.)
+// tile cache's production runs here already, tiles-api.js.) A job may take
+// many frames (a world's rivers built at start, thousands of dispatches):
+// on an async queue the frames go on beside it, wait for it nowhere, and the
+// page polls `done` each frame.
 //
 //   job.done   true once the GPU has done the job's work; from the read that
 //              finds it true, the frames read what it wrote (the graphics

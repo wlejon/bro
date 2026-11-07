@@ -31,8 +31,12 @@ struct UploadSlice {
 /// resources off frameIndex().
 ///
 /// With an async compute queue (VulkanContext::asyncComputeQueue), a slot
-/// also owns a command pool on the compute family (beginComputeCommands),
-/// and its reuse waits for the slot's work on that queue as well.
+/// also owns a command pool on the compute family (beginComputeCommands).
+/// Its reuse does not wait for the slot's work on that queue: a slot whose
+/// compute work is still running (a background job longer than the frames,
+/// bro.kernel.background) retires its compute pool, uploads, descriptor
+/// pools and deferred destructors to be released once that work is done,
+/// and takes fresh ones, so the frames go on beside it.
 ///
 /// Deferred destruction: defer(fn) runs `fn` once every submission made up to
 /// the end of the current frame has completed, so a resource can be released
@@ -141,13 +145,29 @@ private:
         bool used = false;    // a command buffer, upload or descriptor set taken this frame
         uint64_t ticket = 0;  // retires every queue op of this slot's previous frame
         uint64_t computeTicket = 0;   // the same on the async compute queue
+        bool computeUsed = false;     // a compute command buffer taken this frame
         std::vector<std::function<void()>> deferred;
         std::vector<UploadChunk> uploads;
         std::vector<VkDescriptorPool> descriptorPools;
         size_t activeDescriptorPool = 0;
     };
 
+    // A slot's part still in use by the async compute queue, released once
+    // its ticket there is complete.
+    struct Retired {
+        uint64_t computeTicket = 0;
+        VkCommandPool computePool = VK_NULL_HANDLE;
+        std::vector<VkCommandBuffer> computeBuffers;
+        std::vector<std::function<void()>> deferred;
+        std::vector<UploadChunk> uploads;
+        std::vector<VkDescriptorPool> descriptorPools;
+    };
+
     void recycle(Slot& slot);
+    void retire(Slot& slot);
+    // Release the retired parts whose compute work is done (all of them
+    // when `all`: the queue is known idle).
+    void releaseRetired(bool all);
     VkCommandBuffer nextBuffer(VkCommandPool pool, std::vector<VkCommandBuffer>& buffers, size_t& next);
     bool addUploadChunk(Slot& slot, VkDeviceSize minSize);
     void destroyUploadChunk(UploadChunk& chunk);
@@ -157,6 +177,9 @@ private:
     Slot slots_[kFramesInFlight];
     uint64_t serial_ = 0;
     std::vector<std::function<void()>> pending_;  // deferred during the open frame
+    std::vector<Retired> retired_;                // in ticket order
+    // Compute pools released from retirement, reset, with their buffers.
+    std::vector<std::pair<VkCommandPool, std::vector<VkCommandBuffer>>> spareComputePools_;
     std::vector<std::pair<HookId, std::function<void()>>> frameEndHooks_;
     HookId nextHookId_ = 1;
     VkDeviceSize minUploadAlignment_ = 16;
