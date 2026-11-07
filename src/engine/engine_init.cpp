@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <atomic>
+#include <chrono>
 #include <thread>
 
 #include "platform/window.h"
@@ -347,6 +349,7 @@ void Engine::construct(const EngineConfig& config) {
     std::string gpuInitError;
     std::thread gpuInit;
     double gpuMs = -1.0, gpuReadyAt = -1.0, windowDoneAt = -1.0;
+    std::atomic<bool> gpuInitDone{false};
     struct JoinOnExit {
         std::thread& t;
         ~JoinOnExit() { if (t.joinable()) t.join(); }
@@ -358,17 +361,19 @@ void Engine::construct(const EngineConfig& config) {
         // installs the host globals and starts the page's compile. Nothing
         // else touches the context, the presenter or skiaGpu_ until the join.
         {
-            gpuInit = std::thread([this, &headlessSkiaGpu, &gpuInitError, &gpuMs, &gpuReadyAt] {
+            gpuInit = std::thread([this, &headlessSkiaGpu, &gpuInitError, &gpuMs, &gpuReadyAt, &gpuInitDone] {
                 const double t0 = util::currentTimeMs();
                 struct Timed {
                     double t0;
                     double& out;
                     double& readyAt;
+                    std::atomic<bool>& done;
                     ~Timed() {
                         out = util::currentTimeMs() - t0;
                         readyAt = sinceStartMs();
+                        done.store(true, std::memory_order_release);
                     }
-                } timed{t0, gpuMs, gpuReadyAt};
+                } timed{t0, gpuMs, gpuReadyAt, gpuInitDone};
                 try {
                     render::VulkanContextConfig vkCfg;
                     vkCfg.headless = true;
@@ -482,6 +487,16 @@ void Engine::construct(const EngineConfig& config) {
     if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) beginPageCompile();
 
     if (displayMode_ == DisplayMode::Headless) {
+        // The device's thread may still be loading the driver and the
+        // pipeline cache: waited for pumped, as every wait on this thread is.
+        util::waitPumpingUntil([&gpuInitDone](int ms) {
+            const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+            while (!gpuInitDone.load(std::memory_order_acquire)) {
+                if (ms >= 0 && std::chrono::steady_clock::now() >= end) return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return true;
+        });
         if (gpuInit.joinable()) gpuInit.join();
         if (!gpuInitError.empty()) throw std::runtime_error(gpuInitError);
 #if BRO_WITH_3D
