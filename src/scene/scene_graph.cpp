@@ -22,6 +22,7 @@
 #include "dom/document.h"
 #include "util/log.h"
 #include "scene/depth_policy.h"
+#include "scene/vulkan/frame/scene_vk_target_format.h"
 #include "brogameagent/world.h"
 
 #include "broimage/decode.h"
@@ -581,6 +582,11 @@ void SceneGraph::syncAgents(float dt) {
         }
     }
 }
+void SceneGraph::renderForRead() {
+    vk::pipeline_async::Hold hold;
+    render();
+}
+
 void SceneGraph::render() {
     // Parked (no canvas): nothing to draw into, and nothing is lost by not
     // drawing — the next attach renders the current state.

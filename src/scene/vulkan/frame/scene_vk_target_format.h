@@ -31,7 +31,18 @@ namespace pipeline_async {
 /// perf.asyncShaders sets it from script (a test settling one scene each
 /// way in one process).
 void setAsync(bool on);
+/// setAsync's policy, unless a Hold is open on this thread.
 bool async();
+/// A render whose pixels are read back (SceneGraph::renderForRead, a
+/// script's captureFrame) holds everything it draws, in a window as in
+/// headless: while one is open on a thread, async() is false there, and a
+/// pipeline an earlier frame left building is waited for, not skipped.
+struct Hold {
+    Hold();
+    ~Hold();
+    Hold(const Hold&) = delete;
+    Hold& operator=(const Hold&) = delete;
+};
 struct Capture {
     std::shared_future<VkPipeline> future;
     bool used = false;
@@ -99,8 +110,11 @@ public:
         if (it != pipelines_.end()) return it->second;
         if (auto pit = pending_.find(key); pit != pending_.end()) {
             if (pit->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-                pipeline_async::noteSkip();
-                return VK_NULL_HANDLE;
+                if (pipeline_async::async()) {
+                    pipeline_async::noteSkip();
+                    return VK_NULL_HANDLE;
+                }
+                pit->second.wait();  // a held render: it draws everything
             }
             VkPipeline p = pit->second.get();
             pending_.erase(pit);

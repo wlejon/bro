@@ -202,6 +202,11 @@ public:
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     /// 3D nodes render through SceneRenderer's Vulkan passes; 2D nodes via CanvasScene.
     void render();
+    /// render() for a frame whose pixels are read back at once (a script's
+    /// captureFrame): it holds everything it draws, waiting for pipelines
+    /// still building where a window's frames skip them (vk::pipeline_async::
+    /// Hold), so a capture in a window is the one headless takes.
+    void renderForRead();
 
     /// Returns true if any MeshNodes were rendered this frame.
     bool hasMeshContent() const { return renderer_.hasMeshContent(); }

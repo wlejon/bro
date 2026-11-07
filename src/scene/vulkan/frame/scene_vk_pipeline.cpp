@@ -210,9 +210,12 @@ namespace {
 std::atomic<int> s_inFlight{0};
 std::atomic<int> s_skips{0};
 std::atomic<bool> s_async{false};
+thread_local int t_holds = 0;
 }
 void setAsync(bool on) { s_async.store(on, std::memory_order_relaxed); }
-bool async() { return s_async.load(std::memory_order_relaxed); }
+bool async() { return t_holds == 0 && s_async.load(std::memory_order_relaxed); }
+Hold::Hold() { ++t_holds; }
+Hold::~Hold() { --t_holds; }
 Capture*& current() {
     thread_local Capture* c = nullptr;
     return c;

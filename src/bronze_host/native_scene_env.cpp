@@ -541,7 +541,8 @@ void bro_scene_SceneGraph_detachAIWorld(void* self) {
 
 void bro_scene_SceneGraph_render(void* self) {
     auto* g = graphOf(self);
-    if (g) g->render();
+    // (captureFrame's: the frame is read back at once.)
+    if (g) g->renderForRead();
 }
 
 double bro_scene_SceneGraph_canvasWidth(void* self) {
