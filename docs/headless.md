@@ -649,6 +649,12 @@ framebuffer binding persists across frames. Only readbacks (`readPixels`,
 `getBufferSubData`, a screenshot) and client waits block, on the context's
 own work. Several WebGL canvases composite independently.
 
+**Threading.** Calls are encoded into a per-context ring (data copied) and
+replayed in order by the engine's WebGL thread (`bro-webgl`); answers from
+backend state are round trips (docs/webgl2-api.js lists them). A frame's end
+waits for every context's replay and submission (not the GPU), so after
+`advanceTime` or `flush()` a screenshot sees what the page encoded.
+
 **Shaders.** GLSL ES 3.00 and 1.00 are compiled in process by glslang to
 SPIR-V, and the program interface comes from glslang's reflection, not from
 parsing source text: attributes (placed by `layout(location)`, then
@@ -778,7 +784,10 @@ finished, so consecutive queries split the GPU's time between them;
 `queryCounterEXT(q, TIMESTAMP_EXT)` writes one; results are nanoseconds.
 `QUERY_RESULT_AVAILABLE` turns true a frame or so later without anything
 waiting (only `QUERY_RESULT` on an unfinished query waits, on that query's own
-submission). `QUERY_COUNTER_BITS_EXT` is the queue's valid timestamp bits,
+submission). Per the WebGL 2 spec it stays false for the rest of the task
+that ended the query (`finish()` included) and holds until the event loop
+turns: poll across `advanceTime` / `flush()` calls, not in a loop.
+`QUERY_COUNTER_BITS_EXT` is the queue's valid timestamp bits,
 `getParameter(TIMESTAMP_EXT)` is the GPU clock now (a lone timestamp
 submitted and waited for), and `GPU_DISJOINT_EXT` is always false (Vulkan
 reports no clock disruptions). Sync objects: `fenceSync` / `clientWaitSync` /

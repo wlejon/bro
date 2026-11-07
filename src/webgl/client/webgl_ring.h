@@ -38,6 +38,10 @@ public:
 
     static constexpr size_t kDefaultCapacity = size_t{1} << 20;
     /// How many bytes either side moves before it publishes its position.
+    /// Measured on three_meshes and three_skinned: at 16 KiB publishes come
+    /// further apart than the WebGL thread's idle spin (about 30 sleeps and
+    /// wakes a frame) and the frame end waits for a longer backlog; at 1 KiB
+    /// four times the publishes buy nothing.
     static constexpr size_t kPublishEvery = 4096;
 
     /// `capacity` is rounded up to a power of two (at least 64 KiB).

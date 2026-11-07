@@ -17,6 +17,7 @@
 // the replay takes back (takeRef), so a slot outlives a record the client
 // forgot it for (an object deleted before its link replays).
 
+#include "webgl/client/webgl_blob.h"
 #include "webgl/webgl_objects.h"
 #include "webgl/webgl_types.h"
 
@@ -111,6 +112,8 @@ class WebGLReplayState {
 public:
     /// Blob bytes outstanding (WebGLClient's cap), freed by the replay.
     std::atomic<size_t> blobBytes{0};
+    /// Where payload blobs come from (the client) and go back to (the replay).
+    WebGLBlobPool blobs;
 
     void createQuery(GLuint id, std::shared_ptr<QuerySlot> slot);
     void deleteQuery(GLuint id);

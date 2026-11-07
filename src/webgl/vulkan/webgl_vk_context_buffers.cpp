@@ -229,6 +229,15 @@ int64_t WebGLVkContext::getIndexedBufferParameter(GLenum pname, GLuint index) {
 }
 
 void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+    bufferDataImpl(target, size, data, nullptr, usage);
+}
+
+void WebGLVkContext::bufferDataTake(GLenum target, std::vector<uint8_t>& data, GLenum usage) {
+    bufferDataImpl(target, static_cast<GLsizeiptr>(data.size()), data.data(), &data, usage);
+}
+
+void WebGLVkContext::bufferDataImpl(GLenum target, GLsizeiptr size, const void* data, std::vector<uint8_t>* take,
+                                    GLenum usage) {
     if (!bufferTargetValid(target) || !bufferUsageValid(usage)) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
@@ -257,10 +266,15 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
 
     res.size = newSize;
     res.usage = usage;
-    // Built aside and swapped in: `data` may alias the old contents.
-    std::vector<uint8_t> contents(static_cast<size_t>(size), 0);
-    if (data && size > 0) std::memcpy(contents.data(), data, static_cast<size_t>(size));
-    res.shadowData.swap(contents);
+    if (take) {
+        // The caller's bytes become the contents; it gets the old ones.
+        res.shadowData.swap(*take);
+    } else {
+        // Built aside and swapped in: `data` may alias the old contents.
+        std::vector<uint8_t> contents(static_cast<size_t>(size), 0);
+        if (data && size > 0) std::memcpy(contents.data(), data, static_cast<size_t>(size));
+        res.shadowData.swap(contents);
+    }
     ++res.version;
     // The new contents are the CPU's: nothing the GPU wrote before is newer.
     res.deviceNewer = false;
@@ -285,6 +299,15 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
 }
 
 void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data) {
+    bufferSubDataImpl(target, offset, size, data, nullptr);
+}
+
+void WebGLVkContext::bufferSubDataTake(GLenum target, GLintptr offset, std::vector<uint8_t>& data) {
+    bufferSubDataImpl(target, offset, static_cast<GLsizeiptr>(data.size()), data.data(), &data);
+}
+
+void WebGLVkContext::bufferSubDataImpl(GLenum target, GLintptr offset, GLsizeiptr size, const void* data,
+                                       std::vector<uint8_t>* take) {
     GLuint bufId = getBoundBufferId(target);
     if (bufId == 0) {
         setSyntheticError(GL_INVALID_OPERATION);
@@ -302,8 +325,14 @@ void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr si
     if (!data || size == 0) return;
     syncShadow(res);
 
-    std::memcpy(res.shadowData.data() + offset, data, size);
-    uploadToBuffer(res, static_cast<VkDeviceSize>(offset), data, static_cast<VkDeviceSize>(size));
+    // Replacing every byte of an unmapped buffer, the caller's own bytes
+    // become the CPU copy (a swap; it gets the old one back).
+    if (take && offset == 0 && take->size() == res.shadowData.size() && !res.isMapped)
+        res.shadowData.swap(*take);
+    else
+        std::memcpy(res.shadowData.data() + offset, data, static_cast<size_t>(size));
+    uploadToBuffer(res, static_cast<VkDeviceSize>(offset), res.shadowData.data() + offset,
+                   static_cast<VkDeviceSize>(size));
 }
 
 void WebGLVkContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length) {

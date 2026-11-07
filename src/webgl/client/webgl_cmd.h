@@ -13,7 +13,7 @@
 // `bytes` is kNullPayload for a call without data (bufferData(target, size,
 // usage)); up to kInlinePayloadMax the bytes follow in the record, 8-aligned
 // so the backend may read them as the element type; past that the record
-// holds a pointer to a malloc'd blob the replay frees.
+// holds a pointer to a WebGLBlob (webgl_blob.h) the replay gives back.
 
 #include "webgl/client/webgl_cmd_list.h"
 #include "webgl/webgl_objects.h"

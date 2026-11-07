@@ -14,14 +14,14 @@ namespace bro::webgl {
 
 namespace {
 
-// Call f(payload, args...) for a payload record, then free its blob.
+// Call f(payload, args...) for a payload record, then give its blob back.
 template <class... Ts, class F>
 void replayPayload(vk::WebGLVkContext* gl, const uint8_t* rec, WebGLReplayState& state, TypeList<Ts...> types,
                    F&& f) {
     const PayloadView p = payloadOf(rec, types);
     if (gl) cmd::decodeArgs<Ts...>(rec, [&](auto... a) { f(p, a...); });
     if (p.blob) {
-        std::free(const_cast<void*>(p.data));
+        state.blobs.give(p.blob);
         state.blobBytes.fetch_sub(static_cast<size_t>(p.bytes), std::memory_order_release);
     }
 }
@@ -46,13 +46,19 @@ void replayCustom(vk::WebGLVkContext* gl, Op op, const uint8_t* rec, WebGLReplay
         case Op::BufferData:
             replayPayload(gl, rec, state, WebGLClient::kBufferDataArgs,
                           [gl](const PayloadView& p, GLenum target, GLenum usage, GLsizeiptr size) {
-                              gl->bufferData(target, size, p.data, usage);
+                              if (p.blob)  // the backend may keep the blob's bytes as the buffer's
+                                  gl->bufferDataTake(target, p.blob->bytes, usage);
+                              else
+                                  gl->bufferData(target, size, p.data, usage);
                           });
             return;
         case Op::BufferSubData:
             replayPayload(gl, rec, state, WebGLClient::kBufferSubDataArgs,
                           [gl](const PayloadView& p, GLenum target, GLintptr offset) {
-                              gl->bufferSubData(target, offset, static_cast<GLsizeiptr>(p.bytes), p.data);
+                              if (p.blob)
+                                  gl->bufferSubDataTake(target, offset, p.blob->bytes);
+                              else
+                                  gl->bufferSubData(target, offset, static_cast<GLsizeiptr>(p.bytes), p.data);
                           });
             return;
         case Op::TexImage2DSource:

@@ -210,13 +210,17 @@ if (!gl) {
             gl.endQuery(gl.ANY_SAMPLES_PASSED);
             assert(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === false,
                    'not available in the task that ended it, before any submission');
+            assert(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === false,
+                   'the same answer for the rest of the task');
             // Frames end (the frame-end flush submits it) and the poll answers
             // without waiting; virtual time does not wait for the GPU either,
             // so the result may still be running after these: finish() then
-            // makes it available, read from the published state.
+            // makes it available, read from the published state on the next
+            // turn (an answer read in this one holds until the task ends).
             for (let frames = 0; frames < 8 && !gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE); frames++)
                 advanceTime(16);
             gl.finish();
+            advanceTime(16);
             assert(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === true, 'available once the GPU is done');
             assert(gl.getQueryParameter(q, gl.QUERY_RESULT) === 1, 'the draw passed samples');
             gl.getQueryParameter(q, 0xBAD);

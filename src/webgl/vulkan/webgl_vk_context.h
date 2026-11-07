@@ -144,6 +144,11 @@ public:
     int64_t getIndexedBufferParameter(GLenum pname, GLuint index);
     void bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
     void bufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
+    /// bufferData / bufferSubData of `data`, which the call may keep as the
+    /// buffer's CPU copy (when it replaces the whole contents), handing the
+    /// old copy back in `data` (a swap: no copy). The client's pooled blobs.
+    void bufferDataTake(GLenum target, std::vector<uint8_t>& data, GLenum usage);
+    void bufferSubDataTake(GLenum target, GLintptr offset, std::vector<uint8_t>& data);
     void getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length);
     void copyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size);
     void* mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access);
@@ -524,6 +529,9 @@ private:
     /// Record a copy of `data` into `res` at `offset`, ordered after earlier
     /// GPU use of the buffer and before later use.
     void uploadToBuffer(VkBufferResource& res, VkDeviceSize offset, const void* data, VkDeviceSize size);
+    void bufferDataImpl(GLenum target, GLsizeiptr size, const void* data, std::vector<uint8_t>* take, GLenum usage);
+    void bufferSubDataImpl(GLenum target, GLintptr offset, GLsizeiptr size, const void* data,
+                           std::vector<uint8_t>* take);
     /// Record a transition of every subresource of `tex` to `layout`.
     void transitionTexture(VkCommandBuffer cmd, VkTextureResource& tex, VkImageLayout layout);
     /// Destroy GPU objects once the GPU is done with them.

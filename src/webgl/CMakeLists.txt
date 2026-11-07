@@ -47,6 +47,7 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_stream.cpp
     vulkan/webgl_vk_caps.cpp
     client/webgl_ring.cpp
+    client/webgl_blob.cpp
     client/webgl_client.cpp
     client/webgl_replay.cpp
     client/webgl_client_async.cpp

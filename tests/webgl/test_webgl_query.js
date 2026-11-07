@@ -1,7 +1,8 @@
 // WebGL2 conformance subset — query objects: occlusion queries with
 // ANY_SAMPLES_PASSED (positive + scissored-out negative), the conservative
 // target, getQuery(CURRENT_QUERY) object identity, non-stalling
-// QUERY_RESULT_AVAILABLE polling bounded by finish() + a wall deadline,
+// QUERY_RESULT_AVAILABLE polling on later turns bounded by finish() + a wall
+// deadline (unavailable within the task that ended the query),
 // isQuery lifecycle, error paths.
 // Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
 
@@ -48,12 +49,18 @@ if (!gl) {
     gl.viewport(0, 0, 64, 64);
 
     // Deterministic result readout: finish() forces completion, then poll
-    // QUERY_RESULT_AVAILABLE (which must never stall) under a wall deadline.
+    // QUERY_RESULT_AVAILABLE (which must never stall) on later turns of the
+    // event loop, under a wall deadline. Not in a loop within this task: a
+    // result never becomes available before control returns to the event
+    // loop, and repeated reads within one task answer the same (WebGL 2.0
+    // getQueryParameter).
     function queryResult(q) {
         gl.finish();
+        assert(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === false,
+               'not available in the task that ended it, even after finish()');
         const deadline = Date.now() + 5000;
         while (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) && Date.now() < deadline) {
-            gl.flush();
+            advanceTime(16);
         }
         assert(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) === true,
                'query result became available');

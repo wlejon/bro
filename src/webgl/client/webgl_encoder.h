@@ -4,6 +4,7 @@
 // cached limit), the header and argument stores at constant offsets, and the
 // payload copy. No atomics: publishing is the client's, at its sync points.
 
+#include "webgl/client/webgl_blob.h"
 #include "webgl/client/webgl_cmd.h"
 #include "webgl/client/webgl_ring.h"
 
@@ -20,10 +21,10 @@ template <class... Ts, class... Us>
 
 /// A record with a payload: `bytes` of `data` (kNullPayload: none), inline up
 /// to kInlinePayloadMax, else `blob` (the caller's copy, already made, which
-/// the replay frees).
+/// the replay gives back to the pool).
 template <class... Ts, class... Us>
 [[gnu::always_inline]] inline void encodePayload(WebGLRing& ring, Op op, TypeList<Ts...> types, const void* data,
-                                                 uint64_t bytes, void* blob, Us... u) {
+                                                 uint64_t bytes, WebGLBlob* blob, Us... u) {
     constexpr size_t descAt = cmd::kPayloadDescOffset<Ts...>;
     constexpr size_t dataAt = cmd::kPayloadDataOffset<Ts...>;
     size_t body = 0;
@@ -37,15 +38,15 @@ template <class... Ts, class... Us>
     if (bytes <= kInlinePayloadMax)
         std::memcpy(rec + dataAt, data, static_cast<size_t>(bytes));
     else
-        cmd::store<void*>(rec + dataAt, blob);
+        cmd::store<WebGLBlob*>(rec + dataAt, blob);
 }
 
 /// The payload of a record encodePayload wrote: its data (null for none) and
-/// size, and whether the data is a blob the reader frees.
+/// size, and the blob holding the data, if any (the reader gives it back).
 struct PayloadView {
     const void* data = nullptr;
     uint64_t bytes = 0;
-    bool blob = false;
+    WebGLBlob* blob = nullptr;
 };
 
 template <class... Ts>
@@ -60,8 +61,8 @@ inline PayloadView payloadOf(const uint8_t* rec, TypeList<Ts...>) {
     if (v.bytes <= kInlinePayloadMax) {
         v.data = at;
     } else {
-        v.data = cmd::load<void*>(at);
-        v.blob = true;
+        v.blob = cmd::load<WebGLBlob*>(at);
+        v.data = v.blob->bytes.data();
     }
     return v;
 }

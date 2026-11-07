@@ -94,11 +94,10 @@ void WebGLClient::reserveBlobBytes(uint64_t bytes) {
     held.fetch_add(static_cast<size_t>(bytes), std::memory_order_relaxed);
 }
 
-void* WebGLClient::copyToBlob(const void* data, uint64_t bytes) {
+WebGLBlob* WebGLClient::copyToBlob(const void* data, uint64_t bytes) {
     reserveBlobBytes(bytes);
-    void* blob = std::malloc(static_cast<size_t>(bytes));
-    if (!blob) throw std::bad_alloc();
-    std::memcpy(blob, data, static_cast<size_t>(bytes));
+    WebGLBlob* blob = channel_.replay.blobs.take(static_cast<size_t>(bytes));
+    std::memcpy(blob->bytes.data(), data, static_cast<size_t>(bytes));
     return blob;
 }
 

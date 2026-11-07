@@ -56,6 +56,9 @@ render::LayerImage WebGL2RenderingContext::frameEnd() {
     if (!client_.hasBackend()) return out;
     // Everything recorded is submitted, and the canvas image as that left it
     // answered: a round trip, so this submission precedes the presenter's.
+    // The engine shows that image, so the backend is told it was presented
+    // in the same round trip (no record after it for the frame-end hook to
+    // settle).
     out = client_.flushThen([](vk::WebGLVkContext& gl) {
         const vk::WebGLVkCanvas& canvas = gl.canvas();
         render::LayerImage img;
@@ -65,9 +68,9 @@ render::LayerImage WebGL2RenderingContext::frameEnd() {
         img.format = canvas.colorFormat();
         img.width = canvas.width();
         img.height = canvas.height();
+        gl.presented();
         return img;
     });
-    client_.presented();
     return out;
 }
 

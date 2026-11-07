@@ -136,6 +136,20 @@ carries `gcCycles`, `gcCycleFrames` and `gcCycleOpen`.
   feature registers its names bound to `undefined` (e.g. `VideoEncoder` with
   `BRO_WITH_VIDEO=0`).
 
+## WebGL bindings
+
+The `webgl_*.cpp` bindings talk to the context's `webgl::WebGLClient`
+(`src/webgl/client/webgl_client.h`), never to the backend: the backend
+(`WebGLVkContext`) lives on the engine's WebGL thread. A call that answers
+nothing encodes a record (the generated client method, or a hand-written
+one); its data is copied into the record or a pooled blob at the call, or,
+for a decoded image, held by reference. A call that answers from the
+backend's state is `client->sync(fn)`: `fn` runs on the WebGL thread after
+every earlier record has replayed, while the JS thread waits, so it is the
+only place a pointer into the JS heap (`typedArrayInfo`) may reach the
+backend. An error the binding decides goes down the ring
+(`syntheticError`), so `getError` keeps call order.
+
 ## Workers
 
 A `Worker` is its own thread and realm with brokit, `ImageBitmap`,

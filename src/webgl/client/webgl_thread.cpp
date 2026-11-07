@@ -5,11 +5,39 @@
 #include <algorithm>
 #include <cassert>
 
-#if defined(__linux__)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
 #endif
 
 namespace bro::webgl {
+
+namespace {
+
+// "bro-webgl" in debuggers, profilers and top.
+void nameThisThread() {
+#if defined(__linux__)
+    pthread_setname_np(pthread_self(), "bro-webgl");
+#elif defined(__APPLE__)
+    pthread_setname_np("bro-webgl");
+#elif defined(_WIN32)
+    // SetThreadDescription is Windows 10 1607 and later: looked up, not linked.
+    using SetDescription = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    if (HMODULE kernel = GetModuleHandleW(L"kernel32.dll"))
+        if (auto fn = reinterpret_cast<SetDescription>(
+                reinterpret_cast<void*>(GetProcAddress(kernel, "SetThreadDescription"))))
+            fn(GetCurrentThread(), L"bro-webgl");
+#endif
+}
+
+}  // namespace
 
 WebGLThread::WebGLThread() : thread_([this] { run(); }) {}
 
@@ -46,9 +74,7 @@ bool WebGLThread::hasWork() const {
 }
 
 void WebGLThread::run() {
-#if defined(__linux__)
-    pthread_setname_np(pthread_self(), "bro-webgl");
-#endif
+    nameThisThread();
     for (;;) {
         if (controlPending_.exchange(false, std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lock(controlMutex_);
@@ -81,12 +107,12 @@ void WebGLThread::run() {
 
         // Idle: more work usually follows within microseconds while a frame's
         // script runs, so spin a little before sleeping.
-        const auto until = std::chrono::steady_clock::now() + kIdleSpin;
+        const SpinDeadline until(kIdleSpin);
         bool work = false;
         for (uint32_t n = 1;; ++n) {
             if ((work = hasWork())) break;
             cpuRelax();
-            if ((n & 15) == 0 && std::chrono::steady_clock::now() >= until) break;
+            if ((n & 15) == 0 && until.passed()) break;
         }
         if (!work) work_.sleepUnless([this] { return hasWork(); });
     }

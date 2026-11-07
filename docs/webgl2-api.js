@@ -52,11 +52,32 @@
  * Extensions beyond the core: `EXT_color_buffer_float`, `EXT_color_buffer_half_float`,
  * `EXT_float_blend`, `OES_texture_float_linear`, `EXT_texture_filter_anisotropic`,
  * the compressed formats the device samples, `EXT_disjoint_timer_query_webgl2`,
- * `KHR_parallel_shader_compile` (compiles are synchronous: `COMPLETION_STATUS_KHR`
- * is true as soon as `compileShader` / `linkProgram` return),
+ * `KHR_parallel_shader_compile` (`COMPLETION_STATUS_KHR` turns true once the
+ * WebGL thread has finished the compile or link, and never waits for it),
  * `WEBGL_debug_renderer_info` (`UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL`
  * name the Vulkan device), `WEBGL_lose_context` and `BRO_buffer_map`. An
  * extension's enums are enums only after its `getExtension`.
+ *
+ * Threading: a call returns as soon as it is recorded. Each context encodes its
+ * calls into a command ring on the JS thread, copying their data (typed arrays,
+ * strings, canvas / video / ImageData pixels; a decoded image is held, not
+ * copied), so an array may change right after the call. The engine's WebGL
+ * thread replays the ring in call order and owns the Vulkan work, overlapping
+ * the page's script; a frame's commands are submitted when the frame is
+ * composited. Errors keep their order: `getError` reports what the calls before
+ * it raised. Answered without the WebGL thread: constant `getParameter`
+ * values, extensions, uniform and attribute locations and a program's or
+ * shader's status and info log (once its last link or compile has replayed:
+ * the first read after one waits for that), query availability, sync status.
+ * Round trips, which wait until the WebGL thread has replayed every call
+ * before them, so are worth keeping out of a frame loop: `getError`,
+ * `isEnabled` and the `is*` object checks, `getParameter` of live state (the
+ * current bindings, viewport, clear color, ...), the other `get*Parameter`
+ * calls, `getUniform`, `getVertexAttrib`, `checkFramebufferStatus`,
+ * `getBufferSubData`, `readPixels` into client memory (which also waits for
+ * the GPU), `finish`, `BRO_buffer_map`'s mapping, and reading the canvas
+ * (`toDataURL`, `drawImage` of it, `createImageBitmap`). A blocking
+ * `clientWaitSync` (a timeout above zero) waits for the GPU itself.
  * @example
  * const gl = canvas.getContext('webgl2');
  *   gl.clearColor(0.0, 0.0, 0.0, 1.0);
@@ -360,6 +381,11 @@ class WebGL2RenderingContext {
    * `QUERY_RESULT_AVAILABLE` (a boolean; never waits) or `QUERY_RESULT`
    * (waits for the query's own submission if it has not finished). A timer
    * query's result is nanoseconds.
+   *
+   * Availability follows the event loop, as the WebGL 2.0 spec requires: a
+   * query is unavailable for the rest of the task that ended it (a `finish()`
+   * included), and a value read in one task holds until control returns to the
+   * event loop, so poll on a later frame or task, never in a loop.
    * @param {WebGLQuery} query
    * @param {number} pname
    * @returns {number|boolean|null}

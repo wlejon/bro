@@ -156,7 +156,6 @@
 #define BRO_WEBGL_CONTROL_COMMANDS(X)                                                             \
     X(SyntheticError, setSyntheticError, GLenum)                                                  \
     X(Flush, flush)                                                                               \
-    X(Presented, presented)                                                                       \
     X(Resize, resize, int, int, uint64_t)
 
 // P<n>(Name, backendMethod, Elem, ArgTypes...): n arguments, then a pointer

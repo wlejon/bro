@@ -105,6 +105,9 @@ void Engine::syncWebGLCanvasSizes() {
 }
 
 void Engine::pumpWebGLContextEvents() {
+    // A turn of the event loop: query availability WebGL latched for the
+    // tasks before may change from here (WebGLClient::queryStatus).
+    webgl::webglEventLoopTurn();
     // Indexed: a listener may create another context, growing the vector.
     for (size_t i = 0; i < webglEntries_.size(); ++i) {
         webgl::WebGL2RenderingContext* ctx = webglEntries_[i].context.get();

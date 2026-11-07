@@ -1,7 +1,8 @@
 // bro_webgl_ring_test: WebGL's command ring between two threads, and the
 // WebGL thread's lifecycle (webgl/client/webgl_thread.h): round trips behind
 // a backlog, the blob budget, many contexts on one thread, teardown and
-// context loss with commands pending.
+// context loss with commands pending, and the blob pool (reuse, and a whole
+// buffer's upload taken as its contents).
 //
 // assert() is the check here, so it must survive a Release build: NDEBUG is
 // undefined before any header can pull in <cassert>. Run under
@@ -9,6 +10,7 @@
 // device shows up as a validation error, which fails the run.
 #undef NDEBUG
 
+#include "webgl/client/webgl_blob.h"
 #include "webgl/client/webgl_encoder.h"
 #include "webgl/client/webgl_ring.h"
 #include "webgl/client/webgl_thread.h"
@@ -116,6 +118,7 @@ void testRingStress() {
 
 constexpr GLenum kArrayBuffer = 0x8892;
 constexpr GLenum kStaticDraw = 0x88E4;
+constexpr GLenum kDynamicDraw = 0x88E8;
 
 // The drawing buffer's first pixel.
 std::vector<uint8_t> firstPixel(WebGL2RenderingContext& ctx) {
@@ -280,6 +283,59 @@ void testOwnThread(render::VulkanContext& device) {
 
 }  // namespace
 
+// Test 8: blobs come back to the pool and are reused; an upload replacing a
+// buffer's whole contents is taken as them (a swap), one covering part of it
+// is copied, and every byte reads back as the last upload left it.
+void testBlobPool(render::VulkanContext& device, const std::shared_ptr<WebGLThread>& thread) {
+    std::cout << "[Test 8] blob pool and whole-buffer uploads... " << std::flush;
+    {
+        WebGLBlobPool pool;
+        WebGLBlob* a = pool.take(1 << 20);
+        assert(a->bytes.size() == (1u << 20));
+        pool.give(a);
+        WebGLBlob* small = pool.take(64 * 1024);  // must not take the 1 MiB one
+        assert(small != a);
+        WebGLBlob* b = pool.take(1 << 20);
+        assert(b == a);
+        pool.give(small);
+        pool.give(b);
+    }
+
+    WebGL2RenderingContext ctx(16, 16, device, {}, thread);
+    WebGLClient& cl = *ctx.client();
+    const GLuint buf = ctx.newObjectId();
+    cl.createBuffer(buf);
+    cl.bindBuffer(kArrayBuffer, WebGLBuffer{buf});
+    constexpr size_t kBytes = 256 * 1024;
+    std::vector<uint8_t> shadow(kBytes, 0);
+    std::vector<uint8_t> data(kBytes);
+    cl.bufferData(kArrayBuffer, static_cast<GLsizeiptr>(kBytes), nullptr, kStaticDraw);
+    for (int i = 0; i < 200; ++i) {
+        // Whole uploads mostly (the swap), a part every third (a copy into
+        // what an earlier swap left), and a re-specification now and then.
+        const bool respec = i % 50 == 49;
+        const bool part = !respec && i % 3 == 2;
+        const size_t off = part ? 40 * 1024 : 0;
+        const size_t len = part ? 64 * 1024 : kBytes;
+        for (size_t k = 0; k < len; ++k) data[k] = patternByte(static_cast<uint64_t>(i), k);
+        if (respec)
+            cl.bufferData(kArrayBuffer, static_cast<GLsizeiptr>(kBytes), data.data(), kDynamicDraw);
+        else
+            cl.bufferSubData(kArrayBuffer, static_cast<GLintptr>(off), static_cast<GLsizeiptr>(len), data.data());
+        std::memcpy(shadow.data() + off, data.data(), len);
+        std::memset(data.data(), 0xEE, len);  // the copy was taken at the call
+        if (i % 25 != 24) continue;
+        std::vector<uint8_t> got(kBytes);
+        cl.sync([&](vk::WebGLVkContext& gl) {
+            gl.getBufferSubData(kArrayBuffer, 0, got.data(), static_cast<GLsizeiptr>(kBytes));
+        });
+        if (got != shadow) std::cout << "(upload " << i << " reads back wrong) ";
+        assert(got == shadow);
+    }
+    assert(getError(cl) == GL_NO_ERROR);
+    std::cout << "PASSED" << std::endl;
+}
+
 int main() {
     std::cout << "=== bro_webgl_ring_test: the WebGL command ring and thread ===" << std::endl;
     testRingStress();
@@ -300,6 +356,7 @@ int main() {
         testManyContexts(device, thread);
         testTeardownWithBacklog(device, thread);
         testLoseRestoreResize(device, thread);
+        testBlobPool(device, thread);
         std::cout << "(the WebGL thread was woken " << thread->wakes() << " times)" << std::endl;
     }
     testOwnThread(device);

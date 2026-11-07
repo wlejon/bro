@@ -87,6 +87,13 @@ void WebGLReplayState::publish(vk::WebGLVkContext& gl) {
 
 // --- Queries ----------------------------------------------------------------
 
+namespace {
+thread_local uint64_t t_eventLoopTurns = 0;
+}  // namespace
+
+void webglEventLoopTurn() { ++t_eventLoopTurns; }
+uint64_t webglEventLoopTurns() { return t_eventLoopTurns; }
+
 void WebGLClient::createQuery(GLuint id) {
     HeldQuery& q = queries_[id];
     q = HeldQuery{};
@@ -107,6 +114,8 @@ void WebGLClient::beginQuery(GLenum target, GLuint id) {
     if (auto it = queries_.find(id); it != queries_.end()) {
         ++it->second.serial;
         it->second.ended = false;
+        it->second.seen = QueryStatus::Pending;
+        it->second.seenTurn = webglEventLoopTurns();
     }
     encodeSimple(channel_.ring, Op::BeginQuery, rec::kBeginQuery, target, id);
 }
@@ -118,6 +127,8 @@ void WebGLClient::endQuery(GLenum target) {
     if (auto it = queries_.find(id); it != queries_.end()) {
         ++it->second.serial;
         it->second.ended = true;
+        it->second.seen = QueryStatus::Pending;
+        it->second.seenTurn = webglEventLoopTurns();
     }
     encodeSimple(channel_.ring, Op::EndQuery, rec::kEndQuery, target, id);
 }
@@ -127,6 +138,8 @@ void WebGLClient::queryCounter(GLuint id, GLenum target) {
         ++it->second.serial;
         it->second.ended = target == GL_TIMESTAMP_EXT && std::find(std::begin(activeQuery_), std::end(activeQuery_), id) ==
                                                             std::end(activeQuery_);
+        it->second.seen = QueryStatus::Pending;
+        it->second.seenTurn = webglEventLoopTurns();
     }
     encodeSimple(channel_.ring, Op::QueryCounter, rec::kQueryCounter, id, target);
 }
@@ -134,8 +147,17 @@ void WebGLClient::queryCounter(GLuint id, GLenum target) {
 bool WebGLClient::queryStatus(GLuint id, QueryStatus& status, uint64_t& result) {
     auto it = id != 0 ? queries_.find(id) : queries_.end();
     if (it == queries_.end()) return false;
-    const HeldQuery& q = it->second;
+    HeldQuery& q = it->second;
     QuerySlot& slot = *q.slot;
+    // The latch: an ended query answers what it answered earlier in this
+    // turn (Pending through the turn that ended it), and Available for good.
+    const uint64_t turn = webglEventLoopTurns();
+    if (q.ended && (q.seen == QueryStatus::Available || q.seenTurn == turn)) {
+        status = q.seen;
+        result = q.seenResult;
+        if (status == QueryStatus::Pending) requestQueryPoll();
+        return true;
+    }
     uint64_t word = slot.word.load(std::memory_order_acquire);
     if ((word >> 8) != q.serial) {
         if (q.ended) {
@@ -154,12 +176,22 @@ bool WebGLClient::queryStatus(GLuint id, QueryStatus& status, uint64_t& result) 
     if (status == QueryStatus::Available) {
         result = slot.result.load(std::memory_order_relaxed);
     } else if (status == QueryStatus::Pending) {
-        // Ask the WebGL thread to look again, even with nothing to replay,
-        // so a later read finds the result once the GPU has it.
-        channel_.pollRequested.store(true, std::memory_order_relaxed);
-        thread_->wake();
+        requestQueryPoll();
+    }
+    if (q.ended) {
+        q.seen = status;
+        q.seenTurn = turn;
+        q.seenResult = status == QueryStatus::Available ? result : 0;
     }
     return true;
+}
+
+// Ask the WebGL thread to look at pending queries again, even with nothing
+// to replay, so a read in a later turn finds a result once the GPU has it.
+void WebGLClient::requestQueryPoll() {
+    if (channel_.pollRequested.load(std::memory_order_relaxed)) return;
+    channel_.pollRequested.store(true, std::memory_order_relaxed);
+    thread_->wake();
 }
 
 // --- Syncs ------------------------------------------------------------------

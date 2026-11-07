@@ -64,7 +64,10 @@ public:
     /// Blob bytes outstanding at most before the client waits for replays to
     /// free some (one larger payload is still taken, alone).
     static constexpr size_t kBlobCap = size_t{64} << 20;
-    /// How long a client spins for the WebGL thread before it sleeps.
+    /// How long a client spins for the WebGL thread before it sleeps: past
+    /// the frame end's wait on three_meshes and three_skinned (10 to 35 us);
+    /// 200 us did not shorten three_instanced's (60 to 80 us, a large upload
+    /// replayed at the end of the frame).
     static constexpr std::chrono::microseconds kWaitSpin{50};
 
     /// Replayed on `thread`. `device` and `caps` outlive the client; the
@@ -221,6 +224,13 @@ public:
     /// The query's status after every call on it replayed (waiting once
     /// when one has not), and its result when Available. False when the
     /// client does not hold the query (never made, deleted).
+    ///
+    /// An ended query's availability is latched per event-loop turn (WebGL
+    /// 2.0, getQueryParameter: a result is not made available until control
+    /// has returned to the event loop, and repeated reads without returning
+    /// to it answer the same): Pending through the turn that ended it, and
+    /// after that it changes only at the first read of a later turn
+    /// (webglEventLoopTurn), holding what that read found for the rest of it.
     bool queryStatus(GLuint id, QueryStatus& status, uint64_t& result);
 
     // --- Syncs, answered here entirely (webgl_client_async.cpp) ---
@@ -274,8 +284,6 @@ public:
     void settle();
     /// Submit and wait for the GPU: a round trip.
     void finish();
-    /// The engine has shown the drawing buffer.
-    void presented() { encodeSimple(channel_.ring, Op::Presented, TypeList<>{}); }
     /// Resize the drawing buffer; `presentedTicket` is the last queue
     /// submission that may sample the old one.
     void resize(int width, int height, uint64_t presentedTicket) {
@@ -310,13 +318,18 @@ private:
     }
     template <class... Ts, class... Us>
     void putPayload(Op op, TypeList<Ts...> types, const void* data, uint64_t bytes, Us... u) {
-        void* blob = nullptr;
-        if (bytes != kNullPayload && bytes > kInlinePayloadMax) blob = copyToBlob(data, bytes);
-        encodePayload(channel_.ring, op, types, data, bytes, blob, u...);
+        if (bytes == kNullPayload || bytes <= kInlinePayloadMax) [[likely]] {
+            encodePayload(channel_.ring, op, types, data, bytes, nullptr, u...);
+            return;
+        }
+        encodePayload(channel_.ring, op, types, data, bytes, copyToBlob(data, bytes), u...);
+        // A large upload is worth starting at once: the WebGL thread's copy
+        // into staging then overlaps the rest of the frame's script.
+        channel_.ring.publish();
     }
-    /// A malloc'd copy of a large payload, counted against kBlobCap (waits
-    /// for the replay to free some first when over it).
-    void* copyToBlob(const void* data, uint64_t bytes);
+    /// A pooled copy of a large payload, counted against kBlobCap (waits for
+    /// the replay to give some back first when over it).
+    WebGLBlob* copyToBlob(const void* data, uint64_t bytes);
     /// Over the blob cap: wait for the replay to free some.
     void reserveBlobBytes(uint64_t bytes);
     /// Forget every object and extension (the backend went).
@@ -330,6 +343,8 @@ private:
         if (channel_.ring.unpublished()) channel_.ring.publish();
         channel_.progress.wait(ready, kWaitSpin);
     }
+    /// Have the WebGL thread publish pending queries' status again.
+    void requestQueryPoll();
     /// A fence's queue ticket, once its fenceSync has replayed.
     uint64_t fenceTicket(FenceSlot& slot);
     /// Encode a SyncCall of fn(ctx, backend) and wait for its answer.
@@ -361,6 +376,11 @@ private:
         std::shared_ptr<QuerySlot> slot;
         uint32_t serial = 0;  // begin/end/queryCounter calls encoded on it
         bool ended = false;   // the last of them ended it (an end or a timestamp the client expects to take)
+        // The latch: what a read in turn `seenTurn` answered (or Pending
+        // from the turn it ended), with the result once Available.
+        QueryStatus seen = QueryStatus::Pending;
+        uint64_t seenTurn = 0;
+        uint64_t seenResult = 0;
     };
     std::unordered_map<GLuint, HeldProgram> programs_;
     std::unordered_map<GLuint, HeldShader> shaders_;
@@ -371,6 +391,14 @@ private:
     GLuint activeQuery_[3]{};
     std::vector<std::string> extensions_;  // enabled, in order
 };
+
+/// The JS thread's event loop has begun a turn (Engine calls it once per
+/// pass of its loop, headless steps and flush() included): query
+/// availability read in an earlier turn may change (WebGLClient::queryStatus).
+/// Counted per thread: each engine's clients live on its JS thread.
+void webglEventLoopTurn();
+/// How many turns the calling thread's event loop has begun.
+uint64_t webglEventLoopTurns();
 
 /// Replay one record onto `gl`, or only release what it owns (a blob, a
 /// held reference) when `gl` is null (webgl_replay.cpp).

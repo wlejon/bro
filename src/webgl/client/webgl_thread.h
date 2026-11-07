@@ -31,7 +31,11 @@ class WebGLChannel;
 
 class WebGLThread {
 public:
-    /// How long the thread spins for more work before it sleeps.
+    /// How long the thread spins for more work before it sleeps. A busy
+    /// frame publishes about every 30 us (three_meshes): 30 us leaves about
+    /// 1.5 sleeps a frame; 10 us woke it about 117 times a frame (a futex
+    /// wake on the JS thread each) for no frame time gained; 60 us gained
+    /// nothing either.
     static constexpr std::chrono::microseconds kIdleSpin{30};
 
     WebGLThread();
