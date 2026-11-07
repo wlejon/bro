@@ -114,14 +114,19 @@ if (!bro.kernel.available) {
     // goes on while the GPU still runs it (render::VulkanFrames retires what
     // its slot lent the job instead of waiting), and its result is whole.
     {
-        const LW = 8192, LH = 2048, PASSES = 1500;
+        const LW = 8192, LH = 2048;
         let a = bro.kernel.createBuffer(new Float32Array(LW * LH).fill(3)), b = bro.kernel.createBuffer(LW * LH * 4);
+        const probe0 = Date.now();
+        for (let i = 0; i < 4; i++) { blur.dispatch([LW, LH], a, b); [a, b] = [b, a]; }
+        a.read(new Float32Array(1));
+        const probeMs = Math.max(1, Date.now() - probe0);
+        const PASSES = Math.max(4, Math.min(1500, Math.ceil((150 * 4) / probeMs)));
         const t0 = Date.now();
         const long = bro.kernel.background(() => {
             for (let i = 0; i < PASSES; i++) { blur.dispatch([LW, LH], a, b); [a, b] = [b, a]; }
         });
         let longest = 0, n = 0;
-        while (!long.done && n < 100000) {
+        while (!long.done && Date.now() - t0 < 30000) {
             const f0 = Date.now();
             advanceTime(16);
             longest = Math.max(longest, Date.now() - f0);
