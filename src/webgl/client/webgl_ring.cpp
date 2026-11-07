@@ -14,13 +14,14 @@ WebGLRing::WebGLRing(size_t capacity) {
     base_ = static_cast<uint8_t*>(std::aligned_alloc(64, cap_));
     if (!base_) throw std::bad_alloc();
     cur_ = base_;
-    limit_ = base_ + cap_;
+    limit_ = base_;  // the first reserve finds its room (and publish mark) in makeRoom
 }
 
 WebGLRing::~WebGLRing() { std::free(base_); }
 
-// The slow half of reserve: wrap to the next lap when the record does not fit
-// the tail, and ask the owner to consume while there is not enough free space.
+// The slow half of reserve: publish once kPublishEvery bytes are unpublished,
+// wrap to the next lap when the record does not fit the tail, and ask the
+// owner to wait for the consumer while there is not enough free space.
 uint8_t* WebGLRing::makeRoom(size_t bytes) {
     assert(bytes % 8 == 0 && bytes <= cap_);
     for (;;) {
@@ -38,12 +39,16 @@ uint8_t* WebGLRing::makeRoom(size_t bytes) {
                 continue;
             }
         } else if (free >= bytes) {
-            limit_ = cur_ + std::min(free, tail);
+            if (w - lastPublished_ >= kPublishEvery) publish();
+            // Come back here when the next kPublishEvery bytes are written
+            // (or the room ends), one record past it at the most.
+            const size_t untilPublish = kPublishEvery - static_cast<size_t>(w - lastPublished_);
+            limit_ = cur_ + std::min({free, tail, std::max(bytes, untilPublish)});
             return cur_;
         }
         // Full: what is written goes to the consumer, which must make room.
         publish();
-        if (fullFn_) fullFn_(fullOwner_);
+        if (fullFn_) fullFn_(owner_, r);
         if (read_.load(std::memory_order_acquire) == r) {
             assert(!"WebGLRing: the full hook consumed nothing");
             std::abort();

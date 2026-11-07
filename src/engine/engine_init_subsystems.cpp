@@ -11,6 +11,7 @@
 #include "render/vulkan_context.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
+#include "webgl/client/webgl_thread.h"
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #endif
@@ -51,7 +52,8 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas,
         cw = attrInt("width", cw);
         ch = attrInt("height", ch);
     }
-    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_, attributes);
+    if (!webglThread_) webglThread_ = std::make_shared<webgl::WebGLThread>();
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_, attributes, webglThread_);
     auto* webglCtx = ctx2.get();
     if (canvas) canvas->setWebglContext(webglCtx);
     webglEntries_.push_back({std::move(ctx2), canvas, canvas ? canvas->document() : nullptr,

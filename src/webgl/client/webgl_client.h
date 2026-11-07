@@ -24,11 +24,14 @@
 // before the replay; only a sync() callback, which runs while the caller
 // waits, may use a pointer into the heap.
 //
-// Inline replay (for now): the ring is replayed on the calling thread at
-// sync points (sync, flush, the frame's end, a read of a publication not
-// made yet) and when it is full. The consumer becomes the WebGL thread
-// later; the encoding and the publications stay.
+// THE THREAD: the backend lives on the WebGL thread (webgl_thread.h), made
+// and destroyed there, and the ring is replayed there as the client
+// publishes it (every WebGLRing::kPublishEvery bytes, and at every sync
+// point). The client waits for that thread only at its sync points: a round
+// trip, a publication not made yet, a full ring or blob budget, and the
+// context's teardown.
 
+#include "webgl/client/webgl_channel.h"
 #include "webgl/client/webgl_client_async.h"
 #include "webgl/client/webgl_client_records.h"
 #include "webgl/client/webgl_cmd.h"
@@ -36,7 +39,9 @@
 #include "webgl/client/webgl_ring.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -45,7 +50,7 @@
 #include <utility>
 #include <vector>
 
-namespace bro::render { class VulkanQueue; }
+namespace bro::render { class VulkanContext; class VulkanQueue; }
 
 namespace bro::webgl {
 
@@ -59,41 +64,56 @@ public:
     /// Blob bytes outstanding at most before the client waits for replays to
     /// free some (one larger payload is still taken, alone).
     static constexpr size_t kBlobCap = size_t{64} << 20;
+    /// How long a client spins for the WebGL thread before it sleeps.
+    static constexpr std::chrono::microseconds kWaitSpin{50};
 
-    /// `caps` and `queue` outlive the client (WebGL2RenderingContext's).
-    WebGLClient(const vk::WebGLCaps& caps, render::VulkanQueue& queue);
-    /// Pending commands are dropped (their blobs freed), then the backend
-    /// goes.
+    /// Replayed on `thread`. `device` and `caps` outlive the client; the
+    /// backend is made with `attributes` at each attach().
+    WebGLClient(std::shared_ptr<WebGLThread> thread, render::VulkanContext& device,
+                std::shared_ptr<const vk::WebGLCaps> caps, const ContextAttributes& attributes);
+    /// Every command still pending replays, then the backend goes: the
+    /// client waits until the WebGL thread has dropped the channel.
     ~WebGLClient();
 
     WebGLClient(const WebGLClient&) = delete;
     WebGLClient& operator=(const WebGLClient&) = delete;
 
-    // --- The backend (inline replay owns it) ---
-    void attach(std::unique_ptr<vk::WebGLVkContext> backend);
-    /// Replay what is pending, then destroy the backend (context loss), and
-    /// forget every object and extension with it.
+    // --- The backend (the WebGL thread makes and destroys it) ---
+    /// A new backend with a `width` x `height` drawing buffer, made after
+    /// every command before it (and destroying the one there was).
+    void attach(int width, int height);
+    /// The backend goes after every command before it (context loss); the
+    /// client forgets every object and extension now.
     void detach();
-    bool hasBackend() const { return backend_ != nullptr; }
+    bool hasBackend() const { return attached_; }
 
-    /// Replay every pending command onto the backend.
-    void drain() {
-        if (ring_.pending()) replayPending();
-    }
-    /// A round trip: fn(backend) after every pending command, its answer
-    /// returned. Requires a backend. `fn` is plain C++ that never touches
-    /// the JS heap but for a pointer the caller took just before (the JS
-    /// thread waits while it runs, so nothing moves).
+    /// A round trip: fn(backend) after every pending command, on the WebGL
+    /// thread, its answer returned (a default one if the backend could not
+    /// be made). Requires attach(). `fn` returns plain data and never
+    /// touches the JS heap but through a pointer the caller took just before
+    /// (the JS thread waits while it runs, so nothing moves).
     template <class F>
     auto sync(F&& fn) {
-        drain();
-        if constexpr (std::is_void_v<std::invoke_result_t<F, vk::WebGLVkContext&>>) {
-            std::forward<F>(fn)(*backend_);
-            replay_.publish(*backend_);
+        using Fn = std::remove_reference_t<F>;
+        using R = std::invoke_result_t<F, vk::WebGLVkContext&>;
+        if constexpr (std::is_void_v<R>) {
+            runSync(
+                [](void* c, vk::WebGLVkContext* gl) {
+                    if (gl) (*static_cast<Fn*>(c))(*gl);
+                },
+                const_cast<void*>(static_cast<const void*>(&fn)));
         } else {
-            auto r = std::forward<F>(fn)(*backend_);
-            replay_.publish(*backend_);
-            return r;
+            struct Ctx {
+                Fn* f;
+                std::optional<R> r;
+            } ctx{&fn, std::nullopt};
+            runSync(
+                [](void* c, vk::WebGLVkContext* gl) {
+                    auto* x = static_cast<Ctx*>(c);
+                    if (gl) x->r.emplace((*x->f)(*gl));
+                },
+                &ctx);
+            return ctx.r ? std::move(*ctx.r) : R{};
         }
     }
 
@@ -103,7 +123,7 @@ public:
 #define BRO_WEBGL_CLIENT_SIMPLE(Name, method, ...)                                 \
     template <class... U>                                                          \
     [[gnu::always_inline]] void method(U... u) {                                   \
-        encodeSimple(ring_, Op::Name, TypeList<__VA_ARGS__>{}, u...);              \
+        encodeSimple(channel_.ring, Op::Name, TypeList<__VA_ARGS__>{}, u...);      \
     }
     BRO_WEBGL_SIMPLE_COMMANDS(BRO_WEBGL_CLIENT_SIMPLE)
 #undef BRO_WEBGL_CLIENT_SIMPLE
@@ -226,17 +246,40 @@ public:
 
     // --- The client's own records ---
     /// An error the binding raised, in order with the backend's.
-    void syntheticError(GLenum error) { encodeSimple(ring_, Op::SyntheticError, TypeList<GLenum>{}, error); }
-    /// Submit what is recorded (WebGL's flush, the frame's end): a sync point.
+    void syntheticError(GLenum error) { encodeSimple(channel_.ring, Op::SyntheticError, TypeList<GLenum>{}, error); }
+    /// Submit what is recorded (WebGL's flush, the frame's end): published
+    /// to the WebGL thread, not waited for.
     void flush();
+    /// A round trip that first submits everything recorded: fn(backend)
+    /// after the backend's flush (the composite's hand-off).
+    template <class F>
+    auto flushThen(F&& fn) {
+        auto both = [&fn](auto& gl) {  // generic: the backend is complete where this is used
+            gl.flush();
+            return fn(gl);
+        };
+        if constexpr (std::is_void_v<std::invoke_result_t<F, vk::WebGLVkContext&>>) {
+            sync(both);
+            settledAt_ = channel_.ring.written();
+        } else {
+            auto r = sync(both);
+            settledAt_ = channel_.ring.written();
+            return r;
+        }
+    }
+    /// Submit what is recorded and wait until the WebGL thread has replayed
+    /// it (not for the GPU): the frame's end, so what a frame encoded is
+    /// replayed and submitted with that frame. Nothing to wait for when no
+    /// call was encoded since the last such submission.
+    void settle();
     /// Submit and wait for the GPU: a round trip.
     void finish();
     /// The engine has shown the drawing buffer.
-    void presented() { encodeSimple(ring_, Op::Presented, TypeList<>{}); }
+    void presented() { encodeSimple(channel_.ring, Op::Presented, TypeList<>{}); }
     /// Resize the drawing buffer; `presentedTicket` is the last queue
     /// submission that may sample the old one.
     void resize(int width, int height, uint64_t presentedTicket) {
-        encodeSimple(ring_, Op::Resize, TypeList<int, int, uint64_t>{}, width, height, presentedTicket);
+        encodeSimple(channel_.ring, Op::Resize, TypeList<int, int, uint64_t>{}, width, height, presentedTicket);
     }
 
     // The hand-written records' argument lists (webgl_replay.cpp decodes them).
@@ -269,22 +312,38 @@ private:
     void putPayload(Op op, TypeList<Ts...> types, const void* data, uint64_t bytes, Us... u) {
         void* blob = nullptr;
         if (bytes != kNullPayload && bytes > kInlinePayloadMax) blob = copyToBlob(data, bytes);
-        encodePayload(ring_, op, types, data, bytes, blob, u...);
+        encodePayload(channel_.ring, op, types, data, bytes, blob, u...);
     }
-    /// A malloc'd copy of a large payload, counted against kBlobCap (replays
-    /// first when over it).
+    /// A malloc'd copy of a large payload, counted against kBlobCap (waits
+    /// for the replay to free some first when over it).
     void* copyToBlob(const void* data, uint64_t bytes);
-    void replayPending();
-    static void onRingFull(void* self);
-    /// Forget every object and extension (the backend went).
-    void forgetObjects();
     /// Over the blob cap: wait for the replay to free some.
     void reserveBlobBytes(uint64_t bytes);
+    /// Forget every object and extension (the backend went).
+    void forgetObjects();
 
-    WebGLRing ring_;
-    std::unique_ptr<vk::WebGLVkContext> backend_;
-    WebGLReplayState replay_;  // the replay's (the consumer's) state
-    bool replaying_ = false;
+    /// Publish what is pending (waking the WebGL thread), then wait until
+    /// ready() — something the WebGL thread publishes.
+    template <class Ready>
+    void waitFor(Ready&& ready) {
+        if (ready()) return;
+        if (channel_.ring.unpublished()) channel_.ring.publish();
+        channel_.progress.wait(ready, kWaitSpin);
+    }
+    /// A fence's queue ticket, once its fenceSync has replayed.
+    uint64_t fenceTicket(FenceSlot& slot);
+    /// Encode a SyncCall of fn(ctx, backend) and wait for its answer.
+    void runSync(WebGLSyncFn fn, void* ctx);
+    static void onRingFull(void* self, uint64_t readSeen);
+    static void onPublish(void* self);
+
+    // The thread first, so the channel (which it serves) goes before it.
+    std::shared_ptr<WebGLThread> thread_;
+    WebGLChannel channel_;
+    uint64_t syncs_ = 0;     // SyncCall records encoded
+    uint64_t settledAt_ = 0;  // the ring's written() at the last flushThen
+    bool attached_ = false;
+    std::shared_ptr<const vk::WebGLCaps> capsRef_;
     const vk::WebGLCaps& caps_;
     render::VulkanQueue& queue_;
 
@@ -301,6 +360,7 @@ private:
     struct HeldQuery {
         std::shared_ptr<QuerySlot> slot;
         uint32_t serial = 0;  // begin/end/queryCounter calls encoded on it
+        bool ended = false;   // the last of them ended it (an end or a timestamp the client expects to take)
     };
     std::unordered_map<GLuint, HeldProgram> programs_;
     std::unordered_map<GLuint, HeldShader> shaders_;

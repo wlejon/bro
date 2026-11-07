@@ -81,14 +81,15 @@ void WebGLClient::compileShader(WebGLShader s) {
         ++it->second.compiles;
         slot = it->second.slot;
     }
-    encodeSimple(ring_, Op::CompileShader, rec::kCompileShader, s, holdRef(std::move(slot)));
+    encodeSimple(channel_.ring, Op::CompileShader, rec::kCompileShader, s, holdRef(std::move(slot)));
 }
 
 const ShaderCompile* WebGLClient::shaderCompile(GLuint id) {
     auto it = id != 0 ? shaders_.find(id) : shaders_.end();
     if (it == shaders_.end()) return nullptr;
     const HeldShader& s = it->second;
-    if (s.slot->compiles.load(std::memory_order_acquire) != s.compiles) drain();
+    const ShaderSlot& slot = *s.slot;
+    waitFor([&] { return slot.compiles.load(std::memory_order_acquire) == s.compiles; });
     return s.slot->compile.get();
 }
 
@@ -123,14 +124,15 @@ void WebGLClient::linkProgram(WebGLProgram p) {
         ++it->second.links;
         slot = it->second.slot;
     }
-    encodeSimple(ring_, Op::LinkProgram, rec::kLinkProgram, p, holdRef(std::move(slot)));
+    encodeSimple(channel_.ring, Op::LinkProgram, rec::kLinkProgram, p, holdRef(std::move(slot)));
 }
 
 const ProgramLink* WebGLClient::programLink(GLuint id) {
     auto it = id != 0 ? programs_.find(id) : programs_.end();
     if (it == programs_.end()) return nullptr;
     const HeldProgram& p = it->second;
-    if (p.slot->links.load(std::memory_order_acquire) != p.links) drain();
+    const ProgramSlot& slot = *p.slot;
+    waitFor([&] { return slot.links.load(std::memory_order_acquire) == p.links; });
     return p.slot->link.get();
 }
 

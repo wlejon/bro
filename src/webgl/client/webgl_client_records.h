@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace bro::webgl::vk { class WebGLVkContext; }
+
 namespace bro::webgl::rec {
 
 /// The pixels of a DOM texture source (img, ImageBitmap, canvas, video,
@@ -45,6 +47,10 @@ inline constexpr TypeList<GLenum, GLuint> kBeginQuery{};
 inline constexpr TypeList<GLenum, GLuint> kEndQuery{};
 // {query, target}
 inline constexpr TypeList<GLuint, GLenum> kQueryCounter{};
+// {width, height}
+inline constexpr TypeList<int, int> kAttach{};
+// {WebGLSyncFn, its context, the round trip's sequence number}
+inline constexpr TypeList<void (*)(void*, vk::WebGLVkContext*), void*, uint64_t> kSyncCall{};
 // {sync, condition, flags, FenceSlot ref}
 inline constexpr TypeList<GLuint, GLenum, GLbitfield, void*> kFenceSync{};
 

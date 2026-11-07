@@ -102,13 +102,25 @@ void replayCustom(vk::WebGLVkContext* gl, Op op, const uint8_t* rec, WebGLReplay
         case Op::CompileShader:
             cmd::decodeArgs<WebGLShader, void*>(rec, [gl](WebGLShader s, void* held) {
                 std::shared_ptr<ShaderSlot> slot = takeRef<ShaderSlot>(held);
-                if (gl) replayCompileShader(*gl, s, slot.get());
+                if (gl) {
+                    replayCompileShader(*gl, s, slot.get());
+                } else if (slot) {
+                    // No backend (one that could not be made): a failed compile,
+                    // published, so no client waits for it.
+                    slot->compile = std::make_shared<const ShaderCompile>();
+                    slot->compiles.fetch_add(1, std::memory_order_release);
+                }
             });
             return;
         case Op::LinkProgram:
             cmd::decodeArgs<WebGLProgram, void*>(rec, [gl](WebGLProgram p, void* held) {
                 std::shared_ptr<ProgramSlot> slot = takeRef<ProgramSlot>(held);
-                if (gl) replayLinkProgram(*gl, p, slot.get());
+                if (gl) {
+                    replayLinkProgram(*gl, p, slot.get());
+                } else if (slot) {
+                    slot->link = emptyProgramLink();
+                    slot->links.fetch_add(1, std::memory_order_release);
+                }
             });
             return;
         case Op::CreateQuery:
@@ -151,7 +163,10 @@ void replayCustom(vk::WebGLVkContext* gl, Op op, const uint8_t* rec, WebGLReplay
             cmd::decodeArgs<GLuint, GLenum, GLbitfield, void*>(
                 rec, [gl](GLuint id, GLenum condition, GLbitfield flags, void* held) {
                     std::shared_ptr<FenceSlot> slot = takeRef<FenceSlot>(held);
-                    if (!gl) return;
+                    if (!gl) {
+                        if (slot) slot->ticketPlus1.store(1, std::memory_order_release);  // ticket 0: complete
+                        return;
+                    }
                     gl->fenceSync(id, condition, flags);
                     slot->ticketPlus1.store(gl->syncTicket(id) + 1, std::memory_order_release);
                 });

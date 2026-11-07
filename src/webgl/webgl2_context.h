@@ -29,9 +29,11 @@ namespace bro::webgl {
 class WebGL2RenderingContext {
 public:
     /// `requested` is what getContext was asked for; attributes() is what
-    /// the context grants (ContextAttributes).
+    /// the context grants (ContextAttributes). The backend lives on `thread`
+    /// (the engine's, shared by its contexts; null: one of its own).
     WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
-                           const ContextAttributes& requested = {});
+                           const ContextAttributes& requested = {},
+                           std::shared_ptr<WebGLThread> thread = nullptr);
     ~WebGL2RenderingContext();
 
     /// What getContextAttributes answers.

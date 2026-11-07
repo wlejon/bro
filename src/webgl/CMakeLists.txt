@@ -51,6 +51,8 @@ add_library(bro_webgl STATIC
     client/webgl_replay.cpp
     client/webgl_client_async.cpp
     client/webgl_client_programs.cpp
+    client/webgl_channel.cpp
+    client/webgl_thread.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)
@@ -61,6 +63,10 @@ if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_webgl_test tests/test_webgl_vulkan.cpp)
     target_link_libraries(bro_vulkan_webgl_test PRIVATE bro_webgl bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_webgl_test PRIVATE ${bro_SOURCE_DIR}/src)
+
+    add_executable(bro_webgl_ring_test tests/test_webgl_ring.cpp)
+    target_link_libraries(bro_webgl_ring_test PRIVATE bro_webgl bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_webgl_ring_test PRIVATE ${bro_SOURCE_DIR}/src)
 
     add_executable(bro_glsl_compiler_test tests/test_glsl_compiler.cpp)
     target_link_libraries(bro_glsl_compiler_test PRIVATE bro_glsl)

@@ -238,3 +238,16 @@
     X(EndQuery)                      \
     X(QueryCounter)                  \
     X(FenceSync)
+
+// The channel's own records (webgl_channel.cpp replays them; the backend
+// never sees them): the backend made, dropped and destroyed on the WebGL
+// thread, and a round trip's callback.
+//   Attach    {width, height}: a new backend (the context's first, or restored)
+//   Detach    {}: the backend goes (context loss)
+//   SyncCall  {fn, ctx, sequence}: fn(ctx, backend), then the answer acknowledged
+//   Destroy   {}: the backend goes and the channel with it; nothing follows
+#define BRO_WEBGL_CHANNEL_COMMANDS(X) \
+    X(Attach)                         \
+    X(Detach)                         \
+    X(SyncCall)                       \
+    X(Destroy)

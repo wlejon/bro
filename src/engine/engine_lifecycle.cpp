@@ -44,6 +44,7 @@
 #endif
 #include "steam/steam_service.h"
 #include "webgl/webgl2_context.h"
+#include "webgl/client/webgl_thread.h"
 #include "platform/desktop_hotkeys.h"
 #include "platform/dialogs.h"
 #include "platform/event_loop.h"
@@ -167,6 +168,7 @@ void Engine::teardown() {
     canvasSceneRegistry_.clear();
 
     webglEntries_.clear();
+    webglThread_.reset();  // joined: every context's backend is gone
     kernelCanvases_.clear();
     destroyAllIframes();
     destroySystemPanels();

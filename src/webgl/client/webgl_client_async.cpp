@@ -13,6 +13,7 @@
 // never ask the backend. Every error the sync calls raise is decided here.
 
 #include "webgl/client/webgl_client.h"
+#include "webgl/client/webgl_thread.h"
 
 #include "render/vulkan_queue.h"
 #include "webgl/vulkan/webgl_vk_caps.h"
@@ -90,48 +91,74 @@ void WebGLClient::createQuery(GLuint id) {
     HeldQuery& q = queries_[id];
     q = HeldQuery{};
     q.slot = std::make_shared<QuerySlot>();
-    encodeSimple(ring_, Op::CreateQuery, rec::kCreateQuery, id, holdRef(q.slot));
+    encodeSimple(channel_.ring, Op::CreateQuery, rec::kCreateQuery, id, holdRef(q.slot));
 }
 
 void WebGLClient::deleteQuery(GLuint id) {
     queries_.erase(id);
     for (GLuint& active : activeQuery_)
         if (active == id) active = 0;
-    encodeSimple(ring_, Op::DeleteQuery, rec::kDeleteQuery, id);
+    encodeSimple(channel_.ring, Op::DeleteQuery, rec::kDeleteQuery, id);
 }
 
 void WebGLClient::beginQuery(GLenum target, GLuint id) {
     const int group = queryGroup(target);
     if (group >= 0 && activeQuery_[group] == 0) activeQuery_[group] = id;
-    if (auto it = queries_.find(id); it != queries_.end()) ++it->second.serial;
-    encodeSimple(ring_, Op::BeginQuery, rec::kBeginQuery, target, id);
+    if (auto it = queries_.find(id); it != queries_.end()) {
+        ++it->second.serial;
+        it->second.ended = false;
+    }
+    encodeSimple(channel_.ring, Op::BeginQuery, rec::kBeginQuery, target, id);
 }
 
 void WebGLClient::endQuery(GLenum target) {
     const int group = queryGroup(target);
     GLuint id = 0;
     if (group >= 0) std::swap(id, activeQuery_[group]);
-    if (auto it = queries_.find(id); it != queries_.end()) ++it->second.serial;
-    encodeSimple(ring_, Op::EndQuery, rec::kEndQuery, target, id);
+    if (auto it = queries_.find(id); it != queries_.end()) {
+        ++it->second.serial;
+        it->second.ended = true;
+    }
+    encodeSimple(channel_.ring, Op::EndQuery, rec::kEndQuery, target, id);
 }
 
 void WebGLClient::queryCounter(GLuint id, GLenum target) {
-    if (auto it = queries_.find(id); it != queries_.end()) ++it->second.serial;
-    encodeSimple(ring_, Op::QueryCounter, rec::kQueryCounter, id, target);
+    if (auto it = queries_.find(id); it != queries_.end()) {
+        ++it->second.serial;
+        it->second.ended = target == GL_TIMESTAMP_EXT && std::find(std::begin(activeQuery_), std::end(activeQuery_), id) ==
+                                                            std::end(activeQuery_);
+    }
+    encodeSimple(channel_.ring, Op::QueryCounter, rec::kQueryCounter, id, target);
 }
 
 bool WebGLClient::queryStatus(GLuint id, QueryStatus& status, uint64_t& result) {
     auto it = id != 0 ? queries_.find(id) : queries_.end();
     if (it == queries_.end()) return false;
     const HeldQuery& q = it->second;
-    uint64_t word = q.slot->word.load(std::memory_order_acquire);
+    QuerySlot& slot = *q.slot;
+    uint64_t word = slot.word.load(std::memory_order_acquire);
     if ((word >> 8) != q.serial) {
-        // A call on the query has not replayed: wait for it, once.
-        drain();
-        word = q.slot->word.load(std::memory_order_acquire);
+        if (q.ended) {
+            // Ended, not replayed yet: its result is not on the host, and
+            // the WebGL thread will publish it (no wait; an app polls this
+            // every frame).
+            word = (static_cast<uint64_t>(q.serial) << 8) | static_cast<uint64_t>(QueryStatus::Pending);
+        } else {
+            // A begin not replayed yet (the backend says whether it took):
+            // wait for it, once.
+            waitFor([&] { return (slot.word.load(std::memory_order_acquire) >> 8) == q.serial; });
+            word = slot.word.load(std::memory_order_acquire);
+        }
     }
     status = static_cast<QueryStatus>(word & 0xff);
-    if (status == QueryStatus::Available) result = q.slot->result.load(std::memory_order_relaxed);
+    if (status == QueryStatus::Available) {
+        result = slot.result.load(std::memory_order_relaxed);
+    } else if (status == QueryStatus::Pending) {
+        // Ask the WebGL thread to look again, even with nothing to replay,
+        // so a later read finds the result once the GPU has it.
+        channel_.pollRequested.store(true, std::memory_order_relaxed);
+        thread_->wake();
+    }
     return true;
 }
 
@@ -148,7 +175,7 @@ bool WebGLClient::fenceSync(GLuint id, GLenum condition, GLbitfield flags) {
     }
     auto slot = std::make_shared<FenceSlot>();
     fences_[id] = slot;
-    encodeSimple(ring_, Op::FenceSync, rec::kFenceSync, id, condition, flags, holdRef(std::move(slot)));
+    encodeSimple(channel_.ring, Op::FenceSync, rec::kFenceSync, id, condition, flags, holdRef(std::move(slot)));
     return true;
 }
 
@@ -157,16 +184,11 @@ void WebGLClient::dropFence(GLuint id) {
     deleteSync(id);
 }
 
-// The fence's ticket, once its fenceSync has replayed (waiting for that once;
-// with inline replay that is replaying this thread's own commands, never a
-// wait on the GPU).
-static uint64_t fenceTicket(FenceSlot& slot, WebGLClient& client) {
-    uint64_t t = slot.ticketPlus1.load(std::memory_order_acquire);
-    if (t == 0) {
-        client.drain();
-        t = slot.ticketPlus1.load(std::memory_order_acquire);
-    }
-    return t == 0 ? 0 : t - 1;
+// The fence's ticket, once its fenceSync has replayed (waiting for that once:
+// the WebGL thread replaying what is before it, never a wait on the GPU).
+uint64_t WebGLClient::fenceTicket(FenceSlot& slot) {
+    waitFor([&] { return slot.ticketPlus1.load(std::memory_order_acquire) != 0; });
+    return slot.ticketPlus1.load(std::memory_order_acquire) - 1;
 }
 
 GLenum WebGLClient::clientWaitSync(GLuint id, GLbitfield flags, double timeoutNs) {
@@ -187,7 +209,7 @@ GLenum WebGLClient::clientWaitSync(GLuint id, GLbitfield flags, double timeoutNs
     }
     // The fence's own submission went at fenceSync: SYNC_FLUSH_COMMANDS_BIT
     // has nothing left to flush.
-    const uint64_t ticket = fenceTicket(*it->second, *this);
+    const uint64_t ticket = fenceTicket(*it->second);
     if (queue_.isComplete(ticket)) return kAlreadySignaled;
     if (timeoutNs == 0) return kTimeoutExpired;
     return queue_.wait(ticket, static_cast<uint64_t>(timeoutNs)) ? kConditionSatisfied : kTimeoutExpired;
@@ -213,7 +235,7 @@ bool WebGLClient::getSyncParameter(GLuint id, GLenum pname, GLint& out) {
         case kSyncCondition: out = kSyncGpuCommandsComplete; return true;
         case kSyncFlags: out = 0; return true;
         case kSyncStatus:
-            out = queue_.isComplete(fenceTicket(*it->second, *this)) ? kSignaled : kUnsignaled;
+            out = queue_.isComplete(fenceTicket(*it->second)) ? kSignaled : kUnsignaled;
             return true;
         default:
             syntheticError(GL_INVALID_ENUM);

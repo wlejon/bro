@@ -13,7 +13,7 @@ namespace bro::render {
     class CommandBuffer;
     class Renderer;
 }
-namespace bro::webgl { class WebGL2RenderingContext; }
+namespace bro::webgl { class WebGL2RenderingContext; class WebGLThread; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }

@@ -425,6 +425,9 @@ private:
     canvas::CanvasScene* canvasSceneById(uint64_t id) const;
 
     std::vector<WebGLEntry> webglEntries_;
+    // The thread every WebGL context's backend lives on: made with the first
+    // context, kept until shutdown (after the contexts, before the device).
+    std::shared_ptr<webgl::WebGLThread> webglThread_;
     std::vector<KernelCanvasEntry> kernelCanvases_;
     // The kernel canvases' shared store pipelines: alive while one is.
     std::weak_ptr<render::KernelCanvasBlit> kernelCanvasBlit_;

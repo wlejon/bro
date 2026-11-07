@@ -2,6 +2,7 @@
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/vulkan/webgl_vk_caps.h"
 #include "render/vulkan_context.h"
+#include "webgl/client/webgl_thread.h"
 
 namespace bro::webgl {
 
@@ -21,13 +22,16 @@ ContextAttributes granted(ContextAttributes a) {
 }  // namespace
 
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
-                                               const ContextAttributes& requested)
+                                               const ContextAttributes& requested,
+                                               std::shared_ptr<WebGLThread> thread)
     : width_(width), height_(height), device_(device), attributes_(granted(requested)),
-      caps_(vk::buildWebGLCaps(device)), client_(*caps_, device.queue()) {
-    client_.attach(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_, caps_));
-    // Work recorded but not yet submitted goes at the frame's end at the
-    // latest, so nothing the backend holds outlives the frame it was for.
-    frameEndHook_ = device_.frames().addFrameEndHook([this] { client_.flush(); });
+      caps_(vk::buildWebGLCaps(device)),
+      client_(thread ? std::move(thread) : std::make_shared<WebGLThread>(), device, caps_, attributes_) {
+    client_.attach(width, height);
+    // What a frame encoded is replayed and submitted by its end at the
+    // latest (a canvas not composited included), so nothing the backend
+    // holds outlives the frame it was for and a headless step sees it done.
+    frameEndHook_ = device_.frames().addFrameEndHook([this] { client_.settle(); });
 }
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
@@ -50,9 +54,9 @@ render::LayerImage WebGL2RenderingContext::frameEnd() {
     render::LayerImage out;
     if (lost_) return out;
     if (!client_.hasBackend()) return out;
-    client_.flush();
-    // What the flush left the canvas as (a round trip with nothing pending).
-    out = client_.sync([](vk::WebGLVkContext& gl) {
+    // Everything recorded is submitted, and the canvas image as that left it
+    // answered: a round trip, so this submission precedes the presenter's.
+    out = client_.flushThen([](vk::WebGLVkContext& gl) {
         const vk::WebGLVkCanvas& canvas = gl.canvas();
         render::LayerImage img;
         img.image = canvas.colorImage();
@@ -100,7 +104,7 @@ WebGL2RenderingContext::ContextEvent WebGL2RenderingContext::takeContextEvent() 
     if (e == ContextEvent::Restored) {
         // WebGL 1.0 5.15.4 "restore the context": a fresh drawing buffer and
         // default state; names continue, so no lost object's names a new one.
-        client_.attach(std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, caps_));
+        client_.attach(width_, height_);
         lost_ = false;
         lostErrorPending_ = false;
     }
