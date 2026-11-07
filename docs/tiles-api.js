@@ -322,7 +322,14 @@ const terrain = bro.tiles.createCache({
 //                   back yet;
 //                   batchSize, the most the next batch holds; tileMs, a
 //                   produced tile's GPU ms (-1 before a batch is timed),
-//                   and levelMs, by level (-1 where none was timed)
+//                   and levelMs, by level (-1 where none was timed);
+//                   batchMs, a batch's own ms whatever it holds (its
+//                   queue's latency): a batch's span fitted as batchMs +
+//                   tiles x their ms over the batches timed, so a batch of
+//                   few tiles does not charge it to them. The refinement's
+//                   budget pays the tiles' ms. A batch whose span ended in a
+//                   later frame than it began (its produce waited, pumped,
+//                   while frames went by) is not timed.
 // cache.clear()     drops every tile; the next updates produce them again
 //                   (after the world's source changed)
 // cache.destroy()   releases its GPU memory (every pool, the draw list, the

@@ -34,7 +34,8 @@ Every brokernel compile goes through a second on-disk cache, brokernel's
 the scene's built-in stages. An entry stores everything the compile produced: SPIR-V, reflection, types,
 constants, probes, costs, hashes and diagnostics. A hit returns the same
 result a compile would. A kernel's CPU form is lowered the first time it runs
-on the CPU (`eval`, `run`), at about the cost of one compile. Only successful
+on the CPU (`eval`, `run`), at about the cost of one compile; a `@cpu`
+kernel's begins on a thread of its own as its compile ends (docs/kernel-api.js). Only successful
 compiles are stored.
 
 An entry misses when any of these differs:
@@ -42,6 +43,9 @@ An entry misses when any of these differs:
 - the compiler build (the binary holding brokernel and brass), the version
   and the host's AVX2/FMA;
 - the source and its file name;
+- the modules registered by name (a hook's `modules`, `registerModule`), each
+  by a hash of its source, so a built-in stage keeps an entry beside each hook
+  it is compiled with;
 - every module the compile read, each resolved again as the compiler would
   now resolve it and compared by a hash of its source;
 - every compile option, knob overrides included.

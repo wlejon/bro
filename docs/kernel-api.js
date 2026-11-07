@@ -97,6 +97,12 @@ console.log('brokernel', bro.kernel.version);
 //
 // Compiles are cached on disk (docs/code-cache.md "Kernel cache"). A launch
 // with unchanged sources takes each from the cache, with the same result.
+//
+// A @cpu kernel's CPU build (lowered and compiled to machine code, which the
+// cache does not hold) starts on a thread of its own as its compile ends, on
+// the page thread and with compileAsync alike: the module comes back without
+// waiting for it. Its first eval or run (or cpuLanes read) waits for it as a
+// compile waits, the window answering; a large kernel takes a second or more.
 
 const mod = bro.kernel.compile(`
     import std::noise::*;

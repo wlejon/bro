@@ -195,6 +195,9 @@ private:
 /// The GPU time of the work recorded between VulkanCompute::beginSpan and
 /// endSpan, from the end of everything submitted before it to the end of
 /// that work. Made by beginSpan; there once ready(), waiting for nothing.
+/// A span that ends in a later frame than it began (the thread recording it
+/// waited, pumped, while frames went by) holds that wait and the frames'
+/// work too: it is ready with no time (ms() negative).
 class ComputeSpan {
 public:
     ~ComputeSpan();
@@ -212,7 +215,9 @@ private:
     std::shared_ptr<ComputeOwner> owner_;
     uint32_t query_ = 0;
     uint64_t ticket_ = 0;
+    uint64_t frame_ = 0;      // the frame serial at beginSpan
     bool background_ = false;
+    bool crossed_ = false;    // it ended in a later frame: no time of its own
     mutable double ms_ = -1.0;
 };
 

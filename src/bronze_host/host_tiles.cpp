@@ -154,6 +154,13 @@ struct Cache {
     // refinement not spent yet, and what this update's batch may spend.
     double tileMs = -1.0;
     std::vector<double> levelMs;
+    // A batch's span is an overhead (its submission's latency on the queue,
+    // whatever the batch holds) and its tiles' costs: fitted as
+    // ms = batchMs + tiles x a tile's, by least squares over the batches
+    // timed (sums decayed toward the latest), so a batch of few tiles does
+    // not charge the overhead to them. The budget pays the tiles alone.
+    double batchMs = 0.0;
+    double fitW = 0.0, fitN = 0.0, fitM = 0.0, fitNN = 0.0, fitNM = 0.0;
     double wantMs = 0.0;
     double credit = 0.0;
     double spendMs = std::numeric_limits<double>::infinity();
@@ -378,9 +385,25 @@ void pace(Cache& c) {
 // estimates missed, by the share of the estimate the level held.
 void timeBatch(Cache& c, const Cache::InFlight& f) {
     if (!f.span || !f.span->ready() || f.tiles.empty()) return;
-    const double ms = f.span->ms();
-    if (ms <= 0.0) return;
-    const double perTile = ms / static_cast<double>(f.tiles.size());
+    const double spanMs = f.span->ms();
+    if (spanMs <= 0.0) return;
+    const double n = static_cast<double>(f.tiles.size());
+    constexpr double kKeep = 0.9;
+    c.fitW = kKeep * c.fitW + 1.0;
+    c.fitN = kKeep * c.fitN + n;
+    c.fitM = kKeep * c.fitM + spanMs;
+    c.fitNN = kKeep * c.fitNN + n * n;
+    c.fitNM = kKeep * c.fitNM + n * spanMs;
+    const double meanN = c.fitN / c.fitW, meanM = c.fitM / c.fitW;
+    const double varN = c.fitNN / c.fitW - meanN * meanN;
+    if (varN > 0.25) {
+        const double slope = (c.fitNM / c.fitW - meanN * meanM) / varN;
+        // A span that does not grow with its tiles is all overhead.
+        c.batchMs = slope > 0.0 ? std::max(0.0, meanM - slope * meanN) : meanM;
+    }
+    // The tiles' share of the span; at least a tenth of it, whatever the fit.
+    const double ms = std::max(spanMs - c.batchMs, 0.1 * spanMs);
+    const double perTile = ms / n;
     if (c.tileMs <= 0.0) c.tileMs = perTile;
     std::vector<std::pair<uint32_t, double>> byLevel;   // level, its estimated ms in the batch
     double predicted = 0.0;
@@ -745,6 +768,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         o.set("reportsInFlight", static_cast<double>(c->reports.size()));
         o.set("batchSize", static_cast<double>(c->batchSize));
         o.set("tileMs", c->tileMs);
+        o.set("batchMs", c->batchMs);
         ev::ArrayBuilder levels(static_cast<uint32_t>(c->levelMs.size()));
         for (uint32_t i = 0; i < c->levelMs.size(); ++i) levels.set(i, c->levelMs[i]);
         o.set("levelMs", levels.get());

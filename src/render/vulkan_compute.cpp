@@ -154,7 +154,7 @@ bool ComputeSpan::ready() const {
 }
 
 double ComputeSpan::ms() const {
-    if (ms_ < 0.0 && ready()) {
+    if (ms_ < 0.0 && !crossed_ && ready()) {
         uint64_t stamps[2] = {0, 0};
         if (vkGetQueryPoolResults(owner_->context->device(), owner_->spanPool, query_, 2, sizeof(stamps), stamps,
                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
@@ -623,6 +623,7 @@ std::shared_ptr<ComputeSpan> VulkanCompute::beginSpan() {
     span->owner_ = owner_;
     span->query_ = owner_->freeSpans.back();
     span->background_ = recordingBackground();
+    span->frame_ = context_->frames().frameSerial();
     owner_->freeSpans.pop_back();
     VkCommandBuffer cmd = commands({});
     vkCmdResetQueryPool(cmd, owner_->spanPool, span->query_, 2);
@@ -636,6 +637,7 @@ void VulkanCompute::endSpan(ComputeSpan& span) {
     if (!context_ || span.owner_ != owner_ || span.ticket_) return;
     VkCommandBuffer cmd = commands({});
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, owner_->spanPool, span.query_ + 1);
+    span.crossed_ = context_->frames().frameSerial() != span.frame_;
     span.ticket_ = span.background_ ? markBackground() : flush();
 }
 
