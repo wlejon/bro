@@ -499,8 +499,8 @@ class SceneNode {
    * `v.instance_index`) after skinning and wind (for an InstancedMesh, in
    * mesh-local space before the per-instance transform) so lighting, fog and
    * shadows follow the displacement; the shadow pass runs `vertex` too. A hook
-   * may pass its own interpolated `vec4<f32>` varyings in `v.user0`, `v.user1`
-   * and `v.user2`.
+   * may pass its own varyings to `fragment`: six interpolated `vec4<f32>` in
+   * `v.v0` to `v.v5` and one `vec4<i32>` in `v.vi`.
    *
    * `fragment` runs after every material input is gathered and before lighting:
    * `s.base_color`, `s.normal` (world space, renormalised after), `s.metallic`,
