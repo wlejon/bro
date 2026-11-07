@@ -204,7 +204,7 @@
  * @property {Array<number>} [rayleigh]  Rayleigh scattering per metre at the surface, [r, g, b] (default [5.802e-6, 13.558e-6, 33.1e-6]).
  * @property {number} [rayleighScaleHeight]  Metres (default 8000).
  * @property {number|Array<number>} [mie]  Mie scattering per metre (default 3.996e-6), or [that, g].
- * @property {number} [mieG]  Mie anisotropy in (-1, 1) (default 0.8).
+ * @property {number|Array<number>} [mieG]  Mie anisotropy in (-1, 1) (default 0.8), one value or [r, g, b]: Mars's dust forward-scatters the blue more than the red (g larger in b), which rings a low sun in blue.
  * @property {number|Array<number>} [mieScattering]  Mie scattering per metre as one value (as `mie`) or [r, g, b]: a coloured haze, such as a dusty air's.
  * @property {number|Array<number>} [mieAbsorption]  Per metre, one value or [r, g, b] (default 0.444e-6). Dust that absorbs the blue (more absorption in b than r) reddens the sky and the light through it.
  * @property {number} [mieScaleHeight]  Metres (default 1200).

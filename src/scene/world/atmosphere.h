@@ -48,7 +48,10 @@ struct AtmosphereParams {
     // Earth's haze, reddish for a dusty air that absorbs the blue.
     float mieScattering[3] = {3.996e-6f, 3.996e-6f, 3.996e-6f};
     float mieAbsorption[3] = {0.444e-6f, 0.444e-6f, 0.444e-6f};
-    float mieG          = 0.8f;
+    // The Mie phase's anisotropy per channel: one for Earth's haze; dust
+    // whose grains forward-scatter the blue more than the red (larger g in
+    // b) rings the sun in blue.
+    float mieG[3]       = {0.8f, 0.8f, 0.8f};
     float scaleHeightM  = 1200.0f;
     // Ozone: absorption only, a tent of density 1 at ozoneCenter falling to 0
     // ozoneWidth either side.

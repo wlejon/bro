@@ -72,7 +72,8 @@ struct alignas(16) AtmosphereGpu {
     alignas(16) float sunIlluminance[4];  // rgb = at the top of the air, w = the sun's angular radius
     alignas(16) float rayleigh[4];        // rgb = scattering per metre at the ground, w = scale height
     alignas(16) float mie[4];             // rgb = scattering per metre at the ground, w = scale height
-    alignas(16) float mieAbsorb[4];       // rgb = absorption per metre at the ground, w = g
+    alignas(16) float mieAbsorb[4];       // rgb = absorption per metre at the ground, w = 0
+    alignas(16) float mieG[4];            // rgb = the phase's anisotropy g per channel, w = 0
     alignas(16) float ozone[4];           // rgb = absorption at the peak, w = the peak's altitude
     alignas(16) float shell[4];           // x = planet radius, y = top radius, z = ozone half width, w = 0
     alignas(16) float origin[4];          // xyz = the eye about the planet's centre
@@ -82,7 +83,7 @@ struct alignas(16) AtmosphereGpu {
     alignas(16) float froxel[4];          // xyz = this eye minus the froxel eye, w = the volume's depth
     alignas(16) float froxelViewProj[16]; // relative to the froxel eye -> its clip space
 };
-static_assert(sizeof(AtmosphereGpu) == 11 * 16 + 64);
+static_assert(sizeof(AtmosphereGpu) == 12 * 16 + 64);
 
 /// The lighting block (set 1), std140 — Lighting in shaders/common/lighting.bk.
 struct alignas(16) SceneLightingUniforms {

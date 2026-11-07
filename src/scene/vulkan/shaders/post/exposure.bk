@@ -157,6 +157,7 @@ fn exposure_comp(u: ExposurePush) {
                     rayleigh: z4,
                     mie: z4,
                     mie_absorb: z4,
+                    mie_g: z4,
                     ozone: z4,
                     shell: vec4<f32>(u.rb, u.rt, 1.0, 1.0),
                     ground: z4,

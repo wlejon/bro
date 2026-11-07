@@ -65,7 +65,8 @@ fn atm_march(
 ) -> MarchResult {
     let nu = dot(rd, sun);
     let p_r = atmosphere::phase_r(nu);
-    let p_m = atmosphere::phase_m(nu, atm.mie_absorb.w);
+    let p_m = vec3<f32>(atmosphere::phase_m(nu, atm.mie_g.x), atmosphere::phase_m(nu, atm.mie_g.y),
+                        atmosphere::phase_m(nu, atm.mie_g.z));
     let dt = (t1 - t0) / (steps as f32);
     var l: vec3<f32> = vec3<f32>(0.0);
     var tr: vec3<f32> = transmittance_in;

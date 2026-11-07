@@ -12,7 +12,8 @@ pub struct Atmosphere {
     sun_illuminance: vec4<f32>,  // rgb the sun's illuminance at the top of the air, w its angular radius
     rayleigh: vec4<f32>,         // rgb scattering a metre at the ground, w the scale height
     mie: vec4<f32>,              // rgb scattering a metre at the ground, w the scale height
-    mie_absorb: vec4<f32>,       // rgb absorption a metre at the ground, w g
+    mie_absorb: vec4<f32>,       // rgb absorption a metre at the ground
+    mie_g: vec4<f32>,            // rgb the phase's anisotropy g per channel
     ozone: vec4<f32>,            // rgb absorption a metre at the layer's peak, w the peak's altitude
     shell: vec4<f32>,            // x the planet's radius, y the top of the air's, z the ozone's half width
     origin: vec4<f32>,           // xyz the eye about the planet's centre

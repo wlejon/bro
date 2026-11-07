@@ -602,7 +602,9 @@ void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32
     if (given(7)) { float s = 0.0f; at(7, s, 0.0f, 1e-2f); std::fill(a.mieAbsorption, a.mieAbsorption + 3, s); }
     rgb(32, a.mieScattering, 0.0f, 1e-2f);
     rgb(35, a.mieAbsorption, 0.0f, 1e-2f);
-    at(6, a.mieG, -0.999f, 0.999f);
+    // The phase's g at 6 (every channel's), or per channel at 38-40.
+    if (given(6)) { float s = 0.0f; at(6, s, -0.999f, 0.999f); std::fill(a.mieG, a.mieG + 3, s); }
+    rgb(38, a.mieG, -0.999f, 0.999f);
     at(8, a.scaleHeightM, 1.0f, 1e6f);
     // Turbidity: haze as a multiple of the clear-air Mie coefficients.
     if (given(9) && params[9] > 0.0) {
