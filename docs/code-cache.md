@@ -26,6 +26,37 @@ The log (`bro.log`, or stderr headless) says per compile whether it hit and why 
 | `BRO_CODE_CACHE=0` | no cache |
 | `BRO_CODE_CACHE_DIR=<dir>` | another directory |
 
+## Kernel cache
+
+Every brokernel compile goes through a second on-disk cache, brokernel's
+(`brokernel/compile_cache.h`). That covers `bro.kernel.compile` /
+`compileAsync`, scene hooks (`setShader` / `setShaderAsync`, volume hooks) and
+the scene's built-in stages. An entry stores everything the compile produced: SPIR-V, reflection, types,
+constants, probes, costs, hashes and diagnostics. A hit returns the same
+result a compile would. A kernel's CPU form is lowered the first time it runs
+on the CPU (`eval`, `run`), at about the cost of one compile. Only successful
+compiles are stored.
+
+An entry misses when any of these differs:
+
+- the compiler build (the binary holding brokernel and brass), the version
+  and the host's AVX2/FMA;
+- the source and its file name;
+- every module the compile read, each resolved again as the compiler would
+  now resolve it and compared by a hash of its source;
+- every compile option, knob overrides included.
+
+It lives in `<user cache dir>/kernel-cache/` and has the same 512 MB limit
+and least-recently-used trim as the code cache. Deleting it is always safe.
+
+| Variable | Effect |
+|---|---|
+| `BRO_KERNEL_CACHE=0` | no cache |
+| `BRO_KERNEL_CACHE_DIR=<dir>` | another directory |
+
+`BRO_SCENE_SHADER_SOURCE=1` reads the built-in stages from the source tree.
+Their compiles still go through the cache, keyed by the text read.
+
 ## Pipelines built off the frame thread
 
 The scene's graphics pipelines (the mesh drawer's, the shadow casters') and its async compute pipelines are built on threads of their own, never on the frame thread: a draw is skipped until its pipeline is in, and `scene.pendingWork()` says `pipelines: 3 building` meanwhile. Whatever a frame skips for a pipeline still coming says so (`pipelines: 2 draws skipped last frame`), so `perf.settle` waits for a frame that skips nothing, and the shadow pages, which cache what was drawn into them, are all drawn again once a frame skips nothing. That is a window's policy (`bro`, `bro --drm`): its frames never wait, so the OS never sees it stop answering. Headless renders are read back at once (tests, stills), so there a frame waits for what it draws; `perf.asyncShaders(true)` gives a headless run the window's behaviour (to measure boot frames as a window has them).

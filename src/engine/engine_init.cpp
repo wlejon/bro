@@ -42,6 +42,7 @@
 #include "render/skia_backend.h"
 #include <include/core/SkData.h>
 #include "render/bidi.h"
+#include "render/kernel_shader.h"
 #include "render/system_font_mgr.h"
 
 #if BRO_WITH_PHYSICS
@@ -50,6 +51,7 @@
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/script_pump.h"
 #include "api/fs_watch.h"  // Engine owns unique_ptr<FsWatcher>s; the ctor's unwind deletes them
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
@@ -163,6 +165,16 @@ void Engine::construct(const EngineConfig& config) {
     editUndo_ = std::make_unique<DomUndoHistories>();
     // Before the engine's threads exist, so they share a few arenas.
     configureHeap();
+    // This thread runs the page: natives that block on it pump it
+    // (util/page_pump.h).
+    installPagePump();
+    // Kernel compiles load from disk when unchanged (docs/code-cache.md);
+    // the engine's own scene stages start compiling now, on threads of their
+    // own, for the first scene's setup to find built.
+    render::configureKernelCache();
+#if BRO_WITH_3D
+    if (config.displayMode != DisplayMode::Server) scene::SceneRenderer::prewarmBuiltinShaders();
+#endif
     // Before any image decodes: rasterizing an SVG image paints it with the
     // layout's SVG traversal.
     layout::installSvgImagePainter();
@@ -452,8 +464,17 @@ void Engine::construct(const EngineConfig& config) {
     } else if (displayMode_ == DisplayMode::Drm) {
         initDrm(config);
     } else {
+        // bro-server: no page thread to keep answering.
+        removePagePump();
         renderer_ = std::make_unique<render::RasterRenderer>();
     }
+
+    // The window is up: from here to the first frame, the longest stretch
+    // the page thread goes without letting the OS in is what a window system
+    // judges (util/page_pump.h; logged with "first frame").
+    util::startPumpWatch();
+    util::notePagePump();
+    if (displayMode_ != DisplayMode::Server) bronze_host::startScriptPumpWatchdog();
 
     // The page's first script compiles on its own thread from here; its run
     // (initAppRealm) takes the program. Windowed, the device below comes up

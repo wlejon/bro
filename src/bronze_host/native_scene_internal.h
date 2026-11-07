@@ -340,6 +340,18 @@ void bro_scene_SceneNode_play(void* self, const char* clipName, const char* json
 }
 
 namespace bro::bronze_host {
+// native_scene_shader_args.cpp: what setShaderModule / setShaderAsync are
+// given, read once for both. False with `err` set when it does not parse.
+struct ShaderModuleArgs {
+    bro::scene::SceneRenderer::CustomShaderTarget target = bro::scene::SceneRenderer::CustomShaderTarget::Static;
+    bool isSkinned = false;
+    std::string source;
+    std::string file;
+    std::vector<std::pair<std::string, std::string>> modules;
+    std::vector<std::pair<std::string, double>> knobs;
+};
+bool readShaderModuleArgs(bro::scene::SceneNode* n, const char* module, const char* file, const char* modulesJson,
+                          ShaderModuleArgs& out, std::string& err);
 bool registerSceneShaderNatives(std::string* error);
 bool registerSceneCameraNatives(std::string* error);
 // native_scene_extras.cpp: the per-type accessors and instanced-mesh

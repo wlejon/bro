@@ -52,7 +52,25 @@ void shadowVertexInput(MeshKind kind, bool custom, bool cutout, std::vector<VkVe
     attributes = std::move(used);
 }
 
+constexpr const char* kCasterVsEntries[kMeshKindCount] = {
+    "shadow_vert",
+    "shadow_instanced_vert",
+    "shadow_skinned_vert",
+    "shadow_scatter_vert",
+    "shadow_tube_vert",
+    "shadow_veg_vert",
+    "shadow_instanced_veg_vert",
+};
+constexpr const char* kCasterOtherEntries[] = {
+    "shadow_frag", "shadow_cutout_vert", "shadow_instanced_cutout_vert", "shadow_cutout_frag",
+};
+
 }  // namespace
+
+void SceneCasterDrawer::prewarmStages() {
+    prewarmKernelShadowStages(kCasterVsEntries);
+    prewarmKernelShadowStages(kCasterOtherEntries);
+}
 
 bool SceneCasterDrawer::setup(SceneGpu& gpu) {
     device_ = &gpu.device;
@@ -73,15 +91,6 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
     info.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
 
-    static constexpr const char* kVsEntries[kMeshKindCount] = {
-        "shadow_vert",
-        "shadow_instanced_vert",
-        "shadow_skinned_vert",
-        "shadow_scatter_vert",
-        "shadow_tube_vert",
-        "shadow_veg_vert",
-        "shadow_instanced_veg_vert",
-    };
     auto buildStage = [&](const char* entry, VkShaderModule& mod, std::string& outEntry) {
         KernelHookStage stage;
         std::string err;
@@ -94,12 +103,12 @@ bool SceneCasterDrawer::setup(SceneGpu& gpu) {
         return mod != VK_NULL_HANDLE;
     };
     for (int k = 0; k < kMeshKindCount; ++k) {
-        if (!buildStage(kVsEntries[k], vs_[k], vsEntry_[k])) return false;
+        if (!buildStage(kCasterVsEntries[k], vs_[k], vsEntry_[k])) return false;
     }
-    return buildStage("shadow_frag", fs_, fsEntry_) &&
-           buildStage("shadow_cutout_vert", vsCutout_[0], vsCutoutEntry_[0]) &&
-           buildStage("shadow_instanced_cutout_vert", vsCutout_[1], vsCutoutEntry_[1]) &&
-           buildStage("shadow_cutout_frag", fsCutout_, fsCutoutEntry_);
+    return buildStage(kCasterOtherEntries[0], fs_, fsEntry_) &&
+           buildStage(kCasterOtherEntries[1], vsCutout_[0], vsCutoutEntry_[0]) &&
+           buildStage(kCasterOtherEntries[2], vsCutout_[1], vsCutoutEntry_[1]) &&
+           buildStage(kCasterOtherEntries[3], fsCutout_, fsCutoutEntry_);
 }
 
 void SceneCasterDrawer::cleanup(SceneGpu& gpu) {

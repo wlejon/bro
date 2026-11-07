@@ -6,6 +6,7 @@
 #include "engine/engine.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_pipeline_cache.h"
+#include "util/page_pump.h"
 
 #include <brass/gpu/vulkan_driver.hpp>
 #include <brokernel/api.h>
@@ -277,7 +278,7 @@ public:
         }
         render::VulkanCompute& compute = device_->context()->compute();
         auto& p = static_cast<Program&>(program);
-        if (p.build.valid()) p.pipeline = compute.adoptPipeline(p.build.get(), &p.error);
+        if (p.build.valid()) p.pipeline = compute.adoptPipeline(util::waitPumping(p.build, util::PumpReason::GpuWait), &p.error);
         if (!p.pipeline) {
             if (err) *err = p.error;
             return false;
@@ -406,6 +407,22 @@ void installKernelGpu(engine::Engine& engine) {
     s_device = std::make_shared<Device>();
     s_device->engine = &engine;
     brokernel::api::setGpuDevice(std::make_shared<KernelGpu>(s_device));
+    // bro.kernel's compiles on the page thread run on a worker while this
+    // thread pumps (util/page_pump.h); compileAsync's promises settle once a
+    // frame, headless's all of them in the frame after they were asked for.
+    if (util::onPageThread()) {
+        brokernel::api::setThreadWaitPump([] { util::pumpPageThread(util::PumpReason::Wait); },
+                                          util::kPumpIntervalMs);
+    }
+    const bool settleAll = engine.displayMode() != engine::DisplayMode::Windowed;
+    engine.addFramePump([settleAll] {
+        brokernel::api::settleAsyncCompiles(settleAll);
+        if (ev::microtasksPending()) ev::drainMicrotasks();
+    });
+    engine.addShutdownHook([] {
+        brokernel::api::shutdownKernelAsync();
+        brokernel::api::setThreadWaitPump(nullptr, 0);
+    });
     engine.addShutdownHook([device = s_device] {
         // A program never dispatched still holds its build: destroyed now,
         // before the device goes. One a dispatch adopted is the compute's

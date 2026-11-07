@@ -515,6 +515,7 @@ void Engine::windowedFrame(bool modal) {
                 eventLoop_->pollEvents();
                 pollingEvents_ = false;
             }
+            util::notePagePump();
             platform::desktop::pumpEvents();
             if (eventLoop_ && eventLoop_->shouldQuit()) {
                 running_ = false;
@@ -702,7 +703,9 @@ void Engine::windowedFrame(bool modal) {
 // poll, and one at a time: anything else that pumps the OS's messages is not
 // at a point between frames.
 void Engine::modalFrame() {
-    if (!pollingEvents_ || inModalFrame_ || !running_) return;
+    // Not from a busy page's pump (util/page_pump.h): a native or a script
+    // is mid-run below it.
+    if (!pollingEvents_ || inModalFrame_ || !running_ || util::inPagePump()) return;
     if (window_) {
         int w = 0, h = 0;
         window_->getSize(w, h);

@@ -103,6 +103,7 @@ set(BRO_BRONZE_HOST_SOURCES
     eval.cpp
     eval_jit.cpp
     eval_js_scan.cpp
+    script_pump.cpp
     host_noise.cpp
     host_custom_elements.cpp
     host_imagebitmap.cpp
@@ -193,6 +194,7 @@ if(BRO_WITH_3D)
         native_scene_nodes.cpp
         native_scene_lights.cpp
         native_scene_shaders.cpp
+        native_scene_shader_args.cpp
         native_scene_extras.cpp
         native_scene_attach.cpp
         native_scene_core.cpp

@@ -34,6 +34,7 @@
 #include "render/damage.h"
 #include "render/kernel_canvas.h"
 #include "util/asset_mounts.h"
+#include "util/page_pump.h"
 #include "webgl/webgl_types.h"
 
 
@@ -448,6 +449,14 @@ public:
     /// one live frame, and the `bro-compiling` / `--bro-compile-progress` state on <html>.
     void pumpCompileFrame(double progress);
     void setCompileProgress(bool compiling, double progress);
+    /// The page thread's pump while a native waits or a script runs long
+    /// (util/page_pump.h; engine_compile_frame.cpp): the window's messages
+    /// processed and left queued, and while the page boots its markup drawn.
+    /// Installed for this engine by installPagePump.
+    void pumpWhileBusy(util::PumpReason reason);
+    void installPagePump();
+    void removePagePump();
+    void drawBootFrame();
     const std::vector<SystemDocument>& systemDocs() const { return systemDocs_; }
     std::vector<SystemDocument>& systemDocs() { return systemDocs_; }
     const std::string& systemActivePanel() const { return systemActivePanel_; }

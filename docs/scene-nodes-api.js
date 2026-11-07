@@ -582,6 +582,31 @@ class SceneNode {
   setShaderModule(source, file, modules) {}
 
   /**
+   * `setShader` without the wait. This takes the same arguments (`opts`, or
+   * `source, file, modules`). Every stage the hook may draw with compiles on
+   * a thread of its own while the page runs: the vertex stage, the fragment
+   * stage's variants and the shadow casters, or for a volume, its main and
+   * near passes. Several calls compile in parallel. The promise settles in a
+   * frame once all of its stages are in. The module is set then, exactly as
+   * `setShader` sets it, and the promise resolves to the node. It rejects
+   * with the TypeError or Error `setShader` would have thrown. Headless
+   * waits for every pending one in the frame after it was asked for (the
+   * next `flush()` / `advanceTime()`).
+   *
+   * A world that sets many hooks at boot starts them all and awaits them
+   * together, so the compiles overlap and the window keeps answering.
+   *
+   * @param {{module: string, file?: string, modules?: Object<string, string>, uniforms?: Object<string, number|number[]>, knobs?: Object<string, number|boolean>}} opts
+   * @returns {Promise<SceneNode>}
+   * @example
+   * await Promise.all([
+   *   ground.setShaderAsync({ module: read('ground.bk'), file: 'ground.bk', modules }),
+   *   water.setShaderAsync({ module: read('water.bk'), file: 'water.bk', modules }),
+   * ]);
+   */
+  setShaderAsync(opts) {}
+
+  /**
    * Override `@knob const` values in the node's custom shader module (`{ NAME: value }`),
    * recompiling the shader stage variants with the new specialization constants.
    *

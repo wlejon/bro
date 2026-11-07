@@ -77,6 +77,26 @@ console.log('brokernel', bro.kernel.version);
 // A compile error throws an Error whose message is the formatted diagnostics
 // and whose `diagnostics` is [{ severity, file, line, column, message }]
 // (f64 reached from a kernel that is not @cpu is one, at the f64).
+//
+// On the main thread a compile runs on a thread of its own while the window
+// keeps answering. The script still waits for it. A module the compile needs
+// from `bro.kernel.resolve` is asked of the resolver on the main thread. The
+// same applies to `withKnobs`, `knobs`, `fn` and `reload`. A Worker compiles
+// inline.
+//
+// bro.kernel.compileAsync(source, opts) -> Promise<KernelModule>
+//   `compile` without the wait: it takes the same options and resolves to
+//   the same module. It rejects with the same Error `compile` would throw,
+//   bad arguments included. It starts at once, so any number compile in
+//   parallel, and settles in a frame. Headless settles every pending one in
+//   the frame after it was asked for. Start a world's kernels together and
+//   await them:
+//
+//     const [relief, climate] = await Promise.all(
+//         ['relief.bk', 'climate.bk'].map((f) => bro.kernel.compileAsync(read(f), { file: f, modules })));
+//
+// Compiles are cached on disk (docs/code-cache.md "Kernel cache"). A launch
+// with unchanged sources takes each from the cache, with the same result.
 
 const mod = bro.kernel.compile(`
     import std::noise::*;

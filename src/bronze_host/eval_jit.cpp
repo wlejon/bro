@@ -14,6 +14,7 @@
 #include "engine/app_runtime.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/page_pump.h"
 #include "util/user_dirs.h"
 
 #include "api/api.h"  // brokit::api::RequireDirGuard
@@ -180,12 +181,13 @@ const char* cacheStatusName(bronze::eval::CodeCacheStatus s) {
     }
 }
 
-// Compiles `code`. In a windowed run the compile goes to another thread
+// Compiles `code`. On the page thread the compile goes to another thread
 // (bronze compiles against inputs captured here, on the thread that will run
 // the program) and this thread keeps the window alive: events pumped, the
 // page's static markup drawn with the compile's progress published on <html>
-// (Engine::pumpCompileFrame, docs/compile-progress.md). Headless compiles
-// inline, which is what keeps a test run deterministic.
+// (Engine::pumpCompileFrame, docs/compile-progress.md). Headless takes the
+// same path; its pump runs nothing (util/page_pump.h), so a test run stays
+// deterministic. Elsewhere (a worker's thread) it compiles inline.
 // The page's first script, compiling ahead on its own thread
 // (startAppScriptCompile) while the engine brings the GPU up. Only the page
 // thread touches it.
@@ -212,8 +214,10 @@ std::unique_ptr<bronze::eval::CompiledScript> awaitCompile(
         }
         engine.setAppCompiling(false);
         engine.setCompileProgress(false, 1.0);
+        return future.get();
     }
-    return future.get();
+    // Headless: the same wait, pumped as every wait on the page thread is.
+    return util::waitPumping(future);
 }
 
 // The ahead-of-time compile of exactly this script, if one is running: taken
@@ -252,9 +256,10 @@ std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine&
         }
         return compiled;
     }
-    if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
-        // Captured fresh for every compile: a retry after a failed run sees
-        // the modules that run published.
+    if (util::pumpsWhileWaiting()) {
+        // Window and headless alike: on another thread, the page thread
+        // pumping meanwhile. Captured fresh for every compile: a retry after
+        // a failed run sees the modules that run published.
         opts.externalModules.clear();
         opts.externalModulesCaptured = false;
         opts.nativeManifestJson.reset();

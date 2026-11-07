@@ -113,6 +113,10 @@ public:
     void releaseNodes(std::span<const uint32_t> ids);
 
     static void setDefaultVulkanContext(render::VulkanContext* ctx) { defaultVulkanContext_ = ctx; }
+    /// Start compiling the engine's own mesh and shadow stages, each on a
+    /// thread of its own, so the first scene's setup finds them built (the
+    /// engine calls it at launch; CPU work, no device needed).
+    static void prewarmBuiltinShaders();
     static render::VulkanContext* defaultVulkanContext() { return defaultVulkanContext_; }
     vk::SceneVkBridge* vkBridge() const { return vkBridge_.get(); }
     /// GPU milliseconds of the last render3D (timestamp queries), waiting for
@@ -510,6 +514,13 @@ public:
                              const std::vector<std::pair<std::string, std::string>>& modules, bool& hasVertexOut,
                              std::string& errOut,
                              const std::vector<std::pair<std::string, double>>& knobs = {});
+    /// Start compiling every stage a hook set for `target` may draw with
+    /// (setShaderAsync), each on a thread of its own; the function returned
+    /// is true once all are built. compileShaderModule then takes them built.
+    static std::function<bool()> prepareShaderModule(CustomShaderTarget target, const std::string& module,
+                                                     const std::string& file,
+                                                     const std::vector<std::pair<std::string, std::string>>& modules,
+                                                     const std::vector<std::pair<std::string, double>>& knobs = {});
 
     // Every hook compiles again: its file re-read from disk when it names
     // one, and a source of `sources` ({name, source}) in place of its file's

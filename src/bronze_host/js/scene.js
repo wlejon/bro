@@ -470,7 +470,8 @@
         return this.setShaderModule(opts, file, modules, knobs);
     });
     fn(SceneNode.prototype, "clearShader", function clearShader() { __bro_native.scene.SceneNode_clearShader(this); return this; });
-    fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules, knobs) {
+    // setShaderModule's arguments, checked: { source, file, payload, uniforms }.
+    const shaderModuleArgs = function (source, file, modules, knobs) {
         let uniforms;
         if (source && typeof source === 'object') {
             file = source.file;
@@ -505,11 +506,35 @@
             payloadObj = Object.assign({}, modules || {});
             if (knobs) payloadObj.__knobs__ = knobs;
         }
-        const err = __bro_native.scene.SceneNode_setShaderModule(this, source, file || "", payloadObj ? JSON.stringify(payloadObj) : "");
+        return { source, file: file || "", payload: payloadObj ? JSON.stringify(payloadObj) : "", uniforms };
+    };
+    const applyShaderModule = function (node, a) {
+        const err = __bro_native.scene.SceneNode_setShaderModule(node, a.source, a.file, a.payload);
         if (err && err.length > 0) throw new Error(err);
-        if (uniforms)
-            for (const k of Object.keys(uniforms)) this.setShaderUniform(k, uniforms[k]);
-        return this;
+        if (a.uniforms)
+            for (const k of Object.keys(a.uniforms)) node.setShaderUniform(k, a.uniforms[k]);
+        return node;
+    };
+    fn(SceneNode.prototype, "setShaderModule", function setShaderModule(source, file, modules, knobs) {
+        return applyShaderModule(this, shaderModuleArgs(source, file, modules, knobs));
+    });
+    // setShader's work off the page thread: every stage the hook may draw
+    // with compiles on threads of its own while the page runs; the promise
+    // settles in a frame once all are in, the module set then (or rejects
+    // with the Error setShader would have thrown).
+    fn(SceneNode.prototype, "setShaderAsync", function setShaderAsync(source, file, modules, knobs) {
+        const node = this;
+        return new Promise(function (resolve, reject) {
+            const a = shaderModuleArgs(source, file, modules, knobs);
+            const err = __bro_native.scene.SceneNode_prepareShaderModule(node, a.source, a.file, a.payload, function () {
+                try {
+                    resolve(applyShaderModule(node, a));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+            if (err && err.length > 0) reject(new Error(err));
+        });
     });
     fn(SceneNode.prototype, "setShaderKnobs", function setShaderKnobs(knobs) {
         if (!knobs || typeof knobs !== 'object')

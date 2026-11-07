@@ -13,6 +13,8 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -87,6 +89,13 @@ bool compileKernelMeshStage(const char* entry, KernelHookStage& out, std::string
 /// Compile a built-in shadow caster stage entry point from shadow/shadow.bk.
 bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::string& err);
 
+/// Start compiling these built-in mesh / shadow stages, each on a thread of
+/// its own; the compileKernel*Stage of one takes its result (waiting for it
+/// if it is still compiling). Nothing while the shaders are read from the
+/// source tree or set B compiles.
+void prewarmKernelMeshStages(std::span<const char* const> entries);
+void prewarmKernelShadowStages(std::span<const char* const> entries);
+
 /// Compile a built-in stage entry point from `file` (with common engine modules registered).
 bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,
                         std::string& err);
@@ -111,12 +120,25 @@ bool compileKernelMeshHookFragment(const std::string& module, const std::string&
                                    KernelHookStage& out, std::string& err,
                                    const KernelHookKnobs& knobs = {}, bool enableProbes = false);
 
+/// True once every stage a prepare started is built (or failed: the compile
+/// that takes it reports why). Callable from the page thread at any time.
+using KernelHookReady = std::function<bool()>;
+
 /// Start compiling, each on a thread of its own, the stages a mesh hook set
 /// for `target` may draw with: its vertex stage, its fragment stage's
 /// variants (indirect, cuts) and its shadow casters. A stage is compiled once
-/// for all its callers, so the draw that first takes one finds it built
-/// rather than compiling it in the frame.
-void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
+/// for all its callers, keyed as compileKernelMeshHook keys it, so the
+/// compile or draw that first takes one finds it built rather than compiling
+/// it then.
+KernelHookReady prepareKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
+                                      const std::string& file, const KernelHookModules& modules,
+                                      const KernelHookKnobs& knobs = {});
+/// The same for a volume's hook: volume_main, and volume_near when it gives
+/// a medium.
+KernelHookReady prepareKernelVolumeHook(const std::string& module, const std::string& file,
+                                        const KernelHookModules& modules, const KernelHookKnobs& knobs = {});
+/// prepareKernelMeshHook, not waiting on what it started.
+void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module, const std::string& file,
                   const KernelHookModules& modules, const KernelHookKnobs& knobs = {});
 
 /// Compile a mesh hook's shadow-caster vertex stage.

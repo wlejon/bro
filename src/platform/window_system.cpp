@@ -10,6 +10,7 @@
 #include "platform/system_info.h"
 #include "platform/window.h"
 #include "util/log.h"
+#include "util/page_pump.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -91,7 +92,10 @@ WindowSystem& windowSystem() {
     return *g_active;
 }
 
-void pumpEvents() { windowSystem().pumpEvents(); }
+void pumpEvents() {
+    windowSystem().pumpEvents();
+    util::notePagePump();
+}
 
 std::unique_ptr<Window> createWindow(const WindowConfig& config) {
     return windowSystem().createWindow(config);

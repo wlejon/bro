@@ -13,6 +13,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/script_pump.h"
 #include "bronze_host/host_gc.h"
 #include "api/fs_watch.h"
 
@@ -27,6 +28,7 @@
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
+#include "render/kernel_shader.h"
 #include "render/skia_backend.h"
 #include "render/recording_renderer.h"
 #if BRO_WITH_3D
@@ -114,6 +116,9 @@ Engine::~Engine() { teardown(); }
 void Engine::teardown() {
     // No command may arrive for an engine on its way out.
     if (control_) control_->stop();
+    bronze_host::stopScriptPumpWatchdog();
+    removePagePump();
+    render::flushKernelCache();
     platform::Dialogs::setWindow(nullptr);
     if (platform::desktop::desktopShellKeyboard()) {
         platform::desktop::setDesktopShellKeyboard(false);

@@ -50,56 +50,18 @@ const char* bro_scene_SceneNode_setShaderModule(void* self, const char* module, 
         tl_shaderErr = "setShaderModule: node or scene destroyed";
         return tl_shaderErr.c_str();
     }
-    scene::SceneRenderer::CustomShaderTarget target = scene::SceneRenderer::CustomShaderTarget::Static;
-    bool isSkinned = false;
-    if (n->type() == scene::SceneNode::Type::Mesh) {
-        auto* mn = static_cast<scene::MeshNode*>(n);
-        if (mn->isVolume()) {
-            target = scene::SceneRenderer::CustomShaderTarget::Volume;
-        } else if (mn->asSkinnedMesh()) {
-            target = scene::SceneRenderer::CustomShaderTarget::Skinned;
-            isSkinned = true;
-        }
-    } else if (n->type() == scene::SceneNode::Type::InstancedMesh) {
-        target = scene::SceneRenderer::CustomShaderTarget::Instanced;
-    } else {
-        tl_shaderErr = "setShaderModule: node is not a MeshNode or InstancedMeshNode";
-        return tl_shaderErr.c_str();
-    }
-    const std::string source = module ? module : "";
-    const std::string name = file && *file ? file : "hook.bk";
-    if (source.empty()) {
-        tl_shaderErr = "setShaderModule: no module source";
-        return tl_shaderErr.c_str();
-    }
-    // The modules it imports beside the engine's: { name: source }.
-    std::vector<std::pair<std::string, std::string>> modules;
-    std::vector<std::pair<std::string, double>> knobs;
-    if (modulesJson && *modulesJson) {
-        auto j = json::parse(modulesJson, nullptr, false);
-        if (j.is_discarded() || !j.is_object()) {
-            tl_shaderErr = "setShaderModule: modules must map names to sources";
-            return tl_shaderErr.c_str();
-        }
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.key() == "__knobs__" && it.value().is_object()) {
-                for (auto kit = it.value().begin(); kit != it.value().end(); ++kit) {
-                    if (kit.value().is_number()) {
-                        knobs.emplace_back(kit.key(), kit.value().get<double>());
-                    } else if (kit.value().is_boolean()) {
-                        knobs.emplace_back(kit.key(), kit.value().get<bool>() ? 1.0 : 0.0);
-                    }
-                }
-                continue;
-            }
-            if (!it.value().is_string()) {
-                tl_shaderErr = "setShaderModule: module '" + it.key() + "' is not a source string";
-                return tl_shaderErr.c_str();
-            }
-            modules.emplace_back(it.key(), it.value().get<std::string>());
-        }
-    }
+    ShaderModuleArgs args;
     std::string err;
+    if (!readShaderModuleArgs(n, module, file, modulesJson, args, err)) {
+        tl_shaderErr = "setShaderModule: " + err;
+        return tl_shaderErr.c_str();
+    }
+    const auto target = args.target;
+    const bool isSkinned = args.isSkinned;
+    const std::string& source = args.source;
+    const std::string& name = args.file;
+    auto& modules = args.modules;
+    auto& knobs = args.knobs;
     bool hasVertex = false;
     if (!g->compileShaderModule(target, source, name, modules, hasVertex, err, knobs)) {
         tl_shaderErr = err.empty() ? "module compilation failed" : err;

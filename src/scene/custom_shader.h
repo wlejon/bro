@@ -4,12 +4,13 @@
 // modules, and numeric uniform overrides. Graphics-API-independent; the
 // backend compiles and caches the module by `key`.
 
+#include "scene/kernel_source_scan.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,8 +62,7 @@ struct CustomShaderState {
     bool isModule() const { return !module.empty(); }
 
     void rebuildKey() {
-        static const std::regex kVertexRe(R"(\bfn\s+vertex\s*\()");
-        hasVertex = std::regex_search(module, kVertexRe);
+        hasVertex = kernelSourceDefinesFn(module, "vertex");
         size_t h = std::hash<std::string>{}(module);
         for (const auto& m : modules) {
             h ^= std::hash<std::string>{}(m.first) + 0x9e3779b9 + (h << 6) + (h >> 2);

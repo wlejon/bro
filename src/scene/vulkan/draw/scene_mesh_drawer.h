@@ -169,6 +169,8 @@ struct MeshDraw {
 class SceneMeshDrawer final {
 public:
     bool setup(SceneGpu& gpu);
+    /// Start compiling the built-in stages setup takes (prewarmKernelMeshStages).
+    static void prewarmStages();
     void cleanup(SceneGpu& gpu);
 
     /// Fill `out` for this frame. False when the node has nothing to draw.

@@ -9,6 +9,8 @@
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
+#include "scene/vulkan/draw/scene_mesh_drawer.h"
+#include "scene/vulkan/shadow/scene_caster_drawer.h"
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/world/world_service.h"
 #include "render/vulkan_context.h"
@@ -25,6 +27,11 @@
 namespace bro::scene {
 
 using bromath::Vec3;
+
+void SceneRenderer::prewarmBuiltinShaders() {
+    vk::SceneMeshDrawer::prewarmStages();
+    vk::SceneCasterDrawer::prewarmStages();
+}
 
 SceneRenderer::SceneRenderer(SceneGraph& graph) : graph_(graph) {
     // Fallback sun for scenes with no LightNode (see render3D). Configured
@@ -329,11 +336,21 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
                                         const std::vector<std::pair<std::string, double>>& knobs) {
     hasVertexOut = false;
     if (target == CustomShaderTarget::Volume) return compileVolumeModule(module, file, modules, errOut, knobs);
+    // Every stage the hook may draw with starts at once; the check below
+    // waits only for the two it takes.
+    vk::warmMeshHook(target, module, file, modules, knobs);
     vk::KernelMeshHook hook;
     if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut, knobs)) return false;
     hasVertexOut = hook.hasVertex;
-    vk::warmMeshHook(target, module, modules, knobs);
     return true;
+}
+
+std::function<bool()> SceneRenderer::prepareShaderModule(CustomShaderTarget target, const std::string& module,
+                                                         const std::string& file,
+                                                         const std::vector<std::pair<std::string, std::string>>& modules,
+                                                         const std::vector<std::pair<std::string, double>>& knobs) {
+    if (target == CustomShaderTarget::Volume) return vk::prepareKernelVolumeHook(module, file, modules, knobs);
+    return vk::prepareKernelMeshHook(target, module, file, modules, knobs);
 }
 
 void SceneRenderer::reloadShaders(const std::vector<std::pair<std::string, std::string>>& sources) {
@@ -366,7 +383,7 @@ void SceneRenderer::reloadShaders(const std::vector<std::pair<std::string, std::
                 mn->bumpChangeGeneration();
                 if (!mn->isVolume()) {
                     const auto target = mn->asSkinnedMesh() ? CustomShaderTarget::Skinned : CustomShaderTarget::Static;
-                    vk::warmMeshHook(target, cs->module, cs->modules, cs->knobs);
+                    vk::warmMeshHook(target, cs->module, cs->moduleFile, cs->modules, cs->knobs);
                 }
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
@@ -374,7 +391,7 @@ void SceneRenderer::reloadShaders(const std::vector<std::pair<std::string, std::
             if (CustomShaderState* cs = imn->customShaderMut()) {
                 reloadState(*cs);
                 imn->bumpChangeGeneration();
-                vk::warmMeshHook(CustomShaderTarget::Instanced, cs->module, cs->modules, cs->knobs);
+                vk::warmMeshHook(CustomShaderTarget::Instanced, cs->module, cs->moduleFile, cs->modules, cs->knobs);
             }
         }
     }

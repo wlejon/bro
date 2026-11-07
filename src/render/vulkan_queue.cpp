@@ -1,5 +1,6 @@
 #include "render/vulkan_queue.h"
 #include "util/log.h"
+#include "util/page_pump.h"
 
 namespace bro::render {
 
@@ -210,7 +211,17 @@ bool VulkanQueue::wait(uint64_t ticket, uint64_t timeoutNs) {
     info.semaphoreCount = 1;
     info.pSemaphores = &timeline_;
     info.pValues = &ticket;
-    VkResult res = vkWaitSemaphores(device_, &info, timeoutNs);
+    VkResult res;
+    if (timeoutNs == UINT64_MAX && util::pumpsWhileWaiting()) {
+        // The page thread: waited in steps, the window's messages let in
+        // between them (util/page_pump.h; a GPU wait draws nothing).
+        constexpr uint64_t kStepNs = uint64_t{util::kPumpIntervalMs} * 1'000'000;
+        while ((res = vkWaitSemaphores(device_, &info, kStepNs)) == VK_TIMEOUT && !isDeviceLost()) {
+            util::pumpPageThread(util::PumpReason::GpuWait);
+        }
+    } else {
+        res = vkWaitSemaphores(device_, &info, timeoutNs);
+    }
     if (res != VK_SUCCESS && res != VK_TIMEOUT) noteFailure("waiting for ticket", res);
     return res == VK_SUCCESS;
 }

@@ -1,7 +1,13 @@
 #include "render/kernel_shader.h"
 
+#include "util/log.h"
+#include "util/user_dirs.h"
+
 #include <brokernel/brokernel.h>
 
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -44,5 +50,23 @@ KernelShader renderKernelShader(RenderKernelSource source, const char* entry, st
     s_cache.emplace(key, out);
     return out;
 }
+
+void configureKernelCache() {
+    static std::once_flag s_once;
+    std::call_once(s_once, [] {
+        const char* off = std::getenv("BRO_KERNEL_CACHE");
+        if (off && (std::strcmp(off, "0") == 0 || std::strcmp(off, "false") == 0)) {
+            LOG_INFO("kernel cache: off (BRO_KERNEL_CACHE=%s)", off);
+            return;
+        }
+        brokernel::CompileCacheConfig cfg;
+        const char* dir = std::getenv("BRO_KERNEL_CACHE_DIR");
+        cfg.dir = std::filesystem::u8path(dir && *dir ? std::string(dir) : util::userCacheDir() + "/kernel-cache");
+        cfg.max_bytes = uint64_t{512} << 20;
+        brokernel::set_compile_cache(std::move(cfg));
+    });
+}
+
+void flushKernelCache() { brokernel::flush_compile_cache(); }
 
 } // namespace bro::render

@@ -2,8 +2,10 @@
 #include "scene/vulkan/frame/scene_shader_sets.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/debug_views.h"
+#include "scene/kernel_source_scan.h"
 #include "tilecache/tiles_module.h"
 #include "util/log.h"
+#include "util/page_pump.h"
 
 #include <brokernel/brokernel.h>
 
@@ -18,7 +20,6 @@
 #include <future>
 #include <memory>
 #include <mutex>
-#include <regex>
 #include <sstream>
 #include <unordered_map>
 
@@ -141,26 +142,17 @@ KernelHookModules resolveHookModules(const std::string& hook, const KernelHookMo
         }
         return false;
     };
-    static const std::regex kImportPatterns[] = {
-        std::regex(R"(\bimport\s+([A-Za-z_][A-Za-z0-9_:]*)\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*\s*)?;)"),
-        std::regex(R"(\bfrom\s+([A-Za-z_][A-Za-z0-9_:]*)\s+import\b)"),
-        std::regex(R"(\buse\s+([A-Za-z_][A-Za-z0-9_:]*)::\{)"),
-        std::regex(R"(\buse\s+([A-Za-z_][A-Za-z0-9_:]*)::[A-Za-z_*][A-Za-z0-9_]*\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*\s*)?;)"),
-    };
     std::vector<std::string> queue;
     queue.push_back(hook);
     for (const auto& [_, src] : modules) queue.push_back(src);
     while (!queue.empty()) {
         std::string cur = std::move(queue.back());
         queue.pop_back();
-        for (const auto& pat : kImportPatterns) {
-            for (std::sregex_iterator it(cur.begin(), cur.end(), pat), end; it != end; ++it) {
-                std::string imp = (*it)[1].str();
-                if (hasMod(imp)) continue;
-                if (auto resolved = brokernel::ModuleRegistry::resolve_default(imp)) {
-                    out.emplace_back(imp, *resolved);
-                    queue.push_back(*resolved);
-                }
+        for (std::string& imp : kernelSourceImports(cur)) {
+            if (hasMod(imp)) continue;
+            if (auto resolved = brokernel::ModuleRegistry::resolve_default(imp)) {
+                out.emplace_back(std::move(imp), *resolved);
+                queue.push_back(*resolved);
             }
         }
     }
@@ -171,12 +163,11 @@ KernelHookModules resolveHookModules(const std::string& hook, const KernelHookMo
 // entry, the hook, the app's modules, a volume's near module): a module set
 // on a node compiles each stage once, on a thread of its own, and a draw
 // that first takes a stage finds it built when warmMeshHook started it, or
-// the module's check when it was set compiled it. The page thread's alone
-// (a pipeline built off the frame records its create-info here, on the page
-// thread; only the driver's build is off it), and a compile thread touches
-// only its own stage's future, so nothing here is shared. Not cached while
-// the engine's shaders are read from the source tree (they change under the
-// key) or set B compiles.
+// the module's check when it was set compiled it; the engine's own mesh and
+// shadow stages are started at launch (prewarmEngineStages). A compile
+// thread touches only its own stage's future; the map is locked. Not cached
+// while the engine's shaders are read from the source tree (they change
+// under the key) or set B compiles.
 using StageResult = std::shared_ptr<const brokernel::CompileResult>;
 using StageFuture = std::shared_future<StageResult>;
 constexpr size_t kMaxStages = 256;
@@ -215,7 +206,9 @@ StageFuture stageFuture(std::string key, std::function<brokernel::CompileResult(
         p.set_value(run());
         return p.get_future().share();
     }
+    static std::mutex s_mu;
     static std::unordered_map<std::string, StageFuture> s_stages;
+    std::lock_guard<std::mutex> lock(s_mu);
     if (auto it = s_stages.find(key); it != s_stages.end()) return it->second;
     if (s_stages.size() >= kMaxStages) {
         for (auto it = s_stages.begin(); it != s_stages.end();) {
@@ -256,7 +249,8 @@ brokernel::CompileResult compileVolumeStage(const char* stageFile, const char* s
                                             const std::string& near, const std::string& hook,
                                             const KernelHookModules& modules,
                                             const KernelHookKnobs& knobs = {}, bool enableProbes = false) {
-    return *volumeStage(stageFile, stageEmbedded, entry, near, hook, modules, knobs, enableProbes).get();
+    const StageFuture f = volumeStage(stageFile, stageEmbedded, entry, near, hook, modules, knobs, enableProbes);
+    return *util::waitPumping(f);
 }
 
 brokernel::CompileResult buildMeshOrShadowEntry(const char* stageFile, const char* stageEmbedded, const char* entry,
@@ -297,13 +291,15 @@ StageFuture shadowStage(const char* entry, const std::string& hook, const Kernel
 brokernel::CompileResult compileMeshEntry(const char* entry, const std::string& hook,
                                           const KernelHookModules& modules,
                                           const KernelHookKnobs& knobs = {}, bool enableProbes = false) {
-    return *meshStage(entry, hook, modules, knobs, enableProbes).get();
+    const StageFuture f = meshStage(entry, hook, modules, knobs, enableProbes);
+    return *util::waitPumping(f);
 }
 
 brokernel::CompileResult compileShadowEntry(const char* entry, const std::string& hook,
                                             const KernelHookModules& modules,
                                             const KernelHookKnobs& knobs = {}) {
-    return *shadowStage(entry, hook, modules, knobs).get();
+    const StageFuture f = shadowStage(entry, hook, modules, knobs);
+    return *util::waitPumping(f);
 }
 
 // BRO_KERNEL_SPIRV_DUMP=<dir> writes each stage's SPIR-V there as
@@ -481,6 +477,16 @@ bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::stri
     return true;
 }
 
+void prewarmKernelMeshStages(std::span<const char* const> entries) {
+    if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) return;
+    for (const char* e : entries) meshStage(e, "module hook;\n", {});
+}
+
+void prewarmKernelShadowStages(std::span<const char* const> entries) {
+    if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) return;
+    for (const char* e : entries) shadowStage(e, "module hook;\n", {});
+}
+
 bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,
                         std::string& err) {
     static std::mutex s_mu;
@@ -566,8 +572,7 @@ bool compileKernelVolumeHook(const std::string& module0, const std::string& file
         }
     };
     const std::string hook = debug_views::expand(module, "scene::debug_view()");
-    static const std::regex kMedium(R"(\bfn\s+medium\s*\()");
-    out.medium = std::regex_search(hook, kMedium);
+    out.medium = kernelSourceDefinesFn(hook, "medium");
     const std::string near = out.medium ? engineSource("draw/near_grid.bk", kBkNearGridSrc)
                                         : engineSource("draw/near_none.bk", kBkNearNoneSrc);
     const auto fail = [&] {
@@ -609,12 +614,9 @@ bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::
     };
     std::string hook;
     if (!expandMeshHookVaryings(hook0, file, hook, err)) return fail();
-    static const std::regex kVertex(R"(\bfn\s+vertex\s*\()");
-    static const std::regex kFragment(R"(\bfn\s+fragment\s*\()");
-    static const std::regex kLight(R"(\bfn\s+light\s*\()");
-    out.hasVertex = std::regex_search(hook, kVertex);
-    out.hasFragment = std::regex_search(hook, kFragment);
-    out.hasLight = std::regex_search(hook, kLight);
+    out.hasVertex = kernelSourceDefinesFn(hook, "vertex");
+    out.hasFragment = kernelSourceDefinesFn(hook, "fragment");
+    out.hasLight = kernelSourceDefinesFn(hook, "light");
     if (!out.hasVertex && !out.hasFragment) {
         err = "mesh module must define fn vertex and/or fn fragment";
         return fail();
@@ -728,28 +730,68 @@ bool compileKernelShadowHook(ShadowCaster caster, bool cutout, const std::string
     return true;
 }
 
-void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module,
-                  const KernelHookModules& modules, const KernelHookKnobs& knobs) {
-    const std::string hook0 = debug_views::expand(module, "scene::debug_view()");
+namespace {
+
+KernelHookReady readyWhenAll(std::vector<StageFuture> stages) {
+    return [stages = std::move(stages)] {
+        for (const StageFuture& f : stages) {
+            if (f.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+        }
+        return true;
+    };
+}
+
+}  // namespace
+
+KernelHookReady prepareKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module0,
+                                      const std::string& file, const KernelHookModules& modules0,
+                                      const KernelHookKnobs& knobs) {
+    // Set B and the source tree compile each stage where it is taken.
+    if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) return [] { return true; };
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string hook0 = debug_views::expand(in.module, "scene::debug_view()");
     std::string hook;
     std::string unusedErr;
-    if (!expandMeshHookVaryings(hook0, "<warm>", hook, unusedErr)) return;
-    static const std::regex kVertex(R"(\bfn\s+vertex\s*\()");
-    static const std::regex kFragment(R"(\bfn\s+fragment\s*\()");
-    static const std::regex kLight(R"(\bfn\s+light\s*\()");
-    const bool hasVertex = std::regex_search(hook, kVertex);
-    const bool hasLight = std::regex_search(hook, kLight);
+    // A hook that does not expand fails when it is set; nothing to wait for.
+    if (!expandMeshHookVaryings(hook0, file, hook, unusedErr)) return [] { return true; };
+    const KernelHookModules& modules = in.modules;
+    const bool hasVertex = kernelSourceDefinesFn(hook, "vertex");
+    const bool hasLight = kernelSourceDefinesFn(hook, "light");
+    std::vector<StageFuture> stages;
     if (hasVertex) {
-        meshStage(vertexEntryForTarget(target), hook, modules, knobs, false);
+        stages.push_back(meshStage(vertexEntryForTarget(target), hook, modules, knobs, false));
         const ShadowCaster caster = target == SceneRenderer::CustomShaderTarget::Skinned     ? ShadowCaster::Skinned
                                   : target == SceneRenderer::CustomShaderTarget::Instanced ? ShadowCaster::Instanced
                                                                                            : ShadowCaster::Static;
-        for (const bool cutout : {false, true}) shadowStage(shadowEntry(caster, cutout), hook, modules, knobs);
+        for (const bool cutout : {false, true}) stages.push_back(shadowStage(shadowEntry(caster, cutout), hook, modules, knobs));
     }
-    if (std::regex_search(hook, kFragment)) {
+    if (kernelSourceDefinesFn(hook, "fragment")) {
         for (const bool indirect : {false, true})
-            for (const bool cuts : {false, true}) meshStage(fragmentEntry(hasLight, indirect, cuts), hook, modules, knobs, false);
+            for (const bool cuts : {false, true})
+                stages.push_back(meshStage(fragmentEntry(hasLight, indirect, cuts), hook, modules, knobs, false));
     }
+    return readyWhenAll(std::move(stages));
+}
+
+KernelHookReady prepareKernelVolumeHook(const std::string& module0, const std::string& file,
+                                        const KernelHookModules& modules0, const KernelHookKnobs& knobs) {
+    if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) return [] { return true; };
+    const HookInputs in = hookInputs(file, module0, modules0);
+    const std::string hook = debug_views::expand(in.module, "scene::debug_view()");
+    const bool medium = kernelSourceDefinesFn(hook, "medium");
+    const std::string near = medium ? engineSource("draw/near_grid.bk", kBkNearGridSrc)
+                                    : engineSource("draw/near_none.bk", kBkNearNoneSrc);
+    std::vector<StageFuture> stages;
+    stages.push_back(volumeStage("draw/volume_main.bk", kBkVolumeMainSrc, "volume_main", near, hook, in.modules, knobs, false));
+    if (medium) {
+        stages.push_back(volumeStage("draw/volume_near.bk", kBkVolumeNearSrc, "volume_near", near, hook, in.modules, knobs, false));
+    }
+    return readyWhenAll(std::move(stages));
+}
+
+void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module, const std::string& file,
+                  const KernelHookModules& modules, const KernelHookKnobs& knobs) {
+    prepareKernelMeshHook(target, module, file, modules, knobs);
 }
 
 } // namespace bro::scene::vk

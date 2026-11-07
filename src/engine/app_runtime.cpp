@@ -7,6 +7,7 @@
 #include "render/svg_image.h"
 #include "util/exe_dir.h"
 #include "util/log.h"
+#include "util/page_pump.h"
 
 #include "broimage/decode.h"
 
@@ -207,8 +208,11 @@ void noteFramePresented() {
     double expected = -1.0;
     if (!gFirstFrameMs.compare_exchange_strong(expected, ms)) return;
     const std::string& id = info().id;
-    LOG_INFO("app %s: first frame %.0f ms after start (page loaded at %.0f ms)",
-             id.empty() ? "(unnamed)" : id.c_str(), ms, loaded);
+    util::stopPumpWatch();
+    const util::PumpGap gap = util::longestPumpGap();
+    LOG_INFO("app %s: first frame %.0f ms after start (page loaded at %.0f ms); longest stretch without pumping "
+             "events %.0f ms, ending %.0f ms after the window",
+             id.empty() ? "(unnamed)" : id.c_str(), ms, loaded, gap.longestMs, gap.endedAtMs);
 }
 
 double firstFrameMs() { return gFirstFrameMs.load(std::memory_order_relaxed); }

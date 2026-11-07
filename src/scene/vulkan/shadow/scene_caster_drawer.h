@@ -38,6 +38,8 @@ public:
     };
 
     bool setup(SceneGpu& gpu);
+    /// Start compiling the built-in stages setup takes (prewarmKernelShadowStages).
+    static void prewarmStages();
     void cleanup(SceneGpu& gpu);
 
     /// Record `draw` into `cmd`, inside a rendering with a SceneTargets::

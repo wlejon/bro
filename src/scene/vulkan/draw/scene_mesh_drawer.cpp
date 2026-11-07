@@ -95,6 +95,15 @@ void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindin
     }
 }
 
+void SceneMeshDrawer::prewarmStages() {
+    std::vector<const char*> entries(std::begin(kVsEntries), std::end(kVsEntries));
+    entries.insert(entries.end(), std::begin(kVsPassthroughEntries), std::end(kVsPassthroughEntries));
+    for (const auto& f : kFsEntries)
+        for (const auto& i : f)
+            for (const char* e : i) entries.push_back(e);
+    prewarmKernelMeshStages(entries);
+}
+
 bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     device_ = gpu.device.device();
     defaults_ = &gpu.defaults;
