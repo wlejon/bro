@@ -11,13 +11,14 @@ WebGLRing::WebGLRing(size_t capacity) {
     size_t cap = size_t{64} * 1024;
     while (cap < capacity) cap <<= 1;
     cap_ = cap;
-    base_ = static_cast<uint8_t*>(std::aligned_alloc(64, cap_));
-    if (!base_) throw std::bad_alloc();
+    // (Aligned operator new: MSVC has no std::aligned_alloc. It throws
+    // bad_alloc itself.)
+    base_ = static_cast<uint8_t*>(::operator new(cap_, std::align_val_t{64}));
     cur_ = base_;
     limit_ = base_;  // the first reserve finds its room (and publish mark) in makeRoom
 }
 
-WebGLRing::~WebGLRing() { std::free(base_); }
+WebGLRing::~WebGLRing() { ::operator delete(base_, std::align_val_t{64}); }
 
 // The slow half of reserve: publish once kPublishEvery bytes are unpublished,
 // wrap to the next lap when the record does not fit the tail, and ask the
