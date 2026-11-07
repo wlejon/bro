@@ -30,8 +30,9 @@ namespace ev = bronze::embed;
 using Value = bronze::Value;
 using tilecache::DrawTile;
 
-// A drawList record, 16 words: int32 slot, parentSlot, root, level, x, y, 0,
-// 0, then float32 centerHi.xyz, radius, centerLo.xyz, 0 (the bounding
+// A drawList record, 16 words: int32 slot, parentSlot, root, level, x, y,
+// coarser (DrawTile::coarser, 4 bits an edge: u = 0 in the low bits, then
+// u = 1, v = 0, v = 1), 0, then float32 centerHi.xyz, radius, centerLo.xyz, 0 (the bounding
 // sphere's center as hi + lo, so a shader can subtract a camera split the
 // same way and get a camera-relative position to f64 accuracy).
 constexpr uint32_t kRecordInts = 16;
@@ -332,6 +333,7 @@ void writeDrawList(Cache& c) {
         r[3] = static_cast<int32_t>(d.id.level);
         r[4] = static_cast<int32_t>(d.id.x);
         r[5] = static_cast<int32_t>(d.id.y);
+        r[6] = d.coarser[0] | (d.coarser[1] << 4) | (d.coarser[2] << 8) | (d.coarser[3] << 12);
         float f[8] = {};
         const double c[3] = {d.bounds.center.x, d.bounds.center.y, d.bounds.center.z};
         for (int k = 0; k < 3; ++k) {
@@ -617,6 +619,9 @@ Value js_drawn(Value self, std::span<const Value>) {
         t.set("y", d.id.y);
         t.set("slot", d.slot);
         t.set("parentSlot", d.parentSlot);
+        ev::ArrayBuilder coarser(4);
+        for (uint32_t e = 0; e < 4; ++e) coarser.set(e, static_cast<uint32_t>(d.coarser[e]));
+        t.set("coarser", coarser.get());
         t.set("center", vec3(d.bounds.center));
         t.set("radius", d.bounds.radius);
         const tilecache::HeightRange r = c->tree.range(d.id);

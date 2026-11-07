@@ -253,9 +253,15 @@ const terrain = bro.tiles.createCache({
 //   the worst-case height would have brought near.
 //
 // cache.drawn       the draw set: [{ root, level, x, y, slot, parentSlot,
-//                   center: [x, y, z], radius, range: [lo, hi] }], each
-//                   tile's bounding sphere and the height range it is
-//                   selected by; parentSlot is -1 for a root. Without a
+//                   coarser: [u0, u1, v0, v1], center: [x, y, z], radius,
+//                   range: [lo, hi] }], each tile's bounding sphere and the
+//                   height range it is selected by; parentSlot is -1 for a
+//                   root. coarser: how many levels coarser the drawn tile
+//                   across each edge (u = 0, u = 1, v = 0, v = 1) is, 0 where
+//                   it is as fine or finer (or none is drawn): a draw that
+//                   lays that edge's vertices on the line between its every
+//                   2^k-th (the neighbour's own vertices) meets it without a
+//                   crack, across a cube-sphere's faces too. Without a
 //                   frustum it covers every root once; with one, less the
 //                   tiles it culled. Nearest the view's position first (by
 //                   the nearest point of the bounding sphere), so a draw in
@@ -264,7 +270,9 @@ const terrain = bro.tiles.createCache({
 // cache.drawCount   drawn.length
 // cache.drawList    KernelBuffer of drawCount records of 16 words, the draw
 //                   set on the GPU for a shader or kernel to walk: int32
-//                   slot, parentSlot, root, level, x, y, 0, 0, then float32
+//                   slot, parentSlot, root, level, x, y, coarser (4 bits an
+//                   edge, u = 0 lowest, then u = 1, v = 0, v = 1), 0, then
+//                   float32
 //                   centerHi.xyz, radius, centerLo.xyz, 0, the bounding
 //                   sphere's center split hi + lo. A frame needs nothing
 //                   else from the CPU: draw drawCount instances, each

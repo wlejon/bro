@@ -448,8 +448,87 @@ void testBudget() {
     check(open.size() == 3, "without a cost, n tiles");
 }
 
+// Each drawn tile's coarser neighbours: on a plane, found by brute force
+// (the drawn tile whose square holds points just past the edge); on a
+// cube-sphere, across the faces too, the neighbour Domain::locate finds is
+// drawn and spans the whole edge.
+void testCoarserNeighbours() {
+    TileTree tree(planeConfig(512));
+    tree.select(viewAt(13.7, 10, 21.3));
+    bool parentFirst = true;
+    produceAll(tree, 16, parentFirst);
+    const auto set = tree.drawSet();
+    const Domain& dom = tree.config().domain;
+    int coarserEdges = 0;
+    bool planeOk = true;
+    for (const DrawTile& d : set) {
+        const double ext = dom.tileExtent(d.id);
+        const Vec3d o = dom.point(d.id, 0, 0);
+        static constexpr double kEdge[4][2] = {{-1e-3, 0}, {1 + 1e-3, 0}, {0, -1e-3}, {0, 1 + 1e-3}};
+        for (int e = 0; e < 4; ++e) {
+            int expect = -1;
+            for (double t : {0.1, 0.5, 0.9}) {
+                const double u = e < 2 ? kEdge[e][0] : t, v = e < 2 ? t : kEdge[e][1];
+                const double px = o.x + u * ext, pz = o.z + v * ext;
+                int here = 0;
+                for (const DrawTile& n : set) {
+                    const double ne = dom.tileExtent(n.id);
+                    const Vec3d no = dom.point(n.id, 0, 0);
+                    if (no.x <= px && px < no.x + ne && no.z <= pz && pz < no.z + ne)
+                        here = std::max(0, static_cast<int>(d.id.level) - static_cast<int>(n.id.level));
+                }
+                if (expect < 0) expect = here;
+                else if (here != expect && (here > 0 || expect > 0)) planeOk = false;   // a coarser one spans the edge
+            }
+            if (d.coarser[e] != std::max(expect, 0)) planeOk = false;
+            if (d.coarser[e] > 0) ++coarserEdges;
+        }
+    }
+    check(planeOk, "a plane's drawn tiles name the coarser neighbour across each edge");
+    check(coarserEdges > 10, "the refined plane has coarser neighbours (" + std::to_string(coarserEdges) + " edges)");
+
+    Config c;
+    c.domain.kind = Domain::Kind::CubeSphere;
+    c.domain.radius = 6.371e6;
+    c.tileSize = 64;
+    c.capacity = 1024;
+    c.maxLevel = 20;
+    c.maxHeight = 9000;
+    TileTree cube(c);
+    // Over the +Y face's edge with +Z: refinement crosses the faces.
+    cube.select(viewAt(0, c.domain.radius * 0.7071 + 200, c.domain.radius * 0.7071));
+    produceAll(cube, 64, parentFirst);
+    const auto cset = cube.drawSet();
+    std::unordered_set<uint64_t> keys;
+    for (const DrawTile& d : cset) keys.insert(d.id.key());
+    bool cubeOk = true;
+    int crossFace = 0;
+    for (const DrawTile& d : cset) {
+        const Domain::Frame f = c.domain.frame(d.id);
+        static constexpr double kEdge[4][2] = {{-1e-3, 0}, {1 + 1e-3, 0}, {0, -1e-3}, {0, 1 + 1e-3}};
+        for (int e = 0; e < 4; ++e) {
+            if (d.coarser[e] == 0) continue;
+            const uint32_t level = d.id.level - d.coarser[e];
+            TileId first;
+            for (double t : {0.02, 0.5, 0.98}) {
+                const double u = e < 2 ? kEdge[e][0] : t, v = e < 2 ? t : kEdge[e][1];
+                const Vec3d p = {f.corner.x + u * f.du.x + v * f.dv.x, f.corner.y + u * f.du.y + v * f.dv.y,
+                                 f.corner.z + u * f.du.z + v * f.dv.z};
+                TileId n;
+                if (!c.domain.locate(p, level, n) || !keys.count(n.key())) cubeOk = false;
+                if (t == 0.02) first = n;
+                else if (!(n == first)) cubeOk = false;
+            }
+            if (first.root != d.id.root) ++crossFace;
+        }
+    }
+    check(cubeOk, "a cube-sphere's coarser neighbours are drawn and span the edge");
+    check(crossFace > 0, "coarser neighbours are found across the faces (" + std::to_string(crossFace) + ")");
+}
+
 int main() {
     testBudget();
+    testCoarserNeighbours();
     testPlaneSelection();
     testEvictionAndRefill();
     testRefreshDropsUnwanted();

@@ -63,6 +63,35 @@ double Domain::tileExtent(const TileId& t) const {
     return std::ldexp(root, -static_cast<int>(t.level));
 }
 
+bool Domain::locate(const Vec3d& p, uint32_t level, TileId& out) const {
+    double fu = 0, fv = 0;   // across the root, [0, 1]
+    uint32_t root = 0;
+    if (kind == Kind::Plane) {
+        const double u = (p.x - origin[0]) / size, v = (p.z - origin[1]) / size;
+        if (u < 0 || v < 0 || u >= rootsX || v >= rootsY) return false;
+        const uint32_t rx = static_cast<uint32_t>(u), ry = static_cast<uint32_t>(v);
+        root = ry * rootsX + rx;
+        fu = u - rx;
+        fv = v - ry;
+    } else {
+        const double ax = std::fabs(p.x), ay = std::fabs(p.y), az = std::fabs(p.z);
+        const double m = std::max(ax, std::max(ay, az));
+        if (!(m > 0)) return false;
+        root = m == ax ? (p.x > 0 ? 0 : 1) : m == ay ? (p.y > 0 ? 2 : 3) : (p.z > 0 ? 4 : 5);
+        // The face point, and (s, q) on the face from its frame (frame()).
+        const Vec3d f = {p.x / m, p.y / m, p.z / m};
+        const Frame r = frame({root, 0, 0, 0});
+        const Vec3d d = sub(f, r.corner);
+        fu = dot(d, r.du) / dot(r.du, r.du);
+        fv = dot(d, r.dv) / dot(r.dv, r.dv);
+    }
+    const double n = std::ldexp(1.0, static_cast<int>(level));
+    const double top = n - 1;
+    out = {root, level, static_cast<uint32_t>(std::clamp(std::floor(fu * n), 0.0, top)),
+           static_cast<uint32_t>(std::clamp(std::floor(fv * n), 0.0, top))};
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // TileTree
 
@@ -581,6 +610,31 @@ std::vector<DrawTile> TileTree::drawSet() const {
     for (uint32_t r = 0; r < config_.domain.rootCount(); ++r) {
         bool ok = true;
         coverInto(static_cast<int32_t>(r), out, ok);
+    }
+    // Each edge's neighbour: the drawn tile holding a point just past the
+    // edge's middle, when one coarser than the tile is (a coarser neighbour
+    // spans the whole edge; a finer one meets it on its own vertices).
+    std::unordered_map<uint64_t, uint32_t> drawnKeys;
+    drawnKeys.reserve(out.size());
+    for (const DrawTile& d : out) drawnKeys.emplace(d.id.key(), d.id.level);
+    const Domain& dom = config_.domain;
+    for (DrawTile& d : out) {
+        const Domain::Frame f = dom.frame(d.id);
+        static constexpr double kPast = 1e-3;
+        static constexpr double kEdge[4][2] = {{-kPast, 0.5}, {1 + kPast, 0.5}, {0.5, -kPast}, {0.5, 1 + kPast}};
+        for (int e = 0; e < 4; ++e) {
+            const double u = kEdge[e][0], v = kEdge[e][1];
+            const Vec3d p = {f.corner.x + u * f.du.x + v * f.dv.x, f.corner.y + u * f.du.y + v * f.dv.y,
+                             f.corner.z + u * f.du.z + v * f.dv.z};
+            for (uint32_t k = 0; k < d.id.level; ++k) {
+                TileId t;
+                if (!dom.locate(p, k, t)) break;
+                if (drawnKeys.count(t.key())) {
+                    d.coarser[e] = static_cast<uint8_t>(std::min<uint32_t>(d.id.level - k, 15));
+                    break;
+                }
+            }
+        }
     }
     std::vector<std::pair<double, uint32_t>> order(out.size());
     for (uint32_t i = 0; i < out.size(); ++i) {

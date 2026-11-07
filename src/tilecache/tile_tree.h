@@ -92,6 +92,10 @@ struct Domain {
     /// A tile's edge length on the base surface (a cube-sphere face spans a
     /// quarter of a great circle).
     double tileExtent(const TileId& t) const;
+    /// The tile at `level` holding base point `p` (a cube-sphere's point
+    /// anywhere off the center: the face it projects onto), or false for a
+    /// point off a plane's roots.
+    bool locate(const Vec3d& p, uint32_t level, TileId& out) const;
 };
 
 struct Bounds {
@@ -150,6 +154,11 @@ struct DrawTile {
     uint32_t slot = 0;
     int32_t parentSlot = -1;     // the parent's slot when it is resident, else -1
     Bounds bounds;
+    /// How many levels coarser the drawn tile across each edge is (u = 0,
+    /// u = 1, v = 0, v = 1), 0 where it is as fine or finer, or none is
+    /// drawn: a draw lays the edge's vertices on that tile's coarser edge
+    /// (every 2^k-th of its own) so the two meet without a crack.
+    uint8_t coarser[4] = {0, 0, 0, 0};
 };
 
 struct Stats {
