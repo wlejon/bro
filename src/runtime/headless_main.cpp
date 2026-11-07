@@ -12,6 +12,7 @@
 #include "bronze_host/host_profile.h"
 #include "bronze_host/host_storage.h"
 #include "util/crash_handler.h"
+#include "embed/embed_profiler.h"
 
 int bro::runtime::runHeadlessMain(int argc, char* argv[]) {
     // First thing, before anything can print or fault: unbuffer the standard
@@ -32,6 +33,8 @@ int bro::runtime::runHeadlessMain(int argc, char* argv[]) {
     hooks.beforeExit = [] {
         bro::bronze_host::flushHostStorage();
         bro::bronze_host::hostProfileDump();
+        // The run leaves by _exit, which skips BRONZE_SAMPLE's atexit report.
+        bronze::embed::samplerReportNow();
     };
     return bro::engine::runHeadless(argc, argv, hooks);
 }
