@@ -29,6 +29,7 @@
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "render/kernel_shader.h"
+#include "render/system_font_mgr.h"
 #include "render/skia_backend.h"
 #include "render/recording_renderer.h"
 #if BRO_WITH_3D
@@ -119,6 +120,10 @@ void Engine::teardown() {
     if (control_) control_->stop();
     bronze_host::stopScriptPumpWatchdog();
     removePagePump();
+#if BRO_WITH_3D
+    scene::SceneRenderer::waitForBuiltinShaders();
+#endif
+    render::waitForSystemFontMgr();
     render::flushKernelCache();
     platform::Dialogs::setWindow(nullptr);
     if (platform::desktop::desktopShellKeyboard()) {

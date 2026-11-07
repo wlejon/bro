@@ -130,6 +130,19 @@ void prewarmSystemFontMgr() {
     s.worker = std::thread([&s] { publish(s, buildWarm("off-thread")); });
 }
 
+void waitForSystemFontMgr() {
+    Shared& s = shared();
+    std::thread worker;
+    {
+        std::unique_lock lock(s.mu);
+        if (s.state == State::Building) {
+            s.cv.wait(lock, [&s] { return s.state == State::Ready; });
+        }
+        worker = std::move(s.worker);
+    }
+    if (worker.joinable()) worker.join();
+}
+
 SkFontMgr* systemFontMgr() {
     Shared& s = shared();
     std::unique_lock lock(s.mu);

@@ -117,6 +117,7 @@ public:
     /// thread of its own, so the first scene's setup finds them built (the
     /// engine calls it at launch; CPU work, no device needed).
     static void prewarmBuiltinShaders();
+    static void waitForBuiltinShaders();
     static render::VulkanContext* defaultVulkanContext() { return defaultVulkanContext_; }
     vk::SceneVkBridge* vkBridge() const { return vkBridge_.get(); }
     /// GPU milliseconds of the last render3D (timestamp queries), waiting for

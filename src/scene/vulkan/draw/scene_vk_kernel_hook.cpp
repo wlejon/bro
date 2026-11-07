@@ -199,6 +199,9 @@ std::string stageKey(const char* stageFile, const char* entry, const std::string
     return key;
 }
 
+std::mutex s_stageMu;
+std::unordered_map<std::string, StageFuture> s_stages;
+
 StageFuture stageFuture(std::string key, std::function<brokernel::CompileResult()> compile) {
     const auto run = [compile] { return std::make_shared<const brokernel::CompileResult>(compile()); };
     if (!shaderSourceDir().empty() || shader_sets::compilingSetB()) {
@@ -206,9 +209,7 @@ StageFuture stageFuture(std::string key, std::function<brokernel::CompileResult(
         p.set_value(run());
         return p.get_future().share();
     }
-    static std::mutex s_mu;
-    static std::unordered_map<std::string, StageFuture> s_stages;
-    std::lock_guard<std::mutex> lock(s_mu);
+    std::lock_guard<std::mutex> lock(s_stageMu);
     if (auto it = s_stages.find(key); it != s_stages.end()) return it->second;
     if (s_stages.size() >= kMaxStages) {
         for (auto it = s_stages.begin(); it != s_stages.end();) {
@@ -792,6 +793,18 @@ KernelHookReady prepareKernelVolumeHook(const std::string& module0, const std::s
 void warmMeshHook(SceneRenderer::CustomShaderTarget target, const std::string& module, const std::string& file,
                   const KernelHookModules& modules, const KernelHookKnobs& knobs) {
     prepareKernelMeshHook(target, module, file, modules, knobs);
+}
+
+void waitForKernelStageCompiles() {
+    std::vector<StageFuture> pending;
+    {
+        std::lock_guard<std::mutex> lock(s_stageMu);
+        pending.reserve(s_stages.size());
+        for (const auto& [_, f] : s_stages) {
+            if (f.valid()) pending.push_back(f);
+        }
+    }
+    for (const StageFuture& f : pending) f.wait();
 }
 
 } // namespace bro::scene::vk

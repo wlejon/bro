@@ -95,6 +95,8 @@ bool compileKernelShadowStage(const char* entry, KernelHookStage& out, std::stri
 /// source tree or set B compiles.
 void prewarmKernelMeshStages(std::span<const char* const> entries);
 void prewarmKernelShadowStages(std::span<const char* const> entries);
+/// Wait for every in-flight stage compile started by prewarm or prepare.
+void waitForKernelStageCompiles();
 
 /// Compile a built-in stage entry point from `file` (with common engine modules registered).
 bool compileKernelStage(const char* file, const char* embedded, const char* entry, KernelHookStage& out,

@@ -33,6 +33,10 @@ void SceneRenderer::prewarmBuiltinShaders() {
     vk::SceneCasterDrawer::prewarmStages();
 }
 
+void SceneRenderer::waitForBuiltinShaders() {
+    vk::waitForKernelStageCompiles();
+}
+
 SceneRenderer::SceneRenderer(SceneGraph& graph) : graph_(graph) {
     // Fallback sun for scenes with no LightNode (see render3D). Configured
     // once; render3D only reads it.

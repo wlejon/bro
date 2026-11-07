@@ -21,6 +21,7 @@ namespace bro::render {
 // instead of blocking the first frame. systemFontMgr() returns the finished
 // manager, waiting only for whatever of the warm-up is still in flight.
 void prewarmSystemFontMgr();
+void waitForSystemFontMgr();
 SkFontMgr* systemFontMgr();
 
 // A typeface over a font file's bytes without copying them: the SkData wraps
