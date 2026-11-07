@@ -183,13 +183,18 @@ if (!gl) {
     // --- getError: the first error in API order, encoded or not ---
     {
         gl.viewport(0, 0, -1, -1);                         // encoded: INVALID_VALUE
-        gl.texParameteri(0xBAD, gl.TEXTURE_MIN_FILTER, 0);  // on the backend now: INVALID_ENUM
-        assert(gl.getError() === gl.INVALID_VALUE, 'the encoded error came first');
+        gl.texParameteri(0xBAD, gl.TEXTURE_MIN_FILTER, 0);  // encoded too: INVALID_ENUM
+        assert(gl.getError() === gl.INVALID_VALUE, 'the first encoded error came first');
         assert(gl.getError() === gl.NO_ERROR, 'one error at a time');
 
         gl.texParameteri(0xBAD, gl.TEXTURE_MIN_FILTER, 0);  // INVALID_ENUM, first now
         gl.viewport(0, 0, -1, -1);
-        assert(gl.getError() === gl.INVALID_ENUM, 'the direct error came first');
+        assert(gl.getError() === gl.INVALID_ENUM, 'the texture error came first');
+
+        gl.createShader(0xBAD);                             // the client's own: INVALID_ENUM
+        gl.viewport(0, 0, -1, -1);
+        assert(gl.getError() === gl.INVALID_ENUM, 'the client error came first');
+        assert(gl.getError() === gl.NO_ERROR, 'one error at a time (client)');
         assert(gl.getError() === gl.NO_ERROR, 'one error at a time (2)');
 
         gl.enable(0xBAD);
@@ -197,6 +202,50 @@ if (!gl) {
         assert(gl.getError() === gl.INVALID_ENUM, 'an encoded error survives a round trip');
         gl.viewport(0, 0, 64, 64);
     }
+
+    // --- Into a framebuffer: an upload from a collected array, queued draws,
+    //     then readPixels; and getUniformLocation straight after linkProgram ---
+    {
+        const tprog = makeProgram(
+            '#version 300 es\nin vec2 aPos;\nout vec2 vUv;\n' +
+            'void main(){ vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }',
+            '#version 300 es\nprecision highp float;\nuniform sampler2D uTex;\nin vec2 vUv;\nout vec4 frag;\n' +
+            'void main(){ frag = texture(uTex, vUv); }');
+        const uTex = gl.getUniformLocation(tprog, 'uTex');  // no LINK_STATUS read first
+        assert(uTex !== null, 'getUniformLocation straight after linkProgram');
+        const src = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, src);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        (() => {
+            const data = new Uint8Array(32 * 32 * 4);  // 16 KiB: a blob
+            for (let i = 0; i < data.length; i += 4) data.set([0, 255, 255, 255], i);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 32, 32, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+            data.fill(0);
+        })();
+        churn();
+        const target = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, target);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 64, 64);
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+        clearBlack();
+        gl.useProgram(tprog);
+        gl.uniform1i(uTex, 0);
+        gl.bindTexture(gl.TEXTURE_2D, src);
+        gl.bindVertexArray(vao);
+        for (let i = 0; i < 50; i++) gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        assertPx(px(10, 50), 0, 255, 255, 'readPixels after queued draws into a framebuffer');
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fb);
+        gl.deleteTexture(target);
+        gl.deleteTexture(src);
+        gl.deleteProgram(tprog);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(LEFT));
+    }
+    assert(gl.getError() === gl.NO_ERROR, 'no error from the framebuffer section');
 
     // --- Loss with commands pending, then calls while lost ---
     {

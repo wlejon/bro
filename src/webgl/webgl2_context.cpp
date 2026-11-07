@@ -23,7 +23,7 @@ ContextAttributes granted(ContextAttributes a) {
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
                                                const ContextAttributes& requested)
     : width_(width), height_(height), device_(device), attributes_(granted(requested)),
-      caps_(vk::buildWebGLCaps(device)) {
+      caps_(vk::buildWebGLCaps(device)), client_(*caps_, device.queue()) {
     client_.attach(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_, caps_));
     // Work recorded but not yet submitted goes at the frame's end at the
     // latest, so nothing the backend holds outlives the frame it was for.
@@ -49,24 +49,28 @@ void WebGL2RenderingContext::resize(int width, int height) {
 render::LayerImage WebGL2RenderingContext::frameEnd() {
     render::LayerImage out;
     if (lost_) return out;
+    if (!client_.hasBackend()) return out;
     client_.flush();
-    vk::WebGLVkContext* gl = client_.drained();
-    if (!gl) return out;
-    const vk::WebGLVkCanvas& canvas = gl->canvas();
-    out.image = canvas.colorImage();
-    out.view = canvas.presentView();
-    out.layout = canvas.colorLayout();
-    out.format = canvas.colorFormat();
-    out.width = canvas.width();
-    out.height = canvas.height();
+    // What the flush left the canvas as (a round trip with nothing pending).
+    out = client_.sync([](vk::WebGLVkContext& gl) {
+        const vk::WebGLVkCanvas& canvas = gl.canvas();
+        render::LayerImage img;
+        img.image = canvas.colorImage();
+        img.view = canvas.presentView();
+        img.layout = canvas.colorLayout();
+        img.format = canvas.colorFormat();
+        img.width = canvas.width();
+        img.height = canvas.height();
+        return img;
+    });
     client_.presented();
     return out;
 }
 
 bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
     if (lost_) return false;
-    vk::WebGLVkContext* gl = client_.drained();
-    return gl && gl->readCanvasPixels(out);
+    if (!client_.hasBackend()) return false;
+    return client_.sync([&out](vk::WebGLVkContext& gl) { return gl.readCanvasPixels(out); });
 }
 
 // WebGL 1.0 5.15.3 "lose the context": the backend and every object go now;

@@ -1,4 +1,5 @@
-// Transform feedback bindings for WebGL2.
+// Transform feedback bindings for WebGL2: encoded by the context's client,
+// but for getTransformFeedbackVarying and isTransformFeedback (round trips).
 
 #include "bronze_host/webgl_internal.h"
 
@@ -9,34 +10,37 @@ namespace bro::bronze_host {
 
 void installWebGLTransformFeedback(ObjectBuilder& b) {
     defMethod(b, "createTransformFeedback", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
-        auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::TransformFeedback, gl->createTransformFeedback(c->newObjectId())) : ev::null();
+        auto* cl = client(c);
+        // Without capture (caps.transformFeedback) there are none to make.
+        if (!cl || !cl->caps().transformFeedback) return ev::null();
+        const GLuint id = c->newObjectId();
+        cl->createTransformFeedback(id);
+        return webglObject(c, WebGLCell::TransformFeedback, id);
     });
     defMethod(b, "deleteTransformFeedback", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::TransformFeedback);
-        if (auto* gl = live(c)) gl->deleteTransformFeedback(id);
+        if (auto* cl = client(c)) cl->deleteTransformFeedback(id);
         forgetWebGLObject(c, WebGLCell::TransformFeedback, id);
         return ev::undefined();
     });
     defMethod(b, "bindTransformFeedback", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->bindTransformFeedback(u32At(a, 0), idOf(argAt(a, 1), WebGLCell::TransformFeedback));
+        if (auto* cl = client(c)) cl->bindTransformFeedback(u32At(a, 0), idOf(argAt(a, 1), WebGLCell::TransformFeedback));
         return ev::undefined();
     });
     defMethod(b, "beginTransformFeedback", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->beginTransformFeedback(u32At(a, 0));
+        if (auto* cl = client(c)) cl->beginTransformFeedback(u32At(a, 0));
         return ev::undefined();
     });
     defMethod(b, "endTransformFeedback", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->endTransformFeedback();
+        if (auto* cl = client(c)) cl->endTransformFeedback();
         return ev::undefined();
     });
     defMethod(b, "pauseTransformFeedback", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->pauseTransformFeedback();
+        if (auto* cl = client(c)) cl->pauseTransformFeedback();
         return ev::undefined();
     });
     defMethod(b, "resumeTransformFeedback", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->resumeTransformFeedback();
+        if (auto* cl = client(c)) cl->resumeTransformFeedback();
         return ev::undefined();
     });
     defMethod(b, "transformFeedbackVaryings", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
@@ -55,13 +59,16 @@ void installWebGLTransformFeedback(ObjectBuilder& b) {
                 }
             }
         }
-        if (auto* gl = live(c)) gl->transformFeedbackVaryings(prog, names, u32At(a, 2));
+        if (auto* cl = client(c)) cl->transformFeedbackVaryings(prog, names, u32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "getTransformFeedbackVarying", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
+        auto* cl = client(c);
+        const GLuint prog = idOf(argAt(a, 0), WebGLCell::Program);
+        const GLuint index = u32At(a, 1);
         webgl::vk::VkFeedbackVarying info;
-        if (!gl || !gl->getTransformFeedbackVarying(idOf(argAt(a, 0), WebGLCell::Program), u32At(a, 1), info))
+        if (!cl ||
+            !cl->sync([&](WebGLBackend& gl) { return gl.getTransformFeedbackVarying(prog, index, info); }))
             return ev::null();
         ObjectBuilder o;
         o.set("name", ev::fromUtf8(info.name));
@@ -70,9 +77,9 @@ void installWebGLTransformFeedback(ObjectBuilder& b) {
         return o.get();
     });
     defMethod(b, "isTransformFeedback", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        return ev::fromBool(gl &&
-                            gl->isTransformFeedback(idOf(argAt(a, 0), WebGLCell::TransformFeedback)) != GL_FALSE);
+        auto* cl = client(c);
+        const GLuint id = idOf(argAt(a, 0), WebGLCell::TransformFeedback);
+        return ev::fromBool(cl && cl->sync([id](WebGLBackend& gl) { return gl.isTransformFeedback(id); }) != GL_FALSE);
     });
 }
 

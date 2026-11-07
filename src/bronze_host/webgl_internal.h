@@ -5,21 +5,24 @@
 // wrappers, and the backend each call runs against.
 //
 // A call goes to the context's client (webgl::WebGLClient, client(c)), which
-// encodes it for the Vulkan backend (webgl::vk::WebGLVkContext) or, for a
-// call that answers, runs it on the backend in a sync() round trip. The
-// families not yet encoded call the backend through live(c), which replays
-// everything the client holds first, so every call reaches the backend in API
-// order. While the context is lost there is neither, and each method does
-// nothing and answers what the WebGL spec says a lost context answers: null
-// for objects and queries, false for the is* predicates and isEnabled, -1 for
-// the attribute and fragment-data locations, WAIT_FAILED and
-// FRAMEBUFFER_UNSUPPORTED for the two waits and statuses.
+// encodes it for the Vulkan backend (webgl::vk::WebGLVkContext), answers it
+// from what it holds (ids, caps, extensions, published link results, query
+// and fence status), or, for anything else that answers, runs it on the
+// backend in a sync() round trip, every encoded call before it replayed
+// first. Nothing reaches the backend any other way. While the context is lost
+// there is no client, and each method does nothing and answers what the WebGL
+// spec says a lost context answers: null for objects and queries, false for
+// the is* predicates and isEnabled, -1 for the attribute and fragment-data
+// locations, WAIT_FAILED and FRAMEBUFFER_UNSUPPORTED for the two waits and
+// statuses.
 //
 // The upload contract: a pointer from embed::typedArrayInfo() lives until
 // the next bronze allocation (host_builder.h). An encoded call copies the
-// bytes into its record in the statement that reads the pointer; a live(c)
-// call or a sync() callback hands it to the backend, which copies it (or, for
-// a readback, writes it) before returning, in that statement.
+// bytes into its record in the statement that reads the pointer; a sync()
+// callback may hand it to the backend, which reads (or, for a readback,
+// writes) it while this thread waits. A sync() callback never touches the
+// JS heap otherwise, and never makes a Value: it answers plain data, which
+// the method wraps after it returns.
 
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
@@ -116,17 +119,11 @@ inline webgl::WebGLProgram programOf(Value v) { return {idOf(v, WebGLCell::Progr
 inline webgl::WebGLSampler samplerOf(Value v) { return {idOf(v, WebGLCell::Sampler)}; }
 
 // ---------------------------------------------------------------------------
-// The live backend
+// The client
 // ---------------------------------------------------------------------------
 
-// What an encoded call goes to: null while the context is lost.
-inline webgl::WebGLClient* client(webgl::WebGL2RenderingContext* c) { return c->client(); }
-
-// What a call not yet encoded runs against, every command before it replayed:
-// null while the context is lost.
-inline WebGLBackend* live(webgl::WebGL2RenderingContext* c) {
-    return c ? c->backend() : nullptr;
-}
+// What every call goes to: null while the context is lost.
+inline webgl::WebGLClient* client(webgl::WebGL2RenderingContext* c) { return c ? c->client() : nullptr; }
 
 // ---------------------------------------------------------------------------
 // Family installers

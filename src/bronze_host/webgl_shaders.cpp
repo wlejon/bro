@@ -3,9 +3,14 @@
 // vector uniform uploads, and the square matrix uploads WebGLUniforms leans
 // on.
 //
-// The uniform calls are encoded by the context's client; the shader and
-// program calls still run on the backend (live(c), every encoded call before
-// them replayed).
+// Every call is encoded by the context's client. What a program or shader
+// reports about itself is answered from what its last link or compile
+// published to the client (webgl_client_async.h, webgl_program_lookup.h):
+// the first such read after a link waits for that link, the rest are
+// local. An object the client no longer holds (deleted, never made) is asked
+// of the backend in a round trip, as is anything that is not link or
+// compile state (DELETE_STATUS of a deleted object, VALIDATE_STATUS,
+// ATTACHED_SHADERS, getAttachedShaders, the is* predicates).
 //
 // The *v upload paths read their data through floatData()/int32Data(): a
 // typed array answers a borrowed bronze-heap pointer the client copies into
@@ -16,11 +21,17 @@
 
 #include "bronze_host/webgl_internal.h"
 
+#include "webgl/vulkan/webgl_program_lookup.h"
+
+#include <algorithm>
 #include <string>
 
 namespace bro::bronze_host {
 
 namespace {
+
+using webgl::WebGLProgram;
+using webgl::WebGLShader;
 
 // Builds the {name, type, size} object getActiveUniform/getActiveAttrib
 // answer — WebGLActiveInfo's shape. `info.name` is host memory, so it
@@ -35,21 +46,54 @@ Value makeActiveInfo(const webgl::WebGLActiveInfo& info) {
     return o.get();
 }
 
+// The program's last link, or null when the client does not hold it (the
+// caller asks the backend).
+const webgl::ProgramLink* linkOf(webgl::WebGLClient* cl, GLuint program) { return cl->programLink(program); }
+
+// A lookup's error goes down the ring, in order with the backend's.
+void raise(webgl::WebGLClient* cl, GLenum err) {
+    if (err != GL_NO_ERROR) cl->syntheticError(err);
+}
+
+// getProgramParameter of what a link leaves (and DELETE_STATUS, false for a
+// program the client holds); false for a pname that is not one of those.
+bool linkParameter(const webgl::ProgramLink& link, GLenum pname, GLint& out) {
+    const webgl::vk::ProgramInterface& iface = *link.iface;
+    switch (pname) {
+        case GL_LINK_STATUS: out = link.linked ? GL_TRUE : GL_FALSE; return true;
+        case GL_DELETE_STATUS: out = GL_FALSE; return true;
+        case GL_ACTIVE_ATTRIBUTES: out = static_cast<GLint>(iface.attribs.size()); return true;
+        case GL_ACTIVE_UNIFORMS: out = static_cast<GLint>(iface.uniforms.size()); return true;
+        case GL_ACTIVE_UNIFORM_BLOCKS: out = static_cast<GLint>(iface.uniformBlocks.size()); return true;
+        case GL_TRANSFORM_FEEDBACK_VARYINGS: out = static_cast<GLint>(iface.feedbackVaryings.size()); return true;
+        case GL_TRANSFORM_FEEDBACK_BUFFER_MODE: out = static_cast<GLint>(iface.feedbackBufferMode); return true;
+        case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH: {
+            size_t longest = 0;
+            for (const auto& v : iface.feedbackVaryings) longest = std::max(longest, v.name.size() + 1);
+            out = static_cast<GLint>(longest);
+            return true;
+        }
+        default: return false;
+    }
+}
+
 }  // namespace
 
 void installWebGLShaders(ObjectBuilder& b) {
     // --- Shaders ---
     defMethod(b, "createShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        webgl::WebGLShader s = gl->createShader(c->newObjectId(), u32At(a, 0));
-        return webglObject(c, WebGLCell::Shader, s.id, s.type);
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const GLuint id = c->newObjectId();
+        const GLenum type = u32At(a, 0);
+        if (!cl->newShader(id, type)) return ev::null();
+        return webglObject(c, WebGLCell::Shader, id, type);
     });
     defMethod(b, "deleteShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         if (cell) {
             const GLuint id = cell->id;
-            if (auto* gl = live(c)) gl->deleteShader({id, cell->shaderType});
+            if (auto* cl = client(c)) cl->dropShader(WebGLShader{id, cell->shaderType});
             forgetWebGLObject(c, WebGLCell::Shader, id);
         }
         return ev::undefined();
@@ -58,105 +102,150 @@ void installWebGLShaders(ObjectBuilder& b) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
         Value src = argAt(a, 1);
         if (cell && !ev::isObject(src)) {
-            if (auto* gl = live(c)) gl->shaderSource({cell->id, cell->shaderType}, ev::toUtf8(src));
+            const WebGLShader s{cell->id, cell->shaderType};
+            const std::string text = ev::toUtf8(src);
+            if (auto* cl = client(c)) cl->setShaderSource(s, text);
         }
         return ev::undefined();
     });
     defMethod(b, "getShaderSource", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (!gl || !cell) return ev::null();
-        return ev::fromUtf8(gl->getShaderSource({cell->id, cell->shaderType}));
+        auto* cl = client(c);
+        if (!cl || !cell) return ev::null();
+        if (const std::string* src = cl->heldShaderSource(cell->id)) return ev::fromUtf8(*src);
+        const WebGLShader s{cell->id, cell->shaderType};
+        return ev::fromUtf8(cl->sync([s](WebGLBackend& gl) { return gl.getShaderSource(s); }));
     });
     defMethod(b, "compileShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (gl && cell) gl->compileShader({cell->id, cell->shaderType});
+        auto* cl = client(c);
+        if (cl && cell) cl->compileShader(WebGLShader{cell->id, cell->shaderType});
         return ev::undefined();
     });
     defMethod(b, "getShaderParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (!gl || !cell) return ev::null();
+        auto* cl = client(c);
+        if (!cl || !cell) return ev::null();
         const GLenum pname = u32At(a, 1);
+        const WebGLShader s{cell->id, cell->shaderType};
         switch (pname) {
             case GL_COMPILE_STATUS:
+                if (const webgl::ShaderCompile* compile = cl->shaderCompile(s.id)) return ev::fromBool(compile->compiled);
+                [[fallthrough]];
             case GL_DELETE_STATUS:
-                return ev::fromBool(gl->getShaderParameter({cell->id, cell->shaderType}, pname) != GL_FALSE);
+                if (pname == GL_DELETE_STATUS && cl->heldShaderSource(s.id)) return ev::fromBool(false);
+                return ev::fromBool(cl->sync([s, pname](WebGLBackend& gl) { return gl.getShaderParameter(s, pname); }) !=
+                                    GL_FALSE);
             case GL_SHADER_TYPE:
                 return ev::fromDouble(cell->shaderType);
-            case GL_COMPLETION_STATUS_KHR:  // with KHR_parallel_shader_compile
-                if (gl->getShaderParameter({cell->id, cell->shaderType}, pname) == GL_TRUE) return ev::fromBool(true);
-                gl->setSyntheticError(GL_INVALID_ENUM);
+            case GL_COMPLETION_STATUS_KHR:  // with KHR_parallel_shader_compile; never waits
+                if (cl->extensionEnabled("KHR_parallel_shader_compile")) {
+                    if (cl->heldShaderSource(s.id)) return ev::fromBool(cl->shaderSettled(s.id));
+                    if (cl->sync([s, pname](WebGLBackend& gl) { return gl.getShaderParameter(s, pname); }) == GL_TRUE)
+                        return ev::fromBool(true);
+                }
+                cl->syntheticError(GL_INVALID_ENUM);
                 return ev::null();
             default:
-                gl->setSyntheticError(GL_INVALID_ENUM);
+                cl->syntheticError(GL_INVALID_ENUM);
                 return ev::null();
         }
     });
     defMethod(b, "getShaderInfoLog", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (!gl || !cell) return ev::null();
-        return ev::fromUtf8(gl->getShaderInfoLog({cell->id, cell->shaderType}));
+        auto* cl = client(c);
+        if (!cl || !cell) return ev::null();
+        if (const webgl::ShaderCompile* compile = cl->shaderCompile(cell->id)) return ev::fromUtf8(compile->infoLog);
+        const WebGLShader s{cell->id, cell->shaderType};
+        return ev::fromUtf8(cl->sync([s](WebGLBackend& gl) { return gl.getShaderInfoLog(s); }));
     });
     defMethod(b, "isShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
-        auto* gl = live(c);
-        return ev::fromBool(gl && cell && gl->isShader({cell->id, cell->shaderType}) != GL_FALSE);
+        auto* cl = client(c);
+        if (!cl || !cell) return ev::fromBool(false);
+        const WebGLShader s{cell->id, cell->shaderType};
+        return ev::fromBool(cl->sync([s](WebGLBackend& gl) { return gl.isShader(s); }) != GL_FALSE);
     });
 
     // --- Programs ---
     defMethod(b, "createProgram", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
-        auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Program, gl->createProgram(c->newObjectId()).id) : ev::null();
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const GLuint id = c->newObjectId();
+        cl->newProgram(id);
+        return webglObject(c, WebGLCell::Program, id);
     });
     defMethod(b, "deleteProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Program);
-        if (auto* gl = live(c)) gl->deleteProgram({id});
+        if (auto* cl = client(c)) cl->dropProgram(WebGLProgram{id});
         forgetWebGLObject(c, WebGLCell::Program, id);
         return ev::undefined();
     });
     defMethod(b, "attachShader", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* sh = cellOf(argAt(a, 1), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (gl && sh) gl->attachShader({idOf(argAt(a, 0), WebGLCell::Program)}, {sh->id, sh->shaderType});
+        auto* cl = client(c);
+        if (cl && sh)
+            cl->attachShader(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)}, WebGLShader{sh->id, sh->shaderType});
         return ev::undefined();
     });
     defMethod(b, "detachShader", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* sh = cellOf(argAt(a, 1), WebGLCell::Shader);
-        auto* gl = live(c);
-        if (gl && sh) gl->detachShader({idOf(argAt(a, 0), WebGLCell::Program)}, {sh->id, sh->shaderType});
+        auto* cl = client(c);
+        if (cl && sh)
+            cl->detachShader(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)}, WebGLShader{sh->id, sh->shaderType});
         return ev::undefined();
     });
     defMethod(b, "getAttachedShaders", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        const std::vector<GLuint> ids = gl->attachedShaders({idOf(argAt(a, 0), WebGLCell::Program)});
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        std::vector<GLuint> ids;
         std::vector<GLenum> types;
-        for (GLuint id : ids)
-            types.push_back(static_cast<GLenum>(gl->getShaderParameter({id, 0}, GL_SHADER_TYPE)));
+        cl->sync([&](WebGLBackend& gl) {
+            ids = gl.attachedShaders(p);
+            for (GLuint id : ids) types.push_back(static_cast<GLenum>(gl.getShaderParameter({id, 0}, GL_SHADER_TYPE)));
+        });
         return hostArrayOf(ids.size(),
                            [&](size_t i) { return webglObject(c, WebGLCell::Shader, ids[i], types[i]); });
     });
     defMethod(b, "linkProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->linkProgram({idOf(argAt(a, 0), WebGLCell::Program)});
+        if (auto* cl = client(c)) cl->linkProgram(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
     defMethod(b, "validateProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->validateProgram({idOf(argAt(a, 0), WebGLCell::Program)});
+        if (auto* cl = client(c)) cl->validateProgram(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
     defMethod(b, "useProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->useProgram({idOf(argAt(a, 0), WebGLCell::Program)});
+        if (auto* cl = client(c)) cl->useProgram(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)});
         return ev::undefined();
     });
     defMethod(b, "getProgramParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        const webgl::WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
         const GLenum pname = u32At(a, 1);
-        const GLint value = gl->getProgramParameter(p, pname);
+        GLint value = 0;
+        if (pname == GL_COMPLETION_STATUS_KHR && !cl->holdsProgram(p.id)) {
+            // Not the client's (deleted, never made): the backend's answer.
+        } else if (pname == GL_COMPLETION_STATUS_KHR) {
+            // Never waits: KHR_parallel_shader_compile's whole point.
+            if (cl->extensionEnabled("KHR_parallel_shader_compile")) return ev::fromBool(cl->programSettled(p.id));
+            cl->syntheticError(GL_INVALID_ENUM);
+            return ev::fromBool(false);
+        }
+        const webgl::ProgramLink* link =
+            pname == GL_COMPLETION_STATUS_KHR || pname == GL_VALIDATE_STATUS || pname == GL_ATTACHED_SHADERS
+                ? nullptr
+                : cl->programLink(p.id);
+        if (link) {
+            if (!linkParameter(*link, pname, value)) {
+                cl->syntheticError(GL_INVALID_ENUM);
+                return ev::fromDouble(0);
+            }
+        } else {
+            value = cl->sync([p, pname](WebGLBackend& gl) { return gl.getProgramParameter(p, pname); });
+        }
         switch (pname) {
             case GL_LINK_STATUS:
             case GL_DELETE_STATUS:
@@ -168,67 +257,126 @@ void installWebGLShaders(ObjectBuilder& b) {
         }
     });
     defMethod(b, "getProgramInfoLog", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        return ev::fromUtf8(gl->getProgramInfoLog({idOf(argAt(a, 0), WebGLCell::Program)}));
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id)) return ev::fromUtf8(link->infoLog);
+        return ev::fromUtf8(cl->sync([p](WebGLBackend& gl) { return gl.getProgramInfoLog(p); }));
     });
     defMethod(b, "isProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        return ev::fromBool(gl && gl->isProgram({idOf(argAt(a, 0), WebGLCell::Program)}) != GL_FALSE);
+        auto* cl = client(c);
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        return ev::fromBool(cl && cl->sync([p](WebGLBackend& gl) { return gl.isProgram(p); }) != GL_FALSE);
     });
 
-    // --- Locations and introspection ---
+    // --- Locations and introspection: from the program's last link ---
     defMethod(b, "bindAttribLocation", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 2);
-        auto* gl = live(c);
-        if (gl && !ev::isObject(name))
-            gl->bindAttribLocation({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), ev::toUtf8(name));
+        if (ev::isObject(name)) return ev::undefined();
+        const std::string n = ev::toUtf8(name);
+        if (auto* cl = client(c))
+            cl->bindAttribLocation(WebGLProgram{idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1), n);
         return ev::undefined();
     });
     defMethod(b, "getAttribLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
-        auto* gl = live(c);
-        if (!gl || ev::isObject(name)) return ev::fromDouble(-1);
-        return ev::fromDouble(gl->getAttribLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
+        if (!client(c) || ev::isObject(name)) return ev::fromDouble(-1);
+        const std::string n = ev::toUtf8(name);
+        auto* cl = client(c);  // converting the name may have run script that lost the context
+        if (!cl) return ev::fromDouble(-1);
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id)) {
+            if (!link->linked) {
+                cl->syntheticError(GL_INVALID_OPERATION);
+                return ev::fromDouble(-1);
+            }
+            return ev::fromDouble(webgl::vk::lookupAttribLocation(*link->iface, n));
+        }
+        return ev::fromDouble(cl->sync([&](WebGLBackend& gl) { return gl.getAttribLocation(p, n); }));
     });
     defMethod(b, "getFragDataLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
-        auto* gl = live(c);
-        if (!gl || ev::isObject(name)) return ev::fromDouble(-1);
-        return ev::fromDouble(gl->getFragDataLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
+        if (!client(c) || ev::isObject(name)) return ev::fromDouble(-1);
+        const std::string n = ev::toUtf8(name);
+        auto* cl = client(c);
+        if (!cl) return ev::fromDouble(-1);
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id)) {
+            if (!link->linked) {
+                cl->syntheticError(GL_INVALID_OPERATION);
+                return ev::fromDouble(-1);
+            }
+            return ev::fromDouble(webgl::vk::lookupFragDataLocation(*link->iface, n));
+        }
+        return ev::fromDouble(cl->sync([&](WebGLBackend& gl) { return gl.getFragDataLocation(p, n); }));
     });
     defMethod(b, "getUniformLocation", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
-        auto* gl = live(c);
-        if (!gl || ev::isObject(name)) return ev::null();
-        return wrapUniformLocation(
-            gl->getUniformLocation({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
+        if (!client(c) || ev::isObject(name)) return ev::null();
+        const std::string n = ev::toUtf8(name);
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id)) {
+            if (!link->linked) {
+                cl->syntheticError(GL_INVALID_OPERATION);
+                return ev::null();
+            }
+            return wrapUniformLocation({webgl::vk::lookupUniformLocation(*link->iface, n), p.id});
+        }
+        return wrapUniformLocation(cl->sync([&](WebGLBackend& gl) { return gl.getUniformLocation(p, n); }));
     });
     defMethod(b, "getActiveAttrib", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        return makeActiveInfo(gl->getActiveAttrib({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        const GLuint index = u32At(a, 1);
+        webgl::WebGLActiveInfo info{"", 0, 0};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id))
+            raise(cl, webgl::vk::lookupActiveAttrib(*link->iface, index, info));
+        else
+            info = cl->sync([&](WebGLBackend& gl) { return gl.getActiveAttrib(p, index); });
+        return makeActiveInfo(info);
     });
     defMethod(b, "getActiveUniform", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        return makeActiveInfo(gl->getActiveUniform({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        const GLuint index = u32At(a, 1);
+        webgl::WebGLActiveInfo info{"", 0, 0};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id))
+            raise(cl, webgl::vk::lookupActiveUniform(*link->iface, index, info));
+        else
+            info = cl->sync([&](WebGLBackend& gl) { return gl.getActiveUniform(p, index); });
+        return makeActiveInfo(info);
     });
     defMethod(b, "getUniformBlockIndex", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         Value name = argAt(a, 1);
-        auto* gl = live(c);
-        if (!gl || ev::isObject(name)) return ev::fromDouble(4294967295.0);  // INVALID_INDEX
-        return ev::fromDouble(gl->getUniformBlockIndex({idOf(argAt(a, 0), WebGLCell::Program)}, ev::toUtf8(name)));
+        if (!client(c) || ev::isObject(name)) return ev::fromDouble(4294967295.0);  // INVALID_INDEX
+        const std::string n = ev::toUtf8(name);
+        auto* cl = client(c);
+        if (!cl) return ev::fromDouble(4294967295.0);
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id))
+            return ev::fromDouble(webgl::vk::lookupUniformBlockIndex(*link->iface, n));
+        return ev::fromDouble(cl->sync([&](WebGLBackend& gl) { return gl.getUniformBlockIndex(p, n); }));
     });
     defMethod(b, "getActiveUniformBlockName", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        return ev::fromUtf8(gl->getActiveUniformBlockName({idOf(argAt(a, 0), WebGLCell::Program)}, u32At(a, 1)));
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram p{idOf(argAt(a, 0), WebGLCell::Program)};
+        const GLuint index = u32At(a, 1);
+        std::string name;
+        if (const webgl::ProgramLink* link = linkOf(cl, p.id))
+            raise(cl, webgl::vk::lookupUniformBlockName(*link->iface, index, name));
+        else
+            name = cl->sync([&](WebGLBackend& gl) { return gl.getActiveUniformBlockName(p, index); });
+        return ev::fromUtf8(name);
     });
     defMethod(b, "getUniformIndices", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
+        const WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         Value namesVal = argAt(a, 1);
-        if (!live(c) || !ev::isObject(namesVal)) return ev::null();
+        if (!client(c) || !ev::isObject(namesVal)) return ev::null();
         ev::Persistent root(namesVal);
         Value lenV = ev::getProperty(root.get(), "length");
         if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::null();
@@ -240,21 +388,30 @@ void installWebGLShaders(ObjectBuilder& b) {
             names.push_back(ev::toUtf8(ev::getElement(root.get(), i)));
         }
         // Re-fetched: a property getter on the list may have lost the context.
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        auto indices = gl->getUniformIndices(prog, names);
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        std::vector<GLuint> indices;
+        if (const webgl::ProgramLink* link = linkOf(cl, prog.id))
+            indices = webgl::vk::lookupUniformIndices(*link->iface, names);
+        else
+            indices = cl->sync([&](WebGLBackend& gl) { return gl.getUniformIndices(prog, names); });
         return hostArrayOf(indices.size(), [&indices](size_t i) { return ev::fromDouble(indices[i]); });
     });
     defMethod(b, "getActiveUniforms", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
+        const WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         uint32_t pname = u32At(a, 2);
         SmallBuffer<uint32_t, 64> storage;
         const uint32_t* data = nullptr;
         size_t count = 0;
         if (!uint32Data(argAt(a, 1), storage, &data, &count)) return ev::null();
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        auto params = gl->getActiveUniforms(prog, std::vector<GLuint>(data, data + count), pname);
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const std::vector<GLuint> indices(data, data + count);
+        std::vector<GLint> params;
+        if (const webgl::ProgramLink* link = linkOf(cl, prog.id))
+            raise(cl, webgl::vk::lookupActiveUniforms(*link->iface, indices, pname, params));
+        else
+            params = cl->sync([&](WebGLBackend& gl) { return gl.getActiveUniforms(prog, indices, pname); });
         return hostArrayOf(params.size(), [&params, pname](size_t i) {
             if (pname == 0x8A3E /* UNIFORM_IS_ROW_MAJOR */) {
                 return ev::fromBool(params[i] != 0);
@@ -263,23 +420,35 @@ void installWebGLShaders(ObjectBuilder& b) {
         });
     });
     defMethod(b, "getActiveUniformBlockParameter", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        const webgl::WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const WebGLProgram prog{idOf(argAt(a, 0), WebGLCell::Program)};
         uint32_t blockIndex = u32At(a, 1);
         uint32_t pname = u32At(a, 2);
+        // UNIFORM_BLOCK_BINDING is program state (uniformBlockBinding), not
+        // what the link left: the backend's.
+        const webgl::ProgramLink* link = pname == GL_UNIFORM_BLOCK_BINDING ? nullptr : linkOf(cl, prog.id);
         switch (pname) {
             case 0x8A43: {  // UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES
-                auto indices = gl->getActiveUniformBlockIndices(prog, blockIndex);
+                std::vector<GLint> indices =
+                    link ? webgl::vk::lookupUniformBlockIndices(*link->iface, blockIndex)
+                         : cl->sync([&](WebGLBackend& gl) { return gl.getActiveUniformBlockIndices(prog, blockIndex); });
                 return hostArrayOf(indices.size(), [&indices](size_t i) {
                     return ev::fromDouble(static_cast<uint32_t>(indices[i]));
                 });
             }
-            case 0x8A44:  // UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER
-            case 0x8A46:  // UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER
-                return ev::fromBool(gl->getActiveUniformBlockParameteri(prog, blockIndex, pname) != 0);
-            default:
-                return ev::fromDouble(gl->getActiveUniformBlockParameteri(prog, blockIndex, pname));
+            default: {
+                GLint value = 0;
+                if (link)
+                    raise(cl, webgl::vk::lookupUniformBlockParameter(*link->iface, blockIndex, pname, value));
+                else
+                    value = cl->sync(
+                        [&](WebGLBackend& gl) { return gl.getActiveUniformBlockParameteri(prog, blockIndex, pname); });
+                if (pname == 0x8A44 /* UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER */ ||
+                    pname == 0x8A46 /* UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER */)
+                    return ev::fromBool(value != 0);
+                return ev::fromDouble(value);
+            }
         }
     });
     defMethod(b, "uniformBlockBinding", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {

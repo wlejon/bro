@@ -49,6 +49,8 @@ add_library(bro_webgl STATIC
     client/webgl_ring.cpp
     client/webgl_client.cpp
     client/webgl_replay.cpp
+    client/webgl_client_async.cpp
+    client/webgl_client_programs.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)

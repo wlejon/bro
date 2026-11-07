@@ -322,13 +322,14 @@ int main() {
     // -------------------------------------------------------------------------
     // Test 6: WebGL2RenderingContext owning its backend, across a resize
     // -------------------------------------------------------------------------
-    std::cout << "[Test 6] WebGL2RenderingContext backend + resize... " << std::flush;
+    std::cout << "[Test 6] WebGL2RenderingContext client + resize... " << std::flush;
     {
         WebGL2RenderingContext glCtx(64, 64, context);
-        assert(glCtx.backend() != nullptr);
+        assert(glCtx.client() != nullptr && glCtx.client()->hasBackend());
 
-        glCtx.backend()->clearColor(0.0f, 1.0f, 1.0f, 1.0f); // Cyan
-        glCtx.backend()->clear(GL_COLOR_BUFFER_BIT);
+        // Encoded, replayed by the readback's round trip.
+        glCtx.client()->clearColor(0.0f, 1.0f, 1.0f, 1.0f); // Cyan
+        glCtx.client()->clear(GL_COLOR_BUFFER_BIT);
 
         std::vector<uint8_t> cyanPixels;
         assert(glCtx.readCanvasPixels(cyanPixels));
@@ -342,8 +343,8 @@ int main() {
         assert(glCtx.canvasWidth() == 32);
         assert(glCtx.canvasHeight() == 32);
 
-        glCtx.backend()->clearColor(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
-        glCtx.backend()->clear(GL_COLOR_BUFFER_BIT);
+        glCtx.client()->clearColor(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
+        glCtx.client()->clear(GL_COLOR_BUFFER_BIT);
 
         std::vector<uint8_t> yellowPixels;
         assert(glCtx.readCanvasPixels(yellowPixels));

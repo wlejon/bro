@@ -44,6 +44,13 @@ if (!gl) {
            'KHR_parallel_shader_compile carries its constants');
     assert(gl.getExtension('KHR_parallel_shader_compile') === par, 'getExtension answers the same object');
     const [p1, s1] = program();
+    // COMPLETION_STATUS_KHR never waits: the link runs behind the call, and
+    // the status is true once it has (a frame's end at the latest; two steps,
+    // since a headless run's first step opens its first frame rather than
+    // ending one).
+    const st = gl.getProgramParameter(p1, par.COMPLETION_STATUS_KHR);
+    assert(st === true || st === false, 'COMPLETION_STATUS_KHR answers a boolean at once');
+    advanceTime(32);
     assert(gl.getProgramParameter(p1, par.COMPLETION_STATUS_KHR) === true, 'a linked program is complete');
     assert(gl.getShaderParameter(s1[0], par.COMPLETION_STATUS_KHR) === true, 'a compiled shader is complete');
     assert(gl.getShaderParameter(s0[1], par.COMPLETION_STATUS_KHR) === true, 'one compiled before enabling too');

@@ -177,6 +177,9 @@ public:
     void linkProgram(WebGLProgram p);
     void useProgram(WebGLProgram p);
     GLint getProgramParameter(WebGLProgram p, GLenum pname);
+    /// The program object `id` (deleted ones the backend still keeps
+    /// included), null for none: what a link left, for the client.
+    const VkProgramResource* programObject(GLuint id) const { return linkedProgram({id}); }
     /// VALIDATE_STATUS: linked, and no texture unit read by samplers of two types.
     void validateProgram(WebGLProgram p);
     /// The value at `loc` of `p`'s default block, or a sampler's unit.
@@ -443,6 +446,11 @@ public:
     /// QUERY_RESULT (waiting for the GPU if need be) or QUERY_RESULT_AVAILABLE;
     /// false with the GL error. A timer query's result is nanoseconds.
     bool getQueryParameter(GLuint id, GLenum pname, uint64_t& out);
+    /// The query as getQueryParameter would find it now, never waiting or
+    /// submitting: 0 when it would refuse (unknown, never begun, active), 1
+    /// while its result is not on the host, 2 with the result in `out`
+    /// (read, and its slots handed back, the first time).
+    int pollQuery(GLuint id, uint64_t& out);
     /// EXT_disjoint_timer_query_webgl2: queryCounterEXT(query, TIMESTAMP_EXT),
     /// getQuery(target, QUERY_COUNTER_BITS_EXT), and getParameter's
     /// GPU_DISJOINT_EXT / TIMESTAMP_EXT.
@@ -461,6 +469,11 @@ public:
     void waitSync(GLuint id, GLbitfield flags, double timeoutNs);
     /// False (with the GL error) for a deleted sync or an unknown pname.
     bool getSyncParameter(GLuint id, GLenum pname, GLint& out);
+    /// The queue ticket sync `id` signals with (0, complete, for none).
+    uint64_t syncTicket(GLuint id) const {
+        auto it = syncs_.find(id);
+        return it == syncs_.end() ? 0 : it->second;
+    }
 
 private:
     /// True when the device has every one of `features` for `format`

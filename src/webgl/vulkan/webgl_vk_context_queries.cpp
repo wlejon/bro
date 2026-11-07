@@ -337,6 +337,33 @@ bool WebGLVkContext::getQueryParameter(GLuint id, GLenum pname, uint64_t& out) {
     return true;
 }
 
+int WebGLVkContext::pollQuery(GLuint id, uint64_t& out) {
+    auto it = queries_.find(id);
+    if (it == queries_.end() || it->second.target == 0 || id == activeOcclusionQuery_ ||
+        id == activeFeedbackQuery_ || id == activeTimerQuery_)
+        return 0;
+    QueryObject& q = it->second;
+    if (q.pending || (q.ticket != 0 && !context_.queue().isComplete(q.ticket))) return 1;
+    if (q.target == GL_TIME_ELAPSED_EXT || q.target == GL_TIMESTAMP_EXT) {
+        if (!q.stamps.empty()) {
+            uint64_t ns = 0;
+            if (!readTimerResult(q, false, ns)) return 1;
+            q.count = ns;
+            retireQuerySlots(q);
+        }
+        out = q.count;
+        return 2;
+    }
+    if (!q.slots.empty()) {
+        uint64_t count = q.count;
+        if (!readOcclusionSlots(context_.device(), occlusionSlots_.pools, q.slots, false, count)) return 1;
+        q.count = count;
+        retireQuerySlots(q);
+    }
+    out = occlusionTarget(q.target) ? (q.count > 0 ? 1u : 0u) : q.count;
+    return 2;
+}
+
 // A free slot of `slots`' type, its reset recorded in `cmd` (outside a pass).
 bool WebGLVkContext::allocSlot(QuerySlots& slots, VkCommandBuffer cmd, uint32_t& slot) {
     for (size_t i = 0; i < slots.retired.size();) {

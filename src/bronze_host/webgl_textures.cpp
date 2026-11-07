@@ -7,14 +7,15 @@
 // xoffset, yoffset, format, type, source) — because they are the pair
 // three.js's WebGLTextures actually calls for a texture built from an image:
 // the 9-arg forms are for DataTexture and friends. `source` is a host Image
-// (host_image.cpp) or an ImageData-shaped { width, height, data }.
+// (host_image.cpp), an ImageBitmap, a canvas or video element, or an
+// ImageData-shaped { width, height, data }.
 //
-// Upload pointers come from embed::typedArrayInfo and live only until the
-// next bronze allocation — each is handed to the backend (which copies it)
-// in the same statement chain with nothing allocating in between.
-// An Image's pixels are host memory and would survive, but resolveSource
-// deliberately hands both kinds back through one type so no caller can start
-// depending on which it got.
+// Every call is encoded by the context's client and replays later, so its
+// pixels are the client's from the call on: a typed array's bytes are copied
+// into the command (embed::typedArrayInfo's pointer lives only until the
+// next bronze allocation, and nothing allocates between the read and the
+// copy); a decoded image (Image, ImageBitmap) is held by reference, since it
+// never changes; a canvas snapshot, a video frame and ImageData are copied.
 
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_image.h"
@@ -42,6 +43,8 @@ struct SourcePixels {
     const uint8_t* data = nullptr;
     GLsizei width = 0;
     GLsizei height = 0;
+    // The decoded image `data` points into, when it is one: held, not copied.
+    std::shared_ptr<const render::DecodedImage> decoded;
     explicit operator bool() const { return data != nullptr; }
 };
 
@@ -55,7 +58,7 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
             LOG_WARN("bronze_host: %s was given an ImageBitmap with no pixels", who);
             return {};
         }
-        return {bmp->rgba(), static_cast<GLsizei>(bmp->width), static_cast<GLsizei>(bmp->height)};
+        return {bmp->rgba(), static_cast<GLsizei>(bmp->width), static_cast<GLsizei>(bmp->height), bmp->pixels};
     }
 
     if (const HostImage* img = hostImageOf(source)) {
@@ -68,7 +71,7 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
                      img->src.c_str());
             return {};
         }
-        return {img->rgba(), img->width, img->height};
+        return {img->rgba(), img->width, img->height, img->pixels};
     }
 
     if (dom::Element* el = hostElementOf(source)) {
@@ -126,18 +129,24 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
 }
 
 
-// Resolve a DOM source and hand its pixels to `upload` straight away (the
-// pointer may be heap-borrowed); INVALID_VALUE when it has none.
+// Resolve a DOM source and hand its pixels, held or copied, to `upload`
+// straight away (the pointer may be heap-borrowed); INVALID_VALUE when it has
+// none.
 template <typename Upload>
 void uploadSource(webgl::WebGL2RenderingContext* c, Value source, const char* who, Upload&& upload) {
     SourcePixels src = resolveSource(source, who);
+    auto* cl = client(c);
+    if (!cl) return;
     if (!src) {
-        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
+        cl->syntheticError(GL_INVALID_VALUE);
         return;
     }
-    // Nothing between resolveSource and the upload allocates on the bronze
+    const auto w = static_cast<uint32_t>(src.width), h = static_cast<uint32_t>(src.height);
+    // Nothing between resolveSource and the copy allocates on the bronze
     // heap, which keeps an ImageData-backed pointer valid.
-    upload(src);
+    upload(*cl, src.decoded ? webgl::WebGLClient::heldPixels(
+                                  std::shared_ptr<const uint8_t>(src.decoded, src.data), w, h)
+                            : cl->copiedPixels(src.data, w, h));
 }
 
 // The bytes of a typed-array (or ArrayBuffer) upload source from element
@@ -156,7 +165,7 @@ ViewBytes viewBytes(webgl::WebGL2RenderingContext* c, Value v, Value srcOffset) 
     if (!ev::typedArrayInfo(v) || !bufferBytes(v, &data, &len, &elemSize)) return out;
     const size_t offset = ev::isUndefined(srcOffset) ? 0 : static_cast<size_t>(ev::toDouble(srcOffset));
     if (offset > len / elemSize) {
-        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* cl = client(c)) cl->syntheticError(GL_INVALID_VALUE);
         out.rangeError = true;
         return out;
     }
@@ -174,7 +183,7 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
     size_t len = 0, elemSize = 1;
     ViewBytes out;
     if (!bufferBytes(argAt(a, index), &data, &len, &elemSize)) {
-        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* cl = client(c)) cl->syntheticError(GL_INVALID_VALUE);
         return out;
     }
     const size_t elemCount = len / elemSize;
@@ -182,7 +191,7 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
     const bool hasOverride = a.size() > index + 2 && !ev::isUndefined(a[index + 2]);
     const size_t override = hasOverride ? u32At(a, index + 2) : 0;
     if (srcOffset > elemCount || (hasOverride && override > elemCount - srcOffset)) {
-        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* cl = client(c)) cl->syntheticError(GL_INVALID_VALUE);
         return out;
     }
     const size_t count = hasOverride ? override : elemCount - srcOffset;
@@ -195,40 +204,47 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
 // refused, by name, rather than read as something it is not.
 void refuseDomSource3D(webgl::WebGL2RenderingContext* c, const char* who) {
     LOG_ERROR("bronze_host: %s from a DOM source is not supported; upload a typed array", who);
-    if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_OPERATION);
+    if (auto* cl = client(c)) cl->syntheticError(GL_INVALID_OPERATION);
 }
 
 }  // namespace
 
+
 void installWebGLTextures(ObjectBuilder& b) {
+    using webgl::WebGLSampler;
+    using webgl::WebGLTexture;
     defMethod(b, "createTexture", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
-        auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Texture, gl->createTexture(c->newObjectId()).id) : ev::null();
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const GLuint id = c->newObjectId();
+        cl->createTexture(id);
+        return webglObject(c, WebGLCell::Texture, id);
     });
     defMethod(b, "deleteTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Texture);
-        if (auto* gl = live(c)) gl->deleteTexture({id});
+        if (auto* cl = client(c)) cl->deleteTexture(WebGLTexture{id});
         forgetWebGLObject(c, WebGLCell::Texture, id);
         return ev::undefined();
     });
     defMethod(b, "bindTexture", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->bindTexture(u32At(a, 0), {idOf(argAt(a, 1), WebGLCell::Texture)});
+        if (auto* cl = client(c)) cl->bindTexture(u32At(a, 0), WebGLTexture{idOf(argAt(a, 1), WebGLCell::Texture)});
         return ev::undefined();
     });
     defMethod(b, "isTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        return ev::fromBool(gl && gl->isTexture({idOf(argAt(a, 0), WebGLCell::Texture)}) != GL_FALSE);
+        auto* cl = client(c);
+        const WebGLTexture tex{idOf(argAt(a, 0), WebGLCell::Texture)};
+        return ev::fromBool(cl && cl->sync([tex](WebGLBackend& gl) { return gl.isTexture(tex); }) != GL_FALSE);
     });
     defMethod(b, "activeTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->activeTexture(u32At(a, 0));
+        if (auto* cl = client(c)) cl->activeTexture(u32At(a, 0));
         return ev::undefined();
     });
     defMethod(b, "texParameteri", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
+        if (auto* cl = client(c)) cl->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "texParameterf", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
+        if (auto* cl = client(c)) cl->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
 
@@ -240,11 +256,9 @@ void installWebGLTextures(ObjectBuilder& b) {
         // DOM-source call announces itself by an OBJECT where the 9-arg form
         // has `border` (a number, required to be 0).
         if (ev::isObject(argAt(a, 5))) {
-            uploadSource(c, argAt(a, 5), "texImage2D", [&](const SourcePixels& src) {
-                if (auto* gl = live(c))
-                    gl->texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3),
-                                         u32At(a, 4), src.data, static_cast<uint32_t>(src.width),
-                                         static_cast<uint32_t>(src.height));
+            uploadSource(c, argAt(a, 5), "texImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
+                cl.texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3), u32At(a, 4),
+                                    std::move(px));
             });
             return ev::undefined();
         }
@@ -253,21 +267,20 @@ void installWebGLTextures(ObjectBuilder& b) {
         const GLsizei width = i32At(a, 3), height = i32At(a, 4);
         Value data = argAt(a, 8);
         if (ev::isUndefined(data) || ev::isNull(data)) {
-            if (auto* gl = live(c))
-                gl->texImage2D(target, level, internalformat, width, height, border, format, type, nullptr, 0);
+            if (auto* cl = client(c))
+                cl->texImage2D(target, level, internalformat, width, height, border, format, type,
+                               static_cast<const void*>(nullptr), size_t{0});
         } else if (ev::isNumber(data)) {
-            if (auto* gl = live(c))
-                gl->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type,
+            if (auto* cl = client(c))
+                cl->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type,
                                       static_cast<GLintptr>(i64At(a, 8)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
-            if (auto* gl = live(c))
-                gl->texImage2D(target, level, internalformat, width, height, border, format, type, view.data,
-                               view.size);
+            if (auto* cl = client(c))
+                cl->texImage2D(target, level, internalformat, width, height, border, format, type,
+                               static_cast<const void*>(view.data), view.size);
         } else if (!view.rangeError) {
-            uploadSource(c, data, "texImage2D", [&](const SourcePixels& src) {
-                if (auto* gl = live(c))
-                    gl->texImage2DSource(target, level, internalformat, width, height, format, type, src.data,
-                                         static_cast<uint32_t>(src.width), static_cast<uint32_t>(src.height));
+            uploadSource(c, data, "texImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
+                cl.texImage2DSource(target, level, internalformat, width, height, format, type, std::move(px));
             });
         }
         return ev::undefined();
@@ -277,11 +290,9 @@ void installWebGLTextures(ObjectBuilder& b) {
     // path: texStorage2D, then this), or the 9/10-arg form.
     defMethod(b, "texSubImage2D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isObject(argAt(a, 6))) {
-            uploadSource(c, argAt(a, 6), "texSubImage2D", [&](const SourcePixels& src) {
-                if (auto* gl = live(c))
-                    gl->texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1,
-                                            u32At(a, 4), u32At(a, 5), src.data, static_cast<uint32_t>(src.width),
-                                            static_cast<uint32_t>(src.height));
+            uploadSource(c, argAt(a, 6), "texSubImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
+                cl.texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1, u32At(a, 4),
+                                       u32At(a, 5), std::move(px));
             });
             return ev::undefined();
         }
@@ -290,31 +301,27 @@ void installWebGLTextures(ObjectBuilder& b) {
         const GLsizei width = i32At(a, 4), height = i32At(a, 5);
         Value data = argAt(a, 8);
         if (ev::isNumber(data)) {
-            if (auto* gl = live(c))
-                gl->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type,
+            if (auto* cl = client(c))
+                cl->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type,
                                          static_cast<GLintptr>(i64At(a, 8)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
-            if (auto* gl = live(c))
-                gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, view.data,
-                                  view.size);
+            if (auto* cl = client(c))
+                cl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type,
+                                  static_cast<const void*>(view.data), view.size);
         } else if (ev::isObject(data) && !view.rangeError) {
-            uploadSource(c, data, "texSubImage2D", [&](const SourcePixels& src) {
-                if (auto* gl = live(c))
-                    gl->texSubImage2DSource(target, level, xoffset, yoffset, width, height, format, type,
-                                            src.data, static_cast<uint32_t>(src.width),
-                                            static_cast<uint32_t>(src.height));
+            uploadSource(c, data, "texSubImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
+                cl.texSubImage2DSource(target, level, xoffset, yoffset, width, height, format, type, std::move(px));
             });
         } else if (!view.rangeError) {
-            if (auto* gl = live(c))
-                gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, nullptr, 0);
+            if (auto* cl = client(c))
+                cl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type,
+                                  static_cast<const void*>(nullptr), size_t{0});
         }
         return ev::undefined();
     });
 
     defMethod(b, "texStorage2D", 5, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->texStorage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                             i32At(a, 4));
+        if (auto* cl = client(c)) cl->texStorage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4));
         return ev::undefined();
     });
 
@@ -327,17 +334,17 @@ void installWebGLTextures(ObjectBuilder& b) {
         const GLsizei width = i32At(a, 3), height = i32At(a, 4), depth = i32At(a, 5);
         Value data = argAt(a, 9);
         if (ev::isUndefined(data) || ev::isNull(data)) {
-            if (auto* gl = live(c))
-                gl->texImage3D(target, level, internalformat, width, height, depth, border, format, type, nullptr,
-                               0);
+            if (auto* cl = client(c))
+                cl->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
+                               static_cast<const void*>(nullptr), size_t{0});
         } else if (ev::isNumber(data)) {
-            if (auto* gl = live(c))
-                gl->texImage3DFromPBO(target, level, internalformat, width, height, depth, border, format, type,
+            if (auto* cl = client(c))
+                cl->texImage3DFromPBO(target, level, internalformat, width, height, depth, border, format, type,
                                       static_cast<GLintptr>(i64At(a, 9)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 10))) {
-            if (auto* gl = live(c))
-                gl->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
-                               view.data, view.size);
+            if (auto* cl = client(c))
+                cl->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
+                               static_cast<const void*>(view.data), view.size);
         } else if (!view.rangeError) {
             refuseDomSource3D(c, "texImage3D");
         }
@@ -349,29 +356,29 @@ void installWebGLTextures(ObjectBuilder& b) {
         const GLsizei width = i32At(a, 5), height = i32At(a, 6), depth = i32At(a, 7);
         Value data = argAt(a, 10);
         if (ev::isNumber(data)) {
-            if (auto* gl = live(c))
-                gl->texSubImage3DFromPBO(target, level, x, y, z, width, height, depth, format, type,
+            if (auto* cl = client(c))
+                cl->texSubImage3DFromPBO(target, level, x, y, z, width, height, depth, format, type,
                                          static_cast<GLintptr>(i64At(a, 10)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 11))) {
-            if (auto* gl = live(c))
-                gl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, view.data,
-                                  view.size);
+            if (auto* cl = client(c))
+                cl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type,
+                                  static_cast<const void*>(view.data), view.size);
         } else if (ev::isObject(data) && !view.rangeError) {
             refuseDomSource3D(c, "texSubImage3D");
         } else if (!view.rangeError) {
-            if (auto* gl = live(c))
-                gl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, nullptr, 0);
+            if (auto* cl = client(c))
+                cl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type,
+                                  static_cast<const void*>(nullptr), size_t{0});
         }
         return ev::undefined();
     });
     defMethod(b, "texStorage3D", 6, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                             i32At(a, 4), i32At(a, 5));
+        if (auto* cl = client(c))
+            cl->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), i32At(a, 5));
         return ev::undefined();
     });
     defMethod(b, "generateMipmap", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->generateMipmap(u32At(a, 0));
+        if (auto* cl = client(c)) cl->generateMipmap(u32At(a, 0));
         return ev::undefined();
     });
 
@@ -380,115 +387,118 @@ void installWebGLTextures(ObjectBuilder& b) {
     // into the bound PIXEL_UNPACK_BUFFER.
     defMethod(b, "compressedTexImage2D", 7, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 6))) {
-            if (auto* gl = live(c))
-                gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
-                                              i32At(a, 5), i32At(a, 6), static_cast<GLintptr>(i64At(a, 7)),
-                                              false);
+            if (auto* cl = client(c))
+                cl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
+                                              i32At(a, 5), i32At(a, 6), static_cast<GLintptr>(i64At(a, 7)), false);
         } else if (ViewBytes view = compressedView(c, a, 6)) {
-            if (auto* gl = live(c))
-                gl->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                         i32At(a, 5), view.data, view.size);
+            if (auto* cl = client(c))
+                cl->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                         i32At(a, 5), static_cast<const void*>(view.data), view.size);
         }
         return ev::undefined();
     });
     defMethod(b, "compressedTexSubImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
-            if (auto* gl = live(c))
-                gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
+            if (auto* cl = client(c))
+                cl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
                                                  i32At(a, 4), i32At(a, 5), 1, u32At(a, 6), i32At(a, 7),
                                                  static_cast<GLintptr>(i64At(a, 8)), false);
         } else if (ViewBytes view = compressedView(c, a, 7)) {
-            if (auto* gl = live(c))
-                gl->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                            i32At(a, 5), u32At(a, 6), view.data, view.size);
+            if (auto* cl = client(c))
+                cl->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                            i32At(a, 5), u32At(a, 6), static_cast<const void*>(view.data), view.size);
         }
         return ev::undefined();
     });
     defMethod(b, "compressedTexImage3D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
-            if (auto* gl = live(c))
-                gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+            if (auto* cl = client(c))
+                cl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
                                               i32At(a, 5), i32At(a, 6), i32At(a, 7),
                                               static_cast<GLintptr>(i64At(a, 8)), true);
         } else if (ViewBytes view = compressedView(c, a, 7)) {
-            if (auto* gl = live(c))
-                gl->compressedTexImage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                         i32At(a, 5), i32At(a, 6), view.data, view.size);
+            if (auto* cl = client(c))
+                cl->compressedTexImage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                         i32At(a, 5), i32At(a, 6), static_cast<const void*>(view.data), view.size);
         }
         return ev::undefined();
     });
     defMethod(b, "compressedTexSubImage3D", 10, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 9))) {
-            if (auto* gl = live(c))
-                gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+            if (auto* cl = client(c))
+                cl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
                                                  i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), i32At(a, 9),
                                                  static_cast<GLintptr>(i64At(a, 10)), true);
         } else if (ViewBytes view = compressedView(c, a, 9)) {
-            if (auto* gl = live(c))
-                gl->compressedTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                            i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), view.data,
-                                            view.size);
+            if (auto* cl = client(c))
+                cl->compressedTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                            i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8),
+                                            static_cast<const void*>(view.data), view.size);
         }
         return ev::undefined();
     });
 
     defMethod(b, "copyTexImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->copyTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                               i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
+        if (auto* cl = client(c))
+            cl->copyTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), i32At(a, 5),
+                               i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
     defMethod(b, "copyTexSubImage2D", 8, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
-                                  i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
+        if (auto* cl = client(c))
+            cl->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4), i32At(a, 5),
+                                  i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
     defMethod(b, "copyTexSubImage3D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                  i32At(a, 5), i32At(a, 6), i32At(a, 7), i32At(a, 8));
+        if (auto* cl = client(c))
+            cl->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4), i32At(a, 5),
+                                  i32At(a, 6), i32At(a, 7), i32At(a, 8));
         return ev::undefined();
     });
 
     // --- WebGLSampler ---
     defMethod(b, "createSampler", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
-        auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Sampler, gl->createSampler(c->newObjectId()).id) : ev::null();
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const GLuint id = c->newObjectId();
+        cl->createSampler(id);
+        return webglObject(c, WebGLCell::Sampler, id);
     });
     defMethod(b, "deleteSampler", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        const webgl::WebGLSampler s = samplerOf(argAt(a, 0));
-        if (auto* gl = live(c)) gl->deleteSampler(s);
+        const WebGLSampler s = samplerOf(argAt(a, 0));
+        if (auto* cl = client(c)) cl->deleteSampler(s);
         forgetWebGLObject(c, WebGLCell::Sampler, s.id);
         return ev::undefined();
     });
     defMethod(b, "bindSampler", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
+        if (auto* cl = client(c)) cl->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
         return ev::undefined();
     });
     defMethod(b, "samplerParameteri", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c)) gl->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
+        if (auto* cl = client(c)) cl->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "samplerParameterf", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        if (auto* gl = live(c))
-            gl->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1),
-                                  static_cast<float>(numAt(a, 2)));
+        if (auto* cl = client(c))
+            cl->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
     defMethod(b, "getSamplerParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        if (!gl) return ev::null();
-        GLenum pname = u32At(a, 1);
+        auto* cl = client(c);
+        if (!cl) return ev::null();
+        const GLenum pname = u32At(a, 1);
+        const WebGLSampler s = samplerOf(argAt(a, 0));
         if (pname == 0x813A /* TEXTURE_MIN_LOD */ || pname == 0x813B /* TEXTURE_MAX_LOD */ ||
             pname == 0x84FE /* TEXTURE_MAX_ANISOTROPY_EXT */) {
-            return ev::fromDouble(gl->getSamplerParameterf(samplerOf(argAt(a, 0)), pname));
+            return ev::fromDouble(cl->sync([&](WebGLBackend& gl) { return gl.getSamplerParameterf(s, pname); }));
         }
-        return ev::fromDouble(gl->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));
+        return ev::fromDouble(cl->sync([&](WebGLBackend& gl) { return gl.getSamplerParameteri(s, pname); }));
     });
     defMethod(b, "isSampler", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
-        auto* gl = live(c);
-        return ev::fromBool(gl && gl->isSampler(samplerOf(argAt(a, 0))) != GL_FALSE);
+        auto* cl = client(c);
+        const WebGLSampler s = samplerOf(argAt(a, 0));
+        return ev::fromBool(cl && cl->sync([s](WebGLBackend& gl) { return gl.isSampler(s); }) != GL_FALSE);
     });
 }
 

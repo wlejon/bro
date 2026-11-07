@@ -43,10 +43,6 @@ public:
     /// What the binding calls: null while the context is lost.
     WebGLClient* client() { return lost_ ? nullptr : &client_; }
 
-    /// The backend, every command the client holds replayed first, for the
-    /// calls the client does not encode yet: null while the context is lost.
-    vk::WebGLVkContext* backend() { return client_.drained(); }
-
     /// What the device can do: getParameter's constants, the extensions,
     /// precisions and sample counts. The same while lost.
     const vk::WebGLCaps& caps() const { return *caps_; }

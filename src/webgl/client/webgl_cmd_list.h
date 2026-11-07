@@ -85,7 +85,71 @@
     X(Uniform2ui, uniform2ui, WebGLUniformLocation, GLuint, GLuint)                               \
     X(Uniform3ui, uniform3ui, WebGLUniformLocation, GLuint, GLuint, GLuint)                       \
     X(Uniform4ui, uniform4ui, WebGLUniformLocation, GLuint, GLuint, GLuint, GLuint)               \
-    X(UniformBlockBinding, uniformBlockBinding, WebGLProgram, GLuint, GLuint)
+    X(UniformBlockBinding, uniformBlockBinding, WebGLProgram, GLuint, GLuint)                     \
+    /* --- Textures and samplers --- */                                                           \
+    X(CreateTexture, createTexture, GLuint)                                                       \
+    X(DeleteTexture, deleteTexture, WebGLTexture)                                                 \
+    X(BindTexture, bindTexture, GLenum, WebGLTexture)                                             \
+    X(ActiveTexture, activeTexture, GLenum)                                                       \
+    X(TexParameteri, texParameteri, GLenum, GLenum, GLint)                                        \
+    X(TexParameterf, texParameterf, GLenum, GLenum, GLfloat)                                      \
+    X(TexImage2DFromPBO, texImage2DFromPBO, GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, GLintptr) \
+    X(TexSubImage2DFromPBO, texSubImage2DFromPBO, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, \
+      GLintptr)                                                                                   \
+    X(TexImage3DFromPBO, texImage3DFromPBO, GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, \
+      GLintptr)                                                                                   \
+    X(TexSubImage3DFromPBO, texSubImage3DFromPBO, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, \
+      GLenum, GLenum, GLintptr)                                                                   \
+    X(TexStorage2D, texStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei)                      \
+    X(TexStorage3D, texStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei)             \
+    X(CompressedTexImageFromPBO, compressedTexImageFromPBO, GLenum, GLint, GLenum, GLsizei, GLsizei, GLsizei, GLint, \
+      GLsizei, GLintptr, bool)                                                                    \
+    X(CompressedTexSubImageFromPBO, compressedTexSubImageFromPBO, GLenum, GLint, GLint, GLint, GLint, GLsizei, \
+      GLsizei, GLsizei, GLenum, GLsizei, GLintptr, bool)                                          \
+    X(CopyTexImage2D, copyTexImage2D, GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint) \
+    X(CopyTexSubImage2D, copyTexSubImage2D, GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei) \
+    X(CopyTexSubImage3D, copyTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei) \
+    X(GenerateMipmap, generateMipmap, GLenum)                                                     \
+    X(CreateSampler, createSampler, GLuint)                                                       \
+    X(DeleteSampler, deleteSampler, WebGLSampler)                                                 \
+    X(BindSampler, bindSampler, GLuint, WebGLSampler)                                             \
+    X(SamplerParameteri, samplerParameteri, WebGLSampler, GLenum, GLint)                          \
+    X(SamplerParameterf, samplerParameterf, WebGLSampler, GLenum, GLfloat)                        \
+    /* --- Framebuffers and renderbuffers --- */                                                  \
+    X(CreateFramebuffer, createFramebuffer, GLuint)                                               \
+    X(DeleteFramebuffer, deleteFramebuffer, WebGLFramebuffer)                                     \
+    X(BindFramebuffer, bindFramebuffer, GLenum, WebGLFramebuffer)                                 \
+    X(FramebufferTexture2D, framebufferTexture2D, GLenum, GLenum, GLenum, WebGLTexture, GLint)    \
+    X(FramebufferTextureLayer, framebufferTextureLayer, GLenum, GLenum, WebGLTexture, GLint, GLint) \
+    X(FramebufferRenderbuffer, framebufferRenderbuffer, GLenum, GLenum, GLenum, WebGLRenderbuffer) \
+    X(ReadBuffer, readBuffer, GLenum)                                                             \
+    X(ClearBufferfi, clearBufferfi, GLenum, GLint, GLfloat, GLint)                                \
+    X(BlitFramebuffer, blitFramebuffer, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) \
+    X(ReadPixelsToPBO, readPixelsToPBO, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, GLintptr) \
+    X(CreateRenderbuffer, createRenderbuffer, GLuint)                                             \
+    X(DeleteRenderbuffer, deleteRenderbuffer, WebGLRenderbuffer)                                  \
+    X(BindRenderbuffer, bindRenderbuffer, GLenum, WebGLRenderbuffer)                              \
+    X(RenderbufferStorage, renderbufferStorage, GLenum, GLenum, GLsizei, GLsizei)                 \
+    X(RenderbufferStorageMultisample, renderbufferStorageMultisample, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
+    /* --- Shaders and programs (compile and link are WebGLClient's own) --- */                   \
+    X(CreateShader, createShader, GLuint, GLenum)                                                 \
+    X(DeleteShader, deleteShader, WebGLShader)                                                    \
+    X(CreateProgram, createProgram, GLuint)                                                       \
+    X(DeleteProgram, deleteProgram, WebGLProgram)                                                 \
+    X(AttachShader, attachShader, WebGLProgram, WebGLShader)                                      \
+    X(DetachShader, detachShader, WebGLProgram, WebGLShader)                                      \
+    X(ValidateProgram, validateProgram, WebGLProgram)                                             \
+    X(UseProgram, useProgram, WebGLProgram)                                                       \
+    X(MaxShaderCompilerThreads, maxShaderCompilerThreads, GLuint)                                 \
+    /* --- Transform feedback and syncs --- */                                                    \
+    X(CreateTransformFeedback, createTransformFeedback, GLuint)                                   \
+    X(DeleteTransformFeedback, deleteTransformFeedback, GLuint)                                   \
+    X(BindTransformFeedback, bindTransformFeedback, GLenum, GLuint)                               \
+    X(BeginTransformFeedback, beginTransformFeedback, GLenum)                                     \
+    X(EndTransformFeedback, endTransformFeedback)                                                 \
+    X(PauseTransformFeedback, pauseTransformFeedback)                                             \
+    X(ResumeTransformFeedback, resumeTransformFeedback)                                           \
+    X(DeleteSync, deleteSync, GLuint)
 
 // X(Name, backendMethod, ArgTypes...): the client's own records, encoded by
 // hand-written WebGLClient members (no generated method of the same name).
@@ -125,11 +189,52 @@
     P1(VertexAttrib3fv, vertexAttrib3fv, GLfloat, GLuint)                                         \
     P1(VertexAttrib4fv, vertexAttrib4fv, GLfloat, GLuint)                                         \
     P1(VertexAttribI4iv, vertexAttribI4iv, GLint, GLuint)                                         \
-    P1(VertexAttribI4uiv, vertexAttribI4uiv, GLuint, GLuint)
+    P1(VertexAttribI4uiv, vertexAttribI4uiv, GLuint, GLuint)                                      \
+    P1(DrawBuffers, drawBuffers, GLenum, GLsizei)                                                 \
+    P2(ClearBufferfv, clearBufferfv, GLfloat, GLenum, GLint)                                      \
+    P2(ClearBufferiv, clearBufferiv, GLint, GLenum, GLint)                                        \
+    P2(ClearBufferuiv, clearBufferuiv, GLuint, GLenum, GLint)
+
+// X(Name, backendMethod, ArgTypes...): the arguments, then client bytes as
+// (const void* data, size_t size), the backend's own last two parameters. A
+// null pointer is "no data" and replays as (nullptr, 0); otherwise the bytes
+// are copied like any payload, and replay as (copy, size).
+#define BRO_WEBGL_BYTES_COMMANDS(X)                                                               \
+    X(TexImage2D, texImage2D, GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum)      \
+    X(TexSubImage2D, texSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum) \
+    X(TexImage3D, texImage3D, GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum) \
+    X(TexSubImage3D, texSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum) \
+    X(CompressedTexImage2D, compressedTexImage2D, GLenum, GLint, GLenum, GLsizei, GLsizei, GLint) \
+    X(CompressedTexSubImage2D, compressedTexSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum) \
+    X(CompressedTexImage3D, compressedTexImage3D, GLenum, GLint, GLenum, GLsizei, GLsizei, GLsizei, GLint) \
+    X(CompressedTexSubImage3D, compressedTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, \
+      GLsizei, GLenum)
+
+// X(Name, backendMethod, ArgTypes...): the arguments, then a string the
+// backend takes as `const std::string&`, copied like a payload.
+#define BRO_WEBGL_STRING_COMMANDS(X)                                                              \
+    X(ShaderSource, shaderSource, WebGLShader)                                                    \
+    X(BindAttribLocation, bindAttribLocation, WebGLProgram, GLuint)                               \
+    X(EnableExtension, enableExtension)
 
 // Hand-written records (webgl_client.h encodes, webgl_replay.cpp decodes):
 //   BufferData     {target, usage, size} + payload (Null: allocate only)
 //   BufferSubData  {target, offset} + payload
+//   (and the records of webgl_client_records.h: the DOM-source uploads, the
+//   lists, and the calls whose results the backend publishes to the client)
 #define BRO_WEBGL_CUSTOM_COMMANDS(X) \
     X(BufferData)                    \
-    X(BufferSubData)
+    X(BufferSubData)                 \
+    X(TexImage2DSource)              \
+    X(TexSubImage2DSource)           \
+    X(InvalidateFramebuffer)         \
+    X(InvalidateSubFramebuffer)      \
+    X(TransformFeedbackVaryings)     \
+    X(CompileShader)                 \
+    X(LinkProgram)                   \
+    X(CreateQuery)                   \
+    X(DeleteQuery)                   \
+    X(BeginQuery)                    \
+    X(EndQuery)                      \
+    X(QueryCounter)                  \
+    X(FenceSync)
