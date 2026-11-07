@@ -65,7 +65,7 @@ fn atm_march(
 ) -> MarchResult {
     let nu = dot(rd, sun);
     let p_r = atmosphere::phase_r(nu);
-    let p_m = atmosphere::phase_m(nu, atm.mie.z);
+    let p_m = atmosphere::phase_m(nu, atm.mie_absorb.w);
     let dt = (t1 - t0) / (steps as f32);
     var l: vec3<f32> = vec3<f32>(0.0);
     var tr: vec3<f32> = transmittance_in;
@@ -77,7 +77,7 @@ fn atm_march(
         let mu_s = dot(p, sun) / r;
         let sun_t = sun_trans_combined(atm, r, mu_s);
         let ms = t_multi_scatter.sample_lod(atmosphere::multi_scatter_uv(atm, r, mu_s), 0.0).xyz / atmosphere::TABLE_SCALE;
-        let s = (m.scatter_r * p_r + m.scatter_m * p_m) * sun_t + (m.scatter_r + vec3<f32>(m.scatter_m)) * ms;
+        let s = (m.scatter_r * p_r + m.scatter_m * p_m) * sun_t + (m.scatter_r + m.scatter_m) * ms;
         let step_t = exp(-ext * dt);
         let s_int = s * step_weight(ext, step_t, dt);
         l += tr * s_int;
@@ -169,7 +169,7 @@ fn atmosphere_multiscatter(@binding(0, 3) @format(rgba16f) out_multi_scatter: wr
         let p = ro + rd * (dt * ((s as f32) + 0.5));
         let pr = length(p);
         let m = atmosphere::medium(atm, pr);
-        let scatter = m.scatter_r + vec3<f32>(m.scatter_m);
+        let scatter = m.scatter_r + m.scatter_m;
         let step_t = exp(-m.extinction * dt);
         let w = step_weight(m.extinction, step_t, dt);
         let sun_t = sun_trans_combined(atm, pr, dot(p, sun) / pr);

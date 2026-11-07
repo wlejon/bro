@@ -596,14 +596,20 @@ void bro_scene_SceneGraph_setAtmosphere(void* self, const double* params, uint32
     a.enabled = !given(0) || params[0] > 0.5;
     rgb(1, a.rayleigh, 0.0f, 1e-2f);
     at(4, a.scaleHeightR, 1.0f, 1e6f);
-    at(5, a.mieScattering, 0.0f, 1e-2f);
+    // Mie scattering at 5 and absorption at 7 (one value for every channel),
+    // or per channel at 32-34 and 35-37.
+    if (given(5)) { float s = 0.0f; at(5, s, 0.0f, 1e-2f); std::fill(a.mieScattering, a.mieScattering + 3, s); }
+    if (given(7)) { float s = 0.0f; at(7, s, 0.0f, 1e-2f); std::fill(a.mieAbsorption, a.mieAbsorption + 3, s); }
+    rgb(32, a.mieScattering, 0.0f, 1e-2f);
+    rgb(35, a.mieAbsorption, 0.0f, 1e-2f);
     at(6, a.mieG, -0.999f, 0.999f);
-    at(7, a.mieAbsorption, 0.0f, 1e-2f);
     at(8, a.scaleHeightM, 1.0f, 1e6f);
     // Turbidity: haze as a multiple of the clear-air Mie coefficients.
     if (given(9) && params[9] > 0.0) {
-        a.mieScattering *= static_cast<float>(params[9]);
-        a.mieAbsorption *= static_cast<float>(params[9]);
+        for (int k = 0; k < 3; ++k) {
+            a.mieScattering[k] *= static_cast<float>(params[9]);
+            a.mieAbsorption[k] *= static_cast<float>(params[9]);
+        }
     }
     rgb(10, a.ozone, 0.0f, 1e-2f);
     at(13, a.ozoneCenter, 0.0f, 1e7f);

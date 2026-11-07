@@ -354,7 +354,7 @@
         // turns it off. A field left out (NaN) keeps Earth's default.
         const o = opts === undefined ? {} : (opts === null ? { enabled: false } : opts);
         const num = (v) => (v === undefined || v === null) ? NaN : +v;
-        const v = new Array(32).fill(NaN);
+        const v = new Array(38).fill(NaN);
         const put3 = (i, a) => { if (a != null && a.length >= 3) { v[i] = +a[0]; v[i + 1] = +a[1]; v[i + 2] = +a[2]; } };
         if (o.enabled !== undefined) v[0] = o.enabled ? 1 : 0;
         put3(1, o.rayleigh);
@@ -364,7 +364,12 @@
             else { v[5] = num(o.mie[0]); v[6] = num(o.mie[1]); }
         }
         if (o.mieG !== undefined) v[6] = num(o.mieG);
-        v[7] = num(o.mieAbsorption);
+        // mieScattering / mieAbsorption: one value, or [r, g, b] for a
+        // coloured haze (dust that absorbs the blue).
+        if (Array.isArray(o.mieScattering)) put3(32, o.mieScattering);
+        else if (o.mieScattering !== undefined) v[5] = num(o.mieScattering);
+        if (Array.isArray(o.mieAbsorption)) put3(35, o.mieAbsorption);
+        else v[7] = num(o.mieAbsorption);
         v[8] = num(o.mieScaleHeight);
         v[9] = num(o.turbidity);
         put3(10, o.ozone);

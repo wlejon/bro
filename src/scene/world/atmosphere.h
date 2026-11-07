@@ -44,8 +44,10 @@ struct AtmosphereParams {
 
     float rayleigh[3]   = {5.802e-6f, 13.558e-6f, 33.1e-6f};   // scattering per metre at sea level
     float scaleHeightR  = 8000.0f;
-    float mieScattering = 3.996e-6f;
-    float mieAbsorption = 0.444e-6f;
+    // Mie (aerosol, dust) per metre at the ground, per channel: grey for
+    // Earth's haze, reddish for a dusty air that absorbs the blue.
+    float mieScattering[3] = {3.996e-6f, 3.996e-6f, 3.996e-6f};
+    float mieAbsorption[3] = {0.444e-6f, 0.444e-6f, 0.444e-6f};
     float mieG          = 0.8f;
     float scaleHeightM  = 1200.0f;
     // Ozone: absorption only, a tent of density 1 at ozoneCenter falling to 0

@@ -205,7 +205,8 @@
  * @property {number} [rayleighScaleHeight]  Metres (default 8000).
  * @property {number|Array<number>} [mie]  Mie scattering per metre (default 3.996e-6), or [that, g].
  * @property {number} [mieG]  Mie anisotropy in (-1, 1) (default 0.8).
- * @property {number} [mieAbsorption]  Per metre (default 0.444e-6).
+ * @property {number|Array<number>} [mieScattering]  Mie scattering per metre as one value (as `mie`) or [r, g, b]: a coloured haze, such as a dusty air's.
+ * @property {number|Array<number>} [mieAbsorption]  Per metre, one value or [r, g, b] (default 0.444e-6). Dust that absorbs the blue (more absorption in b than r) reddens the sky and the light through it.
  * @property {number} [mieScaleHeight]  Metres (default 1200).
  * @property {number} [turbidity]  Haze: multiplies the Mie coefficients (default 1).
  * @property {Array<number>} [ozone]  Ozone absorption per metre at its peak, [r, g, b] (default [0.650e-6, 1.881e-6, 0.085e-6]).

@@ -213,10 +213,10 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
     g.sunIlluminance[3] = a.sunAngularRadius;
     std::copy(a.rayleigh, a.rayleigh + 3, g.rayleigh);
     g.rayleigh[3] = a.scaleHeightR;
-    g.mie[0] = a.mieScattering;
-    g.mie[1] = a.mieAbsorption;
-    g.mie[2] = a.mieG;
+    std::copy(a.mieScattering, a.mieScattering + 3, g.mie);
     g.mie[3] = a.scaleHeightM;
+    std::copy(a.mieAbsorption, a.mieAbsorption + 3, g.mieAbsorb);
+    g.mieAbsorb[3] = a.mieG;
     std::copy(a.ozone, a.ozone + 3, g.ozone);
     g.ozone[3] = a.ozoneCenter;
     g.shell[0] = a.planetRadius;
@@ -233,7 +233,8 @@ void SceneAtmosphere::beginFrame(SceneFrame& frame) {
 
     // The tables' inputs: a change remakes them (the world-service jobs).
     const uint64_t hash = hashFloats({g.rayleigh[0], g.rayleigh[1], g.rayleigh[2], g.rayleigh[3], g.mie[0],
-                                      g.mie[1], g.mie[2], g.mie[3], g.ozone[0], g.ozone[1], g.ozone[2], g.ozone[3],
+                                      g.mie[1], g.mie[2], g.mie[3], g.mieAbsorb[0], g.mieAbsorb[1],
+                                      g.mieAbsorb[2], g.mieAbsorb[3], g.ozone[0], g.ozone[1], g.ozone[2], g.ozone[3],
                                       g.shell[0], g.shell[1], g.shell[2], g.ground[0], g.ground[1], g.ground[2],
                                       g.sunIlluminance[3]});
     if (hash != wantHash_) {

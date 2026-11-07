@@ -152,8 +152,8 @@ void checkAir(double turbidity, std::initializer_list<double> altitudes, std::in
     scene::atmref::Params rp;
     rp.Rb = defaults.planetRadius;
     rp.Rt = defaults.planetRadius + defaults.thickness;
-    rp.mieS = defaults.mieScattering * turbidity;
-    rp.mieA = defaults.mieAbsorption * turbidity;
+    rp.mieS = defaults.mieScattering[0] * turbidity;
+    rp.mieA = defaults.mieAbsorption[0] * turbidity;
     const double Rb = rp.Rb, Rt = rp.Rt;
 
     std::printf("air of turbidity %.0f\n", turbidity);
@@ -189,8 +189,10 @@ void checkAir(double turbidity, std::initializer_list<double> altitudes, std::in
             a.sunDirExplicit = true;
             a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = 1.0f;
             a.sunColorExplicit = true;
-            a.mieScattering = static_cast<float>(rp.mieS);
-            a.mieAbsorption = static_cast<float>(rp.mieA);
+            for (int k = 0; k < 3; ++k) {
+                a.mieScattering[k] = static_cast<float>(rp.mieS);
+                a.mieAbsorption[k] = static_cast<float>(rp.mieA);
+            }
             graph.setAtmosphere(a);
             renderFrame(graph);
             renderFrame(graph);   // the view-independent tables are the world service's, granted on the first
