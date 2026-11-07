@@ -28,7 +28,7 @@ constexpr GLbitfield kSyncFlushCommandsBit = 0x1;
 
 } // namespace
 
-GLuint WebGLVkContext::fenceSync(GLenum condition, GLbitfield flags) {
+GLuint WebGLVkContext::fenceSync(GLuint id, GLenum condition, GLbitfield flags) {
     if (condition != kSyncGpuCommandsComplete) {
         setSyntheticError(GL_INVALID_ENUM);
         return 0;
@@ -39,7 +39,6 @@ GLuint WebGLVkContext::fenceSync(GLenum condition, GLbitfield flags) {
     }
     recordBufferDownloads();
     flushCommands();
-    const GLuint id = nextObjectId_++;
     syncs_[id] = stream_.lastTicket();
     return id;
 }

@@ -8,6 +8,7 @@
 
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_values.h"
+#include "webgl/vulkan/webgl_vk_caps.h"
 
 #include <cstring>
 #include <string>
@@ -181,16 +182,20 @@ void installWebGLQueries(ObjectBuilder& b) {
         auto* gl = live(c);
         if (!gl) return ev::null();
         GLenum pname = u32At(a, 0);
+        // The device's constants: the capabilities snapshot, no backend call.
+        const webgl::vk::WebGLCaps& caps = c->caps();
+        if (float f = 0.0f; caps.floatLimit(pname, f)) return ev::fromDouble(f);
+        if (int64_t v = 0; caps.limit(pname, v)) return ev::fromDouble(static_cast<double>(v));
         switch (pname) {
             // String parameters
             case 0x1F02:  // GL_VERSION
-                return ev::fromUtf8("WebGL 2.0");
+                return ev::fromUtf8(caps.version);
             case 0x8B8C:  // GL_SHADING_LANGUAGE_VERSION
-                return ev::fromUtf8("WebGL GLSL ES 3.00");
+                return ev::fromUtf8(caps.shadingLanguageVersion);
             case 0x1F00:  // GL_VENDOR
-                return ev::fromUtf8("Bro");
+                return ev::fromUtf8(caps.vendor);
             case 0x1F01:  // GL_RENDERER
-                return ev::fromUtf8("Bro Vulkan");
+                return ev::fromUtf8(caps.renderer);
             case 0x9245:    // UNMASKED_VENDOR_WEBGL
             case 0x9246: {  // UNMASKED_RENDERER_WEBGL
                 std::string info;
@@ -203,7 +208,7 @@ void installWebGLQueries(ObjectBuilder& b) {
             case 0x80AA:  // GL_SAMPLE_COVERAGE_VALUE
             case 0x8038:  // GL_POLYGON_OFFSET_FACTOR
             case 0x2A00:  // GL_POLYGON_OFFSET_UNITS
-            case 0x84FF:  // MAX_TEXTURE_MAX_ANISOTROPY_EXT
+            case 0x84FF:  // MAX_TEXTURE_MAX_ANISOTROPY_EXT (INVALID_ENUM: not in caps, so not supported)
                 return ev::fromDouble(gl->getParameterFloat(pname));
 
             // EXT_disjoint_timer_query_webgl2
@@ -220,14 +225,13 @@ void installWebGLQueries(ObjectBuilder& b) {
                 return makeInt32Array(v, 4);
             }
             // Int[2]
-            case 0x0D3A: {  // GL_MAX_VIEWPORT_DIMS
-                GLint v[2] = {0, 0};
-                gl->getParameterInt2(pname, v);
-                return makeInt32Array(v, 2);
-            }
+            case 0x0D3A:  // GL_MAX_VIEWPORT_DIMS
+                return makeInt32Array(caps.maxViewportDims, 2);
             // Float[2]
-            case 0x846D:    // GL_ALIASED_POINT_SIZE_RANGE
-            case 0x846E:    // GL_ALIASED_LINE_WIDTH_RANGE
+            case 0x846D:  // GL_ALIASED_POINT_SIZE_RANGE
+                return makeFloat32Array(caps.aliasedPointSizeRange, 2);
+            case 0x846E:  // GL_ALIASED_LINE_WIDTH_RANGE
+                return makeFloat32Array(caps.aliasedLineWidthRange, 2);
             case 0x0B70: {  // GL_DEPTH_RANGE
                 GLfloat v[2] = {0, 0};
                 gl->getParameterFloat2(pname, v);
@@ -324,16 +328,6 @@ void installWebGLQueries(ObjectBuilder& b) {
             case 0x80AB:  // GL_SAMPLE_COVERAGE_INVERT
                 return ev::fromBool(gl->getParameterBool(pname) != GL_FALSE);
 
-            // 64-bit limits.
-            case 0x8A30:  // GL_MAX_UNIFORM_BLOCK_SIZE
-            case 0x8A31:  // GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS
-            case 0x8A33:  // GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS
-            case 0x8D6B:  // GL_MAX_ELEMENT_INDEX
-            case 0x9111:  // GL_MAX_SERVER_WAIT_TIMEOUT
-                return ev::fromDouble(static_cast<double>(gl->getParameterInt64(pname)));
-            case 0x84FD:  // GL_MAX_TEXTURE_LOD_BIAS
-                return ev::fromDouble(gl->getParameterFloat(pname));
-
             // The stencil masks are GLuint: all ones is 4294967295, not -1.
             case 0x0B93:  // GL_STENCIL_VALUE_MASK
             case 0x0B98:  // GL_STENCIL_WRITEMASK
@@ -342,7 +336,7 @@ void installWebGLQueries(ObjectBuilder& b) {
             case 0x91B0:  // MAX_SHADER_COMPILER_THREADS_KHR
                 return ev::fromDouble(static_cast<GLuint>(gl->getParameterInt(pname)));
 
-            // Default: integer parameter (all the MAX_* limits included).
+            // Default: integer parameter.
             default:
                 return ev::fromDouble(gl->getParameterInt(pname));
         }
@@ -385,22 +379,22 @@ void installWebGLQueries(ObjectBuilder& b) {
     defMethod(b, "getSupportedExtensions", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
         if (!gl) return ev::null();
-        const std::vector<std::string> exts = gl->supportedExtensions();
+        const std::vector<std::string>& exts = c->caps().extensions;
         return hostArrayOf(exts.size(), [&exts](size_t i) {
             return ev::fromUtf8(exts[i]);
         });
     });
 
-    // Every precision is highp: shaders compile with precision qualifiers
-    // dropped (32-bit floats and ints throughout).
+    // The caps' precisions (every one is highp).
     defMethod(b, "getShaderPrecisionFormat", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (!live(c)) return ev::null();
         const GLenum type = u32At(a, 1);
         const bool integer = type >= 0x8DF3 && type <= 0x8DF5;  // LOW_INT .. HIGH_INT
+        const webgl::vk::WebGLCaps::Precision& p = integer ? c->caps().intPrecision : c->caps().floatPrecision;
         ObjectBuilder o;
-        o.set("rangeMin", ev::fromDouble(integer ? 31 : 127));
-        o.set("rangeMax", ev::fromDouble(integer ? 30 : 127));
-        o.set("precision", ev::fromDouble(integer ? 0 : 23));
+        o.set("rangeMin", ev::fromDouble(p.rangeMin));
+        o.set("rangeMax", ev::fromDouble(p.rangeMax));
+        o.set("precision", ev::fromDouble(p.precision));
         return o.get();
     });
 
@@ -433,7 +427,7 @@ void installWebGLQueries(ObjectBuilder& b) {
     // --- WebGLSync ---
     defMethod(b, "fenceSync", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Sync, gl->fenceSync(u32At(a, 0), u32At(a, 1))) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Sync, gl->fenceSync(c->newObjectId(), u32At(a, 0), u32At(a, 1))) : ev::null();
     });
     defMethod(b, "deleteSync", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Sync);
@@ -464,7 +458,7 @@ void installWebGLQueries(ObjectBuilder& b) {
     // --- WebGLQuery ---
     defMethod(b, "createQuery", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Query, gl->createQuery()) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Query, gl->createQuery(c->newObjectId())) : ev::null();
     });
     defMethod(b, "deleteQuery", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Query);
@@ -515,7 +509,7 @@ void installWebGLQueries(ObjectBuilder& b) {
             gl->setSyntheticError(GL_INVALID_ENUM);
             return ev::null();
         }
-        const std::vector<GLint> samples = gl->supportedSampleCounts(internalformat);
+        const std::vector<GLint>& samples = c->caps().samples(internalformat);
         return makeInt32Array(samples.data(), samples.size());
     });
 

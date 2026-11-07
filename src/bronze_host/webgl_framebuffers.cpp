@@ -16,7 +16,7 @@ void installWebGLFramebuffers(ObjectBuilder& b) {
     // --- Framebuffers ---
     defMethod(b, "createFramebuffer", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Framebuffer, gl->createFramebuffer().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Framebuffer, gl->createFramebuffer(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteFramebuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Framebuffer);
@@ -184,7 +184,7 @@ void installWebGLFramebuffers(ObjectBuilder& b) {
     // --- Renderbuffers ---
     defMethod(b, "createRenderbuffer", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Renderbuffer, gl->createRenderbuffer().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Renderbuffer, gl->createRenderbuffer(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteRenderbuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Renderbuffer);

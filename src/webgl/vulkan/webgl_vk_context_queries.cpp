@@ -57,8 +57,7 @@ bool readOcclusionSlots(VkDevice device, const std::vector<VkQueryPool>& pools,
 
 } // namespace
 
-GLuint WebGLVkContext::createQuery() {
-    const GLuint id = nextObjectId_++;
+GLuint WebGLVkContext::createQuery(GLuint id) {
     queries_[id] = QueryObject{};
     return id;
 }
@@ -94,7 +93,7 @@ void WebGLVkContext::retireQuerySlots(QueryObject& q) {
 }
 
 bool WebGLVkContext::timerQueriesSupported() const {
-    return timestampBits_ > 0 && timestampPeriodNs_ > 0.0f;
+    return caps_->timerQueries();
 }
 
 void WebGLVkContext::beginQuery(GLenum target, GLuint id) {

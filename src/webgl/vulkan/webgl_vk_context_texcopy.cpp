@@ -40,38 +40,23 @@ bool isFixedPoint(VkFormat format) {
 // Compressed images
 // ---------------------------------------------------------------------------
 
-std::vector<std::string> WebGLVkContext::compressedTextureExtensions() const {
-    std::vector<std::string> names;
-    const CompressedExtension* exts = nullptr;
-    const size_t n = compressedExtensions(exts);
-    for (size_t i = 0; i < n; ++i)
-        if (compressedExtensionSupported(context_.physicalDevice(), context_.features(), exts[i]))
-            names.emplace_back(exts[i].name);
-    return names;
-}
-
 bool WebGLVkContext::enableCompressedExtension(const std::string& name) {
-    for (const std::string& ext : compressedTextureExtensions()) {
-        if (ext != name) continue;
-        if (std::find(enabledCompressedExtensions_.begin(), enabledCompressedExtensions_.end(), name) ==
-            enabledCompressedExtensions_.end())
-            enabledCompressedExtensions_.push_back(name);
-        return true;
-    }
-    return false;
+    if (!caps_->compressedExtension(name)) return false;
+    if (std::find(enabledCompressedExtensions_.begin(), enabledCompressedExtensions_.end(), name) ==
+        enabledCompressedExtensions_.end())
+        enabledCompressedExtensions_.push_back(name);
+    return true;
 }
 
 std::vector<GLint> WebGLVkContext::compressedTextureFormats() const {
+    // In the device's extension order, whatever order they were enabled in.
     std::vector<GLint> formats;
-    const CompressedExtension* exts = nullptr;
-    const size_t n = compressedExtensions(exts);
-    for (size_t i = 0; i < n; ++i) {
-        if (std::find(enabledCompressedExtensions_.begin(), enabledCompressedExtensions_.end(), exts[i].name) ==
+    for (const WebGLCaps::CompressedExtension& ext : caps_->compressedExtensions) {
+        if (std::find(enabledCompressedExtensions_.begin(), enabledCompressedExtensions_.end(), ext.name) ==
             enabledCompressedExtensions_.end())
             continue;
-        for (size_t f = 0; f < exts[i].count; ++f)
-            if (std::find(formats.begin(), formats.end(), static_cast<GLint>(exts[i].formats[f])) == formats.end())
-                formats.push_back(static_cast<GLint>(exts[i].formats[f]));
+        for (GLint f : ext.formats)
+            if (std::find(formats.begin(), formats.end(), f) == formats.end()) formats.push_back(f);
     }
     return formats;
 }

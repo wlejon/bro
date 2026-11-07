@@ -203,7 +203,7 @@ void refuseDomSource3D(webgl::WebGL2RenderingContext* c, const char* who) {
 void installWebGLTextures(ObjectBuilder& b) {
     defMethod(b, "createTexture", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Texture, gl->createTexture().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Texture, gl->createTexture(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteTexture", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Texture);
@@ -454,7 +454,7 @@ void installWebGLTextures(ObjectBuilder& b) {
     // --- WebGLSampler ---
     defMethod(b, "createSampler", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Sampler, gl->createSampler().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Sampler, gl->createSampler(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteSampler", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const webgl::WebGLSampler s = samplerOf(argAt(a, 0));

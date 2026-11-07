@@ -6,8 +6,7 @@
 
 namespace bro::webgl::vk {
 
-WebGLBuffer WebGLVkContext::createBuffer() {
-    GLuint id = nextObjectId_++;
+WebGLBuffer WebGLVkContext::createBuffer(GLuint id) {
     buffers_[id] = VkBufferResource{};
     return {id};
 }

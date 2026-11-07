@@ -42,7 +42,7 @@ void installWebGLBuffers(ObjectBuilder& b) {
 
     defMethod(b, "createBuffer", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Buffer, gl->createBuffer().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Buffer, gl->createBuffer(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteBuffer", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         GLuint bufId = idOf(argAt(a, 0), WebGLCell::Buffer);
@@ -208,7 +208,7 @@ void installWebGLBuffers(ObjectBuilder& b) {
     // --- Vertex array objects ---
     defMethod(b, "createVertexArray", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::VertexArray, gl->createVertexArray().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::VertexArray, gl->createVertexArray(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteVertexArray", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::VertexArray);

@@ -9,25 +9,33 @@
 
 namespace bro::webgl::vk {
 
+class WebGLVkStream;
+
 /// Manages the offscreen canvas render target (VkImage color + depth/stencil attachments),
 /// resizing, layout transitions, zero-copy presentation, and staging pixel readback.
 /// The context's attributes decide the attachments: a depth and/or stencil
 /// image only when asked for, and without alpha the color image keeps its
 /// alpha at one (the context draws it as an RGB format: alphaOne).
+///
+/// Replaced images are destroyed through `stream` (the context's, whose
+/// commands draw into them), once its work so far is done and, since the
+/// presenter samples them too, once the queue ticket the caller names is.
 class WebGLVkCanvas {
 public:
-    explicit WebGLVkCanvas(render::VulkanContext& context, const ContextAttributes& attributes = {});
+    WebGLVkCanvas(render::VulkanContext& context, WebGLVkStream& stream, const ContextAttributes& attributes = {});
     ~WebGLVkCanvas();
 
     WebGLVkCanvas(const WebGLVkCanvas&) = delete;
     WebGLVkCanvas& operator=(const WebGLVkCanvas&) = delete;
 
     /// Create color and depth/stencil attachments of the given size. Their
-    /// contents are undefined until recordInit() clears them.
-    bool init(uint32_t width, uint32_t height);
+    /// contents are undefined until recordInit() clears them. Images already
+    /// there are released (release(afterTicket)).
+    bool init(uint32_t width, uint32_t height, uint64_t afterTicket = 0);
 
-    /// Recreate the attachments at a new size (contents cleared by recordInit()).
-    bool resize(uint32_t width, uint32_t height);
+    /// Recreate the attachments at a new size (contents cleared by
+    /// recordInit()); the old ones are released after `afterTicket`.
+    bool resize(uint32_t width, uint32_t height, uint64_t afterTicket = 0);
 
     /// Record the clear of freshly created attachments into `cmd` (no-op once done).
     void recordInit(VkCommandBuffer cmd);
@@ -40,8 +48,9 @@ public:
     /// No alpha channel: alpha reads, and is kept, as one.
     bool opaque() const { return !attributes_.alpha; }
 
-    /// Release the images; they are destroyed once the GPU is done with them.
-    void cleanup();
+    /// Release the images; they are destroyed once the stream's work so far
+    /// and queue ticket `afterTicket` (the presenter's last use) are done.
+    void release(uint64_t afterTicket);
 
     /// Transition color attachment image to new layout.
     void transitionColor(VkCommandBuffer cmd, VkImageLayout newLayout);
@@ -89,6 +98,7 @@ private:
     void clearImages(VkCommandBuffer cmd);
 
     render::VulkanContext& context_;
+    WebGLVkStream& stream_;
     ContextAttributes attributes_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;

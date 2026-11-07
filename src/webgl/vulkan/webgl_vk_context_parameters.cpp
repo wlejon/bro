@@ -1,28 +1,13 @@
-// getParameter: state the context tracks, and implementation limits read
-// from the Vulkan device rather than assumed, so a page sizing itself by
-// them asks for what this device (and this implementation) can do.
+// getParameter: state the context tracks, and the implementation limits of
+// the capabilities snapshot (webgl_vk_caps.cpp).
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "webgl/vulkan/webgl_vk_formats.h"
 
 #include <algorithm>
 #include <climits>
-#include <cstdio>
 
 namespace bro::webgl::vk {
-
-namespace {
-
-GLint clampInt(uint64_t v) { return static_cast<GLint>(std::min<uint64_t>(v, INT_MAX)); }
-
-// The highest count in a VkSampleCountFlags mask.
-GLint highestSampleCount(VkSampleCountFlags flags) {
-    for (GLint n = 64; n > 1; n /= 2)
-        if (flags & static_cast<VkSampleCountFlags>(n)) return n;
-    return 0;
-}
-
-} // namespace
 
 // Bits of the draw framebuffer's buffers: color from DRAW_BUFFER0's
 // attachment (the first drawn one), depth and stencil from theirs.
@@ -34,73 +19,15 @@ static FormatBits framebufferBits(VkFormat color, VkFormat depth, VkFormat stenc
 }
 
 GLint WebGLVkContext::getParameterInt(GLenum pname) {
-    const VkPhysicalDeviceLimits& L = context_.deviceProperties().limits;
+    // The device's limits are the snapshot's (webgl_vk_caps.cpp).
+    if (int64_t limit = 0; caps_->limit(pname, limit))
+        return static_cast<GLint>(std::clamp<int64_t>(limit, INT_MIN, INT_MAX));
     switch (pname) {
-        // --- Texture and framebuffer sizes ---
-        case GL_MAX_TEXTURE_SIZE: return clampInt(L.maxImageDimension2D);
-        case GL_MAX_CUBE_MAP_TEXTURE_SIZE: return clampInt(L.maxImageDimensionCube);
-        case GL_MAX_3D_TEXTURE_SIZE: return clampInt(L.maxImageDimension3D);
-        case GL_MAX_ARRAY_TEXTURE_LAYERS: return clampInt(L.maxImageArrayLayers);
-        case GL_MAX_RENDERBUFFER_SIZE:
-            return clampInt(std::min({L.maxImageDimension2D, L.maxFramebufferWidth, L.maxFramebufferHeight}));
-        case GL_MAX_DRAW_BUFFERS:
-        case GL_MAX_COLOR_ATTACHMENTS:
-            return clampInt(std::min({8u, L.maxColorAttachments, L.maxFragmentOutputAttachments}));
-        case GL_MAX_SAMPLES:
-            return highestSampleCount(L.framebufferColorSampleCounts & L.framebufferDepthSampleCounts &
-                                      L.framebufferStencilSampleCounts);
-        case GL_MAX_TEXTURE_LOD_BIAS: return static_cast<GLint>(L.maxSamplerLodBias);
-        case GL_MIN_PROGRAM_TEXEL_OFFSET: return L.minTexelOffset;
-        case GL_MAX_PROGRAM_TEXEL_OFFSET: return clampInt(L.maxTexelOffset);
-        case GL_SUBPIXEL_BITS: return clampInt(L.subPixelPrecisionBits);
-
-        // --- Shader resources ---
-        // Attributes: the VAO and the generic-attribute block hold 16.
-        case GL_MAX_VERTEX_ATTRIBS: return clampInt(std::min(16u, L.maxVertexInputAttributes));
-        // The default uniform block is a uniform buffer.
-        case GL_MAX_VERTEX_UNIFORM_VECTORS:
-        case GL_MAX_FRAGMENT_UNIFORM_VECTORS:
-            return clampInt(std::min<uint64_t>(L.maxUniformBufferRange, 65536) / 16);
-        case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
-        case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
-            return getParameterInt(GL_MAX_FRAGMENT_UNIFORM_VECTORS) * 4;
-        case GL_MAX_VARYING_VECTORS:
-            return clampInt(std::min(L.maxVertexOutputComponents, L.maxFragmentInputComponents) / 4);
-        case GL_MAX_VARYING_COMPONENTS: return getParameterInt(GL_MAX_VARYING_VECTORS) * 4;
-        case GL_MAX_VERTEX_OUTPUT_COMPONENTS: return clampInt(L.maxVertexOutputComponents);
-        case GL_MAX_FRAGMENT_INPUT_COMPONENTS: return clampInt(L.maxFragmentInputComponents);
-        // Samplers: one descriptor set per program (kMaxTextureUnits). Each
-        // sampler is visible only to the stages that use it, so a stage is
-        // bounded by the per-stage limit and the program by the set limit.
-        case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
-        case GL_MAX_TEXTURE_IMAGE_UNITS:
-            return clampInt(std::min({kMaxStageTextureUnits, L.maxPerStageDescriptorSamplers,
-                                      L.maxPerStageDescriptorSampledImages}));
-        case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
-            return clampInt(std::min({kMaxTextureUnits, L.maxDescriptorSetSamplers, L.maxDescriptorSetSampledImages,
-                                      2 * static_cast<uint32_t>(getParameterInt(GL_MAX_TEXTURE_IMAGE_UNITS))}));
-        // Uniform blocks: the default block takes one uniform-buffer slot.
-        case GL_MAX_UNIFORM_BUFFER_BINDINGS: return static_cast<GLint>(kMaxUniformBufferBindings);
-        case GL_MAX_VERTEX_UNIFORM_BLOCKS:
-        case GL_MAX_FRAGMENT_UNIFORM_BLOCKS:
-        case GL_MAX_COMBINED_UNIFORM_BLOCKS:
-            return clampInt(std::min<uint64_t>({kMaxUniformBufferBindings, L.maxPerStageDescriptorUniformBuffers - 1,
-                                                L.maxDescriptorSetUniformBuffers - 1}));
-        case 0x8A34 /* GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT */: return clampInt(L.minUniformBufferOffsetAlignment);
-        case GL_MAX_UNIFORM_BLOCK_SIZE:
-        case GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
-        case GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
-        case GL_MAX_ELEMENT_INDEX:
-        case GL_MAX_SERVER_WAIT_TIMEOUT:
-            return clampInt(static_cast<uint64_t>(getParameterInt64(pname)));
-        case GL_MAX_ELEMENTS_VERTICES:
-        case GL_MAX_ELEMENTS_INDICES: return clampInt(L.maxDrawIndexedIndexValue);
-        // Transform feedback's ES 3.0 minimums, which the capturing vertex
-        // stage holds (0 where the device cannot capture).
-        case GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS: return transformFeedbackSupported() ? 64 : 0;
-        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
-            return transformFeedbackSupported() ? static_cast<GLint>(kMaxFeedbackBuffers) : 0;
-        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: return transformFeedbackSupported() ? 4 : 0;
+        case GL_MAX_TEXTURE_LOD_BIAS: {
+            float bias = 0.0f;
+            caps_->floatLimit(pname, bias);
+            return static_cast<GLint>(bias);
+        }
 
         // --- Framebuffer state ---
         case GL_RED_BITS: case GL_GREEN_BITS: case GL_BLUE_BITS: case GL_ALPHA_BITS:
@@ -215,28 +142,6 @@ bool WebGLVkContext::formatSupports(VkFormat format, VkFormatFeatureFlags featur
     return (props.optimalTilingFeatures & features) == features;
 }
 
-std::vector<std::string> WebGLVkContext::supportedExtensions() const {
-    // Compiles finish inside compileShader / linkProgram, so a parallel
-    // compile is always complete; the device names itself to
-    // WEBGL_debug_renderer_info.
-    std::vector<std::string> exts = {"EXT_color_buffer_float", "BRO_buffer_map", "WEBGL_lose_context",
-                                     "KHR_parallel_shader_compile", "WEBGL_debug_renderer_info"};
-    // The 16-bit float formats render (and blend) on every Vulkan device.
-    if (formatSupports(VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
-        exts.emplace_back("EXT_color_buffer_half_float");
-    if (anisotropicFiltering()) exts.emplace_back("EXT_texture_filter_anisotropic");
-    // Compressed formats the device samples natively, and only those.
-    for (std::string& name : compressedTextureExtensions()) exts.push_back(std::move(name));
-    // What 32-bit float formats can do is the device's to say.
-    if (formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
-        exts.emplace_back("EXT_float_blend");
-    if (formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
-        exts.emplace_back("OES_texture_float_linear");
-    // GPU timer queries, on Vulkan timestamps.
-    if (timerQueriesSupported()) exts.emplace_back("EXT_disjoint_timer_query_webgl2");
-    return exts;
-}
-
 bool WebGLVkContext::enableExtension(const std::string& name) {
     // A compressed-texture extension's formats are accepted once enabled.
     if (enableCompressedExtension(name)) return true;
@@ -245,8 +150,7 @@ bool WebGLVkContext::enableExtension(const std::string& name) {
         timerQueriesEnabled_ = true;
         return true;
     }
-    const std::vector<std::string> exts = supportedExtensions();
-    if (std::find(exts.begin(), exts.end(), name) == exts.end()) return false;
+    if (!caps_->supports(name)) return false;
     // COMPLETION_STATUS_KHR and the UNMASKED_* strings are enums from now on.
     if (name == "KHR_parallel_shader_compile") parallelCompileEnabled_ = true;
     if (name == "WEBGL_debug_renderer_info") rendererInfoEnabled_ = true;
@@ -258,57 +162,25 @@ bool WebGLVkContext::unmaskedRendererInfo(GLenum pname, std::string& out) {
         setSyntheticError(GL_INVALID_ENUM);
         return false;
     }
-    const VkPhysicalDeviceProperties& props = context_.deviceProperties();
-    if (pname == GL_UNMASKED_RENDERER_WEBGL) {
-        out = props.deviceName;
-        return true;
-    }
-    // The PCI vendor ids Vulkan reports, and the Khronos ids of the rest.
-    switch (props.vendorID) {
-        case 0x1002: out = "AMD"; break;
-        case 0x10DE: out = "NVIDIA"; break;
-        case 0x8086: out = "Intel"; break;
-        case 0x106B: out = "Apple"; break;
-        case 0x13B5: out = "ARM"; break;
-        case 0x5143: out = "Qualcomm"; break;
-        case 0x1010: out = "Imagination Technologies"; break;
-        case 0x10005: out = "Mesa"; break;
-        default: {
-            char id[16];
-            std::snprintf(id, sizeof id, "0x%04X", props.vendorID);
-            out = id;
-        }
-    }
+    out = pname == GL_UNMASKED_RENDERER_WEBGL ? caps_->unmaskedRenderer : caps_->unmaskedVendor;
     return true;
 }
 
 // The limits GL types as 64-bit.
 int64_t WebGLVkContext::getParameterInt64(GLenum pname) {
-    const VkPhysicalDeviceLimits& L = context_.deviceProperties().limits;
-    switch (pname) {
-        case GL_MAX_UNIFORM_BLOCK_SIZE: return static_cast<int64_t>(L.maxUniformBufferRange);
-        case GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
-        case GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
-            return static_cast<int64_t>(getParameterInt(GL_MAX_COMBINED_UNIFORM_BLOCKS)) *
-                       getParameterInt64(GL_MAX_UNIFORM_BLOCK_SIZE) / 4 +
-                   getParameterInt(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS);
-        case GL_MAX_ELEMENT_INDEX: return static_cast<int64_t>(L.maxDrawIndexedIndexValue);
-        // waitSync has nothing to wait on: GPU work is ordered on one queue.
-        case GL_MAX_SERVER_WAIT_TIMEOUT: return 0;
-        default: return getParameterInt(pname);
-    }
+    if (int64_t limit = 0; caps_->limit(pname, limit)) return limit;
+    return getParameterInt(pname);
 }
 
 GLfloat WebGLVkContext::getParameterFloat(GLenum pname) {
+    if (float limit = 0.0f; caps_->floatLimit(pname, limit)) return limit;
     switch (pname) {
         case 0x0B73 /* GL_DEPTH_CLEAR_VALUE */: return clearDepth_;
         case GL_LINE_WIDTH: return lineWidth_;
         case GL_POLYGON_OFFSET_FACTOR: return polygonOffsetFactor_;
         case GL_POLYGON_OFFSET_UNITS: return polygonOffsetUnits_;
-        case GL_MAX_TEXTURE_LOD_BIAS: return context_.deviceProperties().limits.maxSamplerLodBias;
         case GL_SAMPLE_COVERAGE_VALUE: return sampleCoverageValue_;
-        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
-            if (context_.features().samplerAnisotropy) return context_.deviceProperties().limits.maxSamplerAnisotropy;
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:  // the device does not filter anisotropically
             setSyntheticError(GL_INVALID_ENUM);
             return 0.0f;
         default: return 0.0f;
@@ -335,9 +207,8 @@ void WebGLVkContext::getParameterInt2(GLenum pname, GLint* out) {
     out[0] = 0;
     out[1] = 0;
     if (pname == GL_MAX_VIEWPORT_DIMS) {
-        const VkPhysicalDeviceLimits& L = context_.deviceProperties().limits;
-        out[0] = clampInt(std::min(L.maxViewportDimensions[0], L.maxFramebufferWidth));
-        out[1] = clampInt(std::min(L.maxViewportDimensions[1], L.maxFramebufferHeight));
+        out[0] = caps_->maxViewportDims[0];
+        out[1] = caps_->maxViewportDims[1];
     }
 }
 
@@ -361,14 +232,11 @@ void WebGLVkContext::getParameterFloat2(GLenum pname, GLfloat* out) {
     out[0] = 0.0f;
     out[1] = 0.0f;
     if (pname == 0x846D /* GL_ALIASED_POINT_SIZE_RANGE */ || pname == 0x0B12 /* GL_POINT_SIZE_RANGE */) {
-        // gl_PointSize beyond 1 needs the largePoints feature.
-        const VkPhysicalDeviceLimits& L = context_.deviceProperties().limits;
-        out[0] = 1.0f;
-        out[1] = context_.largePoints() ? L.pointSizeRange[1] : 1.0f;
+        out[0] = caps_->aliasedPointSizeRange[0];
+        out[1] = caps_->aliasedPointSizeRange[1];
     } else if (pname == GL_ALIASED_LINE_WIDTH_RANGE) {
-        // Wide lines need the wideLines feature (MoltenVK has none).
-        out[0] = 1.0f;
-        out[1] = context_.wideLines() ? context_.deviceProperties().limits.lineWidthRange[1] : 1.0f;
+        out[0] = caps_->aliasedLineWidthRange[0];
+        out[1] = caps_->aliasedLineWidthRange[1];
     } else if (pname == GL_DEPTH_RANGE) {
         out[0] = depthNear_;
         out[1] = depthFar_;

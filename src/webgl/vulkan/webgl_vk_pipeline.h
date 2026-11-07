@@ -10,6 +10,8 @@
 
 namespace bro::webgl::vk {
 
+class WebGLVkStream;
+
 /// Key identifying the complete graphics pipeline state for WebGL draw calls.
 struct PipelineKey {
     VkShaderModule vertShader = VK_NULL_HANDLE;
@@ -75,9 +77,11 @@ struct PipelineKeyHasher {
 };
 
 /// Cache of Vulkan dynamic rendering graphics pipelines keyed by WebGL render state.
+/// Only `stream`'s commands use the pipelines, so an evicted one is destroyed
+/// once the stream's work so far is done.
 class WebGLVkPipelineCache {
 public:
-    explicit WebGLVkPipelineCache(render::VulkanContext& context);
+    WebGLVkPipelineCache(render::VulkanContext& context, WebGLVkStream& stream);
     ~WebGLVkPipelineCache();
 
     WebGLVkPipelineCache(const WebGLVkPipelineCache&) = delete;
@@ -105,6 +109,7 @@ private:
     VkPipeline createPipeline(const PipelineKey& key, VkPipelineLayout layout);
 
     render::VulkanContext& context_;
+    WebGLVkStream& stream_;
     std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHasher> pipelines_;
     PipelineKey lastKey_{};
     VkPipelineLayout lastLayout_ = VK_NULL_HANDLE;

@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_pipeline.h"
+#include "webgl/vulkan/webgl_vk_stream.h"
 #include "util/log.h"
 
 #include <cstring>
@@ -121,8 +122,8 @@ size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     return seed;
 }
 
-WebGLVkPipelineCache::WebGLVkPipelineCache(render::VulkanContext& context)
-    : context_(context)
+WebGLVkPipelineCache::WebGLVkPipelineCache(render::VulkanContext& context, WebGLVkStream& stream)
+    : context_(context), stream_(stream)
 {
 }
 
@@ -156,7 +157,7 @@ void WebGLVkPipelineCache::evictShaders(VkShaderModule vert, VkShaderModule frag
     for (auto it = pipelines_.begin(); it != pipelines_.end();) {
         if (it->first.vertShader == vert || it->first.fragShader == frag) {
             VkPipeline pipeline = it->second;
-            context_.frames().defer([dev, pipeline] { vkDestroyPipeline(dev, pipeline, nullptr); });
+            stream_.defer([dev, pipeline] { vkDestroyPipeline(dev, pipeline, nullptr); });
             it = pipelines_.erase(it);
         } else {
             ++it;

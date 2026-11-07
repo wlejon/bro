@@ -25,12 +25,11 @@ VkShaderModule createShaderModule(VkDevice device, const std::vector<uint32_t>& 
 
 } // namespace
 
-WebGLShader WebGLVkContext::createShader(GLenum type) {
+WebGLShader WebGLVkContext::createShader(GLuint id, GLenum type) {
     if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {
         setSyntheticError(GL_INVALID_ENUM);
         return {};
     }
-    GLuint id = nextObjectId_++;
     shaders_[id] = VkShaderResource{type};
     return {id, type};
 }
@@ -94,8 +93,7 @@ std::vector<GLuint> WebGLVkContext::attachedShaders(WebGLProgram p) const {
     return out;
 }
 
-WebGLProgram WebGLVkContext::createProgram() {
-    GLuint id = nextObjectId_++;
+WebGLProgram WebGLVkContext::createProgram(GLuint id) {
     programs_[id] = VkProgramResource{};
     return {id};
 }

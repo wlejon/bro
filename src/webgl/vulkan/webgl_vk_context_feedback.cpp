@@ -28,12 +28,11 @@ uint32_t primitiveVertices(GLenum mode) {
 } // namespace
 
 bool WebGLVkContext::transformFeedbackSupported() const {
-    return context_.features().vertexPipelineStoresAndAtomics == VK_TRUE;
+    return caps_->transformFeedback;
 }
 
-GLuint WebGLVkContext::createTransformFeedback() {
+GLuint WebGLVkContext::createTransformFeedback(GLuint id) {
     if (!transformFeedbackSupported()) return 0;
-    const GLuint id = nextObjectId_++;
     feedbacks_[id] = FeedbackObject{};
     return id;
 }

@@ -3,6 +3,7 @@
 #include "render/vulkan_context.h"
 #include "webgl/webgl_objects.h"
 #include "webgl/vulkan/webgl_vk_types.h"
+#include "webgl/vulkan/webgl_vk_caps.h"
 #include "webgl/vulkan/webgl_vk_context_state.h"
 #include "webgl/vulkan/webgl_vk_canvas.h"
 #include "webgl/vulkan/webgl_vk_pipeline.h"
@@ -29,18 +30,25 @@ class WebGLVkContext {
 public:
     /// `attributes` are those the context was granted (its drawing buffer's
     /// alpha, depth, stencil and preservation).
+    ///
+    /// Object names are the caller's: every create* takes the name the new
+    /// object gets (one sequence for every kind, WebGL2RenderingContext's),
+    /// so a client can hand a name out before the backend sees the call.
+    /// `caps` is the device's snapshot (buildWebGLCaps), taken here when null.
     WebGLVkContext(int width, int height, render::VulkanContext& context, const ContextAttributes& attributes = {},
-                   GLuint firstObjectId = 1);
+                   std::shared_ptr<const WebGLCaps> caps = nullptr);
     ~WebGLVkContext();
 
-    /// The name the next created object gets.
-    GLuint nextObjectId() const { return nextObjectId_; }
+    /// What this device can do (getParameter's constants, the extensions).
+    const WebGLCaps& caps() const { return *caps_; }
 
     WebGLVkContext(const WebGLVkContext&) = delete;
     WebGLVkContext& operator=(const WebGLVkContext&) = delete;
 
-    /// Resize canvas attachments.
-    void resize(int width, int height);
+    /// Resize canvas attachments. The old ones are destroyed once this
+    /// context's work so far and queue ticket `presentedTicket` (the last
+    /// submission that may sample them: the presenter's) are done.
+    void resize(int width, int height, uint64_t presentedTicket);
 
     /// Offscreen canvas manager.
     WebGLVkCanvas& canvas() { return canvas_; }
@@ -112,14 +120,13 @@ public:
     void getParameterFloat4(GLenum pname, GLfloat* out);
     void getParameterBool4(GLenum pname, GLboolean* out);
 
-    /// getSupportedExtensions: what this device backs. enableExtension is
-    /// getExtension's: true when supported, and a compressed-texture
-    /// extension's formats are accepted from then on.
-    std::vector<std::string> supportedExtensions() const;
+    /// enableExtension is getExtension's: true when supported
+    /// (caps().extensions), and the extension's enums are accepted from then
+    /// on (a compressed-texture extension's formats, TIME_ELAPSED_EXT, ...).
     bool enableExtension(const std::string& name);
     /// WEBGL_debug_renderer_info's UNMASKED_VENDOR_WEBGL /
-    /// UNMASKED_RENDERER_WEBGL: the Vulkan device's vendor and name. False
-    /// (INVALID_ENUM raised) until the extension is enabled.
+    /// UNMASKED_RENDERER_WEBGL (caps().unmasked*). False (INVALID_ENUM
+    /// raised) until the extension is enabled.
     bool unmaskedRendererInfo(GLenum pname, std::string& out);
     /// KHR_parallel_shader_compile's maxShaderCompilerThreadsKHR: kept for
     /// getParameter, with no other effect (compiles are synchronous, so
@@ -127,7 +134,7 @@ public:
     void maxShaderCompilerThreads(GLuint count) { maxShaderCompilerThreads_ = count; }
 
     // --- Buffers ---
-    WebGLBuffer createBuffer();
+    WebGLBuffer createBuffer(GLuint id);
     void deleteBuffer(WebGLBuffer buf);
     GLboolean isBuffer(WebGLBuffer buf) const;  // true once bound
     bool bindBuffer(GLenum target, WebGLBuffer buf);  // false (with the error) when refused
@@ -151,7 +158,7 @@ public:
                          GLenum format, GLenum type, GLintptr offset);
 
     // --- Shaders & Programs ---
-    WebGLShader createShader(GLenum type);
+    WebGLShader createShader(GLuint id, GLenum type);
     void deleteShader(WebGLShader s);
     void shaderSource(WebGLShader s, const std::string& src);
     void compileShader(WebGLShader s);
@@ -160,7 +167,7 @@ public:
     std::string getShaderSource(WebGLShader s);
     GLboolean isShader(WebGLShader s) const;
 
-    WebGLProgram createProgram();
+    WebGLProgram createProgram(GLuint id);
     void deleteProgram(WebGLProgram p);
     GLboolean isProgram(WebGLProgram p) const;
     GLuint currentProgram() const { return currentProgramId_; }
@@ -225,7 +232,7 @@ public:
     void uniformMatrix4x3fv(WebGLUniformLocation loc, GLsizei count, GLboolean transpose, const GLfloat* value);
 
     // --- Vertex Arrays (VAO) ---
-    WebGLVertexArrayObject createVertexArray();
+    WebGLVertexArrayObject createVertexArray(GLuint id);
     void deleteVertexArray(WebGLVertexArrayObject vao);
     bool bindVertexArray(WebGLVertexArrayObject vao);
     GLboolean isVertexArray(WebGLVertexArrayObject vao) const;  // true once bound
@@ -266,7 +273,7 @@ public:
     // unpack state reads is INVALID_OPERATION. A null pointer defines the
     // image as zeros. With a PIXEL_UNPACK_BUFFER bound, the *FromPBO forms
     // read at a byte offset into it instead.
-    WebGLTexture createTexture();
+    WebGLTexture createTexture(GLuint id);
     void deleteTexture(WebGLTexture tex);
     void bindTexture(GLenum target, WebGLTexture tex);
     void activeTexture(GLenum texture);
@@ -335,7 +342,7 @@ public:
     void generateMipmap(GLenum target);
 
     // --- Samplers ---
-    WebGLSampler createSampler();
+    WebGLSampler createSampler(GLuint id);
     void deleteSampler(WebGLSampler s);
     void bindSampler(GLuint unit, WebGLSampler s);
     void samplerParameteri(WebGLSampler s, GLenum pname, GLint param);
@@ -346,7 +353,7 @@ public:
     GLuint boundSampler(GLuint unit) const { return unit < boundSamplers_.size() ? boundSamplers_[unit] : 0; }
 
     // --- Framebuffers & Renderbuffers ---
-    WebGLFramebuffer createFramebuffer();
+    WebGLFramebuffer createFramebuffer(GLuint id);
     void deleteFramebuffer(WebGLFramebuffer fb);
     void bindFramebuffer(GLenum target, WebGLFramebuffer fb);
     GLboolean isFramebuffer(WebGLFramebuffer fb) const;  // true once bound
@@ -385,11 +392,8 @@ public:
     bool getFramebufferAttachmentParameter(GLenum target, GLenum attachment, GLenum pname,
                                            AttachmentParameter& out);
     GLint getRenderbufferParameter(GLenum target, GLenum pname);
-    /// The sample counts renderbufferStorageMultisample accepts for
-    /// `internalformat`, highest first (getInternalformatParameter(SAMPLES)).
-    std::vector<GLint> supportedSampleCounts(GLenum internalformat);
 
-    WebGLRenderbuffer createRenderbuffer();
+    WebGLRenderbuffer createRenderbuffer(GLuint id);
     void deleteRenderbuffer(WebGLRenderbuffer rbo);
     void bindRenderbuffer(GLenum target, WebGLRenderbuffer rbo);
     GLboolean isRenderbuffer(WebGLRenderbuffer rbo) const;  // true once bound
@@ -412,7 +416,7 @@ public:
     /// Whether the device can capture (its vertex stage can store); without
     /// it createTransformFeedback answers 0.
     bool transformFeedbackSupported() const;
-    GLuint createTransformFeedback();
+    GLuint createTransformFeedback(GLuint id);
     void deleteTransformFeedback(GLuint id);
     GLboolean isTransformFeedback(GLuint id) const;  // true once bound
     void bindTransformFeedback(GLenum target, GLuint id);
@@ -430,7 +434,7 @@ public:
     GLuint indexedBuffer(GLenum target, GLuint index);
 
     // --- Query objects (webgl_vk_context_queries.cpp) ---
-    GLuint createQuery();
+    GLuint createQuery(GLuint id);
     void deleteQuery(GLuint id);
     GLboolean isQuery(GLuint id) const;  // true once begun
     void beginQuery(GLenum target, GLuint id);
@@ -450,7 +454,7 @@ public:
     // --- Sync objects (webgl_vk_context_sync.cpp) ---
     /// MAX_CLIENT_WAIT_TIMEOUT_WEBGL: longer client waits are refused.
     static constexpr double kMaxClientWaitTimeoutNs = 1e9;
-    GLuint fenceSync(GLenum condition, GLbitfield flags);
+    GLuint fenceSync(GLuint id, GLenum condition, GLbitfield flags);
     void deleteSync(GLuint id);
     GLboolean isSync(GLuint id) const;
     GLenum clientWaitSync(GLuint id, GLbitfield flags, double timeoutNs);
@@ -464,8 +468,7 @@ private:
     bool formatSupports(VkFormat format, VkFormatFeatureFlags features) const;
     /// EXT_texture_filter_anisotropic: the device filters anisotropically.
     bool anisotropicFiltering() const;
-    /// The compressed-texture extensions this device backs, and enabling one.
-    std::vector<std::string> compressedTextureExtensions() const;
+    /// Enabling a compressed-texture extension this device backs.
     bool enableCompressedExtension(const std::string& name);
     bool markBufferBound(GLuint id);
     GLuint getBoundBufferId(GLenum target) const;
@@ -492,7 +495,8 @@ private:
     // bufferSubData and the draws around it is the command stream's. A flush
     // submits it without waiting; only readbacks and client waits block, on
     // this context's own ticket. Open work is submitted at frame end at the
-    // latest (a VulkanFrames frame-end hook), and earlier whenever the stream's
+    // latest (the owner's VulkanFrames frame-end hook calls flush(); the
+    // backend never touches the engine's frames), and earlier whenever the stream's
     // segment has used its memory budget (flushIfOverBudget, called where no
     // upload slice or descriptor set of the open segment is still held).
     VkCommandBuffer commands();
@@ -797,6 +801,7 @@ private:
     void bindingsChanged() { ++bindingSerial_; }
 
     render::VulkanContext& context_;
+    std::shared_ptr<const WebGLCaps> caps_;
     WebGLVkStream stream_;
     WebGLVkCanvas canvas_;
     bool preserveDrawingBuffer_ = false;
@@ -805,7 +810,6 @@ private:
     WebGLVkPipelineCache pipelineCache_;
 
     bool inRenderPass_ = false;
-    render::VulkanFrames::HookId frameEndHook_ = 0;
 
     // Sampled in place of a missing or incomplete texture, which GL reads as
     // (0, 0, 0, 1): one per component kind (float, int, uint, and depth for
@@ -877,11 +881,6 @@ private:
     std::unordered_map<GLuint, VkRenderbufferResource> renderbuffers_;
     std::unordered_map<GLuint, VkSamplerResource> samplers_;
 
-    // Object names, one sequence for every kind. A context restored after a
-    // loss continues its predecessor's, so no name of a lost object ever
-    // names a new one.
-    GLuint nextObjectId_ = 1;
-
     GLuint readFboId_ = 0;   // READ_FRAMEBUFFER binding (0 = the canvas)
     GLuint drawFboId_ = 0;   // DRAW_FRAMEBUFFER binding
     GLuint currentRenderbufferId_ = 0;
@@ -929,7 +928,6 @@ private:
     void genericAttribsChanged() { genericAttribSerial_ = 0; }
 
     // Indexed UNIFORM_BUFFER bindings (IndexedBuffer, above).
-    static constexpr uint32_t kMaxUniformBufferBindings = 36;
     std::array<IndexedBuffer, kMaxUniformBufferBindings> boundUniformBuffers_{};
 
     GLuint activeTextureUnit_ = 0;

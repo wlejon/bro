@@ -1,5 +1,7 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "webgl/vulkan/webgl_vk_caps.h"
+#include "render/vulkan_context.h"
 
 namespace bro::webgl {
 
@@ -21,9 +23,18 @@ ContextAttributes granted(ContextAttributes a) {
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
                                                const ContextAttributes& requested)
     : width_(width), height_(height), device_(device), attributes_(granted(requested)),
-      backend_(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_)) {}
+      caps_(vk::buildWebGLCaps(device)),
+      backend_(std::make_unique<vk::WebGLVkContext>(width, height, device, attributes_, caps_)) {
+    // Work recorded but not yet submitted goes at the frame's end at the
+    // latest, so nothing the backend holds outlives the frame it was for.
+    frameEndHook_ = device_.frames().addFrameEndHook([this] {
+        if (backend_) backend_->flush();
+    });
+}
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
+    if (frameEndHook_ != 0) device_.frames().removeFrameEndHook(frameEndHook_);
+    frameEndHook_ = 0;
     for (auto& cb : teardownCallbacks_)
         if (cb) cb(this);
     teardownCallbacks_.clear();
@@ -33,7 +44,8 @@ void WebGL2RenderingContext::resize(int width, int height) {
     if (width == width_ && height == height_) return;
     width_ = width;
     height_ = height;
-    if (backend_) backend_->resize(width, height);
+    // The presenter's submissions so far may sample the old images.
+    if (backend_) backend_->resize(width, height, device_.queue().lastSubmittedTicket());
 }
 
 render::LayerImage WebGL2RenderingContext::drawingBuffer() const {
@@ -65,7 +77,6 @@ bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
 // the lost event is the engine's to fire, at the canvas, after this turn.
 void WebGL2RenderingContext::loseContext() {
     if (lost_) return;  // its INVALID_OPERATION is unobservable: getError answers NO_ERROR while lost
-    nextObjectId_ = backend_->nextObjectId();
     backend_.reset();
     lost_ = true;
     lostErrorPending_ = true;
@@ -89,7 +100,7 @@ WebGL2RenderingContext::ContextEvent WebGL2RenderingContext::takeContextEvent() 
     if (e == ContextEvent::Restored) {
         // WebGL 1.0 5.15.4 "restore the context": a fresh drawing buffer and
         // default state; names continue, so no lost object's names a new one.
-        backend_ = std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, nextObjectId_);
+        backend_ = std::make_unique<vk::WebGLVkContext>(width_, height_, device_, attributes_, caps_);
         lost_ = false;
         lostErrorPending_ = false;
     }

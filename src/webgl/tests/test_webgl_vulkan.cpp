@@ -9,6 +9,7 @@
 
 #include "webgl/vulkan/webgl_vk_canvas.h"
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "webgl/vulkan/webgl_vk_stream.h"
 #include "webgl/webgl2_context.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
@@ -40,12 +41,16 @@ int main() {
         return 1;
     }
 
+    // Object names are the caller's (WebGL2RenderingContext's, in the engine).
+    GLuint nextId = 1;
+
     // -------------------------------------------------------------------------
     // Test 1: WebGLVkCanvas Creation, Resizing, and Layout Transitions
     // -------------------------------------------------------------------------
     std::cout << "[Test 1] WebGLVkCanvas Creation & Resizing... " << std::flush;
     {
-        WebGLVkCanvas canvas(context);
+        WebGLVkStream stream(context);
+        WebGLVkCanvas canvas(context, stream);
         assert(canvas.init(128, 128));
         assert(canvas.isValid());
         assert(canvas.width() == 128);
@@ -68,7 +73,7 @@ int main() {
         context.endSingleTimeCommands(cmd);
         assert(canvas.colorLayout() == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-        canvas.cleanup();
+        canvas.release(0);
         assert(!canvas.isValid());
         std::cout << "PASSED" << std::endl;
     }
@@ -79,7 +84,7 @@ int main() {
     std::cout << "[Test 2] WebGLVkContext Buffer Upload & SubData... " << std::flush;
     {
         WebGLVkContext ctx(64, 64, context);
-        WebGLBuffer buf = ctx.createBuffer();
+        WebGLBuffer buf = ctx.createBuffer(nextId++);
         assert(buf.id != 0);
 
         ctx.bindBuffer(GL_ARRAY_BUFFER, buf);
@@ -137,17 +142,17 @@ int main() {
             "    fragColor = vec4(v_color, 1.0);\n"
             "}\n";
 
-        vertShader = ctx.createShader(GL_VERTEX_SHADER);
+        vertShader = ctx.createShader(nextId++, GL_VERTEX_SHADER);
         ctx.shaderSource(vertShader, vertGlsl);
         ctx.compileShader(vertShader);
         assert(ctx.getShaderParameter(vertShader, GL_COMPILE_STATUS) == GL_TRUE);
 
-        fragShader = ctx.createShader(GL_FRAGMENT_SHADER);
+        fragShader = ctx.createShader(nextId++, GL_FRAGMENT_SHADER);
         ctx.shaderSource(fragShader, fragGlsl);
         ctx.compileShader(fragShader);
         assert(ctx.getShaderParameter(fragShader, GL_COMPILE_STATUS) == GL_TRUE);
 
-        program = ctx.createProgram();
+        program = ctx.createProgram(nextId++);
         ctx.attachShader(program, vertShader);
         ctx.attachShader(program, fragShader);
         ctx.linkProgram(program);
@@ -194,17 +199,17 @@ int main() {
             "    fragColor = vec4(v_color, 1.0);\n"
             "}\n";
 
-        WebGLShader vs = ctx.createShader(GL_VERTEX_SHADER);
+        WebGLShader vs = ctx.createShader(nextId++, GL_VERTEX_SHADER);
         ctx.shaderSource(vs, vertGlsl);
         ctx.compileShader(vs);
         assert(ctx.getShaderParameter(vs, GL_COMPILE_STATUS) == GL_TRUE);
 
-        WebGLShader fs = ctx.createShader(GL_FRAGMENT_SHADER);
+        WebGLShader fs = ctx.createShader(nextId++, GL_FRAGMENT_SHADER);
         ctx.shaderSource(fs, fragGlsl);
         ctx.compileShader(fs);
         assert(ctx.getShaderParameter(fs, GL_COMPILE_STATUS) == GL_TRUE);
 
-        WebGLProgram prog = ctx.createProgram();
+        WebGLProgram prog = ctx.createProgram(nextId++);
         ctx.attachShader(prog, vs);
         ctx.attachShader(prog, fs);
         ctx.linkProgram(prog);
@@ -231,11 +236,11 @@ int main() {
             { 0.0f,  0.8f,  0.0f, 1.0f, 0.0f}
         };
 
-        WebGLBuffer vbo = ctx.createBuffer();
+        WebGLBuffer vbo = ctx.createBuffer(nextId++);
         ctx.bindBuffer(GL_ARRAY_BUFFER, vbo);
         ctx.bufferData(GL_ARRAY_BUFFER, sizeof(triangle), triangle, GL_STATIC_DRAW);
 
-        WebGLVertexArrayObject vao = ctx.createVertexArray();
+        WebGLVertexArrayObject vao = ctx.createVertexArray(nextId++);
         ctx.bindVertexArray(vao);
 
         ctx.enableVertexAttribArray(0);
@@ -381,17 +386,17 @@ int main() {
             }
         )";
 
-        WebGLShader vs = ctx.createShader(GL_VERTEX_SHADER);
+        WebGLShader vs = ctx.createShader(nextId++, GL_VERTEX_SHADER);
         ctx.shaderSource(vs, vsSrc);
         ctx.compileShader(vs);
         assert(ctx.getShaderParameter(vs, GL_COMPILE_STATUS) == GL_TRUE);
 
-        WebGLShader fs = ctx.createShader(GL_FRAGMENT_SHADER);
+        WebGLShader fs = ctx.createShader(nextId++, GL_FRAGMENT_SHADER);
         ctx.shaderSource(fs, fsSrc);
         ctx.compileShader(fs);
         assert(ctx.getShaderParameter(fs, GL_COMPILE_STATUS) == GL_TRUE);
 
-        WebGLProgram prog = ctx.createProgram();
+        WebGLProgram prog = ctx.createProgram(nextId++);
         ctx.attachShader(prog, vs);
         ctx.attachShader(prog, fs);
         ctx.linkProgram(prog);
@@ -403,7 +408,7 @@ int main() {
         WebGLUniformLocation locTint = ctx.getUniformLocation(prog, "uTint");
 
         // 2x2 white RGBA texture with mipmaps
-        WebGLTexture tex = ctx.createTexture();
+        WebGLTexture tex = ctx.createTexture(nextId++);
         ctx.activeTexture(GL_TEXTURE0);
         ctx.bindTexture(GL_TEXTURE_2D, tex);
         const uint8_t white[16] = {
@@ -424,10 +429,10 @@ int main() {
         };
         const uint16_t indices[6] = {0, 1, 2, 2, 1, 3};
 
-        WebGLVertexArrayObject vao = ctx.createVertexArray();
+        WebGLVertexArrayObject vao = ctx.createVertexArray(nextId++);
         ctx.bindVertexArray(vao);
 
-        WebGLBuffer vbo = ctx.createBuffer();
+        WebGLBuffer vbo = ctx.createBuffer(nextId++);
         ctx.bindBuffer(GL_ARRAY_BUFFER, vbo);
         ctx.bufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
         ctx.enableVertexAttribArray(0);
@@ -435,7 +440,7 @@ int main() {
         ctx.enableVertexAttribArray(1);
         ctx.vertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVert), 2 * sizeof(float));
 
-        WebGLBuffer ibo = ctx.createBuffer();
+        WebGLBuffer ibo = ctx.createBuffer(nextId++);
         ctx.bindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
         ctx.bufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 

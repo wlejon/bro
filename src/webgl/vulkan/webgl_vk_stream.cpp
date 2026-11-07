@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace bro::webgl::vk {
 
@@ -42,7 +43,9 @@ WebGLVkStream::WebGLVkStream(render::VulkanContext& context) : context_(context)
 
 WebGLVkStream::~WebGLVkStream() {
     submit();
-    context_.queue().wait(lastTicket_);
+    uint64_t last = lastTicket_;
+    for (const Segment& segment : segments_) last = std::max(last, segment.afterTicket);
+    context_.queue().wait(last);
     VkDevice device = context_.device();
     for (Segment& segment : segments_) {
         for (auto& fn : segment.deferred) fn();
@@ -55,6 +58,7 @@ WebGLVkStream::~WebGLVkStream() {
 
 VkCommandBuffer WebGLVkStream::commands() {
     if (cmd_ != VK_NULL_HANDLE) return cmd_;
+    assertOwner();
     Segment& segment = open();
     if (segment.nextCommandBuffer == segment.commandBuffers.size()) {
         VkCommandBufferAllocateInfo allocInfo{};
@@ -79,6 +83,7 @@ VkCommandBuffer WebGLVkStream::commands() {
 }
 
 bool WebGLVkStream::submit() {
+    assertOwner();
     Segment& segment = open();
     bool ok = true;
     if (cmd_ != VK_NULL_HANDLE) {
@@ -114,8 +119,10 @@ bool WebGLVkStream::wantsSubmit() const {
 }
 
 void WebGLVkStream::recycle(Segment& segment) {
-    if (segment.ticket != 0) context_.queue().wait(segment.ticket);
+    const uint64_t ticket = std::max(segment.ticket, segment.afterTicket);
+    if (ticket != 0) context_.queue().wait(ticket);
     segment.ticket = 0;
+    segment.afterTicket = 0;
     for (auto& fn : segment.deferred) fn();
     segment.deferred.clear();
 
@@ -234,8 +241,20 @@ VkDescriptorSet WebGLVkStream::allocDescriptorSet(VkDescriptorSetLayout layout) 
     return VK_NULL_HANDLE;
 }
 
+void WebGLVkStream::assertOwner() const {
+    assert(std::this_thread::get_id() == owner_ && "WebGL backend used off its owner thread");
+}
+
 void WebGLVkStream::defer(std::function<void()> destroy) {
+    assertOwner();
     open().deferred.push_back(std::move(destroy));
+}
+
+void WebGLVkStream::deferUntil(uint64_t afterTicket, std::function<void()> destroy) {
+    assertOwner();
+    Segment& segment = open();
+    segment.afterTicket = std::max(segment.afterTicket, afterTicket);
+    segment.deferred.push_back(std::move(destroy));
 }
 
 } // namespace bro::webgl::vk

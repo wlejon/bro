@@ -88,7 +88,7 @@ VkSampler WebGLVkContext::samplerFor(const SamplerState& state, const TexFormat&
     return sampler;
 }
 
-bool WebGLVkContext::anisotropicFiltering() const { return context_.features().samplerAnisotropy == VK_TRUE; }
+bool WebGLVkContext::anisotropicFiltering() const { return caps_->anisotropicFiltering; }
 
 void WebGLVkContext::destroySamplerCache() {
     for (const auto& [key, sampler] : samplerCache_) vkDestroySampler(context_.device(), sampler, nullptr);
@@ -128,8 +128,7 @@ VkImageView WebGLVkContext::sampledView(VkTextureResource& tex, uint32_t base, u
 // Sampler objects
 // ---------------------------------------------------------------------------
 
-WebGLSampler WebGLVkContext::createSampler() {
-    GLuint id = nextObjectId_++;
+WebGLSampler WebGLVkContext::createSampler(GLuint id) {
     samplers_[id] = VkSamplerResource{};
     return {id};
 }

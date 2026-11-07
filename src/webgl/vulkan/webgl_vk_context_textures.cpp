@@ -32,8 +32,7 @@ bool validCompareFunc(GLint v) { return v >= GL_NEVER && v <= GL_ALWAYS; }
 
 } // namespace
 
-WebGLTexture WebGLVkContext::createTexture() {
-    GLuint id = nextObjectId_++;
+WebGLTexture WebGLVkContext::createTexture(GLuint id) {
     textures_[id] = VkTextureResource{};
     return {id};
 }

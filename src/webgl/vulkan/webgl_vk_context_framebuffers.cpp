@@ -53,8 +53,7 @@ VkImageAspectFlags PassSurface::aspects() const {
 // Framebuffer objects
 // ---------------------------------------------------------------------------
 
-WebGLFramebuffer WebGLVkContext::createFramebuffer() {
-    GLuint id = nextObjectId_++;
+WebGLFramebuffer WebGLVkContext::createFramebuffer(GLuint id) {
     framebuffers_[id] = VkFramebufferResource{};
     return {id};
 }

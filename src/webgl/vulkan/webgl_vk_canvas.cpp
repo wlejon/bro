@@ -1,5 +1,6 @@
 #include "webgl/vulkan/webgl_vk_canvas.h"
 #include "webgl/vulkan/webgl_vk_formats.h"
+#include "webgl/vulkan/webgl_vk_stream.h"
 #include "render/vulkan_util.h"
 #include "util/log.h"
 
@@ -8,17 +9,18 @@
 
 namespace bro::webgl::vk {
 
-WebGLVkCanvas::WebGLVkCanvas(render::VulkanContext& context, const ContextAttributes& attributes)
-    : context_(context), attributes_(attributes)
+WebGLVkCanvas::WebGLVkCanvas(render::VulkanContext& context, WebGLVkStream& stream,
+                             const ContextAttributes& attributes)
+    : context_(context), stream_(stream), attributes_(attributes)
 {
 }
 
 WebGLVkCanvas::~WebGLVkCanvas() {
-    cleanup();
+    release(0);
 }
 
-bool WebGLVkCanvas::init(uint32_t width, uint32_t height) {
-    cleanup();
+bool WebGLVkCanvas::init(uint32_t width, uint32_t height, uint64_t afterTicket) {
+    release(afterTicket);
 
     width_ = std::max(1u, width);
     height_ = std::max(1u, height);
@@ -36,7 +38,7 @@ bool WebGLVkCanvas::init(uint32_t width, uint32_t height) {
     return true;
 }
 
-bool WebGLVkCanvas::resize(uint32_t width, uint32_t height) {
+bool WebGLVkCanvas::resize(uint32_t width, uint32_t height, uint64_t afterTicket) {
     uint32_t w = std::max(1u, width);
     uint32_t h = std::max(1u, height);
 
@@ -44,10 +46,10 @@ bool WebGLVkCanvas::resize(uint32_t width, uint32_t height) {
         return true;
     }
 
-    return init(w, h);
+    return init(w, h, afterTicket);
 }
 
-void WebGLVkCanvas::cleanup() {
+void WebGLVkCanvas::release(uint64_t afterTicket) {
     VkDevice dev = context_.device();
     if (dev == VK_NULL_HANDLE) return;
 
@@ -56,7 +58,7 @@ void WebGLVkCanvas::cleanup() {
     Dead color{colorImage_, colorView_, presentView_, colorAllocId_};
     Dead depth{depthImage_, depthView_, VK_NULL_HANDLE, depthAllocId_};
     if (color.image != VK_NULL_HANDLE || depth.image != VK_NULL_HANDLE) {
-        context_.frames().defer([ctx, dev, color, depth] {
+        stream_.deferUntil(afterTicket, [ctx, dev, color, depth] {
             for (const Dead& d : {color, depth}) {
                 if (d.view != VK_NULL_HANDLE) vkDestroyImageView(dev, d.view, nullptr);
                 if (d.extraView != VK_NULL_HANDLE) vkDestroyImageView(dev, d.extraView, nullptr);

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <thread>
 #include <vector>
 
 namespace bro::render { class VulkanContext; }
@@ -25,7 +26,9 @@ namespace bro::webgl::vk {
 /// context submits at its next safe point (wantsSubmit), and the ring waits
 /// for the oldest segment rather than growing.
 ///
-/// Main thread only.
+/// One thread only: the one that made it (assertOwner, checked in debug
+/// builds). Nothing here needs the engine's frames, so that thread need not
+/// be the main one.
 class WebGLVkStream {
 public:
     explicit WebGLVkStream(render::VulkanContext& context);
@@ -57,6 +60,15 @@ public:
 
     /// Run `destroy` once the GPU has finished every command recorded so far.
     void defer(std::function<void()> destroy);
+    /// defer(), and also not before queue ticket `afterTicket` has completed:
+    /// for what work outside the stream uses too (the presenter samples the
+    /// canvas images, in submissions up to the ticket it last read).
+    void deferUntil(uint64_t afterTicket, std::function<void()> destroy);
+
+    /// Debug builds of the library: the calling thread is the one that made
+    /// the stream. (Out of line, so one layout and one check whatever NDEBUG
+    /// a translation unit including this has.)
+    void assertOwner() const;
 
     /// Changes whenever a segment closes. Upload slices and descriptor sets
     /// are valid only within the segment they came from, so a cache of them
@@ -83,7 +95,8 @@ private:
         size_t activeDescriptorPool = 0;
         uint32_t descriptorSets = 0;
         std::vector<std::function<void()>> deferred;
-        uint64_t ticket = 0;  // completes every command of the segment
+        uint64_t ticket = 0;       // completes every command of the segment
+        uint64_t afterTicket = 0;  // deferUntil's: `deferred` waits for it too
     };
     static constexpr uint32_t kSegments = 3;
 
@@ -100,6 +113,7 @@ private:
     VkCommandBuffer cmd_ = VK_NULL_HANDLE;
     uint64_t lastTicket_ = 0;
     VkDeviceSize minUploadAlignment_ = 16;
+    std::thread::id owner_ = std::this_thread::get_id();
 };
 
 } // namespace bro::webgl::vk

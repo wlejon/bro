@@ -10,7 +10,7 @@ namespace bro::bronze_host {
 void installWebGLTransformFeedback(ObjectBuilder& b) {
     defMethod(b, "createTransformFeedback", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::TransformFeedback, gl->createTransformFeedback()) : ev::null();
+        return gl ? webglObject(c, WebGLCell::TransformFeedback, gl->createTransformFeedback(c->newObjectId())) : ev::null();
     });
     defMethod(b, "deleteTransformFeedback", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::TransformFeedback);

@@ -20,8 +20,7 @@ constexpr GLenum kRenderbufferSamples = 0x8CAB;
 
 } // namespace
 
-WebGLRenderbuffer WebGLVkContext::createRenderbuffer() {
-    GLuint id = nextObjectId_++;
+WebGLRenderbuffer WebGLVkContext::createRenderbuffer(GLuint id) {
     renderbuffers_[id] = VkRenderbufferResource{};
     return {id};
 }
@@ -66,30 +65,6 @@ void WebGLVkContext::bindRenderbuffer(GLenum target, WebGLRenderbuffer rbo) {
     currentRenderbufferId_ = rbo.id;
 }
 
-std::vector<GLint> WebGLVkContext::supportedSampleCounts(GLenum internalformat) {
-    std::vector<GLint> counts;
-    VkFormat format = colorRenderableFormat(internalformat);
-    if (format == VK_FORMAT_UNDEFINED) format = depthStencilFormat(context_.physicalDevice(), internalformat);
-    // ES 3.0: integer formats are never multisampled.
-    if (format == VK_FORMAT_UNDEFINED || isIntegerFormat(format)) return counts;
-    const VkImageAspectFlags aspects = render::imageAspectFor(format);
-    const VkImageUsageFlags usage = (aspects == VK_IMAGE_ASPECT_COLOR_BIT
-                                         ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                                         : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) |
-                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    VkImageFormatProperties props{};
-    if (vkGetPhysicalDeviceImageFormatProperties(context_.physicalDevice(), format, VK_IMAGE_TYPE_2D,
-                                                 VK_IMAGE_TILING_OPTIMAL, usage, 0, &props) != VK_SUCCESS)
-        return counts;
-    const VkPhysicalDeviceLimits& limits = context_.deviceProperties().limits;
-    VkSampleCountFlags flags = props.sampleCounts;
-    if (aspects & VK_IMAGE_ASPECT_COLOR_BIT) flags &= limits.framebufferColorSampleCounts;
-    if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) flags &= limits.framebufferDepthSampleCounts;
-    if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) flags &= limits.framebufferStencilSampleCounts;
-    for (GLint n = 64; n > 1; n /= 2)
-        if (flags & static_cast<VkSampleCountFlags>(n)) counts.push_back(n);
-    return counts;
-}
 
 void WebGLVkContext::renderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height) {
     renderbufferStorageMultisample(target, 0, internalformat, width, height);
@@ -121,7 +96,7 @@ void WebGLVkContext::renderbufferStorageMultisample(GLenum target, GLsizei sampl
     }
     VkSampleCountFlagBits sampleBits = VK_SAMPLE_COUNT_1_BIT;
     if (samples > 0) {
-        const std::vector<GLint> counts = supportedSampleCounts(internalformat);
+        const std::vector<GLint>& counts = caps_->samples(internalformat);
         if (counts.empty() || samples > counts.front()) {
             setSyntheticError(GL_INVALID_OPERATION);
             return;

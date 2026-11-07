@@ -8,11 +8,10 @@
 namespace bro::webgl::vk {
 
 WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& context,
-                               const ContextAttributes& attributes, GLuint firstObjectId)
-    : context_(context), stream_(context), canvas_(context, attributes),
-      preserveDrawingBuffer_(attributes.preserveDrawingBuffer), pipelineCache_(context)
+                               const ContextAttributes& attributes, std::shared_ptr<const WebGLCaps> caps)
+    : context_(context), caps_(caps ? std::move(caps) : buildWebGLCaps(context)), stream_(context), canvas_(context, stream_, attributes),
+      preserveDrawingBuffer_(attributes.preserveDrawingBuffer), pipelineCache_(context, stream_)
 {
-    nextObjectId_ = firstObjectId;
     canvas_.init(width, height);
     initVulkanResources();
     canvas_.recordInit(commands());
@@ -32,20 +31,11 @@ WebGLVkContext::~WebGLVkContext() {
 }
 
 void WebGLVkContext::initVulkanResources() {
-    frameEndHook_ = context_.frames().addFrameEndHook([this] { flushCommands(); });
-
     createPlaceholders();
 
     // EXT_disjoint_timer_query_webgl2 needs the graphics queue to timestamp.
-    uint32_t familyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(context_.physicalDevice(), &familyCount, nullptr);
-    std::vector<VkQueueFamilyProperties> families(familyCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(context_.physicalDevice(), &familyCount, families.data());
-    const int family = context_.queueFamilies().graphicsFamily;
-    if (family >= 0 && static_cast<uint32_t>(family) < familyCount) {
-        timestampBits_ = families[static_cast<uint32_t>(family)].timestampValidBits;
-        timestampPeriodNs_ = context_.deviceProperties().limits.timestampPeriod;
-    }
+    timestampBits_ = caps_->timestampBits;
+    timestampPeriodNs_ = caps_->timestampPeriodNs;
 
     for (uint32_t i = 0; i < 16; ++i) {
         float* f = reinterpret_cast<float*>(genericAttribs_[i].data());
@@ -58,10 +48,6 @@ void WebGLVkContext::cleanupVulkanResources() {
     if (dev == VK_NULL_HANDLE) return;
 
     flushCommands();
-    if (frameEndHook_ != 0) {
-        context_.frames().removeFrameEndHook(frameEndHook_);
-        frameEndHook_ = 0;
-    }
 
     for (auto& [id, buf] : buffers_) releaseBuffer(buf);
     buffers_.clear();
@@ -95,14 +81,16 @@ void WebGLVkContext::cleanupVulkanResources() {
 
     pipelineCache_.clear();
 
-    canvas_.cleanup();
+    // The presenter may still sample the drawing buffer: every submission so
+    // far is what it could have sampled it in.
+    canvas_.release(context_.queue().lastSubmittedTicket());
 }
 
 // The viewport and scissor box are the app's: a resized drawing buffer
 // keeps them (WebGL 1.0, "The WebGL Viewport"), as GL's did.
-void WebGLVkContext::resize(int width, int height) {
+void WebGLVkContext::resize(int width, int height, uint64_t presentedTicket) {
     endRendering();
-    canvas_.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    canvas_.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height), presentedTicket);
     canvas_.recordInit(commands());
 }
 
@@ -128,6 +116,7 @@ void WebGLVkContext::finish() {
 }
 
 GLenum WebGLVkContext::getError() {
+    stream_.assertOwner();
     GLenum err = pendingError_;
     pendingError_ = GL_NO_ERROR;
     return err;
@@ -411,8 +400,7 @@ GLint WebGLVkContext::getPixelStorei(GLenum pname) const {
 // Vertex Arrays (VAO)
 // ---------------------------------------------------------------------------
 
-WebGLVertexArrayObject WebGLVkContext::createVertexArray() {
-    GLuint id = nextObjectId_++;
+WebGLVertexArrayObject WebGLVkContext::createVertexArray(GLuint id) {
     vaos_[id] = VkVAOResource{};
     return {id};
 }

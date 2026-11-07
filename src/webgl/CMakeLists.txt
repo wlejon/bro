@@ -19,6 +19,7 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_buffers.cpp
     vulkan/webgl_vk_context_program.cpp
     vulkan/webgl_vk_context_introspection.cpp
+    vulkan/webgl_program_lookup.cpp
     vulkan/webgl_vk_context_placeholders.cpp
     vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
@@ -44,6 +45,7 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_commands.cpp
     vulkan/webgl_vk_context_draw.cpp
     vulkan/webgl_vk_stream.cpp
+    vulkan/webgl_vk_caps.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)

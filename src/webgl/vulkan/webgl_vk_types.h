@@ -368,6 +368,8 @@ constexpr uint32_t kFeedbackBinding = 112;
 constexpr uint32_t kMaxStageTextureUnits = 32;
 constexpr uint32_t kMaxTextureUnits = 64;
 constexpr uint32_t kMaxFeedbackBuffers = 4;
+/// Indexed UNIFORM_BUFFER binding points.
+constexpr uint32_t kMaxUniformBufferBindings = 36;
 constexpr uint32_t kFeedbackPushOffset = 16;
 struct FeedbackPush {
     uint32_t base = 0;   // records already written since beginTransformFeedback

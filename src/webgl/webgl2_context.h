@@ -3,6 +3,7 @@
 #include "webgl/webgl_types.h"
 
 #include "render/layer_image.h"
+#include "render/vulkan_frames.h"
 
 #include <vulkan/vulkan.h>
 
@@ -12,16 +13,18 @@
 #include <vector>
 
 namespace bro::render { class VulkanContext; }
-namespace bro::webgl::vk { class WebGLVkContext; }
+namespace bro::webgl::vk { class WebGLVkContext; struct WebGLCaps; }
 
 namespace bro::webgl {
 
 /// The WebGL2 context of one <canvas>. It owns the backend that implements
 /// the API and holds the drawing buffer (vk::WebGLVkContext), and carries
-/// what outlives a backend: the drawing buffer's size and the context-loss
-/// state (WEBGL_lose_context). The JS binding calls the backend directly;
-/// while the context is lost there is none, and every call answers its lost
-/// value.
+/// what outlives a backend: the drawing buffer's size, the context-loss
+/// state (WEBGL_lose_context), the object names (one sequence, continued
+/// across a loss), the device's capabilities snapshot (vk::WebGLCaps) and the
+/// frame-end hook that submits the backend's open work. The JS binding calls
+/// the backend directly; while the context is lost there is none, and every
+/// call answers its lost value.
 class WebGL2RenderingContext {
 public:
     /// `requested` is what getContext was asked for; attributes() is what
@@ -38,6 +41,15 @@ public:
 
     /// The backend WebGL calls run against: null while the context is lost.
     vk::WebGLVkContext* backend() const { return backend_.get(); }
+
+    /// What the device can do: getParameter's constants, the extensions,
+    /// precisions and sample counts. The same while lost.
+    const vk::WebGLCaps& caps() const { return *caps_; }
+
+    /// The name of an object about to be created (the backend's create*
+    /// takes it). One sequence for every kind, continued across a context
+    /// loss, so no name of a lost object ever names a new one.
+    GLuint newObjectId() { return nextObjectId_++; }
 
     /// Run when the context is destroyed (the binding drops its wrappers).
     using TeardownCallback = std::function<void(WebGL2RenderingContext*)>;
@@ -80,14 +92,16 @@ private:
     int height_;
     render::VulkanContext& device_;
     ContextAttributes attributes_;
+    std::shared_ptr<const vk::WebGLCaps> caps_;
     std::unique_ptr<vk::WebGLVkContext> backend_;
+    render::VulkanFrames::HookId frameEndHook_ = 0;
     std::vector<TeardownCallback> teardownCallbacks_;
 
     bool lost_ = false;
     bool restoreAllowed_ = false;
     bool lostErrorPending_ = false;
     ContextEvent pendingEvent_ = ContextEvent::None;
-    GLuint nextObjectId_ = 1;       // the lost backend's, for the restored one
+    GLuint nextObjectId_ = 1;
 };
 
 } // namespace bro::webgl

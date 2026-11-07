@@ -38,7 +38,7 @@ void installWebGLShaders(ObjectBuilder& b) {
     defMethod(b, "createShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         auto* gl = live(c);
         if (!gl) return ev::null();
-        webgl::WebGLShader s = gl->createShader(u32At(a, 0));
+        webgl::WebGLShader s = gl->createShader(c->newObjectId(), u32At(a, 0));
         return webglObject(c, WebGLCell::Shader, s.id, s.type);
     });
     defMethod(b, "deleteShader", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
@@ -105,7 +105,7 @@ void installWebGLShaders(ObjectBuilder& b) {
     // --- Programs ---
     defMethod(b, "createProgram", 0, [](webgl::WebGL2RenderingContext* c, std::span<const Value>) {
         auto* gl = live(c);
-        return gl ? webglObject(c, WebGLCell::Program, gl->createProgram().id) : ev::null();
+        return gl ? webglObject(c, WebGLCell::Program, gl->createProgram(c->newObjectId()).id) : ev::null();
     });
     defMethod(b, "deleteProgram", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         const GLuint id = idOf(argAt(a, 0), WebGLCell::Program);
