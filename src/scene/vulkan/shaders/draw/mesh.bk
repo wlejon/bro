@@ -191,6 +191,15 @@ pub fn make_vertex_in(model: mat4f, wind_mask: f32, pos: vec3<f32>, normal: vec3
     };
 }
 
+// An instanced vertex hook's input: its instance's own index `id` (location
+// 7: a culled view draws its survivors in a compacted order).
+pub fn make_instance_vertex_in(model: mat4f, wind_mask: f32, pos: vec3<f32>, normal: vec3<f32>,
+                               uv: vec2<f32>, color: vec4<f32>, tangent: vec4<f32>, id: u32) -> Vertex {
+    var v = make_vertex_in(model, wind_mask, pos, normal, uv, color, tangent);
+    v.instance_index = id as i32;
+    return v;
+}
+
 pub fn make_frag_vertex(push: Push, world_pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>,
                         color: vec4<f32>, tangent: vec3<f32>, bitangent: vec3<f32>,
                         v0: vec4<f32>, v1: vec4<f32>, v2: vec4<f32>, v3: vec4<f32>,

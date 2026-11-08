@@ -88,7 +88,9 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
             if (casts) {
                 if (const auto wb = nodeWorldBounds(m)) {
                     const CustomShaderState* cs = m->customShader();
-                    const bool chunk = cs && cs->hasVertex;
+                    // A custom vertex chunk displaces, and a GPU count changes
+                    // what is drawn, with no generation signal.
+                    const bool chunk = (cs && cs->hasVertex) || m->instanceCountBuffer();
                     const bool sways = swaying && m->hasVegetation();
                     const bool moving =
                         shadowCasterStates_.caster(m->id(), m->changeGeneration(), *wb, chunk, pages, sways);

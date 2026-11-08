@@ -35,7 +35,11 @@ void PassOpaque::record(SceneFrame& frame) {
     SceneMeshDrawer& meshes = frame.gpu.meshes;
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
-        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
+        // (A culled draw draws the instances the camera holds.)
+        if (draw.culledIn(0))
+            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw.inView(0), &cull);
+        else
+            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
         if (frame.timer)
             frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
@@ -55,8 +59,11 @@ void PassTranslucent::declare(const SceneFrame& frame, PassIO& io) const {
 void PassTranslucent::record(SceneFrame& frame) {
     // (Drawn whole, not cut to chunks: a blend's order is its triangles'.)
     for (uint32_t i : frame.lists.translucent) {
-        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet,
-                                frame.lists.meshes[i]);
+        const MeshDraw& draw = frame.lists.meshes[i];
+        if (draw.culledIn(0))
+            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw.inView(0));
+        else
+            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
     }
 }
 

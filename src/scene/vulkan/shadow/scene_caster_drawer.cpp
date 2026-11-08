@@ -271,6 +271,8 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     if (draw.shadowIndexCount != 0 && draw.shadowIndexCount < draw.indexCount) {
         MeshDraw cut = draw;
         cut.indexCount = draw.shadowIndexCount;
+        // A GPU-counted draw's second command is its shadow prefix.
+        if (cut.indirect) cut.indirectOffset += sizeof(VkDrawIndexedIndirectCommand);
         SceneMeshDrawer::bindGeometryAndDraw(cmd, cut, &cull);
         return;
     }

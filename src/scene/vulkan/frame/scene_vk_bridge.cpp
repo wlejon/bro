@@ -11,6 +11,7 @@
 #include "scene/vulkan/lighting/pass_environment.h"
 #include "scene/vulkan/draw/pass_gaussian_splat.h"
 #include "scene/vulkan/draw/pass_mesh.h"
+#include "scene/vulkan/draw/pass_draw_counts.h"
 #include "scene/vulkan/draw/pass_particles.h"
 #include "scene/vulkan/post/pass_postfx.h"
 #include "scene/vulkan/lighting/pass_reflection_probe.h"
@@ -45,7 +46,9 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // where they were drawn. The atmosphere's froxels run on the async
     // compute queue where there is one, and the graphics waits for them at
     // their first reader (the opaque meshes; the sky itself on a frame the
-    // world service remade the atmosphere's tables).
+    // world service remade the atmosphere's tables). GPU-counted draws get
+    // their commands before any pass draws them.
+    graph_.add(std::make_unique<PassDrawCounts>());
     graph_.add(std::make_unique<PassShadow>());
     graph_.add(std::make_unique<PassShadowCopy>());
     graph_.add(std::make_unique<PassFrameUniforms>());

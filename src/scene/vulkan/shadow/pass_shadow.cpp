@@ -66,7 +66,11 @@ void PassShadow::drawView(SceneFrame& frame, int index) {
         const char* label = (view.dynamic ? kOverlay : kPages)[static_cast<int>(draw.kind)];
         if (frame.timer && run && run != label) frame.timer->mark(cmd, run);
         run = label;
-        frame.gpu.casters.draw(frame, cmd, lightViewProj, draw, culling ? &view.frustum : nullptr);
+        // (A culled draw casts the instances this view holds.)
+        if (draw.culledIn(1 + index))
+            frame.gpu.casters.draw(frame, cmd, lightViewProj, draw.inView(1 + index), culling ? &view.frustum : nullptr);
+        else
+            frame.gpu.casters.draw(frame, cmd, lightViewProj, draw, culling ? &view.frustum : nullptr);
     }
     if (frame.timer && run) frame.timer->mark(cmd, run);
 }

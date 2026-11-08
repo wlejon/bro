@@ -639,6 +639,22 @@
         __bro_native.scene.SceneNode_setShaderBuffer(this, name, buffer === undefined ? null : buffer);
         return this;
     });
+    fn(SceneNode.prototype, "setInstanceCountBuffer", function setInstanceCountBuffer(buffer, index) {
+        __bro_native.scene.SceneNode_setInstanceCountBuffer(this, buffer === undefined ? null : buffer, index | 0);
+        return this;
+    });
+    fn(SceneNode.prototype, "setInstanceCullSpheres", function setInstanceCullSpheres(buffer) {
+        __bro_native.scene.SceneNode_setInstanceCullSpheres(this, buffer === undefined ? null : buffer);
+        return this;
+    });
+    fn(SceneNode.prototype, "setCullBounds", function setCullBounds(min, max) {
+        if (!min || !max) {
+            __bro_native.scene.SceneNode_setCullBounds(this, false, 0, 0, 0, 0, 0, 0);
+        } else {
+            __bro_native.scene.SceneNode_setCullBounds(this, true, +min[0], +min[1], +min[2], +max[0], +max[1], +max[2]);
+        }
+        return this;
+    });
     fn(SceneNode.prototype, "setShaderTexture", function setShaderTexture(name, opts) {
         if (!name || !opts) return this;
         // depth: the slices are a 3D texture's z (a sampler3D), not an array's.

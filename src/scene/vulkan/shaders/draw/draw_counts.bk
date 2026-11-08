@@ -1,0 +1,31 @@
+// A GPU-counted instanced draw's commands (vulkan/draw/pass_draw_counts.h):
+// the count a kernel left at word `a.x` of `source`, clamped to the node's
+// instance rows (a.y), written as two VkDrawIndexedIndirectCommands at word
+// `b.x` of `commands`: the draw's (a.z indices) and its shadow prefix's
+// (a.w indices). Five words a command: index count, instance count, first
+// index, vertex offset, first instance.
+
+struct DrawCountUBO {
+    a: vec4<u32>,   // source word, instance rows, index count, shadow index count
+    b: vec4<u32>,   // commands word, 0, 0, 0
+}
+
+@binding(0, 0) var u: uniform<DrawCountUBO>;
+@binding(0, 1) var source: buffer<u32>;
+@binding(0, 2) var commands: buffer<u32>;
+
+@compute @workgroup_size(1, 1, 1)
+fn draw_counts() {
+    let n = min(source[u.a.x], u.a.y);
+    let d = u.b.x;
+    commands[d] = u.a.z;
+    commands[d + 1u] = n;
+    commands[d + 2u] = 0u;
+    commands[d + 3u] = 0u;
+    commands[d + 4u] = 0u;
+    commands[d + 5u] = u.a.w;
+    commands[d + 6u] = n;
+    commands[d + 7u] = 0u;
+    commands[d + 8u] = 0u;
+    commands[d + 9u] = 0u;
+}

@@ -24,6 +24,7 @@
 #include "scene/vulkan/draw/scene_vk_custom_shader.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_target_format.h"
+#include "scene/vulkan/shaders/shadow/shadow_pages_layout.h"
 
 #include <vulkan/vulkan.h>
 
@@ -36,6 +37,9 @@
 
 namespace bro::scene {
 class InstancedMeshNode;
+}
+namespace bro::render {
+class ComputeBuffer;
 }
 
 namespace bro::scene::vk {
@@ -94,6 +98,21 @@ constexpr bool streamless(MeshKind k) {
     return k == MeshKind::Tube;
 }
 
+/// Where a culled instanced draw's views draw from (PassDrawCounts, over
+/// InstancedMeshNode::setInstanceCullSpheres): per view (0 the camera, 1 + i
+/// the frame's shadow view i) its compacted rows and instance indices in
+/// `out` and its two commands in `commands`. A view without a region (`has`
+/// false) draws the draw's own rows.
+struct InstanceCullViews {
+    static constexpr int kViews = 1 + SP_MAX_VIEWS;
+    VkBuffer out = VK_NULL_HANDLE;
+    VkBuffer commands = VK_NULL_HANDLE;
+    bool has[kViews] = {};
+    VkDeviceSize rows[kViews] = {};
+    VkDeviceSize ids[kViews] = {};
+    VkDeviceSize command[kViews] = {};
+};
+
 struct MeshDraw {
     /// Move the draw to positions relative to an eye `offset` from the one it
     /// was prepared for (push.model is camera-relative).
@@ -115,6 +134,42 @@ struct MeshDraw {
     VkBuffer vegetation = VK_NULL_HANDLE;        // Vegetation (per vertex), InstancedVegetation (per instance)
     VkDeviceSize vegetationOffset = 0;
     uint32_t instanceCount = 1;
+    /// A GPU-counted instanced draw (InstancedMeshNode::setInstanceCountBuffer):
+    /// the count's buffer and u32 word. PassDrawCounts writes the draw's two
+    /// VkDrawIndexedIndirectCommands at `indirect` + `indirectOffset` (the
+    /// draw's, then its shadow prefix's: shadowIndexCount's), the count
+    /// clamped to instanceCount, and the draw is issued from them. Until the
+    /// pass has given it a place (`indirect` null) it draws instanceCount.
+    const render::ComputeBuffer* countBuffer = nullptr;
+    uint32_t countWord = 0;
+    VkBuffer indirect = VK_NULL_HANDLE;
+    VkDeviceSize indirectOffset = 0;
+    /// Instanced: each drawn instance's own index (location 7, what a vertex
+    /// hook's instance_index reads): 0..n-1 for the rows as they are, a
+    /// view's survivors' for a culled view.
+    VkBuffer instanceIds = VK_NULL_HANDLE;
+    VkDeviceSize instanceIdOffset = 0;
+    /// The node's instance spheres (setInstanceCullSpheres), and the views
+    /// PassDrawCounts culled them for this frame (null: none yet).
+    const render::ComputeBuffer* cullSpheres = nullptr;
+    const InstanceCullViews* cullViews = nullptr;
+
+    /// This draw as view `view` (InstanceCullViews) draws it.
+    MeshDraw inView(int view) const {
+        MeshDraw d = *this;
+        if (cullViews && view >= 0 && view < InstanceCullViews::kViews && cullViews->has[view]) {
+            d.instances = cullViews->out;
+            d.instanceOffset = cullViews->rows[view];
+            d.instanceIds = cullViews->out;
+            d.instanceIdOffset = cullViews->ids[view];
+            d.indirect = cullViews->commands;
+            d.indirectOffset = cullViews->command[view];
+        }
+        return d;
+    }
+    bool culledIn(int view) const {
+        return cullViews && view >= 0 && view < InstanceCullViews::kViews && cullViews->has[view];
+    }
     /// A big static mesh's chunks (GpuMesh::chunks) and their index buffer:
     /// a pass given a ChunkCull draws the chunks its frustum reaches, else
     /// `indices` whole. Null: not chunked.
@@ -223,7 +278,7 @@ public:
 
     /// The vertex input of a mesh kind (binding 0 = packed vertices, binding 1
     /// = instance rows, skin attributes or per-vertex vegetation, binding 2 =
-    /// per-instance vegetation).
+    /// per-instance vegetation or an instance's own index).
     static void vertexInput(MeshKind kind, std::vector<VkVertexInputBindingDescription>& bindings,
                             std::vector<VkVertexInputAttributeDescription>& attributes);
 

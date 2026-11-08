@@ -417,6 +417,61 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
     return false;
 }
 
+bool bro_scene_SceneNode_setInstanceCountBuffer(void* self, uint64_t bufferBits, int32_t word) {
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;
+    const Rooted value(ev::fromBits(bufferBits));
+    std::shared_ptr<bro::render::ComputeBuffer> buffer;
+    if (!ev::isNull(value) && !ev::isUndefined(value)) {
+#if BRO_WITH_KERNEL
+        buffer = computeBufferOf(value);
+#endif
+        if (!buffer) {
+            ev::throwTypeError("setInstanceCountBuffer: the buffer is not a KernelBuffer (bro.kernel.createBuffer)");
+            return false;
+        }
+        if (word < 0 || (static_cast<uint64_t>(word) + 1) * 4 > buffer->size()) {
+            ev::throwRangeError("setInstanceCountBuffer: the word is outside the buffer");
+            return false;
+        }
+    }
+    static_cast<scene::InstancedMeshNode*>(n)->setInstanceCountBuffer(std::move(buffer),
+                                                                      static_cast<uint32_t>(word < 0 ? 0 : word));
+    return true;
+}
+
+bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits) {
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;
+    const Rooted value(ev::fromBits(bufferBits));
+    std::shared_ptr<bro::render::ComputeBuffer> buffer;
+    if (!ev::isNull(value) && !ev::isUndefined(value)) {
+#if BRO_WITH_KERNEL
+        buffer = computeBufferOf(value);
+#endif
+        if (!buffer) {
+            ev::throwTypeError("setInstanceCullSpheres: the buffer is not a KernelBuffer (bro.kernel.createBuffer)");
+            return false;
+        }
+    }
+    static_cast<scene::InstancedMeshNode*>(n)->setInstanceCullSpheres(std::move(buffer));
+    return true;
+}
+
+bool bro_scene_SceneNode_setCullBounds(void* self, bool set, double dx0, double dy0, double dz0, double dx1, double dy1, double dz1) {
+    const float x0 = float(dx0), y0 = float(dy0), z0 = float(dz0), x1 = float(dx1), y1 = float(dy1), z1 = float(dz1);
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;
+    auto* m = static_cast<scene::InstancedMeshNode*>(n);
+    if (!set) {
+        m->setCullBounds(std::nullopt);
+        return true;
+    }
+    m->setCullBounds(bromath::AABB3{{x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, z0 < z1 ? z0 : z1},
+                                    {x0 < x1 ? x1 : x0, y0 < y1 ? y1 : y0, z0 < z1 ? z1 : z0}});
+    return true;
+}
+
 bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width,
                                                 int32_t height, int32_t layers, int32_t channels, bool repeat,
                                                 bool volume, int32_t encoding, int32_t atlas) {

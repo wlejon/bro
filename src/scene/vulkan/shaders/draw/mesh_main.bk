@@ -515,13 +515,14 @@ import hook;
     @location(2) in_uv: vec2<f32>,
     @location(3) in_color: vec4<f32>,
     @location(4) in_tangent: vec4<f32>,
+    @location(7) in_inst_id: u32,
     @location(8) in_inst_row0: vec4<f32>,
     @location(9) in_inst_row1: vec4<f32>,
     @location(10) in_inst_row2: vec4<f32>,
     @location(11) in_inst_color: vec4<f32>,
     push: mesh::Push
 ) {
-    let v = hook::vertex(mesh::make_vertex_in(push.model, push.extra.z, in_pos, in_normal, in_uv, in_color, in_tangent));
+    let v = hook::vertex(mesh::make_instance_vertex_in(push.model, push.extra.z, in_pos, in_normal, in_uv, in_color, in_tangent, in_inst_id));
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(push.model, vec4<f32>(scene::mul3(r, v.pos) + trans, 1.0));
@@ -540,13 +541,14 @@ import hook;
     @location(2) in_uv: vec2<f32>,
     @location(3) in_color: vec4<f32>,
     @location(4) in_tangent: vec4<f32>,
+    @location(7) in_inst_id: u32,
     @location(8) in_inst_row0: vec4<f32>,
     @location(9) in_inst_row1: vec4<f32>,
     @location(10) in_inst_row2: vec4<f32>,
     @location(11) in_inst_color: vec4<f32>,
     push: mesh::Push
 ) {
-    let v = mesh::make_vertex_in(push.model, push.extra.z, in_pos, in_normal, in_uv, in_color, in_tangent);
+    let v = mesh::make_instance_vertex_in(push.model, push.extra.z, in_pos, in_normal, in_uv, in_color, in_tangent, in_inst_id);
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(push.model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0));

@@ -101,6 +101,12 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         auto* m = static_cast<InstancedMeshNode*>(n);
         float lo[3], hi[3];
         if (!m->computeWorldInstanceBounds(lo, hi)) return std::nullopt;
+        if (const std::optional<bromath::AABB3>& cb = m->cullBounds()) {
+            // What a vertex hook places, as the node says (setCullBounds).
+            const bromath::AABB3 w = bromath::atransform(*cb, m->worldMatrix());
+            lo[0] = w.min.x; lo[1] = w.min.y; lo[2] = w.min.z;
+            hi[0] = w.max.x; hi[1] = w.max.y; hi[2] = w.max.z;
+        }
         const float pad = m->cullMargin() +
                           (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);
         out.min = {lo[0] - pad, lo[1] - pad, lo[2] - pad};

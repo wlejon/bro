@@ -85,7 +85,13 @@ void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindin
         attributes.push_back({9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16});   // row 1
         attributes.push_back({10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32});  // row 2
         attributes.push_back({11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48});  // colour
-        if (kind == MeshKind::InstancedVegetation) vegetation(2, VK_VERTEX_INPUT_RATE_INSTANCE);
+        if (kind == MeshKind::InstancedVegetation) {
+            vegetation(2, VK_VERTEX_INPUT_RATE_INSTANCE);
+        } else {
+            // The instance's own index (a vertex hook's instance_index).
+            bindings.push_back({2, 4, VK_VERTEX_INPUT_RATE_INSTANCE});
+            attributes.push_back({7, 2, VK_FORMAT_R32_UINT, 0});
+        }
     } else if (kind == MeshKind::Vegetation) {
         vegetation(1, VK_VERTEX_INPUT_RATE_VERTEX);
     } else if (kind == MeshKind::Skinned) {
@@ -791,6 +797,25 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     out.instances = rows.buffer;
     out.instanceOffset = rows.offset;
     out.instanceCount = static_cast<uint32_t>(rowCount);
+    if (out.kind == MeshKind::Instanced) {
+        // Each row's own index, 0..n-1 (a culled view draws its survivors').
+        thread_local std::vector<uint32_t> iota;
+        if (iota.size() < rowCount) {
+            const size_t from = iota.size();
+            iota.resize(rowCount);
+            for (size_t i = from; i < rowCount; ++i) iota[i] = static_cast<uint32_t>(i);
+        }
+        const render::UploadSlice ids = frame.gpu.device.frameUpload(rowCount * sizeof(uint32_t));
+        if (!ids) return false;
+        std::memcpy(ids.mapped, iota.data(), rowCount * sizeof(uint32_t));
+        out.instanceIds = ids.buffer;
+        out.instanceIdOffset = ids.offset;
+    }
+    if (!batched && node.instanceCountBuffer()) {
+        out.countBuffer = node.instanceCountBuffer().get();
+        out.countWord = node.instanceCountWord();
+    }
+    if (!batched && node.instanceCullSpheres()) out.cullSpheres = node.instanceCullSpheres().get();
     fillMaterial(frame, node, out);
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.effectiveAtlasCols(), 1, 255)) +
@@ -865,6 +890,10 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
             buffers[2] = draw.vegetation;
             offsets[2] = draw.vegetationOffset;
             count = 3;
+        } else if (draw.instanceIds) {
+            buffers[2] = draw.instanceIds;
+            offsets[2] = draw.instanceIdOffset;
+            count = 3;
         }
         break;
     case MeshKind::Skinned:
@@ -914,6 +943,10 @@ void SceneMeshDrawer::bindGeometryAndDraw(VkCommandBuffer cmd, const MeshDraw& d
         return;
     }
     vkCmdBindIndexBuffer(cmd, draw.indices, 0, VK_INDEX_TYPE_UINT32);
+    if (draw.indirect) {
+        vkCmdDrawIndexedIndirect(cmd, draw.indirect, draw.indirectOffset, 1, sizeof(VkDrawIndexedIndirectCommand));
+        return;
+    }
     vkCmdDrawIndexed(cmd, draw.indexCount, draw.instanceCount, 0, 0, 0);
 }
 

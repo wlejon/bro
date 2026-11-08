@@ -1018,6 +1018,63 @@ class SceneNode {
   setInstanceCount(count) {}
 
   /**
+   * InstancedMesh: draw as many instances as a kernel says, read on the GPU
+   * each frame, with nothing read back. Word `index` of `buffer` (a u32 or
+   * non-negative i32 the kernel wrote before the frame) is the count,
+   * clamped to the node's instance rows; instances 0..n-1 draw, in every
+   * pass (shadows and reflection probes too). Pair it with a custom vertex
+   * hook that picks what instance k shows from a list the same kernel
+   * wrote: a crowd dealt into levels of detail draws each level's node from
+   * its own count. A node with a count casts as a moving caster. `null`
+   * draws every row again. Not for a static batch.
+   *
+   * @param {KernelBuffer|null} buffer
+   * @param {number} [index=0] - the word (4 bytes) the count is at
+   * @returns {SceneNode}
+   * @example
+   *   const counts = bro.kernel.createBuffer(16);     // a kernel writes counts[0..2]
+   *   near.setInstanceCountBuffer(counts, 0);
+   *   mid.setInstanceCountBuffer(counts, 1);
+   */
+  setInstanceCountBuffer(buffer, index) {}
+
+  /**
+   * InstancedMesh: each instance's sphere, read on the GPU each frame: four
+   * floats an instance in row order (centre x, y, z in node space, radius).
+   * The camera and every shadow view the node casts into draw only the
+   * instances whose sphere reaches them: a frame's first pass compacts
+   * each view's instances (their rows, and their own indices: a vertex
+   * hook's `instance_index` is still the instance's own), with the count of
+   * setInstanceCountBuffer when there is one. For a crowd a hook places,
+   * where each shadow clipmap level would otherwise draw every creature.
+   * Views with none of their own (reflection probe faces) draw every row.
+   * `null` stops culling.
+   *
+   * @param {KernelBuffer|null} buffer
+   * @returns {SceneNode}
+   * @example
+   *   // the kernel that deals creatures into levels writes each one's sphere
+   *   far.setInstanceCullSpheres(farSpheres);
+   */
+  setInstanceCullSpheres(buffer) {}
+
+  /**
+   * InstancedMesh: where the node draws, in node space, when a vertex hook
+   * places its vertices (a crowd skinned from a kernel's poses, anywhere on
+   * its field). The box replaces the instances' bounds for culling, the
+   * camera's and every shadow view's: a shadow view that does not reach it
+   * draws none of the node. `cullMargin` still pads it. No arguments (or
+   * null) go back to the instances' bounds.
+   *
+   * @param {Array<number>|null} min - [x, y, z]
+   * @param {Array<number>} [max] - [x, y, z]
+   * @returns {SceneNode}
+   * @example
+   *   crowd.setCullBounds([-R, -1, -R], [R, 3, R]);   // the field the herd keeps to
+   */
+  setCullBounds(min, max) {}
+
+  /**
    * InstancedMesh: GPU foliage scatter. The node's mesh (a leaf card: +Z tip,
    * +Y card normal, +X side) is drawn once per leaf, each leaf placed along
    * its branch segment in the vertex shader — up bias, tilt / roll / scale

@@ -48,6 +48,8 @@ embed_vk_shader(lighting/ibl.bk                 kBkIblSrc)
 embed_vk_shader(lighting/sky.bk                 kBkSkySrc)
 embed_vk_shader(post/postfx.bk                  kBkPostFxSrc)
 embed_vk_shader(post/exposure.bk                kBkExposureSrc)
+embed_vk_shader(draw/draw_counts.bk             kBkDrawCountsSrc)
+embed_vk_shader(draw/instance_cull.bk           kBkInstanceCullSrc)
 embed_vk_shader(draw/billboard.bk               kBkBillboardSrc)
 embed_vk_shader(draw/decal.bk                   kBkDecalSrc)
 embed_vk_shader(draw/gaussian_splat.bk          kBkGaussianSplatSrc)
@@ -125,6 +127,7 @@ add_library(bro_scene STATIC
     vulkan/draw/scene_mesh_drawer_inspect.cpp
     vulkan/draw/scene_draw_list.cpp
     vulkan/draw/pass_mesh.cpp
+    vulkan/draw/pass_draw_counts.cpp
     vulkan/draw/pass_decal.cpp
     vulkan/draw/pass_volume.cpp
     vulkan/draw/pass_particles.cpp

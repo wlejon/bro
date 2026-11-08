@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <optional>
 
 namespace bro::scene {
 
@@ -367,6 +368,31 @@ public:
     }
     const std::vector<CustomShaderBuffer>& customShaderBuffers() const { return userBuffers_; }
 
+    /// The instance count, read on the GPU each frame: u32 `word` of `buffer`
+    /// (what a kernel wrote before the frame), clamped to instanceCount();
+    /// instances 0..n-1 of the rows draw, in every pass. Null: instanceCount().
+    /// Not for a static batch (its merged mesh draws whole).
+    void setInstanceCountBuffer(std::shared_ptr<render::ComputeBuffer> buffer, uint32_t word) {
+        countBuffer_ = std::move(buffer);
+        countWord_ = word;
+        bumpChangeGeneration();
+    }
+    const std::shared_ptr<render::ComputeBuffer>& instanceCountBuffer() const { return countBuffer_; }
+    uint32_t instanceCountWord() const { return countWord_; }
+
+    /// Each instance's sphere, node space (centre, radius: four floats an
+    /// instance, in row order), read on the GPU: the camera and every shadow
+    /// view draw only the instances whose sphere reaches them (a frame's
+    /// first pass compacts each view's rows), so a crowd whose vertex hook
+    /// places its instances casts and draws only what each view holds. A
+    /// hook's instance_index is the instance's own index all the same. Null:
+    /// every instance draws in every view.
+    void setInstanceCullSpheres(std::shared_ptr<render::ComputeBuffer> buffer) {
+        cullSpheres_ = std::move(buffer);
+        bumpChangeGeneration();
+    }
+    const std::shared_ptr<render::ComputeBuffer>& instanceCullSpheres() const { return cullSpheres_; }
+
     using UserTexture = MeshNode::UserTexture;
     bool setCustomShaderTexture(const std::string& name, int width, int height, const float* data,
                                 bool mipmap = false, bool repeat = false, bool clampT = false, int channels = 1) {
@@ -428,6 +454,17 @@ public:
     void setCullMargin(float m) { cullMargin_ = m < 0.0f ? 0.0f : m; }
     float cullMargin() const { return cullMargin_; }
 
+    /// Where the node draws, in node space, when a vertex hook places its
+    /// vertices (a crowd skinned from a kernel's poses, anywhere on its
+    /// field): replaces the instances' bounds for culling, the shadow views'
+    /// included (cullMargin still pads it). nullopt: the instances' bounds.
+    void setCullBounds(std::optional<bromath::AABB3> box) {
+        cullBounds_ = box;
+        instanceBoundsDirty_ = true;
+        bumpChangeGeneration();
+    }
+    const std::optional<bromath::AABB3>& cullBounds() const { return cullBounds_; }
+
     /// Compute the world-space AABB enclosing every instance's transformed
     /// local mesh bounds. Used by shadow frustum fitting. Returns false if
     /// there are no instances or the mesh is empty.
@@ -464,6 +501,10 @@ private:
 
     std::vector<float> instanceData_;
     size_t instanceCount_ = 0;
+    std::shared_ptr<render::ComputeBuffer> countBuffer_;   // setInstanceCountBuffer
+    uint32_t countWord_ = 0;
+    std::shared_ptr<render::ComputeBuffer> cullSpheres_;   // setInstanceCullSpheres
+    std::optional<bromath::AABB3> cullBounds_;              // setCullBounds
 
     // Static batching: mesh_ + instanceData_ merged into one draw. batchMesh_
     // is the baked geometry drawn (instead of mesh_) when renderingBatched().

@@ -1,0 +1,65 @@
+// A view's instances of a culled instanced draw (vulkan/draw/pass_draw_counts.h):
+// each instance whose sphere (`spheres`, node space: centre, radius) reaches
+// the view's planes takes the next place of the view's region of `out`: its
+// row (16 words, copied from `rows`) and its own index (the hook's
+// instance_index). The draw's two VkDrawIndexedIndirectCommands at word
+// b.y of `commands` (written beforehand with no instances) count them.
+// The instances are the node's rows, or the count a kernel left at word a.x
+// of `source` when there is one (a.x != NONE), clamped to them.
+
+pub const NONE: u32 = 0xffffffffu;
+
+struct CullUBO {
+    p0: vec4<f32>,   // the view's planes, relative to the frame's eye: normal, distance
+    p1: vec4<f32>,
+    p2: vec4<f32>,
+    p3: vec4<f32>,
+    p4: vec4<f32>,
+    p5: vec4<f32>,
+    m0: vec4<f32>,   // the draw's model, relative to the eye: its first three rows
+    m1: vec4<f32>,
+    m2: vec4<f32>,
+    s: vec4<f32>,    // x: the model's largest axis scale
+    a: vec4<u32>,    // count word (NONE: none), rows, rows' first word, the region's rows' first word
+    b: vec4<u32>,    // the region's indices' first word, commands word, 0, 0
+}
+
+@binding(0, 0) var u: uniform<CullUBO>;
+@binding(0, 1) var source: buffer<u32>;
+@binding(0, 2) var spheres: buffer<f32>;
+@binding(0, 3) var rows: buffer<u32>;
+@binding(0, 4) var out: buffer<u32>;
+@binding(0, 5) var commands: buffer<u32>;
+
+fn behind(p: vec4<f32>, c: vec3<f32>, r: f32) -> bool {
+    return dot(p.xyz, c) + p.w < -r;
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn instance_cull() {
+    let k = global_id().x;
+    var n = u.a.y as i32;
+    if (u.a.x != NONE) {
+        n = min(source[u.a.x as i32] as i32, n);
+    }
+    if (k >= n) {
+        return;
+    }
+    let s = k * 4;
+    let lc = vec3<f32>(spheres[s], spheres[s + 1], spheres[s + 2]);
+    let c = vec3<f32>(dot(u.m0.xyz, lc) + u.m0.w, dot(u.m1.xyz, lc) + u.m1.w, dot(u.m2.xyz, lc) + u.m2.w);
+    let r = spheres[s + 3] * u.s.x;
+    if (behind(u.p0, c, r) || behind(u.p1, c, r) || behind(u.p2, c, r) ||
+        behind(u.p3, c, r) || behind(u.p4, c, r) || behind(u.p5, c, r)) {
+        return;
+    }
+    let cw = u.b.y as i32;
+    let i = commands.atomic_add(cw + 1, 1u) as i32;
+    commands.atomic_add(cw + 6, 1u);
+    let src = (u.a.z as i32) + k * 16;
+    let dst = (u.a.w as i32) + i * 16;
+    for (var w: i32 = 0; w < 16; w += 1) {
+        out[dst + w] = rows[src + w];
+    }
+    out[(u.b.x as i32) + i] = k as u32;
+}
