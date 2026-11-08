@@ -270,8 +270,10 @@ void installHeadlessScenePerf(engine::Engine& engine,
             };
             // (SceneRenderer::pendingWork's reasons for them, whatever `kinds` says.)
             const auto building = [&engine] {
-                for (const std::string& r : engine.scenePendingWork())
+                for (const std::string& r : engine.scenePendingWork()) {
                     if (r.rfind("pipelines:", 0) == 0 && r.find("building") != std::string::npos) return true;
+                    if (r.rfind("images:", 0) == 0) return true;
+                }
                 return false;
             };
             HeldClock clock(engine, held);
@@ -300,9 +302,10 @@ void installHeadlessScenePerf(engine::Engine& engine,
                 if (held && exposure) engine.advanceSceneExposure(static_cast<float>(kFrameMs / 1000.0));
                 stepFrame(engine);
                 std::vector<std::string> now = pendingNow();
-                // (Pipelines building finish in wall time, not frames: while
-                // they are under way an unchanged frame is no stall, and the
-                // next waits a moment for them, whatever a kinds filter hides.)
+                // (Pipelines building and images decoding finish in wall
+                // time, not frames: while they are under way an unchanged
+                // frame is no stall, and the next waits a moment for them,
+                // whatever a kinds filter hides.)
                 if (now == pending && building())
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 else

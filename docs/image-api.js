@@ -123,9 +123,11 @@
  * another element, or in a CSS `background-image`, reuses the picture: that
  * element is `complete` as soon as `src` is set (its `load` is still a task).
  *
- * In bro-headless, `flush()` waits for every decode started so far and
- * screenshots wait for the pictures they show, so tests are deterministic;
- * `img.src = p; flush();` leaves `img` complete.
+ * bro-headless loads images as a window does: a frame settles the decodes
+ * that have finished and paints the gap for the rest, so a script waits for
+ * `load` (or `img.decode()`, or `perf.settle()`) before using an image. A
+ * headless capture (screenshot, getPixel, frameImage) waits for the
+ * pictures it paints.
  *
  * ORIENTATION. `image-orientation: from-image` (the initial value) turns a
  * photo with EXIF orientation upright: its natural size, its box and its

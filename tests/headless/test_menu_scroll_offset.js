@@ -49,7 +49,7 @@ function snap(tag) {
     shots.push(p);
     const img = new Image();
     img.src = p;
-    flush();                            // settles the off-thread decode
+    waitForImages();                    // the off-thread decode, settled
     assert(img.naturalWidth > 0, 'screenshot decodes: ' + tag);
     const c = document.createElement('canvas');
     c.width = img.naturalWidth; c.height = img.naturalHeight;

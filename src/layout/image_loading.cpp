@@ -6,6 +6,7 @@
 #include "render/image_source.h"
 #include "render/image_store.h"
 
+#include <atomic>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -27,7 +28,8 @@ std::vector<PendingLoad>& pending() {
 }
 
 uint64_t g_lastSettled = 0;
-bool g_paintWaits = false;
+// (Read by the layout thread's record too: a window's is never held.)
+std::atomic<int> g_paintWaits{0};
 
 void queueEvent(dom::Element* el, bool ok) {
     if (auto* doc = el->document()) doc->queueElementEvent(el, ok ? "load" : "error");
@@ -167,7 +169,13 @@ void whenImageSettled(dom::Element* el, std::function<void(bool ok)> cb) {
     cb(el->imageComplete() && el->imageOk());
 }
 
-void setPaintWaitsForImages(bool wait) { g_paintWaits = wait; }
-bool paintWaitsForImages() { return g_paintWaits; }
+size_t imageLoadsPending() {
+    const render::ImageStore& store = render::ImageStore::instance();
+    return store.pendingCount() + (store.settledCount() != g_lastSettled ? 1 : 0);
+}
+
+PaintWaitsHold::PaintWaitsHold() { g_paintWaits.fetch_add(1, std::memory_order_relaxed); }
+PaintWaitsHold::~PaintWaitsHold() { g_paintWaits.fetch_sub(1, std::memory_order_relaxed); }
+bool paintWaitsForImages() { return g_paintWaits.load(std::memory_order_relaxed) > 0; }
 
 }  // namespace bro::layout

@@ -82,7 +82,7 @@ const SHOT = path.join(os.tmpdir(), 'bro_border_image_shot_' + Date.now() + '.pn
 screenshot(SHOT);
 const img = new Image();
 img.src = SHOT;
-flush();  // settles the off-thread decode
+waitForImages();  // the off-thread decode, settled
 assert(img.naturalWidth > 0, 'screenshot decodes');
 const cnv = document.createElement('canvas');
 cnv.width = img.naturalWidth; cnv.height = img.naturalHeight;

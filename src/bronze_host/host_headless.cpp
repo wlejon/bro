@@ -3,6 +3,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_gc.h"
+#include "bronze_host/host_image.h"
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_notification.h"
 #include "bronze_host/host_storage.h"
@@ -10,6 +11,7 @@
 #include "bronze_host/host_builder.h"
 
 #include "engine/engine.h"
+#include "layout/image_loading.h"
 #include "bronze_host/host_bro_namespaces.h"
 #include "platform/desktop_notifications.h"
 #include "platform/dialogs.h"
@@ -123,6 +125,22 @@ void installHeadlessGlobals(engine::Engine& engine) {
             drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 0, "flush"));
+
+    // waitForImages([timeoutMs]): frames load images as a window's do (a
+    // decode settles at the first frame after it finishes, the gap painted
+    // meanwhile); this waits for the decodes in flight and settles them as
+    // that frame would (natural size, `complete`, the load / error event
+    // queued, decode() and createImageBitmap promises), then lays out. True
+    // when none is left decoding.
+    regBoth("waitForImages", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            const double timeoutMs = a.empty() || ev::isUndefined(a[0]) ? 10000.0 : ev::toDouble(a[0]);
+            layout::settleImageLoads(timeoutMs);
+            pumpHostImageDecodes();
+            engine.flush();
+            drainMicrotasksAndLocalFetches();
+            return ev::fromBool(layout::imageLoadsPending() == 0);
+        }, 1, "waitForImages"));
 
     // 3. sleep(double ms)
     regBoth("sleep", ev::makeFunction(

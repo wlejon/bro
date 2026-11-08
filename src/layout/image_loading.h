@@ -40,18 +40,29 @@ bool pumpImageLoads();
 // A settle the next pump has to deliver: the main loop must not idle on it.
 bool imageSettlesPending();
 
-// Headless runs settle loads deterministically: wait (at most `timeoutMs`)
-// for the decodes in flight, then pump.
+// Wait (at most `timeoutMs`) for the decodes in flight, then pump.
 void settleImageLoads(double timeoutMs = 10000.0);
+
+// Decodes queued or running, plus settles the next pump will deliver: the
+// settle state's `images` (perf.pendingWork).
+size_t imageLoadsPending();
 
 // Run `cb(ok)` when `el`'s current load settles — on the pump that settles it
 // (after its load / error event is queued), or now when it has no load in
 // flight. A load superseded by a new src settles its waiters with false.
 void whenImageSettled(dom::Element* el, std::function<void(bool ok)> cb);
 
-// Headless paints wait for the decodes they need rather than painting the
-// gap, so a screenshot is deterministic. Off (the default) everywhere else.
-void setPaintWaitsForImages(bool wait);
+// A frame's paint draws what is decoded and leaves the gap for the rest,
+// repainting when it lands, in a window and in headless alike. A paint whose
+// pixels are read back (a headless capture) waits for the decodes it needs
+// instead, while a PaintWaitsHold is open (main thread; the paint it covers
+// runs there).
+struct PaintWaitsHold {
+    PaintWaitsHold();
+    ~PaintWaitsHold();
+    PaintWaitsHold(const PaintWaitsHold&) = delete;
+    PaintWaitsHold& operator=(const PaintWaitsHold&) = delete;
+};
 bool paintWaitsForImages();
 
 }  // namespace bro::layout

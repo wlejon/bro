@@ -24,7 +24,7 @@ function pngSize(p) {
 function pngPixels(p) {
     const img = new Image();
     img.src = p;
-    flush();  // the decode is off-thread; a headless flush settles it
+    waitForImages();  // the off-thread decode, settled
     const c = document.createElement('canvas');
     c.width = img.width;
     c.height = img.height;

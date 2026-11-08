@@ -166,9 +166,6 @@ void installHostImagePump(engine::Engine& engine) {
         pendingDecodes().clear();
         render::setImageAnimationClockSource(nullptr);
     });
-    // Headless settles loads deterministically: its paints wait for the
-    // decodes they need rather than painting the gap.
-    if (engine.displayMode() == engine::DisplayMode::Headless) layout::setPaintWaitsForImages(true);
 }
 
 bool onHostImageMainThread() {

@@ -35,12 +35,12 @@ function writeTemp(name, b64) {
     return p;
 }
 
-// The decode runs off the page thread; a headless flush() settles it, so the
+// The decode runs off the page thread; waitForImages() settles it, so the
 // image is complete (or broken) when this returns.
 function load(p) {
     const img = new Image();
     img.src = p;
-    flush();
+    waitForImages();
     return img;
 }
 

@@ -19,14 +19,14 @@ assert(img.src === '', 'initial src empty');
 // binary asset into the tree. Absolute path, so it bypasses app-relative src
 // resolution. The decode runs off the page thread and load / error are tasks,
 // as on the web: neither fires before the `src` assignment returns. settle()
-// lets them land (a headless flush() finishes the decode, a zero timeout
-// runs the queued event).
+// lets them land (waitForImages() finishes the decode, a zero timeout runs
+// the queued event).
 const os = require('os');
 const path = require('path');
 const REAL_PNG = path.join(os.tmpdir(), 'bro_test_image_' + Date.now() + '.png');
 screenshot(REAL_PNG);
 async function settle() {
-    flush();
+    waitForImages();
     await new Promise((r) => setTimeout(r, 0));
 }
 

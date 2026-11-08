@@ -64,11 +64,13 @@ void Engine::flush() {
     pumpTerminals();
     pumpRemoteViews();
     pumpWebGLContextEvents();
-    // Headless settles image loads deterministically: every decode started so
-    // far (an <img> or `new Image()` src, attached or not) finishes here, so
-    // after flush() the image is complete and drawable. Its load / error
-    // event is still a task, dispatched on the next turn.
-    layout::settleImageLoads();
+    // The image loads whose decodes finished settle here, as a window's
+    // frame settles them (natural size, `complete`, the load / error event
+    // queued as a task); one still decoding settles at a later flush, and a
+    // frame paints the gap meanwhile. perf.settle() waits for them (the
+    // settle state's `images`), and a capture's paint waits for the
+    // pictures it shows.
+    layout::pumpImageLoads();
 
     if (document_) {
         document_->setTransitionManager(&transitionManager_, engineNowMs_);
@@ -90,8 +92,6 @@ void Engine::flush() {
             ensureReplacedElements(document_->documentElement());
             iframeSyncNeeded_ = true;
         }
-        // ... and the loads the markup just started.
-        layout::settleImageLoads();
         noteHoverRecheck();  // laid out again: what is under a still pointer
 
         dom::Element* previousHover = hoveredElement_.get();
@@ -391,6 +391,10 @@ std::vector<uint8_t> Engine::capturePixels() {
     if (!document_) return {};
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
+    // The frame read back holds the pictures it paints: where a frame paints
+    // the gap for an image still decoding, this paint waits for it. (The
+    // load itself settles at a frame, as it does in a window.)
+    layout::PaintWaitsHold paintWaits;
 
     beginGpuFrame();
 
@@ -608,6 +612,9 @@ std::vector<std::string> Engine::scenePendingWork() {
     for (auto& sg : sceneGraphs_)
         if (sg.graph) sg.graph->renderer().pendingWork(out);
 #endif
+    // (Wall-clock work, as pipelines are: perf.settle waits for it in time.)
+    if (const size_t images = layout::imageLoadsPending(); images > 0)
+        out.push_back("images: " + std::to_string(images) + " decoding");
     for (auto& [id, source] : pendingWorkSources_) source(out);
     return out;
 }

@@ -24,7 +24,7 @@ flush();
 function darkPixelsInRect(file) {
     const img = new Image();
     img.src = file;
-    flush();  // settles the off-thread decode
+    waitForImages();  // the off-thread decode, settled
     assert(img.naturalWidth > 0, 'screenshot decodes: ' + file);
     const cnv = document.createElement('canvas');
     cnv.width = img.naturalWidth;

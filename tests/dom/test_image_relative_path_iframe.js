@@ -28,7 +28,7 @@ try {
     const img = sub.createElement('img');
     img.src = NAME;
     sub.body.appendChild(img);
-    flush();
+    waitForImages();
     assert(img.complete === true, 'sub-document <img> settled');
     assert(img.naturalWidth > 0 && img.naturalHeight > 0,
            'sub-document <img src="' + NAME + '"> resolved under iframe_child/, got ' +
