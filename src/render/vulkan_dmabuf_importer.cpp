@@ -119,9 +119,7 @@ void VulkanDmabufImporter::prune(uint64_t currentFrameSerial, uint64_t maxAgeFra
     for (auto it = cache_.begin(); it != cache_.end();) {
         if (currentFrameSerial > it->second->lastUsedFrame &&
             (currentFrameSerial - it->second->lastUsedFrame) > maxAgeFrames) {
-            if (it->second->view != VK_NULL_HANDLE) {
-                vkDestroyImageView(context_.device(), it->second->view, nullptr);
-            }
+            retire(std::move(it->second));
             it = cache_.erase(it);
         } else {
             ++it;
@@ -131,12 +129,25 @@ void VulkanDmabufImporter::prune(uint64_t currentFrameSerial, uint64_t maxAgeFra
 
 void VulkanDmabufImporter::releaseBuffer(uint64_t bufferId) {
     auto it = cache_.find(bufferId);
-    if (it != cache_.end()) {
-        if (it->second->view != VK_NULL_HANDLE) {
-            vkDestroyImageView(context_.device(), it->second->view, nullptr);
-        }
-        cache_.erase(it);
-    }
+    if (it == cache_.end()) return;
+    retire(std::move(it->second));
+    cache_.erase(it);
+}
+
+// The import (view, image, memory: the client's dmabuf stays referenced while
+// it lives) goes once the GPU is done with every frame that may have sampled
+// it.
+void VulkanDmabufImporter::retire(std::unique_ptr<ImportedClientBuffer> buf) {
+    if (!buf) return;
+    VkDevice device = context_.device();
+    std::shared_ptr<ImportedClientBuffer> held(std::move(buf));
+    context_.frames().defer([device, held] {
+        if (held->view != VK_NULL_HANDLE) vkDestroyImageView(device, held->view, nullptr);
+        held->view = VK_NULL_HANDLE;
+#if defined(__linux__)
+        held->vulkanImage.reset();
+#endif
+    });
 }
 
 void VulkanDmabufImporter::clear() {

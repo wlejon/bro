@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -158,6 +159,10 @@ public:
     /// next, once it has left the screen.
     void notifyClientLayersShown(const std::vector<LeasedSurfaceFrame>& frames, const FramePresentation* shown);
     void returnClientLayers(const std::vector<LeasedSurfaceFrame>& frames);
+    /// Images of returned frames that their surface no longer lists (the
+    /// client destroyed the wl_buffer, or the surface is gone), each reported
+    /// once: the host drops its imports of them (surface.h's contract).
+    std::vector<uint64_t> takeRetiredImages();
 
     // Window management controls
     bool focusWindow(uint64_t winId);
@@ -233,6 +238,9 @@ private:
 #if BRO_HAVE_WAYLAND_SERVER
     std::unique_ptr<brocompositor::wl::ServerBackend> backend_;
     std::shared_ptr<brocompositor::WindowManager> wm_;
+    // Every image a returned frame showed, until takeRetiredImages finds it
+    // retired.
+    std::unordered_map<uint64_t, std::weak_ptr<brocompositor::wl::ClientSurface>> sampledImages_;
 #endif
     bool running_ = false;
     std::string socketName_;

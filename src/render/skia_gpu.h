@@ -36,6 +36,7 @@
 #include <vulkan/vulkan.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -196,6 +197,7 @@ private:
     };
     std::mutex retireMutex_;
     std::vector<Retired> retired_;
+    std::chrono::steady_clock::time_point lastCleanup_{};  // guarded by mutex_
     std::atomic<int> liveImages_{0};
 };
 

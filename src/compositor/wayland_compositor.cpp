@@ -569,11 +569,30 @@ void WaylandCompositor::releaseClientLayers(const std::vector<LeasedSurfaceFrame
 
 void WaylandCompositor::returnClientLayers(const std::vector<LeasedSurfaceFrame>& frames) {
 #if BRO_HAVE_WAYLAND_SERVER
-    for (const auto& lf : frames)
-        if (lf.surface) lf.surface->release(lf.frame);
+    for (const auto& lf : frames) {
+        if (!lf.surface) continue;
+        lf.surface->release(lf.frame);
+        sampledImages_.try_emplace(lf.frame.image_id, lf.surface);
+    }
 #else
     (void)frames;
 #endif
+}
+
+std::vector<uint64_t> WaylandCompositor::takeRetiredImages() {
+    std::vector<uint64_t> out;
+#if BRO_HAVE_WAYLAND_SERVER
+    for (auto it = sampledImages_.begin(); it != sampledImages_.end();) {
+        auto surface = it->second.lock();
+        if (!surface || surface->closed() || !surface->image(it->first)) {
+            out.push_back(it->first);
+            it = sampledImages_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+#endif
+    return out;
 }
 
 void WaylandCompositor::notifyClientLayersShown(const std::vector<LeasedSurfaceFrame>& frames,

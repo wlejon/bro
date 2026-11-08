@@ -106,6 +106,14 @@ uint64_t clientFramesKey(const std::vector<compositor::LeasedSurfaceFrame>& leas
 // the device) and runs the destructors deferred until it finished.
 void Engine::beginGpuFrame() {
     if (vulkanContext_) vulkanContext_->frames().beginFrame();
+#if BRO_WITH_COMPOSITOR && BRO_WITH_DMABUF
+    // Client buffers the compositor has retired: their imports go (deferred
+    // past the frames that sampled them), or each one a client ever showed
+    // would stay in VRAM, and in every submission's buffer list.
+    if (drmCtx_ && drmCtx_->compositor && vulkanPresenter_ && vulkanPresenter_->dmabufImporter())
+        for (uint64_t id : drmCtx_->compositor->takeRetiredImages())
+            vulkanPresenter_->dmabufImporter()->releaseBuffer(id);
+#endif
 }
 
 // Size this frame's composite; forget last frame's layers. The CPU segments

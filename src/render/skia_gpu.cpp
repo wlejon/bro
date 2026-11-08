@@ -20,6 +20,7 @@
 #include <src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 namespace bro::render {
@@ -342,6 +343,14 @@ void SkiaGpu::finish(std::span<SkSurface* const> surfaces) {
     for (SkSurface* s : surfaces)
         if (s) context_->flush(s, GrFlushInfo{}, &readable);
     context_->submit(GrSyncCpu::kNo);
+    // Scratch and cached resources nothing has used for a while go (layers
+    // and blurs sized to windows long closed), at most once a second: the
+    // budget alone would let them pile up to its limit.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastCleanup_ >= std::chrono::seconds(1)) {
+        lastCleanup_ = now;
+        context_->performDeferredCleanup(std::chrono::seconds(10));
+    }
 }
 
 void SkiaGpu::retire(VkImage image, VkImageView view, uint64_t allocId) {

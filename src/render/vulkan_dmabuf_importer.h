@@ -45,7 +45,8 @@ public:
     /// Purge buffers older than maxAgeFrames
     void prune(uint64_t currentFrameSerial, uint64_t maxAgeFrames = 60);
 
-    /// Invalidate or remove a specific buffer
+    /// Drop a buffer's import (its wl_buffer is gone); destroyed once the
+    /// frames that may have sampled it have retired.
     void releaseBuffer(uint64_t bufferId);
 
     void clear();
@@ -53,6 +54,8 @@ public:
     bool isSupported() const { return initialized_; }
 
 private:
+    void retire(std::unique_ptr<ImportedClientBuffer> buf);
+
     VulkanContext& context_;
     bool initialized_ = false;
 #if defined(__linux__)
