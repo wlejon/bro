@@ -553,11 +553,21 @@ class Mesh {
   // --- Simplification and LOD -----------------------------------------------
 
   /**
-   *  Quadric decimation to `ratio` of the current triangles.
+   *  Quadric decimation to `ratio` of the current triangles. `lock`, a byte
+   *  a vertex, keeps every vertex whose byte is nonzero where it is (no edge
+   *  collapses into or out of it): a region worth its detail (a face) keeps
+   *  it while the rest is reduced. A lock of the wrong length throws a
+   *  RangeError.
    * @param {number} [ratio=0.5] @param {number} [targetError=1e-3]
+   * @param {Uint8Array} [lock]
    * @returns {Mesh} this
+   *
+   * @example
+   *   const keep = new Uint8Array(mesh.vertexCount);
+   *   // ... keep[v] = 1 for the vertices about the eyes
+   *   mesh.simplifyToTriangleCount(14000, 1e-3, keep);
    */
-  simplify(ratio, targetError) {}
+  simplify(ratio, targetError, lock) {}
 
   /**
    * Quadric decimation that folds UV and normal error into the metric, so UV
@@ -575,8 +585,13 @@ class Mesh {
    */
   simplifyWithAttributes(ratio, targetError, uvWeight, normalWeight) {}
 
-  /** @param {number} [count=100] @param {number} [targetError=1e-3] @returns {Mesh} this */
-  simplifyToTriangleCount(count, targetError) {}
+  /**
+   * `simplify` to a triangle count rather than a ratio; `lock` as simplify's.
+   * @param {number} [count=100] @param {number} [targetError=1e-3]
+   * @param {Uint8Array} [lock]
+   * @returns {Mesh} this
+   */
+  simplifyToTriangleCount(count, targetError, lock) {}
 
   /**
    *  One simplified copy per ratio; the source mesh is untouched.
