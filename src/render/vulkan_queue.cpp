@@ -2,7 +2,56 @@
 #include "util/log.h"
 #include "util/page_pump.h"
 
+#include <algorithm>
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 namespace bro::render {
+
+namespace {
+
+// Every live queue by its timeline, so a batch that waits on another queue's
+// timeline can be held until that queue has submitted the value.
+std::mutex gQueuesMutex;
+std::vector<std::pair<VkSemaphore, VulkanQueue*>> gQueues;
+
+void registerQueue(VkSemaphore timeline, VulkanQueue* queue) {
+    std::lock_guard<std::mutex> lock(gQueuesMutex);
+    gQueues.emplace_back(timeline, queue);
+}
+
+void unregisterQueue(VulkanQueue* queue) {
+    std::lock_guard<std::mutex> lock(gQueuesMutex);
+    std::erase_if(gQueues, [&](const auto& entry) { return entry.second == queue; });
+}
+
+// "bro-vkqueue" in debuggers, profilers and top.
+void nameThisThread() {
+#if defined(__linux__)
+    pthread_setname_np(pthread_self(), "bro-vkqueue");
+#elif defined(__APPLE__)
+    pthread_setname_np("bro-vkqueue");
+#elif defined(_WIN32)
+    using SetDescription = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    if (HMODULE kernel = GetModuleHandleW(L"kernel32.dll"))
+        if (auto fn = reinterpret_cast<SetDescription>(
+                reinterpret_cast<void*>(GetProcAddress(kernel, "SetThreadDescription"))))
+            fn(GetCurrentThread(), L"bro-vkqueue");
+#endif
+}
+
+}  // namespace
+
+VulkanQueue* VulkanQueue::queueOfTimeline(VkSemaphore timeline) {
+    std::lock_guard<std::mutex> lock(gQueuesMutex);
+    for (const auto& [sem, queue] : gQueues)
+        if (sem == timeline) return queue;
+    return nullptr;
+}
 
 VulkanQueue::~VulkanQueue() {
     shutdown();
@@ -26,6 +75,17 @@ bool VulkanQueue::init(VkDevice device, VkQueue graphicsQueue, VkQueue presentQu
         LOG_ERROR("VulkanQueue: failed to create the queue timeline semaphore");
         return false;
     }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stop_ = false;
+        running_ = true;
+        lastTicket_ = submittedTicket_ = 0;
+        presentedSince_ = false;
+        queuedOps_ = doneOps_ = presentsQueued_ = presentsDone_ = 0;
+        queuedFences_.clear();
+    }
+    thread_ = std::thread(&VulkanQueue::run, this);
+    registerQueue(timeline_, this);
 
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -49,7 +109,16 @@ bool VulkanQueue::init(VkDevice device, VkQueue graphicsQueue, VkQueue presentQu
 
 void VulkanQueue::shutdown() {
     if (device_ == VK_NULL_HANDLE) return;
-    waitIdle();
+    if (thread_.joinable()) {
+        waitIdle();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        workCv_.notify_all();
+        thread_.join();  // after making everything still queued
+        unregisterQueue(this);
+    }
     if (immediatePool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(device_, immediatePool_, nullptr);
         immediatePool_ = VK_NULL_HANDLE;
@@ -76,98 +145,250 @@ void VulkanQueue::noteFailure(const char* where, VkResult res) {
 
 uint64_t VulkanQueue::submit(const QueueSubmit& batch) {
     if (isDeviceLost()) return 0;
-    std::vector<VkSemaphore> waitSems;
-    std::vector<VkPipelineStageFlags> waitStages;
-    std::vector<uint64_t> waitValues;
+    Op op;
+    Op::Batch b;
     for (const auto& w : batch.waits) {
-        waitSems.push_back(w.semaphore);
-        waitStages.push_back(w.stages);
-        waitValues.push_back(w.value);
+        b.waitSems.push_back(w.semaphore);
+        b.waitStages.push_back(w.stages);
+        b.waitValues.push_back(w.value);
     }
-    std::vector<VkSemaphore> signalSems;
-    std::vector<uint64_t> signalValues;
-    for (const auto& s : batch.signals) {
-        signalSems.push_back(s.semaphore);
-        signalValues.push_back(s.value);
+    b.commandBuffers = batch.commandBuffers;
+    for (const auto& sig : batch.signals) {
+        b.signalSems.push_back(sig.semaphore);
+        b.signalValues.push_back(sig.value);
     }
-    signalSems.push_back(timeline_);
-    signalValues.push_back(0);  // filled under the lock
-
-    std::lock_guard<std::mutex> lock(submitMutex_);
-    if (isDeviceLost()) return 0;
-    const uint64_t ticket = lastTicket_ + 1;
-    signalValues.back() = ticket;
-
-    VkTimelineSemaphoreSubmitInfo timelineInfo{};
-    timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-    timelineInfo.waitSemaphoreValueCount = static_cast<uint32_t>(waitValues.size());
-    timelineInfo.pWaitSemaphoreValues = waitValues.data();
-    timelineInfo.signalSemaphoreValueCount = static_cast<uint32_t>(signalValues.size());
-    timelineInfo.pSignalSemaphoreValues = signalValues.data();
-
-    VkSubmitInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    info.pNext = &timelineInfo;
-    info.waitSemaphoreCount = static_cast<uint32_t>(waitSems.size());
-    info.pWaitSemaphores = waitSems.data();
-    info.pWaitDstStageMask = waitStages.data();
-    info.commandBufferCount = static_cast<uint32_t>(batch.commandBuffers.size());
-    info.pCommandBuffers = batch.commandBuffers.data();
-    info.signalSemaphoreCount = static_cast<uint32_t>(signalSems.size());
-    info.pSignalSemaphores = signalSems.data();
-
-    VkResult res = vkQueueSubmit(queue_, 1, &info, VK_NULL_HANDLE);
-    if (res != VK_SUCCESS) {
-        noteFailure("vkQueueSubmit", res);
-        return 0;
-    }
-    lastTicket_ = ticket;
-    presentedSince_ = false;
-    return ticket;
+    op.batches.push_back(std::move(b));
+    return enqueue(std::move(op));
 }
 
 VkResult VulkanQueue::submitForeign(uint32_t count, const VkSubmitInfo* batches, VkFence fence) {
     if (isDeviceLost()) return VK_ERROR_DEVICE_LOST;
-    // The foreign batches wait and signal binary semaphores only, so the
-    // timeline values cover just the signal list: 0 for each binary semaphore
-    // (ignored), the ticket for ours.
-    VkSubmitInfo last{};
-    last.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    if (count > 0) last = batches[count - 1];
-    std::vector<VkSemaphore> signalSems(last.pSignalSemaphores, last.pSignalSemaphores + last.signalSemaphoreCount);
-    signalSems.push_back(timeline_);
-    std::vector<uint64_t> signalValues(signalSems.size(), 0);
-
-    std::lock_guard<std::mutex> lock(submitMutex_);
-    if (isDeviceLost()) return VK_ERROR_DEVICE_LOST;
-    const uint64_t ticket = lastTicket_ + 1;
-    signalValues.back() = ticket;
-
-    VkTimelineSemaphoreSubmitInfo timelineInfo{};
-    timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-    timelineInfo.pNext = last.pNext;
-    timelineInfo.signalSemaphoreValueCount = static_cast<uint32_t>(signalValues.size());
-    timelineInfo.pSignalSemaphoreValues = signalValues.data();
-    last.pNext = &timelineInfo;
-    last.signalSemaphoreCount = static_cast<uint32_t>(signalSems.size());
-    last.pSignalSemaphores = signalSems.data();
-
-    std::vector<VkSubmitInfo> all(batches, batches + (count > 0 ? count - 1 : 0));
-    all.push_back(last);
-    VkResult res = vkQueueSubmit(queue_, static_cast<uint32_t>(all.size()), all.data(), fence);
-    if (res != VK_SUCCESS) {
-        noteFailure("foreign vkQueueSubmit", res);
-        return res;
+    // Copied: the caller's arrays and pNext chain are gone once this returns.
+    // Skia's batches wait and signal binary semaphores, and chain at most a
+    // VkProtectedSubmitInfo.
+    Op op;
+    op.fence = fence;
+    for (uint32_t i = 0; i < count; ++i) {
+        const VkSubmitInfo& in = batches[i];
+        Op::Batch b;
+        b.waitSems.assign(in.pWaitSemaphores, in.pWaitSemaphores + in.waitSemaphoreCount);
+        b.waitStages.assign(in.pWaitDstStageMask, in.pWaitDstStageMask + in.waitSemaphoreCount);
+        b.waitValues.assign(in.waitSemaphoreCount, 0);
+        b.commandBuffers.assign(in.pCommandBuffers, in.pCommandBuffers + in.commandBufferCount);
+        b.signalSems.assign(in.pSignalSemaphores, in.pSignalSemaphores + in.signalSemaphoreCount);
+        b.signalValues.assign(in.signalSemaphoreCount, 0);
+        for (auto* next = static_cast<const VkBaseInStructure*>(in.pNext); next; next = next->pNext) {
+            if (next->sType == VK_STRUCTURE_TYPE_PROTECTED_SUBMIT_INFO) {
+                b.protectedSubmit = reinterpret_cast<const VkProtectedSubmitInfo*>(next)->protectedSubmit;
+            } else if (next->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO) {
+                const auto* t = reinterpret_cast<const VkTimelineSemaphoreSubmitInfo*>(next);
+                for (uint32_t k = 0; k < t->waitSemaphoreValueCount && k < in.waitSemaphoreCount; ++k)
+                    b.waitValues[k] = t->pWaitSemaphoreValues[k];
+                for (uint32_t k = 0; k < t->signalSemaphoreValueCount && k < in.signalSemaphoreCount; ++k)
+                    b.signalValues[k] = t->pSignalSemaphoreValues[k];
+            } else {
+                LOG_ERROR("VulkanQueue: foreign submit chains structure type %d, which is dropped",
+                          static_cast<int>(next->sType));
+            }
+        }
+        op.batches.push_back(std::move(b));
     }
-    lastTicket_ = ticket;
-    presentedSince_ = false;
-    return res;
+    if (op.batches.empty()) op.batches.emplace_back();
+    return enqueue(std::move(op)) != 0 ? VK_SUCCESS : VK_ERROR_DEVICE_LOST;
 }
 
-VkResult VulkanQueue::present(const VkPresentInfoKHR& info) {
-    std::lock_guard<std::mutex> lock(submitMutex_);
-    presentedSince_ = true;
-    return vkQueuePresentKHR(presentQueue_, &info);
+VkResult VulkanQueue::present(const VkPresentInfoKHR& info, std::function<void(VkResult)> onResult) {
+    if (isDeviceLost()) return VK_ERROR_DEVICE_LOST;
+    if (info.pNext) LOG_ERROR("VulkanQueue: a present's pNext chain is not carried to the queue's thread");
+    Op op;
+    op.kind = Op::Kind::Present;
+    op.presentWaits.assign(info.pWaitSemaphores, info.pWaitSemaphores + info.waitSemaphoreCount);
+    op.swapchains.assign(info.pSwapchains, info.pSwapchains + info.swapchainCount);
+    op.imageIndices.assign(info.pImageIndices, info.pImageIndices + info.swapchainCount);
+    op.onPresent = std::move(onResult);
+    enqueue(std::move(op));
+    return VK_SUCCESS;
+}
+
+uint64_t VulkanQueue::enqueue(Op&& op) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (isDeviceLost() || !running_) return 0;
+    uint64_t ticket = 0;
+    if (op.kind == Op::Kind::Present) {
+        presentedSince_ = true;
+        ++presentsQueued_;
+    } else {
+        // The queue's timeline signal rides on the last batch.
+        ticket = ++lastTicket_;
+        op.ticket = ticket;
+        Op::Batch& last = op.batches.back();
+        last.signalSems.push_back(timeline_);
+        last.signalValues.push_back(ticket);
+        presentedSince_ = false;
+    }
+    ++queuedOps_;
+    if (op.fence != VK_NULL_HANDLE) queuedFences_.push_back(op.fence);
+    pending_.push_back(std::move(op));
+    lock.unlock();
+    workCv_.notify_one();
+    return ticket;
+}
+
+void VulkanQueue::run() {
+    nameThisThread();
+    std::unique_lock<std::mutex> lock(mutex_);
+    for (;;) {
+        workCv_.wait(lock, [&] { return stop_ || !pending_.empty(); });
+        if (pending_.empty()) break;  // stopping, and everything queued is made
+        const bool present = pending_.front().kind == Op::Kind::Present;
+        uint64_t ticket = 0;
+        VkFence fence = VK_NULL_HANDLE;
+        {
+            Op op = std::move(pending_.front());
+            pending_.pop_front();
+            ticket = op.ticket;
+            fence = op.fence;
+            lock.unlock();
+            execute(op);
+        }
+        lock.lock();
+        if (fence != VK_NULL_HANDLE) {
+            auto it = std::find(queuedFences_.begin(), queuedFences_.end(), fence);
+            if (it != queuedFences_.end()) queuedFences_.erase(it);
+        }
+        if (present) ++presentsDone_;
+        else submittedTicket_ = std::max(submittedTicket_, ticket);
+        ++doneOps_;
+        doneCv_.notify_all();
+    }
+    running_ = false;
+    doneCv_.notify_all();
+}
+
+void VulkanQueue::execute(Op& op) {
+    if (op.kind == Op::Kind::Present) {
+        VkPresentInfoKHR info{};
+        info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        info.waitSemaphoreCount = static_cast<uint32_t>(op.presentWaits.size());
+        info.pWaitSemaphores = op.presentWaits.data();
+        info.swapchainCount = static_cast<uint32_t>(op.swapchains.size());
+        info.pSwapchains = op.swapchains.data();
+        info.pImageIndices = op.imageIndices.data();
+        VkResult res = isDeviceLost() ? VK_ERROR_DEVICE_LOST : vkQueuePresentKHR(presentQueue_, &info);
+        if (res == VK_ERROR_DEVICE_LOST) noteFailure("vkQueuePresentKHR", res);
+        if (op.onPresent) op.onPresent(res);
+        return;
+    }
+    holdForOtherQueues(op);
+    const VkResult res = isDeviceLost() ? VK_ERROR_DEVICE_LOST : submitOp(op);
+    if (res == VK_SUCCESS) return;
+    noteFailure(op.fence != VK_NULL_HANDLE || op.batches.size() > 1 ? "foreign vkQueueSubmit" : "vkQueueSubmit",
+                res);
+    signalAnyway(op.ticket);
+}
+
+VkResult VulkanQueue::submitOp(Op& op) {
+    const size_t n = op.batches.size();
+    std::vector<VkSubmitInfo> infos(n);
+    std::vector<VkTimelineSemaphoreSubmitInfo> timelines(n);
+    std::vector<VkProtectedSubmitInfo> protects(n);
+    for (size_t i = 0; i < n; ++i) {
+        Op::Batch& b = op.batches[i];
+        VkTimelineSemaphoreSubmitInfo& t = timelines[i];
+        t.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        t.waitSemaphoreValueCount = static_cast<uint32_t>(b.waitValues.size());
+        t.pWaitSemaphoreValues = b.waitValues.data();
+        t.signalSemaphoreValueCount = static_cast<uint32_t>(b.signalValues.size());
+        t.pSignalSemaphoreValues = b.signalValues.data();
+        if (b.protectedSubmit) {
+            protects[i].sType = VK_STRUCTURE_TYPE_PROTECTED_SUBMIT_INFO;
+            protects[i].protectedSubmit = VK_TRUE;
+            t.pNext = &protects[i];
+        }
+        VkSubmitInfo& info = infos[i];
+        info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        info.pNext = &t;
+        info.waitSemaphoreCount = static_cast<uint32_t>(b.waitSems.size());
+        info.pWaitSemaphores = b.waitSems.data();
+        info.pWaitDstStageMask = b.waitStages.data();
+        info.commandBufferCount = static_cast<uint32_t>(b.commandBuffers.size());
+        info.pCommandBuffers = b.commandBuffers.data();
+        info.signalSemaphoreCount = static_cast<uint32_t>(b.signalSems.size());
+        info.pSignalSemaphores = b.signalSems.data();
+    }
+    return vkQueueSubmit(queue_, static_cast<uint32_t>(n), infos.data(), op.fence);
+}
+
+// A failed submission's ticket still completes, so nothing waits on it for
+// good: an empty batch signals it in order; failing that (device loss), the
+// host signals it once the ticket before it is done.
+void VulkanQueue::signalAnyway(uint64_t ticket) {
+    if (!isDeviceLost()) {
+        VkTimelineSemaphoreSubmitInfo t{};
+        t.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        t.signalSemaphoreValueCount = 1;
+        t.pSignalSemaphoreValues = &ticket;
+        VkSubmitInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        info.pNext = &t;
+        info.signalSemaphoreCount = 1;
+        info.pSignalSemaphores = &timeline_;
+        if (vkQueueSubmit(queue_, 1, &info, VK_NULL_HANDLE) == VK_SUCCESS) return;
+    }
+    if (ticket > 1) {
+        const uint64_t before = ticket - 1;
+        VkSemaphoreWaitInfo wait{};
+        wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+        wait.semaphoreCount = 1;
+        wait.pSemaphores = &timeline_;
+        wait.pValues = &before;
+        vkWaitSemaphores(device_, &wait, 2'000'000'000ull);
+    }
+    VkSemaphoreSignalInfo signal{};
+    signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+    signal.semaphore = timeline_;
+    signal.value = ticket;
+    vkSignalSemaphore(device_, &signal);
+}
+
+// A wait on another queue's timeline is submitted only once that queue has
+// submitted the value: the driver then never sees a wait before its signal.
+void VulkanQueue::holdForOtherQueues(const Op& op) {
+    for (const Op::Batch& b : op.batches) {
+        for (size_t i = 0; i < b.waitSems.size(); ++i) {
+            if (b.waitSems[i] == timeline_ || b.waitValues[i] == 0) continue;
+            if (VulkanQueue* other = queueOfTimeline(b.waitSems[i])) other->waitSubmitted(b.waitValues[i]);
+        }
+    }
+}
+
+void VulkanQueue::waitSubmitted(uint64_t ticket) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    doneCv_.wait(lock, [&] { return submittedTicket_ >= ticket || ticket > lastTicket_ || !running_; });
+}
+
+void VulkanQueue::drain() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    const uint64_t target = queuedOps_;
+    doneCv_.wait(lock, [&] { return doneOps_ >= target || !running_; });
+}
+
+bool VulkanQueue::fenceQueued(VkFence fence) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::find(queuedFences_.begin(), queuedFences_.end(), fence) != queuedFences_.end();
+}
+
+void VulkanQueue::waitFenceSubmitted(VkFence fence) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    doneCv_.wait(lock, [&] {
+        return !running_ || std::find(queuedFences_.begin(), queuedFences_.end(), fence) == queuedFences_.end();
+    });
+}
+
+void VulkanQueue::waitPresented() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    const uint64_t target = presentsQueued_;
+    doneCv_.wait(lock, [&] { return presentsDone_ >= target || !running_; });
 }
 
 uint64_t VulkanQueue::completedTicket() const {
@@ -178,18 +399,18 @@ uint64_t VulkanQueue::completedTicket() const {
 }
 
 uint64_t VulkanQueue::lastSubmittedTicket() const {
-    std::lock_guard<std::mutex> lock(submitMutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return lastTicket_;
 }
 
 uint64_t VulkanQueue::retireTicket() const {
-    std::lock_guard<std::mutex> lock(submitMutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return lastTicket_ + (presentedSince_ ? 1 : 0);
 }
 
 uint64_t VulkanQueue::sealTicket() {
     {
-        std::lock_guard<std::mutex> lock(submitMutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
         if (!presentedSince_) return lastTicket_;
     }
     const uint64_t ticket = submit(QueueSubmit{});

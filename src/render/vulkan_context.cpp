@@ -226,6 +226,11 @@ bool VulkanContext::init(platform::Window* presentTarget) {
 
 void VulkanContext::cleanup() {
     if (device_ != VK_NULL_HANDLE) {
+        // The queues' threads make their last calls before the device-wide
+        // wait (which needs every queue to itself).
+        queue_.drain();
+        uploadQueue_.drain();
+        asyncCompute_.drain();
         vkDeviceWaitIdle(device_);
         compute_.shutdown();
         pipelineCache_.shutdown();

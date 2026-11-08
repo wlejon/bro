@@ -26,9 +26,10 @@ namespace bro::render {
 
 // ---------------------------------------------------------------------------
 // Skia's queue entry points, routed through the queue owner. Skia resolves
-// every Vulkan function through the getProc it is given; these three replace
-// the ones that touch the queue. They carry no user data, so the queues and
-// devices they belong to are looked up in a small registry.
+// every Vulkan function through the getProc it is given; these replace the
+// ones that touch the queue, and the fences its submissions carry. They carry
+// no user data, so the queues and devices they belong to are looked up in a
+// small registry.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -70,6 +71,33 @@ VKAPI_ATTR VkResult VKAPI_CALL routedQueueWaitIdle(VkQueue queue) {
     return owner && owner->waitIdle() ? VK_SUCCESS : VK_ERROR_DEVICE_LOST;
 }
 
+// Skia's fences go to vkQueueSubmit on the queue's thread, which needs the
+// fence to itself: until then a fence is unsignalled and left alone, and a
+// wait, reset or destroy holds for the submission first.
+VKAPI_ATTR VkResult VKAPI_CALL routedGetFenceStatus(VkDevice device, VkFence fence) {
+    VulkanQueue* owner = ownerOfDevice(device);
+    if (owner && owner->fenceQueued(fence)) return VK_NOT_READY;
+    return vkGetFenceStatus(device, fence);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL routedWaitForFences(VkDevice device, uint32_t count, const VkFence* fences,
+                                                   VkBool32 waitAll, uint64_t timeout) {
+    if (VulkanQueue* owner = ownerOfDevice(device))
+        for (uint32_t i = 0; i < count; ++i) owner->waitFenceSubmitted(fences[i]);
+    return vkWaitForFences(device, count, fences, waitAll, timeout);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL routedResetFences(VkDevice device, uint32_t count, const VkFence* fences) {
+    if (VulkanQueue* owner = ownerOfDevice(device))
+        for (uint32_t i = 0; i < count; ++i) owner->waitFenceSubmitted(fences[i]);
+    return vkResetFences(device, count, fences);
+}
+
+VKAPI_ATTR void VKAPI_CALL routedDestroyFence(VkDevice device, VkFence fence, const VkAllocationCallbacks* alloc) {
+    if (VulkanQueue* owner = ownerOfDevice(device)) owner->waitFenceSubmitted(fence);
+    vkDestroyFence(device, fence, alloc);
+}
+
 // Skia's only device waits are at teardown; the queue is the only one it uses.
 VKAPI_ATTR VkResult VKAPI_CALL routedDeviceWaitIdle(VkDevice device) {
     VulkanQueue* owner = ownerOfDevice(device);
@@ -102,6 +130,10 @@ PFN_vkVoidFunction skiaGetProc(const char* name, VkInstance instance, VkDevice d
         return reinterpret_cast<PFN_vkVoidFunction>(&routedQueueWaitIdle);
     if (std::strcmp(name, "vkDeviceWaitIdle") == 0)
         return reinterpret_cast<PFN_vkVoidFunction>(&routedDeviceWaitIdle);
+    if (std::strcmp(name, "vkGetFenceStatus") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&routedGetFenceStatus);
+    if (std::strcmp(name, "vkWaitForFences") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&routedWaitForFences);
+    if (std::strcmp(name, "vkResetFences") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&routedResetFences);
+    if (std::strcmp(name, "vkDestroyFence") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&routedDestroyFence);
     if (device != VK_NULL_HANDLE) return vkGetDeviceProcAddr(device, name);
     return vkGetInstanceProcAddr(instance, name);
 }

@@ -22,6 +22,7 @@
 #include <include/core/SkRect.h>
 #include <include/core/SkSurface.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -106,6 +107,102 @@ void testQueueAndFrames(render::VulkanContext& ctx) {
     CHECK(queue.isComplete(t));
     CHECK(frames.frameSerial() == serial + 2);
     vkDestroyDescriptorSetLayout(ctx.device(), layout, nullptr);
+}
+
+// Submissions from several threads at once: every ticket is handed out once,
+// in order per thread; a ticket can be waited on (from any thread, or by a
+// later batch) the moment submit() returns, before the queue's thread has
+// submitted it; work submitted after a ticket runs after it; and a batch that
+// waits on another queue's ticket is held until that queue submits it.
+void testQueueThreads(render::VulkanContext& ctx) {
+    std::cout << "[queue] multi-thread submission order and ticket waits" << std::endl;
+    auto& queue = ctx.queue();
+    VkDevice dev = ctx.device();
+    const uint32_t family = static_cast<uint32_t>(ctx.queueFamilies().graphicsFamily);
+
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkDeviceSize off = 0;
+    uint64_t id = 0;
+    void* mapped = nullptr;
+    constexpr int kThreads = 4;
+    constexpr int kPerThread = 150;
+    CHECK(ctx.createBuffer(4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           buf, mem, off, id, mapped));
+    if (!mapped) return;
+    std::memset(mapped, 0, 4096);
+
+    std::vector<std::vector<uint64_t>> tickets(kThreads);
+    std::vector<int> badWaits(kThreads, 0);
+    std::vector<std::thread> threads;
+    const uint64_t first = queue.lastSubmittedTicket();
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, nullptr, 0, family};
+            VkCommandPool pool = VK_NULL_HANDLE;
+            vkCreateCommandPool(dev, &poolInfo, nullptr, &pool);
+            std::vector<VkCommandBuffer> cmds(kPerThread);
+            VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                           VK_COMMAND_BUFFER_LEVEL_PRIMARY, static_cast<uint32_t>(kPerThread)};
+            vkAllocateCommandBuffers(dev, &ai, cmds.data());
+            for (int i = 0; i < kPerThread; ++i) {
+                VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkBeginCommandBuffer(cmds[i], &begin);
+                // Each thread counts in its own word: a later fill overwrites
+                // an earlier one only if it runs after it.
+                const uint32_t value = static_cast<uint32_t>(i + 1);
+                vkCmdFillBuffer(cmds[i], buf, static_cast<VkDeviceSize>(t) * 256, 4, value);
+                vkEndCommandBuffer(cmds[i]);
+                render::QueueSubmit batch;
+                batch.commandBuffers.push_back(cmds[i]);
+                // Every other batch also waits on this thread's previous ticket.
+                if (i % 2 == 1)
+                    batch.waits.push_back({queue.timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, tickets[t].back()});
+                tickets[t].push_back(queue.submit(batch));
+                // Waited on at once, every tenth: before the queue's thread
+                // may have submitted it.
+                if (i % 10 == 0 && !queue.wait(tickets[t].back())) ++badWaits[t];
+            }
+            if (!queue.wait(tickets[t].back())) ++badWaits[t];
+            vkDestroyCommandPool(dev, pool, nullptr);
+        });
+    }
+    for (auto& th : threads) th.join();
+
+    std::vector<uint64_t> all;
+    for (int t = 0; t < kThreads; ++t) {
+        CHECK(badWaits[t] == 0);
+        CHECK(static_cast<int>(tickets[t].size()) == kPerThread);
+        bool increasing = true;
+        for (size_t i = 1; i < tickets[t].size(); ++i) increasing = increasing && tickets[t][i] > tickets[t][i - 1];
+        CHECK(increasing);
+        all.insert(all.end(), tickets[t].begin(), tickets[t].end());
+        // The last fill of each thread is what its word holds.
+        CHECK(static_cast<uint32_t*>(mapped)[t * 64] == static_cast<uint32_t>(kPerThread));
+    }
+    std::sort(all.begin(), all.end());
+    bool contiguous = all.size() == static_cast<size_t>(kThreads * kPerThread) && all.front() == first + 1;
+    for (size_t i = 1; contiguous && i < all.size(); ++i) contiguous = all[i] == all[i - 1] + 1;
+    CHECK(contiguous);
+    CHECK(queue.completedTicket() >= all.back());
+
+    // Across queues: a graphics batch waiting on an upload-queue ticket the
+    // moment it is handed out completes only after it.
+    if (render::VulkanQueue* upload = ctx.uploadQueue()) {
+        for (int i = 0; i < 50; ++i) {
+            const uint64_t upTicket = upload->submit(render::QueueSubmit{});
+            CHECK(upTicket > 0);
+            const uint64_t gTicket = queue.submit(
+                render::QueueSubmit{{}, {{upload->timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, upTicket}}, {}});
+            CHECK(gTicket > 0 && queue.wait(gTicket));
+            CHECK(upload->isComplete(upTicket));
+        }
+    } else {
+        std::cout << "  (no upload queue: the cross-queue case is skipped)" << std::endl;
+    }
+    ctx.destroyBuffer(buf, id);
 }
 
 // An RGBA8 image cleared to `color` and left in SHADER_READ_ONLY_OPTIMAL.
@@ -471,6 +568,7 @@ int main() {
         CHECK(ctx.persistentPipelineCache().loadedBytes() == 0);
         cacheFile = ctx.persistentPipelineCache().path();
         testQueueAndFrames(ctx);
+        testQueueThreads(ctx);
         testPresenterOffscreen(ctx);  // builds the presenter's blend pipeline
         testSkiaGpu(ctx);
     }

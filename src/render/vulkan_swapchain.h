@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -119,6 +120,7 @@ private:
     bool wantVsync_ = true;
     bool vsync_ = true;          // the mode the current swapchain was made with
     bool needsRecreate_ = false;
+    std::atomic<bool> presentStale_{false};  // a present came back out of date / suboptimal
     uint64_t presentTag_ = 0;
 
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;

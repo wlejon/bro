@@ -335,6 +335,10 @@ bool VulkanSwapchain::recreate() {
 }
 
 SwapchainResult VulkanSwapchain::acquire(uint32_t& outImageIndex) {
+    // The swapchain is the host's again once the last present on it is made
+    // (presents run on the queue's thread).
+    context_.queue().waitPresented();
+    if (presentStale_.exchange(false, std::memory_order_relaxed)) needsRecreate_ = true;
     uint32_t winW = 0, winH = 0;
     if (!windowPixelSize(winW, winH)) return SwapchainResult::Minimized;
     if (swapchain_ == VK_NULL_HANDLE || needsRecreate_ || vsync_ != wantVsync_ ||
@@ -394,11 +398,14 @@ SwapchainResult VulkanSwapchain::present(uint32_t imageIndex, uint64_t ticket) {
     // A window system that reports presentation (Wayland presentation-time)
     // asks about the commit this present makes.
     if (window_) window_->beforePresent(presentTag_);
-    VkResult result = context_.queue().present(presentInfo);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        needsRecreate_ = true;
-        return result == VK_SUBOPTIMAL_KHR ? SwapchainResult::Suboptimal : SwapchainResult::OutOfDate;
-    }
+    // Made on the queue's thread; an out-of-date or suboptimal swapchain is
+    // rebuilt at the next acquire, which waits for this present first.
+    VkResult result = context_.queue().present(presentInfo, [this](VkResult r) {
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
+            presentStale_.store(true, std::memory_order_relaxed);
+        else if (r != VK_SUCCESS)
+            LOG_ERROR("VulkanSwapchain: vkQueuePresentKHR returned %d", r);
+    });
     if (result != VK_SUCCESS) {
         LOG_ERROR("VulkanSwapchain: vkQueuePresentKHR returned %d", result);
         return SwapchainResult::Error;

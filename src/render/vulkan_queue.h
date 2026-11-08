@@ -2,9 +2,12 @@
 
 #include <vulkan/vulkan.h>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace bro::render {
@@ -30,19 +33,28 @@ struct QueueSubmit {
     std::vector<SemaphoreSignal> signals;
 };
 
-/// The single owner of the device's graphics (and present) queue. (The
-/// context has a second one, VulkanContext::uploadQueue(), for the transfer
-/// family when the device has one apart from graphics; its tickets are its
-/// own timeline's.)
+/// The single owner of a device queue: the graphics (and present) queue, and
+/// the context's others (VulkanContext::uploadQueue() for the transfer family,
+/// asyncComputeQueue()), each with its own timeline and tickets.
 ///
-/// VkQueue needs external synchronisation, so every vkQueueSubmit and
-/// vkQueuePresentKHR in bro goes through here, under one lock. Each submission
-/// also signals the queue's timeline semaphore with the next value of a
-/// monotonically increasing counter and returns it as the submission's ticket.
-/// A semaphore signal's first scope is every command submitted to the queue
-/// before it, so "ticket N completed" means everything submitted up to and
-/// including submission N has finished — a fence for all prior work without a
-/// queue- or device-wide wait.
+/// Every vkQueueSubmit and vkQueuePresentKHR in bro goes through here. Each
+/// submission signals the queue's timeline semaphore with the next value of a
+/// monotonically increasing counter, its ticket. A semaphore signal's first
+/// scope is every command submitted to the queue before it, so "ticket N
+/// completed" means everything submitted up to and including submission N has
+/// finished — a fence for all prior work without a queue- or device-wide wait.
+///
+/// The queue's own thread makes the driver calls. submit(), submitForeign()
+/// and present() take a ticket (or a place in line) under a short lock and
+/// return; the thread submits and presents in that order. So a caller never
+/// waits for another thread's vkQueueSubmit — which can block in the kernel on
+/// a buffer another process (the compositor) holds — and everything that
+/// orders by the queue still does: binary semaphores are signalled before they
+/// are waited on (acquire, then the submit that waits on it, then the present
+/// that waits on the submit's), and a ticket can be waited for (or waited on
+/// by another submission) as soon as it is returned, since timeline waits may
+/// precede the signal's submission. A batch that waits on another
+/// VulkanQueue's timeline is held until that queue has submitted the value.
 class VulkanQueue {
 public:
     VulkanQueue() = default;
@@ -54,18 +66,34 @@ public:
     bool init(VkDevice device, VkQueue graphicsQueue, VkQueue presentQueue, uint32_t graphicsFamily);
     void shutdown();
 
-    /// Submit one batch. Returns its ticket, or 0 if the submission failed (the
-    /// command buffers were then not executed and no semaphore will signal).
+    /// Queue one batch for submission. Returns its ticket, or 0 if the device
+    /// is lost (the batch is then dropped). A submission that fails on the
+    /// queue's thread is logged and its ticket signalled all the same, so
+    /// waits on it end.
     uint64_t submit(const QueueSubmit& batch);
 
-    /// Submit batches recorded by code that drives the queue itself (Skia's
-    /// Vulkan backend calls vkQueueSubmit through here): the same lock, and
-    /// the queue's timeline signal appended to the last batch so the work
-    /// gets a ticket like any other. Returns the vkQueueSubmit result.
+    /// Queue batches recorded by code that drives the queue itself (Skia's
+    /// Vulkan backend calls vkQueueSubmit through here): the batches are
+    /// copied, and the queue's timeline signal appended to the last so the
+    /// work gets a ticket like any other. `fence` signals as with
+    /// vkQueueSubmit. Returns VK_SUCCESS, or VK_ERROR_DEVICE_LOST.
     VkResult submitForeign(uint32_t count, const VkSubmitInfo* batches, VkFence fence);
 
-    /// Present on the present queue (serialised with submissions).
-    VkResult present(const VkPresentInfoKHR& info);
+    /// Queue a present after everything queued so far. `onResult` (may be
+    /// empty) gets vkQueuePresentKHR's result, on the queue's thread. The
+    /// swapchains must not be used on the host (acquire, recreate) until
+    /// waitPresented() returns. Returns VK_SUCCESS, or VK_ERROR_DEVICE_LOST.
+    VkResult present(const VkPresentInfoKHR& info, std::function<void(VkResult)> onResult = {});
+    /// Whether a foreign submission's `fence` is still queued (not yet past
+    /// its vkQueueSubmit on the queue's thread): it is unsignalled, and the
+    /// host must not touch it (vkQueueSubmit needs the fence to itself).
+    bool fenceQueued(VkFence fence) const;
+    /// Block until the submission carrying `fence`, if one is queued, is made.
+    void waitFenceSubmitted(VkFence fence);
+    /// Block until every present queued so far has been made.
+    void waitPresented();
+    /// Block until the queue's thread has made every call queued so far.
+    void drain();
 
     /// The highest ticket the GPU has finished.
     uint64_t completedTicket() const;
@@ -103,6 +131,39 @@ public:
     VkQueue queue() const { return queue_; }
 
 private:
+    /// One call for the queue's thread: a submission (its own arrays, the
+    /// last batch carrying the timeline signal) or a present.
+    struct Op {
+        enum class Kind { Submit, Present };
+        struct Batch {
+            std::vector<VkSemaphore> waitSems;
+            std::vector<VkPipelineStageFlags> waitStages;
+            std::vector<uint64_t> waitValues;  // one per wait (0 for a binary semaphore)
+            std::vector<VkCommandBuffer> commandBuffers;
+            std::vector<VkSemaphore> signalSems;
+            std::vector<uint64_t> signalValues;  // one per signal
+            bool protectedSubmit = false;
+        };
+        Kind kind = Kind::Submit;
+        uint64_t ticket = 0;
+        std::vector<Batch> batches;
+        VkFence fence = VK_NULL_HANDLE;
+        std::vector<VkSemaphore> presentWaits;
+        std::vector<VkSwapchainKHR> swapchains;
+        std::vector<uint32_t> imageIndices;
+        std::function<void(VkResult)> onPresent;
+    };
+
+    void run();
+    void execute(Op& op);
+    VkResult submitOp(Op& op);
+    void signalAnyway(uint64_t ticket);
+    void holdForOtherQueues(const Op& op);
+    static VulkanQueue* queueOfTimeline(VkSemaphore timeline);
+    /// Block until this queue's thread has submitted `ticket`.
+    void waitSubmitted(uint64_t ticket);
+    /// Hand `op` to the thread; a submission's ticket (0 if refused).
+    uint64_t enqueue(Op&& op);
     void noteFailure(const char* where, VkResult res);
 
     VkDevice device_ = VK_NULL_HANDLE;
@@ -111,9 +172,21 @@ private:
     VkSemaphore timeline_ = VK_NULL_HANDLE;
     std::atomic<bool> deviceLost_{false};
 
-    mutable std::mutex submitMutex_;
-    uint64_t lastTicket_ = 0;      // guarded by submitMutex_
-    bool presentedSince_ = false;  // a present followed lastTicket_ (guarded)
+    mutable std::mutex mutex_;
+    std::condition_variable workCv_;   // the thread: something queued, or stop
+    std::condition_variable doneCv_;   // waiters: the thread made a call
+    std::deque<Op> pending_;           // guarded by mutex_
+    std::thread thread_;
+    bool stop_ = false;                // guarded
+    bool running_ = false;             // the thread takes calls (guarded)
+    uint64_t lastTicket_ = 0;          // the last ticket handed out (guarded)
+    bool presentedSince_ = false;      // a present followed lastTicket_ (guarded)
+    uint64_t queuedOps_ = 0;           // calls queued (guarded)
+    uint64_t doneOps_ = 0;             // calls the thread made (guarded)
+    uint64_t submittedTicket_ = 0;     // highest ticket the thread submitted (guarded)
+    uint64_t presentsQueued_ = 0;      // guarded
+    uint64_t presentsDone_ = 0;        // guarded
+    std::vector<VkFence> queuedFences_;  // foreign fences not yet submitted (guarded)
 
     std::mutex immediateMutex_;
     VkCommandPool immediatePool_ = VK_NULL_HANDLE;
