@@ -486,6 +486,13 @@ public:
     /// frame callback does: `forRead` draws nothing then. A flush outside a
     /// step draws at once.
     void renderPendingScenes(bool forRead = false);
+    /// A read of a scene's pixels (a capture, captureFrame, toImageData) is
+    /// its frame once that frame's work is in: every scene whose last render
+    /// skipped a draw for a pipeline still building renders again, waiting
+    /// for them (SceneGraph::renderForRead), in creation order, so a scene
+    /// sampling another's output (asTexture) samples the redrawn one. In a
+    /// window as in headless; a frame skipping nothing costs nothing here.
+    void redrawSkippedScenes();
     void advanceTime(double ms);
     /// Headless: run `frames` frames of the windowed frame loop itself (the
     /// layout and raster threads, the event pump, the source watcher, the

@@ -306,10 +306,12 @@ void Engine::construct(const EngineConfig& config) {
     audioStartup_.realAudio = config.realAudio;
     serverStartTime_ = util::currentTimeMs();
 
-    // A window's frames skip what is still building; headless frames, read
-    // back at once, wait for it (perf.asyncShaders overrides).
+    // Frames skip what is still building, a window's and headless's alike:
+    // headless runs the frames a window shows. Its reads (capturePixels) and
+    // a page's captureFrame draw what their frame skipped (perf.asyncShaders
+    // overrides).
 #if BRO_WITH_3D
-    scene::vk::pipeline_async::setAsync(displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm);
+    scene::vk::pipeline_async::setAsync(displayMode_ != DisplayMode::Server);
 #endif
 
     if (displayMode_ == DisplayMode::Server) {

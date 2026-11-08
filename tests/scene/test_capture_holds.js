@@ -1,7 +1,7 @@
-// A captureFrame holds everything it draws under a window's policy too
-// (perf.asyncShaders(true): frames skip a draw whose pipeline is still being
-// built). The capture is read back at once, so it waits for those pipelines
-// as headless's frames do (SceneGraph::renderForRead, scene_vk_target_format.h
+// A captureFrame holds everything it draws, though frames skip a draw whose
+// pipeline is still being built (perf.asyncShaders(true), a window's policy
+// and headless's). The capture is read back at once, so it waits for those
+// pipelines (SceneGraph::renderForRead, scene_vk_target_format.h
 // pipeline_async::Hold): a page's one-off capture in a window is the picture
 // headless takes. Verifies, with a box whose fragment module is salted (its
 // program compiles cold) on a ground:

@@ -134,6 +134,10 @@ void PassReflectionProbe::record(SceneFrame& frame) {
         auto* node = static_cast<ReflectionProbeNode*>(shown);
         if (!node->captureRequested()) continue;
         Probe* probe = ensure(frame.gpu, *node);
+        // A capture is kept for good, of the scene as it is when asked for:
+        // it holds what it draws (waits for a pipeline still building, in a
+        // window too) where a frame would skip it and the probe keep the gap.
+        pipeline_async::Hold hold;
         if (probe && capture(frame, *node, *probe)) {
             probe->captured = true;
             node->markCaptured();

@@ -248,6 +248,13 @@ void Engine::renderPendingScenes(bool forRead) {
 #endif
 }
 
+void Engine::redrawSkippedScenes() {
+#if BRO_WITH_3D
+    for (auto& sg : sceneGraphs_)
+        if (sg.graph && sg.graph->cullStats().pipelineSkips > 0) sg.graph->renderForRead();
+#endif
+}
+
 void Engine::advanceTime(double ms) {
     double remaining = ms;
     // The last frame flushed, before the clock moves past it.
@@ -410,6 +417,12 @@ std::vector<uint8_t> Engine::capturePixels() {
         sg.graph->setDeviceScale(deviceScale_.render);
         sg.graph->render();
     }
+    // That render is a window's frame, which may have skipped a draw whose
+    // pipeline was still building: the capture is that frame's picture once
+    // its work is in, the frame after the skip as a window draws it (a cache
+    // the skipping frame left, the shadow pages, redrawn by the window's own
+    // rule).
+    redrawSkippedScenes();
 #endif
 
     for (auto& cs : canvasScenes_) {

@@ -1096,13 +1096,20 @@ class SceneGraph {
   projectLocal(x, y, z) {}
 
   /**
+   * The scene's last render, read back. A frame skips a draw whose pipeline
+   * is still being built (docs/code-cache.md "Pipelines built off the frame
+   * thread"); when the last one did, the scene renders again first, waiting
+   * for those pipelines, so the picture holds everything.
    * @returns {ImageData}
    */
   toImageData() {}
 
   /**
-   * Renders the scene now and reads it back. Throws on a detached (parked)
-   * scene, which is not rendered: attach it to a canvas first.
+   * Renders the scene now and reads it back, holding everything it draws
+   * (it waits for a pipeline still being built, where a frame skips it); a
+   * scene whose output it samples (`asTexture`) and whose last frame skipped
+   * a draw renders again first. Throws on a detached (parked) scene, which
+   * is not rendered: attach it to a canvas first.
    * @param {number} [width]
    * @param {number} [height]
    * @returns {ImageData}

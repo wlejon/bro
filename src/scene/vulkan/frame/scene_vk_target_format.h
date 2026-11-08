@@ -26,17 +26,18 @@ namespace bro::scene::vk {
 namespace pipeline_async {
 /// Whether a frame skips what is not yet built (true) or waits for it
 /// (false). The engine turns it on for a window (no frame waits, so the
-/// window never stops answering) and leaves it off in headless, whose
-/// renders are read back at once (tests, stills) and must hold everything.
+/// window never stops answering) and for headless, which runs a window's
+/// frames; what reads pixels back draws what its frame skipped (Hold).
 /// perf.asyncShaders sets it from script (a test settling one scene each
 /// way in one process).
 void setAsync(bool on);
 /// setAsync's policy, unless a Hold is open on this thread.
 bool async();
 /// A render whose pixels are read back (SceneGraph::renderForRead, a
-/// script's captureFrame) holds everything it draws, in a window as in
-/// headless: while one is open on a thread, async() is false there, and a
-/// pipeline an earlier frame left building is waited for, not skipped.
+/// script's captureFrame) or kept for good (a reflection probe's capture)
+/// holds everything it draws, in a window as in headless: while one is open
+/// on a thread, async() is false there, and a pipeline an earlier frame left
+/// building is waited for, not skipped.
 struct Hold {
     Hold();
     ~Hold();

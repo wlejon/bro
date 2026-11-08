@@ -541,8 +541,11 @@ void bro_scene_SceneGraph_detachAIWorld(void* self) {
 
 void bro_scene_SceneGraph_render(void* self) {
     auto* g = graphOf(self);
-    // (captureFrame's: the frame is read back at once.)
-    if (g) g->renderForRead();
+    // (captureFrame's: the frame is read back at once. A scene it samples
+    // (asTexture) whose last frame skipped a draw is redrawn first.)
+    if (!g) return;
+    if (auto* eng = hostEngine()) eng->redrawSkippedScenes();
+    g->renderForRead();
 }
 
 double bro_scene_SceneGraph_canvasWidth(void* self) {
@@ -563,6 +566,8 @@ void bro_scene_SceneGraph_setCanvasSize(void* self, double w, double h) {
 void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* out) {
     auto* g = graphOf(self);
     if (!g) { copyBuffer<uint8_t>(nullptr, 0, out); return; }
+    // The last render read back, once its skipped draws are in.
+    if (auto* eng = hostEngine()) eng->redrawSkippedScenes();
     int w = 0, h = 0;
     tl_tonemapPixels = g->readTonemapPixelsRGBA(w, h);
     tl_tonemapW = w;
