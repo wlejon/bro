@@ -263,7 +263,7 @@ check_class() {
         "$SCRIPT_DIR/appdir_class" \
         "$SCRIPT_DIR/apps/class_probe.js" \
         "$SCRIPT_DIR/expected/class_probe.expected" \
-        --expr "advanceTime(64);"
+        --expr "waitForImages(); advanceTime(64);"
 }
 
 # pointerLock, fullscreen, and the Gamepad API, with a virtual gamepad

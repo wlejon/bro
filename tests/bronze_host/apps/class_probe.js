@@ -298,24 +298,14 @@ const PNG_1X1 =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA' +
     'DUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-let loadFired = false;
 let loadThisWasImg = false;
 
-// addEventListener is the inherited one; the handler's receiver must still be
-// this instance.
-img.addEventListener('load', function () {
-    loadFired = true;
-    loadThisWasImg = this === img;
-});
-
-// `src` is the inherited ACCESSOR — the setter has to unwrap `this` to reach
-// the payload it decodes into.
-img.src = PNG_1X1;
-
-// Reported from a timer so the ordering is fixed whether the decode settles
-// synchronously or on the next turn.
-setTimeout(function () {
-    say('load.fired', loadFired);
+// Reported from the load (or error) event: decodes run off the page thread, as
+// in a window, so the event lands whenever the decode finishes — a timer would
+// race it. The harness's waitForImages() settles the decode before the clock
+// moves.
+function report(fired) {
+    say('load.fired', fired);
     say('load.receiverWasInstance', loadThisWasImg);
     say('load.complete', img.complete === true);
     say('load.naturalWidth', img.naturalWidth);
@@ -323,4 +313,16 @@ setTimeout(function () {
     // The other instance is untouched: state is per instance even though the
     // accessor that writes it is shared.
     say('load.otherUntouched', other.complete === false && other.naturalWidth === 0);
-}, 0);
+}
+
+// addEventListener is the inherited one; the handler's receiver must still be
+// this instance.
+img.addEventListener('load', function () {
+    loadThisWasImg = this === img;
+    report(true);
+});
+img.addEventListener('error', function () { report(false); });
+
+// `src` is the inherited ACCESSOR — the setter has to unwrap `this` to reach
+// the payload it decodes into.
+img.src = PNG_1X1;
