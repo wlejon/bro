@@ -290,6 +290,12 @@ struct ObjectBuilder {
         obj.set(ev::setProperty(obj.get(), name, v));
     }
 
+    // A WebIDL constant (ev::kConstantAttributes): read-only, enumerable,
+    // permanent. Same rooting as set().
+    void defineConstant(const char* name, Value v) {
+        obj.set(ev::defineProperty(obj.get(), name, v, ev::kConstantAttributes));
+    }
+
     void def(const char* name, uint32_t arity, ev::NativeFn fn) {
         // hostProfileWrap is the identity unless BRO_HOST_PROFILE=1 (host_profile.h).
         //

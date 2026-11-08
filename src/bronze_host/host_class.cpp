@@ -231,6 +231,13 @@ void HostClass::setStatic(const char* name, Value v) const {
     s->ctor->set(ev::setProperty(s->ctor->get(), name, valP.get()));
 }
 
+void HostClass::defineStaticConstant(const char* name, Value v) const {
+    const Slots* s = slotsIfAny();
+    if (!s || !s->ctor) return;
+    ev::Persistent valP(v);
+    s->ctor->set(ev::defineProperty(s->ctor->get(), name, valP.get(), ev::kConstantAttributes));
+}
+
 Value HostClass::prototype() const {
     const Slots* s = slotsIfAny();
     return s && s->proto ? s->proto->get() : ev::undefined();

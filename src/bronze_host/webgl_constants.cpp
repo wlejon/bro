@@ -646,15 +646,20 @@ const ConstantEntry kConstants[] = {
 
 }  // namespace
 
+// WebIDL constants (WebIDL 3.7.3): {writable: false, enumerable: true,
+// configurable: false} on the interface object and its prototype alike, so a
+// program's `gl.FLOAT = 0` is discarded (a TypeError in strict code). bronze
+// caches a read of such a property through the prototype chain as its value,
+// so `gl.FLOAT` costs no walk to the prototype.
 void installWebGLConstants(ObjectBuilder& b) {
     for (const ConstantEntry& e : kConstants) {
-        b.set(e.name, ev::fromDouble(e.value));
+        b.defineConstant(e.name, ev::fromDouble(e.value));
     }
 }
 
 void installWebGLConstants(const HostClass& cls) {
     for (const ConstantEntry& e : kConstants) {
-        cls.setStatic(e.name, ev::fromDouble(e.value));
+        cls.defineStaticConstant(e.name, ev::fromDouble(e.value));
     }
 }
 

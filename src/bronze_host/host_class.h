@@ -82,6 +82,8 @@ public:
     // (Node.TEXT_NODE). `name`, `length` and `prototype` are
     // refused by bronze and must not be passed.
     void setStatic(const char* name, Value v) const;
+    // A WebIDL constant on the interface object (ev::kConstantAttributes).
+    void defineStaticConstant(const char* name, Value v) const;
 
     // The current realm's, or undefined where this realm never installed it.
     Value prototype() const;
