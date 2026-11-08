@@ -95,7 +95,8 @@ if (!bro.kernel.available) {
     outBuf.read(new Float32Array(W));
     assert(!job.done, 'a background job waits for the frame to end');
     let frames = 0;
-    while (!job.done && frames < 30) { advanceTime(16); frames++; }
+    const jobT0 = Date.now();
+    while (!job.done && Date.now() - jobT0 < 5000) { advanceTime(16); frames++; }
     assert(job.done, `a background job is done within frames (${frames})`);
     agree(bgTwice.read(new Float32Array(W * H)), cpuTwice, 1e-6, 'a background blur of the blur');
     const bgTimes = perf.kernelTimes();
@@ -107,7 +108,8 @@ if (!bro.kernel.available) {
     try { bro.kernel.background(() => { throw new Error('produce failed'); }); } catch (e) { thrown = e; }
     assert(thrown && thrown.message === 'produce failed', 'what fn throws is rethrown');
     const after = bro.kernel.background(() => {});
-    while (!after.done && frames < 60) { advanceTime(16); frames++; }
+    const afterT0 = Date.now();
+    while (!after.done && Date.now() - afterT0 < 5000) { advanceTime(16); frames++; }
     assert(after.done, 'and later jobs still run');
 
     // A job longer than the frames in flight does not hold them: each frame

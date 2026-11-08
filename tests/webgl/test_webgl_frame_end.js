@@ -77,6 +77,7 @@ if (!gl) {
     }
 
     // --- The live loop: the frame shown is this one or the one before --------
+    runFrames(1, { stepMs: 16 });
     let frame = 100;
     let resized = false;
     function tick() {
