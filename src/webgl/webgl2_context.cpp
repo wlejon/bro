@@ -50,28 +50,9 @@ void WebGL2RenderingContext::resize(int width, int height) {
     if (!lost_) client_.resize(width, height, device_.queue().lastSubmittedTicket());
 }
 
-render::LayerImage WebGL2RenderingContext::frameEnd() {
-    render::LayerImage out;
-    if (lost_) return out;
-    if (!client_.hasBackend()) return out;
-    // Everything recorded is submitted, and the canvas image as that left it
-    // answered: a round trip, so this submission precedes the presenter's.
-    // The engine shows that image, so the backend is told it was presented
-    // in the same round trip (no record after it for the frame-end hook to
-    // settle).
-    out = client_.flushThen([](vk::WebGLVkContext& gl) {
-        const vk::WebGLVkCanvas& canvas = gl.canvas();
-        render::LayerImage img;
-        img.image = canvas.colorImage();
-        img.view = canvas.presentView();
-        img.layout = canvas.colorLayout();
-        img.format = canvas.colorFormat();
-        img.width = canvas.width();
-        img.height = canvas.height();
-        gl.presented();
-        return img;
-    });
-    return out;
+render::LayerImage WebGL2RenderingContext::frameEnd(bool mayLag) {
+    if (lost_ || !client_.hasBackend()) return {};
+    return client_.endFrame(mayLag);
 }
 
 bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {

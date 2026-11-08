@@ -425,6 +425,11 @@ private:
     canvas::CanvasScene* canvasSceneById(uint64_t id) const;
 
     std::vector<WebGLEntry> webglEntries_;
+    // The composite under way is the live loop's frame (not a capture, a
+    // compile or a headless step): a WebGL canvas may show the frame before
+    // the one its script just ended while the WebGL thread finishes
+    // replaying it (WebGL2RenderingContext::frameEnd's mayLag).
+    bool webglFramesMayLag_ = false;
     // The thread every WebGL context's backend lives on: made with the first
     // context, kept until shutdown (after the contexts, before the device).
     std::shared_ptr<webgl::WebGLThread> webglThread_;

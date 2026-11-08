@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/layer_image.h"
 #include "render/vulkan_context.h"
 #include "webgl/webgl_types.h"
 
@@ -17,9 +18,18 @@ class WebGLVkStream;
 /// image only when asked for, and without alpha the color image keeps its
 /// alpha at one (the context draws it as an RGB format: alphaOne).
 ///
+/// The compositor never samples the drawing buffer itself: each frame's end
+/// copies it into a second color image, the front (recordPresentCopy), which
+/// is what the presenter samples. So the context can go on drawing the next
+/// frame into the drawing buffer while the presenter's submission for the
+/// last one is still to come: the front changes only at a frame's end, in
+/// one submission, which queue order puts wholly before or wholly after any
+/// presenter submission sampling it. The front stays SHADER_READ_ONLY_OPTIMAL
+/// between copies.
+///
 /// Replaced images are destroyed through `stream` (the context's, whose
 /// commands draw into them), once its work so far is done and, since the
-/// presenter samples them too, once the queue ticket the caller names is.
+/// presenter samples the front, once the queue ticket the caller names is.
 class WebGLVkCanvas {
 public:
     WebGLVkCanvas(render::VulkanContext& context, WebGLVkStream& stream, const ContextAttributes& attributes = {});
@@ -68,6 +78,14 @@ public:
         transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
+    /// Record the copy of the drawing buffer's color into the front, ordered
+    /// after whatever wrote it and before whatever samples the front next
+    /// (the presenter's submissions), and after any earlier sampling of it.
+    void recordPresentCopy(VkCommandBuffer cmd);
+    /// The front, as the presenter samples it (valid once a
+    /// recordPresentCopy has been submitted; empty without images).
+    render::LayerImage frontImage() const;
+
     /// Record a copy of the color attachment into `dst` as tightly packed,
     /// top-down RGBA (width x height x 4), leaving the layout as it was.
     bool recordCopy(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset = 0);
@@ -75,9 +93,6 @@ public:
     // Accessors
     VkImage colorImage() const { return colorImage_; }
     VkImageView colorView() const { return colorView_; }
-    /// The view the compositor samples: the color view, or without alpha one
-    /// that reads alpha as one (whatever a blit left there).
-    VkImageView presentView() const { return presentView_ != VK_NULL_HANDLE ? presentView_ : colorView_; }
     VkFormat colorFormat() const { return colorFormat_; }
     VkImageLayout colorLayout() const { return colorLayout_; }
 
@@ -93,6 +108,15 @@ public:
     render::VulkanContext& context() { return context_; }
 
 private:
+    struct ColorImage {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        uint64_t allocId = 0;
+        VkImageView view = VK_NULL_HANDLE;
+        VkImageView presentView = VK_NULL_HANDLE;  // alpha read as one; only without alpha
+    };
+    bool createColorImage(uint32_t width, uint32_t height, VkImageUsageFlags usage, ColorImage& out);
     bool createColorAttachment(uint32_t width, uint32_t height);
     bool createDepthAttachment(uint32_t width, uint32_t height);
     void clearImages(VkCommandBuffer cmd);
@@ -108,9 +132,11 @@ private:
     VkDeviceSize colorOffset_ = 0;
     uint64_t colorAllocId_ = 0;
     VkImageView colorView_ = VK_NULL_HANDLE;
-    VkImageView presentView_ = VK_NULL_HANDLE;
     VkFormat colorFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
     VkImageLayout colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    ColorImage front_;
+    VkImageLayout frontLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory_ = VK_NULL_HANDLE;

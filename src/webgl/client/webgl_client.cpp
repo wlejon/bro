@@ -33,6 +33,7 @@ void WebGLClient::attach(int width, int height) {
     encodeSimple(channel_.ring, Op::Attach, rec::kAttach, width, height);
     channel_.ring.publish();
     attached_ = true;
+    rebuiltAt_ = framesEncoded_;
 }
 
 void WebGLClient::detach() {
@@ -40,6 +41,7 @@ void WebGLClient::detach() {
     encodeSimple(channel_.ring, Op::Detach, TypeList<>{});
     channel_.ring.publish();
     attached_ = false;
+    rebuiltAt_ = framesEncoded_;
 }
 
 void WebGLClient::forgetObjects() {
@@ -59,7 +61,24 @@ void WebGLClient::flush() {
 
 void WebGLClient::settle() {
     if (!attached_ || channel_.ring.written() == settledAt_) return;
-    flushThen([](vk::WebGLVkContext&) {});
+    sync([](vk::WebGLVkContext& gl) { gl.flush(); });
+    settledAt_ = channel_.ring.written();
+}
+
+render::LayerImage WebGLClient::endFrame(bool mayLag) {
+    if (!attached_) return {};
+    if (framesEncoded_ == rebuiltAt_ || channel_.ring.written() != frameEndAt_) {
+        encodeSimple(channel_.ring, Op::FrameEnd, rec::kFrameEnd, ++framesEncoded_);
+        channel_.ring.publish();
+        frameEndAt_ = settledAt_ = channel_.ring.written();
+    }
+    // The bound: the frame end before this one has replayed (its front is
+    // submitted), and with no lag this one too.
+    uint64_t target = framesEncoded_;
+    if (mayLag && target - 1 > rebuiltAt_) --target;
+    std::atomic<uint64_t>& ended = channel_.framesEnded;
+    channel_.progress.wait([&] { return ended.load(std::memory_order_acquire) >= target; }, kWaitSpin);
+    return channel_.frontImages[ended.load(std::memory_order_acquire) % 2];
 }
 
 void WebGLClient::finish() {

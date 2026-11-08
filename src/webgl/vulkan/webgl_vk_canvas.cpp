@@ -55,11 +55,12 @@ void WebGLVkCanvas::release(uint64_t afterTicket) {
 
     render::VulkanContext* ctx = &context_;
     struct Dead { VkImage image; VkImageView view; VkImageView extraView; uint64_t allocId; };
-    Dead color{colorImage_, colorView_, presentView_, colorAllocId_};
+    Dead color{colorImage_, colorView_, VK_NULL_HANDLE, colorAllocId_};
+    Dead front{front_.image, front_.view, front_.presentView, front_.allocId};
     Dead depth{depthImage_, depthView_, VK_NULL_HANDLE, depthAllocId_};
-    if (color.image != VK_NULL_HANDLE || depth.image != VK_NULL_HANDLE) {
-        stream_.deferUntil(afterTicket, [ctx, dev, color, depth] {
-            for (const Dead& d : {color, depth}) {
+    if (color.image != VK_NULL_HANDLE || front.image != VK_NULL_HANDLE || depth.image != VK_NULL_HANDLE) {
+        stream_.deferUntil(afterTicket, [ctx, dev, color, front, depth] {
+            for (const Dead& d : {color, front, depth}) {
                 if (d.view != VK_NULL_HANDLE) vkDestroyImageView(dev, d.view, nullptr);
                 if (d.extraView != VK_NULL_HANDLE) vkDestroyImageView(dev, d.extraView, nullptr);
                 if (d.image != VK_NULL_HANDLE) ctx->destroyImage(d.image, d.allocId);
@@ -68,11 +69,12 @@ void WebGLVkCanvas::release(uint64_t afterTicket) {
     }
     colorImage_ = VK_NULL_HANDLE;
     colorView_ = VK_NULL_HANDLE;
-    presentView_ = VK_NULL_HANDLE;
     colorMemory_ = VK_NULL_HANDLE;
     colorAllocId_ = 0;
     colorOffset_ = 0;
     colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    front_ = ColorImage{};
+    frontLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
     depthImage_ = VK_NULL_HANDLE;
     depthView_ = VK_NULL_HANDLE;
     depthMemory_ = VK_NULL_HANDLE;
@@ -120,26 +122,16 @@ void WebGLVkCanvas::clearImages(VkCommandBuffer cmd) {
     }
 }
 
-bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
+bool WebGLVkCanvas::createColorImage(uint32_t width, uint32_t height, VkImageUsageFlags usage, ColorImage& out) {
     VkDevice dev = context_.device();
-    colorFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
-
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-
-    if (!context_.createImage(width, height, colorFormat_,
-                              VK_IMAGE_TILING_OPTIMAL, usage,
-                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              colorImage_, colorMemory_,
-                              colorOffset_, colorAllocId_)) {
+    if (!context_.createImage(width, height, colorFormat_, VK_IMAGE_TILING_OPTIMAL, usage,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out.image, out.memory, out.offset, out.allocId)) {
         return false;
     }
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = colorImage_;
+    viewInfo.image = out.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = colorFormat_;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -148,13 +140,35 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(dev, &viewInfo, nullptr, &colorView_) != VK_SUCCESS) {
+    if (vkCreateImageView(dev, &viewInfo, nullptr, &out.view) != VK_SUCCESS) return false;
+    if (opaque() && (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_ONE;
+        if (vkCreateImageView(dev, &viewInfo, nullptr, &out.presentView) != VK_SUCCESS) return false;
+    }
+    return true;
+}
+
+bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
+    colorFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
+
+    ColorImage back;
+    const bool made = createColorImage(width, height,
+                                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                       back);
+    colorImage_ = back.image;
+    colorMemory_ = back.memory;
+    colorOffset_ = back.offset;
+    colorAllocId_ = back.allocId;
+    colorView_ = back.view;
+    if (!made) return false;
+    // The front: what the presenter samples, and copies from (a blend).
+    if (!createColorImage(width, height,
+                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                          front_)) {
         return false;
     }
-    if (opaque()) {
-        viewInfo.components.a = VK_COMPONENT_SWIZZLE_ONE;
-        if (vkCreateImageView(dev, &viewInfo, nullptr, &presentView_) != VK_SUCCESS) return false;
-    }
+    frontLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
     colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
     needsInit_ = true;
     return true;
@@ -214,6 +228,54 @@ void WebGLVkCanvas::transitionDepth(VkCommandBuffer cmd, VkImageLayout newLayout
     if (depthLayout_ == newLayout || depthImage_ == VK_NULL_HANDLE) return;
     context_.transitionImageLayout(depthImage_, depthFormat_, depthLayout_, newLayout, cmd);
     depthLayout_ = newLayout;
+}
+
+void WebGLVkCanvas::recordPresentCopy(VkCommandBuffer cmd) {
+    if (!isValid() || front_.image == VK_NULL_HANDLE || cmd == VK_NULL_HANDLE) return;
+    recordInit(cmd);
+    transitionColor(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+    // After every earlier read of the front (the presenter's sampling, or its
+    // copy in a blend, in submissions before this one): nothing kept.
+    render::ImageBarrier toDst;
+    toDst.image = front_.image;
+    toDst.oldLayout = frontLayout_;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    toDst.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    toDst.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+    render::cmdImageBarrier(cmd, toDst);
+
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {width_, height_, 1};
+    vkCmdCopyImage(cmd, colorImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, front_.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    // Readable by whatever samples or copies it in later submissions.
+    render::ImageBarrier toRead;
+    toRead.image = front_.image;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    toRead.srcAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstStages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    toRead.dstAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    render::cmdImageBarrier(cmd, toRead);
+    frontLayout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
+render::LayerImage WebGLVkCanvas::frontImage() const {
+    render::LayerImage img;
+    if (front_.image == VK_NULL_HANDLE) return img;
+    img.image = front_.image;
+    img.view = front_.presentView != VK_NULL_HANDLE ? front_.presentView : front_.view;
+    img.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    img.format = colorFormat_;
+    img.width = width_;
+    img.height = height_;
+    return img;
 }
 
 bool WebGLVkCanvas::recordCopy(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset) {

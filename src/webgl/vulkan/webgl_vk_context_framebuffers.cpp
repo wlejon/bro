@@ -260,10 +260,12 @@ WebGLVkContext::Surface WebGLVkContext::attachmentSurface(const VkFboAttachment&
 }
 
 // Every use of the drawing buffer's images starts here, so this is where a
-// shown drawing buffer is cleared (presented()).
+// shown drawing buffer is cleared (presented()), and where the front the
+// compositor samples becomes stale (endFrame copies it again).
 WebGLVkContext::Surface WebGLVkContext::canvasSurface(bool depth) {
     Surface s;
     if (!canvas_.isValid()) return s;
+    canvasFrontStale_ = true;
     if (canvasClearPending_) {
         canvasClearPending_ = false;
         endRendering();

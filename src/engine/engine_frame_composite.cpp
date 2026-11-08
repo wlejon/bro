@@ -341,9 +341,10 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 frameVolatile_ = true;  // its drawing buffer is redrawn in place
                 for (auto& entry : webglEntries_) {
                     if (!entry.context || !entry.element || entry.elementId != src.elementId) continue;
-                    // The canvas's recorded work is submitted before the
-                    // presenter's submission samples it (queue order does the rest).
-                    placeLayerImage(entry.context->frameEnd(), quad);
+                    // The canvas's front holds a finished frame before the
+                    // presenter's submission samples it (queue order does the
+                    // rest): this one, or in the live loop the one before.
+                    placeLayerImage(entry.context->frameEnd(webglFramesMayLag_), quad);
                     return;
                 }
             },

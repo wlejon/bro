@@ -24,7 +24,7 @@ WebGLChannel::~WebGLChannel() {
     ring.setHooks(nullptr, nullptr, nullptr);
     ring.publish();
     ring.consume([this](Op op, const uint8_t* rec) {
-        if (op != Op::Attach && op != Op::Detach && op != Op::SyncCall && op != Op::Destroy)
+        if (op != Op::Attach && op != Op::Detach && op != Op::SyncCall && op != Op::FrameEnd && op != Op::Destroy)
             replayWebGLCommand(nullptr, op, rec, replay);
     });
     replay.clear();
@@ -69,6 +69,20 @@ void WebGLChannel::replayRecord(uint16_t opBits, const uint8_t* rec) {
                 }
                 if (backend_) replay.publish(*backend_);
                 syncsAnswered.store(seq, std::memory_order_release);
+                progress.notify();
+            });
+            return;
+        case Op::FrameEnd:
+            cmd::decodeArgs<uint64_t>(rec, [this](uint64_t seq) {
+                render::LayerImage img;
+                try {
+                    if (backend_) img = backend_->endFrame();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("WebGL: ending a frame failed: %s", e.what());
+                }
+                frontImages[seq % 2] = img;
+                if (backend_) replay.publish(*backend_);
+                framesEnded.store(seq, std::memory_order_release);
                 progress.notify();
             });
             return;

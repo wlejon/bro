@@ -64,7 +64,14 @@
  * copied), so an array may change right after the call. The engine's WebGL
  * thread replays the ring in call order and owns the Vulkan work, overlapping
  * the page's script; a frame's commands are submitted when the frame is
- * composited. Errors keep their order: `getError` reports what the calls before
+ * composited. At a frame's end the drawing buffer is copied, on the WebGL
+ * thread, into the image the compositor samples, and the live frame loop
+ * (a window, `runFrames`) does not wait for that: the script's next frame
+ * runs while the WebGL thread finishes replaying this one, at most one frame
+ * ahead, so a window may show the frame before the one just drawn when the
+ * replay is the longer. Reads of the canvas (`readPixels`, `toDataURL`,
+ * `createImageBitmap`) and captures (`screenshot`, `getPixel`,
+ * `frameImage`) always see the frame just drawn. Errors keep their order: `getError` reports what the calls before
  * it raised. Answered without the WebGL thread: constant `getParameter`
  * values, extensions, uniform and attribute locations and a program's or
  * shader's status and info log (once its last link or compile has replayed:

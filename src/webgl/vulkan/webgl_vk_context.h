@@ -66,6 +66,12 @@ public:
     /// of it, which makes the clear redundant.
     void presented() { canvasClearPending_ = !preserveDrawingBuffer_; }
 
+    /// A frame's end, for the compositor: the drawing buffer copied into the
+    /// canvas's front when anything used it since the last copy, everything
+    /// recorded submitted, and presented(). Answers the front, which the
+    /// presenter may sample in any submission after this one.
+    render::LayerImage endFrame();
+
     // =================================================================
     // WebGL2 API Commands
     // =================================================================
@@ -827,6 +833,7 @@ private:
     WebGLVkCanvas canvas_;
     bool preserveDrawingBuffer_ = false;
     bool canvasClearPending_ = false;  // presented(), not yet cleared
+    bool canvasFrontStale_ = true;     // the drawing buffer used since the front was copied from it
     bool clearCoversCanvas(GLbitfield mask) const;
     WebGLVkPipelineCache pipelineCache_;
 

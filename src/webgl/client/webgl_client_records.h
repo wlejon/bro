@@ -51,6 +51,8 @@ inline constexpr TypeList<GLuint, GLenum> kQueryCounter{};
 inline constexpr TypeList<int, int> kAttach{};
 // {WebGLSyncFn, its context, the round trip's sequence number}
 inline constexpr TypeList<void (*)(void*, vk::WebGLVkContext*), void*, uint64_t> kSyncCall{};
+// {the frame end's sequence number}
+inline constexpr TypeList<uint64_t> kFrameEnd{};
 // {sync, condition, flags, FenceSlot ref}
 inline constexpr TypeList<GLuint, GLenum, GLbitfield, void*> kFenceSync{};
 

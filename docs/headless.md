@@ -651,9 +651,13 @@ own work. Several WebGL canvases composite independently.
 
 **Threading.** Calls are encoded into a per-context ring (data copied) and
 replayed in order by the engine's WebGL thread (`bro-webgl`); answers from
-backend state are round trips (docs/webgl2-api.js lists them). A frame's end
-waits for every context's replay and submission (not the GPU), so after
-`advanceTime` or `flush()` a screenshot sees what the page encoded.
+backend state are round trips (docs/webgl2-api.js lists them). A headless
+step's frame end waits for every context's replay and submission (not the
+GPU), so after `advanceTime` or `flush()` a screenshot sees what the page
+encoded. The live loop (`runFrames`, like a window) waits only for the frame
+end before, so the script's next frame overlaps the replay of this one, and
+`presentedImage()` may show the frame before the one just drawn; a capture
+(`screenshot`, `getPixel`, `frameImage`) composites the frame just drawn.
 
 **Shaders.** GLSL ES 3.00 and 1.00 are compiled in process by glslang to
 SPIR-V, and the program interface comes from glslang's reflection, not from

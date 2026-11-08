@@ -65,10 +65,16 @@ public:
 
     // --- The drawing buffer, for the compositor and toDataURL ---
     /// The compositor is about to show the drawing buffer: submit the work
-    /// recorded so far, mark it shown (vk::WebGLVkContext::presented), and
-    /// answer the canvas image (its view, current layout and size) to sample
-    /// in place, behind that submission in queue order. Empty while lost.
-    render::LayerImage frameEnd();
+    /// recorded so far, copy the drawing buffer into the image the compositor
+    /// samples (the canvas's front), mark it shown
+    /// (vk::WebGLVkContext::presented), and answer the front (its view,
+    /// layout and size) to sample in place. Without `mayLag` the front holds
+    /// everything drawn so far once this returns (behind it in queue order);
+    /// with it, this returns once the frame end before this one has
+    /// replayed, so the script's next frame overlaps the WebGL thread's
+    /// replay of this one (WebGLClient::endFrame): a presenter submission
+    /// shows this frame or the one before. Empty while lost.
+    render::LayerImage frameEnd(bool mayLag = false);
     /// The canvas as tightly packed, top-down RGBA (canvasWidth() x
     /// canvasHeight()). False while lost.
     bool readCanvasPixels(std::vector<uint8_t>& out);

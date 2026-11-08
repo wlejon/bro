@@ -92,6 +92,7 @@ void WebGLVkContext::resize(int width, int height, uint64_t presentedTicket) {
     endRendering();
     canvas_.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height), presentedTicket);
     canvas_.recordInit(commands());
+    canvasFrontStale_ = true;
 }
 
 bool WebGLVkContext::readCanvasPixels(std::vector<uint8_t>& out) {
@@ -105,6 +106,17 @@ bool WebGLVkContext::readCanvasPixels(std::vector<uint8_t>& out) {
     if (!waitForCommands()) return false;
     out.assign(static_cast<const uint8_t*>(mapped), static_cast<const uint8_t*>(mapped) + size);
     return true;
+}
+
+render::LayerImage WebGLVkContext::endFrame() {
+    if (canvasFrontStale_) {
+        endRendering();
+        canvas_.recordPresentCopy(commands());
+        canvasFrontStale_ = false;
+    }
+    flushCommands();
+    presented();
+    return canvas_.frontImage();
 }
 
 void WebGLVkContext::flush() {

@@ -13,12 +13,15 @@
 // What crosses back, without a lock:
 //   - publications into the client's slots (webgl_client_async.h);
 //   - syncsAnswered: the last round trip (SyncCall) answered;
+//   - framesEnded and frontImages: the last frame end (FrameEnd) replayed,
+//     and the image it left for the compositor;
 //   - the ring's read position and replay.blobBytes (back-pressure);
 //   - progress: notified after every batch replayed and every round trip
 //     answered, which is what the client sleeps on when it waits for any of
 //     the above.
 // The Destroy acknowledgement is the control plane's: WebGLThread's mutex.
 
+#include "render/layer_image.h"
 #include "webgl/client/webgl_client_async.h"
 #include "webgl/client/webgl_ring.h"
 #include "webgl/client/webgl_wait.h"
@@ -59,6 +62,13 @@ public:
     WebGLWaitWord progress;
     /// The sequence number of the last SyncCall answered.
     std::atomic<uint64_t> syncsAnswered{0};
+    /// The sequence number of the last FrameEnd replayed, stored (release)
+    /// after its image: frontImages[n % 2] is what frame end n answered.
+    /// The client reads the slot of a frame end it has seen acknowledged,
+    /// and encodes frame end n + 2 (the next writer of that slot) only after
+    /// that read, so the two never overlap.
+    std::atomic<uint64_t> framesEnded{0};
+    render::LayerImage frontImages[2];
     /// The client read a query still pending: publish query status again
     /// even without commands.
     std::atomic<bool> pollRequested{false};

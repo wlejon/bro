@@ -37,6 +37,7 @@
 #include "webgl/client/webgl_cmd.h"
 #include "webgl/client/webgl_encoder.h"
 #include "webgl/client/webgl_ring.h"
+#include "render/layer_image.h"
 
 #include <atomic>
 #include <chrono>
@@ -260,23 +261,19 @@ public:
     /// Submit what is recorded (WebGL's flush, the frame's end): published
     /// to the WebGL thread, not waited for.
     void flush();
-    /// A round trip that first submits everything recorded: fn(backend)
-    /// after the backend's flush (the composite's hand-off).
-    template <class F>
-    auto flushThen(F&& fn) {
-        auto both = [&fn](auto& gl) {  // generic: the backend is complete where this is used
-            gl.flush();
-            return fn(gl);
-        };
-        if constexpr (std::is_void_v<std::invoke_result_t<F, vk::WebGLVkContext&>>) {
-            sync(both);
-            settledAt_ = channel_.ring.written();
-        } else {
-            auto r = sync(both);
-            settledAt_ = channel_.ring.written();
-            return r;
-        }
-    }
+    /// The frame's end, the composite's hand-off: a FrameEnd record (the
+    /// backend's endFrame: the drawing buffer copied into the canvas's front,
+    /// everything recorded submitted, the buffer marked shown), then the
+    /// front once a frame end has replayed. That is this one, or with
+    /// `mayLag` the one before it: the JS thread goes on to its next frame
+    /// while the WebGL thread replays this one, never more than one frame
+    /// ahead (this waits for the previous frame end). A front sampled by a
+    /// submission after this returns shows that frame end or a later one, as
+    /// the queue orders the presenter's submission and the frame end's.
+    /// Nothing new is encoded when nothing was since the last frame end.
+    /// Empty without a backend. The first frame end after attach() or
+    /// resize() never lags (the front before it may be gone).
+    render::LayerImage endFrame(bool mayLag);
     /// Submit what is recorded and wait until the WebGL thread has replayed
     /// it (not for the GPU): the frame's end, so what a frame encoded is
     /// replayed and submitted with that frame. Nothing to wait for when no
@@ -285,9 +282,11 @@ public:
     /// Submit and wait for the GPU: a round trip.
     void finish();
     /// Resize the drawing buffer; `presentedTicket` is the last queue
-    /// submission that may sample the old one.
+    /// submission that may sample the old one (the client answers no front
+    /// from before the resize after it: endFrame).
     void resize(int width, int height, uint64_t presentedTicket) {
         encodeSimple(channel_.ring, Op::Resize, TypeList<int, int, uint64_t>{}, width, height, presentedTicket);
+        rebuiltAt_ = framesEncoded_;
     }
 
     // The hand-written records' argument lists (webgl_replay.cpp decodes them).
@@ -356,7 +355,10 @@ private:
     std::shared_ptr<WebGLThread> thread_;
     WebGLChannel channel_;
     uint64_t syncs_ = 0;     // SyncCall records encoded
-    uint64_t settledAt_ = 0;  // the ring's written() at the last flushThen
+    uint64_t settledAt_ = 0;   // the ring's written() at the last settle() or endFrame()
+    uint64_t frameEndAt_ = 0;  // the ring's written() at the last FrameEnd
+    uint64_t framesEncoded_ = 0;  // FrameEnd records encoded
+    uint64_t rebuiltAt_ = 0;      // framesEncoded_ at the last attach, detach or resize
     bool attached_ = false;
     std::shared_ptr<const vk::WebGLCaps> capsRef_;
     const vk::WebGLCaps& caps_;

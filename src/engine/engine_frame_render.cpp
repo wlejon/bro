@@ -273,10 +273,15 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
         beginFrameComposite();
         if (drmCtx_) drmCtx_->clientLayersComposited = false;
+        // The live loop's frame: a WebGL canvas's script runs its next frame
+        // while the WebGL thread replays this one. A headless step is not
+        // live: what it composites is what its script drew.
+        webglFramesMayLag_ = displayMode_ != DisplayMode::Headless || headlessPipeline_;
         compositeLayers(layers.appLayers, layers.appInsetTop);
         compositeRemainingClientWindows();
 
         compositeLayers(layers.systemLayers);
+        webglFramesMayLag_ = false;
 
         compositeWindowHosts();
         compositeDragIcon();

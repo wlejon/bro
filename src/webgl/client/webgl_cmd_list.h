@@ -244,9 +244,12 @@
 //   Attach    {width, height}: a new backend (the context's first, or restored)
 //   Detach    {}: the backend goes (context loss)
 //   SyncCall  {fn, ctx, sequence}: fn(ctx, backend), then the answer acknowledged
+//   FrameEnd  {sequence}: the backend's endFrame, its front published and the
+//             frame acknowledged (WebGLChannel::framesEnded)
 //   Destroy   {}: the backend goes and the channel with it; nothing follows
 #define BRO_WEBGL_CHANNEL_COMMANDS(X) \
     X(Attach)                         \
     X(Detach)                         \
     X(SyncCall)                       \
+    X(FrameEnd)                       \
     X(Destroy)
