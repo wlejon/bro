@@ -18,7 +18,9 @@ include(FetchContent)
 
 set(BRO_GLSLANG_VERSION 16.6.0)
 FetchContent_Declare(glslang
-    URL      https://github.com/KhronosGroup/glslang/archive/refs/tags/${BRO_GLSLANG_VERSION}.tar.gz
+    URL      https://codeload.github.com/KhronosGroup/glslang/tar.gz/refs/tags/${BRO_GLSLANG_VERSION}
+             https://github.com/KhronosGroup/glslang/archive/refs/tags/${BRO_GLSLANG_VERSION}.tar.gz
+    DOWNLOAD_NAME "${BRO_GLSLANG_VERSION}.tar.gz"
     URL_HASH SHA256=9c09b901149c729df745057dafa815278aaa101b84d2b6e14f16a42de52f97f2
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )

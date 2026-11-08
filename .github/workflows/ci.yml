@@ -34,6 +34,7 @@ env:
   # this pins the vcpkg tool + scripts to the same commit (the runner's
   # preinstalled vcpkg drifts with every image update).
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  VCPKG_FORCE_SYSTEM_BINARIES: "1"
   # The Windows jobs configure against the LunarG Vulkan SDK (headers +
   # vulkan-1.lib); scripts/ci/install-vulkan-sdk-windows.sh checks the hash.
   VULKAN_SDK_VERSION: 1.4.363.0
@@ -117,8 +118,28 @@ jobs:
         shell: bash
         run: scripts/ci/install-vulkan-sdk-windows.sh
 
+      - name: Seed sccache tool cache
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ARCH="x64"; ASSET="sccache-v0.19.0-x86_64-pc-windows-msvc.tar.gz"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ARCH="arm64"; ASSET="sccache-v0.19.0-aarch64-apple-darwin.tar.gz"
+          else
+            ARCH="x64"; ASSET="sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz"
+          fi
+          DEST="$RUNNER_TOOL_CACHE/sccache/0.19.0/$ARCH"
+          mkdir -p "$DEST"
+          if (cd "$DEST" && gh release download v0.19.0 -R mozilla/sccache -p "$ASSET" -O "$ASSET" && tar -xzf "$ASSET" --strip-components=1 && rm -f "$ASSET"); then
+            touch "${DEST}.complete"
+          fi
+
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.19.0"
 
       # Persist vcpkg's built-package archives across runs. The pinned manifest
       # keeps package ABIs stable, so after one warm run the configure-time dep
@@ -143,14 +164,21 @@ jobs:
       # are all pinned together.
       - name: vcpkg (pinned)
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git clone --reference-if-able "${VCPKG_INSTALLATION_ROOT:-}" https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
           git -C "$RUNNER_TEMP/vcpkg" checkout "$VCPKG_COMMIT"
+          sed -i.bak 's|\${github_host}/\${org_name}/\${repo_name}/archive/\${ref_to_use}\.tar\.gz|https://codeload.github.com/${org_name}/${repo_name}/tar.gz/${ref_to_use}|g' "$RUNNER_TEMP/vcpkg/scripts/cmake/vcpkg_from_github.cmake"
+          . "$RUNNER_TEMP/vcpkg/scripts/vcpkg-tool-metadata.txt"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+            gh release download "$VCPKG_TOOL_RELEASE_TAG" -R microsoft/vcpkg-tool -p "vcpkg.exe" -O "$RUNNER_TEMP/vcpkg/vcpkg.exe" || "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            (gh release download "$VCPKG_TOOL_RELEASE_TAG" -R microsoft/vcpkg-tool -p "vcpkg-glibc" -O "$RUNNER_TEMP/vcpkg/vcpkg" && chmod +x "$RUNNER_TEMP/vcpkg/vcpkg") || "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
           else
-            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+            (gh release download "$VCPKG_TOOL_RELEASE_TAG" -R microsoft/vcpkg-tool -p "vcpkg-macos" -O "$RUNNER_TEMP/vcpkg/vcpkg" && chmod +x "$RUNNER_TEMP/vcpkg/vcpkg") || "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
           fi
+          touch "$RUNNER_TEMP/vcpkg/vcpkg.disable-metrics"
           mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
@@ -298,8 +326,28 @@ jobs:
         shell: bash
         run: scripts/ci/install-vulkan-sdk-windows.sh
 
+      - name: Seed sccache tool cache
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ARCH="x64"; ASSET="sccache-v0.19.0-x86_64-pc-windows-msvc.tar.gz"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ARCH="arm64"; ASSET="sccache-v0.19.0-aarch64-apple-darwin.tar.gz"
+          else
+            ARCH="x64"; ASSET="sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz"
+          fi
+          DEST="$RUNNER_TOOL_CACHE/sccache/0.19.0/$ARCH"
+          mkdir -p "$DEST"
+          if (cd "$DEST" && gh release download v0.19.0 -R mozilla/sccache -p "$ASSET" -O "$ASSET" && tar -xzf "$ASSET" --strip-components=1 && rm -f "$ASSET"); then
+            touch "${DEST}.complete"
+          fi
+
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.19.0"
 
       - name: Configure
         shell: bash

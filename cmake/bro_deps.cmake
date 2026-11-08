@@ -294,15 +294,21 @@ function(bro_dependency name)
         if(tree)
             set(FETCHCONTENT_SOURCE_DIR_${uc} "${tree}")
             # Never downloaded: FetchContent takes the tree instead.
-            set(url "https://github.com/${gh}/archive/HEAD.tar.gz")
+            set(urls "https://github.com/${gh}/archive/HEAD.tar.gz")
+            set(dl_name "HEAD.tar.gz")
         else()
             _bro_deps_commit(${lc} sha how)
-            set(url "https://github.com/${gh}/archive/${sha}.tar.gz")
+            set(urls
+                "https://codeload.github.com/${gh}/tar.gz/${sha}"
+                "https://github.com/${gh}/archive/${sha}.tar.gz"
+            )
+            set(dl_name "${sha}.tar.gz")
         endif()
         # SOURCE_SUBDIR names nothing, so FetchContent only populates and the
         # add_subdirectory() below decides EXCLUDE_FROM_ALL and the binary dir.
         # Extraction-time timestamps, so a changed commit rebuilds what it changed.
-        FetchContent_Declare(${lc} URL "${url}" DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+        FetchContent_Declare(${lc} URL ${urls} DOWNLOAD_NAME "${dl_name}"
+                             DOWNLOAD_EXTRACT_TIMESTAMP FALSE
                              SOURCE_SUBDIR _bro_deps_populate_only)
         FetchContent_MakeAvailable(${lc})
         FetchContent_GetProperties(${lc} SOURCE_DIR src)
