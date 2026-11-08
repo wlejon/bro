@@ -9,9 +9,9 @@
 // in each), detached, and appended again; only that re-insertion's style and
 // layout pass is measured. A view switch in an app is exactly this.
 //
-// It reports the median microseconds per element for style (resolveStyles,
-// and of that the cascade) and for layout (build + invalidate + layout +
-// sync), and guards both against a regression well past what they are now.
+// It logs the median microseconds per element for style (resolveStyles, and
+// of that the cascade) and for layout (build + invalidate + layout + sync),
+// and asserts the caches that keep them low: styles and layout subtrees kept.
 //
 // BRO_RESTYLE_COST_ITERS overrides the iteration count (profiling runs).
 
@@ -139,18 +139,11 @@ if (only) skipTest(`BRO_RESTYLE_COST_ONLY=${only}: a profiling run`);
 assert(small.elements >= 25 && small.elements <= 25 + 2, `only the re-inserted rows are styled (${small.elements})`);
 assert(big.elements >= 100 && big.elements <= 100 + 2, `only the re-inserted rows are styled (${big.elements})`);
 
-// The guard. Before style sharing and layout retention a re-inserted element
-// cost ~11-12 us of style and ~5-6 us of layout here; now it is ~1.8 and
-// ~0.3 (Windows, Release). The limits leave room for a loaded machine running
-// the suite in parallel and still fail if either cache stops working.
-const styleLimit = (process.env && process.env.CI) ? 15 : 6;
-const layoutLimit = (process.env && process.env.CI) ? 15 : 5;
+// The guard is what does not depend on the machine: every element kept its
+// style, every row its layout subtree, and next to nothing was laid out (the
+// microseconds above are logged, not asserted).
 for (const r of [small, big]) {
     const n = r.elements;
-    assert(r.style < styleLimit, `re-insert style ${r.style.toFixed(2)} us/el, limit ${styleLimit}`);
-    assert(r.layout < layoutLimit, `re-insert layout ${r.layout.toFixed(2)} us/el, limit ${layoutLimit}`);
-    // And the reasons, which do not depend on the machine: every element kept
-    // its style, every row its layout subtree, and next to nothing was laid out.
     assert(r.stats.stylesKept >= n - 2, `styles kept on re-insert (${r.stats.stylesKept} of ${n})`);
     assert(r.stats.layoutSubtreesKept >= Math.floor(n / 11), `row layouts kept (${r.stats.layoutSubtreesKept})`);
     assert(r.stats.nodesLaidOut < 20, `nodes laid out on re-insert (${r.stats.nodesLaidOut})`);

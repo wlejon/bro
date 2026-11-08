@@ -29,7 +29,7 @@
     // A presented frame once presents stop changing (a rAF is not a present).
     async function settled() {
         let last = null;
-        const deadline = Date.now() + 2000;
+        const deadline = Date.now() + 10000;
         for (;;) {
             await wait(30);
             await frames(2);

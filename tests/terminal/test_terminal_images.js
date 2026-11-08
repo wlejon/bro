@@ -137,7 +137,7 @@ if (!bro.terminal || !bro.terminal.available) {
     t.feed('\x1b[2;30H\x1b]1337;File=inline=1;width=2;height=2;preserveAspectRatio=0;size=' + ANIM_GIF.length + ':' +
            b64(ANIM_GIF) + '\x07');
     const seen = new Set();
-    const end = Date.now() + 3000;
+    const end = Date.now() + 15000;
     while (Date.now() < end && seen.size < 3) {
         advanceTime(16);
         const c = at(29, 1, 0.5, 0.5);

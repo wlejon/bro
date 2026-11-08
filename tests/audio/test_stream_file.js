@@ -159,8 +159,15 @@ assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote streaming fixture WAV');
     let st = waitForStats(id, s => s.bufferedFrames > 0);
     assert(st, 'loop stream prebuffered');
 
+    // Paced on the ring, as the whole-file render above is: each 0.1 s gulp
+    // only once the worker has a gulp buffered, so a slow runner cannot drain
+    // it and read as dead air at the seam.
+    const gulp = Math.ceil(sr / 10);
     ctx.startRecording();
-    for (let i = 0; i < 12; i++) { sleep(100); realWait(12); }
+    for (let i = 0; i < 12; i++) {
+        waitForStats(id, s => s.bufferedFrames >= gulp + 1024, 10000);
+        sleep(100);
+    }
     const rec = ctx.stopRecording();
 
     st = ctx.getStreamStats(id);

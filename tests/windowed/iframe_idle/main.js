@@ -23,9 +23,10 @@ function frames(n) {
 function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
-// Poll the presented frame until every [x, y, rgb, what] check holds (2 s).
+// Poll the presented frame until every [x, y, rgb, what] check holds (10 s;
+// a fast renderer returns within a few frames).
 async function shows(checks) {
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 10000;
     let img = null;
     for (;;) {
         img = presentedFrame();

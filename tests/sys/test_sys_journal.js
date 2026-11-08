@@ -61,16 +61,18 @@ async function main() {
     const transports = await j.values('_TRANSPORT');
     assert(Array.isArray(transports) && transports.length > 0, 'values lists a field\'s values');
 
-    // A live follow from the end: a record written now arrives, under an
-    // identifier of this run's own, so the match has no record before it.
+    // A live follow from the newest record: a record written now arrives,
+    // under an identifier of this run's own, so the match has no record
+    // before it. Following after a cursor (not "new records only") means the
+    // record is delivered however late the follow's thread starts.
     const { execFileSync } = require('child_process');
     const tag = 'bro-journal-test-' + Math.random().toString(16).slice(2);
     const got = [];
-    const follow = j.follow({ match: { SYSLOG_IDENTIFIER: tag } }, (entries) => {
+    const head = (await j.query({ limit: 1 })).entries.at(-1);
+    const follow = j.follow({ match: { SYSLOG_IDENTIFIER: tag }, after: head ? head.cursor : undefined }, (entries) => {
         for (const e of entries) got.push(e);
     });
     assert(typeof follow.id === 'number' && typeof follow.close === 'function', 'follow returns { id, close }');
-    await new Promise(r => setTimeout(r, 300));
     try {
         execFileSync('logger', ['-t', tag, tag]);
     } catch (e) {
