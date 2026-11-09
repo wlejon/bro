@@ -6,8 +6,9 @@
 #
 # <runner> is any suite runner that prints `PASS <name>` / `FAIL <name>` /
 # `SKIP <name>` lines: bro's tests/run_tests.sh, helmapps' scripts/run_tests.sh,
-# broworkshop's scripts/validate.sh. Each mode runs it with the environment
-# that selects the mode:
+# broworkshop's scripts/validate.sh, or ctest (its `Test #N: name ... Passed`
+# lines; e.g. helm's UI tests: -- ctest --test-dir ../helm/build-release).
+# Each mode runs it with the environment that selects the mode:
 #
 #   auto     the default tiered JIT
 #
@@ -66,8 +67,9 @@ for m in "${mode_list[@]}"; do
         aot) env -u BRO_JIT_TIER -u BRONZE_GC_STRESS TEST_AOT=1 "$@" > "$log" 2>&1 ;;
         gc)  env -u BRO_JIT_TIER -u TEST_AOT BRONZE_GC_STRESS=1 "$@" > "$log" 2>&1 ;;
     esac
-    echo "mode $m: $(grep -cE '^\s*PASS ' "$log") passed, $(grep -cE '^\s*FAIL ' "$log") failed," \
-         "$(grep -cE '^\s*SKIP ' "$log") skipped ($(( $(date +%s) - start )) s)"
+    echo "mode $m: $(grep -cE '^\s*PASS |Test +#[0-9]+: .* Passed' "$log") passed," \
+         "$(grep -cE '^\s*FAIL |Test +#[0-9]+: .*\*\*\*(Failed|Timeout|Exception|Not Run)' "$log") failed," \
+         "$(grep -cE '^\s*SKIP |Test +#[0-9]+: .*\*\*\*Skipped' "$log") skipped ($(( $(date +%s) - start )) s)"
 done
 
 # One row per test: name, then its verdict in each mode (- = not run).
@@ -76,6 +78,9 @@ import re, sys
 out, modes = sys.argv[1], sys.argv[2:]
 # `PASS  name`, or validate.sh's `PASS  test  name` / `PASS  smoke  name`.
 line = re.compile(r'^\s*(PASS|FAIL|SKIP)\s+(?:(test|smoke)\s+)?(\S+?)(?::|\s|$)')
+# ctest: `  3/23 Test  #3: ui-bar .....   Passed    2.1 sec`, `***Failed`,
+# `***Timeout`, `***Skipped`, `***Exception: SegFault`, `***Not Run`.
+ctest = re.compile(r'^\s*\d+/\d+\s+Test\s+#\d+:\s+(\S+)\s+\.*\s*(\*\*\*)?(\w+)')
 verdicts = {}
 for m in modes:
     with open(f'{out}/{m}.log', errors='replace') as f:
@@ -84,6 +89,12 @@ for m in modes:
             if hit:
                 name = (hit.group(2) + ' ' if hit.group(2) else '') + hit.group(3)
                 verdicts.setdefault(name, {})[m] = hit.group(1)
+                continue
+            hit = ctest.match(l)
+            if hit:
+                word = hit.group(3)
+                v = 'PASS' if word == 'Passed' else 'SKIP' if word == 'Skipped' else 'FAIL'
+                verdicts.setdefault(hit.group(1), {})[m] = v
 timing = re.compile(r'perf|budget|latency|timing|stall|jank', re.I)
 ref = modes[0]
 rows, diverged = [], []
