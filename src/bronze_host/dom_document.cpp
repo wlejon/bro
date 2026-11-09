@@ -582,7 +582,7 @@ Value makeDocumentValue(dom::Document* fixed) {
         dom::Node* node = hostNodeOf(a[0]);
         if (!node) return ev::null();
         bool deep = a.size() > 1 && ev::toBool(a[1]);
-        dom::Node* cloned = doc->cloneNode(node, deep, /*preserveId=*/true);
+        dom::Node* cloned = doc->cloneNode(node, deep);
         return hostNodeValue(cloned);
     });
     b.def("adoptNode", 1, [fixed](Value, std::span<const Value> a) {

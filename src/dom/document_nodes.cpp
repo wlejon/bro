@@ -36,7 +36,7 @@ DocumentFragment* Document::createDocumentFragment() {
     return allocateNode<DocumentFragment>();
 }
 
-Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
+Node* Document::cloneNode(Node* src, bool deep) {
     if (!src) return nullptr;
 
     switch (src->nodeType()) {
@@ -56,7 +56,7 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
             }
             if (deep && clone) {
                 for (auto* child : src->childNodes()) {
-                    if (Node* childClone = cloneNode(child, true, preserveId))
+                    if (Node* childClone = cloneNode(child, true))
                         clone->appendChild(childClone);
                 }
             }
@@ -75,10 +75,7 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
     else clone->setNs(srcEl->ns());
     clone->setQualifiedName(srcEl->qualifiedName());
 
-    for (const auto& [name, val] : srcEl->attributes()) {
-        if (!preserveId && name == "id") continue;
-        clone->setAttribute(name, val);
-    }
+    for (const auto& [name, val] : srcEl->attributes()) clone->setAttribute(name, val);
     // "style" never lives in attributes_ (see Element::setAttribute) — copy the
     // declaration block from StyleProxy, and only when the attribute is really
     // present, so an element with no style attribute doesn't grow one.
@@ -87,11 +84,11 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
 
     if (deep) {
         for (auto* child : srcEl->childNodes()) {
-            if (Node* childClone = cloneNode(child, true, preserveId))
+            if (Node* childClone = cloneNode(child, true))
                 clone->appendChild(childClone);
         }
         if (srcEl->templateContent()) {
-            if (Node* fragClone = cloneNode(srcEl->templateContent(), true, preserveId)) {
+            if (Node* fragClone = cloneNode(srcEl->templateContent(), true)) {
                 if (auto* fEl = dynamic_cast<Element*>(fragClone)) {
                     clone->setTemplateContent(fEl);
                 }

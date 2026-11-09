@@ -79,12 +79,9 @@ public:
     // never by serializing to markup and reparsing, which silently drops
     // everything markup cannot express (a <canvas>'s backing store, a
     // <select>'s live selection, custom-element upgrade state). Event
-    // listeners are intentionally NOT copied, per spec.
-    //
-    // `preserveId` is spec behaviour (the id attribute is an attribute like
-    // any other); the JS Element.cloneNode binding passes false to keep its
-    // long-standing "clones don't collide on id" contract.
-    Node* cloneNode(Node* src, bool deep, bool preserveId = true);
+    // listeners are intentionally NOT copied, per spec. Every attribute is
+    // copied, the id among them, so a clone can replace its original.
+    Node* cloneNode(Node* src, bool deep);
 
     // Allocate a ShadowRoot owned by this document
     ShadowRoot* allocateShadowRoot(Element* host, ShadowRoot::Mode mode);

@@ -359,10 +359,7 @@ void installNodeTree(ObjectBuilder& b) {
         dom::Document* doc = st->node->document();
         if (!doc) return ev::null();
         bool deep = ev::toBool(argAt(a, 0));
-        // preserveId=false matches what bro's own JS binding does: two nodes
-        // with one id is a bug an app almost never intends, and getElementById
-        // would answer whichever it reached first.
-        return hostNodeValue(doc->cloneNode(st->node, deep, /*preserveId=*/false));
+        return hostNodeValue(doc->cloneNode(st->node, deep));
     });
 
     b.accessor("childNodes",

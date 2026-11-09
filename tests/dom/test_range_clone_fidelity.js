@@ -108,7 +108,12 @@ assert(deepSel.value === 'c', 'cloneNode(true) carries select selection');
 const deepPx = deepCv.getContext('2d').getImageData(0, 0, 1, 1).data;
 assert(deepPx[0] === 255 && deepPx[3] === 255,
     'cloneNode(true) carries the canvas backing store');
-assert(deep.id === '', 'cloneNode(true) still drops the id');
+assert(deep.id === host.id && host.id !== '', 'cloneNode(true) copies the id, as every attribute');
+// A clone takes its original's place, found by the same id.
+const shallow = host.cloneNode(false);
+host.parentNode.replaceChild(shallow, host);
+assert(document.getElementById(host.id) === shallow, 'a clone replacing its original is found by its id');
+shallow.parentNode.replaceChild(host, shallow);
 
 root.innerHTML = '';
 flush();
