@@ -141,6 +141,17 @@ struct View {
     bool frustum = false;
     Vec3d forward, right, up;
     double tanHalfX = 1, tanHalfY = 1;
+    /// Places wanted whatever the view sees: a tile whose bounds come within
+    /// `radius` of `position` is seen (not culled, so drawn) and splits while
+    /// its cells are larger than `cell`, as well as by the view's own rule,
+    /// before any of the view's splits. What a simulation stands on, out of
+    /// the camera's sight too.
+    struct Focus {
+        Vec3d position;
+        double radius = 0;
+        double cell = 1;
+    };
+    std::vector<Focus> focus;
 };
 
 struct Production {

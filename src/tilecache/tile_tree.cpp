@@ -306,8 +306,23 @@ bool TileTree::visible(const Bounds& b, double top, const View& view, const Cull
 
 double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* seen) const {
     const Bounds b = tightBounds(n);
+    // A focus the tile comes near: seen, and split down to the focus's cell
+    // before anything the view wants (a capacity-bound cache gives the
+    // focus its tiles first, and produces them first), its error raised
+    // above any projection's. Coarser along a chain is still larger.
+    bool focused = false;
+    double focusError = 0;
+    for (const View::Focus& f : view.focus) {
+        if (length(sub(f.position, b.center)) - b.radius > f.radius) continue;
+        focused = true;
+        focusError = std::max(focusError, n.cell / std::max(f.cell, 1e-9));
+    }
+    if (focusError > 1.0) focusError += 1e12;
     *seen = visible(b, n.range.hi, view, cull);
-    if (!*seen) return 0;
+    if (!*seen) {
+        *seen = focused;
+        return focusError;
+    }
     // Two lower bounds on the distance to the tile, the larger kept: to its
     // bounding sphere, and to its slab (the base footprint's disc, extruded
     // over its height range along the base normal, the bottom lowered by the
@@ -322,7 +337,7 @@ double TileTree::error(const Node& n, const View& view, const Cull& cull, bool* 
     const double dv = up > n.range.hi ? up - n.range.hi : (up < bottom ? bottom - up : 0.0);
     const double sphere = length(sub(view.position, b.center)) - b.radius;
     const double dist = std::max({sphere, std::sqrt(dh * dh + dv * dv), n.cell * 1e-3});
-    const double cells = n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9);
+    const double cells = std::max(n.cell / dist * view.projScale / std::max(config_.pixelsPerCell, 1e-9), focusError);
     if (config_.pixelsPerDetail > 0 && n.detail >= 0)
         return std::max(cells, n.detail / dist * view.projScale / config_.pixelsPerDetail);
     return cells;

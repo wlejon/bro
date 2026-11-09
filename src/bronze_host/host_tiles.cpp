@@ -484,6 +484,21 @@ Value js_update(Value self, std::span<const Value> args) {
         v.tanHalfX = tanHalf * numberOr(view, "viewportWidth", height * 16.0 / 9.0) / height;
         v.frustum = true;
     }
+    // focus: [{ position, radius, cell }]: places wanted whatever is seen.
+    const Rooted focus(ev::getProperty(view, "focus"));
+    if (ev::isObject(focus)) {
+        const double n = numberOr(focus, "length", 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            const Rooted f(ev::getElement(focus, i));
+            double fp[3];
+            if (!ev::isObject(f) || !numbers(f, "position", fp, 3))
+                return ev::throwTypeError("TileCache.update: a focus is { position: [x, y, z], radius, cell }");
+            const double radius = numberOr(f, "radius", 0), cell = numberOr(f, "cell", 0);
+            if (!(radius >= 0) || !(cell > 0))
+                return ev::throwRangeError("TileCache.update: a focus's radius is >= 0 and its cell > 0");
+            v.focus.push_back({{fp[0], fp[1], fp[2]}, radius, cell});
+        }
+    }
     // Ready first: a batch's reports come back with it, and the tree takes
     // them for a ready tile.
     const bool retired = retireBatches(*c);

@@ -682,6 +682,25 @@ if (!bro.kernel.available || !bro.tiles) {
         try { fn(); } catch (e) { assert(check(e), what + ': ' + e.message); return; }
         assert(false, what + ': did not throw');
     };
+
+    // focus: a place behind a frustum is drawn, at its cell, all the same.
+    {
+        const spot = [2.0, 0, 32.0];
+        const away = { position: [8, 4, 32], forward: [1, 0, 0], up: [0, 1, 0], fov: 60, viewportHeight: 1080 };
+        const finestAt = (c) => Math.max(-1, ...c.drawn.filter((d) => Math.hypot(d.center[0] - spot[0], d.center[2] - spot[2]) <
+                                                                      SIZE / 2 ** d.level * 0.75).map((d) => d.level));
+        // (A capacity the view's tiles fill: the focus's come first.)
+        const plain = makeCache({ capacity: 256 });
+        assert(settle(plain, away), 'the view looking away settles');
+        assert(finestAt(plain) < 0, 'a frustum draws nothing behind it: ' + finestAt(plain));
+        const held = makeCache({ capacity: 256 });
+        assert(settle(held, { ...away, focus: [{ position: spot, radius: 0.5, cell: SIZE / 32 / T }] }), 'with a focus it settles');
+        assert(finestAt(held) === 5, 'a focus behind the view is drawn at its cell: level ' + finestAt(held));
+        throws(() => held.update({ ...away, focus: [{ radius: 1, cell: 1 }] }), (e) => e instanceof TypeError, 'a focus without a position');
+        throws(() => held.update({ ...away, focus: [{ position: spot, radius: 1, cell: 0 }] }), (e) => e instanceof RangeError, 'a focus of cell 0');
+        plain.destroy();
+        held.destroy();
+    }
     throws(() => cache.layer('colour'), (e) => e instanceof RangeError, 'an unknown layer');
     throws(() => makeCache({ domain: { type: 'torus' } }), (e) => e instanceof TypeError, 'an unknown domain');
     throws(() => makeCache({ layers: { height: 3 } }), (e) => e instanceof RangeError, 'a layer of 3 bytes a cell');

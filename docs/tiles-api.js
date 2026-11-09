@@ -251,6 +251,13 @@ const terrain = bro.tiles.createCache({
 //   and is drawn. A tile's distance for refinement is to its height slab, so
 //   tight ranges (`ranges`) refine what is near and stop refining what only
 //   the worst-case height would have brought near.
+//   focus: [{ position: [x, y, z], radius, cell }]: places wanted whatever
+//   the view sees, such as the ground a simulation's bodies stand on. A
+//   tile whose bounds come within `radius` of `position` is seen (never
+//   culled, so it is in the draw set) and splits while its cells are
+//   larger than `cell`, as well as by the view's rule. Its splits come
+//   before the view's (in the capacity and in production order); the view's
+//   tiles take what capacity is left.
 //
 // cache.drawn       the draw set: [{ root, level, x, y, slot, parentSlot,
 //                   coarser: [u0, u1, v0, v1], center: [x, y, z], radius,

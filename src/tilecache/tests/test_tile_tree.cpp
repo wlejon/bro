@@ -209,6 +209,26 @@ void testFrustum() {
     check(!behind, "nothing wholly behind the camera is drawn");
     check(under, "the ground in view ahead still refines");
 
+    // A focus behind the camera is wanted, drawn and refined down to its
+    // cell all the same, and the view's own ground still refines.
+    TileTree focused(planeConfig(4096));
+    View fv = v;
+    const Vec3d spot{4.0, 0, 21.3};
+    fv.focus.push_back({spot, 1.0, 0.05});
+    focused.select(fv);
+    produceAll(focused, 64, parentFirst);
+    double spotCell = 1e9;
+    bool aheadToo = false;
+    for (const DrawTile& d : focused.drawSet()) {
+        const double ext = focused.config().domain.tileExtent(d.id);
+        const Vec3d o = focused.config().domain.point(d.id, 0, 0);
+        if (o.x <= spot.x && spot.x < o.x + ext && o.z <= spot.z && spot.z < o.z + ext)
+            spotCell = ext / focused.config().tileSize;
+        if (o.x <= 43.7 && 43.7 < o.x + ext && o.z <= 21.3 && 21.3 < o.z + ext && d.id.level >= 6) aheadToo = true;
+    }
+    check(spotCell <= 0.05, "a focus behind the camera is drawn at its cell (" + std::to_string(spotCell) + ")");
+    check(aheadToo, "and the view's ground ahead still refines beside it");
+
     // Siblings are produced together: a parent draws in its children's place
     // until all four are ready, so one left behind (culled, its error small)
     // would hold back everything refined under the quad. One at a time, a
