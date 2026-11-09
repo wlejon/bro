@@ -42,13 +42,14 @@ function shot(name, selector) {
 // Count pixels darker than mid-grey, and the ones that are neither ink nor
 // background (antialiasing / blur).
 function inkStats(px) {
-    let ink = 0, grey = 0;
+    let ink = 0, grey = 0, coverage = 0;
     for (let i = 0; i < px.data.length; i += 4) {
         const v = px.data[i];
         if (v < 128) ink++;
         if (v > 16 && v < 240) grey++;
+        coverage += (255 - v) / 255;
     }
-    return { ink, grey };
+    return { ink, grey, coverage };
 }
 
 // --- baseline: 1x ------------------------------------------------------------
@@ -134,8 +135,12 @@ assert(pad2.w === 42 && pad2.h === 60, `2x crop of a 21x30 box is 42x60, got ${p
 document.getElementById('t').style.color = 'black';
 flush();
 const text2 = inkStats(pngPixels(shot('text2', '#t')));
-const inkRatio = text2.ink / text1.ink;
-assert(inkRatio > 3 && inkRatio < 5, 'text ink scales ~4x at 2x, got ' + inkRatio.toFixed(2));
+// Coverage (summed darkness), not a count of dark pixels: a thin 1x stem is
+// all mid-grey, so the count overstates the ratio (5.1 with Noto Sans). Small
+// sizes also hint thinner, so coverage lands above 4 (4.6 with Noto Sans);
+// 1x (~1) and 3x (~9) are both well outside.
+const inkRatio = text2.coverage / text1.coverage;
+assert(inkRatio > 3 && inkRatio < 6, 'text coverage scales ~4x at 2x, got ' + inkRatio.toFixed(2));
 const fringe1 = text1.grey / text1.ink, fringe2 = text2.grey / text2.ink;
 assert(fringe2 < fringe1, `text edges are sharper at 2x (grey/ink ${fringe2.toFixed(2)} vs ${fringe1.toFixed(2)})`);
 

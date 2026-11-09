@@ -77,6 +77,13 @@ try {
     { name: 'markup missing', src: rel(missing), want: 'error' },
   ];
 
+  // A decode runs off the page thread, so its load / error lands once it
+  // finishes (waitForImages) and the frame after runs the queued event.
+  function settle() {
+    assert(waitForImages(), 'every decode finishes');
+    advanceTime(16);
+  }
+
   // 1. Markup, with listeners attached after parsing (before the task runs).
   root.innerHTML = cases.map((c, i) => '<img id="m' + i + '" src="' + c.src + '">').join('');
   const fired = cases.map(() => []);
@@ -85,8 +92,7 @@ try {
     el.addEventListener('load', () => fired[i].push('load'));
     el.addEventListener('error', () => fired[i].push('error'));
   });
-  flush();
-  advanceTime(16);
+  settle();
   cases.forEach((c, i) => {
     assert(fired[i].length === 1 && fired[i][0] === c.want,
            c.name + ': fires exactly one ' + c.want + ', got [' + fired[i].join(',') + ']');
@@ -114,16 +120,16 @@ try {
   img.addEventListener('load', () => seen.push('load'));
   img.addEventListener('error', () => seen.push('error'));
   img.setAttribute('src', rel(exePath));
-  flush(); advanceTime(16);
+  settle();
   assert(seen.join(',') === 'error', 'setAttribute to an .exe: one error, got [' + seen.join(',') + ']');
   img.setAttribute('src', rel(icoPath));
-  flush(); advanceTime(16);
+  settle();
   assert(seen.join(',') === 'error,load', 'setAttribute to an .ico: then one load, got [' + seen.join(',') + ']');
   img.src = rel(fakeIcoPath);
-  flush(); advanceTime(16);
+  settle();
   assert(seen.join(',') === 'error,load,error', 'src = a fake .ico: one error, got [' + seen.join(',') + ']');
   img.src = rel(icoPath);
-  flush(); advanceTime(16);
+  settle();
   assert(seen.join(',') === 'error,load,error,load', 'src = an .ico: one load, got [' + seen.join(',') + ']');
   assert(img.naturalWidth === 40, 'the src property decodes the icon too, got ' + img.naturalWidth);
 
@@ -133,7 +139,7 @@ try {
   helper.onload = () => { helperEvent = 'load'; };
   helper.onerror = () => { helperEvent = 'error'; };
   helper.src = rel(icoPath);
-  advanceTime(16);
+  settle();
   assert(helperEvent === 'load' && helper.width === 40 && helper.height === 24,
          'new Image() loads the icon at 40x24, got ' + helperEvent + ' ' + helper.width + 'x' + helper.height);
 } finally {

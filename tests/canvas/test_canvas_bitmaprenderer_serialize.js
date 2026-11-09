@@ -52,6 +52,8 @@ assert(jpg.indexOf('data:image/jpeg;base64,') === 0, 'JPEG too, got ' + jpg.slic
     let loaded = false;
     img.onload = () => { loaded = true; };
     img.src = url;
+    // The decode runs off the page thread; the frame after it runs onload.
+    assert(waitForImages(), 'the decode finishes');
     for (let i = 0; i < 20 && !loaded; i++) advanceTime(16);
     assert(loaded, 'the data URL decodes');
     assert(img.naturalWidth === 3 && img.naturalHeight === 1, 'decoded size 3x1');
