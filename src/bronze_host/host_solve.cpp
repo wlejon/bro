@@ -8,6 +8,7 @@
 #include "check/solve_fn.h"
 
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -61,9 +62,13 @@ std::vector<std::string> getObjectKeys(Value obj) {
     return out;
 }
 
-bronze::check::SolveOptions parseSolveOptions(Value optsVal) {
-    bronze::check::SolveOptions opts;
-    if (!ev::isObject(optsVal)) return opts;
+// The solver compares the return against the target as a 64-bit integer,
+// the width the int32 domain's results have (`x >>> 0` reaches 2^32 - 1,
+// `x * y` far past it). A target that is no integer, or one beyond 2^53
+// where a double no longer names a single integer, has no such value, and
+// converting it would answer a question nobody asked.
+bool parseSolveOptions(Value optsVal, bronze::check::SolveOptions& opts, std::string& errOut) {
+    if (!ev::isObject(optsVal)) return true;
     ev::Persistent root(optsVal);
 
     Value targetV = ev::getProperty(root.get(), "target");
@@ -72,7 +77,13 @@ bronze::check::SolveOptions parseSolveOptions(Value optsVal) {
         if (targetV.isBool()) {
             opts.targetReturn = targetV.asBool() ? 1 : 0;
         } else {
-            opts.targetReturn = jsToInt32(ev::toDouble(targetV));
+            double t = ev::toDouble(targetV);
+            constexpr double kMaxExact = 9007199254740992.0;  // 2^53
+            if (!targetV.isNumber() || !std::isfinite(t) || std::trunc(t) != t || std::fabs(t) > kMaxExact) {
+                errOut = "target must be a boolean or an integer of magnitude at most 2^53";
+                return false;
+            }
+            opts.targetReturn = static_cast<int64_t>(t);
         }
     }
 
@@ -142,7 +153,7 @@ bronze::check::SolveOptions parseSolveOptions(Value optsVal) {
         }
     }
 
-    return opts;
+    return true;
 }
 
 Value makeInt64JsArray(const std::vector<int64_t>& vals) {
@@ -164,8 +175,10 @@ Value jsBroSolve(Value, std::span<const Value> args) {
     if (!extractJsFunctionSource(args[0], fnSrc, err)) {
         return ev::throwError(("bro.solve: " + err).c_str());
     }
-    bronze::check::SolveOptions opts = hasArg(args, 1) ? parseSolveOptions(args[1])
-                                                       : bronze::check::SolveOptions{};
+    bronze::check::SolveOptions opts;
+    if (hasArg(args, 1) && !parseSolveOptions(args[1], opts, err)) {
+        return ev::throwError(("bro.solve: " + err).c_str());
+    }
     bronze::check::SolveResult res = bronze::check::solveJsFunction(fnSrc, opts);
     if (res.status == bronze::check::SolveStatus::Error) {
         return ev::throwError(("bro.solve: " + res.error).c_str());
@@ -201,8 +214,10 @@ Value jsBroSolveWithCert(Value, std::span<const Value> args) {
     if (!extractJsFunctionSource(args[0], fnSrc, err)) {
         return ev::throwError(("bro.solveWithCert: " + err).c_str());
     }
-    bronze::check::SolveOptions opts = hasArg(args, 1) ? parseSolveOptions(args[1])
-                                                       : bronze::check::SolveOptions{};
+    bronze::check::SolveOptions opts;
+    if (hasArg(args, 1) && !parseSolveOptions(args[1], opts, err)) {
+        return ev::throwError(("bro.solveWithCert: " + err).c_str());
+    }
     bronze::check::SolveResult res = bronze::check::solveJsFunction(fnSrc, opts);
     if (res.status == bronze::check::SolveStatus::Error) {
         return ev::throwError(("bro.solveWithCert: " + res.error).c_str());
@@ -249,9 +264,13 @@ Value jsBroSolveAll(Value, std::span<const Value> args) {
         if (args[1].isNumber()) {
             int32_t m = jsToInt32(args[1].asNumber());
             maxSolutions = (m > 0) ? static_cast<size_t>(m) : 0;
-            if (hasArg(args, 2)) opts = parseSolveOptions(args[2]);
+            if (hasArg(args, 2) && !parseSolveOptions(args[2], opts, err)) {
+                return ev::throwError(("bro.solveAll: " + err).c_str());
+            }
         } else if (ev::isObject(args[1])) {
-            opts = parseSolveOptions(args[1]);
+            if (!parseSolveOptions(args[1], opts, err)) {
+                return ev::throwError(("bro.solveAll: " + err).c_str());
+            }
             ev::Persistent optRoot(args[1]);
             Value maxSolV = ev::getProperty(optRoot.get(), "maxSolutions");
             if (maxSolV.isNumber()) {
@@ -356,18 +375,41 @@ Value jsBroOptimize(Value, std::span<const Value> args) {
     bronze::check::OptimizeResult optRes = bronze::check::optimizeJsFunction(refSrc, optOpts);
     std::string winningSource = optRes.optimizedSource;
 
-    // Build callable wrapper that executes the verified optimized function via
-    // Brass's bitvector evaluator (or delegates to the original JS function).
+    // The callable runs the optimized source only where it is proven: a
+    // verified, different source, and arguments that are int32 numbers inside
+    // the proof's domain, one per declared parameter (a missing one would be
+    // undefined, which the domain does not hold). Anything else, and a source
+    // the evaluator cannot run, goes to the original function.
+    const bool useOptimized = optRes.verified && optRes.optimized;
+    const int32_t domMin = optRes.domainMin;
+    const int32_t domMax = optRes.domainMax;
     ev::Persistent callableFn(ev::makeFunction(
-        [winningSource, origFnRoot](Value thisVal, std::span<const Value> callArgs) -> Value {
+        [winningSource, origFnRoot, useOptimized, domMin, domMax](Value thisVal,
+                                                                  std::span<const Value> callArgs) -> Value {
             std::vector<int64_t> intArgs;
-            intArgs.reserve(callArgs.size());
-            for (size_t i = 0; i < callArgs.size(); ++i) {
-                intArgs.push_back(i32At(callArgs, i));
+            bool inDomain = useOptimized;
+            for (size_t i = 0; inDomain && i < callArgs.size(); ++i) {
+                if (!callArgs[i].isNumber()) { inDomain = false; break; }
+                double d = callArgs[i].asNumber();
+                // -0 is outside the int32 domain: a function can tell it from 0.
+                if (std::trunc(d) != d || d < domMin || d > domMax || (d == 0 && std::signbit(d))) {
+                    inDomain = false;
+                    break;
+                }
+                intArgs.push_back(static_cast<int64_t>(d));
             }
             int64_t retVal = 0;
-            if (bronze::check::evalConcreteJsFunction(winningSource, intArgs, &retVal)) {
-                return ev::fromDouble(static_cast<double>(retVal));
+            bronze::check::ConcreteResultKind kind = bronze::check::ConcreteResultKind::Number;
+            size_t paramCount = 0;
+            if (inDomain &&
+                bronze::check::evalConcreteJsFunction(winningSource, intArgs, &retVal, nullptr, "", &kind,
+                                                      &paramCount) &&
+                callArgs.size() >= paramCount) {
+                if (kind == bronze::check::ConcreteResultKind::Boolean) return ev::fromBool(retVal != 0);
+                if (kind == bronze::check::ConcreteResultKind::Number) {
+                    return ev::fromDouble(static_cast<double>(retVal));
+                }
+                // undefined and null share one kind in the model: the original answers which.
             }
             if (ev::isFunction(origFnRoot->get())) {
                 ev::CallResult cr = ev::call(origFnRoot->get(), thisVal, callArgs);
@@ -588,6 +630,12 @@ Value jsBroProve(Value, std::span<const Value> args) {
     out.set("unboxedF64Ops", ev::fromDouble(rep.unboxedF64Ops));
     out.set("equivalent", ev::fromBool(rep.equivalent));
     out.set("roundTripProven", ev::fromBool(rep.roundTripProven));
+    {
+        ev::Persistent eqDetail(ev::fromUtf8(rep.equivalenceDetail));
+        out.set("equivalenceDetail", eqDetail.get());
+        ev::Persistent rtDetail(ev::fromUtf8(rep.roundTripDetail));
+        out.set("roundTripDetail", rtDetail.get());
+    }
 
     if (!rep.counterexampleArgs.empty()) {
         ObjectBuilder cex;

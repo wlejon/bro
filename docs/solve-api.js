@@ -19,9 +19,12 @@
  *   Every entry point takes a function or a source string. A function is
  *   turned into source with its own toString() and compiled again from that
  *   text, so what is analysed is the text, not the closure:
- *     - variables the function captures are not seen. A free name is not
- *       read from the enclosing scope; it becomes an unknown value, and the
- *       result is then wrong rather than an error (see "Limits").
+ *     - variables the function captures are not seen. A free name (one that
+ *       is neither a parameter, a binding inside the function nor a known
+ *       global such as Math, Number or String) is refused with "free variable
+ *       <name>: the function's source is analysed, not its closure; pass the
+ *       value as a parameter or inline it" (see ERRORS for how each entry
+ *       point reports it). `typeof k` of a free k is refused the same way.
  *     - native functions have no source (`Math.max`): superoptimize and
  *       rewriteSource throw "cannot rewrite native C++ function without JS
  *       source", the others fail to parse the "[native code]" text.
@@ -33,7 +36,11 @@
  *
  * THE DOMAIN: 32-BIT SIGNED INTEGERS
  *   Each parameter is a symbolic 32-bit signed integer (int32). Results are
- *   compared as 64-bit integers; a boolean return is 1 or 0. JS semantics are
+ *   compared as 64-bit integers, so `x >>> 0` (up to 2^32 - 1) and `x * y`
+ *   keep their full value; for solve a boolean return is 1 or 0. prove and
+ *   optimize also compare the result's kind: a boolean, a number and
+ *   undefined (or null) are different results even where their bits agree
+ *   (`x > 3` is not `x > 3 ? 1 : 0`, a missing return is not 0). JS semantics are
  *   kept where they differ from machine integers: `x + 1 < x` has no int32
  *   solution (numbers do not wrap), `((x + 1) | 0) < x` does (x = 2147483647).
  *   prove and optimize also accept array and object parameters whose elements
@@ -50,11 +57,21 @@
  *   "function not symbolically decidable: <reason>"):
  *     fractional constants ("fractional floating-point constant", including
  *     Math.PI), non-integer division ("non-integer floating-point division"),
- *     BigInt and dynamic calls ("unsupported IL operation: call.dynamic").
+ *     BigInt and dynamic calls ("unsupported IL operation: call.dynamic"),
+ *     free variables ("free variable k: ..."), and string operations on
+ *     the int32 parameters: String(x) and template literals ("string
+ *     conversion of a number (String(x), a template literal) is not
+ *     modelled"), `'a' + x` ("string concatenation with a number is not
+ *     modelled"), and reading a parameter as an object (`x.length`, `x[0]`:
+ *     "parameter x is read as a string, array or object (x.length); every
+ *     parameter is a 32-bit integer here"). Strings built from literals only
+ *     are modelled: `('ab' + 'c').length === x` solves to 3.
  *
- *   Not modelled correctly (no error, wrong answer): string operations on
- *   number parameters (`String(x).length`, `('a' + x).length`) and captured
- *   variables. Do not trust a result that depends on either.
+ *   Not modelled for prove and optimize, which accept string, array and
+ *   object parameters: a parameter's kind is decided by how it is used, so
+ *   `String(s).length` is proved as if s were a string. A value stored in an
+ *   object or a closure slot and read back loses its boolean kind, and null
+ *   is not told from undefined.
  *
  *   The solver can give up: a hard query (`x * x < 0` over all of int32)
  *   ran 640 ms and came back status 'unknown'. Narrowing the domain with
@@ -68,22 +85,28 @@
  *   only `domainMin` / `domainMax`. Defaults:
  *     solve, solveWithCert, solveAll, prove, layout.solve  full int32
  *     optimize, superoptimize, rewriteSource               [-10000, 10000]
- *   A proof or rewrite is only claimed over its domain. The functions optimize
- *   returns, and the source superoptimize and rewriteSource return, are not
- *   restricted to it: `x < 0 ? -x : x` superoptimizes to a branchless abs that
- *   is equal on [-10000, 10000] and differs at -2147483648.
+ *   A proof or rewrite is only claimed over its domain. The function optimize
+ *   returns runs the original fn outside it. The source superoptimize and
+ *   rewriteSource return is not restricted to it: `x < 0 ? -x : x`
+ *   superoptimizes to a branchless abs that is equal on [-10000, 10000] and
+ *   differs at -2147483648.
  *
  * ERRORS
  *   Missing first argument, or one that is not a function, object or string:
  *   every entry point throws ("bro.solve: expected a JavaScript function or
- *   source string"). Source that does not parse or cannot be modelled:
+ *   source string"). A target that is not a boolean or an integer of
+ *   magnitude at most 2^53: solve, solveWithCert and solveAll throw ("target
+ *   must be a boolean or an integer of magnitude at most 2^53"). Source that
+ *   does not parse or cannot be modelled (a free variable included):
  *     - solve, solveWithCert, prove, fuzz and layout.solve throw with the
- *       compiler's message. Positions are in the wrapped source
+ *       compiler's message (prove: "bro.prove: free variable k: ..." for fn,
+ *       "bro.prove: equivTo function: free variable k: ..." /
+ *       "roundTripWith function: ..." for the others). Positions are in the wrapped source
  *       (`export function __solve_target(x) { return (...); }`), not in the
  *       text you passed: '(x) => x +' reports column 47.
  *     - solveAll returns [].
  *     - optimize and superoptimize return verified: false with the reason
- *       in `summary`.
+ *       in `summary`. A candidate with a free variable is never proven.
  *     - rewriteSource returns the source unchanged with summary
  *       "Source does not parse; no rewrites applied".
  */
@@ -94,8 +117,9 @@
  * @typedef {Object} SolveOptions
  * @property {number|boolean} [target]  Find arguments where the return value
  *   equals this (true = 1, false = 0). Without it the goal is a nonzero
- *   (truthy) return. Converted to int32, so a target of 2^31 or more wraps
- *   and cannot match a value like `x >>> 0` = 4294967295.
+ *   (truthy) return. Compared as a 64-bit integer, so 4294967295 matches
+ *   `x >>> 0` at x = -1 and 3000000000 matches no int32 `x`. A fractional,
+ *   non-finite or non-number target, or one beyond 2^53, throws.
  * @property {number} [min]  Lower bound for every parameter (alias domainMin).
  * @property {number} [max]  Upper bound for every parameter (alias domainMax).
  * @property {number} [bitWidth]  1..31: sets min/max to the signed range of
@@ -213,10 +237,14 @@ bro.solveAll = function (fn, maxSolutions, opts) {};
  *                     instructions. Compiler statistics, not proof results.
  *   equivalent        true when equivTo was not given; false both for a
  *                     counterexample and for a proof that could not be
- *                     decided (then counterexample is null and no reason is
- *                     returned; seen for `x / 3` against `x * (1/3)` and for
- *                     string parameters)
+ *                     decided (then counterexample is null; seen for `x / 3`
+ *                     against `x * (1/3)` and for string parameters)
+ *   equivalenceDetail the prover's sentence on the equivalence ('' without
+ *                     equivTo), e.g. why it could not decide, or "counterexample
+ *                     found where the old function returns a boolean and the
+ *                     new one a number"
  *   roundTripProven   true when roundTripWith was not given
+ *   roundTripDetail   the same for the round trip
  *   counterexample    {args, witnessArgs, expectedOutput, actualOutput} or
  *                     null. expectedOutput is fn's result, actualOutput the
  *                     other function's (round trip: the input and what came
@@ -227,15 +255,17 @@ bro.solveAll = function (fn, maxSolutions, opts) {};
  *   lockstepHazards   strings 'kind: message'
  *   synthesizedTests  [{args, expectedReturn, kind: 'branch-coverage' |
  *                     'hazard-reproducer', pathDescription}]
- *   sha256, proofHash a 64-hex-digit digest of the normalized source. It is
- *                     not SHA-256 (a four-lane FNV-style hash), so it is an
- *                     identifier, not a cryptographic commitment.
+ *   sha256, proofHash the SHA-256 (hex) of the normalized source, the text in
+ *                     `export function <name>(params) { ... }` form that every
+ *                     check ran on (for `(x) => x`:
+ *                     'export function __prove_target(x) { return (x); }')
  *   certificateJson   the booleans and counts above as JSON, schema
  *                     'bronze.proof.cert.v1'
  *
- * The equivalence compares numbers: a boolean result equals 1 / 0, so
- * `x => x > 3` is reported equivalent to `x => x > 3 ? 1 : 0`.
- * Throws on source that does not parse or compile.
+ * The equivalence compares the value and its kind (boolean, number,
+ * undefined): `x => x > 3` is not equivalent to `x => x > 3 ? 1 : 0`, and
+ * the counterexample is any input. Throws on source that does not parse or
+ * compile, and on a free variable in fn, equivTo or roundTripWith.
  *
  * @param {Function|string} fn
  * @param {ProveOptions} [opts]
@@ -274,7 +304,7 @@ bro.prove = function (fn, opts) {};
  *
  * Coverage below 1 means some blocks were not reached with int32 inputs
  * (a float comparison or a string parameter, for example).
- * Throws on source that does not parse.
+ * Throws on source that does not parse, and on a free variable.
  *
  * @param {Function|string} fn
  * @param {{maxPaths?: number}} [opts]
@@ -311,13 +341,16 @@ bro.fuzz = function (fn, opts) {};
  * candidates (up to 64), proposeCandidate(failedSource, cex) where cex is
  * {round, args, witnessArgs, expectedOutput, actualOutput, candidateOutput}.
  *
- * Returns a callable function. Calling it converts every argument to int32
- * and evaluates optimizedSource with the solver's concrete evaluator
- * (about 15 µs a call here, compiling the source each time); only when that
- * evaluator cannot run the source does it call the original fn. So the
- * callable is only right for int32-in, number-out functions: it returns 1/0
- * for a boolean result, and for `s => s.length` it returned 0 for 'abcd'.
- * Its properties:
+ * Returns a callable function. When a different source was proven
+ * (verified and optimized) and every argument is an integer number in
+ * [domainMin, domainMax] (not -0), one per declared parameter, it evaluates
+ * optimizedSource with the solver's concrete evaluator (compiling the source
+ * each call) and returns its result as the kind it is: a boolean for a
+ * boolean, a number for a number. Every other call (no proven rewrite, an
+ * argument outside the domain, a non-integer or non-number, too few
+ * arguments, an undefined or null result, a source the evaluator cannot
+ * run) calls the original fn with the arguments as given, so the callable
+ * returns what fn returns. Its properties:
  *   verified, provenEquivalent  the returned source is proven equal to fn on
  *                     the domain. With no candidate found, this says whether
  *                     fn itself could be modelled (it is checked against
@@ -440,9 +473,14 @@ bro.layout.available;
  *    (== and === are the same), && || ! and parentheses. A string that does
  *    not parse throws "invalid layout constraint expression: '<text>'".
  *    The predicate (second argument, or a function in `constraints`) receives
- *    the box variables by POSITION, not by name: box after box, each as
- *    x, y, w, h (then z, d for a 3D box). Its parameter names are ignored, so
- *    `(a_x, b_x) => ...` over boxes a and b gets a.x and a.y.
+ *    the box variables by NAME: a parameter `<id>_<x|y|w|h>` (z, d for a 3D
+ *    box) is that box's variable wherever it stands, so `(b_y, a_x) => ...`
+ *    gets b.y and a.x. A parameter that names no box variable throws
+ *    "bro.layout.solve: predicate parameter 'c_x' names no box variable: name
+ *    each parameter <box>_<x|y|w|h> (z, d for a 3D box) after a box of the
+ *    spec (a, b)". The predicate is solved
+ *    like bro.solve: its parameters are int32, and the same constructs are
+ *    refused.
  *
  * 2. bro.layout.solve(varNames, predicate, [opts])
  *    Solves predicate(...vars) like bro.solve, and names the results with
@@ -473,7 +511,8 @@ bro.layout.available;
 bro.layout.solve = function (specOrVars, predicateOrOpts, opts) {};
 
 // ── Examples ─────────────────────────────────────────────────────────────────
-// Each was run through bro-headless; the comment is what it returned.
+// Each was run through bro-headless; the comment is what it returned (the
+// "Refused rather than answered" block: what the soundness test asserts).
 
 /**
  * @example
@@ -493,6 +532,24 @@ bro.layout.solve = function (specOrVars, predicateOrOpts, opts) {};
  *   bro.solve((x) => x / 2 === 1.5);
  *   // throws "bro.solve: function not symbolically decidable:
  *   //         non-integer floating-point division"
+ *
+ * @example
+ *   // Refused rather than answered, and full-width targets (what
+ *   // tests/math/test_solver_soundness.js asserts)
+ *   bro.solve((x) => String(x).length === 2);
+ *   // throws "bro.solve: function not symbolically decidable: string conversion
+ *   //         of a number (String(x), a template literal) is not modelled"
+ *   const k = 4;
+ *   bro.solveWithCert((x) => x === k);
+ *   // throws "bro.solveWithCert: function not symbolically decidable: free
+ *   //         variable k: the function's source is analysed, not its closure;
+ *   //         pass the value as a parameter or inline it"
+ *   [...bro.solve((x) => x >>> 0, { target: 4294967295 })];   // → [-1]
+ *   bro.solve((x) => x, { target: 3000000000 });               // → null
+ *   bro.prove((x) => x > 3, { equivTo: (x) => (x > 3 ? 1 : 0),
+ *       synthesizeTests: false }).equivalent;                  // → false
+ *   bro.optimize((x) => x > 3)(5);                             // → true
+ *   bro.optimize((s) => s.length)('abcd');                     // → 4
  *
  * @example
  *   // Unsat and unknown kept apart
