@@ -1,7 +1,7 @@
 """Frame timing for the real-world scenes: rw.py's `time`, `sweep` and `perf`
 commands (mode=time in lib/harness.js, lib/timing.js).
 
-  rw.py time  --browser chromium|bro|bro-aot --scene S --n N [--json F]
+  rw.py time  --browser chromium|bro|bro-aot|bro-app --scene S --n N [--json F]
       One windowed run: warm frames, then timed ones; prints the summary.
   rw.py sweep [--scenes a,b] [--out DIR] [--rest 20] [--light-rest 5]
       Per scene, N steps geometrically (x1.5) from the scene's minimum until
@@ -83,6 +83,7 @@ MODES = {
     "chromium": ("chromium", False),
     "bro": ("bro", False),
     "bro-aot": ("bro", True),
+    "bro-app": ("bro", "app"),
 }
 
 

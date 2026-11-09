@@ -40,11 +40,17 @@ shader sync generators compile in bronze, at the JIT tiers and in an AOT
 ## Timing
 
 ```bash
-python3 bench/realworld/rw.py time --browser chromium|bro|bro-aot --scene S --n N
+python3 bench/realworld/rw.py time --browser chromium|bro|bro-aot|bro-app --scene S --n N
 python3 bench/realworld/rw.py sweep [--scenes a,b] [--out DIR]
 python3 bench/realworld/rw.py perf --scene S --n N [--aot]
 python3 bench/realworld/rw.py report --json DIR/timing.json [--out DIR/report.md]
 ```
+
+`bro` is the folder under the JIT, `bro-aot` the folder with an `app.so`
+from `bronze build`, and `bro-app` the app as an installed one runs: its own
+executable with the page's scripts compiled at build (`bro --build-exe`,
+docs/apps.md "Ahead-of-time scripts"). `bro-app` is the number an installed
+app gets.
 
 Each timed run renders 120 warm-up frames (shaders compile, JIT tiers
 settle), then times 300. Per frame (`lib/timing.js`):

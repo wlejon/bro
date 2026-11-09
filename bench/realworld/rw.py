@@ -329,13 +329,38 @@ def run_chromium(server, page, cfg, out):
     return status, log
 
 
+def build_app_exe(d, name):
+    """The app as an installed one runs: its own executable (docs/apps.md,
+    "The app's executable") with the page's scripts compiled ahead of time
+    beside it, by `bro --build-exe`. The executable lives outside the app
+    folder (a folder holding one is bro's own state, which the page may not
+    write its output into; that output needs the `files` capability, granted
+    here in the grant store) and is kept between runs, so only a unit whose
+    text changed (config.js, per N) is compiled again."""
+    exe = WORK / "exe" / name / "rwapp"
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    res = subprocess.run([str(BRO), "--build-exe", str(d), "--out", str(exe)], capture_output=True, text=True)
+    if res.returncode != 0 or not exe.exists():
+        raise RuntimeError("bro --build-exe failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
+    AOT_BUILD_S[name] = round(time.time() - t0, 1)
+    # An app's own executable takes no --grant: what it may do is in the grant
+    # store, as for any installed app.
+    subprocess.run([str(BRO), "--grant-app", str(d), "files"], capture_output=True, text=True, check=True)
+    return exe
+
+
 def run_bro(page, cfg, name, aot=False, env_extra=None, perf_data=None):
-    """One windowed bro run of `page`; with perf_data, under `perf record`
+    """One windowed bro run of `page`; `aot` is False (the folder, JIT), True
+    (app.so from `bronze build`) or "app" (the installed form, build_app_exe);
+    with perf_data, under `perf record`
     (user space, CLOCK_MONOTONIC timestamps, JIT code named through brass's
     perf map) so a window of it can be reported against the trace clock."""
-    d = make_bro_app(name, page, cfg, aot=aot)
+    d = make_bro_app(name, page, cfg, aot=aot is True)
     env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **WAYLAND_ENV, **(env_extra or {}))
     cmd = [str(BRO), "--grant", "declared", str(d)]
+    if aot == "app":
+        cmd = [str(build_app_exe(d, name))]
     if perf_data:
         env["BRASS_PERF_MAP"] = "1"
         cmd = ["perf", "record", "-q", "-k", "CLOCK_MONOTONIC", "-e", "cycles:u", "-F", "1999",

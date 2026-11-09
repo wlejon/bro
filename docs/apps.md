@@ -567,7 +567,10 @@ file mapped like any other library instead of compiling the page.
 headless engine sets up the page's realm exactly as a launch does (host
 globals, natives, module roots) and, instead of running each script unit (the
 classic scripts together, then each module script), compiles it through
-bronze's evaluator, the same front end and IL the JIT compiles, to a module.
+bronze's evaluator, the same front end the JIT compiles from, to a module.
+A unit is compiled as a whole program: bronze's ahead-of-time optimizer
+(direct calls it can predict, slots it can name) runs over it, which the JIT
+never does, so an installed app's code is the best bronze makes.
 The module image is written by brass's own PE / ELF writer: **no compiler or
 linker is needed on the machine**, on Windows or Linux. A unit whose module is
 still current is kept; the build's own log is `build.log` in the directory, and
