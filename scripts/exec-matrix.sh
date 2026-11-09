@@ -26,6 +26,9 @@
 # for a race before blaming the compiler. Names that look like timing tests
 # (perf, budget, latency) are marked `timing?`.
 #
+# To turn a divergence into a small repro, scripts/reduce-js.py shrinks a JS
+# file while a run of it in the failing mode still shows the symptom.
+#
 # Writes <out>/<mode>.log (the runner's output) and <out>/matrix.txt (every
 # test's verdict per mode); prints the divergences. Exit 1 when any test's
 # verdict differs from auto's, 0 otherwise.
