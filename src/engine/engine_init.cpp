@@ -212,6 +212,7 @@ void Engine::construct(const EngineConfig& config) {
     compiledApp_ = config.compiledApp;
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     aotDir_ = config.aotDir;
+    aotRequired_ = config.aotRequired;
     aotBuildDir_ = config.aotBuildDir;
     appDir_ = config.appDir;
     titleOverride_ = config.title;

@@ -203,6 +203,15 @@ std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, co
         LOG_INFO("aot: %s runs its ahead-of-time module %s", opts.filename.c_str(), loaded.modulePath.c_str());
         return loaded;
     }
+    if (engine.aotRequired()) {
+        // The ahead-of-page load and the unit's own load both ask; say it once.
+        static std::set<std::string> reported;  // page thread only
+        if (reported.insert(opts.filename).second)
+            LOG_ERROR("aot: --aot %s: the module for %s is out of date (%s); rebuild it with --aot-build",
+                  engine.aotDir().c_str(), opts.filename.c_str(), loaded.why.c_str());
+        engine.setTestFailure(true);
+        return std::nullopt;
+    }
     LOG_WARN("aot: the ahead-of-time module for %s is out of date (%s); compiling it", opts.filename.c_str(),
              loaded.why.c_str());
     static bool rebuildRequested = false;

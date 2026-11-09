@@ -66,6 +66,11 @@ struct EngineConfig {
     // runs its module there while the module is still the program a compile
     // would build, and compiles in process otherwise. Empty: every unit compiles.
     std::string aotDir;
+    // `bro-headless <app> --aot <dir>`: aotDir was asked for by a test, so a
+    // page unit whose module is out of date is a failure of the run (logged,
+    // the unit still compiles so the rest of the output is there), never a
+    // quiet fall back to the JIT the test did not ask for.
+    bool aotRequired = false;
     // `bro-headless <app> --aot-build <dir>`: compile the page's script units
     // into `aotDir`'s layout at <dir> instead of running them
     // (bronze_host/app_aot.h), then stop.

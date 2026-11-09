@@ -629,6 +629,7 @@ public:
     const std::string& appDir() const { return appDir_; }
     /// EngineConfig::aotDir / aotBuildDir (empty when not set).
     const std::string& aotDir() const { return aotDir_; }
+    bool aotRequired() const { return aotRequired_; }
     const std::string& aotBuildDir() const { return aotBuildDir_; }
     /// The page's script units, in the order the page runs them: every classic
     /// script as ONE unit named for the page (they share one global scope),

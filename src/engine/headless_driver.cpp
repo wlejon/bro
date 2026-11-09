@@ -111,6 +111,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::string launchNotification;
     std::string nativeManifestOut;
     std::string aotBuildDir;
+    std::string aotRunDir;
     std::vector<std::string> hostGrants;
 
     // bro.app.schedule records a headless run's launches and reaches no OS,
@@ -165,7 +166,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --aot-build <dir>\n"
                 "                  Compile the page's scripts ahead of time into <dir>\n"
                 "                  instead of running them, and exit (an app executable's\n"
-                "                  AOT directory; `bro --build-exe` runs this)\n",
+                "                  AOT directory; `bro --build-exe` runs this)\n"
+                "  --aot <dir>\n"
+                "                  Run the page's scripts from the modules an --aot-build\n"
+                "                  wrote to <dir>, as an installed app's executable does;\n"
+                "                  a module out of date fails the run (tests of AOT code)\n",
                 hooks.programName.c_str(), hooks.tagline.c_str(), hooks.programName.c_str());
             return 0;
         } else if (strcmp(argv[i], "--") == 0) {
@@ -203,6 +208,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             nativeManifestOut = argv[++i];
         } else if (strcmp(argv[i], "--aot-build") == 0 && i + 1 < argc) {
             aotBuildDir = argv[++i];
+        } else if (strcmp(argv[i], "--aot") == 0 && i + 1 < argc) {
+            aotRunDir = argv[++i];
         } else if (strcmp(argv[i], "--grant") == 0 && i + 1 < argc) {
             // What this run's host grants the app outright (tests, development).
             appendGrantList(argv[++i], hostGrants);
@@ -313,6 +320,15 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.installHostBindings = hooks.installHostBindings;
         config.installWorkerHostBindings = hooks.installWorkerHostBindings;
         config.aotBuildDir = aotBuildDir;
+        if (!aotRunDir.empty()) {
+            std::ifstream summary(aotRunDir + "/aot.txt");
+            if (!summary.good()) {
+                fprintf(stderr, "Error: --aot %s: no aot.txt there (make it with --aot-build)\n", aotRunDir.c_str());
+                return 1;
+            }
+            config.aotDir = aotRunDir;
+            config.aotRequired = true;
+        }
         config.hostGrants = hooks.hostGrants;
         config.hostGrants.insert(config.hostGrants.end(), hostGrants.begin(), hostGrants.end());
         if (!aotBuildDir.empty()) config.showSplash = false;

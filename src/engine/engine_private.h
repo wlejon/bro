@@ -600,6 +600,7 @@ private:
     bool compiledApp_ = false;
     bool hostProvidesCompiledApp_ = false;
     std::string aotDir_;
+    bool aotRequired_ = false;
     std::string aotBuildDir_;
     std::vector<uint64_t> appModuleHandles_;
     bool splashDismissTriggered_ = false;
