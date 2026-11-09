@@ -19,7 +19,7 @@
 #                tool      development tools around bro
 #   bro        self | dep (bro builds against it: declared in cmake/bro_pins.cmake,
 #              tracked at its main, locked only on a release tag) | -
-#   github     public | pending (not on GitHub yet)
+#   github     public | private | pending (not on GitHub yet)
 #   platforms  comma-separated: win, linux, mac
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
@@ -75,4 +75,5 @@ broworkshop     app       -          public   win,linux,mac    bro
 helm            app       -          public   win,linux,mac    bro
 helmapps        app       -          public   win,linux,mac    bro
 ffmpeg-bro      app       -          public   win,linux,mac    bro
+smallworlds     app       -          private  win              bro
 broparity       tool      -          public   win,linux,mac    bro

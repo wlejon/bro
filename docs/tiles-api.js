@@ -187,7 +187,7 @@
 // take away from what it draws (how far its children's surface leaves its
 // own, say: on self-similar ground the tile's own cells tell, as the rms of
 // its odd vertices against the even ones about them, scaled by the share the
-// next level keeps; demos/planet's k_split_detail). It is read back as ranges
+// next level keeps; smallworlds' planet, k_split_detail). It is read back as ranges
 // are (NaN or negative: no report). A tile without a report takes half its
 // nearest reported ancestor's a level, and one with none splits by its
 // cells alone, so a fresh region refines a level or two ahead of its reports.
@@ -280,7 +280,7 @@ const terrain = bro.tiles.createCache({
 //                   four ivec4 a record, intBitsToFloat for the floats), and
 //                   place it at (centerHi - camHi) + (centerLo - camLo) with
 //                   the camera split the same way, a camera-relative position
-//                   good to f64 at any distance (demos/planet in broworkshop).
+//                   good to f64 at any distance (smallworlds' planet, game/core).
 //                   `drawn` builds an object a tile: for inspection, not for
 //                   every frame.
 // cache.layer(name) the layer's whole pool as a KernelBuffer: producers

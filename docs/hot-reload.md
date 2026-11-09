@@ -29,7 +29,7 @@ window.addEventListener('sourcechange', (e) => {
 });
 ```
 
-The planet (`broworkshop/demos/planet`) takes its `.bk` files this way: its `planet.reload(files)` names each by file and as a `planet::` module, then rebuilds the rivers, tiles, clouds, grass and trees that the changed kernels feed.
+The planet ([smallworlds](https://github.com/wlejon/smallworlds), `game/`) takes its `.bk` files this way: its `planet.reload(files)` names each by file and as a `planet::` module, then rebuilds the rivers, tiles, clouds, grass and trees that the changed kernels feed.
 
 A watcher reload is held back while the tree looks incomplete (index.html missing, a script it names missing, or a static import naming a file or export that does not exist). The page stays up and the log says why: `Not reloading yet, the source looks incomplete: js/shell.js imports NotificationCenter from js/notify.js, which does not export it`. F5 and `location.reload()` are never held back.
 
