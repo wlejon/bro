@@ -28,6 +28,8 @@ if (draft) { openPath(draft.path); list.scrollTop = draft.scroll; }
 
 `sessionStorage` lasts as long as the process (it is not written to disk); `localStorage` is for what should outlive it.
 
+A `<terminal>`'s shell would end with its element; `terminal.park(key)` in the `pagehide` handler hands the running session to the engine, and `terminal.adopt(key)` on a terminal of the new page takes it back: the same process, shell state, screen and scrollback, its events going to the new element from then on. Note the keys in `sessionStorage`. A parked session the new page does not adopt within two frames and two seconds of booting is ended ([terminal-api.js](terminal-api.js), "Across a reload").
+
 The page gets `pagehide` once more when the app quits (the window closed, `bro.quit()`, Ctrl+C, the end of a headless script), as a closed tab's does, while everything it reaches still runs. What must outlive the process is written there synchronously (`fs.writeFileSync`): the process exits after the handlers return, so a promise they start does not finish.
 
 ## Taking a change in place

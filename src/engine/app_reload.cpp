@@ -7,6 +7,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
+#include "layout/el_terminal.h"
 #include "layout/element_ref_adapter.h"
 #include "render/skia_backend.h"
 #if BRO_WITH_3D
@@ -453,6 +454,11 @@ void Engine::performAppReload() {
     }
     if (!failure.empty()) showAppReloadFailure(failure);
     if (failedBefore) setTestFailure(true);
+
+    // The terminal sessions the old page parked in its pagehide wait for
+    // this page's adopt() from now: their grace period counts from the boot
+    // just finished, not from the park (the reload may have taken longer).
+    layout::ElTerminal::restartParkedGrace();
 
     uiDirty_ = true;
     systemDirty_ = true;

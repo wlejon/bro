@@ -192,6 +192,35 @@
  *     localStorage.setItem('shell', String(term.sessionId));
  *   }
  *
+ * Across a reload. A local session ends with its element, and a reload
+ * throws every element away; park(key) in a `pagehide` handler hands the
+ * session to the engine instead, and adopt(key) on a <terminal> of the next
+ * page takes it back: the same process, its shell state, screen, scrollback,
+ * selection and search, now driven and painted by the new element. Events
+ * the program raised that the old page had not heard yet (title, cwd, bell,
+ * exit, ...) go to the adopter. A session parked and not adopted is ended
+ * (its process killed, as a removed element's) once the next page has had
+ * two frames and two seconds since it booted -- or since the park, when no
+ * reload follows -- and every parked session ends when bro quits. Keys are
+ * the app's own: another app in the process never sees them. A persistent
+ * session needs none of this (it detaches and is attached again).
+ *
+ * @example
+ *   // Term's tabs keep their shells across a hot reload.
+ *   addEventListener('pagehide', () => {
+ *     const keys = [];
+ *     for (const [i, t] of tabs.entries()) {
+ *       if (!t.running) continue;
+ *       t.park('tab' + i);
+ *       keys.push('tab' + i);
+ *     }
+ *     sessionStorage.setItem('parked', JSON.stringify(keys));
+ *   });
+ *   for (const key of JSON.parse(sessionStorage.getItem('parked') || '[]')) {
+ *     const t = newTab();          // a <terminal> in the document
+ *     if (!t.adopt(key)) t.spawn();
+ *   }
+ *
  * Performance. Every <terminal> is its own compositor layer, recorded only
  * when the terminal changes. A busy terminal therefore re-records only
  * itself, and a page change never re-records a terminal.
@@ -303,6 +332,33 @@ class HTMLTerminalElement extends HTMLElement {
    *  document, reloading the page or closing bro does the same. A local
    *  (non-persistent) process is not affected. */
   detach() {}
+
+  /**
+   * Hand this element's session (its running process, screen, scrollback,
+   * selection and search) to the engine under `key`, for adopt(key) on a
+   * <terminal> of the next page (see "Across a reload"). The process runs on
+   * and its output is still parsed; this element is left with no session, as
+   * after a detach, so it may spawn, attach or adopt again. Call it from a
+   * `pagehide` handler. Unadopted, the session is ended after the grace
+   * period.
+   * @param {string} key
+   * @throws {DOMException} SyntaxError for an empty key; InvalidStateError
+   *   when there is no session to park or a session is already parked as `key`
+   */
+  park(key) {}
+
+  /**
+   * Take the session parked as `key` (by this app, in this page or the one
+   * before a reload): it is sized to this element, and this element is its
+   * terminal from then on exactly as if it had spawned it (frames, input,
+   * every event, `pid`, `exit`). Replaces whatever finished or detached
+   * session this element had.
+   * @param {string} key
+   * @returns {boolean} false when nothing is parked as `key`
+   * @throws {DOMException} OperationError when this element's process is
+   *   running, or the app may not start programs (`spawn`)
+   */
+  adopt(key) {}
 
   /** Raw bytes (a UTF-8 string) to the process's input, unencoded.
    *  @returns {boolean} false when there is no running process */

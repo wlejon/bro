@@ -188,6 +188,9 @@ void Engine::pumpTerminals() {
         if (t.pump(now, focused, deviceScale_.render)) repaint = true;
         if (t.takeCursorChanged() && el && hoveredElement_.get() == el) updateCursorFromHover(el);
     });
+    // Sessions a page parked (terminal.park, for the next page to adopt)
+    // that no one took within the grace period are ended here.
+    layout::ElTerminal::sweepParked(now);
     if (repaint) uiDirty_ = true;
 }
 

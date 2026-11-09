@@ -55,6 +55,16 @@ bool ElTerminal::closeSession(const std::string&, uint64_t, std::string*) { retu
 bool ElTerminal::killServer(const std::string&, std::string*) { return false; }
 bool ElTerminal::readySession(bool, std::string*) { return false; }
 void ElTerminal::detachIfRemoved() {}
+void ElTerminal::resetForNewSession() {}
+bool ElTerminal::park(const std::string&, std::string* error) {
+    if (error) *error = "<terminal> is not compiled into this build (BRO_WITH_TERMINAL)";
+    return false;
+}
+bool ElTerminal::adopt(const std::string&, std::string*) { return false; }
+void ElTerminal::sweepParked(double) {}
+void ElTerminal::restartParkedGrace() {}
+void ElTerminal::dropParked() {}
+size_t ElTerminal::parkedCount() { return 0; }
 bool ElTerminal::write(std::string_view) { return false; }
 void ElTerminal::feed(std::string_view) {}
 void ElTerminal::kill() {}

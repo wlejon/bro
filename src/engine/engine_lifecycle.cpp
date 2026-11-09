@@ -26,6 +26,7 @@
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
 #include "layout/box.h"
+#include "layout/el_terminal.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "render/kernel_shader.h"
@@ -85,6 +86,10 @@ void Engine::shutdown() {
     // its handlers reach still runs (a recording saved, a session kept).
     if (displayMode_ != DisplayMode::Server) firePageHide();
     shutdownDone_ = true;
+    // Terminal sessions parked for a next page that will not come (the
+    // pagehide just fired may have parked some) end now, as their elements'
+    // would, while everything a TermSession's teardown reaches is still up.
+    layout::ElTerminal::dropParked();
 
     util::beginShutdown();
 

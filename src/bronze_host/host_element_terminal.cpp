@@ -20,6 +20,7 @@
 #include "layout/el_terminal.h"
 
 #include "embed/embed_access.h"
+#include "engine/app_permissions.h"
 
 #include <cmath>
 #include <cwchar>
@@ -144,6 +145,14 @@ layout::ElTerminal* hostTerminalControl(Value self, bool create) {
 namespace {
 
 layout::ElTerminal* control(Value self, bool create = true) { return hostTerminalControl(self, create); }
+
+// The parked-session table is process-wide; a key is the running app's own
+// (its identity before it), so an <appview> compartment, or any other app
+// sharing the process, never adopts the shell another one parked.
+std::string parkKey(const std::string& key) {
+    if (key.empty()) return key;
+    return engine::appPermissions().identity() + '\n' + key;
+}
 
 std::string stringArg(std::span<const Value> a, size_t i) {
     return i < a.size() && !ev::isUndefined(a[i]) && !ev::isNull(a[i]) ? ev::toUtf8(a[i]) : std::string();
@@ -493,6 +502,37 @@ void decorateTerminalProto(ObjectBuilder& b) {
     b.def("detach", 0, [](Value self, std::span<const Value>) -> Value {
         if (auto* t = control(self, false)) t->detach();
         return ev::undefined();
+    });
+    // park(key): hand the running session to the engine under `key`, for a
+    // <terminal> of the next page to adopt (a pagehide handler's job; see
+    // ElTerminal::park). Throws when there is nothing to park or the key is
+    // taken.
+    b.def("park", 1, [](Value self, std::span<const Value> a) -> Value {
+        auto* t = control(self, false);
+        if (!t) return ev::throwValue(hostMakeDomError("InvalidStateError", "park(): this terminal has no session"));
+        const std::string key = stringArg(a, 0);
+        std::string error;
+        if (!t->park(parkKey(key), &error))
+            return ev::throwValue(hostMakeDomError(key.empty() ? "SyntaxError" : "InvalidStateError",
+                                                   "park(): " + error));
+        return ev::undefined();
+    });
+    // adopt(key) -> bool: take the session parked under `key` (false: none).
+    // Throws when this terminal runs a process or the app may not spawn.
+    b.def("adopt", 1, [](Value self, std::span<const Value> a) -> Value {
+        auto* t = control(self);
+        if (!t) return ev::throwTypeError("adopt(): not a <terminal>");
+        const std::string key = stringArg(a, 0);
+        // Laid out first, so the session is sized to the element's real grid.
+        if (HostNodeState* st = hostNodeStateOfValue(self); st && st->el && st->el->document())
+            if (auto* eng = hostEngine()) eng->flushLayoutForRead(st->el->document());
+        std::string error;
+        if (!t->adopt(parkKey(key), &error)) {
+            if (error.empty()) return ev::fromBool(false);
+            return ev::throwValue(hostMakeDomError("OperationError", "adopt(): " + error));
+        }
+        holdTerminal(*t, "the terminal session parked as '" + key + "'");
+        return ev::fromBool(true);
     });
     // write(data): raw bytes (a UTF-8 string) to the child's input.
     b.def("write", 1, [](Value self, std::span<const Value> a) -> Value {

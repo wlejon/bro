@@ -55,6 +55,12 @@ bool ElTerminal::readySession(bool attaching, std::string* error) {
     // Used: start over with a fresh session, sized as the grid is now.
     m.session = std::make_unique<terminal::TermSession>(std::max(1, m.lastCols ? m.lastCols : 80),
                                                         std::max(1, m.lastRows ? m.lastRows : 24));
+    resetForNewSession();
+    return true;
+}
+
+void ElTerminal::resetForNewSession() {
+    Impl& m = *impl_;
     m.frame.reset();
     m.frameOutputMs = 0.0;
     m.focused = false;
@@ -80,7 +86,6 @@ bool ElTerminal::readySession(bool attaching, std::string* error) {
     m.paletteKey.clear();      // the theme goes to the new session ...
     m.imageMemoryLimit = -1.0;  // ... and so does every option
     setOptions(options_);
-    return true;
 }
 
 void ElTerminal::detachIfRemoved() {

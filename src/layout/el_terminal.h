@@ -15,8 +15,9 @@
 // recorded into the terminal's own compositor layer), el_terminal_mouse.cpp
 // (selection, mouse reports, the wheel, links, the pointer shape),
 // el_terminal_view.cpp (scrollback, search, selection and the other script
-// calls), el_terminal_events.cpp (what the program says, as DOM events) and
-// el_terminal_theme.cpp (palette and colours from CSS and script).
+// calls), el_terminal_events.cpp (what the program says, as DOM events),
+// el_terminal_theme.cpp (palette and colours from CSS and script) and
+// el_terminal_park.cpp (a session parked across a reload, then adopted).
 //
 // Threads: everything here runs on the main thread except getContentSize(),
 // which layout may call from its own thread (it only reads the font metrics,
@@ -136,6 +137,32 @@ public:
     static bool closeSession(const std::string& server, uint64_t id, std::string* error);
     static bool killServer(const std::string& server, std::string* error);
     static bool persistentAvailable();
+
+    // ---- keeping a session across a reload (el_terminal_park.cpp) ---------
+    // park(key) hands this element's session (its child, screen, scrollback,
+    // selection, search, and the program's events not yet dispatched) to a
+    // process-wide table under `key`, and leaves the element as if detached:
+    // a fresh, empty session that may spawn, attach or adopt. The child runs
+    // on and its output keeps being parsed. Meant for a `pagehide` handler.
+    // False (with *error) when there is nothing to park or `key` is taken.
+    bool park(const std::string& key, std::string* error);
+    // adopt(key) takes the session parked under `key`, sized to this element,
+    // which from then on is its terminal exactly as if it had spawned it.
+    // False with *error empty: nothing is parked under `key`; with *error set:
+    // this element runs a process, or the spawn gate refused.
+    bool adopt(const std::string& key, std::string* error);
+    // A parked session nobody adopts is ended (as a destroyed element's is)
+    // at the first sweep that finds it has waited at least kParkGraceFrames
+    // frames and kParkGraceMs since it was parked or, when a reload came
+    // after that, since the reload's new page booted (restartParkedGrace).
+    // Both, so a page restoring its terminals after an await or two in a
+    // fast loop, or after a slow first frame, still finds them.
+    static constexpr int kParkGraceFrames = 2;
+    static constexpr double kParkGraceMs = 2000.0;
+    static void sweepParked(double nowMs);  // once per frame (the engine's terminal pump)
+    static void restartParkedGrace();        // the reload's new page has booted
+    static void dropParked();                // engine shutdown: end every parked session
+    static size_t parkedCount();
     bool write(std::string_view bytes);  // raw bytes to the child's input
     void feed(std::string_view output);  // bytes into the emulator, as if the child wrote them
     void kill();
@@ -362,6 +389,10 @@ private:
     // detached session; otherwise a used session is replaced by a fresh one
     // with this element's options and theme (el_terminal_mux.cpp).
     bool readySession(bool attaching, std::string* error);
+    // The state that follows the session, reset for the one just installed
+    // in Impl::session (a fresh one, or an adopted one); the element's
+    // options and theme go to it.
+    void resetForNewSession();
     // The element left the document: let go of a persistent session.
     void detachIfRemoved();
 
