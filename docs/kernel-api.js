@@ -257,6 +257,12 @@ const values = mod.kernel('k_lookup').run(4, new Float32Array([5, 6, 7]), new In
 //   buffer.write(typedArray, byteOffset = 0)   // copied now, lands before later dispatches
 //   buffer.read(typedArray, byteOffset = 0)    // fills it after every dispatch so far
 //                                              // (blocks until they are done); returns it
+//   buffer.readLater(byteOffset = 0, byteLength = rest) -> KernelReadback
+//                                              // the same bytes, copied without waiting:
+//     readback.ready                           // true once the GPU has made the copy
+//     readback.byteLength
+//     readback.read(typedArray)                // fills it from the copy's start; null until ready
+//     readback.release()                       // drops its host memory now (else at collection)
 //   buffer.destroy()                           // releases its GPU memory once in-flight work finishes;
 //                                              // any later use of the buffer throws
 //

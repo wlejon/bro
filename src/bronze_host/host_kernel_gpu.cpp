@@ -61,6 +61,17 @@ bool lost(const Device& d, std::string* err) {
     return false;
 }
 
+class Readback final : public brokernel::api::GpuReadback {
+public:
+    explicit Readback(std::shared_ptr<render::ComputeReadback> r) : r_(std::move(r)) {}
+    bool ready() const override { return r_->ready(); }
+    const void* data() const override { return r_->data(); }
+    size_t bytes() const override { return static_cast<size_t>(r_->size()); }
+
+private:
+    std::shared_ptr<render::ComputeReadback> r_;
+};
+
 class Buffer final : public brokernel::api::GpuBuffer {
 public:
     Buffer(std::shared_ptr<Device> device, std::shared_ptr<render::ComputeBuffer> buffer)
@@ -81,6 +92,13 @@ public:
         if (device_->context()->compute().read(*buffer_, offset, out, n)) return true;
         if (err) *err = isDeviceLost(*device_->context()) ? kDeviceLostError : "the GPU buffer read failed";
         return false;
+    }
+    std::shared_ptr<brokernel::api::GpuReadback> readLater(size_t offset, size_t n, std::string* err) override {
+        if (lost(*device_, err)) return nullptr;
+        auto r = device_->context()->compute().readLater(*buffer_, offset, n);
+        if (r) return std::make_shared<Readback>(std::move(r));
+        if (err) *err = isDeviceLost(*device_->context()) ? kDeviceLostError : "the GPU buffer read failed";
+        return nullptr;
     }
     void destroy() override {
         if (buffer_) buffer_->releaseDeferred();
@@ -108,6 +126,9 @@ public:
     }
     bool read(size_t offset, void* out, size_t n, std::string* err) override {
         return buffer_->read(offset_ + offset, out, n, err);
+    }
+    std::shared_ptr<brokernel::api::GpuReadback> readLater(size_t offset, size_t n, std::string* err) override {
+        return buffer_->readLater(offset_ + offset, n, err);
     }
 
 private:

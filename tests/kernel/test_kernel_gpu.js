@@ -79,6 +79,36 @@ if (!bro.kernel.available) {
     const row = outBuf.read(new Float32Array(W));
     assert(row.every((v) => near(v, 3, 1e-6)), 'a write is seen by the next dispatch: ' + row[5]);
 
+    // readLater(byteOffset, byteLength): the bytes after every dispatch so
+    // far, copied without waiting; read() gives null until they are there.
+    srcBuf.write(src, 0);
+    blur.dispatch([W, H], srcBuf, outBuf);
+    const later = outBuf.readLater(4 * W, 8 * W);
+    assert(later.byteLength === 8 * W, 'a readback holds the bytes asked for: ' + later.byteLength);
+    let laterFrames = 0;
+    const laterT0 = Date.now();
+    while (!later.ready && Date.now() - laterT0 < 5000) { advanceTime(16); laterFrames++; }
+    assert(later.ready, `a readback is ready within frames (${laterFrames})`);
+    agree(later.read(new Float32Array(2 * W)), cpuOut.subarray(W, 3 * W), 1e-6, 'readLater of rows 1 and 2');
+    srcBuf.write(new Float32Array(W).fill(3), 0);
+    blur.dispatch([W, H], srcBuf, outBuf);
+    assert(near(later.read(new Float32Array(1))[0], cpuOut[W], 1e-6), 'a readback keeps the bytes of its moment');
+    later.release();
+    const rest = outBuf.readLater();
+    while (!rest.ready) advanceTime(16);
+    assert(rest.byteLength === W * H * 4 && rest.read(new Float32Array(W)).every((v) => near(v, 3, 1e-6)),
+           'readLater() reads the whole buffer');
+    for (const [what, fn] of [['past the end', () => outBuf.readLater(W * H * 4, 4)],
+                              ['empty', () => outBuf.readLater(0, 0)],
+                              ['too long', () => outBuf.readLater(4, W * H * 4)]]) {
+        let e = null;
+        try { fn(); } catch (x) { e = x; }
+        assert(e instanceof RangeError, 'readLater refuses a range ' + what);
+    }
+    let released = null;
+    try { later.read(new Float32Array(1)); } catch (x) { released = x; }
+    assert(released, 'a released readback throws');
+
     // bro.kernel.background(fn): fn's dispatches run in the gap after the
     // frame, in order with each other, after the work recorded before; the
     // job is done once the GPU has done them, and its results read right
