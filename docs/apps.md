@@ -573,7 +573,10 @@ A unit is compiled as a whole program: bronze's ahead-of-time optimizer
 never does, so an installed app's code is the best bronze makes.
 The module image is written by brass's own PE / ELF writer: **no compiler or
 linker is needed on the machine**, on Windows or Linux. A unit whose module is
-still current is kept; the build's own log is `build.log` in the directory, and
+still current is kept, unless another engine build wrote it: a new engine
+compiles every unit again, so a compiler's fixes and improvements reach an
+installed app with the engine that carries them. The build's own log is
+`build.log` in the directory, and
 `bro --exe-info` prints its summary as `aot.*` lines. A unit that fails to
 compile is reported and simply runs on the JIT.
 

@@ -92,6 +92,19 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
     std::error_code ec;
     fs::create_directories(u8path(dir), ec);
 
+    // Modules another engine build wrote are compiled again, current record
+    // or not. A record only says the module is still the program this text
+    // compiles to against this ABI, which stays true across compiler builds;
+    // what the newer compiler would make of it (a fix, a faster body) reaches
+    // an installed app only by building it again, and a new engine is when
+    // its executable is rebuilt anyway.
+    bool otherEngine = true;
+    {
+        std::ifstream prior(u8path(dir) / kSummaryFile, std::ios::binary);
+        std::string line;
+        if (prior && std::getline(prior, line)) otherEngine = line != "engine=" + engine::engineVersion();
+    }
+
     // The registry each later unit is compiled against: what the realm holds
     // now, plus every module file the units before it publish when they run.
     // A unit that turns out to run against another registry (one whose top
@@ -121,7 +134,8 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
         std::string status;
 
         const auto start = std::chrono::steady_clock::now();
-        bronze::eval::LoadedModule existing = bronze::eval::loadModule(execCode, opts, record);
+        bronze::eval::LoadedModule existing;
+        if (!otherEngine) existing = bronze::eval::loadModule(execCode, opts, record);
         if (existing.ok) {
             keep.insert(u8str(u8path(existing.modulePath).filename()));
             status = "current";
