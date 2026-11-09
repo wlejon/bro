@@ -210,6 +210,12 @@ if (!bro.kernel.available || !bro.tiles) {
     }
     assert(threw && threw.message === 'no data yet', 'update rethrows what produce threw');
     assert(flaky.pending > 0, `the failed tiles stay pending (${flaky.pending})`);
+    // The levels above the failing one may still be on the GPU when it throws
+    // (production runs in the background); updates that keep failing land them.
+    for (let i = 0; i < 60 && flaky.drawn.length === 0; i++) {
+        try { flaky.update(near); } catch (e) { /* the failing level again */ }
+        advanceTime(16);
+    }
     checkCoverage(flaky, 'after a throw');
     failLevel = -1;
     assert(settle(flaky, near), 'the next updates produce them');

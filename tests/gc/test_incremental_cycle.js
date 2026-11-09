@@ -58,9 +58,16 @@ const cycles0 = bz().gcCycles;
 const full0 = bz().gcFullCollections;
 
 // Old objects the page drops after they are promoted.
-let dropped = [];
-for (let i = 0; i < 2000; i++) dropped.push({ i, payload: [i, i + 1, i + 2] });
-const wrDropped = new WeakRef(dropped[1234]);
+// Built in a function, so no temporary of this long-lived top-level frame
+// holds them: a baseline (tier 1) frame keeps its dead temporaries reachable.
+const page = {};
+function fillDropped() {
+    const d = [];
+    for (let i = 0; i < 2000; i++) d.push({ i, payload: [i, i + 1, i + 2] });
+    page.dropped = d;
+    return new WeakRef(d[1234]);
+}
+const wrDropped = fillDropped();
 runFrames(40, { stepMs: 16 });  // promoted by the minors these frames run
 
 const ran = framesUntil(() => bz().gcCycles >= cycles0 + 1, 3000);
@@ -72,7 +79,7 @@ assert(after1.gcCycleFrames > 1, `the cycle ran across frames (${after1.gcCycleF
 
 // ── 2. what the page dropped is reclaimed ─────────────────────────────────
 
-dropped = null;
+page.dropped = null;
 const cycles1 = bz().gcCycles;
 // The cycle open when it was dropped may keep it (it was live at its
 // start); the one after cannot.
