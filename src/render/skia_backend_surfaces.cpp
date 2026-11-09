@@ -216,6 +216,14 @@ void SkiaRenderer::enterCanvas(const SkIRect* damage, SkIPoint origin) {
     if (origin.fX || origin.fY)
         canvas_->translate(static_cast<float>(-origin.fX), static_cast<float>(-origin.fY));
     minSaveCount_ = 1;
+    // The whole surface, before any clip: a damage-clipped surface is a
+    // partial pass's scratch, whose pixels outside the damage are never read,
+    // and a clear under the clip (a scissored clear) left a block of the
+    // previous pass in place on Ganesh-Vulkan, so a translucent box drawn
+    // over it blended twice (tests/layout/test_scroll_layers: a 16x2 block
+    // under a half-black overlay at 0.75). Unclipped, it is the render
+    // pass's load op.
+    canvas_->clear(SK_ColorTRANSPARENT);
     if (damage) {
         // Its own save level, under the one switchSurface's restore pops and
         // the one resetClip restores to: nothing drawn can lift the clip
@@ -224,7 +232,6 @@ void SkiaRenderer::enterCanvas(const SkIRect* damage, SkIPoint origin) {
         canvas_->clipIRect(*damage);
         minSaveCount_ = 2;
     }
-    canvas_->clear(SK_ColorTRANSPARENT);
     if (deviceScale_ != 1.0f) canvas_->scale(deviceScale_, deviceScale_);
     canvas_->save();
 }
