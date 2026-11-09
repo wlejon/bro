@@ -79,6 +79,7 @@ void Document::parse(const std::string& html, const std::vector<AuthorSheet>& au
         auto sheet = htmlayout::css::parse(as.css);
         sheet.baseUrl = as.baseUrl;
         addSheetToCascade(std::move(sheet));
+        retainedSheets_.back().linked = true;
     }
 
     // Parse HTML with gumbo

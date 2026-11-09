@@ -12,7 +12,21 @@ bro ../broworkshop/games/torque     # boots, then watches the folder
 - The `system_reload_app` action (default **F5**, rebindable; [settings.md](settings.md)).
 - `location.reload()`.
 
-App state does not survive a reload.
+A change of stylesheets alone (every changed file a `.css`) does not reload: the page's linked sheets are read again and swapped into its cascade, `@import`ed sheets included, and the page restyles with its DOM and script state as they were (the log says `Stylesheets changed: restyled the running page`). A `<style>` element's text is the page's own and stays. A page with an `<iframe>` reloads instead, since a frame's sheets come from the app dir too.
+
+## Keeping state across a reload
+
+A reload starts a fresh page in a fresh realm, so nothing in the old page's heap survives. Before it goes, the window gets `pagehide` (any reload: the watcher, F5, `location.reload()`), and `sessionStorage` outlives the reload, as in a browser: an app puts what the user is in the middle of there and reads it back as it boots.
+
+```js
+addEventListener('pagehide', () => {
+    sessionStorage.setItem('draft', JSON.stringify({ path: current.path, scroll: list.scrollTop }));
+});
+const draft = JSON.parse(sessionStorage.getItem('draft') || 'null');
+if (draft) { openPath(draft.path); list.scrollTop = draft.scroll; }
+```
+
+`sessionStorage` lasts as long as the process (it is not written to disk); `localStorage` is for what should outlive it.
 
 ## Taking a change in place
 

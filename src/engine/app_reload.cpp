@@ -246,6 +246,17 @@ void Engine::pollAppWatcher(double nowMs) {
                 appWatchDeferReason_.clear();
                 return;
             }
+            // Only stylesheets changed: restyle the running page rather than
+            // throw its state away. Frames have documents of their own, read
+            // from the app dir too, so a page with any reloads as before.
+            const bool onlyCss = std::all_of(files.begin(), files.end(), [](const std::string& f) {
+                return f.size() > 4 && f.compare(f.size() - 4, 4, ".css") == 0;
+            });
+            if (onlyCss && iframeDocs_.empty()) {
+                appWatchDeferReason_.clear();
+                restyleInPlace();
+                return;
+            }
         }
         // A reload throws the running page away, so it only goes ahead on a
         // tree that is whole: every file index.html and its module graph name
@@ -266,8 +277,30 @@ void Engine::pollAppWatcher(double nowMs) {
     }
 }
 
+void Engine::restyleInPlace() {
+    std::vector<dom::Document::AuthorSheet> sheets;
+    for (const auto& cssPath : manifest_.stylePaths) {
+        std::string css = AppLoader::loadFile(cssPath);
+        if (!css.empty())
+            sheets.push_back({std::move(css), std::filesystem::path(cssPath).parent_path().string()});
+    }
+    document_->replaceLinkedSheets(sheets);
+    loadCustomFonts();
+    LOG_INFO("Stylesheets changed: restyled the running page (%zu linked sheets), not reloading",
+             sheets.size());
+}
+
 void Engine::performAppReload() {
     LOG_INFO("Reloading app '%s'", appDir_.c_str());
+    // The page's last word, while its realm still runs: `pagehide`, as a
+    // browser fires it before a reload, so an app can put what it is in the
+    // middle of into sessionStorage (which outlives the reload) and pick it
+    // up when the new page boots. A throwing handler does not stop the reload.
+    if (document_) {
+        dom::Event hide("pagehide", /*bubbles=*/false, /*cancelable=*/false);
+        hide.setIsTrusted(true);
+        dom::dispatchWindowEvent(document_.get(), hide);
+    }
     appWatchChanged_.clear();
     appWatchChangedUnknown_ = false;
 
