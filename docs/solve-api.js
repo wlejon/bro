@@ -98,13 +98,12 @@
  *   magnitude at most 2^53: solve, solveWithCert and solveAll throw ("target
  *   must be a boolean or an integer of magnitude at most 2^53"). Source that
  *   does not parse or cannot be modelled (a free variable included):
- *     - solve, solveWithCert, prove, fuzz and layout.solve throw with the
+ *     - solve, solveWithCert, solveAll, prove, fuzz and layout.solve throw with the
  *       compiler's message (prove: "bro.prove: free variable k: ..." for fn,
  *       "bro.prove: equivTo function: free variable k: ..." /
  *       "roundTripWith function: ..." for the others). Positions are in the wrapped source
  *       (`export function __solve_target(x) { return (...); }`), not in the
  *       text you passed: '(x) => x +' reports column 47.
- *     - solveAll returns [].
  *     - optimize and superoptimize return verified: false with the reason
  *       in `summary`. A candidate with a free variable is never proven.
  *     - rewriteSource returns the source unchanged with summary
@@ -128,11 +127,17 @@
  * @property {boolean} [unsigned]  With bitWidth, use the unsigned range.
  * @property {Object<string, [number, number]|{min?: number, max?: number}>} [bounds]
  *   Per-parameter bounds by parameter name, intersected with min/max.
- * @property {boolean} [minimize]  After a solution is found, try to replace
- *   each argument, in order, with a value of smaller magnitude from the fixed
- *   list 0, ±1..±4, 5..10, 12, 16, 20, 24, 32, 42, 50, 64, 100, keeping the
- *   first that still satisfies the goal. It is not a search for the minimum:
- *   for `x > 10 && x % 7 === 3` it returns 24, not 17.
+ * @property {boolean} [minimize]  Answer the least magnitude: the first
+ *   argument as small as |x| goes among the solutions, then the second given
+ *   the first, and so on (a binary search of solver queries per parameter,
+ *   so `x > 10 && x % 7 === 3` gives 17 and `x < -500` gives -501). Between
+ *   x and -x either may come back. If a query runs out of budget the search
+ *   for that parameter stops with the value it has, which still satisfies
+ *   the goal but may not be the least.
+ * @property {number} [maxConflicts]  The solver's conflict budget per query
+ *   (default 10000), an integer from 1 to 2^32 - 1. A query that exhausts it
+ *   answers 'unknown'; raise it for multiplication-heavy goals, which are
+ *   costly to bit-blast.
  * @property {string} [fnName]  Which function of a multi-function source
  *   string to solve (bro.solve, solveWithCert, solveAll only).
  */
@@ -187,15 +192,22 @@ bro.solveWithCert = function (fn, opts) {};
  * Two call forms: (fn, maxSolutions, opts) or (fn, opts) with
  * `opts.maxSolutions`. A count of 0 or less returns [].
  *
- * Never throws for an unmodellable function: it returns []. It also stops
- * without saying so when one query comes back 'unknown', so fewer results
- * than asked does not prove there are no more: `x * x < 10` over full int32
- * returned 6 of its 7 solutions, and all 7 with {min: -100, max: 100}.
+ * The returned array says why it stopped:
+ *   status    'complete' (these are every solution in the domain), 'limit'
+ *             (it found maxSolutions; there may be more), 'unknown' (a query
+ *             ran out of budget; there may be more)
+ *   complete  status === 'complete'
+ * Only 'complete' proves there are no more: `x * x < 10` over full int32
+ * gives 6 of its 7 solutions with status 'unknown' at the default budget,
+ * and all 7, 'complete', with {min: -100, max: 100}.
+ *
+ * Throws when fn cannot be modelled, as bro.solve does.
  *
  * @param {Function|string} fn
  * @param {number|(SolveOptions & {maxSolutions?: number})} [maxSolutions=10]
  * @param {SolveOptions} [opts]
- * @returns {Array<number[] & Object<string, number>>}
+ * @returns {Array<number[] & Object<string, number>> &
+ *           {status: 'complete'|'limit'|'unknown', complete: boolean}}
  */
 bro.solveAll = function (fn, maxSolutions, opts) {};
 

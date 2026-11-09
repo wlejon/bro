@@ -99,3 +99,29 @@ function throwsWith(fn, part, label) {
            'sha256 of the normalized source; got ' + h.sha256);
     assert(h.proofHash === h.sha256, 'proofHash is the same digest');
 }
+
+// ---- solveAll: says why it stopped, throws like solve -------------------------
+{
+    const odd = bro.solveAll((x) => (x & 1) === 1, 10, { min: 1, max: 4 });
+    assert(odd.length === 2 && odd.status === 'complete' && odd.complete === true,
+           'every odd value in [1, 4], complete; got ' + odd.length + ' ' + odd.status);
+    const some = bro.solveAll((x) => x > 0, 3);
+    assert(some.length === 3 && some.status === 'limit' && some.complete === false,
+           'three of many is the limit; got ' + some.status);
+    const sq = bro.solveAll((x) => x * x < 10, 20, { min: -100, max: 100 });
+    assert(sq.length === 7 && sq.complete, 'x * x < 10 in [-100, 100] has 7; got ' + sq.length);
+    let threw = '';
+    try { bro.solveAll((x) => String(x).length === 2); } catch (e) { threw = String(e); }
+    assert(threw.indexOf('bro.solveAll') >= 0, 'an unmodellable function throws; got ' + threw);
+    let bad = '';
+    try { bro.solve((x) => x > 0, { maxConflicts: 0 }); } catch (e) { bad = String(e); }
+    assert(bad.indexOf('maxConflicts') >= 0, 'a zero budget is refused; got ' + bad);
+}
+
+// ---- minimize: the least magnitude, not the least of a list -------------------
+{
+    const r = bro.solve((x) => x > 10 && x % 7 === 3, { minimize: true });
+    assert(r && r[0] === 17, 'least x > 10 with x % 7 === 3 is 17; got ' + (r && r[0]));
+    const n = bro.solve((x) => x < -500, { minimize: true });
+    assert(n && n[0] === -501, 'least magnitude below -500 is -501; got ' + (n && n[0]));
+}

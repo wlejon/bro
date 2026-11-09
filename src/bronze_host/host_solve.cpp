@@ -128,6 +128,16 @@ bool parseSolveOptions(Value optsVal, bronze::check::SolveOptions& opts, std::st
         opts.fnName = ev::toUtf8(fnNameV);
     }
 
+    Value conflictsV = ev::getProperty(root.get(), "maxConflicts");
+    if (!conflictsV.isUndefined()) {
+        double c = conflictsV.isNumber() ? conflictsV.asNumber() : -1.0;
+        if (!(c >= 1.0 && c <= 4294967295.0) || c != static_cast<double>(static_cast<uint64_t>(c))) {
+            errOut = "maxConflicts must be an integer from 1 to 2^32 - 1";
+            return false;
+        }
+        opts.maxConflicts = static_cast<uint32_t>(c);
+    }
+
     Value boundsV = ev::getProperty(root.get(), "bounds");
     if (ev::isObject(boundsV)) {
         ev::Persistent boundsObj(boundsV);
@@ -280,19 +290,32 @@ Value jsBroSolveAll(Value, std::span<const Value> args) {
         }
     }
 
-    bronze::check::SolveResult meta = bronze::check::solveJsFunction(fnSrc, opts);
-    auto tuples = bronze::check::solveAllJsFunction(fnSrc, maxSolutions, opts);
-    return hostArrayOf(tuples.size(), [&](size_t i) -> Value {
+    bronze::check::SolveAllResult all = bronze::check::solveAllJsFunction(fnSrc, maxSolutions, opts);
+    if (all.stop == bronze::check::SolveStatus::Error) {
+        return ev::throwError(("bro.solveAll: " + all.error).c_str());
+    }
+    const auto& tuples = all.solutions;
+    ev::Persistent out(hostArrayOf(tuples.size(), [&](size_t i) -> Value {
         ev::Persistent row(makeInt64JsArray(tuples[i]));
-        for (size_t j = 0; j < meta.paramNames.size() && j < tuples[i].size(); ++j) {
-            const std::string& pname = meta.paramNames[j];
+        for (size_t j = 0; j < all.paramNames.size() && j < tuples[i].size(); ++j) {
+            const std::string& pname = all.paramNames[j];
             if (pname != "length") {
                 row.set(ev::setProperty(row.get(), pname,
                                         ev::fromDouble(static_cast<double>(tuples[i][j]))));
             }
         }
         return row.get();
-    });
+    }));
+    // Why it stopped: 'complete' (these are every solution), 'limit' (it found
+    // maxSolutions), 'unknown' (a query ran out of budget). Only 'complete'
+    // says there are no more.
+    const bool complete = all.stop == bronze::check::SolveStatus::Unsat;
+    const char* stop = complete ? "complete"
+                     : (all.stop == bronze::check::SolveStatus::Sat ? "limit" : "unknown");
+    ev::Persistent stopStr(ev::fromUtf8(stop));
+    out.set(ev::setProperty(out.get(), "status", stopStr.get()));
+    out.set(ev::setProperty(out.get(), "complete", ev::fromBool(complete)));
+    return out.get();
 }
 
 // ---------------------------------------------------------------------------
