@@ -265,6 +265,18 @@ void pumpBrokitTicks() {
     callTick(g_pumps->fsAsyncTick, "__brokit_fs_async_tick");
 }
 
+void resetBrokitForReload() {
+    // brokit's natives and facades are installed once and outlive the page;
+    // what the page started on them does not. An fs.watch listener of the old
+    // page run after its modules were unloaded read its freed closure and
+    // aborted the process (helmapps Term, which watches its settings dir); a
+    // fetch or fs.promises reaction would do the same. Only the main
+    // thread's state: each worker's brokit is its own, and its thread is
+    // already stopped by detachAllWorkersForReload.
+    if (!g_pumps) return;
+    brokit::api::resetPageState();
+}
+
 void drainMicrotasksAndLocalFetches(bool always) {
     // A turn's local-fetch settling stops after this long, or this many
     // rounds (each round is a task whose reactions may issue more fetches);

@@ -393,6 +393,7 @@ void Engine::performAppReload() {
     selectionPastThreshold_ = false;
 
     bro::bronze_host::detachAllWorkersForReload();
+    bro::bronze_host::resetBrokitForReload();
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
     bro::bronze_host::clearHostMediaQueries();

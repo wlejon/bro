@@ -137,6 +137,10 @@ void terminateAllWorkers();
 // A reload: every Worker the page made stops, its queued replies dropped and
 // its handlers released (a browser ends a page's dedicated workers with it).
 void detachAllWorkersForReload();
+// A reload: brokit's async state that belongs to the page ends with it, its
+// fetches, sockets, fs watchers, pending fs promises and spawned children,
+// none of them settled or called back (host_brokit.cpp).
+void resetBrokitForReload();
 
 /// The JS heap as bronze accounts for it, for `bro-ctl mem`.
 struct JsMemoryStats {
