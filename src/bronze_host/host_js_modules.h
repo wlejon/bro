@@ -20,6 +20,9 @@ void installObserverHooks();
 // from the frame seam after requestAnimationFrame and its microtask
 // checkpoint, in each compartment whose module registered its callback.
 void fireHostObserverFrame();
+// A reload: the page's Mutation/Resize/IntersectionObservers go (observers.js
+// outlives the page), with the host's watches and queued notices.
+void resetHostObservers();
 // A compartment's watches, queued records and callbacks, at its teardown.
 void dropObserverState(uint64_t compartmentId);
 

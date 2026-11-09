@@ -738,6 +738,18 @@
         deliverIntersectionObservations();
     });
 
+    // A reload: this module and its classes outlive the page (they are
+    // installed once), but the page's observers do not. Kept, they watched
+    // the old document's detached nodes for ever: a resize pass read each
+    // as changed and reported 'undelivered notifications' every frame, and
+    // an old callback could run after the page's code was unloaded.
+    hooks.onReset(function () {
+        activeMutationObservers.clear();
+        activeResizeObservers.clear();
+        activeIntersectionObservers.clear();
+        mutationMicrotaskQueued = false;
+    });
+
     g.MutationObserver = MutationObserver;
     g.MutationRecord = MutationRecord;
     g.ResizeObserver = ResizeObserver;

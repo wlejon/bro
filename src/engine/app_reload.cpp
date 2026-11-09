@@ -20,6 +20,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
+#include "bronze_host/host_js_modules.h"
 #include "embed/embed.h"
 #include "api/fs_watch.h"
 #if BRO_WITH_COMPOSITOR
@@ -390,6 +391,7 @@ void Engine::performAppReload() {
     bro::bronze_host::clearHostMediaQueries();
     bro::bronze_host::clearHostCanvases();
     bro::bronze_host::clearAllElementListeners();
+    bro::bronze_host::resetHostObservers();
     bro::bronze_host::resetCustomElementsRegistry();
     bro::bronze_host::clearParsedDocuments();
     bro::bronze_host::clearDynamicModules();

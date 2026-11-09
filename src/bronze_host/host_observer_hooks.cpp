@@ -102,6 +102,7 @@ struct HookState {
     bool signalled = false;
     ev::Persistent onMutation;
     ev::Persistent onFrame;
+    ev::Persistent onReset;
 };
 
 // By compartment id. unique_ptr so a state keeps its address while the map
@@ -308,7 +309,28 @@ Value onFrame(Value, std::span<const Value> a) {
     return ev::undefined();
 }
 
+Value onReset(Value, std::span<const Value> a) {
+    Value fn = argAt(a, 0);
+    if (!ev::isFunction(fn)) {
+        return ev::throwTypeError("__bro_observers.onReset: expected a function");
+    }
+    state().onReset.set(fn);
+    return ev::undefined();
+}
+
 }  // namespace
+
+void resetHostObservers() {
+    HookState* s = existingState();
+    if (!s) return;
+    s->watches.clear();
+    s->queue.clear();
+    s->signalled = false;
+    if (!ev::isFunction(s->onReset.get())) return;
+    const ev::Persistent fn(s->onReset.get());
+    ev::CallResult r = ev::call(fn.get(), ev::undefined(), {});
+    if (r.thrown) reportBronzeError("__bro_observers.onReset", r.value);
+}
 
 void installObserverHooks() {
     state();
@@ -319,6 +341,7 @@ void installObserverHooks() {
     b.def("takeMutations", 0, takeMutations);
     b.def("onMutation", 1, onMutation);
     b.def("onFrame", 1, onFrame);
+    b.def("onReset", 1, onReset);
     // The builder roots the object; registerGlobal and globalValue both
     // allocate, so each use re-reads it.
     ev::registerGlobal("__bro_observers", b.get());
