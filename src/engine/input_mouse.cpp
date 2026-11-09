@@ -37,6 +37,10 @@
 
 namespace bro::engine {
 
+double Engine::clickClockMs() const {
+    return windowedPipeline() ? util::currentTimeMs() : virtualTime_;
+}
+
 float Engine::overlayMouseY(float y) const {
     const Overlay* active = overlayMgr_->active();
     if (active && active->context() == OverlayContext::App) {
@@ -95,7 +99,7 @@ bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
         dispatchDocMouseRelease(cctx, dp->mouseState, sub, upEvt,
                                 lx, ly, button, pressedButtons_, mod,
                                 movementX, movementY, lx, ly,
-                                util::currentTimeMs(),
+                                clickClockMs(),
                                 inputConfig_.doubleClickThresholdMs,
                                 inputConfig_.doubleClickDistancePx);
     }
@@ -232,7 +236,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         const float focusX = x, focusY = y - static_cast<float>(contentTop());
         PressIntent intent;
         intent.ordinal = pressOrdinal(appMouseState_, target, focusX, focusY,
-                                      util::currentTimeMs(),
+                                      clickClockMs(),
                                       inputConfig_.doubleClickThresholdMs,
                                       inputConfig_.doubleClickDistancePx);
         intent.extend = (mod & platform::kmod::Shift) != 0;
@@ -485,7 +489,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
                                 x, clientY, button, pressedButtons_, mod,
                                 movX, movY, x, pageY,
-                                util::currentTimeMs(),
+                                clickClockMs(),
                                 inputConfig_.doubleClickThresholdMs,
                                 inputConfig_.doubleClickDistancePx,
                                 [this, docX, docY]() {

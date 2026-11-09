@@ -193,7 +193,7 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
     float docX = x, docY = clientY + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     int mod = currentModState();
-    double nowMs = util::currentTimeMs();
+    double nowMs = clickClockMs();
 
     ControlContext cctx{document_.get(),
                         renderer_.get(), window_.get(), &uiDirty_,

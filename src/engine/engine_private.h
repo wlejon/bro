@@ -210,6 +210,9 @@
     void initDevLoopConfig(const EngineConfig& config);
     void initAppWatcher();
     void pollAppWatcher(double nowMs);
+    // A change of stylesheets alone: the page's linked sheets read again and
+    // swapped into its cascade, the page kept (app_reload.cpp).
+    void restyleInPlace();
 
     void initSystemPanels();
     void loadCustomFonts();
@@ -871,6 +874,12 @@ private:
     bool inModalFrame_ = false;
     bool modalFramesRan_ = false;   // during this frame's pollEvents()
     bool windowedPipeline() const { return displayMode_ == DisplayMode::Windowed || headlessPipeline_; }
+    // The clock double-click and double-tap streaks are timed on: the wall
+    // clock where frames run in real time, headless's virtual time otherwise,
+    // so two clicks a script sends with no advanceTime between are one
+    // double-click however long the first one's handlers ran (a loaded
+    // machine, BRONZE_GC_STRESS), and clicks advanceTime(1000) apart are not.
+    double clickClockMs() const;   // input_mouse.cpp
     bool presentHeadlessPipelineFrame(const render::PresentFrame& frame);
     bool headlessPipeline_ = false;         // inside runPipelineFrames
     bool headlessPipelineStarted_ = false;  // its threads are up

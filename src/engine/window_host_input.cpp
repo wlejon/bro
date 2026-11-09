@@ -234,7 +234,7 @@ void Engine::hostMouseDown(uint64_t hostId, float x, float y, int sdlButton) {
 
     PressIntent intent;
     intent.ordinal = pressOrdinal(h.mouseState, target, x, y,
-                                  util::currentTimeMs(),
+                                  clickClockMs(),
                                   inputConfig_.doubleClickThresholdMs,
                                   inputConfig_.doubleClickDistancePx);
     intent.extend = (mod & platform::kmod::Shift) != 0;
@@ -291,7 +291,7 @@ void Engine::hostMouseUp(uint64_t hostId, float x, float y, int sdlButton) {
     dispatchDocMouseRelease(cctx, h.mouseState, target, upEvt,
                             x, y, button, h.pressedButtons, mod,
                             x - prevX, y - prevY, x, y,
-                            util::currentTimeMs(),
+                            clickClockMs(),
                             inputConfig_.doubleClickThresholdMs,
                             inputConfig_.doubleClickDistancePx);
     h.activeElement = h.document ? h.document->activeElement() : nullptr;
