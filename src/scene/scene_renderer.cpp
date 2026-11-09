@@ -71,7 +71,7 @@ float SceneRenderer::vegetationReach(float height, const bromath::Mat4& world) c
 // so culling can never pop visible content: skinned meshes use palette-posed
 // bounds, wind sway pads by its max displacement, splats pad by the 3-sigma
 // quad extent the splat shader emits.
-std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const {
+std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n, bool margin) const {
     bromath::AABB3 out;
     switch (n->type()) {
     case SceneNode::Type::Mesh: {
@@ -86,11 +86,12 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
         // is the user's promise about custom-vertex-shader displacement —
         // the engine can't infer it from the hook's code (see setCullMargin).
         // Vegetation sways in the wind field instead, by at most its reach.
+        const float cm = margin ? m->cullMargin() : 0.0f;
         const float pad = m->vegetationHeight() > 0.0f
-                              ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) + m->cullMargin()
+                              ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) + cm
                               : m->windMask() * windStrength_ *
                                         bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]}) +
-                                    m->cullMargin();
+                                    cm;
         if (pad > 0.0f) {
             out.min = out.min - Vec3{pad, pad, pad};
             out.max = out.max + Vec3{pad, pad, pad};
@@ -107,7 +108,7 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const
             lo[0] = w.min.x; lo[1] = w.min.y; lo[2] = w.min.z;
             hi[0] = w.max.x; hi[1] = w.max.y; hi[2] = w.max.z;
         }
-        const float pad = m->cullMargin() +
+        const float pad = (margin ? m->cullMargin() : 0.0f) +
                           (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);
         out.min = {lo[0] - pad, lo[1] - pad, lo[2] - pad};
         out.max = {hi[0] + pad, hi[1] + pad, hi[2] + pad};

@@ -215,26 +215,35 @@ void ShadowPages::beginBasis(Sun& sun, const double d[3], float angularRadius, c
     std::memcpy(sun.offset, offset, sizeof(offset));
 }
 
-bool ShadowPages::fitRange(Sun& sun, const bromath::AABB3& box, bool grow) const {
-    // The depth range along the light: the casters' extent, grown in coarse
-    // steps (a change redraws every page, so it moves rarely) and never
-    // shrunk.
+bool ShadowPages::fitRange(Sun& sun, const bromath::AABB3& box, const bromath::AABB3& depthBox, bool grow) const {
+    // The casters' rect across the light: where their shadows can fall, cull
+    // margins in. The depth range along the light: the casters' extent
+    // without their margins (a margin of "anywhere" would spread the depth's
+    // precision over kilometres and take every shadow near its receiver),
+    // grown in coarse steps (a change redraws every page, so it moves
+    // rarely) and never shrunk; what a vertex hook carries past it toward the
+    // light is laid on the near plane (shadow.bk caster_clip) and still casts.
     sun.casterRect[0] = sun.casterRect[2] = 1e300;
     sun.casterRect[1] = sun.casterRect[3] = -1e300;
     bool grew = false;
     if (!bromath::aisEmpty(box)) {
         double cs[8][3];
         corners(box, cs);
+        for (auto& p : cs) {
+            double a, b, c;
+            sunPlane(sun, p, a, b, c);
+            sun.casterRect[0] = std::min(sun.casterRect[0], a);
+            sun.casterRect[1] = std::max(sun.casterRect[1], a);
+            sun.casterRect[2] = std::min(sun.casterRect[2], b);
+            sun.casterRect[3] = std::max(sun.casterRect[3], b);
+        }
+        corners(bromath::aisEmpty(depthBox) ? box : depthBox, cs);
         double lo = 1e300, hi = -1e300;
         for (auto& p : cs) {
             double a, b, c;
             sunPlane(sun, p, a, b, c);
             lo = std::min(lo, c);
             hi = std::max(hi, c);
-            sun.casterRect[0] = std::min(sun.casterRect[0], a);
-            sun.casterRect[1] = std::max(sun.casterRect[1], a);
-            sun.casterRect[2] = std::min(sun.casterRect[2], b);
-            sun.casterRect[3] = std::max(sun.casterRect[3], b);
         }
         if (!sun.haveRange || lo < sun.zLo || hi > sun.zHi) {
             grew = sun.haveRange;
@@ -342,7 +351,7 @@ void ShadowPages::setSun(const ShadowSun& sun) {
     // The sun turned past the shown clipmap, or its casters outgrew the
     // depth range: the next one begins, about the eye, in light space of the
     // sun as it is now.
-    const bool outgrown = fitRange(sun_, sun.casters, false);
+    const bool outgrown = fitRange(sun_, sun.casters, sun.depthCasters, false);
     if (!building_ && (outgrown || dot3(sun_.d, d) < std::cos(static_cast<double>(config_.sunTurn)))) {
         next_ = Sun{};
         next_.had = true;
@@ -356,7 +365,7 @@ void ShadowPages::setSun(const ShadowSun& sun) {
         ready_ = false;
         begun_ = serial_;
     }
-    if (building_ && fitRange(next_, sun.casters, true))
+    if (building_ && fitRange(next_, sun.casters, sun.depthCasters, true))
         for (int i = clipFirst(true); i < clipFirst(true) + clip; ++i)
             if (entries_[static_cast<size_t>(i)].drawn) entries_[static_cast<size_t>(i)].dirty = true;
     moveWindows(sun_, 0);

@@ -107,7 +107,8 @@ struct ShadowSun {
     uint32_t lightId = 0;
     int lightIndex = 0;                   // in SceneRenderer::frameLights()
     bromath::Vec3 direction{0.0f, -1.0f, 0.0f};   // light -> scene
-    bromath::AABB3 casters;               // every caster's bounds: the depth range
+    bromath::AABB3 casters;               // every caster's bounds, cull margins in: where shadows can fall
+    bromath::AABB3 depthCasters = bromath::aempty3();   // without the margins: the depth range (empty: casters)
     float bias = 0.0f, normalBias = 0.0f;
     float reach = 0.0f;                   // how far from the eye it shadows (m; 0 none)
     float angularRadius = 0.0f;           // the sun disc's (radians): its penumbra
@@ -318,10 +319,10 @@ private:
     /// `angularRadius` along `d` (both fixed for the clipmap's life, so its
     /// cached pages and its overlays part the plants alike).
     void beginBasis(Sun& sun, const double d[3], float angularRadius, const Sun* from) const;
-    /// Fit `sun`'s depth range to the casters' `box` (and its casters'
-    /// plane rect); true when a range it had must grow (grown only with
-    /// `grow`).
-    bool fitRange(Sun& sun, const bromath::AABB3& box, bool grow) const;
+    /// Fit `sun`'s depth range to the casters' `depthBox` (`box` where it is
+    /// empty) and its casters' plane rect to `box`; true when a range it had
+    /// must grow (grown only with `grow`).
+    bool fitRange(Sun& sun, const bromath::AABB3& box, const bromath::AABB3& depthBox, bool grow) const;
     /// `sun`'s levels' maps, appended to maps_.
     void addLevelMaps(const Sun& sun, bool next);
     /// The built clipmap becomes the shown one, the shown one's pages freed.

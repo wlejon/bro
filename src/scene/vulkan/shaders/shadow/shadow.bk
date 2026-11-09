@@ -8,6 +8,18 @@ import bark;
 import mesh;
 import hook;
 
+// A caster's clip position. In an orthographic map (the sun's levels: the
+// matrix's w row is 0 0 0 1) a vertex nearer the light than the map's near
+// plane is laid on it rather than clipped away: the depth range follows the
+// casters' bounds, and geometry a vertex hook carries past them toward the
+// light still shadows everything behind it.
+fn caster_clip(push: mesh::ShadowPush, world_pos: vec4<f32>) -> vec4<f32> {
+    var c = scene::mul4(push.light_view_proj, world_pos);
+    let m = push.light_view_proj;
+    if m[0].w == 0.0 && m[1].w == 0.0 && m[2].w == 0.0 && c.z < 0.0 { c.z = 0.0; }
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 // Built-in Shadow Caster Vertex Stages
 // ---------------------------------------------------------------------------
@@ -24,7 +36,7 @@ import hook;
     let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
     let pos = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 @vertex fn shadow_veg_vert(
@@ -42,7 +54,7 @@ import hook;
     let world_pos0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
     let n0 = normalize(scene::mul3(scene::mat3_from4(model), in_normal));
     let sw = vegetation::sway(model, in_veg0, in_veg1, in_veg2, in_veg3, n0, world_pos0, true);
-    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(sw.world_pos, 1.0)));
+    set_vertex_position(caster_clip(push,vec4<f32>(sw.world_pos, 1.0)));
 }
 
 @vertex fn shadow_instanced_vert(
@@ -56,7 +68,7 @@ import hook;
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 @vertex fn shadow_instanced_veg_vert(
@@ -77,7 +89,7 @@ import hook;
     let world_pos0 = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0)).xyz;
     let n0 = normalize(scene::mul3(scene::mat3_from4(model), scene::mul3(r, in_normal)));
     let sw = vegetation::sway(model, in_veg0, in_veg1, in_veg2, in_veg3, n0, world_pos0, true);
-    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(sw.world_pos, 1.0)));
+    set_vertex_position(caster_clip(push,vec4<f32>(sw.world_pos, 1.0)));
 }
 
 @vertex fn shadow_skinned_vert(
@@ -96,7 +108,7 @@ import hook;
     let wp0 = scene::mul4(model, vec4<f32>(p_skin, 1.0)).xyz;
     let pos = p_skin + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 @vertex fn shadow_scatter_vert(
@@ -121,7 +133,7 @@ import hook;
         let sw = vegetation::sway_axis(model, vr.v0, vr.v1, vr.v2, vr.v3, sl.f, card_n, wp, true);
         wp = sw.world_pos;
     }
-    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(wp, 1.0)));
+    set_vertex_position(caster_clip(push,vec4<f32>(wp, 1.0)));
 }
 
 @vertex fn shadow_tube_vert(push: mesh::ShadowPush) {
@@ -137,7 +149,7 @@ import hook;
         let sw = vegetation::sway_axis(model, vr.v0, vr.v1, vr.v2, vr.v3, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), wp, true);
         wp = sw.world_pos;
     }
-    set_vertex_position(scene::mul4(push.light_view_proj, vec4<f32>(wp, 1.0)));
+    set_vertex_position(caster_clip(push,vec4<f32>(wp, 1.0)));
 }
 
 @vertex fn shadow_cutout_vert(
@@ -152,7 +164,7 @@ import hook;
     let wp0 = scene::mul4(model, vec4<f32>(in_pos, 1.0)).xyz;
     let pos = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let world_pos = scene::mul4(model, vec4<f32>(pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
     mesh::emit_shadow_cutout(push, in_uv, in_color.w, 1.0);
 }
 
@@ -170,7 +182,7 @@ import hook;
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, in_pos) + trans, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
     mesh::emit_shadow_cutout(push, in_uv, in_color.w, in_inst_color.w);
 }
 
@@ -192,7 +204,7 @@ import hook;
     let pos0 = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, in_normal, in_uv, in_color, in_tangent));
     let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 @vertex fn shadow_hook_cutout_vert(
@@ -209,7 +221,7 @@ import hook;
     let pos0 = in_pos + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, in_normal, in_uv, in_color, in_tangent));
     let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
     mesh::emit_shadow_cutout(push, v.uv, in_color.w, 1.0);
 }
 
@@ -230,7 +242,7 @@ import hook;
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, v.pos) + trans, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 @vertex fn shadow_hook_instanced_cutout_vert(
@@ -251,7 +263,7 @@ import hook;
     let r = mesh::inst_rot(in_inst_row0, in_inst_row1, in_inst_row2);
     let trans = vec3<f32>(in_inst_row0.w, in_inst_row1.w, in_inst_row2.w);
     let world_pos = scene::mul4(model, vec4<f32>(scene::mul3(r, v.pos) + trans, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
     mesh::emit_shadow_cutout(push, v.uv, in_color.w, in_inst_color.w);
 }
 
@@ -275,7 +287,7 @@ import hook;
     let pos0 = p_skin + scene::mul3(inv_m3, scene::wind_delta(wp0, in_color.x * push.params.x));
     let v = hook::vertex(mesh::make_vertex_in(model, push.params.x, pos0, n_skin, in_uv, in_color, in_tangent));
     let world_pos = scene::mul4(model, vec4<f32>(v.pos, 1.0));
-    set_vertex_position(scene::mul4(push.light_view_proj, world_pos));
+    set_vertex_position(caster_clip(push,world_pos));
 }
 
 // ---------------------------------------------------------------------------

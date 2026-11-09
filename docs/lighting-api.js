@@ -152,7 +152,10 @@
  * drawn each frame over the cached depth. There is nothing to
  * size: resolution follows the screen. A custom vertex hook that moves
  * geometry past a node's bounds needs its `cullMargin` set, or the pages
- * its shadow falls in are not found.
+ * its shadow falls in are not found. The margin widens only where shadows
+ * are looked for: the sun's depth range follows the casters' bounds without
+ * their margins, so a margin of "anywhere" costs no shadow its precision,
+ * and geometry a hook carries past the range toward the sun still casts.
  * @typedef {Object} ShadowQualityConfig
  * @property {number} [pcfTaps] -  PCF filter grid side: 1 (single sample), 3 or 5 (default 3).
  */

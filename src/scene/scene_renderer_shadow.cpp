@@ -48,7 +48,7 @@ bromath::AABB3 SceneRenderer::seenBounds(float reach) const {
     return box;
 }
 
-void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
+void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::AABB3& depthBounds) {
     ShadowPages& pages = shadowPages_;
     // Vegetation sways whenever the wind field moves at all; a wind-masked
     // mesh bends under the wind.
@@ -56,6 +56,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
     const bool windy = windStrength_ > 0.0f;
     shadowCasterStates_.begin();
     casterBounds = bromath::aempty3();
+    depthBounds = bromath::aempty3();
 
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
@@ -75,7 +76,8 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                                                                    skinned || chunk, pages, sways);
                     if (moving) shadowMotion_[m->id()] = ShadowMotion::Moving;
                     else if (sways) shadowMotion_[m->id()] = ShadowMotion::Swaying;
-                    casterBounds = bromath::amerge(casterBounds, *wb);   // (its cullMargin in)
+                    casterBounds = bromath::amerge(casterBounds, *wb);
+                    depthBounds = bromath::amerge(depthBounds, *nodeWorldBounds(m, false));
                 }
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
@@ -97,6 +99,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds) {
                     if (moving) shadowMotion_[m->id()] = ShadowMotion::Moving;
                     else if (sways) shadowMotion_[m->id()] = ShadowMotion::Swaying;
                     casterBounds = bromath::amerge(casterBounds, *wb);
+                    depthBounds = bromath::amerge(depthBounds, *nodeWorldBounds(m, false));
                 }
             }
         }
@@ -121,9 +124,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
 
     bool anyLight = false;
     for (auto* L : lights) anyLight = anyLight || (L && L->castsShadow());
-    bromath::AABB3 casterBounds = bromath::aempty3();
+    bromath::AABB3 casterBounds = bromath::aempty3(), depthBounds = bromath::aempty3();
     if (anyLight) {
-        gatherShadowCasters(casterBounds);
+        gatherShadowCasters(casterBounds, depthBounds);
     } else {
         // Nothing casts: the pages go with their lights (endLights), and the
         // casters are met anew when a light casts again.
@@ -152,6 +155,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             sun.lightIndex = i;
             sun.direction = d;
             sun.casters = casterBounds;
+            sun.depthCasters = depthBounds;
             sun.bias = L->shadowBias();
             sun.normalBias = L->shadowNormalBias();
             sun.reach = L->shadowDistance();

@@ -104,6 +104,36 @@ if (!probe.scene) {
         dropScene(s);
     }
 
+    // ---- Directional: a caster near its receiver, beside a node whose cull
+    // margin says "anywhere" (a vertex hook placing its vertices) ----------
+    // The margin is culling's: the sun's depth range follows the casters'
+    // bounds without it, so a ball 2 cm off the ground still shadows it.
+    // With the margin in the range, its precision spread over hundreds of
+    // kilometres and the ball cast nothing.
+    {
+        const s = freshScene(256);
+        const scn = s.scene;
+        scn.setCamera({ fov: 40, near: 0.05, far: 50, position: [0, 1.2, 1.2], target: [0, 0, 0] });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
+        scn.setAmbient([0.02, 0.02, 0.02]);
+        scn.createMesh({ mesh: 'plane', halfW: 4, halfD: 4, color: [0.8, 0.8, 0.8], roughness: 1, castsShadow: false });
+        // The sun at 45 degrees toward +x: the ball (centre 7 cm up) shadows x 0 to 0.14.
+        scn.createMesh({ mesh: 'sphere', radius: 0.05, color: 'white', y: 0.07 });
+        const sun = scn.createLight({ type: 'directional', direction: [1, -1, 0], intensity: 3 });
+        sun.castsShadow = true;
+        const far = scn.createMesh({ mesh: 'box', halfW: 0.1, halfH: 0.1, halfD: 0.1, color: 'white', x: -3, y: 0.1 });
+        far.cullMargin = 1e5;
+        // (The margin widens where shadows can fall, so the first frame's
+        // pages are a coarse level's; the fine ones follow, as in a window.)
+        for (let i = 0; i < 4; i++) scn.captureFrame();
+        const f = scn.captureFrame();
+        const lit = ground(scn, f, -0.3, 0.3);
+        const shaded = ground(scn, f, 0.09, 0);
+        assert(lit > 60, `the sunlit ground is bright (${lit.toFixed(1)})`);
+        assert(shaded < lit * 0.4, `a ball 2 cm off the ground shadows it beside a node of margin 1e5 (${shaded.toFixed(1)} vs ${lit.toFixed(1)})`);
+        dropScene(s);
+    }
+
     // ---- Spot: the cone, and a spot shadow ---------------------------------
     {
         const { s, scn } = setup(192);

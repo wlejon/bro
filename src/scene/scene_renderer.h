@@ -535,7 +535,9 @@ public:
     /// Conservative world-space AABB for a cullable node (Mesh incl. skinned,
     /// InstancedMesh, GaussianSplat, Particles3D, Decal). Returns nullopt when
     /// the node has no valid bounds — such nodes draw unconditionally.
-    std::optional<bromath::AABB3> nodeWorldBounds(SceneNode* n) const;
+    /// `margin` false leaves out a mesh's cullMargin (the sun's shadow depth
+    /// range: a margin of "anywhere" would spread its precision over it).
+    std::optional<bromath::AABB3> nodeWorldBounds(SceneNode* n, bool margin = true) const;
 
     /// Camera-frustum test for the forward passes: true when the node is
     /// provably outside this frame's view and safe to skip. Never true while
@@ -582,8 +584,9 @@ private:
     // counts the casters it draws and culls.
     void prepareShadows(const std::vector<LightNode*>& lights);
     // The casters (shadowMotion_, the casters' states, the overlays of what
-    // moves) and their bounds' union, the sun's depth range.
-    void gatherShadowCasters(bromath::AABB3& casterBounds);
+    // moves) and their bounds' union, cull margins in (where shadows can
+    // fall) and out (the sun's depth range).
+    void gatherShadowCasters(bromath::AABB3& casterBounds, bromath::AABB3& depthBounds);
     /// The bounds of what the camera sees out to `reach` (0: its far plane).
     bromath::AABB3 seenBounds(float reach) const;
 
