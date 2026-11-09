@@ -200,6 +200,12 @@
     // initAppRealm's run of it to take.
     void beginPageCompile();
     void performAppReload();
+    /// The page's last word while its realm still runs: `pagehide` on the
+    /// window (and the microtasks its handlers queued). Before a reload and
+    /// once as the engine shuts down, so a page can save what it is in the
+    /// middle of whichever way it goes. Once per page.
+    void firePageHide();
+    bool pageHideFired_ = false;
     // After a reload whose page failed (index.html unloadable, or a top-level
     // script threw): the error, logged and shown over whatever the page drew.
     void showAppReloadFailure(const std::string& what);

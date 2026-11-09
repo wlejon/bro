@@ -81,6 +81,9 @@ void Engine::stopBackgroundServices() {
 
 void Engine::shutdown() {
     if (shutdownDone_) return;
+    // The page goes as a closed tab does: `pagehide` first, while everything
+    // its handlers reach still runs (a recording saved, a session kept).
+    if (displayMode_ != DisplayMode::Server) firePageHide();
     shutdownDone_ = true;
 
     util::beginShutdown();
@@ -116,6 +119,9 @@ void Engine::shutdown() {
 Engine::~Engine() { teardown(); }
 
 void Engine::teardown() {
+    // Headless (and an engine embedded without run()) ends here: the page's
+    // pagehide before anything it could reach is stopped.
+    if (displayMode_ != DisplayMode::Server && !shutdownDone_) firePageHide();
     // No command may arrive for an engine on its way out.
     if (control_) control_->stop();
     bronze_host::stopScriptPumpWatchdog();

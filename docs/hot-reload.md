@@ -28,6 +28,8 @@ if (draft) { openPath(draft.path); list.scrollTop = draft.scroll; }
 
 `sessionStorage` lasts as long as the process (it is not written to disk); `localStorage` is for what should outlive it.
 
+The page gets `pagehide` once more when the app quits (the window closed, `bro.quit()`, Ctrl+C, the end of a headless script), as a closed tab's does, while everything it reaches still runs. What must outlive the process is written there synchronously (`fs.writeFileSync`): the process exits after the handlers return, so a promise they start does not finish.
+
 ## Taking a change in place
 
 Before a watcher reload, the window gets a cancelable `sourcechange` event whose `detail.files` names the changed files from the app dir (`kernels/relief.bk`; a file of the project's lib as `/lib/...`). `preventDefault()` keeps the running page, so an app can swap the change in itself: new kernel sources through `bro.kernel.reload`, hook sources through `scene.reloadShaders` ([kernel-api.js](kernel-api.js), [scene-api.js](scene-api.js)), and whatever it made from the changed kernels made again. A change of unknown files (a burst the watcher dropped, the folder replaced) reloads without the event; F5 and `location.reload()` never fire it.

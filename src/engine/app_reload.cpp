@@ -292,23 +292,29 @@ void Engine::restyleInPlace() {
              sheets.size());
 }
 
+void Engine::firePageHide() {
+    if (pageHideFired_ || !document_) return;
+    pageHideFired_ = true;
+    dom::Event hide("pagehide", /*bubbles=*/false, /*cancelable=*/false);
+    hide.setIsTrusted(true);
+    dom::dispatchWindowEvent(document_.get(), hide);
+    if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
+}
+
 void Engine::performAppReload() {
     LOG_INFO("Reloading app '%s'", appDir_.c_str());
     // The page's last word, while its realm still runs: `pagehide`, as a
     // browser fires it before a reload, so an app can put what it is in the
     // middle of into sessionStorage (which outlives the reload) and pick it
     // up when the new page boots. A throwing handler does not stop the reload.
-    if (document_) {
-        dom::Event hide("pagehide", /*bubbles=*/false, /*cancelable=*/false);
-        hide.setIsTrusted(true);
-        dom::dispatchWindowEvent(document_.get(), hide);
-    }
+    firePageHide();
     // The old page's microtask checkpoint, before its modules stop being
     // roots: a promise it settled just before the reload (a worker's reply,
     // say: Images' full-resolution decode) left a reaction queued, and run
     // after the unload below that reaction read the old page's module state
     // freed. A browser runs the checkpoint before a navigation too.
     if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
+    pageHideFired_ = false;   // the next page gets its own
     appWatchChanged_.clear();
     appWatchChangedUnknown_ = false;
 
