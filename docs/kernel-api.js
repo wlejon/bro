@@ -315,7 +315,10 @@ if (bro.kernel.gpu) {
 // tile cache's production runs here already, tiles-api.js.) A job may take
 // many frames (a world's rivers built at start, thousands of dispatches):
 // on an async queue the frames go on beside it, wait for it nowhere, and the
-// page polls `done` each frame.
+// page polls `done` each frame. Its work goes to the GPU 64 dispatches a
+// submission, in order, as the frame's own stream does: one submission of
+// thousands would run past the OS's GPU watchdog (about 2 s on Windows) and
+// lose the device.
 //
 //   job.done   true once the GPU has done the job's work; from the read that
 //              finds it true, the frames read what it wrote (the graphics

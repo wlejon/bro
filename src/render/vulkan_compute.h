@@ -341,6 +341,12 @@ private:
     };
     struct Stream {
         VkCommandBuffer open = VK_NULL_HANDLE;
+        // The background stream's full buffers (kMaxDispatchesPerSubmit
+        // dispatches each), held with `open` until the frame releases them,
+        // then submitted one a submission, in order.
+        std::vector<VkCommandBuffer> sealed;
+        // Recorded work not yet submitted.
+        bool holds() const { return open != VK_NULL_HANDLE || !sealed.empty(); }
         std::vector<Range> reads;
         std::vector<Range> writes;
         uint32_t openDispatches = 0;

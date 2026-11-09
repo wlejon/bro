@@ -16,9 +16,12 @@ namespace {
 
 constexpr VkDeviceSize kBufferGranule = 256;
 constexpr VkDeviceSize kDeferredReclaimBytes = 32ull * 1024 * 1024;
-// Maximum dispatches recorded into one graphics command buffer before
-// submitting it, so long dispatch loops do not build one multi-second
-// submission that trips the OS GPU watchdog (TDR).
+// Maximum dispatches recorded into one command buffer, so a long dispatch
+// loop does not build one multi-second submission that trips the OS GPU
+// watchdog (TDR: about 2 s on Windows, sooner on the GPU driving the display
+// while it composites). The graphics stream submits each such buffer at
+// once; the background stream seals it and submits its buffers one a
+// submission when the frame releases them.
 constexpr uint32_t kMaxDispatchesPerSubmit = 64;
 // Timestamp queries for timed dispatches, two a dispatch, in a ring. 4096 at
 // most: MoltenVK backs a pool with a Metal counter sample buffer of 32 KB at
@@ -400,11 +403,13 @@ VkCommandBuffer VulkanCompute::commands(std::span<const ComputeAccess> access) {
         context_->frames().ensureFrame();
         const bool bg = recordingBackground();
         s.open = bg && async() ? context_->frames().beginComputeCommands() : context_->frames().beginCommands();
-        // A background submission is timed whole, from when its work starts
+        // A background release is timed whole, from when its work starts
         // (after the graphics it waits for) to its end: what it takes of the
-        // gap between frames.
-        if (bg) backgroundStamped_ = false;
-        if (bg && timestamps()) {
+        // gap between frames. Its first buffer opens the stamp, its last
+        // closes it (flushStream).
+        const bool first = bg && s.sealed.empty();
+        if (first) backgroundStamped_ = false;
+        if (first && timestamps()) {
             if (backgroundPool_ == VK_NULL_HANDLE) {
                 VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
                 info.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -477,7 +482,7 @@ uint64_t VulkanCompute::endBackground() {
 }
 
 uint64_t VulkanCompute::markBackground() {
-    if (backgroundStream_.open == VK_NULL_HANDLE) return owner_->backgroundMarked;
+    if (!backgroundStream_.holds()) return owner_->backgroundMarked;
     return ++owner_->backgroundMarked;
 }
 
@@ -570,7 +575,21 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
         timed_.push_back({pipeline.label_, query, 0, recordingBackground()});
     }
     Stream& s = current();
-    if (++s.openDispatches >= kMaxDispatchesPerSubmit && !recordingBackground()) {
+    if (recordingBackground()) {
+        // Held to the frame's release: sealed, after a barrier the next
+        // buffer's work waits behind, and the next dispatch opens another.
+        if (++s.openDispatches >= kMaxDispatchesPerSubmit) {
+            memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            s.sealed.push_back(s.open);
+            s.open = VK_NULL_HANDLE;
+            s.reads.clear();
+            s.writes.clear();
+            s.openDispatches = 0;
+        }
+        return true;
+    }
+    if (++s.openDispatches >= kMaxDispatchesPerSubmit) {
         const uint64_t prev = s.prevBatchTicket;
         const uint64_t ticket = flush();
         if (!ticket) return false;
@@ -713,7 +732,7 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
     std::memcpy(out, readbackMapped_, static_cast<size_t>(size));
     if (!bg) {
         graphicsStream_.prevBatchTicket = 0;
-        if (backgroundStream_.open == VK_NULL_HANDLE) context_->frames().reclaimCompleted(/*wait=*/false);
+        if (!backgroundStream_.holds()) context_->frames().reclaimCompleted(/*wait=*/false);
     }
     return true;
 }
@@ -762,18 +781,22 @@ uint64_t VulkanCompute::flush() { return flushStream(graphicsStream_, false); }
 
 void VulkanCompute::reclaim() {
     if (!context_ || !owner_ || background_) return;
-    if (backgroundStream_.open != VK_NULL_HANDLE) return;
+    if (backgroundStream_.holds()) return;
     flush();
     graphicsStream_.prevBatchTicket = 0;
     context_->frames().reclaimCompleted(/*wait=*/true);
 }
 
 uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
-    if (!context_ || s.open == VK_NULL_HANDLE) return s.lastTicket;
+    if (!context_ || !s.holds()) return s.lastTicket;
     // Everything submitted after this sees what the work wrote.
-    memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-    const VkCommandBuffer cmd = s.open;
+    if (s.open != VK_NULL_HANDLE) {
+        memoryBarrier(s.open, kComputeStages, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+        s.sealed.push_back(s.open);
+    }
+    std::vector<VkCommandBuffer> cmds = std::move(s.sealed);
+    s.sealed.clear();
     s.open = VK_NULL_HANDLE;
     s.reads.clear();
     s.writes.clear();
@@ -792,11 +815,18 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
                 waits.push_back({context_->queue().timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, g});
         }
         const bool stamped = backgroundStamped_;
-        if (stamped) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, backgroundPool_,
+        if (stamped) vkCmdWriteTimestamp(cmds.back(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, backgroundPool_,
                                          backgroundStampQuery_ + 1);
         backgroundStamped_ = false;
-        ticket = async() ? context_->frames().submitCompute(cmd, std::move(waits))
-                         : context_->frames().submit(cmd, std::move(waits));
+        // One submission a buffer, in order on the queue: the first waits
+        // for the graphics, the rest come after it. A failed one drops the
+        // rest (they would run on what it did not write; the frame slot's
+        // pool reset takes them back).
+        for (size_t i = 0; i < cmds.size(); i++) {
+            if (i > 0 && !ticket) break;
+            ticket = async() ? context_->frames().submitCompute(cmds[i], i == 0 ? std::move(waits) : std::vector<SemaphoreWait>{})
+                             : context_->frames().submit(cmds[i], i == 0 ? std::move(waits) : std::vector<SemaphoreWait>{});
+        }
         if (stamped && ticket) backgroundStamps_.push_back({backgroundStampQuery_, ticket});
         // The serials handed out so far are this submission's (a failed
         // one's complete at once: there is nothing to wait for).
@@ -809,7 +839,8 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
             waits.push_back({queueFor(true).timeline(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, acquire_});
             acquired_ = acquire_;
         }
-        ticket = context_->frames().submit(cmd, std::move(waits));
+        // The graphics stream submits as it goes (dispatch): one buffer.
+        ticket = context_->frames().submit(cmds.front(), std::move(waits));
     }
     if (ticket) s.lastTicket = ticket;
     // The dispatches timed in it finish with it (a failed submission's never).

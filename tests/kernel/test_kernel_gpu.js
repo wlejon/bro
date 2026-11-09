@@ -133,6 +133,23 @@ if (!bro.kernel.available) {
         assert(mid === 3, 'the long job ran every pass: ' + mid);
     }
 
+    // A job of many dispatches goes to the GPU in several submissions (64
+    // dispatches each, so none runs past the OS's GPU watchdog), in order:
+    // 200 dependent blurs agree with the same 200 on the CPU.
+    {
+        const PASSES = 200;
+        let cpuA = Float32Array.from(src), cpuB = new Float32Array(W * H);
+        for (let i = 0; i < PASSES; i++) { blur.run([W, H], cpuA, cpuB); [cpuA, cpuB] = [cpuB, cpuA]; }
+        let a = bro.kernel.createBuffer(src), b = bro.kernel.createBuffer(W * H * 4);
+        const chain = bro.kernel.background(() => {
+            for (let i = 0; i < PASSES; i++) { blur.dispatch([W, H], a, b); [a, b] = [b, a]; }
+        });
+        const t0 = Date.now();
+        while (!chain.done && Date.now() - t0 < 5000) advanceTime(16);
+        assert(chain.done, 'a job of many submissions is done');
+        agree(a.read(new Float32Array(W * H)), cpuA, 1e-4, 'its submissions ran in order');
+    }
+
     // A gather returning one value per cell; an index outside the table reads zero.
     const gather = mod.kernel('k_gather');
     const returns = gather.dispatch(5, bro.kernel.createBuffer(new Float32Array([10, 20, 30])),
