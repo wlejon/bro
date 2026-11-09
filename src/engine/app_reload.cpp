@@ -20,6 +20,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
+#include "embed/embed.h"
 #include "api/fs_watch.h"
 #if BRO_WITH_COMPOSITOR
 #include <brocompositor/api.h>
@@ -301,6 +302,12 @@ void Engine::performAppReload() {
         hide.setIsTrusted(true);
         dom::dispatchWindowEvent(document_.get(), hide);
     }
+    // The old page's microtask checkpoint, before its modules stop being
+    // roots: a promise it settled just before the reload (a worker's reply,
+    // say: Images' full-resolution decode) left a reaction queued, and run
+    // after the unload below that reaction read the old page's module state
+    // freed. A browser runs the checkpoint before a navigation too.
+    if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
     appWatchChanged_.clear();
     appWatchChangedUnknown_ = false;
 
@@ -377,6 +384,7 @@ void Engine::performAppReload() {
     selectionDragging_ = false;
     selectionPastThreshold_ = false;
 
+    bro::bronze_host::detachAllWorkersForReload();
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
     bro::bronze_host::clearHostMediaQueries();

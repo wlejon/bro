@@ -203,6 +203,16 @@ void terminateAllWorkers() {
     }
 }
 
+void detachAllWorkersForReload() {
+    std::vector<WorkerInstance*> workers;
+    {
+        std::lock_guard<std::mutex> lock(s_workersMutex);
+        workers = s_activeWorkers;
+    }
+    for (auto* w : workers)
+        if (w) w->detachFromPage();
+}
+
 void installWorkerGlobals(engine::Engine& engine) {
     g_workerClass.install("Worker", 1,
         [&engine](Value, std::span<const Value> a) -> Value {

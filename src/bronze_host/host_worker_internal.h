@@ -68,6 +68,21 @@ public:
         alive_.store(false, std::memory_order_release);
     }
 
+    // The page that made it is going (a reload): the thread stops, and what it
+    // already sent, its handlers (the old page's closures) and the wrapper's
+    // pin go with it, so no reply reaches code whose module is unloaded.
+    void detachFromPage() {
+        terminate();
+        {
+            std::lock_guard<std::mutex> lock(toMainMutex_);
+            toMainQueue_.clear();
+        }
+        onmessage_.set(ev::undefined());
+        onerror_.set(ev::undefined());
+        listeners_.clear();
+        unpinWrapper();
+    }
+
     void postToWorker(std::unique_ptr<Message> msg) {
         if (terminated_.load(std::memory_order_relaxed)) return;
         std::lock_guard<std::mutex> lock(toWorkerMutex_);

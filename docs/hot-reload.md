@@ -16,7 +16,7 @@ A change of stylesheets alone (every changed file a `.css`) does not reload: the
 
 ## Keeping state across a reload
 
-A reload starts a fresh page in a fresh realm, so nothing in the old page's heap survives. Before it goes, the window gets `pagehide` (any reload: the watcher, F5, `location.reload()`), and `sessionStorage` outlives the reload, as in a browser: an app puts what the user is in the middle of there and reads it back as it boots.
+A reload starts a fresh page in a fresh realm, so nothing in the old page's heap survives. The old page's promise jobs already queued run first, and its Workers end with it (a reply one sent just before is dropped), so none of its code runs after it is gone. Before it goes, the window gets `pagehide` (any reload: the watcher, F5, `location.reload()`), and `sessionStorage` outlives the reload, as in a browser: an app puts what the user is in the middle of there and reads it back as it boots.
 
 ```js
 addEventListener('pagehide', () => {
