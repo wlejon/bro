@@ -8,6 +8,7 @@
 #include "dom/scroll_absorber.h"
 #include "css/cascade.h"
 #include "layout/box.h"
+#include <thread>
 #include <gumbo.h>
 #include <string>
 #include <memory>
@@ -28,7 +29,14 @@ class Selection;
 class Document {
 public:
     Document();
+    // A document no other thread or document reaches (an <img>'s SVG, parsed
+    // and painted on the image decoder thread): it stays out of the live-
+    // document registry, which the main thread walks.
+    struct Unlisted {};
+    explicit Document(Unlisted);
     ~Document();
+    // The thread that made it (a listed document's whole life is on it).
+    std::thread::id ownerThread() const { return owner_; }
 
     // Parsing — parse HTML with gumbo, extract <style> CSS, build DOM tree
     // uaCss: user-agent default styles (lowest priority in cascade)
@@ -44,6 +52,12 @@ public:
     };
     void parse(const std::string& html, const std::vector<AuthorSheet>& authorSheets,
                const std::string& uaCss);
+    // Swap the linked sheets parse() was given for `sheets` (the same files
+    // read again after an edit), in place: the DOM, the page's script state
+    // and every other sheet (UA, <style>, shadow-scoped) stay, and the cascade
+    // is rebuilt from the retained sheets, so @imports are read again too.
+    // The next resolveStyles() re-resolves every element, as after a new sheet.
+    void replaceLinkedSheets(const std::vector<AuthorSheet>& sheets);
 
     // Parse `xml` as an XML document (DOMParser's XML and SVG types) into
     // this FRESH document: names keep their case, prefixes resolve through
@@ -857,8 +871,11 @@ private:
         htmlayout::css::Stylesheet sheet;
         void* scope = nullptr;
         htmlayout::css::Origin origin = htmlayout::css::Origin::Author;
+        bool linked = false;   // one of parse()'s authorSheets
     };
     std::vector<RetainedSheet> retainedSheets_;
+    bool listed_ = false;   // in the live-document registry (document.cpp)
+    std::thread::id owner_;
     // Single funnel for cascade_.addStylesheet — applies the media context
     // and retains the sheet for later re-evaluation.
     void addSheetToCascade(htmlayout::css::Stylesheet sheet, void* scope = nullptr,

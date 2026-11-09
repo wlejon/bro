@@ -22,22 +22,43 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
 namespace bro::dom {
 
-// Live-document registry backing NodeHandle. Documents are created and
-// destroyed on the main thread only (app doc, system panels, HtmlNode inner
-// docs); the layout/raster threads never construct or destroy one, so a plain
-// set needs no synchronization.
+// Live-document registry backing NodeHandle. The documents a page sees are
+// made and destroyed on the main thread, but a worker's DOMParser makes its
+// own on the worker's thread, so the set takes a lock. A document parsed on
+// the image decoder thread for an <img>'s SVG (Document(Unlisted)) is never
+// in it.
+static std::mutex& liveDocumentsMutex() {
+    static std::mutex m;
+    return m;
+}
 static std::unordered_set<const Document*>& liveDocuments() {
     static std::unordered_set<const Document*> s;
     return s;
 }
 
+// The registered documents this thread made, copied out of the lock: no
+// other thread destroys them while the caller walks the copy, nor touches
+// what the walk changes, and what the walk calls may look a document up.
+static std::vector<const Document*> listedDocuments() {
+    std::vector<const Document*> out;
+    const auto self = std::this_thread::get_id();
+    std::lock_guard<std::mutex> lock(liveDocumentsMutex());
+    for (const Document* d : liveDocuments())
+        if (d->ownerThread() == self) out.push_back(d);
+    return out;
+}
+
 bool Document::isLiveDocument(const Document* doc) {
-    return doc && liveDocuments().count(doc) != 0;
+    if (!doc) return false;
+    std::lock_guard<std::mutex> lock(liveDocumentsMutex());
+    return liveDocuments().count(doc) != 0;
 }
 
 void Document::noteInputModality(bool keyboard) {
@@ -45,7 +66,7 @@ void Document::noteInputModality(bool keyboard) {
     if (!keyboard) return;
     // A key pressed while something focused by a click has focus shows its
     // indicator from now on.
-    for (const Document* d : liveDocuments()) {
+    for (const Document* d : listedDocuments()) {
         auto* doc = const_cast<Document*>(d);
         if (doc->focusedElement_ && !doc->focusVisible_) {
             doc->focusVisible_ = true;
@@ -55,19 +76,26 @@ void Document::noteInputModality(bool keyboard) {
 }
 
 void Document::markAllPaintDirty() {
-    for (const Document* d : liveDocuments()) const_cast<Document*>(d)->markPaintDirty();
+    for (const Document* d : listedDocuments()) const_cast<Document*>(d)->markPaintDirty();
 }
 
-Document::Document() {
+Document::Document() : owner_(std::this_thread::get_id()) {
+    std::lock_guard<std::mutex> lock(liveDocumentsMutex());
     liveDocuments().insert(this);
+    listed_ = true;
 }
+
+Document::Document(Unlisted) {}
 
 // Selection owns a Range whose destructor calls back into unregisterRange().
 // Members destroy in reverse declaration order, so if we defaulted this the
 // liveRanges_ set would already be gone by the time ~Selection ran. Tear
 // selection_ down first, then clear any JS-owned Ranges that outlived us.
 Document::~Document() {
-    liveDocuments().erase(this);
+    if (listed_) {
+        std::lock_guard<std::mutex> lock(liveDocumentsMutex());
+        liveDocuments().erase(this);
+    }
     // Sever anything still pointing into this document's node storage before
     // that storage goes away.
     for (auto& [n, _] : ownedNodes_) {
@@ -267,6 +295,38 @@ void Document::rebuildCascadeForMediaChange() {
     // The rule set changed but no element was marked dirty (nobody touched
     // them — the @media conditions flipped). Force the next resolveStyles()
     // to re-resolve everything, selector-level, exactly like a new sheet.
+    mediaRebuilt_ = true;
+    markDirty();
+}
+
+void Document::replaceLinkedSheets(const std::vector<AuthorSheet>& sheets) {
+    std::vector<RetainedSheet> fresh;
+    for (const auto& as : sheets) {
+        if (as.css.empty()) continue;
+        RetainedSheet rs{htmlayout::css::parse(as.css), nullptr, htmlayout::css::Origin::Author, true};
+        rs.sheet.baseUrl = as.baseUrl;
+        fresh.push_back(std::move(rs));
+    }
+    // The new linked sheets take the place of the old ones (where the first
+    // stood: after the UA sheet, before the page's own <style>s), keeping the
+    // cascade order a fresh parse would give.
+    std::vector<RetainedSheet> next;
+    bool placed = false;
+    auto place = [&] {
+        if (placed) return;
+        placed = true;
+        for (auto& rs : fresh) next.push_back(std::move(rs));
+    };
+    for (auto& rs : retainedSheets_) {
+        if (rs.linked) { place(); continue; }
+        if (rs.origin != htmlayout::css::Origin::UserAgent) place();
+        next.push_back(std::move(rs));
+    }
+    place();
+    retainedSheets_ = std::move(next);
+    cascade_.clear();
+    for (auto& rs : retainedSheets_)
+        cascade_.addStylesheet(rs.sheet, rs.scope, hasMediaContext_ ? &mediaContext_ : nullptr, rs.origin);
     mediaRebuilt_ = true;
     markDirty();
 }

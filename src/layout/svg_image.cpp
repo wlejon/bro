@@ -31,7 +31,7 @@ struct SvgImageDoc {
 
 std::shared_ptr<SvgImageDoc> parseSvgImage(const char* data, size_t len) {
     auto out = std::make_shared<SvgImageDoc>();
-    out->doc = std::make_unique<dom::Document>();
+    out->doc = std::make_unique<dom::Document>(dom::Document::Unlisted{});
     if (!out->doc->parseXml(std::string(data, len))) return nullptr;
     dom::Element* root = out->doc->documentElement();
     if (!root || svgcommon::lower(root->tagName()) != "svg") return nullptr;
