@@ -71,14 +71,16 @@ done
 python3 - "$out" "${mode_list[@]}" <<'EOF'
 import re, sys
 out, modes = sys.argv[1], sys.argv[2:]
-line = re.compile(r'^\s*(PASS|FAIL|SKIP)\s+(\S+?)(?::|\s|$)')
+# `PASS  name`, or validate.sh's `PASS  test  name` / `PASS  smoke  name`.
+line = re.compile(r'^\s*(PASS|FAIL|SKIP)\s+(?:(test|smoke)\s+)?(\S+?)(?::|\s|$)')
 verdicts = {}
 for m in modes:
     with open(f'{out}/{m}.log', errors='replace') as f:
         for l in f:
             hit = line.match(l)
             if hit:
-                verdicts.setdefault(hit.group(2), {})[m] = hit.group(1)
+                name = (hit.group(2) + ' ' if hit.group(2) else '') + hit.group(3)
+                verdicts.setdefault(name, {})[m] = hit.group(1)
 timing = re.compile(r'perf|budget|latency|timing|stall|jank', re.I)
 ref = modes[0]
 rows, diverged = [], []
