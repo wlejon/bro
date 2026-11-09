@@ -55,6 +55,9 @@ struct QueueSubmit {
 /// by another submission) as soon as it is returned, since timeline waits may
 /// precede the signal's submission. A batch that waits on another
 /// VulkanQueue's timeline is held until that queue has submitted the value.
+/// The queues' threads take their driver calls in turn, never two at once
+/// (concurrent submits to the graphics and async compute queues hung NVIDIA's
+/// Windows driver).
 class VulkanQueue {
 public:
     VulkanQueue() = default;

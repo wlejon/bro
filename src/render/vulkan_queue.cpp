@@ -25,6 +25,16 @@ namespace {
 std::mutex gQueuesMutex;
 std::vector<std::pair<VkSemaphore, VulkanQueue*>> gQueues;
 
+// Every queue's vkQueueSubmit and vkQueuePresentKHR, one at a time. Each
+// queue's thread still makes its own calls (no caller waits for one), but
+// two queues' calls never run at once: on NVIDIA's Windows driver a
+// submission to the async compute queue made while the graphics queue's
+// thread was in its own submit or present hung the GPU now and then (a TDR,
+// no fault reported): the planet's boot, its rivers' background job beside
+// presented frames, lost the device in 4 of 6 windowed launches, 0 of 6 with
+// the calls taken in turn.
+std::mutex gDriverCallsMutex;
+
 void registerQueue(VkSemaphore timeline, VulkanQueue* queue) {
     std::lock_guard<std::mutex> lock(gQueuesMutex);
     gQueues.emplace_back(timeline, queue);
@@ -273,6 +283,7 @@ void VulkanQueue::run() {
 
 void VulkanQueue::execute(Op& op) {
     if (op.kind == Op::Kind::Present) {
+        std::lock_guard<std::mutex> driver(gDriverCallsMutex);
         VkPresentInfoKHR info{};
         info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         info.waitSemaphoreCount = static_cast<uint32_t>(op.presentWaits.size());
@@ -285,8 +296,14 @@ void VulkanQueue::execute(Op& op) {
         if (op.onPresent) op.onPresent(res);
         return;
     }
+    // Held before the driver lock: the other queue's thread takes it to make
+    // the submission this one waits for.
     holdForOtherQueues(op);
-    const VkResult res = isDeviceLost() ? VK_ERROR_DEVICE_LOST : submitOp(op);
+    VkResult res = VK_ERROR_DEVICE_LOST;
+    if (!isDeviceLost()) {
+        std::lock_guard<std::mutex> driver(gDriverCallsMutex);
+        res = submitOp(op);
+    }
     if (res == VK_SUCCESS) return;
     noteFailure(op.fence != VK_NULL_HANDLE || op.batches.size() > 1 ? "foreign vkQueueSubmit" : "vkQueueSubmit",
                 res);
@@ -339,6 +356,7 @@ void VulkanQueue::signalAnyway(uint64_t ticket) {
         info.pNext = &t;
         info.signalSemaphoreCount = 1;
         info.pSignalSemaphores = &timeline_;
+        std::lock_guard<std::mutex> driver(gDriverCallsMutex);
         if (vkQueueSubmit(queue_, 1, &info, VK_NULL_HANDLE) == VK_SUCCESS) return;
     }
     if (ticket > 1) {
