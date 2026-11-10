@@ -36,6 +36,13 @@ ROOT = rw.ROOT
 JS_WORK = rw.WORK / "js"
 DEFAULT_BRONZE = Path("/home/j/projects/bronze/build/src/cli/bronze")
 CORE = "4"
+COUNTERS = ["instructions:u", "cycles:u"]
+# --frontend: what says a layout regression is one (README.md, "JS bench").
+# The names are this machine's perf's (AMD Zen: `perf list`): L1 instruction-
+# cache misses, op-cache misses, and the ops the legacy decoders delivered
+# (each op-cache miss sends a fetch block through them).
+FRONTEND_COUNTERS = ["ic_tag_hit_miss.instruction_cache_miss:u", "op_cache_hit_miss.op_cache_miss:u",
+                     "de_src_op_disp.x86_decoder:u"]
 
 # Engine-run sizes (rw.py time / the realworld bench numbers).
 DEFAULT_N = {"three_meshes": 2565, "three_skinned": 410, "three_instanced": 42992, "three_lights": 64,
@@ -160,16 +167,16 @@ def harvested_build(scene, cfg, bronze, flags):
     return exe2, round((secs1 or 0) + (secs2 or 0), 1)
 
 
-def counted_run(cmd, perf_extra=None):
-    """Run cmd pinned to one core under perf, counting between the page's
-    marks. Returns (stdout text, {'instructions:u': n, 'cycles:u': n} or {})."""
+def counted_run(cmd, perf_extra=None, events=None):
+    """Run cmd pinned to one core under perf, counting `events` (COUNTERS by
+    default) between the page's marks. Returns (stdout text, {event: n} or {})."""
     tmp = Path(tempfile.mkdtemp(prefix="rwjs_", dir=str(rw.WORK)))
     ctl, ack, stat = tmp / "ctl", tmp / "ack", tmp / "stat.txt"
     os.mkfifo(ctl)
     os.mkfifo(ack)
     ctl_fd = os.open(ctl, os.O_RDWR)
     ack_fd = os.open(ack, os.O_RDWR)
-    perf = perf_extra or ["perf", "stat", "-x,", "-e", "instructions:u,cycles:u", "-o", str(stat)]
+    perf = perf_extra or ["perf", "stat", "-x,", "-e", ",".join(events or COUNTERS), "-o", str(stat)]
     full = perf + ["-D", "-1", "--control", f"fifo:{ctl},{ack}", "--", "taskset", "-c", CORE] + cmd
     errf = open(tmp / "stderr.txt", "w")
     proc = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=errf)
@@ -227,16 +234,16 @@ def bench_line(text):
     raise RuntimeError("no RW bench line" + (": " + json.dumps(errs[0])[:800] if errs else ""))
 
 
-def measure(cmd, frames, reps=2):
-    """Best of `reps` counted runs: (bench line, instructions/frame, cycles/frame)."""
+def measure(cmd, frames, reps=2, events=None):
+    """Best of `reps` counted runs: (bench line, instructions/frame,
+    cycles/frame, {event: count/frame})."""
     best = None
     for _ in range(reps):
-        text, counts, _tmp = counted_run(cmd)
+        text, counts, _tmp = counted_run(cmd, events=events)
         b = bench_line(text)
-        ins = counts.get("instructions:u", 0) / frames
-        cyc = counts.get("cycles:u", 0) / frames
+        per = {k: v / frames for k, v in counts.items()}
         if best is None or b["ms_per_frame"] < best[0]["ms_per_frame"]:
-            best = (b, ins, cyc)
+            best = (b, per.get("instructions:u", 0), per.get("cycles:u", 0), per)
     return best
 
 
@@ -273,8 +280,9 @@ def cmd_js(args):
             else:
                 exe, secs = bronze_build(scene, cfg, bronze, args.flags)
             node_cmd = ["node", str(ROOT / "scenes" / f"{scene}.js")] + [f"{k}={v}" for k, v in cfg.items()]
-            nb, ni, nc = measure(node_cmd, cfg["frames"])
-            bb, bi, bc = measure([str(exe)], cfg["frames"])
+            nb, ni, nc, _ = measure(node_cmd, cfg["frames"])
+            events = COUNTERS + FRONTEND_COUNTERS if args.frontend else None
+            bb, bi, bc, bper = measure([str(exe)], cfg["frames"], events=events)
         except Exception as e:  # noqa: BLE001
             print(f"{scene}: ERROR {e}", flush=True)
             rows.append({"scene": scene, "error": str(e)[:2000]})
@@ -285,6 +293,10 @@ def cmd_js(args):
                "draws": bb["draw_calls_per_frame"], "gl_calls": bb["gl_calls_per_frame"],
                "checksum_node": nb["checksum"], "checksum_bronze": bb["checksum"], "checksum_ok": ok,
                "build_s": secs, "exe": str(exe), "harvest": bool(args.harvest)}
+        if args.frontend:
+            row.update({"bronze_l1i_miss": bper.get(FRONTEND_COUNTERS[0], 0),
+                        "bronze_opcache_miss": bper.get(FRONTEND_COUNTERS[1], 0),
+                        "bronze_decoder_ops": bper.get(FRONTEND_COUNTERS[2], 0)})
         rows.append(row)
         if not ok:
             print(f"!!!! {scene}: CHECKSUM MISMATCH node {nb['checksum']} bronze {bb['checksum']}"
@@ -293,8 +305,9 @@ def cmd_js(args):
               + (f", built in {secs} s" if secs is not None else ", cached build"), flush=True)
     print()
     title = "bronze" + (" (harvest)" if args.harvest else "")
+    fe_head = f" {'cyc/f':>8} {'L1I miss/f':>10} {'op$ miss/f':>10} {'dec ops/f':>9}" if args.frontend else ""
     print(f"{'scene':16} {'n':>6} {'node ms':>8} {title + ' ms':>{max(10, len(title) + 3)}} {'ratio':>6}"
-          f" {'node ins/f':>11} {'bronze ins/f':>12} {'ratio':>6} {'draws':>6} {'gl calls':>8}  check  build")
+          f" {'node ins/f':>11} {'bronze ins/f':>12} {'ratio':>6}{fe_head} {'draws':>6} {'gl calls':>8}  check  build")
     for r in rows:
         if "error" in r:
             print(f"{r['scene']:16} ERROR: {r['error'].splitlines()[0][:100]}")
@@ -302,8 +315,10 @@ def cmd_js(args):
         ratio = r["bronze_ms"] / r["node_ms"] if r["node_ms"] else 0
         iratio = r["bronze_instr"] / r["node_instr"] if r["node_instr"] else 0
         build = "cached" if r["build_s"] is None else f"{r['build_s']} s"
+        fe = (f" {fmt_n(r['bronze_cycles']):>8} {fmt_n(r['bronze_l1i_miss']):>10} {fmt_n(r['bronze_opcache_miss']):>10}"
+              f" {fmt_n(r['bronze_decoder_ops']):>9}") if args.frontend else ""
         print(f"{r['scene']:16} {r['n']:>6} {r['node_ms']:>8.3f} {r['bronze_ms']:>{max(10, len(title) + 3)}.3f} {ratio:>6.2f}"
-              f" {fmt_n(r['node_instr']):>11} {fmt_n(r['bronze_instr']):>12} {iratio:>6.2f} {r['draws']:>6.0f} {r['gl_calls']:>8.0f}"
+              f" {fmt_n(r['node_instr']):>11} {fmt_n(r['bronze_instr']):>12} {iratio:>6.2f}{fe} {r['draws']:>6.0f} {r['gl_calls']:>8.0f}"
               f"  {'ok' if r['checksum_ok'] else 'MISMATCH'}  {build}")
     if any(not r.get("checksum_ok", True) for r in rows):
         print("\n!!!! CHECKSUM MISMATCH: node and bronze did not do the same work (see above)")
@@ -340,6 +355,8 @@ def add_commands(sub):
     p.add_argument("--flags", default="", help="extra `bronze build` flags")
     p.add_argument("--harvest", action="store_true", help="build, run to harvest the inline caches, rebuild on them")
     p.add_argument("--profile", action="store_true", help="perf record the bronze executable's timed frames; top 25 symbols")
+    p.add_argument("--frontend", action="store_true",
+                   help="also count the bronze run's L1I misses, op-cache misses and decoder ops per frame")
     p.add_argument("--json", default="")
     return {"js": cmd_js}
 

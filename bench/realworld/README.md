@@ -118,7 +118,7 @@ boot, so one `app.so` per scene serves every N.
 
 ```bash
 node bench/realworld/scenes/<scene>.js mode=bench n=N warm=W frames=F
-python3 bench/realworld/rw.py js <scene>|all [--n N] [--warm W] [--frames F] [--bronze PATH] [--flags "..."] [--harvest]
+python3 bench/realworld/rw.py js <scene>|all [--n N] [--warm W] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--frontend]
 python3 bench/realworld/rw.py js <scene> --profile [--harvest]
 ```
 
@@ -172,6 +172,15 @@ build with `--harvest-out`, one run to write the inline-cache harvest, and
 the build on it (`--feedback-in`), which is the one measured (bronze
 docs/type-feedback.md, "Harvest"). `--profile` records the bronze
 executable's timed frames with `perf record` and prints the top 25 symbols.
+
+`--frontend` also counts the bronze executable's front end over the timed
+frames (AMD Zen event names: `ic_tag_hit_miss.instruction_cache_miss`,
+`op_cache_hit_miss.op_cache_miss`, `de_src_op_disp.x86_decoder`) and prints
+cycles, L1I misses, op-cache misses and decoder-dispatched ops per frame
+(JSON: `bronze_l1i_miss`, `bronze_opcache_miss`, `bronze_decoder_ops`). A
+change in ms at equal instructions with these moving is code layout, not the
+code: where the hot functions sit in the text and which instruction-cache
+sets they share (bronze docs/type-feedback.md, "Function placement").
 
 What the bench leaves out, so its ms is not the frame time:
 
