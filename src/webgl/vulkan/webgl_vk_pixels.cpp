@@ -352,6 +352,14 @@ void unpackPixels(const UnpackState& state, const void* srcIn, GLenum format, GL
     const bool premultiply = state.premultiplyAlpha && hasAlpha(format) && !tf.isInteger() && !depthStencil;
     const bool asIs = !premultiply && storedAsIs(tf, format, type);
     const size_t dstRow = static_cast<size_t>(width) * texel;
+    // RGBA bytes premultiplied into an RGBA8 texture, which is every canvas
+    // and image upload of a 2D library (pixi's text is one per string): the
+    // generic path below decodes each texel to floats and encodes it back,
+    // and was 40% of a pixi_text frame. The same arithmetic in bytes:
+    // (c * a + 127) / 255 is what that path computes before its round trip
+    // through float, which is exact for a byte.
+    const bool premultiplyBytes =
+        premultiply && format == GL_RGBA && type == GL_UNSIGNED_BYTE && storedAsIs(tf, format, type);
 
     for (uint32_t z = 0; z < depth; ++z) {
         for (uint32_t y = 0; y < height; ++y) {
@@ -360,6 +368,16 @@ void unpackPixels(const UnpackState& state, const void* srcIn, GLenum format, GL
             uint8_t* out = dst + outRow * dstRow;
             if (asIs) {
                 std::memcpy(out, in, dstRow);
+                continue;
+            }
+            if (premultiplyBytes) {
+                for (uint32_t x = 0; x < width; ++x) {
+                    const uint32_t a8 = in[x * 4 + 3];
+                    out[x * 4 + 0] = static_cast<uint8_t>((in[x * 4 + 0] * a8 + 127) / 255);
+                    out[x * 4 + 1] = static_cast<uint8_t>((in[x * 4 + 1] * a8 + 127) / 255);
+                    out[x * 4 + 2] = static_cast<uint8_t>((in[x * 4 + 2] * a8 + 127) / 255);
+                    out[x * 4 + 3] = static_cast<uint8_t>(a8);
+                }
                 continue;
             }
             for (uint32_t x = 0; x < width; ++x, in += pixel, out += texel) {
