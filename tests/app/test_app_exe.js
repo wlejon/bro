@@ -141,6 +141,16 @@ function run() {
             'the next launch runs the rebuilt module: ' + JSON.stringify(report));
 
         // A record this engine cannot read (another format or ABI): the same.
+        // The launch above ran the plain module and left its profile (what
+        // its inline caches held) beside it: the next build compiles the unit
+        // again on that, and the one after finds it current.
+        broCli(['--build-exe', app, '--out', exe]);
+        const onProfile = info(exe);
+        assert(onProfile['aot.built'] === '1' && String(onProfile['aot.unit0']).indexOf('on its profile') >= 0,
+            'the unit is built again on the profile its run left: ' + JSON.stringify(onProfile));
+        const profiled = launch(exe).report;
+        assert(profiled.marker === 'second' && profiled.codeCache === 'aot',
+            'the profiled module runs the page: ' + JSON.stringify(profiled));
         broCli(['--build-exe', app, '--out', exe]);
         assert(info(exe)['aot.current'] === '1', 'current again');
         const records = fs.readdirSync(aotDirOf(exe)).filter((f) => f.endsWith('.bzm'));

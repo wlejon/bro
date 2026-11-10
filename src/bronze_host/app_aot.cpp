@@ -46,6 +46,10 @@ constexpr const char* kModuleExt = ".so";
 constexpr const char* kSummaryFile = "aot.txt";
 
 fs::path recordPath(const std::string& dir, const std::string& id) { return u8path(dir) / (id + ".bzm"); }
+// The unit's type feedback: what the inline caches of its plain module held
+// when a run ended (bronze docs/type-feedback.md, "Harvest"), which the next
+// build of the unit specializes on.
+fs::path profilePath(const std::string& dir, const std::string& id) { return u8path(dir) / (id + ".tfb"); }
 
 // A fresh module name for each build of a unit: a running executable keeps
 // the module it loaded mapped, and on Windows a mapped image cannot be
@@ -131,6 +135,9 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
         const std::string execCode = scriptExecCode(unit.code, unit.name);
         const std::string id = aotUnitId(opts.filename, opts.publishEntry);
         const std::string record = u8str(recordPath(dir, id));
+        const fs::path profile = profilePath(dir, id);
+        const bool hasProfile = fs::is_regular_file(profile, ec);
+        if (hasProfile) opts.feedbackInPath = u8str(profile);
         std::string status;
 
         const auto start = std::chrono::steady_clock::now();
@@ -150,6 +157,15 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
                 char buf[64];
                 std::snprintf(buf, sizeof(buf), "built %.0f ms", ms);
                 status = buf;
+                if (res.feedbackApplied) {
+                    status += " on its profile";
+                } else if (hasProfile) {
+                    // Another build's harvest (the unit's text or the compiler
+                    // changed since): the module is the plain one, and its
+                    // next run writes the profile that fits it.
+                    fs::remove(profile, ec);
+                    status += " (stale profile dropped)";
+                }
                 ++built;
                 for (const std::string& f : res.filesRead) {
                     if (std::find(registry.begin(), registry.end(), f) == registry.end()) registry.push_back(f);
@@ -199,6 +215,24 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
     return allOk;
 }
 
+namespace {
+
+// `bro --build-exe` for the running app's executable, in the background and
+// once a process: the next launch has current modules.
+void requestAotRebuild(engine::Engine& engine) {
+    static bool requested = false;  // page thread only
+    const std::string& exe = engine::currentApp().executable;
+    if (requested || exe.empty()) return;
+    requested = true;
+    std::string err;
+    if (!util::spawnDetached({engine::stockBroPath(), "--build-exe", engine.appDir(), "--out", exe, "--quiet"}, {},
+                             err)) {
+        LOG_WARN("aot: cannot start the rebuild of %s: %s", engine.aotDir().c_str(), err.c_str());
+    }
+}
+
+}  // namespace
+
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       const bronze::eval::EvalOptions& opts) {
     if (engine.aotDir().empty() || isJitDisabled()) return std::nullopt;
@@ -212,9 +246,29 @@ std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, co
         return std::nullopt;
     }
 
-    bronze::eval::LoadedModule loaded = bronze::eval::loadModule(execCode, opts, u8str(record));
+    // A unit built on its profile loads with the profile named; a plain one
+    // without. The plain module's caches are what the profile is made from:
+    // it is harvested into the profile's place when the page is hidden or the
+    // app quits (Engine::firePageHide), once, and the next launch finds a
+    // profile beside a plain module and has the unit built again on it.
+    const fs::path profile = profilePath(engine.aotDir(), id);
+    const bool hasProfile = fs::is_regular_file(profile, ec);
+    bronze::eval::LoadedModule loaded;
+    if (hasProfile) {
+        bronze::eval::EvalOptions fed = opts;
+        fed.feedbackInPath = u8str(profile);
+        loaded = bronze::eval::loadModule(execCode, fed, u8str(record));
+    }
+    const bool onProfile = loaded.ok;
+    if (!loaded.ok) loaded = bronze::eval::loadModule(execCode, opts, u8str(record));
     if (loaded.ok) {
-        LOG_INFO("aot: %s runs its ahead-of-time module %s", opts.filename.c_str(), loaded.modulePath.c_str());
+        LOG_INFO("aot: %s runs its ahead-of-time module %s%s", opts.filename.c_str(), loaded.modulePath.c_str(),
+                 onProfile ? " (built on its profile)" : "");
+        if (!onProfile && hasProfile) {
+            requestAotRebuild(engine);
+        } else if (!onProfile && loaded.icIdentity) {
+            bronze::embed::harvestInlineCaches(loaded.icIdentity, u8str(profile));
+        }
         return loaded;
     }
     if (engine.aotRequired()) {
@@ -228,16 +282,7 @@ std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, co
     }
     LOG_WARN("aot: the ahead-of-time module for %s is out of date (%s); compiling it", opts.filename.c_str(),
              loaded.why.c_str());
-    static bool rebuildRequested = false;
-    const std::string& exe = engine::currentApp().executable;
-    if (!rebuildRequested && !exe.empty()) {
-        rebuildRequested = true;
-        std::string err;
-        if (!util::spawnDetached({engine::stockBroPath(), "--build-exe", engine.appDir(), "--out", exe, "--quiet"},
-                                 {}, err)) {
-            LOG_WARN("aot: cannot start the rebuild of %s: %s", engine.aotDir().c_str(), err.c_str());
-        }
-    }
+    requestAotRebuild(engine);
     return std::nullopt;
 }
 

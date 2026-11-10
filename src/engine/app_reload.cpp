@@ -300,6 +300,10 @@ void Engine::firePageHide() {
     hide.setIsTrusted(true);
     dom::dispatchWindowEvent(document_.get(), hide);
     if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
+    // The page's ahead-of-time modules leave what their inline caches held
+    // (bronze_host/app_aot.cpp, loadAotUnit): the profile their next build
+    // reads. Here because the realm still runs and every exit passes through.
+    if (!aotDir_.empty()) bronze::embed::writeInlineCacheHarvests();
 }
 
 void Engine::performAppReload() {

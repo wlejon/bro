@@ -580,6 +580,21 @@ installed app with the engine that carries them. The build's own log is
 `bro --exe-info` prints its summary as `aot.*` lines. A unit that fails to
 compile is reported and simply runs on the JIT.
 
+**Built again on what a run saw.** The first module of a unit is compiled
+from its text alone. When the page is hidden or the app quits, what that
+module's inline caches held (which object layouts each property access met,
+which functions each call reached) is written beside it as the unit's profile
+(`<unit>.tfb`; bronze docs/type-feedback.md, "Harvest"). Recording it costs
+nothing while the app runs. The next launch finds a profile beside a module
+built without one and starts `bro --build-exe` in the background, which
+compiles the unit again on the profile: accessors and methods the run
+resolved are called directly or inlined, slots it found are read at fixed
+offsets, each behind a guard, so a run that differs from the profile is
+slower at that site and never wrong. The launch after that runs the new
+module (`aot.txt` says `on its profile`). A profile belongs to one build of
+one text: after an edit or a new engine the stale one is dropped and the
+cycle starts over.
+
 **Checked at every launch.** Each unit has a record (`<unit>.bzm`) beside its
 module (`<unit>-<stamp>.dll` / `.so`) naming everything the compile read: the
 unit's text and compile options (the key the [code cache](code-cache.md)
