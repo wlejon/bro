@@ -4,7 +4,9 @@
 // of WebGLRenderer.render (r160 lines 29540-29790): matrixWorld updates,
 // frustum culling and the opaque/transparent render-list sort, and the
 // once-per-frame skeleton.update() of WebGLObjects.update. In render modes
-// the state is read from the live renderer's render list instead.
+// the state is read from the live renderer's render list instead. mode=bench
+// is a render mode whose canvas is lib/bench_env.js's stub (WebGLRenderer
+// renders into lib/glstub.js).
 
 import * as THREE from '../vendor/three.module.js';
 import { run, makeRng, Hasher } from './harness.js';

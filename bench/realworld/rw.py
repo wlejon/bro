@@ -26,6 +26,9 @@ logs to <run dir>/bro.log.
   python3 bench/realworld/rw.py time | sweep | perf ...
       Frame timing (timing.py): one timed run, the N sweep against Chromium's
       60 fps knee, and a perf profile of bro grouped by layer.
+  python3 bench/realworld/rw.py js <scene>|all [--n N] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--profile]
+      The scenes' JavaScript alone (jsbench.py): mode=bench in node against a
+      `bronze build` executable, ms and instructions per frame, checksums compared.
 
 Work files go to $RW_WORK (default bench/realworld/.work). Windowed runs need
 WAYLAND_DISPLAY / XDG_RUNTIME_DIR (defaulted to helm's wayland-0).
@@ -557,7 +560,9 @@ def main():
     p.add_argument("--frames", type=int, default=60)
     sys.path.insert(0, str(ROOT))
     import timing
+    import jsbench
     extra = timing.add_commands(sub)
+    extra.update(jsbench.add_commands(sub))
     args = ap.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
     # app.so is built once per scene per invocation (sources change between).

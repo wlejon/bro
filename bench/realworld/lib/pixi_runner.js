@@ -4,8 +4,12 @@
 // updateRenderGroupTransforms() (what RenderGroupSystem runs each render)
 // computes the transforms; text is measured by a fixed-advance stub so node
 // and bronze measure alike. In render modes an Application renders to the
-// harness's canvas.
+// harness's canvas; in mode=bench that canvas is lib/bench_env.js's stub and
+// pixi's DOMAdapter makes stub canvases too.
 
+// bench_env first: it defines `navigator` where the engine has none (a
+// bronze-built executable) before pixi reads it at module level.
+import { installPixiBench } from './bench_env.js';
 import * as PIXI from '../vendor/pixi.mjs';
 import { run, makeRng, Hasher } from './harness.js';
 
@@ -35,6 +39,8 @@ export function pixiScene(def) {
             const rng = makeRng(cfg.seed);
             let app = null, stage, renderer = null;
             if (h) {
+                // mode=bench: stub canvases and text measurement (lib/bench_env.js)
+                if (h.bench) installPixiBench(PIXI);
                 app = new PIXI.Application();
                 await app.init({
                     canvas: h.canvas, width: cfg.w, height: cfg.h, preference: 'webgl', antialias: !!cfg.aa,

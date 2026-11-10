@@ -18,20 +18,26 @@
 //           rAF interval, the CPU time of the callback, the GPU time of its
 //           WebGL work (EXT_disjoint_timer_query_webgl2), and in bro the
 //           flight recorder's records of the same frames
+//   bench   node or a bronze-built executable (ENV 'standalone'), no DOM, no
+//           GPU: the library renders every frame into lib/glstub.js's stub
+//           WebGL2 context; `warm` frames, then `frames` frames timed with
+//           performance.now() in one synchronous loop (runBench)
 //
 // Time is the frame index / 60 s, never a clock.
 
+import { installBenchGlobals, makeStubCanvas, captureGeneratedFunctions } from './bench_env.js';
 import { makeRecorder } from './glrecord.js';
 import { makeTimer } from './timing.js';
 
 export const ENV = (typeof bro !== 'undefined' && bro !== null) ? 'bro'
     : (typeof window === 'undefined' && typeof process !== 'undefined' && process.versions && process.versions.node) ? 'node'
+    : (typeof window === 'undefined' && typeof document === 'undefined') ? 'standalone'
     : 'browser';
 
 const DEFAULTS = {
     scene: '', n: 0, mode: 'render', frames: 0, cp: '', seed: 12345,
     w: 1280, h: 720, aa: 0, shot: 30, rec: 3, shadows: 0, out: '', detail: 0,
-    quit: 1, watchdog: 30000, tag: '', warm: 120, meas: 300, gpu: 1,
+    quit: 1, watchdog: 30000, tag: '', warm: 120, meas: 300, gpu: 1, mark: 0,
 };
 
 export function readConfig(sceneDefaults) {
@@ -42,6 +48,10 @@ export function readConfig(sceneDefaults) {
     };
     const bc = globalThis.BENCH_CONFIG;
     if (bc) for (const k of Object.keys(bc)) set(k, bc[k]);
+    // A bronze-built executable has no arguments (its host passes none to the
+    // program): its configuration is a BENCH_CONFIG compiled in (rw.py js),
+    // and without one it benches at the scene's defaults.
+    if (ENV === 'standalone' && !(bc && bc.mode)) cfg.mode = 'bench';
     if (ENV === 'browser' && typeof location !== 'undefined' && location.search) {
         for (const [k, v] of new URLSearchParams(location.search)) set(k, v);
     }
@@ -52,7 +62,7 @@ export function readConfig(sceneDefaults) {
         }
     }
     if (cfg.mode === 'time') cfg.frames = cfg.warm + cfg.meas;
-    if (!cfg.frames) cfg.frames = cfg.mode === 'state' ? 120 : (cfg.mode === 'shot' ? cfg.shot + 1 : (cfg.mode === 'record' ? cfg.rec : 600));
+    if (!cfg.frames) cfg.frames = cfg.mode === 'state' ? 120 : (cfg.mode === 'shot' ? cfg.shot + 1 : (cfg.mode === 'record' ? cfg.rec : (cfg.mode === 'bench' ? 300 : 600)));
     cfg.checkpoints = new Set((cfg.cp ? String(cfg.cp) : `0,1,2,30,60,${cfg.frames - 1}`).split(',').map(Number));
     return cfg;
 }
@@ -199,6 +209,7 @@ export function run(def) {
     }
     try {
         if (cfg.mode === 'state') runState(def, cfg);
+        else if (cfg.mode === 'bench') runBench(def, cfg);
         else runLoop(def, cfg).catch(fail);
     } catch (e) { fail(e); }
 }
@@ -219,6 +230,67 @@ function runState(def, cfg) {
     };
     if (res && typeof res.then === 'function') res.then(go, fail);
     else go(res);
+}
+
+// mode=bench: the browser page's frame (scene step + library render) into the
+// stub context, `warm` frames, then `frames` timed in one synchronous loop.
+// The checksum folds the scene's state (as `state` reports it, with each
+// float64 hash reduced to its float32 lane: libm may differ in the last ulp
+// between engines, rw.py l1's `ulp`) and the last frame's GL call counts.
+function runBench(def, cfg) {
+    installBenchGlobals();
+    const captured = cfg.capture && ENV === 'node' ? captureGeneratedFunctions() : null;
+    const canvas = makeStubCanvas(cfg.w, cfg.h);
+    const go = (inst) => {
+        const gl = canvas._gl;
+        if (!gl) throw new Error('the library created no WebGL context');
+        header(cfg, inst.info ? inst.info() : null);
+        // mark=1 (rw.py js): a line before and after the timed loop, each
+        // padded past the pipe's capacity so the write blocks until rw.py has
+        // read the marker and switched `perf stat` counting on or off; the
+        // counts then cover the timed frames and nothing else.
+        const pad = cfg.mark ? ' '.repeat(65536) : '';
+        const markOn = 'RW mark on' + pad, markOff = 'RW mark off' + pad;
+        let f = 0;
+        for (; f < cfg.warm; f++) { gl.beginFrame(); inst.frame(f); }
+        const before = gl.totals();
+        if (cfg.mark) console.log(markOn);
+        const t0 = performance.now();
+        for (let k = 0; k < cfg.frames; k++, f++) { gl.beginFrame(); inst.frame(f); }
+        const ms = performance.now() - t0;
+        if (cfg.mark) console.log(markOff);
+        const after = gl.totals();
+        const last = gl.frameCounts();
+        const state = inst.state(0);
+        emitLine('state', Object.assign({ f: f - 1 }, state));
+        const per = (k) => Math.round((after[k] - before[k]) / cfg.frames * 100) / 100;
+        const h = new Hasher();
+        h.str(checksumText(state));
+        h.num(last.calls); h.num(last.draws); h.num(last.uniforms); h.num(last.uploads);
+        emitLine('bench', {
+            scene: cfg.scene, n: cfg.n, warm: cfg.warm, frames: cfg.frames, env: ENV,
+            ms_per_frame: Math.round(ms / cfg.frames * 10000) / 10000,
+            draw_calls_per_frame: per('draws'), gl_calls_per_frame: per('calls'),
+            uniform_calls_per_frame: per('uniforms'), uploads_per_frame: per('uploads'),
+            last: last, checksum: h.exact,
+        });
+        if (captured) nodeFs().writeFileSync(cfg.capture, JSON.stringify(captured()));
+        done('ok');
+    };
+    const res = def.start(cfg, { canvas, bench: true });
+    if (res && typeof res.then === 'function') res.then((inst) => { try { go(inst); } catch (e) { fail(e); } }, fail);
+    else go(res);
+}
+
+function checksumText(state) {
+    const norm = (v) => {
+        if (typeof v === 'string' && /^[0-9a-f]{8}:[0-9a-f]{8}:\d+$/.test(v)) return v.slice(9);
+        if (typeof v === 'number') return Number.isInteger(v) ? v : Math.fround(v).toPrecision(6);
+        if (Array.isArray(v)) return v.map(norm);
+        return v;
+    };
+    const keys = Object.keys(state).sort();
+    return keys.map((k) => k + '=' + JSON.stringify(norm(state[k]))).join(';');
 }
 
 async function runLoop(def, cfg) {
