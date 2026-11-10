@@ -39,8 +39,15 @@ namespace bro::bronze_host {
 /// The name a unit's record goes by in an AOT directory (`<id>.bzm`): a
 /// digest of the unit's compile name and whether it is published as a module
 /// file (EvalOptions filename / publishEntry), so the build and a run agree on
-/// it without a table.
-std::string aotUnitId(const std::string& filename, bool publishEntry);
+/// it without a table. `ordinal` tells apart units of one name and kind, in
+/// page order: a page's classic scripts and each of its inline module scripts
+/// are all named for the page, and shared one record until they had it (the
+/// later build overwrote the earlier, which then ran as out of date).
+std::string aotUnitId(const std::string& filename, bool publishEntry, int ordinal = 0);
+
+/// A page's units are about to run, first to last (the load and each reload):
+/// the ordinals takeAotUnit counts start over.
+void beginAotUnitRuns();
 
 /// What `bro --exe-info` reports of an AOT directory (`aot.txt`, written by
 /// buildAppAot): `aot.<key>=<value>` lines, "" when there is none.
@@ -57,7 +64,7 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
 /// unit would be compiled from); nothing otherwise. A stale record is logged
 /// and starts a rebuild of the directory, once per process.
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
-                                                      const bronze::eval::EvalOptions& opts);
+                                                      const bronze::eval::EvalOptions& opts, int ordinal = 0);
 
 /// At launch, in place of the page's first unit's ahead compile
 /// (startAppScriptCompile): its module, loaded now when current and kept for

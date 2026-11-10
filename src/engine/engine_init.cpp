@@ -788,6 +788,7 @@ void Engine::initAppRealm() {
             // compiled against, and none of them runs.
             if (!bro::bronze_host::buildAppAot(*this, units, aotBuildDir_)) setTestFailure(true);
         } else {
+            bro::bronze_host::beginAotUnitRuns();
             for (const auto& unit : units) {
                 if (!bro::bronze_host::evalAppScript(*this, unit.code, unit.name, unit.moduleFile)) {
                     setTestFailure(true);

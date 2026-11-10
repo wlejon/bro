@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <set>
 #include <system_error>
 
@@ -70,9 +71,11 @@ std::string oneLine(std::string s) {
 
 }  // namespace
 
-std::string aotUnitId(const std::string& filename, bool publishEntry) {
+std::string aotUnitId(const std::string& filename, bool publishEntry, int ordinal) {
     util::Sha256 h;
-    const std::string material = std::string(publishEntry ? "module\n" : "script\n") + filename;
+    // The first unit of a name keeps the id it always had.
+    std::string material = std::string(publishEntry ? "module\n" : "script\n") + filename;
+    if (ordinal > 0) material += "\n#" + std::to_string(ordinal);
     h.update(material.data(), material.size());
     return h.hex().substr(0, 24);
 }
@@ -122,6 +125,7 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
         bronze::eval::captureThreadInputs(probe);
         registry = probe.externalModules;
     }
+    std::map<std::string, int> buildOrdinals;  // units of one name and kind, counted in page order
     std::set<std::string> keep;  // module files a record names
     std::string summary = "engine=" + engine::engineVersion() + "\n";
     summary += "units=" + std::to_string(units.size()) + "\n";
@@ -133,7 +137,8 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
         opts.externalModules = registry;
         opts.externalModulesCaptured = true;
         const std::string execCode = scriptExecCode(unit.code, unit.name);
-        const std::string id = aotUnitId(opts.filename, opts.publishEntry);
+        const std::string id =
+            aotUnitId(opts.filename, opts.publishEntry, buildOrdinals[aotUnitId(opts.filename, opts.publishEntry)]++);
         const std::string record = u8str(recordPath(dir, id));
         const fs::path profile = profilePath(dir, id);
         const bool hasProfile = fs::is_regular_file(profile, ec);
@@ -234,9 +239,9 @@ void requestAotRebuild(engine::Engine& engine) {
 }  // namespace
 
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
-                                                      const bronze::eval::EvalOptions& opts) {
+                                                      const bronze::eval::EvalOptions& opts, int ordinal) {
     if (engine.aotDir().empty() || isJitDisabled()) return std::nullopt;
-    const std::string id = aotUnitId(opts.filename, opts.publishEntry);
+    const std::string id = aotUnitId(opts.filename, opts.publishEntry, ordinal);
     const fs::path record = recordPath(engine.aotDir(), id);
     std::error_code ec;
     // Scripts that are not the page's (a control eval, a driver) have no
@@ -295,6 +300,9 @@ struct AheadAot {
     bronze::eval::LoadedModule module;
 };
 std::optional<AheadAot> s_ahead;  // page thread only
+// How many units of each name and kind this page has run (aotUnitId's
+// ordinal); page thread only.
+std::map<std::string, int> s_runOrdinals;
 
 }  // namespace
 
@@ -308,15 +316,20 @@ bool loadAheadAotUnit(engine::Engine& engine, const std::string& execCode, const
     return true;
 }
 
+void beginAotUnitRuns() { s_runOrdinals.clear(); }
+
 std::optional<bronze::eval::LoadedModule> takeAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       const bronze::eval::EvalOptions& opts) {
-    if (s_ahead && s_ahead->filename == opts.filename && s_ahead->publishEntry == opts.publishEntry &&
-        s_ahead->code == execCode) {
+    if (engine.aotDir().empty()) return std::nullopt;
+    const int ordinal = s_runOrdinals[aotUnitId(opts.filename, opts.publishEntry)]++;
+    // The module kept ahead of the page is its first unit's (ordinal 0).
+    if (s_ahead && ordinal == 0 && s_ahead->filename == opts.filename &&
+        s_ahead->publishEntry == opts.publishEntry && s_ahead->code == execCode) {
         bronze::eval::LoadedModule taken = std::move(s_ahead->module);
         s_ahead.reset();
         return taken;
     }
-    return loadAotUnit(engine, execCode, opts);
+    return loadAotUnit(engine, execCode, opts, ordinal);
 }
 
 void discardAheadAotUnit() { s_ahead.reset(); }
