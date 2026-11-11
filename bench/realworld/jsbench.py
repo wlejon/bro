@@ -351,21 +351,34 @@ def profile(scene, args, bronze):
 
 
 def instruction_profile(cmd, data, frames):
-    """perf record -e instructions:u of cmd's timed frames. Returns
-    ({function: instructions a frame}, total a frame), a function named by its
-    last name: V8's `JS:*name file:line:col` and bronze's `mod9.Class.name`
-    both become `name`, the tiers and the module prefix dropped."""
-    perf = ["perf", "record", "-q", "-e", "instructions:u", "-c", "200003", "-o", str(data)]
-    counted_run(cmd, perf_extra=perf)
+    """perf record of cmd, sampled by AMD IBS on retired ops, over the whole
+    run: `frames` is every frame it steps, warm ones included, so a function
+    of the frame loop reads as its instructions a frame and one of the setup
+    as a sliver. Returns {function: instructions a frame}, a function named
+    by its last name: V8's `JS:*name file:line:col` and bronze's
+    `mod9.Class.name` both become `name`, the tiers and the module prefix
+    dropped. IBS because it is precise: an instructions:u counter's sample
+    lands dozens of instructions late on this CPU, which moved most of a
+    caller's share into the leaf it calls next (three_instanced's Math.sin
+    read as 23M instructions a frame; it runs 9M). The whole run because an
+    IBS event that perf starts disabled never counts in node."""
+    subprocess.run(["perf", "record", "-q", "-e", "ibs_op/cnt_ctl=1/", "-c", "200003", "-o", str(data), "--",
+                    "taskset", "-c", CORE] + cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     res = subprocess.run(["perf", "report", "-i", str(data), "--stdio", "--no-children", "--sort", "symbol",
                           "-F", "period,symbol", "-q"], capture_output=True, text=True)
+    # The samples give each function's share of the run (an IBS period is
+    # not an instruction count); perf stat gives the run's instructions.
+    stat = Path(str(data) + ".stat")
+    subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", str(stat), "--", "taskset", "-c", CORE] + cmd,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run = next(int(l.split(",")[0]) for l in stat.read_text().splitlines() if "instructions" in l)
+    stat.unlink()
+    rows = [l.split(None, 2) for l in res.stdout.splitlines()]
+    rows = [r for r in rows if len(r) == 3 and r[0].isdigit()]
+    sampled = sum(int(r[0]) for r in rows) or 1
     out = {}
-    total = 0
-    for line in res.stdout.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) < 3 or not parts[0].isdigit():
-            continue
-        n = int(parts[0]) / frames
+    for parts in rows:
+        n = int(parts[0]) / sampled * run / frames
         sym = parts[2].split("  ")[0].strip()  # perf pads the symbol and appends empty columns
         if sym.startswith(("JS:", "LazyCompile:", "Function:", "Script:")):
             sym = re.sub(r"^[a-z]?[*~^+']+", "", sym.split(":", 1)[1]).split(" ")[0] or "(anonymous)"
@@ -373,8 +386,7 @@ def instruction_profile(cmd, data, frames):
         tail = name.split(".")[-1]
         name = " ".join(name.split()[-2:]) if tail in ("x", "y") or name.startswith(("get ", "set ")) else tail
         out[name] = out.get(name, 0) + n
-        total += n
-    return out, total
+    return out
 
 
 def versus(scene, args, bronze):
@@ -385,15 +397,12 @@ def versus(scene, args, bronze):
     exe, _ = harvested_build(scene, cfg, bronze, args.flags) if args.harvest else bronze_build(scene, cfg, bronze, args.flags)
     work = JS_WORK / scene
     node_cmd = ["node", "--perf-basic-prof", str(ROOT / "scenes" / f"{scene}.js")] + [f"{k}={v}" for k, v in cfg.items()]
-    b, bt = instruction_profile([str(exe)], work / "perf.instr.data", cfg["frames"])
-    n, nt = instruction_profile(node_cmd, work / "perf.node.data", cfg["frames"])
-    # The samples give each function's share; perf stat gives the total.
+    steps = cfg["frames"] + cfg.get("warm", 0)
+    b = instruction_profile([str(exe)], work / "perf.instr.data", steps)
+    n = instruction_profile(node_cmd, work / "perf.node.data", steps)
     plain_node = ["node", str(ROOT / "scenes" / f"{scene}.js")] + [f"{k}={v}" for k, v in cfg.items()]
-    real_b = measure([str(exe)], cfg["frames"], reps=1)[1]
-    real_n = measure(plain_node, cfg["frames"], reps=1)[1]
-    b = {k: v * real_b / bt for k, v in b.items()}
-    n = {k: v * real_n / nt for k, v in n.items()}
-    bt, nt = real_b, real_n
+    bt = measure([str(exe)], cfg["frames"], reps=1)[1]
+    nt = measure(plain_node, cfg["frames"], reps=1)[1]
     for f in Path("/tmp").glob("perf-*.map"):
         f.unlink(missing_ok=True)
     print(f"{scene} n={cfg['n']}: instructions a frame, bronze {fmt_n(bt)} node {fmt_n(nt)}")
