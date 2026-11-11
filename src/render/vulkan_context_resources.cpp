@@ -57,7 +57,7 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                  VkBuffer& buffer, VkDeviceMemory& memory,
                                  VkDeviceSize& outOffset, uint64_t& outAllocId,
                                  void*& outMappedData, bool shared) {
-    if (size == 0) return false;
+    if (size == 0 || size > maxAllocationSize_) return false;
     std::lock_guard<std::mutex> lock(resourceMutex_);
 
     VkBufferCreateInfo bufferInfo{};

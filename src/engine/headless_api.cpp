@@ -257,12 +257,20 @@ void Engine::redrawSkippedScenes() {
 
 void Engine::advanceTime(double ms) {
     double remaining = ms;
+    const double targetVirtual = virtualTime_ + ms;
     // The last frame flushed, before the clock moves past it.
     renderPendingScenes();
     while (remaining > 0) {
-        double step = std::min(remaining, 16.0);
-        virtualTime_ += step;
-        remaining -= step;
+        double step;
+        if (remaining <= 16.0) {
+            step = std::max(0.0, targetVirtual - virtualTime_);
+            virtualTime_ = targetVirtual;
+            remaining = 0;
+        } else {
+            step = 16.0;
+            virtualTime_ += step;
+            remaining -= step;
+        }
         inTimeStep_ = true;
         // A headless frame is this step, in the flight recorder too (wall
         // time, as everywhere in the trace).

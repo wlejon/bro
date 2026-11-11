@@ -45,6 +45,19 @@ void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccess
     vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 1, &b, 0, nullptr, 0, nullptr);
 }
 
+void copyBufferChunked(VkCommandBuffer cmd, VkBuffer src, VkDeviceSize srcOffset,
+                       VkBuffer dst, VkDeviceSize dstOffset, VkDeviceSize size) {
+    constexpr VkDeviceSize kMaxCopyChunk = 1ull << 30;
+    while (size > 0) {
+        const VkDeviceSize chunk = std::min(size, kMaxCopyChunk);
+        const VkBufferCopy copy{srcOffset, dstOffset, chunk};
+        vkCmdCopyBuffer(cmd, src, dst, 1, &copy);
+        srcOffset += chunk;
+        dstOffset += chunk;
+        size -= chunk;
+    }
+}
+
 // Past this many ranges held since the last barrier, the next operation
 // waits for all of them (the checks stay short).
 constexpr size_t kMaxTrackedRanges = 1024;
@@ -108,8 +121,14 @@ void ComputeBuffer::release() {
 ComputeReadback::~ComputeReadback() {
     if (!owner_ || !owner_->context) return;
     owner_->readbacks.erase(this);
+    if (buffer_ == VK_NULL_HANDLE && allocId_ == 0) return;
     VulkanContext* ctx = owner_->context;
-    ctx->frames().defer([ctx, buffer = buffer_, alloc = allocId_] { ctx->destroyBuffer(buffer, alloc); });
+    const VkDeviceSize sz = size_;
+    owner_->deferredBytes += sz;
+    ctx->frames().defer([ctx, owner = owner_, sz, buffer = buffer_, alloc = allocId_] {
+        owner->deferredBytes = owner->deferredBytes > sz ? owner->deferredBytes - sz : 0;
+        ctx->destroyBuffer(buffer, alloc);
+    });
 }
 
 void ComputeReadback::release() {
@@ -247,6 +266,10 @@ std::shared_ptr<ComputeBuffer> VulkanCompute::createBuffer(VkDeviceSize size, st
         return nullptr;
     }
     if (!background_ && owner_->deferredBytes >= kDeferredReclaimBytes) reclaim();
+    if (size > ~VkDeviceSize{0} - kBufferGranule) {
+        fail(error, "could not allocate a GPU buffer of that size");
+        return nullptr;
+    }
     const VkDeviceSize capacity = std::max(kBufferGranule, (size + kBufferGranule - 1) / kBufferGranule * kBufferGranule);
     std::shared_ptr<ComputeBuffer> b(new ComputeBuffer());
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -546,8 +569,7 @@ bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void
     std::memcpy(slice.mapped, data, static_cast<size_t>(size));
     const ComputeAccess to{buffer.address_ + offset, size, true};
     VkCommandBuffer cmd = commands({&to, 1});
-    const VkBufferCopy copy{slice.offset, offset, size};
-    vkCmdCopyBuffer(cmd, slice.buffer, buffer.buffer_, 1, &copy);
+    copyBufferChunked(cmd, slice.buffer, slice.offset, buffer.buffer_, offset, size);
     return true;
 }
 
@@ -722,8 +744,7 @@ bool VulkanCompute::read(const ComputeBuffer& buffer, VkDeviceSize offset, void*
     }
     const ComputeAccess from{buffer.address_ + offset, size, false};
     VkCommandBuffer cmd = commands({&from, 1});
-    const VkBufferCopy copy{offset, 0, size};
-    vkCmdCopyBuffer(cmd, buffer.buffer_, readback_, 1, &copy);
+    copyBufferChunked(cmd, buffer.buffer_, offset, readback_, 0, size);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
     const bool bg = recordingBackground();
@@ -742,6 +763,7 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
     if (!context_ || buffer.buffer_ == VK_NULL_HANDLE || offset > buffer.size_ || size > buffer.size_ - offset ||
         size == 0)
         return nullptr;
+    if (!background_ && owner_->deferredBytes >= kDeferredReclaimBytes) reclaim();
     std::shared_ptr<ComputeReadback> r(new ComputeReadback());
     r->owner_ = owner_;
     VkMemoryPropertyFlags props = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -751,15 +773,19 @@ std::shared_ptr<ComputeReadback> VulkanCompute::readLater(const ComputeBuffer& b
     VkDeviceSize memOffset = 0;
     if (!context_->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, props, r->buffer_, memory, memOffset,
                                 r->allocId_, r->mapped_)) {
-        LOG_ERROR("VulkanCompute: could not allocate a %zu-byte readback buffer", static_cast<size_t>(size));
-        return nullptr;
+        if (!background_ && owner_->deferredBytes > 0) reclaim();
+        if (r->buffer_ == VK_NULL_HANDLE &&
+            !context_->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, props, r->buffer_, memory, memOffset,
+                                    r->allocId_, r->mapped_)) {
+            LOG_ERROR("VulkanCompute: could not allocate a %zu-byte readback buffer", static_cast<size_t>(size));
+            return nullptr;
+        }
     }
     r->size_ = size;
     owner_->readbacks.insert(r.get());
     const ComputeAccess from{buffer.address_ + offset, size, false};
     VkCommandBuffer cmd = commands({&from, 1});
-    const VkBufferCopy copy{offset, 0, size};
-    vkCmdCopyBuffer(cmd, buffer.buffer_, r->buffer_, 1, &copy);
+    copyBufferChunked(cmd, buffer.buffer_, offset, r->buffer_, 0, size);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                   VK_ACCESS_HOST_READ_BIT);
     r->background_ = recordingBackground();

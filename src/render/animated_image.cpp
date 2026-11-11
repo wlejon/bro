@@ -172,7 +172,9 @@ struct AnimatedImage::Impl {
     Pos pos(double now) const {
         Pos p;
         const double length = prefix[size_t(count)];
-        const double e = std::max(0.0, now - origin);
+        // Nudge past sub-ULP clock rounding when `now` reaches `due` after
+        // multi-step float accumulation. Frame delays are integer milliseconds.
+        const double e = std::max(0.0, now - origin) + 1e-6;
         if (plays > 0 && e >= double(plays) * length) {
             p.seq = int64_t(plays) * count - 1;
             p.finished = true;
