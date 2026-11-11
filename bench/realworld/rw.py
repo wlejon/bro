@@ -26,7 +26,7 @@ logs to <run dir>/bro.log.
   python3 bench/realworld/rw.py time | sweep | perf ...
       Frame timing (timing.py): one timed run, the N sweep against Chromium's
       60 fps knee, and a perf profile of bro grouped by layer.
-  python3 bench/realworld/rw.py js <scene>|all [--n N] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--profile]
+  python3 bench/realworld/rw.py js <scene>|all [--n N] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--profile] [--versus]
       The scenes' JavaScript alone (jsbench.py): mode=bench in node against a
       `bronze build` executable, ms and instructions per frame, checksums compared.
 

@@ -120,6 +120,7 @@ boot, so one `app.so` per scene serves every N.
 node bench/realworld/scenes/<scene>.js mode=bench n=N warm=W frames=F
 python3 bench/realworld/rw.py js <scene>|all [--n N] [--warm W] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--frontend]
 python3 bench/realworld/rw.py js <scene> --profile [--harvest]
+python3 bench/realworld/rw.py js <scene> --versus [--harvest] [--top N]
 ```
 
 `mode=bench` runs the page's whole frame, scene step plus the library's
@@ -172,6 +173,11 @@ build with `--harvest-out`, one run to write the inline-cache harvest, and
 the build on it (`--feedback-in`), which is the one measured (bronze
 docs/type-feedback.md, "Harvest"). `--profile` records the bronze
 executable's timed frames with `perf record` and prints the top 25 symbols.
+`--versus [--top N]` samples instructions in both engines over the timed
+frames (node with `--perf-basic-prof`) and prints instructions a frame by
+function, bronze beside node, widest gap first, each engine's rows scaled to
+its `perf stat` total. A function is named by its last name, and each engine
+charges an inlined callee to its caller, so read a row with its callers'.
 
 `--frontend` also counts the bronze executable's front end over the timed
 frames (AMD Zen event names: `ic_tag_hit_miss.instruction_cache_miss`,

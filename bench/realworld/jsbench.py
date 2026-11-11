@@ -23,6 +23,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -271,6 +272,10 @@ def cmd_js(args):
         for scene in scenes:
             profile(scene, args, bronze)
         return
+    if args.versus:
+        for scene in scenes:
+            versus(scene, args, bronze)
+        return
     rows = []
     for scene in scenes:
         cfg = scene_cfg(scene, args)
@@ -345,6 +350,59 @@ def profile(scene, args, bronze):
         print(l[:160])
 
 
+def instruction_profile(cmd, data, frames):
+    """perf record -e instructions:u of cmd's timed frames. Returns
+    ({function: instructions a frame}, total a frame), a function named by its
+    last name: V8's `JS:*name file:line:col` and bronze's `mod9.Class.name`
+    both become `name`, the tiers and the module prefix dropped."""
+    perf = ["perf", "record", "-q", "-e", "instructions:u", "-c", "200003", "-o", str(data)]
+    counted_run(cmd, perf_extra=perf)
+    res = subprocess.run(["perf", "report", "-i", str(data), "--stdio", "--no-children", "--sort", "symbol",
+                          "-F", "period,symbol", "-q"], capture_output=True, text=True)
+    out = {}
+    total = 0
+    for line in res.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        n = int(parts[0]) / frames
+        sym = parts[2].split("  ")[0].strip()  # perf pads the symbol and appends empty columns
+        if sym.startswith(("JS:", "LazyCompile:", "Function:", "Script:")):
+            sym = re.sub(r"^[a-z]?[*~^+']+", "", sym.split(":", 1)[1]).split(" ")[0] or "(anonymous)"
+        name = sym.split("(")[0].strip()
+        tail = name.split(".")[-1]
+        name = " ".join(name.split()[-2:]) if tail in ("x", "y") or name.startswith(("get ", "set ")) else tail
+        out[name] = out.get(name, 0) + n
+        total += n
+    return out, total
+
+
+def versus(scene, args, bronze):
+    """Instructions a frame by function, bronze beside node, widest gap first.
+    An engine charges an inlined callee to its caller, and the two inline
+    differently, so read a row with the rows of its callers and callees."""
+    cfg = scene_cfg(scene, args)
+    exe, _ = harvested_build(scene, cfg, bronze, args.flags) if args.harvest else bronze_build(scene, cfg, bronze, args.flags)
+    work = JS_WORK / scene
+    node_cmd = ["node", "--perf-basic-prof", str(ROOT / "scenes" / f"{scene}.js")] + [f"{k}={v}" for k, v in cfg.items()]
+    b, bt = instruction_profile([str(exe)], work / "perf.instr.data", cfg["frames"])
+    n, nt = instruction_profile(node_cmd, work / "perf.node.data", cfg["frames"])
+    # The samples give each function's share; perf stat gives the total.
+    plain_node = ["node", str(ROOT / "scenes" / f"{scene}.js")] + [f"{k}={v}" for k, v in cfg.items()]
+    real_b = measure([str(exe)], cfg["frames"], reps=1)[1]
+    real_n = measure(plain_node, cfg["frames"], reps=1)[1]
+    b = {k: v * real_b / bt for k, v in b.items()}
+    n = {k: v * real_n / nt for k, v in n.items()}
+    bt, nt = real_b, real_n
+    for f in Path("/tmp").glob("perf-*.map"):
+        f.unlink(missing_ok=True)
+    print(f"{scene} n={cfg['n']}: instructions a frame, bronze {fmt_n(bt)} node {fmt_n(nt)}")
+    print(f"{'function':44} {'bronze':>9} {'node':>9} {'gap':>9}")
+    names = sorted(set(b) | set(n), key=lambda k: n.get(k, 0) - b.get(k, 0))
+    for k in names[:args.top]:
+        print(f"{k[:44]:44} {fmt_n(b.get(k, 0)):>9} {fmt_n(n.get(k, 0)):>9} {fmt_n(b.get(k, 0) - n.get(k, 0)):>9}")
+
+
 def add_commands(sub):
     p = sub.add_parser("js", help="scene JS alone: node vs a bronze executable (README.md, JS bench)")
     p.add_argument("scene", help="a scene, a comma list, or all")
@@ -355,6 +413,8 @@ def add_commands(sub):
     p.add_argument("--flags", default="", help="extra `bronze build` flags")
     p.add_argument("--harvest", action="store_true", help="build, run to harvest the inline caches, rebuild on them")
     p.add_argument("--profile", action="store_true", help="perf record the bronze executable's timed frames; top 25 symbols")
+    p.add_argument("--versus", action="store_true", help="instructions a frame by function, bronze beside node, widest gap first")
+    p.add_argument("--top", type=int, default=30, help="rows --versus prints")
     p.add_argument("--frontend", action="store_true",
                    help="also count the bronze run's L1I misses, op-cache misses and decoder ops per frame")
     p.add_argument("--json", default="")
