@@ -363,7 +363,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
         /*hostGlobals=*/globalsPath, /*inferStats=*/false,
         /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
-        /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+        /*importMapPath=*/{},
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
         /*entryResolvesAs=*/resolvesAs);
@@ -388,7 +388,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
             /*hostGlobals=*/globalsPath, /*inferStats=*/false,
             /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
-            /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+            /*importMapPath=*/{},
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
             /*entryResolvesAs=*/resolvesAs);
@@ -552,7 +552,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*hostGlobals=*/globalsPath, /*inferStats=*/false,
         /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
-        /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+        /*importMapPath=*/{},
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
 
@@ -574,7 +574,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*hostGlobals=*/globalsPath, /*inferStats=*/false,
             /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
-            /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+            /*importMapPath=*/{},
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
         std::filesystem::remove(wrappedFile, ec);
