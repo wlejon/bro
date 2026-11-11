@@ -353,6 +353,9 @@ void WorkerInstance::threadFunc() {
         opts.filename = resolvedPath.string();
         opts.entryResolvesAs = resolvedPath;
         opts.hostGlobals = registeredHostGlobals();
+        // Every thread that runs scripts is locked down before its first one
+        // (dom_globals.cpp, host_worker_thread.cpp).
+        opts.lockedBuiltins = true;
         if (mounts_) {
             for (const auto& [prefix, target] : mounts_->mounts()) {
                 opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});
