@@ -39,10 +39,6 @@ void WorkerInstance::threadFunc() {
     BootClock::time_point bootMarks[4] = {bootStart, bootStart, bootStart, bootStart};
     ensureSharedRuntimeEnv();
     const ProfilerThreadScope profiled(scriptPath_);  // bro.profiler {threads: 'workers'}
-    // This thread's builtins, frozen before the first install, as the main
-    // thread's are (dom_globals.cpp installWebHostGlobals).
-    ev::lockdown();
-
     installImageBitmapGlobals();
     installNoiseGlobals();
     // The bro.math classes BEFORE the roots, as in the main realm: the root
@@ -353,9 +349,6 @@ void WorkerInstance::threadFunc() {
         opts.filename = resolvedPath.string();
         opts.entryResolvesAs = resolvedPath;
         opts.hostGlobals = registeredHostGlobals();
-        // Every thread that runs scripts is locked down before its first one
-        // (dom_globals.cpp, host_worker_thread.cpp).
-        opts.lockedBuiltins = true;
         if (mounts_) {
             for (const auto& [prefix, target] : mounts_->mounts()) {
                 opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});

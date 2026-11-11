@@ -352,8 +352,7 @@ def add_commands(sub):
     p.add_argument("--warm", type=int, default=0)
     p.add_argument("--frames", type=int, default=0)
     p.add_argument("--bronze", default=str(DEFAULT_BRONZE))
-    p.add_argument("--flags", default="--lockdown",
-                   help="`bronze build` flags (default --lockdown: locked builtins, what bro gives its apps)")
+    p.add_argument("--flags", default="", help="extra `bronze build` flags")
     p.add_argument("--harvest", action="store_true", help="build, run to harvest the inline caches, rebuild on them")
     p.add_argument("--profile", action="store_true", help="perf record the bronze executable's timed frames; top 25 symbols")
     p.add_argument("--frontend", action="store_true",

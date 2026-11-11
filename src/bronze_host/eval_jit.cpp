@@ -294,9 +294,6 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     // Read off the registry the install filled, not from a list kept beside
     // it: what is registered is exactly what the compile admits.
     opts.hostGlobals = registeredHostGlobals();
-    // Every thread that runs scripts is locked down before its first one
-    // (dom_globals.cpp, host_worker_thread.cpp).
-    opts.lockedBuiltins = true;
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
     opts.retainSource = true;
@@ -534,9 +531,6 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     bronze::eval::EvalOptions opts;
     opts.filename = absPath.string();
     opts.hostGlobals = registeredHostGlobals();
-    // Every thread that runs scripts is locked down before its first one
-    // (dom_globals.cpp, host_worker_thread.cpp).
-    opts.lockedBuiltins = true;
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = absPath;
     opts.retainSource = true;
