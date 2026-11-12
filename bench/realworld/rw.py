@@ -316,6 +316,9 @@ def run_chromium(server, page, cfg, out):
            "--no-default-browser-check", "--enable-logging=stderr", "--v=0", "--ignore-gpu-blocklist",
            "--allow-file-access-from-files", "--disable-extensions",
            "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+           # an occluded or unfocused window is not throttled either
+           "--disable-backgrounding-occluded-windows", "--disable-features=CalculateNativeWinOcclusion",
+           "--disable-ipc-flooding-protection", "--disable-hang-monitor",
            # uncapped frames, as bro's vsync false / maxFps 0
            "--disable-gpu-vsync", "--disable-frame-rate-limit",
            f"--window-size={w},{h}", f"--app={url}"]
