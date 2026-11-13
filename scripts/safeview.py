@@ -32,6 +32,7 @@ import re
 import sys
 
 ADDR = re.compile(r"0x[0-9a-fA-F]{5,}|\b(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{8,}\b")
+FLOAT = re.compile(r"(\d+\.\d+(?:[eE][-+]?\d+)?)")
 SMALL_HEX = re.compile(r"\b0x([0-9a-fA-F]{1,4})\b")
 BYTE_COLUMN = re.compile(r"(?:\b[0-9a-fA-F]{2}\b[ \t]){3,}")
 CXX_TAIL = re.compile(r"(<[^<>]*>|\([^()]*\))")
@@ -91,7 +92,11 @@ def short_name(name):
 def clean(line, labels, width):
     line = "".join(c if 32 <= ord(c) < 127 or c == "\t" else "?" for c in line.rstrip("\n"))
     line = BYTE_COLUMN.sub("", line)
-    line = ADDR.sub(lambda m: labels.of(int(m.group(0), 16)), line)
+    # A decimal number's digits are not an address (6.95e-310 is a float).
+    parts = FLOAT.split(line)
+    for i in range(0, len(parts), 2):
+        parts[i] = ADDR.sub(lambda m: labels.of(int(m.group(0), 16)), parts[i])
+    line = "".join(parts)
     line = SMALL_HEX.sub(lambda m: str(int(m.group(1), 16)), line)
     if "::" in line and len(line) > width:
         line = strip_cxx(line)
