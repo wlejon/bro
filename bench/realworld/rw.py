@@ -119,7 +119,7 @@ def make_bro_app(name, page, cfg, aot=False):
         cached = WORK / "aot" / Path(page).stem / "app.so"
         if not cached.exists():
             t0 = time.time()
-            build_aot(d, d / entry)
+            build_harvested_aot(d, d / entry, cfg)
             AOT_BUILD_S[Path(page).stem] = round(time.time() - t0, 1)
             cached.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(d / "app.so", cached)
@@ -128,7 +128,7 @@ def make_bro_app(name, page, cfg, aot=False):
     return d
 
 
-def build_aot(d, entry):
+def build_aot(d, entry, flags=()):
     """app.so beside index.html: the host globals and native manifest printed
     by bro-headless, then `bronze build --emit-shared` against them. The module graph is
     compiled, config.js is not (a classic script, compiled at boot), so one
@@ -140,12 +140,36 @@ def build_aot(d, entry):
     env = dict(os.environ, BRONZE_SHARED_RT_LIB=str(RT_LIB), BRO_PROJECT_ROOT=str(BRO_ROOT))
     # RW_BRONZE_FLAGS: extra `bronze build` flags, e.g. `--feedback-out /abs/x.tfb`
     # for a type-feedback instrumented app.so (bronze docs/type-feedback.md).
-    extra = os.environ.get("RW_BRONZE_FLAGS", "").split()
+    extra = list(flags) + os.environ.get("RW_BRONZE_FLAGS", "").split()
     res = subprocess.run([str(BRONZE), "build", str(entry), "-o", str(d / "app.so"), "--emit-shared",
                           "--host-globals", str(d / "app.host-globals"), "--native-manifest", str(natives)]
                          + extra, env=env, capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError("bronze build failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
+
+
+def build_harvested_aot(d, entry, cfg):
+    """The app.so a scene is measured with, built as jsbench.py --harvest
+    builds its executable: an ordinary build with --harvest-out, one windowed
+    timing run of it at cfg's N (the renderer's code is met only with a
+    context) to write the harvest, then the build on it (--feedback-in)."""
+    tfb = d / "app.tfb"
+    build_aot(d, entry, ["--harvest-out", str(tfb)])
+    config = d / "config.js"
+    kept = config.read_text()
+    run = {"mode": "time", "n": cfg.get("n", 1), "warm": 120, "meas": 600, "gpu": 0, "watchdog": 600000,
+           "out": str(d / "out")}
+    config.write_text("globalThis.BENCH_CONFIG = " + json.dumps(run) + ";\n")
+    env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **WAYLAND_ENV)
+    subprocess.run([str(BRO), "--grant", "declared", str(d)], cwd=str(d), env=env,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    config.write_text(kept)
+    for f in (d / "out").iterdir():
+        f.unlink()
+    if not tfb.exists():
+        raise RuntimeError(f"the harvest run of {d.name} wrote no {tfb}")
+    build_aot(d, entry, ["--feedback-in", str(tfb)])
+    tfb.unlink()
 
 
 def rw_lines(text):
