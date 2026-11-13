@@ -76,12 +76,16 @@ class Labels:
         return label
 
 
-def short_name(name):
+def strip_cxx(text):
     prev = None
-    while prev != name:
-        prev = name
-        name = CXX_TAIL.sub("", name)
-    return name.strip()[:80]
+    while prev != text:
+        prev = text
+        text = CXX_TAIL.sub("", text)
+    return text
+
+
+def short_name(name):
+    return strip_cxx(name).strip()[:80]
 
 
 def clean(line, labels, width):
@@ -89,7 +93,8 @@ def clean(line, labels, width):
     line = BYTE_COLUMN.sub("", line)
     line = ADDR.sub(lambda m: labels.of(int(m.group(0), 16)), line)
     line = SMALL_HEX.sub(lambda m: str(int(m.group(1), 16)), line)
-    line = short_name(line) if "::" in line and len(line) > width else line
+    if "::" in line and len(line) > width:
+        line = strip_cxx(line)
     return line[:width]
 
 
