@@ -399,10 +399,13 @@ void runMinor(FrameGc& f) {
     f.work |= kGcWorkMinor;
 }
 
+bool minorIsDue(const bronze::embed::HeapPressure& p) {
+    return p.edenCapacity > 0 &&
+           static_cast<double>(p.edenUsed) >= kBetweenFramesEdenFill * static_cast<double>(p.edenCapacity);
+}
+
 void minorIfDue(const bronze::embed::HeapPressure& p, FrameGc& f) {
-    if (p.edenCapacity == 0 ||
-        static_cast<double>(p.edenUsed) < kBetweenFramesEdenFill * static_cast<double>(p.edenCapacity))
-        return;
+    if (!minorIsDue(p)) return;
     runMinor(f);
 }
 
@@ -471,6 +474,17 @@ void openCycle(double startMs, const bronze::embed::HeapPressure& p) {
     s_cycle.threshold = p.fullThreshold;
 }
 
+bool tryOpenCycle(const bronze::embed::HeapPressure& p, FrameGc& f, bool due) {
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!bronze::embed::startGcCycle()) return false;
+    f.startMs = msSince(t0);
+    f.work |= kGcWorkStart;
+    openCycle(f.startMs, p);
+    if (s_bootCycle && !due) f.note = "boot";
+    s_bootCycle = false;
+    return true;
+}
+
 void finishCycle(FrameGc& f, double fill, const char* why) {
     const auto t0 = std::chrono::steady_clock::now();
     bronze::embed::finishGcCycle();
@@ -479,10 +493,18 @@ void finishCycle(FrameGc& f, double fill, const char* why) {
     if (why) f.note = why;
     s_cycle.finishMs = f.finishMs;
     s_cycle.finishFill = fill;
-    // The marking it took, for the next one's estimate: a cycle finished
-    // early by the fallback marked only part of it and says less.
-    if (s_cycle.threshold > 0 && s_cycle.markDone)
-        s_markMsPerMB = s_cycle.markMs / (static_cast<double>(s_cycle.threshold) / 1048576.0);
+    // The marking it took, for the next one's estimate. Cycles opened on an
+    // almost-empty old generation (boot, memory pressure) mark far less than a
+    // full threshold and must not pull the rate down; an early fallback finish
+    // may still push an underestimate upward using its mark + finish pause.
+    if (s_cycle.threshold > 0) {
+        const double thresholdMB = static_cast<double>(s_cycle.threshold) / 1048576.0;
+        if (s_cycle.markDone && s_cycle.startFill >= kCycleStartMin) {
+            s_markMsPerMB = s_cycle.markMs / thresholdMB;
+        } else if (!s_cycle.markDone) {
+            s_markMsPerMB = std::max(s_markMsPerMB, (s_cycle.markMs + s_cycle.finishMs) / thresholdMB);
+        }
+    }
     ++s_cyclesFinished;
     s_lastCycleFrames = s_cycle.frames;
     s_cycle.open = false;
@@ -508,9 +530,9 @@ void logCycleEnd(const char* how) {
 // it is due (cycleDue), then each frame a slice of what its budget has left
 // after a minor collection, the finish in a frame of its own once a slice
 // drained the grey work, then sweep slices.
-void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
+void cycleStep(bronze::embed::HeapPressure p, FrameGc& f) {
     using clock = std::chrono::steady_clock;
-    const double fill = fillOf(p);
+    double fill = fillOf(p);
     notePromotion(p);
     if (s_cycle.open && !p.marking) {
         // Finished by the heap's own trigger or a full collection: the pause
@@ -520,14 +542,26 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
     }
     if (p.marking && s_cycle.open) {
         ++s_cycle.frames;
-        if (fill >= kCycleFallbackFill) {
+        const bool minorDue = !(f.work & kGcWorkMinor) && minorIsDue(p);
+        const double postMinorFill =
+            p.fullThreshold > 0
+                ? (static_cast<double>(p.oldGrowth) + static_cast<double>(minorDue ? p.edenUsed : 0)) /
+                      static_cast<double>(p.fullThreshold)
+                : 0.0;
+        if (fill >= kCycleFallbackFill || postMinorFill >= kCycleFallbackFill) {
             s_cycle.behind = true;
             finishCycle(f, fill, "fallback: the old generation reached 90% of its threshold while marking");
             return;
         }
         if (s_cycle.markDone) {
+            const double preFinishFill =
+                p.fullThreshold > 0
+                    ? (static_cast<double>(p.oldGrowth) + static_cast<double>(p.edenUsed)) /
+                          static_cast<double>(p.fullThreshold)
+                    : 0.0;
             if (!s_cycle.preFinishMinor && p.edenCapacity > 0 &&
-                static_cast<double>(p.edenUsed) >= kPreFinishEdenFill * static_cast<double>(p.edenCapacity)) {
+                static_cast<double>(p.edenUsed) >= kPreFinishEdenFill * static_cast<double>(p.edenCapacity) &&
+                preFinishFill < kCycleFallbackFill) {
                 s_cycle.preFinishMinor = true;
                 // What it promotes is grey: a slice in this slot drains it
                 // (more slices after, if it does not), so the finish has
@@ -573,7 +607,30 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         s_bootCycle = false;
         return;
     }
+    const bool minorDue = minorIsDue(p);
+    const bool dueNow =
+        cycleDue(p, fill) ||
+        (minorDue && p.fullThreshold > 0 &&
+         (static_cast<double>(p.oldGrowth) + static_cast<double>(p.edenUsed)) >=
+             kBetweenFramesOldFill * static_cast<double>(p.fullThreshold));
+    if (!p.sweeping && (dueNow || s_bootCycle)) {
+        if (s_cycle.sweeping) {
+            // Swept by the allocator, or by a full collection.
+            logCycleEnd("swept by the heap");
+            s_cycle = Cycle{};
+        }
+        tryOpenCycle(p, f, dueNow);
+        return;
+    }
     minorIfDue(p, f);
+    if (f.work & kGcWorkMinor) {
+        p = bronze::embed::heapPressure();
+        fill = fillOf(p);
+        if (p.marking) {
+            s_bootCycle = false;
+            return;
+        }
+    }
     const double budget = kFrameBudgetMs - f.total();
     // The boot's cycle waits for the sweep like a paced one (it is not due:
     // its start would finish the sweep in its own pause).
@@ -603,13 +660,7 @@ void cycleStep(const bronze::embed::HeapPressure& p, FrameGc& f) {
         s_cycle = Cycle{};
     }
     if (!wanted) return;
-    const auto t0 = clock::now();
-    if (!bronze::embed::startGcCycle()) return;
-    f.startMs = msSince(t0);
-    f.work |= kGcWorkStart;
-    openCycle(f.startMs, p);
-    if (s_bootCycle && !due) f.note = "boot";
-    s_bootCycle = false;
+    tryOpenCycle(p, f, due);
 }
 
 }  // namespace
