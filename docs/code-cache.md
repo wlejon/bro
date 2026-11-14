@@ -33,21 +33,23 @@ Every brokernel compile goes through a second on-disk cache, brokernel's
 `compileAsync`, scene hooks (`setShader` / `setShaderAsync`, volume hooks) and
 the scene's built-in stages. An entry stores everything the compile produced: SPIR-V, reflection, types,
 constants, probes, costs, hashes and diagnostics. A hit returns the same
-result a compile would. A kernel's CPU form is lowered the first time it runs
-on the CPU (`eval`, `run`), at about the cost of one compile; a `@cpu`
-kernel's begins on a thread of its own as its compile ends (docs/kernel-api.js). Only successful
-compiles are stored.
+result a compile would. A kernel's CPU build is made the first time it runs
+on the CPU (`eval`, `run`) and stored as native code, which later launches
+load; a `@cpu` kernel's begins on a thread of its own as its compile ends, and
+`kernel.cpuReady()` makes any kernel's off the page's thread
+(docs/kernel-api.js). Only successful compiles are stored.
 
 An entry misses when any of these differs:
 
 - the compiler build (the binary holding brokernel and brass), the version
   and the host's AVX2/FMA;
 - the source and its file name;
-- the modules registered by name (a hook's `modules`, `registerModule`), each
-  by a hash of its source, so a built-in stage keeps an entry beside each hook
-  it is compiled with;
-- every module the compile read, each resolved again as the compiler would
-  now resolve it and compared by a hash of its source;
+- any module the compile read (one of a hook's `modules`, one registered with
+  `registerModule`, one a resolver or search path finds), each resolved again
+  as the compiler would now resolve it and compared by a hash of its source,
+  so a built-in stage keeps an entry beside each hook it is compiled with. A
+  module the compile does not read is no part of it: registering constants
+  for one shader leaves every other entry a hit;
 - every compile option, knob overrides included.
 
 It lives in `<user cache dir>/kernel-cache/` and has the same 512 MB limit

@@ -99,7 +99,7 @@ console.log('brokernel', bro.kernel.version);
 // with unchanged sources takes each from the cache, with the same result.
 //
 // A @cpu kernel's CPU build (lowered and compiled to machine code, which the
-// cache does not hold) starts on a thread of its own as its compile ends, on
+// cache holds after the first launch that made it) starts on a thread of its own as its compile ends, on
 // the page thread and with compileAsync alike: the module comes back without
 // waiting for it. Its first eval or run (or cpuLanes read) waits for it as a
 // compile waits, the window answering; a large kernel takes a second or more.
@@ -113,6 +113,13 @@ console.log('brokernel', bro.kernel.version);
 //
 //     const m = await bro.kernel.compileAsync(source, { file, modules });
 //     await m.cpuReady();          // m's evals and runs no longer wait
+//
+// kernel.cpuReady() -> Promise<void>
+//   The same for one kernel, whichever it was built for: a kernel built for
+//   the GPU has no CPU build until it is run or eval'd on the CPU, and this
+//   makes it on a thread of its own, the frames going on meanwhile.
+//
+//     await m.step.cpuReady();     // step.run(...) on host arrays no longer waits
 
 const mod = bro.kernel.compile(`
     import std::noise::*;
