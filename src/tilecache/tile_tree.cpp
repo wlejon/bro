@@ -629,11 +629,16 @@ std::vector<DrawTile> TileTree::drawSet() const {
     // Each edge's neighbour: the drawn tile holding a point just past the
     // edge's middle, when one coarser than the tile is (a coarser neighbour
     // spans the whole edge; a finer one meets it on its own vertices).
-    std::unordered_map<uint64_t, uint32_t> drawnKeys;
-    drawnKeys.reserve(out.size());
-    for (const DrawTile& d : out) drawnKeys.emplace(d.id.key(), d.id.level);
+    // The tile holding the point at each coarser level is an ancestor of the
+    // one holding it a level up from the tile's own (locate floors the same
+    // root coordinate at every level), and a drawn tile is a node: the point
+    // is located once, and the nodes over it are walked for a drawn one.
+    std::vector<uint8_t> drawnNode(nodes_.size(), 0);
+    for (const DrawTile& d : out)
+        if (const int32_t i = find(d.id); i >= 0) drawnNode[i] = 1;
     const Domain& dom = config_.domain;
     for (DrawTile& d : out) {
+        if (d.id.level == 0) continue;
         const Domain::Frame f = dom.frame(d.id);
         static constexpr double kPast = 1e-3;
         static constexpr double kEdge[4][2] = {{-kPast, 0.5}, {1 + kPast, 0.5}, {0.5, -kPast}, {0.5, 1 + kPast}};
@@ -641,13 +646,17 @@ std::vector<DrawTile> TileTree::drawSet() const {
             const double u = kEdge[e][0], v = kEdge[e][1];
             const Vec3d p = {f.corner.x + u * f.du.x + v * f.dv.x, f.corner.y + u * f.du.y + v * f.dv.y,
                              f.corner.z + u * f.du.z + v * f.dv.z};
-            for (uint32_t k = 0; k < d.id.level; ++k) {
-                TileId t;
-                if (!dom.locate(p, k, t)) break;
-                if (drawnKeys.count(t.key())) {
-                    d.coarser[e] = static_cast<uint8_t>(std::min<uint32_t>(d.id.level - k, 15));
-                    break;
-                }
+            TileId t;
+            if (!dom.locate(p, d.id.level - 1, t)) continue;
+            int32_t i = find(t);
+            while (i < 0 && t.level > 0) {
+                t = t.parent();
+                i = find(t);
+            }
+            for (; i >= 0; i = nodes_[i].parent) {
+                if (!drawnNode[i]) continue;
+                d.coarser[e] = static_cast<uint8_t>(std::min<uint32_t>(d.id.level - nodes_[i].id.level, 15));
+                break;
             }
         }
     }

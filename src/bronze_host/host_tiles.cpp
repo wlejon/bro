@@ -125,6 +125,7 @@ struct Cache {
     std::vector<std::string> invalidatedLayers; // selective layer subset for stale refreshes (empty = all layers)
     std::shared_ptr<brokernel::api::GpuBuffer> drawList;
     std::vector<DrawTile> drawn;
+    std::vector<int32_t> drawRecords;   // what drawList holds (writeDrawList)
     std::shared_ptr<brokernel::api::GpuBuffer> lookup;
     // The update's batch on the GPU, producePerUpdate records, and its
     // KernelBuffer, made once.
@@ -350,8 +351,12 @@ void writeDrawList(Cache& c) {
         f[3] = static_cast<float>(d.bounds.radius);
         std::memcpy(r + 8, f, sizeof(f));
     }
+    // The buffer holds the last list written: the same one again (a view
+    // that draws what it drew) is not uploaded.
+    if (records == c.drawRecords) return;
     std::string err;
     c.drawList->write(0, records.data(), records.size() * sizeof(int32_t), &err);
+    c.drawRecords = std::move(records);
 }
 
 // What the next batch may spend, from the milliseconds the frame leaves its
@@ -645,11 +650,44 @@ Value js_update(Value self, std::span<const Value> args) {
     return ev::fromDouble(static_cast<double>(batch.size()));
 }
 
-Value js_drawn(Value self, std::span<const Value>) {
-    const Cache* c = cacheOf(self, "TileCache.drawn");
-    ev::ArrayBuilder out(c->drawn.size());
+Value drawnTiles(const Cache* c, const std::vector<uint32_t>* only);
+
+Value js_drawn(Value self, std::span<const Value>) { return drawnTiles(cacheOf(self, "TileCache.drawn"), nullptr); }
+
+// drawnNear([x, y, z], reach): the drawn tiles whose footprint on the base
+// surface (the bounding sphere less its height range) comes within `reach`
+// of the point.
+Value js_drawnNear(Value self, std::span<const Value> args) {
+    const Cache* c = cacheOf(self, "TileCache.drawnNear");
+    double p[3];
+    bool ok = !args.empty() && ev::isObject(args[0]);
+    for (uint32_t k = 0; ok && k < 3; ++k) {
+        const Value v = ev::getElement(args[0], k);
+        ok = ev::isNumber(v);
+        if (ok) p[k] = ev::toDouble(v);
+    }
+    const double reach = args.size() > 1 && ev::isNumber(args[1]) ? ev::toDouble(args[1]) : -1.0;
+    if (!ok || !(reach >= 0)) return ev::throwTypeError("TileCache.drawnNear: takes [x, y, z] and a reach >= 0");
+    const bool plane = c->tree.config().domain.kind == tilecache::Domain::Kind::Plane;
+    std::vector<uint32_t> near;
     for (uint32_t i = 0; i < c->drawn.size(); ++i) {
         const DrawTile& d = c->drawn[i];
+        const tilecache::HeightRange r = c->tree.range(d.id);
+        const double h = std::max(std::abs(r.lo), std::abs(r.hi));
+        const double foot = plane ? std::sqrt(std::max(0.0, d.bounds.radius * d.bounds.radius - h * h))
+                                  : std::max(0.0, d.bounds.radius - h);
+        const double dx = p[0] - d.bounds.center.x, dy = p[1] - d.bounds.center.y, dz = p[2] - d.bounds.center.z;
+        const double lim = foot + reach;
+        if (dx * dx + dy * dy + dz * dz <= lim * lim) near.push_back(i);
+    }
+    return drawnTiles(c, &near);
+}
+
+Value drawnTiles(const Cache* c, const std::vector<uint32_t>* only) {
+    const uint32_t n = static_cast<uint32_t>(only ? only->size() : c->drawn.size());
+    ev::ArrayBuilder out(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const DrawTile& d = c->drawn[only ? (*only)[i] : i];
         ev::ObjectBuilder t;
         t.set("root", d.id.root);
         t.set("level", d.id.level);
@@ -753,6 +791,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         return c->detailPool ? brokernel::api::bufferValue(c->detailPool) : ev::null();
     });
     b.accessor("drawn", js_drawn);
+    b.def("drawnNear", 2, js_drawnNear);
     b.accessor("drawList", [](Value self, std::span<const Value>) -> Value {
         return brokernel::api::bufferValue(cacheOf(self, "TileCache.drawList")->drawList);
     });

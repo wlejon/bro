@@ -290,6 +290,12 @@ const terrain = bro.tiles.createCache({
 //                   good to f64 at any distance.
 //                   `drawn` builds an object a tile: for inspection, not for
 //                   every frame.
+// cache.drawnNear([x, y, z], reach)
+//                   the tiles of `drawn`, in its order, whose footprint on
+//                   the base surface (the bounding sphere less the height
+//                   range) comes within `reach` of the point: the ground
+//                   about a body, a few objects where `drawn` builds
+//                   thousands.
 // cache.layer(name) the layer's whole pool as a KernelBuffer: producers
 //                   write it (a batch's tiles at their slots), and a scene
 //                   node's custom shader binds it (setShaderBuffer, scene-

@@ -139,6 +139,23 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(settle(cache, near), 'the cache settles near the ground');
     const drawn = checkCoverage(cache, 'near');
     const deepest = Math.max(...drawn.map((t) => t.level));
+    // drawnNear: the drawn tiles whose squares come within a reach of a
+    // point, by brute force over the draw set (a tile's footprint is the
+    // circle about its square).
+    {
+        const p = [20, 0, 20], reach = 6;
+        const want = drawn.filter((t) => {
+            const half = SIZE / (1 << t.level) / 2;
+            return Math.hypot(t.center[0] - p[0], t.center[2] - p[2]) <= half * Math.SQRT2 + reach + 1e-9;
+        }).map(tileKey);
+        const got = cache.drawnNear(p, reach).map(tileKey);
+        assert(got.length > 0 && got.length < drawn.length && got.join(' ') === want.join(' '),
+               `drawnNear names the drawn tiles about a point, in draw order (${got.length} of ${drawn.length}, ${want.length} expected)`);
+        assert(cache.drawnNear(p, 1e9).length === drawn.length, 'and all of them at a reach that holds the plane');
+        let refused = false;
+        try { cache.drawnNear(p); } catch (e) { refused = e instanceof TypeError; }
+        assert(refused, 'drawnNear without a reach is refused');
+    }
     assert(planeFrameOk, 'a plane tile\'s frame is its origin and extent along +x and +z');
     assert(batches < cache.stats.produced && sameBatchParent === 0,
            `produce takes a batch a call, never a tile beside its parent (${batches} calls for ${cache.stats.produced} tiles)`);
