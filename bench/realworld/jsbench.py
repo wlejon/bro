@@ -383,6 +383,9 @@ def instruction_profile(cmd, data, frames):
         if sym.startswith(("JS:", "LazyCompile:", "Function:", "Script:")):
             sym = re.sub(r"^[a-z]?[*~^+']+", "", sym.split(":", 1)[1]).split(" ")[0] or "(anonymous)"
         name = sym.split("(")[0].strip()
+        # An address perf found no symbol for (V8's builtins in a stripped node, mostly): one row.
+        if re.fullmatch(r"0x[0-9a-f]+", name):
+            name = "(unresolved)"
         # bronze's variants of one source function: `f$typed_fd`, `f$1477`, `f__generic`, `f__twin`.
         name = re.sub(r"(\$\w+|__generic|__twin)+$", "", name)
         tail = name.split(".")[-1]
@@ -392,8 +395,8 @@ def instruction_profile(cmd, data, frames):
 
 
 def versus(scene, args, bronze):
-    """Instructions a frame by function, bronze beside node, widest gap first.
-    An engine charges an inlined callee to its caller, and the two inline
+    """Instructions a frame by function, bronze beside node: the widest gaps
+    first, then the rows node runs more of. An engine charges an inlined callee to its caller, and the two inline
     differently, so read a row with the rows of its callers and callees."""
     cfg = scene_cfg(scene, args)
     exe, _ = harvested_build(scene, cfg, bronze, args.flags) if args.harvest else bronze_build(scene, cfg, bronze, args.flags)
@@ -410,8 +413,15 @@ def versus(scene, args, bronze):
     print(f"{scene} n={cfg['n']}: instructions a frame, bronze {fmt_n(bt)} node {fmt_n(nt)}")
     print(f"{'function':44} {'bronze':>9} {'node':>9} {'gap':>9}")
     names = sorted(set(b) | set(n), key=lambda k: n.get(k, 0) - b.get(k, 0))
+    row = lambda k: f"{k[:44]:44} {fmt_n(b.get(k, 0)):>9} {fmt_n(n.get(k, 0)):>9} {fmt_n(b.get(k, 0) - n.get(k, 0)):>9}"
     for k in names[:args.top]:
-        print(f"{k[:44]:44} {fmt_n(b.get(k, 0)):>9} {fmt_n(n.get(k, 0)):>9} {fmt_n(b.get(k, 0) - n.get(k, 0)):>9}")
+        print(row(k))
+    # The other end: what node runs more of, which is where its inlined callees and its builtins are.
+    rest = names[args.top:]
+    if rest:
+        print("...")
+        for k in rest[-max(args.top // 2, 1):]:
+            print(row(k))
 
 
 def add_commands(sub):
