@@ -95,10 +95,12 @@ if (!bro.kernel.available || !bro.tiles) {
     // A batch is ready once the GPU has done it (it runs beside the frames),
     // so each update is a frame apart.
     const settle = (cache, view) => {
-        for (let i = 0; i < 64; i++) {
+        const deadline = Date.now() + 5000;
+        for (let i = 0; i < 64 || Date.now() < deadline; i++) {
             cache.update(view);
             if (cache.pending === 0) return true;
             advanceTime(16);
+            if (i >= 4) wallSleep(2);
         }
         return false;
     };
@@ -229,9 +231,11 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(flaky.pending > 0, `the failed tiles stay pending (${flaky.pending})`);
     // The levels above the failing one may still be on the GPU when it throws
     // (production runs in the background); updates that keep failing land them.
-    for (let i = 0; i < 60 && flaky.drawn.length === 0; i++) {
+    const flakyDeadline = Date.now() + 5000;
+    for (let i = 0; (i < 60 || Date.now() < flakyDeadline) && flaky.drawn.length === 0; i++) {
         try { flaky.update(near); } catch (e) { /* the failing level again */ }
         advanceTime(16);
+        if (flaky.drawn.length === 0 && i >= 4) wallSleep(2);
     }
     checkCoverage(flaky, 'after a throw');
     failLevel = -1;
@@ -256,11 +260,13 @@ if (!bro.kernel.available || !bro.tiles) {
     assert(redo.stale === redo.wanted && redo.pending === redo.wanted && redo.stale > 0,
            `a refresh leaves every wanted tile out of date (${redo.stale} of ${redo.wanted})`);
     let keptDrawn = true, settled = false;
-    for (let i = 0; i < 64 && !settled; i++) {
+    const redoDeadline = Date.now() + 5000;
+    for (let i = 0; (i < 64 || Date.now() < redoDeadline) && !settled; i++) {
         redo.update(near);
         keptDrawn = keptDrawn && redo.drawn.map(tileKey).sort().join() === drawnKeys;
         settled = redo.pending === 0;
         advanceTime(16);
+        if (!settled && i >= 4) wallSleep(2);
     }
     const again = seen.flat();
     assert(settled && redo.stale === 0, `the updates produce them again (${redo.pending} pending)`);
@@ -299,9 +305,17 @@ if (!bro.kernel.available || !bro.tiles) {
     });
     // Ranges come back once the GPU is done, never by waiting: a frame or two.
     const settleRanged = (c, view) => {
-        let ok = true;
-        for (let i = 0; i < 8; i++) { ok = settle(c, view) && ok; advanceTime(16); }
-        return ok;
+        const deadline = Date.now() + 5000;
+        for (let i = 0; i < 8 || Date.now() < deadline; i++) {
+            if (!settle(c, view)) return false;
+            if (i >= 2 && c.stats.reportsInFlight === 0) {
+                c.update(view);
+                if (c.pending === 0 && c.stats.reportsInFlight === 0) return true;
+            }
+            advanceTime(16);
+            if (i >= 4) wallSleep(2);
+        }
+        return false;
     };
     const wide = ranged(-1), tight = ranged(99), rootsOnly = ranged(0);
     const above = { position: [10, 40, 12], fov: 60, viewportHeight: 720 };
@@ -537,10 +551,12 @@ if (!bro.kernel.available || !bro.tiles) {
         },
     });
     const surfacePoint = [0.3 * ER, 0.9 * ER, -0.2 * ER].map((c, k, a) => c / Math.hypot(...a) * (ER + 40));
+    const earthView = { position: surfacePoint, fov: 60, viewportHeight: 720 };
     for (let i = 0; i < 48; i++) {
-        earth.update({ position: surfacePoint, fov: 60, viewportHeight: 720 });
+        earth.update(earthView);
         advanceTime(16);
     }
+    assert(settle(earth, earthView), 'an Earth-radius cache settles');
     const verts = earth.layer('v').read(new Float32Array(512 * VT * VT * 3));
     let deepLevel = 0, deepErr = 0, relErr = 0;
     for (const t of earth.drawn) {

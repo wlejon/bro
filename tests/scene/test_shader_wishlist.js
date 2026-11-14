@@ -195,10 +195,19 @@ if (!probeCtx.scene) {
         });
 
         const view = { position: [16, 10, 16], fov: 60, viewportHeight: 256 };
-        for (let i = 0; i < 32 && (i === 0 || cache.pending > 0); i++) {
-            cache.update(view);
-            advanceTime(16);
-        }
+        // Background tile batches complete in wall time on the GPU queue, while
+        // empty headless advanceTime() steps do not block once writeDrawList
+        // skips re-uploading an unchanged draw list.
+        const settleCache = (c, v) => {
+            const deadline = Date.now() + 5000;
+            for (let i = 0; (i === 0 || c.pending > 0) && (i < 32 || Date.now() < deadline); i++) {
+                c.update(v);
+                if (c.pending === 0) break;
+                advanceTime(16);
+                if (i >= 3) wallSleep(2);
+            }
+        };
+        settleCache(cache, view);
         assert(cache.pending === 0, 'two-layer tile cache settles');
         assert(seenBatchLayers.length > 0 &&
                seenBatchLayers[0].includes('height') &&
@@ -251,10 +260,7 @@ if (!probeCtx.scene) {
         const cCountBefore = colorDispatchCount;
 
         cache.invalidate(['color']);
-        for (let i = 0; i < 32 && (i === 0 || cache.pending > 0); i++) {
-            cache.update(view);
-            advanceTime(16);
-        }
+        settleCache(cache, view);
         assert(cache.pending === 0, 'selective invalidate(["color"]) settles');
         assert(seenBatchLayers.length > 0 &&
                seenBatchLayers.every((l) => l.length === 1 && l[0] === 'color'),
@@ -268,6 +274,7 @@ if (!probeCtx.scene) {
         assert(Math.abs(cAfter - 255 * 0.4) < 8,
             `invalidated color layer updated on GPU (before=${cBefore}, after=${cAfter})`);
 
+        cache.destroy();
         dropScene(s);
     }
 
