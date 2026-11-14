@@ -383,6 +383,8 @@ def instruction_profile(cmd, data, frames):
         if sym.startswith(("JS:", "LazyCompile:", "Function:", "Script:")):
             sym = re.sub(r"^[a-z]?[*~^+']+", "", sym.split(":", 1)[1]).split(" ")[0] or "(anonymous)"
         name = sym.split("(")[0].strip()
+        # bronze's variants of one source function: `f$typed_fd`, `f$1477`, `f__generic`, `f__twin`.
+        name = re.sub(r"(\$\w+|__generic|__twin)+$", "", name)
         tail = name.split(".")[-1]
         name = " ".join(name.split()[-2:]) if tail in ("x", "y") or name.startswith(("get ", "set ")) else tail
         out[name] = out.get(name, 0) + n
