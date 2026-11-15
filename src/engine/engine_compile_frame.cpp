@@ -74,6 +74,22 @@ void Engine::drawBootFrame() {
     if (layoutPipeline_ && !layoutPipeline_->isIdle()) return;
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia || !document_ || !document_->documentElement()) return;
+
+    // The markup's CSS animations and transitions run through the boot: the
+    // engine's clock goes on by the time since the last boot frame (a long
+    // gap counts as one frame), and what the tick changed is painted below.
+    // Their events stay pending for the first frame of the run loop.
+    static double s_lastBootFrameMs = 0.0;
+    const double bootNow = util::currentTimeMs();
+    if (s_lastBootFrameMs > 0.0) engineNowMs_ += std::clamp(bootNow - s_lastBootFrameMs, 0.0, 50.0);
+    s_lastBootFrameMs = bootNow;
+    document_->setTransitionManager(&transitionManager_, engineNowMs_);
+    animationManager_.setKeyframes(&document_->cascade().keyframes());
+    document_->setAnimationManager(&animationManager_);
+    document_->setWebAnimationManager(&webAnimationManager_);
+    const bool animActive = transitionManager_.tick(engineNowMs_) | animationManager_.tick(engineNowMs_) |
+                            webAnimationManager_.tick(engineNowMs_);
+    if (animActive) document_->markPaintDirty();
     // Laid out as a script's geometry read lays it out (mid-script too): the
     // paint half of the dirty flag stays armed for the first frame, and a
     // structure change leaves the frame its iframe sync.

@@ -4,8 +4,8 @@ In a windowed run, a page script is compiled on a background thread while the
 main thread keeps the window alive: events are pumped (the window can be
 moved, resized and closed), and the page's own **static markup** — its HTML
 and CSS, parsed and laid out before any script compiles — is drawn about 60
-times a second. When the engine's splash panel is up it covers the window and
-animates as before.
+times a second, its CSS animations and transitions running. When the engine's
+splash panel is up it covers the window and animates as before.
 
 So an app's loading screen is ordinary markup and CSS in `index.html`. While a
 compile runs, bro publishes its state on the document element:
