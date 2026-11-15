@@ -3,6 +3,7 @@
 ## 1. Task Execution & Polling
 - **Never poll tasks in a loop**: Do not poll `manage_task status` or sleep-loop while background tasks or commands run.
 - **Wait for reactive wakeups**: The system automatically delivers notifications and wakes up the agent upon task completion or messages. Launch the task and wait for the system notification.
+- **GitHub CLI (`gh`) watch & rate-limit discipline**: Never call `gh` in a polling loop. Watch active runs with a single background `gh run watch <id> -R <owner>/<repo> --interval 60 --compact --exit-status` command, and batch multi-repo status queries into a single `gh api graphql` call.
 
 ## 2. Subagent Orchestration for Large Tasks
 - **Capacity estimation**: A well-instructed subagent can write ~4k lines of clean code or ~2k lines equivalent in debugging.
@@ -26,3 +27,5 @@
 - **System memory constraint**: This system doesn't have enough RAM (16 GB for 32 threads) to run memory-intensive operations (C++ compilation of heavy units, parallel headless rendering instances) in unbounded parallel without OOM-killing processes.
 - **Test execution defaults**: `tests/run_tests.sh` runs serially (1 test job at a time) by default. Full parallel execution is an opt-in override (`BRO_TEST_JOBS=auto` or `BRO_TEST_PARALLEL=1`), not the default.
 - **Build concurrency defaults**: Ninja compilation is bounded by `BRO_COMPILE_JOBS` (default: 4) and `BRO_LINK_JOBS` (default: 2) in CMake to keep peak compiler memory safely within the physical RAM envelope.
+- **No unbounded binary disassembly**: Never run whole-binary or whole-section symbolic disassembly (`otool -tV`/`-tvV`, unscoped `objdump -d`) on large binaries or dylibs; macOS desktop Jetsam does not auto-kill runaway CLI processes before XNU VM compressor exhaustion. Prefer source inspection or `nm`, or scope strictly to one symbol (`/usr/bin/objdump --disassemble-symbols=<sym>`).
+- **Bypass conda `cctools` on `PATH`**: `/Users/j/anaconda3/bin` shadows `/usr/bin` with outdated Darwin 20 `cctools` (`otool`, `nm`, `ar`, `strip`, `ld`) that can leak tens of GB on modern Darwin Mach-O files. Always invoke Apple inspection/toolchain binaries via `/usr/bin/<tool>` or `xcrun <tool>`.
