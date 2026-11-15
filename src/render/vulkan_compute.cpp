@@ -74,6 +74,24 @@ VulkanQueue& queueOf(VulkanContext& context, bool background) {
     return async ? *async : context.queue();
 }
 
+void destroyComputeBufferDeferred(VulkanContext* ctx, const std::shared_ptr<ComputeOwner>& owner, VkDeviceSize cap,
+                                  VkBuffer buffer, uint64_t alloc) {
+    ctx->frames().defer([ctx, owner, cap, buffer, alloc] {
+#if defined(__APPLE__)
+        // MoltenVK's MVKDevice::encodeGPUAddressableBuffers binds every live
+        // SHADER_DEVICE_ADDRESS VkBuffer into every BDA compute dispatch until
+        // vkDestroyBuffer. Wait for any in-flight graphics or async-compute
+        // submissions that could still reference its MTLBuffer before destroying it.
+        if (const uint64_t gfxTicket = ctx->queue().lastSubmittedTicket()) ctx->queue().wait(gfxTicket);
+        if (VulkanQueue* asyncQueue = ctx->asyncComputeQueue()) {
+            if (const uint64_t compTicket = asyncQueue->lastSubmittedTicket()) asyncQueue->wait(compTicket);
+        }
+#endif
+        owner->deferredBytes = owner->deferredBytes > cap ? owner->deferredBytes - cap : 0;
+        ctx->destroyBuffer(buffer, alloc);
+    });
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -97,10 +115,7 @@ void ComputeBuffer::releaseDeferred() {
     size_ = 0;
     capacity_ = 0;
     owner_->deferredBytes += cap;
-    ctx->frames().defer([ctx, owner = owner_, cap, buffer, alloc] {
-        owner->deferredBytes = owner->deferredBytes > cap ? owner->deferredBytes - cap : 0;
-        ctx->destroyBuffer(buffer, alloc);
-    });
+    destroyComputeBufferDeferred(ctx, owner_, cap, buffer, alloc);
 }
 
 void ComputeBuffer::markLayers(std::span<const uint32_t> parts, uint32_t layers) {

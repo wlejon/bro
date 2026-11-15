@@ -139,6 +139,7 @@ struct Cache {
     std::shared_ptr<brokernel::api::GpuBuffer> detailPool;
     struct Report {
         std::shared_ptr<render::ComputeReadback> ranges, detail;
+        uint64_t batchId = 0;
         uint32_t firstSlot = 0;
         std::vector<tilecache::Production> tiles;
         bool ready() const { return (!ranges || ranges->ready()) && (!detail || detail->ready()); }
@@ -184,10 +185,13 @@ struct Cache {
     struct InFlight {
         std::vector<tilecache::Production> tiles;
         std::vector<bool> layerMask; // empty = all layers; else per-layer dirty flag
+        uint64_t batchId = 0;
         uint64_t ticket = 0;
         std::shared_ptr<render::ComputeSpan> span;   // its GPU time, when timestamps are there
     };
     std::deque<InFlight> inFlight;
+    uint64_t nextBatchId = 0;
+    uint64_t retiredBatchId = 0;
 };
 
 ev::HostClass g_cacheClass;
@@ -208,6 +212,7 @@ void destroyCache(Cache& c) {
         if (*b) (*b)->destroy();
     c.reports.clear();
     c.inFlight.clear();
+    c.retiredBatchId = c.nextBatchId;
     c.invalidatedLayers.clear();
     c.tree.clear();
 }
@@ -249,7 +254,7 @@ Value vec3(const tilecache::Vec3d& v) {
 // The ranges and detail producers wrote, for the readbacks the GPU has
 // finished: each tile still in the slot it was produced into gets its own.
 void collectReports(Cache& c) {
-    while (!c.reports.empty() && c.reports.front().ready()) {
+    while (!c.reports.empty() && c.reports.front().batchId <= c.retiredBatchId && c.reports.front().ready()) {
         const Cache::Report& rb = c.reports.front();
         const auto* ranges = rb.ranges ? static_cast<const float*>(rb.ranges->data()) : nullptr;
         const auto* detail = rb.detail ? static_cast<const float*>(rb.detail->data()) : nullptr;
@@ -446,6 +451,7 @@ bool retireBatches(Cache& c) {
         }
         if (compute) compute->acquireBackground(f.ticket);
         timeBatch(c, f);
+        c.retiredBatchId = f.batchId;
         c.inFlight.pop_front();
         any = true;
     }
@@ -622,8 +628,10 @@ Value js_update(Value self, std::span<const Value> args) {
             return ev::throwValue(thrown);
         }
     }
+    const uint64_t batchId = !batch.empty() ? ++c->nextBatchId : 0;
     if ((c->rangePool || c->detailPool) && !batch.empty()) {
         Cache::Report rb;
+        rb.batchId = batchId;
         uint32_t last = 0;
         rb.firstSlot = UINT32_MAX;
         for (const tilecache::Production& p : batch) {
@@ -641,6 +649,7 @@ Value js_update(Value self, std::span<const Value> args) {
         Cache::InFlight f;
         f.tiles = batch;
         f.layerMask = std::move(batchMask);
+        f.batchId = batchId;
         if (span) compute->endSpan(*span);
         f.span = std::move(span);
         f.ticket = compute ? compute->endBackground() : 0;
@@ -766,6 +775,7 @@ void decorateCache(ev::ObjectBuilder& b) {
         c->drawn.clear();
         c->reports.clear();
         c->inFlight.clear();   // their slots are free; later batches run after them
+        c->retiredBatchId = c->nextBatchId;
         c->invalidatedLayers.clear();
         writeLookup(*c);
         return ev::undefined();
