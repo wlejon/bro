@@ -486,10 +486,15 @@
     // redefines the properties so app reads/writes go to a chained app slot —
     // `bro.net.onmessage = fn` keeps working before OR after sync starts, and
     // every non-sync message (raw or clone) is forwarded to the app untouched.
+    // The slots' own properties as they were before sync took them, put back
+    // by leave().
+    const netSlots = {};
     function wrapNetHandlers() {
         appHandlers.onmessage = net.onmessage || null;
         appHandlers.onconnect = net.onconnect || null;
         appHandlers.ondisconnect = net.ondisconnect || null;
+        for (const name of ['onmessage', 'onconnect', 'ondisconnect'])
+            netSlots[name] = Object.getOwnPropertyDescriptor(net, name) || null;
         net.onmessage = dispatchMessage;       // via the original C setter
         net.onconnect = dispatchConnect;
         net.ondisconnect = dispatchDisconnect;
@@ -499,6 +504,16 @@
                 get: () => appHandlers[name],
                 set: (fn) => { appHandlers[name] = fn; },
             });
+        }
+    }
+
+    // The slots back as they were, holding the app's handlers.
+    function unwrapNetHandlers() {
+        for (const name of ['onmessage', 'onconnect', 'ondisconnect']) {
+            if (netSlots[name]) Object.defineProperty(net, name, netSlots[name]);
+            else delete net[name];
+            net[name] = appHandlers[name];
+            netSlots[name] = null;
         }
     }
 
@@ -632,6 +647,36 @@
             const conns = net.connections();
             if (conns.length > 0) hostConn = conns[0];
         }
+    };
+
+    // End the session. A client lets its host go; a host stops listening and
+    // lets every client go. Every replicated object is dropped and its
+    // destroy hook run, the timers stop, and bro.net's handler slots are
+    // plain again, holding the app's handlers. The registered types and RPCs
+    // stay, so host() or join() can be called again.
+    sync.leave = function () {
+        if (!active) return;
+        if (isHost) {
+            for (const c of net.connections()) net.disconnect(c);
+            net.unhost();
+        } else if (hostConn !== null) {
+            net.disconnect(hostConn);
+        }
+        if (tickTimer !== null) { g.clearInterval(tickTimer); tickTimer = null; }
+        if (interpTimer !== null) { g.clearInterval(interpTimer); interpTimer = null; }
+        active = false;
+        isHost = false;
+        hostConn = null;
+        tickCount = 0;
+        const dropped = [...records.values()];
+        records.clear();
+        for (const rec of dropped) {
+            byObj.delete(rec.obj);
+            if (!rec.def.destroy) continue;
+            try { rec.def.destroy(rec.obj); }
+            catch (e) { console.error('[net.sync] destroy("' + rec.type + '") threw: ' + (e && e.stack || e)); }
+        }
+        unwrapNetHandlers();
     };
 
     // Host-only: create a replicated object. Runs the local factory, then
