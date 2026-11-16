@@ -167,25 +167,6 @@ dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
     return resolveTarget(a.elem, a.nodeId, a.doc);
 }
 
-dom::Element* WebAnimationManager::resolveTarget(dom::Element* elem, uint32_t nodeId, dom::Document* doc) {
-    if (!elem || !dom::Document::isLiveDocument(doc)) return nullptr;
-    dom::Node* n = doc->resolveNode(elem, nodeId);
-    if (!n) return nullptr;
-    // Nodes queued in pendingFrees_ still resolve (memory alive) but are on
-    // their way out — treat as gone so we never dirty or route them.
-    if (!doc->ownsNode(n)) return nullptr;
-    return static_cast<dom::Element*>(n);
-}
-
-std::vector<dom::Element*> WebAnimationManager::resolveTicked(const std::vector<Ticked>& list) const {
-    std::vector<dom::Element*> out;
-    out.reserve(list.size());
-    for (const Ticked& t : list) {
-        if (dom::Element* e = resolveTarget(t.elem, t.nodeId, t.doc)) out.push_back(e);
-    }
-    return out;
-}
-
 // ---------------------------------------------------------------------------
 // Playback control
 // ---------------------------------------------------------------------------

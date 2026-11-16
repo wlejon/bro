@@ -27,6 +27,8 @@
 // (engine teardown destroys members before the JS runtime), the static
 // isLive() registry makes the release a no-op.
 
+#include "dom/document.h"
+#include "dom/element.h"
 #include "engine/css_easing.h"
 
 #include <css/cascade.h>
@@ -323,6 +325,27 @@ private:
     std::vector<uint64_t> pendingCanceled_;
     std::vector<uint64_t> pendingRemoved_;
 };
+
+// (In the header: bro_dom's style pass reads the tick's lists, and a target
+// that links bro_dom without bro_engine must still link.)
+inline dom::Element* WebAnimationManager::resolveTarget(dom::Element* elem, uint32_t nodeId, dom::Document* doc) {
+    if (!elem || !dom::Document::isLiveDocument(doc)) return nullptr;
+    dom::Node* n = doc->resolveNode(elem, nodeId);
+    if (!n) return nullptr;
+    // Nodes queued in pendingFrees_ still resolve (memory alive) but are on
+    // their way out — treat as gone so we never dirty or route them.
+    if (!doc->ownsNode(n)) return nullptr;
+    return static_cast<dom::Element*>(n);
+}
+
+inline std::vector<dom::Element*> WebAnimationManager::resolveTicked(const std::vector<Ticked>& list) const {
+    std::vector<dom::Element*> out;
+    out.reserve(list.size());
+    for (const Ticked& t : list) {
+        if (dom::Element* e = resolveTarget(t.elem, t.nodeId, t.doc)) out.push_back(e);
+    }
+    return out;
+}
 
 // Composite order of two records on one element: CSS transitions the markup
 // owns first (by generation, then property name), then CSS animations it owns
