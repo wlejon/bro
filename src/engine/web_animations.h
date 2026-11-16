@@ -229,6 +229,7 @@ public:
     // Live, still-document-owned element for this record, or null. Never
     // dereferences a dangling pointer (generation-checked via nodeId).
     dom::Element* resolveElement(const WebAnimation& a) const;
+    static dom::Element* resolveTarget(dom::Element* elem, uint32_t nodeId, dom::Document* doc);
 
     // --- engine seams (mirror TransitionManager) -------------------------
     // Advance clocks, detect finishes (queued for main-thread delivery),
@@ -264,12 +265,15 @@ public:
     bool activeAnimatesOnly(dom::Element* elem,
                             const std::set<std::string>& allowed) const;
 
-    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
+    // (Each read resolves the elements again, as a record's are: the lists
+    // are read after the tick, by which time script may have removed an
+    // element and its wrapper's collection freed it.)
+    std::vector<dom::Element*> activeThisTick() const { return resolveTicked(activeThisTick_); }
     // Elements an animation finished on this tick: marked dirty so their
     // value settles (the fill, or back to the base). A layout pass that ticks
     // after its style resolve and then clears the document's dirty flag
     // marks them again after it, or the settling pass never runs.
-    const std::vector<dom::Element*>& finishedThisTick() const { return finishedThisTick_; }
+    std::vector<dom::Element*> finishedThisTick() const { return resolveTicked(finishedThisTick_); }
 
     // Events queued by tick() / cancelFromMarkup, drained on the main thread
     // and delivered to the JS wrappers: finish (finished promise + onfinish),
@@ -310,8 +314,11 @@ private:
     // Element* used purely as a hash key (never dereferenced); entries carry a
     // nodeId generation check against address reuse.
     std::unordered_multimap<const dom::Element*, uint64_t> byElem_;
-    std::vector<dom::Element*> activeThisTick_;
-    std::vector<dom::Element*> finishedThisTick_;
+    // An element as a tick saw it, resolved again (generation-checked) when read.
+    struct Ticked { dom::Element* elem; uint32_t nodeId; dom::Document* doc; };
+    std::vector<dom::Element*> resolveTicked(const std::vector<Ticked>& list) const;
+    std::vector<Ticked> activeThisTick_;
+    std::vector<Ticked> finishedThisTick_;
     std::vector<uint64_t> pendingFinished_;
     std::vector<uint64_t> pendingCanceled_;
     std::vector<uint64_t> pendingRemoved_;

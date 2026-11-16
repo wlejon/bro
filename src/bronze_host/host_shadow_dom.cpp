@@ -166,12 +166,16 @@ void decorateShadowRootProto(ObjectBuilder& b) {
             dom::Document* doc = st->shadowRoot->document();
             if (!doc && st->shadowRoot->host()) doc = st->shadowRoot->host()->document();
             if (!doc) doc = currentHostDocument();
+            // (Marked as ShadowRoot::setInnerHTML marks it: the layout tree
+            // holds the children until it is built again.)
+            const bool hadChildren = !st->shadowRoot->childNodes().empty();
             for (auto* child : st->shadowRoot->childNodes()) {
                 child->setParent(nullptr);
                 if (doc) doc->freeNode(child);
             }
             st->shadowRoot->childNodes().clear();
             st->shadowRoot->invalidateSlots();
+            if (hadChildren && st->shadowRoot->host()) st->shadowRoot->host()->markStructureDirty();
             Value v = argAt(a, 0);
             if (!ev::isUndefined(v) && !ev::isNull(v) && doc) {
                 std::string text = ev::toUtf8(v);
