@@ -298,7 +298,6 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
     opts.retainSource = true;
     opts.pinsPath = discoverPinsPath(engine, filename);
-    opts.censusOutPath = discoverCensusOutPath(engine, filename);
     // One module map per realm. The page is one compilation unit and a headless
     // driver script is another, so without this a test's `import "/app/lib/x.js"`
     // compiles the app's module into its OWN unit and evaluates it a second
@@ -535,7 +534,6 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     opts.entryResolvesAs = absPath;
     opts.retainSource = true;
     opts.pinsPath = discoverPinsPath(engine, absPath);
-    opts.censusOutPath = discoverCensusOutPath(engine, absPath);
     // The consuming half of the same seam: a specifier that resolves to a file
     // the page already evaluated binds that instance instead of compiling a
     // second copy of it into this unit. The driver's OWN file is the entry and

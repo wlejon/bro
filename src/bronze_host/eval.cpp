@@ -355,16 +355,14 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     const auto roots = moduleRootsFor(engine);
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
     const std::string pinsPath = discoverPinsPath(engine, filename);
-    const std::string censusOutPath = discoverCensusOutPath(engine, filename);
     std::string err;
     int status = bronze::cli::runBuild(
         tempJs.string(), outDll.string(), &err,
         /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-        /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-        /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+        /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{},
-        /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
+        /*pinsPath=*/pinsPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
         /*entryResolvesAs=*/resolvesAs);
 
@@ -385,11 +383,10 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
         status = bronze::cli::runBuild(
             tempJsWrap.string(), outDll.string(), &err,
             /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-            /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-            /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+            /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{},
-            /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
+            /*pinsPath=*/pinsPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
             /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
@@ -517,7 +514,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
     const auto roots = moduleRootsFor(engine);
     const std::string pinsPath = discoverPinsPath(engine, absSource);
-    const std::string censusOutPath = discoverCensusOutPath(engine, absSource);
     std::string err;
 
     std::ifstream ifs(absSource, std::ios::binary);
@@ -549,11 +545,10 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     int status = bronze::cli::runBuild(
         buildSrc, outDll.string(), &err,
         /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-        /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-        /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+        /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{},
-        /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
+        /*pinsPath=*/pinsPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
 
     if (!wrapFile.empty()) {
@@ -571,11 +566,10 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         status = bronze::cli::runBuild(
             wrappedFile.string(), outDll.string(), &err,
             /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-            /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-            /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+            /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{},
-            /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
+            /*pinsPath=*/pinsPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
         std::filesystem::remove(wrappedFile, ec);
     }
