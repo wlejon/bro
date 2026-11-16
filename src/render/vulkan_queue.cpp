@@ -414,6 +414,22 @@ void VulkanQueue::waitFenceSubmitted(VkFence fence) {
     });
 }
 
+bool VulkanQueue::waitCompletionHandlers(uint64_t timeoutNs) {
+    if (device_ == VK_NULL_HANDLE || isDeviceLost()) return false;
+    VkFenceCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    if (vkCreateFence(device_, &info, nullptr, &fence) != VK_SUCCESS) return false;
+    bool ok = submitForeign(0, nullptr, fence) == VK_SUCCESS;
+    if (ok) {
+        waitFenceSubmitted(fence);
+        ok = vkWaitForFences(device_, 1, &fence, VK_TRUE, timeoutNs) == VK_SUCCESS;
+    }
+    // (A fence still pending is not destroyed: the queue may yet signal it.)
+    if (ok || isDeviceLost()) vkDestroyFence(device_, fence, nullptr);
+    return ok;
+}
+
 void VulkanQueue::waitPresented() {
     std::unique_lock<std::mutex> lock(mutex_);
     const uint64_t target = presentsQueued_;
