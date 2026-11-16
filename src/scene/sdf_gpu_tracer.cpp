@@ -654,6 +654,9 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
     opts.local_size_x = 64;
     opts.local_size_y = 1;
     opts.local_size_z = 1;
+#ifdef __APPLE__
+    opts.loads_through_variable = true;   // MoltenVK's SPIRV-Cross (brokernel CompileOptions)
+#endif
     auto kernel = brass::target::SpirvTarget::compile(*fn, opts);
     return kernel.words;
 #else
