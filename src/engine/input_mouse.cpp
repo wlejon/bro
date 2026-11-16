@@ -200,7 +200,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
                            x - prevMouseX, y - prevMouseY, scrollY_, mod,
                            static_cast<float>(contentTop()));
 
-        dom::Element* target = hitTest(docX, docY);
+        // A locked pointer has no place on the page: its buttons go to the
+        // element that holds the lock, as its motion does.
+        dom::Element* locked = lockedElement_.get();
+        dom::Element* target = locked ? locked : hitTest(docX, docY);
         if (target && target->iframeDoc() &&
             iframeHandleMouseDown(target, docX, docY, button,
                                   x - prevMouseX, y - prevMouseY, mod)) {
@@ -428,7 +431,8 @@ void Engine::handleMouseUp(float x, float y, int button) {
     terminalMouseUp(docX, docY, button);
 
     if (document_) {
-        dom::Element* target = hitTest(docX, docY);
+        dom::Element* lockedUp = lockedElement_.get();
+        dom::Element* target = lockedUp ? lockedUp : hitTest(docX, docY);
         int mod = currentModState();
         float ct = static_cast<float>(contentTop());
         float movX = x - prevMouseX;
@@ -494,6 +498,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
                                 inputConfig_.doubleClickDistancePx,
                                 [this, docX, docY]() {
                                     flushLayoutForRead(document_.get());
+                                    if (dom::Element* held = lockedElement_.get()) return held;
                                     return hitTest(docX, docY);
                                 });
     }

@@ -233,6 +233,24 @@ pumpUntil(() => disconnects.length > 0, 8000);
 assert(disconnects.length === 1, 'chained app ondisconnect fired');
 assert(sync.isAuthority(c1) === true, 'client-owned object reverted to host authority');
 
+// --- 13. Leave: every object dropped with its destroy hook, the slots plain
+// again with the app's handlers in them, and a session can be begun anew. ---
+destroyed.length = 0;
+sync.leave();
+assert(sync.active === false, 'leave ended the session');
+assert(destroyed.includes(c1), 'leave ran the destroy hook of what was left');
+assert(sync.objects().length === 0 && sync.get(c1id) === null, 'leave dropped every object');
+assert(bro.net.isHosting() === false, 'leave stopped hosting');
+assert(typeof bro.net.onmessage === 'function', 'the app handler is still in its slot');
+assert(Object.getOwnPropertyDescriptor(bro.net, 'onmessage').get !== undefined, 'the slot is an accessor again');
+sync.leave();   // (a second leave does nothing)
+sync.host({ port: PORT + 1, tickHz: 20 });
+assert(sync.active === true && sync.isHost === true, 'a session begun again after leave');
+const again = sync.spawn('ball', { x: 9 });
+assert(again.x === 9 && sync.objects().length === 1, 'spawn works in the new session');
+sync.leave();
+assert(sync.active === false && sync.objects().length === 0, 'the second session left');
+
 w.terminate();
 bro.net.close();
 advanceTime(100);

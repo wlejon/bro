@@ -164,13 +164,7 @@ void WebAnimationManager::disownFromMarkup(uint64_t id) {
 }
 
 dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
-    if (!a.elem || !dom::Document::isLiveDocument(a.doc)) return nullptr;
-    dom::Node* n = a.doc->resolveNode(a.elem, a.nodeId);
-    if (!n) return nullptr;
-    // Nodes queued in pendingFrees_ still resolve (memory alive) but are on
-    // their way out — treat as gone so we never dirty or route them.
-    if (!a.doc->ownsNode(n)) return nullptr;
-    return static_cast<dom::Element*>(n);
+    return resolveTarget(a.elem, a.nodeId, a.doc);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,14 +399,14 @@ bool WebAnimationManager::tick(double now) {
                     // same settling markDirty the CSS managers issue.
                     if (elem) {
                         elem->markDirty();
-                        finishedThisTick_.push_back(elem);
+                        finishedThisTick_.push_back({elem, a.nodeId, a.doc});
                     }
                     anyCompleted = true;
                 } else {
                     // (CSS animations and transitions under display:none do
                     // not get here: display:none cancels them.)
                     anyActive = true;
-                    if (elem) activeThisTick_.push_back(elem);
+                    if (elem) activeThisTick_.push_back({elem, a.nodeId, a.doc});
                 }
             }
         }

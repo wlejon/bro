@@ -122,6 +122,17 @@ public:
     /// for vkQueueWaitIdle / vkDeviceWaitIdle.
     bool waitIdle() { return wait(retireTicket()); }
 
+    /// waitIdle(), and also the driver's host-side handling of that work
+    /// done: an empty submission carrying a VkFence, waited on. On MoltenVK
+    /// the timeline is a Metal event the GPU signals, and a device-wide wait
+    /// waits for the GPU, but each command buffer's query results are written
+    /// by a completion handler that runs after (MVKCommandEncoder::
+    /// finishQueries, reading the query pool); a fence is signalled from the
+    /// handler of the last command buffer, and a queue's handlers run in
+    /// order. Before destroying query pools the queue used. Gives up after
+    /// `timeoutNs`.
+    bool waitCompletionHandlers(uint64_t timeoutNs = 5'000'000'000ull);
+
     /// Record `record` into a command buffer, submit it and wait for it (its
     /// own ticket, not the device). For uploads, readbacks and one-off layout
     /// work outside the frame. Returns false if the submission failed.

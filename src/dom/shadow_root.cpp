@@ -79,12 +79,18 @@ std::string ShadowRoot::innerHTML() const {
 }
 
 void ShadowRoot::setInnerHTML(const std::string& html, Document* doc) {
-    // Clear existing children
+    // Clear existing children. The layout tree holds them until it is built
+    // again, and the frame's drain frees what freeNode queued unless the
+    // structure is dirty: so it is marked here, not left to the appends
+    // below (an empty string appends nothing, and the layout read after it
+    // walked freed boxes).
+    const bool hadChildren = !children_.empty();
     for (auto* child : children_) {
         child->setParent(nullptr);
         if (doc) doc->freeNode(child);
     }
     children_.clear();
+    if (hadChildren && host_) host_->markStructureDirty();
     styleSheets_.clear();
     invalidateSlots();
 

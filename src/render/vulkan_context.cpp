@@ -226,6 +226,12 @@ bool VulkanContext::init(platform::Window* presentTarget) {
 
 void VulkanContext::cleanup() {
     if (device_ != VK_NULL_HANDLE) {
+        // The driver's completion handlers done before anything they read
+        // goes (the query pools: VulkanQueue::waitCompletionHandlers). Small
+        // Worlds' headless game crashed on exit in MoltenVK's finishQueries.
+        queue_.waitCompletionHandlers();
+        if (hasUploadQueue_) uploadQueue_.waitCompletionHandlers();
+        if (hasAsyncCompute_) asyncCompute_.waitCompletionHandlers();
         // The queues' threads make their last calls before the device-wide
         // wait (which needs every queue to itself).
         queue_.drain();

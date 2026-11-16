@@ -41,7 +41,7 @@ struct Device {
 };
 
 constexpr const char* kDeviceLostError =
-    "device lost (likely the GPU watchdog: a submission ran over ~2 s)";
+    "device lost (a submission ran past the GPU watchdog, or GPU memory ran out)";
 
 bool isDeviceLost(render::VulkanContext& ctx) {
     return ctx.queue().isDeviceLost() ||

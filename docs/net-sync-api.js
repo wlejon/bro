@@ -163,6 +163,17 @@ sync.isHost;
  *  the connection lands or after losing it). */
 sync.hostConn;
 
+/**
+ * End the session, on either side. A client lets its host go (a lost host
+ * included); a host lets every client go and stops listening. Every
+ * replicated object is dropped and its destroy hook run, the tick and
+ * interpolation timers stop, and bro.net's onmessage/onconnect/ondisconnect
+ * are plain slots again holding the app's handlers. Registered types and
+ * RPCs are kept: host() or join() may be called again. Does nothing when no
+ * session is active.
+ */
+sync.leave();
+
 
 // --- Spawning (host-only) --------------------------------------------------------
 

@@ -150,8 +150,13 @@ void VulkanQueue::shutdown() {
 void VulkanQueue::noteFailure(const char* where, VkResult res) {
     if (res == VK_ERROR_DEVICE_LOST) {
         if (!deviceLost_.exchange(true, std::memory_order_relaxed)) {
+            // The driver's reason is not in the VkResult. Seen: a submission
+            // run past the OS's GPU watchdog (about 2 s on Windows), and on
+            // macOS the GPU out of memory (MoltenVK logs "[mvk-error] ...
+            // kIOGPUCommandBufferCallbackErrorOutOfMemory"), several games on
+            // one 16 GB Mac.
             LOG_ERROR("VulkanQueue: device lost (VK_ERROR_DEVICE_LOST) in %s "
-                      "(likely the GPU watchdog: a submission ran over ~2 s)",
+                      "(a submission ran past the GPU watchdog, or GPU memory ran out)",
                       where);
         }
         return;
@@ -407,6 +412,22 @@ void VulkanQueue::waitFenceSubmitted(VkFence fence) {
     doneCv_.wait(lock, [&] {
         return !running_ || std::find(queuedFences_.begin(), queuedFences_.end(), fence) == queuedFences_.end();
     });
+}
+
+bool VulkanQueue::waitCompletionHandlers(uint64_t timeoutNs) {
+    if (device_ == VK_NULL_HANDLE || isDeviceLost()) return false;
+    VkFenceCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    if (vkCreateFence(device_, &info, nullptr, &fence) != VK_SUCCESS) return false;
+    bool ok = submitForeign(0, nullptr, fence) == VK_SUCCESS;
+    if (ok) {
+        waitFenceSubmitted(fence);
+        ok = vkWaitForFences(device_, 1, &fence, VK_TRUE, timeoutNs) == VK_SUCCESS;
+    }
+    // (A fence still pending is not destroyed: the queue may yet signal it.)
+    if (ok || isDeviceLost()) vkDestroyFence(device_, fence, nullptr);
+    return ok;
 }
 
 void VulkanQueue::waitPresented() {

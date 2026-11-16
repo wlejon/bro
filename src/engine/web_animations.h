@@ -27,6 +27,8 @@
 // (engine teardown destroys members before the JS runtime), the static
 // isLive() registry makes the release a no-op.
 
+#include "dom/document.h"
+#include "dom/element.h"
 #include "engine/css_easing.h"
 
 #include <css/cascade.h>
@@ -229,6 +231,7 @@ public:
     // Live, still-document-owned element for this record, or null. Never
     // dereferences a dangling pointer (generation-checked via nodeId).
     dom::Element* resolveElement(const WebAnimation& a) const;
+    static dom::Element* resolveTarget(dom::Element* elem, uint32_t nodeId, dom::Document* doc);
 
     // --- engine seams (mirror TransitionManager) -------------------------
     // Advance clocks, detect finishes (queued for main-thread delivery),
@@ -264,12 +267,15 @@ public:
     bool activeAnimatesOnly(dom::Element* elem,
                             const std::set<std::string>& allowed) const;
 
-    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
+    // (Each read resolves the elements again, as a record's are: the lists
+    // are read after the tick, by which time script may have removed an
+    // element and its wrapper's collection freed it.)
+    std::vector<dom::Element*> activeThisTick() const { return resolveTicked(activeThisTick_); }
     // Elements an animation finished on this tick: marked dirty so their
     // value settles (the fill, or back to the base). A layout pass that ticks
     // after its style resolve and then clears the document's dirty flag
     // marks them again after it, or the settling pass never runs.
-    const std::vector<dom::Element*>& finishedThisTick() const { return finishedThisTick_; }
+    std::vector<dom::Element*> finishedThisTick() const { return resolveTicked(finishedThisTick_); }
 
     // Events queued by tick() / cancelFromMarkup, drained on the main thread
     // and delivered to the JS wrappers: finish (finished promise + onfinish),
@@ -310,12 +316,36 @@ private:
     // Element* used purely as a hash key (never dereferenced); entries carry a
     // nodeId generation check against address reuse.
     std::unordered_multimap<const dom::Element*, uint64_t> byElem_;
-    std::vector<dom::Element*> activeThisTick_;
-    std::vector<dom::Element*> finishedThisTick_;
+    // An element as a tick saw it, resolved again (generation-checked) when read.
+    struct Ticked { dom::Element* elem; uint32_t nodeId; dom::Document* doc; };
+    std::vector<dom::Element*> resolveTicked(const std::vector<Ticked>& list) const;
+    std::vector<Ticked> activeThisTick_;
+    std::vector<Ticked> finishedThisTick_;
     std::vector<uint64_t> pendingFinished_;
     std::vector<uint64_t> pendingCanceled_;
     std::vector<uint64_t> pendingRemoved_;
 };
+
+// (In the header: bro_dom's style pass reads the tick's lists, and a target
+// that links bro_dom without bro_engine must still link.)
+inline dom::Element* WebAnimationManager::resolveTarget(dom::Element* elem, uint32_t nodeId, dom::Document* doc) {
+    if (!elem || !dom::Document::isLiveDocument(doc)) return nullptr;
+    dom::Node* n = doc->resolveNode(elem, nodeId);
+    if (!n) return nullptr;
+    // Nodes queued in pendingFrees_ still resolve (memory alive) but are on
+    // their way out — treat as gone so we never dirty or route them.
+    if (!doc->ownsNode(n)) return nullptr;
+    return static_cast<dom::Element*>(n);
+}
+
+inline std::vector<dom::Element*> WebAnimationManager::resolveTicked(const std::vector<Ticked>& list) const {
+    std::vector<dom::Element*> out;
+    out.reserve(list.size());
+    for (const Ticked& t : list) {
+        if (dom::Element* e = resolveTarget(t.elem, t.nodeId, t.doc)) out.push_back(e);
+    }
+    return out;
+}
 
 // Composite order of two records on one element: CSS transitions the markup
 // owns first (by generation, then property name), then CSS animations it owns
