@@ -300,10 +300,13 @@ void Engine::firePageHide() {
     hide.setIsTrusted(true);
     dom::dispatchWindowEvent(document_.get(), hide);
     if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
-    // The page's ahead-of-time modules leave what their inline caches held
-    // (bronze_host/app_aot.cpp, loadAotUnit): the profile their next build
-    // reads. Here because the realm still runs and every exit passes through.
-    if (!aotDir_.empty()) bronze::embed::writeInlineCacheHarvests();
+    // Modules built to be harvested leave what their inline caches held: an
+    // installed app's ahead-of-time units (bronze_host/app_aot.cpp,
+    // loadAotUnit) and an app.so built with `--harvest-out`. Here because the
+    // realm still runs and every exit passes through: a harvest written after
+    // the realm is gone names no callee and has no representation rows. No
+    // module armed: nothing is written.
+    bronze::embed::writeInlineCacheHarvests();
 }
 
 void Engine::performAppReload() {

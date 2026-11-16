@@ -48,7 +48,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BRO_ROOT = ROOT.parent.parent
-BUILD = BRO_ROOT / "build-release"
+BUILD = Path(os.environ.get("RW_BUILD", BRO_ROOT / "build-release"))
 BRO = BUILD / "bro"
 BRO_HEADLESS = BUILD / "bro-headless"
 BRONZE = BUILD / "bronze"
