@@ -244,9 +244,6 @@ bro.solveAll = function (fn, maxSolutions, opts) {};
  *   safe, hazardFree  no static or reproduced hazard
  *   deterministic     no lockstep hazard
  *   proofsValid       IL and proof verification passed
- *   provenGuards, totalGuards  type/bounds guards the compiler proved away,
- *                     of those it counted; unboxedF64Ops: unboxed numeric
- *                     instructions. Compiler statistics, not proof results.
  *   equivalent        true when equivTo was not given; false both for a
  *                     counterexample and for a proof that could not be
  *                     decided (then counterexample is null; seen for `x / 3`

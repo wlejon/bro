@@ -648,9 +648,6 @@ Value jsBroProve(Value, std::span<const Value> args) {
     out.set("hazardFree", ev::fromBool(rep.hazardFree));
     out.set("deterministic", ev::fromBool(rep.deterministic));
     out.set("proofsValid", ev::fromBool(rep.proofsValid));
-    out.set("provenGuards", ev::fromDouble(rep.provenGuards));
-    out.set("totalGuards", ev::fromDouble(rep.totalGuards));
-    out.set("unboxedF64Ops", ev::fromDouble(rep.unboxedF64Ops));
     out.set("equivalent", ev::fromBool(rep.equivalent));
     out.set("roundTripProven", ev::fromBool(rep.roundTripProven));
     {
