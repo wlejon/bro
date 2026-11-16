@@ -150,8 +150,13 @@ void VulkanQueue::shutdown() {
 void VulkanQueue::noteFailure(const char* where, VkResult res) {
     if (res == VK_ERROR_DEVICE_LOST) {
         if (!deviceLost_.exchange(true, std::memory_order_relaxed)) {
+            // The driver's reason is not in the VkResult. Seen: a submission
+            // run past the OS's GPU watchdog (about 2 s on Windows), and on
+            // macOS the GPU out of memory (MoltenVK logs "[mvk-error] ...
+            // kIOGPUCommandBufferCallbackErrorOutOfMemory"), several games on
+            // one 16 GB Mac.
             LOG_ERROR("VulkanQueue: device lost (VK_ERROR_DEVICE_LOST) in %s "
-                      "(likely the GPU watchdog: a submission ran over ~2 s)",
+                      "(a submission ran past the GPU watchdog, or GPU memory ran out)",
                       where);
         }
         return;
