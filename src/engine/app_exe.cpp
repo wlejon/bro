@@ -10,6 +10,7 @@
 #include "util/sha.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -29,6 +30,8 @@
 #include <windows.h>
 #include <process.h>
 #else
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -416,6 +419,49 @@ std::vector<std::pair<std::string, std::string>> readAotSummary(const std::strin
     return out;
 }
 
+// One build of an AOT directory at a time: a launch's background rebuild
+// (bronze_host/app_aot.cpp requestAotRebuild) and a `--build-exe` started
+// meanwhile take turns, the later one finding the earlier's units current.
+// Held for the object's life; released by the system if the process dies.
+class AotBuildLock {
+public:
+    explicit AotBuildLock(const fs::path& file) {
+#ifdef _WIN32
+        h_ = CreateFileW(file.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h_ != INVALID_HANDLE_VALUE) {
+            OVERLAPPED ov{};
+            if (!LockFileEx(h_, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &ov)) {
+                CloseHandle(h_);
+                h_ = INVALID_HANDLE_VALUE;
+            }
+        }
+#else
+        fd_ = open(file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        if (fd_ >= 0) {
+            int r;
+            do { r = flock(fd_, LOCK_EX); } while (r != 0 && errno == EINTR);
+        }
+#endif
+    }
+    ~AotBuildLock() {
+#ifdef _WIN32
+        if (h_ != INVALID_HANDLE_VALUE) CloseHandle(h_);
+#else
+        if (fd_ >= 0) close(fd_);
+#endif
+    }
+    AotBuildLock(const AotBuildLock&) = delete;
+    AotBuildLock& operator=(const AotBuildLock&) = delete;
+
+private:
+#ifdef _WIN32
+    HANDLE h_ = INVALID_HANDLE_VALUE;
+#else
+    int fd_ = -1;
+#endif
+};
+
 }  // namespace
 
 bool buildAppExeAot(const std::string& appDir, const std::string& exePath, std::string& summary, std::string& err) {
@@ -433,18 +479,21 @@ bool buildAppExeAot(const std::string& appDir, const std::string& exePath, std::
     const std::string dir = appExeAotDir(exePath);
     fs::create_directories(u8path(dir), ec);
     const std::string log = u8str(u8path(dir) / "build.log");
+    AotBuildLock lock(u8path(dir) / "build.lock");
     const int status = util::runAndWait({u8str(headless), appDir, "--aot-build", dir}, err, log);
     if (status < 0) return false;
 
-    int units = 0, built = 0, current = 0, failed = 0;
+    int units = 0, built = 0, current = 0, waiting = 0, failed = 0;
     for (const auto& [k, v] : readAotSummary(dir)) {
         if (k == "units") units = std::atoi(v.c_str());
         else if (k == "built") built = std::atoi(v.c_str());
         else if (k == "current") current = std::atoi(v.c_str());
+        else if (k == "waiting") waiting = std::atoi(v.c_str());
         else if (k.rfind("unit", 0) == 0 && v.find(" failed: ") != std::string::npos) ++failed;
     }
     summary = std::to_string(units) + (units == 1 ? " unit: " : " units: ") + std::to_string(built) + " built, " +
               std::to_string(current) + " current";
+    if (waiting) summary += ", " + std::to_string(waiting) + " waiting for a first run's profile";
     if (failed) summary += ", " + std::to_string(failed) + " failed";
     if (status != 0) {
         err = "the ahead-of-time compile " + std::string(failed ? "left units to the JIT" : "failed") + " (exit " +

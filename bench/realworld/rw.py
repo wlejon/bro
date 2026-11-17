@@ -366,17 +366,34 @@ def build_app_exe(d, name):
     folder (a folder holding one is bro's own state, which the page may not
     write its output into; that output needs the `files` capability, granted
     here in the grant store) and is kept between runs, so only a unit whose
-    text changed (config.js, per N) is compiled again."""
+    text changed (config.js, per N) is compiled again. A unit has no module
+    until a run of it has been harvested (its profile): the first build
+    leaves it waiting, so the executable runs once untimed, and the build
+    after it (which waits for the one that run started in the background)
+    makes the module the timed run loads. AOT_BUILD_S counts the builds, not
+    the harvest run."""
     exe = WORK / "exe" / name / "rwapp"
     exe.parent.mkdir(parents=True, exist_ok=True)
-    t0 = time.time()
-    res = subprocess.run([str(BRO), "--build-exe", str(d), "--out", str(exe)], capture_output=True, text=True)
-    if res.returncode != 0 or not exe.exists():
-        raise RuntimeError("bro --build-exe failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
-    AOT_BUILD_S[name] = round(time.time() - t0, 1)
+
+    def build():
+        t0 = time.time()
+        res = subprocess.run([str(BRO), "--build-exe", str(d), "--out", str(exe)], capture_output=True, text=True)
+        if res.returncode != 0 or not exe.exists():
+            raise RuntimeError("bro --build-exe failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
+        return time.time() - t0, res.stdout + res.stderr
+
     # An app's own executable takes no --grant: what it may do is in the grant
     # store, as for any installed app.
     subprocess.run([str(BRO), "--grant-app", str(d), "files"], capture_output=True, text=True, check=True)
+    spent, out = build()
+    if "waiting for a first run's profile" in out:
+        env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **WAYLAND_ENV)
+        subprocess.run([str(exe)], cwd=str(d), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        more, out = build()
+        spent += more
+        if "waiting for a first run's profile" in out:
+            raise RuntimeError("the harvest run left a unit without its profile:\n" + out[-2000:])
+    AOT_BUILD_S[name] = round(spent, 1)
     return exe
 
 

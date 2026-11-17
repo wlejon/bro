@@ -19,6 +19,7 @@
 #include "util/time.h"
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/app_aot.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_js_modules.h"
@@ -300,13 +301,16 @@ void Engine::firePageHide() {
     hide.setIsTrusted(true);
     dom::dispatchWindowEvent(document_.get(), hide);
     if (bronze::embed::microtasksPending()) bronze::embed::drainMicrotasks();
-    // Modules built to be harvested leave what their inline caches held: an
-    // installed app's ahead-of-time units (bronze_host/app_aot.cpp,
-    // loadAotUnit) and an app.so built with `--harvest-out`. Here because the
-    // realm still runs and every exit passes through: a harvest written after
-    // the realm is gone names no callee and has no representation rows. No
-    // module armed: nothing is written.
+    // Programs built to be harvested leave what their inline caches and
+    // counters held: an installed app's units on their first run
+    // (bronze_host/app_aot.cpp, loadAotUnit) and an app.so built with
+    // `--harvest-out`. Here because the realm still runs and every exit
+    // passes through: a harvest written after the realm is gone names no
+    // callee and has no representation rows. No program armed: nothing is
+    // written. An app's harvests of a long enough run then become its
+    // units' profiles, and its modules are built on them.
     bronze::embed::writeInlineCacheHarvests();
+    bronze_host::settleAotHarvests(*this);
 }
 
 void Engine::performAppReload() {

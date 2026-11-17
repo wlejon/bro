@@ -89,8 +89,10 @@ function run() {
     let id = info(exe);
     // The page's script, compiled ahead of time beside the executable.
     assert(norm(id['aot.dir']) === norm(aotDirOf(exe)), 'the AOT directory is beside it: ' + JSON.stringify(id));
-    assert(id['aot.units'] === '1' && id['aot.built'] === '1' && / built /.test(id['aot.unit0'] || ''),
-        'its one script unit was compiled: ' + JSON.stringify(id) + '\n' + readLog(exe));
+    // No module until a run has been harvested (docs/apps.md, "Ahead-of-time
+    // scripts"): the unit waits for its profile.
+    assert(id['aot.units'] === '1' && id['aot.built'] === '0' && /waiting for its profile/.test(id['aot.unit0'] || ''),
+        'its one script unit waits for its profile: ' + JSON.stringify(id) + '\n' + readLog(exe));
     assert(id.id === 'org.bro.test.ExeApp' && id.name === 'Exe App' && id.version === '2.3.4',
         'the identity is stamped: ' + JSON.stringify(id));
     assert(norm(id.app) === norm(app), 'it names the app folder: ' + id.app);
@@ -107,10 +109,21 @@ function run() {
     const again = broCli(['--build-exe', app, '--out', exe]);
     assert(fs.statSync(exe).mtimeMs === mtime, 'a current executable is not rebuilt: ' + again);
     id = info(exe);
-    assert(id['aot.current'] === '1' && id['aot.built'] === '0', 'nor is a current module: ' + JSON.stringify(id));
+    assert(id['aot.waiting'] === '1' && id['aot.built'] === '0', 'nor is a module built on nothing: ' + JSON.stringify(id));
+    // A build on a profile that finished after `since` (ms, the clock of the
+    // files' mtimes).
+    const builtOnProfile = (since) => () => {
+        try {
+            if (fs.statSync(path.join(aotDirOf(exe), 'aot.txt')).mtimeMs <= since) return false;
+            const i = info(exe);
+            return i['aot.built'] === '1' && /on its profile/.test(i['aot.unit0']);
+        } catch (e) { return false; }
+    };
+    const now = () => { const f = path.join(scratch, 'clock'); fs.writeFileSync(f, ''); return fs.statSync(f).mtimeMs; };
 
     // ---- a current executable runs the app as itself ------------------------------
     {
+        const t = now();
         const { report } = launch(exe);
         assert(report.id === 'org.bro.test.ExeApp', 'ran the app: ' + JSON.stringify(report));
         assert(norm(report.dir) === norm(app), 'from its folder: ' + report.dir);
@@ -118,9 +131,14 @@ function run() {
             'bro.app.executable is the app executable: ' + JSON.stringify(report));
         assert(norm(report.exePath) === norm(exe), 'and so is the process image: ' + report.exePath);
         assert(JSON.stringify(report.argv) === '["arg one"]', 'arguments pass through: ' + JSON.stringify(report.argv));
-        assert(report.codeCache === 'aot', 'the page ran its ahead-of-time module: ' + report.codeCache);
-        assert(/where/.test(report.stack) && /index\.html/.test(report.stack),
-            'a stack trace from compiled code names its function and file: ' + report.stack);
+        // Its first run: compiled in process and harvested, and the module is
+        // built on that behind it.
+        assert(report.codeCache !== 'aot', 'the first run is compiled in process: ' + report.codeCache);
+        until(builtOnProfile(t), 60000, 'the background build on the first run\'s profile');
+        const second = launch(exe).report;
+        assert(second.codeCache === 'aot', 'the second launch runs its ahead-of-time module: ' + second.codeCache);
+        assert(/where/.test(second.stack) && /index\.html/.test(second.stack),
+            'a stack trace from compiled code names its function and file: ' + second.stack);
     }
 
     // ---- ahead-of-time scripts: checked at each launch -----------------------------
@@ -130,38 +148,28 @@ function run() {
         // the page in process and rebuilds the directory behind it.
         fs.writeFileSync(page, fs.readFileSync(page, 'utf8').replace("marker: 'first'", "marker: 'second'"));
         assert(info(exe).state === 'current', 'a page edit leaves the executable current');
+        let t = now();
         let { report, stderr } = launch(exe);
         assert(report.marker === 'second', 'the edited page ran: ' + JSON.stringify(report));
         assert(report.codeCache !== 'aot', 'not from the stale module: ' + report.codeCache);
         assert(stderr.indexOf('out of date') >= 0, 'it says why: ' + stderr.slice(-1000));
-        until(() => { try { return info(exe)['aot.built'] === '1'; } catch (e) { return false; } }, 60000,
-            'the background rebuild of the AOT directory');
+        until(builtOnProfile(t), 60000, 'the background rebuild of the AOT directory');
         report = launch(exe).report;
         assert(report.marker === 'second' && report.codeCache === 'aot',
             'the next launch runs the rebuilt module: ' + JSON.stringify(report));
 
         // A record this engine cannot read (another format or ABI): the same.
-        // The launch above ran the plain module and left its profile (what
-        // its inline caches held) beside it: the next build compiles the unit
-        // again on that, and the one after finds it current.
-        broCli(['--build-exe', app, '--out', exe]);
-        const onProfile = info(exe);
-        assert(onProfile['aot.built'] === '1' && String(onProfile['aot.unit0']).indexOf('on its profile') >= 0,
-            'the unit is built again on the profile its run left: ' + JSON.stringify(onProfile));
-        const profiled = launch(exe).report;
-        assert(profiled.marker === 'second' && profiled.codeCache === 'aot',
-            'the profiled module runs the page: ' + JSON.stringify(profiled));
         broCli(['--build-exe', app, '--out', exe]);
         assert(info(exe)['aot.current'] === '1', 'current again');
         const records = fs.readdirSync(aotDirOf(exe)).filter((f) => f.endsWith('.bzm'));
         assert(records.length === 1, 'one record: ' + records);
         fs.writeFileSync(path.join(aotDirOf(exe), records[0]), 'not a record from this engine');
+        t = now();
         ({ report, stderr } = launch(exe));
         assert(report.marker === 'second' && report.codeCache !== 'aot',
             'an unreadable record falls back to the JIT: ' + JSON.stringify(report));
         assert(stderr.indexOf('out of date') >= 0, 'and says so: ' + stderr.slice(-1000));
-        until(() => { try { return info(exe)['aot.built'] === '1'; } catch (e) { return false; } }, 60000,
-            'the rebuild after an unreadable record');
+        until(builtOnProfile(t), 60000, 'the rebuild after an unreadable record');
         assert(launch(exe).report.codeCache === 'aot', 'and the rebuilt module runs');
     }
 

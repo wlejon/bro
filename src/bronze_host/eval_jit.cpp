@@ -414,9 +414,10 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     const std::string execCode = scriptExecCode(code, filename);
 
     // An installed app's executable runs the unit's ahead-of-time module
-    // while it is current (app_aot.h); anything else compiles here.
+    // while it is current (app_aot.h); anything else compiles here, a page
+    // unit with no module to be harvested (opts.harvestOutPath).
     bronze::embed::CallResult res;
-    if (auto aot = takeAotUnit(engine, execCode, opts)) {
+    if (auto aot = takeAotUnit(engine, execCode, opts, /*pageUnit=*/moduleHandleOut != nullptr)) {
         res = bronze::eval::runModule(*aot, opts);
     } else {
         auto compiled = compileWithPumping(engine, opts, execCode);

@@ -17,6 +17,8 @@ On a reload each script unit is looked up separately: the classic scripts of a p
 
 The log (`bro.log`, or stderr headless) says per compile whether it hit and why not: `compiled D:/app/index.html in 212 ms (code cache hit)`.
 
+An installed app's unit on its first run (no ahead-of-time module yet; [apps.md](apps.md), "Ahead-of-time scripts") compiles to be harvested: lowered as its module build lowers, with counters in its code. That compile is neither served from the cache nor stored in it, so it never takes another compile's IL and no other compile takes its.
+
 ## Location and knobs
 
 `<user cache dir>/code-cache/`: `%LOCALAPPDATA%\bro\code-cache`, `~/Library/Caches/bro/code-cache`, `$XDG_CACHE_HOME/bro/code-cache`. Held to 512 MB of disk space (whole 4 KiB units, warm lists `.bzw` included): a store that takes it past the limit has a background thread delete the least recently used entries, each with its warm list, down to 7/8 of the limit. The page thread never walks the directory; engine shutdown waits for a trim in progress. Deleting it is always safe.

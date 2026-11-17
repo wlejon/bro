@@ -562,15 +562,47 @@ Beside the executable sits its AOT directory, `<executable>.aot`
 shared libraries the executable loads, so a launch runs machine code from a
 file mapped like any other library instead of compiling the page.
 
-**Built at install.** `bro --install` and `bro --build-exe` run
+**Built on the app's first run.** `bro --install` and `bro --build-exe` run
 `bro-headless <app> --aot-build <dir>` after stamping the executable. That
 headless engine sets up the page's realm exactly as a launch does (host
 globals, natives, module roots) and, instead of running each script unit (the
-classic scripts together, then each module script), compiles it through
-bronze's evaluator, the same front end the JIT compiles from, to a module.
-A unit is compiled as a whole program: bronze's ahead-of-time optimizer
-(direct calls it can predict, slots it can name) runs over it, which the JIT
-never does, so an installed app's code is the best bronze makes.
+classic scripts together, then each module script), compiles each unit that
+has a PROFILE through bronze's evaluator, the same front end the JIT compiles
+from, to a module built on it. A unit without one waits (`aot.txt`: `waiting
+for its profile`): there is no module built on nothing.
+
+A unit's profile is its first run. With no module, the unit compiles in
+process TO BE HARVESTED (bronze `EvalOptions::harvestOutPath`): lowered as
+its module build lowers, so the run's records name the build's sites, and
+counting in every tier, interpreter to optimized code, what a module made to
+be harvested counts (function entries and loop iterations, call counts, the
+slow paths and arms that ran, which object layouts each property access met,
+which functions each call reached, allocation sites' promotions; bronze
+docs/type-feedback.md, "Harvest"). The counting costs the first run some
+speed; it is not served from or stored in the [code cache](code-cache.md).
+When the page is hidden or the app quits, the harvest is written beside the
+modules as the unit's profile (`<unit>.tfb`) and `bro --build-exe` starts in
+the background, so the second launch runs the module (`aot.txt` says `built
+... on its profile, C of F functions cold`). A launch that finds a profile
+whose module is not built yet runs the unit compiled, as a folder launch
+does.
+
+The build compiles the unit as a whole program: bronze's ahead-of-time
+optimizer (direct calls it can predict, slots it can name) runs over it,
+which the JIT never does, and on the profile accessors and methods the run
+resolved are called directly or inlined, slots it found are read at fixed
+offsets, each behind a guard, so a run that differs from the profile is
+slower at that site and never wrong. The functions the run never entered, or
+entered only a few times, compile COLD (small, their accesses through the
+runtime). A module counts how often each cold function is entered; a run that
+entered one more than about once a frame (64 a second of the run, and at
+least 4096 times) shows the profile was too thin a run (an app closed two
+seconds after it opened): at its end the unit's profile and record are
+dropped, and the next launch is harvested again. A profile belongs to one
+build of one text: after an edit or a new engine whose compile no longer
+matches it, the stale one is dropped (`stale profile dropped`) before
+anything is compiled, and the cycle starts over.
+
 The module image is written by brass's own PE / ELF writer: **no compiler or
 linker is needed on the machine**, on Windows or Linux. A unit whose module is
 still current is kept, unless another engine build wrote it: a new engine
@@ -580,21 +612,6 @@ installed app with the engine that carries them. The build's own log is
 `bro --exe-info` prints its summary as `aot.*` lines. A unit that fails to
 compile is reported and simply runs on the JIT.
 
-**Built again on what a run saw.** The first module of a unit is compiled
-from its text alone. When the page is hidden or the app quits, what that
-module's inline caches held (which object layouts each property access met,
-which functions each call reached) is written beside it as the unit's profile
-(`<unit>.tfb`; bronze docs/type-feedback.md, "Harvest"). Recording it costs
-nothing while the app runs. The next launch finds a profile beside a module
-built without one and starts `bro --build-exe` in the background, which
-compiles the unit again on the profile: accessors and methods the run
-resolved are called directly or inlined, slots it found are read at fixed
-offsets, each behind a guard, so a run that differs from the profile is
-slower at that site and never wrong. The launch after that runs the new
-module (`aot.txt` says `on its profile`). A profile belongs to one build of
-one text: after an edit or a new engine the stale one is dropped and the
-cycle starts over.
-
 **Checked at every launch.** Each unit has a record (`<unit>.bzm`) beside its
 module (`<unit>-<stamp>.dll` / `.so`) naming everything the compile read: the
 unit's text and compile options (the key the [code cache](code-cache.md)
@@ -603,11 +620,10 @@ digest of every source file and how each import resolved, and the bronze
 runtime ABI. Before a unit runs, the record is checked against the unit as it
 is now and the module's own ABI stamp against the engine's. Any difference
 (an edited script or import, another engine build, another host-global list)
-and the unit compiles in process as a folder launch would, the log says why
-(`aot: the ahead-of-time module for ... is out of date (...)`), and a
-`bro --build-exe` starts in the background, so the next launch has a current
-module. A module never runs a program other than the one the JIT would
-compile.
+and the log says why (`aot: the ahead-of-time module for ... is out of date
+(...)`), the profile goes with the record, and the unit compiles in process
+to be harvested, as on its first run. A module never runs a program other
+than the one the JIT would compile.
 
 Compiled code is a first-class citizen of the runtime: each module registers
 its code ranges and stack maps when it loads, so stack traces name its

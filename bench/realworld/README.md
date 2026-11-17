@@ -48,9 +48,10 @@ python3 bench/realworld/rw.py report --json DIR/timing.json [--out DIR/report.md
 
 `bro` is the folder under the JIT, `bro-aot` the folder with an `app.so`
 from `bronze build`, and `bro-app` the app as an installed one runs: its own
-executable with the page's scripts compiled at build (`bro --build-exe`,
-docs/apps.md "Ahead-of-time scripts"). `bro-app` is the number an installed
-app gets.
+executable with the page's scripts compiled on its first run's profile
+(`bro --build-exe`, an untimed harvest run of the executable, `bro
+--build-exe` again; docs/apps.md "Ahead-of-time scripts"). `bro-app` is the
+number an installed app gets from its second launch on.
 
 Each timed run renders 120 warm-up frames (shaders compile, JIT tiers
 settle), then times 300. Per frame (`lib/timing.js`):
