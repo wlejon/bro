@@ -592,9 +592,10 @@ optimizer (direct calls it can predict, slots it can name) runs over it,
 which the JIT never does, and on the profile accessors and methods the run
 resolved are called directly or inlined, slots it found are read at fixed
 offsets, each behind a guard, so a run that differs from the profile is
-slower at that site and never wrong. The functions the run never entered, or
-entered only a few times, compile COLD (small, their accesses through the
-runtime). A module counts how often each cold function is entered; a run that
+slower at that site and never wrong. The functions the run never entered are not compiled: the module
+carries their code for bronze's interpreter, which runs them when first
+called and compiles any that turn hot as the JIT does; those it entered only
+a few times (start-up code) are compiled small. A module counts how often each cold function is entered; a run that
 entered one more than about once a frame (64 a second of the run, and at
 least 4096 times) shows the profile was too thin a run (an app closed two
 seconds after it opened): at its end the unit's profile and record are
