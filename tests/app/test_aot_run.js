@@ -85,6 +85,37 @@ function main() {
     assert(two.status === 0, 'a two-module page runs from its AOT build: ' + two.out.slice(-600));
     const ran = two.out.split('\n').filter((l) => l.includes('runs its ahead-of-time module'));
     assert(ran.length === 2, 'both module scripts ran their modules: ' + ran.length);
+
+    // Built again on its run: the plain module keeps a harvest build's
+    // evidence (entry counts among it), so the build on its profile knows
+    // which functions the run never entered and compiles them cold.
+    const app3 = path.join(root, 'app3');
+    const aot3 = path.join(root, 'aot3');
+    fs.mkdirSync(app3);
+    fs.writeFileSync(path.join(app3, 'index.html'),
+        '<!doctype html><html><body><script src="main.js"></script></body></html>\n');
+    fs.writeFileSync(path.join(app3, 'main.js'),
+        'function used(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s; }\n' +
+        'function neverRun(o) { return o.a + o.b * 2; }\n' +
+        'globalThis.neverRun = neverRun;\n' +
+        'globalThis.total = 0;\n' +
+        'for (let k = 0; k < 2000; k++) globalThis.total += used(10);\n');
+    const probe3 = path.join(root, 'probe3.js');
+    fs.writeFileSync(probe3, 'assert(globalThis.total === 90000, "the page ran: " + globalThis.total);\n');
+    const unit = () => (fs.readFileSync(path.join(aot3, 'aot.txt'), 'utf-8').split('\n')
+        .find((l) => l.startsWith('unit0=')) || '');
+    assert(run([app3, '--aot-build', aot3]).status === 0, 'the plain build succeeds');
+    const harvested = run(['--aot', aot3, app3, probe3]);
+    assert(harvested.status === 0, 'the plain module runs: ' + harvested.out.slice(-600));
+    assert(fs.readdirSync(aot3).some((f) => f.endsWith('.tfb')), 'the run wrote its profile');
+    const rebuilt = run([app3, '--aot-build', aot3]);
+    assert(rebuilt.status === 0, 'the build on its profile succeeds: ' + rebuilt.out.slice(-400));
+    const cold = /on its profile, (\d+) of (\d+) functions cold/.exec(unit());
+    assert(cold, 'built on its profile: ' + unit());
+    assert(Number(cold[1]) >= 1, 'a function the run never entered is cold: ' + unit());
+    const profiled = run(['--aot', aot3, app3, probe3]);
+    assert(profiled.status === 0, 'the module built on its profile runs: ' + profiled.out.slice(-600));
+    assert(profiled.out.includes('(built on its profile)'), 'the profiled module ran');
 }
 main();
 

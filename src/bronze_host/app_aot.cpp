@@ -163,7 +163,8 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
                 std::snprintf(buf, sizeof(buf), "built %.0f ms", ms);
                 status = buf;
                 if (res.feedbackApplied) {
-                    status += " on its profile";
+                    status += " on its profile, " + std::to_string(res.coldFunctions) + " of " +
+                              std::to_string(res.functions) + " functions cold";
                 } else if (hasProfile) {
                     // Another build's harvest (the unit's text or the compiler
                     // changed since): the module is the plain one, and its
