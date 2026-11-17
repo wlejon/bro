@@ -185,10 +185,13 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
                           res.errorMessage.c_str());
             }
         }
-        if (existing.ok && unit.moduleFile) {
-            // A current module's graph is what it was: its entry and imports
-            // are published the same way, which only a build reports. The
-            // entry is enough for the common shape (one module script).
+        if (unit.moduleFile) {
+            // A module script publishes its own file when it runs, whether
+            // its module was built now, kept, or failed and it runs on the
+            // JIT, so the units after it are compiled against a registry
+            // that holds it (a build's filesRead lists only what the entry
+            // imported). A kept module's imports are not listed: only a
+            // build reports them.
             std::error_code aec;
             const std::string entry = fs::absolute(u8path(unit.name), aec).generic_string();
             if (std::find(registry.begin(), registry.end(), entry) == registry.end()) registry.push_back(entry);

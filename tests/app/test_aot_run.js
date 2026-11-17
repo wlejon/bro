@@ -58,11 +58,33 @@ function main() {
     assert(stale.status !== 0, 'a run from an out-of-date module fails');
     const errors = stale.out.split('\n').filter((l) => l.includes('[ERROR]') && l.includes('is out of date'));
     assert(errors.length === 1, 'the stale module is reported once: ' + errors.length);
+    assert(errors[0].includes('(compiled with other inputs (text))'), 'the refusal names what differs: ' + errors[0]);
     assert(stale.out.includes('AOT_RUN page 49'), 'the page still ran, compiled');
 
     // Not an AOT build: refused before the engine starts.
     const none = run(['--aot', path.join(root, 'nothing'), app, probe]);
     assert(none.status !== 0 && none.out.includes('no aot.txt'), 'a directory without aot.txt is refused: ' + none.out);
+
+    // Two module scripts: the first publishes its own file when it runs, so
+    // the second is built against a registry that holds it and runs its
+    // module, not one refused as out of date straight after its build.
+    const app2 = path.join(root, 'app2');
+    const aot2 = path.join(root, 'aot2');
+    fs.mkdirSync(app2);
+    fs.writeFileSync(path.join(app2, 'index.html'),
+        '<!doctype html><html><body>' +
+        '<script type="module" src="first.js"></script>' +
+        '<script type="module" src="second.js"></script></body></html>\n');
+    fs.writeFileSync(path.join(app2, 'first.js'), 'globalThis.first = 3;\n');
+    fs.writeFileSync(path.join(app2, 'second.js'), 'globalThis.second = globalThis.first * 5;\n');
+    const probe2 = path.join(root, 'probe2.js');
+    fs.writeFileSync(probe2, 'assert(globalThis.second === 15, "both modules ran: " + globalThis.second);\n');
+    const built2 = run([app2, '--aot-build', aot2]);
+    assert(built2.status === 0, 'the two-module AOT build succeeds: ' + built2.out.slice(-400));
+    const two = run(['--aot', aot2, app2, probe2]);
+    assert(two.status === 0, 'a two-module page runs from its AOT build: ' + two.out.slice(-600));
+    const ran = two.out.split('\n').filter((l) => l.includes('runs its ahead-of-time module'));
+    assert(ran.length === 2, 'both module scripts ran their modules: ' + ran.length);
 }
 main();
 
