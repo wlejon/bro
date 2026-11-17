@@ -122,6 +122,22 @@ constexpr double kMinSweepSliceMs = 0.05;
 // shaded since.
 constexpr double kPreFinishEdenFill = 0.1;
 
+// The compiled functions' MIR bodies are released (Module::release_bodies:
+// built again if a tier-up or deopt asks) on frames, not only when the page
+// goes idle: a game draws every frame and never does, and Small Worlds held
+// 1.6 GB of bodies it had run. The first release a while after the start,
+// once the load's compile is done, then every kBodyReleasePeriodMs while the
+// bodies held have grown past kBodyReleaseMinBytes.
+// A release goes kBodyReleaseSliceBytes a frame (freeing 1.5 GB of bodies at
+// once took 245 ms on an M2 Pro; a 2 MB slice took up to 2.7 ms, more than
+// half a frame at 200 fps, so a slice is 1 MB).
+constexpr double kBodyReleaseFirstMs = 20000.0;
+constexpr double kBodyReleasePeriodMs = 30000.0;
+constexpr uint64_t kBodyReleaseMinBytes = 32ull << 20;
+constexpr size_t kBodyReleaseSliceBytes = 1u << 20;
+double s_bodyReleaseWaitMs = kBodyReleaseFirstMs;
+bool s_bodyReleaseUnderWay = false;
+
 double s_idleAccumulatorMs = 0.0;
 double s_timeSinceLastGcMs = 0.0;
 double s_timeSinceSampleMs = 0.0;
@@ -321,11 +337,37 @@ void hostResetIdleGCTimer() {
     s_bootCycle = false;
 }
 
+namespace {
+void releaseCompiledBodiesOnFrame(double delta) {
+    if (!s_bodyReleaseUnderWay) {
+        s_bodyReleaseWaitMs -= delta;
+        if (s_bodyReleaseWaitMs > 0.0) return;
+        s_bodyReleaseWaitMs = kBodyReleasePeriodMs;
+        if (compiledBodyStats().liveBytes < kBodyReleaseMinBytes) return;
+    }
+    static size_t bytes = 0, slices = 0;
+    static double totalMs = 0.0, longestMs = 0.0;
+    if (!s_bodyReleaseUnderWay) bytes = slices = 0, totalMs = longestMs = 0.0;
+    bool finished = true;
+    const auto t0 = std::chrono::steady_clock::now();
+    bytes += bronze::embed::releaseIdleCompiledBodies(kBodyReleaseSliceBytes, &finished);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++slices;
+    totalMs += ms;
+    longestMs = std::max(longestMs, ms);
+    s_bodyReleaseUnderWay = !finished;
+    if (finished && bytes > 0)
+        LOG_INFO("js: released %.1f MB of compiled function bodies over %zu frames, %.1f ms (longest %.2f ms)",
+                 bytes / 1048576.0, slices, totalMs, longestMs);
+}
+}  // namespace
+
 void hostNotifyIdleFrame(double dtMs) {
     if (!isWebHostGlobalsInstalled()) return;
     if (isExecutionStackActive()) return;
 
     const double delta = (dtMs > 0.0) ? dtMs : 16.67;
+    releaseCompiledBodiesOnFrame(delta);
     s_timeSinceLastGcMs += delta;
     s_timeSinceSampleMs += delta;
 
