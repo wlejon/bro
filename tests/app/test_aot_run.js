@@ -4,7 +4,9 @@
 // through (docs/apps.md, "Ahead-of-time scripts"): a unit has no module until
 // its first run, compiled in process, has been harvested; the build after it
 // is made on that profile, with the functions the run never entered cold;
-// the next run runs that module; no module is ever built on nothing; a run
+// the next run runs that module; no module is ever built on nothing; a
+// harvested compile is kept in the code cache under its own key, so another
+// harvested launch of the same text is served from it; a run
 // that enters a cold function often drops the profile, and the launch after
 // it is harvested again; a module out of date fails the run instead of
 // falling back to the JIT, and the run is harvested again; a directory that
@@ -19,10 +21,13 @@ const headless = [process.env.BRO_HEADLESS, process.execPath].filter(Boolean).fi
 assert(headless, 'a bro-headless binary');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bro_aot_run_'));
+// The test's own code cache, so its first harvested compile is a miss.
+const codeCache = path.join(root, 'code-cache');
 
 function run(args) {
-    const r = cp.spawnSync(headless, args, { encoding: 'utf-8', timeout: 120000,
-                                            env: Object.assign({}, process.env, { BRO_APP_HOME: root }) });
+    const env = Object.assign({}, process.env, { BRO_APP_HOME: root, BRO_CODE_CACHE_DIR: codeCache });
+    delete env.BRO_CODE_CACHE;
+    const r = cp.spawnSync(headless, args, { encoding: 'utf-8', timeout: 120000, env });
     return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
 }
 
@@ -106,6 +111,29 @@ function main() {
     assert(!second.out.includes('to be harvested'), 'a module is not harvested');
     assert(!second.out.includes('harvested again'), 'a run like the profiled one keeps its profile');
     assert(profiles(aot).length === 1, 'the profile stays');
+
+    // A harvested compile is kept in the code cache under a key of its own:
+    // the first one missed it, and another harvested launch of the same text
+    // (a fresh AOT directory, as after a dropped profile) is served from it,
+    // still counts, and gives a profile the build takes as the first did.
+    // The page's classic scripts are one unit, named by the page.
+    const cacheLine = (out) => (/compiled \S*index\.html in \d+ ms \(code cache (\w+)/.exec(out) || [])[1];
+    assert(cacheLine(first.out) === 'miss', 'the first harvested compile misses the cache: ' + cacheLine(first.out));
+    const aotCached = path.join(root, 'aot_cached');
+    assert(run([app, '--aot-build', aotCached]).status === 0, 'the second AOT directory installs');
+    const cachedRun = run(['--aot', aotCached, app, probe]);
+    assert(cachedRun.status === 0 && cachedRun.out.includes('compiled in process, to be harvested'),
+        'the second directory\'s first run is harvested: ' + cachedRun.out.slice(-600));
+    assert(cacheLine(cachedRun.out) === 'hit', 'the harvested compile is served from the cache: ' +
+        cacheLine(cachedRun.out));
+    assert(profiles(aotCached).length === 1, 'the cached run left its profile: ' + fs.readdirSync(aotCached));
+    assert(run([app, '--aot-build', aotCached]).status === 0, 'the build on the cached run\'s profile succeeds');
+    const coldCached = /built \d+ ms on its profile, (\d+) of (\d+) functions cold/.exec(units(aotCached)[0]);
+    assert(coldCached && coldCached[1] === cold[1] && coldCached[2] === cold[2],
+        'the cached run\'s profile builds as the first did: ' + units(aotCached)[0] + ' / ' + units(aot)[0]);
+    const cachedModule = run(['--aot', aotCached, app, probe]);
+    assert(cachedModule.status === 0 && cachedModule.out.includes('(built on its profile)'),
+        'the module built on the cached run\'s profile runs: ' + cachedModule.out.slice(-600));
 
     // A run that enters a cold function often: the profile was too thin, and
     // the next launch is harvested again, then built on and run as before.
