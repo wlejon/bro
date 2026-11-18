@@ -173,7 +173,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git clone --reference-if-able "${VCPKG_INSTALLATION_ROOT:-}" https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          for attempt in 1 2 3; do
+            rm -rf "$RUNNER_TEMP/vcpkg"
+            git clone --reference-if-able "${VCPKG_INSTALLATION_ROOT:-}" https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg" && break
+            echo "vcpkg clone attempt $attempt failed; retrying in 10s..."
+            [ "$attempt" -eq 3 ] && exit 1
+            sleep 10
+          done
           git -C "$RUNNER_TEMP/vcpkg" checkout "$VCPKG_COMMIT"
           sed -i.bak 's|\${github_host}/\${org_name}/\${repo_name}/archive/\${ref_to_use}\.tar\.gz|https://codeload.github.com/${org_name}/${repo_name}/tar.gz/${ref_to_use}|g' "$RUNNER_TEMP/vcpkg/scripts/cmake/vcpkg_from_github.cmake"
           . "$RUNNER_TEMP/vcpkg/scripts/vcpkg-tool-metadata.txt"

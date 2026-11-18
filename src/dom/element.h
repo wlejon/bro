@@ -184,6 +184,7 @@ public:
     static void querySelectorAllUnder(Node* root, const std::string& selector,
                                       std::vector<Element*>& out, bool firstOnly = false);
     Element* closest(const std::string& selector);
+    static bool isValidSelector(const std::string& selector);
 
     // Simple selector matching (works for dynamic elements)
     bool matchesSimple(const std::string& selector) const;

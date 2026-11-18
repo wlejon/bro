@@ -768,6 +768,9 @@ Value makeFragmentValue(dom::Node* frag) {
         Value selV = a[0];
         if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
         std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
         if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
             return hostElementValue(el->querySelector(sel));
         }
@@ -783,6 +786,9 @@ Value makeFragmentValue(dom::Node* frag) {
         Value selV = a[0];
         if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
         std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
         std::vector<dom::Element*> out;
         if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
             out = el->querySelectorAll(sel);

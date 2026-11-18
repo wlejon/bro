@@ -61,6 +61,8 @@ uint32_t elementOf(std::string_view handle);
 /// Whether `s` is an element handle (digits '.' digits) or a window (w digits).
 bool isElementHandle(std::string_view s);
 bool isWindowHandle(std::string_view s);
+/// Whether `s` is a collapsed handle range (N.A-B with B >= A).
+bool isHandleRange(std::string_view s, std::string* firstOut = nullptr, std::string* lastOut = nullptr);
 
 /// One line, indented (elements one space more than their depth). Window
 /// lines always carry their rect; elements only with `rects`.

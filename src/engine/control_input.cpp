@@ -110,6 +110,15 @@ struct InputPlayer {
         px = x;
         py = y;
     }
+    void moveBy(float dx, float dy) {
+        Step s;
+        s.atMs = t;
+        s.in.kind = Engine::DeviceInput::Kind::RelativeMotion;
+        s.isMove = true;
+        s.cssX = dx;
+        s.cssY = dy;
+        steps.push_back(s);
+    }
     void glide(float x, float y, double ms) {
         const int n = std::max(1, static_cast<int>(ms / 8.0));
         const float x0 = px, y0 = py;
@@ -119,6 +128,19 @@ struct InputPlayer {
             const float e = f * f * (3 - 2 * f);
             t += ms / n;
             move(x0 + (x - x0) * e, y0 + (y - y0) * e);
+        }
+    }
+    void glideBy(float dx, float dy, double ms) {
+        const int n = std::max(1, static_cast<int>(ms / 8.0));
+        float prevX = 0, prevY = 0;
+        for (int i = 1; i <= n; ++i) {
+            const float f = static_cast<float>(i) / n;
+            const float e = f * f * (3 - 2 * f);
+            const float curX = dx * e, curY = dy * e;
+            t += ms / n;
+            moveBy(curX - prevX, curY - prevY);
+            prevX = curX;
+            prevY = curY;
         }
     }
     void button(uint32_t code, bool pressed) {
@@ -188,11 +210,38 @@ std::shared_ptr<InputPlayer> newPlayer(Engine& e) {
 
 void cmdMove(ControlServer& s, const ControlCallPtr& call) {
     auto args = call->positional();
+    auto p = newPlayer(s.engine());
+    const double ms = call->number("ms", 0);
+    const std::string byVal = call->option("by");
+    if (!byVal.empty()) {
+        auto parseNum = [](const std::string& sv, float& out) {
+            if (sv.empty()) return false;
+            char* end = nullptr;
+            out = std::strtof(sv.c_str(), &end);
+            return end && *end == '\0';
+        };
+        float dx = 0, dy = 0;
+        bool parsed = false;
+        if (byVal != "true") {
+            const size_t comma = byVal.find(',');
+            parsed = comma != std::string::npos && parseNum(byVal.substr(0, comma), dx) &&
+                     parseNum(byVal.substr(comma + 1), dy);
+        } else if (!args.empty()) {
+            const size_t comma = args[0].find(',');
+            if (comma != std::string::npos) {
+                parsed = parseNum(args[0].substr(0, comma), dx) && parseNum(args[0].substr(comma + 1), dy);
+            } else if (args.size() > 1) {
+                parsed = parseNum(args[0], dx) && parseNum(args[1], dy);
+            }
+        }
+        if (!parsed) return call->fail("usage: move --by dx dy | --by=dx,dy [--ms=0]");
+        if (ms > 0) p->glideBy(dx, dy, ms);
+        else p->moveBy(dx, dy);
+        return play(s, call, p);
+    }
     float x, y;
     std::string why;
     if (!controlResolvePoint(s.engine(), args, 0, x, y, nullptr, &why)) return call->fail(why);
-    auto p = newPlayer(s.engine());
-    const double ms = call->number("ms", 0);
     if (ms > 0) p->glide(x, y, ms);
     else p->move(x, y);
     play(s, call, p);
@@ -205,10 +254,12 @@ void cmdClick(ControlServer& s, const ControlCallPtr& call) {
         float x, y;
         std::string why;
         if (!controlResolvePoint(s.engine(), args, 0, x, y, nullptr, &why)) return call->fail(why);
-        const double ms = call->number("ms", 0);
-        if (ms > 0) p->glide(x, y, ms);
-        else p->move(x, y);
-        p->wait(16);
+        if (!s.engine().screenPointerLocked()) {
+            const double ms = call->number("ms", 0);
+            if (ms > 0) p->glide(x, y, ms);
+            else p->move(x, y);
+            p->wait(16);
+        }
     }
     const uint32_t btn = buttonCode(call->option("button", "left"));
     const int count = std::clamp(static_cast<int>(call->number("count", 1)), 1, 3);
@@ -229,7 +280,7 @@ void cmdButton(ControlServer& s, const ControlCallPtr& call, bool pressed) {
         float x, y;
         std::string why;
         if (!controlResolvePoint(s.engine(), args, 0, x, y, nullptr, &why)) return call->fail(why);
-        p->move(x, y);
+        if (!s.engine().screenPointerLocked()) p->move(x, y);
     }
     p->button(buttonCode(call->option("button", "left")), pressed);
     play(s, call, p);
@@ -357,7 +408,8 @@ void cmdType(ControlServer& s, const ControlCallPtr& call) {
 }  // namespace
 
 void registerControlInputCommands(ControlServer& s) {
-    s.registerCommand("move", "<x y | x,y | selector> [--ms=0]  move the pointer (gliding over --ms)",
+    s.registerCommand("move",
+                      "<x y | x,y | selector | --by dx dy | --by=dx,dy> [--ms=0]  move the pointer (relative with --by)",
                       [&s](const ControlCallPtr& c) { cmdMove(s, c); });
     s.registerCommand("click",
                       "[x y | x,y | selector] [--button=left|right|middle] [--count=1] [--hold=40] [--ms=0]  "

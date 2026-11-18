@@ -122,6 +122,20 @@ bool isElementHandle(std::string_view s) {
     return dot != std::string_view::npos && allDigits(s.substr(0, dot)) && allDigits(s.substr(dot + 1));
 }
 
+bool isHandleRange(std::string_view s, std::string* firstOut, std::string* lastOut) {
+    const size_t dash = s.find('-');
+    if (dash == std::string_view::npos) return false;
+    const std::string_view first = s.substr(0, dash);
+    const std::string_view rest = s.substr(dash + 1);
+    if (!isElementHandle(first) || !allDigits(rest)) return false;
+    const long from = elementOf(first);
+    long last = 0;
+    if (!parseInt(rest, last) || last < from) return false;
+    if (firstOut) *firstOut = std::string(first);
+    if (lastOut) *lastOut = std::string(first.substr(0, first.find('.') + 1)) + std::to_string(last);
+    return true;
+}
+
 int windowOf(std::string_view h) {
     long v = -1;
     if (isWindowHandle(h)) parseInt(h.substr(1), v);

@@ -516,6 +516,9 @@ Value makeDocumentValue(dom::Document* fixed) {
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
         std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
         dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::null();
         dom::Element* el = doc->querySelector(sel);
@@ -524,9 +527,13 @@ Value makeDocumentValue(dom::Document* fixed) {
     b.def("querySelectorAll", 1, [fixed](Value, std::span<const Value> a) {
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
+        std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
         dom::Document* doc = documentFor(fixed);
         if (!doc) return makeStaticNodeList({});
-        return makeStaticNodeList(doc->querySelectorAll(ev::toUtf8(selV)));
+        return makeStaticNodeList(doc->querySelectorAll(sel));
     });
     b.def("getElementsByTagName", 1, [fixed](Value, std::span<const Value> a) {
         std::string tag = !a.empty() && !ev::isUndefined(a[0]) && !ev::isObject(a[0]) ? ev::toUtf8(a[0]) : "*";

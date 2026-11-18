@@ -545,9 +545,18 @@ void aimAt(const Item& it, const std::vector<WinInfo>& wins, float& x, float& y)
 using Plan = std::function<bool(const Item* target, const WinInfo* window, std::vector<std::vector<std::string>>& steps,
                                 std::string& why)>;
 
+bool handleRangeError(std::string_view tok, std::string& msg) {
+    std::string first, last;
+    if (!view::isHandleRange(tok, &first, &last)) return false;
+    msg = std::string(tok) + " is a handle range; specify one handle from " + first + " to " + last;
+    return true;
+}
+
 // The shape of every action: the view before, the input, the settle, and
 // the diff since the view before as the reply.
 void act(ControlServer& s, const ControlCallPtr& call, const std::string& target, Plan plan, double waitWindowMs = 0) {
+    std::string rangeMsg;
+    if (!target.empty() && handleRangeError(target, rangeMsg)) return call->fail(rangeMsg);
     const bool display = aggregates(s);
     auto wins0 = display ? desktopWindows(s) : std::vector<WinInfo>{};
     const Scope def = defaultScope(wins0);
@@ -616,7 +625,7 @@ bool handleForm(const ControlCallPtr& call) {
     auto p = call->positional();
     if (p.empty()) return false;
     if (view::isWindowHandle(p[0])) return true;
-    if (!view::isElementHandle(p[0])) return false;
+    if (!view::isElementHandle(p[0]) && !view::isHandleRange(p[0])) return false;
     // `type 1.5` types "1.5"; `type 3.1 text` types into 3.1.
     if (call->argv()[0] == "type") return p.size() > 1;
     // "3.4 5": a point, not a handle.
@@ -701,7 +710,8 @@ void cmdTypeHandle(ControlServer& s, const ControlCallPtr& call, bool replace) {
 
 void cmdKeyHandle(ControlServer& s, const ControlCallPtr& call) {
     auto p = call->positional();
-    const bool toTarget = !p.empty() && (view::isWindowHandle(p[0]) || view::isElementHandle(p[0]));
+    const bool toTarget =
+        !p.empty() && (view::isWindowHandle(p[0]) || view::isElementHandle(p[0]) || view::isHandleRange(p[0]));
     const std::string target = toTarget ? p[0] : std::string();
     std::vector<std::string> keys(p.begin() + (toTarget ? 1 : 0), p.end());
     if (keys.empty()) return call->fail("usage: key [wN | N.M] <combo>...");
@@ -719,6 +729,8 @@ void cmdKeyHandle(ControlServer& s, const ControlCallPtr& call) {
 void cmdScroll(ControlServer& s, const ControlCallPtr& call) {
     const std::string target = call->arg(0);
     const std::string dy = call->arg(1, "3");
+    std::string rangeMsg;
+    if (handleRangeError(target, rangeMsg)) return call->fail(rangeMsg);
     if (!view::isElementHandle(target) && !view::isWindowHandle(target))
         return call->fail("usage: scroll <N.M | wN> [detents=3, + is down]");
     act(s, call, target, [dy](const Item* it, const WinInfo* w, auto& steps, std::string&) {
@@ -774,6 +786,8 @@ void cmdLaunch(ControlServer& s, const ControlCallPtr& call) {
 void cmdShot(ControlServer& s, const ControlCallPtr& call) {
     std::string target = call->arg(0);
     std::string path = call->arg(1);
+    std::string rangeMsg;
+    if (handleRangeError(target, rangeMsg)) return call->fail(rangeMsg);
     if (!target.empty() && !view::isWindowHandle(target) && !view::isElementHandle(target)) {
         path = target;  // shot <path>: the screen
         target.clear();

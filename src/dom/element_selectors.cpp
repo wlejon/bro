@@ -21,20 +21,31 @@ namespace bro::dom {
 // result keyed by the source text. The parsed Selectors are pure value data
 // (no element pointers), so the cache is valid for the process; it is bounded so
 // a program generating unique selectors can't grow it without limit.
-static const std::vector<htmlayout::css::Selector>&
-cachedParseSelectorList(const std::string& selector) {
-    static thread_local std::unordered_map<std::string,
-                                            std::vector<htmlayout::css::Selector>> cache;
+struct CachedSelectors {
+    std::vector<htmlayout::css::Selector> list;
+    bool valid = false;
+};
+
+static const CachedSelectors& cachedParseSelectorList(const std::string& selector) {
+    static thread_local std::unordered_map<std::string, CachedSelectors> cache;
     auto it = cache.find(selector);
     if (it != cache.end()) return it->second;
     if (cache.size() >= 1024) cache.clear();   // bound for dynamically-built selectors
-    auto res = cache.emplace(selector, htmlayout::css::parseSelectorList(selector));
+    CachedSelectors entry;
+    entry.valid = htmlayout::css::parseSelectorListChecked(selector, entry.list);
+    auto res = cache.emplace(selector, std::move(entry));
     return res.first->second;
+}
+
+bool Element::isValidSelector(const std::string& selector) {
+    return cachedParseSelectorList(selector).valid;
 }
 
 std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
-    const auto& selectors = cachedParseSelectorList(selector);
+    const auto& parsed = cachedParseSelectorList(selector);
+    if (!parsed.valid) return result;
+    const auto& selectors = parsed.list;
     layout::ElementRefAdapter::ScopingRootGuard scope(this, selector);  // :scope is this element
 
     std::function<void(Element*)> search = [&](Element* elem) {
@@ -55,7 +66,9 @@ std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
 }
 
 Element* Element::querySelector(const std::string& selector) {
-    const auto& selectors = cachedParseSelectorList(selector);
+    const auto& parsed = cachedParseSelectorList(selector);
+    if (!parsed.valid) return nullptr;
+    const auto& selectors = parsed.list;
     layout::ElementRefAdapter::ScopingRootGuard scope(this, selector);  // :scope is this element
 
     std::function<Element*(Element*)> search = [&](Element* elem) -> Element* {
@@ -80,7 +93,9 @@ Element* Element::querySelector(const std::string& selector) {
 void Element::querySelectorAllUnder(Node* root, const std::string& selector,
                                     std::vector<Element*>& out, bool firstOnly) {
     if (!root) return;
-    const auto& selectors = cachedParseSelectorList(selector);
+    const auto& parsed = cachedParseSelectorList(selector);
+    if (!parsed.valid) return;
+    const auto& selectors = parsed.list;
     // A shadow root or fragment is not an element, so no element is :scope.
     layout::ElementRefAdapter::ScopingRootGuard scope(nullptr, selector);
 
@@ -109,7 +124,9 @@ bool Element::matches(const std::string& selector) const {
 }
 
 bool Element::matchesScoped(const std::string& selector, const Element* scopingRoot) const {
-    const auto& selectors = cachedParseSelectorList(selector);
+    const auto& parsed = cachedParseSelectorList(selector);
+    if (!parsed.valid) return false;
+    const auto& selectors = parsed.list;
     layout::ElementRefAdapter::ScopingRootGuard scope(const_cast<Element*>(scopingRoot), selector);
     auto* adapter = layout::ElementRefAdapter::getOrCreate(const_cast<Element*>(this));
     bool matched = false;

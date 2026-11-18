@@ -195,6 +195,11 @@ bool readStorageFile(const std::string& path, std::map<std::string, std::string>
 bool writeStorageFile(const std::string& path, const std::map<std::string, std::string>& items) {
     if (path.empty()) return false;
     namespace fs = std::filesystem;
+    const fs::path parent = fs::path(path).parent_path();
+    if (!parent.empty()) {
+        std::error_code mkdirEc;
+        fs::create_directories(parent, mkdirEc);
+    }
     const std::string tmp = path + ".tmp";
     {
         std::ofstream file(tmp, std::ios::binary | std::ios::trunc);

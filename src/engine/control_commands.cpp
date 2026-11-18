@@ -73,6 +73,10 @@ std::vector<std::pair<dom::Element*, ControlRect>> controlQueryRects(Engine& eng
         if (why) *why = "no document";
         return out;
     }
+    if (!dom::Element::isValidSelector(selector)) {
+        if (why) *why = "bad selector '" + selector + "'";
+        return out;
+    }
     std::vector<dom::Element*> els;
     try {
         els = doc->querySelectorAll(selector);

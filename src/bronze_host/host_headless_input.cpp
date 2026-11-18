@@ -5,6 +5,7 @@
 #include "engine/key_mapping.h"
 #include "engine/window_host.h"
 #include "platform/keyboard.h"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -114,6 +115,30 @@ void installHeadlessInput(engine::Engine& engine) {
             engine.flush();
             return ev::undefined();
         }, 2, "mouseMove"));
+
+    // mouseMoveBy(dx, dy [, windowId])
+    regBoth("mouseMoveBy", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.size() < 2) return ev::throwTypeError("mouseMoveBy(dx, dy [, windowId]) requires dx and dy");
+            float dx = static_cast<float>(ev::toDouble(a[0]));
+            float dy = static_cast<float>(ev::toDouble(a[1]));
+            const uint64_t wid = argWindowId(a, 2);
+            if (wid) {
+                auto* h = engine.windowHostById(wid);
+                float lx = h ? h->lastMouseX : 0.0f, ly = h ? h->lastMouseY : 0.0f;
+                engine.hostMouseMove(wid, lx + dx, ly + dy, dx, dy);
+            } else if (engine.hasPointerLock()) {
+                engine.handleMouseMove(engine.getLastMouseX(), engine.getLastMouseY(), dx, dy);
+            } else {
+                const float nx = std::clamp(engine.getLastMouseX() + dx, 0.0f,
+                                            float(std::max(0, engine.viewportWidth() - 1)));
+                const float ny = std::clamp(engine.getLastMouseY() + dy, 0.0f,
+                                            float(std::max(0, engine.viewportHeight() - 1)));
+                engine.handleMouseMove(nx, ny, dx, dy);
+            }
+            engine.flush();
+            return ev::undefined();
+        }, 2, "mouseMoveBy"));
 
     // currentCursor([windowId])
     regBoth("currentCursor", ev::makeFunction(

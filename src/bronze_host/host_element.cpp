@@ -712,24 +712,40 @@ void decorateElementProto(ObjectBuilder& b) {
         if (!st) return ev::undefined();
         Value selV = argAt(a, 0);
         if (!st->el || ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
-        return hostElementValue(st->el->querySelector(ev::toUtf8(selV)));
+        std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        return hostElementValue(st->el->querySelector(sel));
     });
     b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st) return ev::undefined();
         Value selV = argAt(a, 0);
         if (!st->el || ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
-        return makeStaticNodeList(st->el->querySelectorAll(ev::toUtf8(selV)));
+        std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        return makeStaticNodeList(st->el->querySelectorAll(sel));
     });
     b.def("matches", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::fromBool(false);
-        return ev::fromBool(st->el->matches(ev::toUtf8(a[0])));
+        std::string sel = ev::toUtf8(a[0]);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        return ev::fromBool(st->el->matches(sel));
     });
     b.def("closest", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::null();
-        dom::Element* found = st->el->closest(ev::toUtf8(a[0]));
+        std::string sel = ev::toUtf8(a[0]);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        dom::Element* found = st->el->closest(sel);
         return found ? hostElementValue(found) : ev::null();
     });
     b.def("getElementsByTagName", 1, [](Value self_, std::span<const Value> a) {

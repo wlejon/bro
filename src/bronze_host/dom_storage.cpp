@@ -10,12 +10,15 @@
 #include "bronze_host/host_web_globals.h"
 
 #include "dom/document.h"
+#include "engine/app_manifest.h"
 #include "engine/engine.h"
 #include "util/storage_file.h"
 
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -59,9 +62,41 @@ static std::string currentStorageBasePath() {
     return normalizePath(basePath);
 }
 
+static std::string stripTrailingSlash(std::string s) {
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\') &&
+           !(s.size() == 3 && s[1] == ':')) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static std::string storageFilePathFor(const std::string& rawBasePath) {
+    const std::string bp = rawBasePath.empty() ? "." : rawBasePath;
+    const std::string scratchHome = engine::scratchProfileHome();
+    if (scratchHome.empty()) {
+        return normalizePath(bp) + "/.storage.json";
+    }
+    namespace fs = std::filesystem;
+    const fs::path dataRoot = fs::path(scratchHome) / "data";
+    if (auto* eng = hostEngine(); eng && !eng->appDir().empty()) {
+        std::error_code ec;
+        fs::path appAbs = fs::weakly_canonical(fs::path(eng->appDir()), ec);
+        if (ec) appAbs = fs::absolute(fs::path(eng->appDir()), ec).lexically_normal();
+        ec.clear();
+        fs::path docAbs = fs::weakly_canonical(fs::path(bp), ec);
+        if (ec) docAbs = fs::absolute(fs::path(bp), ec).lexically_normal();
+        appAbs = fs::path(stripTrailingSlash(normalizePath(appAbs.string())));
+        docAbs = fs::path(stripTrailingSlash(normalizePath(docAbs.string())));
+        fs::path rel = docAbs.lexically_relative(appAbs);
+        if (!rel.empty() && rel != "." && *rel.begin() != "..") {
+            return normalizePath((dataRoot / rel / ".storage.json").string());
+        }
+    }
+    return normalizePath((dataRoot / ".storage.json").string());
+}
+
 static StorageState& currentStorage() {
-    std::string basePath = currentStorageBasePath();
-    std::string path = basePath + "/.storage.json";
+    std::string path = storageFilePathFor(currentStorageBasePath());
     auto& st = g_storages[path];
     if (!st.loaded) {
         st.path = path;
@@ -115,8 +150,7 @@ void flushHostStorage() {
 }
 
 void reloadHostStorage(const std::string& basePath) {
-    std::string bp = basePath.empty() ? "." : basePath;
-    std::string path = normalizePath(bp) + "/.storage.json";
+    std::string path = storageFilePathFor(basePath);
     auto& st = g_storages[path];
     if (st.dirty) {
         st.dirty = false;

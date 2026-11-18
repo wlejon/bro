@@ -219,8 +219,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             dispatchPointerAlias("pointermove", locked, moveEvt);
             dispatchEvent(locked, moveEvt);
         }
-        lastMouseX_ = x;
-        lastMouseY_ = y;
+        lastMouseX_ = lockedMouseX_;
+        lastMouseY_ = lockedMouseY_;
         return;
     }
 

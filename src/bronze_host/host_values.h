@@ -38,6 +38,14 @@ inline Value hostMakeDomError(const char* name, const std::string& message) {
     // lands in a Persistent, and each string is made in its own statement
     // before the receiver it is stored on is read.
     ev::Persistent msgVal(ev::fromUtf8(message));
+    ev::Persistent nameVal(name && *name ? ev::fromUtf8(name) : ev::fromUtf8("Error"));
+    auto d = ev::globalValue("DOMException");
+    if (d.found && ev::isFunction(d.value)) {
+        ev::Persistent ctor(d.value);
+        Value args[2] = {msgVal.get(), nameVal.get()};
+        ev::CallResult res = ev::construct(ctor.get(), std::span<const Value>(args, 2));
+        if (!res.thrown) return res.value;
+    }
     ev::Persistent errObj;
     auto g = ev::globalValue("Error");
     if (g.found) {
@@ -48,7 +56,6 @@ inline Value hostMakeDomError(const char* name, const std::string& message) {
         errObj.set(ev::createObject());
     }
     if (name && *name) {
-        ev::Persistent nameVal(ev::fromUtf8(name));
         errObj.set(ev::setProperty(errObj.get(), "name", nameVal.get()));
     }
     return errObj.get();

@@ -109,15 +109,21 @@ bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
 void Engine::handleMouseDown(float x, float y, int button) {
     noteUserActivity();
     dom::Document::noteInputModality(false);   // a click does not show :focus-visible
-    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
+    if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
+    dom::Element* locked = lockedElement_.get();
+    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
+    const float evtX = locked ? lockedMouseX_ : x;
+    const float evtY = locked ? lockedMouseY_ : y;
+    const float movX = locked ? 0.0f : (x - prevMouseX);
+    const float movY = locked ? 0.0f : (y - prevMouseY);
+    const float docX = evtX, docY = evtY - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
-    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
-    lastMouseX_ = x;
-    lastMouseY_ = y;
+    lastMouseX_ = evtX;
+    lastMouseY_ = evtY;
 
     // A press on a <remoteview> goes to its screen too, and captures it.
-    remotePointer(x, y, 0.0f, 0.0f, button, true);
+    if (!locked) remotePointer(x, y, 0.0f, 0.0f, button, true);
 
     button = sdlToDomButton(button);
 
@@ -152,7 +158,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
     pressedButtons_ |= domButtonMask(button);
     dispatchMouseButtonAction(button, true);
 
-    {
+    if (!locked) {
         float ct = static_cast<float>(contentTop());
         float vh = static_cast<float>(contentHeight());
         auto& vs = viewportScrollbar_.style();
@@ -172,7 +178,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         }
     }
 
-    if (document_ && document_->documentElement()) {
+    if (!locked && document_ && document_->documentElement()) {
         float cy = y - static_cast<float>(contentTop());
         ScrollbarMetrics em;
         dom::Element* hitElem = findElementScrollbarHit(
@@ -196,17 +202,16 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
         dom::MouseEvent evt("mousedown");
         int mod = currentModState();
-        populateMouseEvent(evt, x, y, button, pressedButtons_,
-                           x - prevMouseX, y - prevMouseY, scrollY_, mod,
+        populateMouseEvent(evt, evtX, evtY, button, pressedButtons_,
+                           movX, movY, scrollY_, mod,
                            static_cast<float>(contentTop()));
 
         // A locked pointer has no place on the page: its buttons go to the
         // element that holds the lock, as its motion does.
-        dom::Element* locked = lockedElement_.get();
         dom::Element* target = locked ? locked : hitTest(docX, docY);
         if (target && target->iframeDoc() &&
             iframeHandleMouseDown(target, docX, docY, button,
-                                  x - prevMouseX, y - prevMouseY, mod)) {
+                                  movX, movY, mod)) {
             markAppBaseDirty();
             return;
         }
@@ -222,7 +227,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
             htmlNodeMouseDownElement_.assign(hnHit->document(), hnEl);
             dispatchHtmlNodeMouseEvent("mousedown", hnEl, hnPxX, hnPxY,
                                         button, pressedButtons_, mod,
-                                        x - prevMouseX, y - prevMouseY,
+                                        movX, movY,
                                         /*bubbles=*/true);
             return;
         }
@@ -230,13 +235,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
         htmlNodeMouseDownElement_.reset();
 #endif
 
-        if (button == 0) dragDrop_.arm(target, x, y);
+        if (button == 0) dragDrop_.arm(target, evtX, evtY);
 
         ControlContext cctx{document_.get(), renderer_.get(), window_.get(),
                             &uiDirty_, overlayMgr_.get(), OverlayContext::App,
                             contentWidth(), contentHeight()};
 
-        const float focusX = x, focusY = y - static_cast<float>(contentTop());
+        const float focusX = evtX, focusY = evtY - static_cast<float>(contentTop());
         PressIntent intent;
         intent.ordinal = pressOrdinal(appMouseState_, target, focusX, focusY,
                                       clickClockMs(),
@@ -369,14 +374,20 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
 void Engine::handleMouseUp(float x, float y, int button) {
     noteUserActivity();
-    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
+    if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
+    dom::Element* lockedUp = lockedElement_.get();
+    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
+    const float evtX = lockedUp ? lockedMouseX_ : x;
+    const float evtY = lockedUp ? lockedMouseY_ : y;
+    const float movX = lockedUp ? 0.0f : (x - prevMouseX);
+    const float movY = lockedUp ? 0.0f : (y - prevMouseY);
+    const float docX = evtX, docY = evtY - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
-    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
-    lastMouseX_ = x;
-    lastMouseY_ = y;
+    lastMouseX_ = evtX;
+    lastMouseY_ = evtY;
 
-    remotePointer(x, y, 0.0f, 0.0f, button, false);
+    if (!lockedUp) remotePointer(x, y, 0.0f, 0.0f, button, false);
 
     button = sdlToDomButton(button);
     pressedButtons_ &= ~domButtonMask(button);
@@ -431,13 +442,10 @@ void Engine::handleMouseUp(float x, float y, int button) {
     terminalMouseUp(docX, docY, button);
 
     if (document_) {
-        dom::Element* lockedUp = lockedElement_.get();
         dom::Element* target = lockedUp ? lockedUp : hitTest(docX, docY);
         int mod = currentModState();
         float ct = static_cast<float>(contentTop());
-        float movX = x - prevMouseX;
-        float movY = y - prevMouseY;
-        float clientY = y - ct;
+        float clientY = evtY - ct;
         float pageY = clientY + scrollY_;
 
         if (target && target->iframeDoc() &&
@@ -476,7 +484,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
 #endif
 
         dom::MouseEvent upEvt("mouseup");
-        populateMouseEvent(upEvt, x, y, button, pressedButtons_,
+        populateMouseEvent(upEvt, evtX, evtY, button, pressedButtons_,
                            movX, movY, scrollY_, mod, ct);
         if (target) applyMouseOffset(upEvt, target);
 
@@ -484,15 +492,15 @@ void Engine::handleMouseUp(float x, float y, int button) {
                             &uiDirty_, overlayMgr_.get(), OverlayContext::App,
                             contentWidth(), contentHeight()};
 
-        if (dragDrop_.finish(target, x, y)) {
+        if (dragDrop_.finish(target, evtX, evtY)) {
             markAppBaseDirty();
             return;
         }
 
         dispatchPointerAlias("pointerup", target, upEvt);
         dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
-                                x, clientY, button, pressedButtons_, mod,
-                                movX, movY, x, pageY,
+                                evtX, clientY, button, pressedButtons_, mod,
+                                movX, movY, evtX, pageY,
                                 clickClockMs(),
                                 inputConfig_.doubleClickThresholdMs,
                                 inputConfig_.doubleClickDistancePx,
@@ -571,6 +579,8 @@ void Engine::setFullscreenState(bool fullscreen) {
 void Engine::exitPointerLock() {
     if (!lockedElement_.held()) return;
     lockedElement_.reset();
+    lastMouseX_ = lockedMouseX_;
+    lastMouseY_ = lockedMouseY_;
 
     if (window_) {
         window_->cursor().warp(lockedMouseX_, lockedMouseY_);

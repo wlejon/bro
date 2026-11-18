@@ -4,6 +4,7 @@
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_values.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node_sweep.h"
 #include "dom/shadow_root.h"
@@ -76,7 +77,11 @@ void decorateShadowRootProto(ObjectBuilder& b) {
         if (!st || !st->shadowRoot) return ev::undefined();
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
-        return hostElementValue(st->shadowRoot->querySelector(ev::toUtf8(selV)));
+        std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        return hostElementValue(st->shadowRoot->querySelector(sel));
     });
 
     b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) -> Value {
@@ -84,7 +89,11 @@ void decorateShadowRootProto(ObjectBuilder& b) {
         if (!st || !st->shadowRoot) return ev::undefined();
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
-        return makeStaticNodeList(st->shadowRoot->querySelectorAll(ev::toUtf8(selV)));
+        std::string sel = ev::toUtf8(selV);
+        if (!dom::Element::isValidSelector(sel)) {
+            return ev::throwValue(hostMakeDomError("SyntaxError", "'" + sel + "' is not a valid selector"));
+        }
+        return makeStaticNodeList(st->shadowRoot->querySelectorAll(sel));
     });
 
     b.def("getElementById", 1, [](Value self_, std::span<const Value> a) -> Value {

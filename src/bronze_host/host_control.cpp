@@ -175,6 +175,10 @@ dom::Element* queryOne(engine::Engine& engine, const std::string& sel, std::stri
         if (why) *why = "no document";
         return nullptr;
     }
+    if (!dom::Element::isValidSelector(sel)) {
+        if (why) *why = "bad selector '" + sel + "'";
+        return nullptr;
+    }
     dom::Element* el = nullptr;
     try {
         el = doc->querySelector(sel);
