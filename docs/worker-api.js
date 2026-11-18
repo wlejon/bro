@@ -8,12 +8,16 @@
  * Dedicated background thread running an isolated JavaScript runtime
  * communicating via structured clone postMessage/onmessage.
  *
- * The script is compiled as written: a worker with `import` / `export` is a
- * module, and top-level `await` works in a module or a classic script (its
- * messages wait until the top level finishes, as in a module worker).
+ * A worker made with `{ type: 'module' }` runs its script as a module: its
+ * top-level declarations are its own. Without it the script is a classic
+ * script, as on the web: its top-level `var` and function declarations are
+ * properties of `self`. `import` / `export` work in either, and top-level
+ * `await` works in either (its messages wait until the top level finishes,
+ * as in a module worker).
  *
  * `importScripts(...urls)` in a classic worker runs each script in the
- * worker's global scope, in order, before it returns: a path (relative to the
+ * worker's global scope, in order, before it returns (each a classic
+ * script, its top-level `var`s properties of `self`): a path (relative to the
  * worker script's folder), a file: or bro://app/ URL, or a blob: / data: URL.
  * A script that cannot be read throws a NetworkError DOMException; a script's
  * own throw propagates.

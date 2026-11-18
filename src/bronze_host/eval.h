@@ -14,6 +14,24 @@ class Engine;
 
 namespace bro::bronze_host {
 
+/// How a compile's top level binds. `Unit`: its declarations are the unit's
+/// own bindings while it runs, bronze copying the var and function ones onto
+/// the global object once it has run (a module script, a headless driver,
+/// eval(), new Function, bro-ctl eval). `ClassicScript`: one of HTML's classic
+/// scripts, whose top-level `var` and function declarations are properties of
+/// the global object made as the script starts, whose top-level `this` is the
+/// global object, and which is sloppy unless it says "use strict" (bronze
+/// EvalOptions::classicScript); `let`, `const` and `class` stay the unit's.
+/// `ClassicScripts`: several classic scripts joined into one unit, each
+/// entered by its classicScriptMarker statement (Engine::combineClassicScripts),
+/// so a function of a later script is not yet defined while an earlier runs;
+/// the unit is sloppy, a script's own "use strict" not being a directive there.
+enum class ScriptGoal { Unit, ClassicScript, ClassicScripts };
+/// A page unit's goal: the classic unit's (its scripts listed) or a module's.
+inline ScriptGoal pageUnitGoal(const std::vector<std::string>& classicScripts) {
+    return classicScripts.empty() ? ScriptGoal::Unit : ScriptGoal::ClassicScripts;
+}
+
 /// Path to directory containing the running executable.
 std::filesystem::path getExecutableDirectory();
 
@@ -33,8 +51,9 @@ std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& 
 /// `filename` is the document the code came from (an app's index.html for its
 /// `<script>` text): its relative imports resolve from there. Empty means
 /// "no document", and they resolve from the app dir instead.
+/// `goal`: ClassicScript for a classic <script> of a frame.
 bool evalScript(engine::Engine& engine, const std::string& code,
-                const std::string& filename = {});
+                const std::string& filename = {}, ScriptGoal goal = ScriptGoal::Unit);
 
 /// evalScript for the app's OWN scripts — the `<script>` text of its
 /// index.html. The run is bracketed as a module load and the handle recorded
@@ -47,8 +66,9 @@ bool evalScript(engine::Engine& engine, const std::string& code,
 /// `<script type="module" src>`), whose instance is then what a later
 /// `import` of that file binds — a driver script importing the app's entry
 /// gets the running app, not a second boot of it.
+/// `goal`: ClassicScripts for the page's joined classic unit.
 bool evalAppScript(engine::Engine& engine, const std::string& code,
-                   const std::string& filename, bool moduleFile = false);
+                   const std::string& filename, bool moduleFile, ScriptGoal goal);
 
 /// A page's classic scripts run as one unit (Engine::pageScriptUnits) whose
 /// text sets a marker as it enters each script, `classicScriptMarker(i)`, and
@@ -57,6 +77,8 @@ bool evalAppScript(engine::Engine& engine, const std::string& code,
 /// task of its own: the marker says which one that was, and -1 (never set)
 /// that the unit did not compile. Cleared before the run, taken after it.
 std::string classicScriptMarker(size_t index);
+/// The global property the marker sets (bronze EvalOptions::classicScriptMarker).
+const char* classicScriptMarkerName();
 void clearClassicScriptMarker();
 int takeClassicScriptMarker();
 /// The page ordinal of the classic script running now (the last marker the

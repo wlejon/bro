@@ -225,7 +225,8 @@ std::unique_ptr<bronze::eval::CompiledScript> awaitCompile(
 std::unique_ptr<AheadCompile> takeAheadCompile(const bronze::eval::EvalOptions& opts, const std::string& code) {
     if (!s_ahead) return nullptr;
     if (s_ahead->filename != opts.filename || s_ahead->moduleFile != opts.publishEntry ||
-        s_ahead->code != code) {
+        s_ahead->opts.classicScript != opts.classicScript ||
+        s_ahead->opts.classicScriptMarker != opts.classicScriptMarker || s_ahead->code != code) {
         return nullptr;
     }
     return std::move(s_ahead);
@@ -287,7 +288,7 @@ std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine&
 }  // namespace
 
 bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename,
-                                            bool moduleFile) {
+                                            bool moduleFile, ScriptGoal goal) {
     bronze::eval::EvalOptions opts;
     opts.filename = filename.empty() ? "<eval>" : filename;
     // Read off the registry the install filled, not from a list kept beside
@@ -308,19 +309,20 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     // too, so a driver's `import "/app/main.js"` binds it rather than booting
     // the app a second time. Inline script text and driver scripts are not.
     opts.publishEntry = moduleFile && !filename.empty();
+    opts.classicScript = goal != ScriptGoal::Unit;
+    if (goal == ScriptGoal::ClassicScripts) opts.classicScriptMarker = classicScriptMarkerName();
     configureCodeCache(opts);
     return opts;
 }
 
 std::string scriptExecCode(const std::string& code, const std::string& filename) {
     if (hasImportStmt(code)) return code;
-    const std::string prepared = prepareClassicScriptGlobals(code);
-    if (hasAwaitStmt(code)) return wrapAsyncIife(prepared, filename);
-    return prepared;
+    if (hasAwaitStmt(code)) return wrapAsyncIife(code, filename);
+    return code;
 }
 
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
-                           bool moduleFile) {
+                           bool moduleFile, ScriptGoal goal) {
     if (isJitDisabled() || s_ahead || code.empty() ||
         std::filesystem::path(filename).extension() == ".lua") {
         return false;
@@ -337,7 +339,7 @@ bool startAppScriptCompile(engine::Engine& engine, const std::string& code, cons
     ahead->code = scriptExecCode(code, filename);
     ahead->filename = filename.empty() ? "<eval>" : filename;
     ahead->moduleFile = moduleFile && !filename.empty();
-    ahead->opts = scriptEvalOptions(engine, filename, moduleFile);
+    ahead->opts = scriptEvalOptions(engine, filename, moduleFile, goal);
     // The run (evalAppScript) hands bronze a module handle, which keeps the
     // program for the life of the process; a compile with no handle in view
     // cannot know that, so it is said here. Without it the program's
@@ -401,13 +403,13 @@ std::string wrapAsyncIife(const std::string& code, const std::string& filename) 
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename,
                                               bronze::embed::ModuleHandle* moduleHandleOut,
-                                              bool moduleFile) {
+                                              bool moduleFile, ScriptGoal goal) {
     HostEvalScope evalScope;
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
 
-    bronze::eval::EvalOptions opts = scriptEvalOptions(engine, filename, moduleFile);
+    bronze::eval::EvalOptions opts = scriptEvalOptions(engine, filename, moduleFile, goal);
     opts.moduleHandleOut = moduleHandleOut;
     const std::string execCode = scriptExecCode(code, filename);
 
@@ -430,7 +432,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
             // The failed attempt is off the stack and superseded: its handle
             // is retired here so the one written below is the run's only one.
             if (moduleHandleOut && *moduleHandleOut) bronze::embed::unloadModule(*moduleHandleOut);
-            auto retryCompiled = compileWithPumping(engine, opts, wrapAsyncIife(prepareClassicScriptGlobals(code), filename));
+            auto retryCompiled = compileWithPumping(engine, opts, wrapAsyncIife(code, filename));
             res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
         }
     }
@@ -438,7 +440,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
 }
 
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename,
-                   bronze::embed::ModuleHandle* moduleHandleOut, bool moduleFile) {
+                   bronze::embed::ModuleHandle* moduleHandleOut, bool moduleFile, ScriptGoal goal) {
     HostEvalScope evalScope;
     if (std::filesystem::path(filename).extension() == ".lua") {
         if (!isWebHostGlobalsInstalled()) {
@@ -459,7 +461,7 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
         std::fflush(stdout);
         return !(hasTestFailure() || engine.hasTestFailure());
     }
-    auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut, moduleFile);
+    auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut, moduleFile, goal);
     if (!reportCallResult(engine, res, "evalScriptJit", filename)) {
         return false;
     }
@@ -539,8 +541,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     // native TLA) returns from its top level long before that, and without
     // the marker a run would stop there: the rest of the test never executed
     // and the run still read as a pass.
-    const std::string prepared = hasImportStmt(content) ? content : prepareClassicScriptGlobals(content);
-    const std::string source = prepared + kScriptDoneMarker;
+    const std::string source = content + kScriptDoneMarker;
     resetScriptDone();
 
     bronze::embed::CallResult res;

@@ -687,10 +687,24 @@ fragment change fires `hashchange`, and navigating (`location.href = ...`,
 current one: the app realm reloads with that page, an iframe reloads its
 frame alone. An `http(s)` URL opens in the system browser.
 
-Top-level `var` and `function` declarations of the classic scripts become
-properties of the global object only when the page's scripts finish (bronze
-compiles them as one unit), so a later script that reads such a name through
-the global object (`window.x`) before then sees `undefined`.
+The classic scripts are classic scripts as the web has them, though bronze
+compiles them as one unit: each script's top-level `var` and `function`
+declarations are properties of the global object, made as that script starts
+(`var x` and `window.x` are one thing, and a function of a later script is
+not defined yet while an earlier one runs); `let`, `const` and `class` are
+shared by the scripts without being properties; and top-level `this` is
+`window`. The page's classic scripts all run sloppy: a `"use strict"` at the
+top of one is not taken as its directive, as the scripts are one unit (an
+inserted script's is). A `var` naming a host
+global assigns through it (`var name = 42` makes `window.name` the string
+`"42"`) or, for a read-only one such as `document` or `top`, leaves it as it
+was. An inserted classic script, an iframe's classic scripts, and a classic
+worker (`new Worker(url)` without `{type: 'module'}`) and the scripts it
+`importScripts` are classic scripts too. Module scripts, headless driver
+scripts, `bro-ctl eval` and `-e`, `eval()` and `new Function` are units of
+their own: their top-level declarations are their own bindings while they
+run, and bronze copies the `var` and `function` ones onto the global object
+once the unit has run.
 
 ## Startup cost
 

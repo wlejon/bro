@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- The page test_classic_scripts.js runs: each script's results in R, which
+     match Chromium's for the same page (the workers aside: Chromium runs no
+     worker from file://). -->
+<html><head>
+<script>
+  window.R = {};
+  var v1 = 1; let l1 = 2; const c1 = 3; class K1 {}
+  function f1() { return 'f1'; }
+  R.thisIsGlobal = this === window;
+  var d = Object.getOwnPropertyDescriptor(window, 'v1');
+  R.v1Desc = [d.value, d.writable, d.enumerable, d.configurable].join();
+  d = Object.getOwnPropertyDescriptor(window, 'f1');
+  R.f1Desc = [typeof d.value, d.writable, d.enumerable, d.configurable].join();
+  R.lexicalOnWindow = ['l1' in window, 'c1' in window, 'K1' in window].join();
+  R.f2Early = typeof f2 + ',' + ('f2' in window);
+  var counter = 0;
+  window.counter = 5; R.bareAfterWin = counter;
+  counter = 7; R.winAfterBare = window.counter;
+  R.sloppy = (function () { return this === window; })();
+</script>
+<script>
+  R.s2 = [typeof v1, v1, l1, c1, typeof K1, f1()].join();
+  function f2() { return 'f2'; }
+  R.f2Here = typeof f2 + ',' + typeof window.f2;
+</script>
+<script>
+  var beforeThrow = 'set';
+  function fBefore() { return 'fb'; }
+  throw new Error('classic-scripts-boom');
+  var afterThrowVar = 'never';
+</script>
+<script>
+  R.afterThrow = [beforeThrow, fBefore(), typeof v1, 'afterThrowVar' in window, String(afterThrowVar)].join();
+</script>
+<script>
+  var document;
+  var top = 5;
+  var name = 42;
+  var status = 7;
+  var innerWidth = 5;
+  var screen = 'mine';
+  function blur() { return 'mine'; }
+  var onload = null;
+  R.redeclare = [typeof document, document === window.document, top === window, typeof name, name,
+                 typeof status, status, innerWidth, window.innerWidth, screen, window.blur()].join();
+</script>
+<script>
+  R.redeclareLater = [typeof document, top === window, name, innerWidth, screen, blur()].join();
+  var s = document.createElement('script');
+  s.textContent = "var insertedVar = 'iv'; function insertedFn() { return 'if'; }";
+  document.head.appendChild(s);
+  R.inserted = [window.insertedVar, typeof window.insertedFn, insertedVar, insertedFn()].join();
+  new Worker('worker_classic.js').onmessage = function (e) { R.worker = e.data; };
+  new Worker('worker_module.js', { type: 'module' }).onmessage = function (e) { R.moduleWorker = e.data; };
+</script>
+</head><body></body></html>

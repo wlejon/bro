@@ -319,10 +319,10 @@ namespace {
 // evalScript and evalAppScript are one function: the latter brackets the run
 // as a module load and hands the handle back through `moduleHandleOut`.
 bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::string& filename,
-                    ev::ModuleHandle* moduleHandleOut, bool moduleFile = false) {
+                    ev::ModuleHandle* moduleHandleOut, bool moduleFile, ScriptGoal goal) {
     HostEvalScope evalScope;
     if (!isJitDisabled() || std::filesystem::path(filename).extension() == ".lua") {
-        return evalScriptJit(engine, code, filename, moduleHandleOut, moduleFile);
+        return evalScriptJit(engine, code, filename, moduleHandleOut, moduleFile, goal);
     }
 
     ensureSharedRuntimeEnv();
@@ -457,12 +457,12 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
 
 } // namespace
 
-bool evalScript(engine::Engine& engine, const std::string& code, const std::string& filename) {
-    return evalScriptImpl(engine, code, filename, nullptr);
+bool evalScript(engine::Engine& engine, const std::string& code, const std::string& filename, ScriptGoal goal) {
+    return evalScriptImpl(engine, code, filename, nullptr, false, goal);
 }
 
 bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename,
-                   bool moduleFile) {
+                   bool moduleFile, ScriptGoal goal) {
     ev::ModuleHandle handle = 0;
     // A module script file's require('./x') resolves against its own folder
     // while its top level runs (docs/brokit-api.js: the calling file's).
@@ -473,7 +473,7 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
         const std::filesystem::path file(std::u8string(filename.begin(), filename.end()));
         requireDir.emplace(file.parent_path());
     }
-    const bool ok = evalScriptImpl(engine, code, filename, &handle, moduleFile);
+    const bool ok = evalScriptImpl(engine, code, filename, &handle, moduleFile, goal);
     // Recorded on failure too: a top level that threw halfway still
     // registered its spans, and they are still the reload's to retire.
     engine.addAppModuleHandle(handle);
@@ -483,6 +483,8 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
 namespace {
 constexpr const char* kClassicScriptMarker = "__broClassicScript";
 }  // namespace
+
+const char* classicScriptMarkerName() { return kClassicScriptMarker; }
 
 std::string classicScriptMarker(size_t index) {
     return std::string("globalThis.") + kClassicScriptMarker + "=" + std::to_string(index) + ";";
@@ -559,20 +561,13 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
 
     const std::string srcExt = absSource.extension().string();
     const std::string wrapExt = (srcExt == ".ts" || srcExt == ".mts" || srcExt == ".mjs") ? srcExt : std::string(".js");
-    const std::string prepared = hasImportStmt(content) ? content : prepareClassicScriptGlobals(content);
     std::filesystem::path wrapFile;
     std::string buildSrc = absSource.string();
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        std::string wrapped = wrapAsyncIife(prepared, absSource.string());
+        std::string wrapped = wrapAsyncIife(content, absSource.string());
         wrapFile = tempDir / (stem + "_wrap" + wrapExt);
         std::ofstream ofs(wrapFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());
-        ofs.close();
-        buildSrc = wrapFile.string();
-    } else if (prepared != content) {
-        wrapFile = tempDir / (stem + "_prep" + wrapExt);
-        std::ofstream ofs(wrapFile, std::ios::binary);
-        ofs.write(prepared.data(), prepared.size());
         ofs.close();
         buildSrc = wrapFile.string();
     }

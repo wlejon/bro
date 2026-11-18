@@ -9,31 +9,38 @@ const os = require('os');
 const path = require('path');
 
 // 1. Same-<script> top-level `function` (including pre-declaration hoisting)
-// and `var` shadowing of replaceable window.* host globals + `window.name` coercion:
-assert(blur() === 'blur-ok', 'hoisted function blur() works before its declaration');
-assert(window.blur() === 'blur-ok', 'hoisted window.blur() works before its declaration');
-
-var __shadowLog = [];
-function blur() {
-  if (__shadowLog) __shadowLog.push('custom-blur');
-  return 'blur-ok';
-}
-var focus = function() {
-  __shadowLog.push('custom-focus');
-  return 'focus-ok';
-};
-var scrollBy = function(dx, dy) {
-  __shadowLog.push('custom-scrollBy:' + dx + ',' + dy);
-  return dx + dy;
-};
-var name = 42;
-
+// and `var` shadowing of replaceable window.* host globals + `window.name`
+// coercion, in a classic script of this page (this driver's own declarations
+// are its own, not the page's: docs/headless.md):
+window.__shadowLog = [];
+const shadowScript = document.createElement('script');
+shadowScript.textContent = `
+  window.__hoisted = [blur(), window.blur()].join('|');
+  function blur() {
+    __shadowLog.push('custom-blur');
+    return 'blur-ok';
+  }
+  var focus = function() {
+    __shadowLog.push('custom-focus');
+    return 'focus-ok';
+  };
+  var scrollBy = function(dx, dy) {
+    __shadowLog.push('custom-scrollBy:' + dx + ',' + dy);
+    return dx + dy;
+  };
+  var name = 42;
+  window.__nameType = typeof name;
+`;
+document.head.appendChild(shadowScript);
+assert(window.__hoisted === 'blur-ok|blur-ok', 'hoisted blur() and window.blur() work before the declaration: ' +
+       window.__hoisted);
+assert(window.__nameType === 'string', 'var name = 42 reads back through window.name as a string');
 assert(blur() === 'blur-ok' && window.blur() === 'blur-ok',
-       'same <script> bare blur() and window.blur() hit top-level function');
+       'bare blur() and window.blur() hit the script\'s top-level function');
 assert(focus() === 'focus-ok' && window.focus() === 'focus-ok',
-       'same <script> bare focus() and window.focus() hit top-level var');
+       'bare focus() and window.focus() hit the script\'s top-level var');
 assert(scrollBy(3, 4) === 7 && window.scrollBy(5, 6) === 11,
-       'same <script> bare scrollBy() and window.scrollBy() hit top-level var');
+       'bare scrollBy() and window.scrollBy() hit the script\'s top-level var');
 assert(typeof name === 'string' && name === '42',
        'var name = 42 coerces through window.name setter to string "42", got: ' + (typeof name) + ':' + name);
 assert(typeof window.name === 'string' && window.name === '42',

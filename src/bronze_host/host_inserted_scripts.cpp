@@ -67,7 +67,7 @@ void fireScriptEvent(dom::Element* el, const char* type) {
 void runScriptText(const std::string& code, const std::string& name) {
     auto* eng = hostEngine();
     if (!eng) return;
-    ev::CallResult r = evalScriptJitResult(*eng, code, name);
+    ev::CallResult r = evalScriptJitResult(*eng, code, name, nullptr, false, ScriptGoal::ClassicScript);
     if (r.thrown) {
         ev::Persistent thrown(r.value);
         if (!hostDispatchUncaughtError(thrown.get())) reportBronzeError(name.c_str(), thrown.get());

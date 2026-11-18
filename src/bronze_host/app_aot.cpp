@@ -143,7 +143,8 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
     int built = 0, current = 0, waiting = 0;
     for (size_t i = 0; i < units.size(); ++i) {
         const auto& unit = units[i];
-        bronze::eval::EvalOptions opts = scriptEvalOptions(engine, unit.name, unit.moduleFile);
+        bronze::eval::EvalOptions opts = 
+            scriptEvalOptions(engine, unit.name, unit.moduleFile, pageUnitGoal(unit.classicScripts));
         opts.externalModules = registry;
         opts.externalModulesCaptured = true;
         const std::string execCode = scriptExecCode(unit.code, unit.name);

@@ -668,7 +668,7 @@ static void clearGlobalProp(const std::string& key) {
 }
 
 static void snapshotBaselineGlobalProps() {
-    snapshotBaselineHostGlobalNames();
+    snapshotBaselineHostGlobals();
     std::vector<std::string> names;
     if (globalOwnPropertyNames(names)) s_baselineGlobalProps = std::move(names);
 }

@@ -33,11 +33,15 @@ std::vector<std::string> Engine::classicScriptTexts() const {
     return texts;
 }
 
-// The page's classic scripts as one unit, every script's top-level bindings
-// in one scope as they are in the web's one global scope. Each script is
-// entered by a marker statement (bronze_host::classicScriptMarker) on a line
-// the unit already has, so line numbers stay the scripts' own and a throw is
-// known to be the script's it came out of (runClassicScripts). Markers count
+// The page's classic scripts as one unit, compiled as classic scripts
+// (bronze_host::ScriptGoal::ClassicScripts): each script's top-level var and
+// function declarations become the global object's as that script starts,
+// and let, const and class are the unit's, shared as the web's global lexical
+// scope shares them. Each script is entered by a marker statement
+// (bronze_host::classicScriptMarker), which is also where bronze splits the
+// unit into its scripts, on a line the unit already has, so line numbers stay
+// the scripts' own and a throw is known to be the script's it came out of
+// (runClassicScripts). Markers count
 // from `first`, the page ordinal of texts[0], so a resumed unit's scripts keep
 // their numbers.
 //
@@ -76,7 +80,7 @@ void Engine::runClassicScripts(const std::vector<std::string>& texts, const std:
                                const std::string& name, size_t first) {
     if (first == 0) bronze_host::snapshotClassicScripts();
     bronze_host::clearClassicScriptMarker();
-    if (bronze_host::evalAppScript(*this, code, name, false)) {
+    if (bronze_host::evalAppScript(*this, code, name, false, bronze_host::ScriptGoal::ClassicScripts)) {
         bronze_host::takeClassicScriptMarker();
         return;
     }

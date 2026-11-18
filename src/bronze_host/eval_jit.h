@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bronze_host/eval.h"
 #include "bronze_host/eval_js_scan.h"
 #include "embed/embed.h"
 #include "eval/eval.h"
@@ -40,31 +41,33 @@ void applyCodeCacheOptions(bronze::eval::EvalOptions& opts);
 /// module FILE `filename` (a `<script type="module" src>`): that instance is
 /// published under the file's path, so a driver script's `import` of it binds
 /// the page's instance instead of running the file again (bronze
-/// EvalOptions::publishEntry).
+/// EvalOptions::publishEntry). `goal`: how the top level binds.
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename = {},
                                               bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
-                                              bool moduleFile = false);
+                                              bool moduleFile = false, ScriptGoal goal = ScriptGoal::Unit);
 
 /// Starts compiling the page's first script on another thread, ahead of its
 /// run: the realm's host globals are installed here (on this, the page
 /// thread) and the compile's inputs captured, so the compile itself needs
 /// nothing from this thread. The engine calls it while the GPU comes up; the
-/// evalAppScript that later runs exactly this script (same text, name and
-/// module-ness) takes the compiled program instead of compiling again,
-/// waiting for the rest of the compile if it is still going. Only one at a
-/// time; false (nothing started) when JIT evaluation is off or `code` is
+/// evalAppScript that later runs exactly this script (same text, name,
+/// module-ness and goal) takes the compiled program instead of compiling
+/// again, waiting for the rest of the compile if it is still going. Only one
+/// at a time; false (nothing started) when JIT evaluation is off or `code` is
 /// empty.
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
-                           bool moduleFile);
+                           bool moduleFile, ScriptGoal goal);
 
 /// The options a script of the page (or a string evaluated as one) compiles
 /// and runs with, and the text compiled for it (a script with a top-level
 /// `await` and no `import` becomes an async IIFE). Shared with the
 /// ahead-of-time build (app_aot.h), whose modules must be exactly the program
 /// this compile would build. Host globals must be installed: the list is read
-/// off them.
-bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename, bool moduleFile);
+/// off them. `goal` sets bronze's classicScript (and, for the joined unit, its
+/// marker), which the code cache's key and an ahead-of-time record both hold.
+bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::string& filename, bool moduleFile,
+                                            ScriptGoal goal);
 std::string scriptExecCode(const std::string& code, const std::string& filename);
 
 /// Waits out and drops a compile startAppScriptCompile began that no run took.
@@ -74,7 +77,7 @@ void discardAppScriptCompile();
 /// Returns true on success, false on failure (and logs error / sets test failure).
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename = {},
                    bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
-                   bool moduleFile = false);
+                   bool moduleFile = false, ScriptGoal goal = ScriptGoal::Unit);
 
 /// Evaluates a JavaScript file in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).

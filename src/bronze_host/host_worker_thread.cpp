@@ -361,6 +361,7 @@ void WorkerInstance::threadFunc() {
             }
             o.retainSource = true;
             o.shareAcrossThreads = true;
+            o.classicScript = true;  // importScripts' scripts are classic scripts
             applyCodeCacheOptions(o);
             auto res = bronze::eval::evalScript(code, o);
             if (res.thrown) return ev::throwValue(res.value);
@@ -391,6 +392,7 @@ void WorkerInstance::threadFunc() {
         }
         opts.retainSource = true;
         opts.shareAcrossThreads = true;
+        opts.classicScript = !moduleScript_;
         applyCodeCacheOptions(opts);
 
         bootMarks[2] = BootClock::now();

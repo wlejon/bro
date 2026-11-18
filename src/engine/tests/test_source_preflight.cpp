@@ -14,12 +14,6 @@
 #include <string>
 #include <chrono>
 
-namespace bro::bronze_host {
-bool isBaselineHostGlobalName(const std::string& name) {
-    return name == "Symbol" || name == "fetch";
-}
-} // namespace bro::bronze_host
-
 namespace fs = std::filesystem;
 
 namespace {
@@ -198,7 +192,6 @@ int main() {
     // eval_js_scan TypeScript top-level scanning checks.
     {
         using bro::bronze_host::scanJsTopLevel;
-        using bro::bronze_host::prepareClassicScriptGlobals;
 
         auto s1 = scanJsTopLevel(
             "interface Box<T> { await?: Promise<T>; get(): T; }\n"
@@ -211,20 +204,6 @@ int main() {
         );
         check(!s1.hasModuleDecl, "TS classic script has no module decl");
         check(!s1.hasTopLevelAwait, "TS interface await property is not top-level await");
-        check(s1.topLevelFunctionDecls.size() == 1 && s1.topLevelFunctionDecls[0] == "Symbol",
-              "TS generic function with object return type is detected as top-level function decl");
-        check(s1.topLevelVarExports.size() == 1 && s1.topLevelVarExports[0].names.size() == 2 &&
-                  s1.topLevelVarExports[0].names[0] == "fetch" &&
-                  s1.topLevelVarExports[0].names[1] == "name",
-              "TS top-level var with generic and non-null type annotations records initialized names");
-
-        std::string prep = prepareClassicScriptGlobals(
-            "function Symbol<T>(x: T): { ok: boolean } { return { ok: true }; }\n"
-            "var name: string = 'hello';\n"
-        );
-        check(prep.find("globalThis.Symbol = Symbol;") != std::string::npos &&
-                  prep.find("globalThis.name = name;") != std::string::npos,
-              "prepareClassicScriptGlobals instruments TS function and var declarations");
 
         auto s2 = scanJsTopLevel("export interface Foo { x: number }\n");
         check(s2.hasModuleDecl, "export interface marks script as module");

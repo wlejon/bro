@@ -144,6 +144,10 @@ void cmdEval(engine::ControlServer& server, const engine::ControlCallPtr& call) 
 
     const uint64_t id = g_eval.nextId++;
     g_eval.pending[id] = call;
+    // A unit of its own, not a classic script: its declarations are its own
+    // bindings while it runs, so a script that reloads the page
+    // (`location.reload()`, then more statements) still has them after the
+    // page's realm is replaced.
     auto res = evalScriptJitResult(engine, code, "<bro-ctl eval>");
     ev::Persistent value(res.value);
     ev::Persistent idv(ev::fromDouble(static_cast<double>(id)));

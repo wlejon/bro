@@ -164,7 +164,9 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     // document for an inline one (the "<inline>" name sits in basePath), and
     // the realm's module registry evaluates a module that two scripts import
     // once. Each script is its own unit, so a module's top-level bindings stay
-    // in its own scope. One entry of the compartment's: an appview's may yield
+    // in its own scope, while a classic script's top-level var and function
+    // declarations are the frame's global object's (ScriptGoal::ClassicScript),
+    // seen by the frame's later scripts. One entry of the compartment's: an appview's may yield
     // at its slice and finish on later frames.
     // Classic scripts first, while the document is loading; then, parsing
     // over, the module scripts (deferred on the web) and the end of the load:
@@ -182,7 +184,7 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                 std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
                 if (code.empty()) continue;
                 std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
-                evalScript(engine, code, fname);
+                evalScript(engine, code, fname, modules ? ScriptGoal::Unit : ScriptGoal::ClassicScript);
             }
         }
         if (dom::Document::isLiveDocument(subDoc)) dom::completeDocumentLoad(subDoc);

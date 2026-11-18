@@ -809,7 +809,8 @@ void Engine::initAppRealm() {
                     continue;
                 }
                 if (document_) dom::advanceDocumentReadiness(document_.get(), "interactive");
-                if (!bro::bronze_host::evalAppScript(*this, unit.code, unit.name, unit.moduleFile)) {
+                if (!bro::bronze_host::evalAppScript(*this, unit.code, unit.name, unit.moduleFile,
+                                                  bronze_host::ScriptGoal::Unit)) {
                     setTestFailure(true);
                 }
             }
@@ -840,7 +841,8 @@ void Engine::beginPageCompile() {
     if (!aotBuildDir_.empty()) return;
     const std::vector<PageScriptUnit> units = pageScriptUnits();
     if (units.empty()) return;
-    bronze_host::startAppScriptCompile(*this, units[0].code, units[0].name, units[0].moduleFile);
+    bronze_host::startAppScriptCompile(*this, units[0].code, units[0].name, units[0].moduleFile,
+                                       bronze_host::pageUnitGoal(units[0].classicScripts));
 }
 
 // Each <link rel=stylesheet> of the page fires `load`, or `error` when its

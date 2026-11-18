@@ -258,7 +258,13 @@ void installWorkerGlobals(engine::Engine& engine) {
             // An inline script is named as a file of the page's folder (it
             // has no path of its own), which is where its imports resolve.
             if (inlineUrl) script = "blob-worker-" + std::to_string(wid) + ".js";
-            auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid, std::move(inlineSource));
+            bool moduleScript = false;
+            if (a.size() > 1 && ev::isObject(a[1])) {
+                Value type = ev::getProperty(a[1], "type");
+                moduleScript = ev::isString(type) && ev::toUtf8(type) == "module";
+            }
+            auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid, std::move(inlineSource),
+                                         moduleScript);
             {
                 std::lock_guard<std::mutex> lock(s_workersMutex);
                 s_activeWorkers.push_back(w);

@@ -38,12 +38,15 @@ public:
     const uint32_t tag = kHostWorkerTag;
 
     // `inlineSource`, when not empty, is the script's text (a blob: or data:
-    // URL's); `scriptPath` then only names it.
+    // URL's); `scriptPath` then only names it. `moduleScript`: made with
+    // {type: 'module'}; otherwise the script is a classic script, whose
+    // top-level var and function declarations are properties of `self`.
     WorkerInstance(std::string scriptPath, std::string basePath, const util::AssetMounts* mounts, uint64_t workerId,
-                   std::string inlineSource = {})
+                   std::string inlineSource, bool moduleScript)
         : scriptPath_(std::move(scriptPath)),
           basePath_(std::move(basePath)),
           inlineSource_(std::move(inlineSource)),
+          moduleScript_(moduleScript),
           mounts_(mounts),
           workerId_(workerId) {}
 
@@ -141,6 +144,7 @@ private:
     std::string scriptPath_;
     std::string basePath_;
     std::string inlineSource_;
+    bool moduleScript_ = false;
     const util::AssetMounts* mounts_ = nullptr;
     uint64_t workerId_ = 0;
 

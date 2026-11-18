@@ -936,7 +936,12 @@ For a frame that comes out the same on every run, a script or page may replace `
 ### Waiting in scripts: await, or pump
 
 A script file with a top-level `await` runs as an ES module, with the same
-globals as a classic script, `require` included. Node modules are
+globals as a classic script, `require` included. A script file (and an
+`-e` expression) is a unit of its own either way, not a classic script as
+the page's are: its top-level declarations are its own bindings while it
+runs, so they survive a `location.reload()` the script makes, and its `var`
+and `function` declarations reach the global object only once it has run;
+assign `window.x` to give the page a value at once. Node modules are
 `require('fs')`, never bare globals; `import ... from 'node:fs'` is rejected
 at compile time (see docs/brokit-api.js).
 

@@ -1,10 +1,7 @@
 #include "bronze_host/eval_js_scan.h"
-#include "bronze_host/host_global_sync.h"
 
-#include <algorithm>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -121,10 +118,6 @@ bool isBinaryContinuationAfterNewline(const ScanToken& tok) {
     }
 }
 
-bool isShadowTargetName(const std::string& name) {
-    return name == "name" || isBaselineHostGlobalName(name);
-}
-
 } // namespace
 
 JsTopLevelScan scanJsTopLevel(std::string_view code) {
@@ -140,7 +133,6 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         pos += 2;
         while (pos < n && code[pos] != '\n' && code[pos] != '\r') ++pos;
     }
-    const size_t headerEndOffset = pos;
 
     std::vector<ScanToken> tokens;
     tokens.reserve(128);
@@ -342,23 +334,7 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
     }
 
     JsTopLevelScan result;
-    result.directiveEndOffset = headerEndOffset;
     const size_t tokCount = tokens.size();
-
-    // Advance directiveEndOffset past any leading string literal directive prologue (e.g. "use strict";)
-    {
-        size_t dIdx = 0;
-        while (dIdx < tokCount && tokens[dIdx].kind == ScanTokKind::String) {
-            const ScanToken& strTok = tokens[dIdx];
-            result.directiveEndOffset = static_cast<size_t>((strTok.text.data() - code.data()) + strTok.text.size());
-            ++dIdx;
-            if (dIdx < tokCount && tokens[dIdx].kind == ScanTokKind::Semicolon) {
-                const ScanToken& semiTok = tokens[dIdx];
-                result.directiveEndOffset = static_cast<size_t>((semiTok.text.data() - code.data()) + semiTok.text.size());
-                ++dIdx;
-            }
-        }
-    }
 
     enum class BraceScope { Normal, FunctionBody, ClassBody };
     std::vector<BraceScope> braceScopes;
@@ -369,7 +345,6 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
     bool pendingClassBody = false;
     bool inTopLevelVar = false;
     bool varExpectIdent = false;
-    std::vector<std::string> currentVarNames;
 
     auto countAngleDelta = [](const ScanToken& t) -> int {
         if (t.kind != ScanTokKind::OtherPunct) return 0;
@@ -584,22 +559,12 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
 
         if (inTopLevelVar && atTopLevel && !tok.inTypeAnnotation) {
             if (tok.kind == ScanTokKind::Semicolon) {
-                const size_t afterSemi = static_cast<size_t>((tok.text.data() - code.data()) + tok.text.size());
-                if (!currentVarNames.empty()) {
-                    result.topLevelVarExports.push_back({afterSemi, std::move(currentVarNames)});
-                }
-                currentVarNames.clear();
                 inTopLevelVar = false;
                 varExpectIdent = false;
                 continue;
             }
             if (tok.newlineBefore && !varExpectIdent &&
                 !isBinaryPrefixBeforeNewline(prev) && !isBinaryContinuationAfterNewline(tok)) {
-                const size_t beforeTok = static_cast<size_t>(tok.text.data() - code.data());
-                if (!currentVarNames.empty()) {
-                    result.topLevelVarExports.push_back({beforeTok, std::move(currentVarNames)});
-                }
-                currentVarNames.clear();
                 inTopLevelVar = false;
                 varExpectIdent = false;
             } else if (tok.kind == ScanTokKind::Comma) {
@@ -617,11 +582,6 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
                     if (afterIdent < tokCount && tokens[afterIdent].kind == ScanTokKind::Colon) {
                         const size_t endVarType = scanTypeAnnotationEnd(afterIdent, false);
                         markTypeRange(afterIdent, endVarType);
-                        afterIdent = endVarType;
-                    }
-                    if (afterIdent < tokCount && tokens[afterIdent].kind == ScanTokKind::OtherPunct &&
-                        tokens[afterIdent].text == "=") {
-                        currentVarNames.emplace_back(tok.text);
                     }
                     varExpectIdent = false;
                 } else if (tok.kind == ScanTokKind::LBrace || tok.kind == ScanTokKind::LBracket) {
@@ -735,26 +695,9 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         if (w == "function" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot) {
             size_t k = i + 1;
             if (k < tokCount && tokens[k].kind == ScanTokKind::OtherPunct && tokens[k].text == "*") ++k;
-            std::string_view fnName;
-            if (k < tokCount && tokens[k].kind == ScanTokKind::Ident) {
-                fnName = tokens[k].text;
-                ++k;
-            }
+            if (k < tokCount && tokens[k].kind == ScanTokKind::Ident) ++k;
             k = skipTypeParamsBeforeParen(k);
             if (k < tokCount && tokens[k].kind == ScanTokKind::LParen) markBodyAfterParams(k);
-            if (atTopLevel && !inTopLevelVar && !fnName.empty()) {
-                const bool asyncPrefix = (prev.kind == ScanTokKind::Ident && prev.text == "async" && !prev.newlineBefore);
-                const ScanToken& beforeFn = asyncPrefix ? prevPrev : prev;
-                const bool isDecl =
-                    beforeFn.kind == ScanTokKind::None ||
-                    beforeFn.kind == ScanTokKind::Semicolon ||
-                    (beforeFn.kind == ScanTokKind::RBrace && !beforeFn.braceIsExprOrObject) ||
-                    ((tok.newlineBefore || (asyncPrefix && prev.newlineBefore)) &&
-                     !isBinaryPrefixBeforeNewline(beforeFn));
-                if (isDecl) {
-                    result.topLevelFunctionDecls.emplace_back(fnName);
-                }
-            }
             continue;
         }
         if (w == "class" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot) {
@@ -784,7 +727,6 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
                 !(prev.kind == ScanTokKind::Ident && (prev.text == "export" || prev.text == "declare"))) {
                 inTopLevelVar = true;
                 varExpectIdent = true;
-                currentVarNames.clear();
                 continue;
             }
             if (w == "import" && prev.kind != ScanTokKind::Dot && prev.kind != ScanTokKind::QuestionDot) {
@@ -825,10 +767,6 @@ JsTopLevelScan scanJsTopLevel(std::string_view code) {
         }
     }
 
-    if (inTopLevelVar && !currentVarNames.empty()) {
-        result.topLevelVarExports.push_back({code.size(), std::move(currentVarNames)});
-    }
-
     return result;
 }
 
@@ -838,69 +776,6 @@ bool hasAwaitStmt(const std::string& code) {
 
 bool hasImportStmt(const std::string& code) {
     return scanJsTopLevel(code).hasModuleDecl;
-}
-
-std::string prepareClassicScriptGlobals(const std::string& code) {
-    if (code.empty()) return code;
-    JsTopLevelScan scan = scanJsTopLevel(code);
-    if (scan.hasModuleDecl) return code;
-
-    struct Insertion {
-        size_t offset = 0;
-        std::string text;
-    };
-    std::vector<Insertion> insertions;
-
-    // 1. Hoisted top-level function declarations that shadow replaceable host globals
-    {
-        std::string fnPrologue;
-        std::unordered_set<std::string> seenFns;
-        for (const std::string& fn : scan.topLevelFunctionDecls) {
-            if (fn == "name" || !isBaselineHostGlobalName(fn)) continue;
-            if (!seenFns.insert(fn).second) continue;
-            fnPrologue += "{globalThis." + fn + " = " + fn + ";}";
-        }
-        if (!fnPrologue.empty()) {
-            insertions.push_back({scan.directiveEndOffset, std::move(fnPrologue)});
-        }
-    }
-
-    // 2. Top-level var declarations that shadow replaceable host globals or `window.name`
-    for (const TopLevelVarExport& ve : scan.topLevelVarExports) {
-        std::string snippet;
-        for (const std::string& vname : ve.names) {
-            if (!isShadowTargetName(vname)) continue;
-            if (vname == "name") {
-                snippet += ";{globalThis.name = name;name = globalThis.name;}";
-            } else {
-                snippet += ";{globalThis." + vname + " = " + vname + ";}";
-            }
-        }
-        if (!snippet.empty()) {
-            insertions.push_back({ve.insertOffset, std::move(snippet)});
-        }
-    }
-
-    if (insertions.empty()) return code;
-
-    std::stable_sort(insertions.begin(), insertions.end(),
-                     [](const Insertion& a, const Insertion& b) { return a.offset < b.offset; });
-
-    std::string out;
-    out.reserve(code.size() + insertions.size() * 48);
-    size_t prev = 0;
-    for (const Insertion& ins : insertions) {
-        const size_t off = std::min(ins.offset, code.size());
-        if (off > prev) {
-            out.append(code, prev, off - prev);
-            prev = off;
-        }
-        out.append(ins.text);
-    }
-    if (prev < code.size()) {
-        out.append(code, prev, code.size() - prev);
-    }
-    return out;
 }
 
 } // namespace bro::bronze_host
