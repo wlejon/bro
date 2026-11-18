@@ -138,23 +138,14 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
         s.proto = new ev::Persistent(proto.get());
     }
 
+    // The registration defines the global object's property too.
     ev::registerGlobal(name, s.ctor->get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::Persistent gtP(gt.value);
-        ev::setProperty(gtP.get(), name, s.ctor->get());
-    }
 }
 
 void HostClass::alias(const char* name) const {
     const Slots* s = slotsIfAny();
     if (!s || !s->ctor) return;
     ev::registerGlobal(name, s->ctor->get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::Persistent gtP(gt.value);
-        ev::setProperty(gtP.get(), name, s->ctor->get());
-    }
 }
 
 void HostClass::bind(const char* name) {

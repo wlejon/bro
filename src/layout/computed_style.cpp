@@ -7,11 +7,13 @@
 
 #include "css/color.h"
 #include "css/properties.h"
+#include "css/transform.h"
 #include "layout/formatting_context.h"
 #include "layout/skia_text_metrics.h"
 #include "util/string_utils.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -136,6 +138,35 @@ std::string backgroundPosition(const std::string& prop, const std::string& value
     return out;
 }
 
+// The matrix is float: cos(90deg) comes out -4.37114e-08 where Chromium's
+// double gives 6.12323e-17. Both are rounding noise; it prints as 0.
+std::string matrixNumber(float v) {
+    if (std::fabs(v) < 1e-6f) v = 0.0f;  // and no "-0"
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%g", static_cast<double>(v));
+    return buf;
+}
+
+std::string resolvedTransform(dom::Element* el, const std::string& value) {
+    const auto& box = el->layoutBox();
+    const float w = box.contentRect.width + box.padding.left + box.padding.right + box.border.left + box.border.right;
+    const float h = box.contentRect.height + box.padding.top + box.padding.bottom + box.border.top + box.border.bottom;
+    const htmlayout::css::Matrix3D m = htmlayout::css::parseTransform3D(value, w, h);
+    const float* a = m.m;
+    const bool flat = a[2] == 0 && a[3] == 0 && a[6] == 0 && a[7] == 0 && a[8] == 0 && a[9] == 0 &&
+                      a[10] == 1 && a[11] == 0 && a[14] == 0 && a[15] == 1;
+    std::string out;
+    if (flat) {
+        const float six[6] = {a[0], a[1], a[4], a[5], a[12], a[13]};
+        out = "matrix(";
+        for (int i = 0; i < 6; ++i) out += (i ? ", " : "") + matrixNumber(six[i]);
+    } else {
+        out = "matrix3d(";
+        for (int i = 0; i < 16; ++i) out += (i ? ", " : "") + matrixNumber(a[i]);
+    }
+    return out + ")";
+}
+
 }  // namespace
 
 std::string computedProperty(dom::Element* el, const std::string& prop,
@@ -162,6 +193,10 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
         value = htmlayout::css::initialValue(prop);
         if (value.empty()) value = untrackedInitial(prop);
     }
+    // transform resolves to the matrix it amounts to (CSS Transforms:
+    // matrix() for a 2D one, matrix3d() otherwise), percentages against the
+    // border box, numbers as Chromium prints them.
+    if (prop == "transform" && !value.empty() && value != "none") return resolvedTransform(el, value);
     if (prop == "font-stretch" && value == "normal") return "100%";
     if (prop == "word-spacing" && value == "normal") return "0px";
     if (prop == "outline-width") {

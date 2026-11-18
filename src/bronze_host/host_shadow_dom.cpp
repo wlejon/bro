@@ -215,10 +215,6 @@ void installShadowRootClass() {
     g_shadowRootClass.inherit(nodeHostClass());
 
     ev::registerGlobal("ShadowRoot", g_shadowRootClass.constructor());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "ShadowRoot", g_shadowRootClass.constructor());
-    }
 }
 
 Value hostShadowRootValue(dom::ShadowRoot* sr) {

@@ -15,8 +15,9 @@
 // the document, and so does the listener, which lives in a list the document
 // owns (its window's list, its root element's).
 //
-// Not here: the window's onerror, onmessage and onunhandledrejection, which
-// their own dispatches read as properties (host_error_events.cpp,
+// The window's onerror, onmessage, onmessageerror, onunhandledrejection and
+// onrejectionhandled only hold their value here: their own dispatches read
+// them as properties and call them (host_error_events.cpp,
 // host_window_message.cpp, host_rejection_events.cpp).
 
 #include "bronze_host/host_events.h"
@@ -137,6 +138,35 @@ void installHandlerAttribute(ObjectBuilder& b, const std::string& type, const st
         });
 }
 
+// An attribute that holds its value for a dispatch that reads it: an object
+// is kept, anything else is null ([LegacyTreatNonObjectAsNull]).
+void installValueHandlerAttribute(ObjectBuilder& b, const std::string& type, const TargetOf& targetOf) {
+    const std::string key = "window-value:" + type;
+    const std::string prop = "on" + type;
+    b.accessor(
+        prop.c_str(),
+        [key, targetOf](Value, std::span<const Value>) -> Value {
+            dom::Element* el = nullptr;
+            dom::Document* doc = targetOf(el);
+            if (!doc) return ev::null();
+            auto it = doc->hostSlots().find(key);
+            if (it == doc->hostSlots().end()) return ev::null();
+            return std::static_pointer_cast<ev::Persistent>(it->second)->get();
+        },
+        [key, targetOf](Value, std::span<const Value> a) -> Value {
+            Value v = argAt(a, 0);
+            dom::Element* el = nullptr;
+            dom::Document* doc = targetOf(el);
+            if (!doc) return ev::undefined();
+            if (!ev::isObject(v)) {
+                doc->hostSlots().erase(key);
+                return ev::undefined();
+            }
+            doc->hostSlots()[key] = std::make_shared<ev::Persistent>(v);
+            return ev::undefined();
+        });
+}
+
 }  // namespace
 
 void installWindowEventHandlers(ObjectBuilder& window) {
@@ -149,6 +179,8 @@ void installWindowEventHandlers(ObjectBuilder& window) {
     };
     for (const char* t : kGlobalHandlerTypes) installHandlerAttribute(window, t, "window:", target);
     for (const char* t : kWindowHandlerTypes) installHandlerAttribute(window, t, "window:", target);
+    for (const char* t : {"error", "message", "messageerror", "unhandledrejection", "rejectionhandled"})
+        installValueHandlerAttribute(window, t, target);
 }
 
 void installDocumentEventHandlers(ObjectBuilder& document, const ElementSource& root) {

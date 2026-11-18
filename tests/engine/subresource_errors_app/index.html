@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- tests/engine/test_subresource_errors.js runs this page in a child. -->
+<html><head>
+<script>window.__log = []; document.addEventListener('error', (e) => __log.push('capture error ' + e.target.tagName), true);</script>
+<link rel="stylesheet" href="ok.css" onload="__log.push('css load')" onerror="__log.push('css error ok.css')">
+<link rel="stylesheet" href="missing.css" onerror="__log.push('css error missing ' + event.type + ' ' + event.bubbles)">
+<link rel="stylesheet" href="https://cdn.example.invalid/refused.css" onerror="__log.push('css error refused')">
+<script src="missing.js" onerror="__log.push('js error missing ' + event.bubbles + ' ' + event.cancelable + ' ' + event.isTrusted)"></script>
+<script src="https://cdn.example.invalid/refused.js" onerror="__log.push('js error refused')" onload="__log.push('refused loaded?')"></script>
+<script src="ok.js" onload="__log.push('js load ' + window.okRan)"></script>
+<script>__log.push('inline after');</script>
+</head><body>
+<button id="b" onclick="__log.push('onclick ' + (this === document.getElementById('b')) + ' ' + event.type)">b</button>
+<a id="a" href="#gone" onclick="return false">a</a>
+<button id="bad" onclick="this is not javascript(">bad</button>
+</body></html>

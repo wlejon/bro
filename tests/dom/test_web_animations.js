@@ -65,10 +65,14 @@ anim2.onfinish = () => { finishFired = true; };
 
 anim2.finish();
 assert(anim2.playState === 'finished', 'playState is finished after finish()');
-assert(finishFired === true, 'onfinish event fired synchronously on finish()');
+// The finish event is queued (finish notification steps), not dispatched
+// inside finish(); the promise resolves first.
+assert(finishFired === false, 'onfinish is not dispatched inside finish()');
 
 const finishedResult = await anim2.finished;
 assert(finishedResult === anim2, 'finished promise resolved with Animation');
+advanceTime(16);
+assert(finishFired === true, 'onfinish fired on a later task');
 
 // 6. cancel() and finished promise rejection
 const anim3 = div.animate([{ opacity: 0 }, { opacity: 1 }], 2000);

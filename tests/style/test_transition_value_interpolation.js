@@ -41,6 +41,12 @@ flush();
 advanceTime(500);
 
 const cs = (id, prop) => getComputedStyle($(id)).getPropertyValue(prop);
+// A computed transform is a matrix (Chromium): the expected function lists
+// below are resolved the same way, on a probe of the same size.
+const probe = document.createElement('div');
+probe.style.cssText = 'width:10px;height:10px';
+root.appendChild(probe);
+const asMatrix = (t) => { probe.style.transform = t; return getComputedStyle(probe).transform; };
 // Compare the numbers in two value strings within a tolerance, with the
 // words between them equal.
 function sameValue(got, want, msg) {
@@ -68,12 +74,12 @@ sameValue(cs('m3d', 'transform'),
           `matrix3d(1.5, 0, 0, 0, 0, ${s}, ${s}, 0, 0, ${-h}, ${h}, 0, 0, 0, 0, 1)`,
           'translateZ(0px) → rotateX(90deg) scale(2) blends through a 3D decomposition');
 // A zero rotation has no axis of its own: the pair shares rotate3d.
-sameValue(cs('axis', 'transform'), 'rotate3d(1, 0, 0, 45deg)',
+sameValue(cs('axis', 'transform'), asMatrix('rotate3d(1, 0, 0, 45deg)'),
           'rotateY(0deg) → rotateX(90deg) rotates about the other axis');
 // The common prefix still blends as functions; the rest through a matrix.
-sameValue(cs('prefix', 'transform'), 'translateX(50px) matrix(2, 0, 0, 2, 0, 0)',
+sameValue(cs('prefix', 'transform'), asMatrix('translateX(50px) matrix(2, 0, 0, 2, 0, 0)'),
           'the matching prefix blends per function, the rest as a matrix');
-sameValue(cs('same', 'transform'), 'translateX(50px)', 'a same-shape pair keeps its functions');
+sameValue(cs('same', 'transform'), asMatrix('translateX(50px)'), 'a same-shape pair keeps its functions');
 
 sameValue(cs('bs', 'box-shadow'), '5px 10px 15px 2px rgb(100, 50, 0)',
           'every part of a box-shadow blends');
@@ -89,4 +95,4 @@ sameValue(cs('bgpos', 'background-position'), '50px 25px', 'a two-value length b
 advanceTime(600);
 for (const [id, prop, , to] of props)
     assert($(id).getAnimations().length === 0, id + ': the transition ended');
-sameValue(cs('m2d', 'transform'), 'translateX(10px) scale(2)', 'and ends on its value');
+sameValue(cs('m2d', 'transform'), asMatrix('translateX(10px) scale(2)'), 'and ends on its value');

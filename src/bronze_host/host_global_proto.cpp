@@ -91,11 +91,6 @@ void installGlobalPrototype(const char* ctorName) {
     ev::setPrototype(global.get(), proto.get());
 
     ev::registerGlobal(ctorName, ctor.get());
-    ev::GlobalValue gt2 = ev::globalValue("globalThis");
-    if (gt2.found && ev::isObject(gt2.value)) {
-        ev::Persistent g2(gt2.value);
-        ev::setProperty(g2.get(), ctorName, ctor.get());
-    }
 }
 
 }  // namespace bro::bronze_host

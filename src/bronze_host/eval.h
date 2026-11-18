@@ -68,6 +68,14 @@ int currentClassicScript();
 /// ordinal. A script element inserted while they run is not one of them
 /// (dom_document.cpp).
 void snapshotClassicScripts();
+/// A statement firing `type` ("load" or "error") at the classic script
+/// running now (currentClassicScript's element): a trusted Event that neither
+/// bubbles nor cancels, as HTML fires at a script element whose fetch
+/// succeeded (after it ran) or failed (in place of running it). The unit's
+/// text carries it (Engine::combineClassicScripts); installClassicScriptEvents
+/// puts the function it calls on the realm's global.
+std::string classicScriptEventCall(const char* type);
+void installClassicScriptEvents();
 
 /// Compile a JS file in-process using bronze CLI and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);

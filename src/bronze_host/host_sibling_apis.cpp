@@ -591,10 +591,13 @@ void installSiblingApis(engine::Engine& engine) {
         // The idle timer (bro.seat.setIdleTimeout) runs on the engine's
         // record of user input: under DRM the engine reads the devices
         // itself, and a compositor client's idle-inhibit holds it off.
+        // Headless, on its virtual clock, the session's other programs'
+        // inhibitors are none of its business.
         engine.addFramePump([eng = &engine] {
             if (s_activeEngine == eng) {
                 broseat::api::tickIdle(eng->activityClockMs(), eng->lastUserActivityMs(),
-                                       eng->hostIdleInhibited());
+                                       eng->hostIdleInhibited(),
+                                       eng->displayMode() != engine::DisplayMode::Headless);
             }
             broseat::api::tickSeatAsync();
             if (ev::microtasksPending()) ev::drainMicrotasks();

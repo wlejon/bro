@@ -167,6 +167,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installPath();
     bk::installIndexedDB();
     bk::installIndexedDBJS();
+    adoptGlobalProperty("indexedDB", ev::GlobalKind::Readonly);  // readonly attribute
     bk::installReadableStream();
     bk::installFetch();
     bk::installWritableStream();

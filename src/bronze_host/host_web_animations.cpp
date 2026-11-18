@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -97,6 +98,8 @@ void fireHandler(Value handler, Value animObj, const char* type, Value currentTi
     ev::call(handlerP.get(), animP.get(), std::span<const Value>(args, 1));
 }
 
+AnimationState* stateOf(Value self);
+
 void settleFinish(AnimationState* st, Value animObjIn) {
     if (st->finishDelivered) return;
     st->finishDelivered = true;
@@ -115,8 +118,18 @@ void settleFinish(AnimationState* st, Value animObjIn) {
             if (cur) ct = ev::fromDouble(*cur);
         }
     }
-    fireHandler(st->onfinish.get(), animP.get(), "finish", ct);
-    strongPins().erase(st->id);
+    // The finish event is a task of its own, queued after the promise's
+    // reactions (Web Animations "finish notification steps"); one cancelled
+    // or replayed before it runs fires none, as in Chromium.
+    auto pending = std::make_shared<ev::Persistent>(animP.get());
+    auto ctP = std::make_shared<ev::Persistent>(ct);
+    const uint64_t id = st->id;
+    postHostTask([pending, ctP, id] {
+        AnimationState* now = stateOf(pending->get());
+        if (now && now->id == id && now->finishDelivered)
+            fireHandler(now->onfinish.get(), pending->get(), "finish", ctP->get());
+        strongPins().erase(id);
+    });
 }
 
 // cancel(): reject `finished` (and replace it with a fresh pending promise on
@@ -665,27 +678,8 @@ void installWebAnimationGlobals() {
     g_cssTransitionClass.install("CSSTransition", 0, nullptr, decorateCssTransitionProto);
     g_cssTransitionClass.inherit(g_animationClass);
 
-    ev::registerGlobal("Animation", g_animationClass.constructor());
+    // install() registered Animation, CSSAnimation and CSSTransition.
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());
-    ev::registerGlobal("CSSAnimation", g_cssAnimationClass.constructor());
-    ev::registerGlobal("CSSTransition", g_cssTransitionClass.constructor());
-    // Each global object is rooted across its defines (setProperty allocates).
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        const Rooted global(gt.value);
-        ev::setProperty(global, "Animation", g_animationClass.constructor());
-        ev::setProperty(global, "WebAnimation", g_animationClass.constructor());
-        ev::setProperty(global, "CSSAnimation", g_cssAnimationClass.constructor());
-        ev::setProperty(global, "CSSTransition", g_cssTransitionClass.constructor());
-    }
-    ev::GlobalValue win = ev::globalValue("window");
-    if (win.found && ev::isObject(win.value)) {
-        const Rooted window(win.value);
-        ev::setProperty(window, "Animation", g_animationClass.constructor());
-        ev::setProperty(window, "WebAnimation", g_animationClass.constructor());
-        ev::setProperty(window, "CSSAnimation", g_cssAnimationClass.constructor());
-        ev::setProperty(window, "CSSTransition", g_cssTransitionClass.constructor());
-    }
 }
 
 void decorateElementWebAnimations(ObjectBuilder& b) {

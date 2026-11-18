@@ -164,6 +164,9 @@ anim.id;                 // the options.id string (get/set)
 // a finished animation is played/seeked back into the running state.
 await anim.finished;
 
+// The finish event is a task of its own, queued after the promise's
+// reactions (also after finish()); an animation cancelled or replayed before
+// that task runs fires none.
 anim.onfinish = (e) => { /* e.type === 'finish', e.currentTime, e.target */ };
 anim.oncancel = (e) => { /* e.type === 'cancel' */ };
 anim.onremove = (e) => { /* e.type === 'remove': replaced, see below */ };

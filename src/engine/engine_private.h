@@ -195,7 +195,15 @@
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
     std::vector<std::string> classicScriptTexts() const;
-    static std::string combineClassicScripts(const std::vector<std::string>& texts, size_t first = 0);
+    std::string combineClassicScripts(const std::vector<std::string>& texts, size_t first = 0) const;
+    // Per classic script (page ordinal), what its fetch came to:
+    // kScriptInline, kScriptFetched (fires load after it runs) or
+    // kScriptFailed (fires error in its place). Set by classicScriptTexts.
+    enum : uint8_t { kScriptInline = 0, kScriptFetched = 1, kScriptFailed = 2 };
+    mutable std::vector<uint8_t> classicScriptFetch_;
+    // The page's linked sheets that could not be read (fireLinkedSheetEvents).
+    std::vector<std::string> failedSheets_;
+    void fireLinkedSheetEvents();
     void runClassicScripts(const std::vector<std::string>& texts, const std::string& code,
                            const std::string& name, size_t first = 0);
     // At launch, while the GPU comes up: the realm's host globals installed
@@ -702,6 +710,9 @@ private:
     // an animal) must not type its own letter there. Cleared by the next
     // keydown or keyup.
     bool dropTextAfterKeyDown_ = false;
+    // The button, checkbox or radio a Space keydown armed: its click comes
+    // with the Space keyup, if focus is still on it (keyActivationFor).
+    dom::ElementHandle spaceActivation_;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;
     // Set inside a headless advanceTime step once media is at its instant:

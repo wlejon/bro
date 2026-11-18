@@ -64,8 +64,25 @@ std::vector<EventPathEntry> buildEventPath(Element* target, const Event& event,
     return path;
 }
 
+AttributeHandlerHook g_attributeHandlerHook = nullptr;
+
+void invokeAttributeHandler(Element* el, Event& event, int phase) {
+    if (!g_attributeHandlerHook || phase == CAPTURING_PHASE || el->attributes().empty()) return;
+    const std::string& type = event.type();
+    for (const auto& kv : el->attributes()) {
+        const std::string& name = kv.first;
+        if (name.size() == type.size() + 2 && name[0] == 'o' && name[1] == 'n' &&
+            name.compare(2, std::string::npos, type) == 0) {
+            g_attributeHandlerHook(el, event);
+            return;
+        }
+    }
+}
+
 void invokeElementListeners(Element* el, Event& event, int phase) {
-    if (!el || !el->nativeListeners()) return;
+    if (!el) return;
+    invokeAttributeHandler(el, event, phase);
+    if (!el->nativeListeners() || event.immediatePropagationStopped()) return;
     auto& list = *el->nativeListeners();
     auto snapshot = list.snapshot(event.type());
     for (auto& entry : snapshot) {
@@ -99,6 +116,10 @@ void dispatchToWindow(Document* doc, Event& event, bool isCapture) {
 }
 
 } // namespace
+
+void setAttributeHandlerHook(AttributeHandlerHook hook) {
+    g_attributeHandlerHook = hook;
+}
 
 void dispatchDomEvent(Element* target, Event& event) {
     if (!target) return;

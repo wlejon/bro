@@ -43,22 +43,8 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
     KeyHandleResult r;
     auto itype = inputType(el);
 
-    // Checkbox/radio: space toggles
-    if ((itype == InputType::Checkbox || itype == InputType::Radio)
-        && keycode == platform::kc::Space) {
-        if (itype == InputType::Checkbox) {
-            if (el->hasAttribute("checked"))
-                el->removeAttribute("checked");
-            else
-                el->setAttribute("checked", "");
-        } else {
-            el->setAttribute("checked", "");
-        }
-        r.handled = true;
-        r.dispatchChange = true;
-        r.dispatchInput = true;
-        return r;
-    }
+    // Checkbox/radio: Space clicks them at its keyup, which the engine runs
+    // (engine/element_activation.h, keyActivationFor).
 
     // Range: arrow keys adjust value
     if (itype == InputType::Range) {

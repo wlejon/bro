@@ -18,8 +18,10 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_svg_interfaces.h"
 #include "bronze_host/host_url_reflect.h"
+#include "bronze_host/host_values.h"
 #include "engine/engine.h"
 #include "dom/document.h"
+#include "dom/text_node.h"
 #include "util/remote_asset.h"
 
 #include <cctype>
@@ -137,6 +139,38 @@ void decorateScriptProto(ObjectBuilder& b) {
             const std::string v = ev::toUtf8(argAt(a, 0));
             HostNodeState* st = hostNodeStateOfValue(receiver.get());
             if (st && st->el) st->el->setAttribute("src", v);
+            return ev::undefined();
+        });
+    // text: the script's child text (jQuery's globalEval sets it); type: the
+    // reflected attribute.
+    b.accessor(
+        "text",
+        [](Value self, std::span<const Value>) -> Value {
+            HostNodeState* st = hostNodeStateOfValue(self);
+            if (!st || !st->el) return ev::fromUtf8("");
+            std::string out;
+            for (dom::Node* n : st->el->childNodes())
+                if (n->nodeType() == dom::NodeType::Text) out += static_cast<dom::TextNode*>(n)->data();
+            return ev::fromUtf8(out);
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            ev::Persistent receiver(self);
+            const std::string v = hostNullableString(argAt(a, 0));
+            HostNodeState* st = hostNodeStateOfValue(receiver.get());
+            if (st && st->el) st->el->setTextContent(v);
+            return ev::undefined();
+        });
+    b.accessor(
+        "type",
+        [](Value self, std::span<const Value>) -> Value {
+            HostNodeState* st = hostNodeStateOfValue(self);
+            return ev::fromUtf8(st && st->el ? st->el->getAttribute("type") : std::string());
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            ev::Persistent receiver(self);
+            const std::string v = hostDomString(argAt(a, 0));
+            HostNodeState* st = hostNodeStateOfValue(receiver.get());
+            if (st && st->el) st->el->setAttribute("type", v);
             return ev::undefined();
         });
 }
@@ -327,13 +361,6 @@ void installHtmlInterfaces() {
     g_documentTypeClass.install("DocumentType", 0, illegalConstructor, decorateDocumentTypeProto);
     g_documentTypeClass.inherit(g_nodeClass);
     g_domImplementationClass.install("DOMImplementation", 0, illegalConstructor, nullptr);
-    ev::registerGlobal("Document", g_documentClass.constructor());
-    {
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-            ev::setProperty(gt.value, "Document", g_documentClass.constructor());
-        }
-    }
 
     // ShadowRoot
     installShadowRootClass();

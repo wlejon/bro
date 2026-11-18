@@ -16,6 +16,7 @@
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_web_globals.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_selection.h"
@@ -38,6 +39,11 @@ namespace bro::bronze_host {
 namespace {
 
 std::unordered_map<uint64_t, std::string>& windowNames() {
+    static auto* map = new std::unordered_map<uint64_t, std::string>();
+    return *map;
+}
+
+std::unordered_map<uint64_t, std::string>& windowStatuses() {
     static auto* map = new std::unordered_map<uint64_t, std::string>();
     return *map;
 }
@@ -77,27 +83,55 @@ Value makeGetComputedStyle() {
 void clearWindowListeners() {
     windowListeners().clear();
     windowNames().clear();
+    windowStatuses().clear();
 }
 
 void clearWindowName(uint64_t scopeId) {
     if (scopeId == 0) {
         windowNames().clear();
+        windowStatuses().clear();
     } else {
         windowNames().erase(scopeId);
+        windowStatuses().erase(scopeId);
     }
 }
 
 void installWindowGlobal(engine::Engine* enginePtr) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     ObjectBuilder b(gt.value);
-    ev::registerGlobal("window", b.get());
-    ev::registerGlobal("self", b.get());
-    ev::registerGlobal("top", b.get());
-    ev::registerGlobal("parent", b.get());
-    b.set("window", b.get());
-    b.set("self", b.get());
-    b.set("top", b.get());
-    b.set("parent", b.get());
+    // The registrations define the global object's own properties too, so
+    // nothing here writes a registered name on it afterwards: a write after
+    // the registration is the page's to make, and would make the name the
+    // global object's to answer (host_global_kinds.h).
+    registerHostGlobal("window", b.get(), ev::GlobalKind::Readonly);  // [LegacyUnforgeable]
+    registerHostGlobal("self", b.get());                              // [Replaceable]
+    registerHostGlobal("frames", b.get());                            // [Replaceable]
+    registerHostGlobal("top", b.get(), ev::GlobalKind::Readonly);     // [LegacyUnforgeable]
+    registerHostGlobal("parent", b.get());                            // [Replaceable]
+    // A top-level window's frameElement; a frame's own is its host page's
+    // element behind the membrane (installParentWindowProxy).
+    b.accessor("frameElement", [](Value, std::span<const Value>) { return ev::null(); }, nullptr);
+    b.accessor("closed", [](Value, std::span<const Value>) { return ev::fromBool(false); }, nullptr);
+    b.accessor("isSecureContext", [](Value, std::span<const Value>) { return ev::fromBool(true); }, nullptr);
+    // window.length: the document's child navigables, its frames.
+    defineReplaceableAttribute(b, "length", [](Value, std::span<const Value>) {
+        dom::Document* doc = currentHostDocument();
+        const size_t n = doc ? doc->querySelectorAll("iframe").size() : 0;
+        return ev::fromDouble(static_cast<double>(n));
+    });
+    // The BarProp objects: every bar of a window is visible.
+    for (const char* bar : {"locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"}) {
+        ObjectBuilder prop;
+        prop.set("visible", ev::fromBool(true));
+        registerHostGlobal(bar, prop.get());
+    }
+    {
+        ObjectBuilder external;  // HTML's obsolete External: both members do nothing
+        external.def("AddSearchProvider", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        external.def("IsSearchProviderInstalled", 0,
+                     [](Value, std::span<const Value>) { return ev::undefined(); });
+        registerHostGlobal("external", external.get());
+    }
 
     b.accessor("name",
                [](Value, std::span<const Value>) {
@@ -110,8 +144,19 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                    windowNames()[currentCompartmentId()] = std::move(s);
                    return ev::undefined();
                });
+    // window.status: a string that shows nowhere, kept as it was set.
+    b.accessor("status",
+               [](Value, std::span<const Value>) {
+                   auto& st = windowStatuses();
+                   auto it = st.find(currentCompartmentId());
+                   return ev::fromUtf8(it != st.end() ? it->second : "");
+               },
+               [](Value, std::span<const Value> a) {
+                   windowStatuses()[currentCompartmentId()] = ev::toUtf8(argAt(a, 0));
+                   return ev::undefined();
+               });
 
-    b.accessor("devicePixelRatio",
+    defineReplaceableAttribute(b, "devicePixelRatio",
                [enginePtr](Value, std::span<const Value>) {
                    // A secondary window reports the display it sits on.
                    dom::Document* curDoc = currentHostDocument();
@@ -120,9 +165,8 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                            return ev::fromDouble(wh->displayScale);
                    }
                    return ev::fromDouble(enginePtr->displayScale());
-               },
-               nullptr);
-    b.accessor("innerWidth",
+               });
+    defineReplaceableAttribute(b, "innerWidth",
                [enginePtr](Value, std::span<const Value>) {
                    dom::Document* curDoc = currentHostDocument();
                    if (curDoc && enginePtr) {
@@ -134,9 +178,8 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                        }
                    }
                    return ev::fromDouble(enginePtr ? enginePtr->contentWidth() : 0);
-               },
-               nullptr);
-    b.accessor("innerHeight",
+               });
+    defineReplaceableAttribute(b, "innerHeight",
                [enginePtr](Value, std::span<const Value>) {
                    dom::Document* curDoc = currentHostDocument();
                    if (curDoc && enginePtr) {
@@ -148,9 +191,8 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                        }
                    }
                    return ev::fromDouble(enginePtr ? enginePtr->contentHeight() : 0);
-               },
-               nullptr);
-    b.accessor("outerWidth",
+               });
+    defineReplaceableAttribute(b, "outerWidth",
                [enginePtr](Value, std::span<const Value>) {
                    dom::Document* curDoc = currentHostDocument();
                    if (curDoc && enginePtr) {
@@ -162,9 +204,8 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                        }
                    }
                    return ev::fromDouble(enginePtr ? enginePtr->viewportWidth() : 0);
-               },
-               nullptr);
-    b.accessor("outerHeight",
+               });
+    defineReplaceableAttribute(b, "outerHeight",
                [enginePtr](Value, std::span<const Value>) {
                    dom::Document* curDoc = currentHostDocument();
                    if (curDoc && enginePtr) {
@@ -176,12 +217,12 @@ void installWindowGlobal(engine::Engine* enginePtr) {
                        }
                    }
                    return ev::fromDouble(enginePtr ? enginePtr->viewportHeight() : 0);
-               },
-               nullptr);
+               });
 
-    b.accessor("opener",
-               [](Value, std::span<const Value>) { return hostWindowOpener(); },
-               nullptr);
+    // opener's setter replaces it as [Replaceable]'s does (HTML 7.2.2.1;
+    // there is no opener to disown).
+    defineReplaceableAttribute(b, "opener",
+                               [](Value, std::span<const Value>) { return hostWindowOpener(); });
 
     b.def("close", 0, [enginePtr](Value, std::span<const Value>) -> Value {
         dom::Document* curDoc = currentHostDocument();
@@ -255,6 +296,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
             {handle, std::move(type), std::move(fnP), capture, targetDoc});
         return ev::undefined();
     });
+    defineReplaceableAttribute(b, "event", [](Value, std::span<const Value>) { return hostCurrentWindowEvent(); });
     b.def("dispatchEvent", 1, [](Value, std::span<const Value> a) {
         return hostDispatchToWindow(argAt(a, 0));
     });
@@ -283,21 +325,11 @@ void installWindowGlobal(engine::Engine* enginePtr) {
 
     // Registered before installWorkerGlobals' no-op `postMessage` stub,
     // whose found-guard then leaves this one in place.
-    // A window property that is also a registered global: set on the
-    // window, then registered.
-    auto setAndRegister = [&b](const char* name, Value v) {
-        b.set(name, v);
-        ev::registerGlobal(name, ev::getProperty(b.get(), name));
-    };
-
-    // Registered before installWorkerGlobals' no-op `postMessage` stub,
-    // whose found-guard then leaves this one in place.
-    setAndRegister("postMessage", makeWindowPostMessage());
-    setAndRegister("getComputedStyle", makeGetComputedStyle());
-    ev::registerGlobal("close", ev::getProperty(b.get(), "close"));
-    setAndRegister("localStorage", makeLocalStorageValue());
-    setAndRegister("sessionStorage", makeSessionStorageValue());
-    setAndRegister("screen", makeScreenValue());
+    registerHostGlobal("postMessage", makeWindowPostMessage());
+    registerHostGlobal("getComputedStyle", makeGetComputedStyle());
+    registerHostGlobal("close", ev::getProperty(b.get(), "close"));
+    registerHostGlobal("localStorage", makeLocalStorageValue(), ev::GlobalKind::Readonly);
+    registerHostGlobal("sessionStorage", makeSessionStorageValue(), ev::GlobalKind::Readonly);
 
     b.def("getSelection", 0, [](Value, std::span<const Value>) {
         dom::Document* doc = currentHostDocument();  // this window's
@@ -320,7 +352,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         return ev::undefined();
     });
 
-    setAndRegister("matchMedia", ev::makeFunction(
+    registerHostGlobal("matchMedia", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
             std::string query = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
             return makeHostMatchMediaObject(query);
@@ -346,14 +378,14 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         scrollRootTo(static_cast<float>(y));
     };
 
-    b.accessor("scrollX", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
-    b.accessor("pageXOffset", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
-    b.accessor("scrollY", [](Value, std::span<const Value>) {
+    defineReplaceableAttribute(b, "scrollX", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); });
+    defineReplaceableAttribute(b, "pageXOffset", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); });
+    defineReplaceableAttribute(b, "scrollY", [](Value, std::span<const Value>) {
         return ev::fromDouble(rootScrollY());
-    }, nullptr);
-    b.accessor("pageYOffset", [](Value, std::span<const Value>) {
+    });
+    defineReplaceableAttribute(b, "pageYOffset", [](Value, std::span<const Value>) {
         return ev::fromDouble(rootScrollY());
-    }, nullptr);
+    });
 
     // An options object without `top` leaves the vertical offset alone.
     b.def("scrollTo", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
@@ -377,7 +409,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
 
     for (const char* name : {"addEventListener", "removeEventListener", "dispatchEvent",
                              "scrollTo", "scroll", "scrollBy", "open", "focus", "blur"}) {
-        ev::registerGlobal(name, ev::getProperty(b.get(), name));
+        registerHostGlobal(name, ev::getProperty(b.get(), name));
     }
 
     installLocationAndHistory(b);

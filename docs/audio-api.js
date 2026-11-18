@@ -55,15 +55,19 @@
  *   bound to the master bus (see those classes). Reading `.value` evaluates
  *   the timeline but pushes nothing. Automation never overwrites `.value`'s
  *   stored base, which is what a first ramp starts from.
- * - EVENTS ARRIVE ON THE FRAME TICK. The only event is an
+ * - EVENTS ARRIVE ON THE FRAME TICK. The events are an
  *   AudioBufferSourceNode's `ended` (the `onended` property and any
- *   `addEventListener('ended', ...)` listeners). It, and the automation
+ *   `addEventListener('ended', ...)` listeners) and an AudioContext's
+ *   `statechange` (`onstatechange`, listeners), queued when suspend(),
+ *   resume() or close() changes `state`. They, and the automation
  *   above, are delivered on bro's frame tick: bro's engine frame pump runs
  *   the audio binding's tick (the same one that settles
  *   `createClipFromFileAsync` and delivers `bro.mic` chunks) once per frame,
  *   including while `bro.time` is paused. They are also delivered at the end
  *   of each `ctx.renderBlock()`. So `ended` fires on the first frame after
- *   the source stopped, not at the exact sample. There is no `onstatechange`,
+ *   the source stopped, not at the exact sample. Nodes and contexts carry
+ *   addEventListener / removeEventListener / dispatchEvent of their own; their
+ *   prototypes do not chain to EventTarget.prototype. There is no
  *   AudioWorklet, ScriptProcessorNode, OfflineAudioContext,
  *   MediaElementSource, ConstantSourceNode or IIRFilterNode.
  * - GARBAGE COLLECTION STOPS SOUND, EXCEPT A PLAYING BUFFER SOURCE. A

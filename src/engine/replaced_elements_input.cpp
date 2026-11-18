@@ -8,6 +8,7 @@
 #include "dom/element_geometry.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
+#include "engine/element_activation.h"
 #include "engine/color_picker_overlay.h"
 #include "engine/dropdown_overlay.h"
 #include "engine/overlay.h"
@@ -279,48 +280,13 @@ void focusNewControl(
     auto* newTextarea = getElTextarea(target);
     auto* newSelect = getElSelect(target);
 
-    // Only a checkbox/radio press below leaves something to undo. Clearing the
-    // record up front means a press on anything else cannot leave a previous
-    // one armed for the next release to act on.
-    state.activationTarget.reset();
-    state.activationPrevRadio.reset();
-    state.activationWasChecked = false;
-
     if (newInput) {
         newInput->setFocused(true);
         auto itype = newInput->inputType(target);
 
-        if (!intent.primary &&
-            (itype == layout::ElInput::InputType::Checkbox ||
-             itype == layout::ElInput::InputType::Radio)) {
-            // A right or middle press focuses the box but does not toggle it:
-            // it makes no click, so nothing would confirm or undo the toggle.
-        } else if (itype == layout::ElInput::InputType::Checkbox) {
-            state.activationTarget.assign(ctx.document, target);
-            state.activationWasChecked = target->hasAttribute("checked");
-            if (target->hasAttribute("checked")) {
-                target->removeAttribute("checked");
-            } else {
-                target->setAttribute("checked", "");
-            }
-            dispatchInputEvent(ctx, target);
-            dom::Event changeEvt("change");
-            dispatchControlEvent(ctx, target, changeEvt);
-            *ctx.dirtyFlag = true;
-        } else if (itype == layout::ElInput::InputType::Radio) {
-            // Read the group's state BEFORE clearing it — after clearRadioGroup
-            // there is nothing left to say which member had the check.
-            state.activationTarget.assign(ctx.document, target);
-            state.activationWasChecked = target->hasAttribute("checked");
-            state.activationPrevRadio.assign(ctx.document,
-                                             layout::checkedRadioInGroup(target));
-            layout::clearRadioGroup(target);
-            target->setAttribute("checked", "");
-            dispatchInputEvent(ctx, target);
-            dom::Event changeEvt("change");
-            dispatchControlEvent(ctx, target, changeEvt);
-            *ctx.dirtyFlag = true;
-        } else if (itype == layout::ElInput::InputType::Range) {
+        // A checkbox or radio changes with its click, at the release
+        // (dispatchActivatingClick): a press only focuses it.
+        if (itype == layout::ElInput::InputType::Range) {
             auto dp = newInput->lastDrawPos();
             float thumbR = layout::ElInput::rangeThumbRadius(dp.h);
             float trackStart = dp.x + thumbR;
@@ -456,17 +422,20 @@ void focusNewControl(
             std::vector<DropdownOverlay::Option> optsCopy = ddOpts;
             layout::ElSelect* sel = newSelect;
 
+            // A pick of another option: input, then change (HTML's "send
+            // select update notifications"); the one already selected fires
+            // nothing.
             auto onSelect = [dirtyFlag, elem, optsCopy, sel](int index) {
                 if (index < 0 || index >= static_cast<int>(optsCopy.size())) return;
+                if (index == sel->selectedIndex()) return;
                 sel->setSelectedIndex(index);
                 elem->setAttribute("value", optsCopy[index].value);
-                dom::Event changeEvt("change");
-                changeEvt.setIsTrusted(true);
-                dom::dispatchDomEvent(elem, changeEvt);
                 dom::InputEvent inputEvt("input");
-                inputEvt.setData(optsCopy[index].value);
                 inputEvt.setIsTrusted(true);
                 dom::dispatchDomEvent(elem, inputEvt);
+                dom::Event changeEvt("change", true, false);
+                changeEvt.setIsTrusted(true);
+                dom::dispatchDomEvent(elem, changeEvt);
                 if (dirtyFlag) *dirtyFlag = true;
             };
 
@@ -744,207 +713,17 @@ void dispatchDocMouseRelease(
         state.lastClickY = clientY;
         state.lastClickTarget.assign(ctx.document, target);
 
+        // The click and its activation behaviour (element_activation.cpp):
+        // a checkbox or radio toggles, a form submits or resets, a link is
+        // followed or downloaded, a label forwards to its control, a
+        // <summary> opens its <details> — the one path element.click() and
+        // the keyboard take too.
         dom::MouseEvent clickEvt("click");
         populate(clickEvt);
         clickEvt.setDetail(state.clickCount);
         if (target) applyMouseOffset(clickEvt, target);
-        dom::dispatchDomEvent(target, clickEvt);
-
-        // Checkbox / radio "legacy-canceled-activation behavior": the press
-        // already applied the new checkedness (focusNewControl) so the control
-        // ticks while the button is held; a click whose default was prevented
-        // has to put it back. Same rule, same gate, as the <details>/<summary>
-        // disclosure toggle further down — that one just happens to run its
-        // default action here rather than on press.
-        if (dom::Element* toggled = state.activationTarget.get()) {
-            if (clickEvt.defaultPrevented() && toggled == target) {
-                if (state.activationWasChecked) toggled->setAttribute("checked", "");
-                else                            toggled->removeAttribute("checked");
-                // Radio only: hand the check back to whichever member held it.
-                // Resolves to null if that element has since been removed, in
-                // which case the group is simply left empty — the same place a
-                // browser lands when the previous option is gone.
-                if (auto* prev = state.activationPrevRadio.get())
-                    prev->setAttribute("checked", "");
-                if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
-            }
-        }
-
-        // <a download> default action: save the link's bytes rather than
-        // navigating to them. Mirrors the programmatic element.click() path.
-        if (!clickEvt.defaultPrevented() && target) {
-            bro::bronze_host::runAnchorDownload(target);
-        }
-
-        // Interactive form submission: a click on <button> or
-        // <input type=submit> walks up to the owning form and fires the
-        // submit event (with constraint validation). Skipped if the click
-        // was cancelled, or the button's type is explicitly button/reset.
-        if (!clickEvt.defaultPrevented() && target) {
-            const auto& tag = target->tagName();
-            const bool isButton = (tag == "BUTTON" || tag == "button");
-            const bool isInput = (tag == "INPUT" || tag == "input");
-            const std::string inputType = isInput ? target->getAttribute("type") : "";
-            const bool isActionInput =
-                isInput && (inputType == "submit" || inputType == "reset" || inputType == "image");
-            if (isButton || isActionInput) {
-                std::string btnType = target->getAttribute("type");
-                // <button> defaults to type=submit when no type attribute.
-                if (btnType.empty() && isButton) btnType = "submit";
-                if (btnType == "image") btnType = "submit";
-                if (btnType == "submit") {
-                    dom::Element* owner = nullptr;
-                    const std::string& attrForm = target->getAttribute("form");
-                    if (!attrForm.empty() && target->document()) {
-                        auto* o = target->document()->getElementById(attrForm);
-                        if (o && (o->tagName() == "FORM" || o->tagName() == "form")) owner = o;
-                    } else {
-                        for (auto* p = target->parentElement(); p; p = p->parentElement()) {
-                            if (p->tagName() == "FORM" || p->tagName() == "form") { owner = p; break; }
-                        }
-                    }
-                    if (owner) {
-                        dom::Event submitEvt("submit", true, true);
-                        submitEvt.setIsTrusted(true);
-                        dom::dispatchDomEvent(owner, submitEvt);
-                    }
-                } else if (btnType == "reset") {
-                    dom::Element* owner = nullptr;
-                    for (auto* p = target->parentElement(); p; p = p->parentElement()) {
-                        if (p->tagName() == "FORM" || p->tagName() == "form") { owner = p; break; }
-                    }
-                    if (owner) {
-                        dom::Event resetEvt("reset", true, true);
-                        resetEvt.setIsTrusted(true);
-                        dom::dispatchDomEvent(owner, resetEvt);
-                    }
-                }
-            }
-        }
-
-        // <label> activation forwarding: clicking a label (or non-interactive
-        // content inside it, e.g. text or spans) forwards activation to the
-        // labeled control. If the click landed on interactive content (a button,
-        // an input, etc.), it must NOT forward so direct control clicks do not
-        // double-toggle.
-        if (!clickEvt.defaultPrevented() && target) {
-            dom::Element* label = nullptr;
-            for (auto* el = target; el; el = el->parentElement()) {
-                if (el->tagName() == "LABEL" || el->tagName() == "label") {
-                    label = el;
-                    break;
-                }
-                if (layout::isInteractiveContent(el)) {
-                    break;
-                }
-            }
-            if (label) {
-                dom::Element* control = layout::findLabeledControl(label);
-                if (control && control != target && !control->hasAttribute("disabled")) {
-                    bool isInput = (control->tagName() == "INPUT" || control->tagName() == "input");
-                    if (isInput) {
-                        std::string t = control->getAttribute("type");
-                        for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        if (t == "checkbox") {
-                            // Toggled before the click is dispatched, put back
-                            // if it is cancelled (element_activation.cpp).
-                            const bool wasChecked = control->hasAttribute("checked");
-                            if (wasChecked) control->removeAttribute("checked");
-                            else            control->setAttribute("checked", "");
-                            dom::MouseEvent fwdClick("click");
-                            populate(fwdClick);
-                            dom::dispatchDomEvent(control, fwdClick);
-                            if (fwdClick.defaultPrevented()) {
-                                if (wasChecked) control->setAttribute("checked", "");
-                                else            control->removeAttribute("checked");
-                            } else {
-                                dispatchInputEvent(ctx, control);
-                                dom::Event changeEvt("change");
-                                dispatchControlEvent(ctx, control, changeEvt);
-                            }
-                            if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
-                        } else if (t == "radio") {
-                            dom::MouseEvent fwdClick("click");
-                            populate(fwdClick);
-                            dom::dispatchDomEvent(control, fwdClick);
-                            if (!fwdClick.defaultPrevented()) {
-                                if (!control->hasAttribute("checked")) {
-                                    layout::clearRadioGroup(control);
-                                    control->setAttribute("checked", "");
-                                    dispatchInputEvent(ctx, control);
-                                    dom::Event changeEvt("change");
-                                    dispatchControlEvent(ctx, control, changeEvt);
-                                    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
-                                }
-                            }
-                        } else if (t == "file") {
-                            dom::MouseEvent fwdClick("click");
-                            populate(fwdClick);
-                            dom::dispatchDomEvent(control, fwdClick);
-                            if (!fwdClick.defaultPrevented()) {
-                                bool allowMultiple = control->hasAttribute("multiple");
-                                std::string accept = control->getAttribute("accept");
-                                std::vector<std::string> picked = platform::Dialogs::pickFiles(accept, allowMultiple);
-                                if (!picked.empty()) {
-                                    control->setSelectedFiles(picked);
-                                    std::string filename = std::filesystem::path(picked[0]).filename().string();
-                                    control->setAttribute("value", "C:\\fakepath\\" + filename);
-                                    dom::Event inputEvt("input");
-                                    dom::dispatchDomEvent(control, inputEvt);
-                                    dom::Event changeEvt("change");
-                                    dom::dispatchDomEvent(control, changeEvt);
-                                    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
-                                }
-                            }
-                        } else {
-                            dom::MouseEvent fwdClick("click");
-                            populate(fwdClick);
-                            dom::dispatchDomEvent(control, fwdClick);
-                        }
-                    } else {
-                        dom::MouseEvent fwdClick("click");
-                        populate(fwdClick);
-                        dom::dispatchDomEvent(control, fwdClick);
-                    }
-                }
-            }
-        }
-
-        // <details>/<summary> default action: clicking inside a <summary>
-        // toggles the [open] attribute on the parent <details>. Walk up from
-        // the click target so a click on text or icon inside the summary
-        // counts too — but only the first <summary> child of <details> is
-        // the disclosure handle (HTML spec). Skip when preventDefault'd.
-        if (!clickEvt.defaultPrevented() && target) {
-            for (auto* el = target; el; el = el->parentElement()) {
-                const auto& tag = el->tagName();
-                if (tag != "SUMMARY" && tag != "summary") continue;
-                auto* parent = el->parentElement();
-                if (!parent) break;
-                const auto& ptag = parent->tagName();
-                if (ptag != "DETAILS" && ptag != "details") break;
-                // First <summary> child only — others are inert per spec.
-                dom::Element* firstSummary = nullptr;
-                for (auto* c : parent->children()) {
-                    const auto& ct = c->tagName();
-                    if (ct == "SUMMARY" || ct == "summary") {
-                        firstSummary = c;
-                        break;
-                    }
-                }
-                if (firstSummary != el) break;
-                if (parent->hasAttribute("open")) {
-                    parent->removeAttribute("open");
-                } else {
-                    parent->setAttribute("open", "");
-                }
-                // Fire a non-bubbling "toggle" event for parity with HTML5.
-                dom::Event toggleEvt("toggle", false, false);
-                toggleEvt.setIsTrusted(true);
-                dom::dispatchDomEvent(parent, toggleEvt);
-                break;
-            }
-        }
+        dispatchActivatingClick(target, clickEvt);
+        if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
 
         if (state.clickCount == 2) {
             dom::MouseEvent dblEvt("dblclick", true, true);
@@ -974,13 +753,6 @@ void dispatchDocMouseRelease(
     }
 
     state.mouseDownTarget.reset();
-    // Disarm the activation undo whatever happened above — including the paths
-    // that never reach the click (mouseup on a different element, a disabled
-    // control), where the record would otherwise still be live for the next
-    // release to act on.
-    state.activationTarget.reset();
-    state.activationPrevRadio.reset();
-    state.activationWasChecked = false;
     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
 }
 

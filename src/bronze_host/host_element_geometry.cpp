@@ -294,6 +294,16 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    if (!st) return ev::undefined();
                    if (!st->el) return ev::fromDouble(0.0);
                    if (isInlineDisplay(st->el)) return ev::fromDouble(0.0);
+                   // The root element answers the viewport's height (CSSOM
+                   // View: a standards-mode document's root), not its own box's;
+                   // jQuery's $(window).height() is this.
+                   if (dom::Document* doc = st->el->document(); doc && st->el == doc->documentElement()) {
+                       if (auto* eng = hostEngine()) {
+                           if (auto* wh = eng->windowHostForDocument(doc)) return fromCssPixels(wh->boxH);
+                           if (auto* ifr = eng->iframeForDocument(doc)) return fromCssPixels(ifr->boxH);
+                           return fromCssPixels(eng->contentHeight());
+                       }
+                   }
                    const auto& box = laidOutBox(st->el);
                    double ch = box.contentRect.height + box.padding.top + box.padding.bottom;
                    if (ch > 0) return fromCssPixels(ch);

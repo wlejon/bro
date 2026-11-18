@@ -20,14 +20,17 @@
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_events.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_web_globals.h"
+#include "bronze_host/host_window_open.h"
 
 #include "dom/document.h"
 #include "engine/engine.h"
 #include "util/remote_asset.h"
 
+#include <cctype>
 #include <memory>
 #include <string>
 #include <vector>
@@ -304,12 +307,47 @@ std::string documentBaseUrl(dom::Document* doc) {
     return url;
 }
 
+void hostFollowHyperlink(dom::Element* anchor) {
+    if (!anchor) return;
+    dom::Document* doc = anchor->document();
+    std::string href = anchor->getAttribute("href");
+    // A javascript: URL is script, and bro runs no script out of a URL: a
+    // `href="javascript:void(0)"` link does nothing, which is what it is
+    // written to do.
+    std::string scheme = href.substr(0, href.find(':') == std::string::npos ? 0 : href.find(':'));
+    for (char& c : scheme) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (scheme == "javascript") return;
+    const std::string url = util::resolveUrl(documentBaseUrl(doc), href);
+    std::string target = anchor->getAttribute("target");
+    for (char& c : target) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    // A new browsing context (_blank, or a name): window.open's.
+    if (!target.empty() && target != "_self" && target != "_parent" && target != "_top") {
+        ev::Persistent urlV(ev::fromUtf8(url));
+        ev::Persistent targetV(ev::fromUtf8(target));
+        const Value args[2] = {urlV.get(), targetV.get()};
+        handleWindowOpen(std::span<const Value>(args, 2));
+        return;
+    }
+    navigate(doc, url, false);
+}
+
 void installLocationAndHistory(ObjectBuilder& window) {
     const uint64_t home = currentCompartmentId();
-    window.set("location", makeLocation(home));
-    ev::registerGlobal("location", ev::getProperty(window.get(), "location"));
-    window.set("history", makeHistory(home));
-    ev::registerGlobal("history", ev::getProperty(window.get(), "history"));
+    // location is [LegacyUnforgeable, PutForwards=href]: an accessor whose
+    // write navigates as `location.href = v` does.
+    auto loc = std::make_shared<ev::Persistent>(makeLocation(home));
+    registerHostGlobalAccessor(
+        "location", [loc](Value, std::span<const Value>) { return loc->get(); },
+        [home](Value, std::span<const Value> a) {
+            dom::Document* doc = compartmentDocument(home);
+            return navigate(doc, ev::toUtf8(argAt(a, 0)), false);
+        });
+    registerHostGlobal("history", makeHistory(home), ev::GlobalKind::Readonly);
+    // window.origin, [Replaceable]: the page's origin, serialized.
+    defineReplaceableAttribute(window, "origin", [home](Value, std::span<const Value>) {
+        const UrlParts u = splitUrl(documentUrl(compartmentDocument(home)));
+        return ev::fromUtf8(u.protocol + "//" + u.host);
+    });
 }
 
 }  // namespace bro::bronze_host

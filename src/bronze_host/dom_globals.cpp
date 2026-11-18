@@ -52,6 +52,7 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_global_sync.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_membrane.h"
 #include "bronze_host/host_appview.h"
 #include "bronze_host/host_rejection_events.h"
@@ -517,22 +518,15 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     {
         // The app's follows the engine's current document rather than naming
         // one (documentFor has the reason); a sub-document's is its own.
-        // Registered (rooted) straight away; the globalThis copies are read
-        // back from the registry, since the constructor lookup and each
-        // setProperty may allocate.
+        // [LegacyUnforgeable] readonly (host_global_kinds.h).
         if (app) {
-            ev::registerGlobal("document", makeDocumentValue(nullptr));
+            registerHostGlobal("document", makeDocumentValue(nullptr), ev::GlobalKind::Readonly);
             setAppDocumentValue(ev::globalValue("document").value);
         } else {
-            ev::registerGlobal("document", hostDocumentValue(c.document));
+            registerHostGlobal("document", hostDocumentValue(c.document), ev::GlobalKind::Readonly);
         }
-        ev::registerGlobal("Document", documentHostClass().constructor());
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::Persistent global(gt.value);
-            ev::setProperty(global.get(), "document", ev::globalValue("document").value);
-            ev::setProperty(global.get(), "Document", ev::globalValue("Document").value);
-        }
+        installClassicScriptEvents();
+        installAttributeHandlerHook();
     }
     // window, self, top, parent and the window-shaped surface (dom_window.cpp).
     installWindowGlobal(g_host->engine);
@@ -540,22 +534,9 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // window: postMessage only, as a cross-origin window is (host_membrane.h).
     if (c.parent && (c.kind == CompartmentKind::Frame || c.kind == CompartmentKind::AppView))
         installParentWindowProxy(c);
-    {
-        // Registered (rooted) first, then read back from the registry for the
-        // globalThis copy: the globalThis lookup may allocate, which a raw
-        // local would not survive.
-        auto registerAndSet = [](const char* name, Value made) {
-            ev::registerGlobal(name, made);
-            ev::GlobalValue gt = ev::globalValue("globalThis");
-            if (!gt.found || !ev::isObject(gt.value)) return;
-            ev::Persistent global(gt.value);
-            ev::Persistent v(ev::globalValue(name).value);
-            ev::setProperty(global.get(), name, v.get());
-        };
-        registerAndSet("requestAnimationFrame", makeRequestAnimationFrame());
-        registerAndSet("cancelAnimationFrame", makeCancelAnimationFrame());
-        registerAndSet("performance", makePerformanceValue());
-    }
+    registerHostGlobal("requestAnimationFrame", makeRequestAnimationFrame());
+    registerHostGlobal("cancelAnimationFrame", makeCancelAnimationFrame());
+    registerHostGlobal("performance", makePerformanceValue());  // [Replaceable]
     installWebGLGlobals();
 
     // The families that own their own files, each registering the names

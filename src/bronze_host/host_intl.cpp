@@ -850,11 +850,6 @@ void installIntlGlobals() {
     }
 
     ev::registerGlobal("Intl", intlVal.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        ev::Persistent global(gt.value);
-        ev::setProperty(global.get(), "Intl", intlVal.get());
-    }
 
     // The builtins' locale methods answer through this Intl. They are given to
     // bronze (ev::setLocaleMethod) rather than assigned onto the prototypes:

@@ -216,13 +216,6 @@ void installParserGlobal() {
     const Rooted xmlSerializerCtor(ev::makeFunction(
         [](Value, std::span<const Value>) { return makeXMLSerializerValue(); }, 0));
     ev::registerGlobal("XMLSerializer", xmlSerializerCtor);
-
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        const Rooted global(gt.value);
-        ev::setProperty(global, "DOMParser", ctor);
-        ev::setProperty(global, "XMLSerializer", xmlSerializerCtor);
-    }
 }
 
 }  // namespace bro::bronze_host

@@ -108,6 +108,10 @@ std::string documentBaseUrl(dom::Document* doc);
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin,
                         dom::Document* docOverride = nullptr);
+// window.event: the event whose listener is running in the current
+// compartment, undefined outside one and for a listener in a shadow tree
+// (DOM 2.9 "inner invoke", the global's current event).
+Value hostCurrentWindowEvent();
 // The document a listener runs in: the realm that registered it while that
 // document lives, else null (the target's).
 dom::Document* listenerRealm(const ListenerRef& ref);
@@ -122,6 +126,10 @@ Value hostDispatchToWindow(Value desc);
 // element.focus()'s steps (host_element_interaction.cpp): focus, blur,
 // focusin, focusout. A no-op for an inert element (outside a modal dialog).
 void hostFocusElement(dom::Element* el);
+// A link's activation (engine/element_activation.cpp): its href, resolved
+// against the document's base URL, navigated to as location.href = url
+// would; a target other than _self/_parent/_top opens as window.open.
+void hostFollowHyperlink(dom::Element* anchor);
 // The same at one document's window — a secondary window's, an iframe's.
 Value hostDispatchToWindowOf(dom::Document* doc, Value desc);
 

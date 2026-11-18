@@ -400,7 +400,8 @@ void decorateCanvasProto(ObjectBuilder& b) {
             // non-string: the argument slot is current, a copy taken before
             // it would not be.
             Value valV = argAt(a, 1);
-            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
+            std::string val = hostDomString(valV);
+            if (!cs->el) return ev::undefined();  // the value's toString may have run script
             cs->el->setAttribute(name, val);
             if (name == "width") {
                 resizeBacking(cs, std::atoi(val.c_str()), 0, /*widthChanged=*/true);

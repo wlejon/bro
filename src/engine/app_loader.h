@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 #include <utility>
@@ -30,6 +31,9 @@ class AppLoader {
 public:
     /// Read the entire contents of a file into a string.
     static std::string loadFile(const std::string& path);
+    /// The same read, telling a failure (missing, refused, unreachable)
+    /// from an empty file: nullopt, with the reason logged.
+    static std::optional<std::string> readFile(const std::string& path);
 
     /// Whether a `<script type>` (lowercased, trimmed; "" for none) is a
     /// classic script: JavaScript, not a module, Lua or a data block. The

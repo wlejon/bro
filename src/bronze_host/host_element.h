@@ -30,6 +30,9 @@ struct ObjectBuilder;
 // Answers null for nullptr, so it can be handed a parent/sibling lookup result
 // directly.
 Value hostElementValue(dom::Element* el);
+// Event handler content attributes (`onclick="..."`) run through dom's
+// attribute handler hook, compiled on first use (host_element.cpp).
+void installAttributeHandlerHook();
 
 // The dom::Element behind a wrapper, or nullptr for any other value. This is
 // what makes `parent.appendChild(child)` possible: the wrapper is an embed

@@ -5,6 +5,7 @@
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_compartment.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -426,11 +427,7 @@ void installCustomElementsGlobals() {
         return ev::undefined();
     });
 
-    ev::registerGlobal("customElements", ce.get());
-    auto g = ev::globalValue("globalThis");
-    if (g.found && ev::isObject(g.value)) {
-        ev::setProperty(g.value, "customElements", ce.get());
-    }
+    registerHostGlobal("customElements", ce.get(), ev::GlobalKind::Readonly);
 }
 
 void clearCustomElementsForCompartment(uint64_t compartmentId) {

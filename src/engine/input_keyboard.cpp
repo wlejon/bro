@@ -2,6 +2,7 @@
 #include "engine/replaced_elements.h"
 #include "engine/input_common.h"
 #include "engine/input_editable.h"
+#include "engine/element_activation.h"
 #include "engine/settings.h"
 #include "engine/key_mapping.h"
 #include "platform/clipboard.h"
@@ -139,6 +140,48 @@ bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
     }
     return false;
 }
+
+namespace {
+
+// A closed <select> stepped from the keyboard, as Chromium on Windows and
+// Linux has it: ArrowUp / ArrowDown to the previous / next enabled option,
+// Home / End to the first / last, firing input and then change.
+bool stepClosedSelect(dom::Element* el, int keycode) {
+    if (!el || (el->tagName() != "select" && el->tagName() != "SELECT")) return false;
+    if (el->hasAttribute("disabled") || el->hasAttribute("multiple")) return false;
+    const bool down = keycode == platform::kc::Down, up = keycode == platform::kc::Up;
+    const bool home = keycode == platform::kc::Home, end = keycode == platform::kc::End;
+    if (!down && !up && !home && !end) return false;
+    std::vector<bool> enabled;
+    for (auto* child : el->children()) {
+        if (child->tagName() == "option" || child->tagName() == "OPTION")
+            enabled.push_back(!child->hasAttribute("disabled"));
+    }
+    const int count = static_cast<int>(enabled.size());
+    const int current = layout::selectedIndex(el);
+    int next = -1;
+    if (down || up) {
+        for (int i = current + (down ? 1 : -1); i >= 0 && i < count; i += down ? 1 : -1) {
+            if (enabled[static_cast<size_t>(i)]) { next = i; break; }
+        }
+    } else {
+        for (int k = 0; k < count; ++k) {
+            const int i = home ? k : count - 1 - k;
+            if (enabled[static_cast<size_t>(i)]) { next = i; break; }
+        }
+    }
+    if (next < 0 || next == current) return true;
+    layout::setSelectedIndex(el, next);
+    dom::InputEvent inputEvt("input");
+    inputEvt.setIsTrusted(true);
+    dom::dispatchDomEvent(el, inputEvt);
+    dom::Event changeEvt("change", true, false);
+    changeEvt.setIsTrusted(true);
+    dom::dispatchDomEvent(el, changeEvt);
+    return true;
+}
+
+}  // namespace
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     noteUserActivity();
@@ -385,6 +428,23 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // web's order. It used to act first and dispatch afterwards, so
     // preventDefault() on keydown could not stop it.
     bool keydownDispatched = false;
+    // A key that activates the focused element (keyActivationFor): Enter
+    // clicks a button or a link now, Space arms the click of its keyup.
+    auto keyActivates = [this, keycode](dom::Element* el) {
+        const bool enter = keycode == platform::kc::Return || keycode == platform::kc::KpEnter;
+        switch (keyActivationFor(el, enter, keycode == platform::kc::Space)) {
+            case KeyActivation::Now:
+                keyboardClick(el);
+                uiDirty_ = true;
+                return true;
+            case KeyActivation::OnKeyUp:
+                spaceActivation_.assign(document_.get(), el);
+                return true;
+            case KeyActivation::None:
+                break;
+        }
+        return false;
+    };
     auto focusedControl = [this](dom::Element* el) {
         if (auto* in = getElInput(el); in && in->isFocused()) return true;
         if (auto* ta = getElTextarea(el); ta && ta->isFocused()) return true;
@@ -409,6 +469,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             updateDatalist(activeEl, /*explicitOpen=*/true);
             if (overlayMgr_->hasActive()) return;
         }
+        if (keyActivates(activeEl)) return;
+        const bool isInput = getElInput(activeEl) != nullptr;
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             result = input->handleKeyDown(activeEl, keycode, mod);
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
@@ -416,6 +478,13 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
         if (result.handled) {
             applyKeyResult(activeEl, result);
+            // Enter in a form's field submits it (implicit submission),
+            // after the field committed its change.
+            if (isInput && (keycode == platform::kc::Return || keycode == platform::kc::KpEnter) &&
+                handle.get() == activeEl) {
+                implicitSubmission(activeEl);
+                uiDirty_ = true;
+            }
             return;
         }
     }
@@ -494,7 +563,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         dom::Element* target = document_->activeElement();
         if (target) {
             dispatchEvent(target, evt);
-            if (evt.defaultPrevented()) dropTextAfterKeyDown_ = true;
+            if (evt.defaultPrevented()) {
+                dropTextAfterKeyDown_ = true;
+            } else if (target == document_->activeElement() &&
+                       (keyActivates(target) || (!overlayMgr_->hasActive() && stepClosedSelect(target, keycode)))) {
+                uiDirty_ = true;
+                markAppBaseDirty();
+                return;
+            }
         }
     }
 
@@ -526,6 +602,16 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     dom::Element* target = document_->activeElement();
     if (target) {
         dispatchEvent(target, evt);
+    }
+    // The Space keyup clicks what its keydown armed, if focus stayed on it
+    // and the keyup was not cancelled.
+    if (keycode == platform::kc::Space) {
+        dom::Element* armed = spaceActivation_.get();
+        spaceActivation_.reset();
+        if (armed && armed == target && armed == document_->activeElement() && !evt.defaultPrevented()) {
+            keyboardClick(armed);
+            uiDirty_ = true;
+        }
     }
 
     dispatchActionEventForKey(sdlKeycodeToWebKey(keycode, mod), "up", 0.0f);

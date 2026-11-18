@@ -536,7 +536,8 @@ fetch(url, options?);    // → Promise<Response>
 // url: http(s), data:, blob:, file:, a path (relative to the app folder, or a
 // mount such as /app/...), or the page's own absolute URL `bro://app/<path>`
 // (what `new URL(x, location.href)` makes), which reads the app folder's file
-// in the page and in its workers.
+// in the page and in its workers. A local path is resolved lexically as a URL
+// path is ("cloud.js/../data/r.hrc" reads data/r.hrc), XMLHttpRequest too.
 //
 // Response: {
 //   ok, status, statusText, url,

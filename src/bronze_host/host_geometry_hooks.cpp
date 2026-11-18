@@ -80,8 +80,6 @@ void installGeometryHooks() {
         return numbersArray(m, 6);
     });
     ev::registerGlobal("__bro_geometry", b.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_geometry", b.get());
 }
 
 Value makeHostRectValue(double x, double y, double w, double h) {

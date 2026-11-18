@@ -23,6 +23,7 @@
 
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_compartment.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_natives.h"
 #if BRO_WITH_NET
 #include "net/bronze_api/net_rollback_api.h"
@@ -91,11 +92,11 @@ void mountOnNamespace(const char* ns, const char* member, const char* global) {
 
 }  // namespace
 
-void adoptGlobalProperty(const char* name) {
+void adoptGlobalProperty(const char* name, ev::GlobalKind kind) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (!gt.found || !ev::isObject(gt.value)) return;
     Value v = ev::getProperty(gt.value, name);
-    if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
+    if (!ev::isUndefined(v)) registerHostGlobal(name, v, kind);
 }
 
 void markProcessBrowser() {

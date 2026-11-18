@@ -37,6 +37,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
+#include "bronze_host/host_inserted_scripts.h"
 #include "bronze_host/host_dom_lists.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_events.h"
@@ -243,12 +244,19 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref) {
         // The fragment stays behind, emptied. Its children are what enters the
         // tree — one at a time and in order, each unparented from the fragment
         // by the insert itself.
-        for (dom::Node* kid : childrenOf(child)) {
+        const std::vector<dom::Node*> kids = childrenOf(child);
+        for (dom::Node* kid : kids) {
             child->removeChild(kid);
             parent->insertBefore(kid, ref);
             if (kid->nodeType() == dom::NodeType::Element) {
                 onCustomElementConnected(static_cast<dom::Element*>(kid));
             }
+        }
+        // The fragment's scripts run once all of it is in (post-connection
+        // steps), each kid's in tree order.
+        for (dom::Node* kid : kids) {
+            if (kid->nodeType() == dom::NodeType::Element && kid->parentNode() == parent)
+                runInsertedScripts(static_cast<dom::Element*>(kid));
         }
         return;
     }
@@ -262,6 +270,7 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref) {
     parent->insertBefore(child, ref);
     if (child->nodeType() == dom::NodeType::Element) {
         onCustomElementConnected(static_cast<dom::Element*>(child));
+        runInsertedScripts(static_cast<dom::Element*>(child));
     }
 }
 

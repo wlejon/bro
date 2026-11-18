@@ -633,3 +633,43 @@ window.open = function(url, target, features) {};
  */
 bro.quit = function() {};
 
+
+// ── The window's globals: what a page's write does ───────────────────────────
+
+/**
+ * Every member of the window answers writes as WebIDL's attribute kinds have
+ * it in a browser (src/bronze_host/host_global_kinds.h):
+ *
+ * - readonly — `window`, `document`, `top`, `navigator`, `history`,
+ *   `customElements`, `localStorage`, `sessionStorage`, `crypto`,
+ *   `indexedDB`, `frameElement`, `closed`, `isSecureContext`: a sloppy write
+ *   is ignored, a strict one is a TypeError.
+ * - [Replaceable] — `self`, `frames`, `parent`, `length`, `screen`,
+ *   `performance`, `event`, `origin`, `external`, `clientInformation`, the
+ *   bars (`locationbar`, `menubar`, `personalbar`, `scrollbars`, `statusbar`,
+ *   `toolbar`, each `{ visible: true }`), `innerWidth` / `innerHeight`,
+ *   `outerWidth` / `outerHeight`, `scrollX` / `scrollY`, `pageXOffset` /
+ *   `pageYOffset`, `screenX` / `screenY` / `screenLeft` / `screenTop`,
+ *   `devicePixelRatio`, `opener`, and every operation and interface object:
+ *   the write makes the name the page's own data property.
+ * - read-write — `name`, `status`, and every `on*` handler (`onload`,
+ *   `onclick`, ..., and `onerror`, `onmessage`, `onmessageerror`,
+ *   `onunhandledrejection`, `onrejectionhandled`, which start null and keep
+ *   any object they are set to).
+ * - `location` — an accessor whose write navigates, as `location.href = v`
+ *   does (PutForwards=href).
+ *
+ * `window.event` is the event whose listener is running (undefined outside
+ * one, and for a listener in a shadow tree). In a worker `self` is readonly
+ * and `onmessage` / `onerror` start null.
+ *
+ * Not yet as in a browser: these properties are not enumerable on the window,
+ * the readonly ones are non-writable data properties rather than getters, and
+ * `window`, `document`, `top` and `location` are configurable.
+ *
+ * @example
+ *   status = 'busy';             // window.status === 'busy'
+ *   innerWidth = 5;              // the page's own innerWidth from now on
+ *   navigator = null;            // ignored ('use strict': TypeError)
+ *   location = '#section-2';     // navigates to the fragment
+ */

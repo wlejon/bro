@@ -65,6 +65,10 @@ struct HostNodeState {
     ev::Persistent childrenObj;
     std::unordered_map<std::string, uint64_t> inlineHandles;
     std::unordered_map<std::string, std::shared_ptr<ListenerRef>> inlineFns;
+    // Event handler content attributes compiled (host_element.cpp): per
+    // type, the attribute text the function was compiled from and the
+    // function, recompiled when the text changes.
+    std::unordered_map<std::string, std::pair<std::string, std::shared_ptr<ListenerRef>>> attributeHandlers;
     uint32_t jsRefs = 0;
     bool pinned = false;  // a custom-element object stands in for the handle
     SweepGroup* sweepGroup = nullptr;  // demoted with this group (host_node_sweep.h)

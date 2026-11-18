@@ -657,6 +657,18 @@ script still runs); then `interactive` (`readystatechange`), the module
 scripts, `DOMContentLoaded`, `complete` (`readystatechange`) and the window's
 `load`, which reaches `window.onload` even when a module script set it.
 Scripts inside HTML comments (IE conditional comments included) do not run.
+An external classic script fires `load` at its element after it ran; one
+that is missing, unreachable or refused by the app's permissions (an
+`http(s)` script without `net`) fires `error` in its place, and the page goes
+on with the next script. Each `<link rel=stylesheet>` fires `load` or `error`
+the same way once the classic scripts ran. Event handler content attributes
+(`onclick="..."`, `onerror="..."`) run with `this` the element and `event` the
+event, and `return false` cancels it; their scope is the global one (not the
+element, its form and the document, as on the web). A classic script element
+inserted by script runs: an inline one at once, inside the call that
+connected it, one with a `src` on a later task, then `load` or `error`;
+innerHTML's scripts never run, `createContextualFragment`'s do, and an
+inserted module script does not run.
 `document.currentScript` is the classic script running (null in a module
 script and after the scripts), and a script's `src` reads as an absolute
 URL. `<base href>` is the base of the page's relative URLs (and

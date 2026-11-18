@@ -491,6 +491,10 @@ std::string classicScriptMarker(size_t index) {
     return std::string("globalThis.") + kClassicScriptMarker + "=" + std::to_string(index) + ";";
 }
 
+std::string classicScriptEventCall(const char* type) {
+    return std::string("__broClassicScriptEvent(\"") + type + "\");";
+}
+
 void clearClassicScriptMarker() {
     cleanGlobalProp(kClassicScriptMarker);
 }

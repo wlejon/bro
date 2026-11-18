@@ -146,6 +146,10 @@ bool AppLoader::isClassicScriptType(const std::string& type) {
 }
 
 std::string AppLoader::loadFile(const std::string& path) {
+    return readFile(path).value_or(std::string());
+}
+
+std::optional<std::string> AppLoader::readFile(const std::string& path) {
     // An absolute URL is a resource on the network, not a file. Everything the
     // manifest carries — stylesheets, external scripts — funnels through here,
     // so this one branch is what makes `<script src="https://cdn/…">` mean what
@@ -155,18 +159,20 @@ std::string AppLoader::loadFile(const std::string& path) {
         // `net`, without asking (util/subresource_access.h).
         if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
             LOG_ERROR("AppLoader::loadFile: %s", refused.c_str());
-            return {};
+            return std::nullopt;
         }
         std::string body = util::fetchRemoteCached(path);
-        if (body.empty())
+        if (body.empty()) {
             LOG_ERROR("AppLoader::loadFile: cannot fetch '%s'", path.c_str());
+            return std::nullopt;
+        }
         return body;
     }
 
     std::ifstream ifs(path, std::ios::binary);
     if (!ifs.is_open()) {
         LOG_ERROR("AppLoader::loadFile: cannot open '%s'", path.c_str());
-        return {};
+        return std::nullopt;
     }
     std::ostringstream ss;
     ss << ifs.rdbuf();

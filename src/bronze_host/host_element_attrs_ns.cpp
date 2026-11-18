@@ -66,7 +66,7 @@ void decorateElementNamespacedAttributes(ObjectBuilder& b) {
         if (!st || !st->el) return ev::undefined();
         const std::string ns = nsArg(a, 0);
         const std::string qname = ev::toUtf8(argAt(a, 1));
-        const std::string value = hostNullableString(argAt(a, 2));
+        const std::string value = hostDomString(argAt(a, 2));
         const size_t colon = qname.find(':');
         if (qname.empty() || (colon != std::string::npos && ns.empty())) {
             return ev::throwValue(hostMakeDomError(

@@ -301,15 +301,10 @@ void fireHostTimers(double nowMs) {
 // ---------------------------------------------------------------------------
 
 void installTimerGlobals() {
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    const bool hasGt = gt.found && ev::isObject(gt.value);
-    // Rooted: globalThis and each function outlive the allocations that
-    // follow them (the next makeFunction, registerGlobal's define).
-    const Rooted global(hasGt ? gt.value : ev::undefined());
-    auto install = [&](const char* name, Value fnIn) {
+    // The registration defines the global object's property too.
+    auto install = [](const char* name, Value fnIn) {
         const Rooted fn(fnIn);
         ev::registerGlobal(name, fn);
-        if (hasGt) ev::setProperty(global, name, fn);
     };
     install("setTimeout", ev::makeFunction(
         [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/false); }, 2));

@@ -588,6 +588,10 @@ Node* Range::createContextualFragment(const std::string& html) {
     if (!document_) return nullptr;
     auto* frag = document_->createElement("#DOCUMENT-FRAGMENT");
     document_->parseInnerHTML(frag, html);
+    // Unlike innerHTML's, a contextual fragment's scripts run when inserted.
+    std::vector<Element*> scripts;
+    Element::querySelectorAllUnder(frag, "script", scripts);
+    for (Element* s : scripts) s->setScriptStarted(false);
     return frag;
 }
 

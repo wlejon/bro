@@ -5,6 +5,7 @@
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rejection_events.h"
@@ -24,7 +25,6 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
-#include <regex>
 #include <span>
 #include <string>
 #include <vector>
@@ -137,11 +137,9 @@ void WorkerInstance::threadFunc() {
         }
     };
 
-    {
-        ev::Persistent globalThis(ev::globalValue("globalThis").value);
-        ev::registerGlobal("self", globalThis.get());
-        ev::setProperty(globalThis.get(), "self", globalThis.get());
-    }
+    // WorkerGlobalScope's self is a readonly attribute (the window's is
+    // [Replaceable]; host_global_kinds.h).
+    registerHostGlobal("self", ev::globalValue("globalThis").value, ev::GlobalKind::Readonly);
 
     auto jsPostMessage = [this](Value, std::span<const Value> args) -> Value {
         if (args.empty()) return ev::undefined();
@@ -156,8 +154,11 @@ void WorkerInstance::threadFunc() {
         return ev::undefined();
     };
 
-    ev::setGlobalValue("onmessage", ev::undefined());
-    ev::setGlobalValue("onerror", ev::undefined());
+    // The handler attributes, null until the script sets them (a bare
+    // `onmessage = f` is the global object's [[Set]]); the loop below reads
+    // them off the global object.
+    ev::setGlobalValue("onmessage", ev::null());
+    ev::setGlobalValue("onerror", ev::null());
     ev::setGlobalFunction("postMessage", 2, jsPostMessage);
     ev::setGlobalFunction("close", 0, [this](Value, std::span<const Value>) -> Value {
         terminated_.store(true, std::memory_order_release);
@@ -178,13 +179,6 @@ void WorkerInstance::threadFunc() {
     };
     ev::setGlobalFunction("addEventListener", 2, jsAddEventListener);
     ev::setGlobalFunction("removeEventListener", 2, jsRemoveEventListener);
-    for (const char* name : {"addEventListener", "removeEventListener"}) {
-        // Both lookups may allocate, so each lands in a root before the
-        // other is made, and the receiver is read last.
-        ev::Persistent fn(ev::globalValue(name).value);
-        ev::Persistent gt(ev::globalValue("globalThis").value);
-        ev::setProperty(gt.get(), name, fn.get());
-    }
 
     bootMarks[0] = BootClock::now();
     namespace bk = brokit::api;
@@ -342,15 +336,6 @@ void WorkerInstance::threadFunc() {
         LOG_ERROR("worker: empty or missing script: %s", resolvedPath.string().c_str());
         dispatchWorkerError("worker: empty or missing script: " + resolvedPath.string(), resolvedPath.string(), 0);
     } else {
-        std::regex re(R"((^|[^\w$.])onmessage\s*=)");
-        if (std::regex_search(scriptCode, re)) {
-            scriptCode = std::regex_replace(scriptCode, re, "$1self.onmessage = ");
-        }
-        std::regex reErr(R"((^|[^\w$.])onerror\s*=)");
-        if (std::regex_search(scriptCode, reErr)) {
-            scriptCode = std::regex_replace(scriptCode, reErr, "$1self.onerror = ");
-        }
-
         bronze::eval::EvalOptions opts;
         opts.filename = resolvedPath.string();
         opts.entryResolvesAs = resolvedPath;

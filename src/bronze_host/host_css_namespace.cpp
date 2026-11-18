@@ -65,12 +65,6 @@ void installCssNamespace() {
         return ev::fromUtf8(cssEscape(ev::toUtf8(a[0])));
     });
     ev::registerGlobal("CSS", b.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        ev::Persistent global(gt.value);
-        ev::Persistent v(ev::globalValue("CSS").value);
-        ev::setProperty(global.get(), "CSS", v.get());
-    }
 }
 
 }  // namespace bro::bronze_host

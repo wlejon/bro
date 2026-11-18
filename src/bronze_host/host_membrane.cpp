@@ -6,6 +6,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_globals_internal.h"
@@ -266,16 +267,9 @@ void installParentWindowProxy(Compartment& c) {
         CompartmentScope scope(c.parent);
         if (scope.entered()) frameElement.set(hostElementValue(c.hostElement));
     }
-    ev::registerGlobal("parent", parent.get());
-    ev::registerGlobal("top", topP.get());
-    ev::registerGlobal("frameElement", frameElement.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        ev::Persistent global(gt.value);
-        ev::setProperty(global.get(), "parent", parent.get());
-        ev::setProperty(global.get(), "top", topP.get());
-        ev::setProperty(global.get(), "frameElement", frameElement.get());
-    }
+    registerHostGlobal("parent", parent.get());                                   // [Replaceable]
+    registerHostGlobal("top", topP.get(), ev::GlobalKind::Readonly);              // [LegacyUnforgeable]
+    registerHostGlobal("frameElement", frameElement.get(), ev::GlobalKind::Readonly);
 }
 
 void clearWindowProxies(uint64_t compartmentId) {

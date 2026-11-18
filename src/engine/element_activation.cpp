@@ -5,6 +5,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
+#include "dom/node_handle.h"
 #include "layout/el_select.h"
 #include "layout/form_control.h"
 #include "layout/form_validation.h"
@@ -19,6 +20,8 @@ namespace bro::bronze_host {
 // element.focus()'s steps (declared in host_events.h, which is too heavy to
 // pull into the engine layer for one function).
 void hostFocusElement(dom::Element* el);
+// A link's activation: navigate to its href (host_location.cpp).
+void hostFollowHyperlink(dom::Element* anchor);
 }  // namespace bro::bronze_host
 
 namespace bro::engine {
@@ -86,153 +89,234 @@ bool runFilePickerActivation(dom::Element* el) {
     return true;
 }
 
-// <summary> activation: toggle [open] on the parent <details>. The walk starts
-// at `el` so a click on an icon inside the summary counts, but only the FIRST
-// <summary> child of a <details> is the disclosure handle.
-bool toggleDetailsFromSummary(dom::Element* el) {
-    for (auto* s = el; s; s = s->parentElement()) {
-        if (!tagIs(s, "summary", "SUMMARY")) continue;
-        dom::Element* parent = s->parentElement();
-        if (!parent || !tagIs(parent, "details", "DETAILS")) return false;
-        dom::Element* firstSummary = nullptr;
-        for (auto* c : parent->children()) {
-            if (tagIs(c, "summary", "SUMMARY")) { firstSummary = c; break; }
-        }
-        if (firstSummary != s) return false;
-        if (parent->hasAttribute("open")) parent->removeAttribute("open");
-        else                              parent->setAttribute("open", "");
-        dom::Event toggleEvt("toggle", false, false);
-        toggleEvt.setIsTrusted(true);
-        dom::dispatchDomEvent(parent, toggleEvt);
-        return true;
+// The <details> whose disclosure handle `el` is: the first <summary> child of
+// a <details>, else null.
+dom::Element* detailsOfSummary(dom::Element* el) {
+    if (!tagIs(el, "summary", "SUMMARY")) return nullptr;
+    dom::Element* parent = el->parentElement();
+    if (!parent || !tagIs(parent, "details", "DETAILS")) return nullptr;
+    for (auto* c : parent->children()) {
+        if (tagIs(c, "summary", "SUMMARY")) return c == el ? parent : nullptr;
     }
-    return false;
+    return nullptr;
 }
 
-}  // namespace
+void toggleDetails(dom::Element* details) {
+    if (details->hasAttribute("open")) details->removeAttribute("open");
+    else                               details->setAttribute("open", "");
+    dom::Event toggleEvt("toggle", false, false);
+    toggleEvt.setIsTrusted(true);
+    dom::dispatchDomEvent(details, toggleEvt);
+}
 
-void runActivationBehavior(dom::Element* el) {
-    if (!el) return;
+std::string inputTypeOf(const dom::Element* el) {
+    return tagIs(el, "input", "INPUT") ? lowered(el->getAttribute("type")) : std::string();
+}
 
-    const bool isButton = tagIs(el, "button", "BUTTON");
-    const bool isInput = tagIs(el, "input", "INPUT");
-    const std::string inputType = isInput ? lowered(el->getAttribute("type")) : std::string();
-    const bool isActionInput =
-        isInput && (inputType == "submit" || inputType == "reset" || inputType == "image");
+// Whether `el` has activation behaviour (HTML 6.2.1 / DOM 2.9): the click
+// that reaches it does something once dispatched.
+bool hasActivationBehavior(dom::Element* el) {
+    if (tagIs(el, "a", "A") || tagIs(el, "area", "AREA")) return el->hasAttribute("href");
+    if (tagIs(el, "button", "BUTTON") || tagIs(el, "label", "LABEL")) return true;
+    if (tagIs(el, "input", "INPUT")) {
+        const std::string t = inputTypeOf(el);
+        return t == "checkbox" || t == "radio" || t == "submit" || t == "reset" || t == "image" ||
+               t == "file" || t == "button" || t == "color";
+    }
+    return detailsOfSummary(el) != nullptr;
+}
 
-    if (isButton || isActionInput) {
-        std::string btnType = lowered(el->getAttribute("type"));
-        if (btnType.empty() && isButton) btnType = "submit";
-        if (btnType == "image") btnType = "submit";   // image = implicit submit
-        if (btnType == "submit") {
+// What a checkbox or radio's legacy-pre-activation behaviour changed, for
+// its legacy-canceled-activation behaviour to put back.
+struct PreActivation {
+    bool checkable = false;
+    bool wasChecked = false;
+    dom::ElementHandle previousRadio;
+};
+
+PreActivation legacyPreActivation(dom::Element* el) {
+    PreActivation pre;
+    const std::string t = inputTypeOf(el);
+    if (t != "checkbox" && t != "radio") return pre;
+    pre.checkable = true;
+    pre.wasChecked = el->hasAttribute("checked");
+    if (t == "checkbox") {
+        if (pre.wasChecked) el->removeAttribute("checked");
+        else                el->setAttribute("checked", "");
+    } else if (!pre.wasChecked) {
+        pre.previousRadio.assign(el->document(), layout::checkedRadioInGroup(el));
+        layout::clearRadioGroup(el);
+        el->setAttribute("checked", "");
+    }
+    return pre;
+}
+
+void legacyCanceledActivation(dom::Element* el, const PreActivation& pre) {
+    if (inputTypeOf(el) == "checkbox") {
+        if (pre.wasChecked) el->setAttribute("checked", "");
+        else                el->removeAttribute("checked");
+    } else if (!pre.wasChecked) {
+        el->removeAttribute("checked");
+        // Back to the member that held the check; none if it has since gone.
+        if (dom::Element* prev = pre.previousRadio.get()) prev->setAttribute("checked", "");
+    }
+}
+
+// A <label>'s activation behaviour: focus its labeled control and click it,
+// unless the click came from the control itself or from other interactive
+// content inside the label (a button or a link beside a checkbox must not
+// tick it). The forwarded click carries the original's coordinates and
+// trust.
+void labelActivation(dom::Element* label, const dom::MouseEvent& click) {
+    dom::Element* control = layout::findLabeledControl(label);
+    if (!control || activationDisabled(control)) return;
+    auto* target = static_cast<dom::Element*>(click.target());
+    for (auto* el = target; el && el != label; el = el->parentElement()) {
+        if (el == control || layout::isInteractiveContent(el)) return;
+    }
+    // Focused through element.focus()'s steps, so the engine knows (Space
+    // toggles a checkbox afterwards), as a browser's label does for a real
+    // click and for label.click() alike.
+    bronze_host::hostFocusElement(control);
+    dom::MouseEvent forwarded("click");
+    forwarded.setClientX(click.clientX()); forwarded.setClientY(click.clientY());
+    forwarded.setScreenX(click.screenX()); forwarded.setScreenY(click.screenY());
+    forwarded.setPageX(click.pageX());     forwarded.setPageY(click.pageY());
+    forwarded.setCtrlKey(click.ctrlKey()); forwarded.setShiftKey(click.shiftKey());
+    forwarded.setAltKey(click.altKey());   forwarded.setMetaKey(click.metaKey());
+    forwarded.setDetail(click.detail());
+    forwarded.setIsTrusted(click.isTrusted());
+    dispatchActivatingClick(control, forwarded);
+}
+
+// The activation behaviour of `el`, its click dispatched and not cancelled.
+void runActivationBehavior(dom::Element* el, const dom::MouseEvent& click) {
+    const std::string t = inputTypeOf(el);
+    if (t == "checkbox" || t == "radio") {
+        dom::InputEvent inputEvt("input");
+        inputEvt.setIsTrusted(true);
+        dom::dispatchDomEvent(el, inputEvt);
+        dom::Event changeEvt("change", true, false);
+        changeEvt.setIsTrusted(true);
+        dom::dispatchDomEvent(el, changeEvt);
+        return;
+    }
+    if (activationDisabled(el)) return;
+    if (tagIs(el, "button", "BUTTON") || t == "submit" || t == "reset" || t == "image") {
+        std::string type = lowered(el->getAttribute("type"));
+        if (tagIs(el, "button", "BUTTON") && type != "reset" && type != "button") type = "submit";
+        if (type == "image") type = "submit";
+        if (type == "submit") {
             if (dom::Element* owner = formOwnerFor(el)) requestFormSubmit(owner, el);
-        } else if (btnType == "reset") {
+        } else if (type == "reset") {
             if (dom::Element* owner = formOwnerFor(el)) resetForm(owner);
         }
         return;
     }
-
     if (runFilePickerActivation(el)) return;
-
-    // <a download>: save the link's bytes instead of navigating. Building a
-    // Blob, minting an object URL and calling link.click() is how every
-    // "Export" button on the web works, so this is the programmatic path's
-    // most-used branch.
-    if (bronze_host::runAnchorDownload(el)) return;
-
-    toggleDetailsFromSummary(el);
+    if (tagIs(el, "a", "A") || tagIs(el, "area", "AREA")) {
+        // <a download>: save the link's bytes. Building a Blob, minting an
+        // object URL and calling link.click() is how every "Export" button on
+        // the web works.
+        if (bronze_host::runAnchorDownload(el)) return;
+        bronze_host::hostFollowHyperlink(el);
+        return;
+    }
+    if (tagIs(el, "label", "LABEL")) {
+        labelActivation(el, click);
+        return;
+    }
+    if (dom::Element* details = detailsOfSummary(el)) toggleDetails(details);
 }
 
-bool forwardLabelActivation(dom::Element* clickTarget) {
-    if (!clickTarget) return false;
-    dom::Element* label = nullptr;
-    for (auto* el = clickTarget; el; el = el->parentElement()) {
-        if (tagIs(el, "label", "LABEL")) { label = el; break; }
-        // Interactive content inside the label handles its own clicks: a
-        // button or a link next to the checkbox must not tick it. The click
-        // target itself only blocks when it is labelable — clicking the
-        // label's own <span> must still forward.
-        if (el != clickTarget || layout::isLabelable(el)) {
-            if (layout::isLabelable(el) || tagIs(el, "a", "A")) return false;
-        }
+}  // namespace
+
+void dispatchActivatingClick(dom::Element* target, dom::MouseEvent& click) {
+    if (!target) return;
+    // The activation target: the target, else the nearest ancestor on the
+    // event's path with activation behaviour (a <span> in a link or a label).
+    dom::Element* activation = nullptr;
+    for (auto* el = target; el; el = el->parentElement()) {
+        if (hasActivationBehavior(el)) { activation = el; break; }
     }
-    if (!label) return false;
-    dom::Element* control = layout::findLabeledControl(label);
-    if (!control || control == clickTarget) return false;
-    // The click already went to the control (or something inside it), so the
-    // control has already run its own activation. Forwarding here is what would
-    // toggle a wrapped checkbox twice and leave it apparently dead.
-    for (auto* el = clickTarget; el; el = el->parentElement()) {
-        if (el == control) return false;
-        if (el == label) break;
+    dom::ElementHandle activationHandle(target->document(), activation);
+    PreActivation pre;
+    if (activation) pre = legacyPreActivation(activation);
+    dom::dispatchDomEvent(target, click);
+    activation = activationHandle.get();
+    if (!activation) return;
+    if (click.defaultPrevented()) {
+        if (pre.checkable) legacyCanceledActivation(activation, pre);
+        return;
     }
-    if (activationDisabled(control)) return false;
-    // A label's activation focuses its control before clicking it (what a
-    // browser's label does for a real click and for label.click() alike),
-    // through element.focus()'s steps, so the control is focused the way the
-    // engine means it: focus/blur events, and the control itself told, which
-    // is what makes Space toggle a checkbox afterwards.
-    bronze_host::hostFocusElement(control);
-    clickElement(control);
-    return true;
+    // A radio that was already checked changes nothing: no input, no change.
+    if (pre.checkable && inputTypeOf(activation) == "radio" && pre.wasChecked) return;
+    runActivationBehavior(activation, click);
 }
 
 void clickElement(dom::Element* el) {
     if (!el) return;
-    // A disabled control has no activation behaviour at all — not even the
-    // click event. Matches the hit-tested path's isInDisabledControl gate.
+    // A disabled control gets no click at all, as in a browser (and as the
+    // hit-tested path's isInDisabledControl gate has it). No focus change
+    // either: element.click() never moves focus on the web.
     if (activationDisabled(el)) return;
+    dom::MouseEvent click("click");
+    dispatchActivatingClick(el, click);
+}
 
-    // No focus change: element.click() does not focus on the web. It used to
-    // set document.activeElement directly, which left a clicked checkbox
-    // reading as focused while the engine (and so Space) did not know it.
+void keyboardClick(dom::Element* el) {
+    if (!el || activationDisabled(el)) return;
+    dom::MouseEvent click("click");
+    click.setIsTrusted(true);
+    dispatchActivatingClick(el, click);
+}
 
-    // A checkbox or radio changes before its click is dispatched (HTML's
-    // legacy-pre-activation behaviour), so the click's listeners read the new
-    // `checked`; a cancelled click puts it back, and only an uncancelled one
-    // fires input and then change. React's onChange for a checkbox is its
-    // click listener comparing `checked` with the value it last saw.
-    const bool isInput = tagIs(el, "input", "INPUT");
-    const std::string inputType = isInput ? lowered(el->getAttribute("type")) : std::string();
-    if (inputType == "checkbox" || inputType == "radio") {
-        const bool wasChecked = el->hasAttribute("checked");
-        dom::Element* previousRadio = nullptr;
-        if (inputType == "checkbox") {
-            if (wasChecked) el->removeAttribute("checked");
-            else            el->setAttribute("checked", "");
-        } else if (!wasChecked) {
-            previousRadio = layout::checkedRadioInGroup(el);
-            layout::clearRadioGroup(el);
-            el->setAttribute("checked", "");
-        }
-        dom::MouseEvent clickEvt("click");
-        dom::dispatchDomEvent(el, clickEvt);
-        if (clickEvt.defaultPrevented()) {
-            if (inputType == "checkbox") {
-                if (wasChecked) el->setAttribute("checked", "");
-                else            el->removeAttribute("checked");
-            } else if (!wasChecked) {
-                el->removeAttribute("checked");
-                if (previousRadio) previousRadio->setAttribute("checked", "");
-            }
-        } else if (inputType == "checkbox" || !wasChecked) {
-            dom::InputEvent inputEvt("input");
-            inputEvt.setIsTrusted(true);
-            dom::dispatchDomEvent(el, inputEvt);
-            dom::Event changeEvt("change", true, false);
-            changeEvt.setIsTrusted(true);
-            dom::dispatchDomEvent(el, changeEvt);
-        }
-        return;
+KeyActivation keyActivationFor(dom::Element* el, bool enter, bool space) {
+    if (!el || (!enter && !space)) return KeyActivation::None;
+    const std::string t = inputTypeOf(el);
+    const bool buttonLike = tagIs(el, "button", "BUTTON") || t == "submit" || t == "reset" ||
+                            t == "image" || t == "button" || t == "color" || t == "file" ||
+                            detailsOfSummary(el) != nullptr;
+    if (enter) {
+        if (buttonLike) return KeyActivation::Now;
+        if ((tagIs(el, "a", "A") || tagIs(el, "area", "AREA")) && el->hasAttribute("href"))
+            return KeyActivation::Now;
+        return KeyActivation::None;
     }
+    if (buttonLike || t == "checkbox" || t == "radio") return KeyActivation::OnKeyUp;
+    return KeyActivation::None;
+}
 
-    dom::MouseEvent clickEvt("click");
-    dom::dispatchDomEvent(el, clickEvt);
-    if (!clickEvt.defaultPrevented()) runActivationBehavior(el);
-
-    // A programmatic label.click() forwards to its control, exactly as a real
-    // click on the label's text does.
-    forwardLabelActivation(el);
+bool implicitSubmission(dom::Element* field) {
+    if (!field || !tagIs(field, "input", "INPUT")) return false;
+    dom::Element* form = formOwnerFor(field);
+    if (!form) return false;
+    std::vector<dom::Element*> items;
+    layout::collectFormElements(form, items);
+    // The form's default button: its first submit button in tree order.
+    for (dom::Element* c : items) {
+        const std::string t = inputTypeOf(c);
+        const bool submitButton = (tagIs(c, "button", "BUTTON") &&
+                                   lowered(c->getAttribute("type")) != "reset" &&
+                                   lowered(c->getAttribute("type")) != "button") ||
+                                  t == "submit" || t == "image";
+        if (!submitButton) continue;
+        if (!activationDisabled(c)) keyboardClick(c);
+        return true;
+    }
+    // No default button: submit when no more than one field blocks implicit
+    // submission (HTML 4.10.21.2).
+    int blocking = 0;
+    for (dom::Element* c : items) {
+        if (!tagIs(c, "input", "INPUT")) continue;
+        const std::string t = inputTypeOf(c);
+        if (t.empty() || t == "text" || t == "search" || t == "url" || t == "tel" || t == "email" ||
+            t == "password" || t == "date" || t == "month" || t == "week" || t == "time" ||
+            t == "datetime-local" || t == "number")
+            ++blocking;
+    }
+    if (blocking <= 1) requestFormSubmit(form, nullptr);
+    return true;
 }
 
 bool checkFormValidity(dom::Element* form) {
@@ -252,7 +336,9 @@ bool checkFormValidity(dom::Element* form) {
 
 void requestFormSubmit(dom::Element* form, dom::Element* submitter) {
     if (!form) return;
-    if (!checkFormValidity(form)) return;
+    const bool noValidate = form->hasAttribute("novalidate") ||
+                            (submitter && submitter->hasAttribute("formnovalidate"));
+    if (!noValidate && !checkFormValidity(form)) return;
 
     dom::SubmitEvent evt("submit", true, true);
     evt.setIsTrusted(true);

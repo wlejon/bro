@@ -5,6 +5,7 @@
 // other roots, so a compiled read and a dynamic one find the same object.
 
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_web_globals.h"
@@ -185,6 +186,9 @@ void installNavigatorGlobal() {
         nav.set("vendorSub", ev::fromUtf8(""));
         nav.set("appCodeName", ev::fromUtf8("Mozilla"));
         nav.set("appName", ev::fromUtf8("Netscape"));
+        // HTML NavigatorID: "5.0 (" and more for any engine but Gecko's
+        // "4.0"; howler.js matches its version out of it.
+        nav.set("appVersion", ev::fromUtf8("5.0 (Bro/1.0)"));
         nav.set("doNotTrack", ev::null());
         nav.set("pdfViewerEnabled", ev::fromBool(false));
         nav.set("webdriver", ev::fromBool(false));
@@ -239,9 +243,9 @@ void installNavigatorGlobal() {
         return p.get();
     });
 
-    ev::registerGlobal("navigator", nav.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "navigator", nav.get());
+    registerHostGlobal("navigator", nav.get(), ev::GlobalKind::Readonly);
+    // window.clientInformation, [Replaceable]: navigator by its old name.
+    registerHostGlobal("clientInformation", ev::globalValue("navigator").value);
 }
 
 }  // namespace bro::bronze_host

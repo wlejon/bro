@@ -556,6 +556,11 @@ public:
     // reflects (image-orientation: from-image, the default).
     const std::shared_ptr<render::ImageRequest>& imageRequest() const { return imageRequest_; }
     bool imageComplete() const { return imageComplete_; }
+    // HTML's "already started" of a <script>: set for the parser's scripts
+    // (the page's, and innerHTML's, which never run), and once a script
+    // inserted by script ran (bronze_host/host_inserted_scripts.cpp).
+    bool scriptStarted() const { return scriptStarted_; }
+    void setScriptStarted(bool v) { scriptStarted_ = v; }
     bool imageOk() const { return imageOk_; }
     int imageOrientation() const { return imageOrientation_; }
     void setImageLoadState(std::shared_ptr<render::ImageRequest> req, bool complete, bool ok,
@@ -808,6 +813,7 @@ private:
     int imageOrientation_ = 1;
     bool imageComplete_ = false;
     bool imageOk_ = false;
+    bool scriptStarted_ = false;
     std::unique_ptr<layout::ElVideo> videoControl_;
     std::unique_ptr<layout::ElTerminal> terminalControl_;
     std::unique_ptr<layout::ElRemoteView> remoteViewControl_;

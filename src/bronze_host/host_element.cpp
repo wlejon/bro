@@ -78,6 +78,17 @@ std::string hostNullableString(Value v) {
     return ev::toUtf8(v);
 }
 
+std::string hostDomString(Value v) {
+    if (ev::isSymbol(v)) ev::throwTypeError("Cannot convert a Symbol value to a string");
+    if (!ev::isObject(v) && !ev::isFunction(v)) return ev::toUtf8(v);
+    ev::Persistent arg(v);
+    ev::Persistent stringCtor(ev::globalValue("String").value);
+    const Value args[1] = {arg.get()};
+    ev::CallResult r = ev::call(stringCtor.get(), ev::undefined(), std::span<const Value>(args, 1));
+    if (r.thrown) ev::throwValue(r.value);
+    return ev::toUtf8(r.value);
+}
+
 namespace {
 
 dom::Element* siblingOf(dom::Element* el, int direction) {
@@ -115,6 +126,55 @@ HostNodeState* nodeStateOf(Value v) {
     return nullptr;
 }
 
+// An event handler content attribute's function (HTML §8.1.8.1, "getting
+// the current value of the event handler"): the attribute's text compiled as
+// the body of a function of `event`, `this` the element, whose `false` return
+// cancels the event. Compiled on first use and again when the text changes;
+// null, with the SyntaxError reported, when it does not compile. The scope is
+// the global one: the element, its form and the document are not on the
+// handler's scope chain (bronze has no `with`), so a bare `submit()` in the
+// text does not reach the form's.
+std::shared_ptr<ListenerRef> attributeHandlerFor(HostNodeState* st, Value self_, const std::string& type) {
+    if (!st || !st->el) return nullptr;
+    ev::Persistent self(self_);
+    const std::string name = "on" + type;
+    if (!st->el->hasAttribute(name)) return nullptr;
+    const std::string source = st->el->getAttribute(name);
+    auto it = st->attributeHandlers.find(type);
+    if (it != st->attributeHandlers.end() && it->second.first == source) return it->second.second;
+    const std::string body = "if ((function (event) {\n" + source +
+                             "\n}).call(this, event) === false) event.preventDefault();";
+    ev::Persistent ctor(ev::globalValue("Function").value);
+    ev::Persistent argName(ev::fromUtf8("event"));
+    ev::Persistent argBody(ev::fromUtf8(body));
+    const Value args[2] = {argName.get(), argBody.get()};
+    ev::CallResult made = ev::construct(ctor.get(), std::span<const Value>(args, 2));
+    std::shared_ptr<ListenerRef> ref;
+    if (made.thrown) {
+        reportBronzeError((st->el->tagName() + " " + name + " attribute").c_str(), made.value);
+    } else {
+        ref = std::make_shared<ListenerRef>();
+        ref->fn.set(made.value);
+        ref->self.set(self.get());
+        ref->realm = currentHostDocument();
+    }
+    st->attributeHandlers.insert_or_assign(type, std::make_pair(source, ref));
+    return ref;
+}
+
+// dom's attribute handler hook (dom/event_dispatch.h): the element's
+// on<type> attribute, unless script set the on<type> property, which
+// replaces it.
+void runAttributeHandler(dom::Element* el, dom::Event& evt) {
+    ev::Persistent self(hostElementValue(el));
+    HostNodeState* st = nodeStateOf(self.get());
+    if (!st || st->inlineFns.count(evt.type())) return;
+    std::shared_ptr<ListenerRef> ref = attributeHandlerFor(st, self.get(), evt.type());
+    if (!ref) return;
+    const std::string origin = el->tagName() + " on" + evt.type() + " attribute";
+    callBronzeListener(ref->fn, ref->self, evt, origin.c_str(), listenerRealm(*ref));
+}
+
 void installInlineEventHandler(ObjectBuilder& b, const char* propName, const char* eventType) {
     std::string type = eventType;
     b.accessor(
@@ -126,6 +186,7 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
             if (it != st->inlineFns.end() && !ev::isUndefined(it->second->fn.get())) {
                 return it->second->fn.get();
             }
+            if (std::shared_ptr<ListenerRef> attr = attributeHandlerFor(st, self_, type)) return attr->fn.get();
             return ev::null();
         },
         [type](Value self_, std::span<const Value> a) {
@@ -163,6 +224,10 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
 }
 
 }  // namespace
+
+void installAttributeHandlerHook() {
+    dom::setAttributeHandlerHook(&runAttributeHandler);
+}
 
 void setHostFullscreenElement(dom::Element* el) {
     s_fullscreenElement = el;
@@ -521,8 +586,8 @@ void decorateElementProto(ObjectBuilder& b) {
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::undefined();
         std::string name = ev::toUtf8(nameV);
-        std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV))
-                              ? ev::toUtf8(valV) : "";
+        std::string val = hostDomString(valV);
+        if (!st->el) return ev::undefined();  // the value's toString may have run script
         std::string oldVal;
         bool had = st->el->hasAttribute(name);
         if (had) oldVal = st->el->getAttribute(name);

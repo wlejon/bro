@@ -88,8 +88,6 @@ void installCssomHooks() {
         return ev::undefined();
     });
     ev::registerGlobal("__bro_cssom", b.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_cssom", b.get());
 }
 
 }  // namespace bro::bronze_host

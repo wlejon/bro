@@ -38,8 +38,8 @@ void dropObserverState(uint64_t compartmentId);
 // Lift a value some compiled JS (or a sibling installer) ASSIGNED onto
 // `globalThis` into bronze's host-global registry, so a compiled read of the
 // bare name answers with the same object. A no-op for a name globalThis
-// lacks.
-void adoptGlobalProperty(const char* name);
+// lacks. `kind` is what a page's write to it does (host_global_kinds.h).
+void adoptGlobalProperty(const char* name, ev::GlobalKind kind = ev::GlobalKind::Replaceable);
 
 // `process.browser = true` on brokit's global `process`: a page or Worker is a
 // browser that happens to carry a Node-style process object, and libraries

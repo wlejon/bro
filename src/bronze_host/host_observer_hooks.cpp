@@ -345,8 +345,6 @@ void installObserverHooks() {
     // The builder roots the object; registerGlobal and globalValue both
     // allocate, so each use re-reads it.
     ev::registerGlobal("__bro_observers", b.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_observers", b.get());
 }
 
 bool hostObserversHold(const HostNodeState* st) {

@@ -53,6 +53,7 @@
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/host_permissions.h"
 #include "bronze_host/script_pump.h"
 #include "api/fs_watch.h"  // Engine owns unique_ptr<FsWatcher>s; the ctor's unwind deletes them
 #include "audio_inference/audio_inference.h"
@@ -692,8 +693,11 @@ void Engine::initAppRealm() {
     // Each linked sheet stays its own sheet, based at its own directory, so
     // its relative url()s resolve against it rather than the document.
     std::vector<dom::Document::AuthorSheet> authorStyles;
+    failedSheets_.clear();
     for (auto& cssPath : manifest_.stylePaths) {
-        std::string css = AppLoader::loadFile(cssPath);
+        std::optional<std::string> fetched = AppLoader::readFile(cssPath);
+        if (!fetched) failedSheets_.push_back(cssPath);
+        std::string css = fetched.value_or(std::string());
         if (!css.empty()) {
             authorStyles.push_back(
                 {std::move(css), std::filesystem::path(cssPath).parent_path().string()});
@@ -814,114 +818,11 @@ void Engine::initAppRealm() {
 
     // A compile begun at launch that no run took (nothing should be left).
     bronze_host::discardAppScriptCompile();
+    fireLinkedSheetEvents();
 
     if (!hostProvidesCompiledApp_) {
         dispatchDocumentReadyEvents();
     }
-}
-
-// One text per classic script, an empty one included, so a script's index
-// here is its ordinal among the page's classic <script>s (the marker
-// document.currentScript reads).
-std::vector<std::string> Engine::classicScriptTexts() const {
-    std::vector<std::string> texts;
-    for (const auto& script : manifest_.scripts) {
-        if (script.isModule || script.isLua) continue;
-        texts.push_back(script.isInline() ? script.code : AppLoader::loadFile(script.path));
-    }
-    return texts;
-}
-
-// The page's classic scripts as one unit, every script's top-level bindings
-// in one scope as they are in the web's one global scope. Each script is
-// entered by a marker statement (bronze_host::classicScriptMarker) on a line
-// the unit already has, so line numbers stay the scripts' own and a throw is
-// known to be the script's it came out of (runClassicScripts). Markers count
-// from `first`, the page ordinal of texts[0], so a resumed unit's scripts keep
-// their numbers.
-std::string Engine::combineClassicScripts(const std::vector<std::string>& texts, size_t first) {
-    std::string combined;
-    for (size_t i = 0; i < texts.size(); ++i) {
-        combined += i == 0 ? std::string() : std::string("\n;");
-        combined += bronze_host::classicScriptMarker(first + i);
-        if (i > 0) combined += "\n";
-        combined += texts[i];
-    }
-    if (!texts.empty()) combined += "\n;" + bronze_host::classicScriptMarker(first + texts.size()) + "\n";
-    return combined;
-}
-
-// A classic script's uncaught exception ends that script only: the error has
-// been reported (window.onerror, the error event, the log) and the scripts
-// after it run, as a unit of their own. A unit that did not compile runs its
-// scripts one by one, so the one with the syntax error is the one that is
-// lost.
-void Engine::runClassicScripts(const std::vector<std::string>& texts, const std::string& code,
-                               const std::string& name, size_t first) {
-    if (first == 0) bronze_host::snapshotClassicScripts();
-    bronze_host::clearClassicScriptMarker();
-    if (bronze_host::evalAppScript(*this, code, name, false)) {
-        bronze_host::takeClassicScriptMarker();
-        return;
-    }
-    setTestFailure(true);
-    const int marked = bronze_host::takeClassicScriptMarker();
-    const int reached = marked < 0 ? -1 : marked - static_cast<int>(first);
-    if (reached >= static_cast<int>(texts.size())) return;  // ran to its end
-    if (reached < 0) {
-        if (texts.size() < 2) return;
-        for (size_t i = 0; i < texts.size(); ++i) {
-            std::vector<std::string> one{texts[i]};
-            runClassicScripts(one, combineClassicScripts(one, first + i), name, first + i);
-        }
-        return;
-    }
-    std::vector<std::string> rest(texts.begin() + reached + 1, texts.end());
-    if (rest.empty()) return;
-    const size_t restFirst = first + static_cast<size_t>(reached) + 1;
-    // Blank lines first, so the rest's scripts keep the lines they have in
-    // this unit and an error names the same line either way.
-    const size_t marker = code.find(bronze_host::classicScriptMarker(restFirst));
-    const size_t lines = marker == std::string::npos
-        ? 0 : static_cast<size_t>(std::count(code.begin(), code.begin() + static_cast<std::ptrdiff_t>(marker), '\n')) + 1;
-    runClassicScripts(rest, std::string(lines, '\n') + combineClassicScripts(rest, restFirst), name, restFirst);
-}
-
-// Module scripts are deferred on the web — they run after the classic ones, in
-// document order — and each is its own module with its own URL: an external
-// one is named for its file, so import.meta.url and its relative imports
-// resolve from where it lives rather than from index.html; an inline one is
-// named for the page, whose URL is its base. An external module script IS the
-// module instance for its file: it is published under its path, so a later
-// `import` of that file — from a headless driver script, or another module
-// script — binds the instance that ran rather than running the file again. Two
-// tags with one src are one module, evaluated once (HTML's module map).
-std::vector<Engine::PageScriptUnit> Engine::pageScriptUnits() const {
-    std::vector<PageScriptUnit> units;
-    if (displayMode_ == DisplayMode::Server && !manifest_.htmlPath.empty()) return units;
-    std::vector<std::string> classic = classicScriptTexts();
-    if (!classic.empty()) {
-        std::string unitName = !manifest_.htmlPath.empty()
-            ? manifest_.htmlPath
-            : (!manifest_.scripts.empty() ? manifest_.scripts.front().path : appDir_);
-        std::string code = combineClassicScripts(classic);
-        units.push_back({std::move(code), unitName, false, std::move(classic)});
-    }
-    std::vector<std::string> moduleFiles;
-    for (const auto& script : manifest_.scripts) {
-        if (!script.isModule && !script.isLua) continue;
-        if (!script.isInline()) {
-            if (std::find(moduleFiles.begin(), moduleFiles.end(), script.path) != moduleFiles.end()) continue;
-            moduleFiles.push_back(script.path);
-        }
-        std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
-        if (code.empty()) continue;
-        std::string unitName = script.isInline()
-            ? (script.isLua ? (manifest_.htmlPath + ".lua") : manifest_.htmlPath)
-            : script.path;
-        units.push_back({std::move(code), std::move(unitName), !script.isInline() && !script.isLua});
-    }
-    return units;
 }
 
 // Only the FIRST unit compiles ahead: it is compiled against the realm as it
@@ -930,12 +831,43 @@ std::vector<Engine::PageScriptUnit> Engine::pageScriptUnits() const {
 // published, so its compile has to wait for that run.
 void Engine::beginPageCompile() {
     if (!appHtmlOverride_.empty()) return;
+    // The page's scripts are fetched here, before any realm installs the
+    // access policy: install it now, so a script over http is asked of the
+    // app's `net` like every later load rather than fetched unasked.
+    bronze_host::installAccessPolicy();
     manifest_ = AppLoader::loadApp(pageSource(), &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     if (!aotBuildDir_.empty()) return;
     const std::vector<PageScriptUnit> units = pageScriptUnits();
     if (units.empty()) return;
     bronze_host::startAppScriptCompile(*this, units[0].code, units[0].name, units[0].moduleFile);
+}
+
+// Each <link rel=stylesheet> of the page fires `load`, or `error` when its
+// sheet could not be read or fetched (refused included), as HTML fires them
+// once the fetch is over; the page goes on without the sheet.
+void Engine::fireLinkedSheetEvents() {
+    if (!document_) return;
+    std::vector<dom::ElementHandle> links;
+    for (dom::Element* el : document_->querySelectorAll("link[href]")) {
+        std::string rel = " " + el->getAttribute("rel") + " ";
+        for (char& c : rel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (char& c : rel) if (c == '\t' || c == '\n' || c == '\r' || c == '\f') c = ' ';
+        if (rel.find(" stylesheet ") == std::string::npos) continue;
+        links.emplace_back(document_.get(), el);
+    }
+    for (auto& handle : links) {
+        dom::Element* el = handle.get();
+        if (!el) continue;
+        const std::string path = AppLoader::resolvePath(manifest_.basePath, el->getAttribute("href"), &assetMounts_);
+        const bool failed = std::find(failedSheets_.begin(), failedSheets_.end(), path) != failedSheets_.end();
+        const bool linked = failed ||
+            std::find(manifest_.stylePaths.begin(), manifest_.stylePaths.end(), path) != manifest_.stylePaths.end();
+        if (!linked) continue;
+        dom::Event evt(failed ? "error" : "load", false, false);
+        evt.setIsTrusted(true);
+        dispatchElementEvent(el, evt);
+    }
 }
 
 const std::string& Engine::documentReadyState() const {

@@ -49,7 +49,8 @@ near(parseFloat(cs.width), 150, 3, 'width at 50%');
     near(parseInt(m[3]), 128, 8, 'bg blue at 50%');
 }
 {
-    const tm = cs.transform.match(/translateX\(([-\d.]+)/);
+    // A computed transform is a matrix; translateX is its fifth number.
+    const tm = cs.transform.match(/^matrix\(1, 0, 0, 1, ([-\d.]+), 0\)$/);
     assert(tm, 'transform is translateX at 50%: ' + cs.transform);
     near(parseFloat(tm[1]), 50, 3, 'translateX at 50%');
 }
@@ -182,6 +183,7 @@ a6.onfinish = () => { onfinishFired = true; };
 advanceTime(300);
 flush();
 flush();
+advanceTime(16);
 assert(promiseResolved, 'finished promise resolved with the animation');
 assert(onfinishFired, 'onfinish fired');
 assert(a6.playState === 'finished', 'a6 finished');
@@ -197,7 +199,23 @@ let finishNow = false;
 a6b.onfinish = () => { finishNow = true; };
 a6b.finish();
 assert(a6b.playState === 'finished', 'finish() → finished');
-assert(finishNow, 'finish() fires onfinish synchronously');
+// The finish event is a task of its own, after the promise's reactions
+// (finish notification steps), as in Chromium.
+assert(!finishNow, 'finish() queues onfinish rather than firing it inside the call');
+advanceTime(16);
+assert(finishNow, 'onfinish fired on the next task');
+{
+    // Cancelled before its finish event ran: none fires, the promise had
+    // resolved first.
+    const a6c = b6b.animate([{ opacity: 0 }, { opacity: 1 }], 5000);
+    const order = [];
+    a6c.onfinish = () => order.push('finish');
+    a6c.finished.then(() => order.push('promise'));
+    a6c.finish();
+    a6c.cancel();
+    advanceTime(16);
+    assert(order.join() === 'promise', 'a cancelled animation fires no queued finish, got ' + order.join());
+}
 near(a6b.currentTime, 5000, 1, 'finish() seeks to end');
 flush();
 cs = getComputedStyle(b6b);

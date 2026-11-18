@@ -34,12 +34,12 @@
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_node_sweep.h"
-#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_event_spec.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_touch.h"
 #include "bronze_host/host_dom_events_types.h"
 
+#include "engine/element_activation.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/drag_data_store.h"
@@ -606,6 +606,26 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
              [&] { callListenerInCompartment(fn, thisObj, evt, origin); });
 }
 
+namespace {
+
+// The global's current event (window.event), with the compartment whose
+// global it is.
+struct CurrentEvent {
+    uint64_t compartment = 0;
+    ev::Persistent value;
+};
+CurrentEvent& currentEvent() {
+    static auto* slot = new CurrentEvent();
+    return *slot;
+}
+
+}  // namespace
+
+Value hostCurrentWindowEvent() {
+    const CurrentEvent& cur = currentEvent();
+    return cur.compartment == currentCompartmentId() ? cur.value.get() : ev::undefined();
+}
+
 static void callListenerInCompartment(const ev::Persistent& fn, const ev::Persistent& thisObj, dom::Event& evt,
                                       const char* origin) {
     auto live = std::make_shared<LiveEvent>();
@@ -620,8 +640,18 @@ static void callListenerInCompartment(const ev::Persistent& fn, const ev::Persis
     ev::Persistent evtObj(ev::isObject(provided)
                               ? decorateProvidedEventValue(provided, evt, live)
                               : buildEventValue(evt, live));
+    // window.event for the call, and the one before it again afterwards (a
+    // listener may dispatch another event).
+    CurrentEvent& cur = currentEvent();
+    const uint64_t savedCompartment = cur.compartment;
+    ev::Persistent savedEvent(cur.value.get());
+    const bool inShadowTree = evt.currentTarget() && evt.currentTarget()->containingShadowRoot();
+    cur.compartment = currentCompartmentId();
+    cur.value.set(inShadowTree ? ev::undefined() : evtObj.get());
     Value arg = evtObj.get();
     ev::CallResult r = ev::call(fn.get(), thisObj.get(), std::span<const Value>(&arg, 1));
+    cur.compartment = savedCompartment;
+    cur.value.set(savedEvent.get());
     // Before the report, and before anything else can run: from here on the
     // dom::Event may be destroyed at any point and the object must not reach
     // it. A listener that stashed the object gets the named refusal instead.
@@ -809,13 +839,15 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
         // its fields — see decorateProvidedEventValue.
         {
             ProvidedEventScope scope(evt, descRoot.get());
-            engine->dispatchElementEvent(el, evt);
+            // A click runs its target's activation behaviour (DOM 2.9), as
+            // a real one does: a dispatched click ticks a checkbox, follows a
+            // link, submits a form.
+            auto* click = evt.type() == "click" ? dynamic_cast<dom::MouseEvent*>(&evt) : nullptr;
+            if (click) engine::dispatchActivatingClick(el, *click);
+            else engine->dispatchElementEvent(el, evt);
         }
         finishProvidedEventValue(descRoot.get(), evt);
     });
-    if (spec.type == "click" && notPrevented) {
-        runAnchorDownload(el);
-    }
     return ev::fromBool(notPrevented);
 }
 

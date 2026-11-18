@@ -80,8 +80,6 @@ ev::Persistent makeRoot(const std::vector<const char*>& namespaces) {
 
 void publish(const char* name, const ev::Persistent& root) {
     ev::registerGlobal(name, root.get());
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, name, root.get());
 }
 
 }  // namespace

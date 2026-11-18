@@ -1,10 +1,12 @@
-// The host globals a script replaced on globalThis, made the bare-name
-// binding too (host_global_sync.h). Each compartment's realm has its own host
-// globals, so this acts on the current realm's.
+// The app realm's host globals as installed, put back at a reload
+// (host_global_sync.h). A page's own writes to them need nothing from here:
+// bronze reads a name the page replaced from the global object
+// (host_global_kinds.h).
 
 #include "bronze_host/host_global_sync.h"
 
 #include "bronze_host/host_class.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_js_modules.h"
 
 #include <unordered_map>
@@ -15,12 +17,12 @@ namespace bro::bronze_host {
 namespace {
 
 std::unordered_set<std::string> s_baselineNames;
-// The app realm's host globals as installed: what a reload puts back over
-// any a script replaced (syncHostGlobalsFromGlobalThis made them current).
+// The app realm's host globals as installed, but its accessors, whose
+// functions stay on the global object: what a reload registers again.
 std::unordered_map<std::string, ev::Persistent> s_baselineValues;
 
-// The names every realm binds to itself: a script assigning them on
-// globalThis is not replacing a host global.
+// The names every realm binds to itself: a script declaring them is not
+// shadowing a host global (the source preflight, eval_js_scan.cpp).
 bool isSpecialRealmGlobal(const std::string& key) {
     return key == "globalThis" || key == "window" || key == "self" || key == "top" || key == "parent" ||
            key == "document";
@@ -32,23 +34,17 @@ void snapshotBaselineHostGlobalNames() {
     s_baselineNames.clear();
     s_baselineValues.clear();
     for (const std::string& key : ev::hostGlobalNames()) {
-        if (isSpecialRealmGlobal(key) || isDeferredName(key.c_str())) continue;
-        s_baselineNames.insert(key);
+        if (isDeferredName(key.c_str())) continue;
+        if (!isSpecialRealmGlobal(key)) s_baselineNames.insert(key);
+        if (isHostGlobalAccessor(key)) continue;
         ev::GlobalValue gv = ev::globalValue(key);
         if (gv.found) s_baselineValues[key].set(gv.value);
     }
 }
 
 void restoreBaselineHostGlobals() {
-    for (auto& [key, value] : s_baselineValues) {
-        ev::GlobalValue cur = ev::globalValue(key);
-        if (!cur.found || ev::toBits(cur.value) != ev::toBits(value.get())) ev::registerGlobal(key, value.get());
-    }
-}
-
-bool isBaselineHostGlobalName(const std::string& name) {
-    if (isSpecialRealmGlobal(name)) return false;
-    return s_baselineNames.count(name) != 0 || ev::hasHostGlobal(name);
+    // Registering again also clears the mark of a name the page overrode.
+    for (auto& [key, value] : s_baselineValues) registerHostGlobal(key.c_str(), value.get(), hostGlobalKind(key));
 }
 
 void syncHostGlobalsFromGlobalThis() {
@@ -56,13 +52,18 @@ void syncHostGlobalsFromGlobalThis() {
     if (!gtv.found || !ev::isObject(gtv.value)) return;
     ev::Persistent gt(gtv.value);
     for (const std::string& key : ev::hostGlobalNames()) {
-        if (isSpecialRealmGlobal(key) || isDeferredName(key.c_str())) continue;
+        if (isDeferredName(key.c_str()) || isHostGlobalAccessor(key)) continue;
         ev::Persistent propVal(ev::getProperty(gt.get(), key));
         ev::GlobalValue regVal = ev::globalValue(key);
         if (!regVal.found || ev::toBits(propVal.get()) != ev::toBits(regVal.value)) {
-            ev::registerGlobal(key, propVal.get());
+            registerHostGlobal(key.c_str(), propVal.get(), hostGlobalKind(key));
         }
     }
+}
+
+bool isBaselineHostGlobalName(const std::string& name) {
+    if (isSpecialRealmGlobal(name)) return false;
+    return s_baselineNames.count(name) != 0 || ev::hasHostGlobal(name);
 }
 
 }  // namespace bro::bronze_host

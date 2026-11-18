@@ -26,6 +26,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_web_globals.h"
 
@@ -336,15 +337,8 @@ void installPlatformGlobals() {
         {"showOpenFolderDialogAsync", makeShowOpenFolderDialogAsync},
         {"showSaveFileDialogAsync", makeShowSaveFileDialogAsync},
     };
+    // `screen` is [Replaceable]; the rest are operations.
     for (const Entry& e : entries) ev::registerGlobal(e.name, e.make());
-
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        ev::Persistent global(gt.value);
-        for (const Entry& e : entries) {
-            ev::setProperty(global.get(), e.name, ev::globalValue(e.name).value);
-        }
-    }
     // window.screenX / screenY (and the screenLeft / screenTop aliases): the
     // window's position on the desktop, live like `screen` is; 0 headless,
     // where there is no desktop to be positioned on.
@@ -362,24 +356,13 @@ void installPlatformGlobals() {
                 return ev::fromDouble(0.0);
             };
         };
-        auto defineOn = [&](Value target) {
-            if (!ev::isObject(target)) return;
-            ObjectBuilder t(target);
-            t.accessor("screenX", screenPos(true), nullptr);
-            t.accessor("screenY", screenPos(false), nullptr);
-            t.accessor("screenLeft", screenPos(true), nullptr);
-            t.accessor("screenTop", screenPos(false), nullptr);
-        };
-        if (gt.found) defineOn(gt.value);
-        ev::GlobalValue winPos = ev::globalValue("window");
-        gt = ev::globalValue("globalThis");
-        if (winPos.found && ev::isObject(winPos.value) && winPos.value != gt.value) defineOn(winPos.value);
-    }
-    ev::GlobalValue win = ev::globalValue("window");
-    if (win.found && ev::isObject(win.value) && win.value != gt.value) {
-        ev::Persistent winRoot(win.value);
-        for (const Entry& e : entries) {
-            ev::setProperty(winRoot.get(), e.name, ev::globalValue(e.name).value);
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            ObjectBuilder t(gt.value);
+            defineReplaceableAttribute(t, "screenX", screenPos(true));
+            defineReplaceableAttribute(t, "screenY", screenPos(false));
+            defineReplaceableAttribute(t, "screenLeft", screenPos(true));
+            defineReplaceableAttribute(t, "screenTop", screenPos(false));
         }
     }
     // Gamepad, GamepadButton, GamepadEvent globals

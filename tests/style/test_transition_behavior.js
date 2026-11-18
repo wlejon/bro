@@ -103,7 +103,7 @@ assert(cs('vis').visibility === 'hidden', 'hidden at the end: ' + cs('vis').visi
 // --- transform: none runs from the identity.
 $('tf').style.transform = 'translateX(100px)';
 advanceTime(500);
-const m = /translateX\(([\d.]+)px\)/.exec(cs('tf').transform);
+const m = /^matrix\(1, 0, 0, 1, ([\d.]+), 0\)$/.exec(cs('tf').transform);  // computed: a matrix
 assert(m && Math.abs(+m[1] - 50) < 2, 'transform from none interpolates: ' + cs('tf').transform);
 advanceTime(600);
 

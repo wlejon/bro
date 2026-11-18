@@ -80,6 +80,13 @@ Value makeHostRectListValue(Value rects);
 //     this.label.textContent = value;   // value optional, often omitted
 std::string hostNullableString(Value v);
 
+// The WebIDL `DOMString` conversion: ToString of any value, so null is
+// "null", undefined "undefined", an array its join(",") and an object its
+// toString() / valueOf() (run through String, which may throw: a throw
+// propagates to the caller, a Symbol is the TypeError). What setAttribute's
+// value is declared as; d3 passes `.attr('viewBox', [x, y, w, h])`.
+std::string hostDomString(Value v);
+
 inline Value makeFloat32Array(const float* data, size_t count) {
     Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(count));
     if (data && count > 0) {

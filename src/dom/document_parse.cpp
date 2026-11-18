@@ -234,6 +234,7 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
                 childElem->setAttribute(attrName, attr->value ? attr->value : "");
             }
 
+            if (child->v.element.tag == GUMBO_TAG_SCRIPT) childElem->setScriptStarted(true);
             parentElem->appendChild(childElem);
 
             if (child->type == GUMBO_NODE_TEMPLATE) {

@@ -10,6 +10,7 @@
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_dom_lists.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/host_global_kinds.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
@@ -24,6 +25,7 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/event.h"
 #include "platform/window.h"
 
 #include "canvas/canvas_scene.h"
@@ -804,6 +806,28 @@ void clearHostDocument(dom::Document* doc) {
 void snapshotClassicScripts() {
     dom::Document* doc = currentHostDocument();
     if (doc) classicScriptSnapshots()[doc] = classicScriptElements(doc);
+}
+
+void installClassicScriptEvents() {
+    registerHostGlobal("__broClassicScriptEvent", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            if (a.empty() || !ev::isString(a[0])) return ev::undefined();
+            const std::string type = ev::toUtf8(a[0]);
+            dom::Document* doc = currentHostDocument();
+            const int k = currentClassicScript();
+            if (!doc || k < 0) return ev::undefined();
+            auto it = classicScriptSnapshots().find(doc);
+            if (it == classicScriptSnapshots().end() || static_cast<size_t>(k) >= it->second.size())
+                return ev::undefined();
+            dom::Element* el = it->second[static_cast<size_t>(k)];
+            bool connected = false;
+            for (dom::Element* now : doc->querySelectorAll("script")) connected = connected || now == el;
+            if (!connected) return ev::undefined();
+            dom::Event evt(type, false, false);
+            evt.setIsTrusted(true);
+            if (auto* eng = hostEngine()) eng->dispatchElementEvent(el, evt);
+            return ev::undefined();
+        }, 1, "__broClassicScriptEvent"));
 }
 
 }  // namespace bro::bronze_host

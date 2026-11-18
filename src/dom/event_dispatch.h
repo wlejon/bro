@@ -13,6 +13,14 @@ class Event;
 /// Invokes native listeners registered via Element::addEventListener and Document::windowListeners.
 void dispatchDomEvent(Element* target, Event& event);
 
+// An element's event handler content attribute (`onclick="..."`, HTML
+// §8.1.8.1) runs through this hook, set by the script layer: called at the
+// target and in the bubbling phase, before the element's listeners, for an
+// element carrying an `on<type>` attribute. The layer compiles it, and skips
+// it where script set the handler property instead.
+using AttributeHandlerHook = void (*)(Element* el, Event& event);
+void setAttributeHandlerHook(AttributeHandlerHook hook);
+
 /// Dispatches an event directly at window listeners on the given document.
 void dispatchWindowEvent(Document* doc, Event& event);
 
