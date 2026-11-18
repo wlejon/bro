@@ -4,9 +4,11 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkFontTypes.h>
 
+#include <cctype>
 #include <chrono>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace bro::render {
 
@@ -112,6 +114,22 @@ void applyGeometricOutlines(SkFont& font) {
     font.setBaselineSnap(false);
 }
 
+// The name a browser tries when a family is not installed (Blink's
+// AlternateFamilyName, WebKit's too): Courier and Courier New, Times and
+// Times New Roman, Arial and Helvetica stand in for each other, so a page's
+// `font: 12px Courier` on Linux is Liberation Mono (Courier New's metric
+// twin) and not the default face.
+static const char* alternateFamilyName(const std::string& name) {
+    static const std::pair<const char*, const char*> kPairs[] = {
+        {"courier", "Courier New"}, {"courier new", "Courier"}, {"times", "Times New Roman"},
+        {"times new roman", "Times"}, {"arial", "Helvetica"}, {"helvetica", "Arial"}};
+    std::string lower = name;
+    for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    for (const auto& [from, to] : kPairs)
+        if (lower == from) return to;
+    return nullptr;
+}
+
 sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
                                          SkFontStyle style,
                                          SkFontMgr* mgr) {
@@ -150,6 +168,8 @@ sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
         noteFontLookup("matchFamilyStyle", name.c_str(), -1,
                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
         if (tf) return tf;
+        if (const char* alternate = alternateFamilyName(name))
+            if (auto tfAlt = sk_sp<SkTypeface>(mgr->matchFamilyStyle(alternate, style))) return tfAlt;
     }
     return sk_sp<SkTypeface>(mgr->matchFamilyStyle(nullptr, style));
 }

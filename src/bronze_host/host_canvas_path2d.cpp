@@ -261,12 +261,18 @@ void installPath2DClass() {
                             SkPath src = other->snapshot();
                             if (a.size() > 1 && ev::isObject(a[1])) {
                                 const Value& m = a[1];  // the rooted slot, current across the reads
-                                float ma = static_cast<float>(ev::toDouble(ev::getProperty(m, "a")));
-                                float mb = static_cast<float>(ev::toDouble(ev::getProperty(m, "b")));
-                                float mc = static_cast<float>(ev::toDouble(ev::getProperty(m, "c")));
-                                float md = static_cast<float>(ev::toDouble(ev::getProperty(m, "d")));
-                                float me = static_cast<float>(ev::toDouble(ev::getProperty(m, "e")));
-                                float mf = static_cast<float>(ev::toDouble(ev::getProperty(m, "f")));
+                                // A DOMMatrix2DInit: a..f, or m11.. when a member is absent.
+                                auto member = [&m](const char* shortName, const char* longName, double dflt) {
+                                    Value v = ev::getProperty(m, shortName);
+                                    if (ev::isUndefined(v)) v = ev::getProperty(m, longName);
+                                    return static_cast<float>(ev::isUndefined(v) ? dflt : ev::toDouble(v));
+                                };
+                                float ma = member("a", "m11", 1);
+                                float mb = member("b", "m12", 0);
+                                float mc = member("c", "m21", 0);
+                                float md = member("d", "m22", 1);
+                                float me = member("e", "m41", 0);
+                                float mf = member("f", "m42", 0);
                                 SkMatrix skMat;
                                 skMat.setAll(ma, mc, me, mb, md, mf, 0, 0, 1);
                                 src = src.makeTransform(skMat);

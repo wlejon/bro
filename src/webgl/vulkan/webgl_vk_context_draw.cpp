@@ -89,7 +89,11 @@ const PipelineKey& WebGLVkContext::fixedPipelineKey() {
     fixedKeySerial_ = pipelineStateSerial_;
     PipelineKey& key = fixedKey_;
     key = PipelineKey{};
-    key.depthBiasEnable = polygonOffsetFillEnabled_ ? VK_TRUE : VK_FALSE;
+    // WEBGL_polygon_mode: in LINE mode POLYGON_OFFSET_LINE offsets instead.
+    const bool lineMode = polygonMode_ == 0x1B01 /* LINE_WEBGL */;
+    key.polygonMode = lineMode ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+    key.depthBiasEnable = (lineMode ? polygonOffsetLineEnabled_ : polygonOffsetFillEnabled_) ? VK_TRUE : VK_FALSE;
+    key.depthClampEnable = depthClampEnabled_ ? VK_TRUE : VK_FALSE;
 
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
     key.cullMode = glCullModeToVk(cullFaceMode_);
@@ -222,7 +226,7 @@ void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent, boo
 
     // GL offsets depth by factor * DZ + units * r; Vulkan by its slope and
     // constant factors, the same terms.
-    bound_.setDepthBias(cmd, polygonOffsetUnits_, polygonOffsetFactor_);
+    bound_.setDepthBias(cmd, polygonOffsetUnits_, polygonOffsetFactor_, polygonOffsetClamp_);
     bound_.setBlendConstants(cmd, blendColor_);
     if (context_.wideLines()) {
         const float* range = context_.deviceProperties().limits.lineWidthRange;

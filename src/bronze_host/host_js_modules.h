@@ -19,6 +19,11 @@ void installCssomHooks();
 void installCssomModule();
 void installInterfaceTags();
 void installAttrModule();
+// `__bro_geometry` (host_geometry_hooks.cpp) and js/geometry.js over it:
+// DOMRect, DOMPoint, DOMMatrix, DOMQuad, the legacy SVG geometry types and
+// the SVG elements' getBBox / getCTM / getScreenCTM.
+void installGeometryHooks();
+void installGeometryModule();
 
 // The observer module's per-frame pass (resize, then intersection), fired
 // from the frame seam after requestAnimationFrame and its microtask

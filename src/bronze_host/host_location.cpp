@@ -38,11 +38,14 @@ namespace {
 
 constexpr const char* kAppOrigin = "bro://app";
 
+}  // namespace
 
 std::string documentUrl(dom::Document* doc) {
     if (doc && !doc->url().empty()) return doc->url();
     return std::string(kAppOrigin) + "/";
 }
+
+namespace {
 
 struct UrlParts {
     std::string protocol, host, pathname, search, hash;

@@ -5,6 +5,7 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_events.h"
 #include "bronze_host/host_document.h"
+#include "bronze_host/host_dom_lists.h"
 #include "dom/document.h"
 #include "engine/engine.h"
 #include "css/parser.h"
@@ -293,6 +294,7 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
         return ev::undefined();
     });
 
+    if (Value proto = mediaQueryListProto(); ev::isObject(proto)) m.obj.set(ev::setPrototype(m.get(), proto));
     Value mqlVal = m.get();
     state->mqlObj.set(mqlVal);
     return mqlVal;

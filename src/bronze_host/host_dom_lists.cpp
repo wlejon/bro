@@ -30,6 +30,9 @@ HostClass g_nodeListClass;
 HostClass g_htmlCollectionClass;
 HostClass g_htmlOptionsCollectionClass;
 HostClass g_htmlFormControlsCollectionClass;
+HostClass g_domTokenListClass;
+HostClass g_domStringMapClass;
+HostClass g_mediaQueryListClass;
 
 Value illegalListConstructor(Value, std::span<const Value>) {
     return ev::throwTypeError("Illegal constructor");
@@ -122,7 +125,14 @@ void installDomListInterfaces() {
     g_htmlFormControlsCollectionClass.install("HTMLFormControlsCollection", 0, illegalListConstructor,
                                               nullptr);
     g_htmlFormControlsCollectionClass.inherit(g_htmlCollectionClass);
+    g_domTokenListClass.install("DOMTokenList", 0, illegalListConstructor, nullptr);
+    g_domStringMapClass.install("DOMStringMap", 0, illegalListConstructor, nullptr);
+    g_mediaQueryListClass.install("MediaQueryList", 0, illegalListConstructor, nullptr);
 }
+
+Value domTokenListProto() { return g_domTokenListClass.prototype(); }
+Value domStringMapProto() { return g_domStringMapClass.prototype(); }
+Value mediaQueryListProto() { return g_mediaQueryListClass.prototype(); }
 
 Value makeStaticNodeList(const std::vector<dom::Element*>& nodes) {
     ev::Persistent list(ev::createObject());

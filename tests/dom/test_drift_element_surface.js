@@ -67,7 +67,7 @@ assert(a.getAttribute('target') === '_blank', '<a>.target reflects the attribute
 a.rel = 'noopener';
 assert(a.getAttribute('rel') === 'noopener', '<a>.rel reflects the attribute');
 a.setAttribute('href', 'other.txt');
-assert(a.href === 'other.txt', 'and the read goes back to the attribute');
+assert(a.href === new URL('other.txt', document.baseURI).href, 'and the read goes back to the attribute, resolved as the web does');
 
 // On a non-link tag they are plain expandos.
 const div = document.createElement('div');

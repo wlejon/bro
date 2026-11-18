@@ -6,6 +6,7 @@
 // <video src> in markup. Decorates the classes host_html_interfaces.cpp
 // installs; docs/video-api.js is the contract.
 
+#include "bronze_host/host_url_reflect.h"
 #include "bronze_host/host_element_video.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
@@ -176,7 +177,7 @@ void decorateMediaProto(ObjectBuilder& b) {
         [](Value self, std::span<const Value>) -> Value {
             auto* el = getElement(self);
             if (!el) return ev::fromUtf8("");
-            return ev::fromUtf8(el->getAttribute("src"));
+            return ev::fromUtf8(reflectedUrl(el, "src"));
         },
         [](Value self, std::span<const Value> a) -> Value {
             auto* el = getElement(self);

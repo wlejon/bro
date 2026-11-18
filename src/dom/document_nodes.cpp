@@ -44,6 +44,10 @@ Node* Document::cloneNode(Node* src, bool deep) {
             return createTextNode(static_cast<TextNode*>(src)->data());
         case NodeType::Comment:
             return createComment(static_cast<CommentNode*>(src)->data());
+        case NodeType::DocumentType: {
+            auto* dt = static_cast<DocumentType*>(src);
+            return createDocumentType(dt->name(), dt->publicId(), dt->systemId());
+        }
         case NodeType::DocumentFragment: {
             Node* clone = nullptr;
             if (auto* el = dynamic_cast<Element*>(src)) {
@@ -100,6 +104,20 @@ Node* Document::cloneNode(Node* src, bool deep) {
     if (elementClonedCb_) elementClonedCb_(this, srcEl, clone);
 
     return clone;
+}
+
+DocumentType* Document::createDocumentType(const std::string& name, const std::string& publicId,
+                                           const std::string& systemId) {
+    auto* dt = allocateNode<DocumentType>(name, publicId, systemId);
+    dt->setDocument(this);
+    return dt;
+}
+
+void Document::setDoctype(DocumentType* dt) {
+    if (dt == doctype_) return;
+    DocumentType* old = doctype_;
+    doctype_ = dt;
+    if (old) noteDetachCandidate(old);
 }
 
 ShadowRoot* Document::allocateShadowRoot(Element* host, ShadowRoot::Mode mode) {
@@ -186,7 +204,7 @@ void Node::setParent(Node* p) {
 }
 
 bool Document::isDetachedRoot(const Node* n) const {
-    if (!n || n == root_ || n->parentNode()) return false;
+    if (!n || n == root_ || n == doctype_ || n->parentNode()) return false;
     if (dynamic_cast<const ShadowRoot*>(n)) return false;
     if (const auto* el = dynamic_cast<const Element*>(n)) {
         if (el->templateHost()) return false;
@@ -196,6 +214,12 @@ bool Document::isDetachedRoot(const Node* n) const {
 
 void Document::freeNode(Node* node) {
     if (!node) return;
+    if (node == doctype_) doctype_ = nullptr;
+    if (node == documentElement_) {
+        root_ = nullptr;
+        documentElement_ = nullptr;
+        body_ = nullptr;
+    }
     auto kids = node->childNodes();
     for (auto* child : kids) {
         freeNode(child);
@@ -269,21 +293,21 @@ void Document::freeNode(Node* node) {
     }
 }
 
-void Document::addNodeFreedObserver(NodeObserver cb) {
+void DocumentObservers::addNodeFreedObserver(NodeObserver cb) {
     if (!cb) return;
     for (NodeObserver existing : nodeFreedObservers_)
         if (existing == cb) return;   // idempotent: installing twice is one hook
     nodeFreedObservers_.push_back(cb);
 }
 
-void Document::addMutationObserver(MutationObserverFn cb) {
+void DocumentObservers::addMutationObserver(MutationObserverFn cb) {
     if (!cb) return;
     for (MutationObserverFn existing : mutationObservers_)
         if (existing == cb) return;   // idempotent: installing twice is one hook
     mutationObservers_.push_back(cb);
 }
 
-void Document::removeMutationObserver(MutationObserverFn cb) {
+void DocumentObservers::removeMutationObserver(MutationObserverFn cb) {
     mutationObservers_.erase(
         std::remove(mutationObservers_.begin(), mutationObservers_.end(), cb),
         mutationObservers_.end());
@@ -330,7 +354,7 @@ void Document::collectDetachedRoots(std::vector<Node*>& out) const {
         if (el->shadowRoot()) pointedAt.insert(el->shadowRoot());
     }
     for (const auto& [n, _] : ownedNodes_) {
-        if (n == root_ || n->parentNode()) continue;
+        if (n == root_ || n == doctype_ || n->parentNode()) continue;
         if (pointedAt.count(n)) continue;
         out.push_back(n);
     }
@@ -374,7 +398,7 @@ void Document::notifyMutation(const MutationNotice& notice) {
     for (MutationObserverFn obs : snapshot) obs(this, notice);
 }
 
-void Document::removeNodeFreedObserver(NodeObserver cb) {
+void DocumentObservers::removeNodeFreedObserver(NodeObserver cb) {
     nodeFreedObservers_.erase(
         std::remove(nodeFreedObservers_.begin(), nodeFreedObservers_.end(), cb),
         nodeFreedObservers_.end());

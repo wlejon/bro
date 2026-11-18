@@ -68,6 +68,7 @@ void installWebGLBuffers(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "bindBuffer", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::BufferTarget, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->bindBuffer(u32At(a, 0), webgl::WebGLBuffer{idOf(argAt(a, 1), WebGLCell::Buffer)});
         return ev::undefined();
     });

@@ -45,7 +45,7 @@ say('style.delete', el.style.color === '');
 
 // A symbol key must not throw: toUtf8 of a symbol is a TypeError by spec, so
 // a trap that stringified first would break any library that probes one.
-say('style.symbol', el.style[Symbol.toStringTag] === undefined);
+say('style.symbol', el.style[Symbol('probe')] === undefined);
 
 // ---------------------------------------------------------------------------
 // 2. getComputedStyle — same reach, still read-only

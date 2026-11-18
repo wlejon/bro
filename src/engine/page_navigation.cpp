@@ -7,6 +7,7 @@
 #include "engine/engine.h"
 #include "engine/app_loader.h"
 #include "platform/system_info.h"
+#include "util/asset_path.h"
 #include "util/log.h"
 #include "util/remote_asset.h"
 
@@ -19,27 +20,6 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr const char* kAppUrlRoot = "bro://app/";
-
-int hexValue(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-std::string percentDecode(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '%' && i + 2 < s.size() && hexValue(s[i + 1]) >= 0 && hexValue(s[i + 2]) >= 0) {
-            out += static_cast<char>(hexValue(s[i + 1]) * 16 + hexValue(s[i + 2]));
-            i += 2;
-        } else {
-            out += s[i];
-        }
-    }
-    return out;
-}
 
 std::string percentEncodePath(const std::string& s) {
     static const char* kHex = "0123456789ABCDEF";
@@ -83,17 +63,7 @@ std::string Engine::appUrlForPath(const std::string& path) const {
 }
 
 std::string Engine::pathForAppUrl(const std::string& url) const {
-    const std::string root = kAppUrlRoot;
-    if (appDir_.empty() || url.compare(0, root.size(), root) != 0) return {};
-    std::string rel = url.substr(root.size());
-    const size_t cut = rel.find_first_of("?#");
-    if (cut != std::string::npos) rel.erase(cut);
-    rel = percentDecode(rel);
-    std::error_code ec;
-    const fs::path base = fs::absolute(appDir_, ec).lexically_normal();
-    const fs::path p = (base / rel).lexically_normal();
-    if (p != base && !isWithin(p, base)) return {};
-    return p.string();
+    return util::pathForAppUrl(url);
 }
 
 const std::vector<std::pair<std::string, std::string>>& Engine::pageImportMap() const {

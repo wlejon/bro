@@ -9,6 +9,7 @@
 #include "embed/embed.h"
 
 #include <functional>
+#include <string>
 
 namespace bro::bronze_host {
 
@@ -27,6 +28,15 @@ Value getSymbolKeyed(Value obj, Value key);
 /// proxy or the methods it answers first) gets Array.prototype's iterator as
 /// its `[Symbol.iterator]`, and with `withForEach` its forEach / entries /
 /// keys / values.
+/// obj[Symbol.toStringTag] = name (non-enumerable, configurable, as WebIDL
+/// gives an interface prototype): what Object.prototype.toString names.
+void setToStringTag(Value obj, const std::string& name);
+
+/// Reflect.get(obj, key, receiver): an accessor found on `obj` runs with
+/// `receiver` as this (a host proxy's prototype members run on the proxy).
+/// What it throws propagates.
+Value reflectGet(Value obj, Value key, Value receiver);
+
 void installArrayLikeIteration(Value obj, bool withForEach);
 
 /// `obj` (a list with no indexed elements of its own, DOMTokenList) iterates

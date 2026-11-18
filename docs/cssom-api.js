@@ -19,7 +19,14 @@
  * - A rule's `style` is a CSSStyleDeclaration: `getPropertyValue`,
  *   `getPropertyPriority`, `setProperty(name, value, 'important')`,
  *   `removeProperty`, `cssText`, `length` / `item(i)`, and camelCase or dashed
- *   property access (`rule.style.backgroundColor = 'red'`).
+ *   property access (`rule.style.backgroundColor = 'red'`). `element.style`
+ *   and `getComputedStyle(el)` are CSSStyleDeclarations too (instanceof, the
+ *   toString tag, `constructor`), with the same members; the DOM's other
+ *   helper objects are instances of theirs as well: `classList` / `relList`
+ *   DOMTokenList (indexed, `""` a SyntaxError, a token with a space an
+ *   InvalidCharacterError), `dataset` DOMStringMap, `localStorage` /
+ *   `sessionStorage` Storage (members on Storage.prototype), `matchMedia()`
+ *   MediaQueryList.
  * - Constructable sheets: `new CSSStyleSheet({media, disabled})`,
  *   `replaceSync(text)` and `replace(text)` (a Promise of the sheet; @import is
  *   dropped), adopted through `document.adoptedStyleSheets = [sheet]` or

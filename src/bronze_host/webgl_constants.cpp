@@ -6,6 +6,9 @@
 #include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_class.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace bro::bronze_host {
 
 namespace {
@@ -651,6 +654,24 @@ const ConstantEntry kConstants[] = {
 // program's `gl.FLOAT = 0` is discarded (a TypeError in strict code). bronze
 // caches a read of such a property through the prototype chain as its value,
 // so `gl.FLOAT` costs no walk to the prototype.
+bool isWebGL2OnlyEnum(uint32_t value) {
+    // The values only WebGL 2 names: a value a WebGL 1 name shares is not one.
+    static const std::vector<uint32_t> values = [] {
+        std::vector<uint32_t> only, shared;
+        for (const ConstantEntry& e : kConstants) {
+            if (e.value > 4294967295.0 || e.value < 0) continue;
+            (isWebGL2OnlyName(e.name) ? only : shared).push_back(static_cast<uint32_t>(e.value));
+        }
+        std::sort(shared.begin(), shared.end());
+        std::vector<uint32_t> out;
+        for (uint32_t v : only)
+            if (!std::binary_search(shared.begin(), shared.end(), v)) out.push_back(v);
+        std::sort(out.begin(), out.end());
+        return out;
+    }();
+    return std::binary_search(values.begin(), values.end(), value);
+}
+
 void installWebGLConstants(ObjectBuilder& b, bool webgl1) {
     for (const ConstantEntry& e : kConstants) {
         if (webgl1 && isWebGL2OnlyName(e.name)) continue;

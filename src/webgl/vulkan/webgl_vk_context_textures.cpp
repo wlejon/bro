@@ -153,7 +153,9 @@ bool WebGLVkContext::setSamplerParameter(SamplerState& state, GLenum pname, GLin
         case GL_TEXTURE_WRAP_S:
         case GL_TEXTURE_WRAP_T:
         case GL_TEXTURE_WRAP_R:
-            if (v != GL_REPEAT && v != GL_CLAMP_TO_EDGE && v != GL_MIRRORED_REPEAT) break;
+            if (v != GL_REPEAT && v != GL_CLAMP_TO_EDGE && v != GL_MIRRORED_REPEAT &&
+                !(v == 0x8743 /* MIRROR_CLAMP_TO_EDGE_EXT */ && mirrorClampExtEnabled_))
+                break;
             (pname == GL_TEXTURE_WRAP_S ? state.wrapS : pname == GL_TEXTURE_WRAP_T ? state.wrapT : state.wrapR) =
                 static_cast<GLenum>(v);
             return true;

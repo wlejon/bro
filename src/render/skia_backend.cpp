@@ -8,7 +8,6 @@
 #include "util/log.h"
 
 #include <cstring>
-#include <sstream>
 #include <cmath>
 
 #include <include/core/SkBitmap.h>
@@ -183,65 +182,10 @@ const SkiaRenderer::FontEntry* SkiaRenderer::getOrCreateFont(FontRef ref) {
     // StyleCharacter in font_fallback.cpp) shares the same system manager.
     SkFontMgr* font_mgr = ensureFontMgr();
 
-    // Map CSS generic family names to real font names
-    auto resolveGeneric = [](const std::string& name) -> const char* {
-#ifdef _WIN32
-        if (name == "sans-serif")  return "Arial";
-        if (name == "serif")       return "Times New Roman";
-        if (name == "monospace")   return "Consolas";
-        if (name == "cursive")     return "Comic Sans MS";
-        if (name == "fantasy")     return "Impact";
-        if (name == "system-ui")   return "Segoe UI";
-#elif defined(__APPLE__)
-        // macOS: prefer Arial/Times for sans-serif/serif because Skia's
-        // CoreText backend reports OS/2 metrics that match Chromium's
-        // line-height: normal exactly. Helvetica's hhea-derived metrics
-        // come back tighter and break parity.
-        if (name == "sans-serif")  return "Arial";
-        if (name == "serif")       return "Times New Roman";
-        if (name == "monospace")   return "Menlo";
-        if (name == "cursive")     return "Apple Chancery";
-        if (name == "fantasy")     return "Papyrus";
-        if (name == "system-ui")   return "Helvetica Neue";
-#else
-        if (name == "sans-serif")  return "Liberation Sans";
-        if (name == "serif")       return "Liberation Serif";
-        if (name == "monospace")   return "Liberation Mono";
-        if (name == "cursive")     return "DejaVu Sans";
-        if (name == "fantasy")     return "DejaVu Sans";
-        if (name == "system-ui")   return "Liberation Sans";
-#endif
-        return nullptr;
-    };
-
-    sk_sp<SkTypeface> typeface;
+    // The one family resolution every renderer shares (font_family.cpp):
+    // @font-face faces, generic names, the platform's matches and aliases.
     CustomFontMatch custom;
-    std::istringstream stream{std::string(ref.family)};
-    std::string name;
-    while (std::getline(stream, name, ',')) {
-        while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
-        while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
-        if (name.empty()) continue;
-        // Check custom fonts first (@font-face registered): CSS font
-        // matching picks the declared face nearest the requested weight/style.
-        custom = matchCustomFontFace(customFonts_, name, ref.weight, ref.italic);
-        if (custom.face) {
-            typeface = custom.face->typeface;
-            break;
-        }
-        // Try CSS generic name
-        const char* resolved = resolveGeneric(name);
-        if (resolved) {
-            typeface = font_mgr->matchFamilyStyle(resolved, style);
-            if (typeface) break;
-        }
-        typeface = font_mgr->matchFamilyStyle(name.c_str(), style);
-        if (typeface) break;
-    }
-    if (!typeface) {
-        typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle());
-    }
-
+    sk_sp<SkTypeface> typeface = resolveFontFamilyList(ref.family, style, font_mgr, customFonts_, &custom);
     auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
     // Subpixel advances. HarfBuzz asks the SkFont for glyph widths and rounds

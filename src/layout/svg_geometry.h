@@ -34,3 +34,21 @@ bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out,
                                 render::Renderer* renderer = nullptr);
 
 } // namespace bro::layout
+
+namespace bro::layout {
+
+/// getBBox(): the fill bounding box of `el` (an element inside an <svg>
+/// subtree, or the <svg> root itself) in its own user space — geometry only,
+/// without its own `transform`. `out` is x, y, width, height; zeros for an
+/// element with no geometry. False when `el` is not an SVG element in an
+/// <svg> subtree.
+bool svgElementBBox(const dom::Element* el, float out[4], render::Renderer* renderer = nullptr);
+
+/// getCTM() / getScreenCTM(): the 2D matrix from `el`'s user space to the
+/// outermost <svg>'s viewport (its viewBox mapping and every transform on
+/// the way), or with `screen` to document coordinates (the <svg>'s
+/// content-box origin added; the caller takes the viewport scroll off).
+/// `out` is a, b, c, d, e, f. False when `el` is not in an <svg> subtree.
+bool svgElementCTM(const dom::Element* el, bool screen, double out[6]);
+
+} // namespace bro::layout

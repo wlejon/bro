@@ -23,6 +23,7 @@
 // is what lets `hostImageOf` answer for an img element and lets
 // webgl_textures.cpp keep asking one question.
 
+#include "bronze_host/host_url_reflect.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_class.h"
@@ -61,7 +62,7 @@ Value sizeMember(Value self, int HostImage::*field) {
 
 Value imageSrcGetter(Value self, std::span<const Value>) {
     HostNodeState* st = hostNodeStateOfValue(self);
-    return ev::fromUtf8(st && st->el ? st->el->getAttribute("src") : std::string());
+    return ev::fromUtf8(st && st->el ? reflectedUrl(st->el, "src") : std::string());
 }
 
 Value imageSrcSetter(Value self, std::span<const Value> a) {

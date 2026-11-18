@@ -1,0 +1,5 @@
+@import "sub/more.css";
+#linked { width: 8px; height: 8px; background-image: url(img/blue.png); }
+#quoted { width: 8px; height: 8px; background: url("img/blue.png") no-repeat; }
+#data { background-image: url(data:image/gif;base64,R0lGODlhAQABAAAAACw=); }
+@media (min-width: 1px) { #media { width: 8px; height: 8px; background-image: url('./img/blue.png'); } }

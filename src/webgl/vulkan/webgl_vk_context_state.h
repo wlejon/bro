@@ -115,7 +115,7 @@ struct PassBindings {
     uint8_t dynamicSet = 0;
     VkViewport viewport{};
     VkRect2D scissor{};
-    float depthBiasConstant = 0.0f, depthBiasSlope = 0.0f;
+    float depthBiasConstant = 0.0f, depthBiasSlope = 0.0f, depthBiasClamp = 0.0f;
     float blendConstants[4]{};
     float lineWidth = 1.0f;
 
@@ -134,7 +134,7 @@ struct PassBindings {
     void setViewport(VkCommandBuffer cmd, float x, float y, float width, float height, float minDepth,
                      float maxDepth);
     void setScissor(VkCommandBuffer cmd, const VkRect2D& sc);
-    void setDepthBias(VkCommandBuffer cmd, float constant, float slope);
+    void setDepthBias(VkCommandBuffer cmd, float constant, float slope, float clamp);
     void setBlendConstants(VkCommandBuffer cmd, const float c[4]);
     void setLineWidth(VkCommandBuffer cmd, float width);
     /// Bind vertex buffers [0, count): only the run of bindings that differs.

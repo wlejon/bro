@@ -94,6 +94,8 @@ void installLocationAndHistory(ObjectBuilder& window);
 // The document's base URL: its URL, or its first <base href> resolved
 // against it (Node.baseURI, and the URL attributes that reflect absolute
 // URLs) (host_location.cpp).
+// The document's URL (dom::Document::url, else the app's root page).
+std::string documentUrl(dom::Document* doc);
 std::string documentBaseUrl(dom::Document* doc);
 
 // Hand `evt` to one compiled listener as PLAIN DATA — a fresh object carrying

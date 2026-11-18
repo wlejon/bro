@@ -132,25 +132,6 @@ void runActivationBehavior(dom::Element* el) {
         return;
     }
 
-    if (isInput && (inputType == "checkbox" || inputType == "radio")) {
-        if (inputType == "checkbox") {
-            if (el->hasAttribute("checked")) el->removeAttribute("checked");
-            else                            el->setAttribute("checked", "");
-        } else {
-            // Radio: checking one unchecks the rest of its name group. An
-            // already-checked radio does not fire again.
-            if (el->hasAttribute("checked")) return;
-            layout::clearRadioGroup(el);
-            el->setAttribute("checked", "");
-        }
-        dom::Event changeEvt("change");
-        dom::dispatchDomEvent(el, changeEvt);
-        dom::InputEvent inputEvt("input");
-        inputEvt.setIsTrusted(true);
-        dom::dispatchDomEvent(el, inputEvt);
-        return;
-    }
-
     if (runFilePickerActivation(el)) return;
 
     // <a download>: save the link's bytes instead of navigating. Building a
@@ -205,6 +186,45 @@ void clickElement(dom::Element* el) {
     // No focus change: element.click() does not focus on the web. It used to
     // set document.activeElement directly, which left a clicked checkbox
     // reading as focused while the engine (and so Space) did not know it.
+
+    // A checkbox or radio changes before its click is dispatched (HTML's
+    // legacy-pre-activation behaviour), so the click's listeners read the new
+    // `checked`; a cancelled click puts it back, and only an uncancelled one
+    // fires input and then change. React's onChange for a checkbox is its
+    // click listener comparing `checked` with the value it last saw.
+    const bool isInput = tagIs(el, "input", "INPUT");
+    const std::string inputType = isInput ? lowered(el->getAttribute("type")) : std::string();
+    if (inputType == "checkbox" || inputType == "radio") {
+        const bool wasChecked = el->hasAttribute("checked");
+        dom::Element* previousRadio = nullptr;
+        if (inputType == "checkbox") {
+            if (wasChecked) el->removeAttribute("checked");
+            else            el->setAttribute("checked", "");
+        } else if (!wasChecked) {
+            previousRadio = layout::checkedRadioInGroup(el);
+            layout::clearRadioGroup(el);
+            el->setAttribute("checked", "");
+        }
+        dom::MouseEvent clickEvt("click");
+        dom::dispatchDomEvent(el, clickEvt);
+        if (clickEvt.defaultPrevented()) {
+            if (inputType == "checkbox") {
+                if (wasChecked) el->setAttribute("checked", "");
+                else            el->removeAttribute("checked");
+            } else if (!wasChecked) {
+                el->removeAttribute("checked");
+                if (previousRadio) previousRadio->setAttribute("checked", "");
+            }
+        } else if (inputType == "checkbox" || !wasChecked) {
+            dom::InputEvent inputEvt("input");
+            inputEvt.setIsTrusted(true);
+            dom::dispatchDomEvent(el, inputEvt);
+            dom::Event changeEvt("change", true, false);
+            changeEvt.setIsTrusted(true);
+            dom::dispatchDomEvent(el, changeEvt);
+        }
+        return;
+    }
 
     dom::MouseEvent clickEvt("click");
     dom::dispatchDomEvent(el, clickEvt);

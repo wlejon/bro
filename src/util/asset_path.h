@@ -19,4 +19,15 @@ std::string resolveAssetPath(const std::string& src);
 /// Resolves the parent directory against mounts/basePath and rejoins the filename.
 std::string resolveAssetWritePath(const std::string& src);
 
+/// The app folder `bro://app/` names (the engine sets it as it loads the app).
+void setAppUrlRoot(const std::string& appDir);
+/// The file a `bro://app/<path>` URL names (percent-decoded, query and
+/// fragment dropped), or "" for any other URL or a path outside the folder.
+std::string pathForAppUrl(const std::string& url);
+// The absolute path a `bro://app/` URL spells ("/a/b.png" for
+// "bro://app/a/b.png?v=1"), "" for another URL. An absolute path attribute
+// (`img.src = "/tmp/x.jpg"`, a mount or a filesystem path: resolveAssetPath)
+// reflects as such a URL, and this is the way back.
+std::string appUrlPath(const std::string& url);
+
 } // namespace bro::util

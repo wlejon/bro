@@ -227,6 +227,7 @@ void installWebGLTextures(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "bindTexture", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::TextureTarget, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->bindTexture(u32At(a, 0), WebGLTexture{idOf(argAt(a, 1), WebGLCell::Texture)});
         return ev::undefined();
     });
@@ -240,10 +241,12 @@ void installWebGLTextures(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "texParameteri", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::TexParameter, u32At(a, 1))) return ev::undefined();
         if (auto* cl = client(c)) cl->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     defMethod(b, "texParameterf", 3, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::TexParameter, u32At(a, 1))) return ev::undefined();
         if (auto* cl = client(c)) cl->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
@@ -257,6 +260,8 @@ void installWebGLTextures(ObjectBuilder& b) {
         // has `border` (a number, required to be 0).
         if (ev::isObject(argAt(a, 5))) {
             uint32_t ifmt = u32At(a, 2), fmt = u32At(a, 3), ty = u32At(a, 4);
+            if (webgl1Refuses(c, WebGL1Enum::TexInternalFormat, ifmt) || webgl1Refuses(c, WebGL1Enum::TexType, ty))
+                return ev::undefined();
             webgl1TexFormat(c, &ifmt, &fmt, &ty);
             uploadSource(c, argAt(a, 5), "texImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
                 cl.texImage2DSource(u32At(a, 0), i32At(a, 1), static_cast<GLint>(ifmt), -1, -1, fmt, ty,
@@ -265,6 +270,8 @@ void installWebGLTextures(ObjectBuilder& b) {
             return ev::undefined();
         }
         uint32_t ifmt = u32At(a, 2), fmt = u32At(a, 6), ty = u32At(a, 7);
+        if (webgl1Refuses(c, WebGL1Enum::TexInternalFormat, ifmt) || webgl1Refuses(c, WebGL1Enum::TexType, ty))
+            return ev::undefined();
         webgl1TexFormat(c, &ifmt, &fmt, &ty);
         const GLenum target = u32At(a, 0), format = fmt, type = ty;
         const GLint level = i32At(a, 1), internalformat = static_cast<GLint>(ifmt), border = i32At(a, 5);
@@ -295,7 +302,8 @@ void installWebGLTextures(ObjectBuilder& b) {
     defMethod(b, "texSubImage2D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isObject(argAt(a, 6))) {
             uint32_t fmt = u32At(a, 4), ty = u32At(a, 5);
-            webgl1TexFormat(c, nullptr, &fmt, &ty);
+            if (webgl1Refuses(c, WebGL1Enum::TexType, ty)) return ev::undefined();
+        webgl1TexFormat(c, nullptr, &fmt, &ty);
             uploadSource(c, argAt(a, 6), "texSubImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
                 cl.texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1, fmt, ty,
                                        std::move(px));
@@ -303,6 +311,7 @@ void installWebGLTextures(ObjectBuilder& b) {
             return ev::undefined();
         }
         uint32_t fmt = u32At(a, 6), ty = u32At(a, 7);
+        if (webgl1Refuses(c, WebGL1Enum::TexType, ty)) return ev::undefined();
         webgl1TexFormat(c, nullptr, &fmt, &ty);
         const GLenum target = u32At(a, 0), format = fmt, type = ty;
         const GLint level = i32At(a, 1), xoffset = i32At(a, 2), yoffset = i32At(a, 3);

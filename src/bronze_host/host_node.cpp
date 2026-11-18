@@ -237,6 +237,7 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref) {
     // terminate on one. The web throws HierarchyRequestError; refusing is the
     // same protection without a DOMException to throw it with.
     if (nodeContains(child, parent)) return;
+    hostDetachFromDocument(child);
 
     if (child->nodeType() == dom::NodeType::DocumentFragment) {
         // The fragment stays behind, emptied. Its children are what enters the
@@ -327,6 +328,10 @@ void installNodeTree(ObjectBuilder& b) {
     b.def("remove", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st) return ev::undefined();
+        if (st->node && hostIsDocumentChild(st->node)) {
+            hostDetachFromDocument(st->node);
+            return ev::undefined();
+        }
         if (st->node && st->node->parentNode()) {
             dom::Node* n = st->node;
             n->parentNode()->removeChild(n);
@@ -431,6 +436,7 @@ void installNodeTree(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st) return ev::undefined();
+                   if (st->node && hostIsDocumentChild(st->node)) return hostDocumentObject(st->node->document());
                    return st->node ? hostNodeValue(st->node->parentNode())
                                    : ev::null();
                },
@@ -454,13 +460,7 @@ void installNodeTree(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->node) return ev::null();
-                   if (dom::Document* doc = st->node->document()) {
-                       if (hostEngine() && doc == hostEngine()->document()) {
-                           ev::GlobalValue g = ev::globalValue("document");
-                           return g.found ? g.value : ev::null();
-                       }
-                       return hostDocumentValue(doc);
-                   }
+                   if (dom::Document* doc = st->node->document()) return hostDocumentObject(doc);
                    ev::GlobalValue g = ev::globalValue("document");
                    return g.found ? g.value : ev::null();
                },
@@ -486,8 +486,10 @@ void installNodeTree(ObjectBuilder& b) {
                        HostNodeState* st = hostNodeStateOfValue(self_);
                        if (!st || !st->node) return ev::null();
                        dom::Node* parent = st->node->parentNode();
-                       if (!parent) return ev::null();
-                       const std::vector<dom::Node*>& kids = parent->childNodes();
+                       std::vector<dom::Node*> top;
+                       if (!parent && hostIsDocumentChild(st->node)) top = hostDocumentChildren(st->node->document());
+                       else if (!parent) return ev::null();
+                       const std::vector<dom::Node*>& kids = parent ? parent->childNodes() : top;
                        auto it = std::find(kids.begin(), kids.end(), st->node);
                        if (it == kids.end()) return ev::null();
                        long long want =

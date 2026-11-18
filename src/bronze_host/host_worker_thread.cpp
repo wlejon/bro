@@ -283,6 +283,8 @@ void WorkerInstance::threadFunc() {
     // The worker global's prototype chain, as the window's (host_global_proto.cpp):
     // String(self) is "[object DedicatedWorkerGlobalScope]".
     installGlobalPrototype("DedicatedWorkerGlobalScope");
+    // DOMRect, DOMPoint, DOMMatrix, DOMQuad (js/geometry.js), as on the page.
+    installGeometryModule();
 
     // unhandledrejection / rejectionhandled at `self`: bronze reports on this
     // thread's own drains, and the loop below flushes after each of them.

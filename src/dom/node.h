@@ -10,6 +10,7 @@ enum class NodeType : uint8_t {
     Text = 3,
     Comment = 8,
     Document = 9,
+    DocumentType = 10,
     DocumentFragment = 11
 };
 

@@ -33,6 +33,13 @@ struct HostNodeState;
 // interfaces.
 void installDomListInterfaces();
 
+// The prototypes of DOMTokenList (classList, relList), DOMStringMap (dataset)
+// and MediaQueryList (matchMedia), installed with the lists; their members are
+// the objects' own (host_element_dataset.cpp, host_matchmedia.cpp).
+Value domTokenListProto();
+Value domStringMapProto();
+Value mediaQueryListProto();
+
 // querySelectorAll's: the nodes as they were when it ran.
 Value makeStaticNodeList(const std::vector<dom::Element*>& nodes);
 

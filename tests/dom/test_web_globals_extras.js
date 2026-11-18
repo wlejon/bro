@@ -97,7 +97,12 @@ const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 assert(svg instanceof SVGElement && svg instanceof Element && !(svg instanceof HTMLElement), '<svg> instanceof SVGElement, not HTMLElement');
 const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
 assert(circle instanceof SVGElement, '<circle> instanceof SVGElement');
-assert(document.createElement('math') instanceof MathMLElement, '<math> instanceof MathMLElement');
+assert(document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math') instanceof MathMLElement, '<math> instanceof MathMLElement');
+const mathHost = document.createElement('div');
+mathHost.innerHTML = '<math><mi>x</mi></math>';
+assert(mathHost.firstChild instanceof MathMLElement, 'a parsed <math> instanceof MathMLElement');
+// An HTML-namespace <math> is an unknown HTML element, as in Chromium.
+assert(!(document.createElement('math') instanceof MathMLElement), 'createElement(math) is not MathML');
 
 const tagMap = {
     label: 'HTMLLabelElement', br: 'HTMLBRElement', hr: 'HTMLHRElement', pre: 'HTMLPreElement',

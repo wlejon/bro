@@ -60,6 +60,30 @@ Value getSymbolKeyed(Value objIn, Value keyIn) {
     return r.thrown ? ev::undefined() : r.value;
 }
 
+void setToStringTag(Value objIn, const std::string& name) {
+    ev::Persistent obj(objIn);
+    ev::Persistent define(globalMember("Object", "defineProperty"));
+    ev::Persistent key(globalMember("Symbol", "toStringTag"));
+    if (!ev::isFunction(define.get()) || !ev::isObject(obj.get())) return;
+    ev::Persistent value(ev::fromUtf8(name));
+    ev::Persistent desc(ev::createObject());
+    desc.set(ev::setProperty(desc.get(), "value", value.get()));
+    desc.set(ev::setProperty(desc.get(), "configurable", ev::fromBool(true)));
+    const Value args[3] = {obj.get(), key.get(), desc.get()};
+    ev::call(define.get(), ev::undefined(), std::span<const Value>(args, 3));
+}
+
+Value reflectGet(Value objIn, Value keyIn, Value receiverIn) {
+    ev::Persistent obj(objIn), key(keyIn), receiver(receiverIn);
+    if (!ev::isObject(obj.get())) return ev::undefined();
+    ev::Persistent get(globalMember("Reflect", "get"));
+    if (!ev::isFunction(get.get())) return ev::undefined();
+    const Value args[3] = {obj.get(), key.get(), receiver.get()};
+    ev::CallResult r = ev::call(get.get(), ev::undefined(), std::span<const Value>(args, 3));
+    if (r.thrown) ev::throwValue(r.value);
+    return r.value;
+}
+
 void installArrayLikeIteration(Value objIn, bool withForEach) {
     ev::Persistent obj(objIn);
     ev::Persistent iter(symbolIterator());

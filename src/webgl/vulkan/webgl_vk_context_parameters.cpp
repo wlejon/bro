@@ -23,6 +23,10 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
     if (int64_t limit = 0; caps_->limit(pname, limit))
         return static_cast<GLint>(std::clamp<int64_t>(limit, INT_MIN, INT_MAX));
     switch (pname) {
+        case 0x0B40 /* POLYGON_MODE_WEBGL */:
+            if (polygonModeExtEnabled_) return static_cast<GLint>(polygonMode_);
+            setSyntheticError(GL_INVALID_ENUM);
+            return 0;
         case GL_MAX_TEXTURE_LOD_BIAS: {
             float bias = 0.0f;
             caps_->floatLimit(pname, bias);
@@ -154,6 +158,10 @@ bool WebGLVkContext::enableExtension(const std::string& name) {
     // COMPLETION_STATUS_KHR and the UNMASKED_* strings are enums from now on.
     if (name == "KHR_parallel_shader_compile") parallelCompileEnabled_ = true;
     if (name == "WEBGL_debug_renderer_info") rendererInfoEnabled_ = true;
+    if (name == "EXT_depth_clamp") depthClampExtEnabled_ = true;
+    if (name == "WEBGL_polygon_mode") polygonModeExtEnabled_ = true;
+    if (name == "EXT_polygon_offset_clamp") offsetClampExtEnabled_ = true;
+    if (name == "EXT_texture_mirror_clamp_to_edge") mirrorClampExtEnabled_ = true;
     return true;
 }
 
@@ -179,6 +187,10 @@ GLfloat WebGLVkContext::getParameterFloat(GLenum pname) {
         case GL_LINE_WIDTH: return lineWidth_;
         case GL_POLYGON_OFFSET_FACTOR: return polygonOffsetFactor_;
         case GL_POLYGON_OFFSET_UNITS: return polygonOffsetUnits_;
+        case 0x8E1B /* POLYGON_OFFSET_CLAMP_EXT */:
+            if (offsetClampExtEnabled_) return polygonOffsetClamp_;
+            setSyntheticError(GL_INVALID_ENUM);
+            return 0.0f;
         case GL_SAMPLE_COVERAGE_VALUE: return sampleCoverageValue_;
         case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:  // the device does not filter anisotropically
             setSyntheticError(GL_INVALID_ENUM);
@@ -196,6 +208,7 @@ GLboolean WebGLVkContext::getParameterBool(GLenum pname) {
     if (pname == GL_STENCIL_TEST) return stencilTestEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x0BD0 /* GL_DITHER */) return ditherEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x8037 /* GL_POLYGON_OFFSET_FILL */) return polygonOffsetFillEnabled_ ? GL_TRUE : GL_FALSE;
+    if (pname == 0x864F /* DEPTH_CLAMP_EXT */ || pname == 0x2A02 /* POLYGON_OFFSET_LINE_WEBGL */) return isEnabled(pname);
     if (pname == 0x8C89 /* GL_RASTERIZER_DISCARD */) return rasterizerDiscardEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */) return sampleAlphaToCoverageEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x80A0 /* GL_SAMPLE_COVERAGE */) return sampleCoverageEnabled_ ? GL_TRUE : GL_FALSE;

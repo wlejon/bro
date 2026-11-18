@@ -747,5 +747,7 @@
     g.CSSFontFaceRule = CSSFontFaceRule;
     g.CSSImportRule = CSSImportRule;
     g.CSSStyleDeclaration = CSSStyleDeclaration;
+    // element.style and getComputedStyle()'s host declarations are born on it.
+    hooks.declarationProto = CSSStyleDeclaration.prototype;
     g.MediaList = MediaList;
 })();

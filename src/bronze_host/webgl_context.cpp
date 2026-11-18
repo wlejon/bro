@@ -6,6 +6,7 @@
 // interface's prototype.
 
 #include "bronze_host/webgl_internal.h"
+#include "bronze_host/host_list_iteration.h"
 #include "bronze_host/host_class.h"
 
 #include <string>
@@ -48,6 +49,9 @@ void contextCellDtor(void* data) { delete static_cast<WebGLContextCell*>(data); 
 struct Wrappers {
     std::unordered_map<uint64_t, ev::Persistent> objects;
     std::unordered_map<std::string, ev::Persistent> extensions;
+    // A WebGL 1 context's vertex arrays (OES_vertex_array_object) are
+    // WebGLVertexArrayObjectOES: no interface a page can name, as in Chromium.
+    ev::Persistent vertexArrayOESProto;
 };
 std::unordered_map<webgl::WebGL2RenderingContext*, Wrappers> s_wrappers;
 
@@ -72,6 +76,14 @@ Value webglObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id, GL
     cell.id = id;
     cell.shaderType = shaderType;
     ev::Persistent wrapper(makeCell(cell));
+    if (kind == WebGLCell::VertexArray && c->version() == 1) {
+        Wrappers& w = wrappersOf(c);
+        if (!ev::isObject(w.vertexArrayOESProto.get())) {
+            w.vertexArrayOESProto.set(ev::createObject());
+            setToStringTag(w.vertexArrayOESProto.get(), "WebGLVertexArrayObjectOES");
+        }
+        wrapper.set(ev::setPrototype(wrapper.get(), w.vertexArrayOESProto.get()));
+    }
     Value v = wrapper.get();
     objects.insert_or_assign(objectKey(kind, id), std::move(wrapper));
     return v;
@@ -96,6 +108,11 @@ Value webglExtension(webgl::WebGL2RenderingContext* c, const std::string& name,
     Value v = wrapper.get();
     extensions.insert_or_assign(name, std::move(wrapper));
     return v;
+}
+
+bool webglExtensionEnabled(webgl::WebGL2RenderingContext* c, const std::string& name) {
+    const auto& extensions = wrappersOf(c).extensions;
+    return extensions.find(name) != extensions.end();
 }
 
 Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {

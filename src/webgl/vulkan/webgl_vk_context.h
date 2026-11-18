@@ -109,6 +109,9 @@ public:
     void frontFace(GLenum mode);
     void lineWidth(GLfloat width);
     void polygonOffset(GLfloat factor, GLfloat units);
+    // EXT_polygon_offset_clamp / WEBGL_polygon_mode.
+    void polygonOffsetClamp(GLfloat factor, GLfloat units, GLfloat clamp);
+    void polygonMode(GLenum face, GLenum mode);
     void sampleCoverage(GLfloat value, GLboolean invert);
     void hint(GLenum target, GLenum mode);
     GLenum getError();
@@ -629,6 +632,11 @@ private:
     bool timerQueriesEnabled_ = false;   // EXT_disjoint_timer_query_webgl2 was enabled
     bool parallelCompileEnabled_ = false;  // KHR_parallel_shader_compile was enabled
     bool rendererInfoEnabled_ = false;     // WEBGL_debug_renderer_info was enabled
+    bool depthClampExtEnabled_ = false;    // EXT_depth_clamp was enabled
+    bool polygonModeExtEnabled_ = false;   // WEBGL_polygon_mode was enabled
+    bool offsetClampExtEnabled_ = false;   // EXT_polygon_offset_clamp was enabled
+    bool mirrorClampExtEnabled_ = false;   // EXT_texture_mirror_clamp_to_edge was enabled
+    bool isValidCap(GLenum cap) const;
     GLuint maxShaderCompilerThreads_ = 0xFFFFFFFFu;  // KHR_parallel_shader_compile's (no effect)
     uint32_t timestampBits_ = 0;         // 0: the queue cannot time
     float timestampPeriodNs_ = 0.0f;
@@ -945,6 +953,10 @@ private:
     GLfloat blendColor_[4]{0.0f, 0.0f, 0.0f, 0.0f};
     GLfloat lineWidth_ = 1.0f;
     GLfloat polygonOffsetFactor_ = 0.0f, polygonOffsetUnits_ = 0.0f;
+    GLfloat polygonOffsetClamp_ = 0.0f;
+    bool depthClampEnabled_ = false;          // DEPTH_CLAMP_EXT
+    bool polygonOffsetLineEnabled_ = false;   // POLYGON_OFFSET_LINE_WEBGL
+    GLenum polygonMode_ = 0x1B02;             // FILL_WEBGL
     GLenum generateMipmapHint_ = GL_DONT_CARE, derivativeHint_ = GL_DONT_CARE;
 
     // Constant values of disabled vertex attributes, bound as a zero-stride

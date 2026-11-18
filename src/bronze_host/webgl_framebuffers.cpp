@@ -33,6 +33,7 @@ void installWebGLFramebuffers(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "bindFramebuffer", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::FramebufferTarget, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c))
             cl->bindFramebuffer(u32At(a, 0), WebGLFramebuffer{idOf(argAt(a, 1), WebGLCell::Framebuffer)});
         return ev::undefined();
@@ -217,6 +218,7 @@ void installWebGLFramebuffers(ObjectBuilder& b) {
         return ev::fromBool(cl && cl->sync([rb](WebGLBackend& gl) { return gl.isRenderbuffer(rb); }) != GL_FALSE);
     });
     defMethod(b, "renderbufferStorage", 4, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::RenderbufferFormat, u32At(a, 1))) return ev::undefined();
         if (auto* cl = client(c)) cl->renderbufferStorage(u32At(a, 0), u32At(a, 1), i32At(a, 2), i32At(a, 3));
         return ev::undefined();
     });

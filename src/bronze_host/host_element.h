@@ -96,7 +96,8 @@ Value makeComputedStyleObject(HostNodeState* st);
 void decorateElementStyle(ObjectBuilder& b);
 
 Value makeDatasetObject(HostNodeState* st);
-Value makeClassListObject(HostNodeState* st);
+// A DOMTokenList over the element's `attr` (classList: "class", relList: "rel").
+Value makeTokenListObject(HostNodeState* st, const std::string& attr);
 void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);

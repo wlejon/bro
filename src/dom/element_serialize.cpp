@@ -1,6 +1,5 @@
-// Element text and markup: the reads (`textContent`, `innerHTML`,
-// `outerHTML`), the writes that reparse or replace a subtree, and the SVG
-// spelling rules the serializer has to apply on the way out.
+// Element text and markup: `textContent`, the writes that reparse or replace
+// a subtree, and innerHTML / outerHTML over the serializers (serialize.cpp).
 //
 // Split out of element.cpp, which had grown past the size this repo keeps its
 // translation units to. Nothing here touches layout, style resolution or the
@@ -9,6 +8,7 @@
 #include "dom/element.h"
 #include "dom/comment_node.h"
 #include "dom/document.h"
+#include "dom/serialize.h"
 #include "dom/text_node.h"
 
 #include <cctype>
@@ -69,167 +69,9 @@ void Element::setTextContent(const std::string& text) {
     markStructureDirty();
 }
 
-std::string Element::innerHTML() const {
-    // A <template>'s markup is its content fragment's (HTML §4.12.3's
-    // serialization rule), not its (always empty) child list.
-    if (templateContent_ && children_.empty()) return templateContent_->innerHTML();
-    std::ostringstream oss;
-    for (const auto& child : children_) {
-        if (child->nodeType() == NodeType::Text) {
-            auto* text = static_cast<const TextNode*>(child);
-            oss << text->data();
-        } else if (child->nodeType() == NodeType::Comment) {
-            auto* comment = static_cast<const CommentNode*>(child);
-            oss << "<!--" << comment->data() << "-->";
-        } else if (child->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<const Element*>(child);
-            oss << elem->outerHTML();
-        }
-    }
-    return oss.str();
-}
+std::string Element::innerHTML() const { return serializeHtmlChildren(this); }
 
-static std::string htmlEscapeAttr(const std::string& val) {
-    std::string result;
-    result.reserve(val.size());
-    for (char c : val) {
-        switch (c) {
-            case '"':  result += "&quot;"; break;
-            case '&':  result += "&amp;"; break;
-            case '<':  result += "&lt;"; break;
-            case '>':  result += "&gt;"; break;
-            default:   result += c; break;
-        }
-    }
-    return result;
-}
-
-// HTML5 spec: SVG elements that require mixed-case tag names.
-// Maps UPPERCASED tag → correct SVG casing.
-static const std::unordered_map<std::string, std::string> kSvgTagCaseMap = {
-    {"CLIPPATH", "clipPath"},
-    {"LINEARGRADIENT", "linearGradient"},
-    {"RADIALGRADIENT", "radialGradient"},
-    {"TEXTPATH", "textPath"},
-    {"FEBLEND", "feBlend"},
-    {"FECOLORMATRIX", "feColorMatrix"},
-    {"FECOMPONENTTRANSFER", "feComponentTransfer"},
-    {"FECOMPOSITE", "feComposite"},
-    {"FEDIFFUSELIGHTING", "feDiffuseLighting"},
-    {"FEDISPLACEMENTMAP", "feDisplacementMap"},
-    {"FEDISTANTLIGHT", "feDistantLight"},
-    {"FEDROPSHADOW", "feDropShadow"},
-    {"FEFLOOD", "feFlood"},
-    {"FEFUNCA", "feFuncA"},
-    {"FEFUNCB", "feFuncB"},
-    {"FEFUNCG", "feFuncG"},
-    {"FEFUNCR", "feFuncR"},
-    {"FEGAUSSIANBLUR", "feGaussianBlur"},
-    {"FEIMAGE", "feImage"},
-    {"FEMERGE", "feMerge"},
-    {"FEMERGENODE", "feMergeNode"},
-    {"FEMORPHOLOGY", "feMorphology"},
-    {"FEOFFSET", "feOffset"},
-    {"FEPOINTLIGHT", "fePointLight"},
-    {"FESPECULARLIGHTING", "feSpecularLighting"},
-    {"FESPOTLIGHT", "feSpotLight"},
-    {"FETILE", "feTile"},
-    {"FETURBULENCE", "feTurbulence"},
-    {"FOREIGNOBJECT", "foreignObject"},
-    {"GLYPHREF", "glyphRef"},
-    {"ALTGLYPH", "altGlyph"},
-    {"ALTGLYPHDEF", "altGlyphDef"},
-    {"ALTGLYPHITEM", "altGlyphItem"},
-    {"ANIMATECOLOR", "animateColor"},
-    {"ANIMATEMOTION", "animateMotion"},
-    {"ANIMATETRANSFORM", "animateTransform"},
-};
-
-static std::string svgCorrectTagName(const std::string& upperTag) {
-    auto it = kSvgTagCaseMap.find(upperTag);
-    if (it != kSvgTagCaseMap.end()) return it->second;
-    // Default: lowercase (works for svg, rect, circle, path, g, defs, etc.)
-    std::string lower = upperTag;
-    for (auto& c : lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return lower;
-}
-
-// SVG attributes that need mixed-case (gumbo lowercases all attributes).
-static const std::unordered_map<std::string, std::string> kSvgAttrCaseMap = {
-    // Core SVG attributes
-    {"viewbox", "viewBox"},
-    {"preserveaspectratio", "preserveAspectRatio"},
-    // Gradient attributes
-    {"gradientunits", "gradientUnits"},
-    {"gradienttransform", "gradientTransform"},
-    {"spreadmethod", "spreadMethod"},
-    // Pattern attributes
-    {"patternunits", "patternUnits"},
-    {"patterntransform", "patternTransform"},
-    {"patterncontentunits", "patternContentUnits"},
-    // Filter attributes
-    {"filterunits", "filterUnits"},
-    {"stddeviation", "stdDeviation"},
-    {"basefrequency", "baseFrequency"},
-    {"numoctaves", "numOctaves"},
-    {"kernelunitlength", "kernelUnitLength"},
-    {"surfacescale", "surfaceScale"},
-    {"diffuseconstant", "diffuseConstant"},
-    {"specularconstant", "specularConstant"},
-    {"specularexponent", "specularExponent"},
-    {"limitingconeangle", "limitingConeAngle"},
-    {"pointsatx", "pointsAtX"},
-    {"pointsaty", "pointsAtY"},
-    {"pointsatz", "pointsAtZ"},
-    {"xchannelselector", "xChannelSelector"},
-    {"ychannelselector", "yChannelSelector"},
-    {"tablevalues", "tableValues"},
-    // Clip / Mask attributes
-    {"clippathunits", "clipPathUnits"},
-    {"maskunits", "maskUnits"},
-    {"maskcontentunits", "maskContentUnits"},
-    // Marker attributes
-    {"markerunits", "markerUnits"},
-    {"markerwidth", "markerWidth"},
-    {"markerheight", "markerHeight"},
-    {"refx", "refX"},
-    {"refy", "refY"},
-    // Text attributes
-    {"startoffset", "startOffset"},
-    {"textlength", "textLength"},
-    {"lengthadjust", "lengthAdjust"},
-    // Namespace prefixed
-    {"xlink:href", "xlink:href"},
-};
-
-std::string Element::outerHTML() const {
-    std::ostringstream oss;
-    // A foreign element serializes under the name it was created with; the
-    // table covers the ones whose name was never recorded (an HTML-namespace
-    // element, or a foreign one that had nothing to preserve).
-    std::string serialized_tag = (ns_ != Namespace::HTML && qualifiedName_)
-                                     ? *qualifiedName_
-                                     : svgCorrectTagName(tag_);
-    oss << "<" << serialized_tag;
-    for (const auto& [key, val] : attributes_) {
-        auto attrIt = kSvgAttrCaseMap.find(key);
-        const std::string& attrName = (attrIt != kSvgAttrCaseMap.end()) ? attrIt->second : key;
-        oss << " " << attrName << "=\"" << htmlEscapeAttr(val) << "\"";
-    }
-    // "style" is never stored in attributes_ (see setAttribute) — StyleProxy
-    // is the sole source, so always serialize from it directly.
-    {
-        const std::string& css = style_.cssText();
-        if (!css.empty()) {
-            oss << " style=\"" << css << "\"";
-        }
-    }
-    oss << ">";
-    oss << innerHTML();
-    oss << "</" << serialized_tag << ">";
-    return oss.str();
-}
+std::string Element::outerHTML() const { return serializeHtmlNode(this); }
 
 void Element::setInnerHTML(const std::string& html) {
     // Setting a <template>'s innerHTML replaces its CONTENT's children: the

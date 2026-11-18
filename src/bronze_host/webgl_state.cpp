@@ -38,14 +38,17 @@ void installWebGLState(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "enable", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::Cap, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->enable(u32At(a, 0));
         return ev::undefined();
     });
     defMethod(b, "disable", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::Cap, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->disable(u32At(a, 0));
         return ev::undefined();
     });
     defMethod(b, "isEnabled", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::Cap, u32At(a, 0))) return ev::fromBool(false);
         auto* cl = client(c);
         const GLenum cap = u32At(a, 0);
         return ev::fromBool(cl && cl->sync([cap](WebGLBackend& gl) { return gl.isEnabled(cap); }) != GL_FALSE);
@@ -72,10 +75,12 @@ void installWebGLState(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "blendEquation", 1, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::BlendEquation, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->blendEquation(u32At(a, 0));
         return ev::undefined();
     });
     defMethod(b, "blendEquationSeparate", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::BlendEquation, u32At(a, 0)) || webgl1Refuses(c, WebGL1Enum::BlendEquation, u32At(a, 1))) return ev::undefined();
         if (auto* cl = client(c)) cl->blendEquationSeparate(u32At(a, 0), u32At(a, 1));
         return ev::undefined();
     });
@@ -138,6 +143,7 @@ void installWebGLState(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "pixelStorei", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::PixelStore, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->pixelStorei(u32At(a, 0), i32At(a, 1));
         return ev::undefined();
     });
@@ -154,6 +160,7 @@ void installWebGLState(ObjectBuilder& b) {
         return ev::undefined();
     });
     defMethod(b, "hint", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::Hint, u32At(a, 0))) return ev::undefined();
         if (auto* cl = client(c)) cl->hint(u32At(a, 0), u32At(a, 1));
         return ev::undefined();
     });

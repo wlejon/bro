@@ -16,6 +16,7 @@ VkSamplerAddressMode addressMode(GLenum wrap) {
     switch (wrap) {
         case GL_REPEAT: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
         case GL_MIRRORED_REPEAT: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        case 0x8743 /* MIRROR_CLAMP_TO_EDGE_EXT */: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
         default: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     }
 }

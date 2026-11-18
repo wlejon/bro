@@ -700,6 +700,21 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
         return it->second.get();
     }
 
+    // One compile whose completion value is the function. What the compile
+    // or the run threw (a SyntaxError for a bad body) is thrown to the caller
+    // as that value, so it is catchable and leaves the page unharmed: through
+    // evalScript, one bad body latched the page's failure flag, and every
+    // later `new Function` in the page then failed as well.
+    if (!isJitDisabled()) {
+        const std::string expr = std::string(sourcePrefixFor(kind)) + params + ") {\n" + body + "\n})";
+        auto res = evalScriptJitResult(*s_activeEngine, expr, "<new Function>");
+        if (res.thrown) return ev::throwValue(res.value);
+        if (!ev::isFunction(res.value)) return ev::throwError("new Function: created function was not found");
+        ev::Persistent& cached = s_dynFnCache[cacheKey];
+        cached.set(res.value);
+        return cached.get();
+    }
+
     const uint64_t fnId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
     const std::string globalName = "__bro_dyn_fn_" + std::to_string(fnId);
     const std::string code = "globalThis." + globalName + " = " + sourcePrefixFor(kind) + params + ") {\n" + body + "\n});";

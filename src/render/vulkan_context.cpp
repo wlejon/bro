@@ -786,6 +786,9 @@ bool VulkanContext::createLogicalDevice() {
     vulkan12Features.storageBuffer8BitAccess = have12.storageBuffer8BitAccess;
     vulkan12Features.shaderBufferInt64Atomics = have12.shaderBufferInt64Atomics;
     vulkan12Features.shaderSharedInt64Atomics = have12.shaderSharedInt64Atomics;
+    // WebGL's EXT_texture_mirror_clamp_to_edge.
+    vulkan12Features.samplerMirrorClampToEdge = have12.samplerMirrorClampToEdge;
+    samplerMirrorClampToEdge_ = have12.samplerMirrorClampToEdge == VK_TRUE;
     vulkan12Features.pNext = &vulkan13Features;
 
     VkPhysicalDeviceVulkan11Features vulkan11Features{};
@@ -831,6 +834,9 @@ bool VulkanContext::createLogicalDevice() {
     deviceFeatures.occlusionQueryPrecise = available.occlusionQueryPrecise;
     deviceFeatures.fullDrawIndexUint32 = available.fullDrawIndexUint32;
     deviceFeatures.depthBiasClamp = available.depthBiasClamp;
+    // WebGL's EXT_depth_clamp and WEBGL_polygon_mode.
+    deviceFeatures.depthClamp = available.depthClamp;
+    deviceFeatures.fillModeNonSolid = available.fillModeNonSolid;
     deviceFeatures.independentBlend = available.independentBlend;
     deviceFeatures.shaderClipDistance = available.shaderClipDistance;
     deviceFeatures.pipelineStatisticsQuery = available.pipelineStatisticsQuery;

@@ -57,7 +57,7 @@
     }
 
     const instances = [
-        ['document', 'HTMLDocument'], ['location', 'Location'], ['navigator', 'Navigator'], ['history', 'History'],
+        ['location', 'Location'], ['navigator', 'Navigator'], ['history', 'History'],
         ['screen', 'Screen'], ['performance', 'Performance'], ['localStorage', 'Storage'],
         ['sessionStorage', 'Storage'], ['crypto', 'Crypto'], ['visualViewport', 'VisualViewport'],
     ];

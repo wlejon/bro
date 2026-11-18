@@ -331,13 +331,14 @@ void PassBindings::setScissor(VkCommandBuffer cmd, const VkRect2D& sc) {
     dynamicSet |= kScissor;
 }
 
-void PassBindings::setDepthBias(VkCommandBuffer cmd, float constant, float slope) {
+void PassBindings::setDepthBias(VkCommandBuffer cmd, float constant, float slope, float clamp) {
     if ((dynamicSet & kDepthBias) && std::memcmp(&depthBiasConstant, &constant, 4) == 0 &&
-        std::memcmp(&depthBiasSlope, &slope, 4) == 0)
+        std::memcmp(&depthBiasSlope, &slope, 4) == 0 && std::memcmp(&depthBiasClamp, &clamp, 4) == 0)
         return;
-    vkCmdSetDepthBias(cmd, constant, 0.0f, slope);
+    vkCmdSetDepthBias(cmd, constant, clamp, slope);
     depthBiasConstant = constant;
     depthBiasSlope = slope;
+    depthBiasClamp = clamp;
     dynamicSet |= kDepthBias;
 }
 

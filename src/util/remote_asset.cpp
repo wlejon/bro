@@ -155,13 +155,23 @@ bool hasUrlScheme(const std::string& s) {
     return i > 1 && s.compare(i, 3, "://") == 0;
 }
 
+static bool isAbsoluteUrl(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size() && (std::isalpha(static_cast<unsigned char>(s[i])) ||
+                            (i > 0 && (std::isdigit(static_cast<unsigned char>(s[i])) ||
+                                       s[i] == '+' || s[i] == '-' || s[i] == '.'))))
+        ++i;
+    // scheme ":" (mailto:, javascript:, data:, blob:), a drive letter excepted.
+    return i > 1 && i < s.size() && s[i] == ':';
+}
+
 bool isHttpUrl(const std::string& s) {
     return s.rfind("http://", 0) == 0 || s.rfind("https://", 0) == 0;
 }
 
 std::string resolveUrl(const std::string& base, const std::string& rel) {
     if (rel.empty()) return base;
-    if (hasUrlScheme(rel)) return rel;
+    if (isAbsoluteUrl(rel)) return rel;
     if (!hasUrlScheme(base)) return rel;
 
     if (rel.rfind("//", 0) == 0) {

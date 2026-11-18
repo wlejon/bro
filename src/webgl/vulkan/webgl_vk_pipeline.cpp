@@ -23,7 +23,8 @@ inline void hashCombine(size_t& seed, size_t value) {
 bool PipelineKey::operator==(const PipelineKey& o) const {
     if (vertShader != o.vertShader || fragShader != o.fragShader || topology != o.topology) return false;
     if (primitiveRestartEnable != o.primitiveRestartEnable ||
-        depthBiasEnable != o.depthBiasEnable || alphaOneMask != o.alphaOneMask || unwrittenMask != o.unwrittenMask ||
+        depthBiasEnable != o.depthBiasEnable || depthClampEnable != o.depthClampEnable ||
+        polygonMode != o.polygonMode || alphaOneMask != o.alphaOneMask || unwrittenMask != o.unwrittenMask ||
         alphaToCoverageEnable != o.alphaToCoverageEnable || sampleMask != o.sampleMask)
         return false;
     if (cullMode != o.cullMode || frontFace != o.frontFace || cullFaceEnable != o.cullFaceEnable) return false;
@@ -70,6 +71,7 @@ size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     size_t seed = 0;
     hashCombine(seed, reinterpret_cast<uintptr_t>(k.vertShader));
     hashCombine(seed, reinterpret_cast<uintptr_t>(k.fragShader));
+    hashCombine(seed, static_cast<uint64_t>(k.depthClampEnable) | (static_cast<uint64_t>(k.polygonMode) << 1));
     const uint64_t packedState =
         static_cast<uint64_t>(k.topology) |
         (static_cast<uint64_t>(k.primitiveRestartEnable & 1u) << 4) |
@@ -230,9 +232,9 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
 
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.depthClampEnable = key.depthClampEnable;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.polygonMode = key.polygonMode;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = key.cullFaceEnable ? key.cullMode : VK_CULL_MODE_NONE;
     rasterizer.frontFace = key.frontFace;

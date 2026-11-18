@@ -19,6 +19,8 @@ struct PipelineKey {
     VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkBool32 primitiveRestartEnable = VK_FALSE;
     VkBool32 depthBiasEnable = VK_FALSE;  // POLYGON_OFFSET_FILL; the factors are dynamic
+    VkBool32 depthClampEnable = VK_FALSE;  // EXT_depth_clamp's DEPTH_CLAMP_EXT
+    VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;  // WEBGL_polygon_mode
 
     VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
     VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;

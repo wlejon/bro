@@ -46,6 +46,7 @@ extern "C" void bro_observers_main();
 extern "C" void bro_cssom_main();
 extern "C" void bro_interface_tags_main();
 extern "C" void bro_attr_main();
+extern "C" void bro_geometry_main();
 extern "C" void bro_events_main();
 extern "C" void bro_clipboard_main();
 extern "C" void bro_notification_main();
@@ -132,6 +133,18 @@ void installAttrModule() {
     bronze::embed::runEntry(bro_attr_main);
     adoptGlobalProperty("Attr");
     adoptGlobalProperty("NamedNodeMap");
+}
+
+void installGeometryModule() {
+    // The module reads `__bro_geometry` at its top level and puts its
+    // factories on it (host_geometry_hooks.cpp).
+    installGeometryHooks();
+    bronze::embed::runEntry(bro_geometry_main);
+    for (const char* name : {"DOMRectReadOnly", "DOMRect", "DOMRectList", "DOMPointReadOnly", "DOMPoint",
+                             "DOMMatrixReadOnly", "DOMMatrix", "WebKitCSSMatrix", "DOMQuad", "SVGMatrix",
+                             "SVGPoint", "SVGRect", "SVGTransform", "SVGTransformList",
+                             "SVGAnimatedTransformList"})
+        adoptGlobalProperty(name);
 }
 
 void installInterfaceTags() {

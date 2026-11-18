@@ -1,6 +1,7 @@
 #include "bronze_host/host_canvas2d_matrix.h"
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_values.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include <cmath>
@@ -112,35 +113,7 @@ void Canvas2DTransformTracker::reset() {
 }
 
 Value Canvas2DTransformTracker::toDOMMatrixValue() const {
-    ObjectBuilder m;
-    m.set("a", ev::fromDouble(current_.a));
-    m.set("b", ev::fromDouble(current_.b));
-    m.set("c", ev::fromDouble(current_.c));
-    m.set("d", ev::fromDouble(current_.d));
-    m.set("e", ev::fromDouble(current_.e));
-    m.set("f", ev::fromDouble(current_.f));
-    m.set("m11", ev::fromDouble(current_.a));
-    m.set("m12", ev::fromDouble(current_.b));
-    m.set("m13", ev::fromDouble(0.0));
-    m.set("m14", ev::fromDouble(0.0));
-    m.set("m21", ev::fromDouble(current_.c));
-    m.set("m22", ev::fromDouble(current_.d));
-    m.set("m23", ev::fromDouble(0.0));
-    m.set("m24", ev::fromDouble(0.0));
-    m.set("m31", ev::fromDouble(0.0));
-    m.set("m32", ev::fromDouble(0.0));
-    m.set("m33", ev::fromDouble(1.0));
-    m.set("m34", ev::fromDouble(0.0));
-    m.set("m41", ev::fromDouble(current_.e));
-    m.set("m42", ev::fromDouble(current_.f));
-    m.set("m43", ev::fromDouble(0.0));
-    m.set("m44", ev::fromDouble(1.0));
-    m.set("is2D", ev::fromBool(true));
-    bool isIdent = (current_.a == 1.0 && current_.b == 0.0 &&
-                    current_.c == 0.0 && current_.d == 1.0 &&
-                    current_.e == 0.0 && current_.f == 0.0);
-    m.set("isIdentity", ev::fromBool(isIdent));
-    return m.get();
+    return makeHostMatrix2DValue(current_.a, current_.b, current_.c, current_.d, current_.e, current_.f);
 }
 
 void installCanvas2DTransformMethods(ObjectBuilder& b, dom::Element* el, std::shared_ptr<Canvas2DTransformTracker> tracker) {

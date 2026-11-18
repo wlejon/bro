@@ -138,6 +138,53 @@ void webgl1TexFormat(webgl::WebGL2RenderingContext* c, uint32_t* internalformat,
     srgb(format, false);
 }
 
+bool webgl1Refuses(webgl::WebGL2RenderingContext* c, WebGL1Enum kind, uint32_t v) {
+    if (!c || c->version() != 1) return false;
+    const auto ext = [c](const char* name) { return webglExtensionEnabled(c, name); };
+    bool ok = true;
+    GLenum error = GL_INVALID_ENUM;
+    switch (kind) {
+        case WebGL1Enum::Pname:
+            if (v == 0x85B5) ok = ext("OES_vertex_array_object");  // VERTEX_ARRAY_BINDING_OES
+            else if (v == 0x8824 || v == 0x8CDF || (v >= 0x8825 && v <= 0x8834)) ok = ext("WEBGL_draw_buffers");
+            else if (v == 0x8B8B) ok = ext("OES_standard_derivatives");
+            else ok = !isWebGL2OnlyEnum(v);
+            break;
+        case WebGL1Enum::Cap:
+        case WebGL1Enum::PixelStore:
+        case WebGL1Enum::TexParameter: ok = !isWebGL2OnlyEnum(v); break;
+        case WebGL1Enum::BufferTarget: ok = v == 0x8892 || v == 0x8893; break;     // ARRAY / ELEMENT_ARRAY
+        case WebGL1Enum::TextureTarget: ok = v == 0x0DE1 || v == 0x8513; break;    // 2D / CUBE_MAP
+        case WebGL1Enum::FramebufferTarget: ok = v == 0x8D40; break;               // FRAMEBUFFER
+        case WebGL1Enum::BlendEquation: ok = (v != 0x8007 && v != 0x8008) || ext("EXT_blend_minmax"); break;
+        case WebGL1Enum::Hint: ok = v != 0x8B8B || ext("OES_standard_derivatives"); break;
+        case WebGL1Enum::RenderbufferFormat:
+            // RGBA4, RGB565, RGB5_A1, DEPTH_COMPONENT16, STENCIL_INDEX8, DEPTH_STENCIL.
+            ok = v == 0x8056 || v == 0x8D62 || v == 0x8057 || v == 0x81A5 || v == 0x8D48 || v == 0x84F9 ||
+                 (v == 0x8C43 && ext("EXT_sRGB")) || (v == 0x8814 && ext("WEBGL_color_buffer_float")) ||
+                 ((v == 0x881A || v == 0x881B) && ext("EXT_color_buffer_half_float"));
+            break;
+        case WebGL1Enum::TexType:
+            // UNSIGNED_BYTE and the packed 16-bit types; the rest with their
+            // extensions.
+            ok = v == 0x1401 || v == 0x8363 || v == 0x8033 || v == 0x8034 ||
+                 (v == 0x1406 && ext("OES_texture_float")) || (v == 0x8D61 && ext("OES_texture_half_float")) ||
+                 ((v == 0x1403 || v == 0x1405 || v == 0x84FA) && ext("WEBGL_depth_texture"));
+            break;
+        case WebGL1Enum::TexInternalFormat:
+            // ES 2.0's unsized formats (internalformat names the format),
+            // the depth ones and EXT_sRGB's; anything else is INVALID_VALUE.
+            ok = v == 0x1906 || v == 0x1907 || v == 0x1908 || v == 0x1909 || v == 0x190A ||  // ALPHA..LUMINANCE_ALPHA
+                 v == 0x1902 || v == 0x84F9 ||                                             // DEPTH_COMPONENT, DEPTH_STENCIL
+                 v == 0x8C40 || v == 0x8C42;                                               // SRGB_EXT, SRGB_ALPHA_EXT
+            error = GL_INVALID_VALUE;
+            break;
+    }
+    if (ok) return false;
+    if (auto* cl = client(c)) cl->syntheticError(error);
+    return true;
+}
+
 bool makeWebGL1Extension(webgl::WebGL2RenderingContext* c, const std::string& name, ObjectBuilder& o) {
     auto def = [&o](const char* n, double v) { o.set(n, ev::fromDouble(v)); };
     if (name == "ANGLE_instanced_arrays") {

@@ -602,4 +602,24 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
 // ---------------------------------------------------------------------------
 
 
+void Document::setDocumentElement(Element* el) {
+    if (el == documentElement_) return;
+    Element* old = documentElement_;
+    root_ = el;
+    documentElement_ = el;
+    body_ = nullptr;
+    if (el) {
+        for (Node* child : el->childNodes()) {
+            if (child->nodeType() == NodeType::Element && static_cast<Element*>(child)->tagName() == "BODY") {
+                body_ = static_cast<Element*>(child);
+                break;
+            }
+        }
+    }
+    if (old) noteDetachCandidate(old);
+    layoutRoot_.reset();
+    markStructureDirty();
+    markDirty();
+}
+
 } // namespace bro::dom

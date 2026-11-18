@@ -61,8 +61,12 @@ inline Value hostMakeDomError(const char* name, const std::string& message) {
     return errObj.get();
 }
 
-// A DOMRect-shaped plain object — x/y/width/height plus the four edges.
+// A DOMRect, and a 2D DOMMatrix (js/geometry.js, made through the factories
+// it puts on `__bro_geometry`; host_geometry_hooks.cpp).
 Value makeHostRectValue(double x, double y, double w, double h);
+Value makeHostMatrix2DValue(double a, double b, double c, double d, double e, double f);
+// A DOMRectList over an array of DOMRects.
+Value makeHostRectListValue(Value rects);
 
 // The WebIDL `DOMString?` / [LegacyNullToEmptyString] conversion, which is
 // what `textContent`, `innerHTML`, `data` and `nodeValue` are declared as:

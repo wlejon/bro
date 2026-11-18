@@ -215,202 +215,135 @@ static void dispatchStorageEvent(bool isSession,
     hostDispatchToWindow(evObj.get());
 }
 
+namespace {
+
+// The key a Storage proxy answers with its kind ("local" / "session"), which
+// Storage.prototype's members read to find their map. Not a key a page can
+// write: the proxy answers it before the items.
+constexpr const char* kStorageKindKey = "\x01bro:storage";
+
+StorageState& storageOf(bool isSession) { return isSession ? currentSessionStorage() : currentStorage(); }
+
+void writeItem(bool isSession, const std::string& key, const std::string& val) {
+    StorageState& st = storageOf(isSession);
+    auto it = st.items.find(key);
+    const bool hasOld = it != st.items.end();
+    const std::string oldVal = hasOld ? it->second : std::string();
+    st.items[key] = val;
+    if (!isSession) scheduleSaveStorage(st);
+    dispatchStorageEvent(isSession, &key, hasOld ? &oldVal : nullptr, &val);
+}
+
+void removeItem(bool isSession, const std::string& key) {
+    StorageState& st = storageOf(isSession);
+    auto it = st.items.find(key);
+    if (it == st.items.end()) return;
+    const std::string oldVal = it->second;
+    st.items.erase(it);
+    if (!isSession) scheduleSaveStorage(st);
+    dispatchStorageEvent(isSession, &key, &oldVal, nullptr);
+}
+
+// Which storage `self` is; throws "Illegal invocation" for anything else.
+bool storageKindOf(Value self) {
+    if (ev::isObject(self)) {
+        Value kind = ev::getProperty(self, kStorageKindKey);
+        if (ev::isString(kind)) return ev::toUtf8(kind) == "session";
+    }
+    ev::throwTypeError("Illegal invocation");
+}
+
+std::string argString(std::span<const Value> a, size_t i) {
+    return i < a.size() ? ev::toUtf8(a[i]) : std::string("undefined");
+}
+
+void decorateStorageProto(ObjectBuilder& b) {
+    b.def("getItem", 1, [](Value self, std::span<const Value> a) {
+        StorageState& st = storageOf(storageKindOf(self));
+        auto it = st.items.find(argString(a, 0));
+        return it == st.items.end() ? ev::null() : ev::fromUtf8(it->second);
+    });
+    b.def("setItem", 2, [](Value self, std::span<const Value> a) {
+        const bool session = storageKindOf(self);
+        writeItem(session, argString(a, 0), argString(a, 1));
+        return ev::undefined();
+    });
+    b.def("removeItem", 1, [](Value self, std::span<const Value> a) {
+        const bool session = storageKindOf(self);
+        removeItem(session, argString(a, 0));
+        return ev::undefined();
+    });
+    b.def("clear", 0, [](Value self, std::span<const Value>) {
+        const bool session = storageKindOf(self);
+        StorageState& st = storageOf(session);
+        if (!st.items.empty()) {
+            st.items.clear();
+            if (!session) scheduleSaveStorage(st);
+            dispatchStorageEvent(session, nullptr, nullptr, nullptr);
+        }
+        return ev::undefined();
+    });
+    b.def("key", 1, [](Value self, std::span<const Value> a) {
+        StorageState& st = storageOf(storageKindOf(self));
+        const int idx = i32At(a, 0);
+        if (idx < 0 || static_cast<size_t>(idx) >= st.items.size()) return ev::null();
+        auto it = st.items.begin();
+        std::advance(it, idx);
+        return ev::fromUtf8(it->first);
+    });
+    b.accessor("length", [](Value self, std::span<const Value>) {
+        return ev::fromDouble(static_cast<double>(storageOf(storageKindOf(self)).items.size()));
+    }, nullptr);
+}
+
+HostClass g_storageClass;
+
+// localStorage / sessionStorage: a Storage whose named properties are the
+// items (`localStorage.k = v`, `Object.keys(localStorage)`), its members on
+// Storage.prototype as on the web.
+Value makeStorageValue(bool isSession) {
+    HostProxyTraps t;
+    t.proto = g_storageClass.prototype();
+    t.get = [isSession](const std::string& key, Value& out) {
+        if (key == kStorageKindKey) {
+            out = ev::fromUtf8(isSession ? "session" : "local");
+            return true;
+        }
+        StorageState& st = storageOf(isSession);
+        auto it = st.items.find(key);
+        if (it == st.items.end()) return false;
+        out = ev::fromUtf8(it->second);
+        return true;
+    };
+    t.set = [isSession](const std::string& key, Value v) {
+        writeItem(isSession, key, ev::isUndefined(v) ? "undefined" : ev::toUtf8(v));
+    };
+    t.has = [isSession](const std::string& key) {
+        const StorageState& st = storageOf(isSession);
+        return st.items.find(key) != st.items.end();
+    };
+    t.ownKeys = [isSession]() {
+        std::vector<std::string> keys;
+        for (const auto& [k, v] : storageOf(isSession).items) {
+            (void)v;
+            keys.push_back(k);
+        }
+        return keys;
+    };
+    t.remove = [isSession](const std::string& key) { removeItem(isSession, key); };
+    return makeHostProxy(std::move(t));
+}
+
+}  // namespace
+
+// The window installs localStorage first, once per realm: the interface
+// object goes in with it.
 Value makeLocalStorageValue() {
-    ObjectBuilder b;
-    b.def("getItem", 1, [](Value, std::span<const Value> a) {
-        if (a.empty()) return ev::null();
-        std::string key = ev::toUtf8(a[0]);
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        if (it == st.items.end()) return ev::null();
-        return ev::fromUtf8(it->second);
-    });
-    b.def("setItem", 2, [](Value, std::span<const Value> a) {
-        std::string key = a.empty() ? "undefined" : ev::toUtf8(a[0]);
-        std::string val = a.size() < 2 ? "undefined" : ev::toUtf8(a[1]);
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        std::string oldVal;
-        bool hasOld = (it != st.items.end());
-        if (hasOld) oldVal = it->second;
-        st.items[key] = val;
-        scheduleSaveStorage(st);
-        dispatchStorageEvent(/*isSession=*/false, &key, hasOld ? &oldVal : nullptr, &val);
-        return ev::undefined();
-    });
-    b.def("removeItem", 1, [](Value, std::span<const Value> a) {
-        if (a.empty()) return ev::undefined();
-        std::string key = ev::toUtf8(a[0]);
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        if (it != st.items.end()) {
-            std::string oldVal = it->second;
-            st.items.erase(it);
-            scheduleSaveStorage(st);
-            dispatchStorageEvent(/*isSession=*/false, &key, &oldVal, nullptr);
-        }
-        return ev::undefined();
-    });
-    b.def("clear", 0, [](Value, std::span<const Value>) {
-        auto& st = currentStorage();
-        if (!st.items.empty()) {
-            st.items.clear();
-            scheduleSaveStorage(st);
-            dispatchStorageEvent(/*isSession=*/false, nullptr, nullptr, nullptr);
-        }
-        return ev::undefined();
-    });
-    b.def("key", 1, [](Value, std::span<const Value> a) {
-        int idx = i32At(a, 0);
-        auto& st = currentStorage();
-        if (idx < 0 || static_cast<size_t>(idx) >= st.items.size()) return ev::null();
-        auto it = st.items.begin();
-        std::advance(it, idx);
-        return ev::fromUtf8(it->first);
-    });
-    b.accessor("length", [](Value, std::span<const Value>) {
-        return ev::fromDouble(static_cast<double>(currentStorage().items.size()));
-    }, nullptr);
-
-    // Named properties over the same map getItem reads.
-    HostProxyTraps t;
-    t.methods = b.get();
-    t.get = [](const std::string& key, Value& out) {
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        if (it == st.items.end()) return false;
-        out = ev::fromUtf8(it->second);
-        return true;
-    };
-    t.set = [](const std::string& key, Value v) {
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        std::string oldVal;
-        bool hasOld = (it != st.items.end());
-        if (hasOld) oldVal = it->second;
-        std::string val = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
-        st.items[key] = val;
-        scheduleSaveStorage(st);
-        dispatchStorageEvent(/*isSession=*/false, &key, hasOld ? &oldVal : nullptr, &val);
-    };
-    t.has = [](const std::string& key) {
-        return currentStorage().items.find(key) != currentStorage().items.end();
-    };
-    t.ownKeys = []() {
-        std::vector<std::string> keys;
-        for (const auto& [k, v] : currentStorage().items) {
-            (void)v;
-            keys.push_back(k);
-        }
-        return keys;
-    };
-    t.remove = [](const std::string& key) {
-        auto& st = currentStorage();
-        auto it = st.items.find(key);
-        if (it != st.items.end()) {
-            std::string oldVal = it->second;
-            st.items.erase(it);
-            scheduleSaveStorage(st);
-            dispatchStorageEvent(/*isSession=*/false, &key, &oldVal, nullptr);
-        }
-    };
-    return makeHostProxy(std::move(t));
+    g_storageClass.install("Storage", 0, [](Value, std::span<const Value>) -> Value {
+        return ev::throwTypeError("Illegal constructor");
+    }, decorateStorageProto);
+    return makeStorageValue(false);
 }
-
-Value makeSessionStorageValue() {
-    ObjectBuilder b;
-    b.def("getItem", 1, [](Value, std::span<const Value> a) {
-        if (a.empty()) return ev::null();
-        std::string key = ev::toUtf8(a[0]);
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        if (it == st.items.end()) return ev::null();
-        return ev::fromUtf8(it->second);
-    });
-    b.def("setItem", 2, [](Value, std::span<const Value> a) {
-        std::string key = a.empty() ? "undefined" : ev::toUtf8(a[0]);
-        std::string val = a.size() < 2 ? "undefined" : ev::toUtf8(a[1]);
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        std::string oldVal;
-        bool hasOld = (it != st.items.end());
-        if (hasOld) oldVal = it->second;
-        st.items[key] = val;
-        dispatchStorageEvent(/*isSession=*/true, &key, hasOld ? &oldVal : nullptr, &val);
-        return ev::undefined();
-    });
-    b.def("removeItem", 1, [](Value, std::span<const Value> a) {
-        if (a.empty()) return ev::undefined();
-        std::string key = ev::toUtf8(a[0]);
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        if (it != st.items.end()) {
-            std::string oldVal = it->second;
-            st.items.erase(it);
-            dispatchStorageEvent(/*isSession=*/true, &key, &oldVal, nullptr);
-        }
-        return ev::undefined();
-    });
-    b.def("clear", 0, [](Value, std::span<const Value>) {
-        auto& st = currentSessionStorage();
-        if (!st.items.empty()) {
-            st.items.clear();
-            dispatchStorageEvent(/*isSession=*/true, nullptr, nullptr, nullptr);
-        }
-        return ev::undefined();
-    });
-    b.def("key", 1, [](Value, std::span<const Value> a) {
-        int idx = i32At(a, 0);
-        auto& st = currentSessionStorage();
-        if (idx < 0 || static_cast<size_t>(idx) >= st.items.size()) return ev::null();
-        auto it = st.items.begin();
-        std::advance(it, idx);
-        return ev::fromUtf8(it->first);
-    });
-    b.accessor("length", [](Value, std::span<const Value>) {
-        return ev::fromDouble(static_cast<double>(currentSessionStorage().items.size()));
-    }, nullptr);
-
-    HostProxyTraps t;
-    t.methods = b.get();
-    t.get = [](const std::string& key, Value& out) {
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        if (it == st.items.end()) return false;
-        out = ev::fromUtf8(it->second);
-        return true;
-    };
-    t.set = [](const std::string& key, Value v) {
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        std::string oldVal;
-        bool hasOld = (it != st.items.end());
-        if (hasOld) oldVal = it->second;
-        std::string val = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
-        st.items[key] = val;
-        dispatchStorageEvent(/*isSession=*/true, &key, hasOld ? &oldVal : nullptr, &val);
-    };
-    t.has = [](const std::string& key) {
-        return currentSessionStorage().items.find(key) != currentSessionStorage().items.end();
-    };
-    t.ownKeys = []() {
-        std::vector<std::string> keys;
-        for (const auto& [k, v] : currentSessionStorage().items) {
-            (void)v;
-            keys.push_back(k);
-        }
-        return keys;
-    };
-    t.remove = [](const std::string& key) {
-        auto& st = currentSessionStorage();
-        auto it = st.items.find(key);
-        if (it != st.items.end()) {
-            std::string oldVal = it->second;
-            st.items.erase(it);
-            dispatchStorageEvent(/*isSession=*/true, &key, &oldVal, nullptr);
-        }
-    };
-    return makeHostProxy(std::move(t));
-}
+Value makeSessionStorageValue() { return makeStorageValue(true); }
 
 }  // namespace bro::bronze_host

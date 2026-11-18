@@ -42,6 +42,8 @@
     X(FrontFace, frontFace, GLenum)                                                               \
     X(LineWidth, lineWidth, GLfloat)                                                              \
     X(PolygonOffset, polygonOffset, GLfloat, GLfloat)                                             \
+    X(PolygonOffsetClamp, polygonOffsetClamp, GLfloat, GLfloat, GLfloat)                          \
+    X(PolygonMode, polygonMode, GLenum, GLenum)                                                   \
     X(SampleCoverage, sampleCoverage, GLfloat, GLboolean)                                         \
     X(Hint, hint, GLenum, GLenum)                                                                 \
     X(PixelStorei, pixelStorei, GLenum, GLint)                                                    \

@@ -387,16 +387,7 @@ void decorateCanvasProto(ObjectBuilder& b) {
         if (!cs || !cs->el) return makeHostRectValue(0, 0, 0, 0);
         dom::AbsoluteRect r = borderBoxOf(cs->el);
         r.y -= viewportScrollOf(cs->el);   // client coordinates
-        ObjectBuilder bRect;
-        bRect.set("left", ev::fromDouble(r.x));
-        bRect.set("top", ev::fromDouble(r.y));
-        bRect.set("right", ev::fromDouble(r.x + r.width));
-        bRect.set("bottom", ev::fromDouble(r.y + r.height));
-        bRect.set("width", ev::fromDouble(r.width));
-        bRect.set("height", ev::fromDouble(r.height));
-        bRect.set("x", ev::fromDouble(r.x));
-        bRect.set("y", ev::fromDouble(r.y));
-        return bRect.get();
+        return makeHostRectValue(r.x, r.y, r.width, r.height);
     });
     b.def("setAttribute", 2, [](Value self, std::span<const Value> a) {
         dom::Element* el = hostElementOf(self);

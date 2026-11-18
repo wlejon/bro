@@ -76,8 +76,6 @@ void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clon
     }
 }
 
-namespace {
-
 // The document a `document` object acts on: the one it was made for, or, for
 // the app's (made with none), whatever the engine is showing (a reload swaps
 // it). Every compartment's `document` is its own object over its own
@@ -91,8 +89,6 @@ dom::Document* documentFor(dom::Document* fixed) {
     if (doc) doc->setElementClonedCallback(&fireElementCloned);
     return doc;
 }
-
-}  // namespace
 
 // The running code's document: its compartment's (host_compartment.h).
 dom::Document* currentHostDocument() {
@@ -173,6 +169,11 @@ Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
     if (!el) return ev::throwError("bronze host: createElement failed");
     if (withNs) {
         el->setNamespaceURI(nsUri);
+        el->setQualifiedName(qualifiedName);
+    } else if (doc->isXml()) {
+        // An XML document's createElement keeps the name as given, in the
+        // null namespace (application/xhtml+xml's in XHTML's).
+        el->setNamespaceURI(doc->contentType() == "application/xhtml+xml" ? dom::Element::kHtmlNamespace : "");
         el->setQualifiedName(qualifiedName);
     }
     Value customVal = constructCustomElement(el, tag);
@@ -343,33 +344,28 @@ void decorateDocumentExtras(ObjectBuilder& b, dom::Document* fixed) {
         dom::Document* doc = documentFor(fixed);
         return ev::fromUtf8(e && !e->documentPageVisible(doc) ? "hidden" : "visible");
     }, nullptr);
-    b.accessor("location", [](Value, std::span<const Value>) {
+    // A document a script made (DOMParser, DOMImplementation, cloneNode) has
+    // no browsing context: no location, no defaultView; its URL is its own
+    // (about:blank for a created one), else the creator's.
+    b.accessor("location", [fixed](Value, std::span<const Value>) {
+        if (fixed && isParsedDocument(fixed)) return ev::null();
         ev::GlobalValue loc = ev::globalValue("location");
         return loc.found ? loc.value : ev::null();
     }, nullptr);
-    b.accessor("URL", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
+    b.accessor("URL", [fixed](Value, std::span<const Value>) {
+        if (fixed && isParsedDocument(fixed) && !fixed->url().empty()) return ev::fromUtf8(fixed->url());
+        return ev::fromUtf8(locationHref());
+    }, nullptr);
     b.accessor("currentScript", [fixed](Value, std::span<const Value>) {
         return currentScriptValue(documentFor(fixed));
     }, nullptr);
-    b.accessor("documentURI", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
+    b.accessor("documentURI", [fixed](Value, std::span<const Value>) {
+        if (fixed && isParsedDocument(fixed) && !fixed->url().empty()) return ev::fromUtf8(fixed->url());
+        return ev::fromUtf8(locationHref());
+    }, nullptr);
     b.set("compatMode", ev::fromUtf8("CSS1Compat"));
     b.set("characterSet", ev::fromUtf8("UTF-8"));
     b.set("charset", ev::fromUtf8("UTF-8"));
-    b.set("contentType", ev::fromUtf8("text/html"));
-    {
-        ObjectBuilder impl;
-        impl.def("createHTMLDocument", 1, [](Value, std::span<const Value> a) -> Value {
-            Value tV = argAt(a, 0);
-            std::string title = (ev::isUndefined(tV) || ev::isObject(tV)) ? "" : ev::toUtf8(tV);
-            std::string html = "<!DOCTYPE html><html><head>";
-            if (!title.empty()) html += "<title>" + title + "</title>";
-            html += "</head><body></body></html>";
-            return hostDocumentValue(parseIntoNewDocument(html));
-        });
-        impl.def("hasFeature", 2, [](Value, std::span<const Value>) { return ev::fromBool(true); });
-        impl.def("createDocumentType", 3, [](Value, std::span<const Value>) { return ev::null(); });
-        b.set("implementation", impl.get());
-    }
     b.def("createEvent", 1, [](Value, std::span<const Value> a) -> Value {
         Value nV = argAt(a, 0);
         std::string name = (ev::isUndefined(nV) || ev::isObject(nV)) ? "" : ev::toUtf8(nV);
@@ -556,6 +552,9 @@ Value makeDocumentValue(dom::Document* fixed) {
         if (!doc) return ev::throwError("bronze host: engine has no document");
         if (a.empty()) return ev::null();
         dom::Node* node = hostNodeOf(a[0]);
+        if (!node && ev::isObject(a[0]) && ev::toDouble(ev::getProperty(a[0], "nodeType")) == 9.0) {
+            return ev::throwValue(hostMakeDomError("NotSupportedError", "Failed to execute 'importNode' on 'Document': The node provided is a document, which may not be imported."));
+        }
         if (!node) return ev::null();
         bool deep = a.size() > 1 && ev::toBool(a[1]);
         dom::Node* cloned = doc->cloneNode(node, deep);
@@ -566,6 +565,9 @@ Value makeDocumentValue(dom::Document* fixed) {
         if (!doc) return ev::throwError("bronze host: engine has no document");
         if (a.empty()) return ev::null();
         dom::Node* node = hostNodeOf(a[0]);
+        if (!node && ev::isObject(a[0]) && ev::toDouble(ev::getProperty(a[0], "nodeType")) == 9.0) {
+            return ev::throwValue(hostMakeDomError("NotSupportedError", "Failed to execute 'adoptNode' on 'Document': The node provided is a document, which may not be adopted."));
+        }
         if (!node) return ev::null();
         dom::Node* adopted = doc->adoptNode(node);
         return hostNodeValue(adopted);
@@ -600,7 +602,8 @@ Value makeDocumentValue(dom::Document* fixed) {
             return hostElementValue(chain[i]);
         });
     });
-    b.accessor("defaultView", [](Value, std::span<const Value>) {
+    b.accessor("defaultView", [fixed](Value, std::span<const Value>) {
+        if (fixed && isParsedDocument(fixed)) return ev::null();
         ev::GlobalValue g = ev::globalValue("window");
         if (g.found) return g.value;
         g = ev::globalValue("globalThis");
@@ -733,6 +736,7 @@ Value makeDocumentValue(dom::Document* fixed) {
     });
 
     decorateDocumentExtras(b, fixed);
+    decorateDocumentNode(b, fixed);
 
     const ElementSource root = [fixed]() -> dom::Element* {
         dom::Document* doc = documentFor(fixed);
@@ -747,7 +751,7 @@ Value makeDocumentValue(dom::Document* fixed) {
     decorateDocumentWebAnimations(b);
     // setPrototype allocates (the receiver goes to dictionary mode); the
     // value handed back is the post-call address, the one we return.
-    return ev::setPrototype(b.get(), documentHostClass().prototype());
+    return ev::setPrototype(b.get(), documentInterfaceProto(documentFor(fixed)));
 }
 
 namespace {

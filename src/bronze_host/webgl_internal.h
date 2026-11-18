@@ -194,6 +194,9 @@ void installWebGLTransformFeedback(ObjectBuilder& b);
 // WebGL 1 (webgl1.cpp). Whether `name` is a member WebGL2RenderingContext
 // has and WebGLRenderingContext has not.
 bool isWebGL2OnlyName(std::string_view name);
+// Whether `value` is the value of a WebGL 2 constant and of no WebGL 1 one
+// (webgl_constants.cpp).
+bool isWebGL2OnlyEnum(uint32_t value);
 // Delete the WebGL 2 methods and accessors from a prototype the family
 // installers built (WebGLRenderingContext's).
 void removeWebGL2OnlyMethods(Value proto);
@@ -201,6 +204,18 @@ void removeWebGL2OnlyMethods(Value proto);
 // (HALF_FLOAT_OES, SRGB_EXT, SRGB_ALPHA_EXT) as the WebGL 2 ones they are;
 // nothing for a WebGL 2 context. Any pointer may be null.
 void webgl1TexFormat(webgl::WebGL2RenderingContext* c, uint32_t* internalformat, uint32_t* format, uint32_t* type);
+// The argument kinds WebGL 1 accepts fewer enums for than WebGL 2.
+enum class WebGL1Enum : uint8_t {
+    Pname, Cap, PixelStore, TexParameter,  // a WebGL 2 name: INVALID_ENUM
+    BufferTarget, TextureTarget, FramebufferTarget, BlendEquation, Hint, RenderbufferFormat, TexType,
+    TexInternalFormat,  // not an ES 2.0 format: INVALID_VALUE
+};
+// For a WebGL 1 context, whether `value` is refused as an argument of `kind`
+// (the extensions enabled so far admit theirs); a refusal records its error
+// on the context. Always false for WebGL 2.
+bool webgl1Refuses(webgl::WebGL2RenderingContext* c, WebGL1Enum kind, uint32_t value);
+// Whether getExtension(name) has answered an object on this context.
+bool webglExtensionEnabled(webgl::WebGL2RenderingContext* c, const std::string& name);
 // The members of a WebGL 1 extension (makeExtension's part for them); false
 // for a name that is not one.
 bool makeWebGL1Extension(webgl::WebGL2RenderingContext* c, const std::string& name, ObjectBuilder& o);

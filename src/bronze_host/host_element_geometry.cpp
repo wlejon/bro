@@ -164,25 +164,6 @@ void collectInnerText(const dom::Element* el, std::string& out) {
     }
 }
 
-std::string outerHtmlOf(dom::Element* el) {
-    std::string tag = el->tagName();
-    for (char& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    std::string result = "<" + tag;
-    for (const auto& [name, val] : el->attributes()) {
-        result += " " + name + "=\"" + val + "\"";
-    }
-    // "style" never lives in attributes_ (Element::setAttribute routes it into
-    // the StyleProxy), so it is appended on its own or it vanishes from the
-    // serialization.
-    if (el->hasAttribute("style")) {
-        result += " style=\"" + el->style().cssText() + "\"";
-    }
-    result += ">";
-    result += el->innerHTML();
-    result += "</" + tag + ">";
-    return result;
-}
-
 // scrollTo / scrollBy take either (x, y) or a {top, left} options object.
 bool readScrollTopArg(std::span<const Value> a, double& top) {
     if (!a.empty() && ev::isObject(a[0])) {
@@ -286,13 +267,13 @@ void decorateElementGeometry(ObjectBuilder& b) {
     // occupies (clientRectsOf), everything else its border box.
     b.def("getClientRects", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        if (!st || !st->el) return makeHostRectListValue(makeEmptyArray());
         std::vector<dom::AbsoluteRect> rects = clientRectsOf(st->el);
         const float sy = viewportScrollOf(st->el);
-        return hostArrayOf(rects.size(), [&rects, sy](size_t i) {
+        return makeHostRectListValue(hostArrayOf(rects.size(), [&rects, sy](size_t i) {
             const auto& r = rects[i];
             return makeHostRectValue(r.x, r.y - sy, r.width, r.height);
-        });
+        }));
     });
 
     b.accessor("clientWidth",
@@ -533,7 +514,7 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
                    if (!st->el) return ev::fromUtf8("");
-                   return ev::fromUtf8(outerHtmlOf(st->el));
+                   return ev::fromUtf8(st->el->outerHTML());
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);

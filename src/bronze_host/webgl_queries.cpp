@@ -13,11 +13,14 @@
 // COMPRESSED_TEXTURE_FORMATS, ...), and sequence<GLboolean> ones a real Array.
 
 #include "bronze_host/webgl_internal.h"
+#include "bronze_host/host_list_iteration.h"
 #include "bronze_host/host_values.h"
 #include "webgl/vulkan/webgl_vk_caps.h"
 
 #include <cstring>
+#include <cctype>
 #include <string>
+#include <utility>
 
 namespace bro::bronze_host {
 
@@ -50,6 +53,35 @@ Value glValue(webgl::WebGL2RenderingContext* c, const webgl::GLValue& v) {
         case Kind::Bool: return hostArrayOf(v.count, [&v](size_t i) { return ev::fromBool(v.words[i] != 0); });
         default: return makeUint32Array(v.words, v.count);
     }
+}
+
+// The interface an extension object is an instance of, as Chromium names
+// it: the prefix (WEBGL as WebGL), then each word capitalised, the acronyms
+// spelled as the specs do (EXT_sRGB is EXTsRGB, OES_texture_float_linear
+// OESTextureFloatLinear, WEBGL_compressed_texture_s3tc WebGLCompressedTextureS3TC).
+std::string extensionInterfaceName(const std::string& name) {
+    static const std::pair<const char*, const char*> kWords[] = {
+        {"webgl", "WebGL"}, {"webgl2", "WebGL2"}, {"lod", "LOD"}, {"srgb", "sRGB"}, {"s3tc", "S3TC"},
+        {"astc", "ASTC"}, {"etc", "ETC"}, {"etc1", "ETC1"}, {"bptc", "BPTC"}, {"rgtc", "RGTC"}, {"minmax", "MinMax"}};
+    std::string out;
+    size_t start = 0;
+    bool prefix = true;
+    while (start <= name.size()) {
+        size_t end = name.find('_', start);
+        if (end == std::string::npos) end = name.size();
+        std::string word = name.substr(start, end - start);
+        std::string lower = word;
+        for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        const char* special = nullptr;
+        for (const auto& [from, to] : kWords)
+            if (lower == from) special = to;
+        if (special) out += special;
+        else if (prefix) out += word;
+        else if (!lower.empty()) out += static_cast<char>(std::toupper(static_cast<unsigned char>(lower[0]))) + lower.substr(1);
+        prefix = false;
+        start = end + 1;
+    }
+    return out;
 }
 
 // An extension object: its constants, and methods for the few that have them.
@@ -124,6 +156,39 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
         def("RGB16F_EXT", 0x881B);
         def("FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE_EXT", 0x8211);
         def("UNSIGNED_NORMALIZED_EXT", 0x8C17);
+    } else if (name == "EXT_depth_clamp") {
+        def("DEPTH_CLAMP_EXT", 0x864F);
+    } else if (name == "EXT_polygon_offset_clamp") {
+        def("POLYGON_OFFSET_CLAMP_EXT", 0x8E1B);
+        o.def("polygonOffsetClampEXT", 3, [c](Value, std::span<const Value> a) {
+            if (auto* cl = client(c))
+                cl->polygonOffsetClamp(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)),
+                                       static_cast<float>(numAt(a, 2)));
+            return ev::undefined();
+        });
+    } else if (name == "WEBGL_polygon_mode") {
+        def("POLYGON_MODE_WEBGL", 0x0B40);
+        def("POLYGON_OFFSET_LINE_WEBGL", 0x2A02);
+        def("LINE_WEBGL", 0x1B01);
+        def("FILL_WEBGL", 0x1B02);
+        o.def("polygonModeWEBGL", 2, [c](Value, std::span<const Value> a) {
+            if (auto* cl = client(c)) cl->polygonMode(u32At(a, 0), u32At(a, 1));
+            return ev::undefined();
+        });
+    } else if (name == "EXT_texture_mirror_clamp_to_edge") {
+        def("MIRROR_CLAMP_TO_EDGE_EXT", 0x8743);
+    } else if (name == "WEBGL_debug_shaders") {
+        // A compiled shader's source ("" before a successful compile).
+        o.def("getTranslatedShaderSource", 1, [c](Value, std::span<const Value> a) {
+            auto* cell = cellOf(argAt(a, 0), WebGLCell::Shader);
+            if (!cell) return ev::throwTypeError("getTranslatedShaderSource: parameter 1 is not of type 'WebGLShader'.");
+            auto* cl = client(c);
+            if (!cl) return ev::fromUtf8("");
+            const webgl::WebGLShader s{cell->id, cell->shaderType};
+            return ev::fromUtf8(cl->sync([s](WebGLBackend& gl) {
+                return gl.getShaderParameter(s, GL_COMPILE_STATUS) == GL_TRUE ? gl.getShaderSource(s) : std::string();
+            }));
+        });
     } else if (name == "WEBGL_debug_renderer_info") {
         def("UNMASKED_VENDOR_WEBGL", 0x9245);
         def("UNMASKED_RENDERER_WEBGL", 0x9246);
@@ -147,6 +212,7 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
         });
     }
     // An empty object for a supported extension with nothing to expose.
+    setToStringTag(o.get(), extensionInterfaceName(name));
     return o.get();
 }
 
@@ -223,6 +289,7 @@ DynamicParameter dynamicParameter(WebGLBackend& gl, GLenum pname) {
         case 0x0B21:  // GL_LINE_WIDTH
         case 0x80AA:  // GL_SAMPLE_COVERAGE_VALUE
         case 0x8038:  // GL_POLYGON_OFFSET_FACTOR
+        case 0x8E1B:  // POLYGON_OFFSET_CLAMP_EXT
         case 0x2A00:  // GL_POLYGON_OFFSET_UNITS
         case 0x84FF:  // MAX_TEXTURE_MAX_ANISOTROPY_EXT (INVALID_ENUM: not in caps, so not supported)
             return number(gl.getParameterFloat(pname));
@@ -316,6 +383,8 @@ DynamicParameter dynamicParameter(WebGLBackend& gl, GLenum pname) {
         case 0x0B90:  // GL_STENCIL_TEST
         case 0x0BD0:  // GL_DITHER
         case 0x8037:  // GL_POLYGON_OFFSET_FILL
+        case 0x864F:  // DEPTH_CLAMP_EXT
+        case 0x2A02:  // POLYGON_OFFSET_LINE_WEBGL
         case 0x809E:  // GL_SAMPLE_ALPHA_TO_COVERAGE
         case 0x80A0:  // GL_SAMPLE_COVERAGE
         case 0x8C89:  // GL_RASTERIZER_DISCARD
@@ -356,6 +425,7 @@ void installWebGLQueries(ObjectBuilder& b) {
         auto* cl = client(c);
         if (!cl) return ev::null();
         GLenum pname = u32At(a, 0);
+        if (webgl1Refuses(c, WebGL1Enum::Pname, pname)) return ev::null();
         // The device's constants: the capabilities snapshot, no backend call.
         const webgl::vk::WebGLCaps& caps = c->caps();
         if (float f = 0.0f; caps.floatLimit(pname, f)) return ev::fromDouble(f);
@@ -598,6 +668,9 @@ void installWebGLQueries(ObjectBuilder& b) {
 
     // --- WebGL2 parameter queries: round trips ---
     defMethod(b, "getTexParameter", 2, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
+        if (webgl1Refuses(c, WebGL1Enum::TextureTarget, u32At(a, 0)) ||
+            webgl1Refuses(c, WebGL1Enum::TexParameter, u32At(a, 1)))
+            return ev::null();
         auto* cl = client(c);
         const GLenum target = u32At(a, 0), pname = u32At(a, 1);
         webgl::TexParameterValue v;

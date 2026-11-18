@@ -215,6 +215,7 @@ void Engine::construct(const EngineConfig& config) {
     aotRequired_ = config.aotRequired;
     aotBuildDir_ = config.aotBuildDir;
     appDir_ = config.appDir;
+    util::setAppUrlRoot(appDir_);
     titleOverride_ = config.title;
     fallbackTitle_ = initialWindowTitle(config);
     installHostBindings_ = config.installHostBindings;
@@ -710,6 +711,11 @@ void Engine::initAppRealm() {
                                 static_cast<float>(contentHeight()));
     document_->setMediaColorScheme(effectiveColorScheme());
     document_->setMediaResolution(deviceScale_.ratio);
+    // A linked sheet's relative url()s name files beside the sheet: the
+    // cascade rewrites them to the resolved path as it adds the sheet.
+    document_->cascade().setUrlRebaser([this](const std::string& url, const std::string& base) {
+        return AppLoader::resolvePath(base, url, &assetMounts_);
+    });
     document_->cascade().setImportResolver(
         [this](const std::string& url, const std::string& base, std::string& importedBase) {
         // Relative to the importing sheet (its directory), else the document.

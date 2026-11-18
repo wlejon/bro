@@ -42,8 +42,14 @@
  * and, as the device allows, `WEBGL_color_buffer_float`,
  * `EXT_color_buffer_half_float`, `EXT_float_blend`, `OES_texture_float_linear`,
  * `EXT_texture_filter_anisotropic` and the compressed-texture extensions.
- * The vertex array objects are `WebGLVertexArrayObject`s (a browser names them
- * `WebGLVertexArrayObjectOES`).
+ * Its vertex array objects are `WebGLVertexArrayObjectOES` (no global of that
+ * name, as in a browser). WebGL 2's enums are refused as Chromium refuses them:
+ * a WebGL 2 `getParameter` / `enable` / `pixelStorei` / `texParameter` name,
+ * buffer target, texture target or framebuffer target is INVALID_ENUM (the
+ * call does nothing, `getParameter` answers null), as are `MIN` / `MAX` before
+ * `EXT_blend_minmax`, a texture type before its extension (FLOAT,
+ * `HALF_FLOAT_OES`, the depth types) and a renderbuffer format outside ES 2.0's
+ * and its extensions'; a sized `texImage2D` internal format is INVALID_VALUE.
  *
  * Context attributes (`canvas.getContext('webgl2', attributes)`), as granted and
  * as `getContextAttributes()` reports them:
@@ -93,8 +99,17 @@
  * `KHR_parallel_shader_compile` (`COMPLETION_STATUS_KHR` turns true once the
  * WebGL thread has finished the compile or link, and never waits for it),
  * `WEBGL_debug_renderer_info` (`UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL`
- * name the Vulkan device), `WEBGL_lose_context` and `BRO_buffer_map`. An
- * extension's enums are enums only after its `getExtension`.
+ * name the Vulkan device), `WEBGL_lose_context` and `BRO_buffer_map`; on both
+ * versions, as the device has the feature, `EXT_depth_clamp` (`DEPTH_CLAMP_EXT`),
+ * `EXT_polygon_offset_clamp` (`polygonOffsetClampEXT`), `WEBGL_polygon_mode`
+ * (`polygonModeWEBGL(FRONT_AND_BACK, LINE_WEBGL)`, `POLYGON_OFFSET_LINE_WEBGL`),
+ * `EXT_texture_mirror_clamp_to_edge` (`MIRROR_CLAMP_TO_EDGE_EXT`), and
+ * `WEBGL_debug_shaders` (`getTranslatedShaderSource` answers a compiled
+ * shader's source). Not offered: `EXT_clip_control` (the vertex stage's
+ * depth remap is compiled into every program) and `WEBGL_multi_draw` (its
+ * `gl_DrawID` needs a per-draw constant in every program). An extension's
+ * enums are enums only after its `getExtension`; its object's toString names
+ * its interface (`[object OESVertexArrayObject]`).
  *
  * Threading: a call returns as soon as it is recorded. Each context encodes its
  * calls into a command ring on the JS thread, copying their data (typed arrays,

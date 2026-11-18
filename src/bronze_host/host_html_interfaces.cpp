@@ -16,12 +16,16 @@
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_runtime.h"
+#include "bronze_host/host_svg_interfaces.h"
+#include "bronze_host/host_url_reflect.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "util/remote_asset.h"
 
 #include <cctype>
 #include <string>
+#include <utility>
+#include <vector>
 #include <unordered_map>
 
 namespace bro::bronze_host {
@@ -34,6 +38,10 @@ namespace {
 
 HostClass g_nodeClass;
 HostClass g_documentClass;
+HostClass g_htmlDocumentClass;
+HostClass g_xmlDocumentClass;
+HostClass g_documentTypeClass;
+HostClass g_domImplementationClass;
 HostClass g_elementClass;
 HostClass g_htmlElementClass;
 HostClass g_characterDataClass;
@@ -50,6 +58,7 @@ HostClass g_htmlButtonElementClass;
 HostClass g_htmlScriptElementClass;
 HostClass g_htmlStyleElementClass;
 HostClass g_htmlAnchorElementClass;
+HostClass g_htmlAreaElementClass;
 HostClass g_htmlSpanElementClass;
 HostClass g_htmlParagraphElementClass;
 HostClass g_htmlTableElementClass;
@@ -151,9 +160,9 @@ Value audioConstructor(Value, std::span<const Value> a) {
 struct ExtraTagDef {
     const char* name;
     const char* tags;
+    void (*decorator)(ObjectBuilder&) = nullptr;
 };
 constexpr ExtraTagDef kExtraTags[] = {
-    {"HTMLAreaElement", "area"},
     {"HTMLBRElement", "br"},
     {"HTMLBaseElement", "base"},
     {"HTMLDListElement", "dl"},
@@ -165,7 +174,7 @@ constexpr ExtraTagDef kExtraTags[] = {
     {"HTMLHeadElement", "head"},
     {"HTMLLabelElement", "label"},
     {"HTMLLegendElement", "legend"},
-    {"HTMLLinkElement", "link"},
+    {"HTMLLinkElement", "link", decorateRelList},
     {"HTMLMapElement", "map"},
     {"HTMLMenuElement", "menu"},
     {"HTMLMetaElement", "meta"},
@@ -192,19 +201,9 @@ constexpr ExtraTagDef kExtraTags[] = {
 HostClass g_extraTagClasses[sizeof(kExtraTags) / sizeof(kExtraTags[0])];
 std::unordered_map<std::string, const HostClass*>* g_extraTagByName = nullptr;
 
-// Non-HTML element namespaces: an inline <svg> subtree and <math> are Elements
-// (every method lives on Element's prototype) branded by their namespace.
-HostClass g_svgElementClass;
+// MathML elements are Elements branded by their namespace; the SVG
+// interfaces are host_svg_interfaces.cpp.
 HostClass g_mathMLElementClass;
-constexpr const char* kSvgTags[] = {
-    "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-    "text", "tspan", "textpath", "defs", "use", "symbol", "lineargradient",
-    "radialgradient", "stop", "clippath", "mask", "pattern", "image", "foreignobject",
-    "filter", "marker", "view", "switch", "desc", "metadata", "fecolormatrix",
-    "fegaussianblur", "feblend", "feoffset", "femerge", "femergenode", "feflood",
-    "fecomposite", "animate", "animatetransform", "set",
-};
-
 // Platform brands for objects the host builds as plain objects — the 2D
 // context, drag / clipboard dataTransfer, AudioDestinationNode — so
 // `ctx instanceof CanvasRenderingContext2D` holds and the names exist.
@@ -249,6 +248,30 @@ const HostClass& characterDataHostClass() { return g_characterDataClass; }
 const HostClass& textHostClass() { return g_textClass; }
 const HostClass& commentHostClass() { return g_commentClass; }
 const HostClass& documentFragmentHostClass() { return g_documentFragmentClass; }
+const HostClass& documentTypeHostClass() { return g_documentTypeClass; }
+const HostClass& domImplementationHostClass() { return g_domImplementationClass; }
+
+Value documentInterfaceProto(const dom::Document* doc) {
+    return (doc && doc->isXml() ? g_xmlDocumentClass : g_htmlDocumentClass).prototype();
+}
+
+// to[name] = the own property descriptor of from[name], when it has one.
+static void copyOwnProperty(Value fromIn, Value toIn, const char* name) {
+    ev::Persistent from(fromIn), to(toIn);
+    ev::GlobalValue objectG = ev::globalValue("Object");
+    if (!objectG.found || !ev::isObject(objectG.value)) return;
+    ev::Persistent object(objectG.value);
+    ev::Persistent getDesc(ev::getProperty(object.get(), "getOwnPropertyDescriptor"));
+    ev::Persistent define(ev::getProperty(object.get(), "defineProperty"));
+    ev::Persistent key(ev::fromUtf8(name));
+    if (!ev::isFunction(getDesc.get()) || !ev::isFunction(define.get())) return;
+    const Value getArgs[2] = {from.get(), key.get()};
+    ev::CallResult desc = ev::call(getDesc.get(), object.get(), std::span<const Value>(getArgs, 2));
+    if (desc.thrown || !ev::isObject(desc.value)) return;
+    ev::Persistent descP(desc.value);
+    const Value defArgs[3] = {to.get(), key.get(), descP.get()};
+    ev::call(define.get(), object.get(), std::span<const Value>(defArgs, 3));
+}
 
 void installHtmlInterfaces() {
     // Once per realm: each compartment has its own classes (HostClass keeps
@@ -295,8 +318,15 @@ void installHtmlInterfaces() {
     g_documentFragmentClass.inherit(g_nodeClass);
 
     // Document
-    g_documentClass.install("Document", 0, illegalConstructor, decorateDocumentProto);
+    g_documentClass.install("Document", 0, documentConstructor, decorateDocumentProto);
     g_documentClass.inherit(g_nodeClass);
+    g_htmlDocumentClass.install("HTMLDocument", 0, illegalConstructor, nullptr);
+    g_htmlDocumentClass.inherit(g_documentClass);
+    g_xmlDocumentClass.install("XMLDocument", 0, illegalConstructor, nullptr);
+    g_xmlDocumentClass.inherit(g_documentClass);
+    g_documentTypeClass.install("DocumentType", 0, illegalConstructor, decorateDocumentTypeProto);
+    g_documentTypeClass.inherit(g_nodeClass);
+    g_domImplementationClass.install("DOMImplementation", 0, illegalConstructor, nullptr);
     ev::registerGlobal("Document", g_documentClass.constructor());
     {
         ev::GlobalValue gt = ev::globalValue("globalThis");
@@ -335,7 +365,8 @@ void installHtmlInterfaces() {
         {g_htmlButtonElementClass, "HTMLButtonElement"},
         {g_htmlScriptElementClass, "HTMLScriptElement", decorateScriptProto},
         {g_htmlStyleElementClass, "HTMLStyleElement"},
-        {g_htmlAnchorElementClass, "HTMLAnchorElement"},
+        {g_htmlAnchorElementClass, "HTMLAnchorElement", decorateHyperlinkProto},
+        {g_htmlAreaElementClass, "HTMLAreaElement", decorateHyperlinkProto},
         {g_htmlSpanElementClass, "HTMLSpanElement"},
         {g_htmlParagraphElementClass, "HTMLParagraphElement"},
         {g_htmlTableElementClass, "HTMLTableElement"},
@@ -388,11 +419,11 @@ void installHtmlInterfaces() {
     g_audioClass.inherit(g_htmlAudioElementClass);
 
     // 6. The remaining per-tag brands, and the tag -> class map
-    // htmlInterfaceProto reads.
+    // elementInterfaceProto reads.
     g_extraTagByName = new std::unordered_map<std::string, const HostClass*>();
     for (size_t i = 0; i < sizeof(kExtraTags) / sizeof(kExtraTags[0]); ++i) {
         HostClass& cls = g_extraTagClasses[i];
-        cls.install(kExtraTags[i].name, 0, illegalConstructor, nullptr);
+        cls.install(kExtraTags[i].name, 0, illegalConstructor, kExtraTags[i].decorator);
         cls.inherit(g_htmlElementClass);
         std::string tags = kExtraTags[i].tags;
         size_t start = 0;
@@ -406,12 +437,9 @@ void installHtmlInterfaces() {
     }
 
     // 7. Non-HTML namespaces
-    g_svgElementClass.install("SVGElement", 0, illegalConstructor, nullptr);
-    g_svgElementClass.inherit(g_elementClass);
+    installSvgInterfaces();
     g_mathMLElementClass.install("MathMLElement", 0, illegalConstructor, nullptr);
     g_mathMLElementClass.inherit(g_elementClass);
-    for (const char* tag : kSvgTags) (*g_extraTagByName)[tag] = &g_svgElementClass;
-    (*g_extraTagByName)["math"] = &g_mathMLElementClass;
 
     // 8. Platform brands
     g_canvas2DContextClass.install("CanvasRenderingContext2D", 0, illegalConstructor, nullptr);
@@ -421,14 +449,35 @@ void installHtmlInterfaces() {
 
     // 9. The list interfaces (NodeList, HTMLCollection and its HTML kinds).
     installDomListInterfaces();
+
+    // 10. The form controls' own members, where a page looks for them. They
+    // live on Element.prototype (a <div>'s `value` is an expando there), and
+    // the controls' prototypes carry the same accessors as own properties, as
+    // in a browser: React reads Object.getOwnPropertyDescriptor(
+    // HTMLInputElement.prototype, 'value') to track an input's value and
+    // calls its setter.
+    const std::pair<const HostClass*, std::vector<const char*>> controls[] = {
+        {&g_htmlInputElementClass, {"value", "checked", "selectionStart", "selectionEnd"}},
+        {&g_htmlTextAreaElementClass, {"value", "selectionStart", "selectionEnd"}},
+        {&g_htmlSelectElementClass, {"value", "selectedIndex"}},
+        {&g_htmlButtonElementClass, {"value"}},
+        {&g_htmlOptionElementClass, {"value"}},
+    };
+    for (const auto& [cls, names] : controls)
+        for (const char* name : names) copyOwnProperty(g_elementClass.prototype(), cls->prototype(), name);
 }
 
 const HostClass& canvasRenderingContext2DHostClass() { return g_canvas2DContextClass; }
 const HostClass& dataTransferHostClass() { return g_dataTransferClass; }
-const HostClass& svgElementHostClass() { return g_svgElementClass; }
 
-Value htmlInterfaceProto(const std::string& tagName) {
-    std::string tag = tagName;
+Value elementInterfaceProto(const dom::Element* el) {
+    switch (el->ns()) {
+        case dom::Element::Namespace::SVG: return svgInterfaceProto(el->tagName());
+        case dom::Element::Namespace::MathML: return g_mathMLElementClass.prototype();
+        case dom::Element::Namespace::HTML: break;
+        default: return g_elementClass.prototype();
+    }
+    std::string tag = el->tagName();
     for (char& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
     if (tag == "canvas") return g_htmlCanvasElementClass.prototype();
@@ -441,6 +490,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "script") return g_htmlScriptElementClass.prototype();
     if (tag == "style") return g_htmlStyleElementClass.prototype();
     if (tag == "a") return g_htmlAnchorElementClass.prototype();
+    if (tag == "area") return g_htmlAreaElementClass.prototype();
     if (tag == "span") return g_htmlSpanElementClass.prototype();
     if (tag == "p") return g_htmlParagraphElementClass.prototype();
     if (tag == "table") return g_htmlTableElementClass.prototype();

@@ -137,4 +137,21 @@ void installNodeTree(ObjectBuilder& b);
 // rule and the reparent rule are stated once.
 void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref);
 
+// ---------------------------------------------------------------------------
+// The document's own children (host_document_node.cpp)
+// ---------------------------------------------------------------------------
+
+// Whether `n` is a child of its document — its doctype or its document
+// element. Neither has a parentNode in the dom tree; the host answers the
+// document for them.
+bool hostIsDocumentChild(const dom::Node* n);
+// The document's children in order: the doctype, then the document element.
+std::vector<dom::Node*> hostDocumentChildren(dom::Document* doc);
+// Take a document child out of its document (a no-op for any other node).
+void hostDetachFromDocument(dom::Node* n);
+// The document object for `doc` in this realm (the app's is `document`).
+Value hostDocumentObject(dom::Document* doc);
+// A DocumentType wrapper.
+Value makeDocumentTypeValue(dom::Node* node);
+
 }  // namespace bro::bronze_host

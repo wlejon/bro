@@ -4,8 +4,10 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_document.h"
+#include "bronze_host/host_node.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/serialize.h"
 #include "dom/text_node.h"
 
 #include <memory>
@@ -53,6 +55,14 @@ dom::Document* parseIntoNewDocument(const std::string& html) {
     dom::Document* ptr = doc.get();
     doc->parse(html);
     // The parsing compartment's: its code alone may wrap and walk it.
+    noteDocumentOwner(ptr, currentCompartment());
+    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentCompartmentId()});
+    return ptr;
+}
+
+dom::Document* newEmptyDocument() {
+    auto doc = std::make_unique<dom::Document>();
+    dom::Document* ptr = doc.get();
     noteDocumentOwner(ptr, currentCompartment());
     s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentCompartmentId()});
     return ptr;
@@ -162,10 +172,8 @@ Value parserParseFromString(Value, std::span<const Value> a) {
     const std::string html = ev::isUndefined(htmlV) ? std::string() : ev::toUtf8(htmlV);
     dom::Document* doc = mime == "text/html" ? parseIntoNewDocument(html)
                                              : parseXmlIntoNewDocument(html);
-    ev::Persistent docVal(hostDocumentValue(doc));
-    ev::Persistent mimeStr(ev::fromUtf8(mime));
-    ev::setProperty(docVal.get(), "contentType", mimeStr.get());
-    return docVal.get();
+    doc->setContentType(mime);
+    return hostDocumentValue(doc);
 }
 
 Value makeParserValue() {
@@ -174,32 +182,17 @@ Value makeParserValue() {
     return b.get();
 }
 
+// The XML serialization of a node, or of a document (found through its
+// document element or doctype, a document object having no node of its own).
 Value xmlSerializerSerializeToString(Value, std::span<const Value> a) {
-    if (a.empty()) return ev::fromUtf8("");
-    const Value& nodeVal = a[0];  // the rooted slot, current across the reads
-    if (ev::isNull(nodeVal) || ev::isUndefined(nodeVal)) return ev::fromUtf8("");
-
-    if (dom::Element* el = hostElementOf(nodeVal)) {
-        return ev::fromUtf8(el->outerHTML());
+    const Value nodeVal = argAt(a, 0);
+    if (dom::Node* node = hostNodeOf(nodeVal)) return ev::fromUtf8(dom::serializeXml(node));
+    if (!ev::isObject(nodeVal) || ev::toDouble(ev::getProperty(nodeVal, "nodeType")) != 9.0) {
+        return ev::throwTypeError("Failed to execute 'serializeToString' on 'XMLSerializer': parameter 1 is not of type 'Node'.");
     }
-
-    Value docElem = ev::getProperty(nodeVal, "documentElement");
-    if (dom::Element* el = hostElementOf(docElem)) {
-        return ev::fromUtf8(el->outerHTML());
-    }
-
-    Value body = ev::getProperty(nodeVal, "body");
-    if (dom::Element* el = hostElementOf(body)) {
-        return ev::fromUtf8(el->innerHTML());
-    }
-
-    Value inner = ev::getProperty(nodeVal, "innerHTML");
-    if (ev::isString(inner)) return inner;
-
-    Value text = ev::getProperty(nodeVal, "textContent");
-    if (ev::isString(text)) return text;
-
-    return ev::fromUtf8("");
+    dom::Node* child = hostNodeOf(ev::getProperty(nodeVal, "documentElement"));
+    if (!child) child = hostNodeOf(ev::getProperty(nodeVal, "doctype"));
+    return ev::fromUtf8(child ? dom::serializeXml(nullptr, child->document()) : std::string());
 }
 
 Value makeXMLSerializerValue() {

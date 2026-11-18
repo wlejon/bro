@@ -189,6 +189,15 @@ void addExtensions(WebGLCaps& caps, render::VulkanContext& device) {
         caps.extensions.emplace_back("OES_texture_float_linear");
     // GPU timer queries, on Vulkan timestamps.
     if (caps.timerQueries()) caps.extensions.emplace_back("EXT_disjoint_timer_query_webgl2");
+    // Rasterizer and sampler state the device has the features for.
+    const VkPhysicalDeviceFeatures& f = device.features();
+    if (f.depthClamp) caps.extensions.emplace_back("EXT_depth_clamp");
+    if (f.depthBiasClamp) caps.extensions.emplace_back("EXT_polygon_offset_clamp");
+    if (f.fillModeNonSolid) caps.extensions.emplace_back("WEBGL_polygon_mode");
+    if (device.samplerMirrorClampToEdge()) caps.extensions.emplace_back("EXT_texture_mirror_clamp_to_edge");
+    // getTranslatedShaderSource answers a compiled shader's source: bro hands
+    // glslang the ES source itself, behind a prelude.
+    caps.extensions.emplace_back("WEBGL_debug_shaders");
 }
 
 template <class T>
@@ -282,6 +291,9 @@ std::shared_ptr<const WebGLCaps> webgl1Caps(const WebGLCaps& webgl2) {
     carry("EXT_float_blend", "EXT_float_blend");
     carry("OES_texture_float_linear", "OES_texture_float_linear");
     carry("EXT_texture_filter_anisotropic", "EXT_texture_filter_anisotropic");
+    for (const char* same : {"EXT_depth_clamp", "EXT_polygon_offset_clamp", "WEBGL_polygon_mode",
+                             "EXT_texture_mirror_clamp_to_edge", "WEBGL_debug_shaders"})
+        carry(same, same);
     for (const auto& c : webgl2.compressedExtensions) ext.push_back(c.name);
     std::sort(ext.begin(), ext.end());
     caps->extensions = std::move(ext);

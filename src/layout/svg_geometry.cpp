@@ -231,3 +231,58 @@ bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out,
 }
 
 } // namespace bro::layout
+
+namespace bro::layout {
+
+namespace {
+
+// The outermost <svg> at or above `el`, or null.
+const dom::Element* outermostSvg(const dom::Element* el) {
+    const dom::Element* root = nullptr;
+    for (const dom::Element* p = el; p; p = p->parentElement())
+        if (p->ns() == dom::Element::Namespace::SVG && lower(p->tagName()) == "svg") root = p;
+    return root;
+}
+
+}  // namespace
+
+bool svgElementBBox(const dom::Element* el, float out[4], render::Renderer* renderer) {
+    if (!el) return false;
+    const dom::Element* svgRoot = outermostSvg(el);
+    if (!svgRoot) return false;
+    out[0] = out[1] = out[2] = out[3] = 0;
+    RendererTextMeasurer meas(renderer);
+    FillBounds fb;
+    if (!localFillBounds(el, svgRoot, &meas, fb, 0)) return true;
+    out[0] = fb.l;
+    out[1] = fb.t;
+    out[2] = fb.r - fb.l;
+    out[3] = fb.b - fb.t;
+    return true;
+}
+
+bool svgElementCTM(const dom::Element* el, bool screen, double out[6]) {
+    if (!el) return false;
+    const dom::Element* svgRoot = outermostSvg(el);
+    if (!svgRoot) return false;
+    auto& box = svgRoot->layoutBox();
+    SkMatrix ctm = viewportMatrix(box.contentRect.width, box.contentRect.height,
+                                  attrOf(svgRoot, "viewBox"), attrOf(svgRoot, "preserveAspectRatio"));
+    std::vector<const dom::Element*> chain;
+    for (const dom::Element* p = el; p && p != svgRoot; p = p->parentElement()) chain.push_back(p);
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+        ctm.preConcat(ownTransform(*it, lower((*it)->tagName())));
+    if (screen) {
+        dom::AbsoluteFrame frame = dom::computeAbsoluteFrame(svgRoot);
+        ctm.postTranslate(frame.ox, frame.oy);
+    }
+    out[0] = ctm.getScaleX();
+    out[1] = ctm.getSkewY();
+    out[2] = ctm.getSkewX();
+    out[3] = ctm.getScaleY();
+    out[4] = ctm.getTranslateX();
+    out[5] = ctm.getTranslateY();
+    return true;
+}
+
+} // namespace bro::layout

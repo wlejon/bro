@@ -27,12 +27,18 @@ void installParserGlobal();
 // until the detached-DOM sweep proves neither its Document wrapper nor any
 // Node wrapper inside it is reachable from JavaScript.
 dom::Document* parseIntoNewDocument(const std::string& html);
+// An empty detached document (DOMImplementation.createDocument, new
+// Document(), document.cloneNode), in the same registry.
+dom::Document* newEmptyDocument();
 
 // A full document surface — the queries, the factories, the element accessors —
 // bound to `doc` rather than to whatever the engine is currently showing. The
 // `document` global is the one wrapper NOT built this way; dom_globals.cpp's
 // documentFor() says why. Defined there, beside the builder it shares.
 Value makeDocumentValue(dom::Document* fixed);
+// The document a document object made for `fixed` acts on (the engine's
+// current one for the app's, made with null); null once it is gone.
+dom::Document* documentFor(dom::Document* fixed);
 Value hostDocumentValue(dom::Document* doc);
 ev::Persistent* hostDocumentWrapperSlot(dom::Document* doc);
 

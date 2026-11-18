@@ -144,7 +144,11 @@ void WebGLVkContext::setSyntheticError(GLenum err) {
 // State
 // ---------------------------------------------------------------------------
 
-static bool isValidCap(GLenum cap) {
+// DEPTH_CLAMP_EXT and POLYGON_OFFSET_LINE_WEBGL are caps once their
+// extensions are enabled.
+bool WebGLVkContext::isValidCap(GLenum cap) const {
+    if (cap == 0x864F /* DEPTH_CLAMP_EXT */) return depthClampExtEnabled_;
+    if (cap == 0x2A02 /* POLYGON_OFFSET_LINE_WEBGL */) return polygonModeExtEnabled_;
     return cap == GL_BLEND || cap == GL_DEPTH_TEST || cap == GL_CULL_FACE ||
            cap == GL_SCISSOR_TEST || cap == GL_STENCIL_TEST || cap == 0x0BD0 /* GL_DITHER */ ||
            cap == 0x8037 /* GL_POLYGON_OFFSET_FILL */ || cap == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */ ||
@@ -200,6 +204,8 @@ void WebGLVkContext::enable(GLenum cap) {
     else if (cap == GL_STENCIL_TEST) stencilTestEnabled_ = true;
     else if (cap == 0x0BD0 /* GL_DITHER */) ditherEnabled_ = true;
     else if (cap == 0x8037 /* GL_POLYGON_OFFSET_FILL */) polygonOffsetFillEnabled_ = true;
+    else if (cap == 0x864F /* DEPTH_CLAMP_EXT */) depthClampEnabled_ = true;
+    else if (cap == 0x2A02 /* POLYGON_OFFSET_LINE_WEBGL */) polygonOffsetLineEnabled_ = true;
     else if (cap == 0x8C89 /* GL_RASTERIZER_DISCARD */) rasterizerDiscardEnabled_ = true;
     else if (cap == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */) sampleAlphaToCoverageEnabled_ = true;
     else if (cap == 0x80A0 /* GL_SAMPLE_COVERAGE */) sampleCoverageEnabled_ = true;
@@ -218,6 +224,8 @@ void WebGLVkContext::disable(GLenum cap) {
     else if (cap == GL_STENCIL_TEST) stencilTestEnabled_ = false;
     else if (cap == 0x0BD0 /* GL_DITHER */) ditherEnabled_ = false;
     else if (cap == 0x8037 /* GL_POLYGON_OFFSET_FILL */) polygonOffsetFillEnabled_ = false;
+    else if (cap == 0x864F /* DEPTH_CLAMP_EXT */) depthClampEnabled_ = false;
+    else if (cap == 0x2A02 /* POLYGON_OFFSET_LINE_WEBGL */) polygonOffsetLineEnabled_ = false;
     else if (cap == 0x8C89 /* GL_RASTERIZER_DISCARD */) rasterizerDiscardEnabled_ = false;
     else if (cap == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */) sampleAlphaToCoverageEnabled_ = false;
     else if (cap == 0x80A0 /* GL_SAMPLE_COVERAGE */) sampleCoverageEnabled_ = false;
@@ -235,6 +243,8 @@ GLboolean WebGLVkContext::isEnabled(GLenum cap) {
     if (cap == GL_STENCIL_TEST) return stencilTestEnabled_ ? GL_TRUE : GL_FALSE;
     if (cap == 0x0BD0 /* GL_DITHER */) return ditherEnabled_ ? GL_TRUE : GL_FALSE;
     if (cap == 0x8037 /* GL_POLYGON_OFFSET_FILL */) return polygonOffsetFillEnabled_ ? GL_TRUE : GL_FALSE;
+    if (cap == 0x864F /* DEPTH_CLAMP_EXT */) return depthClampEnabled_ ? GL_TRUE : GL_FALSE;
+    if (cap == 0x2A02 /* POLYGON_OFFSET_LINE_WEBGL */) return polygonOffsetLineEnabled_ ? GL_TRUE : GL_FALSE;
     if (cap == 0x8C89 /* GL_RASTERIZER_DISCARD */) return rasterizerDiscardEnabled_ ? GL_TRUE : GL_FALSE;
     if (cap == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */) return sampleAlphaToCoverageEnabled_ ? GL_TRUE : GL_FALSE;
     if (cap == 0x80A0 /* GL_SAMPLE_COVERAGE */) return sampleCoverageEnabled_ ? GL_TRUE : GL_FALSE;
@@ -343,6 +353,29 @@ void WebGLVkContext::lineWidth(GLfloat width) {
 void WebGLVkContext::polygonOffset(GLfloat factor, GLfloat units) {
     polygonOffsetFactor_ = factor;
     polygonOffsetUnits_ = units;
+    polygonOffsetClamp_ = 0.0f;
+}
+void WebGLVkContext::polygonOffsetClamp(GLfloat factor, GLfloat units, GLfloat clamp) {
+    if (!offsetClampExtEnabled_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    polygonOffsetFactor_ = factor;
+    polygonOffsetUnits_ = units;
+    polygonOffsetClamp_ = clamp;
+}
+void WebGLVkContext::polygonMode(GLenum face, GLenum mode) {
+    if (!polygonModeExtEnabled_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    // FRONT_AND_BACK only; LINE_WEBGL or FILL_WEBGL.
+    if (face != 0x0408 || (mode != 0x1B01 && mode != 0x1B02)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
+    pipelineStateChanged();
+    polygonMode_ = mode;
 }
 void WebGLVkContext::sampleCoverage(GLfloat value, GLboolean invert) {
     sampleCoverageValue_ = std::clamp(value, 0.0f, 1.0f);

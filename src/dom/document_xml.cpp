@@ -347,6 +347,7 @@ private:
 }  // namespace
 
 bool Document::parseXml(const std::string& xml) {
+    xml_ = true;
     XmlParser parser(*this, xml);
     Element* root = parser.run();
     if (root) {

@@ -783,7 +783,10 @@ new EventTarget();
 const mc = new MessageChannel();
 mc.port1;                // MessagePort
 mc.port2;                // MessagePort
-// MessagePort: postMessage(data), onmessage, close()
+// MessagePort: postMessage(data, transfer), onmessage, addEventListener('message'), start(), close()
+// Messages queue until the port starts: setting onmessage starts it (start()
+// is for addEventListener). Each message is delivered as its own task, after
+// the current script's microtasks, as on the web.
 
 
 // -----------------------------------------------------------------------------

@@ -20,8 +20,20 @@ const HostClass& characterDataHostClass();
 const HostClass& textHostClass();
 const HostClass& commentHostClass();
 const HostClass& documentFragmentHostClass();
+const HostClass& documentTypeHostClass();
+const HostClass& domImplementationHostClass();
 
-Value htmlInterfaceProto(const std::string& tagName);
+// host_document_node.cpp: the document's node surface (childNodes, doctype,
+// the four mutators, cloneNode, implementation), DocumentType's members, and
+// `new Document()`.
+void decorateDocumentNode(ObjectBuilder& b, dom::Document* fixed);
+void decorateDocumentTypeProto(ObjectBuilder& b);
+Value documentConstructor(Value, std::span<const Value>);
+// The interface prototype for a document object: HTMLDocument or XMLDocument.
+Value documentInterfaceProto(const dom::Document* doc);
+
+// The interface prototype an element is born on: by namespace, then tag.
+Value elementInterfaceProto(const dom::Element* el);
 
 void decorateDocumentProto(ObjectBuilder& b);
 

@@ -38,6 +38,7 @@ void Document::parse(const std::string& html, const std::vector<AuthorSheet>& au
     // Clear any existing tree
     root_ = nullptr;
     documentElement_ = nullptr;
+    doctype_ = nullptr;
     body_ = nullptr;
     focusedElement_ = nullptr;   // ownedNodes_.clear() bypasses freeNode's scrub
     topLayer_.clear();           // likewise
@@ -87,6 +88,11 @@ void Document::parse(const std::string& html, const std::vector<AuthorSheet>& au
     // Parse HTML with gumbo
     GumboOutput* output = gumbo_parse(html.c_str());
     if (!output) return;
+    if (output->document && output->document->v.document.has_doctype) {
+        const GumboDocument& gd = output->document->v.document;
+        doctype_ = createDocumentType(gd.name ? gd.name : "", gd.public_identifier ? gd.public_identifier : "",
+                                      gd.system_identifier ? gd.system_identifier : "");
+    }
 
     // Find the <html> element in gumbo's tree
     GumboNode* htmlNode = output->root;

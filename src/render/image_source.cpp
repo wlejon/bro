@@ -91,8 +91,24 @@ ImageSource resolveImageSource(const std::string& url, const std::string& basePa
     }
 
     // A file. `thumbnails/a.png?v=12` is the standard cache-bust: the query
-    // and fragment name no part of the file.
+    // and fragment name no part of the file. A `bro://app/` URL (what
+    // img.src and a computed url() answer) names a file of the app folder.
     std::string clean = url;
+    if (clean.compare(0, 10, "bro://app/") == 0) {
+        clean = util::pathForAppUrl(url);
+        if (clean.empty()) {
+            src.error = "outside the app folder: " + url;
+            return src;
+        }
+        // An absolute path is a mount or a filesystem path here
+        // (resolveAssetPath), and reflects as a URL under the app's root like
+        // any other: where the app folder has no such file, the URL is that
+        // path again, so `b.src = a.src` names what `a` shows.
+        std::error_code ec;
+        if (!std::filesystem::exists(clean, ec)) {
+            clean = util::appUrlPath(url);
+        }
+    }
     if (const auto q = clean.find_first_of("?#"); q != std::string::npos) clean.resize(q);
     if (clean.compare(0, 7, "file://") == 0) {
         clean.erase(0, 7);

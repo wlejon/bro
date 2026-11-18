@@ -303,9 +303,9 @@ void focusNewControl(
             } else {
                 target->setAttribute("checked", "");
             }
+            dispatchInputEvent(ctx, target);
             dom::Event changeEvt("change");
             dispatchControlEvent(ctx, target, changeEvt);
-            dispatchInputEvent(ctx, target);
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Radio) {
             // Read the group's state BEFORE clearing it — after clearRadioGroup
@@ -316,9 +316,9 @@ void focusNewControl(
                                              layout::checkedRadioInGroup(target));
             layout::clearRadioGroup(target);
             target->setAttribute("checked", "");
+            dispatchInputEvent(ctx, target);
             dom::Event changeEvt("change");
             dispatchControlEvent(ctx, target, changeEvt);
-            dispatchInputEvent(ctx, target);
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Range) {
             auto dp = newInput->lastDrawPos();
@@ -846,20 +846,23 @@ void dispatchDocMouseRelease(
                         std::string t = control->getAttribute("type");
                         for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                         if (t == "checkbox") {
+                            // Toggled before the click is dispatched, put back
+                            // if it is cancelled (element_activation.cpp).
+                            const bool wasChecked = control->hasAttribute("checked");
+                            if (wasChecked) control->removeAttribute("checked");
+                            else            control->setAttribute("checked", "");
                             dom::MouseEvent fwdClick("click");
                             populate(fwdClick);
                             dom::dispatchDomEvent(control, fwdClick);
-                            if (!fwdClick.defaultPrevented()) {
-                                if (control->hasAttribute("checked")) {
-                                    control->removeAttribute("checked");
-                                } else {
-                                    control->setAttribute("checked", "");
-                                }
+                            if (fwdClick.defaultPrevented()) {
+                                if (wasChecked) control->setAttribute("checked", "");
+                                else            control->removeAttribute("checked");
+                            } else {
+                                dispatchInputEvent(ctx, control);
                                 dom::Event changeEvt("change");
                                 dispatchControlEvent(ctx, control, changeEvt);
-                                dispatchInputEvent(ctx, control);
-                                if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
                             }
+                            if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
                         } else if (t == "radio") {
                             dom::MouseEvent fwdClick("click");
                             populate(fwdClick);
@@ -868,9 +871,9 @@ void dispatchDocMouseRelease(
                                 if (!control->hasAttribute("checked")) {
                                     layout::clearRadioGroup(control);
                                     control->setAttribute("checked", "");
+                                    dispatchInputEvent(ctx, control);
                                     dom::Event changeEvt("change");
                                     dispatchControlEvent(ctx, control, changeEvt);
-                                    dispatchInputEvent(ctx, control);
                                     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
                                 }
                             }

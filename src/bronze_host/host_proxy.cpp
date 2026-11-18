@@ -83,6 +83,11 @@ Value makeHostProxy(HostProxyTraps traps) {
     pack->t = std::move(traps);
     pack->methods.set(pack->t.methods);
     pack->proto.set(pack->t.proto);
+    // With an interface prototype, `methods` holds the instance's own members
+    // only: what it would inherit (constructor, toString, valueOf) comes from
+    // the prototype, so `style.constructor === CSSStyleDeclaration`.
+    if (ev::isObject(pack->methods.get()) && ev::isObject(pack->proto.get()))
+        pack->methods.set(ev::setPrototype(pack->methods.get(), ev::null()));
 
     ObjectBuilder h;
 
@@ -96,7 +101,7 @@ Value makeHostProxy(HostProxyTraps traps) {
                 if (!ev::isUndefined(m)) return m;
             }
             if (ev::isUndefined(pack->proto.get())) return ev::undefined();
-            return getSymbolKeyed(pack->proto.get(), argAt(a, 1));
+            return reflectGet(pack->proto.get(), argAt(a, 1), argAt(a, 2));
         }
         const std::string k = ev::toUtf8(key);
         // Methods first: they are the object's fixed surface, and no CSS
@@ -106,7 +111,7 @@ Value makeHostProxy(HostProxyTraps traps) {
             if (!ev::isUndefined(m)) return m;
         }
         if (!ev::isUndefined(pack->proto.get())) {
-            Value m = ev::getProperty(pack->proto.get(), k.c_str());
+            Value m = reflectGet(pack->proto.get(), argAt(a, 1), argAt(a, 2));
             if (!ev::isUndefined(m)) return m;
         }
         Value out = ev::undefined();

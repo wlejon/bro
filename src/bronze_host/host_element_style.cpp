@@ -8,17 +8,23 @@
 #include "bronze_host/host_element.h"
 #include "bronze_host/host_proxy.h"
 #include "bronze_host/host_node_sweep.h"
+#include "bronze_host/host_list_iteration.h"
 
 #include "dom/element.h"
 #include "dom/style_proxy.h"
 #include "engine/engine.h"
 #include "layout/computed_style.h"
+#include "css/properties.h"
 #include "util/log.h"
+#include "util/remote_asset.h"
+#include "bronze_host/host_events.h"
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -86,7 +92,46 @@ std::string styleKeyToCss(const std::string& key) {
     return dom::StyleProxy::camelToKebab(key);
 }
 
+// Whether `css` (a dashed name, as styleKeyToCss gives it) is a property the
+// engine supports: every such name is a member of every CSSStyleDeclaration on
+// the web, set or not, which is what feature detection asks (`'transform' in
+// el.style`, Leaflet's and jQuery's vendor-prefix probes: a `false` there made
+// Leaflet write every position to style['false']). `webkitX` / `WebkitX` are
+// the -webkit- aliases Blink keeps; Moz, ms and O prefixes are not members.
+bool supportedCssProperty(std::string css) {
+    static const std::unordered_set<std::string> known = [] {
+        std::unordered_set<std::string> s;
+        for (const auto& def : htmlayout::css::knownProperties()) s.insert(def.name);
+        return s;
+    }();
+    if (css.size() > 2 && css[0] == '-' && css[1] == '-') return false;  // custom: only when set
+    if (css == "css-float") css = "float";
+    if (css.rfind("webkit-", 0) == 0) css = "-" + css;
+    if (css.rfind("-webkit-", 0) == 0 && !known.count(css)) css.erase(0, 8);
+    return known.count(css) > 0 || htmlayout::css::isShorthandProperty(css);
+}
+
 }  // namespace
+
+// CSSStyleDeclaration.prototype (js/cssom.js), which element.style and the
+// computed style are born on: `instanceof CSSStyleDeclaration`, its toString
+// tag and constructor. Their members are the objects' own, answered first.
+static Value styleDeclarationProto() {
+    ev::GlobalValue hooks = ev::globalValue("__bro_cssom");
+    if (!hooks.found || !ev::isObject(hooks.value)) return ev::undefined();
+    Value proto = ev::getProperty(hooks.value, "declarationProto");
+    return ev::isObject(proto) ? proto : ev::undefined();
+}
+
+// What the cssom.js prototype's own accessors would read from the instance:
+// answered here so they never reach it.
+static void declarationExtras(ObjectBuilder& b, std::function<std::vector<std::string>()> names) {
+    b.accessor("parentRule", [](Value, std::span<const Value>) { return ev::null(); }, nullptr);
+    installSnapshotIteration(b.get(), [names = std::move(names)]() {
+        std::vector<std::string> list = names();
+        return hostArrayOf(list.size(), [&list](size_t i) { return ev::fromUtf8(list[i]); });
+    });
+}
 
 Value makeStyleObject(HostNodeState* raw) {
     StateRef st(raw);
@@ -154,8 +199,16 @@ Value makeStyleObject(HostNodeState* raw) {
                    return ev::undefined();
                });
 
+    declarationExtras(b, [st]() {
+        std::vector<std::string> names;
+        if (st->el)
+            for (const auto& [name, value] : st->el->style().properties()) names.push_back(name);
+        return names;
+    });
+
     HostProxyTraps t;
     t.methods = b.get();
+    t.proto = styleDeclarationProto();
     // Every CSS property is a property of this object, set or not — that is
     // what makes `style.gridAutoFlow` readable without a table saying so, and
     // it is also what the web does: an unset property reads "".
@@ -205,13 +258,14 @@ Value makeStyleObject(HostNodeState* raw) {
             else st->el->style().setProperty(css, val);
         }
     };
-    // Membership and enumeration answer for the SET properties only. `'color'
-    // in el.style` being false on a bare element is what the web says too —
-    // the declaration owns only what was assigned to it — and it is what keeps
-    // `Object.keys(el.style)` the short useful list rather than all 363.
+    // Membership answers for every supported property, set or not, as on the
+    // web (supportedCssProperty), plus a set custom property. Enumeration
+    // answers for the SET properties only, which keeps `Object.keys(el.style)`
+    // the short useful list rather than all 363.
     t.has = [st](const std::string& key) {
         if (!st->el) return false;
-        return !st->el->style().getProperty(styleKeyToCss(key)).empty();
+        const std::string css = styleKeyToCss(key);
+        return supportedCssProperty(css) || !st->el->style().getProperty(css).empty();
     };
     t.ownKeys = [st]() {
         std::vector<std::string> keys;
@@ -244,13 +298,53 @@ Value makeStyleObject(HostNodeState* raw) {
 // element — so a UI that reads a width, changes a class and reads again must
 // see the second answer, and a snapshot taken at construction would hand back
 // the first.
+// A computed url() is an absolute URL, quoted, as a browser serialises it:
+// url("bro://app/css/img/a.png") for `url(img/a.png)` in css/s.css, which
+// the cascade has already rebased onto the sheet's file. Leaflet finds its
+// marker images by reading this off a probe element.
+static std::string absoluteCssUrls(const std::string& value, dom::Document* doc) {
+    if (value.find("url(") == std::string::npos) return value;
+    std::string out;
+    size_t i = 0;
+    while (i < value.size()) {
+        size_t at = value.find("url(", i);
+        if (at == std::string::npos) { out.append(value, i, std::string::npos); break; }
+        size_t close = value.find(')', at + 4);
+        if (close == std::string::npos) { out.append(value, i, std::string::npos); break; }
+        out.append(value, i, at - i);
+        std::string body = value.substr(at + 4, close - at - 4);
+        if (body.size() >= 2 && (body.front() == '"' || body.front() == '\'') && body.back() == body.front())
+            body = body.substr(1, body.size() - 2);
+        std::string unescaped;
+        for (size_t k = 0; k < body.size(); ++k) {
+            if (body[k] == '\\' && k + 1 < body.size()) ++k;
+            unescaped += body[k];
+        }
+        std::string url;
+        if (unescaped.rfind("data:", 0) == 0) {
+            url = unescaped;
+        } else if (!unescaped.empty() && unescaped[0] == '/' && unescaped.rfind("//", 0) != 0) {
+            url = hostEngine() ? hostEngine()->appUrlForPath(unescaped) : std::string();
+            if (url.empty()) url = "file://" + unescaped;
+        } else {
+            url = util::resolveUrl(documentBaseUrl(doc), unescaped);
+        }
+        out += "url(\"";
+        for (char ch : url) { if (ch == '"' || ch == '\\') out += '\\'; out += ch; }
+        out += "\")";
+        i = close + 1;
+    }
+    return out;
+}
+
 Value makeComputedStyleObject(HostNodeState* raw) {
     StateRef st(raw);
     ObjectBuilder b;
     auto resolve = [st](const std::string& css) {
         if (!st->el) return std::string();
         hostEngine()->flushLayoutForRead(st->el->document());
-        return layout::computedProperty(st->el, css, hostEngine()->textMetrics());
+        return absoluteCssUrls(layout::computedProperty(st->el, css, hostEngine()->textMetrics()),
+                               st->el->document());
     };
     b.def("getPropertyValue", 1, [resolve](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
@@ -279,8 +373,11 @@ Value makeComputedStyleObject(HostNodeState* raw) {
         return ev::fromUtf8("");
     });
 
+    declarationExtras(b, []() { return std::vector<std::string>(); });
+
     HostProxyTraps t;
     t.methods = b.get();
+    t.proto = styleDeclarationProto();
     t.get = [resolve](const std::string& key, Value& out) {
         out = ev::fromUtf8(resolve(styleKeyToCss(key)));
         return true;
@@ -288,7 +385,8 @@ Value makeComputedStyleObject(HostNodeState* raw) {
     // No `set` and no `remove`: the web's computed declaration ignores both,
     // and leaving the callbacks empty is how this file spells that.
     t.has = [resolve](const std::string& key) {
-        return !resolve(styleKeyToCss(key)).empty();
+        const std::string css = styleKeyToCss(key);
+        return supportedCssProperty(css) || !resolve(css).empty();
     };
     // Enumeration is the one place the curated list still earns its keep. The
     // web enumerates every supported property; htmlayout has no registry to

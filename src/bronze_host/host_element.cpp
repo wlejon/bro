@@ -71,19 +71,6 @@ dom::AbsoluteRect borderBoxOf(dom::Element* el) {
     return dom::absoluteBorderBox(el);
 }
 
-Value makeHostRectValue(double x, double y, double w, double h) {
-    ObjectBuilder r;
-    r.set("x", ev::fromDouble(x));
-    r.set("y", ev::fromDouble(y));
-    r.set("left", ev::fromDouble(x));
-    r.set("top", ev::fromDouble(y));
-    r.set("right", ev::fromDouble(x + w));
-    r.set("bottom", ev::fromDouble(y + h));
-    r.set("width", ev::fromDouble(w));
-    r.set("height", ev::fromDouble(h));
-    return r.get();
-}
-
 // See host_values.h: `ev::isObject(null)` is false, so this is the only
 // thing standing between a nullable DOMString setter and the word "null".
 std::string hostNullableString(Value v) {
@@ -261,6 +248,9 @@ Value hostNodeValue(dom::Node* node) {
         case dom::NodeType::DocumentFragment:
             v = makeFragmentValue(node);
             break;
+        case dom::NodeType::DocumentType:
+            v = makeDocumentTypeValue(node);
+            break;
         default:
             return ev::null();
     }
@@ -311,7 +301,7 @@ Value makeNodeHandleObject(dom::Node* node) {
 }
 
 Value makeElementHandleObject(dom::Element* el) {
-    Value tagProto = htmlInterfaceProto(el->tagName());
+    Value tagProto = elementInterfaceProto(el);
     HostNodeState* st = stateFor(el);
     return ev::makeHandle(st, stateHandleDtor(st), ev::Finalize::InSweep, tagProto);
 }

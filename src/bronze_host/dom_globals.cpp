@@ -625,6 +625,9 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // Attr, NamedNodeMap, element.attributes and the *AttributeNode methods
     // (js/attr.js), over Element's attribute methods.
     installAttrModule();
+    // DOMRect, DOMPoint, DOMMatrix, DOMQuad and the SVG geometry types
+    // (js/geometry.js), over the SVG element interfaces.
+    installGeometryModule();
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();

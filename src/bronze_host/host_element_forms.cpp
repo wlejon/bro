@@ -10,6 +10,7 @@
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_anchor_download.h"
+#include "bronze_host/host_url_reflect.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -284,6 +285,7 @@ void decorateElementForms(ObjectBuilder& b) {
                        HostNodeState* st = hostNodeStateOfValue(self_);
                        if (!st || !st->el) return ev::undefined();
                        if (!reflects(st->el)) return ev::getProperty(self_, x.c_str());
+                       if (a == "href") return ev::fromUtf8(reflectedUrl(st->el, "href"));
                        return ev::fromUtf8(st->el->getAttribute(a));
                    },
                    [a, x, reflects](Value self_, std::span<const Value> args) {

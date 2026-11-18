@@ -60,19 +60,6 @@ HostRangeCell* hostRangeCellOf(Value v) {
     return cell;
 }
 
-Value makeDomRectValue(double x, double y, double w, double h) {
-    ObjectBuilder r;
-    r.set("x", ev::fromDouble(x));
-    r.set("y", ev::fromDouble(y));
-    r.set("left", ev::fromDouble(x));
-    r.set("top", ev::fromDouble(y));
-    r.set("right", ev::fromDouble(x + w));
-    r.set("bottom", ev::fromDouble(y + h));
-    r.set("width", ev::fromDouble(w));
-    r.set("height", ev::fromDouble(h));
-    return r.get();
-}
-
 bro::dom::Element* nearestElementAncestor(dom::Node* node) {
     for (dom::Node* n = node; n; n = n->parentNode()) {
         if (n->nodeType() == bro::dom::NodeType::Element)
@@ -452,21 +439,21 @@ void decorateRangeProto(ObjectBuilder& b) {
 
     b.def("getClientRects", 0, [](Value self_, std::span<const Value>) {
         auto* r = hostRangeOf(self_);
-        if (!r) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        if (!r) return makeHostRectListValue(makeEmptyArray());
 
         std::vector<bro::dom::AbsoluteRect> rects = rangeClientRects(r);
-        return hostArrayOf(rects.size(), [&](size_t i) {
+        return makeHostRectListValue(hostArrayOf(rects.size(), [&](size_t i) {
             const auto& pr = rects[i];
-            return makeDomRectValue(pr.x, pr.y, pr.width, pr.height);
-        });
+            return makeHostRectValue(pr.x, pr.y, pr.width, pr.height);
+        }));
     });
 
     b.def("getBoundingClientRect", 0, [](Value self_, std::span<const Value>) {
         auto* r = hostRangeOf(self_);
-        if (!r) return makeDomRectValue(0, 0, 0, 0);
+        if (!r) return makeHostRectValue(0, 0, 0, 0);
 
         std::vector<bro::dom::AbsoluteRect> rects = rangeClientRects(r);
-        if (rects.empty()) return makeDomRectValue(0, 0, 0, 0);
+        if (rects.empty()) return makeHostRectValue(0, 0, 0, 0);
         // The union of the client rects (CSSOM), skipping empty ones unless
         // every one is empty — a collapsed caret is all-empty and still has a
         // position.
@@ -484,7 +471,7 @@ void decorateRangeProto(ObjectBuilder& b) {
             right  = std::max(right,  pr.x + pr.width);
             bottom = std::max(bottom, pr.y + pr.height);
         }
-        return makeDomRectValue(left, top, right - left, bottom - top);
+        return makeHostRectValue(left, top, right - left, bottom - top);
     });
 }
 
