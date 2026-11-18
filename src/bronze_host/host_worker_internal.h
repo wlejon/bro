@@ -161,4 +161,9 @@ private:
     std::vector<Listener> listeners_;
 };
 
+// The file a Worker or importScripts URL names: a file:// or bro://app/ URL's
+// path (percent-decoded, query and fragment dropped), or a path as given.
+// False, with `err`, for another scheme.
+bool workerScriptPath(const std::string& url, std::string& path, std::string& err);
+
 }  // namespace bro::bronze_host

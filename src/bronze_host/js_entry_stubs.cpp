@@ -21,6 +21,7 @@ void bro_cssom_main() {}
 void bro_interface_tags_main() {}
 void bro_attr_main() {}
 void bro_geometry_main() {}
+void bro_intl_locale_main() {}
 void bro_events_main() {}
 void bro_clipboard_main() {}
 void bro_notification_main() {}

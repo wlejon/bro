@@ -137,6 +137,12 @@ public:
     void removeJsListener(const std::string& type);
     bool hasJsListener(const std::string& type) const;
 
+    // Event tasks queued at this element and not yet run
+    // (Document::queueElementEvent: an <img>'s load / error). While one is
+    // due the element's listeners must stay reachable, as a browser keeps an
+    // element with a pending event alive: the detached-tree sweep reads it.
+    uint32_t queuedEventTasks() const { return queuedEventTasks_; }
+
     // Event listeners — C++ side. A host with no app JS registers here and the
     // callback is invoked by the same dispatch (js::dispatchDomEvent) the JS
     // listeners go through: same event path, same shadow-DOM retargeting, same
@@ -735,6 +741,8 @@ private:
     // Per-type count of live JS listeners; a type with none is erased, so
     // emptiness of a bucket is never a state that has to be reasoned about.
     std::unordered_map<std::string, uint32_t> jsListenerCounts_;
+    uint32_t queuedEventTasks_ = 0;
+    friend class Document;  // queueElementEvent counts its tasks
     // Allocated on the first C++ addEventListener. Most elements never get
     // one, and Element is instantiated in the millions by big documents.
     std::unique_ptr<NativeListenerList> nativeListeners_;

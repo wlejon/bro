@@ -68,8 +68,16 @@
  *   the source stopped, not at the exact sample. Nodes and contexts carry
  *   addEventListener / removeEventListener / dispatchEvent of their own; their
  *   prototypes do not chain to EventTarget.prototype. There is no
- *   AudioWorklet, ScriptProcessorNode, OfflineAudioContext,
- *   MediaElementSource, ConstantSourceNode or IIRFilterNode.
+ *   AudioWorklet, ScriptProcessorNode or MediaElementSource.
+ * - OFFLINEAUDIOCONTEXT IS A REAL GRAPH. None of the rules above apply to
+ *   an OfflineAudioContext (below): its nodes take nothing from the engine,
+ *   and it renders exactly what its connect() edges describe, in 128-frame
+ *   quanta, as Web Audio defines it (channel up/down-mixing, a-rate and
+ *   k-rate params with per-sample automation, audio connected to params,
+ *   feedback through a DelayNode, Chromium's band-limited oscillator
+ *   tables), so a render matches Chromium's to float precision. It also
+ *   makes ConstantSourceNode and IIRFilterNode, which a live AudioContext
+ *   does not.
  * - GARBAGE COLLECTION STOPS SOUND, EXCEPT A PLAYING BUFFER SOURCE. A
  *   collected OscillatorNode stops and frees its voice, and a collected
  *   BiquadFilterNode releases its slot. Keep a reference to anything that
@@ -359,13 +367,14 @@ class AudioNode {
   /** 0 for the destination, the output count for a ChannelSplitterNode, else 1. @readonly @type {number} */
   numberOfOutputs;
 
-  /** Always 2 (a splitter reports its output count, a merger 1); assignment is ignored. @type {number} */
+  /** 2 by default (a splitter its output count, a merger 1, an offline destination the context's channels).
+   *  1..32, else NotSupportedError. Mixing uses it in an OfflineAudioContext; live, it is informational. @type {number} */
   channelCount;
 
-  /** 'max' ('explicit' on splitter/merger). Informational. @type {string} */
+  /** 'max', 'clamped-max' or 'explicit' (Web Audio's default per node kind). Mixing uses it offline. @type {string} */
   channelCountMode;
 
-  /** 'speakers' ('discrete' on a splitter). Informational. @type {string} */
+  /** 'speakers' or 'discrete' ('discrete' on a splitter). Mixing uses it offline. @type {string} */
   channelInterpretation;
 
 }
@@ -1317,6 +1326,94 @@ class AudioContext {
    */
   saveWav(path, samples, channels, sampleRate) {}
 
+}
+
+// ── OfflineAudioContext ─────────────────────────────────────────────────────
+
+/**
+ * Renders a node graph as fast as it can into an AudioBuffer instead of
+ * playing it. It has every `create*` factory of an AudioContext (and
+ * `createBuffer`, `decodeAudioData`, `createPeriodicWave`), plus
+ * `createConstantSource` and `createIIRFilter`; `destination`, `listener`
+ * (its params automate per quantum), addEventListener and friends,
+ * `oncomplete` and `onstatechange`. The live-engine members (buses, clips,
+ * voices, renderBlock) are not on it.
+ *
+ * Rendering starts after the script that called `startRendering()` (in a
+ * promise job) and runs without yielding up to the next `suspend` time or the
+ * end. Then the promise resolves with the buffer, and in a later job
+ * `complete` (an OfflineAudioCompletionEvent with `renderedBuffer`) fires and
+ * `state` is 'closed'. `statechange` fires for 'running', 'suspended' and
+ * 'closed'.
+ *
+ * @example
+ *   const ctx = new OfflineAudioContext(1, 44100, 44100);   // or ({numberOfChannels, length, sampleRate})
+ *   const osc = ctx.createOscillator();
+ *   osc.connect(ctx.destination);
+ *   osc.start();
+ *   const buffer = await ctx.startRendering();
+ */
+class OfflineAudioContext {
+  /**
+   * @param {number|{numberOfChannels?: number, length: number, sampleRate: number}} channelsOrOptions
+   *   1..32 channels (default 1 in the options form).
+   * @param {number} [length] Frames, at least 1. NotSupportedError otherwise.
+   * @param {number} [sampleRate] 3000..768000. NotSupportedError otherwise.
+   */
+  constructor(channelsOrOptions, length, sampleRate) {}
+
+  /** @readonly @type {number} */ length;
+  /** @readonly @type {number} */ sampleRate;
+  /** The time rendered so far (at a suspend, the suspend time). @readonly @type {number} */ currentTime;
+  /** 'suspended' until startRendering, 'running', 'suspended' at a suspend, then 'closed'. @readonly @type {string} */ state;
+
+  /** Rejects with InvalidStateError when called a second time. @returns {Promise<AudioBuffer>} */
+  startRendering() {}
+
+  /**
+   * Stops rendering at `suspendTime`, rounded up to a 128-frame boundary, and
+   * resolves there; the graph may then be changed before `resume()`. Rejects
+   * with InvalidStateError for a time at or past `length`, one already
+   * rendered, or a second suspend at the same quantum.
+   * @param {number} suspendTime seconds
+   * @returns {Promise<void>}
+   */
+  suspend(suspendTime) {}
+
+  /** Goes on after a suspend. InvalidStateError before startRendering or once closed. @returns {Promise<void>} */
+  resume() {}
+
+  /** @returns {ConstantSourceNode} */
+  createConstantSource() {}
+
+  /**
+   * @param {number[]|Float32Array} feedforward 1..20 coefficients, not all zero
+   * @param {number[]|Float32Array} feedback 1..20 coefficients, feedback[0] not zero
+   * @returns {IIRFilterNode}
+   */
+  createIIRFilter(feedforward, feedback) {}
+}
+
+/** The `complete` event: `new OfflineAudioCompletionEvent(type, {renderedBuffer})`. */
+class OfflineAudioCompletionEvent {
+  /** @readonly @type {AudioBuffer} */ renderedBuffer;
+}
+
+/** A constant (its `offset` param, automatable) from start() to stop(); offline only. */
+class ConstantSourceNode extends AudioNode {
+  /** a-rate, default 1. @readonly @type {AudioParam} */ offset;
+  /** @param {number} [when] */ start(when) {}
+  /** @param {number} [when] */ stop(when) {}
+}
+
+/** A general IIR filter (Web Audio's difference equation); offline only. */
+class IIRFilterNode extends AudioNode {
+  /**
+   * @param {Float32Array} frequencyHz
+   * @param {Float32Array} magResponse
+   * @param {Float32Array} phaseResponse
+   */
+  getFrequencyResponse(frequencyHz, magResponse, phaseResponse) {}
 }
 
 // ── Microphone ───────────────────────────────────────────────────────────────

@@ -250,9 +250,10 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         }
         // A null listener is no registration (DOM addEventListener step 2).
         if (ev::isNull(argAt(a, 1)) || ev::isUndefined(argAt(a, 1))) return ev::undefined();
-        if (!ev::isFunction(argAt(a, 1))) {
+        // A function, or an EventListener object (its handleEvent is called).
+        if (!ev::isObject(argAt(a, 1))) {
             return ev::throwTypeError(
-                "window.addEventListener: listener must be a function");
+                "window.addEventListener: listener must be a function or an object");
         }
         // Rooted before toUtf8/readOptions, which can allocate.
         ev::Persistent fnP(argAt(a, 1));

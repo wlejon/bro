@@ -76,6 +76,8 @@ static void notifyChildListChanged(Node* parent) {
         if (el->hasShadow()) {
             if (ShadowRoot* sr = el->shadowRoot()) sr->invalidateSlots();
         }
+        // And a <slot> may have come or gone anywhere inside a shadow tree.
+        if (ShadowRoot* sr = el->containingShadowRoot()) sr->invalidateSlots();
         return;
     }
     // A ShadowRoot's child list is a SCOPE as well as a tree. Two things have
@@ -424,6 +426,21 @@ struct AttributeNoticeGuard {
 };
 }  // namespace
 
+// A child's `slot` or a slot's `name` decides which slot takes which node:
+// the assignment is stale and the host's composed children change.
+static void slotAttributeChanged(Element* el, const std::string& name) {
+    ShadowRoot* sr = nullptr;
+    if (name == "slot") {
+        Node* parent = el->parentNode();
+        if (parent && parent->nodeType() == NodeType::Element) sr = static_cast<Element*>(parent)->shadowRoot();
+    } else if (name == "name" && el->tagName() == "SLOT") {
+        sr = el->containingShadowRoot();
+    }
+    if (!sr) return;
+    sr->invalidateSlots();
+    if (sr->host()) sr->host()->markStructureDirty();
+}
+
 void Element::setAttribute(const std::string& name, const std::string& val) {
     if (name == "style") {
         // The "style" attribute and the .style CSSOM object (StyleProxy) are
@@ -484,6 +501,7 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
     }
 
     attributes_[name] = val;
+    if (name == "slot" || name == "name") slotAttributeChanged(this, name);
     if (name == "id") {
         markPaintDirty();
         if (document_ && document_->siblingQualifiers()) markLaterSiblingsDirty();
@@ -529,6 +547,7 @@ void Element::removeAttribute(const std::string& name) {
                                                                   : nullptr);
         attributes_.erase(name);
     }
+    if (name == "slot" || name == "name") slotAttributeChanged(this, name);
     if (name == "class" || name == "id") markPaintDirty();  // see setAttribute
     else markDirty();
     if (sideways) markLaterSiblingsDirty();

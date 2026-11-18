@@ -13,27 +13,44 @@ constexpr int CAPTURING_PHASE = 1;
 constexpr int AT_TARGET = 2;
 constexpr int BUBBLING_PHASE = 3;
 
+// One step of the event path: an element or a shadow root, and the target
+// as a listener there sees it (retargeted to a host outside its tree).
 struct EventPathEntry {
-    Element* element = nullptr;
-    Element* retargetedTarget = nullptr;
+    Node* node = nullptr;
+    Node* retargetedTarget = nullptr;
 };
 
-bool isInsideShadowRoot(const Element* el, const ShadowRoot* sr) {
-    const Node* n = el;
+bool isInsideShadowRoot(const Node* n, const ShadowRoot* sr) {
     while (n && n->parentNode()) n = n->parentNode();
     return n == sr;
 }
 
-std::vector<EventPathEntry> buildEventPath(Element* target, const Event& event,
+// DOM "get the parent" from the target up: an assigned node's parent is its
+// slot, a shadow root's its host (unless the event is not composed and
+// started inside the root, where the path ends at the root).
+std::vector<EventPathEntry> buildEventPath(Node* target, const Event& event,
                                            bool& stoppedAtShadowBoundary) {
     std::vector<EventPathEntry> path;
-    Element* current = target;
-    Element* effectiveTarget = target;
+    Node* current = target;
+    Node* effectiveTarget = target;
     stoppedAtShadowBoundary = false;
 
     while (current) {
         path.push_back({current, effectiveTarget});
-        auto* parentNode = current->parentNode();
+        if (auto* sr = dynamic_cast<ShadowRoot*>(current)) {
+            if (!sr->host()) break;
+            if (isInsideShadowRoot(effectiveTarget, sr)) {
+                if (!event.composed()) {
+                    stoppedAtShadowBoundary = true;
+                    break;
+                }
+                effectiveTarget = sr->host();
+            }
+            current = sr->host();
+            continue;
+        }
+        if (current->nodeType() != NodeType::Element) break;
+        Node* parentNode = current->parentNode();
         if (parentNode && parentNode->nodeType() == NodeType::Element) {
             auto* parentElem = static_cast<Element*>(parentNode);
             if (parentElem->hasShadow()) {
@@ -44,24 +61,26 @@ std::vector<EventPathEntry> buildEventPath(Element* target, const Event& event,
                     }
                 }
             }
+            current = parentElem;
+            continue;
         }
-        if (parentNode && parentNode->nodeType() == NodeType::DocumentFragment) {
-            auto* sr = dynamic_cast<ShadowRoot*>(parentNode);
-            if (sr && sr->host()) {
-                if (isInsideShadowRoot(effectiveTarget, sr)) {
-                    if (!event.composed()) {
-                        stoppedAtShadowBoundary = true;
-                        break;
-                    }
-                    effectiveTarget = sr->host();
-                }
-                current = sr->host();
-                continue;
-            }
+        if (parentNode && dynamic_cast<ShadowRoot*>(parentNode)) {
+            current = parentNode;
+            continue;
         }
-        current = current->parentElement();
+        break;
     }
     return path;
+}
+
+void setEventTarget(Event& event, Node* n) {
+    if (auto* sr = dynamic_cast<ShadowRoot*>(n)) event.setTargetToRoot(sr);
+    else event.setTarget(static_cast<Element*>(n));
+}
+
+void setEventCurrentTarget(Event& event, Node* n) {
+    if (auto* sr = dynamic_cast<ShadowRoot*>(n)) event.setCurrentTargetToRoot(sr);
+    else event.setCurrentTarget(static_cast<Element*>(n));
 }
 
 AttributeHandlerHook g_attributeHandlerHook = nullptr;
@@ -79,11 +98,9 @@ void invokeAttributeHandler(Element* el, Event& event, int phase) {
     }
 }
 
-void invokeElementListeners(Element* el, Event& event, int phase) {
-    if (!el) return;
-    invokeAttributeHandler(el, event, phase);
-    if (!el->nativeListeners() || event.immediatePropagationStopped()) return;
-    auto& list = *el->nativeListeners();
+void invokeListeners(NativeListenerList* listeners, Event& event, int phase) {
+    if (!listeners || event.immediatePropagationStopped()) return;
+    auto& list = *listeners;
     auto snapshot = list.snapshot(event.type());
     for (auto& entry : snapshot) {
         if (event.immediatePropagationStopped()) break;
@@ -96,6 +113,16 @@ void invokeElementListeners(Element* el, Event& event, int phase) {
         if (entry->opts.once) list.remove(ListenerHandle{entry->id});
         entry->cb(event);
     }
+}
+
+void invokeEntryListeners(Node* node, Event& event, int phase) {
+    if (auto* sr = dynamic_cast<ShadowRoot*>(node)) {
+        invokeListeners(sr->nativeListeners(), event, phase);
+        return;
+    }
+    auto* el = static_cast<Element*>(node);
+    invokeAttributeHandler(el, event, phase);
+    invokeListeners(el->nativeListeners(), event, phase);
 }
 
 void dispatchToWindow(Document* doc, Event& event, bool isCapture) {
@@ -121,15 +148,15 @@ void setAttributeHandlerHook(AttributeHandlerHook hook) {
     g_attributeHandlerHook = hook;
 }
 
-void dispatchDomEvent(Element* target, Event& event) {
-    if (!target) return;
+namespace {
 
-    event.setTarget(target);
+void dispatchAlongPath(Node* target, Document* targetDoc, Event& event) {
+    setEventTarget(event, target);
     bool stoppedAtShadowBoundary = false;
     auto path = buildEventPath(target, event, stoppedAtShadowBoundary);
     if (path.empty()) return;
 
-    Document* doc = stoppedAtShadowBoundary ? nullptr : target->document();
+    Document* doc = stoppedAtShadowBoundary ? nullptr : targetDoc;
 
     // What `event.target` reads as at each step of the walk. Shadow
     // encapsulation is exactly this: a listener OUTSIDE the shadow tree is
@@ -139,50 +166,61 @@ void dispatchDomEvent(Element* target, Event& event) {
     // grown a shadow root. buildEventPath already computed it per entry; this
     // is where it is applied, and the real target is restored afterwards so a
     // caller reading the event once the dispatch is over still sees it.
-    Element* const realTarget = target;
-    Element* const outermost = path.back().retargetedTarget;
+    Node* const outermost = path.back().retargetedTarget;
 
     // 1. Capture phase: window -> root -> target (exclusive)
     if (!event.propagationStopped()) {
-        event.setTarget(outermost);
+        setEventTarget(event, outermost);
         dispatchToWindow(doc, event, /*isCapture=*/true);
     }
     for (int i = static_cast<int>(path.size()) - 1; i > 0; --i) {
         if (event.propagationStopped()) break;
-        event.setTarget(path[i].retargetedTarget);
-        event.setCurrentTarget(path[i].element);
+        setEventTarget(event, path[i].retargetedTarget);
+        setEventCurrentTarget(event, path[i].node);
         event.setEventPhase(CAPTURING_PHASE);
-        invokeElementListeners(path[i].element, event, CAPTURING_PHASE);
+        invokeEntryListeners(path[i].node, event, CAPTURING_PHASE);
     }
 
     // 2. At-target phase
     if (!event.propagationStopped()) {
-        event.setTarget(path[0].retargetedTarget);
-        event.setCurrentTarget(path[0].element);
+        setEventTarget(event, path[0].retargetedTarget);
+        setEventCurrentTarget(event, path[0].node);
         event.setEventPhase(AT_TARGET);
-        invokeElementListeners(path[0].element, event, AT_TARGET);
+        invokeEntryListeners(path[0].node, event, AT_TARGET);
     }
 
     // 3. Bubble phase: target parent -> root -> window
     if (event.bubbles()) {
         for (size_t i = 1; i < path.size(); ++i) {
             if (event.propagationStopped()) break;
-            event.setTarget(path[i].retargetedTarget);
-            event.setCurrentTarget(path[i].element);
+            setEventTarget(event, path[i].retargetedTarget);
+            setEventCurrentTarget(event, path[i].node);
             event.setEventPhase(BUBBLING_PHASE);
-            invokeElementListeners(path[i].element, event, BUBBLING_PHASE);
+            invokeEntryListeners(path[i].node, event, BUBBLING_PHASE);
         }
         if (!event.propagationStopped()) {
-            event.setTarget(outermost);
+            setEventTarget(event, outermost);
             dispatchToWindow(doc, event, /*isCapture=*/false);
         }
     }
 
     // After the walk: target stays, currentTarget and the phase are cleared
     // (DOM 2.9 dispatch, steps 12-14).
-    event.setTarget(realTarget);
+    setEventTarget(event, target);
     event.setCurrentTarget(nullptr);
     event.setEventPhase(0);
+}
+
+}  // namespace
+
+void dispatchDomEvent(Element* target, Event& event) {
+    if (!target) return;
+    dispatchAlongPath(target, target->document(), event);
+}
+
+void dispatchDomEventAtRoot(ShadowRoot* root, Event& event) {
+    if (!root || !root->host()) return;
+    dispatchAlongPath(root, root->host()->document(), event);
 }
 
 void dispatchWindowEvent(Document* doc, Event& event) {

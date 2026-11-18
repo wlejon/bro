@@ -169,6 +169,12 @@ void whenImageSettled(dom::Element* el, std::function<void(bool ok)> cb) {
     cb(el->imageComplete() && el->imageOk());
 }
 
+bool imageLoadInFlight(const dom::Element* el) {
+    for (const PendingLoad& p : pending())
+        if (p.el.get() == el) return true;
+    return false;
+}
+
 size_t imageLoadsPending() {
     const render::ImageStore& store = render::ImageStore::instance();
     return store.pendingCount() + (store.settledCount() != g_lastSettled ? 1 : 0);

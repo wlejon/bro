@@ -341,7 +341,8 @@ void installLocationAndHistory(ObjectBuilder& window) {
         [home](Value, std::span<const Value> a) {
             dom::Document* doc = compartmentDocument(home);
             return navigate(doc, ev::toUtf8(argAt(a, 0)), false);
-        });
+        },
+        /*configurable=*/false);
     registerHostGlobal("history", makeHistory(home), ev::GlobalKind::Readonly);
     // window.origin, [Replaceable]: the page's origin, serialized.
     defineReplaceableAttribute(window, "origin", [home](Value, std::span<const Value>) {

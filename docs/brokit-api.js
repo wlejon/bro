@@ -614,6 +614,9 @@ crypto.subtle.exportKey(format, key);
 
 new TextEncoder();                       // encode(string) → Uint8Array
 new TextDecoder(encoding?);              // decode(buffer) → string
+// encodings: utf-8, utf-16le ('utf-16'), utf-16be, windows-1252 ('latin1',
+// 'ascii', ...), by their Encoding Standard labels; any other label is a
+// RangeError. A leading BOM is dropped unless { ignoreBOM: true }.
 
 new TextEncoderStream();                 // TransformStream: string chunks → Uint8Array chunks
 new TextDecoderStream(encoding?);        // TransformStream: Uint8Array chunks → string chunks

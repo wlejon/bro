@@ -38,5 +38,7 @@ Value elementInterfaceProto(const dom::Element* el);
 void decorateDocumentProto(ObjectBuilder& b);
 
 void installHtmlInterfaces();
+// After brokit's EventTarget exists: Node.prototype inherits EventTarget.prototype.
+void chainNodeOntoEventTarget();
 
 }  // namespace bro::bronze_host

@@ -171,7 +171,19 @@ dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
 // Playback control
 // ---------------------------------------------------------------------------
 
+void WebAnimationManager::applyPendingRate(WebAnimation& a, double now) {
+    if (!a.hasPendingRate) return;
+    a.hasPendingRate = false;
+    a.playbackRate = a.pendingRate;
+    if (a.state == WebAnimState::Running && a.hasHoldTime && a.playbackRate != 0) {
+        a.startTime = now - a.holdTime / a.playbackRate;
+        a.hasStartTime = true;
+        a.hasHoldTime = false;
+    }
+}
+
 void WebAnimationManager::play(WebAnimation& a, double now) {
+    applyPendingRate(a, now);
     auto ctOpt = a.currentTimeMs(now);
     double ct = ctOpt.value_or(0);
     bool has = ctOpt.has_value();
@@ -197,6 +209,7 @@ void WebAnimationManager::play(WebAnimation& a, double now) {
 }
 
 void WebAnimationManager::pause(WebAnimation& a, double now) {
+    applyPendingRate(a, now);
     if (a.state == WebAnimState::Paused) return;
     auto ctOpt = a.currentTimeMs(now);
     double ct = ctOpt ? *ctOpt : (a.playbackRate < 0 ? a.endTimeMs() : 0);
@@ -207,6 +220,10 @@ void WebAnimationManager::pause(WebAnimation& a, double now) {
 }
 
 void WebAnimationManager::cancelOp(WebAnimation& a) {
+    if (a.hasPendingRate) {
+        a.hasPendingRate = false;
+        a.playbackRate = a.pendingRate;
+    }
     if (a.state != WebAnimState::Idle) a.settling = true;
     a.hasStartTime = false;
     a.hasHoldTime = false;
@@ -215,6 +232,10 @@ void WebAnimationManager::cancelOp(WebAnimation& a) {
 }
 
 void WebAnimationManager::finishOp(WebAnimation& a) {
+    if (a.hasPendingRate) {
+        a.hasPendingRate = false;
+        a.playbackRate = a.pendingRate;
+    }
     double end = a.endTimeMs(); // caller ensured finite for forward rates
     a.holdTime = a.playbackRate < 0 ? 0 : end;
     a.hasHoldTime = true;
@@ -224,12 +245,47 @@ void WebAnimationManager::finishOp(WebAnimation& a) {
     a.finishNotified = true; // delivered synchronously by the binding
 }
 
+// Web Animations "reverse an animation": the flipped rate is pending, and
+// the animation plays from where it is (from the far end once past it),
+// its current time held until the tick that applies the rate. `playbackRate`
+// answers the old rate until then, as Chromium's does.
 void WebAnimationManager::reverse(WebAnimation& a, double now) {
-    a.playbackRate = -a.playbackRate;
-    play(a, now);
+    const double rate = -(a.hasPendingRate ? a.pendingRate : a.playbackRate);
+    auto ctOpt = a.currentTimeMs(now);
+    double ct = ctOpt.value_or(0);
+    const bool has = ctOpt.has_value();
+    const double end = a.endTimeMs();
+    if (rate >= 0) {
+        if (!has || ct < 0 || ct >= end) ct = 0;
+    } else if (!has || ct <= 0 || ct > end) {
+        ct = std::isfinite(end) ? end : 0;  // can't seek to an infinite end
+    }
+    a.holdTime = ct;
+    a.hasHoldTime = true;
+    a.hasStartTime = false;
+    a.hasPendingRate = true;
+    a.pendingRate = rate;
+    a.state = WebAnimState::Running;
+    a.finishNotified = false;
+}
+
+void WebAnimationManager::updateRate(WebAnimation& a, double rate, double now) {
+    if (a.state != WebAnimState::Running) {
+        setRate(a, rate, now);
+        return;
+    }
+    // Running: the current time holds until the tick that applies the rate.
+    if (auto ctOpt = a.currentTimeMs(now)) {
+        a.holdTime = *ctOpt;
+        a.hasHoldTime = true;
+        a.hasStartTime = false;
+    }
+    a.hasPendingRate = true;
+    a.pendingRate = rate;
 }
 
 void WebAnimationManager::seek(WebAnimation& a, double t, double now) {
+    applyPendingRate(a, now);
     if (a.state == WebAnimState::Paused || !a.hasStartTime || a.playbackRate == 0) {
         a.holdTime = t;
         a.hasHoldTime = true;
@@ -280,7 +336,7 @@ void WebAnimationManager::timingChanged(WebAnimation& a, double now) {
 // ---------------------------------------------------------------------------
 
 void WebAnimationManager::setStartTime(WebAnimation& a, double st, double now) {
-    (void)now;
+    applyPendingRate(a, now);
     a.startTime = st;
     a.hasStartTime = true;
     a.hasHoldTime = false;
@@ -288,6 +344,7 @@ void WebAnimationManager::setStartTime(WebAnimation& a, double st, double now) {
 }
 
 void WebAnimationManager::setCurrentTime(WebAnimation& a, double ct, double now) {
+    applyPendingRate(a, now);
     // "Silently set the current time": a paused (or idle) animation keeps a
     // HOLD time — seeking it must not start the clock again. An idle one is
     // paused at the new time, as a seek on the web leaves it.
@@ -324,6 +381,9 @@ void WebAnimationManager::setCurrentTime(WebAnimation& a, double ct, double now)
 }
 
 void WebAnimationManager::setRate(WebAnimation& a, double rate, double now) {
+    // Setting playbackRate drops a pending rate; a held running animation
+    // starts its clock now (below).
+    a.hasPendingRate = false;
     auto ctOpt = a.currentTimeMs(now);
     a.playbackRate = rate;
     if (a.state == WebAnimState::Running && ctOpt) {
@@ -349,8 +409,10 @@ const char* WebAnimationManager::playState(const WebAnimation& a, double now) co
     double ct = *ctOpt;
     double end = a.endTimeMs();
     // Boundary crossed but tick() hasn't formalized it yet — report fresh.
-    if ((a.playbackRate > 0 && std::isfinite(end) && ct >= end) ||
-        (a.playbackRate < 0 && ct <= 0))
+    // By the effective rate: a pending one when it is set (a reversed
+    // animation held at its end is running, not finished).
+    const double rate = a.hasPendingRate ? a.pendingRate : a.playbackRate;
+    if ((rate > 0 && std::isfinite(end) && ct >= end) || (rate < 0 && ct <= 0))
         return "finished";
     return "running";
 }
@@ -376,6 +438,13 @@ bool WebAnimationManager::tick(double now) {
         }
 
         dom::Element* elem = resolveElement(a);
+
+        // The pending rate's task: the frame after reverse() or
+        // updatePlaybackRate() applies it, and the animation is ready.
+        if (a.hasPendingRate) {
+            applyPendingRate(a, now);
+            pendingReady_.push_back(a.id);
+        }
 
         if (a.state == WebAnimState::Running) {
             if (auto ctOpt = a.currentTimeMs(now)) {

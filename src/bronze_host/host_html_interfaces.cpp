@@ -307,6 +307,20 @@ static void copyOwnProperty(Value fromIn, Value toIn, const char* name) {
     ev::call(define.get(), object.get(), std::span<const Value>(defArgs, 3));
 }
 
+// Node is an EventTarget (`node instanceof EventTarget`): its prototype and
+// constructor sit on brokit's EventTarget's. Once brokit has installed it.
+void chainNodeOntoEventTarget() {
+    ev::GlobalValue et = ev::globalValue("EventTarget");
+    if (!et.found || !ev::isFunction(et.value)) return;
+    ev::Persistent etCtor(et.value);
+    ev::Persistent etProto(ev::getProperty(etCtor.get(), "prototype"));
+    if (!ev::isObject(etProto.get())) return;
+    ev::Persistent nodeProto(g_nodeClass.prototype());
+    ev::setPrototype(nodeProto.get(), etProto.get());
+    ev::Persistent nodeCtor(g_nodeClass.constructor());
+    ev::setPrototype(nodeCtor.get(), etCtor.get());
+}
+
 void installHtmlInterfaces() {
     // Once per realm: each compartment has its own classes (HostClass keeps
     // one constructor and prototype per realm).

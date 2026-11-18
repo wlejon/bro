@@ -7,7 +7,12 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node_sweep.h"
+#include "bronze_host/host_events.h"
+#include "bronze_host/host_runtime.h"
+#include "dom/event.h"
+#include "dom/node_handle.h"
 #include "dom/shadow_root.h"
+#include "engine/engine.h"
 #include "dom/element.h"
 #include "dom/document.h"
 #include "dom/text_node.h"
@@ -27,6 +32,10 @@ Value illegalConstructor(Value, std::span<const Value>) {
 }
 
 void decorateShadowRootProto(ObjectBuilder& b) {
+    // An EventTarget on the composed path: listeners here hear events from
+    // inside the shadow tree (and slotchange), dispatchEvent targets the root.
+    installElementEventTarget(b, nullptr, "ShadowRoot");
+
     b.accessor("nodeType", [](Value, std::span<const Value>) -> Value {
         return ev::fromDouble(11);
     }, nullptr);
@@ -202,6 +211,76 @@ void decorateShadowRootProto(ObjectBuilder& b) {
     });
 }
 
+// ---- slotchange --------------------------------------------------------
+// DOM "signal a slot change": a slot whose assigned nodes changed gets a
+// `slotchange` (bubbling, not composed) at the next microtask checkpoint.
+// The tree tells us which shadow roots' assignments went stale
+// (ShadowRoot::setSlotChangeHook); the hosts are held by handle until then,
+// and each root compares its slots with what it last reported.
+struct PendingSlotChanges {
+    std::vector<dom::NodeHandle<dom::Element>> hosts;
+    bool scheduled = false;
+};
+
+PendingSlotChanges& pendingSlotChanges() {
+    static auto* p = new PendingSlotChanges();
+    return *p;
+}
+
+void flushSlotChanges() {
+    PendingSlotChanges& p = pendingSlotChanges();
+    p.scheduled = false;
+    std::vector<dom::NodeHandle<dom::Element>> hosts;
+    hosts.swap(p.hosts);
+    engine::Engine* engine = hostEngine();
+    for (const auto& h : hosts) {
+        dom::Element* host = h.get();
+        dom::ShadowRoot* sr = host ? host->shadowRoot() : nullptr;
+        if (!sr) continue;
+        std::vector<dom::NodeHandle<dom::Element>> slots;
+        for (dom::Element* slot : sr->takeSlotChanges()) slots.emplace_back(slot->document(), slot);
+        for (const auto& handle : slots) {
+            dom::Element* slot = handle.get();
+            if (!slot || !engine) continue;
+            dom::Event evt("slotchange", /*bubbles=*/true, /*cancelable=*/false);
+            evt.setIsTrusted(true);
+            evt.setComposed(false);
+            engine->dispatchElementEvent(slot, evt);
+        }
+    }
+}
+
+void onSlotsInvalidated(dom::ShadowRoot* sr) {
+    dom::Element* host = sr->host();
+    if (!host || !host->document()) return;
+    PendingSlotChanges& p = pendingSlotChanges();
+    p.hosts.emplace_back(host->document(), host);
+    if (p.scheduled) return;
+    p.scheduled = true;
+    // A microtask (a resolved promise's reaction) where script can run; a
+    // task where none is current (a document built by the engine itself).
+    if (!ev::currentRealm()) {
+        postHostTask(flushSlotChanges);
+        return;
+    }
+    ev::Persistent promise(ev::createPromise());
+    ev::resolvePromise(promise.get(), ev::undefined());
+    ev::Persistent then(ev::getProperty(promise.get(), "then"));
+    ev::Persistent reaction(ev::makeFunction(
+        [](Value, std::span<const Value>) -> Value {
+            flushSlotChanges();
+            return ev::undefined();
+        },
+        1));
+    if (!ev::isFunction(then.get())) {
+        postHostTask(flushSlotChanges);
+        return;
+    }
+    Value arg = reaction.get();
+    ev::CallResult r = ev::call(then.get(), promise.get(), std::span<const Value>(&arg, 1));
+    if (r.thrown) postHostTask(flushSlotChanges);
+}
+
 }  // namespace
 
 const HostClass& shadowRootHostClass() {
@@ -211,6 +290,7 @@ const HostClass& shadowRootHostClass() {
 void installShadowRootClass() {
     if (!firstInRealm(&g_shadowRootClass)) return;
 
+    dom::ShadowRoot::setSlotChangeHook(&onSlotsInvalidated);
     g_shadowRootClass.install("ShadowRoot", 0, illegalConstructor, decorateShadowRootProto);
     g_shadowRootClass.inherit(nodeHostClass());
 

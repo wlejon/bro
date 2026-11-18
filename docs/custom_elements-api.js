@@ -32,6 +32,19 @@
  *   // Instantiate custom element via document.createElement
  *   const el = document.createElement("my-counter");
  *   document.body.appendChild(el);
+ *
+ * Shadow roots (`attachShadow`) are EventTargets on the composed path: a
+ * listener on the root hears events from inside its tree (currentTarget is
+ * the root; a non-composed event stops there, a composed one continues to
+ * the host retargeted), and `shadowRoot.dispatchEvent` targets the root. A
+ * <slot> whose assigned nodes change (children added or removed, a child's
+ * `slot` or the slot's `name` changed) gets a bubbling `slotchange` at the
+ * next microtask checkpoint.
+ *
+ * @example
+ *   const root = el.attachShadow({ mode: "open" });
+ *   root.innerHTML = "<slot></slot>";
+ *   root.addEventListener("slotchange", (e) => console.log(e.target.assignedElements()));
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────

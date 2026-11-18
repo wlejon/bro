@@ -22,10 +22,12 @@ struct AnimationState {
     ev::Persistent oncancel;
     ev::Persistent onremove;
     ev::Persistent finishedPromise;
-    // `ready`: minted on first read and already resolved — this model has no
-    // pending play/pause tasks (`pending` is always false), so an animation is
-    // ready the moment it exists.
+    // `ready`: minted on first read. Resolved at once unless a pending
+    // playback rate (reverse(), updatePlaybackRate()) waits for the next
+    // tick; then a fresh promise, resolved when the tick applies the rate
+    // (deliverWebAnimationFinishEvents). Play and pause are not pending.
     ev::Persistent readyPromise;
+    bool readyResolved = false;
     // `effect`: the KeyframeEffect, minted on first read and kept so
     // `anim.effect === anim.effect`.
     ev::Persistent effect;

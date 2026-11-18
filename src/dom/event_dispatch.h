@@ -7,11 +7,16 @@ namespace bro::dom {
 class Document;
 class Element;
 class Event;
+class ShadowRoot;
 
 /// Dispatches a DOM event through standard DOM event propagation:
 /// window (capture) -> ancestors (capture) -> target (at_target) -> ancestors (bubble) -> window (bubble).
 /// Invokes native listeners registered via Element::addEventListener and Document::windowListeners.
 void dispatchDomEvent(Element* target, Event& event);
+
+/// The same dispatch with a shadow root as the target (shadowRoot.dispatchEvent):
+/// the root, then its host's path when the event is composed.
+void dispatchDomEventAtRoot(ShadowRoot* root, Event& event);
 
 // An element's event handler content attribute (`onclick="..."`, HTML
 // §8.1.8.1) runs through this hook, set by the script layer: called at the

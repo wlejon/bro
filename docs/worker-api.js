@@ -12,6 +12,12 @@
  * module, and top-level `await` works in a module or a classic script (its
  * messages wait until the top level finishes, as in a module worker).
  *
+ * `importScripts(...urls)` in a classic worker runs each script in the
+ * worker's global scope, in order, before it returns: a path (relative to the
+ * worker script's folder), a file: or bro://app/ URL, or a blob: / data: URL.
+ * A script that cannot be read throws a NetworkError DOMException; a script's
+ * own throw propagates.
+ *
  * Event loop: each message, and each due timer, is a task followed by a
  * microtask checkpoint (a promise a timer resolves continues before the next
  * timer runs). `setTimeout(fn, 0)` runs on the worker's next turn — well under

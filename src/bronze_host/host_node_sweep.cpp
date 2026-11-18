@@ -15,6 +15,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "layout/el_video.h"
+#include "layout/image_loading.h"
 #include "layout/el_terminal.h"
 #include "util/log.h"
 
@@ -251,11 +252,15 @@ dom::Node* topOf(dom::Node* n) {
 }
 
 // Something outside JavaScript still needs this tree: a MutationObserver
-// watching or reporting a node of it, a <video>/<audio> that is playing, or
-// a <terminal> whose child is running.
+// watching or reporting a node of it, a <video>/<audio> that is playing, a
+// <terminal> whose child is running, or an element with an event still due —
+// an <img> whose load is in flight or whose load / error is queued. A
+// browser keeps those alive; three.js's ImageLoader holds its detached <img>
+// only through the listeners it is waiting to call.
 bool heldNatively(dom::Node* n, HostNodeState* st) {
     if (st && hostObserversHold(st)) return true;
     if (auto* el = dynamic_cast<dom::Element*>(n)) {
+        if (el->queuedEventTasks() > 0 || layout::imageLoadInFlight(el)) return true;
         if (layout::ElVideo* v = el->videoControl()) {
             if (v->isPlaying()) return true;
         }

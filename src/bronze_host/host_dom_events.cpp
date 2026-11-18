@@ -38,6 +38,7 @@
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_touch.h"
 #include "bronze_host/host_dom_events_types.h"
+#include "bronze_host/host_shadow_dom.h"
 
 #include "engine/element_activation.h"
 #include "engine/engine.h"
@@ -47,6 +48,8 @@
 #include "dom/event.h"
 #include "dom/event_target.h"
 #include "dom/event_dispatch.h"
+#include "dom/node_handle.h"
+#include "dom/shadow_root.h"
 
 #include <algorithm>
 #include <cctype>
@@ -84,10 +87,12 @@ Value windowObjectValue() {
 }
 
 Value eventTargetValue(const dom::Event& e) {
+    if (e.targetRoot()) return hostShadowRootValue(e.targetRoot());
     return e.targetIsWindow() ? windowObjectValue() : describeTarget(e.target());
 }
 
 Value eventCurrentTargetValue(const dom::Event& e) {
+    if (e.currentTargetRoot()) return hostShadowRootValue(e.currentTargetRoot());
     return e.currentTargetIsWindow() ? windowObjectValue() : describeTarget(e.currentTarget());
 }
 
@@ -495,6 +500,9 @@ struct ElementListener {
     dom::ListenerHandle handle;
     bool capture = false;
     bool once = false;
+    // Registered on the element's shadow root (keyed by its host, whose
+    // lifetime and sweep group it shares), not on the element.
+    bool onRoot = false;
 };
 
 using Registrations = std::unordered_map<dom::Element*, std::vector<ElementListener>>;
@@ -589,11 +597,15 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Document* docOverride) {
     // A listener on a demoted tree has its function in the sweep's group;
     // the group comes back before `fn` is read.
-    if (evt.currentTarget()) hostSweepTouchNode(evt.currentTarget());
+    // A shadow root's listeners are its host's (registered under it).
+    dom::Element* current = evt.currentTarget();
+    if (!current && evt.currentTargetRoot()) current = evt.currentTargetRoot()->host();
+    if (current) hostSweepTouchNode(current);
     dom::Document* targetDoc = docOverride;
     if (!targetDoc) {
         if (evt.target()) targetDoc = evt.target()->document();
-        else if (evt.currentTarget()) targetDoc = evt.currentTarget()->document();
+        else if (evt.targetRoot() && evt.targetRoot()->host()) targetDoc = evt.targetRoot()->host()->document();
+        else if (current) targetDoc = current->document();
     }
 
     // The event object, the call and the report of what it throws, all in
@@ -645,11 +657,29 @@ static void callListenerInCompartment(const ev::Persistent& fn, const ev::Persis
     CurrentEvent& cur = currentEvent();
     const uint64_t savedCompartment = cur.compartment;
     ev::Persistent savedEvent(cur.value.get());
-    const bool inShadowTree = evt.currentTarget() && evt.currentTarget()->containingShadowRoot();
+    const bool inShadowTree =
+        evt.currentTargetRoot() || (evt.currentTarget() && evt.currentTarget()->containingShadowRoot());
     cur.compartment = currentCompartmentId();
     cur.value.set(inShadowTree ? ev::undefined() : evtObj.get());
-    Value arg = evtObj.get();
-    ev::CallResult r = ev::call(fn.get(), thisObj.get(), std::span<const Value>(&arg, 1));
+    // An EventListener object (DOM "inner invoke"): its handleEvent, read at
+    // each call, with the object as `this`; a function is called with the
+    // current target as `this`.
+    ev::CallResult r;
+    if (ev::isFunction(fn.get())) {
+        Value arg = evtObj.get();
+        r = ev::call(fn.get(), thisObj.get(), std::span<const Value>(&arg, 1));
+    } else {
+        ev::CallResult got = ev::catchThrow([&] { return ev::getProperty(fn.get(), "handleEvent"); });
+        if (got.thrown) {
+            r = got;
+        } else if (!ev::isFunction(got.value)) {
+            r = ev::catchThrow([] { return ev::throwTypeError("The listener's handleEvent is not a function"); });
+        } else {
+            ev::Persistent handler(got.value);
+            Value arg = evtObj.get();
+            r = ev::call(handler.get(), fn.get(), std::span<const Value>(&arg, 1));
+        }
+    }
     cur.compartment = savedCompartment;
     cur.value.set(savedEvent.get());
     // Before the report, and before anything else can run: from here on the
@@ -684,6 +714,13 @@ dom::Element* targetElement(const ElementSource& source, Value thisValue) {
     return source ? source() : elementOfReceiver(thisValue);
 }
 
+// The shadow root a ShadowRoot receiver is (the prototype form only).
+dom::ShadowRoot* targetRoot(const ElementSource& source, Value thisValue) {
+    if (source) return nullptr;
+    HostNodeState* st = hostNodeStateOfValue(thisValue);
+    return st && !st->el ? st->shadowRoot : nullptr;
+}
+
 std::string targetName(const ElementSource& source, const std::string& name,
                        dom::Element* el) {
     if (source || !el) return name;
@@ -703,8 +740,9 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         auto ref = std::make_shared<ListenerRef>();
         ref->self.set(thisValue);
         ref->realm = currentHostDocument();
-        dom::Element* el = targetElement(source, ref->self.get());
-        const std::string who = targetName(source, name, el);
+        dom::ShadowRoot* root = targetRoot(source, ref->self.get());
+        dom::Element* el = root ? root->host() : targetElement(source, ref->self.get());
+        const std::string who = root ? std::string("ShadowRoot") : targetName(source, name, el);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
@@ -712,9 +750,10 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         }
         // A null listener is no registration (DOM addEventListener step 2).
         if (ev::isNull(fn) || ev::isUndefined(fn)) return ev::undefined();
-        if (!ev::isFunction(fn)) {
+        // A function, or an EventListener object (its handleEvent is called).
+        if (!ev::isObject(fn)) {
             return ev::throwTypeError(who +
-                                      ".addEventListener: listener must be a function");
+                                      ".addEventListener: listener must be a function or an object");
         }
         ref->fn.set(fn);
         // The type string first: readOptions reads properties, which may
@@ -738,7 +777,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         // native list has no such rule of its own, so it is applied here.
         auto& mine = registrations()[el];
         for (const ElementListener& r : mine) {
-            if (r.type == type && r.capture == opts.capture &&
+            if (r.type == type && r.capture == opts.capture && r.onRoot == (root != nullptr) &&
                 ev::toBits(r.ref->fn.get()) == ev::toBits(ref->fn.get())) {
                 return ev::undefined();
             }
@@ -747,9 +786,9 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         std::string origin = who + " " + type + " listener";
         bool isOnce = opts.once;
         ListenerRef* key = ref.get();
-        dom::ListenerHandle handle = el->addEventListener(
-            type,
-            [ref, origin, el, type, isOnce, key](dom::Event& evt) {
+        const bool onRoot = root != nullptr;
+        auto callback =
+            [ref, origin, el, type, isOnce, key, onRoot](dom::Event& evt) {
                 // Rooted here: the once-removal below may drop the last
                 // registration that shares this ListenerRef's roots. The
                 // element's demoted group, if any, comes back first.
@@ -757,7 +796,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                 ev::Persistent fn(ref->fn.get());
                 ev::Persistent self(ref->self.get());
                 if (isOnce) {
-                    if (el) el->removeJsListener(type);
+                    if (el && !onRoot) el->removeJsListener(type);
                     auto& map = registrations();
                     auto found = map.find(el);
                     if (found != map.end()) {
@@ -771,23 +810,25 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                     }
                 }
                 callBronzeListener(fn, self, evt, origin.c_str(), listenerRealm(*ref));
-            },
-            opts);
+            };
+        dom::ListenerHandle handle = root ? root->addEventListener(type, std::move(callback), opts)
+                                          : el->addEventListener(type, std::move(callback), opts);
         if (!handle) {
             return ev::throwError(who + ".addEventListener: the engine refused the "
                                         "registration");
         }
-        el->addJsListener(type);
-        registrations()[el].push_back({std::move(type), ref, handle, opts.capture, opts.once});
+        if (!onRoot) el->addJsListener(type);
+        registrations()[el].push_back({std::move(type), ref, handle, opts.capture, opts.once, onRoot});
         return ev::undefined();
     });
 
     b.def("removeEventListener", 3, [source, name](Value thisValue,
                                                    std::span<const Value> a) {
-        dom::Element* el = targetElement(source, thisValue);
+        dom::ShadowRoot* root = targetRoot(source, thisValue);
+        dom::Element* el = root ? root->host() : targetElement(source, thisValue);
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
-            return ev::throwTypeError(targetName(source, name, el) +
+            return ev::throwTypeError((root ? std::string("ShadowRoot") : targetName(source, name, el)) +
                                       ".removeEventListener: type must be a string");
         }
         std::string type = ev::toUtf8(typeV);
@@ -803,8 +844,11 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             // argument slot here, after readOptions, which may allocate.
             if (it->type != type) continue;
             if (it->capture != opts.capture) continue;
+            if (it->onRoot != (root != nullptr)) continue;
             if (ev::toBits(it->ref->fn.get()) != ev::toBits(argAt(a, 1))) continue;
-            if (el) {
+            if (root) {
+                root->removeEventListener(it->handle);
+            } else if (el) {
                 el->removeEventListener(it->handle);
                 el->removeJsListener(type);
             }
@@ -817,6 +861,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
 
     b.def("dispatchEvent", 1, [source, name](Value thisValue,
                                              std::span<const Value> a) {
+        if (dom::ShadowRoot* root = targetRoot(source, thisValue)) return hostDispatchToShadowRoot(root, argAt(a, 0));
         dom::Element* el = targetElement(source, thisValue);
         const std::string who = targetName(source, name, el);
         return hostDispatchToElement([el]() { return el; }, who.c_str(), argAt(a, 0));
@@ -849,6 +894,23 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
         finishProvidedEventValue(descRoot.get(), evt);
     });
     return ev::fromBool(notPrevented);
+}
+
+Value hostDispatchToShadowRoot(dom::ShadowRoot* root, Value desc) {
+    ev::Persistent descRoot(desc);
+    EventSpec spec;
+    if (!readEventSpec(descRoot.get(), "ShadowRoot", spec)) return ev::undefined();
+    if (!root || !root->host()) return ev::throwError("ShadowRoot.dispatchEvent: the root has no host");
+    dom::Document* doc = root->host()->document();
+    dom::NodeHandle<dom::Element> host(doc, root->host());
+    return ev::fromBool(dispatchEventSpec(spec, [&host, &descRoot](dom::Event& evt) {
+        {
+            ProvidedEventScope scope(evt, descRoot.get());
+            dom::Element* h = host.get();
+            if (h && h->shadowRoot()) dom::dispatchDomEventAtRoot(h->shadowRoot(), evt);
+        }
+        finishProvidedEventValue(descRoot.get(), evt);
+    }));
 }
 
 // The window of the realm the caller is running in: a secondary window's or an

@@ -159,6 +159,8 @@ advanceTime(100);
 near(a5.currentTime, ctBefore + 200, 25, 'playbackRate 2 doubles progress');
 
 a5.reverse();
+assert(a5.playbackRate === 2 && a5.pending, 'reverse flips the rate on the next frame, got ' + a5.playbackRate);
+advanceTime(16);
 assert(a5.playbackRate === -2, 'reverse flips rate, got ' + a5.playbackRate);
 const ctRev = a5.currentTime;
 advanceTime(100);

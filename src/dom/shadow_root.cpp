@@ -160,11 +160,10 @@ void ShadowRoot::collectSlots(Node* node, std::vector<Element*>& slots) const {
         if (elem->tagName() == "SLOT") {
             slots.push_back(elem);
         }
-        // Don't descend into nested shadow roots
-        if (!elem->hasShadow()) {
-            for (auto* child : elem->childNodes()) {
-                collectSlots(child, slots);
-            }
+        // A nested host's light children are still in this tree (its own
+        // shadow root is not among them).
+        for (auto* child : elem->childNodes()) {
+            collectSlots(child, slots);
         }
     }
 }
@@ -238,6 +237,46 @@ void ShadowRoot::distributeSlots() {
     }
 
     slotsValid_ = true;
+}
+
+namespace {
+ShadowRoot::SlotChangeHook g_slotChangeHook = nullptr;
+}
+
+void ShadowRoot::setSlotChangeHook(SlotChangeHook hook) {
+    g_slotChangeHook = hook;
+}
+
+void ShadowRoot::invalidateSlots() {
+    slotsValid_ = false;
+    if (slotChangeQueued_ || !g_slotChangeHook || !host_) return;
+    slotChangeQueued_ = true;
+    g_slotChangeHook(this);
+}
+
+std::vector<Element*> ShadowRoot::takeSlotChanges() {
+    slotChangeQueued_ = false;
+    distributeSlots();
+    std::vector<Element*> changed;
+    for (const SlotAssignment& now : slotAssignments_) {
+        auto before = std::find_if(signalled_.begin(), signalled_.end(),
+                                   [&](const SlotAssignment& s) { return s.slot == now.slot; });
+        const bool same = before != signalled_.end() ? before->assignedNodes == now.assignedNodes
+                                                     : now.assignedNodes.empty();
+        if (!same) changed.push_back(now.slot);
+    }
+    signalled_ = slotAssignments_;
+    return changed;
+}
+
+ListenerHandle ShadowRoot::addEventListener(const std::string& type, EventCallback cb, ListenerOptions opts) {
+    if (!cb) return ListenerHandle{};
+    if (!nativeListeners_) nativeListeners_ = std::make_unique<NativeListenerList>();
+    return nativeListeners_->add(type, std::move(cb), opts);
+}
+
+bool ShadowRoot::removeEventListener(ListenerHandle handle) {
+    return nativeListeners_ && nativeListeners_->remove(handle);
 }
 
 std::vector<Node*> ShadowRoot::assignedNodes(Element* slot) const {

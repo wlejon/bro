@@ -96,7 +96,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 
 | File | Surface |
 |------|---------|
-| `audio-api.js` | `AudioContext` Web-Audio half: nodes, params, buffers, listener, decoding, `getUserMedia`; how it maps onto broaudio |
+| `audio-api.js` | `AudioContext` Web-Audio half: nodes, params, buffers, listener, decoding, `getUserMedia`; how it maps onto broaudio; `OfflineAudioContext` (a real node graph rendered to a buffer, suspend/resume, ConstantSource/IIRFilter) |
 | `audio-engine-api.js` | `AudioContext` engine half: clips, playbacks, streams, voices, buses + effects, presets; VoiceAllocator, ModMatrix, MidiInput, Sequence |
 | `audio-synth-graph-api.js` | `SynthGraph`: procedural voices from a plain-object graph (osc/FM/noise/filter/env/sweep/shaper/resonator/comb/layers), seeded per-trigger jitter, `render()` offline to an AudioBuffer bit-identical to live, `ctx.playSynth` / `releaseSynth`; JIT kernel per shape |
 | `ear-api.js` | `bro.ear`: judge a finished clip offline, deterministic: `measure` (timing, LUFS, centroid/flatness, tonality, ringing partials), `compare` to a reference, labelled `spectrogram` images/PNGs; `loadClap` prompt scorer in ML builds |
@@ -118,12 +118,12 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `abort-api.js` | `AbortController` & `AbortSignal` (`timeout`, `any`, `abort`): cancellation primitives for `fetch`, streams, and async tasks |
 | `canvas-api.js` | `HTMLCanvasElement` & `CanvasRenderingContext2D`, `CanvasGradient`, `CanvasPattern`, `ImageData`, `Path2D` |
 | `webgl2-api.js` | `WebGL2RenderingContext`: OpenGL ES 3.0 hardware-accelerated rendering over Vulkan |
-| `custom_elements-api.js` | `customElements` & `HTMLElement`: Web Components custom element registry, lifecycle callbacks, and DOM upgrading |
+| `custom_elements-api.js` | `customElements` & `HTMLElement`: Web Components custom element registry, lifecycle callbacks, and DOM upgrading; shadow roots as event targets and `slotchange` |
 | `cssom-api.js` | CSSOM: `document.styleSheets`, `element.sheet`, `CSSStyleSheet` (insertRule/deleteRule/disabled, constructable `replaceSync` + `adoptedStyleSheets` on documents and shadow roots), the `CSSRule` family; every change restyles |
 | `geometry-api.js` | `DOMRect`/`DOMRectList`, `DOMPoint`, `DOMMatrix` (2D/3D, CSS transform strings, every op + `*Self`; `WebKitCSSMatrix`), `DOMQuad`; canvas `getTransform`/`setTransform(matrix)`; SVG `getBBox`/`getCTM`/`getScreenCTM`, `transform.baseVal`, `createSVGPoint`/`SVGMatrix`, Chromium's values |
 | `domparser-api.js` | `DOMParser`: HTML / SVG string parsing into a detached DOM `Document` tree |
 | `events-api.js` | `Event`, `CustomEvent`, `UIEvent`, `MouseEvent`, `PointerEvent`, `TouchEvent`, `GestureEvent`: DOM event dispatch |
-| `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |
+| `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Locale` |
 | `text-api.js` | `bro.text`: render-layer text shaping (`shape`, `byteOffsetToX`, `xToByteOffset`, `clusterRange`, `cacheStats`) and UAX #9 bidi diagnostics |
 | `scene-api.js` | `bro.scene`: `SceneGraph` + `SceneNode` core: hierarchy, transforms, cameras, render settings, raycast/project, capture, `attachTo`, wind, the settle state (`pendingWork`) |
 | `scene-nodes-api.js` | `bro.scene` node types: create* options (mesh/skinned/instanced, splats, shapes, sprites, HTML, lights, particles, decals, probes), per-type SceneNode members (shaders, LOD, instances, skeletal playback) |

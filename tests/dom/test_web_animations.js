@@ -97,7 +97,9 @@ assert(abortCaught === true, 'finished promise rejected on cancel');
 // 7. reverse()
 const anim4 = div.animate([{ opacity: 0 }, { opacity: 1 }], 1000);
 anim4.reverse();
-assert(anim4.playbackRate === -1.0, 'playbackRate inverted after reverse()');
+assert(anim4.playbackRate === 1.0 && anim4.pending, 'the inverted rate is pending after reverse()');
+advanceTime(16);
+assert(anim4.playbackRate === -1.0, 'playbackRate inverted after reverse() on the next frame');
 anim4.cancel();
 
 // Cleanup

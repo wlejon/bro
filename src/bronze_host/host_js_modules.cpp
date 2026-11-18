@@ -48,6 +48,7 @@ extern "C" void bro_cssom_main();
 extern "C" void bro_interface_tags_main();
 extern "C" void bro_attr_main();
 extern "C" void bro_geometry_main();
+extern "C" void bro_intl_locale_main();
 extern "C" void bro_events_main();
 extern "C" void bro_clipboard_main();
 extern "C" void bro_notification_main();
@@ -134,6 +135,12 @@ void installAttrModule() {
     bronze::embed::runEntry(bro_attr_main);
     adoptGlobalProperty("Attr");
     adoptGlobalProperty("NamedNodeMap");
+}
+
+// Intl.Locale (js/intl_locale.js), over the Intl namespace installIntlGlobals
+// registers (host_intl.cpp); it runs after it.
+void installIntlLocaleModule() {
+    bronze::embed::runEntry(bro_intl_locale_main);
 }
 
 void installGeometryModule() {

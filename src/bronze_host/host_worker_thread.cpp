@@ -10,10 +10,12 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rejection_events.h"
 #include "bronze_host/host_runtime.h"
+#include "bronze_host/host_values.h"
 #include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
 #include "eval/eval.h"
 #include "util/log.h"
+#include "util/object_url.h"
 #include <api/api.h>
 #include "embed/embed_access.h"
 
@@ -67,9 +69,6 @@ void WorkerInstance::threadFunc() {
     serverControl.stop = [this] { terminated_.store(true, std::memory_order_release); };
     setWorkerServerControl(&serverControl);
 
-    ev::Persistent workerOnmessage;
-    ev::Persistent workerOnerror;
-
     struct WorkerListener {
         std::string type;
         ev::Persistent fn;
@@ -109,14 +108,9 @@ void WorkerInstance::threadFunc() {
         // The handler is rooted the moment it is read: building the event
         // below allocates, and a raw function Value held across that would be
         // called at its pre-collection address.
-        ev::Persistent cb(workerOnerror.get());
-        if (!ev::isFunction(cb.get())) {
-            Value gt = ev::globalValue("globalThis").value;
-            if (ev::isObject(gt)) {
-                Value p = ev::getProperty(gt, "onerror");
-                if (ev::isFunction(p)) cb.set(p);
-            }
-        }
+        // Read at each dispatch, as an event handler attribute is.
+        ev::Persistent cb(ev::undefined());
+        if (Value gt = ev::globalValue("globalThis").value; ev::isObject(gt)) cb.set(ev::getProperty(gt, "onerror"));
 
         ev::Persistent errEvt(makeWorkerErrorEvent(msg, fn, line));
 
@@ -324,6 +318,56 @@ void WorkerInstance::threadFunc() {
     std::error_code ec;
     resolvedPath = std::filesystem::weakly_canonical(resolvedPath, ec);
 
+    // importScripts(...urls): each script fetched and run in this global
+    // scope, in order, before the call returns (HTML "import scripts into
+    // worker global scope"); a file that cannot be read is a NetworkError and
+    // a script's own throw propagates. URLs as `new Worker` takes them (file:,
+    // bro://app/, a path), a relative one against the worker script's folder,
+    // and blob: / data: URLs.
+    const std::filesystem::path importBase = resolvedPath.parent_path();
+    ev::setGlobalFunction("importScripts", 1, [this, importBase](Value, std::span<const Value> args) -> Value {
+        std::vector<std::pair<std::string, std::string>> scripts;  // name, code
+        for (const Value& a : args) {
+            const std::string url = ev::toUtf8(a);
+            std::string code;
+            std::string name = url;
+            std::vector<uint8_t> bytes;
+            if (url.rfind("blob:", 0) == 0 || url.rfind("data:", 0) == 0) {
+                if (!util::inlineURLBytes(url, bytes))
+                    return ev::throwValue(hostMakeDomError("NetworkError", "importScripts: cannot load " + url));
+                code.assign(bytes.begin(), bytes.end());
+            } else {
+                std::string path, err;
+                if (!workerScriptPath(url, path, err))
+                    return ev::throwValue(hostMakeDomError("NetworkError", "importScripts: " + url + ": " + err));
+                std::filesystem::path full(std::u8string(path.begin(), path.end()));
+                if (!full.is_absolute()) full = importBase / full;
+                std::ifstream ifs(full, std::ios::binary);
+                if (!ifs.is_open())
+                    return ev::throwValue(hostMakeDomError("NetworkError", "importScripts: cannot load " + url));
+                code.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                const std::u8string u = full.u8string();
+                name.assign(u.begin(), u.end());
+            }
+            scripts.emplace_back(std::move(name), std::move(code));
+        }
+        for (const auto& [name, code] : scripts) {
+            bronze::eval::EvalOptions o;
+            o.filename = name;
+            o.hostGlobals = registeredHostGlobals();
+            if (mounts_) {
+                for (const auto& [prefix, target] : mounts_->mounts())
+                    o.moduleRoots.push_back({prefix, std::filesystem::path(target)});
+            }
+            o.retainSource = true;
+            o.shareAcrossThreads = true;
+            applyCodeCacheOptions(o);
+            auto res = bronze::eval::evalScript(code, o);
+            if (res.thrown) return ev::throwValue(res.value);
+        }
+        return ev::undefined();
+    });
+
     std::string scriptCode = inlineSource_;
     if (scriptCode.empty()) {
         std::ifstream ifs(resolvedPath, std::ios::binary);
@@ -404,19 +448,6 @@ void WorkerInstance::threadFunc() {
     ev::Persistent fsAsyncHasPending(ev::globalValue("__brokit_fs_async_has_pending").value);
 
     while (!terminated_.load(std::memory_order_relaxed)) {
-        Value gtVal = ev::globalValue("globalThis").value;
-        if (ev::isObject(gtVal)) {
-            ev::Persistent gt(gtVal);
-            Value curOnmessage = ev::getProperty(gt.get(), "onmessage");
-            if (ev::isFunction(curOnmessage)) {
-                workerOnmessage.set(curOnmessage);
-            }
-            Value curOnerror = ev::getProperty(gt.get(), "onerror");
-            if (ev::isFunction(curOnerror)) {
-                workerOnerror.set(curOnerror);
-            }
-        }
-
         std::deque<std::unique_ptr<Message>> batch;
         {
             std::lock_guard<std::mutex> lock(toWorkerMutex_);
@@ -433,7 +464,10 @@ void WorkerInstance::threadFunc() {
             ev::Persistent dataRoot(data.value);
             ev::Persistent evObjRoot(makeWorkerMessageEvent(dataRoot));
 
-            Value cb = workerOnmessage.get();
+            // The handler as it is now: an earlier message's handler may
+            // have replaced it (Monaco's worker swaps onmessage on its first).
+            Value gtVal = ev::globalValue("globalThis").value;
+            Value cb = ev::isObject(gtVal) ? ev::getProperty(gtVal, "onmessage") : ev::undefined();
             if (ev::isFunction(cb)) {
                 ev::Persistent cbRoot(cb);
                 Value event = evObjRoot.get();

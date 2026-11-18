@@ -76,10 +76,14 @@ const op = () => parseFloat(getComputedStyle(el).opacity);
     advanceTime(1000);
     const before = r.currentTime;
     r.updatePlaybackRate(2);
-    assert(r.playbackRate === 2, 'the rate applies');
+    // Pending until the next frame, as in Chromium (test_waapi_pending_rate).
+    assert(r.playbackRate === 1 && r.pending, 'the rate is pending');
     near(r.currentTime, before, 1e-6, 'without a jump');
+    advanceTime(16);
+    assert(r.playbackRate === 2, 'the rate applies on the next frame');
+    const applied = r.currentTime;
     advanceTime(500);
-    near(r.currentTime - before, 1000, 5, 'and runs at twice the speed');
+    near(r.currentTime - applied, 1000, 5, 'and runs at twice the speed');
     r.cancel();
 }
 

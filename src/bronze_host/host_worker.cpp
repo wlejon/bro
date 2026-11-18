@@ -70,7 +70,9 @@ static std::string percentDecode(const std::string& s) {
     return out;
 }
 
-static bool workerScriptPath(const std::string& url, std::string& path, std::string& err) {
+}  // namespace
+
+bool workerScriptPath(const std::string& url, std::string& path, std::string& err) {
     auto startsWith = [&](const char* p) { return url.rfind(p, 0) == 0; };
     std::string rest;
     if (startsWith("file://")) {
@@ -97,8 +99,6 @@ static bool workerScriptPath(const std::string& url, std::string& path, std::str
     path = percentDecode(rest);
     return true;
 }
-
-}  // namespace
 
 void WorkerInstance::postToMain(std::unique_ptr<Message> msg) {
     {

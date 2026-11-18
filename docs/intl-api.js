@@ -5,7 +5,7 @@
  *
  * Implements standard ECMA-402 internationalization constructors and helpers:
  * NumberFormat, DateTimeFormat, PluralRules, Collator, ListFormat,
- * RelativeTimeFormat, DisplayNames, and getCanonicalLocales.
+ * RelativeTimeFormat, DisplayNames, Locale, and getCanonicalLocales.
  *
  * @example
  *   // Number formatting with locale separators
@@ -242,6 +242,42 @@ class DisplayNames {
    */
   resolvedOptions() {}
 
+}
+
+/**
+ * A Unicode BCP 47 locale identifier, parsed and canonicalized as V8 does
+ * (language lower case, script title case, region upper case, the -u-
+ * keywords sorted; `_` is not a separator). A malformed tag or option value is
+ * a RangeError. maximize() / minimize() add or drop the likely script and
+ * region for the common languages (en, fr, de, es, it, pt, ja, zh, ko, ru,
+ * ar, hi and about twenty more); another language is returned as it is.
+ *
+ * @example
+ *   const l = new Intl.Locale('en', { region: 'GB', hourCycle: 'h23' });
+ *   l.toString();                                   // 'en-GB-u-hc-h23'
+ *   new Intl.Locale('zh').maximize().baseName;      // 'zh-Hans-CN'
+ */
+class Locale {
+  /**
+   * @param {string|Locale} tag
+   * @param {{language?: string, script?: string, region?: string, calendar?: string, collation?: string,
+   *          hourCycle?: 'h11'|'h12'|'h23'|'h24', caseFirst?: 'upper'|'lower'|'false', numeric?: boolean,
+   *          numberingSystem?: string}} [options]
+   */
+  constructor(tag, options) {}
+  /** @readonly @type {string} */ baseName;
+  /** @readonly @type {string} */ language;
+  /** @readonly @type {string|undefined} */ script;
+  /** @readonly @type {string|undefined} */ region;
+  /** @readonly @type {string|undefined} */ calendar;
+  /** @readonly @type {string|undefined} */ collation;
+  /** @readonly @type {string|undefined} */ hourCycle;
+  /** @readonly @type {string|undefined} */ caseFirst;
+  /** @readonly @type {boolean} */ numeric;
+  /** @readonly @type {string|undefined} */ numberingSystem;
+  /** @returns {string} */ toString() {}
+  /** @returns {Locale} */ maximize() {}
+  /** @returns {Locale} */ minimize() {}
 }
 
 // ── The Intl global ──────────────────────────────────────────────────────────

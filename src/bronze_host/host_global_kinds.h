@@ -36,8 +36,9 @@ bool isHostGlobalAccessor(const std::string& name);
 
 // An accessor global: reads and writes, bare or through `window.x`, call
 // `getter` / `setter` with the global object as `this`. A null setter makes
-// it read-only.
-void registerHostGlobalAccessor(const char* name, ev::NativeFn getter, ev::NativeFn setter);
+// it read-only; `configurable` false makes it [LegacyUnforgeable] (location).
+void registerHostGlobalAccessor(const char* name, ev::NativeFn getter, ev::NativeFn setter,
+                                bool configurable = true);
 
 // A [Replaceable] attribute on the global object `global` answered by
 // `getter`; a write defines the written value as the global's own data

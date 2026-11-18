@@ -115,6 +115,13 @@ struct WebAnimation {
     double startTime = 0;    // engine ms at which currentTime was 0 (rate-adjusted)
     bool hasHoldTime = false;
     double holdTime = 0;     // frozen currentTime (paused / finished / rate 0)
+    // A pending playback rate (reverse(), updatePlaybackRate() on a running
+    // animation): `playbackRate` still answers the old rate, the current time
+    // is held, and the next tick applies the rate and starts the clock from
+    // the held time (the animation is `pending` until then, its `ready`
+    // promise unresolved), as Chromium's pending play task does.
+    bool hasPendingRate = false;
+    double pendingRate = 1.0;
     WebAnimReplaceState replaceState = WebAnimReplaceState::Active;
 
     // --- CSS animation (CSSAnimation) ------------------------------------
@@ -198,7 +205,9 @@ public:
     void pause(WebAnimation& a, double now);
     void cancelOp(WebAnimation& a);                 // → Idle, applies nothing
     void finishOp(WebAnimation& a);                 // seek to boundary, → Finished
-    void reverse(WebAnimation& a, double now);      // flip rate + play
+    void reverse(WebAnimation& a, double now);      // pending flipped rate + play
+    // updatePlaybackRate(): pending on a running animation, else at once.
+    void updateRate(WebAnimation& a, double rate, double now);
     void seek(WebAnimation& a, double t, double now);
     void setRate(WebAnimation& a, double rate, double now);
     void setStartTime(WebAnimation& a, double st, double now);
@@ -283,6 +292,8 @@ public:
     std::vector<uint64_t> takeFinishedEvents() { return std::move(pendingFinished_); }
     std::vector<uint64_t> takeCanceledEvents() { return std::move(pendingCanceled_); }
     std::vector<uint64_t> takeRemovedEvents() { return std::move(pendingRemoved_); }
+    // Animations whose pending rate a tick applied: their `ready` resolves.
+    std::vector<uint64_t> takeReadyEvents() { return std::move(pendingReady_); }
 
     // Animation ids relevant to `elem` (running/paused, or finished while
     // holding a forwards fill), composite order. For getAnimations().
@@ -301,6 +312,7 @@ public:
         pendingFinished_.clear();
         pendingCanceled_.clear();
         pendingRemoved_.clear();
+        pendingReady_.clear();
     }
 
 private:
@@ -311,6 +323,9 @@ private:
     // Records on `elem`, composite order.
     std::vector<const WebAnimation*> stackFor(const dom::Element* elem, bool checkNode) const;
     void removeReplaced();
+    // Apply a pending rate now: a running animation's clock starts from
+    // the held time at `now`.
+    static void applyPendingRate(WebAnimation& a, double now);
 
     std::unordered_map<uint64_t, WebAnimation> records_;
     // Element* used purely as a hash key (never dereferenced); entries carry a
@@ -324,6 +339,7 @@ private:
     std::vector<uint64_t> pendingFinished_;
     std::vector<uint64_t> pendingCanceled_;
     std::vector<uint64_t> pendingRemoved_;
+    std::vector<uint64_t> pendingReady_;
 };
 
 // (In the header: bro_dom's style pass reads the tick's lists, and a target

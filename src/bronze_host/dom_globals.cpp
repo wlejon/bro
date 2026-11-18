@@ -555,6 +555,7 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // via installHtmlInterfaces() / installImageGlobal().
     installTouchGlobals();
     installBrokitGlobals(engine);
+    chainNodeOntoEventTarget();
     // The UI event classes (js/events.js) extend the `Event` brokit just
     // installed.
     installEventsModule();
@@ -613,6 +614,7 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     installRangeGlobals();
     installSelectionGlobals();
     installIntlGlobals();
+    installIntlLocaleModule();
     installWebAnimationGlobals();
     installVideoGlobals();
     // An appview's `bro.app.host`, where its host page's grants appear, and

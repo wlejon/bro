@@ -50,9 +50,12 @@
  *
  * DELIBERATE SIMPLIFICATIONS (vs the full spec):
  *   - Composite modes other than "replace" are ignored.
- *   - `pending` is always false (play/pause apply immediately), so `ready`
- *     is an already-resolved promise and updatePlaybackRate() applies at
- *     once, like setting playbackRate. `effect` cannot be swapped and has no
+ *   - play() and pause() apply immediately (not pending). reverse(), and
+ *     updatePlaybackRate() on a running animation, are pending as in
+ *     Chromium: `playbackRate` answers the old rate, the current time holds,
+ *     `pending` is true and `ready` resolves on the next frame, which
+ *     applies the rate. Setting `playbackRate` applies at once and drops a
+ *     pending rate. `effect` cannot be swapped and has no
  *     setKeyframes; `timeline` is always document.timeline; `new
  *     KeyframeEffect(...)` is not constructible; iterationStart is always 0.
  *   - Object-form keyframes distribute values evenly; an explicit `offset`
@@ -171,8 +174,12 @@ anim.onfinish = (e) => { /* e.type === 'finish', e.currentTime, e.target */ };
 anim.oncancel = (e) => { /* e.type === 'cancel' */ };
 anim.onremove = (e) => { /* e.type === 'remove': replaced, see below */ };
 anim.replaceState;       // 'active' | 'removed' | 'persisted'
+// An Animation is an EventTarget: the same events reach listeners, after
+// the on<type> handler.
+anim.addEventListener('finish', (e) => { /* e.currentTime */ }, { once: true });
 
-// Already resolved with the animation (nothing is ever pending).
+// Resolved with the animation; a fresh pending promise while a playback
+// rate change (reverse(), updatePlaybackRate()) waits for the next frame.
 await anim.ready;
 
 // ── Timeline & start time ────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ namespace bro::dom {
 class Document;
 class Element;
 class Event;
+class ShadowRoot;
 }  // namespace bro::dom
 
 namespace bro::bronze_host {
@@ -122,6 +123,8 @@ dom::Document* listenerRealm(const ListenerRef& ref);
 // `!defaultPrevented`, as the web's dispatchEvent does, or a pending
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
+// shadowRoot.dispatchEvent(event): the root is the target (host_dom_events.cpp).
+Value hostDispatchToShadowRoot(dom::ShadowRoot* root, Value desc);
 Value hostDispatchToWindow(Value desc);
 // element.focus()'s steps (host_element_interaction.cpp): focus, blur,
 // focusin, focusout. A no-op for an inert element (outside a modal dialog).

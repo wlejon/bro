@@ -152,7 +152,15 @@ bool readCanvasBitmap(CanvasState* cs, std::vector<uint8_t>& out, int& w, int& h
         return w > 0 && h > 0;
     }
     auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene());
-    if (!scene) return false;
+    if (!scene) {
+        // No context yet: its bitmap is transparent black at its size, which
+        // toDataURL / toBlob encode (Chromium's answer; null only at 0 size).
+        w = canvasWidthOf(cs);
+        h = canvasHeightOf(cs);
+        if (w <= 0 || h <= 0) return false;
+        out.assign(static_cast<size_t>(w) * h * 4, 0);
+        return true;
+    }
     w = scene->width();
     h = scene->height();
     if (w <= 0 || h <= 0) return false;

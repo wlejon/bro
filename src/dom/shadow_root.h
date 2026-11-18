@@ -1,5 +1,7 @@
 #pragma once
+#include "dom/event_target.h"
 #include "dom/node.h"
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -72,9 +74,24 @@ public:
     // shadow tree structure with <slot> elements replaced by their assigned content
     std::vector<Node*> composedChildren() const;
 
-    // Mark that slot distribution needs recalculating
-    void invalidateSlots() { slotsValid_ = false; }
+    // Mark that slot distribution needs recalculating, and tell the slot
+    // change hook (once until takeSlotChanges): a slot's assigned nodes may
+    // have changed, which fires `slotchange` at it (DOM "signal a slot
+    // change"; the host queues it as a microtask).
+    void invalidateSlots();
     bool slotsValid() const { return slotsValid_; }
+    using SlotChangeHook = void (*)(ShadowRoot*);
+    static void setSlotChangeHook(SlotChangeHook hook);
+
+    // The slots whose assigned nodes differ from what the last call saw
+    // (the first call compares with nothing assigned), in tree order.
+    std::vector<Element*> takeSlotChanges();
+
+    // A shadow root is an event target on the composed path (C++ half; the
+    // JS bindings register through it too, as for Element).
+    ListenerHandle addEventListener(const std::string& type, EventCallback cb, ListenerOptions opts = {});
+    bool removeEventListener(ListenerHandle handle);
+    NativeListenerList* nativeListeners() const { return nativeListeners_.get(); }
 
 private:
     void collectSlots(Node* node, std::vector<Element*>& slots) const;
@@ -90,6 +107,11 @@ private:
     mutable bool slotsValid_ = false;
     mutable std::vector<SlotAssignment> slotAssignments_;
     mutable std::unordered_map<Node*, Element*> nodeToSlot_;
+    // What takeSlotChanges last reported, per slot; whether the hook has been
+    // told since.
+    std::vector<SlotAssignment> signalled_;
+    bool slotChangeQueued_ = false;
+    std::unique_ptr<NativeListenerList> nativeListeners_;
 };
 
 } // namespace bro::dom

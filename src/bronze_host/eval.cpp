@@ -7,7 +7,6 @@
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_pins.h"
 #include "bronze_host/host_compartment.h"
-#include "bronze_host/host_global_sync.h"
 
 #include "api/api.h"  // brokit::api::RequireDirGuard
 #include "cli/driver.h"
@@ -343,7 +342,6 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
-    syncHostGlobalsFromGlobalThis();
 
     const std::string execCode = scriptExecCode(code, filename);
     {
@@ -448,7 +446,6 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
-    syncHostGlobalsFromGlobalThis();
     ev::endModuleLoad(bronzeHandle);
     std::fflush(stdout);
 
@@ -547,7 +544,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
-    syncHostGlobalsFromGlobalThis();
     const auto manifest = writeHostGlobalsManifest(tempDir, stem);
     const std::string globalsPath = manifest.string();
     const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
@@ -654,7 +650,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
-    syncHostGlobalsFromGlobalThis();
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {

@@ -83,19 +83,38 @@ void rejectFinishedPromise(AnimationState* st) {
     ev::rejectPromise(st->finishedPromise.get(), err);
 }
 
+// An Animation is an EventTarget (its prototype chains onto brokit's): the
+// event (an Event carrying currentTime, as AnimationPlaybackEvent does) goes
+// to the on<type> handler, then to the addEventListener listeners.
 void fireHandler(Value handler, Value animObj, const char* type, Value currentTime) {
-    if (!ev::isFunction(handler)) return;
     // Rooted before the event object is built: its allocations would leave
     // the raw parameters pointing at the old semispace.
     ev::Persistent handlerP(handler);
     ev::Persistent animP(animObj);
     ev::Persistent timeP(currentTime);
-    ObjectBuilder eb;
-    eb.set("type", ev::fromUtf8(type));
-    eb.set("currentTime", timeP.get());
-    eb.set("target", animP.get());
-    Value args[1] = { eb.get() };
-    ev::call(handlerP.get(), animP.get(), std::span<const Value>(args, 1));
+    ev::Persistent dispatch(ev::getProperty(animP.get(), "dispatchEvent"));
+    ev::GlobalValue eventG = ev::globalValue("Event");
+    if (!eventG.found || !ev::isFunction(eventG.value)) return;
+    ev::Persistent eventCtor(eventG.value);
+    ev::Persistent typeV(ev::fromUtf8(type));
+    Value ctorArgs[1] = {typeV.get()};
+    ev::CallResult made = ev::construct(eventCtor.get(), std::span<const Value>(ctorArgs, 1));
+    if (made.thrown || !ev::isObject(made.value)) return;
+    ev::Persistent evt(made.value);
+    ev::setProperty(evt.get(), "currentTime", timeP.get());
+    ev::setProperty(evt.get(), "timelineTime", ev::null());
+    ev::setProperty(evt.get(), "target", animP.get());
+    ev::setProperty(evt.get(), "currentTarget", animP.get());
+    if (ev::isFunction(handlerP.get())) {
+        Value args[1] = {evt.get()};
+        ev::CallResult r = ev::call(handlerP.get(), animP.get(), std::span<const Value>(args, 1));
+        if (r.thrown) reportBronzeError(type, r.value);
+    }
+    if (ev::isFunction(dispatch.get())) {
+        Value args[1] = {evt.get()};
+        ev::CallResult r = ev::call(dispatch.get(), animP.get(), std::span<const Value>(args, 1));
+        if (r.thrown) reportBronzeError(type, r.value);
+    }
 }
 
 AnimationState* stateOf(Value self);
@@ -474,15 +493,15 @@ void decorateAnimationProto(ObjectBuilder& b) {
         return ev::undefined();
     });
 
-    // updatePlaybackRate(rate): the rate change without a jump. With no
-    // pending tasks in this model it takes effect at once, preserving the
-    // current time, as `playbackRate = rate` does on a running animation.
+    // updatePlaybackRate(rate): the rate change without a jump. On a running
+    // animation the rate is pending until the next tick (`playbackRate`
+    // answers the old one, `pending` is true); otherwise it applies at once.
     b.def("updatePlaybackRate", 1, [](Value self_, std::span<const Value> a) {
         Call c = callOf(self_);
         if (!c.rec) return ev::undefined();
         double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
         if (!std::isfinite(r)) return ev::throwTypeError("updatePlaybackRate: rate must be finite");
-        c.mgr->setRate(*c.rec, r, c.eng->timeNowMs());
+        c.mgr->updateRate(*c.rec, r, c.eng->timeNowMs());
         markTargetDirty(c);
         return ev::undefined();
     });
@@ -595,16 +614,23 @@ void decorateAnimationProto(ObjectBuilder& b) {
     b.accessor("ready", [](Value self_, std::span<const Value>) {
         auto* st = stateOf(self_);
         if (!st) return ev::null();
-        if (ev::isUndefined(st->readyPromise.get())) {
+        Call c = callOf(self_);
+        const bool pending = c.rec && c.rec->hasPendingRate;
+        if (ev::isUndefined(st->readyPromise.get()) || (pending && st->readyResolved)) {
             ev::Persistent self(self_);
             st->readyPromise.set(ev::createPromise());
-            ev::resolvePromise(st->readyPromise.get(), self.get());
+            st->readyResolved = false;
+            if (!pending) {
+                ev::resolvePromise(st->readyPromise.get(), self.get());
+                st->readyResolved = true;
+            }
         }
         return st->readyPromise.get();
     }, nullptr);
 
-    b.accessor("pending", [](Value, std::span<const Value>) {
-        return ev::fromBool(false);
+    b.accessor("pending", [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        return ev::fromBool(c.rec && c.rec->hasPendingRate);
     }, nullptr);
 
     b.accessor("id",
@@ -680,6 +706,20 @@ void installWebAnimationGlobals() {
 
     // install() registered Animation, CSSAnimation and CSSTransition.
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());
+
+    // Animation is an EventTarget: addEventListener('finish' | 'cancel' |
+    // 'remove') (Shoelace's animateTo waits on them).
+    ev::GlobalValue et = ev::globalValue("EventTarget");
+    if (et.found && ev::isFunction(et.value)) {
+        ev::Persistent etCtor(et.value);
+        ev::Persistent etProto(ev::getProperty(etCtor.get(), "prototype"));
+        if (ev::isObject(etProto.get())) {
+            ev::Persistent proto(g_animationClass.prototype());
+            ev::setPrototype(proto.get(), etProto.get());
+            ev::Persistent ctor(g_animationClass.constructor());
+            ev::setPrototype(ctor.get(), etCtor.get());
+        }
+    }
 }
 
 void decorateElementWebAnimations(ObjectBuilder& b) {
@@ -772,11 +812,12 @@ void deliverWebAnimationFinishEvents() {
     if (!eng) return;
     // Every manager's (the app document's, each iframe's and window's),
     // taken before any is delivered: a handler may take an iframe away.
-    std::vector<uint64_t> finished, canceled;
+    std::vector<uint64_t> ready, finished, canceled;
     struct Removed { uint64_t id; std::optional<double> currentTime; };
     std::vector<Removed> removed;
     const double now = eng->timeNowMs();
     eng->forEachWebAnimationManager([&](engine::WebAnimationManager& mgr) {
+        for (uint64_t id : mgr.takeReadyEvents()) ready.push_back(id);
         for (uint64_t id : mgr.takeFinishedEvents()) finished.push_back(id);
         for (uint64_t id : mgr.takeCanceledEvents()) canceled.push_back(id);
         for (uint64_t id : mgr.takeRemovedEvents()) {
@@ -785,6 +826,17 @@ void deliverWebAnimationFinishEvents() {
             removed.push_back(r);
         }
     });
+    // A pending rate applied: `ready` resolves, before any finish.
+    for (uint64_t id : ready) {
+        auto it = liveStates().find(id);
+        if (it == liveStates().end()) continue;
+        AnimationState* st = it->second;
+        if (ev::isUndefined(st->readyPromise.get()) || st->readyResolved) continue;
+        st->readyResolved = true;
+        ev::Persistent selfP(st->self.get());
+        ev::Persistent promise(st->readyPromise.get());
+        ev::resolvePromise(promise.get(), selfP.get());
+    }
     for (uint64_t id : finished) {
         auto it = liveStates().find(id);
         if (it != liveStates().end()) {

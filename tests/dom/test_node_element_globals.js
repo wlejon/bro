@@ -89,8 +89,9 @@ assert(chain[0] === HTMLDivElement.prototype, 'chain starts at the tag interface
 assert(chain[1] === HTMLElement.prototype, 'HTMLElement.prototype is above that');
 assert(chain[2] === Element.prototype, 'Element.prototype is above that');
 assert(chain[3] === Node.prototype, 'Node.prototype is directly above Element.prototype');
-assert(chain[4] === Object.prototype, 'Object.prototype tops it off');
-assert(chain.length === 5, `chain is exactly 5 deep, got ${chain.length}`);
+assert(chain[4] === EventTarget.prototype, 'EventTarget.prototype is above Node.prototype');
+assert(chain[5] === Object.prototype, 'Object.prototype tops it off');
+assert(chain.length === 6, `chain is exactly 6 deep, got ${chain.length}`);
 
 // ---------------------------------------------------------------------------
 // nodeType constants

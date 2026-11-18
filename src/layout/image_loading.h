@@ -47,6 +47,10 @@ void settleImageLoads(double timeoutMs = 10000.0);
 // settle state's `images` (perf.pendingWork).
 size_t imageLoadsPending();
 
+// `el` has a load in flight: its load / error event is still due, so its
+// listeners must stay reachable (the detached-tree sweep asks).
+bool imageLoadInFlight(const dom::Element* el);
+
 // Run `cb(ok)` when `el`'s current load settles — on the pump that settles it
 // (after its load / error event is queued), or now when it has no load in
 // flight. A load superseded by a new src settles its waiters with false.

@@ -47,20 +47,6 @@ void restoreBaselineHostGlobals() {
     for (auto& [key, value] : s_baselineValues) registerHostGlobal(key.c_str(), value.get(), hostGlobalKind(key));
 }
 
-void syncHostGlobalsFromGlobalThis() {
-    ev::GlobalValue gtv = ev::globalValue("globalThis");
-    if (!gtv.found || !ev::isObject(gtv.value)) return;
-    ev::Persistent gt(gtv.value);
-    for (const std::string& key : ev::hostGlobalNames()) {
-        if (isDeferredName(key.c_str()) || isHostGlobalAccessor(key)) continue;
-        ev::Persistent propVal(ev::getProperty(gt.get(), key));
-        ev::GlobalValue regVal = ev::globalValue(key);
-        if (!regVal.found || ev::toBits(propVal.get()) != ev::toBits(regVal.value)) {
-            registerHostGlobal(key.c_str(), propVal.get(), hostGlobalKind(key));
-        }
-    }
-}
-
 bool isBaselineHostGlobalName(const std::string& name) {
     if (isSpecialRealmGlobal(name)) return false;
     return s_baselineNames.count(name) != 0 || ev::hasHostGlobal(name);

@@ -30,8 +30,21 @@ for (const name of Object.keys(readonly)) {
     assert(globalThis[name] === before, name + ': window.' + name + ' = v is ignored');
     const d = Object.getOwnPropertyDescriptor(window, name);
     assert(d && d.writable !== true && !d.set, name + ' has no setter and is not writable');
+    assert(d.enumerable === true, name + ' is enumerable');
     assert(name in window, "'" + name + "' in window");
 }
+// [LegacyUnforgeable]: window, document, top and location cannot be
+// redefined or deleted, as in Chromium.
+for (const name of ['window', 'document', 'top', 'location']) {
+    const d = Object.getOwnPropertyDescriptor(window, name);
+    assert(d && d.configurable === false && d.enumerable === true, name + ' is enumerable and not configurable');
+    assert(delete window[name] === false && window[name] !== undefined, 'delete window.' + name + ' is refused');
+}
+assert(Object.keys(window).includes('document') && Object.keys(window).includes('setTimeout'),
+       'host globals are enumerable own properties of window');
+const enumerated = [];
+for (const k in window) enumerated.push(k);
+assert(enumerated.includes('navigator') && enumerated.includes('location'), 'for-in over window sees navigator and location');
 assert(window === self && top === window && frames === window && parent === window,
        'a top-level window is its own self, top, frames and parent');
 assert(frameElement === null, 'a top-level window has no frameElement');
@@ -42,8 +55,16 @@ for (const name of ['innerWidth', 'innerHeight', 'outerWidth', 'outerHeight', 's
                     'pageXOffset', 'pageYOffset', 'screenX', 'screenY', 'screenLeft', 'screenTop',
                     'devicePixelRatio', 'length', 'opener', 'origin', 'event']) {
     const d = Object.getOwnPropertyDescriptor(window, name);
-    assert(d && typeof d.get === 'function' && typeof d.set === 'function' && d.configurable,
-           name + ' is a configurable accessor with a setter');
+    assert(d && typeof d.get === 'function' && typeof d.set === 'function' && d.configurable && d.enumerable,
+           name + ' is a configurable, enumerable accessor with a setter');
+}
+for (const name of ['setTimeout', 'alert', 'getComputedStyle', 'Element', 'screen', 'performance']) {
+    const d = Object.getOwnPropertyDescriptor(window, name);
+    assert(d && d.configurable === true && d.writable !== false,
+           name + ' is a configurable, writable property (' + JSON.stringify(d && { w: d.writable, e: d.enumerable }) + ')');
+    if (typeof globalThis[name] === 'function' && name !== 'Element') {
+        assert(d.enumerable === true, name + ' (an operation) is enumerable');
+    }
 }
 assert(typeof innerWidth === 'number' && innerWidth > 0, 'innerWidth reads the viewport');
 assert(length === 0, 'window.length counts the frames: none');

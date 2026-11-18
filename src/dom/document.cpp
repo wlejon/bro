@@ -219,9 +219,11 @@ void Document::queueElementEvent(Element* target, const char* type) {
     if (!target || !s_taskPoster) return;
     NodeHandle<Element> handle(this, target);
     std::string name = type;
+    ++target->queuedEventTasks_;
     s_taskPoster([handle, name] {
         Element* el = handle.get();
         if (!el) return;
+        if (el->queuedEventTasks_ > 0) --el->queuedEventTasks_;
         Event evt(name, /*bubbles=*/false, /*cancelable=*/false);
         evt.setIsTrusted(true);
         dispatchDomEvent(el, evt);

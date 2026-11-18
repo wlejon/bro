@@ -42,14 +42,14 @@ ev::GlobalKind hostGlobalKind(const std::string& name) {
 
 bool isHostGlobalAccessor(const std::string& name) { return accessors().count(name) != 0; }
 
-void registerHostGlobalAccessor(const char* name, ev::NativeFn getter, ev::NativeFn setter) {
+void registerHostGlobalAccessor(const char* name, ev::NativeFn getter, ev::NativeFn setter, bool configurable) {
     const std::string getName = "get " + std::string(name);
     const std::string setName = "set " + std::string(name);
     const ev::Persistent g(ev::makeFunction(std::move(getter), 0, getName));
     const ev::Persistent s(setter ? ev::makeFunction(std::move(setter), 1, setName) : ev::undefined());
     kinds().erase(name);
     accessors().insert(name);
-    ev::registerGlobalAccessor(name, g.get(), s.get());
+    ev::registerGlobalAccessor(name, g.get(), s.get(), configurable);
 }
 
 void defineReplaceableAttribute(ObjectBuilder& global, const char* name, ev::NativeFn getter) {

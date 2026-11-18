@@ -6,6 +6,7 @@
 namespace bro::dom {
 
 class Element;
+class ShadowRoot;
 
 class Event {
 public:
@@ -29,10 +30,18 @@ public:
     bool targetIsWindow() const { return targetIsWindow_; }
     bool currentTargetIsWindow() const { return currentTargetIsWindow_; }
 
-    void setTarget(Element* t) { target_ = t; targetIsWindow_ = false; }
-    void setCurrentTarget(Element* t) { currentTarget_ = t; currentTargetIsWindow_ = false; }
-    void setTargetToWindow() { target_ = nullptr; targetIsWindow_ = true; }
-    void setCurrentTargetToWindow() { currentTarget_ = nullptr; currentTargetIsWindow_ = true; }
+    // A shadow root is an event target on the path too (a DocumentFragment,
+    // not an Element): when one is the (current) target, target() /
+    // currentTarget() read null and these name it.
+    ShadowRoot* targetRoot() const { return targetRoot_; }
+    ShadowRoot* currentTargetRoot() const { return currentTargetRoot_; }
+
+    void setTarget(Element* t) { target_ = t; targetIsWindow_ = false; targetRoot_ = nullptr; }
+    void setCurrentTarget(Element* t) { currentTarget_ = t; currentTargetIsWindow_ = false; currentTargetRoot_ = nullptr; }
+    void setTargetToWindow() { target_ = nullptr; targetIsWindow_ = true; targetRoot_ = nullptr; }
+    void setCurrentTargetToWindow() { currentTarget_ = nullptr; currentTargetIsWindow_ = true; currentTargetRoot_ = nullptr; }
+    void setTargetToRoot(ShadowRoot* r) { target_ = nullptr; targetIsWindow_ = false; targetRoot_ = r; }
+    void setCurrentTargetToRoot(ShadowRoot* r) { currentTarget_ = nullptr; currentTargetIsWindow_ = false; currentTargetRoot_ = r; }
     void setComposed(bool v) { composed_ = v; }
     void setIsTrusted(bool v) { isTrusted_ = v; if (v) composed_ = true; }
     void setEventPhase(int v) { eventPhase_ = v; }
@@ -46,6 +55,8 @@ private:
     std::string type_;
     Element* target_ = nullptr;
     Element* currentTarget_ = nullptr;
+    ShadowRoot* targetRoot_ = nullptr;
+    ShadowRoot* currentTargetRoot_ = nullptr;
     bool targetIsWindow_ = false;
     bool currentTargetIsWindow_ = false;
     bool bubbles_;
