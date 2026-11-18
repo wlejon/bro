@@ -65,11 +65,17 @@ ModuleHandle openModule(const std::string& path, std::string& error) {
     std::error_code ec;
     const std::filesystem::path abs = std::filesystem::absolute(path, ec);
     const std::wstring wide = (ec ? std::filesystem::path(path) : abs).wstring();
+    DWORD prevMode = 0;
+    const BOOL modeSet = ::SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &prevMode);
     HMODULE h = ::LoadLibraryExW(wide.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    const DWORD err = h ? 0 : ::GetLastError();
+    if (modeSet) {
+        ::SetThreadErrorMode(prevMode, nullptr);
+    }
     if (!h) {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "Windows error %lu",
-                      static_cast<unsigned long>(::GetLastError()));
+                      static_cast<unsigned long>(err));
         error = buf;
         return nullptr;
     }
