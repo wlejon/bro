@@ -201,6 +201,7 @@ void WorkerInstance::threadFunc() {
     bk::installBlob();
     bk::installURLObject();
     bk::installProcess();
+    markProcessBrowser();
     bk::installOS();
     bk::installPath();
     bk::installIndexedDB();
@@ -268,6 +269,9 @@ void WorkerInstance::threadFunc() {
         brokit::api::setRequireBasePath(std::filesystem::path(std::u8string(workerBase.begin(), workerBase.end())));
         brokit::api::setIndexedDBPath(workerBase);
     }
+    // The page's `bro://app/` URLs are the app folder's files here too
+    // (pixi's worker fetches its textures by the page's absolute URLs).
+    if (eng && !eng->appDir().empty()) brokit::api::addFetchUrlMount("bro://app", eng->appDir());
     // `bro`: bro.net / bro.net.sync over this thread's own subscriber, the
     // sibling compute APIs over this thread's own classes, bro.server over
     // the control above (host_bro_root.cpp); the loop below polls them.

@@ -141,6 +141,10 @@ void readImportMap(const std::string& text, const std::string& baseDir, const ut
 
 } // namespace
 
+bool AppLoader::isClassicScriptType(const std::string& type) {
+    return type != "module" && isExecutableScriptType(type);
+}
+
 std::string AppLoader::loadFile(const std::string& path) {
     // An absolute URL is a resource on the network, not a file. Everything the
     // manifest carries — stylesheets, external scripts — funnels through here,

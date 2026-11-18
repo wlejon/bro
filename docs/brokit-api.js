@@ -533,6 +533,10 @@ fetch(url, options?);    // → Promise<Response>
 //   signal, AbortSignal (aborts an in-flight request with AbortError)
 //   mode, credentials, cache, redirect, referrer
 // Note: brokit's fetch does NOT implement keepalive or integrity.
+// url: http(s), data:, blob:, file:, a path (relative to the app folder, or a
+// mount such as /app/...), or the page's own absolute URL `bro://app/<path>`
+// (what `new URL(x, location.href)` makes), which reads the app folder's file
+// in the page and in its workers.
 //
 // Response: {
 //   ok, status, statusText, url,
@@ -806,7 +810,9 @@ localStorage.length;
 
 indexedDB.open(name, version?);          // → IDBOpenDBRequest
 indexedDB.deleteDatabase(name);          // → IDBOpenDBRequest
-// Full IDBDatabase / IDBTransaction / IDBObjectStore / IDBCursor API
+// Full IDBDatabase / IDBTransaction / IDBObjectStore / IDBCursor API.
+// objectStoreNames / indexNames are DOMStringLists: the names (an array), with
+// contains(name) and item(i).
 
 
 // -----------------------------------------------------------------------------
@@ -840,7 +846,10 @@ clearInterval(id);
 // Minimal Node-compatible process global. Available everywhere, no require().
 
 process.platform;        // 'win32' | 'linux' | 'darwin' (or 'unknown')
-process.cwd();           // → string, current working directory
+process.browser;         // true in a bro page or Worker (browserify's convention:
+                         //   a library that finds a global `process` reads it before
+                         //   taking the host for Node)
+process.cwd();          // → string, current working directory
 process.exit(code?);     // terminates the process; default code 0
 process.kill(pid, signal?); // → true; signal is a name ('SIGTERM', the default) or a
                          //   number. Signal 0 only asks whether pid exists. Windows

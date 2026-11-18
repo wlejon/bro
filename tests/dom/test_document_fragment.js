@@ -76,3 +76,22 @@ assert(phones.length === 1, 'getElementsByName("phone") finds 1');
 
 // --- Cleanup ---
 root.innerHTML = '';
+
+// --- textContent assignment ---
+// Setting a fragment's textContent replaces its children with one text node
+// (none for ""), a setter strict-mode code relies on (jQuery's buildFragment
+// clears its fragment so); a removed child stays usable.
+(function () {
+    'use strict';
+    var frag = document.createDocumentFragment();
+    var holder = document.createElement('div');
+    holder.innerHTML = '<b>kept</b>';
+    frag.appendChild(holder);
+    var kept = holder.firstChild;
+    frag.textContent = '';
+    assert(frag.childNodes.length === 0 && holder.parentNode === null, 'textContent = "" empties the fragment');
+    assert(kept.textContent === 'kept' && kept.parentNode === holder, 'a removed child keeps its own subtree');
+    frag.textContent = 'hi';
+    assert(frag.childNodes.length === 1 && frag.firstChild.nodeType === 3 && frag.textContent === 'hi',
+           'textContent = "hi" leaves one text node');
+})();

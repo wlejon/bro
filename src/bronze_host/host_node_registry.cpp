@@ -63,6 +63,8 @@ void clearNodeState(HostNodeState* st) {
     st->classListObj.set(ev::undefined());
     st->computedObj.set(ev::undefined());
     st->datasetObj.set(ev::undefined());
+    st->childNodesObj.set(ev::undefined());
+    st->childrenObj.set(ev::undefined());
     st->inlineHandles.clear();
     st->inlineFns.clear();
     st->hasStyle = false;

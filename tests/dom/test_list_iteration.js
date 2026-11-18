@@ -31,8 +31,11 @@ assert(JSON.stringify([...cl.keys()]) === '[0,1]' && JSON.stringify([...cl.value
        'classList.keys / values');
 
 for (const [what, list] of [['querySelectorAll', document.querySelectorAll('p')], ['childNodes', document.body.childNodes],
-                            ['children', document.body.children], ['attributes', first.attributes]]) {
+                            ['attributes', first.attributes]]) {
     assert(typeof list[Symbol.iterator] === 'function' && typeof list.forEach === 'function', what + ' is iterable');
 }
+// children is an HTMLCollection: iterable, no forEach.
+assert(typeof document.body.children[Symbol.iterator] === 'function' && document.body.children.forEach === undefined,
+       'children is an iterable HTMLCollection');
 
 console.log('test_list_iteration: OK');

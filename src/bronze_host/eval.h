@@ -59,6 +59,15 @@ bool evalAppScript(engine::Engine& engine, const std::string& code,
 std::string classicScriptMarker(size_t index);
 void clearClassicScriptMarker();
 int takeClassicScriptMarker();
+/// The page ordinal of the classic script running now (the last marker the
+/// unit set), or -1 outside a classic unit. Read without clearing it.
+int currentClassicScript();
+/// Records the document's classic <script> elements, in document order, as
+/// the page's classic scripts start (Engine::runClassicScripts): the
+/// elements document.currentScript names by currentClassicScript()'s
+/// ordinal. A script element inserted while they run is not one of them
+/// (dom_document.cpp).
+void snapshotClassicScripts();
 
 /// Compile a JS file in-process using bronze CLI and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);

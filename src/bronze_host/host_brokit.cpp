@@ -162,6 +162,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installURLObject();
     guardCreateObjectURL();
     bk::installProcess();
+    markProcessBrowser();
     bk::installOS();
     bk::installPath();
     bk::installIndexedDB();
@@ -224,6 +225,9 @@ void installBrokitGlobals(engine::Engine& engine) {
     if (!engine.appDir().empty()) {
         bk::addFsBasePath(engine.appDir());
         bk::addFetchBasePath(engine.appDir());
+        // The page's own URLs (`bro://app/...`, what `new URL(x, location.href)`
+        // makes) fetch the app folder's files, as a page's same-origin URLs do.
+        bk::addFetchUrlMount("bro://app", engine.appDir());
         // require('./x.js') from a page script (or a handler it left) has
         // no calling file on brokit's stack; it resolves against the app
         const std::string& app = engine.appDir();

@@ -73,6 +73,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_event_handlers.cpp
     host_location.cpp
     host_list_iteration.cpp
+    host_dom_lists.cpp
     host_element_attrs_ns.cpp
     host_font_face_set.cpp
     host_dom_events.cpp

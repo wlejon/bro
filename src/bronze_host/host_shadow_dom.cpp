@@ -1,4 +1,5 @@
 #include "bronze_host/host_shadow_dom.h"
+#include "bronze_host/host_dom_lists.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_html_interfaces.h"
@@ -82,13 +83,8 @@ void decorateShadowRootProto(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->shadowRoot) return ev::undefined();
         Value selV = argAt(a, 0);
-        if (ev::isObject(selV) || ev::isUndefined(selV)) {
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        }
-        std::vector<dom::Element*> found = st->shadowRoot->querySelectorAll(ev::toUtf8(selV));
-        return hostArrayOf(found.size(), [&found](size_t i) {
-            return hostElementValue(found[i]);
-        });
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
+        return makeStaticNodeList(st->shadowRoot->querySelectorAll(ev::toUtf8(selV)));
     });
 
     b.def("getElementById", 1, [](Value self_, std::span<const Value> a) -> Value {
@@ -102,15 +98,7 @@ void decorateShadowRootProto(ObjectBuilder& b) {
     b.accessor("children", [](Value self_, std::span<const Value>) -> Value {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->shadowRoot) return ev::undefined();
-        std::vector<dom::Element*> kids;
-        for (dom::Node* n : st->shadowRoot->childNodes()) {
-            if (n->nodeType() == dom::NodeType::Element) {
-                kids.push_back(static_cast<dom::Element*>(n));
-            }
-        }
-        return hostArrayOf(kids.size(), [&kids](size_t i) {
-            return hostElementValue(kids[i]);
-        });
+        return hostChildrenCollection(st);
     }, nullptr);
 
     b.accessor("firstElementChild", [](Value self_, std::span<const Value>) -> Value {

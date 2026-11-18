@@ -60,6 +60,9 @@ struct HostNodeState {
     ev::Persistent classListObj;
     ev::Persistent computedObj;
     ev::Persistent datasetObj;
+    // childNodes / children (host_dom_lists.h): live, one object per node.
+    ev::Persistent childNodesObj;
+    ev::Persistent childrenObj;
     std::unordered_map<std::string, uint64_t> inlineHandles;
     std::unordered_map<std::string, std::shared_ptr<ListenerRef>> inlineFns;
     uint32_t jsRefs = 0;

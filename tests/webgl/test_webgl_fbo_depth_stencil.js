@@ -186,6 +186,25 @@ if (!gl) {
     quad(0, [1, 1, 0, 1], false);
     assertPixel(28, 16, [0, 255, 255, 255], 'clearBufferfi reset stencil to 0: nothing passes EQUAL 1');
     gl.disable(gl.STENCIL_TEST);
+
+    // WebGL 1's unsized DEPTH_STENCIL is still renderbuffer storage, as
+    // DEPTH24_STENCIL8 (three.js r75's shadow target uses it).
+    const unsizedRb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, unsizedRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_STENCIL, 32, 32);
+    assertError(gl.NO_ERROR, 'renderbufferStorage(DEPTH_STENCIL)');
+    assert(gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_DEPTH_SIZE) >= 24 &&
+           gl.getRenderbufferParameter(gl.RENDERBUFFER, gl.RENDERBUFFER_STENCIL_SIZE) === 8,
+           'unsized DEPTH_STENCIL has depth and 8 stencil bits');
+    const fboU = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboU);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTexture(32, 32), 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, unsizedRb);
+    assert(gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE, 'color + DEPTH_STENCIL complete');
+    assert(gl.getParameter(gl.DEPTH_BITS) >= 24, 'DEPTH_BITS with the unsized renderbuffer');
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboS);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, dsRb);
+
     gl.clearBufferfi(gl.DEPTH_STENCIL, 1, 1.0, 0);
     assertError(gl.INVALID_VALUE, 'clearBufferfi drawbuffer must be 0');
     gl.clearBufferfi(gl.COLOR, 0, 1.0, 0);

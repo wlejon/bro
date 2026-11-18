@@ -195,9 +195,9 @@
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
     std::vector<std::string> classicScriptTexts() const;
-    static std::string combineClassicScripts(const std::vector<std::string>& texts);
+    static std::string combineClassicScripts(const std::vector<std::string>& texts, size_t first = 0);
     void runClassicScripts(const std::vector<std::string>& texts, const std::string& code,
-                           const std::string& name);
+                           const std::string& name, size_t first = 0);
     // At launch, while the GPU comes up: the realm's host globals installed
     // and the page's first script compiling on its own thread, for
     // initAppRealm's run of it to take.

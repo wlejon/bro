@@ -40,8 +40,11 @@ GLint lookupUniformLocation(const ProgramInterface& iface, const std::string& na
     auto [base, element] = splitSubscript(name);
     for (const VkUniformInfo& u : iface.uniforms) {
         if (u.location < 0) continue;
-        if (u.size == 1 && u.name == name) return u.location;
-        if (u.size > 1) {
+        if (u.name == name) return u.location;
+        // An array, of one element too (`uniform vec3 lightColor[1]`, three.js
+        // r49's lights): reflected as "name[0]", and found by "name" as well.
+        const bool isArray = u.name.size() > 3 && u.name.compare(u.name.size() - 3, 3, "[0]") == 0;
+        if (isArray) {
             const std::string arrayBase = u.name.substr(0, u.name.size() - 3);  // drop "[0]"
             if (name == arrayBase) return u.location;
             if (element >= 0 && base == arrayBase && element < u.size)

@@ -75,6 +75,76 @@ Dialect dialectOf(const std::string& src) {
     return Dialect::Es100;
 }
 
+// Words that are identifiers in GLSL ES but keywords of the Vulkan GLSL 450
+// the source is compiled as: three.js's transmission shader has a function
+// parameter named `sampler`. Each is renamed, as a whole identifier outside
+// comments (in #define lines too, so a shader's own `#define texture2D
+// texture` stays consistent), to kKeywordPrefix + itself; names the program
+// reports (attributes, uniforms, blocks, outputs) have the prefix taken off.
+// texture2D and the other texture types are ES 1.00 built-in functions
+// (the preamble maps them), so they are renamed in ES 3.00 source only.
+constexpr const char* kKeywordPrefix = "bro_kw_";
+
+bool vulkanOnlyKeyword(std::string_view id, Dialect dialect) {
+    static const char* const kAlways[] = {
+        "sampler", "samplerShadow", "buffer", "shared", "precise",
+        "subpassInput", "subpassInputMS", "isubpassInput", "isubpassInputMS",
+        "usubpassInput", "usubpassInputMS",
+    };
+    static const char* const kEs300[] = {
+        "texture1D", "texture1DArray", "texture2D", "texture2DArray", "texture3D", "textureCube",
+        "textureCubeArray", "texture2DRect", "textureBuffer", "texture2DMS", "texture2DMSArray",
+        "itexture1D", "itexture1DArray", "itexture2D", "itexture2DArray", "itexture3D", "itextureCube",
+        "itextureCubeArray", "itexture2DRect", "itextureBuffer", "itexture2DMS", "itexture2DMSArray",
+        "utexture1D", "utexture1DArray", "utexture2D", "utexture2DArray", "utexture3D", "utextureCube",
+        "utextureCubeArray", "utexture2DRect", "utextureBuffer", "utexture2DMS", "utexture2DMSArray",
+    };
+    for (const char* k : kAlways)
+        if (id == k) return true;
+    if (dialect == Dialect::Es300)
+        for (const char* k : kEs300)
+            if (id == k) return true;
+    return false;
+}
+
+std::string renameKeywords(const std::string& src, Dialect dialect) {
+    std::string out;
+    out.reserve(src.size());
+    size_t i = 0;
+    while (i < src.size()) {
+        const char c = src[i];
+        if (c == '/' && i + 1 < src.size() && (src[i + 1] == '/' || src[i + 1] == '*')) {
+            const bool line = src[i + 1] == '/';
+            size_t end = line ? src.find('\n', i) : src.find("*/", i + 2);
+            end = end == std::string::npos ? src.size() : (line ? end : end + 2);
+            out.append(src, i, end - i);
+            i = end;
+        } else if (isIdentChar(c)) {
+            size_t end = i;
+            while (end < src.size() && (isIdentChar(src[end]) || (c >= '0' && c <= '9' && src[end] == '.'))) ++end;
+            const std::string_view word(src.data() + i, end - i);
+            if (!(c >= '0' && c <= '9') && vulkanOnlyKeyword(word, dialect)) out += kKeywordPrefix;
+            out.append(word);
+            i = end;
+        } else {
+            out.push_back(c);
+            ++i;
+        }
+    }
+    return out;
+}
+
+// A name as the program states it (`sampler`, `light.sampler[2]`), from the
+// one glslang reports, and back.
+std::string userName(std::string name) {
+    const size_t n = std::strlen(kKeywordPrefix);
+    for (size_t at = name.find(kKeywordPrefix); at != std::string::npos; at = name.find(kKeywordPrefix, at))
+        name.erase(at, n);
+    return name;
+}
+
+std::string internalName(const std::string& name) { return renameKeywords(name, Dialect::Es300); }
+
 // The source with the #extension lines of WebGL 1 extensions that are core
 // here (and unknown to desktop GLSL) blanked, keeping line numbers.
 std::string withoutEsExtensions(const std::string& src) {
@@ -205,8 +275,9 @@ struct StageSource {
 
 StageSource stageSource(EShLanguage stage, const std::string& src, const Limits& limits) {
     StageSource s;
-    s.source = withoutEsExtensions(src);
-    s.preamble = preamble(stage, dialectOf(src), s.source, limits);
+    const Dialect dialect = dialectOf(src);
+    s.source = renameKeywords(withoutEsExtensions(src), dialect);
+    s.preamble = preamble(stage, dialect, s.source, limits);
     s.strings[s.count++] = s.source.c_str();
     if (stage == EShLangVertex) s.strings[s.count++] = kVertexEpilogue;
     return s;
@@ -254,7 +325,7 @@ std::vector<DeclaredInput> declaredInputs(glslang::TShader& vs) {
             glslang::TIntermSymbol* sym = obj->getAsSymbolNode();
             if (!sym || sym->getQualifier().storage != glslang::EvqVaryingIn) continue;
             const glslang::TQualifier& q = sym->getQualifier();
-            out.push_back({sym->getName().c_str(), q.hasLocation() ? static_cast<int>(q.layoutLocation) : -1});
+            out.push_back({userName(sym->getName().c_str()), q.hasLocation() ? static_cast<int>(q.layoutLocation) : -1});
         }
     }
     return out;
@@ -282,7 +353,7 @@ bool placeAttributes(glslang::TProgram& program, const std::vector<DeclaredInput
         const glslang::TObjectReflection& in = program.getPipeInput(i);
         if (!(in.stages & EShLangVertexMask) || in.name.rfind("gl_", 0) == 0) continue;
         Pending p;
-        p.info.name = in.name;
+        p.info.name = userName(in.name);
         p.info.type = static_cast<GLenum>(in.glDefineType);
         const glslang::TType* type = in.getType();
         p.info.size = (type && type->isArray()) ? std::max(1, type->getOuterArraySize()) : 1;
@@ -366,7 +437,7 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
             continue;
         }
         VkUniformBlockInfo info;
-        info.name = b.name;
+        info.name = userName(b.name);
         info.dataSize = static_cast<uint32_t>(std::max(b.size, 0));
         info.descriptorBinding = static_cast<uint32_t>(b.getBinding());
         for (const VkUniformBlockInfo& prior : iface.uniformBlocks)
@@ -388,7 +459,7 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
     for (int i = 0; i < program.getNumUniformVariables(); ++i) {
         const glslang::TObjectReflection& r = program.getUniform(i);
         VkUniformInfo u;
-        u.name = r.name;
+        u.name = userName(r.name);
         u.type = static_cast<GLenum>(r.glDefineType);
         u.size = std::max(1, r.size);
         const TypeInfo t = typeInfo(u.type);
@@ -551,7 +622,7 @@ bool feedbackInterface(glslang::TShader& vs, const FeedbackRequest& request, Pro
             v.type = GL_FLOAT;
         } else {
             FeedbackTarget target;
-            if (!resolveFeedbackName(name, outputs, target)) {
+            if (!resolveFeedbackName(internalName(name), outputs, target)) {
                 log += "ERROR: transform feedback varying '" + name + "' is not an output of the vertex shader\n";
                 return false;
             }
@@ -615,7 +686,7 @@ std::string captureEpilogue(const ProgramInterface& iface) {
                                "u";
         const uint32_t per = t.components();
         for (uint32_t k = 0; k < v.components; ++k) {
-            std::string expr = v.name;
+            std::string expr = internalName(v.name);
             if (v.array) expr += "[" + std::to_string(k / per) + "]";
             const uint32_t within = k % per;
             if (t.isMatrix())
@@ -637,8 +708,9 @@ void reflectOutputs(glslang::TProgram& program, ProgramInterface& iface) {
     for (int i = 0; i < program.getNumPipeOutputs(); ++i) {
         const glslang::TObjectReflection& out = program.getPipeOutput(i);
         if (!(out.stages & EShLangFragmentMask)) continue;
-        if (out.name.rfind("gl_", 0) == 0 || out.name.rfind("bro_", 0) == 0) continue;
-        iface.fragDataLocations[out.name] = static_cast<GLint>(out.layoutLocation());
+        const std::string name = userName(out.name);
+        if (name.rfind("gl_", 0) == 0 || name.rfind("bro_", 0) == 0) continue;
+        iface.fragDataLocations[name] = static_cast<GLint>(out.layoutLocation());
     }
 }
 
@@ -756,13 +828,15 @@ LinkResult link(const std::string& vertexSource, const std::string& fragmentSour
     }
 
     std::unordered_map<std::string, uint32_t> locations;
-    for (const VkAttribInfo& a : result.iface.attribs) locations[a.name] = static_cast<uint32_t>(a.location);
+    for (const VkAttribInfo& a : result.iface.attribs) locations[internalName(a.name)] = static_cast<uint32_t>(a.location);
     if (!spirv::setInputLocations(result.vertSpirv, locations)) {
         result.log += "ERROR: could not place the vertex attributes\n";
         return result;
     }
     spirv::stripRelaxedPrecision(result.vertSpirv);
     spirv::stripRelaxedPrecision(result.fragSpirv);
+    spirv::zeroInitializeVariables(result.vertSpirv);
+    spirv::zeroInitializeVariables(result.fragSpirv);
     result.ok = true;
     return result;
 }

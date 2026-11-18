@@ -814,12 +814,14 @@ void Engine::initAppRealm() {
     }
 }
 
+// One text per classic script, an empty one included, so a script's index
+// here is its ordinal among the page's classic <script>s (the marker
+// document.currentScript reads).
 std::vector<std::string> Engine::classicScriptTexts() const {
     std::vector<std::string> texts;
     for (const auto& script : manifest_.scripts) {
         if (script.isModule || script.isLua) continue;
-        std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
-        if (!code.empty()) texts.push_back(std::move(code));
+        texts.push_back(script.isInline() ? script.code : AppLoader::loadFile(script.path));
     }
     return texts;
 }
@@ -828,16 +830,18 @@ std::vector<std::string> Engine::classicScriptTexts() const {
 // in one scope as they are in the web's one global scope. Each script is
 // entered by a marker statement (bronze_host::classicScriptMarker) on a line
 // the unit already has, so line numbers stay the scripts' own and a throw is
-// known to be the script's it came out of (runClassicScripts).
-std::string Engine::combineClassicScripts(const std::vector<std::string>& texts) {
+// known to be the script's it came out of (runClassicScripts). Markers count
+// from `first`, the page ordinal of texts[0], so a resumed unit's scripts keep
+// their numbers.
+std::string Engine::combineClassicScripts(const std::vector<std::string>& texts, size_t first) {
     std::string combined;
     for (size_t i = 0; i < texts.size(); ++i) {
         combined += i == 0 ? std::string() : std::string("\n;");
-        combined += bronze_host::classicScriptMarker(i);
+        combined += bronze_host::classicScriptMarker(first + i);
         if (i > 0) combined += "\n";
         combined += texts[i];
     }
-    if (!texts.empty()) combined += "\n;" + bronze_host::classicScriptMarker(texts.size()) + "\n";
+    if (!texts.empty()) combined += "\n;" + bronze_host::classicScriptMarker(first + texts.size()) + "\n";
     return combined;
 }
 
@@ -847,31 +851,34 @@ std::string Engine::combineClassicScripts(const std::vector<std::string>& texts)
 // scripts one by one, so the one with the syntax error is the one that is
 // lost.
 void Engine::runClassicScripts(const std::vector<std::string>& texts, const std::string& code,
-                               const std::string& name) {
+                               const std::string& name, size_t first) {
+    if (first == 0) bronze_host::snapshotClassicScripts();
     bronze_host::clearClassicScriptMarker();
     if (bronze_host::evalAppScript(*this, code, name, false)) {
         bronze_host::takeClassicScriptMarker();
         return;
     }
     setTestFailure(true);
-    const int reached = bronze_host::takeClassicScriptMarker();
+    const int marked = bronze_host::takeClassicScriptMarker();
+    const int reached = marked < 0 ? -1 : marked - static_cast<int>(first);
     if (reached >= static_cast<int>(texts.size())) return;  // ran to its end
     if (reached < 0) {
         if (texts.size() < 2) return;
-        for (const std::string& text : texts) {
-            std::vector<std::string> one{text};
-            runClassicScripts(one, combineClassicScripts(one), name);
+        for (size_t i = 0; i < texts.size(); ++i) {
+            std::vector<std::string> one{texts[i]};
+            runClassicScripts(one, combineClassicScripts(one, first + i), name, first + i);
         }
         return;
     }
     std::vector<std::string> rest(texts.begin() + reached + 1, texts.end());
     if (rest.empty()) return;
+    const size_t restFirst = first + static_cast<size_t>(reached) + 1;
     // Blank lines first, so the rest's scripts keep the lines they have in
     // this unit and an error names the same line either way.
-    const size_t marker = code.find(bronze_host::classicScriptMarker(static_cast<size_t>(reached) + 1));
+    const size_t marker = code.find(bronze_host::classicScriptMarker(restFirst));
     const size_t lines = marker == std::string::npos
         ? 0 : static_cast<size_t>(std::count(code.begin(), code.begin() + static_cast<std::ptrdiff_t>(marker), '\n')) + 1;
-    runClassicScripts(rest, std::string(lines, '\n') + combineClassicScripts(rest), name);
+    runClassicScripts(rest, std::string(lines, '\n') + combineClassicScripts(rest, restFirst), name, restFirst);
 }
 
 // Module scripts are deferred on the web — they run after the classic ones, in

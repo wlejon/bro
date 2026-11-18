@@ -79,9 +79,13 @@ void WebGLVkContext::renderbufferStorageMultisample(GLenum target, GLsizei sampl
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }
+    // WebGL keeps WebGL 1's unsized DEPTH_STENCIL here, as DEPTH24_STENCIL8
+    // (three.js r75's shadow map target asks for it; rejected, the target had
+    // no depth buffer and the whole scene read as shadowed).
+    if (internalformat == GL_DEPTH_STENCIL) internalformat = GL_DEPTH24_STENCIL8;
     VkFormat format = colorRenderableFormat(internalformat);
     if (format == VK_FORMAT_UNDEFINED) format = depthStencilFormat(context_.physicalDevice(), internalformat);
-    if (format == VK_FORMAT_UNDEFINED || internalformat == GL_DEPTH_STENCIL) {
+    if (format == VK_FORMAT_UNDEFINED) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }

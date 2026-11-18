@@ -16,6 +16,14 @@ namespace bro::webgl::vk::spirv {
 /// through MoltenVK, in particular) makes of relaxed precision.
 void stripRelaxedPrecision(std::vector<uint32_t>& words);
 
+/// Give every Private (global) and Function (local) variable without an
+/// initializer a null one: WebGL defines an uninitialised variable as zero
+/// (ANGLE initialises them), where SPIR-V leaves it undefined. PlayCanvas
+/// accumulates its lighting into uninitialised globals (`vec3
+/// dDiffuseLight; ... dDiffuseLight += ambient`), which came out black.
+/// Variables of opaque types (samplers, images) are left as they are.
+void zeroInitializeVariables(std::vector<uint32_t>& words);
+
 /// Set the Location decoration of the Input variables named in `locations`
 /// (attributes placed by bindAttribLocation or the linker rather than by the
 /// source). Returns false if a named input is not found.

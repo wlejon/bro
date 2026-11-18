@@ -504,6 +504,13 @@ int takeClassicScriptMarker() {
     return reached;
 }
 
+int currentClassicScript() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return -1;
+    Value v = ev::getProperty(gt.value, kClassicScriptMarker);
+    return ev::isNumber(v) ? static_cast<int>(ev::toDouble(v)) : -1;
+}
+
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     HostEvalScope evalScope;
     // The breadcrumb a crash report prints. The host cannot name the LINE a

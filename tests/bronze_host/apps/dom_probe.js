@@ -13,11 +13,10 @@
 //   children lookup, a querySelector, a parentNode walk — and prints whether
 //   they are the SAME OBJECT, not whether they describe the same element.
 //
-//   REAL ARRAYS. `children` and `querySelectorAll` must be arrays with
-//   Array.prototype on them, because what an app does with them is `for…of`,
-//   `Array.from`, `.map`, `.filter`. An object with numeric keys and a
-//   `length` passes a naive check and is a TypeError at every one of those
-//   call sites, so the probe iterates rather than indexing.
+//   THE WEB'S LISTS. `children` is a live HTMLCollection and
+//   `querySelectorAll` a static NodeList, as on the web: what an app does
+//   with them is `for…of`, `Array.from`, `forEach`, `instanceof NodeList`, so
+//   the probe iterates rather than only indexing.
 //
 //   LIFETIME. The registry holds an entry per element and the engine frees
 //   nodes on its own schedule. A wrapper for a detached element must keep
@@ -60,21 +59,20 @@ for (let i = 0; i < names.length; i++) {
 say('panel.childElementCount', panel.childElementCount);
 
 // ---------------------------------------------------------------------------
-// children is a real array
+// children is a live HTMLCollection
 // ---------------------------------------------------------------------------
-// Not `children.length === 3` — that is true of a fake. These four lines are
-// each a different piece of Array.prototype, and a bare object with numeric
-// keys fails every one of them with a TypeError rather than a wrong answer.
+// Not `children.length === 3` — that is true of a fake. Iteration and
+// Array.from over it are what an app does with it.
 
 const kids = panel.children;
-say('children.isArray', Array.isArray(kids));
+say('children.isCollection', kids instanceof HTMLCollection && !Array.isArray(kids));
 
 let joined = '';
 for (const kid of kids) { joined = joined + kid.getAttribute('data-name') + ','; }
 say('children.forOf', joined);
 
-say('children.map', kids.map(function (k) { return k.textContent; }).join('|'));
-say('children.filter', kids.filter(function (k) { return k.textContent !== 'beta'; }).length);
+say('children.map', Array.from(kids, function (k) { return k.textContent; }).join('|'));
+say('children.filter', Array.from(kids).filter(function (k) { return k.textContent !== 'beta'; }).length);
 
 // ---------------------------------------------------------------------------
 // Identity, by four routes
@@ -99,11 +97,11 @@ say('id.body', document.body === document.querySelector('body'));
 // the three rows and NOT the decoy the page put in the document beside them.
 
 const allRows = document.querySelectorAll('.row');
-say('qsa.docIsArray', Array.isArray(allRows));
+say('qsa.docIsNodeList', allRows instanceof NodeList && typeof allRows.forEach === 'function');
 say('qsa.docCount', allRows.length);
 const ownRows = panel.querySelectorAll('.row');
 say('qsa.elemCount', ownRows.length);
-say('qsa.elemScoped', ownRows.indexOf(beta) === 1);
+say('qsa.elemScoped', Array.prototype.indexOf.call(ownRows, beta) === 1);
 
 // ---------------------------------------------------------------------------
 // Tree edits
@@ -114,17 +112,17 @@ delta.className = 'row';
 delta.setAttribute('data-name', 'delta');
 delta.textContent = 'delta';
 panel.insertBefore(delta, beta);
-say('edit.afterInsert', panel.children.map(function (k) { return k.textContent; }).join(','));
+say('edit.afterInsert', Array.from(panel.children, function (k) { return k.textContent; }).join(','));
 
 const epsilon = document.createElement('div');
 epsilon.className = 'row';
 epsilon.textContent = 'epsilon';
 panel.replaceChild(epsilon, delta);
-say('edit.afterReplace', panel.children.map(function (k) { return k.textContent; }).join(','));
+say('edit.afterReplace', Array.from(panel.children, function (k) { return k.textContent; }).join(','));
 say('edit.replacedDetached', epsilon.parentNode === panel && delta.parentNode === null);
 
 panel.removeChild(epsilon);
-say('edit.afterRemove', panel.children.map(function (k) { return k.textContent; }).join(','));
+say('edit.afterRemove', Array.from(panel.children, function (k) { return k.textContent; }).join(','));
 say('edit.contains.own', panel.contains(beta));
 say('edit.contains.gone', panel.contains(epsilon));
 say('edit.contains.self', panel.contains(panel));
@@ -301,7 +299,7 @@ for (const name of ['red', 'green', 'blue']) {
     select.appendChild(option);
 }
 panel.appendChild(select);
-say('form.select.optionsIsArray', Array.isArray(select.options));
+say('form.select.optionsIsCollection', select.options instanceof HTMLOptionsCollection);
 say('form.select.optionCount', select.options.length);
 say('form.select.optionIdentity', select.options[1] === select.children[1]);
 say('form.select.default', select.value + '/' + select.selectedIndex);

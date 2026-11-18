@@ -6,6 +6,8 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
+#include "bronze_host/host_dom_lists.h"
+#include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_anchor_download.h"
 
@@ -120,11 +122,34 @@ void decorateElementForms(ObjectBuilder& b) {
     b.accessor("options",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
-                   if (!st) return ev::undefined();
-                   if (!st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-                   std::vector<dom::Element*> opts = layout::selectOptions(st->el);
-                   return hostArrayOf(opts.size(), [&opts](size_t i) {
-                       return hostElementValue(opts[i]);
+                   if (!st || !st->el) return ev::undefined();
+                   StateRef ref(st);
+                   return makeLiveCollection(
+                       [ref]() {
+                           return ref->el ? layout::selectOptions(ref->el) : std::vector<dom::Element*>{};
+                       },
+                       CollectionKind::Options);
+               },
+               nullptr);
+    // The selected options: the one at selectedIndex, or for a <select
+    // multiple> each carrying selectedness (its `selected` attribute here).
+    b.accessor("selectedOptions",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   StateRef ref(st);
+                   return makeLiveCollection([ref]() {
+                       std::vector<dom::Element*> out;
+                       if (!ref->el) return out;
+                       std::vector<dom::Element*> opts = layout::selectOptions(ref->el);
+                       if (ref->el->hasAttribute("multiple")) {
+                           for (dom::Element* o : opts)
+                               if (o->hasAttribute("selected")) out.push_back(o);
+                       } else {
+                           const int i = layout::selectedIndex(ref->el);
+                           if (i >= 0 && static_cast<size_t>(i) < opts.size()) out.push_back(opts[i]);
+                       }
+                       return out;
                    });
                },
                nullptr);

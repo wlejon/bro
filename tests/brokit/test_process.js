@@ -31,3 +31,18 @@ assert(process.env.BROKIT_TEST_VAR === undefined, 'deleted env: ' + process.env.
 
 // missing var → undefined
 assert(process.env.DEFINITELY_NOT_SET_VAR_12345 === undefined, 'missing env undefined');
+
+// A page is a browser carrying a Node-style process: process.browser is true
+// (browserify's convention, which libraries such as A-Frame read before
+// treating a global `process` as Node), in a Worker too.
+assert(process.browser === true, 'process.browser in the page: ' + process.browser);
+{
+    const url = URL.createObjectURL(new Blob(['postMessage(String(process.browser));'], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    let got;
+    w.onmessage = (e) => { got = e.data; };
+    const deadline = Date.now() + 15000;
+    while (got === undefined && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
+    w.terminate();
+    assert(got === 'true', 'process.browser in a Worker: ' + got);
+}

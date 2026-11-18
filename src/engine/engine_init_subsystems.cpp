@@ -35,12 +35,26 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas,
 
     // The drawing buffer is the canvas's width/height attributes when it has
     // them (what syncWebGLCanvasSizes keeps it at every frame after), else
-    // its laid-out box, else the viewport. Starting from the box or viewport
-    // when the attributes say otherwise left a `canvas.width = 64` canvas
-    // with a 1920x1080 buffer until the next frame, so a draw + readPixels
-    // in the same turn saw a 64-pixel corner of a stretched image.
+    // its laid-out box, else the viewport for a canvas in the document and
+    // the web's 300x150 for one outside it (a capability probe's
+    // createElement('canvas'), which xeokit then reads back as a size).
+    // Starting from the box or viewport when the attributes say otherwise
+    // left a `canvas.width = 64` canvas with a 1920x1080 buffer until the
+    // next frame, so a draw + readPixels in the same turn saw a 64-pixel
+    // corner of a stretched image.
     int cw = viewportWidth_, ch = viewportHeight_;
     if (canvas) {
+        const dom::Node* root = canvas;
+        while (root->parentNode()) root = root->parentNode();
+        const bool inDocument =
+            root->nodeType() == dom::NodeType::Document ||
+            (root->nodeType() == dom::NodeType::Element &&
+             (static_cast<const dom::Element*>(root)->tagName() == "html" ||
+              static_cast<const dom::Element*>(root)->tagName() == "HTML"));
+        if (!inDocument) {
+            cw = 300;
+            ch = 150;
+        }
         auto& box = canvas->layoutBox();
         if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
         if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);

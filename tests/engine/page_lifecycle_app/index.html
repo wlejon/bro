@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head><title>lifecycle</title>
+<base href="sub/">
 <script>
 // The page of tests/engine/test_page_lifecycle.js, run by a child
 // bro-headless with verify.js. It records, in window.__log, the document's
@@ -8,6 +9,9 @@
 // DOMContentLoaded, load, and handler attributes set on the way.
 window.__log = ['script1 ' + document.readyState];
 window.__errors = [];
+// document.currentScript names the classic script running (null in a module
+// script and after the scripts), numbered right after one that threw.
+window.__current = [document.currentScript === document.scripts[0]];
 window.onerror = function (message) { __errors.push(String(message)); };
 document.addEventListener('readystatechange', function () { __log.push('readystatechange ' + document.readyState); });
 document.onreadystatechange = function () { __log.push('onreadystatechange ' + document.readyState); };
@@ -26,9 +30,12 @@ throw new Error('script 2 throws');
 </script>
 <script>
 __log.push('script3 ' + typeof CodeMirror);
+__current.push(document.currentScript === document.scripts[3]);
 </script>
+<script src="current_script.js"></script>
 <script type="module">
 __log.push('module ' + document.readyState);
+__current.push(document.currentScript);
 // A module script is deferred: the load event is still ahead of it.
 window.onload = function () { __log.push('onload set by the module'); };
 </script>

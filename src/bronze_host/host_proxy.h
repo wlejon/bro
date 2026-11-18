@@ -28,6 +28,12 @@ struct HostProxyTraps {
     // fixed method surface, which on the web would sit on a prototype. May be
     // undefined for a view that has none.
     Value methods = ev::undefined();
+    // The view's prototype (a list interface's, NodeList.prototype): the
+    // proxy's target is born on it, so `instanceof` and getPrototypeOf
+    // answer it, and a key `methods` does not answer is looked up along it
+    // before `get` is asked (`constructor`, `item`, `toString`), as the named
+    // properties of a WebIDL collection never shadow its prototype's members.
+    Value proto = ev::undefined();
     std::function<bool(const std::string& key, Value& out)> get;
     std::function<void(const std::string& key, Value v)> set;
     std::function<bool(const std::string& key)> has;

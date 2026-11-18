@@ -10,6 +10,8 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
+#include "bronze_host/host_dom_lists.h"
+#include "bronze_host/host_node_sweep.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -150,29 +152,20 @@ void decorateElementValidity(ObjectBuilder& b) {
                nullptr);
 
     // ---- HTMLFormElement ---------------------------------------------------
-    // The controls a form owns, as an array that also answers to each
-    // control's NAME — `form.elements.email` is how half the form code on the
-    // web reaches a field. A real HTMLFormControlsCollection is a Proxy; a
-    // snapshot with the named properties set on it covers what pages do.
+    // The controls a form owns: an HTMLFormControlsCollection, live, which
+    // also answers to each control's id or name (`form.elements.email`).
     b.accessor("elements",
                [](Value self_, std::span<const Value>) -> Value {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !isFormTag(st->el)) return ev::undefined();
-                   std::vector<dom::Element*> items;
-                   layout::collectFormElements(st->el, items);
-                   ev::Persistent arr(hostArrayOf(items.size(), [&items](size_t i) {
-                       return hostElementValue(items[i]);
-                   }));
-                   for (dom::Element* c : items) {
-                       const std::string& n = c->getAttribute("name");
-                       if (n.empty()) continue;
-                       // First control of a given name wins, as it does on the
-                       // web; a later one must not shadow it.
-                       if (!ev::isUndefined(ev::getProperty(arr.get(), n.c_str()))) continue;
-                       ev::Persistent cv(hostElementValue(c));
-                       arr.set(ev::setProperty(arr.get(), n.c_str(), cv.get()));
-                   }
-                   return arr.get();
+                   StateRef ref(st);
+                   return makeLiveCollection(
+                       [ref]() {
+                           std::vector<dom::Element*> items;
+                           if (ref->el) layout::collectFormElements(ref->el, items);
+                           return items;
+                       },
+                       CollectionKind::FormControls);
                },
                nullptr);
 

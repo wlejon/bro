@@ -31,6 +31,12 @@ public:
     /// Read the entire contents of a file into a string.
     static std::string loadFile(const std::string& path);
 
+    /// Whether a `<script type>` (lowercased, trimmed; "" for none) is a
+    /// classic script: JavaScript, not a module, Lua or a data block. The
+    /// page's classic scripts are the manifest's non-module, non-Lua ones, in
+    /// document order (document.currentScript counts them).
+    static bool isClassicScriptType(const std::string& type);
+
     /// Resolve a path against a base directory and asset mounts.
     /// Resolution order: absolute disk path > engine-supplied mount (`/lib`,
     /// `/system`, ...) > base + relative. `mounts` may be null.

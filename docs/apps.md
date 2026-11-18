@@ -657,7 +657,10 @@ script still runs); then `interactive` (`readystatechange`), the module
 scripts, `DOMContentLoaded`, `complete` (`readystatechange`) and the window's
 `load`, which reaches `window.onload` even when a module script set it.
 Scripts inside HTML comments (IE conditional comments included) do not run.
-`<base href>` is the base of the page's relative URLs. A
+`document.currentScript` is the classic script running (null in a module
+script and after the scripts), and a script's `src` reads as an absolute
+URL. `<base href>` is the base of the page's relative URLs (and
+`node.baseURI`). A
 `<script type="importmap">` maps bare specifiers for the page's module
 scripts, static and dynamic imports alike: an exact key to a file, a key
 ending in `/` to a folder; a scope's entries apply page-wide unless they

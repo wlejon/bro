@@ -36,6 +36,7 @@
 
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_proxy.h"
+#include "bronze_host/host_class.h"  // ev::setPrototype
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 #include "bronze_host/host_list_iteration.h"
 
@@ -51,6 +52,7 @@ namespace {
 struct TrapPack {
     HostProxyTraps t;
     ev::Persistent methods;
+    ev::Persistent proto;
 };
 
 // The elements of an argument list, each rooted: a vector is heap memory,
@@ -80,6 +82,7 @@ Value makeHostProxy(HostProxyTraps traps) {
     auto pack = std::make_shared<TrapPack>();
     pack->t = std::move(traps);
     pack->methods.set(pack->t.methods);
+    pack->proto.set(pack->t.proto);
 
     ObjectBuilder h;
 
@@ -88,14 +91,22 @@ Value makeHostProxy(HostProxyTraps traps) {
         Value key = argAt(a, 1);
         if (ev::isSymbol(key)) {
             // A list's `[Symbol.iterator]` is part of its method surface.
-            if (ev::isUndefined(pack->methods.get())) return ev::undefined();
-            return getSymbolKeyed(pack->methods.get(), key);
+            if (!ev::isUndefined(pack->methods.get())) {
+                Value m = getSymbolKeyed(pack->methods.get(), argAt(a, 1));
+                if (!ev::isUndefined(m)) return m;
+            }
+            if (ev::isUndefined(pack->proto.get())) return ev::undefined();
+            return getSymbolKeyed(pack->proto.get(), argAt(a, 1));
         }
         const std::string k = ev::toUtf8(key);
         // Methods first: they are the object's fixed surface, and no CSS
         // property or data-* key exists named `setProperty` to collide.
         if (!ev::isUndefined(pack->methods.get())) {
             Value m = ev::getProperty(pack->methods.get(), k.c_str());
+            if (!ev::isUndefined(m)) return m;
+        }
+        if (!ev::isUndefined(pack->proto.get())) {
+            Value m = ev::getProperty(pack->proto.get(), k.c_str());
             if (!ev::isUndefined(m)) return m;
         }
         Value out = ev::undefined();
@@ -118,14 +129,15 @@ Value makeHostProxy(HostProxyTraps traps) {
     h.def("has", 2, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
         if (ev::isSymbol(key)) {
-            if (ev::isUndefined(pack->methods.get())) return ev::fromBool(false);
-            return ev::fromBool(!ev::isUndefined(getSymbolKeyed(pack->methods.get(), key)));
+            for (const ev::Persistent* o : {&pack->methods, &pack->proto})
+                if (!ev::isUndefined(o->get()) && !ev::isUndefined(getSymbolKeyed(o->get(), argAt(a, 1))))
+                    return ev::fromBool(true);
+            return ev::fromBool(false);
         }
         const std::string k = ev::toUtf8(key);
-        if (!ev::isUndefined(pack->methods.get()) &&
-            !ev::isUndefined(ev::getProperty(pack->methods.get(), k.c_str()))) {
-            return ev::fromBool(true);
-        }
+        for (const ev::Persistent* o : {&pack->methods, &pack->proto})
+            if (!ev::isUndefined(o->get()) && !ev::isUndefined(ev::getProperty(o->get(), k.c_str())))
+                return ev::fromBool(true);
         return ev::fromBool(pack->t.has && pack->t.has(k));
     });
 
@@ -189,6 +201,7 @@ Value makeHostProxy(HostProxyTraps traps) {
     ev::Persistent handler(h.get());
     ev::Persistent target(ev::isUndefined(pack->t.target) ? ev::createObject()
                                                           : pack->t.target);
+    if (ev::isObject(pack->t.proto)) ev::setPrototype(target.get(), pack->t.proto);
 
     ev::GlobalValue proxyCtor = ev::globalValue("Proxy");
     if (!proxyCtor.found) {

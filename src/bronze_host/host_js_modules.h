@@ -32,6 +32,12 @@ void dropObserverState(uint64_t compartmentId);
 // lacks.
 void adoptGlobalProperty(const char* name);
 
+// `process.browser = true` on brokit's global `process`: a page or Worker is a
+// browser that happens to carry a Node-style process object, and libraries
+// that find a global `process` read process.browser (browserify's convention)
+// before treating the host as Node (A-Frame skips its stylesheet otherwise).
+void markProcessBrowser();
+
 // Enter each compiled module and lift what it defined on globalThis into the
 // host-global registry: MutationObserver/ResizeObserver/IntersectionObserver
 // and their entry classes; the UI event classes (MouseEvent, KeyboardEvent,

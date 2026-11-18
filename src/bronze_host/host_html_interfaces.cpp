@@ -1,4 +1,5 @@
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_dom_lists.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_shadow_dom.h"
@@ -11,11 +12,13 @@
 #include "bronze_host/host_remote_view.h"
 #endif
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_events.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_runtime.h"
 #include "engine/engine.h"
 #include "dom/document.h"
+#include "util/remote_asset.h"
 
 #include <cctype>
 #include <string>
@@ -105,6 +108,26 @@ void decorateDetailsProto(ObjectBuilder& b) {
             if (!st || !st->el) return ev::undefined();
             if (ev::toBool(argAt(a, 0))) st->el->setAttribute("open", "");
             else st->el->removeAttribute("open");
+            return ev::undefined();
+        });
+}
+
+// HTMLScriptElement.src: the src attribute as an absolute URL, resolved
+// against the document's base URL ("" without the attribute). Potree finds
+// its own folder from document.currentScript.src.
+void decorateScriptProto(ObjectBuilder& b) {
+    b.accessor(
+        "src",
+        [](Value self, std::span<const Value>) -> Value {
+            HostNodeState* st = hostNodeStateOfValue(self);
+            if (!st || !st->el || !st->el->hasAttribute("src")) return ev::fromUtf8("");
+            return ev::fromUtf8(util::resolveUrl(documentBaseUrl(st->el->document()), st->el->getAttribute("src")));
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            ev::Persistent receiver(self);
+            const std::string v = ev::toUtf8(argAt(a, 0));
+            HostNodeState* st = hostNodeStateOfValue(receiver.get());
+            if (st && st->el) st->el->setAttribute("src", v);
             return ev::undefined();
         });
 }
@@ -310,7 +333,7 @@ void installHtmlInterfaces() {
         {g_htmlSelectElementClass, "HTMLSelectElement"},
         {g_htmlTextAreaElementClass, "HTMLTextAreaElement"},
         {g_htmlButtonElementClass, "HTMLButtonElement"},
-        {g_htmlScriptElementClass, "HTMLScriptElement"},
+        {g_htmlScriptElementClass, "HTMLScriptElement", decorateScriptProto},
         {g_htmlStyleElementClass, "HTMLStyleElement"},
         {g_htmlAnchorElementClass, "HTMLAnchorElement"},
         {g_htmlSpanElementClass, "HTMLSpanElement"},
@@ -395,6 +418,9 @@ void installHtmlInterfaces() {
     g_dataTransferClass.install("DataTransfer", 0, illegalConstructor, nullptr);
     g_audioDestinationNodeClass.install("AudioDestinationNode", 0, illegalConstructor, nullptr);
     installPath2DClass();
+
+    // 9. The list interfaces (NodeList, HTMLCollection and its HTML kinds).
+    installDomListInterfaces();
 }
 
 const HostClass& canvasRenderingContext2DHostClass() { return g_canvas2DContextClass; }

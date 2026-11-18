@@ -20,6 +20,7 @@
 #include "embed/embed.h"
 #include "embed/embed_fast_function.h"
 #include "runtime/array.h"
+#include "runtime/typed_array.h"  // ElementKind
 
 #include <cmath>
 #include <cstddef>
@@ -198,12 +199,16 @@ inline bool plainArrayData(Value v, Storage& storage, Convert convert,
     return true;
 }
 
+// The WebGL Float32List / Int32List / Uint32List unions: a typed array of the
+// list's own element type is read in place; any other typed array or array-like
+// is a sequence<T>, converted element by element (xeokit hands
+// uniformMatrix4fv a Float64Array, which Chromium converts).
 template <typename Storage>
 inline bool floatData(Value v, Storage& storage,
                       const float** outData, size_t* outCount) {
     if (!v.isObject()) return false;
     if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
-        if (auto info = ev::typedArrayInfo(v)) {
+        if (auto info = ev::typedArrayInfo(v); info && info.elementKind == bronze::ElementKind::Float32) {
             *outData = reinterpret_cast<const float*>(info.data);
             *outCount = info.byteLength / sizeof(float);
             return true;
@@ -218,7 +223,7 @@ inline bool int32Data(Value v, Storage& storage,
                       const int32_t** outData, size_t* outCount) {
     if (!v.isObject()) return false;
     if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
-        if (auto info = ev::typedArrayInfo(v)) {
+        if (auto info = ev::typedArrayInfo(v); info && info.elementKind == bronze::ElementKind::Int32) {
             *outData = reinterpret_cast<const int32_t*>(info.data);
             *outCount = info.byteLength / sizeof(int32_t);
             return true;
@@ -235,7 +240,7 @@ inline bool uint32Data(Value v, Storage& storage,
                        const uint32_t** outData, size_t* outCount) {
     if (!v.isObject()) return false;
     if (v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::TypedArray) {
-        if (auto info = ev::typedArrayInfo(v)) {
+        if (auto info = ev::typedArrayInfo(v); info && info.elementKind == bronze::ElementKind::Uint32) {
             *outData = reinterpret_cast<const uint32_t*>(info.data);
             *outCount = info.byteLength / sizeof(uint32_t);
             return true;

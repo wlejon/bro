@@ -94,6 +94,11 @@ void adoptGlobalProperty(const char* name) {
     if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
 }
 
+void markProcessBrowser() {
+    ev::GlobalValue p = ev::globalValue("process");
+    if (p.found && ev::isObject(p.value)) ev::setProperty(p.value, "browser", ev::fromBool(true));
+}
+
 void installObserversModule() {
     // The module reads `__bro_observers` at its top level, so the hook object
     // is registered first (host_observer_hooks.cpp).

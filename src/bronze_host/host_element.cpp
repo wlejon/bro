@@ -12,6 +12,7 @@
 #include "bronze_host/host_image.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
+#include "bronze_host/host_dom_lists.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
@@ -639,15 +640,7 @@ void decorateElementProto(ObjectBuilder& b) {
 
     b.accessor("children",
                [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   if (!st->el) {
-                       return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-                   }
-                   std::vector<dom::Element*> kids = st->el->children();
-                   return hostArrayOf(
-                       kids.size(),
-                       [&kids](size_t i) { return hostElementValue(kids[i]); });
+                   return hostChildrenCollection(nodeStateOf(self_));
                },
                nullptr);
     b.accessor("childElementCount",
@@ -725,11 +718,8 @@ void decorateElementProto(ObjectBuilder& b) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st) return ev::undefined();
         Value selV = argAt(a, 0);
-        if (!st->el || ev::isObject(selV) || ev::isUndefined(selV))
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        std::vector<dom::Element*> found = st->el->querySelectorAll(ev::toUtf8(selV));
-        return hostArrayOf(found.size(),
-                           [&found](size_t i) { return hostElementValue(found[i]); });
+        if (!st->el || ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
+        return makeStaticNodeList(st->el->querySelectorAll(ev::toUtf8(selV)));
     });
     b.def("matches", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = nodeStateOf(self_);

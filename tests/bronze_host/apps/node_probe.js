@@ -108,7 +108,7 @@ say('sib.childrenLen', para.children.length);
 let kinds = '';
 for (const n of para.childNodes) kinds = kinds + n.nodeType + ',';
 say('sib.kinds', kinds);
-say('sib.isArray', Array.isArray(para.childNodes));
+say('sib.isNodeList', para.childNodes instanceof NodeList && para.childNodes === para.childNodes);
 
 // ---------------------------------------------------------------------------
 // CharacterData, with offsets that are UTF-16

@@ -20,11 +20,9 @@ namespace bro::bronze_host {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
-// A REAL JS array of `count` items, `make(i)` supplying each. Real, because
-// what an app does with `children` or `querySelectorAll` is iterate it —
-// `for…of`, `Array.from`, `.map` — and an object with numeric keys and a
-// `length` has neither Array.prototype nor an iterator, so every one of those
-// is a TypeError at the call site rather than an empty result.
+// A REAL JS array of `count` items, `make(i)` supplying each: an object with
+// numeric keys and a `length` has neither Array.prototype nor an iterator.
+// (The DOM's own lists, NodeList and HTMLCollection, are host_dom_lists.h.)
 //
 // `make(i)` runs with the array already rooted and its result is stored
 // immediately, which is what keeps this inside the GC rule: a pre-built

@@ -325,7 +325,7 @@ bool demote(SweepGroup& g) {
     for (uint32_t m = 0; m < g.members.size(); ++m) {
         HostNodeState* st = g.members[m];
         for (ev::Persistent* p : {&st->styleObj, &st->classListObj, &st->datasetObj,
-                                  &st->computedObj}) {
+                                  &st->computedObj, &st->childNodesObj, &st->childrenObj}) {
             if (!ev::isUndefined(p->get())) g.slots.push_back({p, m});
         }
         if (!st->el) continue;

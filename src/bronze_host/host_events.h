@@ -91,6 +91,10 @@ void installDocumentEventHandlers(ObjectBuilder& document, const ElementSource& 
 // `location` and `history` on the window, registered as globals
 // (host_location.cpp).
 void installLocationAndHistory(ObjectBuilder& window);
+// The document's base URL: its URL, or its first <base href> resolved
+// against it (Node.baseURI, and the URL attributes that reflect absolute
+// URLs) (host_location.cpp).
+std::string documentBaseUrl(dom::Document* doc);
 
 // Hand `evt` to one compiled listener as PLAIN DATA — a fresh object carrying
 // the fields for the event's kind (coordinates, key, button, deltas, the

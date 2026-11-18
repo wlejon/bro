@@ -39,6 +39,19 @@
  * - `failIfMajorPerformanceCaveat`: reported as asked; `desynchronized` and
  *   `xrCompatible`: granted false.
  *
+ * A canvas that is not in a document starts at 300x150, as on the web (one in
+ * the document without width/height attributes is sized to the viewport).
+ * Shaders: a GLSL variable declared without an initializer (global or local)
+ * reads as zero, as ANGLE makes it. Uniform data (`uniform*v`,
+ * `uniformMatrix*fv`): a typed array of the list's own type (Float32Array,
+ * Int32Array, Uint32Array) is read in place; any other typed array or a plain
+ * array is converted element by element (a Float64Array of matrices works).
+ * Identifiers that are Vulkan GLSL keywords but not GLSL ES ones (`sampler`,
+ * `buffer`, `shared`, `texture2D` in ES 3.00, ...) compile and keep their
+ * names. `getUniformLocation('a')` finds element 0 of any uniform array,
+ * one-element arrays included. `renderbufferStorage(RENDERBUFFER, DEPTH_STENCIL,
+ * ...)` (WebGL 1's unsized form) allocates DEPTH24_STENCIL8.
+ *
  * Limits are the Vulkan device's, capped where a WebGL implementation is:
  * `MAX_TEXTURE_IMAGE_UNITS` / `MAX_VERTEX_TEXTURE_IMAGE_UNITS` are 32 and
  * `MAX_COMBINED_TEXTURE_IMAGE_UNITS` 64 wherever the device's per-stage and

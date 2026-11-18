@@ -37,7 +37,9 @@
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
+#include "bronze_host/host_dom_lists.h"
 #include "bronze_host/host_element.h"
+#include "bronze_host/host_events.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
@@ -364,12 +366,7 @@ void installNodeTree(ObjectBuilder& b) {
 
     b.accessor("childNodes",
                [](Value self_, std::span<const Value>) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
-                   std::vector<dom::Node*> kids = childrenOf(st->node);
-                   return hostArrayOf(kids.size(), [&kids](size_t i) {
-                       return hostNodeValue(kids[i]);
-                   });
+                   return hostChildNodesList(hostNodeStateOfValue(self_));
                },
                nullptr);
     b.def("hasChildNodes", 0, [](Value self_, std::span<const Value>) {
@@ -444,6 +441,13 @@ void installNodeTree(ObjectBuilder& b) {
         if (!st || !st->node) return ev::null();
         dom::Element* p = st->node->parentElement();
         return p ? hostElementValue(p) : ev::null();
+    }, nullptr);
+
+    // The document's base URL (its <base href>, else its URL), for every node.
+    b.accessor("baseURI", [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        dom::Document* doc = st && st->node ? st->node->document() : nullptr;
+        return ev::fromUtf8(documentBaseUrl(doc ? doc : currentHostDocument()));
     }, nullptr);
 
     b.accessor("ownerDocument",
@@ -663,16 +667,7 @@ Value makeFragmentValue(dom::Node* frag) {
     // `frag.children.length` back before inserting it.
     b.accessor("children",
                [](Value self_, std::span<const Value>) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
-                   std::vector<dom::Element*> kids;
-                   if (st->node)
-                       for (dom::Node* n : st->node->childNodes())
-                           if (n->nodeType() == dom::NodeType::Element)
-                               kids.push_back(static_cast<dom::Element*>(n));
-                   return hostArrayOf(kids.size(), [&kids](size_t i) {
-                       return hostElementValue(kids[i]);
-                   });
+                   return hostChildrenCollection(hostNodeStateOfValue(self_));
                },
                nullptr);
 
@@ -745,7 +740,27 @@ Value makeFragmentValue(dom::Node* frag) {
                    }
                    return ev::fromUtf8(out);
                },
-               nullptr);
+               // Setting it replaces the children with one text node (none
+               // for ""): jQuery's buildFragment clears its fragment so, in
+               // strict mode, where a missing setter throws. The children
+               // are removed, not freed: script may still hold them.
+               [](Value self_, std::span<const Value> a) {
+                   ev::Persistent receiver(self_);
+                   Value v = argAt(a, 0);
+                   const std::string text = ev::isNull(v) || ev::isUndefined(v) ? std::string() : ev::toUtf8(v);
+                   HostNodeState* st = hostNodeStateOfValue(receiver.get());
+                   if (!st || !st->node) return ev::undefined();
+                   while (!st->node->childNodes().empty()) {
+                       dom::Node* kid = st->node->childNodes().back();
+                       st->node->removeChild(kid);
+                       if (kid->nodeType() == dom::NodeType::Element)
+                           onCustomElementDisconnected(static_cast<dom::Element*>(kid));
+                   }
+                   if (!text.empty()) {
+                       if (dom::Document* doc = st->node->document()) st->node->appendChild(doc->createTextNode(text));
+                   }
+                   return ev::undefined();
+               });
 
     b.def("querySelector", 1, [](Value self_, std::span<const Value> a) -> Value {
         HostNodeState* st = hostNodeStateOfValue(self_);
@@ -764,10 +779,9 @@ Value makeFragmentValue(dom::Node* frag) {
 
     b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) -> Value {
         HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st || !st->node || a.empty()) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        if (!st || !st->node || a.empty()) return makeStaticNodeList({});
         Value selV = a[0];
-        if (ev::isObject(selV) || ev::isUndefined(selV))
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
         std::string sel = ev::toUtf8(selV);
         std::vector<dom::Element*> out;
         if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
@@ -775,9 +789,7 @@ Value makeFragmentValue(dom::Node* frag) {
         } else {
             dom::Element::querySelectorAllUnder(st->node, sel, out);
         }
-        return hostArrayOf(out.size(), [&out](size_t i) {
-            return hostElementValue(out[i]);
-        });
+        return makeStaticNodeList(out);
     });
 
     b.def("getElementById", 1, [](Value self_, std::span<const Value> a) -> Value {

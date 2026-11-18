@@ -8,7 +8,8 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
-#include "bronze_host/host_proxy.h"
+#include "bronze_host/host_dom_lists.h"
+#include "bronze_host/eval.h"
 #include "bronze_host/host_document.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
@@ -19,6 +20,7 @@
 #include "bronze_host/host_web_animations.h"
 #include "bronze_host/host_web_globals.h"
 
+#include "engine/app_loader.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -227,6 +229,15 @@ void collectMatching(dom::Element* cur, const std::string& selector, std::vector
     }
 }
 
+bool isHtmlTag(const dom::Element* el, const char* tag) {
+    return el->ns() == dom::Element::Namespace::HTML && el->qualifiedName() == tag;
+}
+
+void collectWhere(dom::Element* cur, bool (*keep)(const dom::Element*), std::vector<dom::Element*>& out) {
+    if (keep(cur)) out.push_back(cur);
+    for (dom::Element* child : cur->children()) collectWhere(child, keep, out);
+}
+
 std::vector<dom::Element*> runCollectionQuery(dom::Element* root, dom::Document* fixed, const std::string& selector) {
     std::vector<dom::Element*> results;
     if (root) {
@@ -245,99 +256,7 @@ std::vector<dom::Element*> runCollectionQuery(dom::Element* root, dom::Document*
 }  // namespace
 
 Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::string selector) {
-    HostProxyTraps traps;
-
-    ObjectBuilder mb;
-    mb.def("item", 1, [root, fixed, selector](Value, std::span<const Value> a) -> Value {
-        int idx = a.empty() ? 0 : satCast<int>(ev::toDouble(a[0]));
-        auto elems = runCollectionQuery(root, fixed, selector);
-        if (idx < 0 || static_cast<size_t>(idx) >= elems.size()) return ev::null();
-        return hostElementValue(elems[idx]);
-    });
-    mb.def("namedItem", 1, [root, fixed, selector](Value, std::span<const Value> a) -> Value {
-        if (a.empty() || ev::isUndefined(a[0])) return ev::null();
-        std::string name = ev::toUtf8(a[0]);
-        auto elems = runCollectionQuery(root, fixed, selector);
-        for (dom::Element* el : elems) {
-            if (el->getAttribute("id") == name || el->getAttribute("name") == name) {
-                return hostElementValue(el);
-            }
-        }
-        return ev::null();
-    });
-    // HTMLCollection's one iteration member: the value iterator over its
-    // indexed elements (no forEach, as on the web).
-    installArrayLikeIteration(mb.get(), /*withForEach=*/false);
-    traps.methods = mb.get();
-
-    traps.get = [root, fixed, selector](const std::string& key, Value& out) -> bool {
-        if (key == "length") {
-            auto elems = runCollectionQuery(root, fixed, selector);
-            out = ev::fromDouble(static_cast<double>(elems.size()));
-            return true;
-        }
-        bool isIndex = !key.empty();
-        for (char c : key) {
-            if (!std::isdigit(static_cast<unsigned char>(c))) {
-                isIndex = false;
-                break;
-            }
-        }
-        if (isIndex) {
-            size_t idx = static_cast<size_t>(std::stoul(key));
-            auto elems = runCollectionQuery(root, fixed, selector);
-            if (idx < elems.size()) {
-                out = hostElementValue(elems[idx]);
-                return true;
-            }
-            out = ev::undefined();
-            return true;
-        }
-        auto elems = runCollectionQuery(root, fixed, selector);
-        for (dom::Element* el : elems) {
-            if (el->getAttribute("id") == key || el->getAttribute("name") == key) {
-                out = hostElementValue(el);
-                return true;
-            }
-        }
-        return false;
-    };
-
-    traps.has = [root, fixed, selector](const std::string& key) -> bool {
-        if (key == "length") return true;
-        bool isIndex = !key.empty();
-        for (char c : key) {
-            if (!std::isdigit(static_cast<unsigned char>(c))) {
-                isIndex = false;
-                break;
-            }
-        }
-        if (isIndex) {
-            size_t idx = static_cast<size_t>(std::stoul(key));
-            auto elems = runCollectionQuery(root, fixed, selector);
-            return idx < elems.size();
-        }
-        auto elems = runCollectionQuery(root, fixed, selector);
-        for (dom::Element* el : elems) {
-            if (el->getAttribute("id") == key || el->getAttribute("name") == key) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    traps.ownKeys = [root, fixed, selector]() -> std::vector<std::string> {
-        auto elems = runCollectionQuery(root, fixed, selector);
-        std::vector<std::string> keys;
-        keys.reserve(elems.size() + 1);
-        for (size_t i = 0; i < elems.size(); ++i) {
-            keys.push_back(std::to_string(i));
-        }
-        keys.push_back("length");
-        return keys;
-    };
-
-    return makeHostProxy(std::move(traps));
+    return makeLiveCollection([root, fixed, selector]() { return runCollectionQuery(root, fixed, selector); });
 }
 
 namespace {
@@ -353,6 +272,49 @@ bool isCreateEventInterface(const std::string& lower) {
     };
     for (const char* n : kNames) if (lower == n) return true;
     return false;
+}
+
+// The page's classic <script>s, per document, as its classic scripts
+// started: a script element, HTML, whose type is classic JavaScript, with a
+// src (not a .lua file) or a body — the AppLoader manifest's classic scripts,
+// one for one, in document order.
+std::unordered_map<dom::Document*, std::vector<dom::Element*>>& classicScriptSnapshots() {
+    static std::unordered_map<dom::Document*, std::vector<dom::Element*>> snapshots;
+    return snapshots;
+}
+
+std::vector<dom::Element*> classicScriptElements(dom::Document* doc) {
+    std::vector<dom::Element*> out;
+    for (dom::Element* el : doc->querySelectorAll("script")) {
+        if (el->ns() != dom::Element::Namespace::HTML) continue;
+        std::string type = el->getAttribute("type");
+        for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const size_t b = type.find_first_not_of(" \t\r\n");
+        type = b == std::string::npos ? std::string() : type.substr(b, type.find_last_not_of(" \t\r\n") - b + 1);
+        if (!engine::AppLoader::isClassicScriptType(type)) continue;
+        if (el->hasAttribute("src")) {
+            const std::string src = el->getAttribute("src");
+            if (src.size() >= 4 && src.compare(src.size() - 4, 4, ".lua") == 0) continue;
+        } else if (el->textContent().empty()) {
+            continue;
+        }
+        out.push_back(el);
+    }
+    return out;
+}
+
+// document.currentScript: the classic script running now, else null. The
+// snapshot's element is handed out only while it is still a script of the
+// document, so a removed (and maybe freed) one is never touched.
+Value currentScriptValue(dom::Document* doc) {
+    const int k = currentClassicScript();
+    if (!doc || k < 0) return ev::null();
+    auto it = classicScriptSnapshots().find(doc);
+    if (it == classicScriptSnapshots().end() || static_cast<size_t>(k) >= it->second.size()) return ev::null();
+    dom::Element* el = it->second[static_cast<size_t>(k)];
+    for (dom::Element* now : doc->querySelectorAll("script"))
+        if (now == el) return hostElementValue(el);
+    return ev::null();
 }
 
 std::string locationHref() {
@@ -386,6 +348,9 @@ void decorateDocumentExtras(ObjectBuilder& b, dom::Document* fixed) {
         return loc.found ? loc.value : ev::null();
     }, nullptr);
     b.accessor("URL", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
+    b.accessor("currentScript", [fixed](Value, std::span<const Value>) {
+        return currentScriptValue(documentFor(fixed));
+    }, nullptr);
     b.accessor("documentURI", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
     b.set("compatMode", ev::fromUtf8("CSS1Compat"));
     b.set("characterSet", ev::fromUtf8("UTF-8"));
@@ -557,16 +522,11 @@ Value makeDocumentValue(dom::Document* fixed) {
         return wrapElement(el);
     });
     b.def("querySelectorAll", 1, [fixed](Value, std::span<const Value> a) {
-        auto empty = []() {
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        };
         Value selV = argAt(a, 0);
-        if (ev::isObject(selV) || ev::isUndefined(selV)) return empty();
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return makeStaticNodeList({});
         dom::Document* doc = documentFor(fixed);
-        if (!doc) return empty();
-        std::vector<dom::Element*> list = doc->querySelectorAll(ev::toUtf8(selV));
-        return hostArrayOf(list.size(),
-                           [&list](size_t i) { return hostElementValue(list[i]); });
+        if (!doc) return makeStaticNodeList({});
+        return makeStaticNodeList(doc->querySelectorAll(ev::toUtf8(selV)));
     });
     b.def("getElementsByTagName", 1, [fixed](Value, std::span<const Value> a) {
         std::string tag = !a.empty() && !ev::isUndefined(a[0]) && !ev::isObject(a[0]) ? ev::toUtf8(a[0]) : "*";
@@ -578,7 +538,11 @@ Value makeDocumentValue(dom::Document* fixed) {
     });
     b.def("getElementsByName", 1, [fixed](Value, std::span<const Value> a) {
         std::string name = !a.empty() && !ev::isUndefined(a[0]) && !ev::isObject(a[0]) ? ev::toUtf8(a[0]) : "";
-        return makeLiveHTMLCollection(nullptr, fixed, "name:" + name);
+        // getElementsByName is a live NodeList (HTML §3.1.5), not a collection.
+        return makeLiveNodeList([fixed, name]() {
+            std::vector<dom::Element*> els = runCollectionQuery(nullptr, fixed, "name:" + name);
+            return std::vector<dom::Node*>(els.begin(), els.end());
+        });
     });
     b.def("importNode", 2, [fixed](Value, std::span<const Value> a) {
         dom::Document* doc = documentFor(fixed);
@@ -648,6 +612,39 @@ Value makeDocumentValue(dom::Document* fixed) {
     };
     defDocElement("body", &dom::Document::body);
     defDocElement("documentElement", &dom::Document::documentElement);
+    // The document's HTMLCollections (HTML §3.1.5 / DOM's children): live,
+    // tree order, each filtering the elements under the root element.
+    auto defDocCollection = [&b, fixed](const char* name, bool (*keep)(const dom::Element*)) {
+        b.accessor(name,
+                   [keep, fixed](Value, std::span<const Value>) {
+                       return makeLiveCollection([keep, fixed]() {
+                           std::vector<dom::Element*> out;
+                           dom::Document* doc = documentFor(fixed);
+                           if (doc && doc->documentElement()) collectWhere(doc->documentElement(), keep, out);
+                           return out;
+                       });
+                   },
+                   nullptr);
+    };
+    defDocCollection("forms", [](const dom::Element* e) { return isHtmlTag(e, "form"); });
+    defDocCollection("images", [](const dom::Element* e) { return isHtmlTag(e, "img"); });
+    defDocCollection("embeds", [](const dom::Element* e) { return isHtmlTag(e, "embed"); });
+    defDocCollection("plugins", [](const dom::Element* e) { return isHtmlTag(e, "embed"); });
+    defDocCollection("scripts", [](const dom::Element* e) { return isHtmlTag(e, "script"); });
+    defDocCollection("links", [](const dom::Element* e) {
+        return (isHtmlTag(e, "a") || isHtmlTag(e, "area")) && e->hasAttribute("href");
+    });
+    defDocCollection("anchors", [](const dom::Element* e) { return isHtmlTag(e, "a") && e->hasAttribute("name"); });
+    b.accessor("children",
+               [fixed](Value, std::span<const Value>) {
+                   return makeLiveCollection([fixed]() {
+                       std::vector<dom::Element*> out;
+                       dom::Document* doc = documentFor(fixed);
+                       if (doc && doc->documentElement()) out.push_back(doc->documentElement());
+                       return out;
+                   });
+               },
+               nullptr);
     // The element whose scrollTop/scrollLeft scroll the viewport: in a
     // standards-mode document (compatMode is always CSS1Compat) that is the
     // root element (CSSOM View), whose scroll offsets bro maps to the
@@ -791,6 +788,11 @@ void clearHostDocument(dom::Document* doc) {
     hostSweepForgetDocument(doc);
     s_docWrappers.erase(doc);
     removeHostMediaQueriesForDocument(doc);
+}
+
+void snapshotClassicScripts() {
+    dom::Document* doc = currentHostDocument();
+    if (doc) classicScriptSnapshots()[doc] = classicScriptElements(doc);
 }
 
 }  // namespace bro::bronze_host

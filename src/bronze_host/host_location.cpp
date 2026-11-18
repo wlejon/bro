@@ -292,6 +292,15 @@ Value makeHistory(uint64_t home) {
 
 }  // namespace
 
+std::string documentBaseUrl(dom::Document* doc) {
+    const std::string url = documentUrl(doc);
+    if (!doc) return url;
+    for (dom::Element* base : doc->querySelectorAll("base")) {
+        if (base->hasAttribute("href")) return util::resolveUrl(url, base->getAttribute("href"));
+    }
+    return url;
+}
+
 void installLocationAndHistory(ObjectBuilder& window) {
     const uint64_t home = currentCompartmentId();
     window.set("location", makeLocation(home));
