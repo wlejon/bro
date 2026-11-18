@@ -191,6 +191,24 @@ void startChunk(WalkState& st, int anchor, render::TextDirection dir) {
     st.chunks.push_back(Chunk{st.runs.size(), anchor, dir});
 }
 
+// A text position attribute (x, y, dx, dy): a <length> whose em / ex
+// resolve against the element's font (d3's axis labels use dy="0.71em"); the
+// first value of a list.
+float textLength(const dom::Element* el, const char* name, const SvgFont& font, float fallback = 0.0f) {
+    const std::string& v = attrOf(el, name);
+    if (v.empty()) return fallback;
+    char* end = nullptr;
+    float f = std::strtof(v.c_str(), &end);
+    if (end == v.c_str()) return fallback;
+    if (end[0] == 'e' && end[1] == 'm') return f * font.size;
+    if (end[0] == 'e' && end[1] == 'x') return f * font.size * 0.5f;
+    if (end[0] == 'p' && end[1] == 't') return f * 96.0f / 72.0f;
+    if (end[0] == 'i' && end[1] == 'n') return f * 96.0f;
+    if (end[0] == 'c' && end[1] == 'm') return f * 96.0f / 2.54f;
+    if (end[0] == 'm' && end[1] == 'm') return f * 96.0f / 25.4f;
+    return f;
+}
+
 void walk(const dom::Element* el, bool isRoot, WalkState& st) {
     std::string tag = lower(el->tagName());
     SvgFont font = resolveFont(el);
@@ -199,15 +217,15 @@ void walk(const dom::Element* el, bool isRoot, WalkState& st) {
     bool hasX = !attrOf(el, "x").empty();
     bool hasY = !attrOf(el, "y").empty();
     if (isRoot) {
-        if (hasX) st.cx = attrFloat(el, "x");
-        if (hasY) st.cy = attrFloat(el, "y");
+        if (hasX) st.cx = textLength(el, "x", font);
+        if (hasY) st.cy = textLength(el, "y", font);
         startChunk(st, anchorMode(el), dir);
     } else {
-        if (hasX) { st.cx = attrFloat(el, "x"); startChunk(st, anchorMode(el), dir); }
-        if (hasY) st.cy = attrFloat(el, "y");
+        if (hasX) { st.cx = textLength(el, "x", font); startChunk(st, anchorMode(el), dir); }
+        if (hasY) st.cy = textLength(el, "y", font);
     }
-    st.cx += attrFloat(el, "dx", 0.0f);
-    st.cy += attrFloat(el, "dy", 0.0f);
+    st.cx += textLength(el, "dx", font);
+    st.cy += textLength(el, "dy", font);
 
     float bshift = baselineShift(el, font, st.m);
 

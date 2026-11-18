@@ -799,6 +799,11 @@ private:
     // each layout of the app document.
     float documentHeight_ = 0.0f;
     void updateDocumentHeight();
+    // documentHeight_ as the user may scroll it: the viewport's overflow is
+    // <html>'s, or <body>'s when <html>'s is visible (CSS Overflow §3.3);
+    // when that is hidden or clip there is no viewport scrollbar and the wheel
+    // does not scroll the page, so this is 0.
+    float userScrollHeight() const;
     float wheelResidualY_ = 0.0f;
 
     TopLayerCloseRequestFn topLayerCloseRequest_;

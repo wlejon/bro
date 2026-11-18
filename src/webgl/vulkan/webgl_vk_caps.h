@@ -82,4 +82,10 @@ struct WebGLCaps {
 /// features and format support, so any thread may take it.
 std::shared_ptr<const WebGLCaps> buildWebGLCaps(render::VulkanContext& device);
 
+/// The same device as a WebGL 1 context sees it: its version strings, and
+/// the WebGL 1 extensions the device's WebGL 2 functionality serves (the
+/// formats, instancing, vertex arrays and draw buffers WebGL 2 has in core),
+/// in the alphabetical order getSupportedExtensions answers.
+std::shared_ptr<const WebGLCaps> webgl1Caps(const WebGLCaps& webgl2);
+
 } // namespace bro::webgl::vk

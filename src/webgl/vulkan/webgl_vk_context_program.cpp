@@ -49,7 +49,7 @@ void WebGLVkContext::compileShader(WebGLShader s) {
     auto it = shaders_.find(s.id);
     if (it == shaders_.end()) return;
     VkShaderResource& sh = it->second;
-    sh.compileStatus = glsl::compile(sh.source, sh.type, sh.infoLog);
+    sh.compileStatus = glsl::compile(sh.source, sh.type, sh.infoLog, caps_->version == "WebGL 1.0");
 }
 
 GLint WebGLVkContext::getShaderParameter(WebGLShader s, GLenum pname) {

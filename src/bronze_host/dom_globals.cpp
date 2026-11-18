@@ -619,6 +619,12 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use.
     installObserversModule();
+    // document.styleSheets, CSSStyleSheet and the CSSRule family
+    // (js/cssom.js), over the DOM interfaces installed above.
+    installCssomModule();
+    // Attr, NamedNodeMap, element.attributes and the *AttributeNode methods
+    // (js/attr.js), over Element's attribute methods.
+    installAttrModule();
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();
@@ -628,6 +634,9 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // An appview's `bro.app.host`, where its host page's grants appear, and
     // its prompts routed to that page (host_appview.cpp).
     if (c.kind == CompartmentKind::AppView) attachAppViewCompartment(c);
+    // Last: Symbol.toStringTag on every interface installed above
+    // (js/interface_tags.js).
+    installInterfaceTags();
 }
 
 static std::vector<std::string> s_baselineGlobalProps;

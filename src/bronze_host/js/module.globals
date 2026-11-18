@@ -22,6 +22,7 @@
 globalThis
 console
 __bro_observers
+__bro_cssom
 bro
 __bro
 __bro_native

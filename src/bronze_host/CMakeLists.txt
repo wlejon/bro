@@ -30,6 +30,7 @@ set(BRO_BRONZE_HOST_SOURCES
     webgl_queries.cpp
     webgl_transform_feedback.cpp
     webgl_context.cpp
+    webgl1.cpp
     host_profile.cpp
     host_telemetry.cpp
     app_module.cpp
@@ -124,6 +125,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_membrane.cpp
     host_appview.cpp
     host_observer_hooks.cpp
+    host_cssom_hooks.cpp
     host_js_modules.cpp
     host_app.cpp
     host_notification.cpp
@@ -652,6 +654,9 @@ else()
     endfunction()
 
     bro_compile_js(observers  bro_observers_main)
+    bro_compile_js(cssom      bro_cssom_main)
+    bro_compile_js(attr       bro_attr_main)
+    bro_compile_js(interface_tags bro_interface_tags_main)
     bro_compile_js(events     bro_events_main)
     bro_compile_js(clipboard  bro_clipboard_main)
     bro_compile_js(notification bro_notification_main)

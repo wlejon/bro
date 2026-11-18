@@ -288,23 +288,24 @@ void Document::rebuildCascadeForMediaChange() {
     if (retainedSheets_.empty()) return;
     // The media context changed after sheets were added: re-evaluate every
     // @media block by rebuilding the cascade from the retained parsed sheets.
-    cascade_.clear();
-    for (auto& rs : retainedSheets_) {
-        cascade_.addStylesheet(rs.sheet, rs.scope, &mediaContext_, rs.origin);
-    }
     // The rule set changed but no element was marked dirty (nobody touched
-    // them — the @media conditions flipped). Force the next resolveStyles()
-    // to re-resolve everything, selector-level, exactly like a new sheet.
-    mediaRebuilt_ = true;
-    markDirty();
+    // them — the @media conditions flipped), so the next resolveStyles()
+    // re-resolves everything, selector-level, exactly like a new sheet.
+    rebuildCascade();
 }
 
 void Document::replaceLinkedSheets(const std::vector<AuthorSheet>& sheets) {
+    // Each keeps the <link> element the old sheet in its place had.
+    std::vector<const Element*> owners;
+    for (const auto& rs : retainedSheets_)
+        if (rs.linked) owners.push_back(rs.owner);
     std::vector<RetainedSheet> fresh;
     for (const auto& as : sheets) {
         if (as.css.empty()) continue;
         RetainedSheet rs{htmlayout::css::parse(as.css), nullptr, htmlayout::css::Origin::Author, true};
         rs.sheet.baseUrl = as.baseUrl;
+        rs.source = as.css;
+        if (fresh.size() < owners.size()) rs.owner = owners[fresh.size()];
         fresh.push_back(std::move(rs));
     }
     // The new linked sheets take the place of the old ones (where the first
@@ -324,11 +325,7 @@ void Document::replaceLinkedSheets(const std::vector<AuthorSheet>& sheets) {
     }
     place();
     retainedSheets_ = std::move(next);
-    cascade_.clear();
-    for (auto& rs : retainedSheets_)
-        cascade_.addStylesheet(rs.sheet, rs.scope, hasMediaContext_ ? &mediaContext_ : nullptr, rs.origin);
-    mediaRebuilt_ = true;
-    markDirty();
+    rebuildCascade();
 }
 
 // ---------------------------------------------------------------------------
@@ -604,9 +601,5 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
 // Shadow DOM CSS
 // ---------------------------------------------------------------------------
 
-void Document::addShadowStylesheet(ShadowRoot* sr, const std::string& css) {
-    if (!sr || css.empty()) return;
-    addSheetToCascade(htmlayout::css::parse(css), static_cast<void*>(sr));
-}
 
 } // namespace bro::dom

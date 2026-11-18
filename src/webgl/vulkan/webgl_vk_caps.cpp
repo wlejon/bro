@@ -262,4 +262,30 @@ std::shared_ptr<const WebGLCaps> buildWebGLCaps(render::VulkanContext& device) {
     return caps;
 }
 
+std::shared_ptr<const WebGLCaps> webgl1Caps(const WebGLCaps& webgl2) {
+    auto caps = std::make_shared<WebGLCaps>(webgl2);
+    caps->version = "WebGL 1.0";
+    caps->shadingLanguageVersion = "WebGL GLSL ES 1.0";
+    // Core in WebGL 2, so present on every device that runs one.
+    std::vector<std::string> ext = {
+        "ANGLE_instanced_arrays", "EXT_blend_minmax", "EXT_frag_depth", "EXT_shader_texture_lod", "EXT_sRGB",
+        "OES_element_index_uint", "OES_fbo_render_mipmap", "OES_standard_derivatives", "OES_texture_float",
+        "OES_texture_half_float", "OES_texture_half_float_linear", "OES_vertex_array_object",
+        "WEBGL_depth_texture", "WEBGL_draw_buffers", "WEBGL_lose_context",
+        "WEBGL_debug_renderer_info"};
+    // The rest follow what the device can do, as their WebGL 2 forms do.
+    const auto carry = [&](const char* webgl2Name, const char* webgl1Name) {
+        if (webgl2.supports(webgl2Name)) ext.emplace_back(webgl1Name);
+    };
+    carry("EXT_color_buffer_float", "WEBGL_color_buffer_float");
+    carry("EXT_color_buffer_half_float", "EXT_color_buffer_half_float");
+    carry("EXT_float_blend", "EXT_float_blend");
+    carry("OES_texture_float_linear", "OES_texture_float_linear");
+    carry("EXT_texture_filter_anisotropic", "EXT_texture_filter_anisotropic");
+    for (const auto& c : webgl2.compressedExtensions) ext.push_back(c.name);
+    std::sort(ext.begin(), ext.end());
+    caps->extensions = std::move(ext);
+    return caps;
+}
+
 } // namespace bro::webgl::vk

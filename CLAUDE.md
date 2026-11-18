@@ -119,6 +119,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `canvas-api.js` | `HTMLCanvasElement` & `CanvasRenderingContext2D`, `CanvasGradient`, `CanvasPattern`, `ImageData`, `Path2D` |
 | `webgl2-api.js` | `WebGL2RenderingContext`: OpenGL ES 3.0 hardware-accelerated rendering over Vulkan |
 | `custom_elements-api.js` | `customElements` & `HTMLElement`: Web Components custom element registry, lifecycle callbacks, and DOM upgrading |
+| `cssom-api.js` | CSSOM: `document.styleSheets`, `element.sheet`, `CSSStyleSheet` (insertRule/deleteRule/disabled, constructable `replaceSync` + `adoptedStyleSheets` on documents and shadow roots), the `CSSRule` family; every change restyles |
 | `domparser-api.js` | `DOMParser`: HTML / SVG string parsing into a detached DOM `Document` tree |
 | `events-api.js` | `Event`, `CustomEvent`, `UIEvent`, `MouseEvent`, `PointerEvent`, `TouchEvent`, `GestureEvent`: DOM event dispatch |
 | `intl-api.js` | `Intl` (ECMA-402): `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames` |

@@ -30,10 +30,12 @@ assert(JSON.stringify([...cl.entries()]) === '[[0,"a"],[1,"b"]]', 'classList.ent
 assert(JSON.stringify([...cl.keys()]) === '[0,1]' && JSON.stringify([...cl.values()]) === '["a","b"]',
        'classList.keys / values');
 
-for (const [what, list] of [['querySelectorAll', document.querySelectorAll('p')], ['childNodes', document.body.childNodes],
-                            ['attributes', first.attributes]]) {
+for (const [what, list] of [['querySelectorAll', document.querySelectorAll('p')], ['childNodes', document.body.childNodes]]) {
     assert(typeof list[Symbol.iterator] === 'function' && typeof list.forEach === 'function', what + ' is iterable');
 }
+// attributes is a NamedNodeMap: iterable, no forEach (as in Chromium).
+assert(typeof first.attributes[Symbol.iterator] === 'function' && first.attributes.forEach === undefined,
+       'attributes is an iterable NamedNodeMap');
 // children is an HTMLCollection: iterable, no forEach.
 assert(typeof document.body.children[Symbol.iterator] === 'function' && document.body.children.forEach === undefined,
        'children is an iterable HTMLCollection');

@@ -506,7 +506,7 @@ void decorateCanvasProto(ObjectBuilder& b) {
         webgl::ContextAttributes attributes;
         if (!contextAttributesOf(argAt(a, 1), attributes))
             return ev::throwTypeError("getContext: powerPreference is not a WebGLPowerPreference");
-        webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el, attributes);
+        webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el, attributes, type == "webgl" ? 1 : 2);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;
         ev::Persistent glRoot(createWebGLContextValue(ctx, canvasRoot.get()));

@@ -16,6 +16,8 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace bro::layout {
 namespace {
@@ -50,6 +52,90 @@ std::string resolveColorToRgb(const std::string& value) {
     return util::serializeCssColor(c.r, c.g, c.b, c.a);
 }
 
+// Initial values of properties htmlayout has no entry for (it keeps a value
+// only once one is declared), as Chromium reports them.
+std::string untrackedInitial(const std::string& prop) {
+    static const std::pair<const char*, const char*> kInitial[] = {
+        {"background-attachment", "scroll"}, {"background-position", "0% 0%"},
+        {"background-position-x", "0%"}, {"background-position-y", "0%"},
+        {"background-repeat", "repeat"}, {"background-size", "auto"},
+        {"background-origin", "padding-box"}, {"background-clip", "border-box"},
+        {"list-style-image", "none"}, {"text-emphasis-style", "none"}, {"font-kerning", "auto"},
+        {"font-optical-sizing", "auto"}, {"font-size-adjust", "none"}, {"font-variant", "normal"},
+        {"font-variant-ligatures", "normal"}, {"font-variant-east-asian", "normal"},
+        {"font-variant-alternates", "normal"}, {"font-variant-position", "normal"},
+        {"column-width", "auto"}, {"column-count", "auto"}, {"outline-style", "none"},
+        {"outline-width", "medium"}, {"transition-property", "all"}, {"transition-duration", "0s"},
+        {"transition-timing-function", "ease"}, {"transition-delay", "0s"},
+    };
+    for (const auto& [name, v] : kInitial)
+        if (prop == name) return v;
+    return {};
+}
+
+// Properties whose `0` computes to `0px`.
+bool isLengthProperty(const std::string& prop) {
+    static const char* kLengths[] = {
+        "top", "right", "bottom", "left", "margin-top", "margin-right", "margin-bottom", "margin-left",
+        "padding-top", "padding-right", "padding-bottom", "padding-left", "border-top-left-radius",
+        "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius",
+        "outline-offset", "text-indent", "row-gap", "column-gap", "letter-spacing", "word-spacing",
+        "min-width", "min-height", "max-width", "max-height", "flex-basis", "column-width",
+    };
+    for (const char* p : kLengths)
+        if (prop == p) return true;
+    return false;
+}
+
+// background-position keywords as the percentages they compute to
+// ("center" -> "50% 50%", "right top" -> "100% 0%").
+std::string backgroundPosition(const std::string& prop, const std::string& value) {
+    auto pct = [](const std::string& k) -> std::string {
+        if (k == "left" || k == "top") return "0%";
+        if (k == "center") return "50%";
+        if (k == "right" || k == "bottom") return "100%";
+        if (k == "0") return "0px";
+        return k;
+    };
+    std::string out;
+    size_t start = 0;
+    while (start <= value.size()) {
+        size_t comma = value.find(',', start);
+        std::string layer = value.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        std::vector<std::string> toks;
+        size_t i = 0;
+        while (i < layer.size()) {
+            while (i < layer.size() && layer[i] == ' ') ++i;
+            size_t j = i;
+            while (j < layer.size() && layer[j] != ' ') ++j;
+            if (j > i) toks.push_back(layer.substr(i, j - i));
+            i = j;
+        }
+        std::string x = "0%", y = "0%";
+        if (toks.size() == 1) {
+            const std::string& t = toks[0];
+            if (t == "top" || t == "bottom") { x = "50%"; y = pct(t); }
+            else { x = pct(t); y = "50%"; }
+        } else if (toks.size() >= 2) {
+            // A vertical keyword first swaps the pair ("top right").
+            if (toks[0] == "top" || toks[0] == "bottom" || toks[1] == "left" || toks[1] == "right") {
+                x = pct(toks[1]);
+                y = pct(toks[0]);
+            } else {
+                x = pct(toks[0]);
+                y = pct(toks[1]);
+            }
+        }
+        if (!out.empty()) out += ", ";
+        if (prop == "background-position-x") out += x;
+        else if (prop == "background-position-y") out += y;
+        else out += x + " " + y;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string computedProperty(dom::Element* el, const std::string& prop,
@@ -62,14 +148,37 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
         const std::string* v = style.customProperty(prop);
         return v ? *v : std::string();
     }
+    {
+        std::string sh;
+        if (computedShorthand(el, prop, metrics, sh)) return sh;
+    }
     std::string value;
     auto it = style.find(prop);
     if (it != style.end()) {
         value = it->second;
     } else {
-        // Fall back to CSS initial value for known properties
+        // Fall back to CSS initial value for known properties, then to the
+        // initial values of the ones htmlayout keeps no default for.
         value = htmlayout::css::initialValue(prop);
+        if (value.empty()) value = untrackedInitial(prop);
     }
+    if (prop == "font-stretch" && value == "normal") return "100%";
+    if (prop == "word-spacing" && value == "normal") return "0px";
+    if (prop == "outline-width") {
+        if (value == "thin") return "1px";
+        if (value == "medium") return "3px";
+        if (value == "thick") return "5px";
+    }
+    if (prop == "background-position" || prop == "background-position-x" || prop == "background-position-y") {
+        // The axes come from background-position when only it was declared.
+        if (prop != "background-position" && it == style.end()) {
+            auto bp = style.find("background-position");
+            if (bp != style.end()) value = bp->second;
+        }
+        return backgroundPosition(prop, value);
+    }
+    // A zero length computes to 0px.
+    if (value == "0" && isLengthProperty(prop)) return "0px";
 
     // line-clamp is a shorthand (htmlayout expands it into max-lines,
     // block-ellipsis and continue, which are what layout reads), so the map

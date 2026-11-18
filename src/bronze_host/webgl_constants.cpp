@@ -651,14 +651,16 @@ const ConstantEntry kConstants[] = {
 // program's `gl.FLOAT = 0` is discarded (a TypeError in strict code). bronze
 // caches a read of such a property through the prototype chain as its value,
 // so `gl.FLOAT` costs no walk to the prototype.
-void installWebGLConstants(ObjectBuilder& b) {
+void installWebGLConstants(ObjectBuilder& b, bool webgl1) {
     for (const ConstantEntry& e : kConstants) {
+        if (webgl1 && isWebGL2OnlyName(e.name)) continue;
         b.defineConstant(e.name, ev::fromDouble(e.value));
     }
 }
 
-void installWebGLConstants(const HostClass& cls) {
+void installWebGLConstants(const HostClass& cls, bool webgl1) {
     for (const ConstantEntry& e : kConstants) {
+        if (webgl1 && isWebGL2OnlyName(e.name)) continue;
         cls.defineStaticConstant(e.name, ev::fromDouble(e.value));
     }
 }

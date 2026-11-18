@@ -26,7 +26,8 @@ struct Limits {
 };
 
 /// Check one shader's source; false with glslang's diagnostics in `log`.
-bool compile(const std::string& source, GLenum type, std::string& log);
+/// A WebGL 1 context (`webgl1`) takes GLSL ES 1.00 only.
+bool compile(const std::string& source, GLenum type, std::string& log, bool webgl1 = false);
 
 struct LinkResult {
     bool ok = false;

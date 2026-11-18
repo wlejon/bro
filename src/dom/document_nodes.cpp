@@ -222,6 +222,9 @@ void Document::freeNode(Node* node) {
         // the next mousemove. Engine::reapDeadInputPointers scrubs the
         // engine's own cached pointers but not this document-owned one.)
         if (elem == focusedElement_) focusedElement_ = nullptr;
+        // A <style> / <link> freed takes its sheet with it (its address may
+        // name another element next).
+        if (elem->tagName() == "STYLE" || elem->tagName() == "LINK") forgetSheetOwner(elem);
         // Its content, which is no child and is not freed with it, stops
         // being pointed at and becomes a detached tree of its own.
         if (Element* content = elem->templateContent()) {

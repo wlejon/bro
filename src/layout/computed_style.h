@@ -34,4 +34,8 @@ class SkiaTextMetrics;
 std::string computedProperty(dom::Element* el, const std::string& prop,
                              SkiaTextMetrics* metrics);
 
+// A shorthand's resolved value, serialized from its longhands as Chromium does
+// (computed_shorthand.cpp); false when `prop` is not one it serializes.
+bool computedShorthand(dom::Element* el, const std::string& prop, SkiaTextMetrics* metrics, std::string& out);
+
 }  // namespace bro::layout

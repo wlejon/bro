@@ -480,29 +480,6 @@ void Document::resolveStyles() {
                          std::chrono::steady_clock::now() - styleT0).count();
 }
 
-// A <style> inserted at runtime (createElement("style") + head.appendChild, the
-// CSS-in-JS pattern) never went through parse(), so its rules aren't in the
-// cascade. Scan the connected tree for any <style> not yet added and add it.
-// Incremental (no cascade clear) to preserve UA / linked / shadow-scoped sheets
-// and @keyframes/@font-face. A <style> whose text is still empty is left for a
-// later pass (its content may be assigned after insertion).
-bool Document::reconcileStyleElements() {
-    styleElsDirty_ = false;
-    if (!documentElement_) return false;
-    std::vector<Element*> all;
-    collectElements(root_, all);
-    bool added = false;
-    for (auto* e : all) {
-        if (e->tagName() != "STYLE" || e->styleSheetAdded()) continue;
-        std::string css = e->textContent();
-        if (css.empty()) continue;
-        addSheetToCascade(htmlayout::css::parse(css));
-        e->setStyleSheetAdded(true);
-        added = true;
-    }
-    return added;
-}
-
 uint64_t Document::inheritTokenOf(Element* el) {
     if (uint64_t t = el->inheritToken()) return t;
     // The fingerprint: the parent-side inputs of Cascade::resolveMatched (the

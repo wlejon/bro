@@ -43,6 +43,9 @@
 #include <vector>
 
 extern "C" void bro_observers_main();
+extern "C" void bro_cssom_main();
+extern "C" void bro_interface_tags_main();
+extern "C" void bro_attr_main();
 extern "C" void bro_events_main();
 extern "C" void bro_clipboard_main();
 extern "C" void bro_notification_main();
@@ -114,6 +117,29 @@ void installObserversModule() {
 }
 
 // js/events.js extends brokit's `Event`, so it runs after installBrokitGlobals.
+void installCssomModule() {
+    // The module reads `__bro_cssom` at its top level (host_cssom_hooks.cpp).
+    installCssomHooks();
+    bronze::embed::runEntry(bro_cssom_main);
+    for (const char* name : {"CSSStyleSheet", "StyleSheet", "StyleSheetList", "CSSRuleList", "CSSRule",
+                             "CSSStyleRule", "CSSGroupingRule", "CSSConditionRule", "CSSMediaRule",
+                             "CSSSupportsRule", "CSSKeyframesRule", "CSSKeyframeRule", "CSSFontFaceRule",
+                             "CSSImportRule", "CSSStyleDeclaration", "MediaList"})
+        adoptGlobalProperty(name);
+}
+
+void installAttrModule() {
+    bronze::embed::runEntry(bro_attr_main);
+    adoptGlobalProperty("Attr");
+    adoptGlobalProperty("NamedNodeMap");
+}
+
+void installInterfaceTags() {
+    bronze::embed::runEntry(bro_interface_tags_main);
+    adoptGlobalProperty("DOMParser");
+    adoptGlobalProperty("XMLSerializer");
+}
+
 void installEventsModule() {
     bronze::embed::runEntry(bro_events_main);
     for (const char* name : {"UIEvent", "MouseEvent", "KeyboardEvent", "InputEvent", "FocusEvent",

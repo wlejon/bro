@@ -23,9 +23,9 @@ ContextAttributes granted(ContextAttributes a) {
 
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
                                                const ContextAttributes& requested,
-                                               std::shared_ptr<WebGLThread> thread)
-    : width_(width), height_(height), device_(device), attributes_(granted(requested)),
-      caps_(vk::buildWebGLCaps(device)),
+                                               std::shared_ptr<WebGLThread> thread, int version)
+    : width_(width), height_(height), version_(version), device_(device), attributes_(granted(requested)),
+      caps_(version == 1 ? vk::webgl1Caps(*vk::buildWebGLCaps(device)) : vk::buildWebGLCaps(device)),
       client_(thread ? std::move(thread) : std::make_shared<WebGLThread>(), device, caps_, attributes_) {
     client_.attach(width, height);
     // What a frame encoded is replayed and submitted by its end at the

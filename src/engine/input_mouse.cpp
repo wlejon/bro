@@ -164,7 +164,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            ct, vh, documentHeight_, vh, scrollY_);
+            ct, vh, userScrollHeight(), vh, scrollY_);
         if (viewportScrollbar_.hitTest(x, y, m)) {
             if (viewportScrollbar_.thumbHitTest(x, y, m)) {
                 viewportScrollbar_.beginDrag(y, m);

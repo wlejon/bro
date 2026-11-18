@@ -21,6 +21,30 @@
  * ("Illegal invocation"). `getContext`, `toDataURL`, `toBlob`, `width` and
  * `height` live on `HTMLCanvasElement.prototype`.
  *
+ * WebGL 1: `getContext('webgl')` (or the legacy `'experimental-webgl'`) is a
+ * `WebGLRenderingContext`, an interface unrelated to `WebGL2RenderingContext`
+ * as in a browser: its prototype has WebGL 1's methods and constants only (no
+ * `bindVertexArray`, `texImage3D`, `RGBA32F`, ...), `VERSION` is "WebGL 1.0" and
+ * `SHADING_LANGUAGE_VERSION` "WebGL GLSL ES 1.0", and a `#version 300 es`
+ * shader fails to compile. It runs on the same backend, so its extensions are
+ * the WebGL 2 functionality under WebGL 1's names: `ANGLE_instanced_arrays`
+ * (`drawArraysInstancedANGLE`, `drawElementsInstancedANGLE`,
+ * `vertexAttribDivisorANGLE`), `OES_vertex_array_object` (`createVertexArrayOES`,
+ * `bindVertexArrayOES`, `isVertexArrayOES`, `deleteVertexArrayOES`),
+ * `WEBGL_draw_buffers` (`drawBuffersWEBGL`, `COLOR_ATTACHMENTi_WEBGL`),
+ * `OES_texture_float` / `OES_texture_half_float` (unsized RGBA / RGB /
+ * LUMINANCE / ALPHA textures of FLOAT or `HALF_FLOAT_OES`), their `_linear`
+ * forms, `WEBGL_depth_texture` (DEPTH_COMPONENT of UNSIGNED_SHORT / UNSIGNED_INT,
+ * DEPTH_STENCIL of `UNSIGNED_INT_24_8_WEBGL`), `EXT_sRGB` (`SRGB_EXT`,
+ * `SRGB_ALPHA_EXT`), `OES_element_index_uint`, `OES_standard_derivatives`,
+ * `EXT_frag_depth`, `EXT_shader_texture_lod`, `EXT_blend_minmax`,
+ * `OES_fbo_render_mipmap`, `WEBGL_lose_context`, `WEBGL_debug_renderer_info`,
+ * and, as the device allows, `WEBGL_color_buffer_float`,
+ * `EXT_color_buffer_half_float`, `EXT_float_blend`, `OES_texture_float_linear`,
+ * `EXT_texture_filter_anisotropic` and the compressed-texture extensions.
+ * The vertex array objects are `WebGLVertexArrayObject`s (a browser names them
+ * `WebGLVertexArrayObjectOES`).
+ *
  * Context attributes (`canvas.getContext('webgl2', attributes)`), as granted and
  * as `getContextAttributes()` reports them:
  * - `alpha` (default true), `depth` (true), `stencil` (false): the drawing buffer
@@ -48,7 +72,8 @@
  * array is converted element by element (a Float64Array of matrices works).
  * Identifiers that are Vulkan GLSL keywords but not GLSL ES ones (`sampler`,
  * `buffer`, `shared`, `texture2D` in ES 3.00, ...) compile and keep their
- * names. `getUniformLocation('a')` finds element 0 of any uniform array,
+ * names, as do GLSL 450 built-ins ES 1.00 lacks used as names in ES 1.00
+ * source (`vec4 texture = texture2D(...)`, a uniform named `sample`). `getUniformLocation('a')` finds element 0 of any uniform array,
  * one-element arrays included. `renderbufferStorage(RENDERBUFFER, DEPTH_STENCIL,
  * ...)` (WebGL 1's unsized form) allocates DEPTH24_STENCIL8.
  *

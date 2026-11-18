@@ -118,7 +118,8 @@ Value createWebGLContextValue(webgl::WebGL2RenderingContext* c, Value canvasValu
     c->addTeardownCallback([](webgl::WebGL2RenderingContext* ctx) { detachWebGLMappings(ctx); });
     auto* cell = new WebGLContextCell;
     cell->context = c;
-    ObjectBuilder b(webgl2RenderingContextHostClass().make(cell, contextCellDtor));
+    const HostClass& cls = c->version() == 1 ? webglRenderingContextHostClass() : webgl2RenderingContextHostClass();
+    ObjectBuilder b(cls.make(cell, contextCellDtor));
     // gl.canvas, an own data property as CanvasRenderingContext2D's is: the
     // real host canvas object, so three.js's reads of gl.canvas.width/height
     // see the live drawing buffer size. It is also the collector's edge from

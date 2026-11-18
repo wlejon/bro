@@ -613,25 +613,7 @@ void decorateElementProto(ObjectBuilder& b) {
         if (!st || !st->el) return ev::fromBool(false);
         return ev::fromBool(!st->el->attributes().empty() || st->el->hasAttribute("style"));
     });
-    b.accessor("attributes",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-                   std::vector<std::pair<std::string, std::string>> attrs;
-                   for (const auto& [name, val] : st->el->attributes()) {
-                       attrs.emplace_back(name, val);
-                   }
-                   if (st->el->hasAttribute("style")) {
-                       attrs.emplace_back("style", st->el->getAttribute("style"));
-                   }
-                   return hostArrayOf(attrs.size(), [&attrs](size_t i) {
-                       ObjectBuilder ab;
-                       ab.set("name", ev::fromUtf8(attrs[i].first));
-                       ab.set("value", ev::fromUtf8(attrs[i].second));
-                       return ab.get();
-                   });
-               },
-               nullptr);
+    // `attributes` (a NamedNodeMap of Attr nodes) is js/attr.js.
 
     // ---- the tree ---------------------------------------------------------
     installNodeTree(b);

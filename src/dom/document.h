@@ -543,8 +543,31 @@ public:
     // Parse an HTML string and replace an element's children (innerHTML setter)
     void parseInnerHTML(Element* parent, const std::string& html);
 
-    // Add a shadow-scoped stylesheet to the cascade
-    void addShadowStylesheet(ShadowRoot* sr, const std::string& css);
+    // Add a shadow-scoped stylesheet to the cascade; `owner` is the shadow
+    // tree's <style> it came from.
+    void addShadowStylesheet(ShadowRoot* sr, const std::string& css, Element* owner = nullptr);
+
+    // --- CSSOM (document_cssom.cpp; the JavaScript is js/cssom.js) ---
+    // A <style> or <link rel=stylesheet> element's sheet: whether it has one,
+    // its CSS text (a CSSOM edit's text once one was made, else what the
+    // element loaded), and its disabled flag.
+    // Bring the sheets up to the tree first (a <style> appended or removed
+    // this turn), as a browser's sheet list always is.
+    void syncSheets() { if (styleElsDirty_ && reconcileStyleElements()) mediaRebuilt_ = true; }
+    bool hasOwnedSheet(const Element* owner) const;
+    std::string ownedSheetText(const Element* owner) const;
+    bool ownedSheetDisabled(const Element* owner) const;
+    // The sheet's rules are now `css` (insertRule, deleteRule, a rule's style
+    // edited, replaceSync): the cascade is rebuilt, the element's own text is
+    // left as it is.
+    void setOwnedSheetText(Element* owner, const std::string& css);
+    void setOwnedSheetDisabled(Element* owner, bool disabled);
+    // The constructed sheets adopted by the document (scope null) or a shadow
+    // root (scope = the ShadowRoot*), in order: they cascade after that
+    // scope's own sheets.
+    void setAdoptedSheets(void* scope, const std::vector<std::string>& css);
+    // An element is being freed: its sheet goes with it.
+    void forgetSheetOwner(const Element* owner);
 
     // Scroll-to-bottom tracking — elements register here instead of walking DOM
     void addScrollToBottomElement(Element* el) { scrollToBottomElements_.insert(el); }
@@ -902,7 +925,24 @@ private:
         void* scope = nullptr;
         htmlayout::css::Origin origin = htmlayout::css::Origin::Author;
         bool linked = false;   // one of parse()'s authorSheets
+        // The <style> / <link> the sheet is (null for the UA sheet and a
+        // shadow root's string sheets), the CSS text it was parsed from, a
+        // CSSOM edit having replaced the element's own text, the disabled
+        // flag, and a constructed sheet in adoptedStyleSheets.
+        const Element* owner = nullptr;
+        std::string source;
+        bool edited = false;
+        bool disabled = false;
+        bool adopted = false;
     };
+    // Re-add every retained sheet that is not disabled, in order, and force a
+    // full restyle (rules changed under every element).
+    void rebuildCascade();
+    // Put the document's element-owned sheets in tree order (`order` is the
+    // connected elements in tree order) and constructed ones after them.
+    void orderSheets(const std::vector<Element*>& order);
+    // A sheet was removed or changed outside a reconcile; the next one rebuilds.
+    bool sheetsStale_ = false;
     std::vector<RetainedSheet> retainedSheets_;
     bool listed_ = false;   // in the live-document registry (document.cpp)
     std::thread::id owner_;

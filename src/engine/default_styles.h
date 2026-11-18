@@ -110,6 +110,26 @@ q::after  { content: close-quote; }
 
 /* ---------- Form controls ---------- */
 
+/* Controls take the UA's control font (Chromium's -webkit-small-control)
+   and reset the text properties they would otherwise inherit from the
+   page: a page in `font: bold 20px Monospace` still has 13.3333px regular
+   buttons. */
+input, textarea, select, button {
+    font-style: normal;
+    font-weight: 400;
+    font-size: 13.3333px;
+    font-family: Arial;
+    line-height: normal;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-transform: none;
+    text-indent: 0;
+    text-align: start;
+}
+textarea {
+    font-family: monospace;
+}
+
 button, input[type="button"], input[type="submit"], input[type="reset"] {
     display: inline-block;
     box-sizing: border-box;
@@ -118,7 +138,6 @@ button, input[type="button"], input[type="submit"], input[type="reset"] {
     border-radius: 3px;
     background-color: #f0f0f0;
     color: #000;
-    font-size: 13.333px;
     text-align: center;
     cursor: pointer;
 }
@@ -129,7 +148,6 @@ input, textarea, select {
     border: 2px solid #767676;
     background-color: #fff;
     color: #000;
-    font-size: 13.333px;
 }
 
 /* Text-entry surfaces get the I-beam. Browsers reach this through

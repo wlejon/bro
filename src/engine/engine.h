@@ -358,8 +358,10 @@ public:
 
     scene::SceneGraph* createSceneContext(dom::Element* canvas);
     size_t sceneContextCount() const;
+    /// `version` 1 is a getContext('webgl') context (WebGLRenderingContext).
     webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas,
-                                                       const webgl::ContextAttributes& attributes = {});
+                                                       const webgl::ContextAttributes& attributes = {},
+                                                       int version = 2);
     /// The display of a 'kernel' canvas (docs/kernel-api.js): null without a
     /// GPU device.
     render::KernelCanvas* createKernelCanvas(dom::Element* canvas);

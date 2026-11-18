@@ -180,8 +180,9 @@ void defMethod(ObjectBuilder& b, const char* name, uint32_t arity, F fn) {
 // The families of WebGL2RenderingContext.prototype. dom_globals_webgl.cpp
 // calls them in one fixed order; the order of the definitions inside each is
 // likewise fixed, so the prototype's shape is reproducible run to run.
-void installWebGLConstants(ObjectBuilder& b);
-void installWebGLConstants(const HostClass& cls);
+// `webgl1`: WebGLRenderingContext's, without the constants WebGL 2 added.
+void installWebGLConstants(ObjectBuilder& b, bool webgl1 = false);
+void installWebGLConstants(const HostClass& cls, bool webgl1 = false);
 void installWebGLState(ObjectBuilder& b);
 void installWebGLBuffers(ObjectBuilder& b);
 void installWebGLShaders(ObjectBuilder& b);
@@ -189,6 +190,20 @@ void installWebGLTextures(ObjectBuilder& b);
 void installWebGLFramebuffers(ObjectBuilder& b);
 void installWebGLQueries(ObjectBuilder& b);
 void installWebGLTransformFeedback(ObjectBuilder& b);
+
+// WebGL 1 (webgl1.cpp). Whether `name` is a member WebGL2RenderingContext
+// has and WebGLRenderingContext has not.
+bool isWebGL2OnlyName(std::string_view name);
+// Delete the WebGL 2 methods and accessors from a prototype the family
+// installers built (WebGLRenderingContext's).
+void removeWebGL2OnlyMethods(Value proto);
+// For a WebGL 1 context, the texture enums WebGL 1 extensions name
+// (HALF_FLOAT_OES, SRGB_EXT, SRGB_ALPHA_EXT) as the WebGL 2 ones they are;
+// nothing for a WebGL 2 context. Any pointer may be null.
+void webgl1TexFormat(webgl::WebGL2RenderingContext* c, uint32_t* internalformat, uint32_t* format, uint32_t* type);
+// The members of a WebGL 1 extension (makeExtension's part for them); false
+// for a name that is not one.
+bool makeWebGL1Extension(webgl::WebGL2RenderingContext* c, const std::string& name, ObjectBuilder& o);
 
 // The context's object: a WebGL2RenderingContext instance for `c`, whose one
 // own property, `canvas`, is `canvasValue` (the host canvas object, so
@@ -200,6 +215,7 @@ Value createWebGLContextValue(webgl::WebGL2RenderingContext* c, Value canvasValu
 void installWebGLObjectClasses();
 
 const HostClass& webgl2RenderingContextHostClass();
+const HostClass& webglRenderingContextHostClass();
 void installWebGLGlobals();
 
 }  // namespace bro::bronze_host

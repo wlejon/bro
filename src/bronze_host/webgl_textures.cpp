@@ -256,14 +256,18 @@ void installWebGLTextures(ObjectBuilder& b) {
         // DOM-source call announces itself by an OBJECT where the 9-arg form
         // has `border` (a number, required to be 0).
         if (ev::isObject(argAt(a, 5))) {
+            uint32_t ifmt = u32At(a, 2), fmt = u32At(a, 3), ty = u32At(a, 4);
+            webgl1TexFormat(c, &ifmt, &fmt, &ty);
             uploadSource(c, argAt(a, 5), "texImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
-                cl.texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3), u32At(a, 4),
+                cl.texImage2DSource(u32At(a, 0), i32At(a, 1), static_cast<GLint>(ifmt), -1, -1, fmt, ty,
                                     std::move(px));
             });
             return ev::undefined();
         }
-        const GLenum target = u32At(a, 0), format = u32At(a, 6), type = u32At(a, 7);
-        const GLint level = i32At(a, 1), internalformat = i32At(a, 2), border = i32At(a, 5);
+        uint32_t ifmt = u32At(a, 2), fmt = u32At(a, 6), ty = u32At(a, 7);
+        webgl1TexFormat(c, &ifmt, &fmt, &ty);
+        const GLenum target = u32At(a, 0), format = fmt, type = ty;
+        const GLint level = i32At(a, 1), internalformat = static_cast<GLint>(ifmt), border = i32At(a, 5);
         const GLsizei width = i32At(a, 3), height = i32At(a, 4);
         Value data = argAt(a, 8);
         if (ev::isUndefined(data) || ev::isNull(data)) {
@@ -290,13 +294,17 @@ void installWebGLTextures(ObjectBuilder& b) {
     // path: texStorage2D, then this), or the 9/10-arg form.
     defMethod(b, "texSubImage2D", 9, [](webgl::WebGL2RenderingContext* c, std::span<const Value> a) {
         if (ev::isObject(argAt(a, 6))) {
+            uint32_t fmt = u32At(a, 4), ty = u32At(a, 5);
+            webgl1TexFormat(c, nullptr, &fmt, &ty);
             uploadSource(c, argAt(a, 6), "texSubImage2D", [&](webgl::WebGLClient& cl, webgl::rec::PixelRef px) {
-                cl.texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1, u32At(a, 4),
-                                       u32At(a, 5), std::move(px));
+                cl.texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1, fmt, ty,
+                                       std::move(px));
             });
             return ev::undefined();
         }
-        const GLenum target = u32At(a, 0), format = u32At(a, 6), type = u32At(a, 7);
+        uint32_t fmt = u32At(a, 6), ty = u32At(a, 7);
+        webgl1TexFormat(c, nullptr, &fmt, &ty);
+        const GLenum target = u32At(a, 0), format = fmt, type = ty;
         const GLint level = i32At(a, 1), xoffset = i32At(a, 2), yoffset = i32At(a, 3);
         const GLsizei width = i32At(a, 4), height = i32At(a, 5);
         Value data = argAt(a, 8);

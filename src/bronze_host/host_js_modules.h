@@ -15,6 +15,10 @@ using Value = bronze::Value;
 // IntersectionObserver on. Registered by installObserversModule before the
 // module's entry runs.
 void installObserverHooks();
+void installCssomHooks();
+void installCssomModule();
+void installInterfaceTags();
+void installAttrModule();
 
 // The observer module's per-frame pass (resize, then intersection), fired
 // from the frame seam after requestAnimationFrame and its microtask

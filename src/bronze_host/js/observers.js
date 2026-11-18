@@ -163,11 +163,20 @@
         let wantOldValue = false;
         for (let i = 0; i < raw.nodes.length; i++) {
             const node = raw.nodes[i];
-            const o = st.targets.get(node);
-            if (o === undefined) continue;
+            let o = st.targets.get(node);
+            let viaDocument = false;
+            if (o === undefined) {
+                // A Document registration is held on its documentElement:
+                // everything under it is the document's subtree.
+                const doc = st.documentOf.get(node);
+                if (doc === undefined) continue;
+                o = st.targets.get(doc);
+                if (o === undefined) continue;
+                viaDocument = true;
+            }
             // An ancestor registration only counts with subtree; the target's
             // own registration always does.
-            if (node !== raw.target && !o.subtree) continue;
+            if ((viaDocument || node !== raw.target) && !o.subtree) continue;
             if (raw.type === 'childList') {
                 if (!o.childList) continue;
             } else if (raw.type === 'attributes') {
@@ -242,7 +251,7 @@
             if (typeof callback !== 'function') {
                 throw new TypeError('MutationObserver: the argument must be a function');
             }
-            moState.set(this, { callback: callback, targets: new Map(), queue: [] });
+            moState.set(this, { callback: callback, targets: new Map(), documentOf: new Map(), queue: [] });
         }
 
         observe(target, options) {
@@ -255,13 +264,19 @@
             }
             const opts = normalizeMutationOptions(options);
             pumpMutations();
+            // The DOM has no node for a Document: its registration watches
+            // the document element in its place.
+            opts.host = target.nodeType === 9 ? target.documentElement : target;
+            if (!opts.host) return;
             const previous = st.targets.get(target);
             if (previous === undefined) {
-                hooks.observeMutations(target, opts.subtree);
-            } else if (previous.subtree !== opts.subtree) {
-                hooks.unobserveMutations(target, previous.subtree);
-                hooks.observeMutations(target, opts.subtree);
+                hooks.observeMutations(opts.host, opts.subtree);
+            } else if (previous.subtree !== opts.subtree || previous.host !== opts.host) {
+                hooks.unobserveMutations(previous.host, previous.subtree);
+                hooks.observeMutations(opts.host, opts.subtree);
+                if (previous.host !== target) st.documentOf.delete(previous.host);
             }
+            if (opts.host !== target) st.documentOf.set(opts.host, target);
             // Re-observing a node REPLACES its options rather than stacking a
             // second registration that would double every record.
             st.targets.set(target, opts);
@@ -280,7 +295,8 @@
             const opts = st.targets.get(target);
             if (opts === undefined) return;
             pumpMutations();
-            hooks.unobserveMutations(target, opts.subtree);
+            hooks.unobserveMutations(opts.host, opts.subtree);
+            st.documentOf.delete(opts.host);
             st.targets.delete(target);
             if (st.targets.size === 0) this.disconnect();
         }
@@ -289,10 +305,11 @@
             const st = moState.get(this);
             if (st === undefined) return;
             pumpMutations();
-            for (const [node, opts] of st.targets) {
-                hooks.unobserveMutations(node, opts.subtree);
+            for (const opts of st.targets.values()) {
+                hooks.unobserveMutations(opts.host, opts.subtree);
             }
             st.targets.clear();
+            st.documentOf.clear();
             // The web drops the record queue too: a disconnected observer's
             // pending records are gone, not merely undelivered.
             st.queue = [];

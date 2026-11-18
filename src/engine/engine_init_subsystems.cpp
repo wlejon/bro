@@ -26,7 +26,8 @@
 namespace bro::engine {
 
 webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas,
-                                                           const webgl::ContextAttributes& attributes) {
+                                                           const webgl::ContextAttributes& attributes,
+                                                           int version) {
     if (!vulkanContext_) return nullptr;
 
     if (canvas && canvas->webglContext()) {
@@ -67,7 +68,8 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas,
         ch = attrInt("height", ch);
     }
     if (!webglThread_) webglThread_ = std::make_shared<webgl::WebGLThread>();
-    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_, attributes, webglThread_);
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_, attributes, webglThread_,
+                                                                 version);
     auto* webglCtx = ctx2.get();
     if (canvas) canvas->setWebglContext(webglCtx);
     webglEntries_.push_back({std::move(ctx2), canvas, canvas ? canvas->document() : nullptr,

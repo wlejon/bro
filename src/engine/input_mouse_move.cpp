@@ -332,7 +332,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            ct, vh, documentHeight_, vh, scrollY_);
+            ct, vh, userScrollHeight(), vh, scrollY_);
         float maxScroll = std::max(0.0f, documentHeight_ - vh);
         setViewportScrollY(std::clamp(
             viewportScrollbar_.updateDrag(y, documentHeight_, vh, m),
@@ -370,7 +370,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            ct, vh, documentHeight_, vh, scrollY_);
+            ct, vh, userScrollHeight(), vh, scrollY_);
         bool wasHovered = viewportScrollbar_.isHovered();
         viewportScrollbar_.setHovered(viewportScrollbar_.thumbHitTest(x, y, m));
         if (wasHovered != viewportScrollbar_.isHovered()) uiDirty_ = true;

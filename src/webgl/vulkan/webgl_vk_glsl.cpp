@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <span>
 
 namespace bro::webgl::vk::glsl {
 
@@ -82,7 +83,9 @@ Dialect dialectOf(const std::string& src) {
 // texture` stays consistent), to kKeywordPrefix + itself; names the program
 // reports (attributes, uniforms, blocks, outputs) have the prefix taken off.
 // texture2D and the other texture types are ES 1.00 built-in functions
-// (the preamble maps them), so they are renamed in ES 3.00 source only.
+// (the preamble maps them), so they are renamed in ES 3.00 source only; the
+// GLSL 450 functions ES 1.00 lacks (texture, round, inverse, ...) in ES 1.00
+// source only.
 constexpr const char* kKeywordPrefix = "bro_kw_";
 
 bool vulkanOnlyKeyword(std::string_view id, Dialect dialect) {
@@ -99,11 +102,25 @@ bool vulkanOnlyKeyword(std::string_view id, Dialect dialect) {
         "utexture1D", "utexture1DArray", "utexture2D", "utexture2DArray", "utexture3D", "utextureCube",
         "utextureCubeArray", "utexture2DRect", "utextureBuffer", "utexture2DMS", "utexture2DMSArray",
     };
+    // GLSL 450 built-in functions and qualifiers that GLSL ES 1.00 does not
+    // have, so in ES 1.00 source they are the program's own names: Phaser's
+    // sprite shader has `vec4 texture = texture2D(...)`, which the preamble's
+    // texture2D -> texture mapping would otherwise collide with.
+    static const char* const kEs100[] = {
+        "texture", "textureProj", "textureLod", "textureProjLod", "textureGrad", "textureProjGrad",
+        "textureOffset", "textureProjOffset", "textureLodOffset", "textureProjLodOffset", "textureGradOffset",
+        "textureProjGradOffset", "textureSize", "textureQueryLod", "textureQueryLevels", "textureGather",
+        "textureGatherOffset", "textureGatherOffsets", "textureSamples", "texelFetch", "texelFetchOffset",
+        "sample", "patch", "subroutine", "smooth", "flat", "noperspective", "centroid", "layout",
+        "round", "roundEven", "trunc", "modf", "isnan", "isinf", "sinh", "cosh", "tanh", "asinh", "acosh",
+        "atanh", "inverse", "transpose", "determinant", "outerProduct", "fma", "frexp", "ldexp",
+        "floatBitsToInt", "floatBitsToUint", "intBitsToFloat", "uintBitsToFloat", "bitCount", "findLSB",
+        "findMSB", "bitfieldExtract", "bitfieldInsert", "bitfieldReverse",
+    };
     for (const char* k : kAlways)
         if (id == k) return true;
-    if (dialect == Dialect::Es300)
-        for (const char* k : kEs300)
-            if (id == k) return true;
+    for (const char* k : dialect == Dialect::Es300 ? std::span<const char* const>(kEs300) : std::span<const char* const>(kEs100))
+        if (id == k) return true;
     return false;
 }
 
@@ -143,7 +160,9 @@ std::string userName(std::string name) {
     return name;
 }
 
-std::string internalName(const std::string& name) { return renameKeywords(name, Dialect::Es300); }
+std::string internalName(const std::string& name, Dialect dialect = Dialect::Es300) {
+    return renameKeywords(name, dialect);
+}
 
 // The source with the #extension lines of WebGL 1 extensions that are core
 // here (and unknown to desktop GLSL) blanked, keeping line numbers.
@@ -756,8 +775,12 @@ TypeInfo typeInfo(GLenum type) {
     }
 }
 
-bool compile(const std::string& source, GLenum type, std::string& log) {
+bool compile(const std::string& source, GLenum type, std::string& log, bool webgl1) {
     log.clear();
+    if (webgl1 && dialectOf(source) == Dialect::Es300) {
+        log = "ERROR: 0:1: '300' : version number not supported\n";
+        return false;
+    }
     auto lock = webgl::acquireGlslang();
     if (!lock.owns_lock()) {
         log ="ERROR: the shader compiler failed to initialise\n";
@@ -828,7 +851,9 @@ LinkResult link(const std::string& vertexSource, const std::string& fragmentSour
     }
 
     std::unordered_map<std::string, uint32_t> locations;
-    for (const VkAttribInfo& a : result.iface.attribs) locations[internalName(a.name)] = static_cast<uint32_t>(a.location);
+    const Dialect vsDialect = dialectOf(vertexSource);
+    for (const VkAttribInfo& a : result.iface.attribs)
+        locations[internalName(a.name, vsDialect)] = static_cast<uint32_t>(a.location);
     if (!spirv::setInputLocations(result.vertSpirv, locations)) {
         result.log += "ERROR: could not place the vertex attributes\n";
         return result;

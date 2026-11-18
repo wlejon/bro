@@ -33,11 +33,14 @@ public:
     /// (the engine's, shared by its contexts; null: one of its own).
     WebGL2RenderingContext(int width, int height, render::VulkanContext& device,
                            const ContextAttributes& requested = {},
-                           std::shared_ptr<WebGLThread> thread = nullptr);
+                           std::shared_ptr<WebGLThread> thread = nullptr, int version = 2);
     ~WebGL2RenderingContext();
 
     /// What getContextAttributes answers.
     const ContextAttributes& attributes() const { return attributes_; }
+    /// 1 for a getContext('webgl') context: WebGLRenderingContext's surface,
+    /// WebGL 1's extensions and version strings, over the same backend.
+    int version() const { return version_; }
 
     WebGL2RenderingContext(const WebGL2RenderingContext&) = delete;
     WebGL2RenderingContext& operator=(const WebGL2RenderingContext&) = delete;
@@ -97,6 +100,7 @@ public:
 private:
     int width_;
     int height_;
+    int version_;
     render::VulkanContext& device_;
     ContextAttributes attributes_;
     std::shared_ptr<const vk::WebGLCaps> caps_;

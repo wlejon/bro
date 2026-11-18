@@ -15,6 +15,10 @@
 
 namespace bro::dom {
 
+class Element;
+// A <link> whose rel names a stylesheet that applies (not an alternate one).
+bool isStylesheetLink(const Element* el);
+
 // Per-property flags the restyle diff needs. Both questions the diff asks are
 // answered from one lookup instead of two separate hash-set probes per property:
 //

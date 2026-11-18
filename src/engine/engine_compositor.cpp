@@ -148,7 +148,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
             auto& vs = viewportScrollbar_.style();
             auto m = viewportScrollbar_.layout(
                 static_cast<float>(contentW) - vs.width - vs.margin,
-                0.0f, vh, documentHeight_, vh, scrollY);
+                0.0f, vh, userScrollHeight(), vh, scrollY);
             // The viewport scrollbar belongs to the root element, whose
             // color-scheme (and scrollbar-color) themes it.
             auto* rootEl = document_->documentElement();

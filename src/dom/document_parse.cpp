@@ -8,6 +8,7 @@
 // are the other three halves and live beside this file.
 
 #include "dom/document.h"
+#include "dom/document_internal.h"
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "engine/css_transitions.h"
@@ -80,6 +81,7 @@ void Document::parse(const std::string& html, const std::vector<AuthorSheet>& au
         sheet.baseUrl = as.baseUrl;
         addSheetToCascade(std::move(sheet));
         retainedSheets_.back().linked = true;
+        retainedSheets_.back().source = as.css;
     }
 
     // Parse HTML with gumbo
@@ -126,10 +128,24 @@ void Document::parse(const std::string& html, const std::vector<AuthorSheet>& au
                 std::string css = elem->textContent();
                 if (!css.empty()) {
                     addSheetToCascade(htmlayout::css::parse(css));
+                    retainedSheets_.back().owner = elem;
+                    retainedSheets_.back().source = std::move(css);
                     elem->setStyleSheetAdded(true);
                 }
             }
         }
+        // The linked sheets parse() was given are the <link rel=stylesheet>
+        // elements' (AppLoader read them in document order): each becomes
+        // its element's sheet (element.sheet, document.styleSheets), and the
+        // sheets take their elements' place in tree order among the <style>s.
+        std::vector<Element*> links;
+        for (auto* elem : allElems)
+            if (elem->tagName() == "LINK" && isStylesheetLink(elem)) links.push_back(elem);
+        size_t li = 0;
+        for (auto& rs : retainedSheets_)
+            if (rs.linked && li < links.size()) rs.owner = links[li++];
+        orderSheets(allElems);
+        rebuildCascade();
     }
     // The parse pass above added every <style> present in the source, so no
     // reconcile is owed until the DOM next changes.
@@ -371,6 +387,11 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
             std::string css = elem->textContent();
             if (!css.empty()) {
                 addSheetToCascade(htmlayout::css::parse(css));
+                retainedSheets_.back().owner = elem;
+                retainedSheets_.back().source = css;
+                // A sheet inserted before others in tree order belongs before
+                // them in the cascade too.
+                sheetsStale_ = true;
                 // Mark added so the post-mutation reconcile (armed by the
                 // markStructureDirty below) doesn't add these rules a second time.
                 elem->setStyleSheetAdded(true);

@@ -56,7 +56,8 @@ Value glValue(webgl::WebGL2RenderingContext* c, const webgl::GLValue& v) {
 Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
     ObjectBuilder o;
     auto def = [&o](const char* n, double v) { o.set(n, ev::fromDouble(v)); };
-    if (name == "WEBGL_compressed_texture_s3tc") {
+    if (makeWebGL1Extension(c, name, o)) {
+    } else if (name == "WEBGL_compressed_texture_s3tc") {
         def("COMPRESSED_RGB_S3TC_DXT1_EXT", 0x83F0);
         def("COMPRESSED_RGBA_S3TC_DXT1_EXT", 0x83F1);
         def("COMPRESSED_RGBA_S3TC_DXT3_EXT", 0x83F2);

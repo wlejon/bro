@@ -43,6 +43,20 @@ void Engine::updateDocumentHeight() {
     documentHeight_ = h;
 }
 
+float Engine::userScrollHeight() const {
+    if (!document_) return 0.0f;
+    auto overflowY = [](const dom::Element* el) -> std::string {
+        if (!el) return "visible";
+        const auto& cs = el->computedStyle();
+        auto it = cs.find("overflow-y");
+        return it == cs.end() ? std::string("visible") : it->second;
+    };
+    std::string ov = overflowY(document_->documentElement());
+    if (ov == "visible") ov = overflowY(document_->body());
+    if (ov == "hidden" || ov == "clip") return 0.0f;
+    return documentHeight_;
+}
+
 void Engine::scrollViewportTo(float y) {
     if (!document_) return;
     flushLayoutForRead(document_.get());
@@ -177,6 +191,9 @@ void Engine::drainWheelSmoothing(float frameDtSec) {
 
     if (!document_) { wheelResidualY_ = 0.0f; return; }
 
+    // A viewport whose overflow is hidden does not scroll by wheel; it keeps
+    // whatever offset script gave it.
+    if (userScrollHeight() <= 0.0f) { wheelResidualY_ = 0.0f; return; }
     float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
     float prevScroll = scrollY_;
     setViewportScrollY(std::clamp(scrollY_ + apply, 0.0f, maxScroll));

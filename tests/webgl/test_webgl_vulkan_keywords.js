@@ -1,7 +1,8 @@
 // Words that are identifiers in GLSL ES but keywords of the Vulkan GLSL bro
 // compiles WebGL shaders as (`sampler`, `buffer`, `shared`, and in ES 3.00
 // `texture2D` and the other texture types) compile, and the program reports
-// them by the names the source uses. three.js's transmission shader has a
+// them by the names the source uses; so do the GLSL 450 built-ins ES 1.00
+// lacks (`texture`, `round`, `sample`) in ES 1.00 source. three.js's transmission shader has a
 // function parameter named `sampler` and failed to compile.
 
 const canvas = document.createElement('canvas');
@@ -63,4 +64,31 @@ if (!gl) {
     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     const got = Array.from(px).join(',');
     assert(got === '255,64,128,255', 'draws through the renamed names, got ' + got);
+
+    // ES 1.00: the GLSL 450 functions it lacks are the program's own names
+    // (Phaser's sprite shader: `vec4 texture = texture2D(uMainSampler, ...)`).
+    const vs1 = 'attribute vec2 round; void main() { gl_Position = vec4(round, 0.0, 1.0); }';
+    const fs1 = 'precision mediump float; uniform sampler2D uMainSampler; uniform float sample;\n' +
+        'float inverse(float x) { return 1.0 - x; }\n' +
+        'void main() { vec4 texture = texture2D(uMainSampler, vec2(0.5)); gl_FragColor = vec4(texture.r, inverse(sample), 0.0, 1.0); }';
+    const p1 = gl.createProgram();
+    for (const [t, s1] of [[gl.VERTEX_SHADER, vs1], [gl.FRAGMENT_SHADER, fs1]]) {
+        const sh = gl.createShader(t);
+        gl.shaderSource(sh, s1);
+        gl.compileShader(sh);
+        assert(gl.getShaderParameter(sh, gl.COMPILE_STATUS), 'ES 1.00 compiles: ' + gl.getShaderInfoLog(sh));
+        gl.attachShader(p1, sh);
+    }
+    gl.linkProgram(p1);
+    assert(gl.getProgramParameter(p1, gl.LINK_STATUS), 'ES 1.00 links: ' + gl.getProgramInfoLog(p1));
+    assert(gl.getAttribLocation(p1, 'round') >= 0 && gl.getUniformLocation(p1, 'sample') !== null, 'by their own names');
+    gl.useProgram(p1);
+    gl.uniform1f(gl.getUniformLocation(p1, 'sample'), 0.75);
+    gl.uniform1i(gl.getUniformLocation(p1, 'uMainSampler'), 0);
+    const loc = gl.getAttribLocation(p1, 'round');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    assert(Array.from(px).join(',') === '255,64,0,255', 'ES 1.00 draws, got ' + Array.from(px).join(','));
 }

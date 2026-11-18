@@ -145,7 +145,7 @@ void ShadowRoot::registerStyleElements(Document* doc) {
         if (css.empty()) continue;   // not parsed yet; try again next change
         elem->setStyleSheetAdded(true);
         styleSheets_.push_back(css);
-        if (doc) doc->addShadowStylesheet(this, css);
+        if (doc) doc->addShadowStylesheet(this, css, elem);
     }
 }
 
