@@ -86,6 +86,7 @@ add_library(bro_engine STATIC
     system_panels_input.cpp
     shader_status.cpp
     iframe.cpp
+    page_navigation.cpp
     sub_document.cpp
     scroll_layers.cpp
     window_host.cpp

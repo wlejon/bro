@@ -573,7 +573,6 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // HTMLCanvasElement and HTMLImageElement are installed as real classes
     // via installHtmlInterfaces() / installImageGlobal().
     installTouchGlobals();
-    installVendorGlobals();
     installBrokitGlobals(engine);
     // The UI event classes (js/events.js) extend the `Event` brokit just
     // installed.

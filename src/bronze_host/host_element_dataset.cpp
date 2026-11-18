@@ -1,5 +1,6 @@
 // dataset proxy and classList / DOMTokenList handling.
 
+#include "bronze_host/host_list_iteration.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_node.h"
@@ -192,6 +193,11 @@ Value makeClassListObject(HostNodeState* raw) {
                        st->el->setClassName(ev::toUtf8(v));
                    return ev::undefined();
                });
+    // DOMTokenList is iterable<DOMString>: for…of, spread, forEach.
+    installSnapshotIteration(b.get(), [st]() {
+        std::vector<std::string> list = classesOf(st->el);
+        return hostArrayOf(list.size(), [&list](size_t i) { return ev::fromUtf8(list[i]); });
+    });
     return b.get();
 }
 

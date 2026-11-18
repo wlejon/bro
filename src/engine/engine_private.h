@@ -194,7 +194,10 @@
 
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
     void initAppRealm();
-    std::string combinedClassicScripts() const;
+    std::vector<std::string> classicScriptTexts() const;
+    static std::string combineClassicScripts(const std::vector<std::string>& texts);
+    void runClassicScripts(const std::vector<std::string>& texts, const std::string& code,
+                           const std::string& name);
     // At launch, while the GPU comes up: the realm's host globals installed
     // and the page's first script compiling on its own thread, for
     // initAppRealm's run of it to take.
@@ -222,6 +225,7 @@
 
     void initSystemPanels();
     void loadCustomFonts();
+    bool loadFontFace(const htmlayout::css::FontFaceRule& ff, const std::string& path);
     void destroySystemPanels();
     void loadSystemPanels(const std::string& systemDir);
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
@@ -600,6 +604,12 @@ private:
     std::vector<render::SkiaRenderer::LayerSurface> iframeSurfaceFrees_;
     bool iframeSyncNeeded_ = false;
     std::unordered_map<dom::Element*, std::string> iframeLoadFailed_;
+    // An iframe its document navigated (navigateDocument): the page its
+    // queued reload loads in place of its src, and that page's URL suffix.
+    std::unordered_map<dom::Element*, std::string> iframeNavigations_;
+    // The app document's URL (pageUrl), and the page file it names.
+    std::string pageUrl_ = "bro://app/";
+    std::string pageSource() const;
     // <appview>s their page stopped: not loaded until start().
     std::unordered_set<dom::Element*> stoppedIframes_;
     bool systemPerfVisible_ = false;
@@ -741,7 +751,6 @@ private:
     void gestureEndIfFounder(uint64_t endedFinger);
     void dispatchGestureEvent(const char* type);
 
-    std::string documentReadyState_ = "loading";
     MouseDispatchState appMouseState_;
     int pressedButtons_ = 0;
 

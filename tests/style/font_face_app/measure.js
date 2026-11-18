@@ -72,4 +72,25 @@ const inkReg = ink(reg), inkSyn = ink(syn);
 assert(inkSyn > inkReg * 1.08,
        'weight 700 in a regular-only family is synthesized bold: ink ' + inkSyn +
        ' vs regular ' + inkReg);
+// A src list falls back past the formats it cannot use and the files it
+// cannot read, to the first source that loads.
+root.textContent = '';
+const fbNarrow = width(span('"TestInterFallback", monospace', 400, 'iiiiii'));
+const fbWide = width(span('"TestInterFallback", monospace', 400, 'WWWWWW'));
+assert(fbWide > fbNarrow * 2, 'the src list fell back to the truetype source (iiiiii ' +
+       fbNarrow.toFixed(2) + ' vs WWWWWW ' + fbWide.toFixed(2) + ')');
+
+// document.fonts: settled by the time a script runs, and iterable.
+assert(document.fonts.status === 'loaded' && document.fonts.ready instanceof Promise,
+       'document.fonts is loaded and ready is a promise');
+const faces = [...document.fonts];
+const fb = faces.find((f) => f.family === 'TestInterFallback');
+assert(fb && fb.status === 'loaded', 'document.fonts lists the fallback face as loaded, got ' +
+       JSON.stringify(faces.map((f) => f.family + ':' + f.status)));
+assert(document.fonts.size === faces.length && document.fonts.check('16px TestInter'), 'size and check()');
+let readyRan = false;
+document.fonts.ready.then((set) => { readyRan = set === document.fonts; });
+advanceTime(1);
+assert(readyRan, 'document.fonts.ready resolves to the set');
+
 console.log('font-face matching: ok');

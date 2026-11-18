@@ -186,6 +186,14 @@ Compartment* compartmentById(uint64_t id) {
     return nullptr;
 }
 
+dom::Document* compartmentDocument(uint64_t id) {
+    Compartment* c = compartmentById(id);
+    if (!c || c->dying) return nullptr;
+    if (c->document) return c->document;
+    engine::Engine* e = id == 0 ? hostEngine() : nullptr;
+    return e ? e->document() : nullptr;
+}
+
 Compartment* compartmentForWindowHost(uint64_t windowHostId) {
     if (windowHostId == 0) return nullptr;
     for (auto& c : s_live)
@@ -464,7 +472,8 @@ bool runEntry(Compartment* c, EntryKind kind, std::function<void()> body) {
     const uint64_t id = c->id;
     const double deadline = steadyMs() + kSyncEntryBudgetMs;
     if (suspended(c) && !finishSuspended(id, deadline)) return false;
-    settle(c, onFiber(c, &body));
+    c->running = std::move(body);
+    settle(c, onFiber(c, &c->running));
     if (kind == EntryKind::Sync) {
         if (Compartment* still = live(id); still && suspended(still)) finishSuspended(id, deadline);
     }
@@ -485,9 +494,9 @@ void serviceCompartmentFibers() {
         if (!c || c->dying || !c->fiber) continue;
         if (suspended(c)) settle(c, onFiber(c, nullptr));
         while ((c = compartmentById(id)) && !c->dying && !suspended(c) && !c->queued.empty()) {
-            std::function<void()> body = std::move(c->queued.front());
+            c->running = std::move(c->queued.front());
             c->queued.pop_front();
-            settle(c, onFiber(c, &body));
+            settle(c, onFiber(c, &c->running));
         }
     }
     dispatchAppViewEvents();

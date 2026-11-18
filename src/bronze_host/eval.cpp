@@ -125,11 +125,18 @@ std::filesystem::path getExecutableDirectory() {
 // Module roots for a compile that runs against `engine`'s app. Every engine
 // mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler
 // resolves `import "/lib/x.js"` exactly as the asset loader resolves
-// `<script src="/lib/x.js">`.
+// `<script src="/lib/x.js">`. The compiling document's import map adds its
+// entries ("three" -> a file, "three/addons/" -> a folder), for static and
+// dynamic imports alike.
 std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine) {
     std::vector<bronze::modules::ModuleRoot> roots;
     for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
         roots.push_back({prefix, std::filesystem::path(target)});
+    }
+    const dom::Document* doc = currentHostDocument();
+    const auto& importMap = doc && doc != engine.document() ? doc->importMap() : engine.pageImportMap();
+    for (const auto& [specifier, target] : importMap) {
+        roots.push_back({specifier, std::filesystem::path(target)});
     }
     return roots;
 }
@@ -474,6 +481,27 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
     // registered its spans, and they are still the reload's to retire.
     engine.addAppModuleHandle(handle);
     return ok;
+}
+
+namespace {
+constexpr const char* kClassicScriptMarker = "__broClassicScript";
+}  // namespace
+
+std::string classicScriptMarker(size_t index) {
+    return std::string("globalThis.") + kClassicScriptMarker + "=" + std::to_string(index) + ";";
+}
+
+void clearClassicScriptMarker() {
+    cleanGlobalProp(kClassicScriptMarker);
+}
+
+int takeClassicScriptMarker() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return -1;
+    Value v = ev::getProperty(gt.value, kClassicScriptMarker);
+    const int reached = ev::isUndefined(v) || ev::isObject(v) ? -1 : static_cast<int>(ev::toDouble(v));
+    cleanGlobalProp(kClassicScriptMarker);
+    return reached;
 }
 
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {

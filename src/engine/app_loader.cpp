@@ -1,5 +1,6 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
+#include "util/json_in.h"
 #include "util/log.h"
 #include "util/remote_asset.h"
 #include "util/string_utils.h"
@@ -33,6 +34,109 @@ bool isExecutableScriptType(const std::string& type) {
         if (type == t) return true;
     }
     return false;
+}
+
+// `html` with its comments blanked out (each comment's characters but its
+// newlines become spaces, so offsets and line numbers hold), outside the raw
+// text of <script> and <style>, where `<!--` is text. A script in a comment
+// (an IE conditional comment, a commented-out tag) is not a script.
+std::string withoutComments(const std::string& html) {
+    std::string out = html;
+    auto startsWithCi = [&out](size_t i, const char* lit) {
+        for (size_t k = 0; lit[k]; ++k) {
+            if (i + k >= out.size() || std::tolower(static_cast<unsigned char>(out[i + k])) != lit[k]) return false;
+        }
+        return true;
+    };
+    size_t i = 0;
+    while (i < out.size()) {
+        if (out.compare(i, 4, "<!--") == 0) {
+            size_t end = out.find("-->", i + 4);
+            end = end == std::string::npos ? out.size() : end + 3;
+            for (size_t k = i; k < end; ++k) {
+                if (out[k] != '\n') out[k] = ' ';
+            }
+            i = end;
+            continue;
+        }
+        const char* rawEnd = startsWithCi(i, "<script") ? "</script" : startsWithCi(i, "<style") ? "</style" : nullptr;
+        if (rawEnd) {
+            size_t k = out.find('>', i);
+            while (k != std::string::npos && k < out.size() && !startsWithCi(k, rawEnd)) {
+                k = out.find('<', k + 1);
+            }
+            i = k == std::string::npos ? out.size() : k + 1;
+            continue;
+        }
+        ++i;
+    }
+    return out;
+}
+
+// The folder a `<base href>` makes the page's base: `href` resolved against
+// the page's folder, its last segment dropped unless it ends in '/'. Empty
+// for none, or a base that is a URL (the app's files are not under it).
+std::string baseFolderOf(const std::string& html, const std::string& pageDir, const util::AssetMounts* mounts) {
+    static const std::regex baseRe(R"(<base\b[^>]*\bhref\s*=\s*["']([^"']*)["'])", std::regex_constants::icase);
+    std::smatch m;
+    if (!std::regex_search(html, m, baseRe)) return {};
+    std::string href = m[1].str();
+    const size_t cut = href.find_first_of("?#");
+    if (cut != std::string::npos) href.erase(cut);
+    if (href.empty() || util::hasUrlScheme(href)) return {};
+    if (href.back() != '/') {
+        const size_t slash = href.find_last_of('/');
+        href = slash == std::string::npos ? std::string() : href.substr(0, slash + 1);
+        if (href.empty()) return {};
+    }
+    return AppLoader::resolvePath(pageDir, href, mounts);
+}
+
+// <script type="importmap">'s JSON into `out`: "imports", then the entries of
+// "scopes" no top-level import names. A scope's mapping is for importers under
+// its URL alone, which module resolution here cannot tell apart, so one that
+// would remap a top-level key is left out, and said. Targets resolve as a
+// script's src does; a target on the network, or a key that is a URL or path
+// rather than a bare specifier, is skipped.
+void readImportMap(const std::string& text, const std::string& baseDir, const util::AssetMounts* mounts,
+                   std::vector<std::pair<std::string, std::string>>& out) {
+    util::JsonValue root;
+    std::string err;
+    if (!util::parseJson(text, root, &err) || !root.isObject()) {
+        LOG_ERROR("AppLoader: <script type=\"importmap\"> is not a JSON object: %s", err.c_str());
+        return;
+    }
+    auto known = [&out](const std::string& key) {
+        for (const auto& [k, v] : out) {
+            if (k == key) return true;
+        }
+        return false;
+    };
+    auto add = [&](const util::JsonValue& imports, const char* where) {
+        if (!imports.isObject()) return;
+        for (const auto& [key, target] : imports.object) {
+            if (!target.isString() || key.empty()) continue;
+            if (key[0] == '.' || key[0] == '/' || util::hasUrlScheme(key)) {
+                LOG_WARN("AppLoader: import map key '%s' is not a bare specifier; skipped", key.c_str());
+                continue;
+            }
+            if (util::isHttpUrl(target.string)) {
+                LOG_WARN("AppLoader: import map maps '%s' to '%s', on the network; skipped", key.c_str(),
+                         target.string.c_str());
+                continue;
+            }
+            if (known(key)) {
+                if (where) LOG_WARN("AppLoader: import map scope %s remaps '%s'; only the top-level mapping is used", where, key.c_str());
+                continue;
+            }
+            out.emplace_back(key, AppLoader::resolvePath(baseDir, target.string, mounts));
+        }
+    };
+    add(root.get("imports"), nullptr);
+    const util::JsonValue& scopes = root.get("scopes");
+    if (scopes.isObject()) {
+        for (const auto& [scope, imports] : scopes.object) add(imports, scope.c_str());
+    }
 }
 
 } // namespace
@@ -127,18 +231,29 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
         return manifest;
     }
 
-    manifest.basePath = appDir;
-    manifest.htmlPath = resolvePath(appDir, "index.html", mounts);
+    // A page file (a navigation's target, an <iframe src="page.html">) is
+    // that page, based at its folder; a folder is its index.html.
+    if ((ext == ".html" || ext == ".htm") && std::filesystem::is_regular_file(appDir, ec)) {
+        std::filesystem::path p(appDir);
+        manifest.basePath = p.has_parent_path() ? p.parent_path().string() : std::string(".");
+        manifest.htmlPath = appDir;
+    } else {
+        manifest.basePath = appDir;
+        manifest.htmlPath = resolvePath(appDir, "index.html", mounts);
+    }
+    const std::string& baseDir = manifest.basePath;
 
     std::string html;
     if (std::filesystem::exists(manifest.htmlPath, ec)) {
-        html = loadFile(manifest.htmlPath);
+        html = withoutComments(loadFile(manifest.htmlPath));
+        // <base href>: every relative URL of the page resolves against it.
+        if (std::string base = baseFolderOf(html, manifest.basePath, mounts); !base.empty()) manifest.basePath = base;
     }
 
     if (html.empty()) {
         std::string entryJs;
         for (const char* candidate : {"server.js", "server.ts", "server.lua", "main.js", "main.ts", "main.lua"}) {
-            std::string resolved = resolvePath(appDir, candidate, mounts);
+            std::string resolved = resolvePath(baseDir, candidate, mounts);
             if (std::filesystem::exists(resolved, ec)) {
                 entryJs = std::move(resolved);
                 break;
@@ -163,7 +278,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string href = (*it)[1].str();
-            manifest.stylePaths.push_back(resolvePath(appDir, href, mounts));
+            manifest.stylePaths.push_back(resolvePath(baseDir, href, mounts));
         }
     }
 
@@ -175,7 +290,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string href = (*it)[1].str();
-            std::string resolved = resolvePath(appDir, href, mounts);
+            std::string resolved = resolvePath(baseDir, href, mounts);
             // Avoid duplicates
             bool found = false;
             for (auto& existing : manifest.stylePaths) {
@@ -217,7 +332,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             }
 
             if (type == "importmap") {
-                LOG_INFO("AppLoader: skipping <script type=\"importmap\"> (handled by runtime)");
+                readImportMap(body, baseDir, mounts, manifest.importMap);
                 continue;
             }
 
@@ -236,7 +351,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             std::smatch srcMatch;
             if (std::regex_search(attrs, srcMatch, srcRe)) {
                 // External script
-                std::string resolved = resolvePath(appDir, srcMatch[1].str(), mounts);
+                std::string resolved = resolvePath(baseDir, srcMatch[1].str(), mounts);
                 const bool isLua = isLuaType || (std::filesystem::path(resolved).extension() == ".lua");
                 manifest.scripts.push_back({resolved, {}, isModule, isLua});
             } else if (!body.empty()) {

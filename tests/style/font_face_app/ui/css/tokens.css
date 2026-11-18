@@ -8,3 +8,14 @@
 
 /* Only a regular face: bold text in it is synthesized. */
 @font-face { font-family: "TestInterRegularOnly"; font-weight: 400; src: url("../fonts/Inter-Regular.ttf"); }
+
+/* A src list as 2048 ships Clear Sans: IE's eot and an svg font (formats no
+   engine reads, skipped), a woff that is not there (tried, then the next),
+   then a truetype that loads. */
+@font-face {
+  font-family: "TestInterFallback";
+  src: url("../fonts/Inter-Regular.eot") format("embedded-opentype"),
+       url("../fonts/Inter-Regular.svg#inter") format("svg"),
+       url("../fonts/missing.woff") format("woff"),
+       url("../fonts/Inter-Regular.ttf") format("truetype");
+}

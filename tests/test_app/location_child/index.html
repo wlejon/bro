@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+// tests/engine/test_location_history.js: this frame's location and history.
+window.__events = [];
+window.addEventListener('hashchange', function (e) { __events.push('hashchange ' + e.oldURL + ' -> ' + e.newURL); });
+window.onpopstate = function (e) { __events.push('popstate ' + JSON.stringify(e.state) + ' ' + location.href); };
+window.__initial = { href: location.href, search: location.search, hash: location.hash, pathname: location.pathname };
+</script>
+</body>
+</html>

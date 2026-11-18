@@ -23,10 +23,10 @@
 // keys are strings or SYMBOLS. `toUtf8` of a symbol is a TypeError by spec
 // (rt_convert.cpp says so in as many words), so a trap that stringified its key
 // first would turn `style[Symbol.toPrimitive]` — a question any library may
-// ask — into a thrown error. `embed::isSymbol` is the guard. Symbol keys then
-// answer undefined, which is the truthful answer for all three of these
-// objects, since none has a symbol-keyed member; there is no forwarding them to
-// the target either, because getProperty takes a string_view key.
+// ask — into a thrown error. `embed::isSymbol` is the guard. Symbol keys are
+// looked up on `methods` alone (a live list's `[Symbol.iterator]` is there,
+// host_list_iteration.h), through Reflect.get since getProperty takes a
+// string_view key, and answer undefined otherwise.
 //
 // LIFETIME. The traps live in a shared_ptr captured by each handler function;
 // embed::makeFunction parks closure state in the function's environment slot
@@ -37,6 +37,7 @@
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_proxy.h"
 #include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
+#include "bronze_host/host_list_iteration.h"
 
 #include <memory>
 #include <span>
@@ -85,7 +86,11 @@ Value makeHostProxy(HostProxyTraps traps) {
     // get(target, key, receiver)
     h.def("get", 3, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (ev::isSymbol(key)) return ev::undefined();
+        if (ev::isSymbol(key)) {
+            // A list's `[Symbol.iterator]` is part of its method surface.
+            if (ev::isUndefined(pack->methods.get())) return ev::undefined();
+            return getSymbolKeyed(pack->methods.get(), key);
+        }
         const std::string k = ev::toUtf8(key);
         // Methods first: they are the object's fixed surface, and no CSS
         // property or data-* key exists named `setProperty` to collide.
@@ -112,7 +117,10 @@ Value makeHostProxy(HostProxyTraps traps) {
 
     h.def("has", 2, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (ev::isSymbol(key)) return ev::fromBool(false);
+        if (ev::isSymbol(key)) {
+            if (ev::isUndefined(pack->methods.get())) return ev::fromBool(false);
+            return ev::fromBool(!ev::isUndefined(getSymbolKeyed(pack->methods.get(), key)));
+        }
         const std::string k = ev::toUtf8(key);
         if (!ev::isUndefined(pack->methods.get()) &&
             !ev::isUndefined(ev::getProperty(pack->methods.get(), k.c_str()))) {

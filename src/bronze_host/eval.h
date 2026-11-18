@@ -50,6 +50,16 @@ bool evalScript(engine::Engine& engine, const std::string& code,
 bool evalAppScript(engine::Engine& engine, const std::string& code,
                    const std::string& filename, bool moduleFile = false);
 
+/// A page's classic scripts run as one unit (Engine::pageScriptUnits) whose
+/// text sets a marker as it enters each script, `classicScriptMarker(i)`, and
+/// once more past the last (i = the script count). A unit whose run threw is
+/// then resumed after the script that threw, as the web runs each script as a
+/// task of its own: the marker says which one that was, and -1 (never set)
+/// that the unit did not compile. Cleared before the run, taken after it.
+std::string classicScriptMarker(size_t index);
+void clearClassicScriptMarker();
+int takeClassicScriptMarker();
+
 /// Compile a JS file in-process using bronze CLI and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);
 

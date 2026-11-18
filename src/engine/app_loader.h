@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace bro::util { class AssetMounts; }
 
@@ -20,6 +21,9 @@ struct AppManifest {
     std::string basePath;
     std::vector<ScriptEntry> scripts;    // in document order (external + inline)
     std::vector<std::string> stylePaths;
+    // <script type="importmap">: specifier key -> the path it maps to
+    // (dom::Document::importMap).
+    std::vector<std::pair<std::string, std::string>> importMap;
 };
 
 class AppLoader {

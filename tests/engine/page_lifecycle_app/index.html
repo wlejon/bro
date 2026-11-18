@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head><title>lifecycle</title>
+<script>
+// The page of tests/engine/test_page_lifecycle.js, run by a child
+// bro-headless with verify.js. It records, in window.__log, the document's
+// load as a browser runs it: readiness, readystatechange, the module script,
+// DOMContentLoaded, load, and handler attributes set on the way.
+window.__log = ['script1 ' + document.readyState];
+window.__errors = [];
+window.onerror = function (message) { __errors.push(String(message)); };
+document.addEventListener('readystatechange', function () { __log.push('readystatechange ' + document.readyState); });
+document.onreadystatechange = function () { __log.push('onreadystatechange ' + document.readyState); };
+document.addEventListener('DOMContentLoaded', function () { __log.push('DOMContentLoaded ' + document.readyState); });
+window.addEventListener('load', function () { __log.push('load ' + document.readyState); });
+</script>
+<script>
+// An uncaught exception ends this script alone.
+__log.push('script2');
+throw new Error('script 2 throws');
+</script>
+<script>
+// A UMD bundle's global, made by a property write on the global object
+// (`global.CodeMirror = factory()`), read by its bare name below.
+(function (global) { global.CodeMirror = { ok: true }; })(this);
+</script>
+<script>
+__log.push('script3 ' + typeof CodeMirror);
+</script>
+<script type="module">
+__log.push('module ' + document.readyState);
+// A module script is deferred: the load event is still ahead of it.
+window.onload = function () { __log.push('onload set by the module'); };
+</script>
+</head>
+<body></body>
+</html>

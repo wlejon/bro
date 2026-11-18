@@ -29,8 +29,11 @@ class Worker {
    * @param {string|URL} url  a path relative to the app directory
    *   ('sim/worker.js'), or a URL: the standard module form
    *   `new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })`
-   *   (a file: URL, since import.meta.url is the module's file URL) or a
-   *   `bro://app/...` URL. Other schemes throw a TypeError.
+   *   (a file: URL, since import.meta.url is the module's file URL), a
+   *   `bro://app/...` URL, or a `blob:` URL (`URL.createObjectURL(new
+   *   Blob([source]))`, classic or `{ type: 'module' }`) or `data:` URL
+   *   carrying the script itself, whose imports resolve from the page's
+   *   folder. A revoked object URL and other schemes throw a TypeError.
    * @param {Object} [options]
    */
   constructor(url, options) {}

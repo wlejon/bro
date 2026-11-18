@@ -104,6 +104,7 @@ void decorateInputProto(ObjectBuilder& b);  // HTMLInputElement.prototype
 void decorateCanvasProto(ObjectBuilder& b);  // HTMLCanvasElement.prototype (dom_canvas.cpp)
 void decorateElementValidity(ObjectBuilder& b);
 void decorateElementMutate(ObjectBuilder& b);
+void decorateElementNamespacedAttributes(ObjectBuilder& b);  // host_element_attrs_ns.cpp
 void decorateElementInteraction(ObjectBuilder& b);
 void decorateElementGeometry(ObjectBuilder& b);
 dom::AbsoluteRect borderBoxOf(dom::Element* el);

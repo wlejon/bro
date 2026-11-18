@@ -10,6 +10,7 @@
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "util/log.h"
+#include "util/remote_asset.h"
 #include "util/subresource_access.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
@@ -138,7 +139,16 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
     SubDocSource out;
     if (srcAttr.empty()) return out;
 
-    out.resolvedSrc = AppLoader::resolvePath(basePath, srcAttr, mounts);
+    // A query or fragment is the page's URL, not part of its file's path.
+    std::string srcPath = srcAttr;
+    if (!util::hasUrlScheme(srcAttr)) {
+        const size_t cut = srcAttr.find_first_of("?#");
+        if (cut != std::string::npos) {
+            out.urlSuffix = srcAttr.substr(cut);
+            srcPath = srcAttr.substr(0, cut);
+        }
+    }
+    out.resolvedSrc = AppLoader::resolvePath(basePath, srcPath, mounts);
     // The page named the folder (or file): the host's access gate decides
     // whether it may be read, before anything in it is (subresource_access.h).
     if (const std::string refused = util::subresourceRefusal(out.resolvedSrc); !refused.empty()) {
@@ -156,7 +166,10 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
         out.appDir = fs::path(out.resolvedSrc).parent_path().string();
     }
 
-    out.manifest = AppLoader::loadApp(out.appDir, mounts);
+    // A folder is its index.html; a page file (.html) is that page.
+    const std::string ext = fs::path(out.resolvedSrc).extension().string();
+    const bool pageFile = out.appDir != out.resolvedSrc && (ext == ".html" || ext == ".htm");
+    out.manifest = AppLoader::loadApp(pageFile ? out.resolvedSrc : out.appDir, mounts);
     out.html = AppLoader::loadFile(out.manifest.htmlPath);
     if (out.html.empty()) {
         LOG_WARN("%s: no index.html at '%s' (src='%s')", what,
@@ -179,10 +192,12 @@ void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
     // Its transitions and animations, on the engine's clock.
     d.animations.attach(d.document.get(), std::move(clock));
     d.document->setBasePath(src.manifest.basePath);
+    d.document->setImportMap(src.manifest.importMap);
     d.document->setMediaColorScheme(colorScheme);
     d.document->setMediaResolution(resolution);
     d.document->setMediaViewport(static_cast<float>(d.boxW), static_cast<float>(d.boxH));
     d.document->parse(src.html, src.authorStyles, kDefaultStyles);
+    d.document->setReadyState("loading");  // until runSubDocScripts' run ends
 }
 
 void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild) {

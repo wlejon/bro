@@ -364,6 +364,7 @@ void Engine::performAppReload() {
         }
     destroyAllIframes();
     pendingIframeReloads_.clear();
+    iframeNavigations_.clear();
     iframeLoadFailed_.clear();
     iframeSyncNeeded_ = false;
 

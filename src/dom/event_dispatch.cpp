@@ -183,4 +183,30 @@ void dispatchWindowEvent(Document* doc, Event& event) {
     event.setEventPhase(0);
 }
 
+void advanceDocumentReadiness(Document* doc, const char* state) {
+    if (!doc || doc->readyState() == state) return;
+    doc->setReadyState(state);
+    // The document's own listeners are held by its root element (the host's
+    // `document` event target), so the event is dispatched there; it does
+    // not bubble, so it reaches the window by no path.
+    if (Element* root = doc->documentElement()) {
+        Event change("readystatechange", /*bubbles=*/false, /*cancelable=*/false);
+        dispatchDomEvent(root, change);
+    }
+}
+
+void completeDocumentLoad(Document* doc) {
+    if (!doc || doc->readyState() == "complete") return;
+    advanceDocumentReadiness(doc, "interactive");
+    if (Element* root = doc->documentElement()) {
+        Event loaded("DOMContentLoaded", /*bubbles=*/true, /*cancelable=*/false);
+        dispatchDomEvent(root, loaded);
+    }
+    advanceDocumentReadiness(doc, "complete");
+    // `load` is fired at the window only: no listener on the document or an
+    // element hears it, as on the web.
+    Event load("load", /*bubbles=*/false, /*cancelable=*/false);
+    dispatchWindowEvent(doc, load);
+}
+
 } // namespace bro::dom

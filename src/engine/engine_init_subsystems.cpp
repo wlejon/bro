@@ -373,49 +373,66 @@ void Engine::loadCustomFonts() {
             });
         if (alreadyLoaded) continue;
 
-        // src is relative to the sheet that declared the rule (its directory,
+        // The src list's usable entries in order (htmlayout drops eot/svg):
+        // the first that can be read and registered is the face. Each is
+        // relative to the sheet that declared the rule (its directory,
         // through @import too); a sheet with no base is the document's.
-        std::string path = AppLoader::resolvePath(
-            ff.baseUrl.empty() ? basePath : ff.baseUrl, ff.src, &assetMounts_);
-        // The sheet named the file or URL: the host's access gate decides
-        // whether it may be read or fetched (util/subresource_access.h).
-        if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
-            LOG_WARN("@font-face '%s': %s", ff.family.c_str(), refused.c_str());
-            continue;
-        }
-
-        // One copy of the bytes, shared by the UI, layout and raster
-        // renderers. Mapped read-only where a mapping does not lock the file
-        // (it would block saving the font during hot reload on Windows), so
-        // its pages are page cache, shared with every process using the font.
-#ifdef _WIN32
-        sk_sp<SkData> bytes;
-        {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (file.is_open()) {
-                const auto size = static_cast<size_t>(file.tellg());
-                file.seekg(0, std::ios::beg);
-                auto owned = SkData::MakeUninitialized(size);
-                if (file.read(static_cast<char*>(owned->writable_data()), static_cast<std::streamsize>(size)))
-                    bytes = std::move(owned);
-            }
-        }
-#else
-        sk_sp<SkData> bytes = SkData::MakeFromFileName(path.c_str());
-#endif
-        if (!bytes || bytes->size() == 0) {
-            LOG_WARN("Failed to load @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
-            continue;
-        }
-        const void* data = bytes->data();
-        const size_t size = bytes->size();
-        std::shared_ptr<const void> keep(data, [bytes](const void*) mutable { bytes.reset(); });
-
-        if (renderer_->registerCustomFont(ff.family, {keep, data, size}, ff.weight, ff.italic)) {
-            LOG_INFO("Loaded @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
-            loadedFonts_.push_back({ff.family, std::move(keep), data, size, ff.weight, ff.italic});
+        const std::vector<std::string> sources = ff.sources.empty() ? std::vector<std::string>{ff.src} : ff.sources;
+        for (const std::string& src : sources) {
+            std::string path = AppLoader::resolvePath(ff.baseUrl.empty() ? basePath : ff.baseUrl, src, &assetMounts_);
+            if (loadFontFace(ff, path)) break;
         }
     }
+}
+
+const std::vector<LoadedFont>& Engine::loadedFonts() const {
+    return loadedFonts_;
+}
+
+// One @font-face source: true when its file was read and the renderer
+// registered the face.
+bool Engine::loadFontFace(const htmlayout::css::FontFaceRule& ff, const std::string& path) {
+    // The sheet named the file or URL: the host's access gate decides
+    // whether it may be read or fetched (util/subresource_access.h).
+    if (const std::string refused = util::subresourceRefusal(path); !refused.empty()) {
+        LOG_WARN("@font-face '%s': %s", ff.family.c_str(), refused.c_str());
+        return false;
+    }
+
+    // One copy of the bytes, shared by the UI, layout and raster
+    // renderers. Mapped read-only where a mapping does not lock the file
+    // (it would block saving the font during hot reload on Windows), so
+    // its pages are page cache, shared with every process using the font.
+#ifdef _WIN32
+    sk_sp<SkData> bytes;
+    {
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            const auto size = static_cast<size_t>(file.tellg());
+            file.seekg(0, std::ios::beg);
+            auto owned = SkData::MakeUninitialized(size);
+            if (file.read(static_cast<char*>(owned->writable_data()), static_cast<std::streamsize>(size)))
+                bytes = std::move(owned);
+        }
+    }
+#else
+    sk_sp<SkData> bytes = SkData::MakeFromFileName(path.c_str());
+#endif
+    if (!bytes || bytes->size() == 0) {
+        LOG_WARN("Failed to load @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
+        return false;
+    }
+    const void* data = bytes->data();
+    const size_t size = bytes->size();
+    std::shared_ptr<const void> keep(data, [bytes](const void*) mutable { bytes.reset(); });
+
+    if (!renderer_->registerCustomFont(ff.family, {keep, data, size}, ff.weight, ff.italic)) {
+        LOG_WARN("@font-face '%s': '%s' is not a font the renderer reads", ff.family.c_str(), path.c_str());
+        return false;
+    }
+    LOG_INFO("Loaded @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
+    loadedFonts_.push_back({ff.family, std::move(keep), data, size, ff.weight, ff.italic});
+    return true;
 }
 } // namespace bro::engine
 

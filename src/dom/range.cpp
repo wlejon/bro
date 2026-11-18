@@ -583,7 +583,9 @@ Range::Error Range::surroundContents(Element* newParent) {
 }
 
 Node* Range::createContextualFragment(const std::string& html) {
-    if (!document_ || !startContainer_) return nullptr;
+    // A range no boundary was set on is collapsed at the start of its
+    // document (document.createRange), whose context parses as the body's.
+    if (!document_) return nullptr;
     auto* frag = document_->createElement("#DOCUMENT-FRAGMENT");
     document_->parseInnerHTML(frag, html);
     return frag;

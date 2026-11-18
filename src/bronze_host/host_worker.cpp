@@ -10,6 +10,7 @@
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/object_url.h"
 #include "util/main_loop_wake.h"
 
 #include <algorithm>
@@ -226,8 +227,18 @@ void installWorkerGlobals(engine::Engine& engine) {
             if (url.empty()) {
                 return ev::throwTypeError("new Worker(scriptURL) requires a script path or URL");
             }
-            std::string script, err;
-            if (!workerScriptPath(url, script, err)) {
+            // A blob: URL (URL.createObjectURL of the script's text, as
+            // pixi.js, three's DRACOLoader and Potree make their workers) or a
+            // data: URL carries the script itself.
+            std::string script, err, inlineSource;
+            const bool inlineUrl = util::isObjectURL(url) || url.rfind("data:", 0) == 0;
+            if (inlineUrl) {
+                std::vector<uint8_t> bytes;
+                if (!util::inlineURLBytes(url, bytes)) {
+                    return ev::throwTypeError("new Worker('" + url + "'): no such object URL (revoked?)");
+                }
+                inlineSource.assign(bytes.begin(), bytes.end());
+            } else if (!workerScriptPath(url, script, err)) {
                 return ev::throwTypeError("new Worker('" + url + "'): " + err);
             }
             // Relative to the document that made it: an <appview>'s worker is
@@ -237,14 +248,17 @@ void installWorkerGlobals(engine::Engine& engine) {
             if (base.empty()) base = ".";
             // The script is read where the worker thread will read it: the
             // host's gate first (host_access.h).
-            {
+            if (!inlineUrl) {
                 const std::filesystem::path sp(std::u8string(script.begin(), script.end()));
                 const std::filesystem::path full = sp.is_absolute() ? sp : std::filesystem::path(base) / sp;
                 const std::u8string u = full.u8string();
                 requirePathAccess(std::string(u.begin(), u.end()), false);
             }
             uint64_t wid = s_workerIdSeq.fetch_add(1, std::memory_order_relaxed);
-            auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid);
+            // An inline script is named as a file of the page's folder (it
+            // has no path of its own), which is where its imports resolve.
+            if (inlineUrl) script = "blob-worker-" + std::to_string(wid) + ".js";
+            auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid, std::move(inlineSource));
             {
                 std::lock_guard<std::mutex> lock(s_workersMutex);
                 s_activeWorkers.push_back(w);

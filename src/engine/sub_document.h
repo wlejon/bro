@@ -36,6 +36,7 @@ struct SubDocSource {
     bool ok = false;
     std::string appDir;       // directory the app was loaded from
     std::string resolvedSrc;  // src resolved against the parent's base path
+    std::string urlSuffix;    // the src's query and fragment ("?a=1#x"), kept for its URL
     AppManifest manifest;
     std::string html;
     std::string authorStyles;

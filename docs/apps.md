@@ -648,6 +648,35 @@ artifact that ships one prebuilt needs app-relative names first.
 macOS app executables are not built yet (apps are bundles there), so no AOT
 directory is either; the writer handles Mach-O, and the plan is the same.
 
+## How a page loads
+
+A page loads as a browser loads it: `document.readyState` is `loading` while
+the classic scripts run, in document order, each its own task (an uncaught
+exception in one is reported to `window.onerror` and the log, and the next
+script still runs); then `interactive` (`readystatechange`), the module
+scripts, `DOMContentLoaded`, `complete` (`readystatechange`) and the window's
+`load`, which reaches `window.onload` even when a module script set it.
+Scripts inside HTML comments (IE conditional comments included) do not run.
+`<base href>` is the base of the page's relative URLs. A
+`<script type="importmap">` maps bare specifiers for the page's module
+scripts, static and dynamic imports alike: an exact key to a file, a key
+ending in `/` to a folder; a scope's entries apply page-wide unless they
+remap a top-level key, and a target on the network is skipped.
+
+The page's URL is `bro://app/<path>` (the app folder's `index.html` is
+`bro://app/`, an iframe's page carries its `src`'s query and fragment).
+`history.pushState` / `replaceState` change it in place (same origin only,
+else a `SecurityError`), `back` / `forward` / `go` fire `popstate`, a
+fragment change fires `hashchange`, and navigating (`location.href = ...`,
+`assign`, `replace`) to another page of the app loads it in place of the
+current one: the app realm reloads with that page, an iframe reloads its
+frame alone. An `http(s)` URL opens in the system browser.
+
+Top-level `var` and `function` declarations of the classic scripts become
+properties of the global object only when the page's scripts finish (bronze
+compiles them as one unit), so a later script that reads such a name through
+the global object (`window.x`) before then sees `undefined`.
+
 ## Startup cost
 
 `bro <dir>` compiles the page's scripts in process at boot (bronze, tiered

@@ -4,6 +4,7 @@
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_events.h"
+#include "bronze_host/host_list_iteration.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_node.h"
 #include "bronze_host/host_element.h"
@@ -16,6 +17,7 @@
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_web_animations.h"
+#include "bronze_host/host_web_globals.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -204,13 +206,13 @@ bool elementMatchesSelector(dom::Element* el, const std::string& selector) {
         }
         return true;
     }
-    std::string elTag = el->tagName();
-    if (elTag.size() != selector.size()) return false;
-    for (size_t i = 0; i < elTag.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(elTag[i])) !=
-            std::tolower(static_cast<unsigned char>(selector[i]))) {
-            return false;
-        }
+    // getElementsByTagName's qualified name (DOM §4.2.6.1): an HTML element
+    // matches it lower-cased, any other (SVG, an XML document's) exactly.
+    const std::string qname = el->qualifiedName();
+    if (el->ns() != dom::Element::Namespace::HTML) return qname == selector;
+    if (qname.size() != selector.size()) return false;
+    for (size_t i = 0; i < qname.size(); ++i) {
+        if (qname[i] != std::tolower(static_cast<unsigned char>(selector[i]))) return false;
     }
     return true;
 }
@@ -263,6 +265,9 @@ Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::stri
         }
         return ev::null();
     });
+    // HTMLCollection's one iteration member: the value iterator over its
+    // indexed elements (no forEach, as on the web).
+    installArrayLikeIteration(mb.get(), /*withForEach=*/false);
     traps.methods = mb.get();
 
     traps.get = [root, fixed, selector](const std::string& key, Value& out) -> bool {
@@ -669,10 +674,9 @@ Value makeDocumentValue(dom::Document* fixed) {
                    return ev::undefined();
                });
     b.accessor("readyState",
-               [](Value, std::span<const Value>) {
-                   auto* e = hostEngine();
-                   if (!e) return ev::fromUtf8("complete");
-                   return ev::fromUtf8(e->documentReadyState());
+               [fixed](Value, std::span<const Value>) {
+                   dom::Document* doc = documentFor(fixed);
+                   return ev::fromUtf8(doc ? doc->readyState() : std::string("complete"));
                },
                nullptr);
     b.accessor("activeElement",
@@ -726,10 +730,16 @@ Value makeDocumentValue(dom::Document* fixed) {
 
     decorateDocumentExtras(b, fixed);
 
-    installElementEventTarget(b, [fixed]() -> dom::Element* {
+    const ElementSource root = [fixed]() -> dom::Element* {
         dom::Document* doc = documentFor(fixed);
         return doc ? doc->documentElement() : nullptr;
-    }, "document");
+    };
+    installElementEventTarget(b, root, "document");
+    installDocumentEventHandlers(b, root);
+    {
+        ev::Persistent fonts(makeFontFaceSet([fixed]() { return documentFor(fixed); }));
+        b.set("fonts", fonts.get());
+    }
     decorateDocumentWebAnimations(b);
     // setPrototype allocates (the receiver goes to dictionary mode); the
     // value handed back is the post-call address, the one we return.

@@ -17,7 +17,9 @@
 #include "bronze_host/host_membrane.h"
 #include "bronze_host/host_appview.h"
 #include "bronze_host/host_storage.h"
+#include "dom/document.h"
 #include "dom/element.h"
+#include "dom/event_dispatch.h"
 #include "engine/app_loader.h"
 #include "engine/engine.h"
 #include "engine/window_host.h"
@@ -164,14 +166,26 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     // once. Each script is its own unit, so a module's top-level bindings stay
     // in its own scope. One entry of the compartment's: an appview's may yield
     // at its slice and finish on later frames.
-    runEntry(c, EntryKind::Async, [&engine, scripts, basePath] {
+    // Classic scripts first, while the document is loading; then, parsing
+    // over, the module scripts (deferred on the web) and the end of the load:
+    // DOMContentLoaded, readiness "complete" and the window's `load`.
+    runEntry(c, EntryKind::Async, [&engine, scripts, basePath, subDoc] {
         reloadHostStorage(basePath);
-        for (const auto& s : scripts) {
-            std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
-            if (code.empty()) continue;
-            std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
-            evalScript(engine, code, fname);
+        for (const bool modules : {false, true}) {
+            // The entry may finish on a later frame (an appview's slice), by
+            // which time the frame can be gone.
+            if (modules && dom::Document::isLiveDocument(subDoc)) {
+                dom::advanceDocumentReadiness(subDoc, "interactive");
+            }
+            for (const auto& s : scripts) {
+                if (s.isModule != modules) continue;
+                std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
+                if (code.empty()) continue;
+                std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
+                evalScript(engine, code, fname);
+            }
         }
+        if (dom::Document::isLiveDocument(subDoc)) dom::completeDocumentLoad(subDoc);
     });
 }
 

@@ -83,6 +83,15 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                const char* what);
 dom::ListenerOptions readOptions(Value optV);
 
+// The event handler attributes (`onload`, `onresize`, `onkeydown`, ...) of the
+// window and of a document whose listeners go on `root`
+// (host_event_handlers.cpp).
+void installWindowEventHandlers(ObjectBuilder& window);
+void installDocumentEventHandlers(ObjectBuilder& document, const ElementSource& root);
+// `location` and `history` on the window, registered as globals
+// (host_location.cpp).
+void installLocationAndHistory(ObjectBuilder& window);
+
 // Hand `evt` to one compiled listener as PLAIN DATA — a fresh object carrying
 // the fields for the event's kind (coordinates, key, button, deltas, the
 // string detail of a CustomEvent), the target identity, and the three

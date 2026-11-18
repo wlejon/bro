@@ -182,6 +182,8 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     SubDocRef ref = iframeSubDoc(*dp);
     buildSubDocDocument(ref, source, effectiveColorScheme(), deviceScale_.ratio,
                         [this] { return engineNowMs_; });
+    if (std::string url = appUrlForPath(source.resolvedSrc); !url.empty())
+        ref.document->setUrl(url + source.urlSuffix);
 
     // Register before finishSubDocLoad so element hooks resolve.
     iframeDocs_.push_back(std::move(doc));
@@ -273,6 +275,11 @@ void Engine::processPendingIframeReloads() {
     for (dom::Element* el : reloads) {
         if (!el) continue;
         std::string src = el->getAttribute("src");
+        // A frame its document navigated loads that page.
+        if (auto nav = iframeNavigations_.find(el); nav != iframeNavigations_.end()) {
+            src = nav->second;
+            iframeNavigations_.erase(nav);
+        }
         // An explicit reload()/src= is a request to retry, so drop any record of
         // a previous failure for this element.
         iframeLoadFailed_.erase(el);

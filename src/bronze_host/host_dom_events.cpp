@@ -680,6 +680,8 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
             return ev::throwTypeError(who + ".addEventListener: type must be a string");
         }
+        // A null listener is no registration (DOM addEventListener step 2).
+        if (ev::isNull(fn) || ev::isUndefined(fn)) return ev::undefined();
         if (!ev::isFunction(fn)) {
             return ev::throwTypeError(who +
                                       ".addEventListener: listener must be a function");

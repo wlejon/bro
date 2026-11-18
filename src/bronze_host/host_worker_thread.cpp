@@ -324,8 +324,8 @@ void WorkerInstance::threadFunc() {
     std::error_code ec;
     resolvedPath = std::filesystem::weakly_canonical(resolvedPath, ec);
 
-    std::string scriptCode;
-    {
+    std::string scriptCode = inlineSource_;
+    if (scriptCode.empty()) {
         std::ifstream ifs(resolvedPath, std::ios::binary);
         if (ifs.is_open()) {
             scriptCode.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());

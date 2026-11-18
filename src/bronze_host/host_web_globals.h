@@ -2,9 +2,13 @@
 
 // The web globals installed by a file of their own and shared with nothing
 // else: storage, gamepad, navigator, performance, the platform odds and ends,
-// CSS, brand constructors, vendor names, and the video encoders.
+// CSS, brand constructors, document.fonts, and the video encoders.
 
 #include "embed/embed.h"
+
+#include <functional>
+
+namespace bro::dom { class Document; }
 
 namespace bro::engine {
 struct GamepadState;
@@ -24,6 +28,8 @@ class HostClass;
 Value makeLocalStorageValue();
 Value makeScreenValue();
 Value makeNavigatorValue();
+// document.fonts over the document `docOf` answers (host_font_face_set.cpp).
+Value makeFontFaceSet(std::function<dom::Document*()> docOf);
 Value buildGamepadSnapshot(const engine::GamepadState& gp);
 void installGamepadButtonGlobals();
 const HostClass& gamepadEventHostClass();
@@ -52,9 +58,6 @@ void installCssNamespace();
 
 // Brand constructors (dom_globals.cpp)
 Value makeBrandConstructor(const char* name);
-
-// Vendor globals (host_vendor_globals.cpp)
-void installVendorGlobals();
 
 // VideoEncoder / GifEncoder (host_video.cpp)
 void installVideoGlobals();

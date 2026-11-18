@@ -9,6 +9,7 @@
 #include "css/cascade.h"
 #include "layout/box.h"
 #include <thread>
+#include <utility>
 #include <gumbo.h>
 #include <string>
 #include <memory>
@@ -340,6 +341,27 @@ public:
     // engine keeps the window's title following the page's.
     void setTitleListener(std::function<void(const std::string&)> fn) { titleListener_ = std::move(fn); }
 
+    // The document's readiness (HTML "current document readiness"):
+    // "complete" for a document no page loads (DOMParser's, an SVG image's);
+    // a page's is set "loading" before its scripts run (the engine's app
+    // document, a sub-document) and is "interactive" once parsing is over
+    // (deferred and module scripts, then DOMContentLoaded), "complete" from
+    // just before the window's load event. dom::advanceDocumentReadiness
+    // (event_dispatch.h) changes it and fires readystatechange.
+    const std::string& readyState() const { return readyState_; }
+    void setReadyState(std::string state) { readyState_ = std::move(state); }
+
+    // The document's URL (document.URL, location.href): bro://app/ and the
+    // page's path in the app folder, its query and fragment; empty for a
+    // document no page loaded, which reads as the app's root.
+    const std::string& url() const { return url_; }
+    void setUrl(std::string url) { url_ = std::move(url); }
+
+    // State the host keeps for this document and drops with it, by name: the
+    // event handler attributes of its window and of the document itself
+    // (bronze_host/host_event_handlers.cpp). Opaque here.
+    std::unordered_map<std::string, std::shared_ptr<void>>& hostSlots() { return hostSlots_; }
+
     // Dirty tracking. Two levels:
     //  - dirty_       : the frame needs a re-record (paint). Set by everything.
     //  - layoutDirty_ : the frame also needs a full layoutTree() pass. Set by
@@ -532,6 +554,13 @@ public:
     // Base path for resolving relative URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
     const std::string& basePath() const { return basePath_; }
+    // The page's import map (<script type="importmap">): each specifier key
+    // ("three", or a prefix ending in '/', "three/addons/") with the file or
+    // folder it names. Module scripts of this document resolve bare
+    // specifiers through it.
+    using ImportMap = std::vector<std::pair<std::string, std::string>>;
+    void setImportMap(ImportMap map) { importMap_ = std::move(map); }
+    const ImportMap& importMap() const { return importMap_; }
 
     // ---- window event listeners (C++ side) --------------------------------
     // One Document is one realm, and a realm has one window, so this is the
@@ -826,6 +855,7 @@ private:
     bool forcedInherit_ = false;      // relayout the whole tree, not just what changed
     Perf perf_;
     std::string basePath_;
+    ImportMap importMap_;
     // Every element that has ever claimed an id, keyed by the id. A *list* per
     // id, not one element, because the map is a cache of a tree query and the
     // tree does not enforce uniqueness: two elements can hold the same id at
@@ -838,6 +868,9 @@ private:
     // getElementById is what decides which candidate is in the document now.
     std::unordered_map<std::string, std::vector<Element*>> idMap_;
     std::function<void(const std::string&)> titleListener_;
+    std::string readyState_ = "complete";
+    std::string url_;
+    std::unordered_map<std::string, std::shared_ptr<void>> hostSlots_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
 
     // Nodes moved out of ownedNodes_ by freeNode() but not yet destroyed.

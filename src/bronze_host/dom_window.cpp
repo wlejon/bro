@@ -195,7 +195,10 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         return ev::undefined();
     });
 
-    b.def("addEventListener", 3, [enginePtr](Value thisValue, std::span<const Value> a) {
+    // The window's listeners are its realm's document's, whichever realm
+    // registers them (`frame.contentWindow.addEventListener` is the frame's).
+    const uint64_t home = currentCompartmentId();
+    b.def("addEventListener", 3, [home](Value thisValue, std::span<const Value> a) {
         // A bare `addEventListener(...)` arrives with no receiver; the
         // listener's `this` is the window either way.
         ev::Persistent self(ev::isObject(thisValue) ? thisValue
@@ -204,6 +207,8 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
             return ev::throwTypeError("window.addEventListener: type must be a string");
         }
+        // A null listener is no registration (DOM addEventListener step 2).
+        if (ev::isNull(argAt(a, 1)) || ev::isUndefined(argAt(a, 1))) return ev::undefined();
         if (!ev::isFunction(argAt(a, 1))) {
             return ev::throwTypeError(
                 "window.addEventListener: listener must be a function");
@@ -212,7 +217,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         ev::Persistent fnP(argAt(a, 1));
         std::string type = ev::toUtf8(argAt(a, 0));
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
-        dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
+        dom::Document* targetDoc = compartmentDocument(home);
         if (!targetDoc) {
             return ev::throwError(
                 "window.addEventListener: the engine refused the registration");
@@ -253,12 +258,13 @@ void installWindowGlobal(engine::Engine* enginePtr) {
     b.def("dispatchEvent", 1, [](Value, std::span<const Value> a) {
         return hostDispatchToWindow(argAt(a, 0));
     });
-    b.def("removeEventListener", 3, [enginePtr](Value, std::span<const Value> a) {
+    installWindowEventHandlers(b);
+    b.def("removeEventListener", 3, [home](Value, std::span<const Value> a) {
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) return ev::undefined();
         std::string type = ev::toUtf8(typeV);
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
-        dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
+        dom::Document* targetDoc = compartmentDocument(home);
         // The listener is read from its argument slot after toUtf8 and
         // readOptions, which may allocate, and compared with nothing
         // allocating in between.
@@ -374,44 +380,7 @@ void installWindowGlobal(engine::Engine* enginePtr) {
         ev::registerGlobal(name, ev::getProperty(b.get(), name));
     }
 
-    {
-        ObjectBuilder loc;
-        loc.set("protocol", ev::fromUtf8("bro:"));
-        loc.set("hostname", ev::fromUtf8("app"));
-        loc.set("host", ev::fromUtf8("app"));
-        loc.set("port", ev::fromUtf8(""));
-        loc.set("pathname", ev::fromUtf8("/"));
-        loc.set("href", ev::fromUtf8("bro://app/"));
-        loc.set("origin", ev::fromUtf8("bro://app"));
-        loc.set("search", ev::fromUtf8(""));
-        loc.set("hash", ev::fromUtf8(""));
-        loc.def("reload", 0, [](Value, std::span<const Value>) -> Value {
-            if (auto* eng = hostEngine()) {
-                dom::Document* curDoc = currentHostDocument();
-                if (curDoc && eng->reloadIframeForDocument(curDoc)) {
-                    return ev::undefined();
-                }
-                eng->requestAppReload();
-            }
-            return ev::undefined();
-        });
-        loc.def("replace", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-        loc.def("assign", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-        setAndRegister("location", loc.get());
-    }
-
-    {
-        ObjectBuilder hist;
-        hist.set("length", ev::fromDouble(1.0));
-        hist.set("state", ev::null());
-        hist.set("scrollRestoration", ev::fromUtf8("auto"));
-        hist.def("back", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-        hist.def("forward", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-        hist.def("go", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-        hist.def("pushState", 3, [](Value, std::span<const Value>) { return ev::undefined(); });
-        hist.def("replaceState", 3, [](Value, std::span<const Value>) { return ev::undefined(); });
-        setAndRegister("history", hist.get());
-    }
+    installLocationAndHistory(b);
 }
 
 }  // namespace bro::bronze_host

@@ -315,8 +315,11 @@ public:
     void releaseAllPointerCaptures();
 
     // Document lifecycle
-    const std::string& documentReadyState() const { return documentReadyState_; }
-    void setDocumentReadyState(const std::string& state);
+    // The app document's readiness (dom::Document::readyState); "loading"
+    // before there is one.
+    const std::string& documentReadyState() const;
+    // The end of the app document's load (dom::completeDocumentLoad), then
+    // what the engine starts on it: media events, the first-frame mark.
     void dispatchDocumentReadyEvents();
 
     // Page visibility (document.hidden) and window focus tracking.
@@ -369,6 +372,25 @@ public:
     void startIframe(dom::Element* el);
     bool iframeStopped(const dom::Element* el) const;
     bool reloadIframeForDocument(const dom::Document* doc);
+    /// The app document's URL (its location.href): `bro://app/`, the page's
+    /// path in the app folder, its query and fragment.
+    const std::string& pageUrl() const { return pageUrl_; }
+    // The @font-face faces the page's renderer registered (document.fonts).
+    const std::vector<LoadedFont>& loadedFonts() const;
+    // The app page's import map, read with its manifest (before the document
+    // exists, so a compile started ahead of it resolves through it too).
+    const std::vector<std::pair<std::string, std::string>>& pageImportMap() const;
+    /// `bro://app/<path>` for a file or folder of the app folder (a folder's
+    /// index.html as the folder), or "" for one outside it.
+    std::string appUrlForPath(const std::string& path) const;
+    /// The file a `bro://app/` URL names, "" for any other URL or a path
+    /// outside the app folder.
+    std::string pathForAppUrl(const std::string& url) const;
+    /// Loads `url` (already resolved) into `doc` in place of the page it
+    /// shows, at the next frame: the app document or an iframe's. A
+    /// `bro://app/` page of the app is loaded; an http(s) URL opens in the
+    /// system browser. False, and nothing changes, for anything else.
+    bool navigateDocument(dom::Document* doc, const std::string& url);
     /// Reloads the app at the next frame: the page's own `location.reload()`,
     /// a source change the watcher saw, or the `system_reload_app` action (F5).
     void requestAppReload();
@@ -640,6 +662,9 @@ public:
         std::string code;
         std::string name;
         bool moduleFile = false;
+        // The classic unit's scripts, each as written (combineClassicScripts
+        // made `code` of them); empty for a module script's unit.
+        std::vector<std::string> classicScripts;
     };
     std::vector<PageScriptUnit> pageScriptUnits() const;
     /// The app is the desktop shell: it was granted the `shell` capability,

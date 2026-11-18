@@ -1,5 +1,6 @@
 // @font-face: CSS font matching across a family declared once per weight, and
-// srcs resolved against the stylesheet that declares them.
+// srcs resolved against the stylesheet that declares them, a src list's
+// fallback past unusable formats and missing files, and document.fonts.
 //
 // A family declared four times (Inter Regular/Medium/SemiBold/Bold at
 // 400/500/600/700) used to draw its first face for every weight, and every

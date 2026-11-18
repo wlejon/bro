@@ -107,6 +107,10 @@ struct Compartment {
     // Async entries that arrived while a job was suspended on the fiber, run
     // in order once it finishes.
     std::deque<std::function<void()>> queued;
+    // The entry the fiber is running. Held here, not by the caller: an entry
+    // that yields at its slice is resumed on later frames, after the call
+    // that started it has returned, and still reads its captures.
+    std::function<void()> running;
     // When the job suspended on the fiber first yielded (steady ms, 0 when
     // none is), and whether it has run past kNotRespondingMs.
     double suspendedSinceMs = 0;
@@ -127,6 +131,11 @@ uint64_t currentCompartmentId();
 /// parser's).
 Compartment* compartmentForDocument(const dom::Document* doc);
 Compartment* compartmentById(uint64_t id);
+/// The document of compartment `id` (the app's: the engine's document), or
+/// null once that compartment is gone. What a realm's window natives answer
+/// for, whichever realm calls them: they capture their own compartment's id
+/// as they are installed (`frame.contentWindow.location` is the frame's).
+dom::Document* compartmentDocument(uint64_t id);
 /// A document a compartment's code made (DOMParser, createHTMLDocument) is
 /// that compartment's; forgotten when the document goes.
 void noteDocumentOwner(const dom::Document* doc, Compartment* owner);

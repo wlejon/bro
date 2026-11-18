@@ -151,6 +151,11 @@ const r8 = document.createRange();
 r8.setStart(root, 0);
 const ctxFrag = r8.createContextualFragment('<span>x</span><span>y</span>');
 assert(ctxFrag !== null, 'createContextualFragment returns fragment');
+// A fresh range (collapsed at the document's start) parses too: xeokit's
+// document.createRange().createContextualFragment(html).firstChild.
+const fresh = document.createRange().createContextualFragment("<div class='m'></div>");
+assert(fresh && fresh.firstChild && fresh.firstChild.className === 'm',
+       'createContextualFragment on a fresh range, got ' + (fresh && fresh.firstChild));
 
 // --- Geometry ---
 root.innerHTML = '<p id="geo">Hello geometry world</p>';

@@ -100,3 +100,15 @@ if (!gl) {
     assert(gl.getParameter(gl.ARRAY_BUFFER_BINDING) === objects.WebGLBuffer, 'the buffer binds and reads back the same object');
     assert(gl.getError() === gl.NO_ERROR, 'no error');
 }
+
+// 'experimental-webgl', WebGL 1's legacy context name (HexGL, older
+// three.js), is the 'webgl' context: the same object for both names.
+{
+    const legacy = document.createElement('canvas');
+    const ctx = legacy.getContext('experimental-webgl');
+    if (ctx) {
+        assert(legacy.getContext('webgl') === ctx, "'experimental-webgl' and 'webgl' are one context");
+    } else {
+        missingGpuContext('webgl');
+    }
+}

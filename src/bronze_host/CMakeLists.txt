@@ -70,6 +70,11 @@ set(BRO_BRONZE_HOST_SOURCES
     host_range.cpp
     host_selection.cpp
     host_events.cpp
+    host_event_handlers.cpp
+    host_location.cpp
+    host_list_iteration.cpp
+    host_element_attrs_ns.cpp
+    host_font_face_set.cpp
     host_dom_events.cpp
     host_dom_events_types.cpp
     host_error_events.cpp
@@ -80,7 +85,6 @@ set(BRO_BRONZE_HOST_SOURCES
     host_parser.cpp
     host_proxy.cpp
     host_class.cpp
-    host_vendor_globals.cpp
     host_anchor_download.cpp
     host_access.cpp
     host_file_path.cpp

@@ -635,6 +635,7 @@ void decorateElementProto(ObjectBuilder& b) {
     // ---- the tree ---------------------------------------------------------
     installNodeTree(b);
     decorateElementMutate(b);
+    decorateElementNamespacedAttributes(b);
 
     b.accessor("children",
                [](Value self_, std::span<const Value>) {

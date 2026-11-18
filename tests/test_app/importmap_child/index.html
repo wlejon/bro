@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<!-- The page of tests/engine/test_import_map.js. <base href="sub/"> makes
+     sub/ the base of every relative URL below, the import map's targets
+     included. A script in a comment does not run: -->
+<!--[if IE]><script>window.__ieRan = true;</script><![endif]-->
+<!-- <script>window.__commentRan = true;</script> -->
+<base href="sub/">
+<script type="importmap">
+{
+  "imports": { "wildlib": "./x.js", "wildpkg/": "../lib/" },
+  "scopes": { "./": { "scopedlib": "../scoped/s.js" } }
+}
+</script>
+<script>
+window.__inlineStyle = '<!-- not a comment inside a script -->';
+</script>
+<script type="module">
+import { X } from 'wildlib';
+import { Y } from 'wildpkg/y.js';
+import { S } from 'scopedlib';
+import { B } from './b.js';
+const dyn = await import('wildpkg/y.js');
+window.__result = [X, Y, S, B, dyn.Y].join(',');
+</script>
+</head>
+<body></body>
+</html>

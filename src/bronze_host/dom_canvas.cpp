@@ -431,6 +431,8 @@ void decorateCanvasProto(ObjectBuilder& b) {
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
+        // The legacy name of a WebGL 1 context, which browsers still answer.
+        if (type == "experimental-webgl") type = "webgl";
         if (!cs->contextType.empty() && cs->contextType != type) return ev::null();
         ev::Persistent canvasRoot(ev::isObject(thisRoot.get()) ? thisRoot.get() : ev::undefined());
         if (!ev::isObject(canvasRoot.get())) canvasRoot.set(hostElementValue(cs->el));
