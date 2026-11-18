@@ -931,6 +931,8 @@ Time does not advance automatically in headless mode. Use `advanceTime(ms)` to a
 
 Virtual time starts from the wall clock at engine initialization. The timer subsystem is seeded with this time at startup so that `setTimeout`/`setInterval` registered during script execution fire correctly relative to `advanceTime()` calls.
 
+For a frame that comes out the same on every run, a script or page may replace `Math.random` and `Date.now` (`Math.random = seededGenerator; Date.now = () => t;`). The JavaScript builtins are otherwise frozen (bronze's lockdown: `Math.floor = f` is refused), and these two are the exception. A replacement is per realm: it changes them only for the page, frame or test script that assigned it.
+
 ### Waiting in scripts: await, or pump
 
 A script file with a top-level `await` runs as an ES module, with the same
