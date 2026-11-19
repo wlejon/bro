@@ -184,7 +184,7 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                 std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
                 if (code.empty()) continue;
                 std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
-                evalScript(engine, code, fname, modules ? ScriptGoal::Unit : ScriptGoal::ClassicScript);
+                evalScript(engine, code, fname, modules ? ScriptGoal::Module : ScriptGoal::ClassicScript);
             }
         }
         if (dom::Document::isLiveDocument(subDoc)) dom::completeDocumentLoad(subDoc);

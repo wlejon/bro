@@ -226,7 +226,8 @@ std::unique_ptr<AheadCompile> takeAheadCompile(const bronze::eval::EvalOptions& 
     if (!s_ahead) return nullptr;
     if (s_ahead->filename != opts.filename || s_ahead->moduleFile != opts.publishEntry ||
         s_ahead->opts.classicScript != opts.classicScript ||
-        s_ahead->opts.classicScriptMarker != opts.classicScriptMarker || s_ahead->code != code) {
+        s_ahead->opts.classicScriptMarker != opts.classicScriptMarker ||
+        s_ahead->opts.publishTopLevel != opts.publishTopLevel || s_ahead->code != code) {
         return nullptr;
     }
     return std::move(s_ahead);
@@ -309,8 +310,9 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     // too, so a driver's `import "/app/main.js"` binds it rather than booting
     // the app a second time. Inline script text and driver scripts are not.
     opts.publishEntry = moduleFile && !filename.empty();
-    opts.classicScript = goal != ScriptGoal::Unit;
+    opts.classicScript = goal == ScriptGoal::ClassicScript || goal == ScriptGoal::ClassicScripts;
     if (goal == ScriptGoal::ClassicScripts) opts.classicScriptMarker = classicScriptMarkerName();
+    opts.publishTopLevel = goal == ScriptGoal::Unit;
     configureCodeCache(opts);
     return opts;
 }
@@ -534,6 +536,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     // second copy of it into this unit. The driver's OWN file is the entry and
     // is never published, so running the same driver twice runs it twice.
     opts.moduleRegistry = true;
+    opts.publishTopLevel = true;
     configureCodeCache(opts);
 
     // The script's last statement records that it RAN to its end. A script

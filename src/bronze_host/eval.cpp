@@ -701,7 +701,7 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
     // later `new Function` in the page then failed as well.
     if (!isJitDisabled()) {
         const std::string expr = std::string(sourcePrefixFor(kind)) + params + ") {\n" + body + "\n})";
-        auto res = evalScriptJitResult(*s_activeEngine, expr, "<new Function>");
+        auto res = evalScriptJitResult(*s_activeEngine, expr, "<new Function>", nullptr, false, ScriptGoal::Module);
         if (res.thrown) return ev::throwValue(res.value);
         if (!ev::isFunction(res.value)) return ev::throwError("new Function: created function was not found");
         ev::Persistent& cached = s_dynFnCache[cacheKey];

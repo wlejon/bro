@@ -108,7 +108,7 @@ uint64_t g_localNext = 1;
 
 bool ensureSettle(engine::Engine& engine, std::string* why) {
     if (g_eval.settle && g_eval.ownerEngine == &engine && g_eval.ownerRealm == ev::currentRealm()) return true;
-    auto res = evalScriptJitResult(engine, kSettleSource, "<bro-ctl>");
+    auto res = evalScriptJitResult(engine, kSettleSource, "<bro-ctl>", nullptr, false, ScriptGoal::Module);
     if (res.thrown || !ev::isFunction(res.value)) {
         if (why) *why = "could not compile the eval helper";
         return false;
@@ -630,7 +630,7 @@ void installInboxNamespace(engine::Engine& engine) {
         [&engine](Value, std::span<const Value>) -> Value {
             if (g_inboxNs && g_inboxOwnerEngine == &engine && g_inboxOwnerRealm == ev::currentRealm())
                 return g_inboxNs->get();
-            auto res = evalScriptJitResult(engine, kInboxSource, "<bro.inbox>");
+            auto res = evalScriptJitResult(engine, kInboxSource, "<bro.inbox>", nullptr, false, ScriptGoal::Module);
             if (res.thrown || !ev::isFunction(res.value)) {
                 LOG_ERROR("bro.inbox: could not compile the namespace");
                 return ev::undefined();

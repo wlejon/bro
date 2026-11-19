@@ -14,22 +14,26 @@ class Engine;
 
 namespace bro::bronze_host {
 
-/// How a compile's top level binds. `Unit`: its declarations are the unit's
-/// own bindings while it runs, bronze copying the var and function ones onto
-/// the global object once it has run (a module script, a headless driver,
-/// eval(), new Function, bro-ctl eval). `ClassicScript`: one of HTML's classic
-/// scripts, whose top-level `var` and function declarations are properties of
-/// the global object made as the script starts, whose top-level `this` is the
-/// global object, and which is sloppy unless it says "use strict" (bronze
-/// EvalOptions::classicScript); `let`, `const` and `class` stay the unit's.
-/// `ClassicScripts`: several classic scripts joined into one unit, each
-/// entered by its classicScriptMarker statement (Engine::combineClassicScripts),
-/// so a function of a later script is not yet defined while an earlier runs;
-/// the unit is sloppy, a script's own "use strict" not being a directive there.
-enum class ScriptGoal { Unit, ClassicScript, ClassicScripts };
+/// How a compile's top level binds. `Module`: a page or iframe `<script
+/// type="module">` (and internal expression helpers), whose top-level
+/// declarations stay its own bindings (`publishTopLevel = false`,
+/// `classicScript = false`). `Unit`: a host-evaluated unit whose declarations
+/// stay its own bindings while it runs and are copied onto `globalThis` once
+/// it has finished (`EvalOptions::publishTopLevel = true`: headless driver
+/// scripts, `-e`, `bro-ctl eval`, `eval()`). `ClassicScript`: one of HTML's
+/// classic scripts, whose top-level `var` and function declarations are
+/// properties of the global object made as the script starts, whose top-level
+/// `this` is the global object, and which is sloppy unless it says "use strict"
+/// (bronze `EvalOptions::classicScript`); `let`, `const` and `class` stay the
+/// unit's. `ClassicScripts`: several classic scripts joined into one unit, each
+/// entered by its `classicScriptMarker` statement
+/// (`Engine::combineClassicScripts`), so a function of a later script is not
+/// yet defined while an earlier runs and each script's own `"use strict"`
+/// directive prologue is honoured.
+enum class ScriptGoal { Module, Unit, ClassicScript, ClassicScripts };
 /// A page unit's goal: the classic unit's (its scripts listed) or a module's.
 inline ScriptGoal pageUnitGoal(const std::vector<std::string>& classicScripts) {
-    return classicScripts.empty() ? ScriptGoal::Unit : ScriptGoal::ClassicScripts;
+    return classicScripts.empty() ? ScriptGoal::Module : ScriptGoal::ClassicScripts;
 }
 
 /// Path to directory containing the running executable.

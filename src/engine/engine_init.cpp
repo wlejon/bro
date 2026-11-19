@@ -810,7 +810,7 @@ void Engine::initAppRealm() {
                 }
                 if (document_) dom::advanceDocumentReadiness(document_.get(), "interactive");
                 if (!bro::bronze_host::evalAppScript(*this, unit.code, unit.name, unit.moduleFile,
-                                                  bronze_host::ScriptGoal::Unit)) {
+                                                  bronze_host::ScriptGoal::Module)) {
                     setTestFailure(true);
                 }
             }
