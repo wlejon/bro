@@ -410,3 +410,73 @@ if (bro.kernel.gpu) {
     }
     requestAnimationFrame(tick);
 }
+
+// ============================================================================
+// 9. Structured Stores, mod.structView(), Dual-Residency Buffers & Native Export
+// ============================================================================
+//
+// Kernels can read and write sub-fields/components/slices of store elements
+// directly (e.g. `particles[i].pos += particles[i].vel * dt`, `particles[i].pos.xy`),
+// respecting std430-compatible struct layout.
+//
+//   const view = mod.structView('StructName', typedArrayOrKernelBuffer);
+//     view.byteStride / view.count / view.fields
+//     view.get(index, fieldName)
+//     view.set(index, fieldName, value)
+//     view.getStruct(index) / view.setStruct(index, obj)
+//
+// Dual-residency KernelBuffers allow running on both CPU (`kernel.run`) and GPU
+// (`kernel.dispatch`) with automatic coherence tracking:
+//   bro.kernel.createBuffer(sizeOrTypedArray, { residency: 'gpu' | 'host' | 'shared' })
+//   buffer.residency   // 'gpu' | 'host' | 'shared'
+//
+// Stateless scalar point kernels can also be exported as direct Bronze native
+// functions via JIT trampolines (callable from subsequent scripts / eval / new Function):
+//   kernel.exportNative('bro.myFastFn')
+
+// ============================================================================
+// 10. Runtime @knobs & Differentiable Knobs (mod.knobGrad)
+// ============================================================================
+//
+// Compile with `{ runtimeKnobs: true }` to update `@knob` values without
+// recompiling SPIR-V or CPU machine code (`kernel.codeHash` stays unchanged):
+//   kernel.setKnobs({ KNOB: value, ... })   // mutates in place; returns kernel
+//   kernel.knobs({ KNOB: value, ... })      // updates in place when runtimeKnobs is true
+//
+// Differentiate scalar outputs w.r.t. scalar/vector `@knob`s at compile time or
+// runtime:
+//   const gradFn = mod.knobGrad('fnName', 'KNOB_NAME');
+//   const gradMap = mod.knobGrad('fnName', ['KNOB_A', 'KNOB_B']);
+
+// ============================================================================
+// 11. Formal SPIR-V Verification & Multi-Target Emission (MSL / PTX)
+// ============================================================================
+//
+//   const report = kernel.verify();
+//     // { spirvParsed, memorySafe, barrierUniform,
+//     //   sharedAccessesProven, globalAccessesProven, barriersProven,
+//     //   violations, diagnostic }
+//
+//   const mod = bro.kernel.compile(src, { emitMsl: true, emitPtx: true, emitSpirvDisassembly: true });
+//   kernel.msl / kernel.mslEntry / kernel.ptx / kernel.spirvDisassembly
+
+// ============================================================================
+// 12. Runtime Telemetry (`telemetry(slot, val)`) & Domain Stdlibs
+// ============================================================================
+//
+// Compile with `{ telemetrySlots: N }` (N > 0) to record per-invocation f32 values:
+//   kernel.telemetrySlots
+//   kernel.setTelemetry(float32ArrayOrKernelBufferOrNull)
+//
+// Additional built-in domain stdlib modules:
+//   import std::dsp;     // db_to_lin, lin_to_db, one_pole, soft_clip, tanh_sat, phasor_step, biquad_*, adsr_envelope
+//   import std::image;   // srgb_to_linear[3], linear_to_srgb[3], luma709, premultiply, unpremultiply, aces_tonemap, box_blur_3x3, sobel_mag_3x3
+//   import std::sim;     // body_state, symplectic_euler_step, verlet_step, spring_force, sdf_circle, sdf_aabb, collide_circle_boundary
+
+// ============================================================================
+// 13. Tensor Interop (`bro.tensor` <-> `bro.kernel`)
+// ============================================================================
+//
+//   const buf = bro.kernel.fromTensor(gpuTensor);
+//   bro.kernel.copyToTensor(buf, gpuTensor);
+//   bro.kernel.copyFromTensor(gpuTensor, buf);

@@ -241,6 +241,12 @@ bool launchAccesses(const brokernel::CompiledKernel& kernel, const brokernel::Gp
         for (int i = 0; i < 3; ++i) threads *= uint64_t{launch.groups[i]} * launch.local_size[i];
         out.push_back({address, threads * std::max<uint64_t>(kernel.return_byte_size, 4), true});
     }
+    if (kernel.telemetry_slots > 0 && kernel.uses_telemetry && launch.telemetry_arg_index < args.size()) {
+        uint64_t taddr = 0;
+        if (addressAt(static_cast<uint32_t>(launch.telemetry_arg_index), taddr)) {
+            out.push_back({taddr, uint64_t{kernel.telemetry_slots} * 4, true});
+        }
+    }
     return kernel.block_bindings.empty();
 }
 

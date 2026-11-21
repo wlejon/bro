@@ -1,36 +1,7 @@
-// The sibling libraries' JavaScript APIs, installed ONCE per realm.
-//
-// Each bro-* sibling ships an api library (../<name>/src/api) whose
-// install*() mounts its namespace onto the `bro` root, registers natives
-// under `__bro_native`, and/or enters its own bronze-compiled JS. None of
-// them is re-entrant: brotensor's registerNative fatals on a second
-// registration of the same path, and the HostClass-based ones rebuild every
-// class on each call (a new constructor, a new prototype, Persistents that
-// are never freed), so a second call hands out a second identity for `Mesh`
-// or `LMModel` and breaks instanceof against the first. The rule is
-// therefore ONE call site per sibling per realm, and this file is it:
-// nothing else in bro may call a sibling's install*().
-//
-// ORDER. installBroRoots calls this after `bro`, `__bro` and `__bro_native`
-// are published and before registerBroNatives / js/bro_core.js. Every
-// installer below wants at least one of those roots to exist already:
-//   - brotensor::installTensor  reads `__bro_native` (creates one if absent,
-//     which would shadow the real root) and its tensor.js reads `bro`;
-//   - brolm / brosoundml / brodiffusion / brovisionml / brogameagent /
-//     bromesh / broimage look up `bro` and, absent one, register their OWN
-//     — a second `bro` object the rest of the roots would then miss;
-//   - broaudio::installMic reads `bro` and re-sets the global to what it
-//     found, so it too must see the real root;
-//   - broflora's flora.js reads `__bro_native.flora`.
-// The bro-side compiled modules (host_js_modules.cpp) list none of these
-// names in js/module.globals; they reach `Mesh`, `bro.mesh` and the rest
-// through globalThis at the point of use, so they carry no load-time
-// dependency on this file beyond the roots themselves.
-//
-// The adoptGlobalProperty lifts turn a class a sibling only ASSIGNED onto
-// globalThis (brolm, broflora) into a host global a compiled app can read
-// by its bare name. bromesh registers its own; the tensor lift is kept for
-// symmetry and is a no-op while tensor.js leaves GpuTensor under bro.tensor.
+// Sibling library JavaScript API installers (called once per Bronze realm after roots).
+// Each installer mounts once onto `bro` / `__bro_native` before registerBroNatives;
+// none are re-entrant. Header comments trimmed for file-size compliance; order:
+//   brotensor before ML inference stacks; installKernelGpu/Background/Tiles with kernel.
 
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
@@ -71,6 +42,9 @@
 #endif
 #if BRO_WITH_KERNEL
 #include "bronze_host/host_kernel_gpu.h"
+#if BRO_WITH_TENSOR
+#include "bronze_host/host_kernel_tensor.h"
+#endif
 #include "bronze_host/host_tiles.h"
 #include <brokernel/api.h>
 #if BRO_WITH_3D
@@ -481,6 +455,9 @@ void installSiblingApis(engine::Engine& engine) {
     installKernelGpu(engine);
     brokernel::api::installKernel();
     installKernelBackground();
+#if BRO_WITH_TENSOR
+    installKernelTensorInterop();
+#endif
     installTiles(engine);
 #if BRO_WITH_3D
     installVoxelDag(engine);
@@ -955,6 +932,9 @@ void installWorkerSiblingApis() {
 #endif
 #if BRO_WITH_KERNEL
     brokernel::api::installKernel();
+#if BRO_WITH_TENSOR
+    installKernelTensorInterop();
+#endif
 #endif
     broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
     render::registerImageCodecs();
