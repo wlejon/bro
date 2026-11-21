@@ -8,6 +8,8 @@ namespace bro::tilecache {
 namespace {
 
 constexpr double kHalfPi = 1.57079632679489661923;
+// Selects a tile that comes in past its split takes to blend in from its parent.
+constexpr float kBlendRampFrames = 24.0f;
 
 double length(const Vec3d& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 Vec3d sub(const Vec3d& a, const Vec3d& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
@@ -604,6 +606,14 @@ void TileTree::coverInto(int32_t node, std::vector<DrawTile>& out, bool& ok) con
         if (wanted && !n.leaf) d.blend = 1.0f;
         else if (n.parent >= 0 && wanted)
             d.blend = static_cast<float>(std::clamp(std::log2(std::max(nodes_[n.parent].error, 1e-9)), 0.0, 1.0));
+        // A tile that comes in past its split (its production lagged the
+        // view, or the capacity held its parent whole) ramps in from its
+        // parent over kBlendRampFrames rather than popping to where the
+        // view has come: it starts as its parent showed.
+        if (n.shownLast + 1 < frame_ || n.shownFrom == 0) n.shownFrom = frame_;
+        n.shownLast = frame_;
+        if (n.parent >= 0 && nodes_[n.parent].state == State::Ready)
+            d.blend = std::min(d.blend, static_cast<float>(frame_ - n.shownFrom) / kBlendRampFrames);
         out.push_back(d);
     };
     if (!wanted || n.leaf) {

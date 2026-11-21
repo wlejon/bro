@@ -307,6 +307,10 @@ private:
         bool leaf = true;
         bool visible = true;
         bool live = false;   // false: on the free list
+        // The select frames it was first drawn in (of the run of selects it
+        // has been drawn in since) and last: a blend ramps in from the first.
+        mutable uint64_t shownFrom = 0;
+        mutable uint64_t shownLast = 0;
     };
 
     void footprintOf(Node& n) const;
