@@ -3,6 +3,7 @@
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_class.h"
 #include "bronze_host/host_worker_msg.h"
+#include "eval/eval.h"
 #include "util/asset_mounts.h"
 
 #include <atomic>
@@ -32,6 +33,36 @@ inline Value makeWorkerMessageEvent(const ev::Persistent& data) {
     return evt.get();
 }
 
+// `bro-headless --aot-build` builds a worker unit's module in a worker realm
+// set up exactly as the worker's run sets it up (app_aot.cpp, buildAppAot):
+// the thread compiles its script with this instead of running it, and ends.
+struct WorkerAotBuild {
+    std::string modulePath;
+    std::string recordPath;
+    std::string profilePath;
+    bool keepCurrent = false;  // a module whose record is still current is kept
+    // Out:
+    bool scriptRead = false;
+    bool current = false;      // kept: the module its record names
+    std::string currentModule;
+    bronze::eval::ModuleBuildResult result;
+};
+
+// A worker's run of its ahead-of-time unit (app_aot.h, loadWorkerAotUnit):
+// worker thread only.
+struct WorkerAotRun {
+    std::string name;
+    std::string record;
+    std::string profile;
+    std::string harvestOut;  // this instance's harvest, renamed onto `profile` when written
+    std::string appDir;      // what the rebuild is of, kept for a worker ending in the engine's teardown
+    std::string aotDir;
+    bool harvesting = false;
+    const uint64_t* coldEntries = nullptr;
+    uint32_t coldEntryCount = 0;
+    double startMs = 0.0;
+};
+
 class WorkerInstance {
 public:
     // First, as host_class.h's handle tags are.
@@ -59,6 +90,13 @@ public:
     void start() {
         alive_.store(true, std::memory_order_release);
         workerThread_ = std::thread(&WorkerInstance::threadFunc, this);
+    }
+
+    // Build mode (WorkerAotBuild): set before start(); the thread builds and
+    // ends by itself, and waitForExit() joins it.
+    void setAotBuild(WorkerAotBuild* build) { aotBuild_ = build; }
+    void waitForExit() {
+        if (workerThread_.joinable()) workerThread_.join();
     }
 
     void terminate() {
@@ -147,6 +185,8 @@ private:
     bool moduleScript_ = false;
     const util::AssetMounts* mounts_ = nullptr;
     uint64_t workerId_ = 0;
+    WorkerAotBuild* aotBuild_ = nullptr;
+    WorkerAotRun workerAot_;
 
     std::thread workerThread_;
     std::atomic<bool> alive_{false};

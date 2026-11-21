@@ -629,6 +629,26 @@ functions with tier `aot`. `eval`, `new Function` and `import()` of code not in
 a module still compile in process. `bro.app.startup.page.codeCache` is `'aot'`
 when the page's first unit ran from its module.
 
+**Workers.** A dedicated Worker's script is a unit of its own and goes
+through the same cycle on the worker's thread (`bronze_host/app_aot.h`,
+`loadWorkerAotUnit`): with no module its first run compiles to be harvested,
+and the harvest is written as the worker ends, while its realm still runs:
+only then are the thread's own caches folded in. A harvest is the union of
+every instance of one script, so a pool leaves one profile: every instance
+writes the unit's one file, and the last to end renames it onto the profile.
+Each thread writes only the units it ran, measured on its own heap (bronze
+keeps shapes per thread). Beside the profile goes a sidecar, `<unit>.worker`,
+naming the script, its base path and whether it is a module worker. The build
+reads the sidecars and builds each unit in a worker realm set up exactly as
+the worker's run sets it up (a worker thread in build mode), so its record
+matches the run's inputs; `aot.txt` lists them as `worker<N>=` lines beside
+the page's `unit<N>=`. A unit whose script is gone is dropped at the next
+build. The page's harvest is written at `pagehide` and the workers' as they
+end, after it, so the rebuild waits for the last harvesting worker and one
+build reads them all. A worker made from a `blob:` or `data:` URL has no file
+to be the unit of and always compiles; so do the scripts `importScripts`
+loads.
+
 **The folder is unaffected.** `bro <dir>` never looks at an AOT directory: the
 edit loop, hot reload and the code cache work as before.
 

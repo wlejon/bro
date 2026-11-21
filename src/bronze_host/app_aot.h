@@ -100,4 +100,28 @@ std::optional<bronze::eval::LoadedModule> takeAotUnit(engine::Engine& engine, co
 /// Drops a module loadAheadAotUnit kept that no run took.
 void discardAheadAotUnit();
 
+// A dedicated Worker's script is a unit of its own, with the same cycle on
+// the worker's thread: its first run compiles to be harvested, the harvest is
+// written as the worker ends (bronze's harvest is per thread), and the build
+// makes the unit's module on it in a worker realm set up as the worker's run
+// sets it up (WorkerAotBuild). A sidecar `<id>.worker` beside the record says
+// how to make that realm: the script's path, its base path, classic or
+// module. A worker made from a blob: or data: URL has no file to be the unit
+// of and always compiles.
+struct WorkerAotRun;
+
+/// The worker script's module (`code` and `opts` exactly what it would be
+/// compiled from) when `engine` runs from an AOT directory holding a current
+/// one; nothing otherwise, and then `opts.harvestOutPath` when the run is to
+/// be harvested. Worker thread.
+std::optional<bronze::eval::LoadedModule> loadWorkerAotUnit(engine::Engine& engine, const std::string& code,
+                                                            bronze::eval::EvalOptions& opts, bool moduleScript,
+                                                            const std::string& basePath, WorkerAotRun& run);
+
+/// The worker is ending, its harvest (if any) just written on its thread:
+/// the harvest becomes the unit's profile, and a module whose run entered a
+/// cold function about once a frame or more loses its profile and record.
+/// The directory's rebuild waits for the last harvesting worker. Worker thread.
+void settleWorkerAot(WorkerAotRun& run);
+
 }  // namespace bro::bronze_host

@@ -5,7 +5,7 @@ the browser-shaped host globals (`document`, `window`, rAF, timers, `Image`,
 `fetch`, observers, WebGL2, ...), bro's own namespaces (`bro.*`), every
 sibling library's `<name>_api`, and the per-frame seam that runs JS. Page
 scripts are compiled in-process at boot (`eval_jit.cpp`); an installed app's
-page scripts are compiled ahead of time on its first run's profile
+page and Worker scripts are compiled ahead of time on its first run's profile
 (`app_aot.h`, docs/apps.md "Ahead-of-time scripts").
 
 ## Folder modules

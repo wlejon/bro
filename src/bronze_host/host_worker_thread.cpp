@@ -1,4 +1,5 @@
 #include "bronze_host/host_worker_internal.h"
+#include "bronze_host/app_aot.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -377,26 +379,58 @@ void WorkerInstance::threadFunc() {
         }
     }
 
-    if (scriptCode.empty()) {
+    bronze::eval::EvalOptions opts;
+    opts.filename = resolvedPath.string();
+    opts.entryResolvesAs = resolvedPath;
+    opts.hostGlobals = registeredHostGlobals();
+    if (mounts_) {
+        for (const auto& [prefix, target] : mounts_->mounts()) {
+            opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});
+        }
+    }
+    opts.retainSource = true;
+    opts.shareAcrossThreads = true;
+    opts.classicScript = !moduleScript_;
+    applyCodeCacheOptions(opts);
+
+    if (aotBuild_) {
+        // `--aot-build`: this realm is the one the unit is compiled against,
+        // and the script does not run (app_aot.cpp, buildAppAot).
+        if (!scriptCode.empty()) {
+            aotBuild_->scriptRead = true;
+            opts.feedbackInPath = aotBuild_->profilePath;
+            if (aotBuild_->keepCurrent) {
+                bronze::eval::LoadedModule existing = bronze::eval::loadModule(scriptCode, opts, aotBuild_->recordPath);
+                if (existing.ok) {
+                    aotBuild_->current = true;
+                    aotBuild_->currentModule = existing.modulePath;
+                }
+            }
+            if (!aotBuild_->current) {
+                aotBuild_->result =
+                    bronze::eval::buildModule(scriptCode, opts, aotBuild_->modulePath, aotBuild_->recordPath);
+            }
+        }
+        terminated_.store(true, std::memory_order_release);
+    } else if (scriptCode.empty()) {
         LOG_ERROR("worker: empty or missing script: %s", resolvedPath.string().c_str());
         dispatchWorkerError("worker: empty or missing script: " + resolvedPath.string(), resolvedPath.string(), 0);
     } else {
-        bronze::eval::EvalOptions opts;
-        opts.filename = resolvedPath.string();
-        opts.entryResolvesAs = resolvedPath;
-        opts.hostGlobals = registeredHostGlobals();
-        if (mounts_) {
-            for (const auto& [prefix, target] : mounts_->mounts()) {
-                opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});
-            }
-        }
-        opts.retainSource = true;
-        opts.shareAcrossThreads = true;
-        opts.classicScript = !moduleScript_;
-        applyCodeCacheOptions(opts);
-
+        // An installed app's worker script runs its ahead-of-time module, or
+        // compiles to be harvested for one (app_aot.h, loadWorkerAotUnit). A
+        // blob: or data: worker's text has no file to be the unit of.
         bootMarks[2] = BootClock::now();
-        auto res = bronze::eval::evalScript(scriptCode, opts);
+        bronze::embed::CallResult res;
+        std::optional<bronze::eval::LoadedModule> aot;
+        if (auto* eng = hostEngine(); eng && inlineSource_.empty()) {
+            aot = loadWorkerAotUnit(*eng, scriptCode, opts, moduleScript_, basePath_, workerAot_);
+        }
+        if (aot) {
+            res = bronze::eval::runModule(*aot, opts);
+        } else {
+            auto compiled = bronze::eval::compileScript(scriptCode, opts);
+            res = bronze::eval::runCompiledScript(std::move(compiled), opts);
+        }
         bootMarks[3] = BootClock::now();
         auto ms = [](BootClock::time_point a, BootClock::time_point b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
@@ -572,6 +606,13 @@ void WorkerInstance::threadFunc() {
             }
             toWorkerCv_.wait_for(lock, wait);
         }
+    }
+
+    // A worker compiled to be harvested leaves its harvest while its realm
+    // still runs (bronze's harvest is per thread; app_aot.h settleWorkerAot).
+    if (workerAot_.harvesting || workerAot_.coldEntries) {
+        if (workerAot_.harvesting) bronze::embed::writeInlineCacheHarvests();
+        settleWorkerAot(workerAot_);
     }
 
     shutdownWorkerSiblingApis();
