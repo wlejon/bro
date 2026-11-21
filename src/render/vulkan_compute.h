@@ -246,6 +246,10 @@ public:
 
     /// Copy `size` bytes from `data` (now) to `buffer` at `offset`.
     bool write(ComputeBuffer& buffer, VkDeviceSize offset, const void* data, VkDeviceSize size);
+    /// The same, `size` bytes that `fill` writes into the staging memory (a
+    /// source in pieces gathered into one copy).
+    bool write(ComputeBuffer& buffer, VkDeviceSize offset, VkDeviceSize size,
+               const std::function<void(uint8_t*)>& fill);
     /// Dispatch `groups` workgroups of `pipeline` with `push` as its
     /// push-constant block (pushConstantBytes() long). `access` is every
     /// buffer range it reads or writes (the default: unknown, ordered

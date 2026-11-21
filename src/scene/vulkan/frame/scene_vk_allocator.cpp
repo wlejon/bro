@@ -90,6 +90,17 @@ bool SceneVkAllocator::stageAndUploadBuffer(VkBuffer dstBuffer, const void* data
     return true;
 }
 
+bool SceneVkAllocator::stageAndUploadBuffer(VkBuffer dstBuffer, VkDeviceSize size, VkDeviceSize dstOffset,
+                                            const std::function<void(uint8_t*)>& fill) {
+    if (size == 0) return true;
+    render::UploadSlice staging = device_.frameUpload(size, 4);
+    if (!staging) return false;
+    fill(static_cast<uint8_t*>(staging.mapped));
+    VkBufferCopy region{staging.offset, dstOffset, size};
+    vkCmdCopyBuffer(device_.uploadCommands(), staging.buffer, dstBuffer, 1, &region);
+    return true;
+}
+
 bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat format,
                                    VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                                    SceneVkImage& outImage, uint32_t mipLevels,

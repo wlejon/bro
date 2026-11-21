@@ -320,6 +320,36 @@ bool syncOneBuffer(render::VulkanCompute* comp,
     return comp->write(*cb, 0, src.data(), byteSize);
 }
 
+// A paged pool array, its pages gathered into one copy.
+template <typename T>
+bool syncOneBuffer(render::VulkanCompute* comp,
+                   std::shared_ptr<brokernel::api::GpuBuffer>& dst,
+                   const bromesh::VoxelDagPool::Paged<T>& src,
+                   std::string* err) {
+    const size_t byteSize = src.empty() ? size_t{64} : src.size() * sizeof(T);
+    auto cb = dst ? computeBufferOf(dst) : nullptr;
+    if (!cb || cb->size() < byteSize) {
+        dst = createEngineBuffer(byteSize, err);
+        if (!dst) return false;
+        cb = computeBufferOf(dst);
+        if (!cb) {
+            if (err) *err = "failed to resolve ComputeBuffer";
+            return false;
+        }
+    }
+    if (src.empty()) {
+        const uint8_t zero[64] = {};
+        return comp->write(*cb, 0, zero, sizeof(zero));
+    }
+    return comp->write(*cb, 0, byteSize, [&](uint8_t* out) {
+        for (size_t p = 0; p < src.pageCount(); ++p) {
+            const size_t n = src.pageSize(p) * sizeof(T);
+            std::memcpy(out, src.page(p), n);
+            out += n;
+        }
+    });
+}
+
 void parseAnchorArg(std::span<const Value> a, double out[3]) {
     out[0] = out[1] = out[2] = 0.0;
     if (a.empty() || !ev::isObject(a[0])) return;

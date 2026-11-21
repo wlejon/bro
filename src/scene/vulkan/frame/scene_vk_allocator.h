@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <functional>
 #include <span>
 
 namespace bro::scene::vk {
@@ -102,6 +103,10 @@ public:
 
     /// Record a copy of `data` into `dstBuffer` at `dstOffset`.
     bool stageAndUploadBuffer(VkBuffer dstBuffer, const void* data, VkDeviceSize size, VkDeviceSize dstOffset = 0);
+    /// The same, `size` bytes that `fill` writes into the staging memory (a
+    /// source in pieces gathered into one copy).
+    bool stageAndUploadBuffer(VkBuffer dstBuffer, VkDeviceSize size, VkDeviceSize dstOffset,
+                              const std::function<void(uint8_t*)>& fill);
 
     // Image & Texture management
     /// Create an image and its view. A sampled image starts out (once the

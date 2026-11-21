@@ -119,9 +119,25 @@ bool uploadStorageVec(SceneGpu& gpu, SceneVkBuffer& dst, const std::vector<T>& s
 // in runs. A buffer too small is remade with headroom and filled whole, so
 // a growing pool remakes it rarely and an edit uploads what it touched.
 template <typename T>
-bool uploadPagedVec(SceneGpu& gpu, SceneVkBuffer& dst, const std::vector<T>& src,
+bool uploadPagedVec(SceneGpu& gpu, SceneVkBuffer& dst, const bromesh::VoxelDagPool::Paged<T>& src,
                     const std::vector<uint64_t>& pageGens, uint64_t sinceGen) {
     if (src.empty()) return true;    // nothing reads it; the dummy binds while invalid
+    constexpr size_t kPage = bromesh::VoxelDagPool::kPageElems;
+    const size_t pages = src.pageCount();
+    // Pages [p, e) gathered into one staged copy.
+    auto upload = [&](size_t p, size_t e) {
+        const size_t first = p * kPage;
+        const size_t last = std::min(e * kPage, src.size());
+        return gpu.allocator.stageAndUploadBuffer(
+            dst.buffer, static_cast<VkDeviceSize>((last - first) * sizeof(T)),
+            static_cast<VkDeviceSize>(first * sizeof(T)), [&](uint8_t* out) {
+                for (size_t q = p; q < e; ++q) {
+                    const size_t n = src.pageSize(q) * sizeof(T);
+                    std::memcpy(out, src.page(q), n);
+                    out += n;
+                }
+            });
+    };
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(src.size() * sizeof(T));
     if (!dst.isValid() || dst.size < bytes) {
         gpu.allocator.destroyBuffer(dst);
@@ -129,21 +145,14 @@ bool uploadPagedVec(SceneGpu& gpu, SceneVkBuffer& dst, const std::vector<T>& src
         if (!gpu.allocator.createBuffer(bytes + bytes / 2, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dst)) {
             return false;
         }
-        return gpu.allocator.stageAndUploadBuffer(dst.buffer, src.data(), bytes);
+        return upload(0, pages);
     }
-    constexpr size_t kPage = bromesh::VoxelDagPool::kPageElems;
-    const size_t pages = std::min(pageGens.size(), (src.size() + kPage - 1) / kPage);
-    for (size_t p = 0; p < pages;) {
+    const size_t changed = std::min(pageGens.size(), pages);
+    for (size_t p = 0; p < changed;) {
         if (pageGens[p] <= sinceGen) { ++p; continue; }
         size_t e = p + 1;
-        while (e < pages && pageGens[e] > sinceGen) ++e;
-        const size_t first = p * kPage;
-        const size_t last = std::min(e * kPage, src.size());
-        if (!gpu.allocator.stageAndUploadBuffer(dst.buffer, src.data() + first,
-                                                static_cast<VkDeviceSize>((last - first) * sizeof(T)),
-                                                static_cast<VkDeviceSize>(first * sizeof(T)))) {
-            return false;
-        }
+        while (e < changed && pageGens[e] > sinceGen) ++e;
+        if (!upload(p, e)) return false;
         p = e;
     }
     return true;

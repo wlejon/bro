@@ -45,6 +45,32 @@ bool uploadArrayBuffer(render::VulkanCompute& compute,
     return compute.write(*dst, 0, src.data(), byteSize);
 }
 
+// A paged pool array, its pages gathered into one copy.
+template <typename T>
+bool uploadArrayBuffer(render::VulkanCompute& compute,
+                       std::shared_ptr<render::ComputeBuffer>& dst,
+                       const bromesh::VoxelDagPool::Paged<T>& src,
+                       std::string* err) {
+    const VkDeviceSize byteSize = src.empty()
+        ? VkDeviceSize{64}
+        : static_cast<VkDeviceSize>(src.size() * sizeof(T));
+    if (!dst || dst->size() < byteSize) {
+        dst = compute.createBuffer(byteSize, err);
+        if (!dst) return false;
+    }
+    if (src.empty()) {
+        const uint8_t zero[64] = {};
+        return compute.write(*dst, 0, zero, sizeof(zero));
+    }
+    return compute.write(*dst, 0, byteSize, [&](uint8_t* out) {
+        for (size_t p = 0; p < src.pageCount(); ++p) {
+            const size_t n = src.pageSize(p) * sizeof(T);
+            std::memcpy(out, src.page(p), n);
+            out += n;
+        }
+    });
+}
+
 }  // namespace
 
 void VoxelRegion::originWorld(double out[3]) const noexcept {

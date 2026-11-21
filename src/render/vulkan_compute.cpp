@@ -588,6 +588,19 @@ bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, const void
     return true;
 }
 
+bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, VkDeviceSize size,
+                          const std::function<void(uint8_t*)>& fill) {
+    if (!context_ || buffer.buffer_ == VK_NULL_HANDLE || offset > buffer.size_ || size > buffer.size_ - offset) return false;
+    if (size == 0) return true;
+    UploadSlice slice = context_->frames().allocUpload(size, 4);
+    if (!slice) return false;
+    fill(static_cast<uint8_t*>(slice.mapped));
+    const ComputeAccess to{buffer.address_ + offset, size, true};
+    VkCommandBuffer cmd = commands({&to, 1});
+    copyBufferChunked(cmd, slice.buffer, slice.offset, buffer.buffer_, offset, size);
+    return true;
+}
+
 bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
                              std::span<const ComputeAccess> access) {
     if (!context_ || pipeline.pipeline_ == VK_NULL_HANDLE || push.size() != pipeline.pushBytes_) return false;
