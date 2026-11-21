@@ -139,6 +139,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_permission_prompts.cpp
     native_tables.cpp
     host_sibling_apis.cpp
+    host_sibling_apis_worker.cpp
     native_time.cpp
     native_paths.cpp
     native_models.cpp

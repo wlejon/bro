@@ -486,6 +486,8 @@ set(BROPULSE_ENABLE_API      ON CACHE BOOL "Build Bronze JavaScript API for brop
 set(BROIME_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for broime" FORCE)
 set(BROREMOTE_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broremote" FORCE)
 set(BROKERNEL_ENABLE_API     ${BRO_WITH_KERNEL} CACHE BOOL "Build Bronze JavaScript API for brokernel" FORCE)
+set(BROAUDIO_WITH_BROKERNEL  ${BRO_WITH_KERNEL} CACHE BOOL "Enable brokernel DSP support in broaudio" FORCE)
+set(BROIMAGE_WITH_BROKERNEL  ${BRO_WITH_KERNEL} CACHE BOOL "Enable brokernel filter support in broimage" FORCE)
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,

@@ -447,6 +447,12 @@ if (bro.kernel.gpu) {
 // runtime:
 //   const gradFn = mod.knobGrad('fnName', 'KNOB_NAME');
 //   const gradMap = mod.knobGrad('fnName', ['KNOB_A', 'KNOB_B']);
+//
+// Accumulate scalar/vector `@knob` gradients across a 1D/2D/3D grid into an f32
+// `rw_store<f32, 1>` via `atomic_add` (compiled with `{ runtimeKnobs: true }`):
+//   const gradGrid = mod.knobGradGrid('cellLossFn', ['A', 'B'], 1);
+//   gradGrid.setKnobs({ A: 0.5, B: [1, 0, 0] });
+//   gradGrid.run(N, targetArr, gradOut); // or .dispatch(...) on GPU
 
 // ============================================================================
 // 11. Formal SPIR-V Verification & Multi-Target Emission (MSL / PTX)
@@ -480,3 +486,8 @@ if (bro.kernel.gpu) {
 //   const buf = bro.kernel.fromTensor(gpuTensor);
 //   bro.kernel.copyToTensor(buf, gpuTensor);
 //   bro.kernel.copyFromTensor(gpuTensor, buf);
+//
+// Zero-copy dispatch directly over GpuTensor storage (no staging copies):
+//   bro.kernel.dispatchTensors(kernel, gridShape, ...args);
+//   // CPU tensors run directly against host pointers; Vulkan tensors pack
+//   // BDA push constants and submit directly onto brotensor's Vulkan stream.

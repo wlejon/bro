@@ -42,4 +42,16 @@ if (!bro.kernel.available || !bro.tensor || bro.tensor.available === false) {
     for (let i = 0; i < 8; i++) {
         assert(Math.abs(readBack[i] - nextVals[i]) < 1e-5, `copyFromTensor[${i}]`);
     }
+
+    // Zero-copy dispatchTensors directly over GpuTensor storage (Vulkan BDA or CPU host pointer).
+    assert(typeof bro.kernel.dispatchTensors === 'function', 'bro.kernel.dispatchTensors exists');
+    const zt = bro.tensor.createTensor(4, 2);
+    const seed = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    zt.upload(seed);
+    bro.kernel.dispatchTensors(kSaxpy, 8, zt, 3.0, -2.0);
+    const afterDirect = zt.download();
+    for (let i = 0; i < 8; i++) {
+        const want = seed[i] * 3.0 - 2.0;
+        assert(Math.abs(afterDirect[i] - want) < 1e-4, `dispatchTensors[${i}]=${afterDirect[i]} want ${want}`);
+    }
 }
