@@ -79,14 +79,6 @@ if [[ -z "$PLATFORM" ]]; then
     esac
 fi
 
-# The extension a bronze-compiled app module carries on this platform — the
-# app.dll / app.so / app.dylib an app directory is built around.
-case "$PLATFORM" in
-    win)   MODULE_EXT=".dll" ;;
-    macos) MODULE_EXT=".dylib" ;;
-    *)     MODULE_EXT=".so" ;;
-esac
-
 case "$(uname -m)" in
     x86_64|amd64)       ARCH="x64" ;;
     arm64|aarch64)      ARCH="arm64" ;;
@@ -275,124 +267,6 @@ fi
 # user projects and creates new ones from system/skeletons/<name>/.
 cp -a system "$OUT_DIR/"
 
-# --- bronze toolchain (only when this build has one) -----------------------
-# A build configured -DBRO_WITH_BRONZE=ON can also COMPILE apps, not only run
-# them, and shipping bro without that compiler would ship half of the feature:
-# the binaries would load an app.dll nobody in the package can produce. So the
-# compiler and the libraries it links into what it emits ride along under
-# bronze/.
-#
-# Why a subdirectory and not flat beside bro: both the compiler's own searches
-# resolve from ITS exe directory (link.cpp's findRuntimeLib / findSharedRuntime
-# look at exeDir first), so bronze/ is a complete, self-contained install of
-# it — while the bro root stays the three binaries and system/. The one file
-# that must exist in BOTH places is the shared runtime: bro LOADS it at
-# startup, so it sits beside bro; the linker RESOLVES it when building a
-# module, so a copy sits beside bronze. Two copies of ~1.5 MB, and neither
-# search has to know about the other's directory.
-#
-# The whole block is skipped, silently, when the build has no bronze — that is
-# the default configuration and the package is exactly what it always was.
-BRONZE_EXE="$(bin_path bronze)"
-if [[ -x "$BRONZE_EXE" ]]; then
-    BZ_DIR="$OUT_DIR/bronze"
-    echo ">>> Staging the bronze compiler into bronze/"
-    mkdir -p "$BZ_DIR/include/embed" "$BZ_DIR/include/runtime"
-    cp "$BRONZE_EXE" "$BZ_DIR/"
-
-    # Static runtime archives. bro only sets CMAKE_RUNTIME_OUTPUT_DIRECTORY, so
-    # unlike the executables these stay in their per-target build directories,
-    # with the per-config subdir under a multi-config generator.
-    bronze_lib() {
-        local mod="$1" base="$BUILD_DIR/_deps/bronze-build/src/$1" f
-        for f in "$base/$CONFIG/bronze_$mod.lib" "$base/bronze_$mod.lib" \
-                 "$base/$CONFIG/libbronze_$mod.a" "$base/libbronze_$mod.a"; do
-            [[ -f "$f" ]] && { echo "$f"; return 0; }
-        done
-        return 1
-    }
-    for mod in rt runtime json regex; do
-        if src="$(bronze_lib "$mod")"; then
-            cp "$src" "$BZ_DIR/"
-        else
-            echo "warning: bronze_$mod library not found under $BUILD_DIR/_deps/bronze-build/src/$mod, skipping" >&2
-        fi
-    done
-
-    # The shared runtime, from bronze's own output directory (CMAKE_BINARY_DIR/
-    # shared, per bronze's cmake/bronze_shared_runtime.cmake). On Windows what a module
-    # LINKS against is the import library, so both it and the DLL come across;
-    # elsewhere the shared object is both.
-    SHARED_SRC="$BUILD_DIR/shared"
-    [[ -d "$SHARED_SRC/$CONFIG" ]] && SHARED_SRC="$SHARED_SRC/$CONFIG"
-    # Named, not globbed: a `bronze_runtime_shared.*` glob also drags in the
-    # linker's .exp file, which is build scrap. The names that do not exist on
-    # this platform are simply skipped.
-    for name in bronze_runtime_shared.dll bronze_runtime_shared.lib \
-                libbronze_runtime_shared.dylib; do
-        if [[ -f "$SHARED_SRC/$name" ]]; then
-            cp -a "$SHARED_SRC/$name" "$BZ_DIR/"
-        fi
-    done
-    # ELF is the exception: the soname chain (libfoo.so -> libfoo.so.1) is a set
-    # of names, so this one is a glob.
-    shopt -s nullglob
-    for f in "$SHARED_SRC"/libbronze_runtime_shared.so*; do
-        cp -a "$f" "$BZ_DIR/"
-    done
-    shopt -u nullglob
-
-    # No host-globals manifest is staged: the shipped bro-headless prints its
-    # own (`bro-headless <app> --print-host-globals`), which is the registry
-    # of THIS host and cannot disagree with it. README.txt below says so.
-
-    # The embed API, for a C++ host of its own that loads compiled modules
-    # (embed.h pulls exactly one header, runtime/value.h, so the pair is the
-    # whole surface), plus bronze's license alongside bro's.
-    BRONZE_SRC="$(grep -E '^BRONZE_DIR:PATH=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2- || true)"
-    if [[ -n "$BRONZE_SRC" && -d "$BRONZE_SRC" ]]; then
-        cp "$BRONZE_SRC/src/embed/embed.h"    "$BZ_DIR/include/embed/"
-        cp "$BRONZE_SRC/src/runtime/value.h"  "$BZ_DIR/include/runtime/"
-        [[ -f "$BRONZE_SRC/LICENSE" ]] && cp "$BRONZE_SRC/LICENSE" "$BZ_DIR/LICENSE"
-    else
-        echo "warning: BRONZE_DIR not in $BUILD_DIR/CMakeCache.txt; embed headers not staged" >&2
-    fi
-
-    # And say so in the package's own README — a directory nobody is told
-    # about is a directory nobody uses.
-    cat >> "$OUT_DIR/README.txt" <<EOF
-
-Compiled apps:
-  bronze/ is the AOT JavaScript compiler. An app directory carrying an
-  app${MODULE_EXT} beside its index.html runs on the binaries above with no
-  flag and no separate runtime; bronze/README.txt has the command that
-  produces one.
-EOF
-
-    cat > "$BZ_DIR/README.txt" <<BZEOF
-bronze — the AOT JavaScript compiler for bro ${VERSION}
-
-Compile an app's JavaScript to a native module the stock bro binaries load:
-
-  ../bro-headless${EXE} myapp --print-host-globals > web_host.globals
-  bronze${EXE} build app.js -o myapp/app${MODULE_EXT} --emit-shared --host-globals web_host.globals
-
-  bro${EXE} myapp
-
-The app directory is index.html + app${MODULE_EXT}; nothing else has to change.
-The first line writes the manifest of the globals bro supplies (DOM, WebGL2,
-audio, physics, AI): bro-headless installs them exactly as a run would and
-prints the list, so it always matches the binaries beside it. Pass it on every
-build for bro.
-
-bronze also compiles standalone programs — 'bronze${EXE} build prog.js -o prog${EXE}'
-links the static runtime archives here into a native executable.
-
-A system linker is required and is not shipped here: MSVC's link.exe on
-Windows, clang++ or g++ on Linux and macOS.
-BZEOF
-fi
-
 # --- macOS .app bundle ----------------------------------------------------
 # Finder launches a Mach-O binary in Terminal; wrap the GUI binary in a bundle
 # so double-click opens the app with no terminal window. The layout is the one
@@ -400,7 +274,7 @@ fi
 # data in Contents/Resources. bro finds system/ and the MoltenVK manifest
 # through util::resourceDir() (Contents/Resources) and keeps its settings in the
 # user data dir, so nothing writes into the signed bundle. The CLI tools
-# (bro-headless, bro-server, bronze/) stay beside Bro.app with their own flat
+# (bro-headless, bro-server) stay beside Bro.app with their own flat
 # copies of the libraries and data, so a terminal user never reaches inside.
 if [[ "$PLATFORM" == "macos" ]]; then
     APP="$OUT_DIR/Bro.app"

@@ -10,8 +10,6 @@ Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-
 
 ** this is pre-alpha **
 
-Each nightly zip also carries **[bronze](https://github.com/wlejon/bronze)** under `bronze/`, the AOT JavaScript compiler, and the binaries in the same zip load what it emits: `bro-headless myapp --print-host-globals > web_host.globals` writes the manifest of globals bro supplies, and `bronze build app.js -o myapp/app.dll --emit-shared --host-globals web_host.globals` turns an app's JavaScript into a native module that `bro myapp` runs.
-
 ## What can I compare it to?
 
 Two familiar yardsticks, plus one that doesn't have a name yet:
@@ -66,7 +64,8 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 | Reach for | to |
 |---|---|
 | `bro.scene` | 3D scene graph: meshes, sprites, particles, PBR lighting, skinned characters |
-| `scene.createTerrain` · `createClipmapTerrain` · `createTileWorld` | chunked height-field terrain, camera-centred clipmaps, square/hex tile grids |
+| `scene.createTerrain` · `createTileWorld` · `bro.tiles` | chunked height-field terrain, square/hex tile grids, GPU tile caches over a plane or cube-sphere |
+| `bro.kernel` | brokernel: one kernel source compiled in process to SPIR-V and native code, dispatched on the GPU or run on the CPU |
 | `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts, characters, vehicles |
 | `AudioContext` (broaudio) | real-time audio: synthesis, effects, spatial, MIDI |
 | `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) + rollback sessions (determinism lint & runtime state-hash desync detection) |
@@ -92,7 +91,7 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 
 ## Architecture
 
-C++20 on Skia, Vulkan 1.3 (MoltenVK on macOS), SDL3 and Jolt, with JavaScript compiled by [bronze](https://github.com/wlejon/bronze) on [brass](https://github.com/wlejon/brass): in-process at boot (interpreter plus tiered JIT), or ahead of time into an `app.dll`/`.so`/`.dylib` the app folder carries. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (scripting and testing), `bro-server` (dedicated game server, no window or renderer).
+C++20 on Skia, Vulkan 1.3 (MoltenVK on macOS), SDL3 and Jolt, with JavaScript compiled by [bronze](https://github.com/wlejon/bronze) on [brass](https://github.com/wlejon/brass), inside the engine: in process at boot (interpreter plus tiered JIT), and for an installed app (`bro --install myapp`, an executable of its own) ahead of time on what its first run did, with no compiler or linker on the machine ([docs/apps.md](docs/apps.md)). The engine is one shared library, `libbro`, under three executables: `bro` (windowed), `bro-headless` (scripting and testing), `bro-server` (dedicated game server, no window or renderer).
 
 The rest lives in sibling libraries; [docs/ecosystem.md](docs/ecosystem.md) lists every repo, and [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) covers working across them.
 

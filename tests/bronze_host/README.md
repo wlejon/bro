@@ -13,8 +13,7 @@ tests/bronze_host/run_checks.sh --list    # the names
 - `BRO_TEST_BRONZE=0` leaves them out of `run_tests.sh`;
   `BRO_TEST_BRONZE_SKIP=<names>` (space or comma separated) drops some.
 - A check skips (77) when there is no `bro-headless`, or no bronze CLI and no
-  already-built module. Build the CLI with
-  `cmake --build build --config Release --target bronze-cli`.
+  already-built module. Every build makes the CLI (it compiles bro's own JS).
 - `lib.sh` rebuilds a module when it is older than its probe or the compiler,
   so a rebuilt bronze recompiles every probe on the next run.
 - `wild`, `instanced` and `pixi` are defined in `run_checks.sh` but not in the

@@ -4,8 +4,9 @@ A folder holding a `bro.json` and an `index.html` is a desktop application.
 The stock `bro` runs it (`bro <dir> [args...]`), and the folder carries no
 native code, no build and no pins. When an app needs something native, that
 capability goes into bro (or into a sibling library exposed as `bro.<x>`),
-never into the app. An ahead-of-time `app.dll` beside `index.html` is an
-optional packaging speed-up, not a requirement.
+never into the app. The engine compiles its scripts: in process for a
+folder, and ahead of time, on what its first run did, for an installed app
+("Ahead-of-time scripts").
 
 Each app runs as its own bro process. An installed app's process is named for
 the app (`helm-calculator`), started by its own small executable, and every
@@ -550,11 +551,6 @@ app's identity stamped into it, and on Windows its icon and version
 resources written with the system's own resource updater. BUILDING.md has how
 and why.
 
-What it is a seam for, later: the natives modules the app uses, a startup
-heap snapshot, packed assets, and per-app release downloads. Each is another
-input to the cache key and another part of the executable; none of them
-changes how it is named, registered or launched.
-
 ## Ahead-of-time scripts
 
 Beside the executable sits its AOT directory, `<executable>.aot`
@@ -642,11 +638,10 @@ they carry no build-machine paths of their own. They do name the app folder:
 module URLs, `import.meta.url` and stack-trace file names are the absolute
 paths the page had at build time, and the record checks them. An AOT
 directory therefore belongs with an app folder at the path it was built for
-(the installed copy, which is what `--install` builds against); a release
-artifact that ships one prebuilt needs app-relative names first.
+(the installed copy, which is what `--install` builds against).
 
-macOS app executables are not built yet (apps are bundles there), so no AOT
-directory is either; the writer handles Mach-O, and the plan is the same.
+macOS has no app executables (apps are bundles there), and so no AOT
+directories.
 
 ## How a page loads
 
@@ -711,9 +706,8 @@ once the unit has run.
 `bro <dir>` compiles the page's scripts in process at boot (bronze, tiered
 JIT). The compiled code is cached on disk ([code-cache.md](code-cache.md)), so
 the second and later launches skip the compile. An installed app's executable
-runs its page from modules compiled at install ("Ahead-of-time scripts",
-above), and shipping an `app.dll` beside `index.html` skips the compile for a
-folder too.
+runs its page from modules built on its first run's profile ("Ahead-of-time
+scripts", above).
 
 Every launch logs its time to the first presented frame, measured from just
 before `main()`: `app <id>: first frame N ms after start` (in the app's log

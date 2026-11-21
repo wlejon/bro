@@ -4,13 +4,16 @@ The engine's JavaScript surface for [bronze](https://github.com/wlejon/bronze):
 the browser-shaped host globals (`document`, `window`, rAF, timers, `Image`,
 `fetch`, observers, WebGL2, ...), bro's own namespaces (`bro.*`), every
 sibling library's `<name>_api`, and the per-frame seam that runs JS. Page
-scripts are compiled in-process at boot (`eval_jit.cpp`); an app folder may
-instead carry an AOT-compiled `app.dll` / `.so` / `.dylib`.
+scripts are compiled in-process at boot (`eval_jit.cpp`); an installed app's
+page scripts are compiled ahead of time on its first run's profile
+(`app_aot.h`, docs/apps.md "Ahead-of-time scripts").
 
-## Compiled app modules
+## Folder modules
 
-`bro <folder>` / `bro-headless <folder>` load `app.<ext>` beside `index.html`
-(`app_module.cpp`), compare its ABI stamp with the runtime's and refuse a
+Apps do not ship these any more; the loader stays for script-entry apps under
+`bro-server`, the `tests/bronze_host` checks and `bench/realworld`'s `bro-aot`
+mode. `bro <folder>` / `bro-headless <folder>` load `app.<ext>` beside
+`index.html` (`app_module.cpp`), compare its ABI stamp with the runtime's and refuse a
 mismatch. The module shares the host's runtime: link `bronze::runtime_shared`
 only, never `bronze::embed` + `bronze::runtime` as well, or the module gets a
 second heap and values are collected out from under it.
@@ -21,7 +24,6 @@ second heap and values are collected out from under it.
     --print-host-globals --print-native-manifest natives.json > host.globals
 
 # compile the app into the folder that carries it
-cmake --build build --config Release --target bronze-cli
 BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib \
   ./build/Release/bronze.exe build app.js -o myapp/app.dll \
     --emit-shared --host-globals host.globals --native-manifest natives.json

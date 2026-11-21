@@ -163,7 +163,7 @@ feature flags do not.
 |---|:--:|---|
 | `BRO_BUILD_EXECUTABLES` | ON top-level, **OFF** under `add_subdirectory` | Builds `bro` / `bro-headless` / `bro-server`. An embedder linking `bro_engine` with its own `main` wants the libraries, not a second `bro.exe` in its tree, and gets that without asking. See [embedding.md](embedding.md). |
 | `BRO_BUILD_TESTS` | ON top-level, **OFF** under `add_subdirectory` | Builds bro's own C++ tests and smoke tools (`bro_*_test`, `bro_videoinspect`, `bro_videoencodetest`, `bro_mediabackendtest`, `bro_mediaclocktest`, ...). They test bro, not the application embedding it, so an embedder's build never compiles or links them. The JS suite under `tests/` is separate and runs on `bro-headless`. |
-| `BRO_WITH_BRONZE` | **ON (mandatory)** | The JavaScript host layer (`src/bronze_host`). The `bronze` compiler is not built by default: `cmake --build build --target bronze-cli` (not `bronze`, which the Visual Studio generator leaves out of the solution). |
+| `BRO_WITH_BRONZE` | **ON (mandatory)** | The JavaScript host layer (`src/bronze_host`); the engine compiles JavaScript in process and, for installed apps, ahead of time. |
 
 ## Dependency auto-enable
 

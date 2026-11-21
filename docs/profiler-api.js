@@ -19,7 +19,7 @@
  *   'interpreter'  run by brass's fast interpreter (Tier 0)
  *   'tier 1'       brass baseline JIT code
  *   'tier 2'       brass optimizing JIT code ('tier 2 osr': entered mid-loop)
- *   'aot'          compiled ahead of time (an app folder's app.dll, bro's own JS)
+ *   'aot'          compiled ahead of time (an installed app's modules, bro's own JS)
  *   'stub'         JIT trampolines and lazy-link stubs
  *   'native'       everything else: bronze runtime helpers, bro, the OS
  *

@@ -93,10 +93,6 @@ Bronze is bro's sole JavaScript engine: it compiles and runs JavaScript
 via [bronze](https://github.com/wlejon/bronze) (backed by [brass](https://github.com/wlejon/brass)).
 Bronze is **mandatory and included in all profiles**.
 
-```bash
-cmake -B build                                            # binaries with bronze JS runtime
-cmake --build build --config Release --target bronze-cli # ...and the compiler that makes one
-```
 
 bronze resolves like every other sibling (see
 [Dependencies](#dependencies)): a `../bronze` checkout first, otherwise the
@@ -106,21 +102,18 @@ says which it took (`bronze: working tree <path>` /
 mistaken for a build against the tree you are editing.
 `-DFETCHCONTENT_SOURCE_DIR_BRONZE=<path>` points it anywhere else.
 
-The `bronze` target is `EXCLUDE_FROM_ALL` — bro links bronze's *runtime*, not
-its compiler — so building the compiler means naming it, as above. Name
-`bronze-cli` and not `bronze`: it builds the same binary and is the one name
-that works under every generator, because Visual Studio leaves an
-`EXCLUDE_FROM_ALL` subdirectory's targets out of the `.sln` and answers
-`--target bronze` with "Project file does not exist". It needs nothing beyond
-brass, which bro already builds from source as bronze's only backend. A tree
-where the target was never built runs pre-built compiled apps without being
-able to build new ones, and `tests/bronze_host/run_checks.sh` skips rather than
-fails in that case.
+The engine compiles JavaScript itself: in process at boot, and for an
+installed app ahead of time with brass's own image writer, so nothing ships
+beside the binaries. The `bronze` command-line compiler is a build tool: every
+build makes it, because bro's own JS (`src/bronze_host/js/`) is compiled with
+it into libbro, and `tests/bronze_host/run_checks.sh` compiles its probes with
+it. `bronze-cli` names the same target under every generator (Visual Studio
+leaves an `EXCLUDE_FROM_ALL` subdirectory's targets out of the `.sln` and
+answers `--target bronze` with "Project file does not exist").
 
 A compiled module carries the ABI fingerprint of the bronze that emitted it and
 the host refuses any module whose fingerprint is not its own, so rebuilding
-bronze invalidates every module already built against it. `src/bronze_host/README.md`
-is the reference.
+bronze invalidates every module already built against it.
 
 ## Prerequisites
 
@@ -332,17 +325,15 @@ directly. libbro is built from them, not instead of them.
 
 **bronze's runtime** is already its own shared library
 (`bronze::runtime_shared`: `bronze_runtime_shared.dll`,
-`libbronze_runtime_shared.so`), and stays one. libbro links it, and an app's
-ahead-of-time module (`app.dll` / `app.so` beside `index.html`) links it too
-and nothing of libbro's: the module reaches the host's globals at run time
-through the realm, not through link-time symbols. An installed app's
-executable carries its page's scripts compiled the same way (its AOT
-directory, docs/apps.md "Ahead-of-time scripts"): each module imports only
-from the bronze runtime, which the executable's process already has loaded
-through libbro, and there is still exactly one runtime, one heap and one key
-registry per process. Those modules are written at install by brass's own
-image writer, in process, so installing needs no compiler or linker on any
-platform that builds app executables. Each one is checked before it runs
+`libbronze_runtime_shared.so`), and stays one. libbro links it, and an
+installed app's ahead-of-time modules (its AOT directory, docs/apps.md
+"Ahead-of-time scripts") link it too and nothing of libbro's: a module reaches
+the host's globals at run time through the realm, not through link-time
+symbols, and imports only from the bronze runtime, which the executable's
+process already has loaded through libbro, so there is still exactly one
+runtime, one heap and one key registry per process. Those modules are written
+by brass's own image writer, in process, so installing needs no compiler or
+linker on any platform that builds app executables. Each one is checked before it runs
 against a record of what it was compiled from, including the bronze runtime
 ABI, the realm's host globals and the natives manifest, rather than against
 `bro_engine_version`: a relink of libbro that changes none of those keeps

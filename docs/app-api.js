@@ -13,8 +13,8 @@
  * (`bro.apps`, docs/apps-api.js, is the other direction: the catalog of every
  * application installed on the machine.)
  *
- * Same in every host: the windowed `bro`, `bro-headless` (argv is what follows
- * `--`), and an app.dll.
+ * Same in every host: the windowed `bro`, an installed app's own executable,
+ * and `bro-headless` (argv is what follows `--`).
  *
  * @example
  *   // A single-instance app: open what a later launch asked for.

@@ -11,14 +11,10 @@ name: Nightly
 # any machine — it uses an NVIDIA GPU when the driver is present and falls back
 # to CPU otherwise. macOS uses Metal (always present). Nothing extra to install.
 #
-# The zip carries BOTH halves of the compiled-app story: binaries built with
-# BRO_WITH_BRONZE=ON, which load an app directory's app.dll/.so/.dylib, and the
-# bronze compiler under bronze/, which produces one. They are built from the
-# same fetched bronze tree (build/_deps/bronze-src) in the same job on purpose — a compiled
-# module carries the ABI fingerprint of the bronze that emitted it and the host
-# refuses to load a module whose fingerprint is not its own, so a compiler and
-# a host from two different bronze commits would ship as a pair that cannot
-# work together. One checkout, one fingerprint, both halves.
+# JavaScript is compiled by the engine itself: in process at boot, and for an
+# installed app ahead of time on its first run's profile (docs/apps.md,
+# "Ahead-of-time scripts"), by brass's own image writer, so the zip needs no
+# separate compiler.
 
 on:
   schedule:
@@ -261,13 +257,6 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
 
-      # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt): bro
-      # links the runtime, not the compiler, so the default target never builds
-      # the CLI. The package ships it, so name it — bronze-cli, the generator-
-      # independent name for it (see the target's comment).
-      - name: Build the bronze compiler
-        run: cmake --build build --config Release --parallel ${{ matrix.jobs }} --target bronze-cli
-
       # Prove the shipped binary launches on this runner and — critically — that
       # the GPU tensor backend was actually COMPILED IN. Single-config generators
       # put the exe directly in build/ (Windows now uses Ninja too); keep the
@@ -315,50 +304,54 @@ jobs:
             scripts/package-release.sh --version "$VERSION" --build-dir build
           fi
 
-      # Prove the two halves in the zip fit each other, from the packaged tree
-      # and nowhere else: compile a tiny app with the SHIPPED compiler,
-      # resolving the runtime libraries beside it, then load the module it
-      # emitted with the SHIPPED bro-headless. This is the check that catches
-      # an ABI-fingerprint mismatch between compiler and host, a bro-headless
-      # that cannot print its own host-globals manifest, and (on Linux/macOS)
-      # a shared runtime the binaries cannot find once the tree has moved off
-      # the build machine.
-      # It runs before signing so a bad package is never signed.
-      - name: Smoke test (packaged bronze compiler + host)
+      # An installed app's scripts compiled ahead of time, from the packaged
+      # tree and nowhere else: a first run harvested, a build on its profile
+      # written by the engine's own module writer, and a run of that module
+      # by the SHIPPED bro-headless. This catches a module the host refuses
+      # (ABI stamp), a module writer that cannot write, and (on Linux/macOS)
+      # a shared runtime a module cannot find once the tree has moved off the
+      # build machine. It runs before signing so a bad package is never signed.
+      - name: Smoke test (packaged ahead-of-time scripts)
         shell: bash
         run: |
           d=$(ls -d dist/bro-${VERSION}-*/ | sed 's:/$::' | head -1)
           PKG="$(pwd)/$d"
-          if [ "$RUNNER_OS" = "Windows" ]; then EXE=".exe"; MOD=".dll";
-          elif [ "$RUNNER_OS" = "macOS" ]; then EXE=""; MOD=".dylib";
-          else EXE=""; MOD=".so"; fi
           mkdir -p "$PKG/smokeapp"
-          echo '<!doctype html><html><body></body></html>' > "$PKG/smokeapp/index.html"
+          echo '<!doctype html><html><body><script src="main.js"></script></body></html>' > "$PKG/smokeapp/index.html"
           cat > "$PKG/smokeapp/main.js" <<'JS'
           const c = document.createElement('canvas');
           c.width = 64; c.height = 64;
           document.body.appendChild(c);
           console.log("APP ok=" + (c.width * c.height));
           JS
-          # From the package directory, the way a user would: the manifest
-          # comes off the shipped bro-headless, then the shipped compiler
-          # builds against it.
           cd "$PKG"
           # bro-headless needs a Vulkan device (Lavapipe on the Linux runner);
-          # a runner with none skips the check, saying so.
-          if ./bro-headless smokeapp --print-host-globals 2>/dev/null > bronze/web_host.globals; then
-            grep -qx document bronze/web_host.globals
-            ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
-              --emit-shared --host-globals bronze/web_host.globals
-            [ -f "smokeapp/app$MOD" ]
-            OUT="$(./bro-headless smokeapp -e 'advanceTime(64)' || true)"
-            echo "$OUT"
-            echo "$OUT" | grep -q 'APP ok=4096'
+          # a runner with none skips the check, saying so. Where the AOT build
+          # cannot run (macOS has no app executables, docs/apps.md), the page
+          # still runs from the packaged tree, compiled in process.
+          if ! RUN="$(./bro-headless smokeapp -e 'advanceTime(64)' 2>&1)"; then
+            echo "::notice::no Vulkan device on this runner; packaged smoke test not run"
+            echo "$RUN" | grep -iE "Vulkan|Fatal" | head -5
           else
-            echo "::notice::no Vulkan device on this runner; packaged compiler + host smoke test not run"
+            grep -q 'APP ok=4096' <<<"$RUN"
+            if ./bro-headless smokeapp --aot-build smokeaot >/dev/null 2>&1; then
+              FIRST="$(./bro-headless --aot smokeaot smokeapp -e 'advanceTime(64)' 2>&1)"
+              grep -q 'APP ok=4096' <<<"$FIRST"
+              ./bro-headless smokeapp --aot-build smokeaot
+              OUT="$(./bro-headless --aot smokeaot smokeapp -e 'advanceTime(64)' 2>&1)"
+              grep -E 'APP |aot:' <<<"$OUT"
+              grep -q 'APP ok=4096' <<<"$OUT"
+              grep -q 'runs its ahead-of-time module' <<<"$OUT"
+            elif [ "$RUNNER_OS" = "macOS" ]; then
+              echo "::notice::no AOT directories on macOS; the packaged page ran compiled in process"
+            else
+              echo "::error::--aot-build failed from the packaged tree"
+              ./bro-headless smokeapp --aot-build smokeaot 2>&1 | tail -20
+              exit 1
+            fi
           fi
           # Leave nothing behind: the zip is cut from this directory.
-          rm -rf "$PKG/smokeapp"
+          rm -rf "$PKG/smokeapp" "$PKG/smokeaot"
 
       # The macOS package carries its own Vulkan loader and MoltenVK (no macOS
       # has either). Check, from the packaged tree, that the shipped
@@ -434,10 +427,8 @@ jobs:
           # The three executables plus the vcpkg DLLs loaded into our process.
           # Basic SKU allows 5,000 signatures/month; a nightly uses ~20.
           files-folder-filter: exe,dll
-          # Recurse, or bronze/bronze.exe — a compiler users run, and the one
-          # binary here most likely to trip SmartScreen — ships unsigned while
-          # everything beside it is signed. Depth 2 reaches bronze/ without
-          # walking all of system/.
+          # Depth 2 reaches a binary one folder down without walking all of
+          # system/.
           files-folder-recurse: true
           files-folder-depth: 2
           file-digest: SHA256
@@ -452,12 +443,11 @@ jobs:
         shell: pwsh
         run: |
           $bad = @()
-          # bronze\bronze.exe and the shared runtime are in this list because
-          # they are as much a part of what a user runs as bro.exe is, and an
-          # unsigned binary inside a signed package is the one a machine
-          # blocks.
+          # The shared runtime is in this list because it is as much a part of
+          # what a user runs as bro.exe is, and an unsigned binary inside a
+          # signed package is the one a machine blocks.
           foreach ($exe in @('bro.exe','bro-headless.exe','bro-server.exe',
-                             'bronze_runtime_shared.dll','bronze\bronze.exe')) {
+                             'bronze_runtime_shared.dll')) {
             $p = Join-Path $env:PKG_DIR $exe
             if (-not (Test-Path $p)) { Write-Host "MISSING $exe"; $bad += $exe; continue }
             $sig = Get-AuthenticodeSignature $p
@@ -517,7 +507,7 @@ jobs:
 
           Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). bro is pre-alpha; nightly is the current release channel.
 
-          Each zip also carries \`bronze/\`, the AOT JavaScript compiler, and the binaries here are built to load what it emits: \`bro-headless myapp --print-host-globals > web_host.globals\` writes the manifest of globals bro supplies, and \`bronze build app.js -o myapp/app.dll --emit-shared --host-globals web_host.globals\` turns an app's JavaScript into a native module that \`bro myapp\` runs with no flag and no separate runtime. Compiler and host come from the same bronze commit, which is what lets them load each other. A system linker is required for compiling (Windows: MSVC's \`link.exe\`; Linux/macOS: \`clang++\` or \`g++\`)."
+          JavaScript is compiled by the engine itself: \`bro myapp\` compiles the app's scripts in process, and \`bro --install myapp\` gives it an executable of its own whose scripts are compiled ahead of time on what its first run did. No compiler, linker or toolchain is needed on the machine."
           gh release create nightly \
             --target "$GITHUB_SHA" \
             --title "Nightly ($(date -u +%Y-%m-%d))" \
