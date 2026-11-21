@@ -63,7 +63,11 @@ if (!gl) {
     const px = new Uint8Array(4);
     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     const got = Array.from(px).join(',');
-    assert(got === '255,64,128,255', 'draws through the renamed names, got ' + got);
+    // Within one step a channel: 0.5 is 127.5, which a unorm target rounds
+    // either way, by the driver.
+    const want = [255, 64, 128, 255];
+    assert(Array.from(px).every((v, i) => Math.abs(v - want[i]) <= 1),
+           'draws through the renamed names, got ' + got);
 
     // ES 1.00: the GLSL 450 functions it lacks are the program's own names
     // (Phaser's sprite shader: `vec4 texture = texture2D(uMainSampler, ...)`).

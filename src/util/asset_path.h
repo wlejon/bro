@@ -6,6 +6,13 @@ namespace bro::util {
 
 class AssetMounts;
 
+/// A drive-qualified path ("C:/x", "C:\x"): an absolute filesystem path on
+/// Windows, where a URL parser would take the drive letter for a scheme.
+inline bool isDrivePath(const std::string& s) {
+    return s.size() >= 3 && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) && s[1] == ':' &&
+           (s[2] == '/' || s[2] == '\\');
+}
+
 /// Sets the base path and asset mounts context for resolving paths.
 void setAssetPathContext(const std::string& basePath, const AssetMounts* mounts);
 

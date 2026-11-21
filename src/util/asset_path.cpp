@@ -40,6 +40,10 @@ std::string pathForAppUrl(const std::string& url) {
     std::string rel = url.substr(kRoot.size());
     if (const size_t cut = rel.find_first_of("?#"); cut != std::string::npos) rel.erase(cut);
     rel = percentDecode(rel);
+    // A drive path reflected under the root ("bro://app/C:/x") is looked for
+    // in the folder as "C/x", as "/home/x" is as "home/x": not there, it is
+    // the path again (appUrlPath).
+    if (isDrivePath(rel)) rel.erase(1, 1);
     std::error_code ec;
     const fs::path base = fs::absolute(s_appUrlRoot, ec).lexically_normal();
     const fs::path p = (base / rel).lexically_normal();
@@ -54,7 +58,10 @@ std::string appUrlPath(const std::string& url) {
     if (url.compare(0, kRoot.size(), kRoot) != 0) return {};
     std::string path = url.substr(kRoot.size() - 1);
     if (const size_t cut = path.find_first_of("?#"); cut != std::string::npos) path.erase(cut);
-    return percentDecode(path);
+    path = percentDecode(path);
+    // "bro://app/C:/x" spells the drive path "C:/x", not "/C:/x".
+    if (isDrivePath(path.substr(1))) path.erase(0, 1);
+    return path;
 }
 
 void setAssetPathContext(const std::string& basePath, const AssetMounts* mounts) {

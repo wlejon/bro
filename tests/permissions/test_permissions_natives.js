@@ -98,7 +98,7 @@ const probe =
     'const img = document.createElement("img");\n' +
     'img.onload = () => { R.img = "ok"; }; img.onerror = () => { R.img = "error"; };\n' +
     'img.src = path.join(D, "pixel.png").split(path.sep).join("/"); document.body.appendChild(img);\n' +
-    'pump(); flush(); pump();\n' +
+    'waitForImages(); pump(); flush(); pump();\n' +
     'R.written = ["w.txt", "s.png", "v.webm", "g.gif", "c.png", "e.png"].filter((f) => require("fs").existsSync(path.join(D, f)));\n';
 
 // ---- without `files` ------------------------------------------------------------------

@@ -61,6 +61,7 @@ if (!bro.thumb || bro.thumb.available === false) {
             '  const img = document.createElement("img");\n' +
             '  img.onload = () => { R.img = "ok"; }; img.onerror = () => { R.img = "error"; };\n' +
             '  img.src = res.path.split("\\\\").join("/"); document.body.appendChild(img);\n' +
+            '  waitForImages();\n' +
             '  for (let i = 0; i < 100 && !R.img; i++) { advanceTime(10); flush(); sleep(5); }\n' +
             '}\n' +
             'console.log("RESULT:" + JSON.stringify(R));\n');

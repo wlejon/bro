@@ -1,8 +1,10 @@
 #include "util/remote_asset.h"
 
+#include "util/asset_path.h"
 #include "util/log.h"
 #include "util/user_dirs.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -179,6 +181,13 @@ std::string resolveUrl(const std::string& base, const std::string& rel) {
         return base.substr(0, scheme + 1) + rel;
     }
     if (rel[0] == '/') return removeDotSegments(urlOrigin(base) + rel);
+    if (isDrivePath(rel)) {
+        // A Windows absolute path is rooted as "/x" is: under the origin,
+        // where bro://app/ reflects a filesystem path (asset_path.h).
+        std::string path = rel;
+        std::replace(path.begin(), path.end(), '\\', '/');
+        return removeDotSegments(urlOrigin(base) + "/" + path);
+    }
     if (rel[0] == '?' || rel[0] == '#')
         return base.substr(0, base.find_first_of("?#")) + rel;
     return removeDotSegments(urlDirectory(base) + rel);

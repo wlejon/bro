@@ -4,6 +4,14 @@
 // into an uninitialised global (`vec3 dDiffuseLight; ... dDiffuseLight +=
 // ambient`), and every StandardMaterial drew black.
 
+// Within one step a channel: a value halfway between two (0.5 is 127.5)
+// rounds either way on a unorm target, by the driver.
+function near(got, want) {
+    const a = got.split(',').map(Number);
+    const b = want.split(',').map(Number);
+    return a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= 1);
+}
+
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '4');
 canvas.setAttribute('height', '4');
@@ -47,12 +55,12 @@ if (!gl) {
     vec3 acc;
     void add() { acc += vec3(0.25, 0.5, 0.0); }
     void main() { add(); o = vec4(acc, 1.0); }`);
-    assert(global === '64,128,0,255', 'an uninitialised global starts at zero, got ' + global);
+    assert(near(global, '64,128,0,255'), 'an uninitialised global starts at zero, got ' + global);
     const local = draw(`#version 300 es
     precision highp float; in vec4 c; out vec4 o;
     void main() { vec3 acc; float arr[2]; acc += vec3(0.5); arr[1] += 0.25; o = vec4(acc.x, arr[0], arr[1], 1.0); }`);
-    assert(local === '128,0,64,255', 'uninitialised locals and arrays start at zero, got ' + local);
+    assert(near(local, '128,0,64,255'), 'uninitialised locals and arrays start at zero, got ' + local);
     const vert = draw(`#version 300 es
     precision highp float; in vec4 c; out vec4 o; void main() { o = c; }`);
-    assert(vert === '0,0,128,255', 'vertex-stage globals of struct and int type start at zero, got ' + vert);
+    assert(near(vert, '0,0,128,255'), 'vertex-stage globals of struct and int type start at zero, got ' + vert);
 }

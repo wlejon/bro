@@ -15,6 +15,7 @@
 #include "engine/engine.h"
 #include "layout/computed_style.h"
 #include "css/properties.h"
+#include "util/asset_path.h"
 #include "util/log.h"
 #include "util/remote_asset.h"
 #include "bronze_host/host_events.h"
@@ -323,9 +324,14 @@ static std::string absoluteCssUrls(const std::string& value, dom::Document* doc)
         std::string url;
         if (unescaped.rfind("data:", 0) == 0) {
             url = unescaped;
-        } else if (!unescaped.empty() && unescaped[0] == '/' && unescaped.rfind("//", 0) != 0) {
+        } else if ((!unescaped.empty() && unescaped[0] == '/' && unescaped.rfind("//", 0) != 0) ||
+                   util::isDrivePath(unescaped)) {
             url = hostEngine() ? hostEngine()->appUrlForPath(unescaped) : std::string();
-            if (url.empty()) url = "file://" + unescaped;
+            if (url.empty()) {
+                std::string path = unescaped;
+                std::replace(path.begin(), path.end(), '\\', '/');
+                url = (util::isDrivePath(path) ? "file:///" : "file://") + path;
+            }
         } else {
             url = util::resolveUrl(documentBaseUrl(doc), unescaped);
         }
