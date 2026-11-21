@@ -170,6 +170,13 @@ struct DrawTile {
     /// drawn: a draw lays the edge's vertices on that tile's coarser edge
     /// (every 2^k-th of its own) so the two meet without a crack.
     uint8_t coarser[4] = {0, 0, 0, 0};
+    /// How far the view has come from the parent's split (0: it has just
+    /// split into this tile) to this tile's own (1), so a draw can blend
+    /// what the tile resolves in from what its parent showed and nothing
+    /// changes at a split: log2 of the parent's error, clamped to [0, 1];
+    /// 1 for a root, a tile drawn for children not yet ready, and one
+    /// drawn while not wanted.
+    float blend = 1.0f;
 };
 
 struct Stats {

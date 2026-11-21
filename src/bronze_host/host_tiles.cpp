@@ -347,6 +347,9 @@ void writeDrawList(Cache& c) {
         r[4] = static_cast<int32_t>(d.id.x);
         r[5] = static_cast<int32_t>(d.id.y);
         r[6] = d.coarser[0] | (d.coarser[1] << 4) | (d.coarser[2] << 8) | (d.coarser[3] << 12);
+        // (In 64ths: a view held still writes the same list, not uploaded again.)
+        const float blend = std::round(d.blend * 64.0f) / 64.0f;
+        std::memcpy(r + 7, &blend, sizeof(float));
         float f[8] = {};
         const double c[3] = {d.bounds.center.x, d.bounds.center.y, d.bounds.center.z};
         for (int k = 0; k < 3; ++k) {
@@ -707,6 +710,7 @@ Value drawnTiles(const Cache* c, const std::vector<uint32_t>* only) {
         ev::ArrayBuilder coarser(4);
         for (uint32_t e = 0; e < 4; ++e) coarser.set(e, static_cast<uint32_t>(d.coarser[e]));
         t.set("coarser", coarser.get());
+        t.set("blend", d.blend);
         t.set("center", vec3(d.bounds.center));
         t.set("radius", d.bounds.radius);
         const tilecache::HeightRange r = c->tree.range(d.id);

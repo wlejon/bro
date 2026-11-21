@@ -260,7 +260,7 @@ const terrain = bro.tiles.createCache({
 //   tiles take what capacity is left.
 //
 // cache.drawn       the draw set: [{ root, level, x, y, slot, parentSlot,
-//                   coarser: [u0, u1, v0, v1], center: [x, y, z], radius,
+//                   coarser: [u0, u1, v0, v1], blend, center: [x, y, z], radius,
 //                   range: [lo, hi] }], each tile's bounding sphere and the
 //                   height range it is selected by; parentSlot is -1 for a
 //                   root. coarser: how many levels coarser the drawn tile
@@ -268,7 +268,14 @@ const terrain = bro.tiles.createCache({
 //                   it is as fine or finer (or none is drawn): a draw that
 //                   lays that edge's vertices on the line between its every
 //                   2^k-th (the neighbour's own vertices) meets it without a
-//                   crack, across a cube-sphere's faces too. Without a
+//                   crack, across a cube-sphere's faces too. blend: how far the
+//                   view has come from the parent's split (0: it has just split
+//                   into this tile) to the tile's own (1), log2 of the parent's
+//                   error clamped to [0, 1], 1 for a root or a tile drawn for
+//                   children not yet ready: a draw mixing what the tile holds
+//                   with what its parent holds at the point (tile x & 1, y & 1
+//                   is the quarter of the parent it covers) by blend changes
+//                   nothing at a split. Without a
 //                   frustum it covers every root once; with one, less the
 //                   tiles it culled. Nearest the view's position first (by
 //                   the nearest point of the bounding sphere), so a draw in
@@ -278,7 +285,8 @@ const terrain = bro.tiles.createCache({
 // cache.drawList    KernelBuffer of drawCount records of 16 words, the draw
 //                   set on the GPU for a shader or kernel to walk: int32
 //                   slot, parentSlot, root, level, x, y, coarser (4 bits an
-//                   edge, u = 0 lowest, then u = 1, v = 0, v = 1), 0, then
+//                   edge, u = 0 lowest, then u = 1, v = 0, v = 1), blend
+//                   (float32 bits, in 64ths), then
 //                   float32
 //                   centerHi.xyz, radius, centerLo.xyz, 0, the bounding
 //                   sphere's center split hi + lo. A frame needs nothing

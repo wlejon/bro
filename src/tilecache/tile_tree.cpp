@@ -597,6 +597,13 @@ void TileTree::coverInto(int32_t node, std::vector<DrawTile>& out, bool& ok) con
         d.slot = static_cast<uint32_t>(n.slot);
         d.parentSlot = n.parent >= 0 && nodes_[n.parent].state == State::Ready ? nodes_[n.parent].slot : -1;
         d.bounds = bounds(n, n.range);
+        // A tile drawn for children not ready is past its own split; one
+        // wanted as a leaf is as far from its parent's split (error 1) to
+        // its own (its parent's error about 2, its own 1) as log2 of the
+        // parent's error says.
+        if (wanted && !n.leaf) d.blend = 1.0f;
+        else if (n.parent >= 0 && wanted)
+            d.blend = static_cast<float>(std::clamp(std::log2(std::max(nodes_[n.parent].error, 1e-9)), 0.0, 1.0));
         out.push_back(d);
     };
     if (!wanted || n.leaf) {
