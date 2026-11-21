@@ -147,7 +147,11 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
                 fprintf(stderr, "Error: no script at '%s'\n", scriptPath.c_str());
                 return 1;
             }
-            config.serverScript = std::filesystem::absolute(scriptPath, fsEc).lexically_normal().string();
+            // Resolved as the app directory is (publishLaunchEnv), so a script
+            // named on the command line and the app's own server.js are one
+            // path, and one AOT unit, when the app is reached through a
+            // symlink (macOS's /var is /private/var).
+            config.serverScript = bro::engine::absolutePath(scriptPath);
         }
 
         // The script's module built ahead of time (bronze_host/app_aot.h):
