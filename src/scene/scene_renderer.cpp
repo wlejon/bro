@@ -367,7 +367,10 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
         key += '=';
         key += std::to_string(value);
     }
-    if (auto it = shaderChecks_.find(key); it != shaderChecks_.end()) {
+    // Shaders read from the source tree, or set B's compiles: the engine's
+    // sources change under the key, so nothing is remembered (as the stages).
+    const bool remember = vk::shaderSourceDir().empty() && !vk::shader_sets::compilingSetB();
+    if (auto it = shaderChecks_.find(key); remember && it != shaderChecks_.end()) {
         hasVertexOut = it->second.hasVertex;
         errOut = it->second.err;
         return it->second.ok;
@@ -386,6 +389,7 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
     hasVertexOut = check.hasVertex;
     errOut = check.err;
     const bool ok = check.ok;
+    if (!remember) return ok;
     if (shaderChecks_.size() >= 512) shaderChecks_.clear();
     shaderChecks_.emplace(std::move(key), std::move(check));
     return ok;
