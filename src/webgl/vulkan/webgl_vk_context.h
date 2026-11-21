@@ -465,6 +465,10 @@ public:
     /// while its result is not on the host, 2 with the result in `out`
     /// (read, and its slots handed back, the first time).
     int pollQuery(GLuint id, uint64_t& out);
+    /// After finish(): every ended query's result read onto the host (waiting
+    /// for the slots, which a completed ticket does not imply under
+    /// MoltenVK), so the next pollQuery answers it available.
+    void settleQueries();
     /// EXT_disjoint_timer_query_webgl2: queryCounterEXT(query, TIMESTAMP_EXT),
     /// getQuery(target, QUERY_COUNTER_BITS_EXT), and getParameter's
     /// GPU_DISJOINT_EXT / TIMESTAMP_EXT.

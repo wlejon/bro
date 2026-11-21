@@ -364,6 +364,26 @@ int WebGLVkContext::pollQuery(GLuint id, uint64_t& out) {
     return 2;
 }
 
+void WebGLVkContext::settleQueries() {
+    for (auto& [id, q] : queries_) {
+        if (q.target == 0 || q.pending || id == activeOcclusionQuery_ || id == activeFeedbackQuery_ ||
+            id == activeTimerQuery_)
+            continue;
+        if (q.ticket != 0 && !context_.queue().isComplete(q.ticket)) continue;
+        if (q.target == GL_TIME_ELAPSED_EXT || q.target == GL_TIMESTAMP_EXT) {
+            uint64_t ns = 0;
+            if (q.stamps.empty() || !readTimerResult(q, true, ns)) continue;
+            q.count = ns;
+        } else {
+            if (q.slots.empty()) continue;
+            uint64_t count = q.count;
+            if (!readOcclusionSlots(context_.device(), occlusionSlots_.pools, q.slots, true, count)) continue;
+            q.count = count;
+        }
+        retireQuerySlots(q);
+    }
+}
+
 // A free slot of `slots`' type, its reset recorded in `cmd` (outside a pass).
 bool WebGLVkContext::allocSlot(QuerySlots& slots, VkCommandBuffer cmd, uint32_t& slot) {
     for (size_t i = 0; i < slots.retired.size();) {

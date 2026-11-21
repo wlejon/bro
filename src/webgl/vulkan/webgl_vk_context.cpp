@@ -125,6 +125,7 @@ void WebGLVkContext::flush() {
 
 void WebGLVkContext::finish() {
     waitForCommands();
+    settleQueries();
 }
 
 GLenum WebGLVkContext::getError() {
