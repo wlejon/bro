@@ -178,6 +178,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `physics-api.js` | `Physics`: Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |
+| `voxeldag-api.js` | `bro.voxeldag.createWorld`: sparse voxel DAG regions raymarched for dense mid/far geometry: archetypes (mesh/SDF/.vox/box, pinned) placed by reference, dithered `minDist`/`maxDist` rings, rays clipped to each region's content bounds, `collect()` reuses unreached slots, `buffers()` for `import voxeldag;` kernels |
 | `dialogs-api.js` | native file/folder dialogs + alert/confirm/prompt; headless answers them from `setPickedFiles` / `setDialogAnswer` |
 | `menu-api.js` | `bro.menu`: native menu bar |
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
