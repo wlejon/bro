@@ -150,6 +150,15 @@ void VoxelRegion::setContentFull() noexcept {
 
 VoxelWorldNode::VoxelWorldNode(const std::string& name) : SceneNode(name) {}
 
+void VoxelWorldNode::setRoot(VoxelRegion& region, uint32_t rootNode) {
+    if (rootNode != region.rootNode) {
+        pool_.retain(rootNode, false);
+        pool_.release(region.rootNode, false);
+        region.rootNode = rootNode;
+    }
+    pool_.sweep();
+}
+
 uint32_t VoxelWorldNode::addRegion(const VoxelRegion& spec) {
     VoxelRegion reg = spec;
     reg.id = nextRegionId_++;
@@ -162,6 +171,7 @@ uint32_t VoxelWorldNode::addRegion(const VoxelRegion& spec) {
         reg.setContentEmpty();
     } else {
         reg.setContentFull();
+        pool_.retain(reg.rootNode, false);
     }
     refreshCarveFlag(reg);
     regions_.push_back(reg);
@@ -187,14 +197,16 @@ const VoxelRegion* VoxelWorldNode::findRegion(uint32_t regionId) const noexcept 
 bool VoxelWorldNode::updateRegion(uint32_t regionId, const VoxelRegion& spec) {
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
-    const uint32_t keepRoot = spec.rootNode != bromesh::kDagNullNode ? spec.rootNode : reg->rootNode;
-    const bool newRoot = keepRoot != reg->rootNode;
+    const uint32_t oldRoot = reg->rootNode;
+    const uint32_t keepRoot = spec.rootNode != bromesh::kDagNullNode ? spec.rootNode : oldRoot;
+    const bool newRoot = keepRoot != oldRoot;
     float keepMin[3], keepMax[3];
     std::memcpy(keepMin, reg->contentMin, sizeof(keepMin));
     std::memcpy(keepMax, reg->contentMax, sizeof(keepMax));
     *reg = spec;
     reg->id = regionId;
-    reg->rootNode = keepRoot;
+    reg->rootNode = oldRoot;
+    setRoot(*reg, keepRoot);
     // Placements are kept in lattice units, so the bounds hold across a move
     // or a new voxel size; a root swapped in from outside may fill the box.
     std::memcpy(reg->contentMin, keepMin, sizeof(keepMin));
@@ -214,7 +226,7 @@ bool VoxelWorldNode::updateRegion(uint32_t regionId, const VoxelRegion& spec) {
 bool VoxelWorldNode::setRegionRoot(uint32_t regionId, uint32_t rootNode) {
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
-    reg->rootNode = rootNode;
+    setRoot(*reg, rootNode);
     if (rootNode == bromesh::kDagNullNode) {
         reg->setContentEmpty();
     } else {
@@ -230,6 +242,7 @@ bool VoxelWorldNode::removeRegion(uint32_t regionId) {
     const auto it = std::find_if(regions_.begin(), regions_.end(),
                                  [regionId](const VoxelRegion& r) { return r.id == regionId; });
     if (it == regions_.end()) return false;
+    pool_.release(it->rootNode, false);
     regions_.erase(it);
     ++regionsGen_;
     bumpChangeGeneration();
@@ -261,13 +274,13 @@ bool VoxelWorldNode::placeSubtree(uint32_t regionId, int ix, int iy, int iz,
                                   uint32_t childRef, bool isLeaf, uint32_t targetDepth) {
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
-    reg->rootNode = pool_.setSubtreeAt(
+    setRoot(*reg, pool_.setSubtreeAt(
         reg->rootNode,
         static_cast<int>(reg->maxDepth),
         static_cast<int>(targetDepth),
         ix, iy, iz,
         childRef,
-        isLeaf);
+        isLeaf));
     if (childRef != bromesh::kDagNullNode) reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
     ++regionsGen_;
@@ -281,10 +294,10 @@ bool VoxelWorldNode::placeSubtreesBatch(uint32_t regionId,
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
     std::vector<bromesh::DagPlacement> copy(placements.begin(), placements.end());
-    reg->rootNode = pool_.setSubtreesBatch(
+    setRoot(*reg, pool_.setSubtreesBatch(
         reg->rootNode,
         static_cast<int>(targetDepth),
-        copy);
+        copy));
     for (const bromesh::DagPlacement& p : placements) {
         if (p.childRef != bromesh::kDagNullNode) reg->growContent(p.ix, p.iy, p.iz, targetDepth);
     }
@@ -313,13 +326,13 @@ bool VoxelWorldNode::stampCarveAndSolid(uint32_t regionId, int ix, int iy, int i
     const uint32_t solidNode = (solidIsLeaf && solidRef != bromesh::kDagNullNode)
         ? pool_.wrapBrickAsNode(solidRef)
         : solidRef;
-    reg->rootNode = pool_.stampPairAt(
+    setRoot(*reg, pool_.stampPairAt(
         reg->rootNode,
         static_cast<int>(reg->maxDepth),
         static_cast<int>(targetDepth),
         ix, iy, iz,
         carveNode,
-        solidNode);
+        solidNode));
     reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
     ++regionsGen_;

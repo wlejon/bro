@@ -25,9 +25,16 @@
  * - `minDist` / `fadeStart` / `maxDist` dither a region in and out, so nested
  *   rings of coarser voxels hand over without a seam.
  *
- * The pool never moves an index. `collect()` frees what no region and no
- * archetype reaches, and later interning reuses those slots, so a world that
- * rebuilds its rings as the camera moves stays at its working size.
+ * The pool never moves an index, and counts the references to every node and
+ * brick: a region holds its tree, so clearing, replacing or removing a region
+ * frees at once what it alone reached, and an edit's replaced spines go as it
+ * is made. Later interning reuses those slots, so a world that rebuilds its
+ * regions as the camera moves stays at its working size with no collect. The
+ * renderer uploads only the pool's pages an edit wrote.
+ *
+ * An edit costs about what it places (sorted, one path a cell); a large
+ * rebuild is best spread over frames: build into a new, disabled region a
+ * batch a frame, then enable it and remove the old one in the same frame.
  *
  * Example:
  *   const vd = bro.voxeldag.createWorld(scene);
@@ -42,9 +49,8 @@
  *   vd.placeBatchTyped(ring, batch, 9, count); // cells at depth 9: 16 m
  *   // Later, recentred:
  *   vd.updateRegion(ring, { center: [nx, ny, nz] });
- *   vd.clearRegion(ring);
+ *   vd.clearRegion(ring);                    // its old tree is freed here
  *   vd.placeBatchTyped(ring, batch, 9, count2);
- *   vd.collect();
  */
 
 /**
@@ -54,7 +60,7 @@
  * @property {number} depth   levels above its bricks: it spans 4 << depth voxels,
  *                            so it fills one cell at target depth maxDepth - depth
  *
- * Every archetype is pinned: `collect()` keeps it whether or not it is placed.
+ * Every archetype is held for good, whether or not it is placed.
  */
 
 /**
@@ -142,8 +148,8 @@ class VoxelWorld {
      *  @param {Archetype} base @param {Archetype} overlay @returns {Archetype} */
     mergeArchetypes(base, overlay) {}
 
-    /** A cyclic clip of archetypes (frames); returns its index. Frames are kept
-     *  by `collect()`. @param {Archetype[]} frames @returns {number} */
+    /** A cyclic clip of archetypes (frames); returns its index. Its frames are
+     *  held for good. @param {Archetype[]} frames @returns {number} */
     registerAnimClip(frames) {}
 
     /** A placeable reference to clip `clip` at phase `phase`.
@@ -160,7 +166,7 @@ class VoxelWorld {
      *  @returns {boolean} */
     updateRegion(id, opts) {}
 
-    /** Empty a region (its tree is left for `collect()`). @returns {boolean} */
+    /** Empty a region, freeing what only its tree reached. @returns {boolean} */
     clearRegion(id) {}
 
     /** @returns {boolean} */
@@ -198,8 +204,8 @@ class VoxelWorld {
      * Free the nodes and bricks no region root, archetype or animation clip
      * reaches. Their slots (and their children / attribute runs) are reused
      * by later interning; nothing moves, so every live reference stays valid.
-     * Call it after a rebuild: a ring recentred without it leaves its old tree
-     * in the pool for good.
+     * Regions and archetypes already free as they go, so this finds nothing
+     * there: it is a full mark and sweep, for a pool edited outside them.
      * @returns {number} nodes and bricks freed
      */
     collect() {}

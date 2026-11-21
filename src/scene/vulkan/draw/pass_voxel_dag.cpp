@@ -115,6 +115,40 @@ bool uploadStorageVec(SceneGpu& gpu, SceneVkBuffer& dst, const std::vector<T>& s
     return gpu.allocator.stageAndUploadBuffer(dst.buffer, src.data(), bytes);
 }
 
+// A pool array the GPU mirrors: the pages written since `sinceGen` go up,
+// in runs. A buffer too small is remade with headroom and filled whole, so
+// a growing pool remakes it rarely and an edit uploads what it touched.
+template <typename T>
+bool uploadPagedVec(SceneGpu& gpu, SceneVkBuffer& dst, const std::vector<T>& src,
+                    const std::vector<uint64_t>& pageGens, uint64_t sinceGen) {
+    if (src.empty()) return true;    // nothing reads it; the dummy binds while invalid
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(src.size() * sizeof(T));
+    if (!dst.isValid() || dst.size < bytes) {
+        gpu.allocator.destroyBuffer(dst);
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (!gpu.allocator.createBuffer(bytes + bytes / 2, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dst)) {
+            return false;
+        }
+        return gpu.allocator.stageAndUploadBuffer(dst.buffer, src.data(), bytes);
+    }
+    constexpr size_t kPage = bromesh::VoxelDagPool::kPageElems;
+    const size_t pages = std::min(pageGens.size(), (src.size() + kPage - 1) / kPage);
+    for (size_t p = 0; p < pages;) {
+        if (pageGens[p] <= sinceGen) { ++p; continue; }
+        size_t e = p + 1;
+        while (e < pages && pageGens[e] > sinceGen) ++e;
+        const size_t first = p * kPage;
+        const size_t last = std::min(e * kPage, src.size());
+        if (!gpu.allocator.stageAndUploadBuffer(dst.buffer, src.data() + first,
+                                                static_cast<VkDeviceSize>((last - first) * sizeof(T)),
+                                                static_cast<VkDeviceSize>(first * sizeof(T)))) {
+            return false;
+        }
+        p = e;
+    }
+    return true;
+}
+
 void destroyPool(SceneGpu& gpu, auto& pool) {
     gpu.allocator.destroyBuffer(pool.nodes);
     gpu.allocator.destroyBuffer(pool.children);
@@ -235,10 +269,12 @@ PassVoxelDag::GpuPool& PassVoxelDag::syncNodePool(
     const uint64_t gen = src.generation();
     if (gp.uploadedGen == gen) return gp;
 
-    if (uploadStorageVec(gpu, gp.nodes, src.nodes()) &&
-        uploadStorageVec(gpu, gp.children, src.children()) &&
-        uploadStorageVec(gpu, gp.bricks, src.bricks()) &&
-        uploadStorageVec(gpu, gp.attrs, src.attrs()) &&
+    using A = bromesh::VoxelDagPool::Array;
+    const uint64_t since = gp.uploadedGen;
+    if (uploadPagedVec(gpu, gp.nodes, src.nodes(), src.pageGenerations(A::Nodes), since) &&
+        uploadPagedVec(gpu, gp.children, src.children(), src.pageGenerations(A::Children), since) &&
+        uploadPagedVec(gpu, gp.bricks, src.bricks(), src.pageGenerations(A::Bricks), since) &&
+        uploadPagedVec(gpu, gp.attrs, src.attrs(), src.pageGenerations(A::Attrs), since) &&
         uploadStorageVec(gpu, gp.animClips, src.animClips()) &&
         uploadStorageVec(gpu, gp.animFrames, src.animFrames())) {
         gp.uploadedGen = gen;

@@ -164,6 +164,10 @@ public:
 
 private:
     void refreshCarveFlag(VoxelRegion& region) noexcept;
+    // A region holds its root in the pool: the new one is held, the old one
+    // released (freeing what it alone reached), then what the edit made and
+    // left unheld is swept.
+    void setRoot(VoxelRegion& region, uint32_t rootNode);
 
     bromesh::VoxelDagPool pool_;
     std::vector<VoxelRegion> regions_;
