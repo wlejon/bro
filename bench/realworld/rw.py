@@ -51,11 +51,9 @@ BRO_ROOT = ROOT.parent.parent
 BUILD = Path(os.environ.get("RW_BUILD", BRO_ROOT / "build-release"))
 BRO = BUILD / "bro"
 BRO_HEADLESS = BUILD / "bro-headless"
-BRONZE = BUILD / "bronze"
-RT_LIB = BUILD / "shared" / "libbronze_runtime_shared.so"
 WORK = Path(os.environ.get("RW_WORK", ROOT / ".work"))
 
-AOT_BUILD_S = {}  # scene -> seconds `bronze build` took this invocation
+AOT_BUILD_S = {}  # scene -> seconds its ahead-of-time builds took this invocation
 
 SCENES = ["three_meshes", "three_instanced", "three_skinned", "three_lights",
           "pixi_sprites", "pixi_graphics", "pixi_text"]
@@ -89,7 +87,7 @@ WAYLAND_ENV = {"WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", "wayland-0")
 
 # ---------------------------------------------------------------- bro run dirs
 
-def make_bro_app(name, page, cfg, aot=False):
+def make_bro_app(name, page, cfg):
     """A bro folder app at WORK/<name>: lib/scenes/vendor symlinked, the page
     copied to index.html, cfg written to config.js, output in <dir>/out.
     bro.json declares `files` (the run writes its output into <dir>/out, which
@@ -105,71 +103,31 @@ def make_bro_app(name, page, cfg, aot=False):
     os.symlink(ROOT / "package.json", d / "package.json")
     cfg = dict(cfg, out=str(d / "out"))
     (d / "config.js").write_text("globalThis.BENCH_CONFIG = " + json.dumps(cfg) + ";\n")
-    html = (ROOT / page).read_text()
-    start = html.index('<script type="module" src="')
-    end = html.index("</script>", start) + len("</script>")
-    entry = html[start:end].split('src="', 1)[1].split('"', 1)[0]
-    if aot:
-        html = html[:start] + html[end:]
-    (d / "index.html").write_text(html)
+    (d / "index.html").write_text((ROOT / page).read_text())
     (d / "bro.json").write_text(json.dumps({"name": name, "width": cfg.get("w", 1280), "height": cfg.get("h", 720),
                                             "splash": False, "watch": False, "vsync": False, "maxFps": 0,
                                             "permissions": ["files"]}))
-    if aot:
-        cached = WORK / "aot" / Path(page).stem / "app.so"
-        if not cached.exists():
-            t0 = time.time()
-            build_harvested_aot(d, d / entry, cfg)
-            AOT_BUILD_S[Path(page).stem] = round(time.time() - t0, 1)
-            cached.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(d / "app.so", cached)
-        else:
-            shutil.copy2(cached, d / "app.so")
     return d
 
 
-def build_aot(d, entry, flags=()):
-    """app.so beside index.html: the host globals and native manifest printed
-    by bro-headless, then `bronze build --emit-shared` against them. The module graph is
-    compiled, config.js is not (a classic script, compiled at boot), so one
-    app.so per scene serves every N; rw.py caches it under WORK/aot."""
-    natives = d / "app.natives.json"
-    res = subprocess.run([str(BRO_HEADLESS), str(d), "--print-host-globals", "--print-native-manifest", str(natives)],
-                         capture_output=True, text=True, check=True)
-    (d / "app.host-globals").write_text(res.stdout)
-    env = dict(os.environ, BRONZE_SHARED_RT_LIB=str(RT_LIB), BRO_PROJECT_ROOT=str(BRO_ROOT))
-    # RW_BRONZE_FLAGS: extra `bronze build` flags, e.g. `--feedback-out /abs/x.tfb`
-    # for a type-feedback instrumented app.so (bronze docs/type-feedback.md).
-    extra = list(flags) + os.environ.get("RW_BRONZE_FLAGS", "").split()
-    res = subprocess.run([str(BRONZE), "build", str(entry), "-o", str(d / "app.so"), "--emit-shared",
-                          "--host-globals", str(d / "app.host-globals"), "--native-manifest", str(natives)]
-                         + extra, env=env, capture_output=True, text=True)
+def headless_aot(d, run_args, env):
+    """bro-headless running the page's scripts ahead of time, as an installed
+    app's executable does (docs/apps.md, "Ahead-of-time scripts"): an
+    --aot-build that leaves each unit waiting for a profile, a first --aot run
+    compiled in process and harvested, the build on its profile, then the run
+    of those modules, which is the one returned. The AOT directory is kept
+    beside the app (WORK/<name>.aot) and rebuilt each time."""
+    aot = WORK / (d.name + ".aot")
+    if aot.exists():
+        shutil.rmtree(aot)
+    build = [str(BRO_HEADLESS), str(d), "--aot-build", str(aot)]
+    run = [str(BRO_HEADLESS), "--grant", "declared", "--aot", str(aot), str(d)] + list(run_args)
+    subprocess.run(build, env=env, capture_output=True, text=True)
+    subprocess.run(run, env=env, capture_output=True, text=True)
+    res = subprocess.run(build, env=env, capture_output=True, text=True)
     if res.returncode != 0:
-        raise RuntimeError("bronze build failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
-
-
-def build_harvested_aot(d, entry, cfg):
-    """The app.so a scene is measured with, built as jsbench.py --harvest
-    builds its executable: an ordinary build with --harvest-out, one windowed
-    timing run of it at cfg's N (the renderer's code is met only with a
-    context) to write the harvest, then the build on it (--feedback-in)."""
-    tfb = d / "app.tfb"
-    build_aot(d, entry, ["--harvest-out", str(tfb)])
-    config = d / "config.js"
-    kept = config.read_text()
-    run = {"mode": "time", "n": cfg.get("n", 1), "warm": 120, "meas": 600, "gpu": 0, "watchdog": 600000,
-           "out": str(d / "out")}
-    config.write_text("globalThis.BENCH_CONFIG = " + json.dumps(run) + ";\n")
-    env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **WAYLAND_ENV)
-    subprocess.run([str(BRO), "--grant", "declared", str(d)], cwd=str(d), env=env,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    config.write_text(kept)
-    for f in (d / "out").iterdir():
-        f.unlink()
-    if not tfb.exists():
-        raise RuntimeError(f"the harvest run of {d.name} wrote no {tfb}")
-    build_aot(d, entry, ["--feedback-in", str(tfb)])
-    tfb.unlink()
+        raise RuntimeError("--aot-build failed:\n" + res.stdout[-2000:] + res.stderr[-2000:])
+    return subprocess.run(run, env=env, capture_output=True, text=True)
 
 
 def rw_lines(text):
@@ -201,9 +159,12 @@ def run_node_state(scene, n, frames, cp):
 def run_headless_state(scene, n, frames, cp, tier):
     kind, env_extra = TIERS[tier]
     cfg = {"mode": "state", "n": n, "frames": frames, "cp": cp, "quit": 0}
-    d = make_bro_app(f"l1_{scene}_{n}_{tier}", f"{scene}.html", cfg, aot=(kind == "aot"))
+    d = make_bro_app(f"l1_{scene}_{n}_{tier}", f"{scene}.html", cfg)
     env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **env_extra)
-    res = subprocess.run([str(BRO_HEADLESS), "--grant", "declared", str(d), "--no-gpu", "-e", "flush()"], env=env, capture_output=True, text=True)
+    if kind == "aot":
+        res = headless_aot(d, ["--no-gpu", "-e", "flush()"], env)
+    else:
+        res = subprocess.run([str(BRO_HEADLESS), "--grant", "declared", str(d), "--no-gpu", "-e", "flush()"], env=env, capture_output=True, text=True)
     lines = rw_lines(res.stdout)
     errs = [l for l in (res.stdout + res.stderr).splitlines() if "rror" in l and "RW " not in l][:8]
     return res.returncode, lines, "\n".join(errs)
@@ -359,7 +320,7 @@ def run_chromium(server, page, cfg, out):
     return status, log
 
 
-def build_app_exe(d, name):
+def build_app_exe(d, name, key):
     """The app as an installed one runs: its own executable (docs/apps.md,
     "The app's executable") with the page's scripts compiled ahead of time
     beside it, by `bro --build-exe`. The executable lives outside the app
@@ -370,8 +331,8 @@ def build_app_exe(d, name):
     until a run of it has been harvested (its profile): the first build
     leaves it waiting, so the executable runs once untimed, and the build
     after it (which waits for the one that run started in the background)
-    makes the module the timed run loads. AOT_BUILD_S counts the builds, not
-    the harvest run."""
+    makes the module the timed run loads. AOT_BUILD_S[key] counts the builds,
+    not the harvest run."""
     exe = WORK / "exe" / name / "rwapp"
     exe.parent.mkdir(parents=True, exist_ok=True)
 
@@ -393,21 +354,20 @@ def build_app_exe(d, name):
         spent += more
         if "waiting for a first run's profile" in out:
             raise RuntimeError("the harvest run left a unit without its profile:\n" + out[-2000:])
-    AOT_BUILD_S[name] = round(spent, 1)
+    AOT_BUILD_S[key] = round(spent, 1)
     return exe
 
 
 def run_bro(page, cfg, name, aot=False, env_extra=None, perf_data=None):
-    """One windowed bro run of `page`; `aot` is False (the folder, JIT), True
-    (app.so from `bronze build`) or "app" (the installed form, build_app_exe);
-    with perf_data, under `perf record`
+    """One windowed bro run of `page`; `aot` False runs the folder (JIT),
+    True the installed form (build_app_exe); with perf_data, under `perf record`
     (user space, CLOCK_MONOTONIC timestamps, JIT code named through brass's
     perf map) so a window of it can be reported against the trace clock."""
-    d = make_bro_app(name, page, cfg, aot=aot is True)
+    d = make_bro_app(name, page, cfg)
     env = dict(os.environ, BRO_TEST_VK_VALIDATION="0", **WAYLAND_ENV, **(env_extra or {}))
     cmd = [str(BRO), "--grant", "declared", str(d)]
-    if aot == "app":
-        cmd = [str(build_app_exe(d, name))]
+    if aot:
+        cmd = [str(build_app_exe(d, name, Path(page).stem))]
     if perf_data:
         env["BRASS_PERF_MAP"] = "1"
         cmd = ["perf", "record", "-q", "-k", "CLOCK_MONOTONIC", "-e", "cycles:u", "-F", "1999",
@@ -609,8 +569,6 @@ def main():
     extra.update(jsbench.add_commands(sub))
     args = ap.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
-    # app.so is built once per scene per invocation (sources change between).
-    shutil.rmtree(WORK / "aot", ignore_errors=True)
     # Chromium's helpers can still be writing a profile when its main process
     # has exited, so a profile dir a run deleted may come back: sweep them.
     if args.cmd != "l1":

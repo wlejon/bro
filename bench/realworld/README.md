@@ -25,8 +25,8 @@ bro comes from `build-release/`, Chromium is `chromium` on the PATH.
 - **node** takes `key=value` arguments (`mode=state`, and `mode=bench`: "JS bench" below).
 
 pixi runs as shipped in both browsers: its `new Function` uniform, UBO and
-shader sync generators compile in bronze, at the JIT tiers and in an AOT
-`app.so` alike.
+shader sync generators compile in bronze, at the JIT tiers and in an
+installed app's ahead-of-time build alike.
 
 ## Correctness levels
 
@@ -40,18 +40,17 @@ shader sync generators compile in bronze, at the JIT tiers and in an AOT
 ## Timing
 
 ```bash
-python3 bench/realworld/rw.py time --browser chromium|bro|bro-aot|bro-app --scene S --n N
+python3 bench/realworld/rw.py time --browser chromium|bro|bro-aot --scene S --n N
 python3 bench/realworld/rw.py sweep [--scenes a,b] [--out DIR]
 python3 bench/realworld/rw.py perf --scene S --n N [--aot]
 python3 bench/realworld/rw.py report --json DIR/timing.json [--out DIR/report.md]
 ```
 
-`bro` is the folder under the JIT, `bro-aot` the folder with an `app.so`
-from `bronze build`, and `bro-app` the app as an installed one runs: its own
-executable with the page's scripts compiled on its first run's profile
-(`bro --build-exe`, an untimed harvest run of the executable, `bro
---build-exe` again; docs/apps.md "Ahead-of-time scripts"). `bro-app` is the
-number an installed app gets from its second launch on.
+`bro` is the folder under the JIT, and `bro-aot` the app as an installed one
+runs: its own executable with the page's scripts compiled on its first run's
+profile (`bro --build-exe`, an untimed harvest run of the executable, `bro
+--build-exe` again; docs/apps.md "Ahead-of-time scripts"), the number an
+installed app gets from its second launch on.
 
 Each timed run renders 120 warm-up frames (shaders compile, JIT tiers
 settle), then times 300. Per frame (`lib/timing.js`):
@@ -104,16 +103,16 @@ profiles bro at Chromium's knee with `perf`.
 `perf` records the bro process with `perf record -k CLOCK_MONOTONIC` (user
 space; brass writes a perf map of the JIT code with `BRASS_PERF_MAP=1`), reports
 only the samples inside the timed window (the flight recorder's clock is
-CLOCK_MONOTONIC too), and groups them: `js-compiled` (JIT code, or `app.so`
-under AOT), `bronze-runtime`, `jit-compiler` (brass compiling on its threads),
+CLOCK_MONOTONIC too), and groups them: `js-compiled` (JIT code, or the
+modules in the executable's `.aot` directory under AOT), `bronze-runtime`, `jit-compiler` (brass compiling on its threads),
 `bro-webgl` (src/webgl), `bro-bindings` (src/bronze_host), `vulkan-driver`,
 `skia`, `compositor-present`, `bro-engine`, `libc`, `window-system`, overall and
 for the main thread alone.
 
-The AOT mode builds `app.so` from the scene's module graph the way an app's
-executable does: `bro-headless --print-host-globals --print-native-manifest`,
-then `bronze build --emit-shared`. `config.js` is a classic script compiled at
-boot, so one `app.so` per scene serves every N.
+The executable is kept between runs, so only a unit whose text changed
+(`config.js`, per N) is compiled again. `l1`'s `aot` tier runs the same cycle
+headless: `bro-headless --aot-build`, a harvested `--aot` run, the build on
+its profile, and the measured `--aot` run.
 
 ## JS bench: the scenes' JavaScript without the engine
 

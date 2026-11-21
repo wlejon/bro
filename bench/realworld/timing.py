@@ -1,7 +1,7 @@
 """Frame timing for the real-world scenes: rw.py's `time`, `sweep` and `perf`
 commands (mode=time in lib/harness.js, lib/timing.js).
 
-  rw.py time  --browser chromium|bro|bro-aot|bro-app --scene S --n N [--json F]
+  rw.py time  --browser chromium|bro|bro-aot --scene S --n N [--json F]
       One windowed run: warm frames, then timed ones; prints the summary.
   rw.py sweep [--scenes a,b] [--out DIR] [--rest 20] [--light-rest 5]
       Per scene, N steps geometrically (x1.5) from the scene's minimum until
@@ -83,7 +83,6 @@ MODES = {
     "chromium": ("chromium", False),
     "bro": ("bro", False),
     "bro-aot": ("bro", True),
-    "bro-app": ("bro", "app"),
 }
 
 
@@ -152,7 +151,8 @@ def perf_group(dso, sym):
     """Which part of the stack a sample is in, from its DSO and symbol."""
     d = os.path.basename(dso or "")
     s = sym or ""
-    if d.startswith(("[JIT]", "perf-", "jitted-")) or d == "app.so":
+    # An installed app's ahead-of-time modules are loaded from <exe>.aot/.
+    if d.startswith(("[JIT]", "perf-", "jitted-")) or os.path.basename(os.path.dirname(dso or "")).endswith(".aot"):
         return "js-compiled"
     if "bronze_runtime" in d or "libbronze" in d:
         # brass:: is the JIT compiler (tier-up compiles on its threads)
@@ -372,7 +372,7 @@ class Sweep:
                            "bro": "__host.wallMs() (steady_clock); bro's performance.now()/rAF timestamp are its frame clock, constant within a frame and snapped to the predicted vblank"},
                 "modes": {"chromium": "Chromium (V8, WebGL2 via ANGLE on OpenGL ES / radeonsi)",
                           "bro": "bro folder app: scripts compiled in-process by bronze, default tiered JIT",
-                          "bro-aot": "bro with app.so: the module graph compiled ahead of time by `bronze build --emit-shared`"},
+                          "bro-aot": "bro as an installed app: its own executable, the page's scripts compiled ahead of time on a first run's profile by `bro --build-exe`"},
             },
             "scenes": {},
         }
