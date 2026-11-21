@@ -47,6 +47,7 @@ struct WorldHandle {
     uint64_t syncedPoolGen = 0;
     uint64_t syncedRegionsGen = 0;
     uint32_t regionCount = 0;
+    double syncedAnchor[3] = {0.0, 0.0, 0.0};
 };
 
 ev::HostClass g_worldClass;
@@ -157,8 +158,10 @@ bromesh::DagVoxelizeOptions parseVoxOpts(Value opts, int depthDefault, bromesh::
         const Rooted col(ev::getProperty(opts, "color"));
         parseColorValue(col, o.defaultColor[0], o.defaultColor[1], o.defaultColor[2], o.defaultColor[3]);
         o.roughness = static_cast<float>(std::clamp(numberOr(opts, "roughness", 0.8), 0.04, 1.0));
+        o.emissive = static_cast<float>(std::clamp(numberOr(opts, "emissive", 0.0), 0.0, 1.0));
         o.fillInterior = boolOr(opts, "fillInterior", false);
         o.fitToCube = boolOr(opts, "fitToCube", true);
+        o.unitBounds = boolOr(opts, "unitBounds", false);
     }
     return o;
 }
@@ -197,6 +200,9 @@ void fillRegionFromOpts(Value opts, scene::VoxelRegion& r, bool isCreate) {
     }
     if (isCreate || !ev::isUndefined(ev::getProperty(opts, "maxDepth"))) {
         r.maxDepth = static_cast<uint32_t>(intOr(opts, "maxDepth", static_cast<int32_t>(r.maxDepth), 1, 16));
+    }
+    if (isCreate || !ev::isUndefined(ev::getProperty(opts, "minDist"))) {
+        r.minDist = static_cast<float>(std::clamp(numberOr(opts, "minDist", r.minDist), 0.0, 65535.0));
     }
     if (isCreate || !ev::isUndefined(ev::getProperty(opts, "maxDist"))) {
         r.maxDist = static_cast<float>(std::max(0.0, numberOr(opts, "maxDist", r.maxDist)));
@@ -301,7 +307,17 @@ bool syncOneBuffer(render::VulkanCompute* comp,
     return comp->write(*cb, 0, src.data(), byteSize);
 }
 
-bool syncWorldBuffers(WorldHandle* w, scene::VoxelWorldNode* vw, std::string* err) {
+void parseAnchorArg(std::span<const Value> a, double out[3]) {
+    out[0] = out[1] = out[2] = 0.0;
+    if (a.empty() || !ev::isObject(a[0])) return;
+    const Rooted arr(a[0]);
+    for (uint32_t i = 0; i < 3; ++i) {
+        const Value v = ev::getElement(arr, i);
+        if (ev::isNumber(v)) out[i] = ev::toDouble(v);
+    }
+}
+
+bool syncWorldBuffers(WorldHandle* w, scene::VoxelWorldNode* vw, const double anchor[3], std::string* err) {
     render::VulkanCompute* comp = engineCompute();
     if (!comp || !comp->available()) {
         if (err) *err = "VulkanCompute not available";
@@ -321,17 +337,23 @@ bool syncWorldBuffers(WorldHandle* w, scene::VoxelWorldNode* vw, std::string* er
         w->syncedPoolGen = pool.generation();
     }
 
-    if (w->syncedRegionsGen != vw->regionsGeneration() || !w->gpuRegions) {
-        const double zeroEye[3] = {0.0, 0.0, 0.0};
+    const bool anchorChanged =
+        w->syncedAnchor[0] != anchor[0] ||
+        w->syncedAnchor[1] != anchor[1] ||
+        w->syncedAnchor[2] != anchor[2];
+    if (w->syncedRegionsGen != vw->regionsGeneration() || !w->gpuRegions || anchorChanged) {
         std::vector<scene::GpuVoxelRegion> gpuRegs;
         gpuRegs.reserve(vw->regions().size());
         for (const auto& reg : vw->regions()) {
             if ((reg.flags & scene::kVoxelRegionEnabled) == 0u || reg.rootNode == bromesh::kDagNullNode) continue;
-            gpuRegs.push_back(reg.packGpu(zeroEye));
+            gpuRegs.push_back(reg.packGpu(anchor));
         }
         if (!syncOneBuffer(comp, w->gpuRegions, gpuRegs, err)) return false;
         w->regionCount = static_cast<uint32_t>(gpuRegs.size());
         w->syncedRegionsGen = vw->regionsGeneration();
+        w->syncedAnchor[0] = anchor[0];
+        w->syncedAnchor[1] = anchor[1];
+        w->syncedAnchor[2] = anchor[2];
     }
 
     comp->flush();
@@ -688,22 +710,86 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         return o.get();
     });
 
-    b.def("syncBuffers", 0, [](Value self, std::span<const Value>) -> Value {
+    b.def("mergeArchetypes", 2, [](Value self, std::span<const Value> a) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.mergeArchetypes", &vw);
+        if (a.size() < 2) return ev::throwTypeError("mergeArchetypes: expected two archetypes");
+        uint32_t bRef = bromesh::kDagNullNode, oRef = bromesh::kDagNullNode;
+        bool bLeaf = false, oLeaf = false;
+        parseRefArg(a[0], bRef, bLeaf);
+        parseRefArg(a[1], oRef, oLeaf);
+        const int bDepth = ev::isObject(a[0]) ? intOr(a[0], "depth", 2, 0, 16) : 2;
+        const int oDepth = ev::isObject(a[1]) ? intOr(a[1], "depth", 2, 0, 16) : 2;
+        const uint32_t merged = vw->pool().mergeSubtrees(bRef, bLeaf, oRef, oLeaf);
+        vw->bumpRegionsGeneration();
+        return makeArchetypeResult(merged, bLeaf && oLeaf, std::max(bDepth, oDepth));
+    });
+
+    b.def("makeAnimRef", 2, [](Value self, std::span<const Value> a) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.makeAnimRef", &vw);
+        if (a.empty()) return ev::throwTypeError("makeAnimRef: clip index required");
+        const uint32_t clip = static_cast<uint32_t>(std::max(0.0, ev::toDouble(a[0])));
+        const uint32_t phase = a.size() >= 2 ? static_cast<uint32_t>(std::max(0.0, ev::toDouble(a[1]))) : 0u;
+        return makeArchetypeResult(vw->pool().makeAnimChildRef(clip, phase), false, 0);
+    });
+
+    b.def("clearRegion", 1, [](Value self, std::span<const Value> a) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.clearRegion", &vw);
+        if (a.empty()) return ev::fromBool(false);
+        const uint32_t rid = static_cast<uint32_t>(std::llround(ev::toDouble(a[0])));
+        return ev::fromBool(vw->setRegionRoot(rid, bromesh::kDagNullNode));
+    });
+
+    b.def("placeBatchTyped", 4, [](Value self, std::span<const Value> a) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.placeBatchTyped", &vw);
+        if (a.size() < 3 || !ev::isObject(a[1])) return ev::fromBool(false);
+        const uint32_t rid = static_cast<uint32_t>(std::llround(ev::toDouble(a[0])));
+        const auto info = ev::typedArrayInfo(a[1]);
+        if (!info || !info.data ||
+            (info.elementKind != bronze::ElementKind::Uint32 && info.elementKind != bronze::ElementKind::Int32)) {
+            return ev::throwTypeError("placeBatchTyped: expected Uint32Array or Int32Array of stride 5");
+        }
+        const uint32_t td = static_cast<uint32_t>(std::clamp(static_cast<int>(std::llround(ev::toDouble(a[2]))), 1, 16));
+        const size_t maxItems = info.byteLength / (5u * sizeof(uint32_t));
+        const size_t count = (a.size() >= 4 && ev::isNumber(a[3]))
+            ? std::min(maxItems, static_cast<size_t>(std::max(0.0, ev::toDouble(a[3]))))
+            : maxItems;
+        const auto* words = reinterpret_cast<const uint32_t*>(info.data);
+        std::vector<bromesh::DagPlacement> batch(count);
+        for (size_t i = 0; i < count; ++i) {
+            const size_t o = i * 5u;
+            batch[i].ix = static_cast<int>(static_cast<int32_t>(words[o + 0u]));
+            batch[i].iy = static_cast<int>(static_cast<int32_t>(words[o + 1u]));
+            batch[i].iz = static_cast<int>(static_cast<int32_t>(words[o + 2u]));
+            batch[i].childRef = words[o + 3u];
+            batch[i].isLeaf = words[o + 4u] != 0u;
+        }
+        return ev::fromBool(vw->placeSubtreesBatch(rid, batch, td));
+    });
+
+    b.def("syncBuffers", 1, [](Value self, std::span<const Value> a) -> Value {
         scene::VoxelWorldNode* vw = nullptr;
         WorldHandle* w = worldOf(self, "VoxelWorld.syncBuffers", &vw);
+        double anchor[3] = {0.0, 0.0, 0.0};
+        parseAnchorArg(a, anchor);
         std::string err;
-        if (!syncWorldBuffers(w, vw, &err)) return ev::throwError("VoxelWorld.syncBuffers: " + err);
+        if (!syncWorldBuffers(w, vw, anchor, &err)) return ev::throwError("VoxelWorld.syncBuffers: " + err);
         ev::ObjectBuilder o;
         o.set("synced", true);
         o.set("regionCount", static_cast<double>(w->regionCount));
         return o.get();
     });
 
-    b.def("buffers", 0, [](Value self, std::span<const Value>) -> Value {
+    b.def("buffers", 1, [](Value self, std::span<const Value> a) -> Value {
         scene::VoxelWorldNode* vw = nullptr;
         WorldHandle* w = worldOf(self, "VoxelWorld.buffers", &vw);
+        double anchor[3] = {0.0, 0.0, 0.0};
+        parseAnchorArg(a, anchor);
         std::string err;
-        if (!syncWorldBuffers(w, vw, &err)) return ev::throwError("VoxelWorld.buffers: " + err);
+        if (!syncWorldBuffers(w, vw, anchor, &err)) return ev::throwError("VoxelWorld.buffers: " + err);
         ev::ObjectBuilder o;
         o.set("regions", brokernel::api::bufferValue(w->gpuRegions));
         o.set("nodes", brokernel::api::bufferValue(w->gpuNodes));

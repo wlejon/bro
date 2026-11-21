@@ -215,7 +215,11 @@ void PassVoxelDag::record(SceneFrame& frame) {
     const SceneVkImage& depth = frame.gpu.targets.depthSnapshot;
     const VkDeviceSize storageAlign = std::max<VkDeviceSize>(
         64, device_->context().deviceProperties().limits.minStorageBufferOffsetAlignment);
-    const double eye[3] = {frame.view.eye.x, frame.view.eye.y, frame.view.eye.z};
+    const double eye[3] = {
+        frame.view.origin[0] + static_cast<double>(frame.view.eye.x),
+        frame.view.origin[1] + static_cast<double>(frame.view.eye.y),
+        frame.view.origin[2] + static_cast<double>(frame.view.eye.z),
+    };
     const float projY = std::max(std::abs(frame.view.proj.at(1, 1)), 1e-4f);
     const float rows = static_cast<float>(std::max(1u, frame.gpu.targets.height()));
     const float pixelCone = 2.0f / (projY * rows);

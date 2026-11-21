@@ -45,6 +45,7 @@ struct VoxelRegion {
     float voxelSize = 1.0f;
     uint32_t maxDepth = 4;  // extent = voxelSize * (4 << maxDepth)
     uint32_t rootNode = bromesh::kDagNullNode;
+    float minDist = 0.0f;
     float maxDist = 0.0f;
     float fadeStart = 0.0f;
     uint32_t flags = kVoxelRegionEnabled | kVoxelRegionCastShadow;

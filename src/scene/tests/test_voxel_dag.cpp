@@ -111,7 +111,10 @@ void testSpirvVerification() {
                 let carved = voxeldag::is_carved_at(
                     ro + rd * 2.0, 1u, 0u, regions, nodes, children, bricks, clips, frames
                 );
-                out_hits[id] = vec4<f32>(hit.color * sh, carved ? 1.0 : hit.t);
+                let carved_static = voxeldag::is_carved_static_at(
+                    ro + rd * 2.0, 1u, regions, nodes, children, bricks
+                );
+                out_hits[id] = vec4<f32>(hit.color * sh, (carved || carved_static) ? 1.0 : hit.t);
             }
         )";
         brokernel::CompileOptions opts;
@@ -506,6 +509,153 @@ void testCarvedCaveAndDepthInterop(render::VulkanContext& context) {
     check(render::vulkanValidationErrorCount() == err0, "cave render zero Vulkan validation errors");
 }
 
+void testPlanetOriginAndStaticCarveAndDistanceBands(render::VulkanContext& context) {
+    const uint32_t err0 = render::vulkanValidationErrorCount();
+    scene::SceneGraph graph;
+    graph.setCanvasSize(192, 192);
+    graph.setToneMap(scene::SceneRenderer::ToneMap::Linear, 1.0f);
+    graph.setAmbient(0.5f, 0.5f, 0.5f);
+    graph.setCamera(0.75f, 1.0f, 0.5f, 400.0f, {0.0f, 3.0f, 0.0f}, {0.0f, -0.5f, -14.0f});
+    graph.setCameraOrigin({600000.0, 0.0, 0.0});
+
+    auto* sun = graph.createLight("sun");
+    sun->setKind(scene::LightNode::Kind::Directional);
+    sun->setDirection(bromath::vnorm(bromath::Vec3{-0.2f, -1.0f, -0.3f}));
+    sun->setIntensity(2.4f);
+    sun->setCastsShadow(false);
+    graph.root()->addChild(sun);
+
+    auto* world = graph.createVoxelWorld("planet_vox");
+    world->setShadowSteps(0u);
+    graph.root()->addChild(world);
+
+    bromesh::DagVoxelizeOptions cOpts;
+    cOpts.resolution = 16;
+    cOpts.state = bromesh::VoxelState::Carve;
+    const uint32_t carveRoot = bromesh::voxelizeSdfToDag(
+        world->pool(),
+        [](float x, float y, float z) {
+            return std::max(std::abs(x) - 0.5f, std::max(std::abs(y) - 0.5f, std::abs(z) - 0.5f));
+        },
+        bromath::AABB3{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}},
+        cOpts);
+
+    bromesh::DagVoxelizeOptions sOpts;
+    sOpts.resolution = 16;
+    sOpts.state = bromesh::VoxelState::Solid;
+    sOpts.defaultColor[0] = 0.96f;
+    sOpts.defaultColor[1] = 0.42f;
+    sOpts.defaultColor[2] = 0.08f;
+    sOpts.emissive = 0.15f;
+    sOpts.fillInterior = true;
+    const uint32_t solidRoot = bromesh::voxelizeSdfToDag(
+        world->pool(),
+        [](float x, float y, float z) {
+            return std::max(std::abs(y + 0.45f) - 0.25f, std::max(std::abs(x) - 0.7f, std::abs(z) - 0.7f));
+        },
+        bromath::AABB3{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}},
+        sOpts);
+
+    // Region centered at planet-scale coordinate [600000.0, 0.0, -14.0], extent = 8m ([-4, 4]^3)
+    scene::VoxelRegion reg;
+    reg.center[0] = 600000.0;
+    reg.center[1] = 0.0;
+    reg.center[2] = -14.0;
+    reg.voxelSize = 0.5f;
+    reg.maxDepth = 2;
+    reg.minDist = 4.0f;
+    reg.fadeStart = 35.0f;
+    reg.maxDist = 60.0f;
+    reg.flags = scene::kVoxelRegionEnabled;
+    const uint32_t rid = world->addRegion(reg);
+    world->setRegionRoot(rid, world->pool().mergeSubtrees(carveRoot, false, solidRoot, false));
+
+    // Culled far region with minDist > 120m must stay invisible
+    scene::VoxelRegion hiddenReg;
+    hiddenReg.center[0] = 600000.0;
+    hiddenReg.center[1] = 0.0;
+    hiddenReg.center[2] = -14.0;
+    hiddenReg.voxelSize = 0.5f;
+    hiddenReg.maxDepth = 2;
+    hiddenReg.minDist = 120.0f;
+    hiddenReg.flags = scene::kVoxelRegionEnabled;
+    const uint32_t hid = world->addRegion(hiddenReg);
+    world->setRegionRoot(hid, solidRoot);
+    // Keep only main region in shared buffer test by creating ground hook relative to [600000, 0, 0]
+    world->removeRegion(hid);
+
+    check(world->syncBuffers(context.compute()), "planet static carve buffer sync");
+    const auto& bufs = world->sharedBuffers();
+
+    auto* ground = graph.createMesh("planet_ground");
+    ground->setMesh(makeGroundPlane(30.0f, 24));
+    ground->setPosition(0.0f, 0.0f, -14.0f);
+    ground->setColor(0.10f, 0.72f, 0.22f, 1.0f);
+    ground->setCastsShadow(false);
+    ground->setCustomShaderModule(R"(
+        module hook;
+        import scene;
+        import mesh;
+        import voxeldag;
+
+        struct Params { carve_rel: vec3<f32>, region_count: f32 }
+        @binding(4, 0) var params: uniform<Params>;
+        @binding(4, 17) var regions: read_buffer<vec4<f32>>;
+        @binding(4, 20) var nodes: read_buffer<vec4<u32>>;
+        @binding(4, 21) var children: read_buffer<u32>;
+        @binding(4, 22) var bricks: read_buffer<vec4<u32>>;
+
+        pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+            if (voxeldag::is_carved_static_at(params.carve_rel + v.world_pos, params.region_count as u32,
+                                                regions, nodes, children, bricks)) {
+                discard_fragment();
+            }
+            return s;
+        }
+    )", "planet_carve_static.bk");
+    const float carveRel[3] = {600000.0f, 3.0f, 0.0f};
+    const float rc = static_cast<float>(bufs.regionCount);
+    ground->setCustomShaderUniform("carve_rel", 3, carveRel);
+    ground->setCustomShaderUniform("region_count", 1, &rc);
+    ground->setCustomShaderBuffer("regions", bufs.regions);
+    ground->setCustomShaderBuffer("nodes", bufs.nodes);
+    ground->setCustomShaderBuffer("children", bufs.children);
+    ground->setCustomShaderBuffer("bricks", bufs.bricks);
+    graph.root()->addChild(ground);
+
+    graph.renderForRead();
+    int w = 0, h = 0;
+    const auto px = graph.readTonemapPixelsRGBA(w, h);
+    int orangePx = 0, greenPx = 0;
+    for (size_t i = 0; i < px.size(); i += 4) {
+        if (px[i + 1] > px[i] + 20 && px[i + 1] > px[i + 2] + 20 && px[i + 1] > 40) ++greenPx;
+        if (px[i] > px[i + 1] + 20 && px[i] > px[i + 2] + 40 && px[i] > 80) ++orangePx;
+    }
+    check(greenPx > 500, "planet-origin ground rendered (" + std::to_string(greenPx) + " px)");
+    uint8_t midPx[4] = {};
+    pixelAt(px, w, h, w / 2, h / 2, midPx);
+    if (orangePx <= 120) {
+        std::fprintf(stderr, "DEBUG planet mid=(%u,%u,%u,%u) green=%d orange=%d\n",
+                     midPx[0], midPx[1], midPx[2], midPx[3], greenPx, orangePx);
+    }
+    check(orangePx > 120, "planet-origin 4-buffer static carve reveals voxel cave (" + std::to_string(orangePx) + " px)");
+
+    // Now set minDist = 120m on rid -> region must be culled cleanly
+    scene::VoxelRegion culled = *world->findRegion(rid);
+    culled.minDist = 120.0f;
+    culled.fadeStart = 0.0f;
+    culled.maxDist = 0.0f;
+    world->updateRegion(rid, culled);
+    graph.renderForRead();
+    const auto pxCulled = graph.readTonemapPixelsRGBA(w, h);
+    int orangeCulled = 0;
+    for (size_t i = 0; i < pxCulled.size(); i += 4) {
+        if (pxCulled[i] > pxCulled[i + 1] + 20 && pxCulled[i] > pxCulled[i + 2] + 40 && pxCulled[i] > 80) ++orangeCulled;
+    }
+    check(orangeCulled == 0, "minDist = 120m culls closer region (" + std::to_string(orangeCulled) + " orange px)");
+    check(render::vulkanValidationErrorCount() == err0, "planet origin + static carve zero Vulkan validation errors");
+}
+
 }  // namespace
 
 int main() {
@@ -524,6 +674,7 @@ int main() {
     testDensePointerForestRender(context);
     testZeroCopyAnimationTick(context);
     testCarvedCaveAndDepthInterop(context);
+    testPlanetOriginAndStaticCarveAndDistanceBands(context);
     scene::SceneRenderer::setDefaultVulkanContext(nullptr);
 
     std::printf("bro_voxel_dag_test: %d checks, %d failures\n", g_checks, g_failures);

@@ -123,13 +123,26 @@ if (!probe.scene) {
         const rid = world.addRegion({ voxelSize: 0.25, maxDepth: 3, center: [0, 0, 0] });
         const carveBox = world.addArchetypeFromBox([1, 1, 1, 1], 1, { state: 'carve' });
         const warmFloor = world.addArchetypeFromBox([0.96, 0.42, 0.08, 1.0], 1, { roughness: 0.8 });
-        // At targetDepth=2 (4x4x4 cells over [-4, +4]^3), cells [1..2] cover [-2, +2]^2 around origin.
+        const glowCube = world.addArchetypeFromBox([0.98, 0.52, 0.12, 1.0], 1, { roughness: 0.7, emissive: 0.6 });
+        const merged = world.mergeArchetypes(carveBox, warmFloor);
+        assert(typeof merged.ref === 'number' && merged.ref >= 0, 'mergeArchetypes returns combined ref');
+        const clip = world.registerAnimClip([glowCube, warmFloor]);
+        const animRef = world.makeAnimRef(clip, 1);
+        assert(typeof animRef.ref === 'number' && animRef.ref !== 0, 'makeAnimRef returns packed anim child ref');
+        world.clearRegion(rid);
+        // At targetDepth=2 (4x4x4 cells over [-4, +4]^3), place typed batch + carved cells.
+        const typed = new Uint32Array(5 * 2);
+        typed.set([0, 1, 0, merged.ref, merged.isLeaf ? 1 : 0, 3, 1, 3, animRef.ref, animRef.isLeaf ? 1 : 0]);
+        assert(world.placeBatchTyped(rid, typed, 2, 2), 'placeBatchTyped accepts stride-5 Uint32Array');
+        world.clearRegion(rid);
         for (let oz = 1; oz <= 2; oz++) {
             for (let ox = 1; ox <= 2; ox++) {
                 world.stampCarveAndSolid(rid, ox, 1, oz, carveBox, warmFloor, 2);
                 world.stampCarveAndSolid(rid, ox, 2, oz, carveBox, null, 2);
             }
         }
+        const anchoredBufs = world.buffers([0, 0, 0]);
+        assert(anchoredBufs.regionCount === 1, 'buffers([ax, ay, az]) synced active region');
         const bufs = world.buffers();
         assert(bufs.regionCount === 1, 'buffers() synced active region');
 

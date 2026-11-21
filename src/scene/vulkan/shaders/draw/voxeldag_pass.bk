@@ -1,6 +1,7 @@
 // Fullscreen SVDAG raymarching pass composing into HDR + indirect + reversed-Z depth.
 import scene;
 import lighting;
+import atmosphere;
 import voxeldag;
 
 struct VoxelDagParams {
@@ -50,6 +51,7 @@ fn shade_voxeldag() -> VoxelFragOut {
     let fc = frag_coord().xy;
     let rd = scene::view_ray(fc);
     let t_max = scene_t_max(fc);
+    let ign = fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
     let count = u_params.counts.x;
     let tick = u_params.counts.y;
     let max_steps = u_params.counts.z;
@@ -61,7 +63,7 @@ fn shade_voxeldag() -> VoxelFragOut {
     var best_t: f32 = t_max;
     var ri: u32 = 0u;
     while (ri < count) {
-        let hit = voxeldag::trace_region(
+        let hit = voxeldag::trace_region_dithered(
             vec3<f32>(0.0, 0.0, 0.0),
             rd,
             best_t,
@@ -70,6 +72,7 @@ fn shade_voxeldag() -> VoxelFragOut {
             max_steps,
             tick,
             ri,
+            ign,
             b_regions,
             b_nodes,
             b_children,
@@ -111,6 +114,17 @@ fn shade_voxeldag() -> VoxelFragOut {
         );
     }
 
+    var local_up = vec3<f32>(0.0, 1.0, 0.0);
+    if (lighting::atmosphere_on()) {
+        let ao_vec = atmosphere::origin(lighting::lighting.atm, best.pos);
+        let al = length(ao_vec);
+        if (al > 1e-5) {
+            local_up = ao_vec * (1.0 / max(al, 1e-5));
+        }
+    }
+    let hemi = 0.5 + 0.5 * dot(best.normal, local_up);
+    let sky_vis = clamp(mix(0.28, 1.0, sun_vis) * mix(0.45, 1.0, hemi), 0.16, 1.0);
+
     let ls = lighting::Surface {
         position: best.pos,
         normal: best.normal,
@@ -124,7 +138,7 @@ fn shade_voxeldag() -> VoxelFragOut {
         subsurface: 0.0,
         translucency: 0.0,
         sun_visibility: sun_vis,
-        sky_visibility: 1.0,
+        sky_visibility: sky_vis,
         sky_normal: best.normal,
         occluder_sun: 0.0,
         sun_diffuse: 0.0,

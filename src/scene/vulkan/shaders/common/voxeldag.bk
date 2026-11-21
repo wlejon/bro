@@ -144,6 +144,98 @@ pub fn resolve_child<BClip, BF>(raw_ref: u32, tick: u32, clips: BClip, frames: B
     return frames[fidx as i32];
 }
 
+// Static point query against all active regions carrying subtractive Carve masks
+// using only 4 storage buffers (omitting animation clip/frame buffers).
+pub fn is_carved_static_at<BReg, BN, BC, BB>(
+    world_pos: vec3<f32>,
+    region_count: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB
+) -> bool {
+    var ri: u32 = 0u;
+    while (ri < region_count) {
+        let base = (ri * 5u) as i32;
+        let r0 = regions[base];
+        let r4 = regions[base + 4];
+        let flags = bitcast<u32>(r4.z);
+        let root = bitcast<u32>(r4.x);
+        if ((flags & (REGION_ENABLED | REGION_HAS_CARVE)) != (REGION_ENABLED | REGION_HAS_CARVE) ||
+            root == DAG_INVALID || r0.w <= 0.0) {
+            ri += 1u;
+            continue;
+        }
+        let r1 = regions[base + 1];
+        let r2 = regions[base + 2];
+        let r3 = regions[base + 3];
+        let rel = world_pos - r0.xyz;
+        let inv_ext = 1.0 / max(r0.w, 1e-6);
+        let u = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
+        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0) {
+            ri += 1u;
+            continue;
+        }
+
+        var p: vec3<f32> = u;
+        var cur: u32 = root;
+        var lvl: u32 = 0u;
+        while (lvl < 16u) {
+            let n = nodes[cur as i32];
+            let masks = n.x;
+            let node_flags = (masks >> 24u) & 0xFFu;
+            if ((node_flags & DAG_FLAG_UNIFORM_CARVE) != 0u) {
+                return true;
+            }
+            let carve_mask = (masks >> 8u) & 0xFFu;
+            if (carve_mask == 0u) {
+                break;
+            }
+            let sp = p * 2.0;
+            let ox = sp.x >= 1.0 ? 1u : 0u;
+            let oy = sp.y >= 1.0 ? 1u : 0u;
+            let oz = sp.z >= 1.0 ? 1u : 0u;
+            let oct = ox | (oy << 1u) | (oz << 2u);
+            let bit = 1u << oct;
+            if ((carve_mask & bit) == 0u) {
+                break;
+            }
+
+            let valid_mask = (masks & 0xFFu) | carve_mask;
+            let slot = popcount_below32(valid_mask, oct);
+            let raw_ref = children[(n.y + slot) as i32];
+            if ((raw_ref & DAG_ANIM_BIT) != 0u || raw_ref == DAG_INVALID) {
+                break;
+            }
+
+            let child_p = vec3<f32>(
+                sp.x - (ox as f32),
+                sp.y - (oy as f32),
+                sp.z - (oz as f32)
+            );
+            let leaf_mask = (masks >> 16u) & 0xFFu;
+            if ((leaf_mask & bit) != 0u) {
+                let b0 = bricks[(raw_ref * 2u) as i32];
+                let b1 = bricks[(raw_ref * 2u + 1u) as i32];
+                if ((b1.w & DAG_BRICK_UNIFORM_CARVE) != 0u) {
+                    return true;
+                }
+                let bp = clamp(floor(child_p * 4.0), vec3<f32>(0.0), vec3<f32>(3.0));
+                let bidx = (bp.x as u32) + ((bp.y as u32) << 2u) + ((bp.z as u32) << 4u);
+                if (bit64_set(b0.z, b0.w, bidx)) {
+                    return true;
+                }
+                break;
+            }
+            cur = raw_ref;
+            p = child_p;
+            lvl += 1u;
+        }
+        ri += 1u;
+    }
+    return false;
+}
+
 // Point query against all active regions carrying subtractive Carve masks.
 // Safe to call directly from terrain / tile fragment hooks (`discard_fragment`).
 pub fn is_carved_at<BReg, BN, BC, BB, BClip, BF>(
@@ -279,8 +371,8 @@ fn box_entry_normal(
 }
 
 // Hierarchical raymarch of one mounted region with continuous cone-filtered LOD,
-// empty/carve octant skipping, O(1) cyclic animation lookup, and 4x4x4 leaf DDA.
-pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
+// dithered min/max distance transitions, empty/carve octant skipping, O(1) cyclic animation lookup, and 4x4x4 leaf DDA.
+pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     ro: vec3<f32>,
     rd: vec3<f32>,
     t_max_world: f32,
@@ -289,6 +381,7 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
     max_steps: u32,
     anim_tick: u32,
     ri: u32,
+    dither_u: f32,
     regions: BReg,
     nodes: BN,
     children: BC,
@@ -311,6 +404,9 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
     let r2 = regions[base + 2];
     let r3 = regions[base + 3];
     let max_dist = r2.w;
+    let fade_start = r3.w;
+    let min_dist = ((bitcast<u32>(r4.y) >> 16u) & 0xFFFFu) as f32;
+    let u_d = clamp(dither_u, 0.0, 1.0);
     let eff_tick = anim_tick + bitcast<u32>(r4.w);
 
     let rel = ro - r0.xyz;
@@ -326,10 +422,17 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
     let t1 = (vec3<f32>(1.0) - ro_n) * inv_d;
     let tsmall = min(t0, t1);
     let tbig = max(t0, t1);
-    let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
+    var t_enter: f32 = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
+    if (min_dist > 0.0) {
+        let eff_min = min_dist * (1.0 + 0.35 * u_d);
+        t_enter = max(t_enter, eff_min * inv_ext);
+    }
     var t_cap: f32 = t_max_world * inv_ext;
     if (max_dist > 0.0) {
-        t_cap = min(t_cap, max_dist * inv_ext);
+        let eff_max = (fade_start > 0.0 && fade_start < max_dist)
+            ? mix(fade_start, max_dist, u_d)
+            : max_dist;
+        t_cap = min(t_cap, eff_max * inv_ext);
     }
     let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), t_cap);
     if (t_enter >= t_exit) {
@@ -528,6 +631,30 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
         };
     }
     return no_hit();
+}
+
+// Convenience wrapper with centered dither threshold (0.5) for non-dithered callers.
+pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    t_max_world: f32,
+    pixel_cone: f32,
+    lod_scale: f32,
+    max_steps: u32,
+    anim_tick: u32,
+    ri: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    attrs: BA,
+    clips: BClip,
+    frames: BF
+) -> TraceHit {
+    return trace_region_dithered(
+        ro, rd, t_max_world, pixel_cone, lod_scale, max_steps, anim_tick, ri, 0.5,
+        regions, nodes, children, bricks, attrs, clips, frames
+    );
 }
 
 // Fast coarse sun occlusion visibility across regions marked REGION_CAST_SHADOW.
