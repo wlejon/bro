@@ -100,6 +100,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `audio-engine-api.js` | `AudioContext` engine half: clips, playbacks, streams, voices, buses + effects, presets; VoiceAllocator, ModMatrix, MidiInput, Sequence |
 | `audio-synth-graph-api.js` | `SynthGraph`: procedural voices from a plain-object graph (osc/FM/noise/filter/env/sweep/shaper/resonator/comb/layers), seeded per-trigger jitter, `render()` offline to an AudioBuffer bit-identical to live, `ctx.playSynth` / `releaseSynth`; JIT kernel per shape |
 | `ear-api.js` | `bro.ear`: judge a finished clip offline, deterministic: `measure` (timing, LUFS, centroid/flatness, tonality, ringing partials), `compare` to a reference, labelled `spectrogram` images/PNGs; `loadClap` prompt scorer in ML builds |
+| `eye-api.js` | `bro.eye`: deterministic visual, DOM, and 3D spatial critic (`measure`, `compose`, `form`, `compare`, `audit`, `scene`, `visualize`, `fit`) grounded in Oklab/WCAG/APCA, saliency/Notan/rails/differential-geometry, 2D FFT tiling, banding, Vulkan depth/BVH geometry, and CMA-ES optimization |
 | `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis |
 | `mesh-bvh-api.js` | `MeshBVH` (ray / closest-point queries over a mesh snapshot) and `ProgressiveMesh` (edge-collapse LOD) |
 | `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |

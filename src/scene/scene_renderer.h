@@ -34,7 +34,7 @@ namespace bro::render { class VulkanContext; }
 
 namespace bro::scene {
 
-namespace vk { class SceneVkBridge; struct AtmosphereTables; }
+namespace vk { class SceneVkBridge; struct AtmosphereTables; struct InspectCamera; }
 
 class SceneGraph;
 class SceneNode;
@@ -187,6 +187,8 @@ public:
     void setInspect(bool on) { inspect_ = on; }
 
     bool inspectFrame(int image, std::vector<double>& stats, std::vector<uint8_t>& pixels);
+    bool readInspectSnapshot(std::vector<uint8_t>& outRgba, std::vector<float>& outDepth,
+                             int& outW, int& outH, vk::InspectCamera& outCam);
     /// Inspection as a recording (scene/vulkan/frame/scene_inspect_record.h):
     /// start one at `path` (renders cut `scale` times each way), keep the
     /// last render in it, finish it (the frames kept).

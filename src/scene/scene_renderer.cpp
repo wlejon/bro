@@ -310,6 +310,14 @@ bool SceneRenderer::inspectFrame(int image, std::vector<double>& stats, std::vec
     return vkBridge_->inspect(kind, stats, pixels);
 }
 
+bool SceneRenderer::readInspectSnapshot(std::vector<uint8_t>& outRgba, std::vector<float>& outDepth,
+                                        int& outW, int& outH, vk::InspectCamera& outCam) {
+    outRgba.clear();
+    outDepth.clear();
+    outW = outH = 0;
+    return vkBridge_ && vkBridge_->readInspectSnapshot(outRgba, outDepth, outW, outH, outCam);
+}
+
 bool SceneRenderer::recordInspect(const std::string& path, int scale, std::string& err) {
     if (!vkBridge_) {
         err = "the scene has not rendered yet";

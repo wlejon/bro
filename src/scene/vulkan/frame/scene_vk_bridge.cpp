@@ -166,17 +166,19 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     frame.joinCompute();
     cmd = frame.cmd;
 
+    lastCamera_.invProj = frame.view.invProj;
+    lastCamera_.relView = frame.view.relView;
+    lastCamera_.relViewProj = frame.view.relViewProj;
+    lastCamera_.eye[0] = frame.view.eye.x;
+    lastCamera_.eye[1] = frame.view.eye.y;
+    lastCamera_.eye[2] = frame.view.eye.z;
+
     // Inspection copies the render's result and depth out with it, with its
     // camera.
     const bool inspectCopy = (inspect_ || recorder_.isOpen()) && ensureInspectBuffer();
     if (inspectCopy) {
         recordInspectCopy(cmd);
-        inspectCamera_.invProj = frame.view.invProj;
-        inspectCamera_.relView = frame.view.relView;
-        inspectCamera_.relViewProj = frame.view.relViewProj;
-        inspectCamera_.eye[0] = frame.view.eye.x;
-        inspectCamera_.eye[1] = frame.view.eye.y;
-        inspectCamera_.eye[2] = frame.view.eye.z;
+        inspectCamera_ = lastCamera_;
     }
     // The result stays on the GPU for the compositor; it is copied out for
     // the CPU only when someone read the previous render's pixels.
@@ -385,6 +387,49 @@ bool SceneVkBridge::inspect(ViewInspector::Image image, std::vector<double>& sta
     inspectLuma_.resize(n);
     for (size_t i = 0; i < n; ++i) inspectLuma_[i] = ViewInspector::lumaOf(base + i * 4);
     inspector_.inspect(inspectCamera_, inspectW_, inspectH_, depth, inspectLuma_.data(), image, stats, pixels);
+    return true;
+}
+
+bool SceneVkBridge::readInspectSnapshot(std::vector<uint8_t>& outRgba,
+                                        std::vector<float>& outDepth,
+                                        int& outW, int& outH,
+                                        InspectCamera& outCam) {
+    outRgba.clear();
+    outDepth.clear();
+    outW = outH = 0;
+    const SceneVkImage& ldr = targets_.ldr;
+    const SceneVkImage& depth = targets_.depth;
+    if (!ready_ || renderSerial_ == 0 || !ldr.isValid() || !depth.isValid()) return false;
+
+    const uint32_t w = targets_.width();
+    const uint32_t h = targets_.height();
+    if (w == 0 || h == 0) return false;
+
+    if (inspectSerial_ != renderSerial_ || !inspectBuffer_.isValid() ||
+        inspectW_ != w || inspectH_ != h) {
+        if (!ensureInspectBuffer()) return false;
+        VkCommandBuffer cmd = device_.frames().beginCommands();
+        recordInspectCopy(cmd);
+        inspectTicket_ = device_.frames().submit(cmd);
+        inspectSerial_ = renderSerial_;
+        inspectW_ = w;
+        inspectH_ = h;
+        inspectCamera_ = lastCamera_;
+    }
+
+    if (inspectTicket_ == 0 || !device_.context().queue().wait(inspectTicket_)) {
+        LOG_ERROR("SceneVkBridge: waiting for the inspection snapshot failed");
+        return false;
+    }
+
+    const size_t pixelCount = static_cast<size_t>(inspectW_) * inspectH_;
+    const auto* base = static_cast<const uint8_t*>(inspectBuffer_.mappedData);
+    const auto* depthPtr = reinterpret_cast<const float*>(base + pixelCount * 4);
+    outRgba.assign(base, base + pixelCount * 4);
+    outDepth.assign(depthPtr, depthPtr + pixelCount);
+    outW = static_cast<int>(inspectW_);
+    outH = static_cast<int>(inspectH_);
+    outCam = inspectCamera_;
     return true;
 }
 

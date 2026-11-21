@@ -22,6 +22,7 @@
 #include "bronze_host/host_proxy.h"
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_bro_namespaces.h"
+#include "bronze_host/host_eye.h"
 #include "bronze_host/host_media.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_natives.h"
@@ -188,6 +189,10 @@ void installBroRoots(engine::Engine& engine) {
     {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
+    }
+    {
+        ev::Persistent eye(makeBroEyeValue(true));
+        ev::setProperty(bro->get(), "eye", eye.get());
     }
     {
         // Before bro_core.js, which adds the instance events over it.
@@ -466,6 +471,10 @@ void installWorkerBroRoot() {
     {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
+    }
+    {
+        ev::Persistent eye(makeBroEyeValue(false));
+        ev::setProperty(bro->get(), "eye", eye.get());
     }
     attachBroSolveApis(bro->get());
 

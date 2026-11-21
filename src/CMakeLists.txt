@@ -37,6 +37,7 @@ if(BRO_WITH_VIDEO)
     add_subdirectory(video)
 endif()
 add_subdirectory(engine)
+add_subdirectory(eye)
 
 # bronze JavaScript runtime host layer.
 add_subdirectory(bronze_host)

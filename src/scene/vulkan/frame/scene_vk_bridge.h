@@ -74,6 +74,12 @@ public:
     /// the render itself once a caller has asked in the previous frame, so a
     /// compositor reading every frame pays no extra submission.
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
+    /// The last render's LDR output and reversed-Z depth buffer (and camera)
+    /// read back on demand. Safe even when setInspect(false).
+    bool readInspectSnapshot(std::vector<uint8_t>& outRgba,
+                             std::vector<float>& outDepth,
+                             int& outW, int& outH,
+                             InspectCamera& outCam);
     /// Copy each render's depth and LDR result out with it, for inspect().
     /// Turning it on or off forgets the render compared against.
     void setInspect(bool on);
@@ -153,6 +159,7 @@ private:
     uint64_t inspectedSerial_ = 0;   // the render inspect() last compared
     uint32_t inspectW_ = 0, inspectH_ = 0;
     InspectCamera inspectCamera_;
+    InspectCamera lastCamera_;
     ViewInspector inspector_;
     std::vector<uint8_t> inspectLuma_;
     InspectRecorder recorder_;       // recordInspect

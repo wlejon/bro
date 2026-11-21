@@ -170,6 +170,9 @@ set(BRO_BRONZE_HOST_SOURCES
     host_solve_layout.cpp
     host_solve_rewrite.cpp
     host_text.cpp
+    host_eye.cpp
+    host_eye_marshal.cpp
+    host_eye_taste.cpp
     host_steam.cpp
     host_menu.cpp
     host_video.cpp
@@ -359,7 +362,7 @@ endfunction()
 # only through an engine's symbol table, so no link order is load-bearing.
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl broimage::broimage bronze::runtime_shared bronze::cli brasslua::bronze Vulkan::Vulkan
+    PUBLIC bro_engine bro_eye bro_webgl broimage::broimage bronze::runtime_shared bronze::cli brasslua::bronze Vulkan::Vulkan
 )
 
 # brokit_api supplies the Node half (require(), fs, path, os, child_process,
