@@ -52,7 +52,7 @@
 // is 2^53 - 1 for the 64-bit seeds and the parameter type's maximum for the
 // narrower ones (`Mesh.rock` 2^31 - 1, `sampleSurface` 2^32 - 1): a
 // non-number is a TypeError, a negative, fractional, NaN or out-of-range one
-// a RangeError. (A negative seed used to wrap and seed like a large one.)
+// a RangeError.
 //
 // Receivers and Mesh arguments are brand-checked: only a handle one of
 // bromesh's own classes made is read as that class. Another class's or
@@ -792,7 +792,7 @@ class Mesh {
    *  Area-weighted point cloud over the surface, as a Mesh with positions (and
    *  normals/UVs when the source has them) and no indices.
    * @param {number} [count=100] @param {number} [seed=0] -  0 = non-deterministic.
-   *   An integer in [0, 2^32 - 1] (it used to wrap modulo 2^32).
+   *   An integer in [0, 2^32 - 1].
    * @returns {Mesh}
    */
   sampleSurface(count, seed) {}

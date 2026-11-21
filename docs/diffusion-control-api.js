@@ -541,11 +541,8 @@ class Pipeline {
   //         textRows + Math.floor(py / 16) * 32 + Math.floor(px / 16)
   //
   //     textRows is typically 17-20 for a short prompt — read it from
-  //     qwenImage21TextRows().rows rather than assuming it. Getting this wrong
-  //     used to be silent: a mask written at imgLen instead of
-  //     textRows + imgLen was skipped, and an all-zero one rendered the
-  //     baseline to the pixel, which is how a study concluded the mask surface
-  //     did nothing. A wrong-length mask now throws, naming the joint length
+  //     qwenImage21TextRows().rows rather than assuming it. A wrong-length mask
+  //     (imgLen instead of textRows + imgLen) throws, naming the joint length
   //     and its split.
   //
   //     A rowMask is the prefix-only analogue: one weight per PREFIX row, so
@@ -653,8 +650,7 @@ class Pipeline {
    * A product of an (attn, mlp) pair with a (txt, img) pair cannot say "the
    * attention gate, on the image rows only" — the most useful dial on the
    * model. Under qwenImage21SetGateScale() raising attnScale raises the
-   * prefix's factor too, which invalidates the prefix KV cache (+13%/step) and
-   * used to silently discard a live qwenImage21ScalePrefixKv() edit. Only
+   * prefix's factor too, which invalidates the prefix KV cache (+13%/step). Only
    * attnTxt and mlpTxt are prefix-side here, so an attnImg sweep never
    * re-extracts and cannot disturb the prefix at all.
    *
@@ -798,14 +794,10 @@ class Pipeline {
   // one pass over the activations no matter how many bindings are armed. Ten
   // overlapping bindings cost what one costs.
   //
-  // The qwenImage21Set* calls are unchanged in meaning: each is now sugar for
-  // "replace the whole list with this one entry" — or, with a null tensor or
-  // an empty range (or all-1 scales), "clear the list". A script written
-  // against the single-slot API keeps doing exactly what it did.
-  //
-  // What the list buys is the thing the single-slot API could not express at
-  // all: two different edits, over two different block ranges, live at the
-  // same time. The second qwenImage21SetGateScale() used to erase the first.
+  // Each qwenImage21Set* call is sugar for "replace the whole list with this
+  // one entry" — or, with a null tensor or an empty range (or all-1 scales),
+  // "clear the list". The Add* calls are what put two different edits, over
+  // two different block ranges, live at the same time.
   //
   // Each qwenImage21Add* returns the new binding's index in its list, each
   // qwenImage21Clear* empties the list, and each qwenImage21*Count() reports
@@ -1288,11 +1280,10 @@ class Pipeline {
    *
    *   * it is idempotent — calling it twice with 0.5 is the same as calling it
    *     once, not 0.25 (compose ranges with qwenImage21AddPrefixKvScale());
-   *   * generate() with a scale armed behaves like every other dial, which the
-   *     old in-place version could not do at all;
+   *   * generate() with a scale armed behaves like every other dial;
    *   * the scale SURVIVES a cache reset / re-extract, because it is a dial
    *     and not cache content;
-   *   * it no longer needs a step to have run first — arm it before step 0.
+   *   * it needs no step to have run first — arm it before step 0.
    *
    * 1/1 over the full layer range clears it.
    *
@@ -1452,11 +1443,7 @@ class Pipeline {
 
   // ── the prompt memo ────────────────────────────────────────────────────────
   //
-  // prime(prompt) and generate(prompt) used to throw after
-  // qwenImage21ReleaseTextEncoder() even for a prompt whose embeddings had
-  // already been produced once — the rows existed, but nothing kept them.
-  //
-  // The pipeline now keeps a small memo of the last 8 encoded prompts (prompt
+  // The pipeline keeps a small memo of the last 8 encoded prompts (prompt
   // string -> rows), filled by qwenImage21EncodePrompt() and by every
   // prime/generate that encoded, so a memoized prompt primes with the encoder
   // gone. A prompt that is NOT memoized throws an error naming it.

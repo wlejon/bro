@@ -479,9 +479,7 @@ const fLoss = bro.ai.game.nn.factoredXent(
 // Head sizes are checked wherever a `headSizes` list is taken (these four
 // and createPolicyValueNet): at most 64 heads, every head an integer in
 // 1..2^24, and their product (the flat action count) within int32
-// (2^31 - 1). Anything else is a RangeError naming the argument: a zero head
-// used to divide by zero in decodeFlatAction, and an overflowing product
-// sized the flat buffers wrong.
+// (2^31 - 1). Anything else is a RangeError naming the argument.
 
 /**
  * Turn per-head logits into a flat prior over prod(headSizes): softmax each

@@ -499,7 +499,7 @@ Exec=/home/j/.local/share/bro/bin/org-example-Notes --new-window
 
 `StartupWMClass` is the id, which is also the window's app_id, so a launcher
 matches running windows to their entry. With `--no-exe`, or where no
-executable can be built (macOS for now, or a bro without `bro-app-stub`),
+executable can be built (macOS, or a bro without `bro-app-stub`),
 `Exec=` runs the folder under bro instead: `Exec=/usr/bin/bro
 /home/j/.local/share/bro/apps/org.example.Notes %F`. `--exec` names that bro;
 the default is the bro running the command. `--desktop-entry` prints this

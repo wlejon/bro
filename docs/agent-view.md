@@ -10,23 +10,15 @@ session they travel on broremote's text lane (`bro-ctl --remote HOST`,
 in the same session the person views and without an ssh shell of the
 agent's own.
 
-## Why: the baseline
+## Why
 
-Four small tasks on halo, done by an agent with only screenshots, coordinate
-clicks and the shell's own DOM (2026-10-15): calculate a product in the
-Calculator, add an alarm in Clock, copy a character from Character Map, then
-close a window. It took about 57 calls, 13 screenshots, 9 missteps, and about
-5.5k tokens of context, 85% of them images. Every value the agent needed a
-picture for was a string inside an app ("69,104", "07:30 Alarm", "SNOWMAN
-U+2603", the "Copied" toast). The missteps came from three things:
-- a keystroke that went to an unexpected window;
-- a screenshot taken before an app's dialog had painted (settling covered only
-  the shell's frames);
-- not knowing which window was on top.
-
-The view answers those directly: every action's reply is what changed, after
-the apps' own frames settled, and the window lines say which is on top and
-which has the keyboard.
+An agent working from screenshots and coordinate clicks spends most of its
+context on images, and nearly every value it needs a picture for is a string
+inside an app. Its missteps come from a keystroke going to an unexpected
+window, a screenshot taken before an app's dialog has painted, and not knowing
+which window is on top. The view answers those directly: every action's reply
+is what changed, after the apps' own frames settled, and the window lines say
+which is on top and which has the keyboard.
 
 ## What the agent sees
 
@@ -119,8 +111,7 @@ w3:
   moved changes only its own line.
 - **Sources:** a bro app serves its own view over its control endpoint, and
   the display server asks it. A window whose app serves none (not a bro app)
-  is its line alone. AT-SPI views of other toolkits' apps are not built.
-  Iframes' documents are not included.
+  is its line alone. Iframes' documents are not included.
 
 ## Revisions, diffs and no-change
 
@@ -215,7 +206,6 @@ with `--remote` (it comes back in the reply).
 - `who-has-keys`: the focused window's line and the element with `@`.
 - `clipboard [--local]`: the clipboard's text. A display asks the focused app,
   since the clients' selection is not the compositor's own clipboard.
-- Not built: `hotkeys` (the shell's global shortcuts).
 
 ## How it is built
 

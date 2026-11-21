@@ -323,8 +323,7 @@ class Smoother {
  *     a quaternion, lookAt, animation or physics rotation). The triple is
  *     XYZ radians, the inverse of q = qz * qy * qx. At the gimbal pole
  *     (|pitch| = pi/2) roll is folded into yaw: rotationX reads 0 and
- *     rotationZ carries the combined angle, which is now the correct angle
- *     (it used to read +-pi/2 whatever the rotation was). The fold starts
+ *     rotationZ carries the combined angle. The fold starts
  *     within about 1e-3 rad of the pole, where the separate roll and yaw are
  *     rounding noise. So near straight up or down, rotationX and rotationZ do
  *     not read back as written, but the rotation they describe is the same.

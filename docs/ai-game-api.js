@@ -376,9 +376,8 @@ const wash = hex.movementField('biped', 40, 40, 30);
  * pops in exact distance order with no comparisons; any edge the ring cannot
  * order (off the quantum grid, or longer than the ring) restarts the build on
  * a plain heap — same distances. `pops` counts every frontier pop, stale
- * entries included: an embedder that used to slice this build under a
- * per-tick pop budget can land the finished field on the same tick it
- * would have.
+ * entries included, so an embedder can hold the build to a per-tick pop
+ * budget.
  * @param {string} id - the step table
  * @param {Object} opts
  * @param {Int32Array} opts.seeds - target cells (distance 0), duplicates ignored
