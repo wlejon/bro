@@ -734,12 +734,19 @@ uint32_t hostCollectBetweenFrames() {
     if (!s_bootCollected) {
         s_bootCollected = true;
         s_bootCycle = true;
+        // External memory's ask for a full collection (ArrayBuffers a
+        // Worker transfers in: a mesh, a decoded image) comes here instead
+        // of stopping the world at the page's next allocation.
+        bronze::embed::deferExternalPressure(true);
     }
-    // A busy page under memory pressure is collected by a cycle like any
-    // other (its native memory comes back at the finish, a few frames on)
-    // rather than in one pause in the middle of what keeps it busy.
-    if (s_requested && std::strcmp(s_requested, "pressure (busy)") == 0) {
-        s_requested = nullptr;
+    // A busy page under memory pressure (the process grown, or external
+    // buffers made) is collected by a cycle like any other (its native
+    // memory comes back at the finish, a few frames on) rather than in one
+    // pause in the middle of what keeps it busy.
+    const bool external = bronze::embed::takeExternalPressure();
+    const bool busy = s_requested && std::strcmp(s_requested, "pressure (busy)") == 0;
+    if (external || busy) {
+        if (busy) s_requested = nullptr;
         s_pressurePending = false;
         s_timeSinceLastGcMs = 0.0;
         const bronze::embed::HeapPressure p = bronze::embed::heapPressure();
@@ -749,7 +756,7 @@ uint32_t hostCollectBetweenFrames() {
                 f.startMs = msSince(t0);
                 f.work |= kGcWorkStart;
                 openCycle(f.startMs, p);
-                f.note = "memory pressure";
+                f.note = busy ? "memory pressure" : "external memory";
             }
         }
         f.log();

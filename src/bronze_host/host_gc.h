@@ -39,6 +39,9 @@ enum : uint32_t {
 /// frame's GC work kept within a 0.5 ms budget, then finished and swept in
 /// slices. The pauses then fall in the time the frame left before the next
 /// one rather than inside a frame. Returns the kGcWork bits of what it did.
+/// External memory's ask for a full collection (bronze
+/// deferExternalPressure, set at the first slot) starts a cycle here, as
+/// memory pressure on a busy page does.
 uint32_t hostCollectBetweenFrames();
 
 /// Creates the collector's parked helper threads for the main thread's heap
