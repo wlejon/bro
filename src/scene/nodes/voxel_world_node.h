@@ -29,13 +29,17 @@ struct alignas(16) GpuVoxelRegion {
     float r2[4] = {0.0f, 1.0f, 0.0f, 0.0f};  // xyz: tangent up, w: maxDist (0 = unlimited)
     float r3[4] = {0.0f, 0.0f, 1.0f, 0.0f};  // xyz: tangent forward, w: fadeStart
     uint32_t rootNode = bromesh::kDagNullNode;
-    uint32_t maxDepth = 4;
+    uint32_t maxDepth = 4;  // bits 0-4: maxDepth, 5-31: minDist in metres
     uint32_t flags = 0;
     uint32_t animTickOffset = 0;
     // The content bounds in the region's [0, 1]^3 as unorm16 pairs:
-    // min.x | min.y << 16, min.z | max.x << 16, max.y | max.z << 16.
+    // min.x | min.y << 16, min.z | max.x << 16, max.y | max.z << 16;
+    // then the f32 bits of where the near band ends (minFadeEnd).
     uint32_t content[4] = {0u, 0xFFFF0000u, 0xFFFFFFFFu, 0u};
 };
+
+/// The farthest minDist a region packs (27 bits of metres).
+inline constexpr uint32_t kVoxelMaxMinDist = (1u << 27u) - 1u;
 static_assert(sizeof(GpuVoxelRegion) == 96, "GpuVoxelRegion must be 96 bytes (6 x vec4)");
 
 /// Sparse Voxel DAG region mounted in world space (double-precision center + orthonormal basis).
@@ -48,7 +52,12 @@ struct VoxelRegion {
     float voxelSize = 1.0f;
     uint32_t maxDepth = 4;  // extent = voxelSize * (4 << maxDepth)
     uint32_t rootNode = bromesh::kDagNullNode;
+    // Drawn from minDist (dithered in to minFadeEnd; 0: minDist * 1.35) out
+    // to maxDist (dithered out from fadeStart; maxDist 0: unlimited). One
+    // dither value a pixel, so a region whose minDist / minFadeEnd are
+    // another's fadeStart / maxDist takes over from it with no gap or overlap.
     float minDist = 0.0f;
+    float minFadeEnd = 0.0f;
     float maxDist = 0.0f;
     float fadeStart = 0.0f;
     uint32_t flags = kVoxelRegionEnabled | kVoxelRegionCastShadow;

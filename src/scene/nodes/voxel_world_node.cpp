@@ -94,10 +94,10 @@ GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
     gpu.r3[2] = forward[2];
     gpu.r3[3] = fadeStart;
 
-    const uint32_t minDistU16 = static_cast<uint32_t>(
-        std::clamp(std::lround(static_cast<double>(minDist)), 0L, 65535L));
+    const uint32_t minDistM = static_cast<uint32_t>(
+        std::clamp(std::llround(static_cast<double>(minDist)), 0LL, static_cast<long long>(kVoxelMaxMinDist)));
     gpu.rootNode = rootNode;
-    gpu.maxDepth = (maxDepth & 0xFFFFu) | (minDistU16 << 16u);
+    gpu.maxDepth = (maxDepth & 0x1Fu) | (minDistM << 5u);
     gpu.flags = flags;
     gpu.animTickOffset = animTickOffset;
 
@@ -119,7 +119,8 @@ GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
         gpu.content[1] = lo(contentMin[2]) | (hi(contentMax[0]) << 16u);
         gpu.content[2] = hi(contentMax[1]) | (hi(contentMax[2]) << 16u);
     }
-    gpu.content[3] = 0u;
+    const float nearEnd = minFadeEnd > minDist ? minFadeEnd : minDist * 1.35f;
+    std::memcpy(&gpu.content[3], &nearEnd, sizeof(float));
     return gpu;
 }
 

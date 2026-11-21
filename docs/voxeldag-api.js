@@ -11,7 +11,9 @@
  * - A region is an oriented box in world space (double-precision centre,
  *   orthonormal basis) of `voxelSize * (4 << maxDepth)` metres a side. Its
  *   cells at a target depth hold placed archetypes.
- * - The pass marches every enabled region per pixel. A cell smaller than the
+ * - Each frame the pass keeps the enabled regions whose content is in view
+ *   and in their distance band, nearest first, and marches those per pixel
+ *   (so a world of many fixed tiles costs what is on screen). A cell smaller than the
  *   pixel cone shades from its prefiltered colour, coverage and normal, so
  *   distance costs no more than near. Rays stop at the scene's depth and at
  *   the nearest region hit.
@@ -61,9 +63,16 @@
  * @property {number[]} [forward]  basis z
  * @property {number} [voxelSize=1]
  * @property {number} [maxDepth=4] 1..16; extent = voxelSize * (4 << maxDepth)
- * @property {number} [minDist=0]  nearer than this (dithered up to +35%) is not drawn; 0..65535
+ * @property {number} [minDist=0]  nearer than this is not drawn...
+ * @property {number} [minFadeEnd=0] ...the near edge dithering in up to here
+ *                                  (0: minDist * 1.35)
  * @property {number} [fadeStart=0] the far edge dithers from here...
  * @property {number} [maxDist=0]  ...to here (0: unlimited)
+ *
+ * A pixel has one dither value u, drawing a region from
+ * mix(minDist, minFadeEnd, u) to mix(fadeStart, maxDist, u): a region whose
+ * minDist / minFadeEnd are another's fadeStart / maxDist takes over from it
+ * with neither a gap nor an overlap at any u.
  * @property {boolean} [enabled=true]
  * @property {boolean} [castShadow=true]
  * @property {number} [animTickOffset=0]
@@ -233,6 +242,7 @@ class VoxelWorld {
  *   [1] xyz right, w voxelSize
  *   [2] xyz up, w maxDist
  *   [3] xyz forward, w fadeStart
- *   [4] bits: x root, y maxDepth | minDist << 16, z flags, w animTickOffset
- *   [5] bits: content bounds in [0, 1]^3, unorm16 pairs (voxeldag::content_box)
+ *   [4] bits: x root, y maxDepth | minDist << 5 (metres), z flags, w animTickOffset
+ *   [5] xyz bits: content bounds in [0, 1]^3, unorm16 pairs (voxeldag::content_box);
+ *       w minFadeEnd
  */

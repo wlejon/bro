@@ -438,7 +438,8 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     let r3 = regions[base + 3];
     let max_dist = r2.w;
     let fade_start = r3.w;
-    let min_dist = ((bitcast<u32>(r4.y) >> 16u) & 0xFFFFu) as f32;
+    let min_dist = (bitcast<u32>(r4.y) >> 5u) as f32;
+    let min_fade_end = regions[base + 5].w;
     let u_d = clamp(dither_u, 0.0, 1.0);
     let eff_tick = anim_tick + bitcast<u32>(r4.w);
 
@@ -463,7 +464,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     let tbig = max(t0, t1);
     var t_enter: f32 = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
     if (min_dist > 0.0) {
-        let eff_min = min_dist * (1.0 + 0.35 * u_d);
+        let eff_min = mix(min_dist, min_fade_end, u_d);
         t_enter = max(t_enter, eff_min * inv_ext);
     }
     var t_cap: f32 = t_max_world * inv_ext;

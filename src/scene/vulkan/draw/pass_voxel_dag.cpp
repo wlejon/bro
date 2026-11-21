@@ -24,6 +24,70 @@ namespace bro::scene::vk {
 
 namespace {
 
+// Whether any of `reg`'s content is inside the view's side planes and within
+// its distance band (the band's dithered edges included), and how near the
+// content comes to the eye.
+bool voxelRegionInView(const VoxelRegion& reg, const double eye[3],
+                       const bromath::Mat4& relViewProj, double* nearest) {
+    if (reg.contentMin[0] > reg.contentMax[0] || reg.contentMin[1] > reg.contentMax[1] ||
+        reg.contentMin[2] > reg.contentMax[2]) {
+        return false;
+    }
+    double origin[3];
+    reg.originWorld(origin);
+    const double ext = static_cast<double>(reg.extent());
+    const float* axes[3] = {reg.right, reg.up, reg.forward};
+
+    // The eye in the region's frame, metres from its origin.
+    double local[3];
+    for (int k = 0; k < 3; ++k) {
+        local[k] = 0.0;
+        for (int j = 0; j < 3; ++j) local[k] += (eye[j] - origin[j]) * static_cast<double>(axes[k][j]);
+    }
+    double dNear = 0.0, dFar = 0.0;
+    for (int k = 0; k < 3; ++k) {
+        const double lo = static_cast<double>(reg.contentMin[k]) * ext;
+        const double hi = static_cast<double>(reg.contentMax[k]) * ext;
+        const double out = std::max({lo - local[k], 0.0, local[k] - hi});
+        const double far = std::max(std::abs(local[k] - lo), std::abs(local[k] - hi));
+        dNear += out * out;
+        dFar += far * far;
+    }
+    dNear = std::sqrt(dNear);
+    dFar = std::sqrt(dFar);
+    if (reg.maxDist > 0.0f && dNear > static_cast<double>(reg.maxDist)) return false;
+    if (reg.minDist > 0.0f && dFar < static_cast<double>(reg.minDist)) return false;
+
+    // Outside one side plane (or behind the eye) with all eight corners: culled.
+    int outside[5] = {0, 0, 0, 0, 0};
+    for (int c = 0; c < 8; ++c) {
+        float p[3];
+        for (int j = 0; j < 3; ++j) {
+            double w = origin[j] - eye[j];
+            for (int k = 0; k < 3; ++k) {
+                const float u = ((c >> k) & 1) ? reg.contentMax[k] : reg.contentMin[k];
+                w += static_cast<double>(u) * ext * static_cast<double>(axes[k][j]);
+            }
+            p[j] = static_cast<float>(w);
+        }
+        float clip[4];
+        for (int r = 0; r < 4; ++r) {
+            clip[r] = relViewProj.at(r, 0) * p[0] + relViewProj.at(r, 1) * p[1] +
+                      relViewProj.at(r, 2) * p[2] + relViewProj.at(r, 3);
+        }
+        if (clip[0] < -clip[3]) ++outside[0];
+        if (clip[0] > clip[3]) ++outside[1];
+        if (clip[1] < -clip[3]) ++outside[2];
+        if (clip[1] > clip[3]) ++outside[3];
+        if (clip[3] <= 0.0f) ++outside[4];
+    }
+    for (int i = 0; i < 5; ++i) {
+        if (outside[i] == 8) return false;
+    }
+    *nearest = dNear;
+    return true;
+}
+
 bool anyRenderableVoxelWorld(const SceneFrame& frame) {
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() != SceneNode::Type::VoxelWorld) continue;
@@ -225,13 +289,23 @@ void PassVoxelDag::record(SceneFrame& frame) {
     const float pixelCone = 2.0f / (projY * rows);
 
     for (const VoxelWorldNode* vw : worlds) {
-        std::vector<GpuVoxelRegion> gpuRegs;
-        gpuRegs.reserve(vw->regions().size());
+        // Every pixel marches every region it is given, so a region is given
+        // only when some of its content is in view and in its distance band,
+        // nearest first: a near hit then cuts the farther regions' marches.
+        std::vector<std::pair<double, GpuVoxelRegion>> visible;
+        visible.reserve(vw->regions().size());
         for (const VoxelRegion& reg : vw->regions()) {
             if ((reg.flags & kVoxelRegionEnabled) == 0u || reg.rootNode == bromesh::kDagNullNode) continue;
-            gpuRegs.push_back(reg.packGpu(eye));
+            double nearest = 0.0;
+            if (!voxelRegionInView(reg, eye, frame.view.relViewProj, &nearest)) continue;
+            visible.emplace_back(nearest, reg.packGpu(eye));
         }
-        if (gpuRegs.empty()) continue;
+        if (visible.empty()) continue;
+        std::sort(visible.begin(), visible.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<GpuVoxelRegion> gpuRegs;
+        gpuRegs.reserve(visible.size());
+        for (const auto& v : visible) gpuRegs.push_back(v.second);
 
         const VkDeviceSize regBytes = static_cast<VkDeviceSize>(gpuRegs.size() * sizeof(GpuVoxelRegion));
         render::UploadSlice regSlice = device_->frameUpload(regBytes, storageAlign);

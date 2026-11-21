@@ -205,7 +205,11 @@ void fillRegionFromOpts(Value opts, scene::VoxelRegion& r, bool isCreate) {
         r.maxDepth = static_cast<uint32_t>(intOr(opts, "maxDepth", static_cast<int32_t>(r.maxDepth), 1, 16));
     }
     if (isCreate || !ev::isUndefined(ev::getProperty(opts, "minDist"))) {
-        r.minDist = static_cast<float>(std::clamp(numberOr(opts, "minDist", r.minDist), 0.0, 65535.0));
+        r.minDist = static_cast<float>(std::clamp(numberOr(opts, "minDist", r.minDist), 0.0,
+                                                  static_cast<double>(scene::kVoxelMaxMinDist)));
+    }
+    if (isCreate || !ev::isUndefined(ev::getProperty(opts, "minFadeEnd"))) {
+        r.minFadeEnd = static_cast<float>(std::max(0.0, numberOr(opts, "minFadeEnd", r.minFadeEnd)));
     }
     if (isCreate || !ev::isUndefined(ev::getProperty(opts, "maxDist"))) {
         r.maxDist = static_cast<float>(std::max(0.0, numberOr(opts, "maxDist", r.maxDist)));
