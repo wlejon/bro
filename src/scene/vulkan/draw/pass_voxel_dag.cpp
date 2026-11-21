@@ -1,6 +1,7 @@
 #include "scene/vulkan/draw/pass_voxel_dag.h"
 
 #include "render/vulkan_context.h"
+#include "render/vulkan_util.h"
 #include "scene/nodes/voxel_world_node.h"
 #include "scene/scene_node.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
@@ -140,12 +141,31 @@ bool uploadPagedVec(SceneGpu& gpu, SceneVkBuffer& dst, const bromesh::VoxelDagPo
     };
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(src.size() * sizeof(T));
     if (!dst.isValid() || dst.size < bytes) {
-        gpu.allocator.destroyBuffer(dst);
-        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        // Outgrown: the old buffer is copied into the new one on the GPU and
+        // only the pages written since go up, rather than the whole array
+        // (a pool of hundreds of megabytes) staged in one frame.
+        SceneVkBuffer old = dst;
+        dst = SceneVkBuffer{};
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         if (!gpu.allocator.createBuffer(bytes + bytes / 2, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dst)) {
+            dst = old;
             return false;
         }
-        return upload(0, pages);
+        if (!old.isValid() || sinceGen == 0) {
+            gpu.allocator.destroyBuffer(old);
+            return upload(0, pages);
+        }
+        VkCommandBuffer cmd = gpu.device.uploadCommands();
+        render::cmdBufferBarrier(cmd, old.buffer, 0, VK_WHOLE_SIZE,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        const VkBufferCopy whole{0, 0, std::min(old.size, dst.size)};
+        vkCmdCopyBuffer(cmd, old.buffer, dst.buffer, 1, &whole);
+        render::cmdBufferBarrier(cmd, dst.buffer, 0, VK_WHOLE_SIZE,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        gpu.allocator.destroyBuffer(old);
     }
     const size_t changed = std::min(pageGens.size(), pages);
     for (size_t p = 0; p < changed;) {

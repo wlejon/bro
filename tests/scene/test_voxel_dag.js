@@ -269,6 +269,31 @@ if (!probe.scene) {
         dropped.cancel();
         assert(dropped.take() === null, 'a cancelled job takes nothing');
 
+        // The pool outgrows its GPU buffers after it was drawn: the new
+        // buffers start as copies of the old (only new pages staged), so
+        // what was drawn before draws the same after.
+        const rid2 = world.addRegion({ voxelSize: 0.5, maxDepth: 3, center: [0, 0, 0] });
+        const job2 = world.addArchetypeFromMeshLater({ positions, colors, indices }, 3, { unitBounds: true, fillInterior: true });
+        while (!job2.ready) sleep(5);
+        const green = job2.take();
+        world.place(rid2, 0, 0, 0, green, 0);
+        const before = s.scene.captureFrame();
+        const bricks0 = world.stats().bricks;
+        const held = [];
+        for (let c = 0; c < 6; c++) {
+            const tinted = colors.map((v, i) => (i % 4 === 0 ? (c + 1) / 7 : v));
+            const j = world.addArchetypeFromMeshLater({ positions, colors: tinted, indices }, 5, { unitBounds: true, fillInterior: true });
+            while (!j.ready) sleep(5);
+            held.push(j.take());
+        }
+        assert(world.stats().bricks > bricks0 * 2, `the pool grew past its buffers (${bricks0} to ${world.stats().bricks} bricks)`);
+        const after = s.scene.captureFrame();
+        assert(after.data[mid + 1] > after.data[mid] + 50 && Math.abs(after.data[mid + 1] - before.data[mid + 1]) < 8,
+               `drawn the same after the pool's buffers grew (${before.data[mid + 1]} then ${after.data[mid + 1]})`);
+        for (const h of held) world.releaseArchetype(h);
+        world.releaseArchetype(green);
+        world.clearRegion(rid2);
+
         document.body.removeChild(s.canvas);
         flush();
     }
