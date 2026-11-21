@@ -272,7 +272,10 @@ const terrain = bro.tiles.createCache({
 //                   view has come from the parent's split (0: it has just split
 //                   into this tile) to the tile's own (1), log2 of the parent's
 //                   error clamped to [0, 1], 1 for a root or a tile drawn for
-//                   children not yet ready: a draw mixing what the tile holds
+//                   children not yet ready, and never more than the selects it
+//                   has been drawn for / 24 (a tile come in late, its
+//                   production behind the view, ramps in from its parent):
+//                   a draw mixing what the tile holds
 //                   with what its parent holds at the point (tile x & 1, y & 1
 //                   is the quarter of the parent it covers) by blend changes
 //                   nothing at a split. Without a
