@@ -235,6 +235,31 @@ if (!probe.scene) {
         assert(img.data[mid + 1] > img.data[mid] + 50 && img.data[mid + 1] > img.data[mid + 2] + 50,
                `voxelized mesh renders green at the centre (${img.data[mid]},${img.data[mid + 1]},${img.data[mid + 2]})`);
 
+        // Taken a slice a call (a zero budget: one slice each), a collect
+        // between calls: the same mesh interns to the same archetype, and
+        // what the half-done take made survives the collects.
+        const sliced = world.addArchetypeFromMeshLater({ positions, colors, indices }, 5, { unitBounds: true, fillInterior: true });
+        const t1 = Date.now();
+        while (!sliced.ready && Date.now() - t1 < 10000) sleep(5);
+        let calls = 0, archS = null;
+        while (!archS && calls < 10000) {
+            archS = sliced.take({ budgetMs: 0 });
+            calls++;
+            if (!archS) world.collect();
+        }
+        assert(archS && calls > 3, `a zero-budget take finishes over calls (${calls})`);
+        const whole = world.addArchetypeFromMeshLater({ positions, colors, indices }, 5, { unitBounds: true, fillInterior: true });
+        while (!whole.ready && Date.now() - t1 < 10000) sleep(5);
+        const archW = whole.take();
+        assert(archW && archW.ref === archS.ref, `sliced and whole takes intern one tree (${archS?.ref} vs ${archW?.ref})`);
+        world.releaseArchetype(archS);
+        world.releaseArchetype(archW);
+        const half = world.addArchetypeFromMeshLater({ positions, colors, indices }, 5, { unitBounds: true, fillInterior: true });
+        while (!half.ready && Date.now() - t1 < 10000) sleep(5);
+        assert(half.take({ budgetMs: 0 }) === null, 'a zero-budget take is not done at once');
+        half.cancel();
+        world.collect();
+
         world.releaseArchetype(arch);
         assert(world.stats().liveBricks > base, 'the region still holds the released archetype');
         world.clearRegion(rid);

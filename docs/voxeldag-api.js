@@ -132,12 +132,17 @@ class VoxelWorld {
      * As addArchetypeFromMesh, but the voxelizing runs on a worker thread: the
      * mesh is copied now, and the job's `take()` interns its voxels into the
      * pool once `ready` (costing what its bricks and nodes are, not its
-     * triangles), so a large mesh never stalls a frame.
+     * triangles). A depth-5 archetype is thousands of bricks, milliseconds to
+     * intern: `take({ budgetMs })` interns for at most that long a call and
+     * is null until a call finishes it (what it has interned is held, so no
+     * sweep frees it between calls; `cancel()` lets it go). `take()` alone
+     * finishes at once. After the archetype is returned, take() is null.
      * @example
      *   const job = vd.addArchetypeFromMeshLater(mesh, 5, { unitBounds: true, fillInterior: true });
-     *   // a later frame:
-     *   if (job.ready) vd.place(region, 0, 0, 0, job.take(), 0);
-     * @returns {{ready: boolean, take(): Archetype|null, cancel(): void}}
+     *   // each later frame until it is placed:
+     *   const arch = job.ready ? job.take({ budgetMs: 1 }) : null;
+     *   if (arch) vd.place(region, 0, 0, 0, arch, 0);
+     * @returns {{ready: boolean, take(opts?: {budgetMs?: number}): Archetype|null, cancel(): void}}
      */
     addArchetypeFromMeshLater(mesh, depth, opts) {}
 

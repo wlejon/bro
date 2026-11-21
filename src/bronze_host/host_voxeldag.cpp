@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
@@ -496,11 +497,34 @@ VoxelizeWorker& voxelizeWorker() {
     return w;
 }
 
+// The pool of a world named by its scene graph's token and node id, or null
+// once either is gone (no throw: a finalizer asks too).
+bromesh::VoxelDagPool* poolOf(const std::weak_ptr<scene::SceneGraph::LivenessToken>& token, uint32_t nodeId) {
+    auto tok = token.lock();
+    if (!tok || !tok->graph) return nullptr;
+    scene::SceneNode* n = tok->graph->resolveNode(nodeId);
+    if (!n || n->type() != scene::SceneNode::Type::VoxelWorld) return nullptr;
+    return &static_cast<scene::VoxelWorldNode*>(n)->pool();
+}
+
 struct JobHandle {
     std::shared_ptr<VoxelizeJob> job;
     Rooted world{bronze::Value{}};    // the VoxelWorld it commits into
+    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
+    uint32_t nodeId = 0;
+    // A commit take() has begun and not finished: it holds what it interned.
+    std::unique_ptr<bromesh::DagBrickCommit> commit;
     bool taken = false;
-    ~JobHandle() { if (job) job->cancelled.store(true, std::memory_order_release); }
+
+    void dropCommit() {
+        if (!commit) return;
+        if (auto* pool = poolOf(token, nodeId)) commit->release(*pool);
+        commit.reset();
+    }
+    ~JobHandle() {
+        if (job) job->cancelled.store(true, std::memory_order_release);
+        dropCommit();
+    }
 };
 
 ev::HostClass g_jobClass;
@@ -537,6 +561,9 @@ Value js_addArchetypeFromMeshLater(Value self, std::span<const Value> args) {
     auto h = std::make_unique<JobHandle>();
     h->job = std::move(job);
     h->world.set(self);
+    const auto* wh = static_cast<WorldHandle*>(g_worldClass.unwrap(self));
+    h->token = wh->token;
+    h->nodeId = wh->nodeId;
     return g_jobClass.createInstance(std::move(h));
 }
 
@@ -545,23 +572,41 @@ void decorateJobClass(ev::ObjectBuilder& b) {
         auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
         return ev::fromBool(h && h->job && h->job->done.load(std::memory_order_acquire));
     });
-    // The archetype, interned now (null before `ready`, or once taken).
-    b.def("take", 0, [](Value self, std::span<const Value>) -> Value {
+    // The archetype, interned into the pool (null before `ready`, or once
+    // taken). With { budgetMs } the interning stops when that time is spent
+    // and take() is null; the next take() goes on from there.
+    b.def("take", 1, [](Value self, std::span<const Value> args) -> Value {
         auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
         if (!h || !h->job || h->taken || !h->job->done.load(std::memory_order_acquire)) return ev::null();
         scene::VoxelWorldNode* vw = nullptr;
         worldOf(h->world, "VoxelizeJob.take", &vw);
+        double budgetMs = -1.0;
+        if (!args.empty() && ev::isObject(args[0])) {
+            const Value b = ev::getProperty(args[0], "budgetMs");
+            if (ev::isNumber(b)) budgetMs = std::max(0.0, ev::toDouble(b));
+        }
+        if (!h->commit) h->commit = std::make_unique<bromesh::DagBrickCommit>(std::move(h->job->set));
+        const auto t0 = std::chrono::steady_clock::now();
+        // A slice is a few hundred interns, a few tenths of a millisecond.
+        while (!h->commit->step(vw->pool(), 256)) {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (budgetMs >= 0.0 && ms >= budgetMs) return ev::null();
+        }
         h->taken = true;
-        const uint32_t ref = bromesh::commitVoxelBricks(vw->pool(), h->job->set);
-        const int depth = h->job->set.depth();
-        h->job->set = {};
+        const uint32_t ref = h->commit->root();
+        const int depth = h->commit->depth();
         vw->bumpRegionsGeneration();
-        return makeArchetypeResult(vw, ref, false, depth);
+        const Value out = makeArchetypeResult(vw, ref, false, depth);   // the world's hold
+        h->dropCommit();
+        return out;
     });
     b.def("cancel", 0, [](Value self, std::span<const Value>) -> Value {
         auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
         if (h && h->job) h->job->cancelled.store(true, std::memory_order_release);
-        if (h) h->taken = true;
+        if (h) {
+            h->taken = true;
+            h->dropCommit();
+        }
         return ev::undefined();
     });
 }
