@@ -100,7 +100,51 @@ GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
     gpu.maxDepth = (maxDepth & 0xFFFFu) | (minDistU16 << 16u);
     gpu.flags = flags;
     gpu.animTickOffset = animTickOffset;
+
+    // Rounded outward, so the box always holds what was placed.
+    const auto lo = [](float v) {
+        return static_cast<uint32_t>(std::clamp(std::floor(v * 65535.0f), 0.0f, 65535.0f));
+    };
+    const auto hi = [](float v) {
+        return static_cast<uint32_t>(std::clamp(std::ceil(v * 65535.0f), 0.0f, 65535.0f));
+    };
+    const bool empty = contentMin[0] > contentMax[0] || contentMin[1] > contentMax[1] ||
+                       contentMin[2] > contentMax[2];
+    if (empty) {
+        gpu.content[0] = 0xFFFFFFFFu;
+        gpu.content[1] = 0x0000FFFFu;
+        gpu.content[2] = 0u;
+    } else {
+        gpu.content[0] = lo(contentMin[0]) | (lo(contentMin[1]) << 16u);
+        gpu.content[1] = lo(contentMin[2]) | (hi(contentMax[0]) << 16u);
+        gpu.content[2] = hi(contentMax[1]) | (hi(contentMax[2]) << 16u);
+    }
+    gpu.content[3] = 0u;
     return gpu;
+}
+
+void VoxelRegion::growContent(int ix, int iy, int iz, uint32_t targetDepth) noexcept {
+    const float cell = 1.0f / static_cast<float>(1u << std::min(targetDepth, 16u));
+    const int c[3] = {ix, iy, iz};
+    for (int k = 0; k < 3; ++k) {
+        const float a = std::clamp(static_cast<float>(c[k]) * cell, 0.0f, 1.0f);
+        contentMin[k] = std::min(contentMin[k], a);
+        contentMax[k] = std::max(contentMax[k], std::min(a + cell, 1.0f));
+    }
+}
+
+void VoxelRegion::setContentEmpty() noexcept {
+    for (int k = 0; k < 3; ++k) {
+        contentMin[k] = 1.0f;
+        contentMax[k] = 0.0f;
+    }
+}
+
+void VoxelRegion::setContentFull() noexcept {
+    for (int k = 0; k < 3; ++k) {
+        contentMin[k] = 0.0f;
+        contentMax[k] = 1.0f;
+    }
 }
 
 VoxelWorldNode::VoxelWorldNode(const std::string& name) : SceneNode(name) {}
@@ -113,6 +157,11 @@ uint32_t VoxelWorldNode::addRegion(const VoxelRegion& spec) {
     normalizeAxis(reg.right, 1.0f, 0.0f, 0.0f);
     normalizeAxis(reg.up, 0.0f, 1.0f, 0.0f);
     normalizeAxis(reg.forward, 0.0f, 0.0f, 1.0f);
+    if (reg.rootNode == bromesh::kDagNullNode) {
+        reg.setContentEmpty();
+    } else {
+        reg.setContentFull();
+    }
     refreshCarveFlag(reg);
     regions_.push_back(reg);
     ++regionsGen_;
@@ -138,9 +187,18 @@ bool VoxelWorldNode::updateRegion(uint32_t regionId, const VoxelRegion& spec) {
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
     const uint32_t keepRoot = spec.rootNode != bromesh::kDagNullNode ? spec.rootNode : reg->rootNode;
+    const bool newRoot = keepRoot != reg->rootNode;
+    float keepMin[3], keepMax[3];
+    std::memcpy(keepMin, reg->contentMin, sizeof(keepMin));
+    std::memcpy(keepMax, reg->contentMax, sizeof(keepMax));
     *reg = spec;
     reg->id = regionId;
     reg->rootNode = keepRoot;
+    // Placements are kept in lattice units, so the bounds hold across a move
+    // or a new voxel size; a root swapped in from outside may fill the box.
+    std::memcpy(reg->contentMin, keepMin, sizeof(keepMin));
+    std::memcpy(reg->contentMax, keepMax, sizeof(keepMax));
+    if (newRoot) reg->setContentFull();
     reg->voxelSize = reg->voxelSize > 1e-5f ? reg->voxelSize : 1.0f;
     reg->maxDepth = std::clamp(reg->maxDepth, 1u, 16u);
     normalizeAxis(reg->right, 1.0f, 0.0f, 0.0f);
@@ -156,6 +214,11 @@ bool VoxelWorldNode::setRegionRoot(uint32_t regionId, uint32_t rootNode) {
     VoxelRegion* reg = findRegion(regionId);
     if (!reg) return false;
     reg->rootNode = rootNode;
+    if (rootNode == bromesh::kDagNullNode) {
+        reg->setContentEmpty();
+    } else {
+        reg->setContentFull();
+    }
     refreshCarveFlag(*reg);
     ++regionsGen_;
     bumpChangeGeneration();
@@ -204,6 +267,7 @@ bool VoxelWorldNode::placeSubtree(uint32_t regionId, int ix, int iy, int iz,
         ix, iy, iz,
         childRef,
         isLeaf);
+    if (childRef != bromesh::kDagNullNode) reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
     ++regionsGen_;
     bumpChangeGeneration();
@@ -220,6 +284,9 @@ bool VoxelWorldNode::placeSubtreesBatch(uint32_t regionId,
         reg->rootNode,
         static_cast<int>(targetDepth),
         copy);
+    for (const bromesh::DagPlacement& p : placements) {
+        if (p.childRef != bromesh::kDagNullNode) reg->growContent(p.ix, p.iy, p.iz, targetDepth);
+    }
     refreshCarveFlag(*reg);
     ++regionsGen_;
     bumpChangeGeneration();
@@ -252,6 +319,7 @@ bool VoxelWorldNode::stampCarveAndSolid(uint32_t regionId, int ix, int iy, int i
         ix, iy, iz,
         carveNode,
         solidNode);
+    reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
     ++regionsGen_;
     bumpChangeGeneration();

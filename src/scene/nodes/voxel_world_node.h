@@ -22,7 +22,7 @@ inline constexpr uint32_t kVoxelRegionEnabled = 1u << 0;
 inline constexpr uint32_t kVoxelRegionHasCarve = 1u << 1;
 inline constexpr uint32_t kVoxelRegionCastShadow = 1u << 2;
 
-/// GPU layout for one active SVDAG region (`5 * vec4<f32>` = 80 bytes).
+/// GPU layout for one active SVDAG region (`6 * vec4<f32>` = 96 bytes; voxeldag.bk REGION_STRIDE).
 struct alignas(16) GpuVoxelRegion {
     float r0[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // xyz: camera-relative/world min corner, w: extent
     float r1[4] = {1.0f, 0.0f, 0.0f, 1.0f};  // xyz: tangent right, w: voxelSize
@@ -32,8 +32,11 @@ struct alignas(16) GpuVoxelRegion {
     uint32_t maxDepth = 4;
     uint32_t flags = 0;
     uint32_t animTickOffset = 0;
+    // The content bounds in the region's [0, 1]^3 as unorm16 pairs:
+    // min.x | min.y << 16, min.z | max.x << 16, max.y | max.z << 16.
+    uint32_t content[4] = {0u, 0xFFFF0000u, 0xFFFFFFFFu, 0u};
 };
-static_assert(sizeof(GpuVoxelRegion) == 80, "GpuVoxelRegion must be 80 bytes (5 x vec4)");
+static_assert(sizeof(GpuVoxelRegion) == 96, "GpuVoxelRegion must be 96 bytes (6 x vec4)");
 
 /// Sparse Voxel DAG region mounted in world space (double-precision center + orthonormal basis).
 struct VoxelRegion {
@@ -50,10 +53,19 @@ struct VoxelRegion {
     float fadeStart = 0.0f;
     uint32_t flags = kVoxelRegionEnabled | kVoxelRegionCastShadow;
     uint32_t animTickOffset = 0;
+    // What the placements cover, in the region's [0, 1]^3 (min > max: nothing).
+    // Rays are clipped to it, so a region mostly empty sky costs what its content does.
+    float contentMin[3] = {1.0f, 1.0f, 1.0f};
+    float contentMax[3] = {0.0f, 0.0f, 0.0f};
 
     float extent() const noexcept {
         return voxelSize * static_cast<float>(4u << maxDepth);
     }
+
+    /// Grow the content bounds by cell (ix, iy, iz) of the lattice at `targetDepth`.
+    void growContent(int ix, int iy, int iz, uint32_t targetDepth) noexcept;
+    void setContentEmpty() noexcept;
+    void setContentFull() noexcept;
 
     void originWorld(double out[3]) const noexcept;
     bromath::AABB3 worldBounds() const noexcept;

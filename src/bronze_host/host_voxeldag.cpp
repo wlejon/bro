@@ -166,7 +166,10 @@ bromesh::DagVoxelizeOptions parseVoxOpts(Value opts, int depthDefault, bromesh::
     return o;
 }
 
-Value makeArchetypeResult(uint32_t ref, bool isLeaf, int depth) {
+// An archetype is what a script places again and again, so the pool keeps it
+// through `collect()` whether or not a region reaches it now.
+Value makeArchetypeResult(scene::VoxelWorldNode* vw, uint32_t ref, bool isLeaf, int depth) {
+    vw->pool().pin(ref, isLeaf);
     ev::ObjectBuilder o;
     o.set("ref", static_cast<double>(ref));
     o.set("isLeaf", isLeaf);
@@ -389,7 +392,7 @@ Value buildSdfArchetype(Value self, std::span<const Value> args, bromesh::VoxelS
     }
 
     vw->bumpRegionsGeneration();
-    return makeArchetypeResult(ref, false, outDepth);
+    return makeArchetypeResult(vw, ref, false, outDepth);
 }
 
 Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
@@ -417,7 +420,7 @@ Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
     int outDepth = 0;
     const uint32_t ref = bromesh::voxelizeMeshToDag(vw->pool(), mesh, dagOpts, &outDepth);
     vw->bumpRegionsGeneration();
-    return makeArchetypeResult(ref, false, outDepth);
+    return makeArchetypeResult(vw, ref, false, outDepth);
 }
 
 Value js_addArchetypeFromVox(Value self, std::span<const Value> args) {
@@ -439,7 +442,7 @@ Value js_addArchetypeFromVox(Value self, std::span<const Value> args) {
     int outDepth = 0;
     const uint32_t ref = bromesh::loadVoxToDag(vw->pool(), bytes.data(), bytes.size(), &outDepth, opts.roughness);
     vw->bumpRegionsGeneration();
-    return makeArchetypeResult(ref, false, outDepth);
+    return makeArchetypeResult(vw, ref, false, outDepth);
 }
 
 Value js_addArchetypeFromBox(Value self, std::span<const Value> args) {
@@ -479,7 +482,7 @@ Value js_addArchetypeFromBox(Value self, std::span<const Value> args) {
             ref = vw->pool().internBrick(0xFFFFFFFFu, 0xFFFFFFFFu, 0u, 0u, vattrs);
         }
         vw->bumpRegionsGeneration();
-        return makeArchetypeResult(ref, true, 0);
+        return makeArchetypeResult(vw, ref, true, 0);
     }
 
     bromesh::DagVoxelizeOptions dagOpts;
@@ -498,7 +501,7 @@ Value js_addArchetypeFromBox(Value self, std::span<const Value> args) {
         dagOpts,
         &outDepth);
     vw->bumpRegionsGeneration();
-    return makeArchetypeResult(ref, false, outDepth);
+    return makeArchetypeResult(vw, ref, false, outDepth);
 }
 
 Value js_createWorld(Value, std::span<const Value> args) {
@@ -699,6 +702,8 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         const auto& p = vw->pool();
         ev::ObjectBuilder o;
         o.set("nodes", static_cast<double>(p.nodes().size()));
+        o.set("liveNodes", static_cast<double>(p.liveNodes()));
+        o.set("liveBricks", static_cast<double>(p.liveBricks()));
         o.set("children", static_cast<double>(p.children().size()));
         o.set("bricks", static_cast<double>(p.bricks().size()));
         o.set("attrs", static_cast<double>(p.attrs().size()));
@@ -722,7 +727,7 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         const int oDepth = ev::isObject(a[1]) ? intOr(a[1], "depth", 2, 0, 16) : 2;
         const uint32_t merged = vw->pool().mergeSubtrees(bRef, bLeaf, oRef, oLeaf);
         vw->bumpRegionsGeneration();
-        return makeArchetypeResult(merged, bLeaf && oLeaf, std::max(bDepth, oDepth));
+        return makeArchetypeResult(vw, merged, bLeaf && oLeaf, std::max(bDepth, oDepth));
     });
 
     b.def("makeAnimRef", 2, [](Value self, std::span<const Value> a) -> Value {
@@ -731,7 +736,17 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         if (a.empty()) return ev::throwTypeError("makeAnimRef: clip index required");
         const uint32_t clip = static_cast<uint32_t>(std::max(0.0, ev::toDouble(a[0])));
         const uint32_t phase = a.size() >= 2 ? static_cast<uint32_t>(std::max(0.0, ev::toDouble(a[1]))) : 0u;
-        return makeArchetypeResult(vw->pool().makeAnimChildRef(clip, phase), false, 0);
+        return makeArchetypeResult(vw, vw->pool().makeAnimChildRef(clip, phase), false, 0);
+    });
+
+    // Frees what no region root nor archetype reaches; their slots are reused,
+    // so a world rebuilding rings on the move stays at its working size.
+    b.def("collect", 0, [](Value self, std::span<const Value>) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.collect", &vw);
+        std::vector<uint32_t> roots;
+        for (const scene::VoxelRegion& r : vw->regions()) roots.push_back(r.rootNode);
+        return ev::fromDouble(static_cast<double>(vw->pool().collect(roots)));
     });
 
     b.def("clearRegion", 1, [](Value self, std::span<const Value> a) -> Value {

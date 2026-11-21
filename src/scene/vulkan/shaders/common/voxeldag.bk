@@ -17,6 +17,37 @@ pub const REGION_ENABLED: u32 = 1u;
 pub const REGION_HAS_CARVE: u32 = 2u;
 pub const REGION_CAST_SHADOW: u32 = 4u;
 
+// vec4s a region takes in the regions buffer (GpuVoxelRegion).
+pub const REGION_STRIDE: u32 = 6u;
+
+// Fixed-point bits a region's [0, 1) axis is walked with: 16 node levels
+// and a 4^3 brick's 2, with room under f32's 24-bit mantissa.
+const PATH_BITS: u32 = 22u;
+const PATH_SCALE: f32 = 4194304.0;
+
+// A region's content bounds in its [0, 1]^3 (min > max: empty), from the
+// unorm16 pairs in its sixth vec4.
+pub struct ContentBox {
+    lo: vec3<f32>,
+    hi: vec3<f32>,
+}
+
+pub fn content_box(r5: vec4<f32>) -> ContentBox {
+    let a = bitcast<u32>(r5.x);
+    let b = bitcast<u32>(r5.y);
+    let c = bitcast<u32>(r5.z);
+    let k = 1.0 / 65535.0;
+    return ContentBox {
+        lo: vec3<f32>((a & 0xFFFFu) as f32, (a >> 16u) as f32, (b & 0xFFFFu) as f32) * k,
+        hi: vec3<f32>((b >> 16u) as f32, (c & 0xFFFFu) as f32, (c >> 16u) as f32) * k,
+    };
+}
+
+fn in_content(u: vec3<f32>, cb: ContentBox) -> bool {
+    return u.x >= cb.lo.x && u.y >= cb.lo.y && u.z >= cb.lo.z &&
+           u.x <= cb.hi.x && u.y <= cb.hi.y && u.z <= cb.hi.z;
+}
+
 pub struct TraceHit {
     hit: bool,
     t: f32,
@@ -156,7 +187,7 @@ pub fn is_carved_static_at<BReg, BN, BC, BB>(
 ) -> bool {
     var ri: u32 = 0u;
     while (ri < region_count) {
-        let base = (ri * 5u) as i32;
+        let base = (ri * REGION_STRIDE) as i32;
         let r0 = regions[base];
         let r4 = regions[base + 4];
         let flags = bitcast<u32>(r4.z);
@@ -172,7 +203,8 @@ pub fn is_carved_static_at<BReg, BN, BC, BB>(
         let rel = world_pos - r0.xyz;
         let inv_ext = 1.0 / max(r0.w, 1e-6);
         let u = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
-        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0) {
+        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0 ||
+            !in_content(u, content_box(regions[base + 5]))) {
             ri += 1u;
             continue;
         }
@@ -251,7 +283,7 @@ pub fn is_carved_at<BReg, BN, BC, BB, BClip, BF>(
 ) -> bool {
     var ri: u32 = 0u;
     while (ri < region_count) {
-        let base = (ri * 5u) as i32;
+        let base = (ri * REGION_STRIDE) as i32;
         let r0 = regions[base];
         let r4 = regions[base + 4];
         let flags = bitcast<u32>(r4.z);
@@ -268,7 +300,8 @@ pub fn is_carved_at<BReg, BN, BC, BB, BClip, BF>(
         let rel = world_pos - r0.xyz;
         let inv_ext = 1.0 / max(r0.w, 1e-6);
         let u = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
-        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0) {
+        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0 ||
+            !in_content(u, content_box(regions[base + 5]))) {
             ri += 1u;
             continue;
         }
@@ -390,7 +423,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     clips: BClip,
     frames: BF
 ) -> TraceHit {
-    let base = (ri * 5u) as i32;
+    let base = (ri * REGION_STRIDE) as i32;
     let r0 = regions[base];
     let r4 = regions[base + 4];
     let flags = bitcast<u32>(r4.z);
@@ -418,8 +451,14 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
     let inv_d = safe_inv_dir(rd_n);
 
-    let t0 = (vec3<f32>(0.0) - ro_n) * inv_d;
-    let t1 = (vec3<f32>(1.0) - ro_n) * inv_d;
+    // Entry and exit of the content bounds, not the whole box: the sky over
+    // a region's forest is never marched.
+    let cb = content_box(regions[base + 5]);
+    if (cb.lo.x > cb.hi.x || cb.lo.y > cb.hi.y || cb.lo.z > cb.hi.z) {
+        return no_hit();
+    }
+    let t0 = (cb.lo - ro_n) * inv_d;
+    let t1 = (cb.hi - ro_n) * inv_d;
     let tsmall = min(t0, t1);
     let tbig = max(t0, t1);
     var t_enter: f32 = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
@@ -449,26 +488,47 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     var first_t: f32 = 1e30;
     var first_vox: f32 = r1.w;
 
+    // The path from the root to where the ray is, one node a level: a step
+    // resumes from the deepest cell still holding the new point, not the root.
+    // Cells are read off the point's fixed-point coordinates (PATH_BITS a
+    // axis), so a level's cell is its coordinates' top bits.
+    var path: array<u32, 17>;
+    path[0] = root;
+    var lvl: u32 = 0u;
+    var pix: u32 = 0u;
+    var piy: u32 = 0u;
+    var piz: u32 = 0u;
+
     var step: u32 = 0u;
     while (step < max_steps && t < t_exit) {
         let p = clamp(ro_n + rd_n * t, vec3<f32>(0.0), vec3<f32>(0.999999));
-        var cur: u32 = root;
-        var cell_min: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-        var cell_size: f32 = 1.0;
+        let ix = (p.x * PATH_SCALE) as u32;
+        let iy = (p.y * PATH_SCALE) as u32;
+        let iz = (p.z * PATH_SCALE) as u32;
+        while (lvl > 0u) {
+            let sh = PATH_BITS - lvl;
+            if ((ix >> sh) == (pix >> sh) && (iy >> sh) == (piy >> sh) && (iz >> sh) == (piz >> sh)) {
+                break;
+            }
+            lvl -= 1u;
+        }
+        pix = ix;
+        piy = iy;
+        piz = iz;
+        var cur: u32 = path[lvl];
 
-        var lvl: u32 = 0u;
         while (lvl < 16u) {
             let n = nodes[cur as i32];
             let masks = n.x;
             let solid_mask = masks & 0xFFu;
-            let sub_size = cell_size * 0.5;
-            let inv_cell = 1.0 / max(cell_size, 1e-6);
-            let rel_p = (p - cell_min) * inv_cell;
-            let ox = rel_p.x >= 0.5 ? 1u : 0u;
-            let oy = rel_p.y >= 0.5 ? 1u : 0u;
-            let oz = rel_p.z >= 0.5 ? 1u : 0u;
+            let sh = PATH_BITS - 1u - lvl;
+            let ox = (ix >> sh) & 1u;
+            let oy = (iy >> sh) & 1u;
+            let oz = (iz >> sh) & 1u;
             let oct = ox | (oy << 1u) | (oz << 2u);
-            let sub_min = cell_min + vec3<f32>(ox as f32, oy as f32, oz as f32) * sub_size;
+            let sub_size = ((1u << sh) as f32) * (1.0 / PATH_SCALE);
+            let sub_min = vec3<f32>(((ix >> sh) << sh) as f32, ((iy >> sh) << sh) as f32,
+                                    ((iz >> sh) << sh) as f32) * (1.0 / PATH_SCALE);
             let sub_max = sub_min + vec3<f32>(sub_size, sub_size, sub_size);
             let t_sub_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, sub_min, sub_max);
             let step_eps = max(max(1e-6, t * 2e-5), sub_size * 1e-4);
@@ -608,9 +668,8 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
             }
 
             cur = resolved;
-            cell_min = sub_min;
-            cell_size = sub_size;
             lvl += 1u;
+            path[lvl] = resolved;
         }
         step += 1u;
     }
@@ -676,7 +735,7 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
     var vis: f32 = 1.0;
     var ri: u32 = 0u;
     while (ri < region_count && vis > 0.02) {
-        let base = (ri * 5u) as i32;
+        let base = (ri * REGION_STRIDE) as i32;
         let r0 = regions[base];
         let r4 = regions[base + 4];
         let flags = bitcast<u32>(r4.z);
@@ -702,8 +761,13 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
         let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
         let inv_d = safe_inv_dir(rd_n);
 
-        let t0 = (vec3<f32>(0.0) - ro_n) * inv_d;
-        let t1 = (vec3<f32>(1.0) - ro_n) * inv_d;
+        let cb = content_box(regions[base + 5]);
+        if (cb.lo.x > cb.hi.x || cb.lo.y > cb.hi.y || cb.lo.z > cb.hi.z) {
+            ri += 1u;
+            continue;
+        }
+        let t0 = (cb.lo - ro_n) * inv_d;
+        let t1 = (cb.hi - ro_n) * inv_d;
         let tsmall = min(t0, t1);
         let tbig = max(t0, t1);
         let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
