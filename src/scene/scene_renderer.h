@@ -567,6 +567,15 @@ public:
     void invalidateShadowPages() { shadowPages_.invalidateAll(); }
 
 private:
+    // compileShaderModule's answers by all a check compiles from: a module
+    // set on node after node is checked once (until reloadShaders).
+    struct ShaderCheck {
+        bool ok = false;
+        bool hasVertex = false;
+        std::string err;
+    };
+    std::unordered_map<std::string, ShaderCheck> shaderChecks_;
+
     // Rebuilds frameLights_ (see frameLights()).
     void collectLights(std::vector<LightNode*>& out) const;
 

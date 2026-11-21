@@ -350,14 +350,45 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
                                         bool& hasVertexOut, std::string& errOut,
                                         const std::vector<std::pair<std::string, double>>& knobs) {
     hasVertexOut = false;
-    if (target == CustomShaderTarget::Volume) return compileVolumeModule(module, file, modules, errOut, knobs);
-    // Every stage the hook may draw with starts at once; the check below
-    // waits only for the two it takes.
-    vk::warmMeshHook(target, module, file, modules, knobs);
-    vk::KernelMeshHook hook;
-    if (!vk::compileKernelMeshHook(target, module, file, modules, hook, errOut, knobs)) return false;
-    hasVertexOut = hook.hasVertex;
-    return true;
+    std::string key(1, static_cast<char>('0' + static_cast<int>(target)));
+    for (const std::string* s : {&file, &module}) {
+        key += '\x1f';
+        key += *s;
+    }
+    for (const auto& [name, source] : modules) {
+        key += '\x1e';
+        key += name;
+        key += '\x1f';
+        key += source;
+    }
+    for (const auto& [name, value] : knobs) {
+        key += '\x1d';
+        key += name;
+        key += '=';
+        key += std::to_string(value);
+    }
+    if (auto it = shaderChecks_.find(key); it != shaderChecks_.end()) {
+        hasVertexOut = it->second.hasVertex;
+        errOut = it->second.err;
+        return it->second.ok;
+    }
+    ShaderCheck check;
+    if (target == CustomShaderTarget::Volume) {
+        check.ok = compileVolumeModule(module, file, modules, check.err, knobs);
+    } else {
+        // Every stage the hook may draw with starts at once; the check below
+        // waits only for the two it takes.
+        vk::warmMeshHook(target, module, file, modules, knobs);
+        vk::KernelMeshHook hook;
+        check.ok = vk::compileKernelMeshHook(target, module, file, modules, hook, check.err, knobs);
+        check.hasVertex = check.ok && hook.hasVertex;
+    }
+    hasVertexOut = check.hasVertex;
+    errOut = check.err;
+    const bool ok = check.ok;
+    if (shaderChecks_.size() >= 512) shaderChecks_.clear();
+    shaderChecks_.emplace(std::move(key), std::move(check));
+    return ok;
 }
 
 std::function<bool()> SceneRenderer::prepareShaderModule(CustomShaderTarget target, const std::string& module,
@@ -370,6 +401,7 @@ std::function<bool()> SceneRenderer::prepareShaderModule(CustomShaderTarget targ
 
 void SceneRenderer::reloadShaders(const std::vector<std::pair<std::string, std::string>>& sources) {
     vk::bumpKernelHookReloadGeneration();
+    shaderChecks_.clear();
     auto reloadState = [&sources](CustomShaderState& cs) {
         if (!cs.moduleFile.empty() && cs.moduleFile.front() != '<') {
             std::ifstream ifs(cs.moduleFile, std::ios::binary);
