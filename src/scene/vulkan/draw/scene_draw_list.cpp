@@ -36,6 +36,7 @@ bool drawsContent(const SceneFrame& frame, const SceneNode& node) {
     case SceneNode::Type::GaussianSplat:
     case SceneNode::Type::Particles3D:
     case SceneNode::Type::Decal:
+    case SceneNode::Type::VoxelWorld:
         return true;
     case SceneNode::Type::Light:
         return frame.renderer.showLightIcons() || node.hasWorldAnchor();

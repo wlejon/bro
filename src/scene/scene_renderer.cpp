@@ -3,6 +3,7 @@
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/decal_node.h"
+#include "scene/nodes/voxel_world_node.h"
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
@@ -139,6 +140,9 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n, bool 
         local.min = Vec3{-0.5f, -0.5f, -0.5f};
         local.max = Vec3{0.5f, 0.5f, 0.5f};
         return bromath::atransform(local, n->worldMatrix());
+    }
+    case SceneNode::Type::VoxelWorld: {
+        return static_cast<const VoxelWorldNode*>(n)->worldBounds();
     }
     default:
         return std::nullopt;

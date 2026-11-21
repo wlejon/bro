@@ -1,0 +1,161 @@
+// Fullscreen SVDAG raymarching pass composing into HDR + indirect + reversed-Z depth.
+import scene;
+import lighting;
+import voxeldag;
+
+struct VoxelDagParams {
+    counts: vec4<u32>,   // x: region_count, y: anim_tick, z: max_steps, w: shadow_steps
+    scales: vec4<f32>,   // x: lod_scale, y: pixel_cone, z: pad, w: pad
+}
+
+@binding(2, 0) var u_scene_depth: sampler2d<f32>;
+@binding(2, 1) var u_params: uniform<VoxelDagParams>;
+@binding(2, 2) var b_regions: read_buffer<vec4<f32>>;
+@binding(2, 3) var b_nodes: read_buffer<vec4<u32>>;
+@binding(2, 4) var b_children: read_buffer<u32>;
+@binding(2, 5) var b_bricks: read_buffer<vec4<u32>>;
+@binding(2, 6) var b_attrs: read_buffer<u32>;
+@binding(2, 7) var b_anim_clips: read_buffer<vec4<u32>>;
+@binding(2, 8) var b_anim_frames: read_buffer<u32>;
+
+struct VoxelFragOut {
+    color: vec4<f32>,
+    indirect: vec4<f32>,
+    depth: f32,
+}
+
+@vertex fn voxeldag_vert() {
+    let vid = vertex_index();
+    let uv = vec2<f32>(((vid << 1) & 2) as f32, (vid & 2) as f32);
+    set_vertex_output(0, uv);
+    set_vertex_position(vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0));
+}
+
+fn scene_t_max(fc: vec2<f32>) -> f32 {
+    let p = vec2<i32>(floor(fc));
+    let d = u_scene_depth.fetch(p, 0);
+    if (d <= 0.0) {
+        return 1e30;
+    }
+    let uv = vec2<f32>(
+        fc.x / max(scene::camera.viewport.x, 1.0),
+        fc.y / max(scene::camera.viewport.y, 1.0)
+    );
+    let v = scene::mul4(scene::camera.inv_proj, vec4<f32>(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, d, 1.0));
+    let inv_vw = (v.w >= 0.0 ? 1.0 : -1.0) / max(abs(v.w), 1e-6);
+    return length(v.xyz * inv_vw);
+}
+
+fn shade_voxeldag() -> VoxelFragOut {
+    let fc = frag_coord().xy;
+    let rd = scene::view_ray(fc);
+    let t_max = scene_t_max(fc);
+    let count = u_params.counts.x;
+    let tick = u_params.counts.y;
+    let max_steps = u_params.counts.z;
+    let shadow_steps = u_params.counts.w;
+    let lod_scale = u_params.scales.x;
+    let pixel_cone = u_params.scales.y;
+
+    var best = voxeldag::no_hit();
+    var best_t: f32 = t_max;
+    var ri: u32 = 0u;
+    while (ri < count) {
+        let hit = voxeldag::trace_region(
+            vec3<f32>(0.0, 0.0, 0.0),
+            rd,
+            best_t,
+            pixel_cone,
+            lod_scale,
+            max_steps,
+            tick,
+            ri,
+            b_regions,
+            b_nodes,
+            b_children,
+            b_bricks,
+            b_attrs,
+            b_anim_clips,
+            b_anim_frames
+        );
+        if (hit.hit && hit.t < best_t) {
+            best = hit;
+            best_t = hit.t;
+        }
+        ri += 1u;
+    }
+
+    if (!best.hit || best.t >= t_max) {
+        discard_fragment();
+    }
+
+    var sun_vis: f32 = 1.0;
+    if (shadow_steps > 0u && lighting::sun_index() >= 0) {
+        let sun_dir = lighting::to_sun();
+        let bias = max(best.voxel_size * 0.75, best.t * 2e-4);
+        let s_ro = best.pos + best.normal * bias;
+        sun_vis = voxeldag::trace_shadow(
+            s_ro,
+            sun_dir,
+            max(best.voxel_size * 64.0, 256.0),
+            pixel_cone,
+            shadow_steps,
+            tick,
+            count,
+            b_regions,
+            b_nodes,
+            b_children,
+            b_bricks,
+            b_anim_clips,
+            b_anim_frames
+        );
+    }
+
+    let ls = lighting::Surface {
+        position: best.pos,
+        normal: best.normal,
+        view: -rd,
+        cam_dist: best.t,
+        base_color: best.color,
+        metallic: 0.0,
+        roughness: clamp(best.roughness, 0.08, 1.0),
+        receives_shadow: true,
+        two_sided: false,
+        subsurface: 0.0,
+        translucency: 0.0,
+        sun_visibility: sun_vis,
+        sky_visibility: 1.0,
+        sky_normal: best.normal,
+        occluder_sun: 0.0,
+        sun_diffuse: 0.0,
+    };
+
+    var indirect: vec3<f32> = lighting::ambient(ls);
+    let emissive = best.color * best.emissive;
+    var color: vec3<f32> = lighting::direct_light(ls) + indirect + emissive;
+    let air = lighting::air(best.pos, best.t);
+    color = color * air.transmittance + air.inscatter;
+    indirect *= air.transmittance;
+
+    let hdr_max = vec3<f32>(scene::HDR_MAX, scene::HDR_MAX, scene::HDR_MAX);
+    let cpos = scene::clip(best.pos);
+    let z = clamp(cpos.z / max(cpos.w, 1e-6), 0.0, 1.0);
+    return VoxelFragOut {
+        color: vec4<f32>(min(color, hdr_max), 1.0),
+        indirect: vec4<f32>(min(indirect, hdr_max), 0.0),
+        depth: z,
+    };
+}
+
+@fragment fn voxeldag_frag(@location(0) in_uv: vec2<f32>) {
+    let out = shade_voxeldag();
+    set_frag_output(0, out.color);
+    set_frag_depth(out.depth);
+}
+
+@fragment fn voxeldag_indirect_frag(@location(0) in_uv: vec2<f32>) {
+    let out = shade_voxeldag();
+    set_frag_output(0, out.color);
+    set_frag_output(1, out.indirect);
+    set_frag_depth(out.depth);
+}

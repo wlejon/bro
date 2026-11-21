@@ -388,6 +388,9 @@ if(BRO_WITH_KERNEL)
     # bro's half of `bro.kernel` (host_kernel_gpu.h): kernels on the engine's
     # device, and `bro.tiles` (host_tiles.h), tile caches filled by kernels.
     target_sources(bro_bronze_host PRIVATE host_kernel_gpu.cpp host_tiles.cpp)
+    if(BRO_WITH_3D)
+        target_sources(bro_bronze_host PRIVATE host_voxeldag.cpp)
+    endif()
 endif()
 
 if(BRO_WITH_TENSOR)

@@ -39,6 +39,8 @@
 #include "volume_near.bk.src.h"
 #include "near_grid.bk.src.h"
 #include "near_none.bk.src.h"
+#include "voxeldag.bk.src.h"
+#include "voxeldag_pass.bk.src.h"
 
 namespace bro::scene::vk {
 
@@ -93,7 +95,7 @@ std::string engineSource(const char* file, const char* embedded) {
 
 constexpr const char* kEngineModules[] = {
     "wind", "scene", "atmosphere", "lighting", "custom", "volume", "near",
-    "vegetation", "procedural", "bark", "mesh", "hook"
+    "vegetation", "procedural", "bark", "mesh", "hook", "voxeldag"
 };
 
 bool checkModuleNames(const std::string& file, const KernelHookModules& modules, std::string& err) {
@@ -121,6 +123,7 @@ void applyCompileOptions(brokernel::CompileOptions& opts, const KernelHookKnobs&
 
 void registerCommonModules(brokernel::Compiler& compiler, const KernelHookModules& modules) {
     compiler.register_module("tiles", bro::tilecache::tilesModuleSource());
+    compiler.register_module("voxeldag", engineSource("common/voxeldag.bk", kBkVoxelDagSrc));
     for (const auto& [name, source] : modules) compiler.register_module(name, source);
     compiler.register_module("wind", engineSource("common/wind.bk", kBkWindSrc));
     compiler.register_module("scene", engineSource("common/scene.bk", kBkSceneSrc));
@@ -540,6 +543,14 @@ VkShaderModule createKernelStageModule(VkDevice dev, const char* file, const cha
         return VK_NULL_HANDLE;
     }
     return SceneVkShaderModule::create(dev, stage.spirv);
+}
+
+std::string voxelDagModuleSource() {
+    return engineSource("common/voxeldag.bk", kBkVoxelDagSrc);
+}
+
+bool compileKernelVoxelDagStage(const char* entry, KernelHookStage& out, std::string& err) {
+    return compileKernelStage("draw/voxeldag_pass.bk", kBkVoxelDagPassSrc, entry, out, err);
 }
 
 uint64_t kernelHookReloadGeneration() {

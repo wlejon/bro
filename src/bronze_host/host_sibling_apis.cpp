@@ -73,6 +73,9 @@
 #include "bronze_host/host_kernel_gpu.h"
 #include "bronze_host/host_tiles.h"
 #include <brokernel/api.h>
+#if BRO_WITH_3D
+#include "bronze_host/host_voxeldag.h"
+#endif
 #endif
 #if BRO_WITH_3D
 #include <bromesh/api.h>
@@ -479,6 +482,9 @@ void installSiblingApis(engine::Engine& engine) {
     brokernel::api::installKernel();
     installKernelBackground();
     installTiles(engine);
+#if BRO_WITH_3D
+    installVoxelDag(engine);
+#endif
 #endif
     {
         // `bro.image` is ONE object with two sources: the kernels, codecs

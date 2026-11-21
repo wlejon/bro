@@ -105,6 +105,12 @@ bool compileKernelStage(const char* file, const char* embedded, const char* entr
 /// Compile a built-in stage entry point from `file` and create its VkShaderModule.
 VkShaderModule createKernelStageModule(VkDevice dev, const char* file, const char* embedded, const char* entry);
 
+/// Source text of the shared `voxeldag` brokernel module (for host JS/kernel callers).
+std::string voxelDagModuleSource();
+
+/// Compile a built-in SVDAG pass stage entry point from draw/voxeldag_pass.bk.
+bool compileKernelVoxelDagStage(const char* entry, KernelHookStage& out, std::string& err);
+
 /// Compile a volume's hook module (`file` names it in diagnostics).
 bool compileKernelVolumeHook(const std::string& module, const std::string& file, const KernelHookModules& modules,
                              KernelVolumeHook& out, std::string& err,

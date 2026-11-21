@@ -35,6 +35,7 @@ class ParticleNode;
 class Particles3DNode;
 class DecalNode;
 class ReflectionProbeNode;
+class VoxelWorldNode;
 class AgentBinding;
 class AIWorldTicker;
 class Tween;
@@ -68,6 +69,7 @@ public:
     CameraNode* createCamera(const std::string& name = "");
     DecalNode* createDecal(const std::string& name = "");
     ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
+    VoxelWorldNode* createVoxelWorld(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);

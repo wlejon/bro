@@ -13,6 +13,7 @@
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/physics_node.h"
 #include "scene/nodes/reflection_probe_node.h"
+#include "scene/nodes/voxel_world_node.h"
 #include "scene/nodes/shape_node.h"
 #include "scene/nodes/skinned_mesh_node.h"
 #include "scene/nodes/sprite_node.h"
@@ -182,6 +183,13 @@ ReflectionProbeNode* SceneGraph::createReflectionProbe(const std::string& name) 
     return ptr;
 }
 
+VoxelWorldNode* SceneGraph::createVoxelWorld(const std::string& name) {
+    auto node = std::make_unique<VoxelWorldNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 void SceneGraph::setActiveCamera(CameraNode* cam) {
     if (!cam) {
         activeCameraId_ = 0;
@@ -281,6 +289,7 @@ void SceneGraph::tickAnimations(float dtSec) {
         if (t == SceneNode::Type::Particles ||
             t == SceneNode::Type::Particles3D ||
             t == SceneNode::Type::Sprite ||
+            t == SceneNode::Type::VoxelWorld ||
             (t == SceneNode::Type::Mesh && static_cast<MeshNode*>(node.get())->asSkinnedMesh() != nullptr)) {
             nodeIds.push_back(id);
         }

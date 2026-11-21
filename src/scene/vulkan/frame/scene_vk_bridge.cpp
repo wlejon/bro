@@ -6,6 +6,7 @@
 #include "scene/vulkan/draw/pass_billboard.h"
 #include "scene/vulkan/draw/pass_decal.h"
 #include "scene/vulkan/draw/pass_volume.h"
+#include "scene/vulkan/draw/pass_voxel_dag.h"
 #include "scene/vulkan/post/pass_dof.h"
 #include "scene/vulkan/lighting/pass_atmosphere.h"
 #include "scene/vulkan/lighting/pass_environment.h"
@@ -57,6 +58,8 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassReflectionProbe>());
     graph_.add(std::make_unique<PassEnvironment>());
     graph_.add(std::make_unique<PassOpaque>());
+    graph_.add(std::make_unique<PassVoxelDagPreDepth>());
+    graph_.add(std::make_unique<PassVoxelDag>());
     // The pages the opaque surfaces' pixels need, for the next plans.
     graph_.add(std::make_unique<PassShadowMark>());
     graph_.add(std::make_unique<PassDepthSnapshot>());

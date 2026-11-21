@@ -59,6 +59,8 @@ embed_vk_shader(draw/volume_main.bk             kBkVolumeMainSrc)
 embed_vk_shader(draw/volume_near.bk             kBkVolumeNearSrc)
 embed_vk_shader(draw/near_grid.bk               kBkNearGridSrc)
 embed_vk_shader(draw/near_none.bk               kBkNearNoneSrc)
+embed_vk_shader(common/voxeldag.bk              kBkVoxelDagSrc)
+embed_vk_shader(draw/voxeldag_pass.bk           kBkVoxelDagPassSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -92,6 +94,7 @@ add_library(bro_scene STATIC
     nodes/particles3d_node.cpp
     nodes/decal_node.cpp
     nodes/reflection_probe_node.cpp
+    nodes/voxel_world_node.cpp
     nodes/terrain_manager.cpp
     nodes/terrain_manager_mesh.cpp
     nodes/terrain_manager_raycast.cpp
@@ -133,6 +136,7 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_particles.cpp
     vulkan/draw/pass_billboard.cpp
     vulkan/draw/pass_gaussian_splat.cpp
+    vulkan/draw/pass_voxel_dag.cpp
     vulkan/lighting/scene_lighting.cpp
     vulkan/lighting/scene_environment.cpp
     vulkan/lighting/scene_atmosphere.cpp
@@ -205,4 +209,9 @@ if(BRO_BUILD_TESTS)
     target_link_libraries(bro_sdf_gpu_tracer_test PRIVATE bro_scene bro_engine bro_dom bro_engine
                           bro_render bro_platform bro_util bromesh bromath brass skia Vulkan::Vulkan)
     target_include_directories(bro_sdf_gpu_tracer_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    add_executable(bro_voxel_dag_test tests/test_voxel_dag.cpp)
+    target_link_libraries(bro_voxel_dag_test PRIVATE bro_scene bro_engine bro_dom bro_engine
+                          bro_render bro_platform bro_util bromesh bromath brass brokernel skia Vulkan::Vulkan)
+    target_include_directories(bro_voxel_dag_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()

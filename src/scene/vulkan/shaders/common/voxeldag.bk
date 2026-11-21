@@ -1,0 +1,656 @@
+// Sparse Voxel DAG traversal, carving queries, and pixel-cone LOD filtering.
+// All GPU storage buffers are passed explicitly as generic parameters so this
+// module introduces no descriptor set bindings of its own and can be imported
+// alongside both PassVoxelDag (set 2) and custom mesh/tile hooks (set 4).
+module voxeldag;
+
+pub const DAG_INVALID: u32 = 0xFFFFFFFFu;
+pub const DAG_ANIM_BIT: u32 = 0x80000000u;
+
+pub const DAG_FLAG_UNIFORM_CARVE: u32 = 1u;
+pub const DAG_FLAG_EMISSIVE: u32 = 2u;
+
+pub const DAG_BRICK_UNIFORM_ATTR: u32 = 1u;
+pub const DAG_BRICK_UNIFORM_CARVE: u32 = 2u;
+
+pub const REGION_ENABLED: u32 = 1u;
+pub const REGION_HAS_CARVE: u32 = 2u;
+pub const REGION_CAST_SHADOW: u32 = 4u;
+
+pub struct TraceHit {
+    hit: bool,
+    t: f32,
+    pos: vec3<f32>,
+    normal: vec3<f32>,
+    color: vec3<f32>,
+    roughness: f32,
+    emissive: f32,
+    voxel_size: f32,
+}
+
+pub fn no_hit() -> TraceHit {
+    return TraceHit {
+        hit: false,
+        t: 1e30,
+        pos: vec3<f32>(0.0, 0.0, 0.0),
+        normal: vec3<f32>(0.0, 1.0, 0.0),
+        color: vec3<f32>(0.0, 0.0, 0.0),
+        roughness: 0.8,
+        emissive: 0.0,
+        voxel_size: 1.0,
+    };
+}
+
+pub fn popcount32(v0: u32) -> u32 {
+    var v: u32 = v0 - ((v0 >> 1u) & 0x55555555u);
+    v = (v & 0x33333333u) + ((v >> 2u) & 0x33333333u);
+    return (((v + (v >> 4u)) & 0x0F0F0F0Fu) * 0x01010101u) >> 24u;
+}
+
+pub fn popcount_below32(mask: u32, bit: u32) -> u32 {
+    if (bit == 0u) {
+        return 0u;
+    }
+    if (bit >= 32u) {
+        return popcount32(mask);
+    }
+    return popcount32(mask & ((1u << bit) - 1u));
+}
+
+pub fn popcount64_below(lo: u32, hi: u32, bit: u32) -> u32 {
+    if (bit == 0u) {
+        return 0u;
+    }
+    if (bit < 32u) {
+        return popcount32(lo & ((1u << bit) - 1u));
+    }
+    if (bit == 32u) {
+        return popcount32(lo);
+    }
+    if (bit >= 64u) {
+        return popcount32(lo) + popcount32(hi);
+    }
+    return popcount32(lo) + popcount32(hi & ((1u << (bit - 32u)) - 1u));
+}
+
+pub fn bit64_set(lo: u32, hi: u32, bit: u32) -> bool {
+    if (bit < 32u) {
+        return ((lo >> bit) & 1u) != 0u;
+    }
+    return ((hi >> (bit - 32u)) & 1u) != 0u;
+}
+
+pub fn unpack_rgba8(p: u32) -> vec4<f32> {
+    let inv = 1.0 / 255.0;
+    return vec4<f32>(
+        ((p) & 0xFFu) as f32 * inv,
+        ((p >> 8u) & 0xFFu) as f32 * inv,
+        ((p >> 16u) & 0xFFu) as f32 * inv,
+        ((p >> 24u) & 0xFFu) as f32 * inv
+    );
+}
+
+fn sign_nz(v: f32) -> f32 {
+    return v >= 0.0 ? 1.0 : -1.0;
+}
+
+fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    let len2 = dot(v, v);
+    let len = max(sqrt(max(len2, 1e-12)), 1e-6);
+    let inv_len = 1.0 / len;
+    return len2 > 1e-12 ? v * inv_len : fallback;
+}
+
+fn safe_inv_dir(d: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        sign_nz(d.x) / max(abs(d.x), 1e-6),
+        sign_nz(d.y) / max(abs(d.y), 1e-6),
+        sign_nz(d.z) / max(abs(d.z), 1e-6)
+    );
+}
+
+pub fn unpack_oct_normal(p: u32) -> vec3<f32> {
+    let fx = (((p) & 0xFFu) as f32 / 255.0) * 2.0 - 1.0;
+    let fy = (((p >> 8u) & 0xFFu) as f32 / 255.0) * 2.0 - 1.0;
+    let fz = 1.0 - abs(fx) - abs(fy);
+    var rx: f32 = fx;
+    var ry: f32 = fy;
+    if (fz < 0.0) {
+        rx = (1.0 - abs(fy)) * sign_nz(fx);
+        ry = (1.0 - abs(fx)) * sign_nz(fy);
+    }
+    return safe_normalize(vec3<f32>(rx, ry, fz), vec3<f32>(0.0, 1.0, 0.0));
+}
+
+pub fn unpack_roughness(p: u32) -> f32 {
+    return ((p >> 16u) & 0xFFu) as f32 / 255.0;
+}
+
+pub fn unpack_emissive(p: u32) -> f32 {
+    return ((p >> 24u) & 0xFFu) as f32 / 255.0;
+}
+
+pub fn resolve_child<BClip, BF>(raw_ref: u32, tick: u32, clips: BClip, frames: BF) -> u32 {
+    if ((raw_ref & DAG_ANIM_BIT) == 0u) {
+        return raw_ref;
+    }
+    let clip_idx = (raw_ref >> 16u) & 0x7FFFu;
+    let phase = raw_ref & 0xFFFFu;
+    let clip = clips[clip_idx as i32];
+    if (clip.y == 0u) {
+        return DAG_INVALID;
+    }
+    let fidx = clip.x + ((tick + phase) % max(clip.y, 1u));
+    return frames[fidx as i32];
+}
+
+// Point query against all active regions carrying subtractive Carve masks.
+// Safe to call directly from terrain / tile fragment hooks (`discard_fragment`).
+pub fn is_carved_at<BReg, BN, BC, BB, BClip, BF>(
+    world_pos: vec3<f32>,
+    region_count: u32,
+    anim_tick: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    clips: BClip,
+    frames: BF
+) -> bool {
+    var ri: u32 = 0u;
+    while (ri < region_count) {
+        let base = (ri * 5u) as i32;
+        let r0 = regions[base];
+        let r4 = regions[base + 4];
+        let flags = bitcast<u32>(r4.z);
+        let root = bitcast<u32>(r4.x);
+        if ((flags & (REGION_ENABLED | REGION_HAS_CARVE)) != (REGION_ENABLED | REGION_HAS_CARVE) ||
+            root == DAG_INVALID || r0.w <= 0.0) {
+            ri += 1u;
+            continue;
+        }
+        let r1 = regions[base + 1];
+        let r2 = regions[base + 2];
+        let r3 = regions[base + 3];
+        let tick_off = bitcast<u32>(r4.w);
+        let rel = world_pos - r0.xyz;
+        let inv_ext = 1.0 / max(r0.w, 1e-6);
+        let u = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
+        if (u.x < 0.0 || u.x >= 1.0 || u.y < 0.0 || u.y >= 1.0 || u.z < 0.0 || u.z >= 1.0) {
+            ri += 1u;
+            continue;
+        }
+
+        let eff_tick = anim_tick + tick_off;
+        var p: vec3<f32> = u;
+        var cur: u32 = root;
+        var lvl: u32 = 0u;
+        while (lvl < 16u) {
+            let n = nodes[cur as i32];
+            let masks = n.x;
+            let node_flags = (masks >> 24u) & 0xFFu;
+            if ((node_flags & DAG_FLAG_UNIFORM_CARVE) != 0u) {
+                return true;
+            }
+            let carve_mask = (masks >> 8u) & 0xFFu;
+            if (carve_mask == 0u) {
+                break;
+            }
+            let sp = p * 2.0;
+            let ox = sp.x >= 1.0 ? 1u : 0u;
+            let oy = sp.y >= 1.0 ? 1u : 0u;
+            let oz = sp.z >= 1.0 ? 1u : 0u;
+            let oct = ox | (oy << 1u) | (oz << 2u);
+            let bit = 1u << oct;
+            if ((carve_mask & bit) == 0u) {
+                break;
+            }
+
+            let valid_mask = (masks & 0xFFu) | carve_mask;
+            let slot = popcount_below32(valid_mask, oct);
+            let raw_ref = children[(n.y + slot) as i32];
+            let resolved = resolve_child(raw_ref, eff_tick, clips, frames);
+            if (resolved == DAG_INVALID) {
+                break;
+            }
+
+            let child_p = vec3<f32>(
+                sp.x - (ox as f32),
+                sp.y - (oy as f32),
+                sp.z - (oz as f32)
+            );
+            let leaf_mask = (masks >> 16u) & 0xFFu;
+            if ((leaf_mask & bit) != 0u) {
+                let b0 = bricks[(resolved * 2u) as i32];
+                let b1 = bricks[(resolved * 2u + 1u) as i32];
+                if ((b1.w & DAG_BRICK_UNIFORM_CARVE) != 0u) {
+                    return true;
+                }
+                let bp = clamp(floor(child_p * 4.0), vec3<f32>(0.0), vec3<f32>(3.0));
+                let bidx = (bp.x as u32) + ((bp.y as u32) << 2u) + ((bp.z as u32) << 4u);
+                if (bit64_set(b0.z, b0.w, bidx)) {
+                    return true;
+                }
+                break;
+            }
+            cur = resolved;
+            p = child_p;
+            lvl += 1u;
+        }
+        ri += 1u;
+    }
+    return false;
+}
+
+fn box_exit_t(
+    ro_n: vec3<f32>,
+    rd_sx: f32,
+    rd_sy: f32,
+    rd_sz: f32,
+    inv_d: vec3<f32>,
+    bmin: vec3<f32>,
+    bmax: vec3<f32>
+) -> f32 {
+    let ex = ((rd_sx > 0.0 ? bmax.x : bmin.x) - ro_n.x) * inv_d.x;
+    let ey = ((rd_sy > 0.0 ? bmax.y : bmin.y) - ro_n.y) * inv_d.y;
+    let ez = ((rd_sz > 0.0 ? bmax.z : bmin.z) - ro_n.z) * inv_d.z;
+    return min(min(ex, ey), ez);
+}
+
+fn box_entry_normal(
+    ro_n: vec3<f32>,
+    rd_sx: f32,
+    rd_sy: f32,
+    rd_sz: f32,
+    inv_d: vec3<f32>,
+    bmin: vec3<f32>,
+    bmax: vec3<f32>
+) -> vec3<f32> {
+    let tx = ((rd_sx > 0.0 ? bmin.x : bmax.x) - ro_n.x) * inv_d.x;
+    let ty = ((rd_sy > 0.0 ? bmin.y : bmax.y) - ro_n.y) * inv_d.y;
+    let tz = ((rd_sz > 0.0 ? bmin.z : bmax.z) - ro_n.z) * inv_d.z;
+    if (tx >= ty && tx >= tz) {
+        return vec3<f32>(rd_sx > 0.0 ? -1.0 : 1.0, 0.0, 0.0);
+    }
+    if (ty >= tz) {
+        return vec3<f32>(0.0, rd_sy > 0.0 ? -1.0 : 1.0, 0.0);
+    }
+    return vec3<f32>(0.0, 0.0, rd_sz > 0.0 ? -1.0 : 1.0);
+}
+
+// Hierarchical raymarch of one mounted region with continuous cone-filtered LOD,
+// empty/carve octant skipping, O(1) cyclic animation lookup, and 4x4x4 leaf DDA.
+pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    t_max_world: f32,
+    pixel_cone: f32,
+    lod_scale: f32,
+    max_steps: u32,
+    anim_tick: u32,
+    ri: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    attrs: BA,
+    clips: BClip,
+    frames: BF
+) -> TraceHit {
+    let base = (ri * 5u) as i32;
+    let r0 = regions[base];
+    let r4 = regions[base + 4];
+    let flags = bitcast<u32>(r4.z);
+    let root = bitcast<u32>(r4.x);
+    let extent = r0.w;
+    if ((flags & REGION_ENABLED) == 0u || root == DAG_INVALID || extent <= 0.0) {
+        return no_hit();
+    }
+
+    let r1 = regions[base + 1];
+    let r2 = regions[base + 2];
+    let r3 = regions[base + 3];
+    let max_dist = r2.w;
+    let eff_tick = anim_tick + bitcast<u32>(r4.w);
+
+    let rel = ro - r0.xyz;
+    let inv_ext = 1.0 / max(extent, 1e-6);
+    let ro_n = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
+    let rd_n = vec3<f32>(dot(rd, r1.xyz), dot(rd, r2.xyz), dot(rd, r3.xyz));
+    let rd_sx = rd_n.x >= 0.0 ? max(rd_n.x, 1e-6) : min(rd_n.x, -1e-6);
+    let rd_sy = rd_n.y >= 0.0 ? max(rd_n.y, 1e-6) : min(rd_n.y, -1e-6);
+    let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
+    let inv_d = safe_inv_dir(rd_n);
+
+    let t0 = (vec3<f32>(0.0) - ro_n) * inv_d;
+    let t1 = (vec3<f32>(1.0) - ro_n) * inv_d;
+    let tsmall = min(t0, t1);
+    let tbig = max(t0, t1);
+    let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
+    var t_cap: f32 = t_max_world * inv_ext;
+    if (max_dist > 0.0) {
+        t_cap = min(t_cap, max_dist * inv_ext);
+    }
+    let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), t_cap);
+    if (t_enter >= t_exit) {
+        return no_hit();
+    }
+
+    let cone_k = max(pixel_cone * lod_scale, 0.0);
+    var t: f32 = t_enter + max(1e-6, t_enter * 2e-5);
+    var accum_rgb: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    var accum_n: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    var accum_a: f32 = 0.0;
+    var accum_rough: f32 = 0.0;
+    var accum_emis: f32 = 0.0;
+    var first_t: f32 = 1e30;
+    var first_vox: f32 = r1.w;
+
+    var step: u32 = 0u;
+    while (step < max_steps && t < t_exit) {
+        let p = clamp(ro_n + rd_n * t, vec3<f32>(0.0), vec3<f32>(0.999999));
+        var cur: u32 = root;
+        var cell_min: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+        var cell_size: f32 = 1.0;
+
+        var lvl: u32 = 0u;
+        while (lvl < 16u) {
+            let n = nodes[cur as i32];
+            let masks = n.x;
+            let solid_mask = masks & 0xFFu;
+            let sub_size = cell_size * 0.5;
+            let inv_cell = 1.0 / max(cell_size, 1e-6);
+            let rel_p = (p - cell_min) * inv_cell;
+            let ox = rel_p.x >= 0.5 ? 1u : 0u;
+            let oy = rel_p.y >= 0.5 ? 1u : 0u;
+            let oz = rel_p.z >= 0.5 ? 1u : 0u;
+            let oct = ox | (oy << 1u) | (oz << 2u);
+            let sub_min = cell_min + vec3<f32>(ox as f32, oy as f32, oz as f32) * sub_size;
+            let sub_max = sub_min + vec3<f32>(sub_size, sub_size, sub_size);
+            let t_sub_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, sub_min, sub_max);
+            let step_eps = max(max(1e-6, t * 2e-5), sub_size * 1e-4);
+
+            let bit = 1u << oct;
+            if ((solid_mask & bit) == 0u) {
+                t = max(t_sub_exit + step_eps, t + step_eps);
+                break;
+            }
+
+            let valid_mask = (masks & 0xFFu) | ((masks >> 8u) & 0xFFu);
+            let slot = popcount_below32(valid_mask, oct);
+            let raw_ref = children[(n.y + slot) as i32];
+            let leaf_mask = (masks >> 16u) & 0xFFu;
+            let is_leaf = (leaf_mask & bit) != 0u;
+            let resolved = resolve_child(raw_ref, eff_tick, clips, frames);
+            if (resolved == DAG_INVALID) {
+                t = max(t_sub_exit + step_eps, t + step_eps);
+                break;
+            }
+
+            // Continuous pixel-cone LOD termination when octant projects smaller than cone threshold.
+            if (cone_k > 0.0 && sub_size <= t * cone_k) {
+                var pco: u32 = 0u;
+                var pnm: u32 = 0u;
+                var is_emissive: bool = false;
+                if (is_leaf) {
+                    let b1 = bricks[(resolved * 2u + 1u) as i32];
+                    pco = b1.y;
+                    pnm = b1.z;
+                    is_emissive = (pnm >> 24u) != 0u;
+                } else {
+                    let cn = nodes[resolved as i32];
+                    pco = cn.z;
+                    pnm = cn.w;
+                    is_emissive = (((cn.x >> 24u) & 0xFFu) & DAG_FLAG_EMISSIVE) != 0u;
+                }
+                let col_a = unpack_rgba8(pco);
+                let ln = unpack_oct_normal(pnm);
+                var wn: vec3<f32> = r1.xyz * ln.x + r2.xyz * ln.y + r3.xyz * ln.z;
+                if (dot(wn, -rd) < -0.1) {
+                    let fn_loc = box_entry_normal(ro_n, rd_sx, rd_sy, rd_sz, inv_d, sub_min, sub_max);
+                    wn = r1.xyz * fn_loc.x + r2.xyz * fn_loc.y + r3.xyz * fn_loc.z;
+                }
+                wn = safe_normalize(wn, -rd);
+                let w = (1.0 - accum_a) * col_a.w;
+                if (first_t > 1e29 && w > 0.01) {
+                    first_t = t;
+                    first_vox = sub_size * extent;
+                }
+                accum_rgb += col_a.xyz * w;
+                accum_n += wn * w;
+                accum_rough += unpack_roughness(pnm) * w;
+                let em = is_emissive ? unpack_emissive(pnm) * 4.0 : 0.0;
+                accum_emis += em * w;
+                accum_a += w;
+
+                if (accum_a >= 0.95) {
+                    let inv_a = 1.0 / max(accum_a, 1e-4);
+                    let safe_n = safe_normalize(accum_n, -rd);
+                    let w_dist = first_t * extent;
+                    return TraceHit {
+                        hit: true,
+                        t: w_dist,
+                        pos: ro + rd * w_dist,
+                        normal: safe_n,
+                        color: accum_rgb * inv_a,
+                        roughness: accum_rough * inv_a,
+                        emissive: accum_emis * inv_a,
+                        voxel_size: first_vox,
+                    };
+                }
+                t = max(t_sub_exit + step_eps, t + step_eps);
+                break;
+            }
+
+            if (is_leaf) {
+                let b0 = bricks[(resolved * 2u) as i32];
+                let b1 = bricks[(resolved * 2u + 1u) as i32];
+                let vox_size = sub_size * 0.25;
+                let inv_sub = 1.0 / max(sub_size, 1e-6);
+                let brick_end = min(t_exit, t_sub_exit);
+                var bt: f32 = t;
+                var bstep: u32 = 0u;
+                while (bstep < 16u && bt < brick_end) {
+                    let rp = clamp((ro_n + rd_n * bt - sub_min) * inv_sub, vec3<f32>(0.0), vec3<f32>(0.999999)) * 4.0;
+                    let vx = min(floor(rp.x) as u32, 3u);
+                    let vy = min(floor(rp.y) as u32, 3u);
+                    let vz = min(floor(rp.z) as u32, 3u);
+                    let bidx = vx + (vy << 2u) + ((vz << 4u));
+                    let vox_min = sub_min + vec3<f32>(vx as f32, vy as f32, vz as f32) * vox_size;
+                    let vox_max = vox_min + vec3<f32>(vox_size, vox_size, vox_size);
+                    if (bit64_set(b0.x, b0.y, bidx)) {
+                        var attr0: u32 = b1.y;
+                        var attr1: u32 = b1.z;
+                        if ((b1.w & DAG_BRICK_UNIFORM_ATTR) == 0u) {
+                            let rank = popcount64_below(b0.x, b0.y, bidx);
+                            let aidx = ((b1.x + rank) * 2u) as i32;
+                            attr0 = attrs[aidx];
+                            attr1 = attrs[aidx + 1];
+                        }
+                        let col_a = unpack_rgba8(attr0);
+                        let ln = unpack_oct_normal(attr1);
+                        var wn: vec3<f32> = r1.xyz * ln.x + r2.xyz * ln.y + r3.xyz * ln.z;
+                        if (dot(wn, -rd) < -0.1) {
+                            let fn_loc = box_entry_normal(ro_n, rd_sx, rd_sy, rd_sz, inv_d, vox_min, vox_max);
+                            wn = r1.xyz * fn_loc.x + r2.xyz * fn_loc.y + r3.xyz * fn_loc.z;
+                        }
+                        wn = safe_normalize(wn, -rd);
+                        let em = unpack_emissive(attr1) * 4.0;
+                        let w = 1.0 - accum_a;
+                        let hit_t = first_t < 1e29 ? first_t : bt;
+                        let final_rgb = accum_rgb + col_a.xyz * w;
+                        let sum_n = accum_n + wn * w;
+                        let final_n = safe_normalize(sum_n, wn);
+                        let final_r = accum_rough + unpack_roughness(attr1) * w;
+                        let final_em = accum_emis + em * w;
+                        let w_dist = hit_t * extent;
+                        return TraceHit {
+                            hit: true,
+                            t: w_dist,
+                            pos: ro + rd * w_dist,
+                            normal: final_n,
+                            color: final_rgb,
+                            roughness: final_r,
+                            emissive: final_em,
+                            voxel_size: vox_size * extent,
+                        };
+                    }
+                    let t_vx_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, vox_min, vox_max);
+                    let beps = max(max(1e-6, bt * 2e-5), vox_size * 1e-3);
+                    bt = max(t_vx_exit + beps, bt + beps);
+                    bstep += 1u;
+                }
+                t = max(t_sub_exit + step_eps, t + step_eps);
+                break;
+            }
+
+            cur = resolved;
+            cell_min = sub_min;
+            cell_size = sub_size;
+            lvl += 1u;
+        }
+        step += 1u;
+    }
+
+    if (accum_a >= 0.35 && first_t < 1e29) {
+        let inv_a = 1.0 / max(accum_a, 1e-4);
+        let safe_n = safe_normalize(accum_n, -rd);
+        let w_dist = first_t * extent;
+        return TraceHit {
+            hit: true,
+            t: w_dist,
+            pos: ro + rd * w_dist,
+            normal: safe_n,
+            color: accum_rgb * inv_a,
+            roughness: accum_rough * inv_a,
+            emissive: accum_emis * inv_a,
+            voxel_size: first_vox,
+        };
+    }
+    return no_hit();
+}
+
+// Fast coarse sun occlusion visibility across regions marked REGION_CAST_SHADOW.
+pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    max_dist: f32,
+    pixel_cone: f32,
+    max_steps: u32,
+    anim_tick: u32,
+    region_count: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    clips: BClip,
+    frames: BF
+) -> f32 {
+    var vis: f32 = 1.0;
+    var ri: u32 = 0u;
+    while (ri < region_count && vis > 0.02) {
+        let base = (ri * 5u) as i32;
+        let r0 = regions[base];
+        let r4 = regions[base + 4];
+        let flags = bitcast<u32>(r4.z);
+        let root = bitcast<u32>(r4.x);
+        let extent = r0.w;
+        if ((flags & (REGION_ENABLED | REGION_CAST_SHADOW)) != (REGION_ENABLED | REGION_CAST_SHADOW) ||
+            root == DAG_INVALID || extent <= 0.0) {
+            ri += 1u;
+            continue;
+        }
+
+        let r1 = regions[base + 1];
+        let r2 = regions[base + 2];
+        let r3 = regions[base + 3];
+        let eff_tick = anim_tick + bitcast<u32>(r4.w);
+
+        let rel = ro - r0.xyz;
+        let inv_ext = 1.0 / max(extent, 1e-6);
+        let ro_n = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
+        let rd_n = vec3<f32>(dot(rd, r1.xyz), dot(rd, r2.xyz), dot(rd, r3.xyz));
+        let rd_sx = rd_n.x >= 0.0 ? max(rd_n.x, 1e-6) : min(rd_n.x, -1e-6);
+        let rd_sy = rd_n.y >= 0.0 ? max(rd_n.y, 1e-6) : min(rd_n.y, -1e-6);
+        let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
+        let inv_d = safe_inv_dir(rd_n);
+
+        let t0 = (vec3<f32>(0.0) - ro_n) * inv_d;
+        let t1 = (vec3<f32>(1.0) - ro_n) * inv_d;
+        let tsmall = min(t0, t1);
+        let tbig = max(t0, t1);
+        let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
+        let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), max_dist * inv_ext);
+        if (t_enter >= t_exit) {
+            ri += 1u;
+            continue;
+        }
+
+        let cone_k = max(pixel_cone * 2.0, 0.01);
+        var t: f32 = t_enter + max(1e-5, t_enter * 2e-5);
+        var step: u32 = 0u;
+        while (step < max_steps && t < t_exit && vis > 0.02) {
+            let p = clamp(ro_n + rd_n * t, vec3<f32>(0.0), vec3<f32>(0.999999));
+            var cur: u32 = root;
+            var cell_min: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+            var cell_size: f32 = 1.0;
+
+            var lvl: u32 = 0u;
+            while (lvl < 12u) {
+                let n = nodes[cur as i32];
+                let masks = n.x;
+                let solid_mask = masks & 0xFFu;
+                let sub_size = cell_size * 0.5;
+                let inv_cell = 1.0 / max(cell_size, 1e-6);
+                let rel_p = (p - cell_min) * inv_cell;
+                let ox = rel_p.x >= 0.5 ? 1u : 0u;
+                let oy = rel_p.y >= 0.5 ? 1u : 0u;
+                let oz = rel_p.z >= 0.5 ? 1u : 0u;
+                let oct = ox | (oy << 1u) | (oz << 2u);
+                let sub_min = cell_min + vec3<f32>(ox as f32, oy as f32, oz as f32) * sub_size;
+                let sub_max = sub_min + vec3<f32>(sub_size, sub_size, sub_size);
+                let t_sub_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, sub_min, sub_max);
+                let step_eps = max(max(1e-5, t * 2e-5), sub_size * 1e-4);
+
+                let bit = 1u << oct;
+                if ((solid_mask & bit) == 0u) {
+                    t = max(t_sub_exit + step_eps, t + step_eps);
+                    break;
+                }
+
+                let valid_mask = (masks & 0xFFu) | ((masks >> 8u) & 0xFFu);
+                let slot = popcount_below32(valid_mask, oct);
+                let raw_ref = children[(n.y + slot) as i32];
+                let leaf_mask = (masks >> 16u) & 0xFFu;
+                let is_leaf = (leaf_mask & bit) != 0u;
+                let resolved = resolve_child(raw_ref, eff_tick, clips, frames);
+                if (resolved == DAG_INVALID) {
+                    t = max(t_sub_exit + step_eps, t + step_eps);
+                    break;
+                }
+
+                if (is_leaf || sub_size <= t * cone_k) {
+                    var occ: f32 = 0.0;
+                    if (is_leaf) {
+                        let b1 = bricks[(resolved * 2u + 1u) as i32];
+                        occ = unpack_rgba8(b1.y).w;
+                    } else {
+                        let cn = nodes[resolved as i32];
+                        occ = unpack_rgba8(cn.z).w;
+                    }
+                    vis *= (1.0 - clamp(occ * 1.25, 0.0, 1.0));
+                    t = max(t_sub_exit + step_eps, t + step_eps);
+                    break;
+                }
+
+                cur = resolved;
+                cell_min = sub_min;
+                cell_size = sub_size;
+                lvl += 1u;
+            }
+            step += 1u;
+        }
+        ri += 1u;
+    }
+    return clamp(vis, 0.0, 1.0);
+}
