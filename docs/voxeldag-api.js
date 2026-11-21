@@ -12,11 +12,13 @@
  *   orthonormal basis) of `voxelSize * (4 << maxDepth)` metres a side. Its
  *   cells at a target depth hold placed archetypes.
  * - Each frame the pass keeps the enabled regions whose content is in view
- *   and in their distance band, nearest first, and marches those per pixel
- *   (so a world of many fixed tiles costs what is on screen). A cell smaller than the
- *   pixel cone shades from its prefiltered colour, coverage and normal, so
- *   distance costs no more than near. Rays stop at the scene's depth and at
- *   the nearest region hit.
+ *   and in their distance band, nearest first, and draws each as the near
+ *   faces of its content box, a fragment marching that region alone, so a
+ *   world of many fixed tiles costs what is on screen. A hit is never nearer
+ *   than the face drawn, so the early depth test skips a region wholly behind
+ *   the scene or a nearer hit. A cell smaller than the pixel cone shades from
+ *   its prefiltered colour, coverage and normal, so distance costs no more
+ *   than near. Rays stop at the scene's depth.
  * - Rays are clipped to each region's content bounds (the cells its
  *   placements cover), so an empty region, or the sky over a flat forest,
  *   is not marched.

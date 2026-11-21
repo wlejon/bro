@@ -161,7 +161,10 @@ bool PassVoxelDag::setup(SceneGpu& gpu) {
     SceneVkDescriptorLayoutBuilder builder;
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     builder.addBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-    for (uint32_t b = 2; b <= 8; ++b) {
+    // The regions (2) are read by the vertex stage too: it draws their boxes.
+    builder.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    for (uint32_t b = 3; b <= 8; ++b) {
         builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     }
     set2Layout_ = builder.build(dev);
@@ -289,9 +292,8 @@ void PassVoxelDag::record(SceneFrame& frame) {
     const float pixelCone = 2.0f / (projY * rows);
 
     for (const VoxelWorldNode* vw : worlds) {
-        // Every pixel marches every region it is given, so a region is given
-        // only when some of its content is in view and in its distance band,
-        // nearest first: a near hit then cuts the farther regions' marches.
+        // A region is drawn as its content box, only when some of its
+        // content is in view and in its distance band, nearest first.
         std::vector<std::pair<double, GpuVoxelRegion>> visible;
         visible.reserve(vw->regions().size());
         for (const VoxelRegion& reg : vw->regions()) {
@@ -338,7 +340,8 @@ void PassVoxelDag::record(SceneFrame& frame) {
         w.updateSet(device_->device(), set2);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &set2, 0, nullptr);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+        // A region's content box an instance (voxeldag_vert: 36 vertices).
+        vkCmdDraw(cmd, 36, static_cast<uint32_t>(gpuRegs.size()), 0, 0);
         frame.drewContent = true;
     }
 }
