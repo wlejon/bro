@@ -18,7 +18,12 @@
 #include <brokernel/api.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -166,8 +171,8 @@ bromesh::DagVoxelizeOptions parseVoxOpts(Value opts, int depthDefault, bromesh::
     return o;
 }
 
-// An archetype is what a script places again and again, so the pool keeps it
-// through `collect()` whether or not a region reaches it now.
+// An archetype is what a script places again and again, so the pool holds it
+// whether or not a region reaches it now, until `releaseArchetype`.
 Value makeArchetypeResult(scene::VoxelWorldNode* vw, uint32_t ref, bool isLeaf, int depth) {
     vw->pool().pin(ref, isLeaf);
     ev::ObjectBuilder o;
@@ -399,6 +404,8 @@ Value buildSdfArchetype(Value self, std::span<const Value> args, bromesh::VoxelS
     return makeArchetypeResult(vw, ref, false, outDepth);
 }
 
+bool readMeshArg(Value meshVal, bromesh::MeshData& mesh);
+
 Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
     scene::VoxelWorldNode* vw = nullptr;
     worldOf(self, "VoxelWorld.addArchetypeFromMesh", &vw);
@@ -407,16 +414,8 @@ Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
     }
     const Rooted meshVal(args[0]);
     bromesh::MeshData mesh;
-    if (const auto* md = bromesh::api::meshDataOf(meshVal)) {
-        mesh = *md;
-    } else {
-        if (!readFloatVec(ev::getProperty(meshVal, "positions"), mesh.positions) ||
-            !readU32Vec(ev::getProperty(meshVal, "indices"), mesh.indices)) {
-            return ev::throwTypeError("addArchetypeFromMesh: positions and indices required");
-        }
-        readFloatVec(ev::getProperty(meshVal, "normals"), mesh.normals);
-        readFloatVec(ev::getProperty(meshVal, "colors"), mesh.colors);
-        if (mesh.normals.empty() && !mesh.positions.empty()) bromesh::computeNormals(mesh);
+    if (!readMeshArg(meshVal, mesh)) {
+        return ev::throwTypeError("addArchetypeFromMesh: positions and indices required");
     }
     const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 5) : 2;
     const Rooted opts(args.size() >= 3 ? args[2] : ev::undefined());
@@ -425,6 +424,146 @@ Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
     const uint32_t ref = bromesh::voxelizeMeshToDag(vw->pool(), mesh, dagOpts, &outDepth);
     vw->bumpRegionsGeneration();
     return makeArchetypeResult(vw, ref, false, outDepth);
+}
+
+// ── Voxelizing off the main thread ──────────────────────────────────────────
+// A mesh is copied and voxelized into a brick set (bromesh: no pool) on one
+// worker thread; the job's take() interns the set into the world's pool on the
+// main thread, which costs what the bricks and nodes are, not the triangles.
+
+struct VoxelizeJob {
+    bromesh::MeshData mesh;
+    bromesh::DagVoxelizeOptions opts;
+    bromesh::DagBrickSet set;
+    std::atomic<bool> done{false};
+    std::atomic<bool> cancelled{false};
+};
+
+class VoxelizeWorker {
+public:
+    ~VoxelizeWorker() { stop(); }
+
+    void push(std::shared_ptr<VoxelizeJob> job) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (stopping_) return;
+            queue_.push_back(std::move(job));
+            if (!thread_.joinable()) thread_ = std::thread([this] { run(); });
+        }
+        cv_.notify_one();
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stopping_ = true;
+            queue_.clear();
+        }
+        cv_.notify_one();
+        if (thread_.joinable()) thread_.join();
+        std::lock_guard<std::mutex> lock(mu_);
+        stopping_ = false;
+    }
+
+private:
+    void run() {
+        for (;;) {
+            std::shared_ptr<VoxelizeJob> job;
+            {
+                std::unique_lock<std::mutex> lock(mu_);
+                cv_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+                if (stopping_) return;
+                job = std::move(queue_.front());
+                queue_.pop_front();
+            }
+            if (!job->cancelled.load(std::memory_order_acquire)) {
+                job->set = bromesh::voxelizeMeshToBricks(job->mesh, job->opts);
+            }
+            job->mesh = {};
+            job->done.store(true, std::memory_order_release);
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::deque<std::shared_ptr<VoxelizeJob>> queue_;
+    std::thread thread_;
+    bool stopping_ = false;
+};
+
+VoxelizeWorker& voxelizeWorker() {
+    static VoxelizeWorker w;
+    return w;
+}
+
+struct JobHandle {
+    std::shared_ptr<VoxelizeJob> job;
+    Rooted world{bronze::Value{}};    // the VoxelWorld it commits into
+    bool taken = false;
+    ~JobHandle() { if (job) job->cancelled.store(true, std::memory_order_release); }
+};
+
+ev::HostClass g_jobClass;
+
+bool readMeshArg(Value meshVal, bromesh::MeshData& mesh) {
+    if (const auto* md = bromesh::api::meshDataOf(meshVal)) {
+        mesh = *md;
+        return true;
+    }
+    if (!readFloatVec(ev::getProperty(meshVal, "positions"), mesh.positions) ||
+        !readU32Vec(ev::getProperty(meshVal, "indices"), mesh.indices)) {
+        return false;
+    }
+    readFloatVec(ev::getProperty(meshVal, "normals"), mesh.normals);
+    readFloatVec(ev::getProperty(meshVal, "colors"), mesh.colors);
+    if (mesh.normals.empty() && !mesh.positions.empty()) bromesh::computeNormals(mesh);
+    return true;
+}
+
+Value js_addArchetypeFromMeshLater(Value self, std::span<const Value> args) {
+    scene::VoxelWorldNode* vw = nullptr;
+    worldOf(self, "VoxelWorld.addArchetypeFromMeshLater", &vw);
+    if (args.empty() || !ev::isObject(args[0])) {
+        return ev::throwTypeError("addArchetypeFromMeshLater: expected Mesh or { positions, indices }");
+    }
+    auto job = std::make_shared<VoxelizeJob>();
+    if (!readMeshArg(args[0], job->mesh)) {
+        return ev::throwTypeError("addArchetypeFromMeshLater: positions and indices required");
+    }
+    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 5) : 2;
+    const Rooted opts(args.size() >= 3 ? args[2] : ev::undefined());
+    job->opts = parseVoxOpts(opts, depth, bromesh::VoxelState::Solid);
+    voxelizeWorker().push(job);
+    auto h = std::make_unique<JobHandle>();
+    h->job = std::move(job);
+    h->world.set(self);
+    return g_jobClass.createInstance(std::move(h));
+}
+
+void decorateJobClass(ev::ObjectBuilder& b) {
+    b.accessor("ready", [](Value self, std::span<const Value>) -> Value {
+        auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
+        return ev::fromBool(h && h->job && h->job->done.load(std::memory_order_acquire));
+    });
+    // The archetype, interned now (null before `ready`, or once taken).
+    b.def("take", 0, [](Value self, std::span<const Value>) -> Value {
+        auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
+        if (!h || !h->job || h->taken || !h->job->done.load(std::memory_order_acquire)) return ev::null();
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(h->world, "VoxelizeJob.take", &vw);
+        h->taken = true;
+        const uint32_t ref = bromesh::commitVoxelBricks(vw->pool(), h->job->set);
+        const int depth = h->job->set.depth();
+        h->job->set = {};
+        vw->bumpRegionsGeneration();
+        return makeArchetypeResult(vw, ref, false, depth);
+    });
+    b.def("cancel", 0, [](Value self, std::span<const Value>) -> Value {
+        auto* h = static_cast<JobHandle*>(g_jobClass.unwrap(self));
+        if (h && h->job) h->job->cancelled.store(true, std::memory_order_release);
+        if (h) h->taken = true;
+        return ev::undefined();
+    });
 }
 
 Value js_addArchetypeFromVox(Value self, std::span<const Value> args) {
@@ -525,6 +664,7 @@ Value js_createWorld(Value, std::span<const Value> args) {
 
 void decorateWorldClass(ev::ObjectBuilder& b) {
     b.def("addArchetypeFromMesh", 3, js_addArchetypeFromMesh);
+    b.def("addArchetypeFromMeshLater", 3, js_addArchetypeFromMeshLater);
     b.def("addArchetypeFromVox", 2, js_addArchetypeFromVox);
     b.def("addArchetypeFromBox", 3, js_addArchetypeFromBox);
     b.def("addArchetypeFromSdf", 3, [](Value self, std::span<const Value> a) {
@@ -589,7 +729,9 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         uint32_t ref = bromesh::kDagNullNode;
         bool isLeaf = false;
         parseRefArg(a[4], ref, isLeaf);
-        const uint32_t td = static_cast<uint32_t>(std::clamp(static_cast<int>(std::llround(ev::toDouble(a[5]))), 1, 16));
+        // Depth 0 is the region's root: an archetype as deep as the region fills it.
+        const uint32_t td = static_cast<uint32_t>(std::clamp(static_cast<int>(std::llround(ev::toDouble(a[5]))), 0, 16));
+        if (td == 0 && (ix != 0 || iy != 0 || iz != 0)) return ev::fromBool(false);
         return ev::fromBool(vw->placeSubtree(rid, ix, iy, iz, ref, isLeaf, td));
     });
 
@@ -753,6 +895,19 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         return ev::fromDouble(static_cast<double>(vw->pool().collect(roots)));
     });
 
+    // Drop the hold an archetype was made with: once no region places it, what
+    // only it reached is freed (placing it after is an error).
+    b.def("releaseArchetype", 1, [](Value self, std::span<const Value> a) -> Value {
+        scene::VoxelWorldNode* vw = nullptr;
+        worldOf(self, "VoxelWorld.releaseArchetype", &vw);
+        if (a.empty()) return ev::fromBool(false);
+        uint32_t ref = bromesh::kDagNullNode;
+        bool isLeaf = false;
+        parseRefArg(a[0], ref, isLeaf);
+        vw->pool().release(ref, isLeaf);
+        return ev::fromBool(true);
+    });
+
     b.def("clearRegion", 1, [](Value self, std::span<const Value> a) -> Value {
         scene::VoxelWorldNode* vw = nullptr;
         worldOf(self, "VoxelWorld.clearRegion", &vw);
@@ -846,10 +1001,16 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
 
 }  // namespace
 
-void installVoxelDag(engine::Engine& /*engine*/) {
+void installVoxelDag(engine::Engine& engine) {
     const std::string src = scene::vk::voxelDagModuleSource();
     brokernel::api::registerHostModule("voxeldag", src);
     g_worldClass.install("VoxelWorld", 0, nullptr, decorateWorldClass, /*global=*/false);
+    g_jobClass.install("VoxelizeJob", 0, nullptr, decorateJobClass, /*global=*/false);
+    static bool s_workerHook = false;
+    if (!s_workerHook) {
+        s_workerHook = true;
+        engine.addShutdownHook([] { voxelizeWorker().stop(); });
+    }
 
     const auto bro = ev::globalValue("bro");
     if (!bro.found || !ev::isObject(bro.value)) return;

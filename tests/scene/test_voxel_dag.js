@@ -199,4 +199,52 @@ if (!probe.scene) {
         document.body.removeChild(s.canvas);
         flush();
     }
+
+    // 3. A mesh voxelized on the worker, filled inside, placed at the region's
+    //    root, then released: the pool frees it once the region is cleared.
+    {
+        const s = makeScene(128);
+        s.scene.setCamera({ fov: 45, near: 0.2, far: 150, position: [0, 0, 11], target: [0, 0, 0] });
+        const world = bro.voxeldag.createWorld(s.scene);
+        world.setShadowSteps(0);
+        const base = world.stats().liveBricks;
+
+        // A closed box, a little inside the unit cube, coloured green.
+        const e = 0.7;
+        const positions = [], colors = [], indices = [];
+        for (let i = 0; i < 8; i++) {
+            positions.push(i & 1 ? e : -e, i & 2 ? e : -e, i & 4 ? e : -e);
+            colors.push(0.1, 0.85, 0.15, 1);
+        }
+        for (const q of [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]) {
+            indices.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+        }
+        const job = world.addArchetypeFromMeshLater({ positions, colors, indices }, 3, { unitBounds: true, fillInterior: true });
+        const t0 = Date.now();
+        while (!job.ready && Date.now() - t0 < 10000) sleep(5);
+        assert(job.ready, 'voxelize job finishes');
+        const arch = job.take();
+        assert(arch && typeof arch.ref === 'number', 'take() returns an archetype');
+        assert(job.take() === null, 'a job is taken once');
+
+        const rid = world.addRegion({ voxelSize: 0.5, maxDepth: 3, center: [0, 0, 0] });
+        assert(!world.place(rid, 1, 0, 0, arch, 0), 'depth 0 takes only cell 0, 0, 0');
+        assert(world.place(rid, 0, 0, 0, arch, 0), 'an archetype as deep as the region fills it at depth 0');
+        const img = s.scene.captureFrame();
+        const mid = (64 * 128 + 64) * 4;
+        assert(img.data[mid + 1] > img.data[mid] + 50 && img.data[mid + 1] > img.data[mid + 2] + 50,
+               `voxelized mesh renders green at the centre (${img.data[mid]},${img.data[mid + 1]},${img.data[mid + 2]})`);
+
+        world.releaseArchetype(arch);
+        assert(world.stats().liveBricks > base, 'the region still holds the released archetype');
+        world.clearRegion(rid);
+        assert(world.stats().liveBricks === base, `cleared and released frees its bricks (${world.stats().liveBricks} vs ${base})`);
+
+        const dropped = world.addArchetypeFromMeshLater({ positions, colors, indices }, 3, { unitBounds: true });
+        dropped.cancel();
+        assert(dropped.take() === null, 'a cancelled job takes nothing');
+
+        document.body.removeChild(s.canvas);
+        flush();
+    }
 }

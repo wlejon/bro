@@ -60,7 +60,8 @@
  * @property {number} depth   levels above its bricks: it spans 4 << depth voxels,
  *                            so it fills one cell at target depth maxDepth - depth
  *
- * Every archetype is held for good, whether or not it is placed.
+ * Every archetype is held, whether or not it is placed, until
+ * `releaseArchetype`.
  */
 
 /**
@@ -117,13 +118,28 @@ class VoxelWorld {
      *        archetype's cube as is (parts outside are cut), so patches made at
      *        one scale line up; otherwise its bounds are fitted (`fitToCube`)
      * @param {boolean} [opts.fitToCube=true]
-     * @param {boolean} [opts.fillInterior=false]
+     * @param {boolean} [opts.fillInterior=false] a closed mesh's inside is solid
+     *        too, one colour (its surface's mean), so a far, coarse level of
+     *        a thick shape covers what the shape does
      * @param {number} [opts.roughness=0.8]
      * @param {number} [opts.emissive=0]
      * @param {string|number[]} [opts.color] where the mesh has no colours
      * @returns {Archetype}
      */
     addArchetypeFromMesh(mesh, depth, opts) {}
+
+    /**
+     * As addArchetypeFromMesh, but the voxelizing runs on a worker thread: the
+     * mesh is copied now, and the job's `take()` interns its voxels into the
+     * pool once `ready` (costing what its bricks and nodes are, not its
+     * triangles), so a large mesh never stalls a frame.
+     * @example
+     *   const job = vd.addArchetypeFromMeshLater(mesh, 5, { unitBounds: true, fillInterior: true });
+     *   // a later frame:
+     *   if (job.ready) vd.place(region, 0, 0, 0, job.take(), 0);
+     * @returns {{ready: boolean, take(): Archetype|null, cancel(): void}}
+     */
+    addArchetypeFromMeshLater(mesh, depth, opts) {}
 
     /** A MagicaVoxel .vox file. @param {Uint8Array|ArrayBuffer} bytes
      *  @param {{roughness?: number}} [opts] @returns {Archetype} */
@@ -143,6 +159,11 @@ class VoxelWorld {
     /** As addArchetypeFromSdf, but its voxels carve (remove what a region's
      *  solid holds there). */
     addCarveArchetypeFromSdf(shape, depth, opts) {}
+
+    /** Drop the hold an archetype was made with. Regions placing it keep what
+     *  they placed; once none does, what only it reached is freed. Placing it
+     *  after this is an error. @param {Archetype} archetype @returns {boolean} */
+    releaseArchetype(archetype) {}
 
     /** `overlay` over `base`: where both are solid the overlay wins; carves union.
      *  @param {Archetype} base @param {Archetype} overlay @returns {Archetype} */
@@ -174,7 +195,8 @@ class VoxelWorld {
 
     // ── Placement (cells at `targetDepth`: 2^targetDepth a side) ────────────
 
-    /** @param {Archetype|number} archetype @returns {boolean} */
+    /** Depth 0 is the region's root (cell 0, 0, 0): an archetype `maxDepth`
+     *  deep fills the region. @param {Archetype|number} archetype @returns {boolean} */
     place(regionId, ix, iy, iz, archetype, targetDepth) {}
 
     /** @param {Array<{ix, iy, iz, archetype?: Archetype, ref?: number, isLeaf?: boolean}>} list */
