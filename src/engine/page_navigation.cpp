@@ -76,6 +76,22 @@ std::string Engine::pageSource() const {
     return path.empty() ? appDir_ : path;
 }
 
+AppManifest Engine::loadPageManifest() const {
+    AppManifest manifest = AppLoader::loadApp(pageSource(), &assetMounts_);
+    if (displayMode_ != DisplayMode::Server || serverScript_.empty()) return manifest;
+    // bro-server runs its server script, not the page: index.html's scripts
+    // are written for a renderer the server does not have. The script is the
+    // app's one unit, a module as a script entry is (AppLoader::loadApp), so
+    // it compiles, is harvested and is built as a page unit is.
+    const bool isLua = std::filesystem::path(serverScript_).extension() == ".lua";
+    manifest.htmlPath.clear();
+    manifest.stylePaths.clear();
+    manifest.importMap.clear();
+    manifest.scripts.clear();
+    manifest.scripts.push_back({serverScript_, {}, /*isModule=*/!isLua, /*isLua=*/isLua});
+    return manifest;
+}
+
 bool Engine::navigateDocument(dom::Document* doc, const std::string& url) {
     if (!doc) return false;
     if (util::isHttpUrl(url)) {

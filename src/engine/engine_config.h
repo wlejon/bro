@@ -75,6 +75,11 @@ struct EngineConfig {
     // into `aotDir`'s layout at <dir> instead of running them
     // (bronze_host/app_aot.h), then stop.
     std::string aotBuildDir;
+    // bro-server: the server script (absolute), run as the app's one script
+    // unit in place of its page, so it compiles, and with aotDir is
+    // harvested and built, as a page's units are. Empty: the app's own
+    // script entry (server.js / main.js of an app without index.html).
+    std::string serverScript;
     // bro.json `"watch"`: reload the app when a source file under its dir
     // changes. Only ever active for a windowed app whose scripts compile
     // in-process (docs/hot-reload.md); BRO_WATCH=0|1 overrides.

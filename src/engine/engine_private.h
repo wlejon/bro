@@ -216,6 +216,7 @@
     /// once as the engine shuts down, so a page can save what it is in the
     /// middle of whichever way it goes. Once per page.
     void firePageHide();
+    void writeAotHarvests();
     bool pageHideFired_ = false;
     // After a reload whose page failed (index.html unloadable, or a top-level
     // script threw): the error, logged and shown over whatever the page drew.
@@ -618,6 +619,10 @@ private:
     // The app document's URL (pageUrl), and the page file it names.
     std::string pageUrl_ = "bro://app/";
     std::string pageSource() const;
+    // The page's manifest (AppLoader::loadApp of pageSource()); under
+    // bro-server with a server script, that script as the one unit.
+    AppManifest loadPageManifest() const;
+    std::string serverScript_;
     // <appview>s their page stopped: not loaded until start().
     std::unordered_set<dom::Element*> stoppedIframes_;
     bool systemPerfVisible_ = false;

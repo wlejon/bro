@@ -408,7 +408,7 @@ bro --dev-mode on|off
 ```
 
 A host grants capabilities outright for one run with
-`--grant <cap>[,<cap>...]` on `bro` or `bro-headless` (`--grant declared` is
+`--grant <cap>[,<cap>...]` on `bro`, `bro-headless` or `bro-server` (`--grant declared` is
 everything bro.json declares), logged loudly: what tests and development use.
 Inside an app, `bro.app.permissions` reports `{declared, granted, denied,
 undecided}` and `bro.app.requestPermission(name)` asks now
@@ -662,6 +662,12 @@ directory therefore belongs with an app folder at the path it was built for
 
 macOS has no app executables (apps are bundles there), and so no AOT
 directories.
+
+**Servers.** `bro-server --aot <dir> <app> [script]` gives a dedicated
+server the same cycle: its script is the app's one unit (the page is not
+run), its first run from `<dir>` is harvested, and as the server ends it
+starts `bro-server <app> <script> --aot-build <dir>` in the background, so
+the next start runs the module ([server-api.js](server-api.js)).
 
 ## How a page loads
 

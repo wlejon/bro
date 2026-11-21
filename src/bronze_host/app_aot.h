@@ -80,6 +80,11 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       bronze::eval::EvalOptions& opts, int ordinal, bool pageUnit);
 
+/// What a harvest's rebuild runs, detached: by default an installed app's
+/// `bro --build-exe` (nothing for a run with no executable of its own);
+/// bro-server `--aot` sets its own `bro-server <app> <script> --aot-build`.
+void setAotRebuildCommand(std::vector<std::string> argv);
+
 /// The page is hidden or the app quits, its harvests just written
 /// (Engine::firePageHide): each unit this process harvested has its profile,
 /// and the directory is rebuilt in the background. A module run here that

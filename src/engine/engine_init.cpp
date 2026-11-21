@@ -215,6 +215,7 @@ void Engine::construct(const EngineConfig& config) {
     aotDir_ = config.aotDir;
     aotRequired_ = config.aotRequired;
     aotBuildDir_ = config.aotBuildDir;
+    serverScript_ = config.serverScript;
     appDir_ = config.appDir;
     util::setAppUrlRoot(appDir_);
     titleOverride_ = config.title;
@@ -628,7 +629,7 @@ void Engine::construct(const EngineConfig& config) {
     // app's boot script reaches must already know there is no one to ask.
     platform::Dialogs::setWindow(window_.get());
     platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
-    manifest_ = AppLoader::loadApp(pageSource(), &assetMounts_);
+    manifest_ = loadPageManifest();
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     drawTraversal_->setViewport(viewportWidth_, viewportHeight_, 0);
 
@@ -669,7 +670,7 @@ void Engine::initAppRealm() {
                  appDir_.c_str());
     }
 
-    manifest_ = AppLoader::loadApp(pageSource(), &assetMounts_);
+    manifest_ = loadPageManifest();
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     std::string html;
     if (!appHtmlOverride_.empty()) {
@@ -784,8 +785,9 @@ void Engine::initAppRealm() {
 
     // bro-server runs its server script, not the page: index.html's scripts
     // are written for a renderer the server does not have, and a throw there
-    // is no failure of the server's. A script-entry app (no index.html; its
-    // server.js / main.js is the entry, htmlPath empty) still runs here.
+    // is no failure of the server's. The server script (loadPageManifest) or
+    // a script-entry app's own (no index.html; its server.js / main.js, so
+    // htmlPath is empty) runs here, as the app's unit.
     const bool serverSkipsPage = displayMode_ == DisplayMode::Server &&
                                  !manifest_.htmlPath.empty();
     if (serverSkipsPage && !manifest_.scripts.empty()) {
@@ -836,7 +838,7 @@ void Engine::beginPageCompile() {
     // access policy: install it now, so a script over http is asked of the
     // app's `net` like every later load rather than fetched unasked.
     bronze_host::installAccessPolicy();
-    manifest_ = AppLoader::loadApp(pageSource(), &assetMounts_);
+    manifest_ = loadPageManifest();
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     if (!aotBuildDir_.empty()) return;
     const std::vector<PageScriptUnit> units = pageScriptUnits();

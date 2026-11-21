@@ -84,7 +84,10 @@ void Engine::shutdown() {
     if (shutdownDone_) return;
     // The page goes as a closed tab does: `pagehide` first, while everything
     // its handlers reach still runs (a recording saved, a session kept).
+    // A server has no page to hide; its units' harvests are written all the
+    // same, while its realm runs.
     if (displayMode_ != DisplayMode::Server) firePageHide();
+    else writeAotHarvests();
     shutdownDone_ = true;
     // Terminal sessions parked for a next page that will not come (the
     // pagehide just fired may have parked some) end now, as their elements'
@@ -126,7 +129,10 @@ Engine::~Engine() { teardown(); }
 void Engine::teardown() {
     // Headless (and an engine embedded without run()) ends here: the page's
     // pagehide before anything it could reach is stopped.
-    if (displayMode_ != DisplayMode::Server && !shutdownDone_) firePageHide();
+    if (!shutdownDone_) {
+        if (displayMode_ != DisplayMode::Server) firePageHide();
+        else writeAotHarvests();
+    }
     // No command may arrive for an engine on its way out.
     if (control_) control_->stop();
     bronze_host::stopScriptPumpWatchdog();

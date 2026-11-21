@@ -3,9 +3,10 @@
 
 #include "runtime/runtime_mains.h"
 
+#include "engine/capabilities.h"
 #include "engine/engine.h"
 #include "engine/launcher.h"
-#include "bronze_host/app_module.h"
+#include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
 #include "util/exe_dir.h"
@@ -42,6 +43,13 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
             "\n"
             "Options:\n"
             "  --tickrate N          Fixed server tick rate in Hz (default: 0, event-driven)\n"
+            "  --grant <caps>        Grant capabilities for this run (comma-separated;\n"
+            "                        'declared' is everything bro.json declares), as on bro\n"
+            "  --aot <dir>           Run the script from its module built ahead of time in\n"
+            "                        <dir>; with none yet, compile it in process and harvest\n"
+            "                        the run, and build the module on that when it ends\n"
+            "  --aot-build <dir>     Build the script's module in <dir> on its harvested\n"
+            "                        run, then exit (what --aot starts in the background)\n"
             "  -h, --help            Show this help text\n"
             "\n"
             "Server JS globals:\n"
@@ -55,6 +63,9 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
     }
 
     double tickrate = 0.0;
+    std::string aotDir;
+    std::string aotBuildDir;
+    std::vector<std::string> hostGrants;
     std::string target;
     std::string scriptPath;
     std::vector<std::string> scriptArgs;
@@ -68,6 +79,12 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
             tickrate = atof(argv[++i]);
             if (tickrate > 1000.0) tickrate = 1000.0;
+        } else if (strcmp(argv[i], "--grant") == 0 && i + 1 < argc) {
+            bro::engine::appendGrantList(argv[++i], hostGrants);
+        } else if (strcmp(argv[i], "--aot") == 0 && i + 1 < argc) {
+            aotDir = argv[++i];
+        } else if (strcmp(argv[i], "--aot-build") == 0 && i + 1 < argc) {
+            aotBuildDir = argv[++i];
         } else if (target.empty() && argv[i][0] != '-') {
             target = argv[i];
         } else if (scriptPath.empty() && argv[i][0] != '-') {
@@ -84,11 +101,13 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
     bro::bronze_host::setScriptArgs(scriptArgs);
 
     int exitCode = 0;
+    bool standaloneScript = false;
 
     try {
         bro::engine::EngineConfig config;
         config.settingsPath = bro::util::defaultSettingsPath();
         config.displayMode = bro::engine::DisplayMode::Server;
+        config.hostGrants = hostGrants;
 
         if (!bro::engine::resolveLaunchTarget(target, config)) {
             // If target is directly a script file (.js/.mjs/.cjs/.ts/.mts):
@@ -98,6 +117,7 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
                 (ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts")) {
                 scriptPath = target;
                 config.appDir = bro::util::executableDir();
+                standaloneScript = true;
             } else {
                 fprintf(stderr, "Error: no app found at '%s'\n", target.c_str());
                 return 1;
@@ -106,11 +126,12 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
 
         bro::engine::publishLaunchEnv(config);
 
-        // A page app (one with an index.html) is not run here: its scripts,
-        // and the app.dll they compile to, are written for a renderer. The
-        // server runs the script named on the command line, else the app's
-        // own server.js / server.ts. An app without index.html is a script-entry app and
-        // its server / main script (or compiled module) is the entry as before.
+        // A page app (one with an index.html) is not run here: its scripts
+        // are written for a renderer. The server runs the script named on the
+        // command line, else the app's own server.js / server.ts, as the
+        // app's one script unit (Engine::loadPageManifest). An app without
+        // index.html is a script-entry app: its server / main script is
+        // that unit already.
         std::error_code fsEc;
         const std::filesystem::path appPath(config.appDir);
         const bool pageApp = std::filesystem::is_regular_file(appPath / "index.html", fsEc);
@@ -121,22 +142,54 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
                 scriptPath = (appPath / "server.ts").string();
             }
         }
+        if (!scriptPath.empty()) {
+            if (!std::filesystem::is_regular_file(scriptPath, fsEc)) {
+                fprintf(stderr, "Error: no script at '%s'\n", scriptPath.c_str());
+                return 1;
+            }
+            config.serverScript = std::filesystem::absolute(scriptPath, fsEc).lexically_normal().string();
+        }
 
-        std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
-        config.hostProvidesCompiledApp = appModule.has_value();
+        // The script's module built ahead of time (bronze_host/app_aot.h):
+        // run from it, or harvest the run for it and build it on that at the
+        // end, in the background, with this same command line.
+        if (!aotBuildDir.empty()) {
+            config.aotBuildDir = std::filesystem::absolute(aotBuildDir, fsEc).string();
+        } else if (!aotDir.empty()) {
+            config.aotDir = std::filesystem::absolute(aotDir, fsEc).string();
+            std::filesystem::create_directories(config.aotDir, fsEc);
+            if (fsEc) {
+                fprintf(stderr, "Error: cannot make the AOT directory '%s': %s\n", config.aotDir.c_str(),
+                        fsEc.message().c_str());
+                return 1;
+            }
+#ifdef _WIN32
+            const char* exeName = "bro-server.exe";
+#else
+            const char* exeName = "bro-server";
+#endif
+            const std::string self = (std::filesystem::path(bro::util::executableDir()) / exeName).string();
+            std::vector<std::string> rebuild = {self};
+            if (!standaloneScript) rebuild.push_back(config.appDir);
+            if (!config.serverScript.empty()) rebuild.push_back(config.serverScript);
+            rebuild.push_back("--aot-build");
+            rebuild.push_back(config.aotDir);
+            bro::bronze_host::setAotRebuildCommand(std::move(rebuild));
+        }
 
         auto engine = std::make_unique<bro::engine::Engine>(config);
         engine->setServerTickRate(tickrate);
 
-        if (appModule && !pageApp) {
-            bro::bronze_host::runAppModule(*engine, *appModule);
+        // --aot-build: the engine's load built the unit instead of running it.
+        if (!aotBuildDir.empty()) {
+            const bool failed = bro::bronze_host::hasTestFailure() || engine->hasTestFailure();
+            engine.reset();
+            return failed ? 1 : 0;
         }
-
-        if (!scriptPath.empty()) {
-            if (!bro::bronze_host::evalScriptFile(*engine, scriptPath)) {
-                fprintf(stderr, "Error: failed to evaluate script '%s'\n", scriptPath.c_str());
-                return 1;
-            }
+        if (engine->hasTestFailure()) {
+            fprintf(stderr, "Error: the server script failed: see the log\n");
+            engine.reset();
+            return 1;
         }
 
         engine->run();

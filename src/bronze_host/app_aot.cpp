@@ -381,11 +381,21 @@ std::unordered_map<std::string, int> s_unitInstances;
 bool s_rebuildWanted = false;
 bool s_rebuildRequested = false;
 
+std::vector<std::string> s_rebuildCommand;
+
 void spawnAotRebuild(const std::string& appDir, const std::string& aotDir) {
-    const std::string& exe = engine::currentApp().executable;
-    if (exe.empty()) return;
+    std::vector<std::string> argv;
+    {
+        std::lock_guard<std::mutex> lock(s_rebuildMutex);
+        argv = s_rebuildCommand;
+    }
+    if (argv.empty()) {
+        const std::string& exe = engine::currentApp().executable;
+        if (exe.empty()) return;
+        argv = {engine::stockBroPath(), "--build-exe", appDir, "--out", exe, "--quiet"};
+    }
     std::string err;
-    if (!util::spawnDetached({engine::stockBroPath(), "--build-exe", appDir, "--out", exe, "--quiet"}, {}, err)) {
+    if (!util::spawnDetached(argv, {}, err)) {
         LOG_WARN("aot: cannot start the rebuild of %s: %s", aotDir.c_str(), err.c_str());
     }
 }
@@ -429,6 +439,11 @@ struct ProfiledRun {
 std::vector<ProfiledRun> s_profiled;
 
 }  // namespace
+
+void setAotRebuildCommand(std::vector<std::string> argv) {
+    std::lock_guard<std::mutex> lock(s_rebuildMutex);
+    s_rebuildCommand = std::move(argv);
+}
 
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       bronze::eval::EvalOptions& opts, int ordinal, bool pageUnit) {
