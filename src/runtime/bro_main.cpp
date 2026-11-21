@@ -17,7 +17,6 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 
-#include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
 #include "render/vulkan_debug.h"
 #include "platform/desktop_notifications.h"
@@ -515,25 +514,10 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
         }
     });
 
-    // Does this app directory carry a compiled module? Asked BEFORE the Engine
-    // is constructed because engine init uses the answer: it is what
-    // distinguishes an app that declares `"compiled": true` and was opened by a
-    // host that can run it from one opened by a host that cannot, and the two
-    // want different diagnostics (engine_init.cpp). Loading it is the other
-    // side of the Engine — see below.
-    std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
-    config.hostProvidesCompiledApp = appModule.has_value();
-
     int exitCode = 0;
     bool fatal = false;
     try {
         bro::engine::Engine engine(config);
-        // The compiled top level runs here: after the Engine (the host globals
-        // it reads are backed by it) and before the run loop (what it schedules
-        // is what the run loop then drives).
-        if (appModule) {
-            bro::bronze_host::runAppModule(engine, *appModule);
-        }
         engine.run();
         // An app that tests itself in a real window (tests/windowed) reports
         // the way a headless test does: a failed assert() exits 1, a

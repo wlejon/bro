@@ -611,10 +611,10 @@ public:
     /// The session's desktop shell over a system compositor (EngineConfig::desktopShell).
     bool isDesktopShell() const { return desktopShell_; }
 
-    /// The bronze module handles of the running app: its compiled `app.dll`
-    /// and/or the program its `<script>` tags were compiled into. Both are
-    /// bracketed loads (bronze embed.h), so a reload can retire their GC roots
-    /// and let the old realm's heap die instead of leaking it per reload.
+    /// The bronze module handles of the running app: the programs its
+    /// `<script>` tags were compiled into. Each is a bracketed load (bronze
+    /// embed.h), so a reload can retire their GC roots and let the old
+    /// realm's heap die instead of leaking it per reload.
     const std::vector<uint64_t>& appModuleHandles() const { return appModuleHandles_; }
     void addAppModuleHandle(uint64_t handle) { if (handle) appModuleHandles_.push_back(handle); }
     void unloadAppModules();
@@ -647,9 +647,7 @@ public:
 
     /// The app directory this Engine was booted from, absolute. Exposed for
     /// the same reason as window() above: a host that has to act on the app's
-    /// own files — loading the compiled module a folder carries
-    /// (bronze_host/app_module.h) — is handed the Engine, not the config that
-    /// built it.
+    /// own files is handed the Engine, not the config that built it.
     const std::string& appDir() const { return appDir_; }
     /// EngineConfig::aotDir / aotBuildDir (empty when not set).
     const std::string& aotDir() const { return aotDir_; }

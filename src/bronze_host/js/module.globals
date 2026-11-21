@@ -2,10 +2,9 @@
 # (bro_compile_js in ../CMakeLists.txt): observers.js, net_sync.js,
 # image_gpu.js, bro_core.js, mesh.js.
 #
-# This is NOT the app manifest. An app is compiled against what
-# `bro-headless <appdir> --print-host-globals` prints — the registry of the
-# binary that will run it — and that list cannot exist at build time, because
-# bro-headless is the thing being built. So these modules are written to read
+# This is NOT the app manifest. An app is compiled against the registry of
+# the binary that runs it (registeredHostGlobals) — and that list cannot exist
+# at build time, because that binary is the thing being built. So these modules are written to read
 # what they need off `globalThis` at install time (`globalThis.document`,
 # `globalThis.queueMicrotask`, ...) and name only a handful of things as bare
 # identifiers: the two every bronze program has, and the host objects C++

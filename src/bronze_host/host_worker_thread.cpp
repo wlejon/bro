@@ -1,6 +1,5 @@
 #include "bronze_host/host_worker_internal.h"
 #include "bronze_host/app_aot.h"
-#include "bronze_host/app_module.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
@@ -41,7 +40,6 @@ void WorkerInstance::threadFunc() {
     using BootClock = std::chrono::steady_clock;
     const BootClock::time_point bootStart = BootClock::now();
     BootClock::time_point bootMarks[4] = {bootStart, bootStart, bootStart, bootStart};
-    ensureSharedRuntimeEnv();
     const ProfilerThreadScope profiled(scriptPath_);  // bro.profiler {threads: 'workers'}
     installImageBitmapGlobals();
     installNoiseGlobals();

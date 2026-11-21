@@ -16,7 +16,7 @@
   }
 </style>
 </head>
-<!-- The compiled app builds its own tree; the page contributes exactly one
+<!-- The probe builds its own tree; the page contributes exactly one
      thing, and it is not decoration. `.row` here is a DECOY: it makes
      `document.querySelectorAll('.row')` and `panel.querySelectorAll('.row')`
      return DIFFERENT counts, which is the only way the probe can tell a
@@ -24,5 +24,6 @@
      document and got away with it. -->
 <body>
 <div class="row" id="decoy">decoy</div>
+<script type="module" src="probe.js"></script>
 </body>
 </html>

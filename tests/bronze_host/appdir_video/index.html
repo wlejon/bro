@@ -26,10 +26,10 @@
 <div id="notacanvas"></div>
 
 <script>
-  // Drawn on demand rather than at load: the compiled top level runs after the
-  // page's scripts (HeadlessHooks::afterEngine), so an event the app dispatches
-  // is the only ordering that is not a guess. appdir_observer/index.html has
-  // the same note for the same reason.
+  // Drawn on demand rather than at load: the probe, a module script, runs
+  // after this one, so an event the probe dispatches is the only ordering
+  // that is not a guess. appdir_observer/index.html has the same note for the
+  // same reason.
   document.addEventListener('app:paint', function () {
       const c = document.getElementById('paint');
       const ctx = c.getContext('2d');
@@ -39,5 +39,6 @@
       ctx.fillRect(8, 8, 24, 24);
   });
 </script>
+<script type="module" src="probe.js"></script>
 </body>
 </html>

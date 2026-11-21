@@ -1,41 +1,23 @@
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
-#include "bronze_host/eval_js_scan.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/app_module.h"
-#include "bronze_host/host_headless.h"
-#include "bronze_host/host_pins.h"
 #include "bronze_host/host_compartment.h"
 
 #include "api/api.h"  // brokit::api::RequireDirGuard
-#include "cli/driver.h"
 #include "embed/embed.h"
 #include "modules/modules.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/crash_handler.h"
-#include "util/log.h"
+#include "util/storage_file.h"
 
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
+#include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace bro::bronze_host {
 
@@ -44,18 +26,7 @@ using Value = bronze::Value;
 
 namespace {
 
-static std::atomic<uint64_t> s_evalCounter{0};
-static std::vector<std::filesystem::path> s_tempModuleFiles;
-static std::vector<ev::ModuleHandle> s_bronzeModules;
 static std::unordered_map<std::string, ev::Persistent> s_dynFnCache;
-
-void trackTempModuleFile(const std::filesystem::path& p) {
-    s_tempModuleFiles.push_back(p);
-}
-
-void trackDynamicBronzeModule(ev::ModuleHandle h) {
-    if (h != 0) s_bronzeModules.push_back(h);
-}
 
 void cleanGlobalProp(const std::string& name) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
@@ -78,48 +49,7 @@ void cleanGlobalProp(const std::string& name) {
     }
 }
 
-#ifdef _WIN32
-constexpr const char* kModuleExt = ".dll";
-#elif defined(__APPLE__)
-constexpr const char* kModuleExt = ".dylib";
-#else
-constexpr const char* kModuleExt = ".so";
-#endif
-
 } // namespace
-
-std::filesystem::path getExecutableDirectory() {
-#ifdef _WIN32
-    char buf[MAX_PATH];
-    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        return std::filesystem::path(std::string(buf, len)).parent_path();
-    }
-#elif defined(__APPLE__)
-    // _NSGetExecutablePath reports the path the process was exec'd by, which
-    // can be a symlink (a bin/ link into a Bro.app or a build tree) or carry
-    // `..`; the runtime library is staged beside the REAL binary, so resolve
-    // it the way Linux's /proc/self/exe already is. `size` comes back as the
-    // length needed when the buffer is short.
-    uint32_t size = 0;
-    _NSGetExecutablePath(nullptr, &size);
-    std::string buf(size, '\0');
-    if (size > 0 && _NSGetExecutablePath(buf.data(), &size) == 0) {
-        std::error_code ec;
-        std::filesystem::path exe(buf.c_str());
-        auto real = std::filesystem::weakly_canonical(exe, ec);
-        return (ec ? exe : real).parent_path();
-    }
-#else
-    char buf[4096];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) {
-        buf[len] = '\0';
-        return std::filesystem::path(buf).parent_path();
-    }
-#endif
-    return std::filesystem::current_path();
-}
 
 // Module roots for a compile that runs against `engine`'s app. Every engine
 // mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler
@@ -152,313 +82,9 @@ std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& 
     return {};
 }
 
-std::filesystem::path getEvalTempDir() {
-    std::filesystem::path p = std::filesystem::temp_directory_path() / "bro_eval";
-    std::error_code ec;
-    std::filesystem::create_directories(p, ec);
-    return p;
-}
-
-void ensureSharedRuntimeEnv() {
-    if (std::getenv("BRONZE_SHARED_RT_LIB")) return;
-    std::error_code ec;
-
-#ifdef _WIN32
-    const char* const name = "bronze_runtime_shared.lib";
-#elif defined(__APPLE__)
-    const char* const name = "libbronze_runtime_shared.dylib";
-#else
-    const char* const name = "libbronze_runtime_shared.so";
-#endif
-
-    // The library beside the running binary first: normally the runtime this
-    // process itself loaded (@loader_path / $ORIGIN / the exe's own dir), so
-    // a module linked against it matches. The build-tree guesses after it are
-    // for an embedder whose executable lives outside a bro build.
-    const auto exeDir = getExecutableDirectory();
-    std::vector<std::filesystem::path> bases = {
-        exeDir,
-        exeDir / "shared",
-        exeDir / "shared/Release",
-        exeDir / "shared/Debug",
-        exeDir.parent_path() / "shared",
-        exeDir.parent_path() / "shared/Release",
-        exeDir.parent_path() / "shared/Debug",
-        std::filesystem::current_path(),
-        std::filesystem::current_path() / "build/shared",
-        std::filesystem::current_path() / "build/shared/Release",
-        std::filesystem::current_path() / "build-release/shared",
-    };
-    if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
-        bases.push_back(std::filesystem::path(env) / "build/shared");
-        bases.push_back(std::filesystem::path(env) / "build/shared/Release");
-        bases.push_back(std::filesystem::path(env) / "build-release/shared");
-    }
-
-    for (const auto& base : bases) {
-        auto cand = base / name;
-        if (std::filesystem::exists(cand, ec)) {
-            std::string abs = std::filesystem::absolute(cand, ec).string();
-#ifdef _WIN32
-            _putenv_s("BRONZE_SHARED_RT_LIB", abs.c_str());
-#else
-            setenv("BRONZE_SHARED_RT_LIB", abs.c_str(), 1);
-#endif
-            break;
-        }
-    }
-}
-
-namespace {
-
-// The `--host-globals` manifest an in-process `bronze build` compiles
-// against: the registry, written out. runBuild takes the manifest as a PATH
-// (cli/driver.h says why), so the enumeration goes through a file in the
-// eval temp dir beside the script it compiles, and is removed with it. The
-// caller has installed the host globals before asking, or the list is empty
-// and every free read of `document` compiles to a runtime miss.
-std::filesystem::path writeHostGlobalsManifest(const std::filesystem::path& dir,
-                                               const std::string& stem) {
-    const auto path = dir / (stem + ".globals");
-    std::ofstream ofs(path, std::ios::binary);
-    for (const auto& name : registeredHostGlobals()) ofs << name << '\n';
-    return path;
-}
-
-// The `--native-manifest` the same compile takes: this thread's native
-// registry (the `__bro_native.*` entry points host_bro_root.cpp registered),
-// written by embed::writeNativeManifest — the same text bro-native-manifest
-// prints at build time for js/bro_core.js, read here off the live registry
-// so an app's `bro.time.scale` and bro's own compile to the same calls. The
-// JIT path (eval_jit.cpp) reads the registry directly and needs no file.
-// Empty when nothing is registered: there is then nothing to lower.
-std::string writeNativeManifestFile(const std::filesystem::path& dir, const std::string& stem) {
-    if (bronze::embed::hostNativeNames().empty()) return {};
-    const auto path = dir / (stem + ".natives.json");
-    std::string err;
-    if (!bronze::embed::writeNativeManifest(path.string(), &err)) {
-        LOG_ERROR("eval: native manifest not written: %s", err.c_str());
-        return {};
-    }
-    return path.string();
-}
-
-} // namespace
-
-#ifdef _WIN32
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-static bool safeRunEntry(void (*entry)()) {
-    __try {
-        bronze::embed::runEntry(entry);
-        return true;
-    } __except (
-        [](LPEXCEPTION_POINTERS ep) -> int {
-            DWORD code = ep->ExceptionRecord->ExceptionCode;
-            void* addr = ep->ExceptionRecord->ExceptionAddress;
-            printf("CRASH in runEntry! code: 0x%08X at %p\n", (unsigned int)code, addr);
-            if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2) {
-                printf("Access violation %s address %p\n",
-                    ep->ExceptionRecord->ExceptionInformation[0] == 0 ? "reading" : "writing",
-                    (void*)ep->ExceptionRecord->ExceptionInformation[1]);
-            }
-            HANDLE proc = GetCurrentProcess();
-            SymSetOptions(SymGetOptions() | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-            std::string exeDir = getExecutableDirectory().string();
-            SymInitialize(proc, exeDir.c_str(), TRUE);
-            void* frames[62];
-            USHORT n = CaptureStackBackTrace(0, 62, frames, nullptr);
-            char symBuf[sizeof(SYMBOL_INFO) + 512];
-            printf("Backtrace (%u frames):\n", (unsigned)n);
-            for (USHORT i = 0; i < n; ++i) {
-                DWORD64 frameAddr = reinterpret_cast<DWORD64>(frames[i]);
-                auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
-                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-                sym->MaxNameLen = 511;
-                DWORD64 disp = 0;
-                const char* name = "?";
-                if (SymFromAddr(proc, frameAddr, &disp, sym)) name = sym->Name;
-                char modName[MAX_PATH] = "?";
-                HMODULE mod = nullptr;
-                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                       reinterpret_cast<LPCSTR>(frameAddr), &mod) && mod) {
-                    GetModuleFileNameA(mod, modName, MAX_PATH);
-                    const char* base = strrchr(modName, '\\');
-                    if (base) memmove(modName, base + 1, strlen(base));
-                }
-                DWORD64 rva = mod ? (frameAddr - reinterpret_cast<DWORD64>(mod)) : 0;
-                IMAGEHLP_LINE64 line;
-                ZeroMemory(&line, sizeof(line));
-                line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-                DWORD lineDisp = 0;
-                if (SymGetLineFromAddr64(proc, frameAddr, &lineDisp, &line)) {
-                    printf("  #%02u %p %s!%s+0x%llx (%s:%lu)\n", (unsigned)i, frames[i], modName,
-                           name, (unsigned long long)disp, line.FileName, (unsigned long)line.LineNumber);
-                } else {
-                    printf("  #%02u %p %s (rva 0x%llx)!%s+0x%llx\n", (unsigned)i, frames[i], modName,
-                           (unsigned long long)rva, name, (unsigned long long)disp);
-                }
-            }
-            fflush(stdout);
-            return EXCEPTION_EXECUTE_HANDLER;
-        }(GetExceptionInformation())
-    ) {
-        return false;
-    }
-}
-#else
-static bool safeRunEntry(void (*entry)()) {
-    bronze::embed::runEntry(entry);
-    return true;
-}
-#endif
-
-namespace {
-
-// evalScript and evalAppScript are one function: the latter brackets the run
-// as a module load and hands the handle back through `moduleHandleOut`.
-bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::string& filename,
-                    ev::ModuleHandle* moduleHandleOut, bool moduleFile, ScriptGoal goal) {
-    HostEvalScope evalScope;
-    if (!isJitDisabled() || std::filesystem::path(filename).extension() == ".lua") {
-        return evalScriptJit(engine, code, filename, moduleHandleOut, moduleFile, goal);
-    }
-
-    ensureSharedRuntimeEnv();
-
-    const auto tempDir = getEvalTempDir();
-    const uint64_t id = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
-    const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::string stem = "eval_" + std::to_string(ts) + "_" + std::to_string(id);
-
-    const std::string fileExt = std::filesystem::path(filename).extension().string();
-    const std::string tempExt = (fileExt == ".ts" || fileExt == ".mts" || fileExt == ".mjs") ? fileExt : std::string(".js");
-    const auto tempJs = tempDir / (stem + tempExt);
-    const auto outDll = tempDir / (stem + kModuleExt);
-
-    // Globals BEFORE the compile, not just before the run: the manifest the
-    // compile admits is read off the registry, so the registry must be full.
-    if (!isWebHostGlobalsInstalled()) {
-        installWebHostGlobals(engine);
-    }
-
-    const std::string execCode = scriptExecCode(code, filename);
-    {
-        std::ofstream ofs(tempJs, std::ios::binary);
-        if (!ofs.is_open()) {
-            LOG_ERROR("eval: failed to write temporary file: %s", tempJs.string().c_str());
-            setTestFailure(true);
-            engine.setTestFailure(true);
-            return false;
-        }
-        ofs.write(execCode.data(), execCode.size());
-    }
-    const auto manifest = writeHostGlobalsManifest(tempDir, stem);
-    const std::string globalsPath = manifest.string();
-    const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
-    const auto roots = moduleRootsFor(engine);
-    const std::string resolvesAs = entryResolvesAsFor(engine, filename);
-    const std::string pinsPath = discoverPinsPath(engine, filename);
-    std::string err;
-    int status = bronze::cli::runBuild(
-        tempJs.string(), outDll.string(), &err,
-        /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-        /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
-        /*emitShared=*/true, /*retainFnSource=*/true,
-        /*importMapPath=*/{},
-        /*pinsPath=*/pinsPath,
-        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
-        /*entryResolvesAs=*/resolvesAs);
-
-    std::error_code ec;
-    std::filesystem::remove(tempJs, ec);
-
-    if ((status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) ||
-        (err.find("unresolved name 'await'") != std::string::npos)) {
-        std::string wrappedCode = wrapAsyncIife(std::string(code), filename);
-        std::filesystem::path tempJsWrap = tempDir / (stem + "_wrap" + tempExt);
-        {
-            std::ofstream ofs(tempJsWrap, std::ios::binary);
-            if (ofs.is_open()) {
-                ofs.write(wrappedCode.data(), wrappedCode.size());
-            }
-        }
-        err.clear();
-        status = bronze::cli::runBuild(
-            tempJsWrap.string(), outDll.string(), &err,
-            /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-            /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
-            /*emitShared=*/true, /*retainFnSource=*/true,
-            /*importMapPath=*/{},
-            /*pinsPath=*/pinsPath,
-            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
-            /*entryResolvesAs=*/resolvesAs);
-        std::filesystem::remove(tempJsWrap, ec);
-    }
-    std::filesystem::remove(manifest, ec);
-    if (!nativesPath.empty()) std::filesystem::remove(nativesPath, ec);
-
-    if (status != 0) {
-        LOG_ERROR("eval compilation failed:\n%s", err.c_str());
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-
-    std::string loadErr;
-    ModuleHandle handle = openModule(outDll.string(), loadErr);
-    trackTempModuleFile(outDll);
-    if (!handle) {
-        LOG_ERROR("eval module load failed: %s", loadErr.c_str());
-        std::error_code ecRm;
-        std::filesystem::remove(outDll, ecRm);
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-#ifndef _WIN32
-    std::error_code ecRm;
-    std::filesystem::remove(outDll, ecRm);
-#endif
-
-    auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
-    if (!entry) {
-        LOG_ERROR("eval module exports no bronze_main: %s", outDll.string().c_str());
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-
-    const bool ownsBronzeModule = (moduleHandleOut == nullptr);
-    const ev::ModuleHandle bronzeHandle = ev::beginModuleLoad();
-    if (moduleHandleOut) *moduleHandleOut = bronzeHandle;
-    else trackDynamicBronzeModule(bronzeHandle);
-
-    bool entryOk = safeRunEntry(entry);
-    if (!entryOk) {
-        ev::endModuleLoad(bronzeHandle);
-        if (ownsBronzeModule) ev::unloadModule(bronzeHandle);
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-    if (ev::microtasksPending()) {
-        ev::drainMicrotasks();
-    }
-    ev::endModuleLoad(bronzeHandle);
-    std::fflush(stdout);
-
-    if (hasTestFailure() || engine.hasTestFailure()) {
-        return false;
-    }
-    return true;
-}
-
-} // namespace
-
 bool evalScript(engine::Engine& engine, const std::string& code, const std::string& filename, ScriptGoal goal) {
-    return evalScriptImpl(engine, code, filename, nullptr, false, goal);
+    HostEvalScope evalScope;
+    return evalScriptJit(engine, code, filename, nullptr, false, goal);
 }
 
 bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename,
@@ -473,7 +99,11 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
         const std::filesystem::path file(std::u8string(filename.begin(), filename.end()));
         requireDir.emplace(file.parent_path());
     }
-    const bool ok = evalScriptImpl(engine, code, filename, &handle, moduleFile, goal);
+    bool ok;
+    {
+        HostEvalScope evalScope;
+        ok = evalScriptJit(engine, code, filename, &handle, moduleFile, goal);
+    }
     // Recorded on failure too: a top level that threw halfway still
     // registered its spans, and they are still the reload's to retire.
     engine.addAppModuleHandle(handle);
@@ -521,136 +151,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     // machine code by then — but it can always name the file, and on a run
     // that drives five model surfaces in a loop that is most of the answer.
     util::setCrashContext("script " + filePath);
-    if (!isJitDisabled() || std::filesystem::path(filePath).extension() == ".lua") {
-        return evalScriptFileJit(engine, filePath);
-    }
-
-    ensureSharedRuntimeEnv();
-
-    std::error_code ec;
-    const std::filesystem::path resolvedPath = filePath;
-    if (!std::filesystem::exists(resolvedPath, ec)) {
-        LOG_ERROR("evalScriptFile: file does not exist: %s", filePath.c_str());
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-
-    const auto absSource = std::filesystem::absolute(resolvedPath, ec);
-    const auto tempDir = getEvalTempDir();
-    const uint64_t id = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
-    const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::string stem = "script_" + std::to_string(ts) + "_" + std::to_string(id);
-    const auto outDll = tempDir / (stem + kModuleExt);
-
-    if (!isWebHostGlobalsInstalled()) {
-        installWebHostGlobals(engine);
-    }
-    const auto manifest = writeHostGlobalsManifest(tempDir, stem);
-    const std::string globalsPath = manifest.string();
-    const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
-    const auto roots = moduleRootsFor(engine);
-    const std::string pinsPath = discoverPinsPath(engine, absSource);
-    std::string err;
-
-    std::ifstream ifs(absSource, std::ios::binary);
-    std::string content;
-    if (ifs) {
-        content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-    }
-
-    const std::string srcExt = absSource.extension().string();
-    const std::string wrapExt = (srcExt == ".ts" || srcExt == ".mts" || srcExt == ".mjs") ? srcExt : std::string(".js");
-    std::filesystem::path wrapFile;
-    std::string buildSrc = absSource.string();
-    if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        std::string wrapped = wrapAsyncIife(content, absSource.string());
-        wrapFile = tempDir / (stem + "_wrap" + wrapExt);
-        std::ofstream ofs(wrapFile, std::ios::binary);
-        ofs.write(wrapped.data(), wrapped.size());
-        ofs.close();
-        buildSrc = wrapFile.string();
-    }
-
-    int status = bronze::cli::runBuild(
-        buildSrc, outDll.string(), &err,
-        /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-        /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
-        /*emitShared=*/true, /*retainFnSource=*/true,
-        /*importMapPath=*/{},
-        /*pinsPath=*/pinsPath,
-        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
-
-    if (!wrapFile.empty()) {
-        std::filesystem::remove(wrapFile, ec);
-    }
-
-    if (status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) {
-        std::string wrapped = wrapAsyncIife(content, absSource.string());
-        auto wrappedFile = tempDir / (stem + "_wrap2" + wrapExt);
-        std::ofstream ofs(wrappedFile, std::ios::binary);
-        ofs.write(wrapped.data(), wrapped.size());
-        ofs.close();
-
-        err.clear();
-        status = bronze::cli::runBuild(
-            wrappedFile.string(), outDll.string(), &err,
-            /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-            /*hostGlobals=*/globalsPath, /*moduleRoots=*/roots, /*entrySymbol=*/{},
-            /*emitShared=*/true, /*retainFnSource=*/true,
-            /*importMapPath=*/{},
-            /*pinsPath=*/pinsPath,
-            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
-        std::filesystem::remove(wrappedFile, ec);
-    }
-    std::filesystem::remove(manifest, ec);
-    if (!nativesPath.empty()) std::filesystem::remove(nativesPath, ec);
-
-    if (status != 0) {
-        LOG_ERROR("evalScriptFile compilation failed for %s:\n%s", filePath.c_str(), err.c_str());
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-
-    std::string loadErr;
-    ModuleHandle handle = openModule(outDll.string(), loadErr);
-    trackTempModuleFile(outDll);
-    if (!handle) {
-        LOG_ERROR("evalScriptFile module load failed: %s", loadErr.c_str());
-        std::error_code ecRm;
-        std::filesystem::remove(outDll, ecRm);
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-#ifndef _WIN32
-    std::error_code ecRm;
-    std::filesystem::remove(outDll, ecRm);
-#endif
-
-    auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
-    if (!entry) {
-        LOG_ERROR("evalScriptFile module exports no bronze_main: %s", outDll.string().c_str());
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-
-    if (!safeRunEntry(entry)) {
-        setTestFailure(true);
-        engine.setTestFailure(true);
-        return false;
-    }
-    if (ev::microtasksPending()) {
-        ev::drainMicrotasks();
-    }
-    std::fflush(stdout);
-
-    if (hasTestFailure() || engine.hasTestFailure()) {
-        return false;
-    }
-    return true;
+    return evalScriptFileJit(engine, filePath);
 }
 
 namespace {
@@ -699,34 +200,12 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
     // as that value, so it is catchable and leaves the page unharmed: through
     // evalScript, one bad body latched the page's failure flag, and every
     // later `new Function` in the page then failed as well.
-    if (!isJitDisabled()) {
-        const std::string expr = std::string(sourcePrefixFor(kind)) + params + ") {\n" + body + "\n})";
-        auto res = evalScriptJitResult(*s_activeEngine, expr, "<new Function>", nullptr, false, ScriptGoal::Module);
-        if (res.thrown) return ev::throwValue(res.value);
-        if (!ev::isFunction(res.value)) return ev::throwError("new Function: created function was not found");
-        ev::Persistent& cached = s_dynFnCache[cacheKey];
-        cached.set(res.value);
-        return cached.get();
-    }
-
-    const uint64_t fnId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
-    const std::string globalName = "__bro_dyn_fn_" + std::to_string(fnId);
-    const std::string code = "globalThis." + globalName + " = " + sourcePrefixFor(kind) + params + ") {\n" + body + "\n});";
-
-    if (!evalScript(*s_activeEngine, code, "<new Function>")) {
-        cleanGlobalProp(globalName);
-        return ev::throwError("new Function: dynamic compilation failed");
-    }
-
-    ev::GlobalValue g = ev::globalValue(globalName);
-    if (!g.found) {
-        cleanGlobalProp(globalName);
-        return ev::throwError("new Function: created function was not found");
-    }
-    // Into the cache (a root) before cleanGlobalProp allocates.
+    const std::string expr = std::string(sourcePrefixFor(kind)) + params + ") {\n" + body + "\n})";
+    auto res = evalScriptJitResult(*s_activeEngine, expr, "<new Function>", nullptr, false, ScriptGoal::Module);
+    if (res.thrown) return ev::throwValue(res.value);
+    if (!ev::isFunction(res.value)) return ev::throwError("new Function: created function was not found");
     ev::Persistent& cached = s_dynFnCache[cacheKey];
-    cached.set(g.value);
-    cleanGlobalProp(globalName);
+    cached.set(res.value);
     return cached.get();
 }
 
@@ -737,54 +216,101 @@ bronze::Value dynamicEval(bronze::Value source) {
     }
     const std::string code = ev::toUtf8(source);
 
-    // One compile of the text as written. bronze's evaluator already answers
-    // the completion value — a trailing expression statement becomes the
-    // result — so there is no expression-first probe to make, and none is
-    // wanted: a probe that fails to parse `var x = 1` as an expression used to
-    // go through the reporting path, whose failure latch then failed the
-    // statement retry that had in fact succeeded. What the script threw is
-    // rethrown as the value it was, for the caller's catch.
-    if (!isJitDisabled()) {
-        auto res = evalScriptJitResult(*s_activeEngine, code, "<eval>");
-        if (res.thrown) return ev::throwValue(res.value);
-        return res.value;
-    }
+    // One compile of the text as written. bronze's evaluator answers the
+    // completion value (the last statement that gave one), so there is no
+    // expression-first probe to make, and none is wanted: a probe that fails
+    // to parse `var x = 1` as an expression used to go through the reporting
+    // path, whose failure latch then failed the statement retry that had in
+    // fact succeeded. What the script threw is rethrown as the value it was,
+    // for the caller's catch.
+    auto res = evalScriptJitResult(*s_activeEngine, code, "<eval>");
+    if (res.thrown) return ev::throwValue(res.value);
+    return res.value;
+}
 
-    // The ahead-of-time fallback (BRO_DISABLE_JIT) runs a module whose result
-    // it can only read back through a global; it keeps the two-shape approach,
-    // with the probe's failure UNLATCHED before the statement form is tried.
-    const uint64_t evalId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
-    const std::string resName = "__bro_eval_res_" + std::to_string(evalId);
-    const bool hostFailedBefore = hasTestFailure();
-    const bool engineFailedBefore = s_activeEngine->hasTestFailure();
-
-    std::string exprCode = "globalThis." + resName + " = (" + code + ");";
-    if (evalScript(*s_activeEngine, exprCode, "<eval>")) {
-        ev::GlobalValue g = ev::globalValue(resName);
-        if (g.found) {
-            // Rooted: cleanGlobalProp allocates.
-            ev::Persistent val(g.value);
-            cleanGlobalProp(resName);
-            return val.get();
+// The importer's `import.meta.url` as a file path: a file: URL decoded
+// (`file:///C:/x%20y/a.js` is C:/x y/a.js, `file:///home/a.js` /home/a.js),
+// anything else as it is.
+std::string referrerPath(const std::string& url) {
+    std::string rest = url;
+    if (rest.rfind("file://", 0) == 0) {
+        rest = rest.substr(7);
+        if (rest.size() >= 3 && rest[0] == '/' && std::isalpha(static_cast<unsigned char>(rest[1])) &&
+            rest[2] == ':') {
+            rest = rest.substr(1);
         }
     }
-    cleanGlobalProp(resName);
-    setTestFailure(hostFailedBefore);
-    s_activeEngine->setTestFailure(engineFailedBefore);
-
-    std::string stmtCode = "globalThis." + resName + " = undefined;\n" + code + ";";
-    if (evalScript(*s_activeEngine, stmtCode, "<eval>")) {
-        ev::GlobalValue g = ev::globalValue(resName);
-        if (g.found) {
-            ev::Persistent val(g.value);
-            cleanGlobalProp(resName);
-            return val.get();
+    std::string out;
+    out.reserve(rest.size());
+    for (size_t i = 0; i < rest.size(); ++i) {
+        if (rest[i] == '%' && i + 2 < rest.size() && std::isxdigit(static_cast<unsigned char>(rest[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(rest[i + 2]))) {
+            out.push_back(static_cast<char>(std::stoi(rest.substr(i + 1, 2), nullptr, 16)));
+            i += 2;
+        } else {
+            out.push_back(rest[i]);
         }
-        cleanGlobalProp(resName);
-        return ev::undefined();
     }
-    cleanGlobalProp(resName);
-    return ev::throwError("eval: evaluation failed");
+    return out;
+}
+
+Value errorValue(const std::string& message) {
+    ev::GlobalValue ctor = ev::globalValue("Error");
+    if (!ctor.found) return ev::fromUtf8(message);
+    ev::Persistent fn(ctor.value);
+    ev::Persistent msg(ev::fromUtf8(message));
+    const Value args[1] = {msg.get()};
+    ev::CallResult made = ev::construct(fn.get(), std::span<const Value>(args, 1));
+    return made.value;
+}
+
+// An `import()` whose specifier the compiler could not read (built at run
+// time). It is answered as a static import of the same specifier written in
+// the importer would be: a unit that imports the module's namespace,
+// compiled to resolve as the importer does (its file, the app's mounts and
+// import map), so a relative specifier resolves against the importer, and
+// a module already loaded (the page's, an earlier import()) is the same
+// instance and namespace rather than a second one. A file that is not there
+// rejects with an Error; what the module's evaluation threw rejects with
+// that value. The module is evaluated before import() returns; its promise
+// settles as a job, as always.
+Value dynamicImport(Value specifierValue, const std::string& referrerUrl) {
+    ev::Persistent promise(ev::createPromise());
+    if (!s_activeEngine) {
+        ev::Persistent err(errorValue("import(): no active engine available"));
+        ev::rejectPromise(promise.get(), err.get());
+        return promise.get();
+    }
+    const std::string specifier = ev::toUtf8(specifierValue);
+    const std::string referrer = referrerPath(referrerUrl);
+
+    // A path the compiler would look for beside the importer: a missing file
+    // is a load failure, named as one.
+    const bool relative = specifier.rfind("./", 0) == 0 || specifier.rfind("../", 0) == 0;
+    if (relative && !referrer.empty()) {
+        std::error_code ec;
+        const std::filesystem::path base = std::filesystem::path(std::u8string(referrer.begin(), referrer.end()))
+                                               .parent_path();
+        const std::filesystem::path target =
+            (base / std::filesystem::path(std::u8string(specifier.begin(), specifier.end()))).lexically_normal();
+        if (!std::filesystem::is_regular_file(target, ec)) {
+            ev::Persistent err(errorValue("import(): could not load module '" + specifier + "' from '" +
+                                          referrer + "' (no file " + target.generic_string() + ")"));
+            ev::rejectPromise(promise.get(), err.get());
+            return promise.get();
+        }
+    }
+
+    const std::string code =
+        "import * as __broDynamicImport from " + util::jsonQuote(specifier) + ";\n__broDynamicImport\n";
+    auto res = evalScriptJitResult(*s_activeEngine, code, referrer, nullptr, false, ScriptGoal::Module);
+    ev::Persistent value(res.value);
+    if (res.thrown) {
+        ev::rejectPromise(promise.get(), value.get());
+    } else {
+        ev::resolvePromise(promise.get(), value.get());
+    }
+    return promise.get();
 }
 
 } // namespace
@@ -793,19 +319,11 @@ void installDynamicHooks(engine::Engine& engine) {
     s_activeEngine = &engine;
     ev::setDynamicFunctionHook(dynamicFunction);
     ev::setDynamicEvalHook(dynamicEval);
+    ev::setDynamicImportHook(dynamicImport);
 }
 
 void clearDynamicModules() {
     s_dynFnCache.clear();
-    for (ev::ModuleHandle bh : s_bronzeModules) {
-        if (bh != 0) ev::unloadModule(bh);
-    }
-    s_bronzeModules.clear();
-    std::error_code ec;
-    for (const auto& f : s_tempModuleFiles) {
-        std::filesystem::remove(f, ec);
-    }
-    s_tempModuleFiles.clear();
 }
 
 } // namespace bro::bronze_host

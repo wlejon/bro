@@ -11,7 +11,6 @@
 #include "engine/terminal_layers.h"
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/app_module.h"
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/script_pump.h"
 #include "bronze_host/host_gc.h"

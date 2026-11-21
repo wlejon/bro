@@ -30,9 +30,8 @@ namespace bro::bronze_host {
 ///
 /// There is no hand-kept list of what this registers: registeredHostGlobals()
 /// below reads the names back off bronze's registry, and that enumeration is
-/// what every compile — in-process (`EvalOptions::hostGlobals`) or ahead of
-/// time (`bro-headless <app> --print-host-globals`, piped to `bronze build
-/// --host-globals`) — is given. A name a compiled program reads must be in
+/// what every compile (`EvalOptions::hostGlobals`, at run time or for an
+/// installed app's ahead-of-time build) is given. A name a compiled program reads must be in
 /// that list AND registered, and with one source for both it cannot be one
 /// without the other.
 ///

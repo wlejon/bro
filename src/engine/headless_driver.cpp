@@ -106,7 +106,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
-    bool printHostGlobals = false;
     bool claimInstance = false;
     std::string launchNotification;
     std::string nativeManifestOut;
@@ -150,15 +149,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "                  Honour the app's \"singleInstance\": take its channel, or\n"
                 "                  hand `-- args` to the instance holding it and exit 0\n"
                 "                  (headless runs otherwise never claim it)\n"
-                "  --print-host-globals\n"
-                "                  Print the host globals this binary registers, one per\n"
-                "                  line, and exit: the --host-globals manifest for\n"
-                "                  `bronze build` of an app that will run on it\n"
                 "  --print-native-manifest <path>\n"
                 "                  Write the native manifest this binary registers (the\n"
                 "                  __bro_native.* entry points and signatures) to <path>\n"
-                "                  and exit: the --native-manifest for the same build.\n"
-                "                  Combines with --print-host-globals in one run\n"
+                "                  and exit\n"
                 "  --grant <cap>[,<cap>...]\n"
                 "                  Grant the app these capabilities for this run, as a\n"
                 "                  host does (tests, development; logged loudly).\n"
@@ -202,8 +196,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         } else if (strcmp(argv[i], "--scheduled") == 0 && i + 1 < argc) {
             // The OS started this run for bro.app.schedule: it happens once.
             completeScheduledLaunch(argv[++i]);
-        } else if (strcmp(argv[i], "--print-host-globals") == 0) {
-            printHostGlobals = true;
         } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
             nativeManifestOut = argv[++i];
         } else if (strcmp(argv[i], "--aot-build") == 0 && i + 1 < argc) {
@@ -315,8 +307,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.graphics.height = height;
         config.deviceScaleFactor = deviceScale;
         config.showSplash = (cliSplash == 1);
-        config.hostProvidesCompiledApp =
-            hooks.providesCompiledApp && hooks.providesCompiledApp(config.appDir);
         config.installHostBindings = hooks.installHostBindings;
         config.installWorkerHostBindings = hooks.installWorkerHostBindings;
         config.aotBuildDir = aotBuildDir;
@@ -350,36 +340,21 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             _exit(status);
         }
 
-        // The compile-time half of the host-globals contract, read off the
-        // run-time half: install exactly what an app would find registered
-        // and print the registry. Before afterEngine, so a module already in
-        // the app dir is neither loaded nor run — the list is a property of
-        // this BINARY, and the app dir is only what the Engine needs to
-        // exist. The engine log is on stderr, so stdout is the manifest and
-        // nothing else.
-        //
-        // The native manifest is the other half of the same contract — the
-        // `__bro_native.*` entry points registered by the same install —
-        // written to a file rather than stdout (it is JSON, and the two
-        // manifests are asked for together by tests/bronze_host/lib.sh).
-        if (printHostGlobals || !nativeManifestOut.empty()) {
+        // The native manifest this binary registers (the `__bro_native.*`
+        // entry points of the host globals' install), written to a file:
+        // tests/bronze_host's natives check compares it with the one bro's
+        // own JavaScript was compiled against. Before afterEngine, so the
+        // list is a property of this BINARY; the app dir is only what the
+        // Engine needs to exist.
+        if (!nativeManifestOut.empty()) {
             if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
                 bro::bronze_host::installWebHostGlobals(*engine);
             }
             int status = 0;
-            if (!nativeManifestOut.empty()) {
-                std::string err;
-                if (!bro::bronze_host::writeNativeManifest(nativeManifestOut, &err)) {
-                    fprintf(stderr, "--print-native-manifest: %s\n", err.c_str());
-                    status = 1;
-                }
-            }
-            if (printHostGlobals) {
-                for (const auto& name : bro::bronze_host::registeredHostGlobals()) {
-                    fputs(name.c_str(), stdout);
-                    fputc('\n', stdout);
-                }
-                fflush(stdout);
+            std::string err;
+            if (!bro::bronze_host::writeNativeManifest(nativeManifestOut, &err)) {
+                fprintf(stderr, "--print-native-manifest: %s\n", err.c_str());
+                status = 1;
             }
             delete engine;
             if (hooks.beforeExit) hooks.beforeExit();

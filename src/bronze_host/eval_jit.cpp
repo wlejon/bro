@@ -36,14 +36,6 @@
 
 namespace bro::bronze_host {
 
-bool isJitDisabled() {
-    static bool disabled = [] {
-        const char* val = std::getenv("BRO_DISABLE_JIT");
-        return val && (std::strcmp(val, "1") == 0 || std::strcmp(val, "true") == 0);
-    }();
-    return disabled;
-}
-
 void applyJitTierOverride() {
     const char* val = std::getenv("BRO_JIT_TIER");
     if (!val || !*val) return;
@@ -325,7 +317,7 @@ std::string scriptExecCode(const std::string& code, const std::string& filename)
 
 bool startAppScriptCompile(engine::Engine& engine, const std::string& code, const std::string& filename,
                            bool moduleFile, ScriptGoal goal) {
-    if (isJitDisabled() || s_ahead || code.empty() ||
+    if (s_ahead || code.empty() ||
         std::filesystem::path(filename).extension() == ".lua") {
         return false;
     }

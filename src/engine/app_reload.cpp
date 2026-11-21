@@ -20,7 +20,6 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_aot.h"
-#include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_js_modules.h"
 #include "embed/embed.h"
@@ -106,7 +105,9 @@ int envSwitch(const char* name, const char* onValue, const char* offValue) {
 } // namespace
 
 void Engine::unloadAppModules() {
-    for (uint64_t handle : appModuleHandles_) bro::bronze_host::unloadAppModule(handle);
+    for (uint64_t handle : appModuleHandles_) {
+        if (handle != 0) bronze::embed::unloadModule(handle);
+    }
     appModuleHandles_.clear();
 }
 
@@ -134,13 +135,12 @@ void Engine::initAppWatcher() {
 
     // The watchers are the edit loop's, so they exist only where there is an
     // edit loop: a window, and scripts the engine itself compiles from the
-    // dir. A compiled app is rebuilt and relaunched by its own build; a
-    // headless run is a test, whose driver owns every reload.
+    // dir. A headless run is a test, whose driver owns every reload.
     // Headless frames of the windowed pipeline (runPipelineFrames) watch as a
     // window does: the watcher's per-frame poll is part of that frame.
     const bool editLoop = displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm ||
                           headlessPipelineStarted_;
-    if (!watchSources_ || !editLoop || hostProvidesCompiledApp_ || appDir_.empty()) return;
+    if (!watchSources_ || !editLoop || appDir_.empty()) return;
 
     // The app dir, and the project's shared /lib when it is not already
     // inside it — the code an app imports from `/lib/...` is edited in the
@@ -432,7 +432,7 @@ void Engine::performAppReload() {
     // Kept, it would make the new page's compile bind every file the old one
     // imported as an external instance: edits to those modules would never
     // load, and a renamed export would read undefined.
-    bro::bronze_host::clearAppModuleRegistry();
+    bronze::embed::clearModuleRegistry();
     if (!appModuleHandles_.empty()) {
         unloadAppModules();
         bro::bronze_host::hostCollectGarbage();
@@ -453,11 +453,6 @@ void Engine::performAppReload() {
     std::string failure;
     try {
         initAppRealm();
-        if (hostProvidesCompiledApp_) {
-            if (auto modulePath = bro::bronze_host::findAppModule(appDir_)) {
-                bro::bronze_host::runAppModule(*this, *modulePath);
-            }
-        }
         if (hasTestFailure())
             failure = "A script of the reloaded page threw at its top level (the error is logged above).";
     } catch (const std::exception& e) {

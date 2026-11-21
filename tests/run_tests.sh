@@ -8,15 +8,13 @@
 # leaves them out (a filter naming a .js file or test_* re-enables them, since
 # a filter that can match nothing else is asking for them). Also runs the
 # bronze_host checks, enumerated from
-# tests/bronze_host/run_checks.sh --list — their subject is a bronze-COMPILED
-# app rather than a script a JS realm could evaluate, so each is a shell check
+# tests/bronze_host/run_checks.sh --list — each an app page whose probe's
+# output is diffed against a pinned expectation, so each is a shell check
 # rather than a test_*.js. Each runs the same bro-headless and reports its own
-# PASS/FAIL lines; exit 77 (the automake convention) counts as SKIP, which a
-# tree without the bronze CLI (the bronze-cli target not built) uses so that "this tree
-# cannot build the subject" never reads as "the subject is broken".
+# PASS/FAIL lines; exit 77 (the automake convention) counts as SKIP.
 # BRO_TEST_BRONZE=0 leaves them out entirely, BRO_TEST_BRONZE_SKIP=<names>
 # leaves out the ones it names; their per-check timeout is
-# BRO_TEST_SH_TIMEOUT (default 120 s — a first run compiles its module).
+# BRO_TEST_SH_TIMEOUT (default 120 s).
 #
 # A JS test that cannot test its subject in this environment says so with
 # skipTest(reason) (weights absent, feature compiled out) or, when
@@ -413,9 +411,7 @@ run_one_test() {
 
     # A bronze_host check (a `bronze:<name>` entry from run_checks.sh --list)
     # runs itself and prints its own PASS/FAIL/SKIP lines; only its exit code
-    # is mapped here. It gets a longer timeout than a JS test because a first
-    # run compiles its module with the bronze CLI, and two of the probes take
-    # minutes.
+    # is mapped here, under its own timeout.
     if [[ "$1" == bronze:* ]]; then
         local SH_TIMEOUT="${BRO_TEST_SH_TIMEOUT:-120}"
         local CHECK="$SCRIPT_DIR/bronze_host/run_checks.sh" NAME="${1#bronze:}"

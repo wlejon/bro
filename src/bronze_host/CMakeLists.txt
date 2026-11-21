@@ -33,7 +33,6 @@ set(BRO_BRONZE_HOST_SOURCES
     webgl1.cpp
     host_profile.cpp
     host_telemetry.cpp
-    app_module.cpp
     app_aot.cpp
     dom_globals.cpp
     dom_window.cpp
@@ -559,9 +558,9 @@ bro_apply_feature_defs(bro_bronze_host)
 # THE HOST-GLOBALS MANIFEST is js/module.globals, a checked-in list of the
 # bare identifiers these modules are allowed to read (globalThis, console,
 # and the host objects C++ registers for them). It is NOT the app manifest:
-# an app compiles against what `bro-headless <appdir> --print-host-globals`
-# prints — the registry of the binary that will run it — and no such list
-# exists while that binary is being built. So bro's modules read everything
+# an app compiles against the registry of the binary that runs it
+# (registeredHostGlobals), and no such list exists while that binary is being
+# built. So bro's modules read everything
 # else off `globalThis` at the point of use, and the manifest stays tiny.
 #
 # On a target brass has no code generator for (BRASS_HOST_BACKEND is OFF,
@@ -701,15 +700,6 @@ else()
 endif()
 
 # --- No app targets here, deliberately ---
-# An app is a directory that carries its own module now (app.dll / app.so /
-# app.dylib, src/bronze_host/app_module.h), which the stock bro and bro-headless
-# load at startup. "Another app" is another folder, not another link of
-# host_main.cpp with a different object beside it — so there is no app-shaped
-# input to this build, no per-app target, and nothing here for an app author to
-# configure.
-#
-# Building an app is `bronze build <entry>.js -o <appdir>/app.dll --emit-shared
-# --host-globals <manifest>`, where the manifest is what `bro-headless <appdir>
-# --print-host-globals` prints — the registry of the binary that will run the
-# module, not a file kept in this tree — and this tree can produce the
-# compiler that does it. src/bronze_host/README.md has the sequence.
+# An app is a directory whose page scripts the engine compiles (ahead of time
+# for an installed app, docs/apps.md), so there is no app-shaped input to this
+# build and nothing here for an app author to configure.

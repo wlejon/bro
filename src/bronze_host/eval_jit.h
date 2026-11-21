@@ -13,9 +13,6 @@ class Engine;
 
 namespace bro::bronze_host {
 
-/// Checks whether in-memory JIT evaluation is disabled (BRO_DISABLE_JIT=1).
-bool isJitDisabled();
-
 /// Pins the tier every in-process compile runs at when BRO_JIT_TIER names one
 /// (bronze's parseExecutionTier: 0/interpreter, 1/baseline, 2/optimized,
 /// auto). Unset, JS runs on bronze's tiered default. A debugging switch,

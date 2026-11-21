@@ -210,8 +210,6 @@ void Engine::construct(const EngineConfig& config) {
     // only with the splash (--splash), so screenshots stay clean by default.
     statusEnabled_ = displayMode_ == DisplayMode::Windowed || displayMode_ == DisplayMode::Drm ||
                      (displayMode_ == DisplayMode::Headless && splashEnabled_);
-    compiledApp_ = config.compiledApp;
-    hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     aotDir_ = config.aotDir;
     aotRequired_ = config.aotRequired;
     aotBuildDir_ = config.aotBuildDir;
@@ -665,11 +663,6 @@ void Engine::construct(const EngineConfig& config) {
 }
 
 void Engine::initAppRealm() {
-    if (compiledApp_ && !hostProvidesCompiledApp_) {
-        LOG_WARN("App '%s' declares \"compiled\": true, but host provides no compiled app module.",
-                 appDir_.c_str());
-    }
-
     manifest_ = loadPageManifest();
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     std::string html;
@@ -823,9 +816,7 @@ void Engine::initAppRealm() {
     bronze_host::discardAppScriptCompile();
     fireLinkedSheetEvents();
 
-    if (!hostProvidesCompiledApp_) {
-        dispatchDocumentReadyEvents();
-    }
+    dispatchDocumentReadyEvents();
 }
 
 // Only the FIRST unit compiles ahead: it is compiled against the realm as it

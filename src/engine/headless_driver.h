@@ -13,11 +13,9 @@ struct HeadlessHooks {
 
     /// Run once the Engine is up and its first run() has returned — virtual
     /// time rebased, the app's document laid out — and before the headless
-    /// globals go in or any script evaluates.
-    /// This is the seam a host whose "app" is NATIVE code needs. bro-bronze-host
-    /// registers its host globals and runs the compiled top level here, which
-    /// puts that top level exactly where a script-based app's own JS already
-    /// is by this point: finished, with its first frame scheduled. The driver
+    /// globals go in or any script evaluates: the seam a host with native
+    /// logic of its own starts it at, where a page's own JS already is by
+    /// this point (finished, with its first frame scheduled). The driver
     /// script that follows then steps a running app rather than starting one.
     std::function<void(Engine&)> afterEngine;
 
@@ -26,22 +24,6 @@ struct HeadlessHooks {
 
     /// Per-thread host bindings for each Worker (EngineConfig::installWorkerHostBindings).
     std::function<void()> installWorkerHostBindings;
-
-    /// Asked once the app directory is resolved and before the Engine is
-    /// constructed: is `afterEngine` going to run compiled logic for THIS app?
-    /// Forwarded to EngineConfig::hostProvidesCompiledApp, which is what lets
-    /// engine init report an app dir and a binary that disagree about which of
-    /// them owns the app's logic. Unset means no, which is bro-headless's own
-    /// answer.
-    ///
-    /// A predicate rather than a bool because the answer is a property of the
-    /// FOLDER, not of the binary: one bro-headless opens a script-based app
-    /// and a compiled one, and which it got depends on whether that directory
-    /// carries a module (bronze_host/app_module.h). A host with an app linked
-    /// in answers yes unconditionally; a host that loads one answers by
-    /// looking. Asked before construction because engine init's diagnostic
-    /// needs it — after the fact the warning has already been emitted.
-    std::function<bool(const std::string& appDir)> providesCompiledApp;
 
     /// Run after the Engine is destroyed and immediately before `_exit()`.
     ///

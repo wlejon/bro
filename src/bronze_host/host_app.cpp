@@ -16,7 +16,8 @@
 //   bro.app.unschedule(id) / scheduled() / scheduledLaunch
 //   instance events                         js/bro_core.js, over _setInstanceDispatcher
 //
-// Everything here is the same for an app.dll and a page compiled at boot.
+// Everything here is the same for a page compiled at boot and one run from
+// its ahead-of-time module.
 
 #include "bronze_host/host_bro_namespaces.h"
 #include "bronze_host/host_builder.h"

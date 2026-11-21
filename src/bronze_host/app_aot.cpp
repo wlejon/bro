@@ -449,7 +449,7 @@ std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, co
                                                       bronze::eval::EvalOptions& opts, int ordinal, bool pageUnit) {
     // Scripts that are not the page's (a control eval, a driver) have no
     // module, and are not harvested either.
-    if (engine.aotDir().empty() || isJitDisabled() || !pageUnit) return std::nullopt;
+    if (engine.aotDir().empty() || !pageUnit) return std::nullopt;
     const std::string& dir = engine.aotDir();
     const std::string id = aotUnitId(opts.filename, opts.publishEntry, ordinal);
     const fs::path record = recordPath(dir, id);
@@ -582,7 +582,7 @@ void discardAheadAotUnit() { s_ahead.reset(); }
 std::optional<bronze::eval::LoadedModule> loadWorkerAotUnit(engine::Engine& engine, const std::string& code,
                                                             bronze::eval::EvalOptions& opts, bool moduleScript,
                                                             const std::string& basePath, WorkerAotRun& run) {
-    if (engine.aotDir().empty() || isJitDisabled()) return std::nullopt;
+    if (engine.aotDir().empty()) return std::nullopt;
     const std::string& dir = engine.aotDir();
     const std::string id = workerUnitId(opts.filename, moduleScript);
     const fs::path record = recordPath(dir, id);

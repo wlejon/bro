@@ -59,8 +59,6 @@ struct EngineConfig {
     DisplayMode displayMode = DisplayMode::Windowed;
     bool realAudio = false;
     bool showSplash = true;
-    bool compiledApp = false;
-    bool hostProvidesCompiledApp = false;
     // An installed app's executable: the directory holding its page scripts
     // compiled ahead of time (engine/app_exe.h, appExeAotDir). Each script unit
     // runs its module there while the module is still the program a compile

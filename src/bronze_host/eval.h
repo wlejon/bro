@@ -36,22 +36,13 @@ inline ScriptGoal pageUnitGoal(const std::vector<std::string>& classicScripts) {
     return classicScripts.empty() ? ScriptGoal::Module : ScriptGoal::ClassicScripts;
 }
 
-/// Path to directory containing the running executable.
-std::filesystem::path getExecutableDirectory();
-
-/// Temporary directory for compiled eval/worker DLLs.
-std::filesystem::path getEvalTempDir();
-
-/// Ensure BRONZE_SHARED_RT_LIB is populated for runtime compilation.
-void ensureSharedRuntimeEnv();
-
 /// Module roots for a compile that runs against `engine`'s app.
 std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine);
 
 /// Where script text handed to evalScript lives for imports.
 std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& filename);
 
-/// Compile JS code in-process using bronze CLI and run it on `engine`.
+/// Compile JS code in process (bronze's evaluator) and run it on `engine`.
 /// `filename` is the document the code came from (an app's index.html for its
 /// `<script>` text): its relative imports resolve from there. Empty means
 /// "no document", and they resolve from the app dir instead.
@@ -103,7 +94,7 @@ void snapshotClassicScripts();
 std::string classicScriptEventCall(const char* type);
 void installClassicScriptEvents();
 
-/// Compile a JS file in-process using bronze CLI and run it on `engine`.
+/// Compile a JS file in process and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);
 
 /// Install dynamic evaluation and function hooks (eval(), new Function())

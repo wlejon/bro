@@ -1,6 +1,6 @@
 # Hot reload
 
-A windowed app whose `<script>` tags bro compiles in-process (a folder without an `app.dll`) reloads when its source changes.
+A windowed folder app reloads when its source changes.
 
 ```
 bro ../broworkshop/games/torque     # boots, then watches the folder
@@ -62,7 +62,7 @@ Unchanged script units load from the [code cache](code-cache.md); while a unit c
 
 An app that is not watched also gets **F5** for itself: `system_reload_app` is defined but unbound, so the key reaches the page as an ordinary `keydown` (a file manager's refresh, say). An app or user can still bind the action to a key in [settings](settings.md).
 
-It is never on for `bro-headless`, `bro-server`, or an app with an `app.dll`.
+It is never on for `bro-headless` or `bro-server`.
 
 ## Scene shaders without a rebuild
 

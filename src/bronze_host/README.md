@@ -8,38 +8,6 @@ scripts are compiled in-process at boot (`eval_jit.cpp`); an installed app's
 page and Worker scripts are compiled ahead of time on its first run's profile
 (`app_aot.h`, docs/apps.md "Ahead-of-time scripts").
 
-## Folder modules
-
-Apps do not ship these any more; the loader stays for script-entry apps under
-`bro-server`, the `tests/bronze_host` checks and `bench/realworld`'s `bro-aot`
-mode. `bro <folder>` / `bro-headless <folder>` load `app.<ext>` beside
-`index.html` (`app_module.cpp`), compare its ABI stamp with the runtime's and refuse a
-mismatch. The module shares the host's runtime: link `bronze::runtime_shared`
-only, never `bronze::embed` + `bronze::runtime` as well, or the module gets a
-second heap and values are collected out from under it.
-
-```bash
-# the manifests of the binary that will run the app
-./build/Release/bro-headless src/bronze_host/fixtures/appdir \
-    --print-host-globals --print-native-manifest natives.json > host.globals
-
-# compile the app into the folder that carries it
-BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib \
-  ./build/Release/bronze.exe build app.js -o myapp/app.dll \
-    --emit-shared --host-globals host.globals --native-manifest natives.json
-
-./build/Release/bro myapp
-```
-
-`BRONZE_SHARED_RT_LIB` is needed under a multi-config generator, where the
-import library is one directory deeper than the CLI searches. Without
-`--native-manifest` the app still runs; `bro.*` natives are then ordinary
-property reads instead of direct calls. `tests/bronze_host/lib.sh` compiles
-probes into app dirs on demand and is the worked example.
-
-A `bro.json` with `"compiled": true` declares that the folder's logic is a
-module; opened with none, bro logs a warning and runs the page anyway.
-
 ## The frame seam
 
 `Engine::onFrame`, at the point the engine fires rAF (windowed frame, each

@@ -629,8 +629,6 @@ private:
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;
     bool splashEnabled_ = true;
-    bool compiledApp_ = false;
-    bool hostProvidesCompiledApp_ = false;
     std::string aotDir_;
     bool aotRequired_ = false;
     std::string aotBuildDir_;

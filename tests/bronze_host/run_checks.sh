@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Every bronze_host check, in one manifest. The mechanics — binary discovery,
-# module build, output cut, diff — are lib.sh's bh_run_check; each check here
-# is one call, under a comment saying what only it catches. README.md is the
-# long-form reference.
+# run, output cut, diff — are lib.sh's bh_run_check; each check here is one
+# call, under a comment saying what only it catches. Each appdir_<name> page
+# runs its probe.js as a module script. README.md is the long-form reference.
 #
 # Usage:
 #   run_checks.sh --list     the check names, one per line (this is what
@@ -10,19 +10,13 @@
 #   run_checks.sh <name>     run one check: exit 0 pass, 1 fail, 77 skip
 #   run_checks.sh            run every check, with a summary line
 #
-# Environment: BRO_HEADLESS, BRONZE, BRO_BRONZE_FRAMES — see lib.sh.
+# Environment: BRO_HEADLESS, BRO_BRONZE_FRAMES — see lib.sh.
 #              BRO_TEST_BRONZE_SKIP — names to leave out (space/comma list).
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/lib.sh"
-
-# The loader itself — the one check whose subject is not a compiled app but
-# what bro does with a folder's module: the ABI guard, the missing entry
-# point, the file that is not a module at all. Bespoke enough (it builds four
-# synthetic C modules with CMake) to keep its own file.
-check_loader() { bash "$SCRIPT_DIR/run_loader_test.sh"; }
 
 # The native tables (src/bronze_host/native_table.h) against the registry.
 # bro-native-manifest prints the manifest bro's own JavaScript is compiled
@@ -71,38 +65,34 @@ check_natives() {
     return 1
 }
 
-# The scene graph, a fixed frame count: three.js's own arithmetic surviving
-# compilation, timers before rAF, the microtask checkpoint after it. The app
-# needs 5 frames and the spare ones must print nothing — an app still drawing
-# after `done` has a rAF it never stopped rescheduling.
+# The scene graph, a fixed frame count: three.js's own arithmetic, timers
+# before rAF, the microtask checkpoint after it. The app needs 5 frames and
+# the spare ones must print nothing — an app still drawing after `done` has a
+# rAF it never stopped rescheduling.
 check_scenegraph() {
     bh_run_check bronze_host \
-        "$PROJECT_DIR/src/bronze_host/fixtures/appdir" \
-        "$PROJECT_DIR/src/bronze_host/fixtures/main_scenegraph.js" \
+        "$SCRIPT_DIR/appdir_scenegraph" \
         "$SCRIPT_DIR/expected/main_scenegraph.expected" \
         --diff-head 40
 }
 
-# Event dispatch into a compiled app, on the HYBRID app dir: a bro.json with
-# "compiled": true and an index.html whose own <script> is interpreted UI JS
-# beside the compiled program. drive_events.js is the driver — the only mode
-# that can produce a click. Three programs, two languages, one Engine, one
-# DOM, one thread.
+# Event dispatch between two programs on one page: the page's own classic
+# script and the probe, a module script. drive_events.js is the driver — the
+# only mode that can produce a click. Three programs, one Engine, one DOM,
+# one thread.
 check_events() {
     bh_run_check bronze_host_events \
         "$SCRIPT_DIR/appdir_events" \
-        "$SCRIPT_DIR/apps/events_probe.js" \
         "$SCRIPT_DIR/expected/events_probe.expected" \
-        --driver "$SCRIPT_DIR/drive_events.js" --split-streams
+        --driver "$SCRIPT_DIR/drive_events.js" --two-block
 }
 
-# fetch() in a compiled app, under a driver.
+# fetch(), under a driver.
 check_fetch() {
     bh_run_check bronze_host_fetch \
         "$SCRIPT_DIR/appdir_fetch" \
-        "$SCRIPT_DIR/apps/fetch_probe.js" \
         "$SCRIPT_DIR/expected/fetch_probe.expected" \
-        --driver "$SCRIPT_DIR/drive_fetch.js" --split-streams
+        --driver "$SCRIPT_DIR/drive_fetch.js" --two-block
 }
 
 # The ELEMENT surface (host_element.cpp): identity, real arrays, tree edits,
@@ -112,7 +102,6 @@ check_fetch() {
 check_dom() {
     bh_run_check bronze_host_dom \
         "$SCRIPT_DIR/appdir_dom" \
-        "$SCRIPT_DIR/apps/dom_probe.js" \
         "$SCRIPT_DIR/expected/dom_probe.expected" \
         --frames 4
 }
@@ -125,7 +114,6 @@ check_dom() {
 check_node() {
     bh_run_check bronze_host_node \
         "$SCRIPT_DIR/appdir_node" \
-        "$SCRIPT_DIR/apps/node_probe.js" \
         "$SCRIPT_DIR/expected/node_probe.expected" \
         --frames 4 --diff-head 80
 }
@@ -138,7 +126,6 @@ check_node() {
 check_file() {
     bh_run_check bronze_host_file \
         "$SCRIPT_DIR/appdir_file" \
-        "$SCRIPT_DIR/apps/file_probe.js" \
         "$SCRIPT_DIR/expected/file_probe.expected" \
         --diff-head 80
 }
@@ -151,7 +138,6 @@ check_file() {
 check_abort() {
     bh_run_check bronze_host_abort \
         "$SCRIPT_DIR/appdir_abort" \
-        "$SCRIPT_DIR/apps/abort_probe.js" \
         "$SCRIPT_DIR/expected/abort_probe.expected" \
         --diff-head 80
 }
@@ -161,7 +147,6 @@ check_abort() {
 check_observer() {
     bh_run_check bronze_host_observer \
         "$SCRIPT_DIR/appdir_observer" \
-        "$SCRIPT_DIR/apps/observer_probe.js" \
         "$SCRIPT_DIR/expected/observer_probe.expected" \
         --diff-head 80
 }
@@ -174,7 +159,6 @@ check_observer() {
 check_resize() {
     bh_run_check bronze_host_resize \
         "$SCRIPT_DIR/appdir_resize" \
-        "$SCRIPT_DIR/apps/resize_probe.js" \
         "$SCRIPT_DIR/expected/resize_probe.expected" \
         --diff-head 80
 }
@@ -182,13 +166,11 @@ check_resize() {
 # DOMParser (host_parser.cpp): the result is a SECOND DOCUMENT, which is the
 # half that goes wrong quietly. `scope.*` — a query on one document must not
 # answer from the other. `adopt.*` — appending a parsed node must transfer
-# ownership, in Node::appendChild itself because a compiled program never
-# passes through the JS bindings. `obs.*` — observers in both documents must
-# report; the host used to remember only that SOME document had been hooked.
+# ownership. `obs.*` — observers in both documents must report; the host used
+# to remember only that SOME document had been hooked.
 check_parser() {
     bh_run_check bronze_host_parser \
         "$SCRIPT_DIR/appdir_parser" \
-        "$SCRIPT_DIR/apps/parser_probe.js" \
         "$SCRIPT_DIR/expected/parser_probe.expected" \
         --diff-head 80
 }
@@ -198,7 +180,6 @@ check_parser() {
 check_proxy() {
     bh_run_check bronze_host_proxy \
         "$SCRIPT_DIR/appdir_proxy" \
-        "$SCRIPT_DIR/apps/proxy_probe.js" \
         "$SCRIPT_DIR/expected/proxy_probe.expected" \
         --expr "advanceTime(64);"
 }
@@ -210,21 +191,19 @@ check_proxy() {
 check_bro_core() {
     bh_run_check bronze_host_bro_core \
         "$SCRIPT_DIR/appdir_bro_core" \
-        "$SCRIPT_DIR/apps/bro_core_probe.js" \
         "$SCRIPT_DIR/expected/bro_core_probe.expected" \
         --expr "advanceTime(64);"
 }
 
 # bro.mesh, Mesh and MeshBVH: native classes, typed-array parameters and
-# both typed-array return modes, from compiled code. The probe forces the
-# collection its transfer-mode results must survive by allocation pressure
-# (the idle collector never runs under a live script frame) from a microtask
-# job, since a WeakRef's target is kept for the job that made it; the frames
-# are spare and must print nothing.
+# both typed-array return modes. The probe forces the collection its
+# transfer-mode results must survive by allocation pressure (the idle
+# collector never runs under a live script frame) from a microtask job, since
+# a WeakRef's target is kept for the job that made it; the frames are spare
+# and must print nothing.
 check_mesh() {
     bh_run_check bronze_host_mesh \
         "$SCRIPT_DIR/appdir_mesh" \
-        "$SCRIPT_DIR/apps/mesh_probe.js" \
         "$SCRIPT_DIR/expected/mesh_probe.expected" \
         --expr "advanceTime(64);"
 }
@@ -233,26 +212,27 @@ check_mesh() {
 check_interp() {
     bh_run_check bronze_host_interp \
         "$SCRIPT_DIR/appdir_interp" \
-        "$SCRIPT_DIR/apps/interp_probe.js" \
         "$SCRIPT_DIR/expected/interp_probe.expected" \
         --expr "advanceTime(64);"
 }
 
-# A dynamic `import()` in compiled code.
+# Static and dynamic `import`.
 check_import() {
     bh_run_check bronze_host_import \
         "$SCRIPT_DIR/appdir_import" \
-        "$SCRIPT_DIR/apps/import_probe.js" \
         "$SCRIPT_DIR/expected/import_probe.expected" \
         --frames 6
 }
 
-# The native codecs from compiled code: bro.mesh's Draco round trip and
-# bro.image's KTX2 transcode (host_codecs.cpp), typed-array payloads sized for
-# generated code's ABI element access. What only this catches: a build that
-# guarded the codecs out, or a binding whose views arrive mis-sized.
+# The native codecs: bro.mesh's Draco round trip and bro.image's KTX2
+# transcode (host_codecs.cpp), typed-array payloads. What only this catches: a
+# build that guarded the codecs out, or a binding whose views arrive
+# mis-sized.
 check_codecs() {
-    bh_run_check bronze_host_codecs         "$SCRIPT_DIR/appdir_codecs"         "$SCRIPT_DIR/apps/codecs_probe.js"         "$SCRIPT_DIR/expected/codecs_probe.expected"         --expr "advanceTime(64);"
+    bh_run_check bronze_host_codecs \
+        "$SCRIPT_DIR/appdir_codecs" \
+        "$SCRIPT_DIR/expected/codecs_probe.expected" \
+        --expr "advanceTime(64);"
 }
 
 # Host classes, via Image as the worked example: a handle born on its
@@ -261,7 +241,6 @@ check_codecs() {
 check_class() {
     bh_run_check bronze_host_class \
         "$SCRIPT_DIR/appdir_class" \
-        "$SCRIPT_DIR/apps/class_probe.js" \
         "$SCRIPT_DIR/expected/class_probe.expected" \
         --expr "waitForImages(); advanceTime(64);"
 }
@@ -271,7 +250,6 @@ check_class() {
 check_input() {
     bh_run_check bronze_host_input \
         "$SCRIPT_DIR/appdir_input" \
-        "$SCRIPT_DIR/apps/input_probe.js" \
         "$SCRIPT_DIR/expected/input_probe.expected" \
         --expr "gamepadConnect('Virtual Controller'); gamepadButton(0, 'south', true, 1.0); gamepadAxis(0, 0, 0.75); advanceTime(64);"
 }
@@ -288,7 +266,6 @@ check_video() {
     out="$(mktemp -d)"
     bh_run_check bronze_host_video \
         "$SCRIPT_DIR/appdir_video" \
-        "$SCRIPT_DIR/apps/video_probe.js" \
         "$SCRIPT_DIR/expected/video_probe.expected" \
         --expr "advanceTime(64)" --run-in "$out" --diff-head 80 --quiet-pass
     rc=$?
@@ -326,7 +303,6 @@ EOF
 check_audio() {
     bh_run_check bronze_host_audio \
         "$SCRIPT_DIR/appdir_audio" \
-        "$SCRIPT_DIR/apps/audio_probe.js" \
         "$SCRIPT_DIR/expected/audio_probe.expected" \
         --diff-head 80
 }
@@ -336,7 +312,6 @@ check_audio() {
 check_physics() {
     bh_run_check bronze_host_physics \
         "$SCRIPT_DIR/appdir_physics" \
-        "$SCRIPT_DIR/apps/physics_probe.js" \
         "$SCRIPT_DIR/expected/physics_probe.expected" \
         --diff-head 30
 }
@@ -346,20 +321,15 @@ check_physics() {
 check_ai() {
     bh_run_check bronze_host_ai \
         "$SCRIPT_DIR/appdir_ai" \
-        "$SCRIPT_DIR/apps/ai_probe.js" \
         "$SCRIPT_DIR/expected/ai_probe.expected" \
         --diff-head 30
 }
 
-# `bro.ai.game` from compiled code (host_ai_game.cpp): the namespace the
-# interpreted binding publishes, over the same brogameagent objects — HexNav
-# over a hand-derived table, an ORCA world with two agents crossing, a route
-# handed over as a plain array. Only this catches a compiled program binding
-# `bro.ai.game` at module load and finding nothing there.
+# `bro.ai.game` (host_ai_game.cpp): HexNav over a hand-derived table, an
+# ORCA world with two agents crossing, a route handed over as a plain array.
 check_aigame() {
     bh_run_check bronze_host_aigame \
         "$SCRIPT_DIR/appdir_aigame" \
-        "$SCRIPT_DIR/apps/aigame_probe.js" \
         "$SCRIPT_DIR/expected/aigame_probe.expected" \
         --diff-head 30
 }
@@ -369,52 +339,13 @@ check_aigame() {
 check_net() {
     bh_run_check bronze_host_net \
         "$SCRIPT_DIR/appdir_net" \
-        "$SCRIPT_DIR/apps/net_probe.js" \
         "$SCRIPT_DIR/expected/net_probe.expected" \
         --diff-head 30
 }
 
-# A wild three.js scene with OrbitControls, under a driver that screenshots
-# into the CWD (hence the pre-clean).
-check_wild() {
-    bh_run_check bronze_host_wild \
-        "$SCRIPT_DIR/appdir_wild" \
-        "$SCRIPT_DIR/apps/wild_orbit_probe.js" \
-        "$SCRIPT_DIR/expected/wild_orbit_probe.expected" \
-        --driver "$SCRIPT_DIR/drive_wild.js" --two-block \
-        --pre-clean "wild_before.png wild_after.png"
-}
-
-# An instanced three.js mesh under load (2,500 instances). Slow to compile the
-# first time — minutes and gigabytes; lib.sh caches the module beside the app
-# dir afterwards.
-check_instanced() {
-    bh_run_check bronze_host_instanced \
-        "$SCRIPT_DIR/appdir_instanced" \
-        "$SCRIPT_DIR/apps/instanced_mesh_probe.js" \
-        "$SCRIPT_DIR/expected/instanced_mesh_probe.expected" \
-        --driver "$SCRIPT_DIR/drive_instanced.js" --two-block \
-        --pre-clean "instanced_before.png instanced_after.png"
-}
-
-# pixi.js v8: WebGL sprites + pixel readback. The slowest module of all to
-# compile the first time.
-check_pixi() {
-    bh_run_check bronze_host_pixi \
-        "$SCRIPT_DIR/appdir_pixi" \
-        "$SCRIPT_DIR/apps/pixi_sprites_probe.js" \
-        "$SCRIPT_DIR/expected/pixi_sprites_probe.expected" \
-        --driver "$SCRIPT_DIR/drive_pixi.js" --two-block \
-        --pre-clean "pixi_before.png pixi_after.png"
-}
-
-# ---------------------------------------------------------------------------
-# The core host checks. Heavy library mega-compiles (wild three.js, instanced
-# mesh load, pixi.js v8) belong in bronze's oracle test suite; JIT and the
-# host bindings checks below are sufficient in bro.
-CHECKS=(loader natives scenegraph events fetch dom node file abort observer resize
-        parser proxy bro_core mesh class codecs input video audio physics ai
-        aigame net)
+CHECKS=(natives scenegraph events fetch dom node file abort observer resize
+        parser proxy bro_core mesh interp import class codecs input video audio
+        physics ai aigame net)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before
 # they are ever listed, so the runner does not even see them.

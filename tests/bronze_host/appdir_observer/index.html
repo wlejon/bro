@@ -22,16 +22,15 @@
      nothing here and look perfectly healthy doing it.
 
      An EVENT rather than a timer, because a timer is not orderable against the
-     compiled program's start: the page's scripts are step 10 of engine init
-     and the compiled top level runs after it (HeadlessHooks::afterEngine), so
-     a setTimeout registered here can — and in this fixture did — fire before
-     there is an observer to see it. The app asking for the mutation puts the
-     order beyond doubt. -->
+     probe's start, a module script deferred past this one: a setTimeout
+     registered here can fire before there is an observer to see it. The probe
+     asking for the mutation puts the order beyond doubt. -->
 <div id="shared" data-page="no"></div>
 <script>
   document.addEventListener('app:mutatePage', function () {
       document.getElementById('shared').setAttribute('data-page', 'yes');
   });
 </script>
+<script type="module" src="probe.js"></script>
 </body>
 </html>

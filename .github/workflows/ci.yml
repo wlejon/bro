@@ -6,15 +6,6 @@ name: CI
 #
 # The `minimal` job below covers the other end: the profile BUILDING.md hands
 # to someone who has just cloned and has no vcpkg. See its own comment.
-#
-# The bronze host layer (src/bronze_host) is built on all three platforms.
-# Linux and macOS also build the bronze COMPILER (with brass backend — x86-64
-# on Linux, its native AArch64 backend on arm64 macOS): those are the jobs
-# that run the test suite, and the tests/bronze_host checks need a compiler
-# to produce their subject — without one they report SKIP forever, which is
-# the failure mode this exists to avoid. Windows gets the host layer compiled
-# and linked, which is what breaks there. Nightly builds the compiler
-# everywhere, because it ships it.
 
 on:
   push:
@@ -56,13 +47,9 @@ jobs:
         include:
           # test: run tests/run_tests.sh after the build. Not on Windows: the
           # runner has no GPU and no Vulkan driver, so it builds only.
-          # bronze_compiler: also build the bronze CLI (the JS compiler, brass
-          # backend), not only the host layer bro links. Nothing in the
-          # default target needs it; the tests/bronze_host checks do, so it
-          # goes with test.
-          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true,  bronze_compiler: true }
-          - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
-          - { name: macos,   os: macos-15,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true }
+          - { name: windows, os: windows-2022, triplet: x64-windows, test: false }
+          - { name: macos,   os: macos-15,     triplet: arm64-osx,   test: true }
     steps:
       # A plain clone: every dependency is fetched at configure into
       # build/_deps. bronze, brass and the bro-* siblings come from the head of
@@ -219,10 +206,9 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             $GEN_ARGS
 
-      # The bronze_host checks compile fixtures that import three.js and pixi.js
-      # OUT OF the bronze tree, by sibling-relative path
-      # (`../../../../bronze/tests/oracle/threejs/three.module.js`, and
-      # node_modules shims whose "main" points the same way) — the layout every
+      # The bronze_host scene graph check imports three.js OUT OF the bronze
+      # tree, by sibling-relative path
+      # (`../../../../bronze/tests/oracle/threejs/three/...`) — the layout every
       # developer has, with bronze checked out beside bro. A runner has the
       # tree configure fetched into build/_deps and no sibling, so give
       # it the sibling name. A symlink, not a copy: one fetched tree under both
@@ -237,21 +223,11 @@ jobs:
         # the runner (exit 143). app profile has no AI tower, so 4 is safe on 16 GB.
         run: cmake --build build --config Release --parallel 4
 
-      # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt), so
-      # the default target does not build its CLI — bro links the runtime, not
-      # the compiler. Name it, or the bronze_host checks find no compiler and
-      # skip. bronze-cli rather than bronze: same binary, one name that every
-      # generator can reach (see the target's comment).
-      - name: Build the bronze compiler
-        if: matrix.bronze_compiler
-        run: cmake --build build --config Release --parallel 4 --target bronze-cli
-
       # run_tests.sh runs the tests/**/test_*.js suite (its default; there is
       # no BRO_TEST_JS gate here on purpose) and, alongside it, the
-      # bronze_host checks (tests/bronze_host/run_checks.sh --list), compiling
-      # each check's app module with the compiler built above. Those checks
-      # are the only coverage that layer has, so they run here in full rather
-      # than being deferred.
+      # bronze_host checks (tests/bronze_host/run_checks.sh --list). Those
+      # checks are the only coverage that layer has, so they run here in full
+      # rather than being deferred.
       - name: Test (headless Vulkan / Lavapipe)
         if: matrix.test && runner.os == 'Linux'
         shell: bash

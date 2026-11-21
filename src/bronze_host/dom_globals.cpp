@@ -431,9 +431,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Every registerGlobal below, and in the install* calls at the foot, is
     // the whole contract: registeredHostGlobals() reads the names back off
     // bronze's registry after this returns, and that is the list every
-    // compile is given (eval_jit.cpp, host_worker.cpp, and `bro-headless
-    // --print-host-globals` for an ahead-of-time `bronze build`). There is
-    // no manifest to keep in step. registerGlobal roots each value for the
+    // compile is given (eval_jit.cpp, host_worker_thread.cpp, app_aot.cpp).
+    // There is no manifest to keep in step. registerGlobal roots each value for the
     // life of the process.
     //
     // Never freed — see the lifetime note at the top of this file.

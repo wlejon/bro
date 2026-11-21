@@ -106,8 +106,7 @@ The engine compiles JavaScript itself: in process at boot, and for an
 installed app ahead of time with brass's own image writer, so nothing ships
 beside the binaries. The `bronze` command-line compiler is a build tool: every
 build makes it, because bro's own JS (`src/bronze_host/js/`) is compiled with
-it into libbro, and `tests/bronze_host/run_checks.sh` compiles its probes with
-it. `bronze-cli` names the same target under every generator (Visual Studio
+it into libbro. `bronze-cli` names the same target under every generator (Visual Studio
 leaves an `EXCLUDE_FROM_ALL` subdirectory's targets out of the `.sln` and
 answers `--target bronze` with "Project file does not exist").
 
