@@ -313,3 +313,13 @@ bro.eye.clearance = function(scene, opts) {};
  * @returns {{ok: boolean, meshCount: number, invertedCount: number, floatingCount: number, overhangCount: number, gapCount: number, issues: Object[], watchedGaps: Object[], path?: string}}
  */
 bro.eye.structure = function(scene, opts) {};
+
+/**
+ * Multi-angle macro close-up contact sheet over named (or auto-selected) 3D SceneGraph subjects
+ * (`threeQuarter`, `front`, `side`, `grazing`, `underside`, `top`, `rear`) to catch micro-seams,
+ * flat caps, levitating parts, and underside attachment gaps. Restores the active camera cleanly.
+ * @param {Object} scene
+ * @param {{targets?: string[], angles?: string[], margin?: number, maxPanelDim?: number, maxPanels?: number, path?: string}} [opts]
+ * @returns {{ok: boolean, panelCount: number, targets: {query: string, matchedNodes: number, center: number[], extent: number[], minY: number, maxY: number}[], path?: string}}
+ */
+bro.eye.closeup = function(scene, opts) {};

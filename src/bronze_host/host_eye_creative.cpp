@@ -9,6 +9,7 @@
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
 #include "eye/eye_clearance.h"
+#include "eye/eye_closeup.h"
 #include "eye/eye_probe.h"
 #include "eye/eye_structure.h"
 #include "scene/scene_graph.h"
@@ -430,6 +431,71 @@ Value jsEyeStructure(Value, std::span<const Value> a) {
         gb.set("pointA", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(g.pointA[k]); }));
         gb.set("pointB", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(g.pointB[k]); }));
         return gb.get();
+    }));
+    if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
+    return o.get();
+#endif
+}
+
+Value jsEyeCloseup(Value, std::span<const Value> a) {
+#if !BRO_WITH_3D
+    (void)a;
+    return ev::throwError("bro.eye.closeup requires a 3D build (BRO_WITH_3D=ON)");
+#else
+    if (!hostEngine()) return ev::throwError("bro.eye.closeup is unavailable in Worker realms");
+    if (a.empty() || !ev::isObject(a[0])) {
+        return ev::throwTypeError("bro.eye.closeup(scene, opts?) requires a SceneGraph");
+    }
+    scene::SceneGraph* graph = nullptr;
+    if (void* raw = ev::handleData(a[0])) {
+        auto* cell = static_cast<HostSceneGraphCell*>(raw);
+        if (cell->tag == kHostSceneGraphTag) graph = cell->graph();
+    }
+    if (!graph) {
+        return ev::throwTypeError("bro.eye.closeup(scene, opts?): expected a live SceneGraph");
+    }
+
+    EyeCloseupOptions copts;
+    Value optsVal = a.size() >= 2 ? a[1] : ev::undefined();
+    ev::Persistent optsRoot(optsVal);
+    if (ev::isObject(optsRoot.get())) {
+        copts.margin = std::clamp(numProp(optsRoot.get(), "margin", copts.margin), 1.1, 8.0);
+        copts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", copts.maxPanelDim)), 128, 1280);
+        copts.maxPanels = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanels", copts.maxPanels)), 1, 24);
+        const std::string rawPath = strProp(optsRoot.get(), "path");
+        if (!rawPath.empty()) {
+            requirePathAccess(rawPath, /*write=*/true);
+            copts.path = rawPath;
+        }
+        Value tgVal = ev::getProperty(optsRoot.get(), "targets");
+        if (ev::isObject(tgVal)) {
+            ev::Persistent ta(tgVal);
+            const uint32_t tn = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(ta.get(), "length")), 32.0)));
+            for (uint32_t i = 0; i < tn; ++i) copts.targets.push_back(ev::toUtf8(ev::getElement(ta.get(), i)));
+        }
+        Value anVal = ev::getProperty(optsRoot.get(), "angles");
+        if (ev::isObject(anVal)) {
+            ev::Persistent aa(anVal);
+            const uint32_t an = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(aa.get(), "length")), 16.0)));
+            if (an > 0) copts.angles.clear();
+            for (uint32_t i = 0; i < an; ++i) copts.angles.push_back(ev::toUtf8(ev::getElement(aa.get(), i)));
+        }
+    }
+
+    const EyeCloseupResult r = captureCloseup(*graph, copts);
+    ObjectBuilder o;
+    o.set("ok", ev::fromBool(r.ok));
+    o.set("panelCount", ev::fromDouble(r.panelCount));
+    o.set("targets", hostArrayOf(r.targets.size(), [&](size_t i) {
+        const auto& t = r.targets[i];
+        ObjectBuilder tb;
+        tb.set("query", ev::fromUtf8(t.query));
+        tb.set("matchedNodes", ev::fromDouble(t.matchedNodes));
+        tb.set("center", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(t.center[k]); }));
+        tb.set("extent", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(t.extent[k]); }));
+        tb.set("minY", ev::fromDouble(t.minY));
+        tb.set("maxY", ev::fromDouble(t.maxY));
+        return tb.get();
     }));
     if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
     return o.get();

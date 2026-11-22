@@ -237,9 +237,10 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
     std::vector<std::vector<bromath::Vec3>> samples(n);
     for (size_t i = 0; i < n; ++i) samples[i] = sampleWorldSurface(entries[i]);
 
-    // A. Inverted face / winding checks
+    // A. Inverted face / winding checks (skip open two-sided cards/foliage and translucent sheets)
     for (size_t i = 0; i < n; ++i) {
         const auto& e = entries[i];
+        if (e.node->twoSided() || e.node->color()[3] < 0.99f) continue;
         const WindingStats ws = inspectWinding(e);
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
         const bool flatDisc = (ext.y < 0.015f);
@@ -351,7 +352,7 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
     // C. Overhanging base footing check for resting flat-footed pillars/pedestals/supports
     for (size_t i = 0; i < n; ++i) {
         const auto& e = entries[i];
-        if (e.ignored || e.grounded) continue;
+        if (e.ignored || e.grounded || e.node->twoSided() || e.node->color()[3] < 0.99f) continue;
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
         if (ext.y < 0.14f || ext.x < 0.10f || ext.z < 0.10f || ext.x > 1.8f || ext.z > 1.8f) continue;
         if (ext.y < 0.45f * std::max(ext.x, ext.z)) continue;  // skip horizontal beams/shafts/blocks
