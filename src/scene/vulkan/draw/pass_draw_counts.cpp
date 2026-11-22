@@ -200,7 +200,8 @@ void PassDrawCounts::recordCulls(SceneFrame& frame) {
                                static_cast<uint32_t>(words + uint64_t(d.instanceCount) * 16)});
             words += uint64_t(d.instanceCount) * 17;
         };
-        if (camera && !d.cameraCulled) add(0, camera);
+        // A shadow-only draw is never drawn for the camera: no camera region.
+        if (camera && !d.cameraCulled && !d.shadowOnly) add(0, camera);
         if (shadows && d.castsShadow) {
             for (int v = 0; v < plan.viewCount; ++v) {
                 const ShadowViewPlan& view = plan.views[v];
