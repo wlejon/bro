@@ -58,6 +58,9 @@ pub struct TraceHit {
     roughness: f32,
     emissive: f32,
     voxel_size: f32,
+    // The opacity of what was hit: a voxel's alpha, or under 1 where the ray
+    // ended in coarse cells it saw partly through.
+    opacity: f32,
 }
 
 // A voxel's own number in [0, 1), from its cell in a region and the region.
@@ -81,6 +84,7 @@ pub fn no_hit() -> TraceHit {
         roughness: 0.8,
         emissive: 0.0,
         voxel_size: 1.0,
+        opacity: 1.0,
     };
 }
 
@@ -555,6 +559,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
     var accum_a: f32 = 0.0;
     var accum_rough: f32 = 0.0;
     var accum_emis: f32 = 0.0;
+    var accum_op: f32 = 0.0;
     var first_t: f32 = 1e30;
     var first_vox: f32 = r1.w;
 
@@ -654,6 +659,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
                 accum_rough += unpack_roughness(pnm) * w;
                 let em = is_emissive ? unpack_emissive(pnm) * 4.0 : 0.0;
                 accum_emis += em * w;
+                accum_op += col_a.w * w;
                 accum_a += w;
 
                 if (accum_a >= 0.95) {
@@ -669,6 +675,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
                         roughness: accum_rough * inv_a,
                         emissive: accum_emis * inv_a,
                         voxel_size: first_vox,
+                        opacity: accum_op * inv_a,
                     };
                 }
                 t = max(t_sub_exit + step_eps, t + step_eps);
@@ -740,6 +747,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
                             roughness: final_r,
                             emissive: final_em,
                             voxel_size: vox_size * extent,
+                            opacity: col_a.w,
                         };
                     }
                     let t_vx_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, vox_min, vox_max);
@@ -771,6 +779,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
             roughness: accum_rough * inv_a,
             emissive: accum_emis * inv_a,
             voxel_size: first_vox,
+            opacity: accum_op * inv_a,
         };
     }
     return no_hit();
@@ -798,191 +807,4 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
         ro, rd, t_max_world, pixel_cone, lod_scale, max_steps, anim_tick, ri, 0.5,
         regions, nodes, children, bricks, attrs, clips, frames
     );
-}
-
-// The shadow BVH over a frame's regions (the pass builds it): two vec4s a
-// node, [lo.xyz, a] [hi.xyz, b] in the regions' space, a and b u32 bits. A
-// leaf (b's top bit set) is region a; an inner node's left child is the next
-// node and its right child node a.
-pub const SHADOW_BVH_STRIDE: u32 = 2u;
-pub const SHADOW_BVH_LEAF: u32 = 0x80000000u;
-
-// Coarse sun occlusion across the regions marked REGION_CAST_SHADOW, the
-// ray tested against only the regions whose boxes it crosses (the BVH of
-// `bvh_count` nodes over them; 0: none cast).
-pub fn trace_shadow<BReg, BBvh, BN, BC, BB, BClip, BF>(
-    ro: vec3<f32>,
-    rd: vec3<f32>,
-    max_dist: f32,
-    pixel_cone: f32,
-    max_steps: u32,
-    anim_tick: u32,
-    bvh_count: u32,
-    regions: BReg,
-    bvh: BBvh,
-    nodes: BN,
-    children: BC,
-    bricks: BB,
-    clips: BClip,
-    frames: BF
-) -> f32 {
-    var vis: f32 = 1.0;
-    if (bvh_count == 0u) {
-        return vis;
-    }
-    let inv_d = safe_inv_dir(rd);
-    var stack: array<u32, 32>;
-    var sp: u32 = 1u;
-    stack[0] = 0u;
-    while (sp > 0u && vis > 0.02) {
-        sp -= 1u;
-        let ni = stack[sp];
-        let b0 = bvh[(ni * SHADOW_BVH_STRIDE) as i32];
-        let b1 = bvh[(ni * SHADOW_BVH_STRIDE + 1u) as i32];
-        let t0 = (b0.xyz - ro) * inv_d;
-        let t1 = (b1.xyz - ro) * inv_d;
-        let tsmall = min(t0, t1);
-        let tbig = max(t0, t1);
-        let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
-        let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), max_dist);
-        if (t_enter > t_exit) {
-            continue;
-        }
-        let a = bitcast<u32>(b0.w);
-        let b = bitcast<u32>(b1.w);
-        if ((b & SHADOW_BVH_LEAF) != 0u) {
-            vis *= shadow_region(ro, rd, max_dist, pixel_cone, max_steps, anim_tick, a, vis,
-                                 regions, nodes, children, bricks, clips, frames);
-        } else if (sp + 2u <= 32u) {
-            stack[sp] = a;
-            stack[sp + 1u] = ni + 1u;
-            sp += 2u;
-        }
-    }
-    return clamp(vis, 0.0, 1.0);
-}
-
-// The share of sunlight region `ri` lets through along the ray (1 when it
-// casts none), marching until the light left (`vis_in` times it) is spent.
-pub fn shadow_region<BReg, BN, BC, BB, BClip, BF>(
-    ro: vec3<f32>,
-    rd: vec3<f32>,
-    max_dist: f32,
-    pixel_cone: f32,
-    max_steps: u32,
-    anim_tick: u32,
-    ri: u32,
-    vis_in: f32,
-    regions: BReg,
-    nodes: BN,
-    children: BC,
-    bricks: BB,
-    clips: BClip,
-    frames: BF
-) -> f32 {
-    var vis: f32 = 1.0;
-        let base = (ri * REGION_STRIDE) as i32;
-        let r0 = regions[base];
-        let r4 = regions[base + 4];
-        let flags = bitcast<u32>(r4.z);
-        let root = bitcast<u32>(r4.x);
-        let extent = r0.w;
-        if ((flags & (REGION_ENABLED | REGION_CAST_SHADOW)) != (REGION_ENABLED | REGION_CAST_SHADOW) ||
-            root == DAG_INVALID || extent <= 0.0) {
-            return vis;
-        }
-
-        let r1 = regions[base + 1];
-        let r2 = regions[base + 2];
-        let r3 = regions[base + 3];
-        let eff_tick = anim_tick + bitcast<u32>(r4.w);
-
-        let rel = ro - r0.xyz;
-        let inv_ext = 1.0 / max(extent, 1e-6);
-        let ro_n = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
-        let rd_n = vec3<f32>(dot(rd, r1.xyz), dot(rd, r2.xyz), dot(rd, r3.xyz));
-        let rd_sx = rd_n.x >= 0.0 ? max(rd_n.x, 1e-6) : min(rd_n.x, -1e-6);
-        let rd_sy = rd_n.y >= 0.0 ? max(rd_n.y, 1e-6) : min(rd_n.y, -1e-6);
-        let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
-        let inv_d = safe_inv_dir(rd_n);
-
-        let cb = content_box(regions[base + 5]);
-        if (cb.lo.x > cb.hi.x || cb.lo.y > cb.hi.y || cb.lo.z > cb.hi.z) {
-            return vis;
-        }
-        let t0 = (cb.lo - ro_n) * inv_d;
-        let t1 = (cb.hi - ro_n) * inv_d;
-        let tsmall = min(t0, t1);
-        let tbig = max(t0, t1);
-        let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
-        let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), max_dist * inv_ext);
-        if (t_enter >= t_exit) {
-            return vis;
-        }
-
-        let cone_k = max(pixel_cone * 2.0, 0.01);
-        var t: f32 = t_enter + max(1e-5, t_enter * 2e-5);
-        var step: u32 = 0u;
-        while (step < max_steps && t < t_exit && vis * vis_in > 0.02) {
-            let p = clamp(ro_n + rd_n * t, vec3<f32>(0.0), vec3<f32>(0.999999));
-            var cur: u32 = root;
-            var cell_min: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-            var cell_size: f32 = 1.0;
-
-            var lvl: u32 = 0u;
-            while (lvl < 12u) {
-                let n = nodes[cur as i32];
-                let masks = n.x;
-                let solid_mask = masks & 0xFFu;
-                let sub_size = cell_size * 0.5;
-                let inv_cell = 1.0 / max(cell_size, 1e-6);
-                let rel_p = (p - cell_min) * inv_cell;
-                let ox = rel_p.x >= 0.5 ? 1u : 0u;
-                let oy = rel_p.y >= 0.5 ? 1u : 0u;
-                let oz = rel_p.z >= 0.5 ? 1u : 0u;
-                let oct = ox | (oy << 1u) | (oz << 2u);
-                let sub_min = cell_min + vec3<f32>(ox as f32, oy as f32, oz as f32) * sub_size;
-                let sub_max = sub_min + vec3<f32>(sub_size, sub_size, sub_size);
-                let t_sub_exit = box_exit_t(ro_n, rd_sx, rd_sy, rd_sz, inv_d, sub_min, sub_max);
-                let step_eps = max(max(1e-5, t * 2e-5), sub_size * 1e-4);
-
-                let bit = 1u << oct;
-                if ((solid_mask & bit) == 0u) {
-                    t = max(t_sub_exit + step_eps, t + step_eps);
-                    break;
-                }
-
-                let valid_mask = (masks & 0xFFu) | ((masks >> 8u) & 0xFFu);
-                let slot = popcount_below32(valid_mask, oct);
-                let raw_ref = children[(n.y + slot) as i32];
-                let leaf_mask = (masks >> 16u) & 0xFFu;
-                let is_leaf = (leaf_mask & bit) != 0u;
-                let resolved = resolve_child(raw_ref, eff_tick, clips, frames);
-                if (resolved == DAG_INVALID) {
-                    t = max(t_sub_exit + step_eps, t + step_eps);
-                    break;
-                }
-
-                if (is_leaf || sub_size <= t * cone_k) {
-                    var occ: f32 = 0.0;
-                    if (is_leaf) {
-                        let b1 = bricks[(resolved * 2u + 1u) as i32];
-                        occ = unpack_rgba8(b1.y).w;
-                    } else {
-                        let cn = nodes[resolved as i32];
-                        occ = unpack_rgba8(cn.z).w;
-                    }
-                    vis *= (1.0 - clamp(occ * 1.25, 0.0, 1.0));
-                    t = max(t_sub_exit + step_eps, t + step_eps);
-                    break;
-                }
-
-                cur = resolved;
-                cell_min = sub_min;
-                cell_size = sub_size;
-                lvl += 1u;
-            }
-            step += 1u;
-        }
-    return clamp(vis, 0.0, 1.0);
 }

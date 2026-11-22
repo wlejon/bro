@@ -158,9 +158,6 @@ public:
     void setLodScale(float s) noexcept { lodScale_ = s > 0.05f ? s : 0.05f; }
     float lodScale() const noexcept { return lodScale_; }
 
-    void setShadowSteps(uint32_t steps) noexcept { shadowSteps_ = steps; }
-    uint32_t shadowSteps() const noexcept { return shadowSteps_; }
-
     void setMaxRaySteps(uint32_t steps) noexcept { maxRaySteps_ = steps > 8u ? steps : 8u; }
     uint32_t maxRaySteps() const noexcept { return maxRaySteps_; }
 
@@ -187,7 +184,6 @@ private:
     bool autoAnimate_ = true;
 
     float lodScale_ = 1.0f;
-    uint32_t shadowSteps_ = 24u;
     uint32_t maxRaySteps_ = 128u;
 
     SharedVoxelGpuBuffers shared_;

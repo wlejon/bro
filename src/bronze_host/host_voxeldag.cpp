@@ -906,12 +906,6 @@ void decorateWorldClass(ev::ObjectBuilder& b) {
         if (!a.empty()) vw->setLodScale(static_cast<float>(ev::toDouble(a[0])));
         return ev::undefined();
     });
-    b.def("setShadowSteps", 1, [](Value self, std::span<const Value> a) -> Value {
-        scene::VoxelWorldNode* vw = nullptr;
-        worldOf(self, "VoxelWorld.setShadowSteps", &vw);
-        if (!a.empty()) vw->setShadowSteps(static_cast<uint32_t>(std::max(0.0, ev::toDouble(a[0]))));
-        return ev::undefined();
-    });
     b.def("setMaxRaySteps", 1, [](Value self, std::span<const Value> a) -> Value {
         scene::VoxelWorldNode* vw = nullptr;
         worldOf(self, "VoxelWorld.setMaxRaySteps", &vw);

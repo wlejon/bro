@@ -24,6 +24,14 @@
  *   is not marched.
  * - `minDist` / `fadeStart` / `maxDist` dither a region in and out, so nested
  *   rings of coarser voxels hand over without a seam.
+ * - A voxel's alpha is its opacity: a ray passes it with probability
+ *   1 - alpha (the same voxels every frame), so a crown voxelized with its
+ *   leaves' coverage shows the sky through it.
+ * - A `castShadow` region casts into the scene's shadow pages as a mesh does:
+ *   the pages it touches are redrawn when it changes, its content traced from
+ *   the light, whatever the camera's distance bands; partly opaque voxels
+ *   shadow their share of the texels, so leaves dapple. Voxels receive the
+ *   pages' shadows (their own, the meshes') as any surface.
  *
  * The pool never moves an index, and counts the references to every node and
  * brick: a region holds its tree, so clearing, replacing or removing a region
@@ -256,8 +264,6 @@ class VoxelWorld {
     setLodScale(s) {}
     /** March steps a region a pixel (default 128, min 8). */
     setMaxRaySteps(n) {}
-    /** Shadow ray steps (0: no voxel shadows). */
-    setShadowSteps(n) {}
     setAnimTick(tick) {}
     setAnimFps(fps) {}
     setAutoAnimate(on) {}

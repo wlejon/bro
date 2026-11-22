@@ -9,9 +9,8 @@ import atmosphere;
 import voxeldag;
 
 struct VoxelDagParams {
-    counts: vec4<u32>,   // x: region_count, y: anim_tick, z: max_steps, w: shadow_steps
+    counts: vec4<u32>,   // x: region_count, y: anim_tick, z: max_steps, w: pad
     scales: vec4<f32>,   // x: lod_scale, y: pixel_cone, z: pad, w: pad
-    shadow: vec4<u32>,   // x: shadow BVH nodes (b_shadow_bvh)
 }
 
 @binding(2, 0) var u_scene_depth: sampler2d<f32>;
@@ -23,7 +22,6 @@ struct VoxelDagParams {
 @binding(2, 6) var b_attrs: read_buffer<u32>;
 @binding(2, 7) var b_anim_clips: read_buffer<vec4<u32>>;
 @binding(2, 8) var b_anim_frames: read_buffer<u32>;
-@binding(2, 9) var b_shadow_bvh: read_buffer<vec4<f32>>;
 
 struct VoxelFragOut {
     color: vec4<f32>,
@@ -115,7 +113,6 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
     let ign = fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
     let tick = u_params.counts.y;
     let max_steps = u_params.counts.z;
-    let shadow_steps = u_params.counts.w;
     let lod_scale = u_params.scales.x;
     let pixel_cone = u_params.scales.y;
 
@@ -142,29 +139,6 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
         discard_fragment();
     }
 
-    var sun_vis: f32 = 1.0;
-    if (shadow_steps > 0u && lighting::sun_index() >= 0) {
-        let sun_dir = lighting::to_sun();
-        let bias = max(best.voxel_size * 0.75, best.t * 2e-4);
-        let s_ro = best.pos + best.normal * bias;
-        sun_vis = voxeldag::trace_shadow(
-            s_ro,
-            sun_dir,
-            max(best.voxel_size * 64.0, 256.0),
-            pixel_cone,
-            shadow_steps,
-            tick,
-            u_params.shadow.x,
-            b_regions,
-            b_shadow_bvh,
-            b_nodes,
-            b_children,
-            b_bricks,
-            b_anim_clips,
-            b_anim_frames
-        );
-    }
-
     var local_up = vec3<f32>(0.0, 1.0, 0.0);
     if (lighting::atmosphere_on()) {
         let ao_vec = atmosphere::origin(lighting::lighting.atm, best.pos);
@@ -173,12 +147,23 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
             local_up = ao_vec * (1.0 / max(al, 1e-5));
         }
     }
-    // Leaves are lit as a mesh leaf is (draw/mesh.bk: two-sided, subsurface
+    // A foliage region's leaves (its partly opaque voxels; its bark is lit as
+    // bark) are lit as a mesh leaf is (draw/mesh.bk: two-sided, subsurface
     // 0.5, translucency 0.7), the sun coming through them.
     let foliage = (bitcast<u32>(b_regions[(ri * voxeldag::REGION_STRIDE + 4u) as i32].z) &
-                   voxeldag::REGION_FOLIAGE) != 0u;
+                   voxeldag::REGION_FOLIAGE) != 0u && best.opacity < 0.99;
+    // The sun's shadow is the shadow pages' (the regions cast into them:
+    // PassVoxelShadow), which direct_light reads. The sky a voxel sees
+    // follows it: under a canopy, in its shadow, the sky is mostly hidden too.
+    var shade_vis: f32 = 1.0;
+    let si = lighting::sun_index();
+    if (si >= 0) {
+        let sun_dir = lighting::to_sun();
+        shade_vis = lighting::light_shadow(si, best.pos, best.t, 0.0, best.normal,
+                                           max(abs(dot(best.normal, sun_dir)), 0.2), 1.0);
+    }
     let hemi = 0.5 + 0.5 * dot(best.normal, local_up);
-    let sky_vis = clamp(mix(0.28, 1.0, sun_vis) * mix(0.45, 1.0, hemi), 0.16, 1.0);
+    let sky_vis = clamp(mix(0.28, 1.0, shade_vis) * mix(0.45, 1.0, hemi), 0.16, 1.0);
 
     let ls = lighting::Surface {
         position: best.pos,
@@ -192,7 +177,7 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
         two_sided: foliage,
         subsurface: foliage ? 0.5 : 0.0,
         translucency: foliage ? 0.7 : 0.0,
-        sun_visibility: sun_vis,
+        sun_visibility: 1.0,
         sky_visibility: sky_vis,
         sky_normal: best.normal,
         occluder_sun: 0.0,
@@ -230,7 +215,7 @@ struct VoxelShadowParams {
     misc: vec4<f32>,        // x: texel (m), y: 1 for an ortho view, z: max steps
 }
 
-@binding(2, 10) var u_shadow: uniform<VoxelShadowParams>;
+@binding(2, 9) var u_shadow: uniform<VoxelShadowParams>;
 
 fn shadow_unproject(ndc: vec3<f32>) -> vec3<f32> {
     let v = scene::mul4(u_shadow.inv_view_proj, vec4<f32>(ndc, 1.0));

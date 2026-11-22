@@ -49,9 +49,8 @@ private:
     friend class PassVoxelShadow;
 
     struct alignas(16) ParamsUbo {
-        uint32_t counts[4] = {};  // regionCount, animTick, maxSteps, shadowSteps
+        uint32_t counts[4] = {};  // regionCount, animTick, maxSteps, 0
         float scales[4] = {};     // lodScale, pixelCone, 0, 0
-        uint32_t shadow[4] = {};  // shadow BVH nodes, 0, 0, 0
     };
 
     struct GpuPool {

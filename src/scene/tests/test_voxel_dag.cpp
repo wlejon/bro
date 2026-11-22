@@ -70,7 +70,7 @@ void auditStage(const char* label, const std::vector<uint32_t>& words, bool requ
 }
 
 void testSpirvVerification() {
-    // 1. Standalone pure `voxeldag` compute kernel auditing is_carved_at + trace_region + trace_shadow.
+    // 1. Standalone pure `voxeldag` compute kernel auditing is_carved_at + trace_region + trace_region_caster.
     {
         brokernel::Compiler compiler;
         compiler.register_module("voxeldag", scene::vk::voxelDagModuleSource());
@@ -81,7 +81,6 @@ void testSpirvVerification() {
             fn audit_voxeldag_kernel(
                 g: grid<1>,
                 regions: read_buffer<vec4<f32>>,
-                shadow_bvh: read_buffer<vec4<f32>>,
                 nodes: read_buffer<vec4<u32>>,
                 children: read_buffer<u32>,
                 bricks: read_buffer<vec4<u32>>,
@@ -100,14 +99,13 @@ void testSpirvVerification() {
                 );
                 var sh: f32 = 1.0;
                 if (hit.hit) {
-                    let sdir = vec3<f32>(0.3, 1.0, 0.2);
+                    let sdir = vec3<f32>(-0.3, -1.0, -0.2);
                     let sun_rd = sdir * (1.0 / max(sqrt(max(dot(sdir, sdir), 1e-8)), 1e-6));
-                    sh = voxeldag::trace_shadow(
-                        hit.pos + hit.normal * 0.05,
-                        sun_rd,
-                        64.0, 0.004, 16u, 0u, 1u,
-                        regions, shadow_bvh, nodes, children, bricks, clips, frames
+                    let cast = voxeldag::trace_region_caster(
+                        hit.pos - sun_rd * 64.0, sun_rd, 128.0, 0.05, 64u, 0u, 0u, id as u32,
+                        regions, nodes, children, bricks, attrs, clips, frames
                     );
+                    sh = cast.hit ? 0.5 : 1.0;
                 }
                 let carved = voxeldag::is_carved_at(
                     ro + rd * 2.0, 1u, 0u, regions, nodes, children, bricks, clips, frames
@@ -194,7 +192,6 @@ void testDensePointerForestRender(render::VulkanContext& context) {
     graph.root()->addChild(sun);
 
     auto* world = graph.createVoxelWorld("forest");
-    world->setShadowSteps(0u);
     graph.root()->addChild(world);
 
     bromesh::DagVoxelizeOptions opts;
@@ -272,7 +269,6 @@ void testZeroCopyAnimationTick(render::VulkanContext& context) {
 
     auto* world = graph.createVoxelWorld("anim");
     world->setAutoAnimate(false);
-    world->setShadowSteps(0u);
     graph.root()->addChild(world);
 
     auto makeBox = [&](float r, float g, float b) -> uint32_t {
@@ -382,7 +378,6 @@ void testCarvedCaveAndDepthInterop(render::VulkanContext& context) {
     graph.root()->addChild(sun);
 
     auto* world = graph.createVoxelWorld("cave_world");
-    world->setShadowSteps(0u);
     graph.root()->addChild(world);
 
     // Region covers [-4, +4]^3 around (0, 0, 0) using 16^3 voxels at depth=2 (0.5m voxels).
@@ -527,7 +522,6 @@ void testPlanetOriginAndStaticCarveAndDistanceBands(render::VulkanContext& conte
     graph.root()->addChild(sun);
 
     auto* world = graph.createVoxelWorld("planet_vox");
-    world->setShadowSteps(0u);
     graph.root()->addChild(world);
 
     bromesh::DagVoxelizeOptions cOpts;
