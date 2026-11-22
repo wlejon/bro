@@ -348,12 +348,12 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         res.issues.push_back(std::move(iss));
     }
 
-    // C. Overhanging base footing check for resting pillars/pedestals/supports
+    // C. Overhanging base footing check for resting flat-footed pillars/pedestals/supports
     for (size_t i = 0; i < n; ++i) {
         const auto& e = entries[i];
         if (e.ignored || e.grounded) continue;
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
-        if (ext.y < 0.14f || ext.x > 1.8f || ext.z > 1.8f) continue;
+        if (ext.y < 0.14f || ext.x < 0.10f || ext.z < 0.10f || ext.x > 1.8f || ext.z > 1.8f) continue;
 
         const auto& bvhSelf = e.node->bvh();
         const auto& mdSelf = e.node->mesh();
@@ -367,13 +367,15 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
             const float wx = e.worldBox.min.x + ext.x * (0.14f + 0.36f * ix);
             for (int iz = 0; iz < 3; ++iz) {
                 const float wz = e.worldBox.min.z + ext.z * (0.14f + 0.36f * iz);
-                // Check if mesh itself has base material here (eliminates L-brackets / pipes!)
+                // Require downward-facing flat base face near footY (ignores rounded shafts / angled rods)
                 const bromath::Vec3 probeW{wx, footY - 0.02f, wz};
                 const bromath::Vec3 loS = mulPt(e.invWorld, probeW);
                 const bromath::Vec3 ldS = bromath::vnorm(mulDir(e.invWorld, {0, 1, 0}));
                 const float opS[3] = {loS.x, loS.y, loS.z}, dpS[3] = {ldS.x, ldS.y, ldS.z};
-                const auto selfHit = bvhSelf.raycast(mdSelf, opS, dpS, 0.09f);
+                const auto selfHit = bvhSelf.raycast(mdSelf, opS, dpS, 0.06f);
                 if (!selfHit.hit) continue;
+                const bromath::Vec3 wNrm = bromath::vnorm(mulDir(e.world, {selfHit.normal[0], selfHit.normal[1], selfHit.normal[2]}));
+                if (wNrm.y > -0.65f) continue;
 
                 ++footSamples;
                 bool hasSupportBelow = (footY <= opts.groundY + 0.04f);
