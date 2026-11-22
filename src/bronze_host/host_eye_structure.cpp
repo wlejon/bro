@@ -261,6 +261,28 @@ Value jsEyeStructure(Value, std::span<const Value> a) {
             }
         }
 
+        Value ggVal = ev::getProperty(optsRoot.get(), "groundGrid");
+        if (ev::isObject(ggVal)) {
+            ev::Persistent ggRoot(ggVal);
+            const double ox = numProp(ggRoot.get(), "originX", std::numeric_limits<double>::quiet_NaN());
+            const double oz = numProp(ggRoot.get(), "originZ", std::numeric_limits<double>::quiet_NaN());
+            const double step = numProp(ggRoot.get(), "step", 0.0);
+            const int cols = static_cast<int>(numProp(ggRoot.get(), "cols", 0));
+            const int rows = static_cast<int>(numProp(ggRoot.get(), "rows", 0));
+            std::vector<float> h;
+            if (std::isfinite(ox) && std::isfinite(oz) && std::isfinite(step) && step > 0.0 &&
+                cols >= 2 && rows >= 2 && cols <= 1024 && rows <= 1024 &&
+                readFloatVector(ev::getProperty(ggRoot.get(), "heights"), h) &&
+                h.size() >= static_cast<size_t>(cols) * static_cast<size_t>(rows)) {
+                sopts.groundGrid.originX = ox;
+                sopts.groundGrid.originZ = oz;
+                sopts.groundGrid.step = step;
+                sopts.groundGrid.cols = cols;
+                sopts.groundGrid.rows = rows;
+                sopts.groundGrid.heights = std::move(h);
+            }
+        }
+
         Value wkVal = ev::getProperty(optsRoot.get(), "interiorWalk");
         parseStructureWalkOpts(wkVal, sopts.interiorWalk);
     }

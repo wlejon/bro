@@ -75,7 +75,8 @@ void walkVisible(scene::SceneNode* node,
                     me.ignored = containsAny(me.name, opts.ignoreFloating);
                     me.walkIgnored = containsAny(me.name, opts.interiorWalk.ignoreNodes);
                     me.groundNamed = isGroundName(me.name);
-                    me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
+                    const bromath::Vec3 ctr = bromath::acenter(me.worldBox);
+                    me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.sampleGroundY(ctr.x, ctr.z) + 0.05);
                     out.push_back(std::move(me));
                 }
             }
@@ -145,7 +146,8 @@ void walkVisible(scene::SceneNode* node,
                 me.ignored = baseIgnored || containsAny(me.name, opts.ignoreFloating);
                 me.walkIgnored = baseWalkIgnored || containsAny(me.name, opts.interiorWalk.ignoreNodes);
                 me.groundNamed = groundNamed;
-                me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
+                const bromath::Vec3 ctr = bromath::acenter(me.worldBox);
+                me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.sampleGroundY(ctr.x, ctr.z) + 0.05);
                 out.push_back(std::move(me));
                 ++instCount;
             }

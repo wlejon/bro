@@ -191,7 +191,8 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
                 it = localIslandCache.emplace(e.mesh, extractLocalIslands(*e.mesh)).first;
             }
             if (!it->second.empty()) {
-                islandsPerNode[i] = instantiateIslands(it->second, *e.mesh, e.world, e.detSign, opts.groundY);
+                const bromath::Vec3 ctr = bromath::acenter(e.worldBox);
+                islandsPerNode[i] = instantiateIslands(it->second, *e.mesh, e.world, e.detSign, opts.sampleGroundY(ctr.x, ctr.z));
             }
         }
     }
@@ -458,7 +459,7 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
                 if (wNrm.y > -0.65f) continue;
 
                 ++footSamples;
-                bool hasSupportBelow = (footY <= opts.groundY + 0.04f);
+                bool hasSupportBelow = (footY <= opts.sampleGroundY(wx, wz) + 0.04f);
                 if (!hasSupportBelow) {
                     const bromath::Vec3 rayOrg{wx, footY + 0.03f, wz};
                     for (size_t j = 0; j < n; ++j) {

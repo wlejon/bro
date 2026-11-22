@@ -389,6 +389,31 @@ void testInteriorWalkability() {
     check(hasWalkIssue("stair-gap", "GapStairLow"), "walk: missing low tread emits stair-gap");
 }
 
+void testGroundGridHilltop() {
+    bro::scene::SceneGraph graph;
+    auto* hillBox = graph.createMesh("HillPost");
+    hillBox->setMesh(bromesh::box(0.5f, 1.0f, 0.5f));
+    hillBox->setPosition(5.0f, 11.0f, 5.0f); // bottom at y = 10.0 on a 10 m hill
+    graph.root()->addChild(hillBox);
+
+    auto* floatingBox = graph.createMesh("FloatingAboveHill");
+    floatingBox->setMesh(bromesh::box(0.5f, 1.0f, 0.5f));
+    floatingBox->setPosition(-5.0f, 11.5f, -5.0f); // bottom at y = 10.5 (0.5 m above 10 m hill)
+    graph.root()->addChild(floatingBox);
+
+    bro::eye::EyeStructureOptions opts;
+    opts.groundY = 0.0;
+    opts.groundGrid.originX = -10.0;
+    opts.groundGrid.originZ = -10.0;
+    opts.groundGrid.step = 5.0;
+    opts.groundGrid.cols = 5;
+    opts.groundGrid.rows = 5;
+    opts.groundGrid.heights.assign(25, 10.0f);
+
+    const auto res = bro::eye::analyzeStructure(graph, opts);
+    check(res.floatingCount == 1, "groundGrid: hill-seated box grounded while 0.5 m air gap is caught");
+}
+
 }  // namespace
 
 int main() {
@@ -396,6 +421,7 @@ int main() {
     testInstancedAndSpatialFilters();
     testMultiFloorSlabsAndFootings();
     testInteriorWalkability();
+    testGroundGridHilltop();
     if (gFailures > 0) {
         std::fprintf(stderr, "FAIL: bro_eye_structure_test (%d failures)\n", gFailures);
         return 1;
