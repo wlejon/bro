@@ -1,6 +1,7 @@
 // native_scene_factories.cpp — SceneGraph node creation factories.
 
 #include "bronze_host/native_scene_internal.h"
+#include "bronze_host/host_access.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/native_physics_internal.h"
 #include "natives/scene/native_scene_decl.h"
@@ -701,6 +702,11 @@ void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts) {
                 }
             }
             if (j.contains("maxParticles") && j["maxParticles"].is_number()) node->setMaxParticles(j["maxParticles"].get<int>());
+            if (j.contains("texture") && j["texture"].is_string()) {
+                const std::string tex = j["texture"].get<std::string>();
+                requirePathAccess(tex, false);
+                node->setTexturePath(tex);
+            }
             if (j.contains("softness") && j["softness"].is_number()) node->setSoftness(j["softness"].get<float>());
             if (j.contains("duration") && j["duration"].is_number()) node->setDuration(j["duration"].get<float>(), j.value("loop", false));
             if (j.contains("blend") && j["blend"].is_string()) {

@@ -608,6 +608,10 @@ void bro_scene_SceneNode_setBaseColorTextureData(void* self, int32_t width, int3
         auto* dn = static_cast<scene::DecalNode*>(n);
         if (data && width > 0 && height > 0) dn->setAlbedoTexture(width, height, data);
         else dn->clearAlbedoTexture();
+    } else if (n->type() == scene::SceneNode::Type::Particles3D) {
+        auto* pn = static_cast<scene::Particles3DNode*>(n);
+        if (data && width > 0 && height > 0) pn->setTexturePixels(width, height, data);
+        else pn->clearTexture();
     }
 }
 
@@ -618,6 +622,8 @@ void bro_scene_SceneNode_clearBaseColorTexture(void* self) {
         static_cast<scene::MeshNode*>(n)->clearBaseColorTexture();
     } else if (n->type() == scene::SceneNode::Type::Decal) {
         static_cast<scene::DecalNode*>(n)->clearAlbedoTexture();
+    } else if (n->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(n)->clearTexture();
     }
 }
 

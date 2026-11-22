@@ -28,7 +28,10 @@ struct EyeTraceTrack {
     double maxY = 0.0;
     double pathLength = 0.0;
     double maxStepJump = 0.0;
+    double maxVelJump = 0.0;
+    double maxRotSnapDeg = 0.0;
     int teleportCount = 0;
+    int snapCount = 0;
     bool closedLoop = false;
     bool touchesWater = false;
     std::string nearestStartStatic;

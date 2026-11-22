@@ -86,6 +86,18 @@ void Particles3DNode::setTexturePath(const std::string& path) {
     texture_.clear();   // a new path decodes afresh rather than keeping the old image
 }
 
+void Particles3DNode::setTexturePixels(int width, int height, const uint8_t* rgba) {
+    texPath_.clear();
+    texTried_ = true;
+    texture_.set(width, height, rgba);
+}
+
+void Particles3DNode::clearTexture() {
+    texPath_.clear();
+    texTried_ = false;
+    texture_.clear();
+}
+
 void Particles3DNode::setSheet(int cols, int rows, int frames) {
     sheetCols_ = cols < 1 ? 1 : cols;
     sheetRows_ = rows < 1 ? 1 : rows;

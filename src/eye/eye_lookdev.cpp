@@ -100,6 +100,65 @@ EyeImage makeSquintPanel(const EyeImage& beauty) {
     return out;
 }
 
+struct HotspotMetrics {
+    double clippedWhiteFrac = 0.0;
+    int hotspotCount = 0;
+};
+
+HotspotMetrics measureBloomHotspots(const EyeImage& pBeauty, const EyeImage& pAlbedo, const EyeImage& pRough) {
+    HotspotMetrics hm;
+    const int pw = pBeauty.width, ph = pBeauty.height;
+    if (pw <= 0 || ph <= 0 || pAlbedo.width != pw || pAlbedo.height != ph || pRough.width != pw || pRough.height != ph) {
+        return hm;
+    }
+    const size_t nPix = static_cast<size_t>(pw) * ph;
+    std::vector<uint8_t> hotMask(nPix, 0);
+    size_t fgCount = 0, clippedCount = 0;
+    for (int y = 0; y < ph; ++y) {
+        for (int x = 0; x < pw; ++x) {
+            const size_t idx = static_cast<size_t>(y) * pw + x;
+            const size_t o = idx * 4;
+            if (pRough.rgba[o] < 6) continue;
+            ++fgCount;
+            const double bLum = (0.2126 * pBeauty.rgba[o] + 0.7152 * pBeauty.rgba[o + 1] + 0.0722 * pBeauty.rgba[o + 2]) / 255.0;
+            const double aLum = (0.2126 * pAlbedo.rgba[o] + 0.7152 * pAlbedo.rgba[o + 1] + 0.0722 * pAlbedo.rgba[o + 2]) / 255.0;
+            if (bLum > 0.96 && aLum < 0.78) {
+                ++clippedCount;
+                hotMask[idx] = 1;
+            }
+        }
+    }
+    hm.clippedWhiteFrac = fgCount > 0 ? static_cast<double>(clippedCount) / fgCount : 0.0;
+
+    std::vector<uint8_t> visited(nPix, 0);
+    std::vector<size_t> q;
+    const int dx4[4] = {1, -1, 0, 0};
+    const int dy4[4] = {0, 0, 1, -1};
+    for (size_t i = 0; i < nPix; ++i) {
+        if (!hotMask[i] || visited[i]) continue;
+        visited[i] = 1;
+        q.clear();
+        q.push_back(i);
+        size_t head = 0;
+        while (head < q.size()) {
+            const size_t cur = q[head++];
+            const int cx = static_cast<int>(cur % pw);
+            const int cy = static_cast<int>(cur / pw);
+            for (int d = 0; d < 4; ++d) {
+                const int nx = cx + dx4[d], ny = cy + dy4[d];
+                if (nx < 0 || nx >= pw || ny < 0 || ny >= ph) continue;
+                const size_t ni = static_cast<size_t>(ny) * pw + nx;
+                if (hotMask[ni] && !visited[ni]) {
+                    visited[ni] = 1;
+                    q.push_back(ni);
+                }
+            }
+        }
+        if (q.size() >= 3) ++hm.hotspotCount;
+    }
+    return hm;
+}
+
 }  // namespace
 
 EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOptions& opts) {
@@ -165,6 +224,24 @@ EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOption
             res.ok = false;
             return res;
         }
+        for (size_t idx : matched) {
+            if (nodes[idx].node->type() != scene::SceneNode::Type::Mesh) continue;
+            auto* mn = static_cast<scene::MeshNode*>(nodes[idx].node);
+            if (mn->effectiveUnlit() || mn->emissive() > 0.5f) continue;
+            const bool translucent = mn->color()[3] < 0.99f;
+            if (translucent) continue;
+            ++res.checkedMeshes;
+            const bool hasAlbedo = mn->hasBaseColorTexture();
+            const bool hasNormal = mn->hasNormalTexture();
+            const bool hasMR = mn->hasMetallicRoughnessTexture();
+            const bool casts = mn->castsShadow();
+            if (!hasAlbedo) ++res.untexturedCount;
+            if (!hasNormal) ++res.noNormalMapCount;
+            if (!casts) ++res.noShadowSolidCount;
+            if (!hasAlbedo || !hasNormal || !casts) {
+                res.materialWarnings.push_back({nodes[idx].name, hasAlbedo, hasNormal, hasMR, casts, translucent});
+            }
+        }
         if (opts.isolate) {
             std::vector<bool> keep(nodes.size(), false);
             for (size_t idx : matched) keep[idx] = true;
@@ -180,6 +257,24 @@ EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOption
         graph.setCamera(0.62f, aspect, nearZ, std::max(40.0f, origFar), ctr + dir * dist, ctr, upVec);
     } else {
         res.matchedNodes = static_cast<int>(nodes.size());
+        for (const auto& nv : nodes) {
+            if (nv.node->type() != scene::SceneNode::Type::Mesh) continue;
+            auto* mn = static_cast<scene::MeshNode*>(nv.node);
+            if (mn->effectiveUnlit() || mn->emissive() > 0.5f) continue;
+            const bool translucent = mn->color()[3] < 0.99f;
+            if (translucent) continue;
+            ++res.checkedMeshes;
+            const bool hasAlbedo = mn->hasBaseColorTexture();
+            const bool hasNormal = mn->hasNormalTexture();
+            const bool hasMR = mn->hasMetallicRoughnessTexture();
+            const bool casts = mn->castsShadow();
+            if (!hasAlbedo) ++res.untexturedCount;
+            if (!hasNormal) ++res.noNormalMapCount;
+            if (!casts) ++res.noShadowSolidCount;
+            if (!hasAlbedo || !hasNormal || !casts) {
+                res.materialWarnings.push_back({nv.name, hasAlbedo, hasNormal, hasMR, casts, translucent});
+            }
+        }
     }
 
     const int sheetW = std::clamp(opts.sheetWidth, 256, 1280);
@@ -284,11 +379,15 @@ EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOption
         res.silhouetteEdgeDensity = fgCount > 0 ? static_cast<double>(edgeHits) / fgCount : 0.0;
     }
 
+    const HotspotMetrics hm = measureBloomHotspots(pBeauty, pAlbedo, pRough);
+    res.clippedWhiteFrac = hm.clippedWhiteFrac;
+    res.bloomHotspotCount = hm.hotspotCount;
+
     char roughPill[64];
     std::snprintf(roughPill, sizeof(roughPill), "rough=%.2f glossy=%.0f%%", res.roughnessMean, res.glossyFrac * 100.0);
     draw::drawText(pRough, 6, 6, roughPill, 1, 175, 240, 210, true);
     char valPill[64];
-    std::snprintf(valPill, sizeof(valPill), "val=%.2f con=%.2f", res.valueMean, res.valueContrast);
+    std::snprintf(valPill, sizeof(valPill), "val=%.2f con=%.2f hot=%d", res.valueMean, res.valueContrast, res.bloomHotspotCount);
     draw::drawText(pSquint, 6, 6, valPill, 1, 240, 225, 175, true);
 
     std::vector<EyeImage> panels;
@@ -298,6 +397,104 @@ EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOption
     panels.push_back(std::move(pSquint));
     const std::vector<std::string> labels = {"beauty", "albedo", "roughness", "squint"};
     const auto sheet = draw::assembleExactSheet(panels, labels, 2, 2, sheetW, sheetH, 1);
+    res.width = sheet.width;
+    res.height = sheet.height;
+    res.visual = {sheet.width, sheet.height, std::move(sheet.rgba)};
+    if (!opts.path.empty()) {
+        std::error_code ec;
+        const std::filesystem::path outPath(opts.path);
+        if (outPath.has_parent_path()) std::filesystem::create_directories(outPath.parent_path(), ec);
+        if (broimage::encode_png_file(opts.path, res.visual.rgba.data(), res.visual.width, res.visual.height, 4)) {
+            res.visualPath = opts.path;
+        }
+    }
+    return res;
+}
+
+EyeSweepResult captureStateSweep(
+    scene::SceneGraph& graph, const EyeSweepOptions& opts,
+    const std::vector<std::pair<std::string, std::function<void()>>>& states) {
+    EyeSweepResult res;
+    if (states.empty()) {
+        res.ok = false;
+        return res;
+    }
+    const size_t nStates = std::min<size_t>(states.size(), 9);
+    const int cols = (nStates <= 3) ? static_cast<int>(nStates) : (nStates <= 4 ? 2 : 3);
+    const int rows = static_cast<int>((nStates + cols - 1) / cols);
+    const int sheetW = std::clamp(opts.sheetWidth > 0 ? opts.sheetWidth : 768, 256, 1280);
+    const int defH = (nStates <= 3) ? 432 : 768;
+    const int sheetH = std::clamp(opts.sheetHeight > 0 ? opts.sheetHeight : defH, 256, 1280);
+    const int cellCap = std::max(96, std::max((sheetW - 8 * (cols + 1)) / cols,
+                                              (sheetH - 8 * (rows + 1)) / rows));
+
+    const int savedDebug = graph.renderer().debugView();
+    const int idAlbedo = scene::debug_views::find("albedo");
+    const int idRough = scene::debug_views::find("roughness");
+
+    auto capDebug = [&](int debugId) -> EyeImage {
+        graph.renderer().setDebugView(debugId);
+        graph.renderForRead();
+        int w = 0, h = 0;
+        const auto rgba = graph.readTonemapPixelsRGBA(w, h);
+        if (rgba.empty() || w <= 0 || h <= 0) return {};
+        return draw::fitPanel(EyeImageView{rgba.data(), w, h, w * 4}, cellCap);
+    };
+
+    std::vector<EyeImage> panels;
+    std::vector<std::string> labels;
+    panels.reserve(nStates);
+    labels.reserve(nStates);
+
+    for (size_t i = 0; i < nStates; ++i) {
+        if (states[i].second) states[i].second();
+        EyeImage beauty = capDebug(0);
+        EyeImage albedo = capDebug(idAlbedo);
+        EyeImage rough = capDebug(idRough);
+        if (beauty.rgba.empty() || albedo.rgba.empty() || rough.rgba.empty()) continue;
+
+        EyeSweepStateResult sr;
+        sr.label = states[i].first;
+        std::vector<double> lVals;
+        const int pw = beauty.width, ph = beauty.height;
+        lVals.reserve(static_cast<size_t>(pw) * ph / 2);
+        double lSum = 0.0;
+        for (int y = 0; y < ph; ++y) {
+            for (int x = 0; x < pw; ++x) {
+                const size_t o = (static_cast<size_t>(y) * pw + x) * 4;
+                if (rough.rgba[o] < 6) continue;
+                const double lum = (0.2126 * beauty.rgba[o] + 0.7152 * beauty.rgba[o + 1] + 0.0722 * beauty.rgba[o + 2]) / 255.0;
+                lVals.push_back(lum);
+                lSum += lum;
+            }
+        }
+        if (!lVals.empty()) {
+            sr.valueMean = lSum / static_cast<double>(lVals.size());
+            std::sort(lVals.begin(), lVals.end());
+            sr.valueContrast = lVals[static_cast<size_t>(0.90 * (lVals.size() - 1))] -
+                               lVals[static_cast<size_t>(0.10 * (lVals.size() - 1))];
+        }
+        const HotspotMetrics hm = measureBloomHotspots(beauty, albedo, rough);
+        sr.clippedWhiteFrac = hm.clippedWhiteFrac;
+        sr.hotspotCount = hm.hotspotCount;
+
+        char pill[96];
+        std::snprintf(pill, sizeof(pill), "val=%.2f con=%.2f hot=%d", sr.valueMean, sr.valueContrast, sr.hotspotCount);
+        draw::drawText(beauty, 6, 6, pill, 1, 240, 225, 175, true);
+
+        labels.push_back(sr.label);
+        panels.push_back(std::move(beauty));
+        res.states.push_back(std::move(sr));
+    }
+
+    graph.renderer().setDebugView(savedDebug);
+    res.stateCount = static_cast<int>(res.states.size());
+    if (panels.empty()) {
+        res.ok = false;
+        return res;
+    }
+
+    const auto sheet = draw::assembleExactSheet(panels, labels, cols, rows, sheetW, sheetH, 1);
     res.width = sheet.width;
     res.height = sheet.height;
     res.visual = {sheet.width, sheet.height, std::move(sheet.rgba)};

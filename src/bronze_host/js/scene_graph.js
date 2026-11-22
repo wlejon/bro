@@ -565,9 +565,21 @@
         return node;
     });
     fn(SceneGraph.prototype, "createParticles3D", function createParticles3D(opts) {
-        const node = canon(__bro_native.scene.SceneGraph_createParticles3D(this, opts ? JSON.stringify(opts) : ""));
+        let jsonOpts = "";
+        const hasTexObj = opts && opts.texture && typeof opts.texture === 'object';
+        if (opts) {
+            if (hasTexObj) {
+                const copy = Object.assign({}, opts);
+                delete copy.texture;
+                jsonOpts = JSON.stringify(copy);
+            } else {
+                jsonOpts = JSON.stringify(opts);
+            }
+        }
+        const node = canon(__bro_native.scene.SceneGraph_createParticles3D(this, jsonOpts));
         if (node) {
             applyNodeOpts(node, opts);
+            if (hasTexObj) node.setBaseColorTexture(opts.texture);
             if (opts && typeof opts.onFinished === 'function') node.onFinished = opts.onFinished;
         }
         return node;

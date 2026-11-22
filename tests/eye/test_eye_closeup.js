@@ -25,6 +25,9 @@ if (bro.scene && bro.scene.createGraph) {
   assert(cuNamed.panelCount === 6, "2 targets x 3 angles = 6 panels, got " + cuNamed.panelCount);
   assert(cuNamed.targets.length === 2, "matched 2 targets");
 
+  const cuSingle = bro.eye.closeup(scene, { target: "Lantern", angles: ["front", "side"], sheetWidth: 768, sheetHeight: 384 });
+  assert(cuSingle.ok === true && cuSingle.panelCount === 2, "singular target alias works");
+
   const cuAuto = bro.eye.closeup(scene, { mode: "inventory", isolate: true, showHeading: true, sheetWidth: 768, sheetHeight: 768 });
   assert(cuAuto.ok === true && cuAuto.panelCount >= 2, "inventory closeup works");
   assert(cuAuto.width === 768 && cuAuto.height === 768, "exact native sheet size 768x768");
@@ -48,14 +51,25 @@ if (bro.scene && bro.scene.createGraph) {
   pond.setPosition(0, 0.15, 0);
   pond.setShader({ module: waterMat, file: "water_test.bk" });
 
-  // Lookdev & roughness check
+  // Lookdev, material audit & bloom hotspot check
   const ld = bro.eye.lookdev(scene, { target: "Lantern", isolate: true, sheetWidth: 768, sheetHeight: 768 });
   assert(ld.ok === true && ld.width === 768 && ld.height === 768, "lookdev ok & 768x768");
   assert(ld.roughnessMean > 0.2 && ld.roughnessMean <= 1.0, "lookdev measured valid roughness: " + ld.roughnessMean);
+  assert(ld.checkedMeshes === 1 && ld.untexturedCount === 1, "lookdev flagged untextured Lantern");
+  assert(ld.bloomHotspotCount === 0, "no bloom hotspots in normal light");
 
-  // Dynamic trajectory trace check
+  // Multi-state sweep check
+  const sw = bro.eye.sweep(scene, {
+    states: [
+      { label: "Bright", apply: () => { sun.intensity = 2.5; } },
+      { label: "Dusk", apply: () => { sun.intensity = 0.6; } },
+    ],
+  });
+  assert(sw.ok === true && sw.stateCount === 2 && sw.width === 768 && sw.height === 432, "sweep captured 2 states at 768x432");
+
+  // Dynamic trajectory trace + snap detection check
   const mover = scene.createMesh({ name: "Falling Leaf", mesh: bro.mesh.sphere(0.1), color: [0.9, 0.3, 0.1] });
-  const tr = bro.eye.trace(scene, {
+  const trSmooth = bro.eye.trace(scene, {
     steps: 10,
     waterY: 0.15,
     minTravel: 0.2,
@@ -66,13 +80,26 @@ if (bro.scene && bro.scene.createGraph) {
       mover.setPosition(-1.0 + f * 2.0, 1.2 - f * 1.1, 0.2);
     },
   });
-  assert(tr.ok === true && tr.trackCount === 1, "trace tracked Falling Leaf: " + tr.trackCount);
-  assert(tr.tracks[0].touchesWater === true, "trace detected water touchdown");
-  assert(tr.tracks[0].nearestStartStatic.length > 0, "trace found nearest start static mesh");
+  assert(trSmooth.ok === true && trSmooth.trackCount === 1, "trace tracked Falling Leaf: " + trSmooth.trackCount);
+  assert(trSmooth.tracks[0].touchesWater === true, "trace detected water touchdown");
+  assert(trSmooth.tracks[0].nearestStartStatic.length > 0, "trace found nearest start static mesh");
+  assert(trSmooth.tracks[0].snapCount === 0, "smooth ramp has 0 snaps");
+
+  const trSnap = bro.eye.trace(scene, {
+    steps: 10,
+    waterY: 0.15,
+    minTravel: 0.2,
+    stepFn: (k, n) => {
+      const f = k / (n - 1);
+      const jump = k >= 5 ? 0.18 : 0.0;
+      mover.setPosition(-1.0 + f * 1.0 + jump, 1.2 - f * 1.1, 0.2);
+    },
+  });
+  assert(trSnap.tracks[0].snapCount >= 1 && trSnap.tracks[0].maxVelJump > 0.1, "trace caught C1 snap");
 
   const camAfter = scene.camera.position;
   assert(Math.hypot(camBefore[0] - camAfter[0], camBefore[1] - camAfter[1], camBefore[2] - camAfter[2]) < 1e-4,
-         "camera restored after closeup/lookdev/trace");
+         "camera restored after closeup/lookdev/sweep/trace");
 
-  print("OK test_eye_closeup: panels=" + cuNamed.panelCount + ", inventory=" + cuAuto.targets.length + ", rough=" + ld.roughnessMean.toFixed(2) + ", trackLen=" + tr.tracks[0].pathLength.toFixed(2));
+  print("OK test_eye_closeup: panels=" + cuNamed.panelCount + ", inventory=" + cuAuto.targets.length + ", rough=" + ld.roughnessMean.toFixed(2) + ", trackLen=" + trSmooth.tracks[0].pathLength.toFixed(2));
 }

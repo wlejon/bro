@@ -50,6 +50,9 @@ public:
     /// first draw). When unset, particles render as soft round points.
     void setTexturePath(const std::string& path);
     const std::string& texturePath() const { return texPath_; }
+    /// Set raw RGBA8 pixel data directly as the particle sprite texture.
+    void setTexturePixels(int width, int height, const uint8_t* rgba);
+    void clearTexture();
 
     /// Flipbook sprite-sheet grid on the texture: cols x rows cells played
     /// over each particle's lifetime. `frames` limits playback to the first

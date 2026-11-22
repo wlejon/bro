@@ -320,25 +320,34 @@ bro.eye.structure = function(scene, opts) {};
  * Optionally isolates each subject (`isolate: true`), overlays metric scale (`showScale`), and projects
  * local `+X` (cyan) and `+Z` (amber) axes (`showHeading`). Outputs an exact native-tile PNG (`sheetWidth x sheetHeight`).
  * @param {Object} scene
- * @param {{mode?: 'targets'|'inventory', targets?: string[], angles?: string[], margin?: number, maxPanelDim?: number, maxPanels?: number, sheetWidth?: number, sheetHeight?: number, isolate?: boolean, showScale?: boolean, showHeading?: boolean, path?: string}} [opts]
+ * @param {{mode?: 'targets'|'inventory', target?: string, targets?: string[], angles?: string[], margin?: number, maxPanelDim?: number, maxPanels?: number, sheetWidth?: number, sheetHeight?: number, isolate?: boolean, showScale?: boolean, showHeading?: boolean, path?: string}} [opts]
  * @returns {{ok: boolean, width: number, height: number, panelCount: number, targets: {query: string, matchedNodes: number, center: number[], extent: number[], minY: number, maxY: number}[], path?: string}}
  */
 bro.eye.closeup = function(scene, opts) {};
 
 /**
  * Render an exact 2x2 PBR lookdev sheet (Beauty, Albedo, Roughness, Squint/Value) for a named target
- * or the active camera view, reporting surface roughness, value contrast, saturation, and edge density.
+ * or the active camera view, reporting surface roughness, value contrast, saturation, edge density,
+ * HDR bloom hotspot clusters, and material/texture audit warnings.
  * @param {Object} scene
  * @param {{target?: string, angle?: string, isolate?: boolean, margin?: number, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
- * @returns {{ok: boolean, width: number, height: number, matchedNodes: number, roughnessMean: number, roughnessStd: number, glossyFrac: number, valueMean: number, valueStd: number, valueContrast: number, albedoSaturationMean: number, silhouetteEdgeDensity: number, path?: string}}
+ * @returns {{ok: boolean, width: number, height: number, matchedNodes: number, roughnessMean: number, roughnessStd: number, glossyFrac: number, valueMean: number, valueStd: number, valueContrast: number, albedoSaturationMean: number, silhouetteEdgeDensity: number, clippedWhiteFrac: number, bloomHotspotCount: number, checkedMeshes: number, untexturedCount: number, noNormalMapCount: number, noShadowSolidCount: number, materialWarnings: Object[], path?: string}}
  */
 bro.eye.lookdev = function(scene, opts) {};
 
 /**
+ * Capture a multi-state/mood comparison sheet in one native-tile image with HDR spike stats.
+ * @param {Object} scene
+ * @param {{states: {label: string, apply: () => void}[], sheetWidth?: number, sheetHeight?: number, path?: string}} opts
+ * @returns {{ok: boolean, width: number, height: number, stateCount: number, states: {label: string, valueMean: number, valueContrast: number, clippedWhiteFrac: number, hotspotCount: number}[], path?: string}}
+ */
+bro.eye.sweep = function(scene, opts) {};
+
+/**
  * Record 3D world trajectories of moving meshes across `stepFn(k, steps)` poses, detecting closed
- * mid-air loops, teleports, water touchdowns, and nearest start static meshes.
+ * mid-air loops, teleports, C0/C1 velocity/rotation snaps, water touchdowns, and nearest start static meshes.
  * @param {Object} scene
  * @param {{steps?: number, waterY?: number, minTravel?: number, filter?: string, stepFn?: (k: number, steps: number) => void, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
- * @returns {{ok: boolean, steps: number, trackCount: number, width: number, height: number, tracks: {name: string, startPos: number[], endPos: number[], minY: number, maxY: number, pathLength: number, maxStepJump: number, teleportCount: number, closedLoop: boolean, touchesWater: boolean, nearestStartStatic: string, nearestStartDist: number}[], path?: string}}
+ * @returns {{ok: boolean, steps: number, trackCount: number, width: number, height: number, tracks: {name: string, startPos: number[], endPos: number[], minY: number, maxY: number, pathLength: number, maxStepJump: number, maxVelJump: number, maxRotSnapDeg: number, teleportCount: number, snapCount: number, closedLoop: boolean, touchesWater: boolean, nearestStartStatic: string, nearestStartDist: number}[], path?: string}}
  */
 bro.eye.trace = function(scene, opts) {};

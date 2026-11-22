@@ -70,6 +70,8 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
         std::string name;
         bromath::AABB3 initialBox{};
         std::vector<bromath::Vec3> pts;
+        std::vector<bromath::Vec3> fwds;
+        std::vector<bromath::Vec3> snapPts;
     };
     std::unordered_map<uint32_t, TrackSample> byId;
     std::vector<uint32_t> order;
@@ -95,8 +97,12 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
             if (!node || !node->visible() || node->type() != scene::SceneNode::Type::Mesh) return;
             auto* mn = static_cast<scene::MeshNode*>(node);
             if (mn->mesh().empty()) return;
-            const bromath::AABB3 wb = worldAabb(mn->localBounds(), mn->worldMatrix());
+            const bromath::Mat4 wm = mn->worldMatrix();
+            const bromath::AABB3 wb = worldAabb(mn->localBounds(), wm);
             const bromath::Vec3 c = bromath::acenter(wb);
+            const bromath::Vec3 rawFwd{wm.data[0], wm.data[1], wm.data[2]};
+            const float fwdLen = bromath::vlen(rawFwd);
+            const bromath::Vec3 fwd = fwdLen > 1e-5f ? (rawFwd * (1.0f / fwdLen)) : bromath::Vec3{1.0f, 0.0f, 0.0f};
             auto it = byId.find(mn->id());
             if (it == byId.end()) {
                 TrackSample ts;
@@ -104,10 +110,12 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
                 ts.name = mn->name().empty() ? ("mesh#" + std::to_string(mn->id())) : mn->name();
                 ts.initialBox = wb;
                 ts.pts.push_back(c);
+                ts.fwds.push_back(fwd);
                 order.push_back(mn->id());
                 byId.emplace(mn->id(), std::move(ts));
             } else {
                 it->second.pts.push_back(c);
+                it->second.fwds.push_back(fwd);
             }
         });
     }
@@ -119,10 +127,10 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
         bromath::Vec3 center{};
     };
     std::vector<StaticRef> statics;
-    std::vector<const TrackSample*> dynamicSamples;
+    std::vector<TrackSample*> dynamicSamples;
 
     for (uint32_t id : order) {
-        const auto& ts = byId[id];
+        auto& ts = byId[id];
         double total = 0.0;
         for (size_t i = 1; i < ts.pts.size(); ++i) {
             total += bromath::vlen(ts.pts[i] - ts.pts[i - 1]);
@@ -134,7 +142,8 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
         }
     }
 
-    for (const TrackSample* ts : dynamicSamples) {
+    int totalSnaps = 0;
+    for (TrackSample* ts : dynamicSamples) {
         if (ts->pts.empty()) continue;
         EyeTraceTrack tr;
         tr.name = ts->name;
@@ -163,13 +172,46 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
         tr.maxStepJump = maxStep;
         const double meanStep = stepLens.empty() ? 0.0 : sum / static_cast<double>(stepLens.size());
         const double jumpThresh = std::max(0.35, meanStep * 4.0);
+        std::vector<double> normalSteps;
         int teleports = 0;
         for (double sl : stepLens) {
             if (sl > jumpThresh) ++teleports;
+            else normalSteps.push_back(sl);
+        }
+        double medStep = meanStep;
+        if (!normalSteps.empty()) {
+            std::sort(normalSteps.begin(), normalSteps.end());
+            medStep = normalSteps[normalSteps.size() / 2];
         }
         tr.teleportCount = teleports;
         tr.closedLoop = bromath::vlen(p1 - p0) < 0.12;
         tr.touchesWater = (minY <= opts.waterY + 0.03) && (maxY >= opts.waterY - 0.03);
+
+        // C0/C1 continuity + rotation snap across non-teleport consecutive pairs
+        double maxVelJump = 0.0, maxRotDeg = 0.0;
+        int snaps = 0;
+        constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+        const double velThresh = std::max(0.055, medStep * 2.6);
+        for (size_t i = 1; i + 1 < ts->pts.size(); ++i) {
+            const double dPrev = stepLens[i - 1];
+            const double dNext = stepLens[i];
+            if (dPrev > jumpThresh || dNext > jumpThresh) continue;
+            const bromath::Vec3 vPrev = ts->pts[i] - ts->pts[i - 1];
+            const bromath::Vec3 vNext = ts->pts[i + 1] - ts->pts[i];
+            const double velJump = bromath::vlen(vNext - vPrev);
+            maxVelJump = std::max(maxVelJump, velJump);
+            const double cosA = std::clamp(static_cast<double>(bromath::vdot(ts->fwds[i], ts->fwds[i - 1])), -1.0, 1.0);
+            const double rotDeg = std::acos(cosA) * kRadToDeg;
+            maxRotDeg = std::max(maxRotDeg, rotDeg);
+            if (velJump > velThresh || rotDeg > 35.0) {
+                ++snaps;
+                ts->snapPts.push_back(ts->pts[i]);
+            }
+        }
+        tr.maxVelJump = maxVelJump;
+        tr.maxRotSnapDeg = maxRotDeg;
+        tr.snapCount = snaps;
+        totalSnaps += snaps;
 
         double bestDist = std::numeric_limits<double>::infinity();
         std::string bestStatic;
@@ -244,10 +286,17 @@ EyeTraceResult traceSceneMotion(scene::SceneGraph& graph, const EyeTraceOptions&
                 prevX = x; prevY = y;
                 hasPrev = true;
             }
+            for (const auto& sp : ts->snapPts) {
+                int sx = 0, sy = 0;
+                if (project(sp, sx, sy)) {
+                    draw::drawCircle(canvas, sx, sy, 5, 2, 255, 60, 220, 255);
+                }
+            }
         }
 
-        char hdr[96];
-        std::snprintf(hdr, sizeof(hdr), "TRACE | %d tracks | %d steps | start=green end=red", res.trackCount, steps);
+        char hdr[112];
+        std::snprintf(hdr, sizeof(hdr), "TRACE | %d tracks | %d steps | snaps=%d | start=green end=red",
+                      res.trackCount, steps, totalSnaps);
         draw::drawText(canvas, 8, 8, hdr, 1, 230, 240, 250, true);
 
         res.width = canvas.width;

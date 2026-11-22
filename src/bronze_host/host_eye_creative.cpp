@@ -480,6 +480,9 @@ Value jsEyeCloseup(Value, std::span<const Value> a) {
             ev::Persistent ta(tgVal);
             const uint32_t tn = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(ta.get(), "length")), 32.0)));
             for (uint32_t i = 0; i < tn; ++i) copts.targets.push_back(ev::toUtf8(ev::getElement(ta.get(), i)));
+        } else {
+            const std::string single = strProp(optsRoot.get(), "target");
+            if (!single.empty()) copts.targets.push_back(single);
         }
         Value anVal = ev::getProperty(optsRoot.get(), "angles");
         if (ev::isObject(anVal)) {

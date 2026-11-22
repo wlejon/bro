@@ -352,9 +352,13 @@ pub fn prepare_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, i
         n = -n;
     }
     if ((fl & (NORMAL_MAP | HAS_TANGENTS)) == (NORMAL_MAP | HAS_TANGENTS)) {
-        let n_ts = normal_map.sample(in_uv).xyz * 2.0 - vec3<f32>(1.0);
-        let tbn = mat3f(normalize(in_tangent), normalize(in_bitangent), n);
-        n = normalize(scene::mul3(tbn, n_ts));
+        let t_len2 = dot(in_tangent, in_tangent);
+        let b_len2 = dot(in_bitangent, in_bitangent);
+        if (t_len2 > 1e-6 && b_len2 > 1e-6) {
+            let n_ts = normal_map.sample(in_uv).xyz * 2.0 - vec3<f32>(1.0);
+            let tbn = mat3f(in_tangent * (1.0 / sqrt(t_len2)), in_bitangent * (1.0 / sqrt(b_len2)), n);
+            n = normalize(scene::mul3(tbn, n_ts));
+        }
     }
     var metallic: f32 = push.pbr_params.x;
     var roughness: f32 = push.pbr_params.y;
