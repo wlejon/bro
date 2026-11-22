@@ -239,7 +239,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
 
     const bool cull = frame.renderer.frustumCullingEnabled();
     for (const MeshDraw& draw : frame.lists.meshes) {
-        if (draw.translucent) continue;   // no sorted translucent pass in a capture
+        if (draw.translucent || draw.shadowOnly) continue;   // no sorted translucent pass in a capture
         if (cull && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) continue;
         MeshDraw faceDraw = draw;
         faceDraw.mirrored = true;

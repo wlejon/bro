@@ -183,6 +183,8 @@ struct MeshDraw {
     MeshPushConstants push{};
     bool translucent = false;
     bool castsShadow = false;
+    /// Drawn by the shadow passes alone: in no colour list, no probe face.
+    bool shadowOnly = false;
     /// How it casts (SceneRenderer::shadowMotion): in the cached depth, in
     /// the overlays drawn over it each frame, or swaying (in the overlays of
     /// the levels its sway shows in, the cached depth of the rest).

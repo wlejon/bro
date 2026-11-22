@@ -817,6 +817,8 @@ const char* bro_scene_SceneNode_kind_get(void* self);
 int32_t bro_scene_SceneNode_childCount_get(void* self);
 bool bro_scene_SceneNode_castsShadow_get(void* self);
 void bro_scene_SceneNode_castsShadow_set(void* self, bool v);
+bool bro_scene_SceneNode_shadowOnly_get(void* self);
+void bro_scene_SceneNode_shadowOnly_set(void* self, bool v);
 bool bro_scene_SceneNode_receivesShadow_get(void* self);
 void bro_scene_SceneNode_receivesShadow_set(void* self, bool v);
 double bro_scene_SceneNode_metallic_get(void* self);

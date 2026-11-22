@@ -377,6 +377,9 @@
     accessor(SceneNode.prototype, "castsShadow",
         function () { return __bro_native.scene.SceneNode_castsShadow_get(this); },
         function (v) { __bro_native.scene.SceneNode_castsShadow_set(this, !!v); });
+    accessor(SceneNode.prototype, "shadowOnly",
+        function () { return __bro_native.scene.SceneNode_shadowOnly_get(this); },
+        function (v) { __bro_native.scene.SceneNode_shadowOnly_set(this, !!v); });
     accessor(SceneNode.prototype, "receivesShadow",
         function () { return __bro_native.scene.SceneNode_receivesShadow_get(this); },
         function (v) { __bro_native.scene.SceneNode_receivesShadow_set(this, !!v); });

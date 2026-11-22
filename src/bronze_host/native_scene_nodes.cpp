@@ -457,6 +457,21 @@ void bro_scene_SceneNode_castsShadow_set(void* self, bool v) {
     }
 }
 
+bool bro_scene_SceneNode_shadowOnly_get(void* self) {
+    auto* n = nodeOf(self);
+    if (!n) return false;
+    if (n->type() == scene::SceneNode::Type::Mesh) return static_cast<scene::MeshNode*>(n)->shadowOnly();
+    if (n->type() == scene::SceneNode::Type::InstancedMesh) return static_cast<scene::InstancedMeshNode*>(n)->shadowOnly();
+    return false;
+}
+
+void bro_scene_SceneNode_shadowOnly_set(void* self, bool v) {
+    auto* n = nodeOf(self);
+    if (!n) return;
+    if (n->type() == scene::SceneNode::Type::Mesh) static_cast<scene::MeshNode*>(n)->setShadowOnly(v);
+    else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setShadowOnly(v);
+}
+
 bool bro_scene_SceneNode_receivesShadow_get(void* self) {
     auto* n = nodeOf(self);
     if (!n) return false;

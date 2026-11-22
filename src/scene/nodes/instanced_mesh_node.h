@@ -305,6 +305,9 @@ public:
 
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
+    /// Casts its shadow and draws nothing else (MeshNode::setShadowOnly).
+    void setShadowOnly(bool b) { shadowOnly_ = b; }
+    bool shadowOnly() const { return shadowOnly_; }
 
     void setReceivesShadow(bool b) { receivesShadow_ = b; }
     bool receivesShadow() const { return receivesShadow_; }
@@ -570,6 +573,7 @@ private:
     float fadeOutDist_ = 0.0f;
 
     bool castsShadow_ = true;
+    bool shadowOnly_ = false;
     bool receivesShadow_ = true;
 
     int atlasCols_ = 1;

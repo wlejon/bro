@@ -58,6 +58,7 @@
  * @property {number} [lineWidth]
  * @property {boolean|number} [wind] - Wind sway: true is 1, or a [0, 1] multiplier.
  * @property {boolean} [castsShadow]
+ * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
  * @property {boolean} [receivesShadow]
  * @property {number|Array<number>} [depthBias] - Units, or [factor, units].
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - RGBA8 base colour map;
@@ -119,6 +120,7 @@
  * @property {boolean} [vertexColorTint]
  * @property {boolean} [doubleSided]
  * @property {boolean} [castsShadow]
+ * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
  * @property {boolean} [receivesShadow]
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - also normalTexture, metallicRoughnessTexture, occlusionTexture, emissiveTexture
  * @property {number} [atlasCols] - atlas grid columns (the other defaults to 1)
@@ -354,6 +356,15 @@ class SceneNode {
    * @type {number}
    */
   fadeOutDist;
+
+  /**
+   * Mesh, InstancedMesh: casts its shadow (with `castsShadow`) and draws
+   * nothing else: in no colour pass and no reflection probe. A shadow proxy
+   * for what draws itself another way, such as impostor quads, whose
+   * fragment cut the shadow pass does not run, or a raymarched volume.
+   * @type {boolean}
+   */
+  shadowOnly;
   /** @type {Array<number>|string} */ emissiveColor;
   /** @type {boolean|string} */ billboard;
   /** @type {boolean} */ autoSync;

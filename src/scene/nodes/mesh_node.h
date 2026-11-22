@@ -278,6 +278,10 @@ public:
     /// (billboards, transparent geometry, debug markers).
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
+    /// Casts its shadow and draws nothing else: a shadow proxy for what
+    /// draws itself another way (an impostor, a raymarched volume).
+    void setShadowOnly(bool b) { shadowOnly_ = b; }
+    bool shadowOnly() const { return shadowOnly_; }
 
     /// Whether light contributions to this mesh are shadow-attenuated. Default
     /// true. Set false for geometry that should stay fully lit regardless of
@@ -641,6 +645,7 @@ private:
     float fadeOutDist_ = 0.0f;
 
     bool castsShadow_ = true;
+    bool shadowOnly_ = false;
     bool receivesShadow_ = true;
     bool twoSided_ = false;
     bool volume_ = false;

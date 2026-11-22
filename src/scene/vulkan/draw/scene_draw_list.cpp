@@ -109,7 +109,7 @@ void buildDrawLists(SceneFrame& frame) {
         placeDraw(frame, node, bounds, draw);
         const auto index = static_cast<uint32_t>(lists.meshes.size());
         lists.meshes.push_back(draw);
-        if (culled) continue;
+        if (culled || draw.shadowOnly) continue;
         (overlay ? lists.overlay : draw.translucent ? lists.translucent : lists.opaque).push_back(index);
     }
 
