@@ -523,6 +523,15 @@
         __bro_native.scene.SceneGraph_detachAIWorld(this);
     });
 
+    // Geometry many mesh nodes draw (createMesh({ geometry })): a snapshot of
+    // the Mesh, made once with its GPU copy; release() lets it go once no
+    // node draws it.
+    fn(SceneGraph.prototype, "createGeometry", function createGeometry(mesh) {
+        const id = __bro_native.scene.SceneGraph_createGeometry(this, mesh);
+        if (!id) throw new TypeError("bro.scene.SceneGraph.prototype.createGeometry: takes a Mesh");
+        const graph = this;
+        return Object.freeze({ id, release() { __bro_native.scene.SceneGraph_releaseGeometry(graph, id); } });
+    });
     fn(SceneGraph.prototype, "createMesh", function createMesh(opts) {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         if (typeof opts === 'string') opts = { mesh: opts };

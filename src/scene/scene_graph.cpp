@@ -106,6 +106,17 @@ PhysicsNode* SceneGraph::createPhysicsNode(const std::string& name) {
     return ptr;
 }
 
+uint32_t SceneGraph::createGeometry(bromesh::MeshData&& mesh) {
+    const uint32_t id = nextGeometry_++;
+    geometries_[id] = SharedGeometry::make(std::move(mesh));
+    return id;
+}
+
+std::shared_ptr<const SharedGeometry> SceneGraph::geometry(uint32_t id) const {
+    const auto it = geometries_.find(id);
+    return it == geometries_.end() ? nullptr : it->second;
+}
+
 MeshNode* SceneGraph::createMesh(const std::string& name) {
     auto node = std::make_unique<MeshNode>(name);
     auto* ptr = node.get();

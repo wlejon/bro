@@ -227,6 +227,19 @@ extern "C" {
 
 using namespace bro::bronze_host;
 
+int32_t bro_scene_SceneGraph_createGeometry(void* self, uint64_t meshVal) {
+    auto* g = graphOf(self);
+    const auto* md = bromesh::api::meshDataOf(bronze::Value{meshVal});
+    if (!g || !md) return 0;
+    bromesh::MeshData mesh = *md;
+    if (mesh.normals.empty() && !mesh.positions.empty()) bromesh::computeNormals(mesh);
+    return static_cast<int32_t>(g->createGeometry(std::move(mesh)));
+}
+
+void bro_scene_SceneGraph_releaseGeometry(void* self, int32_t id) {
+    if (auto* g = graphOf(self)) g->releaseGeometry(static_cast<uint32_t>(id));
+}
+
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshVal) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
@@ -244,6 +257,18 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
     // scene.createVolume: a medium over the view, not a surface (MeshNode::setVolume).
     if (ev::isObject(opts) && ev::toBool(ev::getProperty(opts, "volume"))) node->setVolume(true);
     if (ev::isObject(opts)) {
+        // 0. Shared geometry (scene.createGeometry): drawn as it is, no mesh
+        // of the node's own.
+        if (const Rooted geoVal(ev::getProperty(opts, "geometry")); ev::isObject(geoVal)) {
+            const Value idVal = ev::getProperty(geoVal, "id");
+            auto geometry = ev::isNumber(idVal) ? g->geometry(static_cast<uint32_t>(ev::toDouble(idVal))) : nullptr;
+            if (geometry) {
+                node->setGeometry(std::move(geometry));
+                applyMeshMaterialOpts(node, opts);
+                return wrapNode(node, g);
+            }
+            LOG_WARN("createMesh: its geometry was released (drawing a box)");
+        }
         // 1. Raw positions/indices
         const Rooted posVal(ev::getProperty(opts, "positions"));
         const Rooted idxVal(ev::getProperty(opts, "indices"));

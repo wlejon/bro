@@ -2,6 +2,7 @@
 
 #include "scene/custom_shader.h"
 #include "scene/scene_node.h"
+#include "scene/nodes/shared_geometry.h"
 #include "scene/world/shade_map.h"
 #include "scene/world/shadow_plan.h"
 #include <bromath/aabb.h>
@@ -63,7 +64,12 @@ public:
     /// cached BVH (rebuilt lazily on the next raycast).
     void setMesh(const bromesh::MeshData& mesh);
     void setMesh(bromesh::MeshData&& mesh);
-    const bromesh::MeshData& mesh() const { return mesh_; }
+    /// Draw `geometry`, which other nodes may draw too (SharedGeometry): no
+    /// copy, its tangents, bounds and GPU buffers made once for all of them.
+    /// setMesh replaces it with a mesh of the node's own.
+    void setGeometry(std::shared_ptr<const SharedGeometry> geometry);
+    const std::shared_ptr<const SharedGeometry>& geometry() const { return geometry_; }
+    const bromesh::MeshData& mesh() const { return geometry_ ? geometry_->mesh : mesh_; }
 
     /// Local-space AABB of the current mesh. Cached; updated in setMesh.
     /// Returns an empty box for empty meshes.
@@ -117,13 +123,13 @@ public:
             const auto& lodMesh = lods_[static_cast<size_t>(lodSelected_)].mesh;
             if (!lodMesh.empty()) return lodMesh;
         }
-        return mesh_;
+        return mesh();
     }
 
     /// True when the node has geometry to draw: a non-empty base mesh or a LOD
     /// chain. Pass gathers use this instead of mesh().empty() so chain-only
     /// nodes aren't skipped.
-    bool hasDrawableMesh() const { return !mesh_.empty() || !lods_.empty(); }
+    bool hasDrawableMesh() const { return !mesh().empty() || !lods_.empty(); }
 
     // --- Material ---
 
@@ -603,6 +609,7 @@ private:
     void recomputeBounds();
 
     bromesh::MeshData mesh_;
+    std::shared_ptr<const SharedGeometry> geometry_;   // set: drawn in place of mesh_
     uint64_t geometryGeneration_ = nextResourceGeneration();
 
     // Cached bounds + BVH. Both are invalidated (bvhDirty_ = true, bounds_

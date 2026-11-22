@@ -605,10 +605,13 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     const bromesh::MeshData& data = node.currentMesh();
     if (data.empty()) return false;
     const uint32_t slot = &data == &node.mesh() ? 0u : static_cast<uint32_t>(node.selectedLod()) + 1u;
+    // Shared geometry has one copy for every node drawing it.
+    const bool shared = slot == 0 && node.geometry();
     const GpuMesh* gm;
     {
         stalls::Part part("mesh upload");
-        gm = frame.gpu.resources.mesh(node.id(), slot, node.geometryGeneration(), data);
+        gm = shared ? frame.gpu.resources.sharedMesh(node.geometry())
+                    : frame.gpu.resources.mesh(node.id(), slot, node.geometryGeneration(), data);
     }
     if (!gm) return false;
 
@@ -640,7 +643,8 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     // chunk may move the points out of the chunks' bounds.
     if (out.kind == MeshKind::Static && !out.lines && !node.customShader()) {
         stalls::Part part("mesh chunks");
-        const GpuMesh* c = frame.gpu.resources.chunked(node.id(), slot, node.geometryGeneration(), data);
+        const GpuMesh* c = shared ? frame.gpu.resources.sharedMesh(node.geometry(), true)
+                                  : frame.gpu.resources.chunked(node.id(), slot, node.geometryGeneration(), data);
         if (c && !c->chunks.empty()) {
             out.chunks = &c->chunks;
             out.chunkIndices = c->chunkIndices.buffer;

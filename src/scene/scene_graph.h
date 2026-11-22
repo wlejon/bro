@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/graph_liveness.h"
+#include "scene/nodes/shared_geometry.h"
 #include "scene/scene_node.h"
 #include "scene/scene_renderer.h"
 
@@ -73,6 +74,14 @@ public:
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
+
+    /// Shared geometry (SharedGeometry) under a handle of the graph's: made
+    /// from `mesh` now, held until releaseGeometry (and after, while a node
+    /// draws it). Handles start at 1 and are never reused.
+    uint32_t createGeometry(bromesh::MeshData&& mesh);
+    /// The geometry of handle `id`; null once released (or never made).
+    std::shared_ptr<const SharedGeometry> geometry(uint32_t id) const;
+    void releaseGeometry(uint32_t id) { geometries_.erase(id); }
 
     /// Find a node by ID.
     SceneNode* findById(uint32_t id) const;
@@ -642,6 +651,8 @@ private:
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
+    std::unordered_map<uint32_t, std::shared_ptr<const SharedGeometry>> geometries_;
+    uint32_t nextGeometry_ = 1;
 
     // AI integration. aiWorldPin_ keeps the attached world's JS wrapper alive
     // for the duration of the attachment (see attachAIWorld).

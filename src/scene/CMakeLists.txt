@@ -85,6 +85,7 @@ add_library(bro_scene STATIC
     nodes/sprite_node.cpp
     nodes/physics_node.cpp
     nodes/mesh_node.cpp
+    nodes/shared_geometry.cpp
     nodes/skinned_mesh_node.cpp
     nodes/instanced_mesh_node.cpp
     nodes/gaussian_splat_node.cpp

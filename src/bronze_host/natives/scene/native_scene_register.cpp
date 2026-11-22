@@ -353,6 +353,8 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_inspectRecordingImage", BRO_NATIVE_FN(bro_scene_SceneGraph_inspectRecordingImage), "u8[]", {"i32"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_readTonemapHeight", BRO_NATIVE_FN(bro_scene_SceneGraph_readTonemapHeight), "i32", {}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_createGeometry", BRO_NATIVE_FN(bro_scene_SceneGraph_createGeometry), "i32", {"__bro_native.scene.SceneGraph", "dynamic"}, error) &&
+           natives::fn("__bro_native.scene.SceneGraph_releaseGeometry", BRO_NATIVE_FN(bro_scene_SceneGraph_releaseGeometry), "void", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createSkinnedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createSkinnedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createInstancedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createInstancedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createShape", BRO_NATIVE_FN(bro_scene_SceneGraph_createShape), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&

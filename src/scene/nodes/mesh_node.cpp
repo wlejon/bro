@@ -26,7 +26,22 @@ static void ensureTangents(bromesh::MeshData& m) {
         bromesh::generateTangents(m);
 }
 
+void MeshNode::setGeometry(std::shared_ptr<const SharedGeometry> geometry) {
+    if (!geometry) {
+        setMesh(bromesh::MeshData{});
+        return;
+    }
+    geometry_ = std::move(geometry);
+    mesh_ = bromesh::MeshData{};
+    geometryGeneration_ = geometry_->generation;
+    if (lods_.empty()) hasVertexColors_ = geometry_->mesh.hasColors();
+    bvhDirty_ = true;
+    recomputeBounds();
+    bumpChangeGeneration();  // geometry changed — its shadow pages are redrawn
+}
+
 void MeshNode::setMesh(const bromesh::MeshData& mesh) {
+    geometry_.reset();
     mesh_ = mesh;
     ensureTangents(mesh_);
     geometryGeneration_ = nextResourceGeneration();
@@ -37,6 +52,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
 }
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
+    geometry_.reset();
     mesh_ = std::move(mesh);
     ensureTangents(mesh_);
     geometryGeneration_ = nextResourceGeneration();
@@ -47,12 +63,19 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
 }
 
 void MeshNode::recomputeBounds() {
+    // Shared geometry brings its own.
+    if (geometry_ && lods_.empty()) {
+        vegetationHeight_ = geometry_->vegetationHeight;
+        bounds_ = geometry_->bounds;
+        return;
+    }
     // The tallest vegetation record (float 3 of every 16): how far the
     // wind sway can carry a vertex.
+    const bromesh::MeshData& base = mesh();
     vegetationHeight_ = 0.0f;
-    if (mesh_.hasVegetation()) {
-        for (size_t i = 3; i < mesh_.vegetation.size(); i += 16) {
-            if (std::isfinite(mesh_.vegetation[i])) vegetationHeight_ = std::max(vegetationHeight_, mesh_.vegetation[i]);
+    if (base.hasVegetation()) {
+        for (size_t i = 3; i < base.vegetation.size(); i += 16) {
+            if (std::isfinite(base.vegetation[i])) vegetationHeight_ = std::max(vegetationHeight_, base.vegetation[i]);
         }
     }
     // Union of the base mesh and every LOD level, so frustum/shadow culling
@@ -74,7 +97,7 @@ void MeshNode::recomputeBounds() {
                    std::max(acc.max.y, b.max.y),
                    std::max(acc.max.z, b.max.z)};
     };
-    merge(mesh_);
+    merge(base);
     for (auto& e : lods_) merge(e.mesh);
     bounds_ = any ? acc : bromath::AABB3{};
 }
@@ -99,7 +122,7 @@ void MeshNode::setLodMeshes(std::vector<LodLevel> levels) {
                          return a.maxDist < b.maxDist;
                      });
     lodSelected_ = 0;
-    hasVertexColors_ = lods_.empty() ? mesh_.hasColors() : lods_[0].hasColors;
+    hasVertexColors_ = lods_.empty() ? mesh().hasColors() : lods_[0].hasColors;
     geometryGeneration_ = nextResourceGeneration();
     recomputeBounds();
     bumpChangeGeneration();  // rendered geometry changed
@@ -119,6 +142,7 @@ void MeshNode::selectLodByDistance(float d) {
 }
 
 const bromesh::MeshBVH& MeshNode::bvh() const {
+    if (geometry_) return geometry_->bvh();
     if (bvhDirty_) {
         bvh_ = bromesh::MeshBVH::build(mesh_);
         bvhDirty_ = false;

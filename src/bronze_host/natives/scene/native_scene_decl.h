@@ -805,6 +805,8 @@ const char* bro_scene_SceneGraph_inspectRecordingError(void);
 void bro_scene_SceneGraph_inspectRecordingImage(int32_t k, bronze_native_buffer* out);
 int32_t bro_scene_SceneGraph_readTonemapHeight(void);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
+int32_t bro_scene_SceneGraph_createGeometry(void* self, uint64_t meshHandle);
+void bro_scene_SceneGraph_releaseGeometry(void* self, int32_t id);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);

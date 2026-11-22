@@ -67,18 +67,55 @@ void SceneGpuResources::eraseNode(Map& map, uint32_t id, Destroy&& destroy) {
     }
 }
 
+void SceneGpuResources::destroy(GpuMesh& m) {
+    allocator_.destroyBuffer(m.vertices);
+    allocator_.destroyBuffer(m.indices);
+    allocator_.destroyBuffer(m.vegetation);
+    allocator_.destroyBuffer(m.chunkIndices);
+    m = GpuMesh{};
+}
+
 const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t generation,
                                        const bromesh::MeshData& data) {
     if (data.empty()) return nullptr;
     GpuMesh& entry = meshes_[key(id, slot)];
     if (entry.generation == generation && entry.vertices.isValid()) return &entry;
+    if (!upload(entry, generation, data)) {
+        LOG_ERROR("SceneGpuResources: Failed uploading mesh of node %u (%zu vertices)", id, data.vertexCount());
+        meshes_.erase(key(id, slot));
+        return nullptr;
+    }
+    return &entry;
+}
 
-    allocator_.destroyBuffer(entry.vertices);
-    allocator_.destroyBuffer(entry.indices);
-    allocator_.destroyBuffer(entry.vegetation);
-    allocator_.destroyBuffer(entry.chunkIndices);
-    entry = GpuMesh{};
+const GpuMesh* SceneGpuResources::sharedMesh(const std::shared_ptr<const SharedGeometry>& geometry, bool chunked) {
+    if (!geometry || geometry->mesh.empty()) return nullptr;
+    Shared& s = shared_[geometry->generation];
+    if (!s.mesh.vertices.isValid()) {
+        if (!upload(s.mesh, geometry->generation, geometry->mesh)) {
+            LOG_ERROR("SceneGpuResources: Failed uploading shared geometry (%zu vertices)", geometry->mesh.vertexCount());
+            shared_.erase(geometry->generation);
+            return nullptr;
+        }
+        s.owner = geometry;
+    }
+    if (chunked && !s.mesh.chunksTried) buildChunks(s.mesh, geometry->mesh);
+    return &s.mesh;
+}
 
+void SceneGpuResources::pruneShared() {
+    for (auto it = shared_.begin(); it != shared_.end();) {
+        if (it->second.owner.expired()) {
+            destroy(it->second.mesh);
+            it = shared_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool SceneGpuResources::upload(GpuMesh& entry, uint64_t generation, const bromesh::MeshData& data) {
+    destroy(entry);
     const size_t vc = data.vertexCount();
     const std::vector<PackedVertex> vertices = packVertices(data);
     std::vector<uint32_t> sequential;
@@ -92,17 +129,13 @@ const GpuMesh* SceneGpuResources::mesh(uint32_t id, uint32_t slot, uint64_t gene
     if (!allocator_.createVertexBuffer(vc * sizeof(PackedVertex), vertices.data(), entry.vertices) ||
         !allocator_.createIndexBuffer(indices->size() * sizeof(uint32_t), indices->data(), entry.indices) ||
         (vegBytes && !allocator_.createVertexBuffer(vegBytes, data.vegetation.data(), entry.vegetation))) {
-        LOG_ERROR("SceneGpuResources: Failed uploading mesh of node %u (%zu vertices)", id, vc);
-        allocator_.destroyBuffer(entry.vertices);
-        allocator_.destroyBuffer(entry.indices);
-        allocator_.destroyBuffer(entry.vegetation);
-        meshes_.erase(key(id, slot));
-        return nullptr;
+        destroy(entry);
+        return false;
     }
     entry.indexCount = static_cast<uint32_t>(indices->size());
     entry.generation = generation;
     noteMeshUpload(vc * sizeof(PackedVertex) + indices->size() * sizeof(uint32_t) + vegBytes);
-    return &entry;
+    return true;
 }
 
 const GpuMesh* SceneGpuResources::chunked(uint32_t id, uint32_t slot, uint64_t generation,
@@ -110,11 +143,16 @@ const GpuMesh* SceneGpuResources::chunked(uint32_t id, uint32_t slot, uint64_t g
     const GpuMesh* m = mesh(id, slot, generation, data);
     if (!m || m->chunksTried) return m;
     GpuMesh& entry = meshes_[key(id, slot)];
+    buildChunks(entry, data);
+    return &entry;
+}
+
+void SceneGpuResources::buildChunks(GpuMesh& entry, const bromesh::MeshData& data) {
     entry.chunksTried = true;
     const size_t vc = data.vertexCount();
     const size_t ic = data.indices.empty() ? vc : data.indices.size();
     const size_t tris = ic / 3;
-    if (tris < kChunkMinTriangles || ic % 3 != 0) return &entry;
+    if (tris < kChunkMinTriangles || ic % 3 != 0) return;
     const auto index = [&](size_t i) { return data.indices.empty() ? static_cast<uint32_t>(i) : data.indices[i]; };
     const auto vertex = [&](uint32_t v) {
         return bromath::Vec3{data.positions[v * 3], data.positions[v * 3 + 1], data.positions[v * 3 + 2]};
@@ -166,10 +204,9 @@ const GpuMesh* SceneGpuResources::chunked(uint32_t id, uint32_t slot, uint64_t g
     if (entry.chunks.size() < 2 ||
         !allocator_.createIndexBuffer(sorted.size() * sizeof(uint32_t), sorted.data(), entry.chunkIndices)) {
         entry.chunks.clear();
-        return &entry;
+        return;
     }
     noteMeshUpload(sorted.size() * sizeof(uint32_t));
-    return &entry;
 }
 
 // How a slot's image is stored and sampled (see TextureSlot).
@@ -490,13 +527,10 @@ void SceneGpuResources::retainShadeMaps(const std::vector<const uint8_t*>& live)
 }
 
 void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
+    // (Shared geometry the nodes were the last to hold goes with them.)
+    pruneShared();
     for (uint32_t id : ids) {
-        eraseNode(meshes_, id, [&](GpuMesh& m) {
-            allocator_.destroyBuffer(m.vertices);
-            allocator_.destroyBuffer(m.indices);
-            allocator_.destroyBuffer(m.vegetation);
-            allocator_.destroyBuffer(m.chunkIndices);
-        });
+        eraseNode(meshes_, id, [&](GpuMesh& m) { destroy(m); });
         eraseNode(textures_, id, [&](Texture& t) { allocator_.destroyImage(t.image); });
         if (auto it = skins_.find(id); it != skins_.end()) {
             allocator_.destroyBuffer(it->second.buffer);
@@ -510,13 +544,10 @@ void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
 }
 
 void SceneGpuResources::cleanup() {
-    for (auto& [k, m] : meshes_) {
-        allocator_.destroyBuffer(m.vertices);
-        allocator_.destroyBuffer(m.indices);
-        allocator_.destroyBuffer(m.vegetation);
-        allocator_.destroyBuffer(m.chunkIndices);
-    }
+    for (auto& [k, m] : meshes_) destroy(m);
     meshes_.clear();
+    for (auto& [g, s] : shared_) destroy(s.mesh);
+    shared_.clear();
     for (auto& [k, t] : textures_) allocator_.destroyImage(t.image);
     textures_.clear();
     for (auto& [k, s] : skins_) allocator_.destroyBuffer(s.buffer);

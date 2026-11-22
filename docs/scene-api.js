@@ -81,6 +81,13 @@ along the motion.
  */
 
 /**
+ * Shared geometry (`createGeometry`), frozen.
+ * @typedef {Object} SceneGeometry
+ * @property {number} id - The scene's handle for it (from 1, never reused).
+ * @property {function(): void} release - Give up the scene's hold (its nodes keep theirs).
+ */
+
+/**
  * @typedef {Object} SceneRaycastResult
  * @property {boolean} [hit]
  * @property {SceneNode} [node]
@@ -508,6 +515,27 @@ class SceneGraph {
    * @returns {SceneNode}
    */
   createMesh(opts) {}
+
+  /**
+   * Geometry many mesh nodes draw: a snapshot of `mesh` (later changes to
+   * the Mesh do not reach it), its tangents, bounds, vegetation records'
+   * height and raycast BVH made once, and one GPU copy for every node made
+   * with `createMesh({ geometry })`. Such a node costs its transform and
+   * material alone: a stand of one plant's copies, or a level of detail
+   * swapped for the next as the camera moves, uploads nothing. `release()`
+   * gives up the scene's hold; the nodes drawing it keep it (and its GPU
+   * copy) until they are gone, and no new node can be made from it.
+   *
+   * @example
+   *   const near = scene.createGeometry(leavesL3), far = scene.createGeometry(leavesL24);
+   *   let node = scene.createMesh({ geometry: near, position: [x, 0, z] });
+   *   // later, as the camera moves away: no upload
+   *   node.destroy();
+   *   node = scene.createMesh({ geometry: far, position: [x, 0, z] });
+   * @param {Mesh} mesh
+   * @returns {SceneGeometry}
+   */
+  createGeometry(mesh) {}
 
   /**
    * @param {SkinnedMeshNodeOptions} [opts]

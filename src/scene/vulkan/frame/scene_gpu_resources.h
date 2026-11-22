@@ -6,6 +6,9 @@
 // the generation it was built from is no longer the current one. Nothing is
 // hashed and nothing is keyed by address.
 //
+// Shared geometry (scene/nodes/shared_geometry.h) is the exception: one copy
+// keyed by the geometry's own generation, for every node that draws it.
+//
 // Copies of destroyed nodes are dropped by releaseNodes(); the GPU objects go
 // through the frame core's deferred destruction, so frames still in flight
 // keep what they use.
@@ -20,6 +23,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -93,6 +97,12 @@ public:
     const GpuMesh* chunked(uint32_t id, uint32_t slot, uint64_t generation, const bromesh::MeshData& data);
     static constexpr uint32_t kChunkMinTriangles = 32768;
     static constexpr uint32_t kChunkTriangles = 4096;   // a chunk's, about
+    /// The one GPU copy of shared geometry every node drawing it draws
+    /// (keyed by its own generation, never a node's), `chunked` as chunked()
+    /// is; kept while anything holds the geometry (pruneShared).
+    const GpuMesh* sharedMesh(const std::shared_ptr<const SharedGeometry>& geometry, bool chunked = false);
+    /// Drop the copies of shared geometry nothing holds any more.
+    void pruneShared();
 
     /// A node's RGBA8 image as a mipmapped, repeating texture; null when empty.
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);
@@ -138,6 +148,16 @@ private:
         size_t vertexCount = 0;
     };
 
+    struct Shared {
+        GpuMesh mesh;
+        std::weak_ptr<const SharedGeometry> owner;
+    };
+    /// `entry` rebuilt from `data` (false, and empty, when an upload fails).
+    bool upload(GpuMesh& entry, uint64_t generation, const bromesh::MeshData& data);
+    /// `entry`'s triangles sorted into chunks (GpuMesh::chunks), when it is big enough.
+    void buildChunks(GpuMesh& entry, const bromesh::MeshData& data);
+    void destroy(GpuMesh& m);
+
     static uint64_t key(uint32_t id, uint32_t slot) { return (static_cast<uint64_t>(id) << 32) | slot; }
     template <typename Map, typename Destroy>
     static void eraseNode(Map& map, uint32_t id, Destroy&& destroy);
@@ -147,6 +167,7 @@ private:
     SceneVkAllocator& allocator_;
     uint64_t render_ = 1;
     std::map<uint64_t, GpuMesh> meshes_;
+    std::unordered_map<uint64_t, Shared> shared_;   // by SharedGeometry::generation
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;
     std::unordered_map<uint32_t, std::unordered_map<std::string, UserTexture>> userTextures_;

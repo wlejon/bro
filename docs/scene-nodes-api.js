@@ -42,6 +42,8 @@
  * @typedef {Object} MeshNodeOptions
  * @property {Mesh|string} [mesh] - A Mesh object, or a primitive name (above).
  * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
+ * @property {SceneGeometry} [geometry] - Shared geometry (`scene.createGeometry`): drawn with no copy of
+ *   its own and uploaded once for every node drawing it; wins over `mesh` / `data`.
  * @property {string|Array<number>} [color] - CSS colour or [r, g, b(, a)] in 0..1.
  * @property {{metallic?: number, roughness?: number}} [material] - PBR params; the flat keys below win.
  * @property {number} [metallic]
