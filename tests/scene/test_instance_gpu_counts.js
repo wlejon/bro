@@ -7,7 +7,8 @@
 //   - setInstanceCullSpheres: an instance whose sphere is outside the view
 //     does not draw, the others draw as themselves (a culled view's
 //     instances are compacted; the hook's instance_index is still each
-//     one's own), with or without a count;
+//     one's own), with or without a count; with maxDistance, one wholly past
+//     it from the eye does not draw either;
 //   - setCullBounds: the node is culled by its box, not by its rows;
 //   - the culled instances cast shadows as the uncut ones do.
 
@@ -153,6 +154,31 @@ if (!probe.scene) {
         node.setInstanceCullSpheres(null);
         got = seen(s.scene.captureFrame());
         assert(got === 'red green blue nothing', `without spheres the count alone: ${got}`);
+        dropScene(s);
+    }
+
+    // maxDistance: a sphere wholly past it from the eye is culled (the
+    // spheres here 6, 16, 26 and 36 from the eye, all in view).
+    {
+        const s = freshScene(SIZE);
+        const node = make(s.scene);
+        const spheres = new Float32Array(16);
+        XS.forEach((x, k) => spheres.set([x * (1 + 10 * k / 6), 0, -10 * k, 0.9], 4 * k));
+        const buf = bro.kernel.createBuffer(spheres);
+        node.setInstanceCullSpheres(buf, { maxDistance: 20 });
+        let got = seen(s.scene.captureFrame());
+        assert(got === 'red green nothing nothing', `instances past maxDistance are culled: ${got}`);
+        node.setInstanceCullSpheres(buf, { maxDistance: 30 });
+        got = seen(s.scene.captureFrame());
+        assert(got === 'red green blue nothing', `a farther maxDistance keeps more: ${got}`);
+        // With a fade of 0.5 each drops out somewhere in [500, 1000]: all of
+        // these, nearer than 40, stay.
+        node.setInstanceCullSpheres(buf, { maxDistance: 1000, fade: 0.5 });
+        got = seen(s.scene.captureFrame());
+        assert(got === 'red green blue yellow', `within maxDistance (1 - fade) all draw: ${got}`);
+        let threw = null;
+        try { node.setInstanceCullSpheres(buf, { fade: 2 }); } catch (e) { threw = e; }
+        assert(threw instanceof RangeError, 'a fade past 1 is a RangeError');
         dropScene(s);
     }
 

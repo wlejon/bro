@@ -33,7 +33,7 @@ struct DrawCountUniforms {
 struct CullUniforms {
     float planes[6][4];   // relative to the frame's eye: normal, distance
     float model[3][4];    // the draw's model's first three rows
-    float s[4];           // x: the model's largest axis scale
+    float s[4];           // x: the model's largest axis scale, y: max distance (0: none), z: its fade share
     uint32_t a[4];        // count word (kNone), rows, rows' first word, the region's rows' first word
     uint32_t b[4];        // the region's indices' first word, commands word
 };
@@ -277,6 +277,8 @@ void PassDrawCounts::recordCulls(SceneFrame& frame) {
         for (int row = 0; row < 3; ++row)
             for (int c = 0; c < 4; ++c) u.model[row][c] = d.push.model[c * 4 + row];
         u.s[0] = scale;
+        u.s[1] = d.cullMaxDistance;
+        u.s[2] = d.cullFade;
         const render::ComputeBuffer* spheres = d.cullSpheres;
         const uint32_t rows = static_cast<uint32_t>(std::min<VkDeviceSize>(d.instanceCount, spheres->size() / 16));
         const bool counted = d.countBuffer && d.countBuffer->buffer() &&

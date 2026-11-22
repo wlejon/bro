@@ -1130,7 +1130,18 @@ class SceneNode {
    * Views with none of their own (reflection probe faces) draw every row.
    * `null` stops culling.
    *
+   * `maxDistance` (m, 0 by default: none) also culls an instance whose
+   * sphere lies wholly past it from the eye, in every view: a shadow page
+   * is drawn with the instances in reach of the eye then, and keeps them
+   * while it is cached, so a caster thinned by distance casts thinner into
+   * the sun's coarse clipmap levels (drawn far from the eye) than into its
+   * fine ones. `fade` (0 to 1) is the share of maxDistance over which they
+   * drop out, each instance at its own hashed distance in
+   * [maxDistance (1 - fade), maxDistance], so a set thins rather than ending
+   * at a line. No hook runs for it: the cull pass does it per instance.
+   *
    * @param {KernelBuffer|null} buffer
+   * @param {{maxDistance?: number, fade?: number}} [opts]
    * @returns {SceneNode}
    * @example
    *   // the kernel that deals creatures into levels writes each one's sphere

@@ -400,11 +400,23 @@ public:
     /// places its instances casts and draws only what each view holds. A
     /// hook's instance_index is the instance's own index all the same. Null:
     /// every instance draws in every view.
-    void setInstanceCullSpheres(std::shared_ptr<render::ComputeBuffer> buffer) {
+    ///
+    /// `maxDistance` (m, 0: none) also culls an instance whose sphere lies
+    /// wholly past it from the eye, in every view, a shadow page drawn
+    /// included (that page keeps what it was drawn with); `fade` (0-1) is the
+    /// share of maxDistance over which instances drop out, each at its own
+    /// hashed distance in [maxDistance (1 - fade), maxDistance], so a set
+    /// thins rather than ending at a line.
+    void setInstanceCullSpheres(std::shared_ptr<render::ComputeBuffer> buffer, float maxDistance = 0.0f,
+                                float fade = 0.0f) {
         cullSpheres_ = std::move(buffer);
+        cullMaxDistance_ = maxDistance > 0.0f ? maxDistance : 0.0f;
+        cullFade_ = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
         bumpChangeGeneration();
     }
     const std::shared_ptr<render::ComputeBuffer>& instanceCullSpheres() const { return cullSpheres_; }
+    float instanceCullMaxDistance() const { return cullMaxDistance_; }
+    float instanceCullFade() const { return cullFade_; }
 
     using UserTexture = MeshNode::UserTexture;
     bool setCustomShaderTexture(const std::string& name, int width, int height, const float* data,
@@ -523,6 +535,8 @@ private:
     std::shared_ptr<render::ComputeBuffer> countBuffer_;   // setInstanceCountBuffer
     uint32_t countWord_ = 0;
     std::shared_ptr<render::ComputeBuffer> cullSpheres_;   // setInstanceCullSpheres
+    float cullMaxDistance_ = 0.0f;                          // its maxDistance (0: none)
+    float cullFade_ = 0.0f;                                 // and fade
     std::optional<bromath::AABB3> cullBounds_;              // setCullBounds
 
     // Static batching: mesh_ + instanceData_ merged into one draw. batchMesh_

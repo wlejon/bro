@@ -153,6 +153,8 @@ struct MeshDraw {
     /// The node's instance spheres (setInstanceCullSpheres), and the views
     /// PassDrawCounts culled them for this frame (null: none yet).
     const render::ComputeBuffer* cullSpheres = nullptr;
+    float cullMaxDistance = 0.0f;   // and their maxDistance (0: none) and fade
+    float cullFade = 0.0f;
     const InstanceCullViews* cullViews = nullptr;
 
     /// This draw as view `view` (InstanceCullViews) draws it.

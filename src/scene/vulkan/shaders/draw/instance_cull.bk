@@ -19,7 +19,7 @@ struct CullUBO {
     m0: vec4<f32>,   // the draw's model, relative to the eye: its first three rows
     m1: vec4<f32>,
     m2: vec4<f32>,
-    s: vec4<f32>,    // x: the model's largest axis scale
+    s: vec4<f32>,    // x: the model's largest axis scale, y: the max distance (0: none), z: its fade share
     a: vec4<u32>,    // count word (NONE: none), rows, rows' first word, the region's rows' first word
     b: vec4<u32>,    // the region's indices' first word, commands word, 0, 0
 }
@@ -52,6 +52,17 @@ fn instance_cull() {
     if (behind(u.p0, c, r) || behind(u.p1, c, r) || behind(u.p2, c, r) ||
         behind(u.p3, c, r) || behind(u.p4, c, r) || behind(u.p5, c, r)) {
         return;
+    }
+    // Past the max distance from the eye (each instance its own, hashed
+    // within the fade share of it): culled in every view.
+    if (u.s.y > 0.0) {
+        var h = (k as u32) * 747796405u + 2891336453u;
+        h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+        h = (h >> 22u) ^ h;
+        let at = u.s.y * (1.0 - u.s.z * ((h & 0xffffu) as f32) / 65535.0);
+        if (length(c) - r > at) {
+            return;
+        }
     }
     let cw = u.b.y as i32;
     let i = commands.atomic_add(cw + 1, 1u) as i32;

@@ -828,7 +828,11 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
         out.countBuffer = node.instanceCountBuffer().get();
         out.countWord = node.instanceCountWord();
     }
-    if (!batched && node.instanceCullSpheres()) out.cullSpheres = node.instanceCullSpheres().get();
+    if (!batched && node.instanceCullSpheres()) {
+        out.cullSpheres = node.instanceCullSpheres().get();
+        out.cullMaxDistance = node.instanceCullMaxDistance();
+        out.cullFade = node.instanceCullFade();
+    }
     fillMaterial(frame, node, out);
     out.twoSided = node.doubleSided();
     out.push.extra[3] = static_cast<float>(std::clamp(node.effectiveAtlasCols(), 1, 255)) +
