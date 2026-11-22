@@ -520,13 +520,22 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
                                           int32_t width, int32_t height,
                                           const float* data, uint32_t dataCount,
                                           bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume,
-                                          int32_t channels) {
+                                          int32_t channels, int32_t format) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
     if (channels != 1 && channels != 2 && channels != 4) {
         ev::throwRangeError("setShaderTexture: channels must be 1, 2 or 4");
         return false;
     }
+    if (format < 0 || format > 3) {
+        ev::throwRangeError("setShaderTexture: format is 'float32', 'unorm8', 'unorm16' or 'float16'");
+        return false;
+    }
+    // A new slot (or a whole one) is staged as floats, then stored at `format`.
+    auto encode = [&](auto* mn) -> bool {
+        if (isSub || width <= 0 || height <= 0) return true;
+        return mn->setCustomShaderTextureEncoding(name, static_cast<scene::MeshNode::UserTexture::Encoding>(format));
+    };
     auto apply = [&](auto* mn) -> bool {
         if (volume && isSub) {
             ev::throwTypeError("setShaderTexture: a 3D slot (depth) is written whole, not by sub-rects");
@@ -575,8 +584,14 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
             return mn->setCustomShaderTexture(name, width, height, data, mipmap, repeat, false, channels);
         }
     };
-    if (n->type() == scene::SceneNode::Type::Mesh) return apply(static_cast<scene::MeshNode*>(n));
-    if (n->type() == scene::SceneNode::Type::InstancedMesh) return apply(static_cast<scene::InstancedMeshNode*>(n));
+    if (n->type() == scene::SceneNode::Type::Mesh) {
+        auto* mn = static_cast<scene::MeshNode*>(n);
+        return apply(mn) && encode(mn);
+    }
+    if (n->type() == scene::SceneNode::Type::InstancedMesh) {
+        auto* mn = static_cast<scene::InstancedMeshNode*>(n);
+        return apply(mn) && encode(mn);
+    }
     return false;
 }
 

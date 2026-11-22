@@ -706,7 +706,7 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
 bool bro_scene_SceneNode_setInstanceCountBuffer(void* self, uint64_t bufferBits, int32_t word);
 bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits);
 bool bro_scene_SceneNode_setCullBounds(void* self, bool set, double x0, double y0, double z0, double x1, double y1, double z1);
-bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y, int32_t width, int32_t height, const float* data, uint32_t dataCount, bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume, int32_t channels);
+bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y, int32_t width, int32_t height, const float* data, uint32_t dataCount, bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume, int32_t channels, int32_t format);
 bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, uint64_t bufferBits, int32_t width, int32_t height, int32_t layers, int32_t channels, bool repeat, bool volume, int32_t encoding, int32_t atlas);
 void bro_scene_SceneNode_setBaseColorTextureData(void* self, int32_t width, int32_t height, const uint8_t* data, uint32_t len);
 void bro_scene_SceneNode_clearBaseColorTexture(void* self);

@@ -427,6 +427,12 @@ public:
         if (changed) bumpChangeGeneration();
         return ok;
     }
+    bool setCustomShaderTextureEncoding(const std::string& name, UserTexture::Encoding encoding) {
+        bool changed = false;
+        const bool ok = MeshNode::setUserTextureEncoding(userTextures_, name, encoding, changed);
+        if (changed) bumpChangeGeneration();
+        return ok;
+    }
     bool setCustomShaderTextureArrayLayer(const std::string& name, int layer, const float* data) {
         bool changed = false;
         const bool ok = MeshNode::setUserTextureArrayLayer(userTextures_, name, layer, data, changed);

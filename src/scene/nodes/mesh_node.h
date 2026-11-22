@@ -544,6 +544,13 @@ public:
                                      bool mipmap = false, bool repeat = false,
                                      bool clampT = false, bool volume = false);
 
+    /// How an existing data slot (setCustomShaderTexture / ...Array) keeps
+    /// its texels on the GPU: the floats staged are converted to `encoding`
+    /// at upload (clamped to 0..1 for the unorm ones), a quarter or half the
+    /// bytes a fetch reads. Set after the slot is made (a new shape resets it
+    /// to Float32). False, logged, for an unknown slot or a buffer slot.
+    bool setCustomShaderTextureEncoding(const std::string& name, UserTexture::Encoding encoding);
+
     /// Stage one whole slice of an existing array slot: width*height*channels
     /// floats at the slot's shape. Refused (false, logged) for an unknown or
     /// non-array slot or a layer out of range.
@@ -584,6 +591,8 @@ public:
                                     bool repeat, bool clampT, bool volume, bool& changed);
     static bool setUserTextureArrayLayer(std::vector<UserTexture>& slots, const std::string& name,
                                          int layer, const float* data, bool& changed);
+    static bool setUserTextureEncoding(std::vector<UserTexture>& slots, const std::string& name,
+                                       UserTexture::Encoding encoding, bool& changed);
     static bool setUserTextureBuffer(std::vector<UserTexture>& slots, const std::string& name,
                                      int width, int height, int layers, int channels,
                                      std::shared_ptr<render::ComputeBuffer> source, bool repeat,

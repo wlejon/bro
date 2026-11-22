@@ -18,6 +18,7 @@
 //       (MeshNode::setCustomShaderTextureBuffer), as floats or `format`
 //       'unorm16'.
 //   (f) `depth` makes a slot a texture3d, filtered across its z slices.
+//   (g) `format` keeps a data slot's floats as unorm8 / unorm16 / float16.
 
 function patchBrightness(img, cx, cy, r) {
     let sum = 0, n = 0;
@@ -539,5 +540,38 @@ if (!boot.scene) {
         dropScene(s);
     }
 
-    console.log('shader texture mips/sub-update/shadow/array/3D test passed');
+    // =====================================================================
+    // (g) `format` on a data slot: the floats kept as unorm8, unorm16 or
+    // float16 read back as they were given (to the format's precision),
+    // their mip chain built at that format, and a sub-rect write converted
+    // at the slot's format too.
+    // =====================================================================
+    {
+        const s = makeScene(SIZE);
+        const scn = s.scene;
+        const N = 64;
+        const data = new Float32Array(N * N);
+        for (let y = 0; y < N; y++)
+            for (let x = 0; x < N; x++) data[y * N + x] = y < 8 ? 0.25 : (y % 2 === 0 ? 1.0 : 0.0);
+        const quad = scn.createMesh({ mesh: 'box', color: 'white' });
+        quad.setShader({ module: probeFrag, uniforms: { uv: [0.5, 0.5], lod: 0 } });
+        for (const format of ['unorm8', 'unorm16', 'float16']) {
+            quad.setShaderTexture('tex', { width: N, height: N, data, mipmap: true, format });
+            const q = probe(scn, quad, N, 32, 2, 0.0);
+            assert(Math.abs(q - 63.75) < 6, `${format}: a texel of 0.25 reads 0.25 (${q.toFixed(1)})`);
+            const bright = probe(scn, quad, N, 32, 32, 0.0);
+            assert(bright > 230, `${format}: level 0 reads the bright row (${bright.toFixed(1)})`);
+            const l1 = probe(scn, quad, N, 32, 32, 1.0);
+            assert(Math.abs(l1 - 127.5) < 12, `${format}: its mip 1 is the stripes' average (${l1.toFixed(1)})`);
+            quad.setShaderTexture('tex', { x: 0, y: 0, width: 4, height: 4, data: new Float32Array(16).fill(0.75) });
+            const sub = probe(scn, quad, N, 1, 1, 0.0);
+            assert(Math.abs(sub - 191.25) < 6, `${format}: a sub-rect write keeps the slot's format (${sub.toFixed(1)})`);
+        }
+        let threw = null;
+        try { quad.setShaderTexture('tex', { width: N, height: N, data, format: 'rgb565' }); } catch (e) { threw = e; }
+        assert(threw instanceof RangeError, 'an unknown format is a RangeError');
+        dropScene(s);
+    }
+
+    console.log('shader texture mips/sub-update/shadow/array/3D/format test passed');
 }

@@ -13,6 +13,44 @@ namespace bro::scene::vk {
 
 namespace {
 
+uint16_t halfOf(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, 4);
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    const int32_t e = static_cast<int32_t>((x >> 23) & 0xffu) - 127 + 15;
+    uint32_t m = x & 0x7fffffu;
+    if (((x >> 23) & 0xffu) == 0xffu) return static_cast<uint16_t>(sign | 0x7c00u | (m ? 0x200u : 0u));
+    if (e >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
+    if (e <= 0) {
+        if (e < -10) return static_cast<uint16_t>(sign);
+        m |= 0x800000u;
+        const uint32_t shift = static_cast<uint32_t>(14 - e);
+        return static_cast<uint16_t>(sign | ((m + (1u << (shift - 1))) >> shift));
+    }
+    const uint32_t h = sign | (static_cast<uint32_t>(e) << 10) | (m >> 13);
+    return static_cast<uint16_t>(h + ((m >> 12) & 1u));   // round half up into the exponent if it carries
+}
+
+// A data slot's floats as the slot's encoding stores them (the unorm ones
+// clamped to 0..1): `src` itself for Float32, else `storage`'s bytes.
+const void* encodeTexels(const float* src, size_t floats, MeshNode::UserTexture::Encoding enc,
+                         std::vector<uint8_t>& storage) {
+    using Enc = MeshNode::UserTexture::Encoding;
+    if (enc == Enc::Float32) return src;
+    const size_t bytes = static_cast<size_t>(MeshNode::encodingBytes(enc));
+    storage.resize(floats * bytes);
+    for (size_t i = 0; i < floats; ++i) {
+        const float c = std::clamp(src[i], 0.0f, 1.0f);
+        if (enc == Enc::Unorm8) {
+            storage[i] = static_cast<uint8_t>(std::lround(c * 255.0f));
+        } else {
+            const uint16_t v = enc == Enc::Unorm16 ? static_cast<uint16_t>(std::lround(c * 65535.0f)) : halfOf(src[i]);
+            std::memcpy(&storage[i * 2], &v, 2);
+        }
+    }
+    return storage.data();
+}
+
 struct alignas(16) PackedVertex {
     float pos[3];
     float normal[3];
@@ -320,8 +358,9 @@ bool SceneGpuResources::createUserTexture(MeshNode::UserTexture& tex, UserTextur
         {VK_FORMAT_R16_UNORM, VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16B16A16_UNORM},
         {VK_FORMAT_R16_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT},
     };
-    const Enc enc = tex.source ? tex.encoding : Enc::Float32;
+    const Enc enc = tex.encoding;
     const VkFormat format = kFormats[static_cast<int>(enc)][ci];
+    out.encoding = enc;
     out.expand3 = tex.channels == 3;
     out.texelBytes = (tex.channels == 1 ? 1u : tex.channels == 2 ? 2u : 4u) *
                      static_cast<uint32_t>(MeshNode::encodingBytes(enc));
@@ -380,6 +419,13 @@ const SceneVkImage* SceneGpuResources::userTexture(uint32_t id, MeshNode::UserTe
         return storage.data();
     };
     std::vector<float> widened;
+    std::vector<uint8_t> encoded;
+    // The staged floats at the slot's encoding (texels of the image's channels).
+    auto staged = [&](const float* src, size_t n) -> const void* {
+        const float* w = widen(src, n, widened);
+        const size_t per = entry.texelBytes / static_cast<uint32_t>(MeshNode::encodingBytes(entry.encoding));
+        return encodeTexels(w, n * per, entry.encoding, encoded);
+    };
 
     if (entry.generation != tex.generation || !entry.image.isValid()) {
         allocator_.destroyImage(entry.image);
@@ -391,19 +437,19 @@ const SceneVkImage* SceneGpuResources::userTexture(uint32_t id, MeshNode::UserTe
         }
         // The full image already carries every staged write.
         const uint32_t layers = tex.layers > 0 ? static_cast<uint32_t>(tex.layers) : 1;
-        const size_t texels = static_cast<size_t>(tex.w) * tex.h * layers;
-        if (tex.data.size() >= texels * static_cast<size_t>(tex.channels)) {
+        const size_t count = static_cast<size_t>(tex.w) * tex.h * layers;
+        if (tex.data.size() >= count * static_cast<size_t>(tex.channels)) {
             ImageRegion region;
             region.layerCount = layers;
-            const float* src = widen(tex.data.data(), texels, widened);
-            allocator_.uploadImage(entry.image, src, texels * entry.texelBytes, region, tex.mipmap);
+            allocator_.uploadImage(entry.image, staged(tex.data.data(), count), count * entry.texelBytes, region,
+                                   tex.mipmap);
         }
         entry.generation = tex.generation;
         entry.copiedRender = 0;
         entry.copiedLog = 0;
         tex.subUpdates.clear();
         tex.sliceUpdates.clear();
-        if (!tex.source) noteTextureUpload(texels * entry.texelBytes);
+        if (!tex.source) noteTextureUpload(count * entry.texelBytes);
     }
     if (tex.source) {
         if (entry.copiedRender == render_) return &entry.image;
@@ -455,18 +501,18 @@ const SceneVkImage* SceneGpuResources::userTexture(uint32_t id, MeshNode::UserTe
         region.y = sub.y;
         region.width = static_cast<uint32_t>(sub.w);
         region.height = static_cast<uint32_t>(sub.h);
-        const size_t texels = static_cast<size_t>(sub.w) * sub.h;
-        allocator_.uploadImage(entry.image, widen(sub.data.data(), texels, widened), texels * entry.texelBytes,
-                               region, tex.mipmap);
+        const size_t count = static_cast<size_t>(sub.w) * sub.h;
+        allocator_.uploadImage(entry.image, staged(sub.data.data(), count), count * entry.texelBytes, region,
+                               tex.mipmap);
     }
     tex.subUpdates.clear();
     for (const auto& slice : tex.sliceUpdates) {
         if (slice.layer < 0 || slice.layer >= tex.layers || slice.data.empty()) continue;
         ImageRegion region;
         region.layer = static_cast<uint32_t>(slice.layer);
-        const size_t texels = static_cast<size_t>(tex.w) * tex.h;
-        allocator_.uploadImage(entry.image, widen(slice.data.data(), texels, widened), texels * entry.texelBytes,
-                               region, tex.mipmap);
+        const size_t count = static_cast<size_t>(tex.w) * tex.h;
+        allocator_.uploadImage(entry.image, staged(slice.data.data(), count), count * entry.texelBytes, region,
+                               tex.mipmap);
     }
     tex.sliceUpdates.clear();
     return &entry.image;

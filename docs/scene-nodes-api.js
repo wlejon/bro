@@ -728,7 +728,12 @@ class SceneNode {
    * `texture3d<vec4<f32>>`, filtered across them by the hardware (one fetch
    * for a tiling 3D field), never mipmapped, written whole. A data array
    * shorter than the extent is a RangeError; `layers` and `depth` together a
-   * TypeError.
+   * TypeError. `format` ('float32' by default, 'unorm8', 'unorm16' or
+   * 'float16') is how the slot keeps the floats given, converted at upload
+   * (the unorm ones clamped to 0 to 1): an RGBA atlas at 'unorm8' is a
+   * quarter of the bytes each fetch reads, which shows where many layers of
+   * a node sample it (a forest of impostors). Sub-rectangle and slice writes
+   * keep the slot's format.
    *
    * With `buffer` (a KernelBuffer) in place of `data`, the slot's texels are
    * the buffer's: width * height (* layers or depth) texels of `channels` floats (1,

@@ -680,11 +680,14 @@
                                                                 opts.atlas === undefined ? 1 : opts.atlas | 0);
             return this;
         }
+        // format: how the slot keeps the floats given (converted at upload).
+        const format = opts.format === undefined ? 0 : TEXTURE_FORMATS.indexOf(opts.format);
+        if (format < 0) throw new RangeError("setShaderTexture: format is 'float32', 'unorm8', 'unorm16' or 'float16'");
         const isSub = opts.x !== undefined || opts.y !== undefined;
         const x = opts.x || 0, y = opts.y || 0, w = opts.width || 0, h = opts.height || 0;
         const data = opts.data ? (opts.data instanceof Float32Array ? opts.data : Float32Array.from(opts.data)) : EMPTY_F32;
         __bro_native.scene.SceneNode_setShaderTexture(this, name, x, y, w, h, data, !!opts.mipmap, isSub,
-                                                      !!opts.repeat, layers, volume, opts.channels || 1);
+                                                      !!opts.repeat, layers, volume, opts.channels || 1, format);
         return this;
     });
     fn(SceneNode.prototype, "capture", function capture() {

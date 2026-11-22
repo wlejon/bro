@@ -337,6 +337,24 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
     return true;
 }
 
+bool MeshNode::setCustomShaderTextureEncoding(const std::string& name, UserTexture::Encoding encoding) {
+    for (auto& t : userTextures_) {
+        if (t.name != name) continue;
+        if (t.source) {
+            LOG_WARN("setShaderTexture('%s'): a buffer slot's format is set with its buffer (ignored)", name.c_str());
+            return false;
+        }
+        if (t.encoding == encoding) return true;
+        t.encoding = encoding;
+        // The image is remade at the new format from the staged floats.
+        t.generation = nextResourceGeneration();
+        bumpChangeGeneration();
+        return true;
+    }
+    LOG_WARN("setShaderTexture('%s'): no such sampler slot for a format (ignored)", name.c_str());
+    return false;
+}
+
 bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
                                                 int layer, const float* data) {
     for (auto& t : userTextures_) {
@@ -457,6 +475,11 @@ bool MeshNode::setUserTextureArrayLayer(std::vector<UserTexture>& slots, const s
     return withTempMesh(slots, changed, [&](MeshNode& m) {
         return m.setCustomShaderTextureArrayLayer(name, layer, data);
     });
+}
+
+bool MeshNode::setUserTextureEncoding(std::vector<UserTexture>& slots, const std::string& name,
+                                      UserTexture::Encoding encoding, bool& changed) {
+    return withTempMesh(slots, changed, [&](MeshNode& m) { return m.setCustomShaderTextureEncoding(name, encoding); });
 }
 
 bool MeshNode::setUserTextureBuffer(std::vector<UserTexture>& slots, const std::string& name,
