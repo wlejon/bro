@@ -89,6 +89,14 @@ bool voxelRegionInView(const VoxelRegion& reg, const double eye[3],
     return true;
 }
 
+// voxeldag_pass.bk VoxelShadowParams.
+struct alignas(16) ShadowViewUbo {
+    float viewProj[16] = {};
+    float invViewProj[16] = {};
+    float rect[4] = {};
+    float misc[4] = {};   // texel (m), ortho, max steps, 0
+};
+
 // The shadow BVH over the drawn regions that cast (voxeldag.bk
 // SHADOW_BVH_STRIDE): each region's content box in the eye-relative frame
 // the regions are packed in, split at the median of the longest axis, laid
@@ -306,6 +314,9 @@ bool PassVoxelDag::setup(SceneGpu& gpu) {
     for (uint32_t b = 3; b <= 9; ++b) {
         builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     }
+    // The shadow casters' view (PassVoxelShadow; the colour pass binds zeros).
+    builder.addBinding(10, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
     set2Layout_ = builder.build(dev);
     if (!set2Layout_) return false;
 
@@ -501,6 +512,10 @@ void PassVoxelDag::record(SceneFrame& frame) {
         } else {
             writeStorageOrDummy(w, 9, dummyBuf_, dummyBuf_);
         }
+        const ShadowViewUbo noView{};
+        const VkDescriptorBufferInfo viewInfo = device_->frameUniform(&noView, sizeof(noView));
+        if (viewInfo.buffer == VK_NULL_HANDLE) continue;
+        w.writeBuffer(10, viewInfo.buffer, viewInfo.range, viewInfo.offset);
         w.updateSet(device_->device(), set2);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &set2, 0, nullptr);
@@ -508,6 +523,192 @@ void PassVoxelDag::record(SceneFrame& frame) {
         vkCmdDraw(cmd, 36, static_cast<uint32_t>(gpuRegs.size()), 0, 0);
         frame.drewContent = true;
     }
+}
+
+bool PassVoxelShadow::setup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    vs_ = createKernelStageModule(dev, "draw/voxeldag_pass.bk", kBkVoxelDagPassSrc, "voxeldag_shadow_vert");
+    fs_ = createKernelStageModule(dev, "draw/voxeldag_pass.bk", kBkVoxelDagPassSrc, "voxeldag_shadow_frag");
+    return vs_ != VK_NULL_HANDLE && fs_ != VK_NULL_HANDLE;
+}
+
+void PassVoxelShadow::cleanup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    if (pipeline_) vkDestroyPipeline(dev, pipeline_, nullptr);
+    pipeline_ = VK_NULL_HANDLE;
+    SceneVkShaderModule::destroy(dev, vs_);
+    SceneVkShaderModule::destroy(dev, fs_);
+    vs_ = fs_ = VK_NULL_HANDLE;
+}
+
+bool PassVoxelShadow::active(const SceneFrame& frame) const {
+    if (!frame.gpu.shadows.ready() || !anyRenderableVoxelWorld(frame)) return false;
+    const ShadowPlan& plan = frame.renderer.shadowPlan();
+    for (int v = 0; v < plan.viewCount; ++v) {
+        if (!plan.views[v].dynamic) return true;
+    }
+    return false;
+}
+
+void PassVoxelShadow::declare(const SceneFrame& frame, PassIO& io) const {
+    io.depthTarget(frame.gpu.shadows.scratch);
+}
+
+void PassVoxelShadow::record(SceneFrame& frame) {
+    VkCommandBuffer cmd = frame.cmd;
+    const ShadowPlan& plan = frame.renderer.shadowPlan();
+    const SceneVkImage& scratch = frame.gpu.shadows.scratch;
+    SceneVkDevice& device = *dag_.device_;
+
+    if (!pipeline_) {
+        TargetFormat target;
+        target.depth = SceneTargets::kDepthFormat;
+        SceneVkPipelineBuilder b;
+        b.setLabel("voxeldag shadow")
+         .setShaderStages(vs_, fs_, "voxeldag_shadow_vert", "voxeldag_shadow_frag")
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_NONE)
+         .setTarget(target)
+         .disableBlending(0)
+         .enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL)
+         .setDynamicStates({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR});
+        pipeline_ = b.build(device.device(), dag_.layout_);
+        if (!pipeline_) return;
+    }
+
+    const double eye[3] = {
+        frame.view.origin[0] + static_cast<double>(frame.view.eye.x),
+        frame.view.origin[1] + static_cast<double>(frame.view.eye.y),
+        frame.view.origin[2] + static_cast<double>(frame.view.eye.z),
+    };
+    const VkDeviceSize storageAlign = std::max<VkDeviceSize>(
+        64, device.context().deviceProperties().limits.minStorageBufferOffsetAlignment);
+
+    // Each world's casting regions, packed about the frame's eye.
+    struct World {
+        const VoxelWorldNode* node;
+        std::vector<GpuVoxelRegion> regions;
+    };
+    std::vector<World> worlds;
+    for (SceneNode* node : frame.lists.nodes) {
+        if (node->type() != SceneNode::Type::VoxelWorld) continue;
+        const auto* vw = static_cast<const VoxelWorldNode*>(node);
+        World w{vw, {}};
+        for (const VoxelRegion& reg : vw->regions()) {
+            constexpr uint32_t casts = kVoxelRegionEnabled | kVoxelRegionCastShadow;
+            if ((reg.flags & casts) != casts || reg.rootNode == bromesh::kDagNullNode) continue;
+            w.regions.push_back(reg.packGpu(eye));
+        }
+        if (!w.regions.empty()) worlds.push_back(std::move(w));
+    }
+    if (worlds.empty()) return;
+
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = scratch.view;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {scratch.width, scratch.height}};
+    info.layerCount = 1;
+    info.pDepthAttachment = &depth;
+    device.cmdBeginRendering(cmd, &info);
+    bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    const VkDescriptorSet frameSets[2] = {frame.cameraSet, frame.lightingSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dag_.layout_, 0, 2, frameSets, 0, nullptr);
+
+    std::vector<GpuVoxelRegion> inView;
+    for (int v = 0; v < plan.viewCount; ++v) {
+        const ShadowViewPlan& view = plan.views[v];
+        if (view.dynamic) continue;
+        const VkRect2D rect{{view.scratchX, view.scratchY},
+                            {static_cast<uint32_t>(view.texelsW), static_cast<uint32_t>(view.texelsH)}};
+        const VkViewport viewport{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
+                                  static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height),
+                                  0.0f, 1.0f};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &rect);
+        const bromath::Mat4 viewProj = toVulkanClip(rebased(view.relViewProj, frame.view.eye - plan.origin));
+        ShadowViewUbo ubo{};
+        std::memcpy(ubo.viewProj, viewProj.data, sizeof(ubo.viewProj));
+        const bromath::Mat4 inv = bromath::minverse(viewProj);
+        std::memcpy(ubo.invViewProj, inv.data, sizeof(ubo.invViewProj));
+        ubo.rect[0] = viewport.x;
+        ubo.rect[1] = viewport.y;
+        ubo.rect[2] = viewport.width;
+        ubo.rect[3] = viewport.height;
+        // A perspective view's texel a metre out: its cells end at the
+        // light's near distances' texel, a little fine farther out.
+        ubo.misc[0] = view.ortho ? view.texel : (view.texelPerMetre > 0.0f ? 1.0f / view.texelPerMetre : 0.0f);
+        ubo.misc[1] = view.ortho ? 1.0f : 0.0f;
+
+        for (const World& w : worlds) {
+            // The regions whose content this view's clip box holds.
+            inView.clear();
+            for (const GpuVoxelRegion& g : w.regions) {
+                const float cmin[3] = {(g.content[0] & 0xFFFFu) / 65535.0f, (g.content[0] >> 16u) / 65535.0f,
+                                       (g.content[1] & 0xFFFFu) / 65535.0f};
+                const float cmax[3] = {(g.content[1] >> 16u) / 65535.0f, (g.content[2] & 0xFFFFu) / 65535.0f,
+                                       (g.content[2] >> 16u) / 65535.0f};
+                if (cmin[0] > cmax[0] || cmin[1] > cmax[1] || cmin[2] > cmax[2]) continue;
+                int outside[4] = {0, 0, 0, 0};
+                for (int k = 0; k < 8; ++k) {
+                    const float u = ((k & 1) ? cmax[0] : cmin[0]) * g.r0[3];
+                    const float vv = ((k & 2) ? cmax[1] : cmin[1]) * g.r0[3];
+                    const float ww = ((k & 4) ? cmax[2] : cmin[2]) * g.r0[3];
+                    float p[3];
+                    for (int a = 0; a < 3; ++a) p[a] = g.r0[a] + g.r1[a] * u + g.r2[a] * vv + g.r3[a] * ww;
+                    float c[4];
+                    for (int r = 0; r < 4; ++r) {
+                        c[r] = viewProj.at(r, 0) * p[0] + viewProj.at(r, 1) * p[1] + viewProj.at(r, 2) * p[2] +
+                               viewProj.at(r, 3);
+                    }
+                    outside[0] += c[0] < -c[3];
+                    outside[1] += c[0] > c[3];
+                    outside[2] += c[1] < -c[3];
+                    outside[3] += c[1] > c[3];
+                }
+                if (outside[0] == 8 || outside[1] == 8 || outside[2] == 8 || outside[3] == 8) continue;
+                inView.push_back(g);
+            }
+            if (inView.empty()) continue;
+            ubo.misc[2] = static_cast<float>(w.node->maxRaySteps());
+
+            const VkDeviceSize regBytes = static_cast<VkDeviceSize>(inView.size() * sizeof(GpuVoxelRegion));
+            render::UploadSlice regSlice = device.frameUpload(regBytes, storageAlign);
+            if (!regSlice) continue;
+            std::memcpy(regSlice.mapped, inView.data(), static_cast<size_t>(regBytes));
+            PassVoxelDag::ParamsUbo params{};
+            params.counts[0] = static_cast<uint32_t>(inView.size());
+            params.counts[1] = w.node->animTick();
+            const VkDescriptorBufferInfo paramsInfo = device.frameUniform(&params, sizeof(params));
+            const VkDescriptorBufferInfo viewInfo = device.frameUniform(&ubo, sizeof(ubo));
+            if (paramsInfo.buffer == VK_NULL_HANDLE || viewInfo.buffer == VK_NULL_HANDLE) continue;
+
+            const PassVoxelDag::GpuPool& gp = dag_.syncNodePool(frame.gpu, w.node->id(), *w.node);
+            VkDescriptorSet set2 = device.frameSet(dag_.set2Layout_);
+            SceneVkDescriptorWriter wr;
+            // (The scene depth is not read by the casters.)
+            wr.writeImage(0, frame.gpu.targets.depthSnapshot.view, frame.gpu.targets.depthSnapshot.sampler);
+            wr.writeBuffer(1, paramsInfo.buffer, paramsInfo.range, paramsInfo.offset);
+            wr.writeBuffer(2, regSlice.buffer, regBytes, regSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            writeStorageOrDummy(wr, 3, gp.nodes, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 4, gp.children, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 5, gp.bricks, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 6, gp.attrs, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 7, gp.animClips, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 8, gp.animFrames, dag_.dummyBuf_);
+            writeStorageOrDummy(wr, 9, dag_.dummyBuf_, dag_.dummyBuf_);
+            wr.writeBuffer(10, viewInfo.buffer, viewInfo.range, viewInfo.offset);
+            wr.updateSet(device.device(), set2);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dag_.layout_, 2, 1, &set2, 0, nullptr);
+            vkCmdDraw(cmd, 36, static_cast<uint32_t>(inView.size()), 0, 0);
+        }
+    }
+    device.cmdEndRendering(cmd);
 }
 
 }  // namespace bro::scene::vk

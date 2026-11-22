@@ -706,6 +706,8 @@ private:
     int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
     ShadowPages shadowPages_;
     ShadowCasters shadowCasterStates_;
+    // The voxel worlds' casting regions, keyed by node and region id.
+    ShadowCasters voxelCasterStates_;
     ShadowPlan shadowPlan_;
     // This frame's casters that are not still (ShadowMotion), by node id.
     std::unordered_map<uint32_t, ShadowMotion> shadowMotion_;

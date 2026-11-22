@@ -96,6 +96,28 @@ bromath::AABB3 VoxelRegion::worldBounds() const noexcept {
     return bromath::AABB3{c - ext, c + ext};
 }
 
+std::optional<bromath::AABB3> VoxelRegion::contentWorldBounds() const noexcept {
+    if (contentMin[0] > contentMax[0] || contentMin[1] > contentMax[1] || contentMin[2] > contentMax[2]) {
+        return std::nullopt;
+    }
+    double origin[3] = {};
+    originWorld(origin);
+    const float ext = extent();
+    bromath::AABB3 box = bromath::aempty3();
+    for (int k = 0; k < 8; ++k) {
+        const float u = ((k & 1) ? contentMax[0] : contentMin[0]) * ext;
+        const float v = ((k & 2) ? contentMax[1] : contentMin[1]) * ext;
+        const float w = ((k & 4) ? contentMax[2] : contentMin[2]) * ext;
+        const bromath::Vec3 p{
+            static_cast<float>(origin[0] + right[0] * u + up[0] * v + forward[0] * w),
+            static_cast<float>(origin[1] + right[1] * u + up[1] * v + forward[1] * w),
+            static_cast<float>(origin[2] + right[2] * u + up[2] * v + forward[2] * w),
+        };
+        box = bromath::amerge(box, bromath::AABB3{p, p});
+    }
+    return box;
+}
+
 GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
     double origin[3] = {};
     originWorld(origin);
@@ -200,8 +222,8 @@ uint32_t VoxelWorldNode::addRegion(const VoxelRegion& spec) {
         pool_.retain(reg.rootNode, false);
     }
     refreshCarveFlag(reg);
+    reg.generation = ++regionsGen_;
     regions_.push_back(reg);
-    ++regionsGen_;
     bumpChangeGeneration();
     return reg.id;
 }
@@ -244,7 +266,7 @@ bool VoxelWorldNode::updateRegion(uint32_t regionId, const VoxelRegion& spec) {
     normalizeAxis(reg->up, 0.0f, 1.0f, 0.0f);
     normalizeAxis(reg->forward, 0.0f, 0.0f, 1.0f);
     refreshCarveFlag(*reg);
-    ++regionsGen_;
+    reg->generation = ++regionsGen_;
     bumpChangeGeneration();
     return true;
 }
@@ -259,7 +281,7 @@ bool VoxelWorldNode::setRegionRoot(uint32_t regionId, uint32_t rootNode) {
         reg->setContentFull();
     }
     refreshCarveFlag(*reg);
-    ++regionsGen_;
+    reg->generation = ++regionsGen_;
     bumpChangeGeneration();
     return true;
 }
@@ -309,7 +331,7 @@ bool VoxelWorldNode::placeSubtree(uint32_t regionId, int ix, int iy, int iz,
         isLeaf));
     if (childRef != bromesh::kDagNullNode) reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
-    ++regionsGen_;
+    reg->generation = ++regionsGen_;
     bumpChangeGeneration();
     return true;
 }
@@ -328,7 +350,7 @@ bool VoxelWorldNode::placeSubtreesBatch(uint32_t regionId,
         if (p.childRef != bromesh::kDagNullNode) reg->growContent(p.ix, p.iy, p.iz, targetDepth);
     }
     refreshCarveFlag(*reg);
-    ++regionsGen_;
+    reg->generation = ++regionsGen_;
     bumpChangeGeneration();
     return true;
 }
@@ -361,7 +383,7 @@ bool VoxelWorldNode::stampCarveAndSolid(uint32_t regionId, int ix, int iy, int i
         solidNode));
     reg->growContent(ix, iy, iz, targetDepth);
     refreshCarveFlag(*reg);
-    ++regionsGen_;
+    reg->generation = ++regionsGen_;
     bumpChangeGeneration();
     return true;
 }

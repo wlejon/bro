@@ -216,6 +216,123 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Shadow casters (PassVoxelShadow): each casting region's content box drawn
+// into a shadow view's rect of the scratch target, a texel's ray traced from
+// the light through it, the first hit's depth written. Positions are the
+// frame's eye-relative ones, as the regions are packed.
+// ---------------------------------------------------------------------------
+
+struct VoxelShadowParams {
+    view_proj: mat4f,       // eye-relative to the view's clip (depth 0 near the light, 1 far)
+    inv_view_proj: mat4f,
+    rect: vec4<f32>,        // the view's rect in the scratch target: x, y, w, h
+    misc: vec4<f32>,        // x: texel (m), y: 1 for an ortho view, z: max steps
+}
+
+@binding(2, 10) var u_shadow: uniform<VoxelShadowParams>;
+
+fn shadow_unproject(ndc: vec3<f32>) -> vec3<f32> {
+    let v = scene::mul4(u_shadow.inv_view_proj, vec4<f32>(ndc, 1.0));
+    return v.xyz * (1.0 / v.w);
+}
+
+// As voxeldag_vert, the faces turned toward the light drawn (the rest
+// collapse), in the view's clip space. An ortho view lays what is nearer the
+// light than its near plane on it (shadow.bk caster_clip).
+@vertex fn voxeldag_shadow_vert() {
+    let vid = vertex_index() as u32;
+    let ri = instance_index() as u32;
+    let base = (ri * voxeldag::REGION_STRIDE) as i32;
+    let r0 = b_regions[base];
+    let r1 = b_regions[base + 1];
+    let r2 = b_regions[base + 2];
+    let r3 = b_regions[base + 3];
+    let cb = voxeldag::content_box(b_regions[base + 5]);
+    let pad = 0.5 * r1.w / max(r0.w, 1e-6);
+    let lo = clamp(cb.lo - vec3<f32>(pad, pad, pad), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+    let hi = clamp(cb.hi + vec3<f32>(pad, pad, pad), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+
+    let face = vid / 6u;
+    let k = vid - face * 6u;
+    let qa = (k == 1u || k == 2u || k == 4u) ? 1.0 : 0.0;
+    let qb = (k == 2u || k == 4u || k == 5u) ? 1.0 : 0.0;
+    let axis = face / 2u;
+    let high = (face & 1u) == 1u;
+    let s = high ? 1.0 : 0.0;
+    var u = vec3<f32>(s, qa, qb);
+    var c = vec3<f32>(s, 0.5, 0.5);
+    var n = vec3<f32>(1.0, 0.0, 0.0);
+    if (axis == 1u) {
+        u = vec3<f32>(qa, s, qb);
+        c = vec3<f32>(0.5, s, 0.5);
+        n = vec3<f32>(0.0, 1.0, 0.0);
+    } else if (axis == 2u) {
+        u = vec3<f32>(qa, qb, s);
+        c = vec3<f32>(0.5, 0.5, s);
+        n = vec3<f32>(0.0, 0.0, 1.0);
+    }
+    let ext = r0.w;
+    let un = mix(lo, hi, u);
+    let cn = mix(lo, hi, c);
+    let p = r0.xyz + (r1.xyz * un.x + r2.xyz * un.y + r3.xyz * un.z) * ext;
+    let pc = r0.xyz + (r1.xyz * cn.x + r2.xyz * cn.y + r3.xyz * cn.z) * ext;
+    let nw = (r1.xyz * n.x + r2.xyz * n.y + r3.xyz * n.z) * (high ? 1.0 : -1.0);
+    // The light's ray through the face's centre: a face it leaves by is far.
+    let qc = scene::mul4(u_shadow.view_proj, vec4<f32>(pc, 1.0));
+    let ndc_c = qc.xy * (1.0 / max(abs(qc.w), 1e-6));
+    let ray = shadow_unproject(vec3<f32>(ndc_c, 1.0)) - shadow_unproject(vec3<f32>(ndc_c, 0.0));
+    let far_face = dot(nw, ray) >= 0.0;
+    set_vertex_output(0, ri);
+    var q = scene::mul4(u_shadow.view_proj, vec4<f32>(p, 1.0));
+    if (u_shadow.misc.y > 0.5 && q.z < 0.0) {
+        q.z = 0.0;
+    }
+    set_vertex_position(far_face ? vec4<f32>(0.0, 0.0, 0.0, 1.0) : q);
+}
+
+@fragment fn voxeldag_shadow_frag(@location(0) region: u32) {
+    let fc = frag_coord().xy;
+    let ndc_xy = (fc - u_shadow.rect.xy) / max(u_shadow.rect.zw, vec2<f32>(1.0, 1.0)) * 2.0 - vec2<f32>(1.0, 1.0);
+    var p0 = shadow_unproject(vec3<f32>(ndc_xy, 0.0));
+    let p1 = shadow_unproject(vec3<f32>(ndc_xy, 1.0));
+    let span = p1 - p0;
+    let len = max(sqrt(dot(span, span)), 1e-6);
+    let rd = span * (1.0 / len);
+    // An ortho view's casters nearer the light than its near plane still
+    // cast (laid on it): the ray starts behind the plane.
+    var back: f32 = 0.0;
+    if (u_shadow.misc.y > 0.5) {
+        back = 4096.0;
+        p0 = p0 - rd * back;
+    }
+    let hit = voxeldag::trace_region_caster(
+        p0,
+        rd,
+        len + back,
+        u_shadow.misc.x,
+        u_shadow.misc.z as u32,
+        u_params.counts.y,
+        region,
+        (fc.x as u32) * 0x9e3779b1u + (fc.y as u32) * 0x85ebca77u + 1u,
+        b_regions,
+        b_nodes,
+        b_children,
+        b_bricks,
+        b_attrs,
+        b_anim_clips,
+        b_anim_frames
+    );
+    if (!hit.hit) {
+        discard_fragment();
+    }
+    // Pushed a voxel away from the light: a written depth takes no polygon
+    // offset, and the voxels' own faces are this coarse.
+    let pos = hit.pos + rd * max(hit.voxel_size, u_shadow.misc.x);
+    let q = scene::mul4(u_shadow.view_proj, vec4<f32>(pos, 1.0));
+    set_frag_depth(clamp(q.z / max(q.w, 1e-6), 0.0, 1.0));
+}
+
 @fragment fn voxeldag_frag(@location(0) region: u32) {
     let out = shade_voxeldag(region);
     set_frag_output(0, out.color);

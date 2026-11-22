@@ -2,6 +2,7 @@
 #include "scene/depth_policy.h"
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/skinned_mesh_node.h"
+#include "scene/nodes/voxel_world_node.h"
 #include "scene/scene_graph.h"
 #include "scene/vulkan/frame/scene_vk_bridge.h"
 
@@ -55,6 +56,7 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::A
     const bool swaying = !windFieldCalm(windField());
     const bool windy = windStrength_ > 0.0f;
     shadowCasterStates_.begin();
+    voxelCasterStates_.begin();
     casterBounds = bromath::aempty3();
     depthBounds = bromath::aempty3();
 
@@ -102,11 +104,25 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::A
                     depthBounds = bromath::amerge(depthBounds, *nodeWorldBounds(m, false));
                 }
             }
+        } else if (n->type() == SceneNode::Type::VoxelWorld) {
+            // Each casting region is a caster that holds still: its change
+            // redraws the pages its old and new content touch.
+            auto* vw = static_cast<VoxelWorldNode*>(n);
+            for (const VoxelRegion& reg : vw->regions()) {
+                constexpr uint32_t casts = kVoxelRegionEnabled | kVoxelRegionCastShadow;
+                if ((reg.flags & casts) != casts || reg.rootNode == bromesh::kDagNullNode) continue;
+                const auto wb = reg.contentWorldBounds();
+                if (!wb) continue;
+                voxelCasterStates_.still(reg.id ^ (vw->id() * 0x9E3779B1u), reg.generation, *wb, pages);
+                casterBounds = bromath::amerge(casterBounds, *wb);
+                depthBounds = bromath::amerge(depthBounds, *wb);
+            }
         }
         for (auto* c : n->children()) self(self, c);
     };
     walk(walk, graph_.root_.get());
     shadowCasterStates_.end(pages);
+    voxelCasterStates_.end(pages);
 }
 
 void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
@@ -131,6 +147,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         // Nothing casts: the pages go with their lights (endLights), and the
         // casters are met anew when a light casts again.
         shadowCasterStates_.clear();
+        voxelCasterStates_.clear();
     }
 
     // The lights: the first shadowed directional light is the sun (its

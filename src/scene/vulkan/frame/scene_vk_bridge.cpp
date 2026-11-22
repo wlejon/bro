@@ -49,8 +49,13 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // their first reader (the opaque meshes; the sky itself on a frame the
     // world service remade the atmosphere's tables). GPU-counted draws get
     // their commands before any pass draws them.
+    auto voxelDag = std::make_unique<PassVoxelDag>();
+    PassVoxelDag& voxelDagPass = *voxelDag;
     graph_.add(std::make_unique<PassDrawCounts>());
     graph_.add(std::make_unique<PassShadow>());
+    // The voxel worlds cast into the same pages (their pools synced here
+    // first, for the colour pass later the same frame).
+    graph_.add(std::make_unique<PassVoxelShadow>(voxelDagPass));
     graph_.add(std::make_unique<PassShadowCopy>());
     graph_.add(std::make_unique<PassFrameUniforms>());
     graph_.add(std::make_unique<PassWorldService>());
@@ -59,7 +64,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassEnvironment>());
     graph_.add(std::make_unique<PassOpaque>());
     graph_.add(std::make_unique<PassVoxelDagPreDepth>());
-    graph_.add(std::make_unique<PassVoxelDag>());
+    graph_.add(std::move(voxelDag));
     // The pages the opaque surfaces' pixels need, for the next plans.
     graph_.add(std::make_unique<PassShadowMark>());
     graph_.add(std::make_unique<PassDepthSnapshot>());

@@ -68,6 +68,9 @@ struct VoxelRegion {
     // Rays are clipped to it, so a region mostly empty sky costs what its content does.
     float contentMin[3] = {1.0f, 1.0f, 1.0f};
     float contentMax[3] = {0.0f, 0.0f, 0.0f};
+    // The node's regionsGeneration() when this region last changed (the
+    // shadow pages redraw where it casts).
+    uint64_t generation = 0;
 
     float extent() const noexcept {
         return voxelSize * static_cast<float>(4u << maxDepth);
@@ -80,6 +83,8 @@ struct VoxelRegion {
 
     void originWorld(double out[3]) const noexcept;
     bromath::AABB3 worldBounds() const noexcept;
+    /// What its placements cover, in world space (none: nothing placed).
+    std::optional<bromath::AABB3> contentWorldBounds() const noexcept;
     GpuVoxelRegion packGpu(const double eye[3]) const noexcept;
 };
 

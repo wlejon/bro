@@ -5,6 +5,10 @@
 //                         draw so raster foreground geometry occludes voxels.
 //   PassVoxelDag          raymarches visible VoxelWorldNode regions into HDR,
 //                         optional SSAO indirect buffer, and reversed-Z depth.
+//   PassVoxelShadow       the casting regions into the shadow pages the frame
+//                         redraws (after PassShadow's casters, before the
+//                         copy into the pool): each region's box drawn in a
+//                         view, its texels' rays traced from the light.
 
 #include "scene/vulkan/frame/scene_pass.h"
 #include "scene/vulkan/frame/scene_vk_allocator.h"
@@ -42,6 +46,8 @@ public:
     void cleanup(SceneGpu& gpu) override;
 
 private:
+    friend class PassVoxelShadow;
+
     struct alignas(16) ParamsUbo {
         uint32_t counts[4] = {};  // regionCount, animTick, maxSteps, shadowSteps
         float scales[4] = {};     // lodScale, pixelCone, 0, 0
@@ -69,6 +75,23 @@ private:
     SceneVkBuffer dummyBuf_;
     PipelineVariants pipelines_;
     std::unordered_map<uint32_t, GpuPool> nodePools_;
+};
+
+class PassVoxelShadow final : public ScenePass {
+public:
+    explicit PassVoxelShadow(PassVoxelDag& dag) : dag_(dag) {}
+    const char* name() const override { return "shadow:voxels"; }
+    bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
+
+private:
+    PassVoxelDag& dag_;
+    VkShaderModule vs_ = VK_NULL_HANDLE;
+    VkShaderModule fs_ = VK_NULL_HANDLE;
+    VkPipeline pipeline_ = VK_NULL_HANDLE;
 };
 
 }  // namespace bro::scene::vk

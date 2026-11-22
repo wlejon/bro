@@ -435,6 +435,62 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     clips: BClip,
     frames: BF
 ) -> TraceHit {
+    return trace_region_core(
+        ro, rd, t_max_world, pixel_cone, lod_scale, 0.0, true, max_steps, anim_tick, ri, dither_u, 0u,
+        regions, nodes, children, bricks, attrs, clips, frames
+    );
+}
+
+// A region's content along a ray from the light, as a shadow map sees it:
+// the camera's distance bands do not apply (what is drawn far off still
+// shadows what is near), and a cell `lod_world` metres or smaller (the
+// map's texel) ends the ray. `texel_seed` (the texel's own number) makes
+// which partly opaque voxels stop the ray differ texel to texel, so a voxel
+// of opacity a shadows a of its texels and the map's filter softens it.
+pub fn trace_region_caster<BReg, BN, BC, BB, BA, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    t_max_world: f32,
+    lod_world: f32,
+    max_steps: u32,
+    anim_tick: u32,
+    ri: u32,
+    texel_seed: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    attrs: BA,
+    clips: BClip,
+    frames: BF
+) -> TraceHit {
+    return trace_region_core(
+        ro, rd, t_max_world, 0.0, 1.0, lod_world, false, max_steps, anim_tick, ri, 0.5, texel_seed,
+        regions, nodes, children, bricks, attrs, clips, frames
+    );
+}
+
+fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    t_max_world: f32,
+    pixel_cone: f32,
+    lod_scale: f32,
+    lod_world: f32,
+    banded: bool,
+    max_steps: u32,
+    anim_tick: u32,
+    ri: u32,
+    dither_u: f32,
+    hash_seed: u32,
+    regions: BReg,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    attrs: BA,
+    clips: BClip,
+    frames: BF
+) -> TraceHit {
     let base = (ri * REGION_STRIDE) as i32;
     let r0 = regions[base];
     let r4 = regions[base + 4];
@@ -475,12 +531,12 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     let tsmall = min(t0, t1);
     let tbig = max(t0, t1);
     var t_enter: f32 = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
-    if (min_dist > 0.0) {
+    if (banded && min_dist > 0.0) {
         let eff_min = mix(min_dist, min_fade_end, u_d);
         t_enter = max(t_enter, eff_min * inv_ext);
     }
     var t_cap: f32 = t_max_world * inv_ext;
-    if (max_dist > 0.0) {
+    if (banded && max_dist > 0.0) {
         let eff_max = (fade_start > 0.0 && fade_start < max_dist)
             ? mix(fade_start, max_dist, u_d)
             : max_dist;
@@ -492,6 +548,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     }
 
     let cone_k = max(pixel_cone * lod_scale, 0.0);
+    let lod_n = max(lod_world, 0.0) * inv_ext;
     var t: f32 = t_enter + max(1e-6, t_enter * 2e-5);
     var accum_rgb: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
     var accum_n: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
@@ -564,7 +621,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
             }
 
             // Continuous pixel-cone LOD termination when octant projects smaller than cone threshold.
-            if (cone_k > 0.0 && sub_size <= t * cone_k) {
+            if ((cone_k > 0.0 || lod_n > 0.0) && sub_size <= t * cone_k + lod_n) {
                 var pco: u32 = 0u;
                 var pnm: u32 = 0u;
                 var is_emissive: bool = false;
@@ -653,7 +710,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
                             let gx = ((ix >> sh) << 2u) + vx;
                             let gy = ((iy >> sh) << 2u) + vy;
                             let gz = ((iz >> sh) << 2u) + vz;
-                            solid_here = voxel_hash01(gx, gy, gz, ri) < op;
+                            solid_here = voxel_hash01(gx, gy, gz, ri ^ hash_seed) < op;
                         }
                     }
                     if (solid_here) {
