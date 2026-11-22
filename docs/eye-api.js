@@ -351,3 +351,23 @@ bro.eye.sweep = function(scene, opts) {};
  * @returns {{ok: boolean, steps: number, trackCount: number, width: number, height: number, tracks: {name: string, startPos: number[], endPos: number[], minY: number, maxY: number, pathLength: number, maxStepJump: number, maxVelJump: number, maxRotSnapDeg: number, teleportCount: number, snapCount: number, closedLoop: boolean, touchesWater: boolean, nearestStartStatic: string, nearestStartDist: number}[], path?: string}}
  */
 bro.eye.trace = function(scene, opts) {};
+
+/**
+ * Zero-image peripheral anomaly scanner over a live SceneGraph using GPU object-ID attribution.
+ * Reports ranked intra-mesh bright outliers, texture-vs-albedo tint mismatches, flat/plastic surfaces,
+ * axis-aligned grid artifacts, shadow-casting gaps, and HDR bloom hotspot clusters.
+ * Writes an auto-cropped sheet to `path` only when anomalies exist (or `alwaysRender: true`).
+ * @param {Object} scene
+ * @param {{minPixels?: number, alwaysRender?: boolean, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
+ * @returns {{ok: boolean, width: number, height: number, visibleMeshes: number, anomalyCount: number, bloomHotspotCount: number, anomalies: Object[], meshes: Object[], path?: string}}
+ */
+bro.eye.diagnose = function(scene, opts) {};
+
+/**
+ * Pure-geometry surface-hugging audit: measures signed closest distance from `subject` mesh vertices
+ * to `surface` mesh BVHs in world space (`p95Gap`, `airGapFrac`, `penetratingFrac`, `worstPoint`).
+ * @param {Object} scene
+ * @param {{pairs: {subject: string, surface: string|string[], maxGap?: number, minGap?: number, maxSamples?: number}[], sheetWidth?: number, sheetHeight?: number, path?: string}} opts
+ * @returns {{ok: boolean, width: number, height: number, pairs: {subject: string, surfaceCount: number, sampleCount: number, minGap: number, p50Gap: number, p95Gap: number, maxGap: number, airGapFrac: number, penetratingFrac: number, worstPoint: number[], ok: boolean}[], path?: string}}
+ */
+bro.eye.conformance = function(scene, opts) {};

@@ -325,11 +325,15 @@ pub fn cost_heatmap(t_in: f32) -> vec3<f32> {
 }
 
 pub fn debug_pixel(debug_col: vec4<f32>, n: vec3<f32>, view: vec3<f32>,
-                     base_color: vec3<f32>, roughness: f32, metallic: f32) -> vec3<f32> {
+                     base_color: vec3<f32>, roughness: f32, metallic: f32,
+                     id_rgb: vec3<f32>) -> vec3<f32> {
+    let dv = scene::debug_view();
+    if (dv == 6) {
+        return id_rgb;
+    }
     if (debug_col.w > 0.0) {
         return debug_col.xyz;
     }
-    let dv = scene::debug_view();
     if (dv == 1) {
         let grazing = 1.0 - abs(dot(n, view));
         return cost_heatmap(0.25 + 0.45 * grazing);
@@ -403,12 +407,11 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     if ((fl & UNLIT) != 0u) {
         var color: vec3<f32> = s_in.base_color * air.transmittance + air.inscatter;
         if (scene::debug_view() != 0) {
-            color = debug_pixel(s_in.debug, geom_n, normalize(-world_pos), s_in.base_color, s_in.roughness, s_in.metallic);
-        }
-        if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
+            color = debug_pixel(s_in.debug, geom_n, normalize(-world_pos), s_in.base_color, s_in.roughness, s_in.metallic, push.emissive.xyz);
+        } else if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
             color *= lighting::cell_shade(world_pos, geom_n);
         }
-        let out_a = (fl & REFLECTANCE) != 0u ? 0.0 : mix(s_in.alpha, 0.0, air.fade);
+        let out_a = scene::debug_view() == 6 ? 1.0 : ((fl & REFLECTANCE) != 0u ? 0.0 : mix(s_in.alpha, 0.0, air.fade));
         return FragOut {
             color: vec4<f32>(min(color, vec3<f32>(scene::HDR_MAX)), out_a),
             indirect: vec4<f32>(0.0),
@@ -467,9 +470,11 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     }
 
     if (scene::debug_view() != 0) {
-        color = debug_pixel(s_in.debug, ls.normal, ls.view, ls.base_color, ls.roughness, ls.metallic);
+        color = debug_pixel(s_in.debug, ls.normal, ls.view, ls.base_color, ls.roughness, ls.metallic, push.emissive.xyz);
         indirect = vec3<f32>(0.0);
-        if ((fl & REFLECTANCE) != 0u) {
+        if (scene::debug_view() == 6) {
+            alpha = 1.0;
+        } else if ((fl & REFLECTANCE) != 0u) {
             alpha = 0.0;
         }
     }

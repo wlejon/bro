@@ -14,5 +14,7 @@ bronze::Value jsEyeCloseup(bronze::Value, std::span<const bronze::Value> a);
 bronze::Value jsEyeLookdev(bronze::Value, std::span<const bronze::Value> a);
 bronze::Value jsEyeSweep(bronze::Value, std::span<const bronze::Value> a);
 bronze::Value jsEyeTrace(bronze::Value, std::span<const bronze::Value> a);
+bronze::Value jsEyeDiagnose(bronze::Value, std::span<const bronze::Value> a);
+bronze::Value jsEyeConformance(bronze::Value, std::span<const bronze::Value> a);
 
 }  // namespace bro::bronze_host::eye_detail

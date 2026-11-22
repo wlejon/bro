@@ -97,9 +97,52 @@ if (bro.scene && bro.scene.createGraph) {
   });
   assert(trSnap.tracks[0].snapCount >= 1 && trSnap.tracks[0].maxVelJump > 0.1, "trace caught C1 snap");
 
+  // Zero-image per-mesh GPU ID anomaly scanner (diagnose)
+  const badCard = bro.mesh.leafCard("oval", { width: 0.8, length: 0.8, fullUV: true });
+  const texW = 16, texH = 16;
+  const cyanTex = new Uint8Array(texW * texH * 4);
+  for (let i = 0; i < texW * texH; ++i) {
+    cyanTex[i * 4 + 0] = 200; cyanTex[i * 4 + 1] = 235; cyanTex[i * 4 + 2] = 250; cyanTex[i * 4 + 3] = 255;
+  }
+  const nrmTex = new Uint8Array(texW * texH * 4);
+  for (let i = 0; i < texW * texH; ++i) {
+    nrmTex[i * 4 + 0] = 128 + ((i % 2) * 24 - 12); nrmTex[i * 4 + 1] = 128; nrmTex[i * 4 + 2] = 255; nrmTex[i * 4 + 3] = 255;
+  }
+  // leafCard sets vertex color r=windBend, g=0, b=0 -> red tint_mismatch against pale cyan texture!
+  scene.createMesh({
+    name: "RedTintedWing",
+    mesh: badCard,
+    texture: { width: texW, height: texH, data: cyanTex },
+    normalTexture: { width: texW, height: texH, data: nrmTex },
+    color: [1, 1, 1],
+    twoSided: true,
+  }).setPosition(0.0, 0.55, 2.2);
+
+  const dg = bro.eye.diagnose(scene, { minPixels: 16 });
+  assert(dg.ok === true && dg.visibleMeshes >= 3, "diagnose decoded >= 3 distinct visible GPU mesh IDs: " + dg.visibleMeshes);
+  assert(dg.anomalies.some((a) => a.kind === "flat_plastic" && a.nodeName === "Stone Lantern"), "diagnose caught untextured Stone Lantern");
+  assert(dg.anomalies.some((a) => a.kind === "tint_mismatch" && a.nodeName === "RedTintedWing"), "diagnose caught vertexColor tint mismatch");
+
+  // Surface-hugging BVH conformance check
+  const slab = scene.createMesh({ name: "TestCliff", mesh: bro.mesh.box(2.0, 1.0, 0.5) }).setPosition(-3.0, 0.5, 0.0);
+  const hugSheet = bro.mesh.plane(1.0, 0.8, 4, 4);
+  scene.createMesh({ name: "HugStream", mesh: hugSheet }).setPosition(-3.0, 0.5, 0.258);
+  scene.createMesh({ name: "FloatStream", mesh: hugSheet }).setPosition(-3.0, 0.5, 0.65);
+
+  const cf = bro.eye.conformance(scene, {
+    pairs: [
+      { subject: "HugStream", surface: "TestCliff", maxGap: 0.03 },
+      { subject: "FloatStream", surface: "TestCliff", maxGap: 0.05 },
+    ],
+  });
+  assert(cf.pairs.length === 2, "conformance evaluated 2 pairs");
+  assert(cf.pairs[0].ok === true && cf.pairs[0].p95Gap < 0.03, "HugStream passes conformance: p95=" + cf.pairs[0].p95Gap);
+  assert(cf.pairs[1].ok === false && cf.pairs[1].maxGap > 0.25, "FloatStream fails conformance: max=" + cf.pairs[1].maxGap);
+  assert(slab !== undefined, "slab live");
+
   const camAfter = scene.camera.position;
   assert(Math.hypot(camBefore[0] - camAfter[0], camBefore[1] - camAfter[1], camBefore[2] - camAfter[2]) < 1e-4,
-         "camera restored after closeup/lookdev/sweep/trace");
+         "camera restored after closeup/lookdev/sweep/trace/diagnose/conformance");
 
-  print("OK test_eye_closeup: panels=" + cuNamed.panelCount + ", inventory=" + cuAuto.targets.length + ", rough=" + ld.roughnessMean.toFixed(2) + ", trackLen=" + trSmooth.tracks[0].pathLength.toFixed(2));
+  print("OK test_eye_closeup: panels=" + cuNamed.panelCount + ", inventory=" + cuAuto.targets.length + ", rough=" + ld.roughnessMean.toFixed(2) + ", trackLen=" + trSmooth.tracks[0].pathLength.toFixed(2) + ", diagMeshes=" + dg.visibleMeshes);
 }

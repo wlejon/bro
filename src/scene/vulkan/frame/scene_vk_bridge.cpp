@@ -156,9 +156,9 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.ssr = renderer.ssrEnabled() && renderer.ssrIntensity() > 0.0f && renderer.debugView() == 0;
-    frame.dof = renderer.depthOfFieldEnabled();
-    frame.tilt = renderer.tiltShiftEnabled();
-    frame.fxaa = renderer.fxaaEnabled();
+    frame.dof = renderer.depthOfFieldEnabled() && renderer.debugView() == 0;
+    frame.tilt = renderer.tiltShiftEnabled() && renderer.debugView() == 0;
+    frame.fxaa = renderer.fxaaEnabled() && renderer.debugView() == 0;
     clock.step("lighting");
     buildDrawLists(frame);
     timer_.mark(cmd, "setup");

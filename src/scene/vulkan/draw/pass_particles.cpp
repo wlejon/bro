@@ -96,6 +96,7 @@ VkPipeline PassParticles::pipeline(const TargetFormat& target, bool additive) {
 }
 
 bool PassParticles::active(const SceneFrame& frame) const {
+    if (frame.renderer.debugView() == 6) return false;
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() == SceneNode::Type::Particles3D && static_cast<const Particles3DNode*>(node)->liveCount() > 0)
             return true;

@@ -198,10 +198,11 @@ void PassPostFx::record(SceneFrame& frame) {
     exposure_.record(frame, hdr);
 
     TonemapPush push{};
-    push.gamma = r.gamma();
+    const bool rawId = r.debugView() == 6;
+    push.gamma = rawId ? 1.0f : r.gamma();
     push.bloomIntensity = bloomOn ? r.bloomIntensity() : 0.0f;
-    push.tonemapMode = static_cast<int32_t>(debug ? SceneRenderer::ToneMap::Linear : r.toneMap());
-    push.dither = r.ditherEnabled() ? 1.0f : 0.0f;
+    push.tonemapMode = rawId ? 3 : static_cast<int32_t>(debug ? SceneRenderer::ToneMap::Linear : r.toneMap());
+    push.dither = (!rawId && r.ditherEnabled()) ? 1.0f : 0.0f;
     if (lut) {
         const auto size = static_cast<float>(lutSize_);
         push.lutAmount = r.colorLUTAmount();

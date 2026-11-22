@@ -22,6 +22,8 @@ if(BRO_WITH_3D)
         eye_closeup.cpp
         eye_lookdev.cpp
         eye_trace.cpp
+        eye_diagnose.cpp
+        eye_conformance.cpp
         eye_scene_form.cpp
     )
 endif()

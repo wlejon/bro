@@ -166,6 +166,10 @@ fn dither_tpdf(p: vec2<f32>) -> vec3<f32> {
     u: TonemapPush
 ) {
     let src = tex_hdr.sample(in_uv);
+    if (u.tonemap_mode == 3) {
+        set_frag_output(0, vec4<f32>(clamp(src.xyz, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
+        return;
+    }
     var c: vec3<f32> = src.xyz;
     if (u.bloom_intensity > 0.0) {
         c += tex_bloom.sample(in_uv).xyz * u.bloom_intensity;

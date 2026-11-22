@@ -32,21 +32,27 @@ void PassOpaque::record(SceneFrame& frame) {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
         "opaque:vegetation", "opaque:instancedVegetation"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
+    const bool idView = frame.renderer.debugView() == 6;
     SceneMeshDrawer& meshes = frame.gpu.meshes;
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
+        MeshDraw d = draw.culledIn(0) ? draw.inView(0) : draw;
+        if (idView) {
+            const uint32_t nid = d.nodeId;
+            d.push.emissive[0] = static_cast<float>(nid & 0xFFu) / 255.0f;
+            d.push.emissive[1] = static_cast<float>((nid >> 8) & 0xFFu) / 255.0f;
+            d.push.emissive[2] = static_cast<float>((nid >> 16) & 0xFFu) / 255.0f;
+            d.push.emissive[3] = 1.0f;
+        }
         // (A culled draw draws the instances the camera holds.)
-        if (draw.culledIn(0))
-            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw.inView(0), &cull);
-        else
-            meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw, &cull);
+        meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, d, &cull);
         if (frame.timer)
             frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
 }
 
 bool PassTranslucent::active(const SceneFrame& frame) const {
-    return !frame.lists.translucent.empty();
+    return frame.renderer.debugView() != 6 && !frame.lists.translucent.empty();
 }
 
 void PassTranslucent::declare(const SceneFrame& frame, PassIO& io) const {
