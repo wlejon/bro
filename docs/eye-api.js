@@ -34,7 +34,13 @@
  *                                             ('audit', 'diff', 'exposure', 'tiling',
  *                                              'depth', 'normals', 'sheet', 'saliency',
  *                                              'notan', 'rails', 'zebra', 'curvature',
- *                                              'turntable', 'raking') -> ImageData/PNG
+ *                                              'turntable', 'raking', 'motion') -> ImageData/PNG
+ *   bro.eye.motion(frames, opts?)             temporal cadence & stability critic: step deltaE,
+ *                                             smoothness, stutterCount, popCount, flickerScore,
+ *                                             active motionBounds & optional annotated trail PNG
+ *   bro.eye.probe(scene, opts?)               3D spatial calipers: sample screen pixels ->
+ *                                             BVH hit node, 3D point/normal, Oklab color,
+ *                                             and pairwise 3D clearances (+ caliper PNG)
  *   bro.eye.fit(renderFn, opts)               deterministic CMA-ES parameter search
  *                                             against a reference, target metrics,
  *                                             audit counts, or custom scorer
@@ -268,3 +274,22 @@ bro.eye.visualize = function(frameOrFrames, opts) {};
  * @returns {{ok: boolean, distance: number, evaluations: number, params: Object, frame: EyeMeasurement, comparison?: EyeComparison, history: number[]}}
  */
 bro.eye.fit = function(renderFn, opts) {};
+
+/**
+ * Analyze temporal motion continuity across an ordered sequence of frames.
+ * Computes per-step Oklab deltaE, staticPairCount, smoothness (0..1),
+ * stutterCount, popCount, flickerScore, motionBounds, and optional filmstrip + motion trail PNG.
+ * @param {EyeFrameSource[]} frames
+ * @param {{threshold?: number, labels?: string[], maxPanelDim?: number, layout?: 'side'|'grid', buildVisual?: boolean, path?: string}} [opts]
+ * @returns {{width: number, height: number, frameCount: number, staticPairCount: number, stutterCount: number, popCount: number, meanDeltaE: number, deltaEStd: number, smoothness: number, lumaMin: number, lumaMax: number, lumaRange: number, flickerScore: number, motionCoverage: number, motionBounds: Object, steps: Object[], path?: string}}
+ */
+bro.eye.motion = function(frames, opts) {};
+
+/**
+ * Spatial 3D calipers over a live SceneGraph: cast rays at specified screen points (or a uniform grid)
+ * and return BVH hit nodes, exact 3D points/normals, Oklab pixel colors, pairwise distances, and optional annotated PNG.
+ * @param {Object} scene
+ * @param {{points?: {x: number, y: number, normalized?: boolean, label?: string}[], gridCols?: number, gridRows?: number, render?: boolean, pairs?: [string, string][], path?: string, maxPanelDim?: number}} [opts]
+ * @returns {{width: number, height: number, samples: Object[], distances: Object[], path?: string}}
+ */
+bro.eye.probe = function(scene, opts) {};

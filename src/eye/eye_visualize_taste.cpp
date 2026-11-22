@@ -2,6 +2,7 @@
 #include "eye/eye_color.h"
 #include "eye/eye_compose.h"
 #include "eye/eye_draw_internal.h"
+#include "eye/eye_motion.h"
 
 #include <algorithm>
 #include <cmath>
@@ -76,6 +77,22 @@ bool visualizeTasteMode(const std::string& mode,
                         EyeVisualResult& outResult) {
     if (images.empty() || !images[0].valid()) return false;
     const int fscale = std::clamp(opts.fontScale, 1, 4);
+
+    if (mode == "motion" && images.size() >= 2) {
+        EyeMotionOptions mopts;
+        mopts.labels = opts.labels;
+        mopts.maxPanelDim = opts.maxPanelDim;
+        mopts.layout = opts.layout;
+        mopts.buildVisual = true;
+        const EyeMotionResult mr = analyzeMotion(images, mopts);
+        if (!mr.visual.empty()) {
+            outResult.width = mr.visual.width;
+            outResult.height = mr.visual.height;
+            outResult.rgba = mr.visual.rgba;
+            return true;
+        }
+        return false;
+    }
 
     if (mode == "saliency") {
         EyeImage base = draw::fitPanel(images[0], opts.maxPanelDim);

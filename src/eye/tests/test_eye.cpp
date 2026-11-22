@@ -2,6 +2,7 @@
 #include "eye/eye_compose.h"
 #include "eye/eye_fit.h"
 #include "eye/eye_measure.h"
+#include "eye/eye_motion.h"
 #include "eye/eye_visualize.h"
 #if BRO_EYE_TEST_WITH_FORM
 #include "eye/eye_form.h"
@@ -245,6 +246,56 @@ int main() {
               "sphere has 8 turntable silhouettes with clean contour");
     }
 #endif
+
+    // 10. Temporal motion continuity
+    {
+        auto drawBox = [](int w, int h, int bx, int by, int bw, int bh,
+                          uint8_t bg, uint8_t fg) {
+            bro::eye::EyeImage img = makeSolid(w, h, bg, bg, bg);
+            for (int y = std::max(0, by); y < std::min(h, by + bh); ++y) {
+                for (int x = std::max(0, bx); x < std::min(w, bx + bw); ++x) {
+                    const size_t i = (static_cast<size_t>(y) * w + x) * 4;
+                    img.rgba[i + 0] = fg;
+                    img.rgba[i + 1] = static_cast<uint8_t>(fg / 2);
+                    img.rgba[i + 2] = 40;
+                }
+            }
+            return img;
+        };
+
+        // Static sequence -> all static pairs, smoothness == 0
+        auto s0 = drawBox(96, 64, 16, 16, 20, 20, 30, 220);
+        std::vector<bro::eye::EyeImageView> staticViews = {s0.view(), s0.view(), s0.view()};
+        auto staticRes = bro::eye::analyzeMotion(staticViews);
+        check(staticRes.staticPairCount == 2, "identical frames produce 2 static pairs");
+        check(staticRes.smoothness == 0.0, "static sequence has smoothness 0");
+
+        // Smooth linear horizontal translation across 5 frames
+        std::vector<bro::eye::EyeImage> moveImgs;
+        std::vector<bro::eye::EyeImageView> moveViews;
+        for (int i = 0; i < 5; ++i) {
+            moveImgs.push_back(drawBox(128, 64, 12 + i * 16, 20, 20, 20, 28, 220));
+        }
+        for (const auto& im : moveImgs) moveViews.push_back(im.view());
+        bro::eye::EyeMotionOptions mopts;
+        mopts.labels = {"t0", "t1", "t2", "t3", "t4"};
+        mopts.buildVisual = true;
+        auto moveRes = bro::eye::analyzeMotion(moveViews, mopts);
+        check(moveRes.frameCount == 5 && moveRes.steps.size() == 4,
+              "5 frames produce 4 motion steps");
+        check(moveRes.staticPairCount == 0, "linear slide has no static pairs");
+        check(moveRes.popCount == 0, "linear slide has no pops");
+        check(moveRes.smoothness > 0.7, "linear slide has high motion smoothness");
+        check(moveRes.motionCoverage > 0.05, "linear slide reports spatial coverage");
+        check(moveRes.visual.width > 0 && moveRes.visual.height > 0, "motion visual builds image");
+
+        // Alternating dark/bright sequence triggers flickerScore
+        auto dark = makeSolid(64, 64, 24, 24, 24);
+        auto bright = makeSolid(64, 64, 230, 230, 230);
+        std::vector<bro::eye::EyeImageView> flk = {dark.view(), bright.view(), dark.view(), bright.view()};
+        auto flkRes = bro::eye::analyzeMotion(flk);
+        check(flkRes.flickerScore > 0.1, "alternating luminance sequence triggers flickerScore");
+    }
 
     if (gFailures == 0) {
         std::printf("PASS: bro_eye_test (all assertions passed)\n");

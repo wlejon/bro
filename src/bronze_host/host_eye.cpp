@@ -1,6 +1,7 @@
 #include "bronze_host/host_eye.h"
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_eye_creative.h"
 #include "bronze_host/host_eye_taste.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_runtime.h"
@@ -530,11 +531,13 @@ Value makeBroEyeValue(bool hasEngine) {
     eyeObj.def("compare", 3, jsEyeCompare);
     eyeObj.def("compose", 2, eye_detail::jsEyeCompose);
     eyeObj.def("form", 2, eye_detail::jsEyeForm);
+    eyeObj.def("motion", 2, eye_detail::jsEyeMotion);
     eyeObj.def("visualize", 2, jsEyeVisualize);
     eyeObj.def("fit", 2, jsEyeFit);
     if (hasEngine) {
         eyeObj.def("audit", 1, jsEyeAudit);
         eyeObj.def("scene", 2, jsEyeScene);
+        eyeObj.def("probe", 2, eye_detail::jsEyeProbe);
     }
     return eyeObj.get();
 }

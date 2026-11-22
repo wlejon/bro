@@ -2,6 +2,7 @@ add_library(bro_eye STATIC
     eye_measure.cpp
     eye_compare.cpp
     eye_compose.cpp
+    eye_motion.cpp
     eye_layout.cpp
     eye_audit.cpp
     eye_visualize.cpp
@@ -14,6 +15,7 @@ if(BRO_WITH_3D)
         eye_scene.cpp
         eye_silhouette.cpp
         eye_form.cpp
+        eye_probe.cpp
         eye_scene_form.cpp
     )
 endif()
@@ -33,6 +35,7 @@ if(BRO_BUILD_TESTS)
         eye_measure.cpp
         eye_compare.cpp
         eye_compose.cpp
+        eye_motion.cpp
         eye_visualize.cpp
         eye_visualize_taste.cpp
         eye_fit.cpp
