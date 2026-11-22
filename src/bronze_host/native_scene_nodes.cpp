@@ -490,6 +490,22 @@ void bro_scene_SceneNode_shadowRange_set(void* self, int32_t v) {
     else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setShadowRange(r);
 }
 
+bool bro_scene_SceneNode_alphaToCoverage_get(void* self) {
+    auto* n = nodeOf(self);
+    if (!n) return false;
+    if (n->type() == scene::SceneNode::Type::Mesh) return static_cast<scene::MeshNode*>(n)->alphaToCoverage();
+    if (n->type() == scene::SceneNode::Type::InstancedMesh)
+        return static_cast<scene::InstancedMeshNode*>(n)->alphaToCoverage();
+    return false;
+}
+
+void bro_scene_SceneNode_alphaToCoverage_set(void* self, bool v) {
+    auto* n = nodeOf(self);
+    if (!n) return;
+    if (n->type() == scene::SceneNode::Type::Mesh) static_cast<scene::MeshNode*>(n)->setAlphaToCoverage(v);
+    else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setAlphaToCoverage(v);
+}
+
 bool bro_scene_SceneNode_receivesShadow_get(void* self) {
     auto* n = nodeOf(self);
     if (!n) return false;

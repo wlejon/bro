@@ -148,6 +148,11 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setTarget(const TargetFormat& ta
     return *this;
 }
 
+SceneVkPipelineBuilder& SceneVkPipelineBuilder::setAlphaToCoverage(bool enable) {
+    multisampling_.alphaToCoverageEnable = enable ? VK_TRUE : VK_FALSE;
+    return *this;
+}
+
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::disableBlending(uint32_t colorAttachmentCount) {
     colorBlendAttachments_.clear();
     for (uint32_t i = 0; i < colorAttachmentCount; ++i) {

@@ -72,6 +72,7 @@ constexpr uint32_t kOcclusionMap = 128;
 constexpr uint32_t kReceivesShadow = 256;
 constexpr uint32_t kTwoSided = 512;
 constexpr uint32_t kHasTangents = 4096;
+constexpr uint32_t kCoverage = 8192;    // alpha is coverage (alpha to coverage), not cut
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
@@ -192,7 +193,8 @@ struct MeshDraw {
     ShadowRange shadowRange = ShadowRange::All;   // which part of its sun shadow it casts
     uint32_t shadowIndexCount = 0;   // a caster's indices, a prefix of indexCount's (0: all of them)
     bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
-    bool lines = false;          // indices are line pairs; drawn unlit
+    bool coverage = false;       // alpha to coverage (MeshNode::setAlphaToCoverage)
+    bool lines = false;         // indices are line pairs; drawn unlit
     float lineWidth = 1.0f;
     bool mirrored = false;       // drawn through a y-flipped projection (probe faces): clockwise is front
     bool noDepthTest = false;    // ignores depth entirely (gizmo handles)

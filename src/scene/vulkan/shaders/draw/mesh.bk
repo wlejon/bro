@@ -40,6 +40,9 @@ pub const OCCLUSION_MAP: u32      = 128u;
 pub const RECEIVES_SHADOW: u32    = 256u;
 pub const TWO_SIDED: u32          = 512u;
 pub const HAS_TANGENTS: u32       = 4096u;
+// Alpha to coverage: the alpha written is the share of the samples covered,
+// so nothing is cut at the alpha cutoff (and alpha is not the SSR mask).
+pub const COVERAGE: u32           = 8192u;
 pub const VERTEX_COLOR_SHIFT: u32 = 10u;
 
 @binding(2, 0) pub var albedo_map: sampler2d<vec4<f32>>;
@@ -311,7 +314,7 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
             return true;
         }
     }
-    if (push.pbr_params.z > 0.0) {
+    if (push.pbr_params.z > 0.0 && (flags(push) & COVERAGE) == 0u) {
         let ba = base_albedo(push, uv, in_color, inst_color);
         if (ba.w < push.pbr_params.z) {
             return true;
@@ -325,7 +328,7 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
 // alpha does. One that leaves `alpha` alone keeps the material's, which
 // should_cut has already tested.
 pub fn hook_cut(push: Push, s: Surface) -> bool {
-    return push.pbr_params.z > 0.0 && s.alpha < push.pbr_params.z;
+    return push.pbr_params.z > 0.0 && s.alpha < push.pbr_params.z && (flags(push) & COVERAGE) == 0u;
 }
 
 pub fn cost_heatmap(t_in: f32) -> vec3<f32> {
@@ -475,7 +478,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     var color: vec3<f32> = lighting::direct_light(ls) + indirect + s_in.emissive;
 
     var alpha: f32 = s_in.alpha;
-    if ((fl & REFLECTANCE) != 0u) {
+    if ((fl & REFLECTANCE) != 0u && (fl & COVERAGE) == 0u) {
         let f0 = mix(vec3<f32>(0.04), ls.base_color, ls.metallic);
         let c = 1.0 - clamp(dot(ls.normal, ls.view), 0.0, 1.0);
         let c2 = c * c;
@@ -504,7 +507,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
             } else {
                 alpha = 0.0;
             }
-        } else if ((fl & REFLECTANCE) != 0u) {
+        } else if ((fl & REFLECTANCE) != 0u && (fl & COVERAGE) == 0u) {
             alpha = 0.0;
         }
     }

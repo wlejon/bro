@@ -145,6 +145,10 @@ public:
     }
     float alphaCutoff() const { return alphaCutoff_; }
 
+    /// Alpha to coverage (MeshNode::setAlphaToCoverage).
+    void setAlphaToCoverage(bool on) { alphaToCoverage_ = on; }
+    bool alphaToCoverage() const { return alphaToCoverage_; }
+
     /// Disable back-face culling for this node. Required for double-sided
     /// foliage so the back face of a leaf card is also visible.
     void setDoubleSided(bool b) { doubleSided_ = b; }
@@ -578,6 +582,7 @@ private:
     bool castsShadow_ = true;
     bool shadowOnly_ = false;
     ShadowRange shadowRange_ = ShadowRange::All;
+    bool alphaToCoverage_ = false;
     bool receivesShadow_ = true;
 
     int atlasCols_ = 1;

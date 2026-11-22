@@ -199,14 +199,16 @@ constexpr uint32_t kNoDepth = 16;
 // that can discard is depth-tested after it shades, so every layer behind
 // the nearest is shaded too.
 constexpr uint32_t kCuts = 32;
-constexpr uint32_t kCount = 64;
+// Alpha to coverage (MeshDraw::coverage): the multisample state's.
+constexpr uint32_t kCoverage = 64;
+constexpr uint32_t kCount = 128;
 }
 
 uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
     return (draw.translucent ? raster::kTranslucent : 0u) |
            (draw.twoSided ? raster::kTwoSided : 0u) |
            (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
-           (draw.noDepthTest ? raster::kNoDepth : 0u) |
+           (draw.noDepthTest ? raster::kNoDepth : 0u) | (draw.coverage ? raster::kCoverage : 0u) |
            (draw.push.extra[0] != 0.0f || draw.push.pbrParams[2] > 0.0f ? raster::kCuts : 0u);
 }
 
@@ -238,6 +240,7 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
      .setTarget(target)
      .setDepthBias(true)
      .setDynamicStates(dynamic);
+    if (rasterBits & raster::kCoverage) b.setAlphaToCoverage(true);
     if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1);
         if (rasterBits & raster::kNoDepth) {
@@ -514,6 +517,7 @@ void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, Me
     out.push.pbrParams[0] = node.metallic();
     out.push.pbrParams[1] = node.roughness();
     out.push.pbrParams[2] = node.alphaCutoff();
+    if constexpr (requires { node.alphaToCoverage(); }) out.coverage = node.alphaToCoverage();
     // Positive: the near clip; negative: minus the distance it fades out from.
     out.push.extra[0] = node.nearClipDist() > 0.0f ? node.nearClipDist() : -node.fadeOutDist();
     out.translucent = color[3] < 1.0f;
@@ -663,6 +667,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (out.coverage) flags |= mesh_flags::kCoverage;
     if (data.hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
@@ -754,6 +759,7 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (out.coverage) flags |= mesh_flags::kCoverage;
     if (out.kind == MeshKind::Scatter && node.mesh().hasTangents()) flags |= mesh_flags::kHasTangents;
     if (node.effectiveUnlit()) flags |= mesh_flags::kUnlit;
     out.materialSet = materialSet(frame, *defaults_, materialImages(frame.gpu.resources, node), flags);
@@ -834,6 +840,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (out.coverage) flags |= mesh_flags::kCoverage;
     if (geometry.hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
@@ -850,6 +857,17 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
 
 void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, VkDescriptorSet cameraSet,
                              VkDescriptorSet lightingSet, const MeshDraw& draw, const ChunkCull* cull) {
+    // Alpha to coverage needs samples to cover and an opaque write: into a
+    // single-sampled target (a probe face) or blended (an overlay) the
+    // surface cuts at its alphaCutoff instead.
+    if (draw.coverage && (target.samples == VK_SAMPLE_COUNT_1_BIT || draw.translucent)) {
+        MeshDraw cut = draw;
+        cut.coverage = false;
+        cut.push.pbrParams[3] =
+            static_cast<float>(static_cast<uint32_t>(draw.push.pbrParams[3]) & ~mesh_flags::kCoverage);
+        record(cmd, target, cameraSet, lightingSet, cut, cull);
+        return;
+    }
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool custom = false;
     if (draw.custom && draw.customSet) {

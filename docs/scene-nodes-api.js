@@ -62,6 +62,7 @@
  * @property {boolean} [castsShadow]
  * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
  * @property {'all'|'near'|'far'} [shadowRange] - Which part of its sun shadow it casts (`shadowRange`).
+ * @property {boolean} [alphaToCoverage] - Alpha as the share of samples covered under MSAA (`alphaToCoverage`).
  * @property {boolean} [receivesShadow]
  * @property {number|Array<number>} [depthBias] - Units, or [factor, units].
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - RGBA8 base colour map;
@@ -125,6 +126,7 @@
  * @property {boolean} [castsShadow]
  * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
  * @property {'all'|'near'|'far'} [shadowRange] - Which part of its sun shadow it casts (`shadowRange`).
+ * @property {boolean} [alphaToCoverage] - Alpha as the share of samples covered under MSAA (`alphaToCoverage`).
  * @property {boolean} [receivesShadow]
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - also normalTexture, metallicRoughnessTexture, occlusionTexture, emissiveTexture
  * @property {number} [atlasCols] - atlas grid columns (the other defaults to 1)
@@ -394,6 +396,22 @@ class SceneNode {
    * @type {'all'|'near'|'far'}
    */
   shadowRange;
+  /**
+   * Alpha to coverage (a mesh or instanced mesh): under MSAA
+   * (`scene.setMSAA`) the surface's alpha, its texture's or a fragment
+   * hook's `out.alpha`, is the share of each pixel's samples it covers, in
+   * place of `alphaCutoff`'s all-or-nothing test, so what is partly there
+   * resolves as a blend with what is behind it, as a sub-pixel leaf does,
+   * and stays opaque where alpha is 1 (depth written, no sorting): an
+   * impostor's coverage, a far card's thinning crown. Single-sampled, or
+   * drawn blended, it cuts at `alphaCutoff` instead; its shadow always
+   * does. Its alpha is not the SSR mask.
+   *
+   * @example
+   *   const imps = scene.createInstancedMesh({ mesh, instances, alphaCutoff: 0.5, alphaToCoverage: true });
+   * @type {boolean}
+   */
+  alphaToCoverage;
   /** @type {Array<number>|string} */ emissiveColor;
   /** @type {boolean|string} */ billboard;
   /** @type {boolean} */ autoSync;

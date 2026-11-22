@@ -332,6 +332,14 @@ public:
     }
     float alphaCutoff() const { return alphaCutoff_; }
 
+    /// Alpha to coverage: under MSAA the surface's alpha (its texture's, or
+    /// a fragment hook's `alpha`) is the share of a pixel's samples it
+    /// covers, in place of the cutoff's all-or-nothing test, so what is
+    /// partly there resolves as a blend with what is behind it, as a
+    /// sub-pixel leaf does. Its shadow still cuts at alphaCutoff.
+    void setAlphaToCoverage(bool on) { alphaToCoverage_ = on; }
+    bool alphaToCoverage() const { return alphaToCoverage_; }
+
     /// Wind sway opt-in [0,1]. The mesh VS multiplies the per-vertex bend
     /// (sourced from vertex color R, 0..1) by this scalar before applying
     /// the global wind delta. Defaults to 0 (no sway) so terrain and other
@@ -660,6 +668,7 @@ private:
     bool castsShadow_ = true;
     bool shadowOnly_ = false;
     ShadowRange shadowRange_ = ShadowRange::All;
+    bool alphaToCoverage_ = false;
     bool receivesShadow_ = true;
     bool twoSided_ = false;
     bool volume_ = false;

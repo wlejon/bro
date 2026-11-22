@@ -383,6 +383,9 @@
     accessor(SceneNode.prototype, "shadowRange",
         function () { return ["all", "near", "far"][__bro_native.scene.SceneNode_shadowRange_get(this)]; },
         function (v) { __bro_native.scene.SceneNode_shadowRange_set(this, v === "near" ? 1 : v === "far" ? 2 : 0); });
+    accessor(SceneNode.prototype, "alphaToCoverage",
+        function () { return __bro_native.scene.SceneNode_alphaToCoverage_get(this); },
+        function (v) { __bro_native.scene.SceneNode_alphaToCoverage_set(this, !!v); });
     accessor(SceneNode.prototype, "receivesShadow",
         function () { return __bro_native.scene.SceneNode_receivesShadow_get(this); },
         function (v) { __bro_native.scene.SceneNode_receivesShadow_set(this, !!v); });

@@ -67,6 +67,10 @@ public:
     /// Attachment formats and sample count of the target the pipeline draws into.
     SceneVkPipelineBuilder& setTarget(const TargetFormat& target);
 
+    /// Alpha to coverage: the first colour output's alpha is the share of
+    /// the pixel's samples written.
+    SceneVkPipelineBuilder& setAlphaToCoverage(bool enable);
+
     /// Configure color blending to disabled (overwrite).
     SceneVkPipelineBuilder& disableBlending(uint32_t colorAttachmentCount = 1);
 

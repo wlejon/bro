@@ -118,6 +118,8 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value optsIn) {
     if (!ev::isUndefined(soVal)) node->setShadowOnly(ev::toBool(soVal));
     Value srVal = ev::getProperty(opts, "shadowRange");
     if (ev::isString(srVal)) node->setShadowRange(shadowRangeOf(ev::toUtf8(srVal)));
+    Value a2cVal = ev::getProperty(opts, "alphaToCoverage");
+    if (!ev::isUndefined(a2cVal)) node->setAlphaToCoverage(ev::toBool(a2cVal));
     Value rsVal = ev::getProperty(opts, "receivesShadow");
     if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
 
@@ -188,6 +190,7 @@ void applyInstancedOpts(scene::InstancedMeshNode* node, Value optsIn) {
     flag("castsShadow", [&](bool v) { node->setCastsShadow(v); });
     flag("shadowOnly", [&](bool v) { node->setShadowOnly(v); });
     if (Value sr = ev::getProperty(opts, "shadowRange"); ev::isString(sr)) node->setShadowRange(shadowRangeOf(ev::toUtf8(sr)));
+    flag("alphaToCoverage", [&](bool v) { node->setAlphaToCoverage(v); });
     flag("receivesShadow", [&](bool v) { node->setReceivesShadow(v); });
 
     auto applyTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
