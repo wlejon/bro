@@ -73,8 +73,15 @@ pub fn scale_of(model: mat4f) -> f32 {
 pub fn plant_of(model: mat4f, v0: vec4<f32>, v3: vec4<f32>) -> VegPlant {
     let scale = scale_of(model);
     let root = scene::mul4(model, vec4<f32>(v0.xyz, 1.0)).xyz;
-    let height = max(v0.w * scale, 0.05);
-    let w = (max(v3.w, 0.0) + 0.5) as u32;
+    return plant_at(root, v0.w * scale, v3.w, scale);
+}
+
+// The plant whose records hold `trunk` (their packed trunk word), standing at
+// `root` (eye-relative) `height` metres tall, drawn at `scale` times the size
+// the records were made for (its trunk's frequency falls by it).
+pub fn plant_at(root: vec3<f32>, height_in: f32, trunk_word: f32, scale: f32) -> VegPlant {
+    let height = max(height_in, 0.05);
+    let w = (max(trunk_word, 0.0) + 0.5) as u32;
     let trunk = VegCantilever {
         freq: veg_log_value(w >> 15u, 9u, VEG_FREQ_RANGE) / scale,
         sway: veg_log_value((w >> 6u) & 511u, 9u, VEG_SWAY_RANGE),
@@ -276,6 +283,16 @@ fn veg_pose_moving(plant: VegPlant, limb: VegLimb, w: VegWind, rest: vec3<f32>, 
     offset += xw * veg_bend(u);
     omega += cross(dir, xw) * (veg_bend_slope(u) / max(limb.twig.len, 0.02));
     return VegPose { offset: offset, omega: omega, drag: drag };
+}
+
+// Where the top of the plant's trunk is moved to (metres, eye-relative axes):
+// the trunk level of pose_of at the full height, held still as pose_of holds
+// a point that would move under a pixel.
+pub fn trunk_top(plant: VegPlant, w: VegWind) -> vec3<f32> {
+    let xt = veg_tree_level(plant.trunk, veg_trunk_damping(w.trunk), VEG_TREE_TURBULENCE, plant.seed, w.trunk, w.kick, w,
+                            0.0, 0.0, plant.seed, 0.0);
+    let top = plant.root + vec3<f32>(0.0, plant.height, 0.0);
+    return xt * smoothstep(VEG_STILL_PIXELS.x, VEG_STILL_PIXELS.y, length(xt) * veg_pixels_per_metre(top));
 }
 
 pub fn pose_of(plant: VegPlant, limb: VegLimb, w: VegWind, rest: vec3<f32>, weight: f32) -> VegPose {

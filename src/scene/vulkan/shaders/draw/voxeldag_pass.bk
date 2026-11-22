@@ -6,6 +6,7 @@
 import scene;
 import lighting;
 import atmosphere;
+import vegetation;
 import voxeldag;
 
 struct VoxelDagParams {
@@ -27,6 +28,29 @@ struct VoxelFragOut {
     color: vec4<f32>,
     indirect: vec4<f32>,
     depth: f32,
+}
+
+// The lean of region ri now (voxeldag::trace_region_dithered's `bend`): its
+// plant's trunk (common/vegetation.bk trunk_top, where a mesh of the same
+// records has the top of its trunk) bending it straight from the root, a point
+// moving with its height above the root along the region's up.
+fn region_bend(ri: u32) -> vec4<f32> {
+    let base = (ri * voxeldag::REGION_STRIDE) as i32;
+    let pl = b_regions[base + 6];
+    let tr = b_regions[base + 7];
+    if (tr.x <= 0.0 || pl.w <= 0.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let r0 = b_regions[base];
+    let r1 = b_regions[base + 1];
+    let r2 = b_regions[base + 2];
+    let r3 = b_regions[base + 3];
+    let root = r0.xyz + (r1.xyz * pl.x + r2.xyz * pl.y + r3.xyz * pl.z) * r0.w;
+    let plant = vegetation::plant_at(root, pl.w, tr.x, tr.y);
+    let top = vegetation::trunk_top(plant, vegetation::wind_of(plant));
+    // Metres at the top over metres of height: the same in [0, 1]^3 units.
+    let k = 1.0 / pl.w;
+    return vec4<f32>(dot(top, r1.xyz) * k, 0.0, dot(top, r3.xyz) * k, pl.y);
 }
 
 // 36 vertices an instance: face vid / 6 (axis face / 2, high side face & 1),
@@ -69,20 +93,28 @@ struct VoxelFragOut {
         n = vec3<f32>(0.0, 0.0, 1.0);
     }
     let ext = r0.w;
-    let un = mix(lo, hi, u);
-    let cn = mix(lo, hi, c);
+    // The box leant as its content is (region_bend): corners moved with
+    // their height, faces turned by the inverse transpose.
+    let bend = region_bend(ri);
+    let ub = mix(lo, hi, u);
+    let cb2 = mix(lo, hi, c);
+    let un = ub + bend.xyz * (ub.y - bend.w);
+    let cn = cb2 + bend.xyz * (cb2.y - bend.w);
+    let nb = n - vec3<f32>(0.0, dot(bend.xyz, n), 0.0);
     let p = r0.xyz + (r1.xyz * un.x + r2.xyz * un.y + r3.xyz * un.z) * ext;
     let pc = r0.xyz + (r1.xyz * cn.x + r2.xyz * cn.y + r3.xyz * cn.z) * ext;
-    let nw = (r1.xyz * n.x + r2.xyz * n.y + r3.xyz * n.z) * (high ? 1.0 : -1.0);
+    let nw = (r1.xyz * nb.x + r2.xyz * nb.y + r3.xyz * nb.z) * (high ? 1.0 : -1.0);
     // The eye is the origin: a face whose outward normal points away from it is far.
     let far_face = dot(nw, pc) >= 0.0;
     let rel = -r0.xyz;
-    let eye_n = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * (1.0 / max(ext, 1e-6));
+    let eye_b = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * (1.0 / max(ext, 1e-6));
+    let eye_n = eye_b - bend.xyz * (eye_b.y - bend.w);
     let margin = 4.0 / max(ext, 1e-6);
     let dlo = eye_n - lo + vec3<f32>(margin, margin, margin);
     let dhi = hi + vec3<f32>(margin, margin, margin) - eye_n;
     let inside = min(min(dlo.x, dlo.y), dlo.z) > 0.0 && min(min(dhi.x, dhi.y), dhi.z) > 0.0;
     set_vertex_output(0, ri);
+    set_vertex_output(1, bend);
     if (inside) {
         let q = scene::clip(p);
         set_vertex_position(far_face ? vec4<f32>(q.x, q.y, q.w, q.w) : vec4<f32>(0.0, 0.0, 0.0, 1.0));
@@ -106,7 +138,7 @@ fn scene_t_max(fc: vec2<f32>) -> f32 {
     return length(v.xyz * inv_vw);
 }
 
-fn shade_voxeldag(ri: u32) -> VoxelFragOut {
+fn shade_voxeldag(ri: u32, bend: vec4<f32>) -> VoxelFragOut {
     let fc = frag_coord().xy;
     let rd = scene::view_ray(fc);
     let t_max = scene_t_max(fc);
@@ -126,6 +158,7 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
         tick,
         ri,
         ign,
+        bend,
         b_regions,
         b_nodes,
         b_children,
@@ -318,14 +351,15 @@ fn shadow_unproject(ndc: vec3<f32>) -> vec3<f32> {
     set_frag_depth(clamp(q.z / max(q.w, 1e-6), 0.0, 1.0));
 }
 
-@fragment fn voxeldag_frag(@location(0) region: u32) {
-    let out = shade_voxeldag(region);
+// The region's bend comes from its box's vertices (the same at all 36).
+@fragment fn voxeldag_frag(@location(0) region: u32, @location(1) bend: vec4<f32>) {
+    let out = shade_voxeldag(region, bend);
     set_frag_output(0, out.color);
     set_frag_depth_less(out.depth);
 }
 
-@fragment fn voxeldag_indirect_frag(@location(0) region: u32) {
-    let out = shade_voxeldag(region);
+@fragment fn voxeldag_indirect_frag(@location(0) region: u32, @location(1) bend: vec4<f32>) {
+    let out = shade_voxeldag(region, bend);
     set_frag_output(0, out.color);
     set_frag_output(1, out.indirect);
     set_frag_depth_less(out.depth);

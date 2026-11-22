@@ -18,8 +18,10 @@ pub const REGION_HAS_CARVE: u32 = 2u;
 pub const REGION_CAST_SHADOW: u32 = 4u;
 pub const REGION_FOLIAGE: u32 = 8u;
 
-// vec4s a region takes in the regions buffer (GpuVoxelRegion).
-pub const REGION_STRIDE: u32 = 6u;
+// vec4s a region takes in the regions buffer (GpuVoxelRegion): [6] the
+// plant it sways as (its root in the region's [0, 1]^3, height m), [7] its
+// trunk word (0: still) and scale.
+pub const REGION_STRIDE: u32 = 8u;
 
 // Fixed-point bits a region's [0, 1) axis is walked with: 16 node levels
 // and a 4^3 brick's 2, with room under f32's 24-bit mantissa.
@@ -421,6 +423,8 @@ fn box_entry_normal(
 
 // Hierarchical raymarch of one mounted region with continuous cone-filtered LOD,
 // dithered min/max distance transitions, empty/carve octant skipping, O(1) cyclic animation lookup, and 4x4x4 leaf DDA.
+// `bend` leans the region: a point at height y (the region's [0, 1]^3) is
+// drawn bend.xyz * (y - bend.w) away, in those units (0: as stored).
 pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     ro: vec3<f32>,
     rd: vec3<f32>,
@@ -431,6 +435,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     anim_tick: u32,
     ri: u32,
     dither_u: f32,
+    bend: vec4<f32>,
     regions: BReg,
     nodes: BN,
     children: BC,
@@ -440,7 +445,7 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
     frames: BF
 ) -> TraceHit {
     return trace_region_core(
-        ro, rd, t_max_world, pixel_cone, lod_scale, 0.0, true, max_steps, anim_tick, ri, dither_u, 0u,
+        ro, rd, t_max_world, pixel_cone, lod_scale, 0.0, true, max_steps, anim_tick, ri, dither_u, 0u, bend,
         regions, nodes, children, bricks, attrs, clips, frames
     );
 }
@@ -470,7 +475,7 @@ pub fn trace_region_caster<BReg, BN, BC, BB, BA, BClip, BF>(
 ) -> TraceHit {
     return trace_region_core(
         ro, rd, t_max_world, 0.0, 1.0, lod_world, false, max_steps, anim_tick, ri, 0.5, texel_seed,
-        regions, nodes, children, bricks, attrs, clips, frames
+        vec4<f32>(0.0, 0.0, 0.0, 0.0), regions, nodes, children, bricks, attrs, clips, frames
     );
 }
 
@@ -487,6 +492,7 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
     ri: u32,
     dither_u: f32,
     hash_seed: u32,
+    bend: vec4<f32>,
     regions: BReg,
     nodes: BN,
     children: BC,
@@ -517,8 +523,12 @@ fn trace_region_core<BReg, BN, BC, BB, BA, BClip, BF>(
 
     let rel = ro - r0.xyz;
     let inv_ext = 1.0 / max(extent, 1e-6);
-    let ro_n = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
-    let rd_n = vec3<f32>(dot(rd, r1.xyz), dot(rd, r2.xyz), dot(rd, r3.xyz));
+    let ro_b = vec3<f32>(dot(rel, r1.xyz), dot(rel, r2.xyz), dot(rel, r3.xyz)) * inv_ext;
+    let rd_b = vec3<f32>(dot(rd, r1.xyz), dot(rd, r2.xyz), dot(rd, r3.xyz));
+    // The ray leant back by the region's bend, an affine map: it stays
+    // straight, and t along it is t along the drawn ray.
+    let ro_n = ro_b - bend.xyz * (ro_b.y - bend.w);
+    let rd_n = rd_b - bend.xyz * rd_b.y;
     let rd_sx = rd_n.x >= 0.0 ? max(rd_n.x, 1e-6) : min(rd_n.x, -1e-6);
     let rd_sy = rd_n.y >= 0.0 ? max(rd_n.y, 1e-6) : min(rd_n.y, -1e-6);
     let rd_sz = rd_n.z >= 0.0 ? max(rd_n.z, 1e-6) : min(rd_n.z, -1e-6);
@@ -805,6 +815,6 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
 ) -> TraceHit {
     return trace_region_dithered(
         ro, rd, t_max_world, pixel_cone, lod_scale, max_steps, anim_tick, ri, 0.5,
-        regions, nodes, children, bricks, attrs, clips, frames
+        vec4<f32>(0.0, 0.0, 0.0, 0.0), regions, nodes, children, bricks, attrs, clips, frames
     );
 }

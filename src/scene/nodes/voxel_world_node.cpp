@@ -170,6 +170,19 @@ GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
     }
     const float nearEnd = minFadeEnd > minDist ? minFadeEnd : minDist * 1.35f;
     std::memcpy(&gpu.content[3], &nearEnd, sizeof(float));
+
+    if (plantTrunk > 0.0f && plantHeight > 0.0f) {
+        const float ext = std::max(extent(), 1e-6f);
+        const float rel[3] = {static_cast<float>(plantRoot[0] - origin[0]),
+                              static_cast<float>(plantRoot[1] - origin[1]),
+                              static_cast<float>(plantRoot[2] - origin[2])};
+        gpu.plant[0] = (rel[0] * right[0] + rel[1] * right[1] + rel[2] * right[2]) / ext;
+        gpu.plant[1] = (rel[0] * up[0] + rel[1] * up[1] + rel[2] * up[2]) / ext;
+        gpu.plant[2] = (rel[0] * forward[0] + rel[1] * forward[1] + rel[2] * forward[2]) / ext;
+        gpu.plant[3] = plantHeight;
+        gpu.trunk[0] = plantTrunk;
+        gpu.trunk[1] = plantScale;
+    }
     return gpu;
 }
 

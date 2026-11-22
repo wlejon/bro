@@ -24,7 +24,7 @@ inline constexpr uint32_t kVoxelRegionCastShadow = 1u << 2;
 // Its content is leaves: hits are lit two-sided, light coming through them.
 inline constexpr uint32_t kVoxelRegionFoliage = 1u << 3;
 
-/// GPU layout for one active SVDAG region (`6 * vec4<f32>` = 96 bytes; voxeldag.bk REGION_STRIDE).
+/// GPU layout for one active SVDAG region (`8 * vec4<f32>` = 128 bytes; voxeldag.bk REGION_STRIDE).
 struct alignas(16) GpuVoxelRegion {
     float r0[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // xyz: camera-relative/world min corner, w: extent
     float r1[4] = {1.0f, 0.0f, 0.0f, 1.0f};  // xyz: tangent right, w: voxelSize
@@ -38,11 +38,16 @@ struct alignas(16) GpuVoxelRegion {
     // min.x | min.y << 16, min.z | max.x << 16, max.y | max.z << 16;
     // then the f32 bits of where the near band ends (minFadeEnd).
     uint32_t content[4] = {0u, 0xFFFF0000u, 0xFFFFFFFFu, 0u};
+    // The plant it sways as (VoxelRegion::plant*): its root in the region's
+    // [0, 1]^3 and its height in metres; then its trunk word (0: it holds
+    // still) and scale.
+    float plant[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float trunk[4] = {0.0f, 1.0f, 0.0f, 0.0f};
 };
 
 /// The farthest minDist a region packs (27 bits of metres).
 inline constexpr uint32_t kVoxelMaxMinDist = (1u << 27u) - 1u;
-static_assert(sizeof(GpuVoxelRegion) == 96, "GpuVoxelRegion must be 96 bytes (6 x vec4)");
+static_assert(sizeof(GpuVoxelRegion) == 128, "GpuVoxelRegion must be 128 bytes (8 x vec4)");
 
 /// Sparse Voxel DAG region mounted in world space (double-precision center + orthonormal basis).
 struct VoxelRegion {
@@ -64,6 +69,14 @@ struct VoxelRegion {
     float fadeStart = 0.0f;
     uint32_t flags = kVoxelRegionEnabled | kVoxelRegionCastShadow;
     uint32_t animTickOffset = 0;
+    // The plant its voxels are (a tree), which it sways as in the scene's
+    // wind: its trunk, as the plant's vegetation records give it (the packed
+    // trunk word; 0: it holds still), bends the region, each point moving
+    // with its height above the root (world metres) along the region's up.
+    double plantRoot[3] = {0.0, 0.0, 0.0};
+    float plantHeight = 0.0f;
+    float plantTrunk = 0.0f;
+    float plantScale = 1.0f;
     // What the placements cover, in the region's [0, 1]^3 (min > max: nothing).
     // Rays are clipped to it, so a region mostly empty sky costs what its content does.
     float contentMin[3] = {1.0f, 1.0f, 1.0f};

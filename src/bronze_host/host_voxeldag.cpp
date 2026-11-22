@@ -226,6 +226,15 @@ void fillRegionFromOpts(Value opts, scene::VoxelRegion& r, bool isCreate) {
     if (isCreate || !ev::isUndefined(ev::getProperty(opts, "animTickOffset"))) {
         r.animTickOffset = static_cast<uint32_t>(std::max(0.0, numberOr(opts, "animTickOffset", r.animTickOffset)));
     }
+    const Rooted plant(ev::getProperty(opts, "plant"));
+    if (ev::isObject(plant)) {
+        vec3DoubleOr(plant, "root", r.plantRoot);
+        r.plantHeight = static_cast<float>(std::max(0.0, numberOr(plant, "height", r.plantHeight)));
+        r.plantTrunk = static_cast<float>(std::max(0.0, numberOr(plant, "trunk", r.plantTrunk)));
+        r.plantScale = static_cast<float>(std::max(1e-3, numberOr(plant, "scale", 1.0)));
+    } else if (ev::isNull(plant)) {
+        r.plantTrunk = 0.0f;
+    }
     const bool enabled = boolOr(opts, "enabled", (r.flags & scene::kVoxelRegionEnabled) != 0u);
     const bool castShadow = boolOr(opts, "castShadow", (r.flags & scene::kVoxelRegionCastShadow) != 0u);
     const bool foliage = boolOr(opts, "foliage", (r.flags & scene::kVoxelRegionFoliage) != 0u);

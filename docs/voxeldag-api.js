@@ -25,6 +25,9 @@
  *   marched.
  * - `minDist` / `fadeStart` / `maxDist` dither a region in and out, so nested
  *   rings of coarser voxels hand over without a seam.
+ * - A region given its `plant` sways in the wind as that plant's mesh does
+ *   (its trunk), its box leant with it, so a swaying tree costs what a still
+ *   one does.
  * - A voxel's alpha is its opacity: a ray passes it with probability
  *   1 - alpha (the same voxels every frame), so a crown voxelized with its
  *   leaves' coverage shows the sky through it.
@@ -96,7 +99,31 @@
  * @property {boolean} [foliage=false] its content is leaves: lit two-sided,
  *                                     the sun shining through (as a mesh
  *                                     leaf is), at every distance
+ * @property {RegionPlant|null} [plant] the plant the region's voxels are,
+ *                                     which it sways as (null: still)
  * @property {number} [animTickOffset=0]
+ */
+
+/**
+ * A region that is one plant (a voxel tree) sways in the scene's wind as a
+ * mesh of the same plant's vegetation records does (vegetation-api.js): its
+ * trunk's top moves where the records' trunk puts it, and the region leans
+ * straight from the root, each point moving with its height above the root
+ * along the region's up. Limbs and leaves do not move on their own; a plant
+ * that would move under a pixel holds still. Its shadow in the shadow pages
+ * stays as cast (they are not redrawn as it sways).
+ * @typedef {Object} RegionPlant
+ * @property {number[]} root   the plant's root, world metres
+ * @property {number} height   its height, metres
+ * @property {number} trunk    its records' packed trunk word (flora-api.js
+ *                             "Vegetation records"; record index 15)
+ * @property {number} [scale=1] the scale the records' plant is drawn at (a
+ *                             mesh node's scale; its trunk's frequency falls
+ *                             by it)
+ * @example
+ *   const rec = floraWorld.emitBranchTubes().vegetation;   // any record: the plant's
+ *   vd.addRegion({ ..., foliage: true,
+ *       plant: { root: [x, 0, z], height: rec[3] * k, trunk: rec[15], scale: k } });
  */
 
 const bro = {
