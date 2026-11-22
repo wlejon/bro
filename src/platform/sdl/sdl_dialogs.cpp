@@ -84,6 +84,11 @@ public:
             delete result;
     }
     bool poll(bool& ok, std::vector<std::string>& picked, std::string& refusal) override {
+        // On non-SDL window systems (Wayland/browl), nothing else calls
+        // SDL_PumpEvents(), which is what drives SDL_DBus_PumpEvents() for
+        // xdg-desktop-portal dialog responses. When SDL_INIT_VIDEO is up, the
+        // SDL event loop already pumps every frame.
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_PumpEvents();
         const bool have = result->haveResult.load(std::memory_order_acquire);
         const int count = result->callbackCount.load(std::memory_order_acquire);
         bool refused = !have && count >= kMaxDialogCallbacks;
