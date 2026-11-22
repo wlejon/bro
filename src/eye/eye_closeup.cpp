@@ -93,19 +93,31 @@ bool isGroundLikeName(const std::string& name) {
 }
 
 std::string stripDigitsSuffix(std::string s) {
-    while (!s.empty() && (std::isdigit(static_cast<unsigned char>(s.back())) || s.back() == '_' || s.back() == ' ')) {
-        s.pop_back();
+    // Strip trailing numbers/underscores and also collapse embedded numbers like "Lily 4 Pivot" -> "Lily Pivot"
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(s[i]);
+        if (std::isdigit(ch) || ch == '_') continue;
+        if (ch == ' ' && (out.empty() || out.back() == ' ')) continue;
+        out.push_back(static_cast<char>(ch));
     }
-    return s;
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
 }
 
 std::string prototypeStem(const BoundsItem& it) {
     if (it.node && it.node->parent() && !it.node->parent()->name().empty()) {
         const std::string p = stripDigitsSuffix(it.node->parent()->name());
-        if (!p.empty() && toLower(p) != "root") return p;
+        const std::string pl = toLower(p);
+        if (!p.empty() && pl != "root" && pl != "__root") {
+            const size_t pv = pl.rfind(" pivot");
+            if (pv != std::string::npos && pv + 6 == pl.size()) return p.substr(0, pv);
+            return p;
+        }
     }
     std::string stem = stripDigitsSuffix(it.name);
-    for (const char* suf : {" wing l", " wing r", " body", " lotus", " pad", " wood", " canopy"}) {
+    for (const char* suf : {" wing l", " wing r", " body", " lotus", " pad", " wood", " canopy", " stem", " pivot"}) {
         const std::string low = toLower(stem);
         const std::string sfx(suf);
         if (low.size() > sfx.size() && low.compare(low.size() - sfx.size(), sfx.size(), sfx) == 0) {

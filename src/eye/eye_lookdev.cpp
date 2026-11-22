@@ -233,7 +233,7 @@ EyeLookdevResult captureLookdev(scene::SceneGraph& graph, const EyeLookdevOption
             const uint8_t rb = pRough.rgba[o];
             if (rb < 6) continue;  // skip sky / clear background
             ++fgCount;
-            const double r = rb / 255.0;
+            const double r = std::pow(rb / 255.0, 2.2);
             rVals.push_back(r);
 
             const double lum = (0.2126 * pBeauty.rgba[o] + 0.7152 * pBeauty.rgba[o + 1] + 0.0722 * pBeauty.rgba[o + 2]) / 255.0;
