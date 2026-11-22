@@ -717,15 +717,79 @@ pub fn trace_region<BReg, BN, BC, BB, BA, BClip, BF>(
     );
 }
 
-// Fast coarse sun occlusion visibility across regions marked REGION_CAST_SHADOW.
-pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
+// The shadow BVH over a frame's regions (the pass builds it): two vec4s a
+// node, [lo.xyz, a] [hi.xyz, b] in the regions' space, a and b u32 bits. A
+// leaf (b's top bit set) is region a; an inner node's left child is the next
+// node and its right child node a.
+pub const SHADOW_BVH_STRIDE: u32 = 2u;
+pub const SHADOW_BVH_LEAF: u32 = 0x80000000u;
+
+// Coarse sun occlusion across the regions marked REGION_CAST_SHADOW, the
+// ray tested against only the regions whose boxes it crosses (the BVH of
+// `bvh_count` nodes over them; 0: none cast).
+pub fn trace_shadow<BReg, BBvh, BN, BC, BB, BClip, BF>(
     ro: vec3<f32>,
     rd: vec3<f32>,
     max_dist: f32,
     pixel_cone: f32,
     max_steps: u32,
     anim_tick: u32,
-    region_count: u32,
+    bvh_count: u32,
+    regions: BReg,
+    bvh: BBvh,
+    nodes: BN,
+    children: BC,
+    bricks: BB,
+    clips: BClip,
+    frames: BF
+) -> f32 {
+    var vis: f32 = 1.0;
+    if (bvh_count == 0u) {
+        return vis;
+    }
+    let inv_d = safe_inv_dir(rd);
+    var stack: array<u32, 32>;
+    var sp: u32 = 1u;
+    stack[0] = 0u;
+    while (sp > 0u && vis > 0.02) {
+        sp -= 1u;
+        let ni = stack[sp];
+        let b0 = bvh[(ni * SHADOW_BVH_STRIDE) as i32];
+        let b1 = bvh[(ni * SHADOW_BVH_STRIDE + 1u) as i32];
+        let t0 = (b0.xyz - ro) * inv_d;
+        let t1 = (b1.xyz - ro) * inv_d;
+        let tsmall = min(t0, t1);
+        let tbig = max(t0, t1);
+        let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
+        let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), max_dist);
+        if (t_enter > t_exit) {
+            continue;
+        }
+        let a = bitcast<u32>(b0.w);
+        let b = bitcast<u32>(b1.w);
+        if ((b & SHADOW_BVH_LEAF) != 0u) {
+            vis *= shadow_region(ro, rd, max_dist, pixel_cone, max_steps, anim_tick, a, vis,
+                                 regions, nodes, children, bricks, clips, frames);
+        } else if (sp + 2u <= 32u) {
+            stack[sp] = a;
+            stack[sp + 1u] = ni + 1u;
+            sp += 2u;
+        }
+    }
+    return clamp(vis, 0.0, 1.0);
+}
+
+// The share of sunlight region `ri` lets through along the ray (1 when it
+// casts none), marching until the light left (`vis_in` times it) is spent.
+pub fn shadow_region<BReg, BN, BC, BB, BClip, BF>(
+    ro: vec3<f32>,
+    rd: vec3<f32>,
+    max_dist: f32,
+    pixel_cone: f32,
+    max_steps: u32,
+    anim_tick: u32,
+    ri: u32,
+    vis_in: f32,
     regions: BReg,
     nodes: BN,
     children: BC,
@@ -734,8 +798,6 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
     frames: BF
 ) -> f32 {
     var vis: f32 = 1.0;
-    var ri: u32 = 0u;
-    while (ri < region_count && vis > 0.02) {
         let base = (ri * REGION_STRIDE) as i32;
         let r0 = regions[base];
         let r4 = regions[base + 4];
@@ -744,8 +806,7 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
         let extent = r0.w;
         if ((flags & (REGION_ENABLED | REGION_CAST_SHADOW)) != (REGION_ENABLED | REGION_CAST_SHADOW) ||
             root == DAG_INVALID || extent <= 0.0) {
-            ri += 1u;
-            continue;
+            return vis;
         }
 
         let r1 = regions[base + 1];
@@ -764,8 +825,7 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
 
         let cb = content_box(regions[base + 5]);
         if (cb.lo.x > cb.hi.x || cb.lo.y > cb.hi.y || cb.lo.z > cb.hi.z) {
-            ri += 1u;
-            continue;
+            return vis;
         }
         let t0 = (cb.lo - ro_n) * inv_d;
         let t1 = (cb.hi - ro_n) * inv_d;
@@ -774,14 +834,13 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
         let t_enter = max(max(tsmall.x, tsmall.y), max(tsmall.z, 0.0));
         let t_exit = min(min(min(tbig.x, tbig.y), tbig.z), max_dist * inv_ext);
         if (t_enter >= t_exit) {
-            ri += 1u;
-            continue;
+            return vis;
         }
 
         let cone_k = max(pixel_cone * 2.0, 0.01);
         var t: f32 = t_enter + max(1e-5, t_enter * 2e-5);
         var step: u32 = 0u;
-        while (step < max_steps && t < t_exit && vis > 0.02) {
+        while (step < max_steps && t < t_exit && vis * vis_in > 0.02) {
             let p = clamp(ro_n + rd_n * t, vec3<f32>(0.0), vec3<f32>(0.999999));
             var cur: u32 = root;
             var cell_min: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
@@ -842,7 +901,5 @@ pub fn trace_shadow<BReg, BN, BC, BB, BClip, BF>(
             }
             step += 1u;
         }
-        ri += 1u;
-    }
     return clamp(vis, 0.0, 1.0);
 }

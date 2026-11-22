@@ -81,6 +81,7 @@ void testSpirvVerification() {
             fn audit_voxeldag_kernel(
                 g: grid<1>,
                 regions: read_buffer<vec4<f32>>,
+                shadow_bvh: read_buffer<vec4<f32>>,
                 nodes: read_buffer<vec4<u32>>,
                 children: read_buffer<u32>,
                 bricks: read_buffer<vec4<u32>>,
@@ -105,7 +106,7 @@ void testSpirvVerification() {
                         hit.pos + hit.normal * 0.05,
                         sun_rd,
                         64.0, 0.004, 16u, 0u, 1u,
-                        regions, nodes, children, bricks, clips, frames
+                        regions, shadow_bvh, nodes, children, bricks, clips, frames
                     );
                 }
                 let carved = voxeldag::is_carved_at(

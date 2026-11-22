@@ -89,6 +89,82 @@ bool voxelRegionInView(const VoxelRegion& reg, const double eye[3],
     return true;
 }
 
+// The shadow BVH over the drawn regions that cast (voxeldag.bk
+// SHADOW_BVH_STRIDE): each region's content box in the eye-relative frame
+// the regions are packed in, split at the median of the longest axis, laid
+// out depth first (left child next, the right child's index in the node).
+struct ShadowBox {
+    float lo[3], hi[3], c[3];
+    uint32_t region;
+};
+
+void shadowBox(const GpuVoxelRegion& g, uint32_t index, std::vector<ShadowBox>& out) {
+    if ((g.flags & (kVoxelRegionEnabled | kVoxelRegionCastShadow)) !=
+        (kVoxelRegionEnabled | kVoxelRegionCastShadow)) {
+        return;
+    }
+    const float cmin[3] = {(g.content[0] & 0xFFFFu) / 65535.0f, (g.content[0] >> 16u) / 65535.0f,
+                           (g.content[1] & 0xFFFFu) / 65535.0f};
+    const float cmax[3] = {(g.content[1] >> 16u) / 65535.0f, (g.content[2] & 0xFFFFu) / 65535.0f,
+                           (g.content[2] >> 16u) / 65535.0f};
+    if (cmin[0] > cmax[0] || cmin[1] > cmax[1] || cmin[2] > cmax[2]) return;
+    ShadowBox b{};
+    for (int a = 0; a < 3; ++a) { b.lo[a] = 1e30f; b.hi[a] = -1e30f; }
+    const float ext = g.r0[3];
+    for (int k = 0; k < 8; ++k) {
+        const float u = (k & 1) ? cmax[0] : cmin[0];
+        const float v = (k & 2) ? cmax[1] : cmin[1];
+        const float w = (k & 4) ? cmax[2] : cmin[2];
+        for (int a = 0; a < 3; ++a) {
+            const float p = g.r0[a] + (g.r1[a] * u + g.r2[a] * v + g.r3[a] * w) * ext;
+            b.lo[a] = std::min(b.lo[a], p);
+            b.hi[a] = std::max(b.hi[a], p);
+        }
+    }
+    for (int a = 0; a < 3; ++a) b.c[a] = 0.5f * (b.lo[a] + b.hi[a]);
+    b.region = index;
+    out.push_back(b);
+}
+
+// Appends the subtree over boxes [first, last) to `nodes` (two vec4s each).
+void buildShadowBvh(std::vector<ShadowBox>& boxes, size_t first, size_t last, std::vector<float>& nodes) {
+    const size_t at = nodes.size() / 8;
+    nodes.resize(nodes.size() + 8);
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    for (size_t i = first; i < last; ++i) {
+        for (int a = 0; a < 3; ++a) {
+            lo[a] = std::min(lo[a], boxes[i].lo[a]);
+            hi[a] = std::max(hi[a], boxes[i].hi[a]);
+        }
+    }
+    uint32_t a = 0, b = 0;
+    if (last - first == 1) {
+        a = boxes[first].region;
+        b = 0x80000000u;
+    } else {
+        float clo[3] = {1e30f, 1e30f, 1e30f}, chi[3] = {-1e30f, -1e30f, -1e30f};
+        for (size_t i = first; i < last; ++i) {
+            for (int k = 0; k < 3; ++k) {
+                clo[k] = std::min(clo[k], boxes[i].c[k]);
+                chi[k] = std::max(chi[k], boxes[i].c[k]);
+            }
+        }
+        int axis = 0;
+        for (int k = 1; k < 3; ++k) {
+            if (chi[k] - clo[k] > chi[axis] - clo[axis]) axis = k;
+        }
+        const size_t mid = first + (last - first) / 2;
+        std::nth_element(boxes.begin() + first, boxes.begin() + mid, boxes.begin() + last,
+                         [axis](const ShadowBox& x, const ShadowBox& y) { return x.c[axis] < y.c[axis]; });
+        buildShadowBvh(boxes, first, mid, nodes);
+        a = static_cast<uint32_t>(nodes.size() / 8);
+        buildShadowBvh(boxes, mid, last, nodes);
+    }
+    float* n = nodes.data() + at * 8;
+    n[0] = lo[0]; n[1] = lo[1]; n[2] = lo[2]; std::memcpy(&n[3], &a, 4);
+    n[4] = hi[0]; n[5] = hi[1]; n[6] = hi[2]; std::memcpy(&n[7], &b, 4);
+}
+
 bool anyRenderableVoxelWorld(const SceneFrame& frame) {
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() != SceneNode::Type::VoxelWorld) continue;
@@ -227,7 +303,7 @@ bool PassVoxelDag::setup(SceneGpu& gpu) {
     // The regions (2) are read by the vertex stage too: it draws their boxes.
     builder.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-    for (uint32_t b = 3; b <= 8; ++b) {
+    for (uint32_t b = 3; b <= 9; ++b) {
         builder.addBinding(b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     }
     set2Layout_ = builder.build(dev);
@@ -379,7 +455,25 @@ void PassVoxelDag::record(SceneFrame& frame) {
         if (!regSlice) continue;
         std::memcpy(regSlice.mapped, gpuRegs.data(), static_cast<size_t>(regBytes));
 
+        std::vector<float> bvh;
+        if (vw->shadowSteps() > 0u) {
+            std::vector<ShadowBox> boxes;
+            boxes.reserve(gpuRegs.size());
+            for (size_t i = 0; i < gpuRegs.size(); ++i) shadowBox(gpuRegs[i], static_cast<uint32_t>(i), boxes);
+            if (!boxes.empty()) buildShadowBvh(boxes, 0, boxes.size(), bvh);
+        }
+        const uint32_t bvhNodes = static_cast<uint32_t>(bvh.size() / 8);
+        render::UploadSlice bvhSlice{};
+        VkDeviceSize bvhBytes = 0;
+        if (bvhNodes > 0) {
+            bvhBytes = static_cast<VkDeviceSize>(bvh.size() * sizeof(float));
+            bvhSlice = device_->frameUpload(bvhBytes, storageAlign);
+            if (!bvhSlice) continue;
+            std::memcpy(bvhSlice.mapped, bvh.data(), static_cast<size_t>(bvhBytes));
+        }
+
         ParamsUbo params{};
+        params.shadow[0] = bvhNodes;
         params.counts[0] = static_cast<uint32_t>(gpuRegs.size());
         params.counts[1] = vw->animTick();
         params.counts[2] = vw->maxRaySteps();
@@ -402,6 +496,11 @@ void PassVoxelDag::record(SceneFrame& frame) {
         writeStorageOrDummy(w, 6, gp.attrs, dummyBuf_);
         writeStorageOrDummy(w, 7, gp.animClips, dummyBuf_);
         writeStorageOrDummy(w, 8, gp.animFrames, dummyBuf_);
+        if (bvhNodes > 0) {
+            w.writeBuffer(9, bvhSlice.buffer, bvhBytes, bvhSlice.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        } else {
+            writeStorageOrDummy(w, 9, dummyBuf_, dummyBuf_);
+        }
         w.updateSet(device_->device(), set2);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2, 1, &set2, 0, nullptr);

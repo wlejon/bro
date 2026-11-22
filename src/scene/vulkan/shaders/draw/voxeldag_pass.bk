@@ -11,6 +11,7 @@ import voxeldag;
 struct VoxelDagParams {
     counts: vec4<u32>,   // x: region_count, y: anim_tick, z: max_steps, w: shadow_steps
     scales: vec4<f32>,   // x: lod_scale, y: pixel_cone, z: pad, w: pad
+    shadow: vec4<u32>,   // x: shadow BVH nodes (b_shadow_bvh)
 }
 
 @binding(2, 0) var u_scene_depth: sampler2d<f32>;
@@ -22,6 +23,7 @@ struct VoxelDagParams {
 @binding(2, 6) var b_attrs: read_buffer<u32>;
 @binding(2, 7) var b_anim_clips: read_buffer<vec4<u32>>;
 @binding(2, 8) var b_anim_frames: read_buffer<u32>;
+@binding(2, 9) var b_shadow_bvh: read_buffer<vec4<f32>>;
 
 struct VoxelFragOut {
     color: vec4<f32>,
@@ -111,7 +113,6 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
     let rd = scene::view_ray(fc);
     let t_max = scene_t_max(fc);
     let ign = fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
-    let count = u_params.counts.x;
     let tick = u_params.counts.y;
     let max_steps = u_params.counts.z;
     let shadow_steps = u_params.counts.w;
@@ -153,8 +154,9 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
             pixel_cone,
             shadow_steps,
             tick,
-            count,
+            u_params.shadow.x,
             b_regions,
+            b_shadow_bvh,
             b_nodes,
             b_children,
             b_bricks,
