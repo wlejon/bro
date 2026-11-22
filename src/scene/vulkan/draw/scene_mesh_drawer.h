@@ -189,6 +189,7 @@ struct MeshDraw {
     /// the overlays drawn over it each frame, or swaying (in the overlays of
     /// the levels its sway shows in, the cached depth of the rest).
     ShadowMotion shadowMotion = ShadowMotion::Still;
+    ShadowRange shadowRange = ShadowRange::All;   // which part of its sun shadow it casts
     uint32_t shadowIndexCount = 0;   // a caster's indices, a prefix of indexCount's (0: all of them)
     bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
     bool lines = false;          // indices are line pairs; drawn unlit

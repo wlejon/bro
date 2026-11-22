@@ -59,6 +59,7 @@
  * @property {boolean|number} [wind] - Wind sway: true is 1, or a [0, 1] multiplier.
  * @property {boolean} [castsShadow]
  * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
+ * @property {'all'|'near'|'far'} [shadowRange] - Which part of its sun shadow it casts (`shadowRange`).
  * @property {boolean} [receivesShadow]
  * @property {number|Array<number>} [depthBias] - Units, or [factor, units].
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - RGBA8 base colour map;
@@ -121,6 +122,7 @@
  * @property {boolean} [doubleSided]
  * @property {boolean} [castsShadow]
  * @property {boolean} [shadowOnly] - Casts its shadow and draws nothing else (`shadowOnly`).
+ * @property {'all'|'near'|'far'} [shadowRange] - Which part of its sun shadow it casts (`shadowRange`).
  * @property {boolean} [receivesShadow]
  * @property {{width: number, height: number, data: Uint8Array}} [texture] - also normalTexture, metallicRoughnessTexture, occlusionTexture, emissiveTexture
  * @property {number} [atlasCols] - atlas grid columns (the other defaults to 1)
@@ -365,6 +367,31 @@ class SceneNode {
    * @type {boolean}
    */
   shadowOnly;
+
+  /**
+   * Mesh, InstancedMesh: which part of its sun shadow it casts. The sun's
+   * shadow is a clipmap of levels, finest at the eye, and the sway level
+   * (about 8 mm a texel, some 30 m around the eye) is where swaying plants
+   * draw into overlays redrawn each frame, past it into cached pages.
+   *  - 'all' (default): every level, as its motion decides.
+   *  - 'near': the sway level's overlays alone (and the finer levels, which
+   *    read them), drawn each frame as swaying vegetation is in any wind:
+   *    no cached page holds it, so its coming, going and changing redraw
+   *    none. A surface whose pixels read a coarser level (farther off, or
+   *    under a wide penumbra) does not see it.
+   *  - 'far': the cached pages past the sway level alone.
+   * A plant drawn in levels of detail near the eye casts 'near' and a still
+   * stand-in for it (one instanced shadowOnly mesh over a stand) casts
+   * 'far': the shadow sways where it shows, is cached where it does not,
+   * and the levels of detail swap without redrawing the cache. A local
+   * light's overlays take 'near'; its cached pages take neither.
+   *
+   * @example
+   *   const tree = scene.createMesh({ data: leaves, shadowRange: 'near' });
+   *   scene.createInstancedMesh({ mesh: proxy, instances, shadowOnly: true, shadowRange: 'far' });
+   * @type {'all'|'near'|'far'}
+   */
+  shadowRange;
   /** @type {Array<number>|string} */ emissiveColor;
   /** @type {boolean|string} */ billboard;
   /** @type {boolean} */ autoSync;

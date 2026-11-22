@@ -308,6 +308,9 @@ public:
     /// Casts its shadow and draws nothing else (MeshNode::setShadowOnly).
     void setShadowOnly(bool b) { shadowOnly_ = b; }
     bool shadowOnly() const { return shadowOnly_; }
+    /// Which part of its sun shadow it casts (MeshNode::setShadowRange).
+    void setShadowRange(ShadowRange r) { shadowRange_ = r; }
+    ShadowRange shadowRange() const { return shadowRange_; }
 
     void setReceivesShadow(bool b) { receivesShadow_ = b; }
     bool receivesShadow() const { return receivesShadow_; }
@@ -574,6 +577,7 @@ private:
 
     bool castsShadow_ = true;
     bool shadowOnly_ = false;
+    ShadowRange shadowRange_ = ShadowRange::All;
     bool receivesShadow_ = true;
 
     int atlasCols_ = 1;

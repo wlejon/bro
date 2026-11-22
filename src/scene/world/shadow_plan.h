@@ -82,6 +82,16 @@ struct ShadowViewPlan {
 /// the coarser levels, where its sway hides under the filter).
 enum class ShadowMotion : uint8_t { Still, Moving, Swaying };
 
+/// Which part of a caster's sun shadow it casts (MeshNode::shadowRange): All;
+/// Near, the sway level's overlays alone (as swaying vegetation does, in any
+/// wind), so its coming and going redraws no cached page; Far, the cached
+/// pages past the sway level alone. A plant drawn in detail near the eye
+/// casts Near and a stable stand-in for it Far: the shadow sways where it
+/// shows and is cached where it does not, and the detailed plant's levels
+/// of detail come and go without redrawing the cache. A local light's
+/// overlays take Near; its cached pages take neither.
+enum class ShadowRange : uint8_t { All, Near, Far };
+
 /// Whether a caster of `motion` draws into view `v`.
 inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
     switch (motion) {
@@ -90,6 +100,16 @@ inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion) {
     case ShadowMotion::Swaying: return v.plants == ShadowPlants::Swaying || v.plants == ShadowPlants::All;
     }
     return false;
+}
+
+/// Whether a caster of `motion` and `range` draws into view `v`.
+inline bool shadowCastsInto(const ShadowViewPlan& v, ShadowMotion motion, ShadowRange range) {
+    switch (range) {
+    case ShadowRange::Near: return v.dynamic && (v.plants == ShadowPlants::Swaying || v.plants == ShadowPlants::All);
+    case ShadowRange::Far: return !v.dynamic && v.plants == ShadowPlants::All;
+    case ShadowRange::All: break;
+    }
+    return shadowCastsInto(v, motion);
 }
 
 /// A page redrawn this frame, copied from the scratch target into the pool,

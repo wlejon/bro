@@ -204,7 +204,7 @@ void PassDrawCounts::recordCulls(SceneFrame& frame) {
         if (shadows && d.castsShadow) {
             for (int v = 0; v < plan.viewCount; ++v) {
                 const ShadowViewPlan& view = plan.views[v];
-                if (!shadowCastsInto(view, d.shadowMotion)) continue;
+                if (!shadowCastsInto(view, d.shadowMotion, d.shadowRange)) continue;
                 if (camera && d.hasBounds && !bromath::fintersects(view.frustum, d.bounds)) continue;
                 add(1 + v, &view.frustum);
             }

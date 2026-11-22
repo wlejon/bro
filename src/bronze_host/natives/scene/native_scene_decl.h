@@ -819,6 +819,8 @@ bool bro_scene_SceneNode_castsShadow_get(void* self);
 void bro_scene_SceneNode_castsShadow_set(void* self, bool v);
 bool bro_scene_SceneNode_shadowOnly_get(void* self);
 void bro_scene_SceneNode_shadowOnly_set(void* self, bool v);
+int32_t bro_scene_SceneNode_shadowRange_get(void* self);
+void bro_scene_SceneNode_shadowRange_set(void* self, int32_t v);
 bool bro_scene_SceneNode_receivesShadow_get(void* self);
 void bro_scene_SceneNode_receivesShadow_set(void* self, bool v);
 double bro_scene_SceneNode_metallic_get(void* self);

@@ -521,6 +521,7 @@ void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, Me
     // belongs to (a custom shader suppresses unlit, so it casts).
     out.castsShadow = node.castsShadow() && !node.effectiveUnlit();
     out.shadowOnly = node.shadowOnly();
+    out.shadowRange = node.shadowRange();
     out.shadowMotion = frame.renderer.shadowMotion(node.id());
     out.depthBiasFactor = node.depthBiasFactor();
     out.depthBiasUnits = node.depthBiasUnits();

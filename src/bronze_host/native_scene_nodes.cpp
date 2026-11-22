@@ -472,6 +472,24 @@ void bro_scene_SceneNode_shadowOnly_set(void* self, bool v) {
     else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setShadowOnly(v);
 }
 
+// The shadow range as its ShadowRange code (0 all, 1 near, 2 far).
+int32_t bro_scene_SceneNode_shadowRange_get(void* self) {
+    auto* n = nodeOf(self);
+    if (!n) return 0;
+    if (n->type() == scene::SceneNode::Type::Mesh) return static_cast<int32_t>(static_cast<scene::MeshNode*>(n)->shadowRange());
+    if (n->type() == scene::SceneNode::Type::InstancedMesh)
+        return static_cast<int32_t>(static_cast<scene::InstancedMeshNode*>(n)->shadowRange());
+    return 0;
+}
+
+void bro_scene_SceneNode_shadowRange_set(void* self, int32_t v) {
+    auto* n = nodeOf(self);
+    if (!n) return;
+    const auto r = v == 1 ? scene::ShadowRange::Near : v == 2 ? scene::ShadowRange::Far : scene::ShadowRange::All;
+    if (n->type() == scene::SceneNode::Type::Mesh) static_cast<scene::MeshNode*>(n)->setShadowRange(r);
+    else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setShadowRange(r);
+}
+
 bool bro_scene_SceneNode_receivesShadow_get(void* self) {
     auto* n = nodeOf(self);
     if (!n) return false;

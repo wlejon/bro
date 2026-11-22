@@ -57,7 +57,7 @@ void PassShadow::drawView(SceneFrame& frame, int index) {
         "shadow:pages:tube",   "shadow:pages:veg",       "shadow:pages:instancedVeg"};
     const char* run = nullptr;
     for (const MeshDraw& draw : frame.lists.meshes) {
-        if (!draw.castsShadow || !shadowCastsInto(view, draw.shadowMotion)) continue;
+        if (!draw.castsShadow || !shadowCastsInto(view, draw.shadowMotion, draw.shadowRange)) continue;
         if (culling && draw.hasBounds && !bromath::fintersects(view.frustum, draw.bounds)) {
             frame.stats.shadowCulled++;
             continue;

@@ -60,6 +60,13 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::A
     casterBounds = bromath::aempty3();
     depthBounds = bromath::aempty3();
 
+    // A caster of the near range is in no cached page, so it has no state
+    // to keep: drawn into the sway level's overlays wherever it is, its
+    // coming, going and changing redraw nothing.
+    auto nearCaster = [&](uint32_t id, const bromath::AABB3& wb) {
+        pages.addDynamic(wb, true);
+        shadowMotion_[id] = ShadowMotion::Swaying;
+    };
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
@@ -67,7 +74,11 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::A
             // Unlit meshes never cast (a custom shader suppresses unlit).
             const bool casts = m->castsShadow() && !m->effectiveUnlit();
             if (casts && m->hasDrawableMesh()) {
-                if (const auto wb = nodeWorldBounds(m)) {
+                if (const auto wb = nodeWorldBounds(m); wb && m->shadowRange() == ShadowRange::Near) {
+                    nearCaster(m->id(), *wb);
+                    casterBounds = bromath::amerge(casterBounds, *wb);
+                    depthBounds = bromath::amerge(depthBounds, *nodeWorldBounds(m, false));
+                } else if (wb) {
                     auto* sm = m->asSkinnedMesh();
                     const bool skinned = sm && sm->skinReady();
                     // A custom vertex chunk displaces with no generation signal.
@@ -90,7 +101,11 @@ void SceneRenderer::gatherShadowCasters(bromath::AABB3& casterBounds, bromath::A
             const bool casts = m->castsShadow() &&
                                (procedural || (!m->effectiveUnlit() && !m->mesh().empty() && m->instanceCount() > 0));
             if (casts) {
-                if (const auto wb = nodeWorldBounds(m)) {
+                if (const auto wb = nodeWorldBounds(m); wb && m->shadowRange() == ShadowRange::Near) {
+                    nearCaster(m->id(), *wb);
+                    casterBounds = bromath::amerge(casterBounds, *wb);
+                    depthBounds = bromath::amerge(depthBounds, *nodeWorldBounds(m, false));
+                } else if (wb) {
                     const CustomShaderState* cs = m->customShader();
                     // A custom vertex chunk displaces, and a GPU count changes
                     // what is drawn, with no generation signal.

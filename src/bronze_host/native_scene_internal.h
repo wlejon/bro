@@ -157,6 +157,11 @@ inline scene::SceneNode* nodeOf(void* self) {
     return (c && c->tag == kHostSceneNodeTag) ? c->node() : nullptr;
 }
 
+/// A shadowRange option's value: 'near', 'far', anything else 'all'.
+inline scene::ShadowRange shadowRangeOf(const std::string& s) {
+    return s == "near" ? scene::ShadowRange::Near : s == "far" ? scene::ShadowRange::Far : scene::ShadowRange::All;
+}
+
 inline HostSceneNodeCell* nodeCellOf(void* self) {
     auto* c = static_cast<HostSceneNodeCell*>(self);
     return (c && c->tag == kHostSceneNodeTag) ? c : nullptr;

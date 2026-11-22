@@ -3,6 +3,7 @@
 #include "scene/custom_shader.h"
 #include "scene/scene_node.h"
 #include "scene/world/shade_map.h"
+#include "scene/world/shadow_plan.h"
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
@@ -282,6 +283,11 @@ public:
     /// draws itself another way (an impostor, a raymarched volume).
     void setShadowOnly(bool b) { shadowOnly_ = b; }
     bool shadowOnly() const { return shadowOnly_; }
+    /// Which part of its sun shadow it casts (ShadowRange): All, Near (the
+    /// sway level's overlays alone: its coming and going redraws no cached
+    /// page) or Far (the cached pages past the sway level alone).
+    void setShadowRange(ShadowRange r) { shadowRange_ = r; }
+    ShadowRange shadowRange() const { return shadowRange_; }
 
     /// Whether light contributions to this mesh are shadow-attenuated. Default
     /// true. Set false for geometry that should stay fully lit regardless of
@@ -646,6 +652,7 @@ private:
 
     bool castsShadow_ = true;
     bool shadowOnly_ = false;
+    ShadowRange shadowRange_ = ShadowRange::All;
     bool receivesShadow_ = true;
     bool twoSided_ = false;
     bool volume_ = false;
