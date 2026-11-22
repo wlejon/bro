@@ -16,6 +16,7 @@ pub const DAG_BRICK_UNIFORM_CARVE: u32 = 2u;
 pub const REGION_ENABLED: u32 = 1u;
 pub const REGION_HAS_CARVE: u32 = 2u;
 pub const REGION_CAST_SHADOW: u32 = 4u;
+pub const REGION_FOLIAGE: u32 = 8u;
 
 // vec4s a region takes in the regions buffer (GpuVoxelRegion).
 pub const REGION_STRIDE: u32 = 6u;
@@ -57,6 +58,17 @@ pub struct TraceHit {
     roughness: f32,
     emissive: f32,
     voxel_size: f32,
+}
+
+// A voxel's own number in [0, 1), from its cell in a region and the region.
+fn voxel_hash01(x: u32, y: u32, z: u32, s: u32) -> f32 {
+    var h: u32 = (x * 0x8da6b343u) ^ (y * 0xd8163841u) ^ (z * 0xcb1ab31fu) ^ (s * 0x165667b1u);
+    h ^= h >> 15u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12u;
+    h *= 0x297a2d39u;
+    h ^= h >> 15u;
+    return ((h >> 8u) as f32) * (1.0 / 16777216.0);
 }
 
 pub fn no_hit() -> TraceHit {
@@ -622,15 +634,29 @@ pub fn trace_region_dithered<BReg, BN, BC, BB, BA, BClip, BF>(
                     let bidx = vx + (vy << 2u) + ((vz << 4u));
                     let vox_min = sub_min + vec3<f32>(vx as f32, vy as f32, vz as f32) * vox_size;
                     let vox_max = vox_min + vec3<f32>(vox_size, vox_size, vox_size);
-                    if (bit64_set(b0.x, b0.y, bidx)) {
-                        var attr0: u32 = b1.y;
-                        var attr1: u32 = b1.z;
+                    var attr0: u32 = b1.y;
+                    var attr1: u32 = b1.z;
+                    var solid_here: bool = bit64_set(b0.x, b0.y, bidx);
+                    if (solid_here) {
                         if ((b1.w & DAG_BRICK_UNIFORM_ATTR) == 0u) {
                             let rank = popcount64_below(b0.x, b0.y, bidx);
                             let aidx = ((b1.x + rank) * 2u) as i32;
                             attr0 = attrs[aidx];
                             attr1 = attrs[aidx + 1];
                         }
+                        // A voxel's alpha is its opacity: the ray passes one
+                        // with probability 1 - alpha, the same voxels for
+                        // every pixel (a hash of where it is), so a crown of
+                        // leaves has the holes the leaves leave.
+                        let op = unpack_rgba8(attr0).w;
+                        if (op < 0.999) {
+                            let gx = ((ix >> sh) << 2u) + vx;
+                            let gy = ((iy >> sh) << 2u) + vy;
+                            let gz = ((iz >> sh) << 2u) + vz;
+                            solid_here = voxel_hash01(gx, gy, gz, ri) < op;
+                        }
+                    }
+                    if (solid_here) {
                         let col_a = unpack_rgba8(attr0);
                         let ln = unpack_oct_normal(attr1);
                         var wn: vec3<f32> = r1.xyz * ln.x + r2.xyz * ln.y + r3.xyz * ln.z;

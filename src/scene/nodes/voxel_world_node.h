@@ -21,6 +21,8 @@ namespace bro::scene {
 inline constexpr uint32_t kVoxelRegionEnabled = 1u << 0;
 inline constexpr uint32_t kVoxelRegionHasCarve = 1u << 1;
 inline constexpr uint32_t kVoxelRegionCastShadow = 1u << 2;
+// Its content is leaves: hits are lit two-sided, light coming through them.
+inline constexpr uint32_t kVoxelRegionFoliage = 1u << 3;
 
 /// GPU layout for one active SVDAG region (`6 * vec4<f32>` = 96 bytes; voxeldag.bk REGION_STRIDE).
 struct alignas(16) GpuVoxelRegion {

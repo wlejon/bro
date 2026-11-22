@@ -173,6 +173,10 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
             local_up = ao_vec * (1.0 / max(al, 1e-5));
         }
     }
+    // Leaves are lit as a mesh leaf is (draw/mesh.bk: two-sided, subsurface
+    // 0.5, translucency 0.7), the sun coming through them.
+    let foliage = (bitcast<u32>(b_regions[(ri * voxeldag::REGION_STRIDE + 4u) as i32].z) &
+                   voxeldag::REGION_FOLIAGE) != 0u;
     let hemi = 0.5 + 0.5 * dot(best.normal, local_up);
     let sky_vis = clamp(mix(0.28, 1.0, sun_vis) * mix(0.45, 1.0, hemi), 0.16, 1.0);
 
@@ -185,9 +189,9 @@ fn shade_voxeldag(ri: u32) -> VoxelFragOut {
         metallic: 0.0,
         roughness: clamp(best.roughness, 0.08, 1.0),
         receives_shadow: true,
-        two_sided: false,
-        subsurface: 0.0,
-        translucency: 0.0,
+        two_sided: foliage,
+        subsurface: foliage ? 0.5 : 0.0,
+        translucency: foliage ? 0.7 : 0.0,
         sun_visibility: sun_vis,
         sky_visibility: sky_vis,
         sky_normal: best.normal,

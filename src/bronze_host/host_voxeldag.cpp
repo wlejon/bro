@@ -157,7 +157,7 @@ bromesh::VoxelState parseStateOpt(Value opts, bromesh::VoxelState fallback) {
 
 bromesh::DagVoxelizeOptions parseVoxOpts(Value opts, int depthDefault, bromesh::VoxelState stateDefault) {
     bromesh::DagVoxelizeOptions o;
-    const int d = std::clamp(depthDefault, 1, 5);
+    const int d = std::clamp(depthDefault, 1, 6);
     o.resolution = 4 << d;
     o.state = parseStateOpt(opts, stateDefault);
     if (ev::isObject(opts)) {
@@ -228,8 +228,10 @@ void fillRegionFromOpts(Value opts, scene::VoxelRegion& r, bool isCreate) {
     }
     const bool enabled = boolOr(opts, "enabled", (r.flags & scene::kVoxelRegionEnabled) != 0u);
     const bool castShadow = boolOr(opts, "castShadow", (r.flags & scene::kVoxelRegionCastShadow) != 0u);
+    const bool foliage = boolOr(opts, "foliage", (r.flags & scene::kVoxelRegionFoliage) != 0u);
     r.flags = (enabled ? scene::kVoxelRegionEnabled : 0u) |
               (castShadow ? scene::kVoxelRegionCastShadow : 0u) |
+              (foliage ? scene::kVoxelRegionFoliage : 0u) |
               (r.flags & scene::kVoxelRegionHasCarve);
 }
 
@@ -409,7 +411,7 @@ Value buildSdfArchetype(Value self, std::span<const Value> args, bromesh::VoxelS
     if (args.empty()) return ev::throwTypeError("addArchetypeFromSdf: shape or callback required");
 
     const Rooted shapeOrFn(args[0]);
-    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 5) : 2;
+    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 6) : 2;
     const Rooted opts(args.size() >= 3 ? args[2] : ev::undefined());
     const bromesh::DagVoxelizeOptions dagOpts = parseVoxOpts(opts, depth, defaultState);
     const bromath::AABB3 box{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
@@ -448,7 +450,7 @@ Value js_addArchetypeFromMesh(Value self, std::span<const Value> args) {
     if (!readMeshArg(meshVal, mesh)) {
         return ev::throwTypeError("addArchetypeFromMesh: positions and indices required");
     }
-    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 5) : 2;
+    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 6) : 2;
     const Rooted opts(args.size() >= 3 ? args[2] : ev::undefined());
     const bromesh::DagVoxelizeOptions dagOpts = parseVoxOpts(opts, depth, bromesh::VoxelState::Solid);
     int outDepth = 0;
@@ -584,7 +586,7 @@ Value js_addArchetypeFromMeshLater(Value self, std::span<const Value> args) {
     if (!readMeshArg(args[0], job->mesh)) {
         return ev::throwTypeError("addArchetypeFromMeshLater: positions and indices required");
     }
-    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 5) : 2;
+    const int depth = args.size() >= 2 && ev::isNumber(args[1]) ? std::clamp(static_cast<int>(ev::toDouble(args[1])), 1, 6) : 2;
     const Rooted opts(args.size() >= 3 ? args[2] : ev::undefined());
     job->opts = parseVoxOpts(opts, depth, bromesh::VoxelState::Solid);
     voxelizeWorker().push(job);

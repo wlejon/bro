@@ -84,6 +84,9 @@
  * with neither a gap nor an overlap at any u.
  * @property {boolean} [enabled=true]
  * @property {boolean} [castShadow=true]
+ * @property {boolean} [foliage=false] its content is leaves: lit two-sided,
+ *                                     the sun shining through (as a mesh
+ *                                     leaf is), at every distance
  * @property {number} [animTickOffset=0]
  */
 
@@ -112,7 +115,7 @@ class VoxelWorld {
      * Voxelise a triangle mesh (a bro.mesh Mesh or { positions, indices,
      * normals?, colors? }) into a subtree.
      * @param {Mesh|Object} mesh
-     * @param {number} [depth=2] 1..5: (4 << depth)^3 voxels
+     * @param {number} [depth=2] 1..6: (4 << depth)^3 voxels (6: 256^3)
      * @param {Object} [opts]
      * @param {boolean} [opts.unitBounds=false] the mesh's [-1, 1]^3 maps to the
      *        archetype's cube as is (parts outside are cut), so patches made at
