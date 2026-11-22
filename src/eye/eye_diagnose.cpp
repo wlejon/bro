@@ -59,6 +59,26 @@ bool isGroundOrTerrainName(const std::string& name) {
            lower.find("bedplate") != std::string::npos;
 }
 
+bool isArchitecturalOrUrbanName(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (unsigned char c : name) {
+        lower.push_back(static_cast<char>(std::tolower(c)));
+    }
+    static constexpr const char* kUrbanTokens[] = {
+        "bldg", "building", "wall", "door", "window", "glass", "slab", "roof",
+        "floor", "stair", "elevator", "parallax", "shell", "facade", "tower",
+        "furn_", "table", "chair", "desk", "sofa", "bed", "counter", "shelf",
+        "lamp", "road", "street", "sidewalk", "ground", "plaza", "car",
+        "vehicle", "traffic", "bridge", "curb", "pillar", "column", "frame",
+        "panel", "rail", "deck", "lantern", "porch", "masonry",
+    };
+    for (const char* tok : kUrbanTokens) {
+        if (lower.find(tok) != std::string::npos) return true;
+    }
+    return false;
+}
+
 bool sampleTextureMeanSrgb(const scene::NodeTexture& tex, const float* tint, double& outR, double& outG, double& outB) {
     if (tex.empty() || tex.rgba.size() < static_cast<size_t>(tex.width) * tex.height * 4) return false;
     const int stepX = std::max(1, tex.width / 32);
@@ -543,7 +563,7 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
             }
         }
 
-        if (ac.count >= 1200 && ms.axisGridScore > 0.72 && ms.detailEntropy > 0.03) {
+        if (ac.count >= 1200 && ms.axisGridScore > 0.72 && ms.detailEntropy > 0.03 && !isArchitecturalOrUrbanName(ac.name)) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), "axisGrid=%.2f entropy=%.3f", ms.axisGridScore, ms.detailEntropy);
             pushAnomaly("axis_grid", "warning", ac, ms.axisGridScore, msg);
