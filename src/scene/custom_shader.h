@@ -58,11 +58,13 @@ struct CustomShaderState {
     std::string key;
     std::vector<CustomShaderUniform> uniforms;
     bool hasVertex = false;   // module defines fn vertex
+    bool hasVertexPos = false;   // fn vertex may modify vertex position
 
     bool isModule() const { return !module.empty(); }
 
     void rebuildKey() {
         hasVertex = kernelSourceDefinesFn(module, "vertex");
+        hasVertexPos = hasVertex && kernelSourceModifiesVertexPos(module);
         size_t h = std::hash<std::string>{}(module);
         for (const auto& m : modules) {
             h ^= std::hash<std::string>{}(m.first) + 0x9e3779b9 + (h << 6) + (h >> 2);

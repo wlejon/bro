@@ -1,8 +1,10 @@
 #include "eye/eye_structure.h"
+#include "eye/eye_structure_collect.h"
+#include "eye/eye_structure_floors.h"
 #include "eye/eye_structure_islands.h"
+#include "eye/eye_structure_walk.h"
 #include "eye/eye_draw_internal.h"
 
-#include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
 #include <broimage/encode.h>
 #include <bromath/aabb.h>
@@ -17,6 +19,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <limits>
+#include <numeric>
 #include <queue>
 #include <unordered_map>
 #include <vector>
@@ -24,71 +27,16 @@
 namespace bro::eye {
 namespace {
 
-struct MeshEntry {
-    scene::MeshNode* node = nullptr;
-    std::string name;
-    bromath::Mat4 world{};
-    bromath::Mat4 invWorld{};
-    bromath::AABB3 worldBox{};
-    float detSign = 1.0f;
-    bool ignored = false;
-    bool groundNamed = false;
-    bool grounded = false;
-};
-
-bromath::Vec3 mulPt(const bromath::Mat4& m, const bromath::Vec3& v) {
-    const float* d = m.data;
-    return {
-        d[0] * v.x + d[4] * v.y + d[8]  * v.z + d[12],
-        d[1] * v.x + d[5] * v.y + d[9]  * v.z + d[13],
-        d[2] * v.x + d[6] * v.y + d[10] * v.z + d[14],
-    };
-}
-
-bromath::Vec3 mulDir(const bromath::Mat4& m, const bromath::Vec3& v) {
-    const float* d = m.data;
-    return {
-        d[0] * v.x + d[4] * v.y + d[8]  * v.z,
-        d[1] * v.x + d[5] * v.y + d[9]  * v.z,
-        d[2] * v.x + d[6] * v.y + d[10] * v.z,
-    };
-}
-
-bromath::AABB3 worldAabb(const bromath::AABB3& b, const bromath::Mat4& m) {
-    bromath::AABB3 out = bromath::aempty3();
-    for (int i = 0; i < 8; ++i) {
-        out = bromath::aexpand(out, mulPt(m, {
-            (i & 1) ? b.max.x : b.min.x,
-            (i & 2) ? b.max.y : b.min.y,
-            (i & 4) ? b.max.z : b.min.z,
-        }));
-    }
-    return out;
-}
-
-double aabbGap(const bromath::AABB3& a, const bromath::AABB3& b) {
-    const double dx = std::max(0.0f, std::max(a.min.x - b.max.x, b.min.x - a.max.x));
-    const double dy = std::max(0.0f, std::max(a.min.y - b.max.y, b.min.y - a.max.y));
-    const double dz = std::max(0.0f, std::max(a.min.z - b.max.z, b.min.z - a.max.z));
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-bool containsAny(const std::string& hay, const std::vector<std::string>& needles) {
-    for (const auto& s : needles) {
-        if (!s.empty() && hay.find(s) != std::string::npos) return true;
-    }
-    return false;
-}
-
 struct WindingStats {
     bool closed = false;
     double signedVolume = 0.0;
     double badNormalRatio = 0.0;
 };
 
-WindingStats inspectWinding(const MeshEntry& e) {
+WindingStats inspectWinding(const StructureMeshEntry& e) {
     WindingStats ws;
-    const auto& md = e.node->mesh();
+    if (!e.mesh) return ws;
+    const auto& md = *e.mesh;
     const size_t tc = md.triangleCount();
     const size_t vc = md.vertexCount();
     if (tc == 0 || vc == 0) return ws;
@@ -135,18 +83,22 @@ WindingStats inspectWinding(const MeshEntry& e) {
     if (checkedNrm > 0) ws.badNormalRatio = static_cast<double>(badNrm) / checkedNrm;
     if (checkClosure && !edgeCounts.empty()) {
         size_t boundary = 0;
-        for (const auto& [k, c] : edgeCounts) if (c < 2) ++boundary;
+        for (const auto& [k, c] : edgeCounts) {
+            (void)k;
+            if (c < 2) ++boundary;
+        }
         ws.closed = (static_cast<double>(boundary) / edgeCounts.size()) < 0.05;
         ws.signedVolume = (vol6 / 6.0) * e.detSign;
     }
     return ws;
 }
 
-std::vector<bromath::Vec3> sampleWorldSurface(const MeshEntry& e) {
-    const auto& md = e.node->mesh();
+std::vector<bromath::Vec3> sampleWorldSurface(const StructureMeshEntry& e) {
+    std::vector<bromath::Vec3> pts;
+    if (!e.mesh) return pts;
+    const auto& md = *e.mesh;
     const size_t vc = md.vertexCount();
     const size_t tc = md.triangleCount();
-    std::vector<bromath::Vec3> pts;
     const size_t vStep = std::max<size_t>(1, vc / 80);
     for (size_t i = 0; i < vc; i += vStep) {
         pts.push_back(mulPt(e.world, {md.positions[i * 3], md.positions[i * 3 + 1], md.positions[i * 3 + 2]}));
@@ -165,31 +117,27 @@ std::vector<bromath::Vec3> sampleWorldSurface(const MeshEntry& e) {
     return pts;
 }
 
-double meshSurfaceDist(const MeshEntry& a, const MeshEntry& b,
+double meshSurfaceDist(const StructureMeshEntry& a, const StructureMeshEntry& b,
                        const std::vector<bromath::Vec3>& ptsA,
                        const std::vector<bromath::Vec3>& ptsB,
                        bromath::Vec3& outPtA, bromath::Vec3& outPtB) {
     double best = std::numeric_limits<double>::infinity();
-    const auto& bvhB = b.node->bvh();
-    const auto& mdB = b.node->mesh();
-    if (!bvhB.empty()) {
+    if (b.bvh && !b.bvh->empty() && b.mesh) {
         for (const auto& pa : ptsA) {
             const bromath::Vec3 lb = mulPt(b.invWorld, pa);
             const float q[3] = {lb.x, lb.y, lb.z};
-            const auto hit = bvhB.closestPoint(mdB, q);
+            const auto hit = b.bvh->closestPoint(*b.mesh, q);
             if (!hit.hit) continue;
             const bromath::Vec3 pb = mulPt(b.world, {hit.position[0], hit.position[1], hit.position[2]});
             const double d = bromath::vlen(pb - pa);
             if (d < best) { best = d; outPtA = pa; outPtB = pb; }
         }
     }
-    const auto& bvhA = a.node->bvh();
-    const auto& mdA = a.node->mesh();
-    if (!bvhA.empty()) {
+    if (a.bvh && !a.bvh->empty() && a.mesh) {
         for (const auto& pb : ptsB) {
             const bromath::Vec3 la = mulPt(a.invWorld, pb);
             const float q[3] = {la.x, la.y, la.z};
-            const auto hit = bvhA.closestPoint(mdA, q);
+            const auto hit = a.bvh->closestPoint(*a.mesh, q);
             if (!hit.hit) continue;
             const bromath::Vec3 pa = mulPt(a.world, {hit.position[0], hit.position[1], hit.position[2]});
             const double d = bromath::vlen(pb - pa);
@@ -199,6 +147,16 @@ double meshSurfaceDist(const MeshEntry& a, const MeshEntry& b,
     return best;
 }
 
+int findEntryByName(const std::vector<StructureMeshEntry>& entries, const std::string& key) {
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].name == key) return static_cast<int>(i);
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].baseName == key) return static_cast<int>(i);
+    }
+    return -1;
+}
+
 }  // namespace
 
 EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructureOptions& opts) {
@@ -206,50 +164,42 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
     const double contactTol = std::clamp(opts.contactTol, 0.001, 0.5);
     const double overhangTol = std::clamp(opts.overhangTol, 0.05, 0.95);
 
-    std::vector<MeshEntry> entries;
-    graph.root()->traverse([&](scene::SceneNode* node) {
-        if (!node || !node->visible()) return;
-        if (node->type() == scene::SceneNode::Type::Mesh) {
-            auto* mn = static_cast<scene::MeshNode*>(node);
-            const auto& md = mn->mesh();
-            if (md.positions.empty() || md.indices.empty()) return;
-            MeshEntry me;
-            me.node = mn;
-            me.name = node->name().empty() ? ("mesh#" + std::to_string(node->id())) : node->name();
-            me.world = node->worldMatrix();
-            me.invWorld = bromath::minverse(me.world);
-            me.worldBox = worldAabb(mn->localBounds(), me.world);
-            const float* d = me.world.data;
-            const bromath::Vec3 c0{d[0], d[1], d[2]}, c1{d[4], d[5], d[6]}, c2{d[8], d[9], d[10]};
-            me.detSign = (bromath::vdot(c0, bromath::vcross(c1, c2)) < 0.0f) ? -1.0f : 1.0f;
-            me.ignored = containsAny(me.name, opts.ignoreFloating);
-            me.groundNamed = (me.name.find("Floor") != std::string::npos ||
-                              me.name.find("Ground") != std::string::npos ||
-                              me.name.find("Terrain") != std::string::npos ||
-                              me.name.find("Bedplate") != std::string::npos);
-            me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
-            entries.push_back(std::move(me));
-        }
-    });
-
+    std::vector<StructureMeshEntry> entries = collectStructureEntries(graph, opts, res.instancedMeshCount);
     const size_t n = entries.size();
     res.meshCount = static_cast<int>(n);
-    if (n == 0) return res;
+    if (n == 0) {
+        std::vector<ResolvedFloor> emptyFloors;
+        prepareFloors(entries, opts, emptyFloors, res);
+        analyzeInteriorWalk(entries, emptyFloors, opts, res);
+        finalizeFloorSummaries(emptyFloors, res);
+        res.ok = res.issues.empty();
+        return res;
+    }
+
+    std::vector<ResolvedFloor> resolvedFloors;
+    prepareFloors(entries, opts, resolvedFloors, res);
 
     std::vector<std::vector<bromath::Vec3>> samples(n);
     std::vector<std::vector<IslandSummary>> islandsPerNode(n);
+    std::unordered_map<const bromesh::MeshData*, std::vector<LocalIsland>> localIslandCache;
     for (size_t i = 0; i < n; ++i) {
         samples[i] = sampleWorldSurface(entries[i]);
         const auto& e = entries[i];
-        if (opts.checkIslands && !e.node->twoSided() && e.node->color()[3] >= 0.99f) {
-            islandsPerNode[i] = extractMeshIslands(*e.node, e.world, e.detSign, opts.groundY);
+        if (opts.checkIslands && !e.twoSided && e.alpha >= 0.99f && e.mesh) {
+            auto it = localIslandCache.find(e.mesh);
+            if (it == localIslandCache.end()) {
+                it = localIslandCache.emplace(e.mesh, extractLocalIslands(*e.mesh)).first;
+            }
+            if (!it->second.empty()) {
+                islandsPerNode[i] = instantiateIslands(it->second, *e.mesh, e.world, e.detSign, opts.groundY);
+            }
         }
     }
 
     // A. Inverted face / winding checks (per connected island when decomposed, else whole-node fallback)
     for (size_t i = 0; i < n; ++i) {
         const auto& e = entries[i];
-        if (e.node->twoSided() || e.node->color()[3] < 0.99f) continue;
+        if (e.twoSided || e.alpha < 0.99f) continue;
 
         if (!islandsPerNode[i].empty()) {
             int badIslands = 0;
@@ -323,13 +273,10 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         }
     }
 
-    // B. Watch pairs gap measurements & global surface-contact connectivity BFS
+    // B. Watch pairs gap measurements & sweep-and-prune surface-contact connectivity BFS
     for (const auto& [ka, kb] : opts.watchPairs) {
-        int ia = -1, ib = -1;
-        for (size_t i = 0; i < n; ++i) {
-            if (ia < 0 && entries[i].name == ka) ia = static_cast<int>(i);
-            if (ib < 0 && entries[i].name == kb) ib = static_cast<int>(i);
-        }
+        const int ia = findEntryByName(entries, ka);
+        const int ib = findEntryByName(entries, kb);
         if (ia < 0 || ib < 0 || ia == ib) continue;
         bromath::Vec3 pA{}, pB{};
         const double gap = meshSurfaceDist(entries[ia], entries[ib], samples[ia], samples[ib], pA, pB);
@@ -356,23 +303,26 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         }
     }
 
-    std::vector<std::vector<size_t>> adj(n);
-    std::vector<double> nearestDist(n, std::numeric_limits<double>::infinity());
-    std::vector<size_t> nearestIdx(n, 0);
-    std::vector<bromath::Vec3> nearestPt(n);
+    std::vector<size_t> sweepOrder(n);
+    std::iota(sweepOrder.begin(), sweepOrder.end(), 0);
+    std::sort(sweepOrder.begin(), sweepOrder.end(), [&](size_t a, size_t b) {
+        return entries[a].worldBox.min.x < entries[b].worldBox.min.x;
+    });
 
-    for (size_t i = 0; i < n; ++i) {
-        for (size_t j = i + 1; j < n; ++j) {
-            const double bg = aabbGap(entries[i].worldBox, entries[j].worldBox);
-            if (bg > contactTol * 2.5 && bg > nearestDist[i] && bg > nearestDist[j]) continue;
+    std::vector<std::vector<size_t>> adj(n);
+    for (size_t sa = 0; sa < n; ++sa) {
+        const size_t i = sweepOrder[sa];
+        const float maxXi = entries[i].worldBox.max.x + static_cast<float>(contactTol);
+        for (size_t sb = sa + 1; sb < n; ++sb) {
+            const size_t j = sweepOrder[sb];
+            if (entries[j].worldBox.min.x > maxXi) break;
+            if (aabbGap(entries[i].worldBox, entries[j].worldBox) > contactTol) continue;
             bromath::Vec3 pA{}, pB{};
             const double d = meshSurfaceDist(entries[i], entries[j], samples[i], samples[j], pA, pB);
             if (d <= contactTol) {
                 adj[i].push_back(j);
                 adj[j].push_back(i);
             }
-            if (d < nearestDist[i]) { nearestDist[i] = d; nearestIdx[i] = j; nearestPt[i] = pA; }
-            if (d < nearestDist[j]) { nearestDist[j] = d; nearestIdx[j] = i; nearestPt[j] = pB; }
         }
     }
 
@@ -391,48 +341,62 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
 
     for (size_t i = 0; i < n; ++i) {
         if (reached[i] || entries[i].ignored) continue;
+        double nearestDist = std::numeric_limits<double>::infinity();
+        size_t nearestIdx = 0;
+        for (size_t j = 0; j < n; ++j) {
+            if (j == i) continue;
+            const double bg = aabbGap(entries[i].worldBox, entries[j].worldBox);
+            if (bg > nearestDist) continue;
+            bromath::Vec3 pA{}, pB{};
+            const double d = meshSurfaceDist(entries[i], entries[j], samples[i], samples[j], pA, pB);
+            if (d < nearestDist) { nearestDist = d; nearestIdx = j; }
+        }
+
         ++res.floatingCount;
+        if (!resolvedFloors.empty() && entries[i].floorIndex >= 0 &&
+            static_cast<size_t>(entries[i].floorIndex) < resolvedFloors.size()) {
+            resolvedFloors[static_cast<size_t>(entries[i].floorIndex)].floatingCount += 1;
+        }
         const bromath::Vec3 ctr = bromath::acenter(entries[i].worldBox);
         const bromath::Vec3 ext = bromath::aextent(entries[i].worldBox);
         EyeStructureIssue iss;
         iss.kind = "floating";
         iss.severity = "error";
         iss.nodeA = entries[i].name;
-        iss.nodeB = entries[nearestIdx[i]].name;
-        iss.value = nearestDist[i];
+        iss.nodeB = entries[nearestIdx].name;
+        iss.value = nearestDist;
         iss.point[0] = ctr.x; iss.point[1] = ctr.y; iss.point[2] = ctr.z;
         iss.radius = std::max(0.24, 0.55 * bromath::vlen(ext));
         char buf[160];
         std::snprintf(buf, sizeof(buf), "%s is floating/disconnected (nearest: %s at %.3fu)",
-                      entries[i].name.c_str(), entries[nearestIdx[i]].name.c_str(), nearestDist[i]);
+                      entries[i].name.c_str(), entries[nearestIdx].name.c_str(), nearestDist);
         iss.message = buf;
         res.issues.push_back(std::move(iss));
     }
 
     // Intra-node per-island connectivity & gravity-aware external support audit
     if (opts.checkIslands) {
-        std::vector<scene::MeshNode*> allNodes(n);
-        std::vector<bromath::Mat4> allWorlds(n), allInvWorlds(n);
-        std::vector<bromath::AABB3> allBoxes(n);
+        std::vector<MeshGeomRef> allGeoms(n);
         for (size_t i = 0; i < n; ++i) {
-            allNodes[i] = entries[i].node;
-            allWorlds[i] = entries[i].world;
-            allInvWorlds[i] = entries[i].invWorld;
-            allBoxes[i] = entries[i].worldBox;
+            allGeoms[i] = {entries[i].mesh, entries[i].bvh, entries[i].world, entries[i].invWorld, entries[i].worldBox};
         }
         for (size_t i = 0; i < n; ++i) {
             const auto& e = entries[i];
-            if (!reached[i] || e.ignored || e.groundNamed) continue;
+            if (!reached[i] || e.ignored || e.groundNamed || e.isFloorAnchor) continue;
             if (islandsPerNode[i].size() < 2 || islandsPerNode[i].size() > 128) continue;
 
             int floatIsl = 0;
             double worstGap = 0.0, worstRad = 0.24;
             bromath::Vec3 worstCtr{};
-            auditIslandGrounding(islandsPerNode[i], i, allNodes, allWorlds, allInvWorlds, allBoxes,
+            auditIslandGrounding(islandsPerNode[i], i, allGeoms,
                                  contactTol, floatIsl, worstGap, worstCtr, worstRad);
             if (floatIsl > 0) {
                 ++res.floatingCount;
                 res.floatingIslandCount += floatIsl;
+                if (!resolvedFloors.empty() && e.floorIndex >= 0 &&
+                    static_cast<size_t>(e.floorIndex) < resolvedFloors.size()) {
+                    resolvedFloors[static_cast<size_t>(e.floorIndex)].floatingCount += 1;
+                }
                 EyeStructureIssue iss;
                 iss.kind = "floating";
                 iss.severity = "error";
@@ -450,17 +414,22 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         }
     }
 
+    // Multi-floor footing audit
+    std::vector<bool> handledByFloorAudit;
+    auditFloorFootings(entries, opts, reached, overhangTol, resolvedFloors, res, handledByFloorAudit);
+
     // C. Overhanging base footing check for resting flat-footed pillars/pedestals/supports
     for (size_t i = 0; i < n; ++i) {
+        if (!handledByFloorAudit.empty() && handledByFloorAudit[i]) continue;
         const auto& e = entries[i];
-        if (e.ignored || e.grounded || e.node->twoSided() || e.node->color()[3] < 0.99f) continue;
+        if (e.ignored || e.grounded || e.isFloorAnchor || e.twoSided || e.alpha < 0.99f) continue;
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
         if (ext.y < 0.14f || ext.x < 0.10f || ext.z < 0.10f || ext.x > 1.8f || ext.z > 1.8f) continue;
-        if (ext.y < 0.45f * std::max(ext.x, ext.z)) continue;  // skip horizontal beams/shafts/blocks
+        if (ext.y < 0.45f * std::max(ext.x, ext.z)) continue;
 
-        const auto& bvhSelf = e.node->bvh();
-        const auto& mdSelf = e.node->mesh();
-        if (bvhSelf.empty()) continue;
+        if (!e.bvh || e.bvh->empty() || !e.mesh) continue;
+        const auto& bvhSelf = *e.bvh;
+        const auto& mdSelf = *e.mesh;
 
         int footSamples = 0, unsupported = 0;
         bromath::Vec3 missSum{0, 0, 0};
@@ -470,14 +439,22 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
             const float wx = e.worldBox.min.x + ext.x * (0.14f + 0.36f * ix);
             for (int iz = 0; iz < 3; ++iz) {
                 const float wz = e.worldBox.min.z + ext.z * (0.14f + 0.36f * iz);
-                // Require downward-facing flat base face near footY (ignores rounded shafts / angled rods)
                 const bromath::Vec3 probeW{wx, footY - 0.02f, wz};
                 const bromath::Vec3 loS = mulPt(e.invWorld, probeW);
-                const bromath::Vec3 ldS = bromath::vnorm(mulDir(e.invWorld, {0, 1, 0}));
+                const bromath::Vec3 ldSRaw = mulDir(e.invWorld, {0, 1, 0});
+                const float ldSLen = bromath::vlen(ldSRaw);
+                if (ldSLen < 1e-8f) continue;
+                const bromath::Vec3 ldS = ldSRaw * (1.0f / ldSLen);
                 const float opS[3] = {loS.x, loS.y, loS.z}, dpS[3] = {ldS.x, ldS.y, ldS.z};
-                const auto selfHit = bvhSelf.raycast(mdSelf, opS, dpS, 0.06f);
+                const auto selfHit = bvhSelf.raycast(mdSelf, opS, dpS, 0.06f * ldSLen);
                 if (!selfHit.hit) continue;
-                const bromath::Vec3 wNrm = bromath::vnorm(mulDir(e.world, {selfHit.normal[0], selfHit.normal[1], selfHit.normal[2]}));
+                const float* id = e.invWorld.data;
+                const float* ln = selfHit.normal;
+                const bromath::Vec3 wNrm = bromath::vnorm({
+                    id[0] * ln[0] + id[1] * ln[1] + id[2] * ln[2],
+                    id[4] * ln[0] + id[5] * ln[1] + id[6] * ln[2],
+                    id[8] * ln[0] + id[9] * ln[1] + id[10] * ln[2],
+                });
                 if (wNrm.y > -0.65f) continue;
 
                 ++footSamples;
@@ -485,17 +462,18 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
                 if (!hasSupportBelow) {
                     const bromath::Vec3 rayOrg{wx, footY + 0.03f, wz};
                     for (size_t j = 0; j < n; ++j) {
-                        if (j == i) continue;
+                        if (j == i || !entries[j].bvh || entries[j].bvh->empty() || !entries[j].mesh) continue;
                         const auto& bBox = entries[j].worldBox;
                         if (wx < bBox.min.x - 0.01f || wx > bBox.max.x + 0.01f ||
                             wz < bBox.min.z - 0.01f || wz > bBox.max.z + 0.01f ||
                             bBox.max.y < footY - 0.10f || bBox.min.y > footY + 0.05f) continue;
-                        const auto& bvhO = entries[j].node->bvh();
-                        if (bvhO.empty()) continue;
                         const bromath::Vec3 loO = mulPt(entries[j].invWorld, rayOrg);
-                        const bromath::Vec3 ldO = bromath::vnorm(mulDir(entries[j].invWorld, {0, -1, 0}));
+                        const bromath::Vec3 ldORaw = mulDir(entries[j].invWorld, {0, -1, 0});
+                        const float ldOLen = bromath::vlen(ldORaw);
+                        if (ldOLen < 1e-8f) continue;
+                        const bromath::Vec3 ldO = ldORaw * (1.0f / ldOLen);
                         const float opO[3] = {loO.x, loO.y, loO.z}, dpO[3] = {ldO.x, ldO.y, ldO.z};
-                        if (bvhO.raycast(entries[j].node->mesh(), opO, dpO, 0.11f).hit) {
+                        if (entries[j].bvh->raycast(*entries[j].mesh, opO, dpO, 0.11f * ldOLen).hit) {
                             hasSupportBelow = true;
                             break;
                         }
@@ -512,6 +490,10 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
             const double missRatio = static_cast<double>(unsupported) / footSamples;
             if (missRatio >= overhangTol) {
                 ++res.overhangCount;
+                if (!resolvedFloors.empty() && e.floorIndex >= 0 &&
+                    static_cast<size_t>(e.floorIndex) < resolvedFloors.size()) {
+                    resolvedFloors[static_cast<size_t>(e.floorIndex)].overhangCount += 1;
+                }
                 const bromath::Vec3 mc = missSum * (1.0f / static_cast<float>(unsupported));
                 EyeStructureIssue iss;
                 iss.kind = "overhang";
@@ -528,6 +510,10 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
             }
         }
     }
+
+    // Interior walkability (doorways, corridors, stairs, headroom)
+    analyzeInteriorWalk(entries, resolvedFloors, opts, res);
+    finalizeFloorSummaries(resolvedFloors, res);
 
     res.ok = res.issues.empty();
 

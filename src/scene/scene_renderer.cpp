@@ -404,6 +404,7 @@ bool SceneRenderer::compileShaderModule(CustomShaderTarget target, const std::st
         vk::KernelMeshHook hook;
         check.ok = vk::compileKernelMeshHook(target, module, file, modules, hook, check.err, knobs);
         check.hasVertex = check.ok && hook.hasVertex;
+        check.hasVertexPos = check.ok && hook.hasVertexPos;
     }
     hasVertexOut = check.hasVertex;
     errOut = check.err;

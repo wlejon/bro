@@ -186,11 +186,12 @@ public:
     /// The view jumped: what the last frames left was measured in a view no
     /// longer shown, so it is forgotten, and the new view settles (its
     /// budget at least settleMs until it has). (Kinds keep their costs.)
-    void cut() {
+    void cut(bool capToTarget = false) {
         need_.clear();
         over_ = false;
         settle_ = config_.settleFrames;
         quiet_ = 0;
+        capSettleToTarget_ = capToTarget;
     }
     bool settling() const { return settle_ > 0; }
     /// Every service spends at least settleMs a frame while on, as a cut
@@ -223,6 +224,7 @@ private:
     WorldServiceConfig config_;
     std::vector<double> need_;   // the last frames' ms apart from the service, newest last
     bool over_ = false;          // the last frame read ran over the target
+    bool capSettleToTarget_ = false; // cap live cut settle budget to targetMs when !s_settlingAll
     int settle_ = 0;             // frames a cut has left to settle in
     int quiet_ = 0;              // frames running it has left nothing worse than settleError queued
     float headroom_ = 0.0f;      // kept under the target (ms): the frames' surprise at overRate

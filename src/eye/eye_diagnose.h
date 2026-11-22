@@ -18,7 +18,7 @@ struct EyeDiagnoseOptions {
 };
 
 struct EyeDiagnoseAnomaly {
-    std::string kind;      // "bright_outlier" | "tint_mismatch" | "flat_plastic" | "axis_grid" | "no_shadow_caster" | "bloom_hotspot"
+    std::string kind;      // "bright_outlier" | "tint_mismatch" | "flat_plastic" | "axis_grid" | "no_shadow_caster" | "translucent_striation" | "bloom_hotspot"
     std::string severity;  // "error" | "warning"
     std::string nodeName;
     uint32_t nodeId = 0;
@@ -30,6 +30,8 @@ struct EyeDiagnoseAnomaly {
 struct EyeDiagnoseMeshStats {
     std::string name;
     uint32_t nodeId = 0;
+    bool instanced = false;
+    int instanceCount = 1;
     int screenPx = 0;
     double screenFrac = 0.0;
     double p10Lum = 0.0;

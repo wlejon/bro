@@ -305,13 +305,17 @@ bro.eye.probe = function(scene, opts) {};
 bro.eye.clearance = function(scene, opts) {};
 
 /**
- * Structural 3D assembly audit over a live SceneGraph: detects inside-out winding
- * (both whole-node and per connected triangle island), disconnected floating nodes/sub-parts,
- * overhanging support footings, and unmeshed watch-pair gaps.
+ * Structural 3D assembly audit over a live SceneGraph: evaluates both MeshNode and
+ * active non-degenerate InstancedMeshNode instances (supporting spatial `bounds`/`near`
+ * filtering and `maxInstances`), detects inside-out winding (whole-node and per-island),
+ * disconnected floating nodes/sub-parts, overhanging support footings, unmeshed watch-pair gaps,
+ * multi-floor slab separation & per-floor footings (`floors`, `autoDetectFloors`,
+ * `minFloorSeparation`), and triangle-accurate interior walkability (`interiorWalk` for
+ * doorways, corridors, stairs, and floor-to-floor headroom).
  * Optionally writes an auto-zoomed macro defect contact sheet PNG (`path`).
  * @param {Object} scene
- * @param {{contactTol?: number, overhangTol?: number, groundY?: number, checkIslands?: boolean, ignoreFloating?: string[], watchPairs?: [string, string][], path?: string, maxPanelDim?: number, maxZoomPanels?: number}} [opts]
- * @returns {{ok: boolean, meshCount: number, invertedCount: number, floatingCount: number, invertedIslandCount: number, floatingIslandCount: number, overhangCount: number, gapCount: number, issues: Object[], watchedGaps: Object[], path?: string}}
+ * @param {{contactTol?: number, overhangTol?: number, groundY?: number, checkIslands?: boolean, ignoreFloating?: string[], watchPairs?: [string, string][], bounds?: {min: number[], max: number[]}|number[], near?: {center?: number[], position?: number[], radius: number}|number[], maxInstances?: number, floors?: 'auto'|number[]|{y: number, tolerance?: number, name?: string}[], autoDetectFloors?: boolean, minFloorSeparation?: number, interiorWalk?: boolean|{enabled?: boolean, agentRadius?: number, agentHeight?: number, stepUp?: number, minHeadroom?: number, maxFloorGap?: number, sampleStep?: number, ignoreNodes?: string[], doorways?: Object[], corridors?: Object[], stairs?: Object[]}, path?: string, maxPanelDim?: number, maxZoomPanels?: number}} [opts]
+ * @returns {{ok: boolean, meshCount: number, instancedMeshCount: number, invertedCount: number, floatingCount: number, invertedIslandCount: number, floatingIslandCount: number, overhangCount: number, gapCount: number, floorDefectCount: number, issues: Object[], watchedGaps: Object[], floors: Object[], interiorWalk: Object, path?: string}}
  */
 bro.eye.structure = function(scene, opts) {};
 
@@ -355,13 +359,16 @@ bro.eye.trace = function(scene, opts) {};
 
 /**
  * Zero-image peripheral anomaly scanner over a live SceneGraph using opaque (`id`) and
- * translucent (`id_translucent`) GPU object-ID attribution. Reports ranked bright outliers,
- * texture-vs-albedo tint mismatches, flat/plastic surfaces, axis-grid repetition, shadow gaps,
- * translucent facet striations (`translucent_striation`), and HDR bloom hotspot clusters.
+ * translucent (`id_translucent`, triggered when `node.color[3] < 0.99` per `SceneMeshDrawer`)
+ * GPU object-ID attribution across both `MeshNode` and `InstancedMeshNode` (per-instance
+ * `rec[15]` encodes the atlas cell index and does not drive translucency). Reports ranked
+ * bright outliers, texture-vs-albedo tint mismatches, flat/plastic surfaces, axis-grid
+ * repetition, shadow gaps (`no_shadow_caster`), translucent facet striations
+ * (`translucent_striation`), and HDR bloom hotspot clusters.
  * Writes an auto-cropped sheet to `path` only when anomalies exist (or `alwaysRender: true`).
  * @param {Object} scene
  * @param {{minPixels?: number, alwaysRender?: boolean, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
- * @returns {{ok: boolean, width: number, height: number, visibleMeshes: number, anomalyCount: number, bloomHotspotCount: number, anomalies: Object[], meshes: Object[], path?: string}}
+ * @returns {{ok: boolean, width: number, height: number, visibleMeshes: number, anomalyCount: number, bloomHotspotCount: number, anomalies: Object[], meshes: {name: string, nodeId: number, instanced: boolean, instanceCount: number, screenPx: number, screenFrac: number, translucent: boolean, striationScore: number}[], path?: string}}
  */
 bro.eye.diagnose = function(scene, opts) {};
 

@@ -1,9 +1,5 @@
 #include "eye/eye_structure_islands.h"
 
-#include "scene/nodes/mesh_node.h"
-#include <bromesh/analysis/bvh.h>
-#include <bromesh/mesh_data.h>
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -173,18 +169,13 @@ bool islandsIntersectTris(const IslandSummary& ia, const IslandSummary& ib, cons
 
 }  // namespace
 
-std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
-                                              const bromath::Mat4& world,
-                                              float detSign,
-                                              double groundY,
-                                              size_t maxTris,
-                                              size_t maxIslands) {
-    const auto& md = node.mesh();
+std::vector<LocalIsland> extractLocalIslands(const bromesh::MeshData& md,
+                                             size_t maxTris,
+                                             size_t maxIslands) {
     const size_t vc = md.vertexCount();
     const size_t tc = md.triangleCount();
     if (vc == 0 || tc == 0 || tc > maxTris) return {};
 
-    // Weld vertices quantized to 0.1 mm so split hard-edge corners connect cleanly
     std::vector<uint32_t> weldedId(vc);
     std::unordered_map<QuantKey, uint32_t, QuantKeyHash> quantMap;
     quantMap.reserve(vc);
@@ -206,13 +197,12 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
         const uint32_t i1 = md.indices[t * 3 + 1];
         const uint32_t i2 = md.indices[t * 3 + 2];
         if (i0 >= vc || i1 >= vc || i2 >= vc) continue;
-        const uint32_t w0 = weldedId[i0], w1 = weldedId[i1], w2 = weldedId[i2];
-        dsu.unite(w0, w1);
-        dsu.unite(w1, w2);
+        dsu.unite(weldedId[i0], weldedId[i1]);
+        dsu.unite(weldedId[i1], weldedId[i2]);
     }
 
     std::unordered_map<uint32_t, size_t> rootToIsl;
-    std::vector<IslandSummary> islands;
+    std::vector<LocalIsland> islands;
     for (size_t t = 0; t < tc; ++t) {
         const uint32_t i0 = md.indices[t * 3 + 0];
         const uint32_t i1 = md.indices[t * 3 + 1];
@@ -222,9 +212,7 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
         auto [it, ins] = rootToIsl.emplace(root, islands.size());
         if (ins) {
             if (islands.size() >= maxIslands) return {};
-            IslandSummary isl;
-            isl.worldBox = bromath::aempty3();
-            islands.push_back(std::move(isl));
+            islands.emplace_back();
         }
         islands[it->second].triIndices.push_back(static_cast<uint32_t>(t));
     }
@@ -235,7 +223,7 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
         edges.clear();
         edges.reserve(isl.triIndices.size() * 2);
         double vol6 = 0.0;
-        size_t checkedNrm = 0, badNrm = 0;
+        size_t checkedNrm = 0, badPos = 0, badNeg = 0;
         const uint32_t refIdx = isl.triIndices.empty() ? 0u : md.indices[isl.triIndices[0] * 3];
         const bromath::Vec3 pRef = isl.triIndices.empty()
             ? bromath::Vec3{0, 0, 0}
@@ -248,9 +236,6 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
             const bromath::Vec3 p0{md.positions[i0 * 3], md.positions[i0 * 3 + 1], md.positions[i0 * 3 + 2]};
             const bromath::Vec3 p1{md.positions[i1 * 3], md.positions[i1 * 3 + 1], md.positions[i1 * 3 + 2]};
             const bromath::Vec3 p2{md.positions[i2 * 3], md.positions[i2 * 3 + 1], md.positions[i2 * 3 + 2]};
-            isl.worldBox = bromath::aexpand(isl.worldBox, mulPt(world, p0));
-            isl.worldBox = bromath::aexpand(isl.worldBox, mulPt(world, p1));
-            isl.worldBox = bromath::aexpand(isl.worldBox, mulPt(world, p2));
 
             const bromath::Vec3 fn = bromath::vcross(p1 - p0, p2 - p0);
             vol6 += static_cast<double>(bromath::vdot(p0 - pRef, fn));
@@ -271,14 +256,18 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
                 const bromath::Vec3 vn = n0 + n1 + n2;
                 if (bromath::vlen(vn) > 1e-6f) {
                     ++checkedNrm;
-                    if (bromath::vdot(fn, vn) * detSign < -1e-6f) ++badNrm;
+                    const float d = bromath::vdot(fn, vn);
+                    if (d < -1e-6f) ++badPos;
+                    if (-d < -1e-6f) ++badNeg;
                 }
             }
         }
 
-        isl.grounded = (isl.worldBox.min.y <= groundY + 0.05);
-        isl.signedVolume = (vol6 / 6.0) * detSign;
-        if (checkedNrm > 0) isl.badNormalRatio = static_cast<double>(badNrm) / checkedNrm;
+        isl.rawSignedVolume = vol6 / 6.0;
+        if (checkedNrm > 0) {
+            isl.badNormalRatioPos = static_cast<double>(badPos) / checkedNrm;
+            isl.badNormalRatioNeg = static_cast<double>(badNeg) / checkedNrm;
+        }
 
         size_t boundary = 0, shared = 0, reversed = 0;
         for (const auto& [k, acc] : edges) {
@@ -298,22 +287,63 @@ std::vector<IslandSummary> extractMeshIslands(const scene::MeshNode& node,
             const uint32_t t = isl.triIndices[k];
             for (int c = 0; c < 3; ++c) {
                 const uint32_t vi = md.indices[t * 3 + c];
-                isl.samples.push_back(mulPt(world, {md.positions[vi * 3], md.positions[vi * 3 + 1], md.positions[vi * 3 + 2]}));
+                isl.localSamples.push_back({md.positions[vi * 3], md.positions[vi * 3 + 1], md.positions[vi * 3 + 2]});
             }
         }
-        const bromath::Vec3 ctr = bromath::acenter(isl.worldBox);
-        isl.samples.push_back(ctr);
-        isl.samples.push_back({ctr.x, isl.worldBox.min.y, ctr.z});
     }
     return islands;
 }
 
+std::vector<IslandSummary> instantiateIslands(const std::vector<LocalIsland>& localIslands,
+                                              const bromesh::MeshData& md,
+                                              const bromath::Mat4& world,
+                                              float detSign,
+                                              double groundY) {
+    std::vector<IslandSummary> out;
+    out.reserve(localIslands.size());
+    for (const auto& li : localIslands) {
+        IslandSummary isl;
+        isl.worldBox = bromath::aempty3();
+        for (uint32_t t : li.triIndices) {
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t vi = md.indices[t * 3 + c];
+                const bromath::Vec3 p{md.positions[vi * 3], md.positions[vi * 3 + 1], md.positions[vi * 3 + 2]};
+                isl.worldBox = bromath::aexpand(isl.worldBox, mulPt(world, p));
+            }
+        }
+        isl.triIndices = li.triIndices;
+        isl.closed = li.closed;
+        isl.signedVolume = li.rawSignedVolume * detSign;
+        isl.badNormalRatio = detSign >= 0.0f ? li.badNormalRatioPos : li.badNormalRatioNeg;
+        isl.reversedEdgeRatio = li.reversedEdgeRatio;
+        isl.sharedEdges = li.sharedEdges;
+        isl.grounded = (isl.worldBox.min.y <= groundY + 0.05);
+        isl.samples.reserve(li.localSamples.size() + 2);
+        for (const auto& lp : li.localSamples) {
+            isl.samples.push_back(mulPt(world, lp));
+        }
+        const bromath::Vec3 ctr = bromath::acenter(isl.worldBox);
+        isl.samples.push_back(ctr);
+        isl.samples.push_back({ctr.x, isl.worldBox.min.y, ctr.z});
+        out.push_back(std::move(isl));
+    }
+    return out;
+}
+
+std::vector<IslandSummary> extractMeshIslands(const bromesh::MeshData& md,
+                                              const bromath::Mat4& world,
+                                              float detSign,
+                                              double groundY,
+                                              size_t maxTris,
+                                              size_t maxIslands) {
+    const auto locals = extractLocalIslands(md, maxTris, maxIslands);
+    if (locals.empty()) return {};
+    return instantiateIslands(locals, md, world, detSign, groundY);
+}
+
 void auditIslandGrounding(const std::vector<IslandSummary>& islands,
                           size_t selfIdx,
-                          const std::vector<scene::MeshNode*>& allNodes,
-                          const std::vector<bromath::Mat4>& allWorlds,
-                          const std::vector<bromath::Mat4>& allInvWorlds,
-                          const std::vector<bromath::AABB3>& allBoxes,
+                          const std::vector<MeshGeomRef>& allGeoms,
                           double contactTol,
                           int& outFloatingIslands,
                           double& outWorstGap,
@@ -322,11 +352,11 @@ void auditIslandGrounding(const std::vector<IslandSummary>& islands,
     outFloatingIslands = 0;
     outWorstGap = 0.0;
     const size_t m = islands.size();
-    if (m < 2 || m > 128) return;
+    if (m < 2 || m > 128 || selfIdx >= allGeoms.size() || !allGeoms[selfIdx].mesh) return;
 
-    const auto& selfMd = allNodes[selfIdx]->mesh();
-    const auto& selfWorld = allWorlds[selfIdx];
-    const auto& selfInv = allInvWorlds[selfIdx];
+    const auto& selfMd = *allGeoms[selfIdx].mesh;
+    const auto& selfWorld = allGeoms[selfIdx].world;
+    const auto& selfInv = allGeoms[selfIdx].invWorld;
 
     std::vector<bool> significant(m, false);
     int sigCount = 0;
@@ -339,7 +369,6 @@ void auditIslandGrounding(const std::vector<IslandSummary>& islands,
     }
     if (sigCount < 2) return;
 
-    // 1. Determine initial grounded/externally-supported anchor islands (with gravity-aware top-only filter)
     std::vector<bool> reached(m, false);
     std::queue<size_t> q;
     for (size_t i = 0; i < m; ++i) {
@@ -355,37 +384,40 @@ void auditIslandGrounding(const std::vector<IslandSummary>& islands,
         const float topBand = std::min(0.032f, std::max(0.014f, 0.25f * ext.y));
         bool extSup = false;
 
-        for (size_t b = 0; b < allNodes.size() && !extSup; ++b) {
-            if (b == selfIdx || !allNodes[b]) continue;
-            if (aabbGap(islands[i].worldBox, allBoxes[b]) > contactTol) continue;
-            const auto& bvhB = allNodes[b]->bvh();
-            const auto& mdB = allNodes[b]->mesh();
+        for (size_t b = 0; b < allGeoms.size() && !extSup; ++b) {
+            if (b == selfIdx || !allGeoms[b].mesh || !allGeoms[b].bvh) continue;
+            if (aabbGap(islands[i].worldBox, allGeoms[b].worldBox) > contactTol) continue;
+            const auto& bvhB = *allGeoms[b].bvh;
+            const auto& mdB = *allGeoms[b].mesh;
             if (bvhB.empty()) continue;
 
             for (const auto& pa : islands[i].samples) {
-                const bromath::Vec3 lb = mulPt(allInvWorlds[b], pa);
+                const bromath::Vec3 lb = mulPt(allGeoms[b].invWorld, pa);
                 const float qPt[3] = {lb.x, lb.y, lb.z};
                 const auto hit = bvhB.closestPoint(mdB, qPt);
                 if (!hit.hit) continue;
-                const bromath::Vec3 pb = mulPt(allWorlds[b], {hit.position[0], hit.position[1], hit.position[2]});
+                const bromath::Vec3 pb = mulPt(allGeoms[b].world, {hit.position[0], hit.position[1], hit.position[2]});
                 if (bromath::vlen(pb - pa) > contactTol) continue;
 
                 if (checkTopOnly && pb.y >= islands[i].worldBox.max.y - topBand &&
                     pb.y > islands[i].worldBox.min.y + 0.50f * ext.y) {
-                    // Reject top-resting attachments unless B also exists directly beneath the island's underside
                     bool under = false;
                     const bromath::Vec3 probes[2] = {
                         {pb.x, islands[i].worldBox.min.y + 0.02f, pb.z},
                         {ctr.x, islands[i].worldBox.min.y + 0.02f, ctr.z},
                     };
-                    const bromath::Vec3 ld = bromath::vnorm(mulDir(allInvWorlds[b], {0, -1, 0}));
-                    const float dir[3] = {ld.x, ld.y, ld.z};
-                    for (const auto& pr : probes) {
-                        const bromath::Vec3 lo = mulPt(allInvWorlds[b], pr);
-                        const float org[3] = {lo.x, lo.y, lo.z};
-                        if (bvhB.raycast(mdB, org, dir, 0.14f).hit) {
-                            under = true;
-                            break;
+                    const bromath::Vec3 ldRaw = mulDir(allGeoms[b].invWorld, {0, -1, 0});
+                    const float ldLen = bromath::vlen(ldRaw);
+                    if (ldLen >= 1e-8f) {
+                        const bromath::Vec3 ld = ldRaw * (1.0f / ldLen);
+                        const float dir[3] = {ld.x, ld.y, ld.z};
+                        for (const auto& pr : probes) {
+                            const bromath::Vec3 lo = mulPt(allGeoms[b].invWorld, pr);
+                            const float org[3] = {lo.x, lo.y, lo.z};
+                            if (bvhB.raycast(mdB, org, dir, 0.14f * ldLen).hit) {
+                                under = true;
+                                break;
+                            }
                         }
                     }
                     if (!under) continue;
@@ -395,17 +427,21 @@ void auditIslandGrounding(const std::vector<IslandSummary>& islands,
             }
             if (!extSup && ext.y > 0.02f) {
                 const bromath::Vec3 footOrg{ctr.x, islands[i].worldBox.max.y - 0.01f, ctr.z};
-                const bromath::Vec3 lo = mulPt(allInvWorlds[b], footOrg);
-                const bromath::Vec3 ld = bromath::vnorm(mulDir(allInvWorlds[b], {0, -1, 0}));
-                const float org[3] = {lo.x, lo.y, lo.z};
-                const float dir[3] = {ld.x, ld.y, ld.z};
-                const float maxD = ext.y + static_cast<float>(contactTol);
-                const auto hitDown = bvhB.raycast(mdB, org, dir, maxD);
-                if (hitDown.hit) {
-                    const bromath::Vec3 pb = mulPt(allWorlds[b], {hitDown.position[0], hitDown.position[1], hitDown.position[2]});
-                    if (!checkTopOnly || pb.y < islands[i].worldBox.max.y - topBand ||
-                        pb.y <= islands[i].worldBox.min.y + 0.50f * ext.y) {
-                        extSup = true;
+                const bromath::Vec3 lo = mulPt(allGeoms[b].invWorld, footOrg);
+                const bromath::Vec3 ldRaw = mulDir(allGeoms[b].invWorld, {0, -1, 0});
+                const float ldLen = bromath::vlen(ldRaw);
+                if (ldLen >= 1e-8f) {
+                    const bromath::Vec3 ld = ldRaw * (1.0f / ldLen);
+                    const float org[3] = {lo.x, lo.y, lo.z};
+                    const float dir[3] = {ld.x, ld.y, ld.z};
+                    const float maxD = (ext.y + static_cast<float>(contactTol)) * ldLen;
+                    const auto hitDown = bvhB.raycast(mdB, org, dir, maxD);
+                    if (hitDown.hit) {
+                        const bromath::Vec3 pb = mulPt(allGeoms[b].world, {hitDown.position[0], hitDown.position[1], hitDown.position[2]});
+                        if (!checkTopOnly || pb.y < islands[i].worldBox.max.y - topBand ||
+                            pb.y <= islands[i].worldBox.min.y + 0.50f * ext.y) {
+                            extSup = true;
+                        }
                     }
                 }
             }
@@ -416,7 +452,6 @@ void auditIslandGrounding(const std::vector<IslandSummary>& islands,
         }
     }
 
-    // 2. Intra-node contact adjacency BFS between islands (require tight metal/wood joinery <= 1.8 cm)
     const double intraTol = std::min(contactTol, 0.018);
     std::vector<std::vector<size_t>> adj(m);
     for (size_t i = 0; i < m; ++i) {

@@ -19,7 +19,10 @@ if(BRO_WITH_3D)
         eye_probe.cpp
         eye_clearance.cpp
         eye_structure.cpp
+        eye_structure_collect.cpp
+        eye_structure_floors.cpp
         eye_structure_islands.cpp
+        eye_structure_walk.cpp
         eye_closeup.cpp
         eye_lookdev.cpp
         eye_trace.cpp
@@ -60,5 +63,16 @@ if(BRO_BUILD_TESTS)
     target_compile_features(bro_eye_test PRIVATE cxx_std_20)
     if(MSVC)
         target_compile_options(bro_eye_test PRIVATE /MP /permissive- /utf-8)
+    endif()
+    if(BRO_WITH_3D)
+        add_executable(bro_eye_structure_test tests/test_eye_structure.cpp)
+        target_include_directories(bro_eye_structure_test PRIVATE ${bro_SOURCE_DIR}/src)
+        target_link_libraries(bro_eye_structure_test PRIVATE
+            $<LINK_GROUP:RESCAN,bro_eye,bro_scene,bro_engine,bro_dom,bro_layout,bro_a11y>)
+        target_compile_features(bro_eye_structure_test PRIVATE cxx_std_20)
+        bro_apply_feature_defs(bro_eye_structure_test)
+        if(MSVC)
+            target_compile_options(bro_eye_structure_test PRIVATE /MP /permissive- /utf-8)
+        endif()
     endif()
 endif()

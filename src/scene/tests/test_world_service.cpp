@@ -274,6 +274,25 @@ void testBudgetFollowsSlack() {
     s.observe(frameOf(9.0, k, 4, 0.2));
     s.beginFrame();
     check(near(s.budgetMs(), 16.7 - 8.8), "the new view's first frame read sets it");
+    // A live cut capped to targetMs respects targetMs while !settlingAll(),
+    // and uses full settleMs when settlingAll() is enabled.
+    {
+        WorldService live;
+        WorldServiceConfig lcfg;
+        lcfg.targetMs = 4.0f;
+        lcfg.settleMs = 8.0f;
+        live.configure(lcfg);
+        live.cut(true);
+        live.beginFrame();
+        check(near(live.budgetMs(), 4.0) && live.settling(),
+              "live cut(true) caps settle budget to targetMs when not settlingAll");
+        WorldService::settleAll(true);
+        live.cut(true);
+        live.beginFrame();
+        check(near(live.budgetMs(), 8.0),
+              "live cut(true) uses full settleMs when settlingAll is active");
+        WorldService::settleAll(false);
+    }
     // A view that never quiets settles after settleFrames all the same.
     s.cut();
     for (int i = 0; i < 6; ++i) {

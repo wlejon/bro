@@ -627,6 +627,7 @@ bool compileKernelMeshHook(SceneRenderer::CustomShaderTarget target, const std::
     std::string hook;
     if (!expandMeshHookVaryings(hook0, file, hook, err)) return fail();
     out.hasVertex = kernelSourceDefinesFn(hook, "vertex");
+    out.hasVertexPos = out.hasVertex && kernelSourceModifiesVertexPos(hook0);
     out.hasFragment = kernelSourceDefinesFn(hook, "fragment");
     out.hasLight = kernelSourceDefinesFn(hook, "light");
     if (!out.hasVertex && !out.hasFragment) {
@@ -768,6 +769,7 @@ KernelHookReady prepareKernelMeshHook(SceneRenderer::CustomShaderTarget target, 
     if (!expandMeshHookVaryings(hook0, file, hook, unusedErr)) return [] { return true; };
     const KernelHookModules& modules = in.modules;
     const bool hasVertex = kernelSourceDefinesFn(hook, "vertex");
+    const bool hasVertexPos = hasVertex && kernelSourceModifiesVertexPos(hook0);
     const bool hasLight = kernelSourceDefinesFn(hook, "light");
     std::vector<StageFuture> stages;
     if (hasVertex) {
@@ -775,7 +777,8 @@ KernelHookReady prepareKernelMeshHook(SceneRenderer::CustomShaderTarget target, 
         const ShadowCaster caster = target == SceneRenderer::CustomShaderTarget::Skinned     ? ShadowCaster::Skinned
                                   : target == SceneRenderer::CustomShaderTarget::Instanced ? ShadowCaster::Instanced
                                                                                            : ShadowCaster::Static;
-        for (const bool cutout : {false, true}) stages.push_back(shadowStage(shadowEntry(caster, cutout), hook, modules, knobs));
+        if (hasVertexPos) stages.push_back(shadowStage(shadowEntry(caster, false), hook, modules, knobs));
+        stages.push_back(shadowStage(shadowEntry(caster, true), hook, modules, knobs));
     }
     if (kernelSourceDefinesFn(hook, "fragment")) {
         for (const bool indirect : {false, true})

@@ -8,10 +8,12 @@
 #include <broimage/encode.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -43,6 +45,20 @@ double wrapHueDiff(double a, double b) {
     return d > 180.0 ? 360.0 - d : d;
 }
 
+bool isGroundOrTerrainName(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (unsigned char c : name) {
+        lower.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return lower.find("ground") != std::string::npos ||
+           lower.find("terrain") != std::string::npos ||
+           lower == "floor" ||
+           lower.find("floor_slab") != std::string::npos ||
+           lower.find("floorplate") != std::string::npos ||
+           lower.find("bedplate") != std::string::npos;
+}
+
 bool sampleTextureMeanSrgb(const scene::NodeTexture& tex, const float* tint, double& outR, double& outG, double& outB) {
     if (tex.empty() || tex.rgba.size() < static_cast<size_t>(tex.width) * tex.height * 4) return false;
     const int stepX = std::max(1, tex.width / 32);
@@ -67,10 +83,104 @@ bool sampleTextureMeanSrgb(const scene::NodeTexture& tex, const float* tint, dou
     return true;
 }
 
+struct DiagNodeInfo {
+    scene::SceneNode* sn = nullptr;
+    bool valid = false;
+    bool instanced = false;
+    int instanceCount = 1;
+    float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float emissive = 0.0f;
+    bool effectiveUnlit = false;
+    bool hasAlbedoMap = false;
+    bool hasNormalMap = false;
+    bool hasMRMap = false;
+    bool castsShadow = true;
+    bool hasCustomShader = false;
+    bool twoSided = false;
+    bool atlasTiled = false;
+    int vertexColorMode = 0;
+    const scene::NodeTexture* baseColorTex = nullptr;
+    const bromesh::MeshData* facetMesh = nullptr;
+};
+
+bool hasDrawableInstanced(const scene::InstancedMeshNode* im) {
+    if (!im) return false;
+    if (im->isTube()) return im->tubeSegCount() > 0;
+    if (im->isScatter()) return !im->mesh().empty() && im->scatterSegCount() > 0 && im->scatterInstanceCount() > 0;
+    return !im->mesh().empty() && im->instanceCount() > 0;
+}
+
+DiagNodeInfo inspectDiagNode(scene::SceneNode* sn) {
+    DiagNodeInfo info;
+    info.sn = sn;
+    if (!sn) return info;
+    if (sn->type() == scene::SceneNode::Type::Mesh) {
+        const auto* mn = static_cast<const scene::MeshNode*>(sn);
+        info.valid = true;
+        info.instanced = false;
+        info.instanceCount = 1;
+        for (int k = 0; k < 4; ++k) info.color[k] = mn->color()[k];
+        info.emissive = mn->emissive();
+        info.effectiveUnlit = mn->effectiveUnlit();
+        info.hasAlbedoMap = mn->hasBaseColorTexture();
+        info.hasNormalMap = mn->hasNormalTexture();
+        info.hasMRMap = mn->hasMetallicRoughnessTexture();
+        info.castsShadow = mn->castsShadow();
+        info.hasCustomShader = mn->hasCustomShader();
+        info.twoSided = mn->twoSided();
+        info.atlasTiled = false;
+        info.vertexColorMode = mn->vertexColorMode();
+        info.baseColorTex = !mn->baseColorTexture().empty() ? &mn->baseColorTexture() : nullptr;
+        const auto& cm = mn->currentMesh();
+        info.facetMesh = !cm.empty() ? &cm : nullptr;
+    } else if (sn->type() == scene::SceneNode::Type::InstancedMesh) {
+        const auto* im = static_cast<const scene::InstancedMeshNode*>(sn);
+        info.valid = true;
+        info.instanced = true;
+        info.instanceCount = im->isTube() ? static_cast<int>(im->tubeSegCount())
+                           : im->isScatter() ? static_cast<int>(im->scatterInstanceCount())
+                                             : static_cast<int>(im->instanceCount());
+        for (int k = 0; k < 4; ++k) info.color[k] = im->color()[k];
+        info.emissive = im->emissive();
+        info.effectiveUnlit = im->effectiveUnlit();
+        info.hasAlbedoMap = im->hasBaseColorTexture();
+        info.hasNormalMap = im->hasNormalTexture();
+        info.hasMRMap = im->hasMetallicRoughnessTexture();
+        info.castsShadow = im->castsShadow();
+        info.hasCustomShader = im->hasCustomShader();
+        info.twoSided = im->doubleSided();
+        info.atlasTiled = (im->atlasCols() > 1 || im->atlasRows() > 1);
+        info.vertexColorMode = (!im->renderingBatched()
+            ? (im->useVertexColorForDraw() ? 1 : 0)
+            : (im->mesh().hasColors() && im->vertexColorTintEnabled() ? 1 : 0));
+        info.baseColorTex = !im->baseColorTexture().empty() ? &im->baseColorTexture() : nullptr;
+        info.facetMesh = (!im->isTube() && !im->mesh().empty()) ? &im->mesh() : nullptr;
+    }
+    return info;
+}
+
+bool subtreeHasTranslucent(const scene::SceneNode* node) {
+    if (!node || !node->renderVisible()) return false;
+    if (node->type() == scene::SceneNode::Type::Mesh) {
+        const auto* mn = static_cast<const scene::MeshNode*>(node);
+        if (!mn->currentMesh().positions.empty() && mn->color()[3] < 0.99f) return true;
+    } else if (node->type() == scene::SceneNode::Type::InstancedMesh) {
+        const auto* im = static_cast<const scene::InstancedMeshNode*>(node);
+        // Matches SceneMeshDrawer::fillMaterial (translucent = node.color()[3] < 1.0f; per-instance rec[15] is atlas cell index)
+        if (hasDrawableInstanced(im) && im->color()[3] < 0.99f) {
+            return true;
+        }
+    }
+    for (const scene::SceneNode* ch : node->children()) {
+        if (subtreeHasTranslucent(ch)) return true;
+    }
+    return false;
+}
+
 struct Accum {
     uint32_t id = 0;
     std::string name;
-    scene::MeshNode* mn = nullptr;
+    DiagNodeInfo info;
     int minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
     int count = 0;
     int lumHist[256] = {};
@@ -224,12 +334,7 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
     const int idObjId = scene::debug_views::find("id");
     const int idTransId = scene::debug_views::find("id_translucent");
 
-    bool hasTranslucent = false;
-    graph.root()->traverse([&](scene::SceneNode* node) {
-        if (!node || !node->visible() || node->type() != scene::SceneNode::Type::Mesh) return;
-        const auto* mn = static_cast<const scene::MeshNode*>(node);
-        if (!mn->mesh().positions.empty() && mn->color()[3] < 0.99f) hasTranslucent = true;
-    });
+    const bool hasTranslucent = subtreeHasTranslucent(graph.root());
 
     int w = 0, h = 0, aw = 0, ah = 0, rw = 0, rh = 0, nw = 0, nh = 0, iw = 0, ih = 0;
     const auto beauty = capDebug(0, w, h);
@@ -283,7 +388,7 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
                 Accum ac;
                 ac.id = nid;
                 ac.name = sn->name().empty() ? ("node_" + std::to_string(nid)) : sn->name();
-                if (sn->type() == scene::SceneNode::Type::Mesh) ac.mn = static_cast<scene::MeshNode*>(sn);
+                ac.info = inspectDiagNode(sn);
                 order.push_back(nid);
                 it = mapAcc.emplace(nid, std::move(ac)).first;
             }
@@ -391,13 +496,15 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
         const int outCnt = brightOutliers.count(nid) ? brightOutliers[nid].second : 0;
         ms.outlierBrightFrac = outCnt * invN;
 
-        const bool isEmissive = ac.mn && ac.mn->emissive() > 0.5f;
-        const bool isUnlit = ac.mn && ac.mn->effectiveUnlit();
-        if (ac.mn) {
-            ms.hasAlbedoMap = ac.mn->hasBaseColorTexture();
-            ms.hasNormalMap = ac.mn->hasNormalTexture();
-            ms.hasMRMap = ac.mn->hasMetallicRoughnessTexture();
-            ms.castsShadow = ac.mn->castsShadow();
+        const bool isEmissive = ac.info.valid && ac.info.emissive > 0.5f;
+        const bool isUnlit = ac.info.valid && ac.info.effectiveUnlit;
+        ms.instanced = ac.info.instanced;
+        ms.instanceCount = ac.info.instanceCount;
+        if (ac.info.valid) {
+            ms.hasAlbedoMap = ac.info.hasAlbedoMap;
+            ms.hasNormalMap = ac.info.hasNormalMap;
+            ms.hasMRMap = ac.info.hasMRMap;
+            ms.castsShadow = ac.info.castsShadow;
         }
 
         if (!isEmissive && !isUnlit && outCnt >= 4 && ms.outlierBrightFrac > 0.008) {
@@ -406,16 +513,16 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
             pushAnomaly("bright_outlier", "error", ac, ms.outlierBrightFrac, msg);
         }
 
-        if (ac.mn && ms.hasAlbedoMap && !ac.mn->hasCustomShader()) {
+        if (ac.info.valid && ms.hasAlbedoMap && !ac.info.hasCustomShader && !ac.info.atlasTiled && ac.info.baseColorTex) {
             double texR = 0, texG = 0, texB = 0;
-            if (sampleTextureMeanSrgb(ac.mn->baseColorTexture(), ac.mn->color(), texR, texG, texB)) {
+            if (sampleTextureMeanSrgb(*ac.info.baseColorTex, ac.info.color, texR, texG, texB)) {
                 double th = 0, ts = 0, tv = 0, rh = 0, rs = 0, rv = 0;
                 rgbToHsv(texR, texG, texB, th, ts, tv);
                 rgbToHsv(ac.alR * invN, ac.alG * invN, ac.alB * invN, rh, rs, rv);
                 ms.hueShiftDeg = wrapHueDiff(th, rh);
                 ms.chromaDelta = std::abs(rs - ts);
                 const bool hueBad = (ts > 0.22 && rs > 0.22 && ms.hueShiftDeg > 45.0);
-                const bool chromaBad = (ms.chromaDelta > 0.38 && rs > 0.45 && ac.mn->vertexColorMode() != 0);
+                const bool chromaBad = (ms.chromaDelta > 0.38 && rs > 0.45 && ac.info.vertexColorMode != 0);
                 if (hueBad || chromaBad) {
                     char msg[160];
                     std::snprintf(msg, sizeof(msg), "hueShift=%.0fdeg chromaDelta=%.2f (check vertexColorTint)", ms.hueShiftDeg, ms.chromaDelta);
@@ -424,8 +531,10 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
             }
         }
 
-        if (ac.mn && !isEmissive && !isUnlit && ac.count >= 400) {
-            const bool flatShading = !ms.hasAlbedoMap || !ms.hasNormalMap || (ms.detailEntropy < 0.010 && ms.normalStd < 0.030);
+        if (ac.info.valid && !isEmissive && !isUnlit && ac.count >= 400) {
+            const bool flatShading = ac.info.hasCustomShader
+                ? (ms.detailEntropy < 0.010 && ms.normalStd < 0.030)
+                : (!ms.hasAlbedoMap || !ms.hasNormalMap || (ms.detailEntropy < 0.010 && ms.normalStd < 0.030));
             if (flatShading) {
                 char msg[160];
                 std::snprintf(msg, sizeof(msg), "albedo=%d normal=%d entropy=%.3f nStd=%.3f",
@@ -440,7 +549,7 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
             pushAnomaly("axis_grid", "warning", ac, ms.axisGridScore, msg);
         }
 
-        if (ac.mn && !isEmissive && !isUnlit && ms.screenFrac < 0.25 && ac.mn->color()[3] >= 0.99f && !ms.castsShadow) {
+        if (ac.info.valid && !isEmissive && !isUnlit && ms.screenFrac < 0.25 && ac.info.color[3] >= 0.99f && !ms.castsShadow && !isGroundOrTerrainName(ac.name)) {
             pushAnomaly("no_shadow_caster", "warning", ac, 1.0, "opaque prop has castsShadow=false");
         }
 
@@ -481,7 +590,7 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
                     TransAcc ta;
                     ta.base.id = nid;
                     ta.base.name = sn->name().empty() ? ("node_" + std::to_string(nid)) : sn->name();
-                    if (sn->type() == scene::SceneNode::Type::Mesh) ta.base.mn = static_cast<scene::MeshNode*>(sn);
+                    ta.base.info = inspectDiagNode(sn);
                     tOrder.push_back(nid);
                     it = tMap.emplace(nid, std::move(ta)).first;
                 }
@@ -522,11 +631,13 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
             ms.p95Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.95);
             ms.p99Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.99);
             ms.translucent = true;
-            if (ta.base.mn) {
-                ms.hasAlbedoMap = ta.base.mn->hasBaseColorTexture();
-                ms.hasNormalMap = ta.base.mn->hasNormalTexture();
-                ms.hasMRMap = ta.base.mn->hasMetallicRoughnessTexture();
-                ms.castsShadow = ta.base.mn->castsShadow();
+            ms.instanced = ta.base.info.instanced;
+            ms.instanceCount = ta.base.info.instanceCount;
+            if (ta.base.info.valid) {
+                ms.hasAlbedoMap = ta.base.info.hasAlbedoMap;
+                ms.hasNormalMap = ta.base.info.hasNormalMap;
+                ms.hasMRMap = ta.base.info.hasMRMap;
+                ms.castsShadow = ta.base.info.castsShadow;
             }
             const double span = std::max(0.08, ms.p95Lum - ms.p10Lum);
             const double ridgeMean = ta.sampleCnt > 0 ? (ta.d2Sum / ta.sampleCnt) / span : 0.0;
@@ -535,9 +646,10 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
 
             int curvedEdges = 0;
             double medianDeg = 0.0;
-            const bool twoSidedLowAlpha = ta.base.mn && ta.base.mn->twoSided() && ta.base.mn->color()[3] < 0.60f;
-            if (ta.base.mn && ta.base.mn->color()[3] < 0.65f) {
-                computeCurvedFacetStats(ta.base.mn->mesh(), curvedEdges, medianDeg);
+            const float effAlpha = ta.base.info.color[3];
+            const bool twoSidedLowAlpha = ta.base.info.valid && ta.base.info.twoSided && effAlpha < 0.60f;
+            if (ta.base.info.valid && ta.base.info.facetMesh && effAlpha < 0.65f) {
+                computeCurvedFacetStats(*ta.base.info.facetMesh, curvedEdges, medianDeg);
             }
             const bool coarsePolys = twoSidedLowAlpha && curvedEdges >= 24 && medianDeg >= 10.0;
             const bool visualStriation = (ta.base.count >= 400 && ms.striationScore > 0.22 && (twoSidedLowAlpha || medianDeg >= 10.0));
@@ -591,8 +703,8 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
         if (q.size() >= 3) {
             ++res.bloomHotspotCount;
             scene::SceneNode* sn = domId != 0 ? graph.findById(domId) : nullptr;
-            const auto* mn = (sn && sn->type() == scene::SceneNode::Type::Mesh) ? static_cast<const scene::MeshNode*>(sn) : nullptr;
-            if (!mn || mn->emissive() <= 0.5f) {
+            const DiagNodeInfo dn = inspectDiagNode(sn);
+            if (!dn.valid || dn.emissive <= 0.5f) {
                 EyeDiagnoseAnomaly ha;
                 ha.kind = "bloom_hotspot";
                 ha.severity = "error";

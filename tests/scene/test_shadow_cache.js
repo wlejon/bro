@@ -208,5 +208,63 @@ if (!probe.scene) {
         dropScene(s);
     }
 
+    // =====================================================================
+    // Section 4: an InstancedMeshNode with a non-displacing fn vertex
+    // (varying-only) caches static shadow pages, while a displacing
+    // fn vertex draws dynamic overlays every frame.
+    // =====================================================================
+    {
+        const s = freshScene(128);
+        const scn = s.scene;
+        scn.setCamera({ fov: 55, near: 0.1, far: 60, position: [0, 6, 12], target: [0, 0, 0] });
+        scn.setToneMap({ mode: 'linear', gamma: 1.0 });
+
+        scn.createMesh({ mesh: 'plane', halfW: 12, halfD: 8, color: 'white', castsShadow: false, y: 0 });
+        const sun = scn.createLight({ type: 'directional', direction: [-0.3, -1, -0.2], intensity: 2 });
+        sun.castsShadow = true;
+
+        const xf = new Float32Array([
+            1, 0, 0, 0,  0, 1, 0, 1,  0, 0, 1, 0,  1, 1, 1, 1,
+        ]);
+        const inst = scn.createInstancedMesh({ mesh: Mesh.box(1, 1, 1), instances: xf, castsShadow: true });
+        inst.setShader({
+            module: `
+                module hook;
+                import mesh;
+                pub fn vertex(v_in: mesh::Vertex) -> mesh::Vertex {
+                    var v = v_in;
+                    v.v0 = vec4<f32>(v_in.pos, v_in.uv.x);
+                    return v;
+                }
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                    var out = s;
+                    out.base_color = vec3<f32>(0.4 + 0.1 * v.v0.x, 0.5, 0.6);
+                    return out;
+                }`,
+        });
+        assert(settle(scn) > 0, 'instanced varying-only hook settles');
+        scn.captureFrame();
+        const stStatic = scn.cullStats();
+        assert(stStatic.shadowPagesDynamic === 0 && stStatic.shadowPagesDrawn === 0,
+            `varying-only fn vertex caches static shadow pages (dynamic=${stStatic.shadowPagesDynamic}, drawn=${stStatic.shadowPagesDrawn})`);
+
+        inst.setShader({
+            module: `
+                module hook;
+                import mesh;
+                pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                    var out = v;
+                    out.pos.y += 0.25;
+                    return out;
+                }
+                pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface { return s; }`,
+        });
+        for (let i = 0; i < 4; ++i) scn.captureFrame();
+        const stDisp = scn.cullStats();
+        assert(stDisp.shadowPagesDynamic > 0,
+            `displacing fn vertex draws dynamic shadow overlays (dynamic=${stDisp.shadowPagesDynamic})`);
+        dropScene(s);
+    }
+
     console.log('shadow cache tests passed');
 }

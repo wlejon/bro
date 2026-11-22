@@ -578,6 +578,7 @@ private:
     struct ShaderCheck {
         bool ok = false;
         bool hasVertex = false;
+        bool hasVertexPos = false;
         std::string err;
     };
     std::unordered_map<std::string, ShaderCheck> shaderChecks_;

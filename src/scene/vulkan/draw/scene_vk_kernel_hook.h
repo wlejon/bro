@@ -53,6 +53,7 @@ struct KernelVolumeHook {
 
 struct KernelMeshHook {
     bool hasVertex = false;
+    bool hasVertexPos = false;
     bool hasFragment = false;
     bool hasLight = false;
     KernelHookStage vs;         // empty when !hasVertex (uses built-in passthrough vs)

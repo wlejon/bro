@@ -293,15 +293,16 @@ void ShadowPages::plan(ShadowPlan& out) {
         total += static_cast<int>(worst->rects.size() / 4);
     }
 
-    // Packed into the scratch target in shelves, the overlays first; a rect
-    // that does not fit waits (its pages stay wanted, its overlays' pages
-    // show their cached depth alone).
+    // Packed into the scratch target in shelves, static drawPages first so
+    // granted/base/stale pages always make progress and dynamic overlays
+    // cannot 100% starve them; a rect that does not fit waits (its pages stay
+    // wanted, its overlays' pages show their cached depth alone).
     std::vector<Rect> rects;
     for (const Group& g : groups)
         for (size_t k = 0; k + 3 < g.rects.size(); k += 4)
             rects.push_back({g.map, g.mip, g.rects[k], g.rects[k + 1], g.rects[k + 2], g.rects[k + 3], g.dynamic});
     std::stable_sort(rects.begin(), rects.end(), [](const Rect& a, const Rect& b) {
-        if (a.dynamic != b.dynamic) return a.dynamic;
+        if (a.dynamic != b.dynamic) return !a.dynamic;
         return a.h > b.h;
     });
     std::vector<uint8_t> inView(entries_.size(), 0);

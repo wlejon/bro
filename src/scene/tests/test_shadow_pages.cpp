@@ -504,6 +504,33 @@ void testOverlays() {
     // ago is still needed.
     moving(true, {});
     check(plan.table[is + 1] != 0u, "a page needed a frame ago keeps its overlay");
+    // Large dynamic overlays must never 100% starve static drawPages out of scratch.
+    {
+        ShadowPages sp;
+        ShadowPlan splan;
+        const Vec3 seye{0.0f, 1.0f, 0.0f};
+        frame(sp, splan, seye, {});
+        const int s4 = entryAt(sp, seye, 4);
+        const int s5 = entryAt(sp, seye, 5);
+        const int s6 = entryAt(sp, seye, 6);
+        const int s7 = entryAt(sp, seye, 7);
+        const int s8 = entryAt(sp, seye, 8);
+        // Request pages across multiple levels, grant s4/s5, and also flood dynamic overlays.
+        sp.beginFrame(seye);
+        sp.setSun(downSun());
+        sp.endLights();
+        sp.request(sp.serial(), bitsOf(sp, {s4, s5, s6, s7, s8}));
+        sp.plan(splan);
+        sp.grant(std::vector<uint64_t>{static_cast<uint64_t>(s4), static_cast<uint64_t>(s5)});
+        sp.beginFrame(seye);
+        sp.setSun(downSun());
+        sp.endLights();
+        sp.addDynamic({{-1e5f, -10.0f, -1e5f}, {1e5f, 100.0f, 1e5f}}, false);
+        sp.request(sp.serial(), bitsOf(sp, {s4, s5, s6, s7, s8}));
+        sp.plan(splan);
+        check(splan.staticPages >= 2 && sp.entry(s4).drawn && sp.entry(s5).drawn,
+              "static drawPages make progress even with huge dynamic overlays");
+    }
 }
 
 void testCoverRects() {

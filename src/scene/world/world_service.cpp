@@ -62,7 +62,11 @@ void WorldService::beginFrame() {
     if (!need_.empty() && over_)
         budget = std::max(budget, static_cast<float>(config_.floorShare * worst(config_.window)));
     if (settle_ > 0) {
-        budget = std::max(budget, config_.settleMs);
+        float sb = config_.settleMs;
+        if (capSettleToTarget_ && !s_settlingAll.load(std::memory_order_relaxed) && config_.targetMs > 0.0f) {
+            sb = std::min(sb, config_.targetMs);
+        }
+        budget = std::max(budget, sb);
         --settle_;
     } else if (s_settlingAll.load(std::memory_order_relaxed)) {
         budget = std::max(budget, config_.settleMs);

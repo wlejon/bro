@@ -100,6 +100,8 @@ Value jsEyeDiagnose(Value, std::span<const Value> a) {
         ObjectBuilder mb;
         mb.set("name", ev::fromUtf8(ms.name));
         mb.set("nodeId", ev::fromDouble(ms.nodeId));
+        mb.set("instanced", ev::fromBool(ms.instanced));
+        mb.set("instanceCount", ev::fromDouble(ms.instanceCount));
         mb.set("screenPx", ev::fromDouble(ms.screenPx));
         mb.set("screenFrac", ev::fromDouble(ms.screenFrac));
         mb.set("p10Lum", ev::fromDouble(ms.p10Lum));

@@ -149,4 +149,169 @@ bool kernelSourceDefinesFn(std::string_view source, std::string_view name) {
     return false;
 }
 
+namespace {
+
+bool isAssignOp(const std::vector<Token>& t, size_t idx, size_t end) {
+    if (idx >= end || t[idx].kind != Tok::Punct || t[idx].text.size() != 1) return false;
+    const char c = t[idx].text[0];
+    if (c == '=') return !isPunct(t, idx + 1, '=');
+    if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '&' || c == '|' || c == '^') {
+        return idx + 1 < end && isPunct(t, idx + 1, '=');
+    }
+    if ((c == '<' || c == '>') && idx + 2 < end && isPunct(t, idx + 1, c) && isPunct(t, idx + 2, '=')) {
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+bool kernelSourceModifiesVertexPos(std::string_view source) {
+    const std::vector<Token> t = tokens(source);
+    int braceDepth = 0;
+    for (size_t i = 0; i + 2 < t.size(); ++i) {
+        if (isPunct(t, i, '{')) {
+            ++braceDepth;
+            continue;
+        }
+        if (isPunct(t, i, '}')) {
+            if (braceDepth > 0) --braceDepth;
+            continue;
+        }
+        if (braceDepth != 0) continue;
+        if (!isWord(t, i, "fn") || !isWord(t, i + 1, "vertex") || !isPunct(t, i + 2, '(')) continue;
+
+        // Locate parameter list `(...)`.
+        size_t p = i + 3;
+        int parenDepth = 1;
+        size_t closeParen = t.size();
+        for (size_t q = p; q < t.size(); ++q) {
+            if (isPunct(t, q, '(')) ++parenDepth;
+            else if (isPunct(t, q, ')') && --parenDepth == 0) {
+                closeParen = q;
+                break;
+            }
+        }
+        if (closeParen >= t.size()) return true;
+
+        // First parameter name (skipping optional `inout` / `in` / `out`).
+        if (p < closeParen && (isWord(t, p, "inout") || isWord(t, p, "in") || isWord(t, p, "out"))) ++p;
+        if (p >= closeParen || t[p].kind != Tok::Ident) return true;
+        const std::string_view vParam = t[p].text;
+
+        // Locate `{ ... }` body and check for `->` return type.
+        bool hasReturnType = false;
+        size_t bodyBrace = t.size();
+        for (size_t q = closeParen + 1; q < t.size(); ++q) {
+            if (isPunct(t, q, '{')) {
+                bodyBrace = q;
+                break;
+            }
+            if (isPunct(t, q, '-') && q + 1 < t.size() && isPunct(t, q + 1, '>')) hasReturnType = true;
+        }
+        if (bodyBrace >= t.size()) return true;
+
+        int d = 1;
+        size_t bodyEnd = t.size();
+        for (size_t q = bodyBrace + 1; q < t.size(); ++q) {
+            if (isPunct(t, q, '{')) ++d;
+            else if (isPunct(t, q, '}') && --d == 0) {
+                bodyEnd = q;
+                break;
+            }
+        }
+        if (bodyEnd >= t.size()) return true;
+
+        const size_t bodyStart = bodyBrace + 1;
+        std::vector<std::string_view> vertexVars{vParam};
+        auto isVertexVar = [&](std::string_view w) {
+            for (const auto& v : vertexVars) {
+                if (v == w) return true;
+            }
+            return false;
+        };
+
+        for (size_t k = bodyStart; k < bodyEnd; ++k) {
+            if (isWord(t, k, "set_vertex_position")) return true;
+
+            // `var lhs [: Type] = rhs;` / `let lhs [: Type] = rhs;` copy tracking.
+            if ((isWord(t, k, "var") || isWord(t, k, "let")) && k + 1 < bodyEnd && t[k + 1].kind == Tok::Ident) {
+                const std::string_view lhs = t[k + 1].text;
+                size_t eqIdx = bodyEnd;
+                size_t semiIdx = bodyEnd;
+                for (size_t q = k + 2; q < bodyEnd; ++q) {
+                    if (isPunct(t, q, ';')) {
+                        semiIdx = q;
+                        break;
+                    }
+                    if (eqIdx == bodyEnd && isPunct(t, q, '=') && !isPunct(t, q + 1, '=') &&
+                        !isPunct(t, q - 1, '<') && !isPunct(t, q - 1, '>') && !isPunct(t, q - 1, '!')) {
+                        eqIdx = q;
+                    }
+                }
+                const bool copiedVertexVar =
+                    eqIdx < semiIdx && eqIdx + 2 == semiIdx && t[eqIdx + 1].kind == Tok::Ident &&
+                    isVertexVar(t[eqIdx + 1].text);
+                if (copiedVertexVar) {
+                    if (!isVertexVar(lhs)) vertexVars.push_back(lhs);
+                } else if (isVertexVar(lhs)) {
+                    return true;
+                }
+            }
+
+            // Any write to `.pos` (e.g. `.pos =`, `.pos.x +=`, `.pos[0] =`).
+            if (isPunct(t, k, '.') && k + 1 < bodyEnd && isWord(t, k + 1, "pos")) {
+                size_t m = k + 2;
+                while (m < bodyEnd) {
+                    if (isPunct(t, m, '.') && m + 1 < bodyEnd && t[m + 1].kind == Tok::Ident) {
+                        m += 2;
+                    } else if (isPunct(t, m, '[')) {
+                        int bd = 1;
+                        ++m;
+                        while (m < bodyEnd && bd > 0) {
+                            if (isPunct(t, m, '[')) ++bd;
+                            else if (isPunct(t, m, ']')) --bd;
+                            ++m;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                if (isAssignOp(t, m, bodyEnd)) return true;
+            }
+
+            // Struct literal field `pos: ...`.
+            if (isWord(t, k, "pos") && k + 1 < bodyEnd && isPunct(t, k + 1, ':') &&
+                (k == bodyStart || !isPunct(t, k - 1, '.'))) {
+                return true;
+            }
+
+            // Reassigning a Vertex variable or passing it to a helper function.
+            if (t[k].kind == Tok::Ident && isVertexVar(t[k].text)) {
+                const bool isDeclName = k > bodyStart && (isWord(t, k - 1, "var") || isWord(t, k - 1, "let"));
+                const bool isFieldName = k > bodyStart && isPunct(t, k - 1, '.');
+                if (!isDeclName && !isFieldName) {
+                    if (k > bodyStart && isPunct(t, k - 1, '&')) return true;
+                    if (isAssignOp(t, k + 1, bodyEnd)) return true;
+                    if (k + 1 < bodyEnd && (isPunct(t, k + 1, ',') || isPunct(t, k + 1, ')'))) return true;
+                }
+            }
+
+            // `return` must be empty (for void/inout) or `return <vertexVar>;`.
+            if (isWord(t, k, "return")) {
+                if (k + 1 < bodyEnd && isPunct(t, k + 1, ';')) {
+                    if (hasReturnType) return true;
+                } else if (k + 2 < bodyEnd && t[k + 1].kind == Tok::Ident && isVertexVar(t[k + 1].text) &&
+                           isPunct(t, k + 2, ';')) {
+                    // Passthrough return of an unmodified-pos Vertex copy.
+                } else {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
 }  // namespace bro::scene

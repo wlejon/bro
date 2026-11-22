@@ -21,4 +21,11 @@ std::vector<std::string> kernelSourceImports(std::string_view source);
 /// Whether `source` defines `fn <name>(` (any generic-free definition).
 bool kernelSourceDefinesFn(std::string_view source, std::string_view name);
 
+/// Whether `source` defines `fn vertex(` whose body may modify vertex position
+/// (`.pos` assignment, `pos:` literal, `set_vertex_position`, reassigning or
+/// passing the `Vertex` struct to a helper, or non-passthrough return).
+/// Defaults conservatively to `true` on anything other than clearly
+/// varying-only / passthrough hooks; returns `false` when no `fn vertex` exists.
+bool kernelSourceModifiesVertexPos(std::string_view source);
+
 }  // namespace bro::scene

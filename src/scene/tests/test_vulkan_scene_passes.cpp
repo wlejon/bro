@@ -12,6 +12,7 @@
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/kernel_source_scan.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/draw/scene_vk_kernel_hook.h"
 #include "scene/vulkan/frame/scene_vk_device.h"
@@ -113,8 +114,25 @@ int main() {
             std::string err;
             assert(compileKernelMeshHook(scene::SceneRenderer::CustomShaderTarget::Static, testHook, "test.bk", {}, compiled, err));
             assert(compiled.hasVertex && compiled.hasFragment);
+            assert(!compiled.hasVertexPos);
             assert(!compiled.vs.spirv.empty() && compiled.vs.spirv[0] == 0x07230203);
             assert(!compiled.fs.spirv.empty() && compiled.fs.spirv[0] == 0x07230203);
+
+            // Varying-only fn vertex keeps hasVertexPos false; modifying .pos sets it true.
+            assert(!scene::kernelSourceModifiesVertexPos(
+                "module hook; import mesh;\n"
+                "pub fn vertex(v_in: mesh::Vertex) -> mesh::Vertex {\n"
+                "  var v = v_in; v.v0 = vec4<f32>(v_in.pos, v_in.uv.x); return v;\n"
+                "}\n"));
+            assert(scene::kernelSourceModifiesVertexPos(
+                "module hook; import mesh;\n"
+                "pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {\n"
+                "  var out = v; out.pos.x += 1.0; return out;\n"
+                "}\n"));
+            assert(scene::kernelSourceModifiesVertexPos(
+                "module hook; import mesh;\n"
+                "fn helper(v: mesh::Vertex) -> mesh::Vertex { return v; }\n"
+                "pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { return helper(v); }\n"));
 
             KernelMeshHook bad;
             std::string badErr;

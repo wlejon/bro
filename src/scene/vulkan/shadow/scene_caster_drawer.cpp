@@ -229,7 +229,7 @@ void SceneCasterDrawer::draw(SceneFrame& frame, VkCommandBuffer cmd, const broma
     const bool cutout = (draw.kind == MeshKind::Static || draw.kind == MeshKind::Instanced) &&
                         draw.push.pbrParams[2] > 0.0f && (flags & mesh_flags::kAlbedoMap) != 0u &&
                         draw.materialSet != VK_NULL_HANDLE;
-    const bool custom = draw.custom && draw.customSet && draw.custom->hasVertex;
+    const bool custom = draw.custom && draw.customSet && (draw.custom->hasVertexPos || (cutout && draw.custom->hasVertex));
     if (custom) pipeline = customPipeline(*draw.custom, draw.kind, twoSided, cutout);
     const bool customBound = pipeline != VK_NULL_HANDLE;
     // (A custom chunk that does not build casts the undisplaced silhouette,
