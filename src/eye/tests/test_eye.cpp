@@ -279,15 +279,28 @@ int main() {
         for (const auto& im : moveImgs) moveViews.push_back(im.view());
         bro::eye::EyeMotionOptions mopts;
         mopts.labels = {"t0", "t1", "t2", "t3", "t4"};
+        mopts.timestampsMs = {0.0, 16.6, 33.2, 85.0, 101.6};  // intentional 51.8ms frame hiccup at step 2
+        mopts.visualStyle = "board";
         mopts.buildVisual = true;
         auto moveRes = bro::eye::analyzeMotion(moveViews, mopts);
         check(moveRes.frameCount == 5 && moveRes.steps.size() == 4,
               "5 frames produce 4 motion steps");
         check(moveRes.staticPairCount == 0, "linear slide has no static pairs");
         check(moveRes.popCount == 0, "linear slide has no pops");
+        check(moveRes.hiccupCount == 1 && moveRes.steps[2].hiccup,
+              "timestampsMs detects exact single timing hiccup");
+        check(moveRes.dtMaxMs > moveRes.dtMedianMs * 2.0, "dtMaxMs > 2 * dtMedianMs");
         check(moveRes.smoothness > 0.7, "linear slide has high motion smoothness");
         check(moveRes.motionCoverage > 0.05, "linear slide reports spatial coverage");
-        check(moveRes.visual.width > 0 && moveRes.visual.height > 0, "motion visual builds image");
+        check(moveRes.visual.width > 0 && moveRes.visual.height > 0, "motion board builds image");
+
+        mopts.visualStyle = "chrono";
+        auto chronoRes = bro::eye::analyzeMotion(moveViews, mopts);
+        check(chronoRes.visual.width > 0 && chronoRes.visual.height > 0, "chrono builds image");
+
+        mopts.visualStyle = "kymograph";
+        auto kymoRes = bro::eye::analyzeMotion(moveViews, mopts);
+        check(kymoRes.visual.width > 0 && kymoRes.visual.height > 0, "kymograph builds image");
 
         // Alternating dark/bright sequence triggers flickerScore
         auto dark = makeSolid(64, 64, 24, 24, 24);

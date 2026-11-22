@@ -78,11 +78,12 @@ bool visualizeTasteMode(const std::string& mode,
     if (images.empty() || !images[0].valid()) return false;
     const int fscale = std::clamp(opts.fontScale, 1, 4);
 
-    if (mode == "motion" && images.size() >= 2) {
+    if ((mode == "motion" || mode == "chrono" || mode == "kymograph") && images.size() >= 2) {
         EyeMotionOptions mopts;
         mopts.labels = opts.labels;
         mopts.maxPanelDim = opts.maxPanelDim;
         mopts.layout = opts.layout;
+        mopts.visualStyle = (mode == "motion") ? "board" : mode;
         mopts.buildVisual = true;
         const EyeMotionResult mr = analyzeMotion(images, mopts);
         if (!mr.visual.empty()) {

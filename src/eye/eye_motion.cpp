@@ -2,13 +2,11 @@
 #include "eye/eye_color.h"
 #include "eye/eye_draw_internal.h"
 #include "eye/eye_measure.h"
-
-#include <broimage/encode.h>
+#include "eye/eye_motion_visual.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <filesystem>
 #include <numeric>
 #include <vector>
 
@@ -168,6 +166,34 @@ EyeMotionResult analyzeMotion(const std::vector<EyeImageView>& frames, const Eye
         }
     }
 
+    // Timestamps / frame pacing hiccup analysis
+    const bool hasTimestamps = (opts.timestampsMs.size() == frames.size());
+    std::vector<double> dts;
+    if (hasTimestamps && nSteps > 0) {
+        dts.reserve(nSteps);
+        double dtSum = 0.0;
+        for (size_t k = 0; k < nSteps; ++k) {
+            const double dt = std::max(0.0, opts.timestampsMs[k + 1] - opts.timestampsMs[k]);
+            res.steps[k].dtMs = dt;
+            dts.push_back(dt);
+            dtSum += dt;
+        }
+        std::vector<double> sortedDt = dts;
+        std::sort(sortedDt.begin(), sortedDt.end());
+        res.dtMedianMs = sortedDt[sortedDt.size() / 2];
+        res.dtP95Ms = sortedDt[static_cast<size_t>(0.95 * (sortedDt.size() - 1))];
+        res.dtMaxMs = sortedDt.back();
+        const double meanDt = dtSum / static_cast<double>(nSteps);
+        if (meanDt > 1e-4) res.fpsMean = 1000.0 / meanDt;
+        const double hiccupThresh = std::max(res.dtMedianMs * 1.75, res.dtMedianMs + 12.0);
+        for (auto& st : res.steps) {
+            if (res.dtMedianMs > 0.0 && st.dtMs > hiccupThresh) {
+                st.hiccup = true;
+                ++res.hiccupCount;
+            }
+        }
+    }
+
     // Reversal energy across frame luma deltas captures exposure/SSR flicker.
     if (nSteps >= 2) {
         double revSum = 0.0;
@@ -194,67 +220,7 @@ EyeMotionResult analyzeMotion(const std::vector<EyeImageView>& frames, const Eye
     }
 
     if (opts.buildVisual || !opts.path.empty()) {
-        std::vector<EyeImage> panels;
-        std::vector<std::string> lbls;
-        const size_t maxSampled = std::min<size_t>(frames.size(), 5);
-        for (size_t i = 0; i < maxSampled; ++i) {
-            const size_t idx = (maxSampled == 1) ? 0 : (i * (frames.size() - 1)) / (maxSampled - 1);
-            panels.push_back(draw::fitPanel(frames[idx], opts.maxPanelDim));
-            if (idx < opts.labels.size()) {
-                lbls.push_back(opts.labels[idx]);
-            } else {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "f%zu", idx);
-                lbls.emplace_back(buf);
-            }
-        }
-
-        // Accumulate motion energy trail panel with centroid polyline overlay.
-        EyeImage trail = resampleRgba(panels[0].view(), w, h);
-        for (size_t i = 0; i < pxCount; ++i) {
-            const double v = std::clamp(maxDeltaMap[i] / 28.0, 0.0, 1.0);
-            const auto c = color::magmaColor(v);
-            uint8_t* p = &trail.rgba[i * 4];
-            p[0] = static_cast<uint8_t>(p[0] * 0.30 + c.r * 0.70);
-            p[1] = static_cast<uint8_t>(p[1] * 0.30 + c.g * 0.70);
-            p[2] = static_cast<uint8_t>(p[2] * 0.30 + c.b * 0.70);
-            p[3] = 255;
-        }
-        trail = draw::fitPanel(trail.view(), opts.maxPanelDim);
-
-        int prevCx = -1, prevCy = -1;
-        for (const auto& st : res.steps) {
-            if (st.changedRatio <= 0.0005) continue;
-            const int cx = std::clamp(static_cast<int>(std::lround(st.centroidX * trail.width)), 2, trail.width - 3);
-            const int cy = std::clamp(static_cast<int>(std::lround(st.centroidY * trail.height)), 2, trail.height - 3);
-            if (prevCx >= 0) draw::drawLine(trail, prevCx, prevCy, cx, cy, 2, 80, 235, 255, 230);
-            draw::drawCircle(trail, cx, cy, 4, 2, 255, 220, 60, 240);
-            prevCx = cx; prevCy = cy;
-        }
-        if (maxBx >= minBx && maxBy >= minBy) {
-            const int rx = static_cast<int>(std::lround((minBx * 1.0 / w) * trail.width));
-            const int ry = static_cast<int>(std::lround((minBy * 1.0 / h) * trail.height));
-            const int rw = std::max(4, static_cast<int>(std::lround(((maxBx - minBx + 1.0) / w) * trail.width)));
-            const int rh = std::max(4, static_cast<int>(std::lround(((maxBy - minBy + 1.0) / h) * trail.height)));
-            draw::drawRectBox(trail, rx, ry, rw, rh, 1, 110, 245, 165);
-        }
-
-        char trailLbl[96];
-        std::snprintf(trailLbl, sizeof(trailLbl), "trail | smooth %.2f | cov %.1f%% | stut %d",
-                      res.smoothness, res.motionCoverage * 100.0, res.stutterCount);
-        panels.push_back(std::move(trail));
-        lbls.emplace_back(trailLbl);
-
-        EyeVisualResult sheet = draw::assembleSheet(std::move(panels), lbls, opts.layout, 1);
-        res.visual = {sheet.width, sheet.height, std::move(sheet.rgba)};
-        if (!opts.path.empty() && !res.visual.empty()) {
-            std::error_code ec;
-            const std::filesystem::path outPath(opts.path);
-            if (outPath.has_parent_path()) std::filesystem::create_directories(outPath.parent_path(), ec);
-            if (broimage::encode_png_file(opts.path, res.visual.rgba.data(), res.visual.width, res.visual.height, 4)) {
-                res.visualPath = opts.path;
-            }
-        }
+        buildMotionVisual(frames, work, maxDeltaMap, w, h, minBx, minBy, maxBx, maxBy, opts, res);
     }
 
     return res;

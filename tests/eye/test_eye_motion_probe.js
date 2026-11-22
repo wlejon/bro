@@ -23,6 +23,7 @@ function assert(cond, msg) {
   const frames = [0, 14, 28, 42, 56].map(makeBoxFrame);
   const res = bro.eye.motion(frames, {
     labels: ["f0", "f1", "f2", "f3", "f4"],
+    timestampsMs: [0, 16.6, 33.2, 85.0, 101.6],
     threshold: 3.0,
     layout: "grid",
   });
@@ -30,17 +31,21 @@ function assert(cond, msg) {
   assert(res.steps.length === 4, "motion steps.length === 4");
   assert(res.staticPairCount === 0, "linear frames have 0 static pairs");
   assert(res.popCount === 0, "linear frames have 0 pops");
+  assert(res.hiccupCount === 1 && res.steps[2].hiccup === true,
+         "timestampsMs detects frame pacing hiccup at step 2");
   assert(res.smoothness > 0.7, "linear frames smoothness > 0.7 (got " + res.smoothness + ")");
   assert(res.motionCoverage > 0.05, "motionCoverage > 0.05");
   assert(res.motionBounds.width > 50, "motionBounds spans horizontal sweep");
 
-  const vis = bro.eye.visualize(frames, {
-    mode: "motion",
-    labels: ["f0", "f1", "f2", "f3", "f4"],
-  });
-  assert(vis && vis.width > 0 && vis.height > 0 && vis.data &&
-         vis.data.length === vis.width * vis.height * 4,
-         "visualize mode='motion' returns an RGBA panel sheet");
+  for (const mode of ["motion", "chrono", "kymograph"]) {
+    const vis = bro.eye.visualize(frames, {
+      mode,
+      labels: ["f0", "f1", "f2", "f3", "f4"],
+    });
+    assert(vis && vis.width > 0 && vis.height > 0 && vis.data &&
+           vis.data.length === vis.width * vis.height * 4,
+           "visualize mode='" + mode + "' returns an RGBA panel sheet");
+  }
 }
 
 // 2. 3D Spatial calipers via bro.eye.probe(scene, opts)

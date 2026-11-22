@@ -8,6 +8,7 @@
 #include "eye/eye_motion.h"
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
+#include "eye/eye_clearance.h"
 #include "eye/eye_probe.h"
 #include "scene/scene_graph.h"
 #endif
@@ -70,6 +71,9 @@ Value jsEyeMotion(Value, std::span<const Value> a) {
         mopts.threshold = std::max(0.1, numProp(optsRoot.get(), "threshold", mopts.threshold));
         mopts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", mopts.maxPanelDim)), 64, 2048);
         mopts.layout = strProp(optsRoot.get(), "layout", mopts.layout);
+        mopts.visualStyle = strProp(optsRoot.get(), "visualStyle", mopts.visualStyle);
+        mopts.slitX = numProp(optsRoot.get(), "slitX", mopts.slitX);
+        mopts.slitY = numProp(optsRoot.get(), "slitY", mopts.slitY);
         mopts.buildVisual = boolProp(optsRoot.get(), "buildVisual", false);
         const std::string rawPath = strProp(optsRoot.get(), "path");
         if (!rawPath.empty()) {
@@ -79,8 +83,15 @@ Value jsEyeMotion(Value, std::span<const Value> a) {
         Value lblVal = ev::getProperty(optsRoot.get(), "labels");
         if (ev::isObject(lblVal)) {
             ev::Persistent la(lblVal);
-            const uint32_t ln = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(la.get(), "length")), 120.0)));
+            const uint32_t ln = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(la.get(), "length")), 240.0)));
             for (uint32_t i = 0; i < ln; ++i) mopts.labels.push_back(ev::toUtf8(ev::getElement(la.get(), i)));
+        }
+        Value tsVal = ev::getProperty(optsRoot.get(), "timestampsMs");
+        if (ev::isObject(tsVal)) {
+            ev::Persistent ta(tsVal);
+            const uint32_t tn = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(ta.get(), "length")), 240.0)));
+            mopts.timestampsMs.reserve(tn);
+            for (uint32_t i = 0; i < tn; ++i) mopts.timestampsMs.push_back(ev::toDouble(ev::getElement(ta.get(), i)));
         }
     }
 
@@ -96,6 +107,7 @@ Value jsEyeMotion(Value, std::span<const Value> a) {
     o.set("staticPairCount", ev::fromDouble(r.staticPairCount));
     o.set("stutterCount", ev::fromDouble(r.stutterCount));
     o.set("popCount", ev::fromDouble(r.popCount));
+    o.set("hiccupCount", ev::fromDouble(r.hiccupCount));
     o.set("meanDeltaE", ev::fromDouble(r.meanDeltaE));
     o.set("deltaEStd", ev::fromDouble(r.deltaEStd));
     o.set("smoothness", ev::fromDouble(r.smoothness));
@@ -104,6 +116,12 @@ Value jsEyeMotion(Value, std::span<const Value> a) {
     o.set("lumaRange", ev::fromDouble(r.lumaRange));
     o.set("flickerScore", ev::fromDouble(r.flickerScore));
     o.set("motionCoverage", ev::fromDouble(r.motionCoverage));
+    o.set("dtMedianMs", ev::fromDouble(r.dtMedianMs));
+    o.set("dtP95Ms", ev::fromDouble(r.dtP95Ms));
+    o.set("dtMaxMs", ev::fromDouble(r.dtMaxMs));
+    o.set("fpsMean", ev::fromDouble(r.fpsMean));
+    o.set("autoSlitX", ev::fromDouble(r.autoSlitX));
+    o.set("autoSlitY", ev::fromDouble(r.autoSlitY));
     {
         ObjectBuilder mb;
         mb.set("x", ev::fromDouble(r.motionBounds.x));
@@ -122,11 +140,13 @@ Value jsEyeMotion(Value, std::span<const Value> a) {
         sb.set("changedRatio", ev::fromDouble(s.changedRatio));
         sb.set("ssim", ev::fromDouble(s.ssim));
         sb.set("lumaDiff", ev::fromDouble(s.lumaDiff));
+        sb.set("dtMs", ev::fromDouble(s.dtMs));
         sb.set("centroidX", ev::fromDouble(s.centroidX));
         sb.set("centroidY", ev::fromDouble(s.centroidY));
         sb.set("staticStep", ev::fromBool(s.staticStep));
         sb.set("stutter", ev::fromBool(s.stutter));
         sb.set("pop", ev::fromBool(s.pop));
+        sb.set("hiccup", ev::fromBool(s.hiccup));
         return sb.get();
     }));
     if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
@@ -235,6 +255,92 @@ Value jsEyeProbe(Value, std::span<const Value> a) {
         db.set("dy", ev::fromDouble(d.dy));
         db.set("dz", ev::fromDouble(d.dz));
         return db.get();
+    }));
+    if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
+    return o.get();
+#endif
+}
+
+Value jsEyeClearance(Value, std::span<const Value> a) {
+#if !BRO_WITH_3D
+    (void)a;
+    return ev::throwError("bro.eye.clearance requires a 3D build (BRO_WITH_3D=ON)");
+#else
+    if (!hostEngine()) return ev::throwError("bro.eye.clearance is unavailable in Worker realms");
+    if (a.empty() || !ev::isObject(a[0])) {
+        return ev::throwTypeError("bro.eye.clearance(scene, opts?) requires a SceneGraph");
+    }
+    scene::SceneGraph* graph = nullptr;
+    if (void* raw = ev::handleData(a[0])) {
+        auto* cell = static_cast<HostSceneGraphCell*>(raw);
+        if (cell->tag == kHostSceneGraphTag) graph = cell->graph();
+    }
+    if (!graph) {
+        return ev::throwTypeError("bro.eye.clearance(scene, opts?): expected a live SceneGraph");
+    }
+
+    EyeClearanceOptions copts;
+    bool hasStepFn = false;
+    ev::Persistent stepFnRoot;
+    Value optsVal = a.size() >= 2 ? a[1] : ev::undefined();
+    ev::Persistent optsRoot(optsVal);
+    if (ev::isObject(optsRoot.get())) {
+        copts.eps = std::clamp(numProp(optsRoot.get(), "eps", copts.eps), 1e-5, 0.5);
+        copts.steps = std::clamp(static_cast<int>(numProp(optsRoot.get(), "steps", copts.steps)), 1, 180);
+        copts.ignoreStatic = boolProp(optsRoot.get(), "ignoreStatic", copts.ignoreStatic);
+        copts.ignoreSameParent = boolProp(optsRoot.get(), "ignoreSameParent", copts.ignoreSameParent);
+        copts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", copts.maxPanelDim)), 128, 2048);
+        const std::string rawPath = strProp(optsRoot.get(), "path");
+        if (!rawPath.empty()) {
+            requirePathAccess(rawPath, /*write=*/true);
+            copts.path = rawPath;
+        }
+        Value sf = ev::getProperty(optsRoot.get(), "stepFn");
+        if (ev::isFunction(sf)) {
+            hasStepFn = true;
+            stepFnRoot = ev::Persistent(sf);
+        }
+        Value ipVal = ev::getProperty(optsRoot.get(), "ignorePairs");
+        if (ev::isObject(ipVal)) {
+            ev::Persistent ipa(ipVal);
+            const uint32_t ipn = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(ipa.get(), "length")), 128.0)));
+            for (uint32_t i = 0; i < ipn; ++i) {
+                Value pairEl = ev::getElement(ipa.get(), i);
+                if (!ev::isObject(pairEl)) continue;
+                ev::Persistent pe(pairEl);
+                copts.ignorePairs.emplace_back(ev::toUtf8(ev::getElement(pe.get(), 0)),
+                                               ev::toUtf8(ev::getElement(pe.get(), 1)));
+            }
+        }
+    }
+
+    std::function<void(int, int)> stepCb;
+    if (hasStepFn) {
+        stepCb = [&](int k, int n) {
+            Value args[2] = {ev::fromDouble(k), ev::fromDouble(n)};
+            (void)ev::call(stepFnRoot.get(), ev::undefined(), args);
+        };
+    }
+
+    const EyeClearanceResult r = analyzeClearance(*graph, copts, stepCb);
+    ObjectBuilder o;
+    o.set("ok", ev::fromBool(r.ok));
+    o.set("posesChecked", ev::fromDouble(r.posesChecked));
+    o.set("totalMeshPairs", ev::fromDouble(r.totalMeshPairs));
+    o.set("staticCollisionCount", ev::fromDouble(r.staticCollisionCount));
+    o.set("dynamicCollisionCount", ev::fromDouble(r.dynamicCollisionCount));
+    o.set("worstPoseIndex", ev::fromDouble(r.worstPoseIndex));
+    o.set("collisions", hostArrayOf(r.collisions.size(), [&](size_t i) {
+        const auto& c = r.collisions[i];
+        ObjectBuilder cb;
+        cb.set("nodeA", ev::fromUtf8(c.nodeA));
+        cb.set("nodeB", ev::fromUtf8(c.nodeB));
+        cb.set("hitTriangles", ev::fromDouble(c.hitTriangles));
+        cb.set("poseIndex", ev::fromDouble(c.poseIndex));
+        cb.set("centroid", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(c.centroid[k]); }));
+        cb.set("overlapDepth", ev::fromDouble(c.overlapDepth));
+        cb.set("dynamic", ev::fromBool(c.dynamic));
+        return cb.get();
     }));
     if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
     return o.get();

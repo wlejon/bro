@@ -259,7 +259,7 @@ bro.eye.scene = function(scene, opts) {};
 
 /**
  * Build a labelled diagnostic contact sheet or heatmap image.
- * Modes: 'audit', 'diff', 'exposure', 'tiling', 'tile2x2', 'depth', 'normals', 'sheet'.
+ * Modes: 'audit', 'diff', 'exposure', 'tiling', 'tile2x2', 'depth', 'normals', 'motion', 'chrono', 'kymograph', 'sheet'.
  * @param {EyeFrameSource|EyeFrameSource[]} frameOrFrames
  * @param {{mode?: string, layout?: 'side'|'stack'|'grid', labels?: string[], fontScale?: number, maxPanelDim?: number, path?: string}} [opts]
  * @returns {{width: number, height: number, data: Uint8ClampedArray, panels: Object[], path?: string}}
@@ -278,10 +278,11 @@ bro.eye.fit = function(renderFn, opts) {};
 /**
  * Analyze temporal motion continuity across an ordered sequence of frames.
  * Computes per-step Oklab deltaE, staticPairCount, smoothness (0..1),
- * stutterCount, popCount, flickerScore, motionBounds, and optional filmstrip + motion trail PNG.
+ * stutterCount, popCount, hiccupCount, flickerScore, motionBounds, and writes a
+ * 4-panel visual motion board (chronophotograph, X-T/Y-T slit kymograph, cadence ECG, and trail).
  * @param {EyeFrameSource[]} frames
- * @param {{threshold?: number, labels?: string[], maxPanelDim?: number, layout?: 'side'|'grid', buildVisual?: boolean, path?: string}} [opts]
- * @returns {{width: number, height: number, frameCount: number, staticPairCount: number, stutterCount: number, popCount: number, meanDeltaE: number, deltaEStd: number, smoothness: number, lumaMin: number, lumaMax: number, lumaRange: number, flickerScore: number, motionCoverage: number, motionBounds: Object, steps: Object[], path?: string}}
+ * @param {{threshold?: number, labels?: string[], timestampsMs?: number[], maxPanelDim?: number, layout?: 'side'|'grid', visualStyle?: 'board'|'chrono'|'kymograph'|'sheet', slitX?: number, slitY?: number, buildVisual?: boolean, path?: string}} [opts]
+ * @returns {{width: number, height: number, frameCount: number, staticPairCount: number, stutterCount: number, popCount: number, hiccupCount: number, meanDeltaE: number, deltaEStd: number, smoothness: number, lumaMin: number, lumaMax: number, lumaRange: number, flickerScore: number, motionCoverage: number, dtMedianMs: number, dtP95Ms: number, dtMaxMs: number, fpsMean: number, autoSlitX: number, autoSlitY: number, motionBounds: Object, steps: Object[], path?: string}}
  */
 bro.eye.motion = function(frames, opts) {};
 
@@ -293,3 +294,12 @@ bro.eye.motion = function(frames, opts) {};
  * @returns {{width: number, height: number, samples: Object[], distances: Object[], path?: string}}
  */
 bro.eye.probe = function(scene, opts) {};
+
+/**
+ * Exact 3D triangle-triangle clearance sweep across one or more kinematic poses (`stepFn(poseIdx, totalSteps)`).
+ * Detects both static and moving mesh interpenetrations and optionally writes an annotated blueprint X-ray PNG.
+ * @param {Object} scene
+ * @param {{eps?: number, steps?: number, stepFn?: (poseIdx: number, totalSteps: number) => void, ignoreStatic?: boolean, ignoreSameParent?: boolean, ignorePairs?: [string, string][], path?: string, maxPanelDim?: number}} [opts]
+ * @returns {{ok: boolean, posesChecked: number, totalMeshPairs: number, staticCollisionCount: number, dynamicCollisionCount: number, worstPoseIndex: number, collisions: {nodeA: string, nodeB: string, hitTriangles: number, poseIndex: number, centroid: number[], overlapDepth: number, dynamic: boolean}[], path?: string}}
+ */
+bro.eye.clearance = function(scene, opts) {};
