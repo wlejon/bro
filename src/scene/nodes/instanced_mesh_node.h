@@ -299,6 +299,9 @@ public:
 
     void setNearClipDist(float d) { nearClipDist_ = d; }
     float nearClipDist() const { return nearClipDist_; }
+    /// As MeshNode::setFadeOutDist.
+    void setFadeOutDist(float d) { fadeOutDist_ = d > 0.0f ? d : 0.0f; }
+    float fadeOutDist() const { return fadeOutDist_; }
 
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
@@ -564,6 +567,7 @@ private:
     float depthBiasFactor_ = 0.0f;
     float depthBiasUnits_ = 0.0f;
     float nearClipDist_ = 0.0f;
+    float fadeOutDist_ = 0.0f;
 
     bool castsShadow_ = true;
     bool receivesShadow_ = true;

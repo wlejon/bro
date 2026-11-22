@@ -292,6 +292,8 @@ bool registerSceneExtraNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_emissiveColorCss_set", BRO_NATIVE_FN(bro_scene_SceneNode_emissiveColorCss_set), "void", {N, "str"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_nearClipDist_get", BRO_NATIVE_FN(bro_scene_SceneNode_nearClipDist_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_nearClipDist_set", BRO_NATIVE_FN(bro_scene_SceneNode_nearClipDist_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_fadeOutDist_get", BRO_NATIVE_FN(bro_scene_SceneNode_fadeOutDist_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_fadeOutDist_set", BRO_NATIVE_FN(bro_scene_SceneNode_fadeOutDist_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_radius_get", BRO_NATIVE_FN(bro_scene_SceneNode_radius_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_radius_set", BRO_NATIVE_FN(bro_scene_SceneNode_radius_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_fillColor_get", BRO_NATIVE_FN(bro_scene_SceneNode_fillColor_get), "str", {N}, error) &&

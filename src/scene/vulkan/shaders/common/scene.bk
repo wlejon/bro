@@ -141,6 +141,14 @@ pub fn view_pos(world_pos: vec3<f32>) -> vec3<f32> {
     return mul4(camera.view, vec4<f32>(world_pos, 1.0)).xyz;
 }
 
+// The value a pixel (window position `fc`) dithers distance bands with: a
+// voxeldag region's minDist / maxDist, a mesh's fadeOutDist. Interleaved
+// gradient noise; one value a pixel, so bands that share an edge hand over
+// pixel for pixel, with neither a gap nor an overlap.
+pub fn band_dither(fc: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
+}
+
 // Vertex wind displacement.
 pub fn wind_delta(pos: vec3<f32>, bend: f32) -> vec3<f32> {
     if camera.wind.w <= 0.0 || bend <= 0.0 { return vec3<f32>(0.0, 0.0, 0.0); }

@@ -1,7 +1,8 @@
 // scene_extras.js — the SceneNode members over the hand-registered natives in
 // native_scene_extras.cpp: the per-type accessors (alphaCutoff, doubleSided,
 // interior, priority, emissiveColor, radius, fillColor / strokeColor /
-// strokeWidth, autoSync, pixelsPerUnit, billboard, nearClipDist, frameIndex),
+// strokeWidth, autoSync, pixelsPerUnit, billboard, nearClipDist, fadeOutDist,
+// frameIndex),
 // the instanced-mesh operations (updateInstance, setInstancedMesh,
 // setAtlasGrid, setScatterSegments, setTubeSegments, updateInstances) and
 // PhysicsNode.syncToPhysics, plus the setter-method spellings (setAlphaCutoff,
@@ -12,7 +13,7 @@
 // defined the factories it wraps: it also teaches createMesh /
 // createInstancedMesh / createShape / createSprite the option keys these
 // accessors answer for (emissiveColor, alphaCutoff, doubleSided, billboard,
-// nearClipDist, atlas, scatter, tube, ...), so an option and a later
+// nearClipDist, fadeOutDist, atlas, scatter, tube, ...), so an option and a later
 // assignment take the same path.
 (function () {
     'use strict';
@@ -51,6 +52,9 @@
     typed('nearClipDist', isMeshOrInstanced,
         (n) => __bro_native.scene.SceneNode_nearClipDist_get(n),
         (n, v) => __bro_native.scene.SceneNode_nearClipDist_set(n, +v));
+    typed('fadeOutDist', isMeshOrInstanced,
+        (n) => __bro_native.scene.SceneNode_fadeOutDist_get(n),
+        (n, v) => __bro_native.scene.SceneNode_fadeOutDist_set(n, +v));
     typed('emissiveColor', isMeshOrInstanced,
         (n) => Array.from(__bro_native.scene.SceneNode_emissiveColor_get(n)),
         (n, v) => {
@@ -200,6 +204,7 @@
         if (opts.alphaCutoff !== undefined) node.alphaCutoff = opts.alphaCutoff;
         if (opts.doubleSided !== undefined) node.doubleSided = opts.doubleSided;
         if (opts.nearClipDist !== undefined) node.nearClipDist = opts.nearClipDist;
+        if (opts.fadeOutDist !== undefined) node.fadeOutDist = opts.fadeOutDist;
         if (opts.billboard !== undefined) node.billboard = opts.billboard;
         if (opts.radius !== undefined && isShape(node)) node.radius = opts.radius;
         if (opts.fillColor !== undefined && isShape(node)) node.fillColor = opts.fillColor;

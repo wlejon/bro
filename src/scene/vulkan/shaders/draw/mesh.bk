@@ -299,6 +299,14 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
     if (push.extra.x > 0.0 && length(world_pos) < push.extra.x) {
         return true;
     }
+    // fadeOutDist (-extra.x): gone past mix(d, 1.35 d, u), where a voxeldag
+    // region whose minDist is d takes over pixel for pixel.
+    if (push.extra.x < 0.0) {
+        let d = -push.extra.x;
+        if (length(world_pos) >= mix(d, d * 1.35, scene::band_dither(frag_coord().xy))) {
+            return true;
+        }
+    }
     if (push.pbr_params.z > 0.0) {
         let ba = base_albedo(push, uv, in_color, inst_color);
         if (ba.w < push.pbr_params.z) {

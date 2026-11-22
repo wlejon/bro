@@ -207,7 +207,7 @@ uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) const {
            (draw.twoSided ? raster::kTwoSided : 0u) |
            (draw.lines ? raster::kLines : 0u) | (draw.mirrored ? raster::kMirrored : 0u) |
            (draw.noDepthTest ? raster::kNoDepth : 0u) |
-           (draw.push.extra[0] > 0.0f || draw.push.pbrParams[2] > 0.0f ? raster::kCuts : 0u);
+           (draw.push.extra[0] != 0.0f || draw.push.pbrParams[2] > 0.0f ? raster::kCuts : 0u);
 }
 
 VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
@@ -514,7 +514,8 @@ void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, Me
     out.push.pbrParams[0] = node.metallic();
     out.push.pbrParams[1] = node.roughness();
     out.push.pbrParams[2] = node.alphaCutoff();
-    out.push.extra[0] = node.nearClipDist();
+    // Positive: the near clip; negative: minus the distance it fades out from.
+    out.push.extra[0] = node.nearClipDist() > 0.0f ? node.nearClipDist() : -node.fadeOutDist();
     out.translucent = color[3] < 1.0f;
     // Unlit meshes never cast: they draw outside the lighting a shadow
     // belongs to (a custom shader suppresses unlit, so it casts).

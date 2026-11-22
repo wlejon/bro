@@ -267,6 +267,11 @@ public:
     /// Used to hide coarse LOD terrain where finer LODs are loaded.
     void setNearClipDist(float d) { nearClipDist_ = d; }
     float nearClipDist() const { return nearClipDist_; }
+    /// Drawn out to fadeOutDist and dithered out by 1.35x it, with the
+    /// dither a voxeldag region's minDist dithers in with (0: no fade; a
+    /// nearClipDist takes precedence).
+    void setFadeOutDist(float d) { fadeOutDist_ = d > 0.0f ? d : 0.0f; }
+    float fadeOutDist() const { return fadeOutDist_; }
 
     /// Whether this mesh writes into the shadow pages. Default true. Set false
     /// for meshes that should illuminate with shadows but not cast their own
@@ -633,6 +638,7 @@ private:
 
     // Near clip distance — discard fragments closer than this (for LOD overlap)
     float nearClipDist_ = 0.0f;
+    float fadeOutDist_ = 0.0f;
 
     bool castsShadow_ = true;
     bool receivesShadow_ = true;

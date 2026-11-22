@@ -343,6 +343,17 @@ class SceneNode {
   /** @type {number} */ alphaCutoff;
   /** @type {boolean} */ doubleSided;
   /** @type {number} */ nearClipDist;
+  /**
+   * Mesh, InstancedMesh: drawn out to this distance from the eye and
+   * dithered out by 1.35x it, each pixel by the value a voxeldag region's
+   * minDist dithers in with (voxeldag-api.js), so a mesh with fadeOutDist d
+   * and a region with minDist d (and its default minFadeEnd) share every
+   * pixel of the band between them, neither a gap nor an overlap: a mesh
+   * tree hands over to the same tree in voxels. Per pixel, by its own
+   * distance. 0 (default): no fade. A nearClipDist takes precedence.
+   * @type {number}
+   */
+  fadeOutDist;
   /** @type {Array<number>|string} */ emissiveColor;
   /** @type {boolean|string} */ billboard;
   /** @type {boolean} */ autoSync;

@@ -142,7 +142,7 @@ fn shade_voxeldag(ri: u32, bend: vec4<f32>) -> VoxelFragOut {
     let fc = frag_coord().xy;
     let rd = scene::view_ray(fc);
     let t_max = scene_t_max(fc);
-    let ign = fract(52.9829189 * fract(dot(fc, vec2<f32>(0.06711056, 0.00583715))));
+    let ign = scene::band_dither(fc);
     let tick = u_params.counts.y;
     let max_steps = u_params.counts.z;
     let lod_scale = u_params.scales.x;

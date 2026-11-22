@@ -190,6 +190,17 @@ void bro_scene_SceneNode_nearClipDist_set(void* self, double v) {
     else if (auto* im = instancedOf(self)) im->setNearClipDist(static_cast<float>(v));
 }
 
+// ---- fadeOutDist (Mesh, InstancedMesh) ------------------------------------
+double bro_scene_SceneNode_fadeOutDist_get(void* self) {
+    if (auto* m = meshOf(self)) return m->fadeOutDist();
+    if (auto* im = instancedOf(self)) return im->fadeOutDist();
+    return 0.0;
+}
+void bro_scene_SceneNode_fadeOutDist_set(void* self, double v) {
+    if (auto* m = meshOf(self)) m->setFadeOutDist(static_cast<float>(v));
+    else if (auto* im = instancedOf(self)) im->setFadeOutDist(static_cast<float>(v));
+}
+
 // ---- Shape: radius, fillColor, strokeColor, strokeWidth -------------------
 double bro_scene_SceneNode_radius_get(void* self) {
     auto* s = shapeOf(self);

@@ -748,6 +748,8 @@ void bro_scene_SceneNode_emissiveColor_set(void* self, const double* v, uint32_t
 void bro_scene_SceneNode_emissiveColorCss_set(void* self, const char* css);
 double bro_scene_SceneNode_nearClipDist_get(void* self);
 void bro_scene_SceneNode_nearClipDist_set(void* self, double v);
+double bro_scene_SceneNode_fadeOutDist_get(void* self);
+void bro_scene_SceneNode_fadeOutDist_set(void* self, double v);
 double bro_scene_SceneNode_radius_get(void* self);
 void bro_scene_SceneNode_radius_set(void* self, double v);
 const char* bro_scene_SceneNode_fillColor_get(void* self);
