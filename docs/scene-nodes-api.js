@@ -336,7 +336,8 @@ class SceneNode {
   /** @type {number} */ cullMargin;
   /**
    * Where the opaque pass draws this node's meshes, low first (0-255, 10 by
-   * default; equal orders keep the scene's order). Draw what covers others
+   * default; within an order, nearest first by the centre of their bounds
+   * along the view). Draw what covers others
    * first, foliage before the ground it stands on, and the depth test
    * rejects the hidden pixels before they shade instead of shading them and
    * drawing over them.

@@ -113,10 +113,17 @@ void buildDrawLists(SceneFrame& frame) {
         (overlay ? lists.overlay : draw.translucent ? lists.translucent : lists.opaque).push_back(index);
     }
 
-    // Near and solid first (MeshDraw::order), so what is behind it fails the
-    // early depth test rather than shading and being overdrawn.
+    // Near and solid first (MeshDraw::order, then nearest first within an
+    // order), so what is behind it fails the early depth test rather than
+    // shading and being overdrawn. (Within an order the scene's own order was
+    // kept: a world that remade its near meshes as the eye moved drew them
+    // after everything behind them, and its opaque passes shaded three times
+    // over.)
     std::stable_sort(lists.opaque.begin(), lists.opaque.end(), [&](uint32_t a, uint32_t b) {
-        return lists.meshes[a].order < lists.meshes[b].order;
+        const MeshDraw& da = lists.meshes[a];
+        const MeshDraw& db = lists.meshes[b];
+        if (da.order != db.order) return da.order < db.order;
+        return da.viewDepth < db.viewDepth;
     });
     std::stable_sort(lists.translucent.begin(), lists.translucent.end(), [&](uint32_t a, uint32_t b) {
         return lists.meshes[a].viewDepth > lists.meshes[b].viewDepth;
