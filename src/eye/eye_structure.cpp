@@ -354,6 +354,7 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         if (e.ignored || e.grounded) continue;
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
         if (ext.y < 0.14f || ext.x < 0.10f || ext.z < 0.10f || ext.x > 1.8f || ext.z > 1.8f) continue;
+        if (ext.y < 0.45f * std::max(ext.x, ext.z)) continue;  // skip horizontal beams/shafts/blocks
 
         const auto& bvhSelf = e.node->bvh();
         const auto& mdSelf = e.node->mesh();
