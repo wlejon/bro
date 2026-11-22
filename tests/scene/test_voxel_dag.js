@@ -95,7 +95,6 @@ if (!probe.scene) {
         }
 
         world.setAutoAnimate(false);
-        world.setShadowSteps(0);
         world.setAnimTick(0);
         const gen0 = world.stats().generation;
         const img0 = s.scene.captureFrame();
@@ -118,7 +117,6 @@ if (!probe.scene) {
     {
         const s = makeScene(192);
         const world = bro.voxeldag.createWorld(s.scene);
-        world.setShadowSteps(0);
 
         const rid = world.addRegion({ voxelSize: 0.25, maxDepth: 3, center: [0, 0, 0] });
         const carveBox = world.addArchetypeFromBox([1, 1, 1, 1], 1, { state: 'carve' });
@@ -206,7 +204,6 @@ if (!probe.scene) {
         const s = makeScene(128);
         s.scene.setCamera({ fov: 45, near: 0.2, far: 150, position: [0, 0, 11], target: [0, 0, 0] });
         const world = bro.voxeldag.createWorld(s.scene);
-        world.setShadowSteps(0);
         const base = world.stats().liveBricks;
 
         // A closed box, a little inside the unit cube, coloured green.
