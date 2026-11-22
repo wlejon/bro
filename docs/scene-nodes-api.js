@@ -617,7 +617,7 @@ class SceneNode {
    * `texture3d<vec4<f32>>`; `setShaderTexture`) sampled through
    * `custom::linear`, `custom::repeat`, `custom::repeat_s` or
    * `custom::nearest`; and `buffer` / `read_buffer` bindings at
-   * `@binding(4, 14)` to `@binding(4, 19)` (`setShaderBuffer`), an unbound one
+   * `@binding(4, 14)` to `@binding(4, 23)` (`setShaderBuffer`), an unbound one
    * of `.len() == 0`. Throws TypeError on bad options and Error with
    * brokernel's diagnostics when compilation or set-4 reflection fails.
    * Needs GPU rendering.
