@@ -1,0 +1,506 @@
+#include "eye/eye_structure.h"
+#include "eye/eye_draw_internal.h"
+
+#include "scene/nodes/mesh_node.h"
+#include "scene/scene_graph.h"
+#include <broimage/encode.h>
+#include <bromath/aabb.h>
+#include <bromath/mat.h>
+#include <bromath/vec.h>
+#include <bromesh/analysis/bvh.h>
+#include <bromesh/analysis/raycast.h>
+#include <bromesh/mesh_data.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <limits>
+#include <queue>
+#include <unordered_map>
+#include <vector>
+
+namespace bro::eye {
+namespace {
+
+struct MeshEntry {
+    scene::MeshNode* node = nullptr;
+    std::string name;
+    bromath::Mat4 world{};
+    bromath::Mat4 invWorld{};
+    bromath::AABB3 worldBox{};
+    float detSign = 1.0f;
+    bool ignored = false;
+    bool grounded = false;
+};
+
+bromath::Vec3 mulPt(const bromath::Mat4& m, const bromath::Vec3& v) {
+    const float* d = m.data;
+    return {
+        d[0] * v.x + d[4] * v.y + d[8]  * v.z + d[12],
+        d[1] * v.x + d[5] * v.y + d[9]  * v.z + d[13],
+        d[2] * v.x + d[6] * v.y + d[10] * v.z + d[14],
+    };
+}
+
+bromath::Vec3 mulDir(const bromath::Mat4& m, const bromath::Vec3& v) {
+    const float* d = m.data;
+    return {
+        d[0] * v.x + d[4] * v.y + d[8]  * v.z,
+        d[1] * v.x + d[5] * v.y + d[9]  * v.z,
+        d[2] * v.x + d[6] * v.y + d[10] * v.z,
+    };
+}
+
+bromath::AABB3 worldAabb(const bromath::AABB3& b, const bromath::Mat4& m) {
+    bromath::AABB3 out = bromath::aempty3();
+    for (int i = 0; i < 8; ++i) {
+        out = bromath::aexpand(out, mulPt(m, {
+            (i & 1) ? b.max.x : b.min.x,
+            (i & 2) ? b.max.y : b.min.y,
+            (i & 4) ? b.max.z : b.min.z,
+        }));
+    }
+    return out;
+}
+
+double aabbGap(const bromath::AABB3& a, const bromath::AABB3& b) {
+    const double dx = std::max(0.0f, std::max(a.min.x - b.max.x, b.min.x - a.max.x));
+    const double dy = std::max(0.0f, std::max(a.min.y - b.max.y, b.min.y - a.max.y));
+    const double dz = std::max(0.0f, std::max(a.min.z - b.max.z, b.min.z - a.max.z));
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool containsAny(const std::string& hay, const std::vector<std::string>& needles) {
+    for (const auto& s : needles) {
+        if (!s.empty() && hay.find(s) != std::string::npos) return true;
+    }
+    return false;
+}
+
+struct WindingStats {
+    bool closed = false;
+    double signedVolume = 0.0;
+    double badNormalRatio = 0.0;
+};
+
+WindingStats inspectWinding(const MeshEntry& e) {
+    WindingStats ws;
+    const auto& md = e.node->mesh();
+    const size_t tc = md.triangleCount();
+    const size_t vc = md.vertexCount();
+    if (tc == 0 || vc == 0) return ws;
+
+    const bool checkClosure = (tc >= 12 && tc <= 12000);
+    std::unordered_map<uint64_t, int> edgeCounts;
+    if (checkClosure) edgeCounts.reserve(tc * 3 / 2);
+
+    const bool hasNormals = md.hasNormals();
+    size_t badNrm = 0, checkedNrm = 0;
+    double vol6 = 0.0;
+
+    for (size_t t = 0; t < tc; ++t) {
+        const uint32_t i0 = md.indices[t * 3 + 0];
+        const uint32_t i1 = md.indices[t * 3 + 1];
+        const uint32_t i2 = md.indices[t * 3 + 2];
+        if (i0 >= vc || i1 >= vc || i2 >= vc) continue;
+        const bromath::Vec3 p0{md.positions[i0 * 3], md.positions[i0 * 3 + 1], md.positions[i0 * 3 + 2]};
+        const bromath::Vec3 p1{md.positions[i1 * 3], md.positions[i1 * 3 + 1], md.positions[i1 * 3 + 2]};
+        const bromath::Vec3 p2{md.positions[i2 * 3], md.positions[i2 * 3 + 1], md.positions[i2 * 3 + 2]};
+
+        const bromath::Vec3 fn = bromath::vcross(p1 - p0, p2 - p0);
+        if (checkClosure) {
+            vol6 += static_cast<double>(bromath::vdot(p0, fn));
+            const uint32_t es[3][2] = {{i0, i1}, {i1, i2}, {i2, i0}};
+            for (const auto& ed : es) {
+                const uint32_t a = std::min(ed[0], ed[1]);
+                const uint32_t b = std::max(ed[0], ed[1]);
+                edgeCounts[(static_cast<uint64_t>(a) << 32) | b] += 1;
+            }
+        }
+        if (hasNormals && bromath::vlen(fn) > 1e-8f) {
+            const bromath::Vec3 n0{md.normals[i0 * 3], md.normals[i0 * 3 + 1], md.normals[i0 * 3 + 2]};
+            const bromath::Vec3 n1{md.normals[i1 * 3], md.normals[i1 * 3 + 1], md.normals[i1 * 3 + 2]};
+            const bromath::Vec3 n2{md.normals[i2 * 3], md.normals[i2 * 3 + 1], md.normals[i2 * 3 + 2]};
+            const bromath::Vec3 vn = n0 + n1 + n2;
+            if (bromath::vlen(vn) > 1e-6f) {
+                ++checkedNrm;
+                if (bromath::vdot(fn, vn) * e.detSign < -1e-6f) ++badNrm;
+            }
+        }
+    }
+
+    if (checkedNrm > 0) ws.badNormalRatio = static_cast<double>(badNrm) / checkedNrm;
+    if (checkClosure && !edgeCounts.empty()) {
+        size_t boundary = 0;
+        for (const auto& [k, c] : edgeCounts) if (c < 2) ++boundary;
+        ws.closed = (static_cast<double>(boundary) / edgeCounts.size()) < 0.05;
+        ws.signedVolume = (vol6 / 6.0) * e.detSign;
+    }
+    return ws;
+}
+
+std::vector<bromath::Vec3> sampleWorldSurface(const MeshEntry& e) {
+    const auto& md = e.node->mesh();
+    const size_t vc = md.vertexCount();
+    const size_t tc = md.triangleCount();
+    std::vector<bromath::Vec3> pts;
+    const size_t vStep = std::max<size_t>(1, vc / 80);
+    for (size_t i = 0; i < vc; i += vStep) {
+        pts.push_back(mulPt(e.world, {md.positions[i * 3], md.positions[i * 3 + 1], md.positions[i * 3 + 2]}));
+    }
+    const size_t tStep = std::max<size_t>(1, tc / 48);
+    for (size_t t = 0; t < tc; t += tStep) {
+        const uint32_t i0 = md.indices[t * 3], i1 = md.indices[t * 3 + 1], i2 = md.indices[t * 3 + 2];
+        if (i0 >= vc || i1 >= vc || i2 >= vc) continue;
+        const bromath::Vec3 c{
+            (md.positions[i0 * 3] + md.positions[i1 * 3] + md.positions[i2 * 3]) / 3.0f,
+            (md.positions[i0 * 3 + 1] + md.positions[i1 * 3 + 1] + md.positions[i2 * 3 + 1]) / 3.0f,
+            (md.positions[i0 * 3 + 2] + md.positions[i1 * 3 + 2] + md.positions[i2 * 3 + 2]) / 3.0f,
+        };
+        pts.push_back(mulPt(e.world, c));
+    }
+    return pts;
+}
+
+double meshSurfaceDist(const MeshEntry& a, const MeshEntry& b,
+                       const std::vector<bromath::Vec3>& ptsA,
+                       const std::vector<bromath::Vec3>& ptsB,
+                       bromath::Vec3& outPtA, bromath::Vec3& outPtB) {
+    double best = std::numeric_limits<double>::infinity();
+    const auto& bvhB = b.node->bvh();
+    const auto& mdB = b.node->mesh();
+    if (!bvhB.empty()) {
+        for (const auto& pa : ptsA) {
+            const bromath::Vec3 lb = mulPt(b.invWorld, pa);
+            const float q[3] = {lb.x, lb.y, lb.z};
+            const auto hit = bvhB.closestPoint(mdB, q);
+            if (!hit.hit) continue;
+            const bromath::Vec3 pb = mulPt(b.world, {hit.position[0], hit.position[1], hit.position[2]});
+            const double d = bromath::vlen(pb - pa);
+            if (d < best) { best = d; outPtA = pa; outPtB = pb; }
+        }
+    }
+    const auto& bvhA = a.node->bvh();
+    const auto& mdA = a.node->mesh();
+    if (!bvhA.empty()) {
+        for (const auto& pb : ptsB) {
+            const bromath::Vec3 la = mulPt(a.invWorld, pb);
+            const float q[3] = {la.x, la.y, la.z};
+            const auto hit = bvhA.closestPoint(mdA, q);
+            if (!hit.hit) continue;
+            const bromath::Vec3 pa = mulPt(a.world, {hit.position[0], hit.position[1], hit.position[2]});
+            const double d = bromath::vlen(pb - pa);
+            if (d < best) { best = d; outPtA = pa; outPtB = pb; }
+        }
+    }
+    return best;
+}
+
+}  // namespace
+
+EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructureOptions& opts) {
+    EyeStructureResult res;
+    const double contactTol = std::clamp(opts.contactTol, 0.001, 0.5);
+    const double overhangTol = std::clamp(opts.overhangTol, 0.05, 0.95);
+
+    std::vector<MeshEntry> entries;
+    graph.root()->traverse([&](scene::SceneNode* node) {
+        if (!node || !node->visible()) return;
+        if (node->type() == scene::SceneNode::Type::Mesh) {
+            auto* mn = static_cast<scene::MeshNode*>(node);
+            const auto& md = mn->mesh();
+            if (md.positions.empty() || md.indices.empty()) return;
+            MeshEntry me;
+            me.node = mn;
+            me.name = node->name().empty() ? ("mesh#" + std::to_string(node->id())) : node->name();
+            me.world = node->worldMatrix();
+            me.invWorld = bromath::minverse(me.world);
+            me.worldBox = worldAabb(mn->localBounds(), me.world);
+            const float* d = me.world.data;
+            const bromath::Vec3 c0{d[0], d[1], d[2]}, c1{d[4], d[5], d[6]}, c2{d[8], d[9], d[10]};
+            me.detSign = (bromath::vdot(c0, bromath::vcross(c1, c2)) < 0.0f) ? -1.0f : 1.0f;
+            me.ignored = containsAny(me.name, opts.ignoreFloating);
+            const bool groundNamed = (me.name.find("Floor") != std::string::npos ||
+                                      me.name.find("Ground") != std::string::npos ||
+                                      me.name.find("Terrain") != std::string::npos ||
+                                      me.name.find("Bedplate") != std::string::npos);
+            me.grounded = groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
+            entries.push_back(std::move(me));
+        }
+    });
+
+    const size_t n = entries.size();
+    res.meshCount = static_cast<int>(n);
+    if (n == 0) return res;
+
+    std::vector<std::vector<bromath::Vec3>> samples(n);
+    for (size_t i = 0; i < n; ++i) samples[i] = sampleWorldSurface(entries[i]);
+
+    // A. Inverted face / winding checks
+    for (size_t i = 0; i < n; ++i) {
+        const auto& e = entries[i];
+        const WindingStats ws = inspectWinding(e);
+        const bromath::Vec3 ext = bromath::aextent(e.worldBox);
+        const bool flatDisc = (ext.y < 0.015f);
+        const bool inverted = (!flatDisc && ws.closed && ws.signedVolume < -1e-6) || (ws.badNormalRatio > 0.35);
+        if (inverted) {
+            ++res.invertedCount;
+            const bromath::Vec3 ctr = bromath::acenter(e.worldBox);
+            EyeStructureIssue iss;
+            iss.kind = "inverted-winding";
+            iss.severity = "error";
+            iss.nodeA = e.name;
+            iss.value = ws.badNormalRatio > 0.35 ? ws.badNormalRatio : 1.0;
+            iss.point[0] = ctr.x; iss.point[1] = ctr.y; iss.point[2] = ctr.z;
+            iss.radius = std::max(0.20, 0.5 * bromath::vlen(ext));
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%s has inside-out/inverted winding (badNrm=%.0f%%, vol=%.4f)",
+                          e.name.c_str(), ws.badNormalRatio * 100.0, ws.signedVolume);
+            iss.message = buf;
+            res.issues.push_back(std::move(iss));
+        }
+    }
+
+    // B. Watch pairs gap measurements & global surface-contact connectivity BFS
+    for (const auto& [ka, kb] : opts.watchPairs) {
+        int ia = -1, ib = -1;
+        for (size_t i = 0; i < n; ++i) {
+            if (ia < 0 && entries[i].name == ka) ia = static_cast<int>(i);
+            if (ib < 0 && entries[i].name == kb) ib = static_cast<int>(i);
+        }
+        if (ia < 0 || ib < 0 || ia == ib) continue;
+        bromath::Vec3 pA{}, pB{};
+        const double gap = meshSurfaceDist(entries[ia], entries[ib], samples[ia], samples[ib], pA, pB);
+        EyeStructurePairGap pg;
+        pg.nodeA = ka; pg.nodeB = kb; pg.gap = gap;
+        pg.pointA[0] = pA.x; pg.pointA[1] = pA.y; pg.pointA[2] = pA.z;
+        pg.pointB[0] = pB.x; pg.pointB[1] = pB.y; pg.pointB[2] = pB.z;
+        res.watchedGaps.push_back(pg);
+        if (gap > contactTol) {
+            ++res.gapCount;
+            EyeStructureIssue iss;
+            iss.kind = "unmeshed-gap";
+            iss.severity = "error";
+            iss.nodeA = ka; iss.nodeB = kb;
+            iss.value = gap;
+            iss.point[0] = (pA.x + pB.x) * 0.5;
+            iss.point[1] = (pA.y + pB.y) * 0.5;
+            iss.point[2] = (pA.z + pB.z) * 0.5;
+            iss.radius = std::max(0.24, gap * 3.0);
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%s and %s do not mesh (gap=%.3fu > %.3fu)", ka.c_str(), kb.c_str(), gap, contactTol);
+            iss.message = buf;
+            res.issues.push_back(std::move(iss));
+        }
+    }
+
+    std::vector<std::vector<size_t>> adj(n);
+    std::vector<double> nearestDist(n, std::numeric_limits<double>::infinity());
+    std::vector<size_t> nearestIdx(n, 0);
+    std::vector<bromath::Vec3> nearestPt(n);
+
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            const double bg = aabbGap(entries[i].worldBox, entries[j].worldBox);
+            if (bg > contactTol * 2.5 && bg > nearestDist[i] && bg > nearestDist[j]) continue;
+            bromath::Vec3 pA{}, pB{};
+            const double d = meshSurfaceDist(entries[i], entries[j], samples[i], samples[j], pA, pB);
+            if (d <= contactTol) {
+                adj[i].push_back(j);
+                adj[j].push_back(i);
+            }
+            if (d < nearestDist[i]) { nearestDist[i] = d; nearestIdx[i] = j; nearestPt[i] = pA; }
+            if (d < nearestDist[j]) { nearestDist[j] = d; nearestIdx[j] = i; nearestPt[j] = pB; }
+        }
+    }
+
+    std::vector<bool> reached(n, false);
+    std::queue<size_t> q;
+    for (size_t i = 0; i < n; ++i) {
+        if (entries[i].grounded) { reached[i] = true; q.push(i); }
+    }
+    while (!q.empty()) {
+        const size_t u = q.front();
+        q.pop();
+        for (size_t v : adj[u]) {
+            if (!reached[v]) { reached[v] = true; q.push(v); }
+        }
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        if (reached[i] || entries[i].ignored) continue;
+        ++res.floatingCount;
+        const bromath::Vec3 ctr = bromath::acenter(entries[i].worldBox);
+        const bromath::Vec3 ext = bromath::aextent(entries[i].worldBox);
+        EyeStructureIssue iss;
+        iss.kind = "floating";
+        iss.severity = "error";
+        iss.nodeA = entries[i].name;
+        iss.nodeB = entries[nearestIdx[i]].name;
+        iss.value = nearestDist[i];
+        iss.point[0] = ctr.x; iss.point[1] = ctr.y; iss.point[2] = ctr.z;
+        iss.radius = std::max(0.24, 0.55 * bromath::vlen(ext));
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%s is floating/disconnected (nearest: %s at %.3fu)",
+                      entries[i].name.c_str(), entries[nearestIdx[i]].name.c_str(), nearestDist[i]);
+        iss.message = buf;
+        res.issues.push_back(std::move(iss));
+    }
+
+    // C. Overhanging base footing check for resting pillars/pedestals/supports
+    for (size_t i = 0; i < n; ++i) {
+        const auto& e = entries[i];
+        if (e.ignored || e.grounded) continue;
+        const bromath::Vec3 ext = bromath::aextent(e.worldBox);
+        if (ext.y < 0.14f || ext.x > 1.8f || ext.z > 1.8f) continue;
+
+        const auto& bvhSelf = e.node->bvh();
+        const auto& mdSelf = e.node->mesh();
+        if (bvhSelf.empty()) continue;
+
+        int footSamples = 0, unsupported = 0;
+        bromath::Vec3 missSum{0, 0, 0};
+        const float footY = e.worldBox.min.y;
+
+        for (int ix = 0; ix < 3; ++ix) {
+            const float wx = e.worldBox.min.x + ext.x * (0.14f + 0.36f * ix);
+            for (int iz = 0; iz < 3; ++iz) {
+                const float wz = e.worldBox.min.z + ext.z * (0.14f + 0.36f * iz);
+                // Check if mesh itself has base material here (eliminates L-brackets / pipes!)
+                const bromath::Vec3 probeW{wx, footY - 0.02f, wz};
+                const bromath::Vec3 loS = mulPt(e.invWorld, probeW);
+                const bromath::Vec3 ldS = bromath::vnorm(mulDir(e.invWorld, {0, 1, 0}));
+                const float opS[3] = {loS.x, loS.y, loS.z}, dpS[3] = {ldS.x, ldS.y, ldS.z};
+                const auto selfHit = bvhSelf.raycast(mdSelf, opS, dpS, 0.09f);
+                if (!selfHit.hit) continue;
+
+                ++footSamples;
+                bool hasSupportBelow = (footY <= opts.groundY + 0.04f);
+                if (!hasSupportBelow) {
+                    const bromath::Vec3 rayOrg{wx, footY + 0.03f, wz};
+                    for (size_t j = 0; j < n; ++j) {
+                        if (j == i) continue;
+                        const auto& bBox = entries[j].worldBox;
+                        if (wx < bBox.min.x - 0.01f || wx > bBox.max.x + 0.01f ||
+                            wz < bBox.min.z - 0.01f || wz > bBox.max.z + 0.01f ||
+                            bBox.max.y < footY - 0.10f || bBox.min.y > footY + 0.05f) continue;
+                        const auto& bvhO = entries[j].node->bvh();
+                        if (bvhO.empty()) continue;
+                        const bromath::Vec3 loO = mulPt(entries[j].invWorld, rayOrg);
+                        const bromath::Vec3 ldO = bromath::vnorm(mulDir(entries[j].invWorld, {0, -1, 0}));
+                        const float opO[3] = {loO.x, loO.y, loO.z}, dpO[3] = {ldO.x, ldO.y, ldO.z};
+                        if (bvhO.raycast(entries[j].node->mesh(), opO, dpO, 0.11f).hit) {
+                            hasSupportBelow = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hasSupportBelow) {
+                    ++unsupported;
+                    missSum = missSum + bromath::Vec3{wx, footY, wz};
+                }
+            }
+        }
+
+        if (footSamples >= 3 && unsupported > 0 && unsupported < footSamples) {
+            const double missRatio = static_cast<double>(unsupported) / footSamples;
+            if (missRatio >= overhangTol) {
+                ++res.overhangCount;
+                const bromath::Vec3 mc = missSum * (1.0f / static_cast<float>(unsupported));
+                EyeStructureIssue iss;
+                iss.kind = "overhang";
+                iss.severity = "error";
+                iss.nodeA = e.name;
+                iss.value = missRatio;
+                iss.point[0] = mc.x; iss.point[1] = mc.y; iss.point[2] = mc.z;
+                iss.radius = std::max(0.28, 0.65 * std::max(ext.x, ext.z));
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "%s footing overhangs support (%d/%d = %.0f%% unsupported)",
+                              e.name.c_str(), unsupported, footSamples, missRatio * 100.0);
+                iss.message = buf;
+                res.issues.push_back(std::move(iss));
+            }
+        }
+    }
+
+    res.ok = res.issues.empty();
+
+    // D. Auto-zoomed macro defect sheet (restoring active camera cleanly afterwards)
+    if (!opts.path.empty()) {
+        scene::CameraNode* savedCamNode = graph.activeCamera();
+        const bromath::Mat4 origV = graph.viewMatrix();
+        const bromath::Mat4 origP = graph.projectionMatrix();
+        const bromath::Vec3 origEye = graph.cameraEye();
+        const float origFov = graph.cameraFovY();
+        const float origNear = graph.cameraNearZ();
+        const float origFar = graph.cameraFarZ();
+        const int cw = graph.canvasWidth(), ch = graph.canvasHeight();
+        const float p00 = origP.at(0, 0), p11 = origP.at(1, 1);
+        const float aspect = (cw > 0 && ch > 0) ? (static_cast<float>(cw) / ch)
+                         : ((std::abs(p00) > 1e-6f && std::abs(p11) > 1e-6f) ? std::abs(p11 / p00) : 16.0f / 9.0f);
+        const bromath::Vec3 origUp{origV.at(1, 0), origV.at(1, 1), origV.at(1, 2)};
+        const bromath::Vec3 origFwd{-origV.at(2, 0), -origV.at(2, 1), -origV.at(2, 2)};
+
+        std::vector<EyeImage> panels;
+        std::vector<std::string> labels;
+        const size_t maxPanels = static_cast<size_t>(std::clamp(opts.maxZoomPanels, 1, 12));
+
+        if (res.issues.empty()) {
+            graph.renderForRead();
+            int w = 0, h = 0;
+            const auto rgba = graph.readTonemapPixelsRGBA(w, h);
+            if (!rgba.empty()) {
+                EyeImage im = draw::fitPanel(EyeImageView{rgba.data(), w, h, w * 4}, opts.maxPanelDim);
+                char bnr[80];
+                std::snprintf(bnr, sizeof(bnr), "STRUCTURE OK | %d meshes | 0 defects", res.meshCount);
+                draw::drawText(im, 8, 8, bnr, 1, 110, 245, 165, true);
+                panels.push_back(std::move(im));
+                labels.emplace_back("overview");
+            }
+        } else {
+            for (size_t k = 0; k < std::min(res.issues.size(), maxPanels); ++k) {
+                const auto& iss = res.issues[k];
+                const bromath::Vec3 tgt{static_cast<float>(iss.point[0]), static_cast<float>(iss.point[1]), static_cast<float>(iss.point[2])};
+                const float dist = static_cast<float>(std::clamp(iss.radius * 2.8, 0.55, 2.4));
+                const bromath::Vec3 camPos = tgt + bromath::vnorm({0.65f, 0.45f, 0.72f}) * dist;
+                graph.setCamera(0.68f, aspect, std::max(0.02f, origNear), std::max(40.0f, origFar), camPos, tgt, {0, 1, 0});
+                graph.renderForRead();
+                int w = 0, h = 0;
+                const auto rgba = graph.readTonemapPixelsRGBA(w, h);
+                if (rgba.empty() || w <= 0 || h <= 0) continue;
+                EyeImage im = draw::fitPanel(EyeImageView{rgba.data(), w, h, w * 4}, opts.maxPanelDim);
+
+                float lx = 0, ly = 0, depth = 0;
+                if (graph.projectLocal(tgt, lx, ly, depth) && depth > 0.0f) {
+                    const float cwf = static_cast<float>(cw > 0 ? cw : w);
+                    const float chf = static_cast<float>(ch > 0 ? ch : h);
+                    const int px = std::clamp(static_cast<int>(std::lround((lx / cwf) * im.width)), 8, im.width - 9);
+                    const int py = std::clamp(static_cast<int>(std::lround((ly / chf) * im.height)), 8, im.height - 9);
+                    draw::drawCircle(im, px, py, 10, 2, 255, 78, 86, 245);
+                    draw::drawLine(im, px - 14, py, px + 14, py, 1, 255, 78, 86, 220);
+                    draw::drawLine(im, px, py - 14, px, py + 14, 1, 255, 78, 86, 220);
+                }
+                panels.push_back(std::move(im));
+                labels.push_back(iss.kind + ": " + iss.nodeA);
+            }
+            if (savedCamNode) graph.setActiveCamera(savedCamNode);
+            else graph.setCamera(origFov, aspect, origNear, origFar, origEye, origEye + origFwd * 5.0f, origUp);
+        }
+
+        if (!panels.empty()) {
+            const auto sheet = draw::assembleSheet(std::move(panels), labels, "grid", 1);
+            res.visual = {sheet.width, sheet.height, std::move(sheet.rgba)};
+            std::error_code ec;
+            const std::filesystem::path outPath(opts.path);
+            if (outPath.has_parent_path()) std::filesystem::create_directories(outPath.parent_path(), ec);
+            if (broimage::encode_png_file(opts.path, res.visual.rgba.data(), res.visual.width, res.visual.height, 4)) {
+                res.visualPath = opts.path;
+            }
+        }
+    }
+
+    return res;
+}
+
+}  // namespace bro::eye

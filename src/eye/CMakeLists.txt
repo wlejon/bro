@@ -18,6 +18,7 @@ if(BRO_WITH_3D)
         eye_form.cpp
         eye_probe.cpp
         eye_clearance.cpp
+        eye_structure.cpp
         eye_scene_form.cpp
     )
 endif()

@@ -539,6 +539,7 @@ Value makeBroEyeValue(bool hasEngine) {
         eyeObj.def("scene", 2, jsEyeScene);
         eyeObj.def("probe", 2, eye_detail::jsEyeProbe);
         eyeObj.def("clearance", 2, eye_detail::jsEyeClearance);
+        eyeObj.def("structure", 2, eye_detail::jsEyeStructure);
     }
     return eyeObj.get();
 }

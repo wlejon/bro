@@ -10,6 +10,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "eye/eye_clearance.h"
 #include "eye/eye_probe.h"
+#include "eye/eye_structure.h"
 #include "scene/scene_graph.h"
 #endif
 
@@ -341,6 +342,94 @@ Value jsEyeClearance(Value, std::span<const Value> a) {
         cb.set("overlapDepth", ev::fromDouble(c.overlapDepth));
         cb.set("dynamic", ev::fromBool(c.dynamic));
         return cb.get();
+    }));
+    if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
+    return o.get();
+#endif
+}
+
+Value jsEyeStructure(Value, std::span<const Value> a) {
+#if !BRO_WITH_3D
+    (void)a;
+    return ev::throwError("bro.eye.structure requires a 3D build (BRO_WITH_3D=ON)");
+#else
+    if (!hostEngine()) return ev::throwError("bro.eye.structure is unavailable in Worker realms");
+    if (a.empty() || !ev::isObject(a[0])) {
+        return ev::throwTypeError("bro.eye.structure(scene, opts?) requires a SceneGraph");
+    }
+    scene::SceneGraph* graph = nullptr;
+    if (void* raw = ev::handleData(a[0])) {
+        auto* cell = static_cast<HostSceneGraphCell*>(raw);
+        if (cell->tag == kHostSceneGraphTag) graph = cell->graph();
+    }
+    if (!graph) {
+        return ev::throwTypeError("bro.eye.structure(scene, opts?): expected a live SceneGraph");
+    }
+
+    EyeStructureOptions sopts;
+    Value optsVal = a.size() >= 2 ? a[1] : ev::undefined();
+    ev::Persistent optsRoot(optsVal);
+    if (ev::isObject(optsRoot.get())) {
+        sopts.contactTol = std::clamp(numProp(optsRoot.get(), "contactTol", sopts.contactTol), 0.001, 0.5);
+        sopts.overhangTol = std::clamp(numProp(optsRoot.get(), "overhangTol", sopts.overhangTol), 0.05, 0.95);
+        sopts.groundY = numProp(optsRoot.get(), "groundY", sopts.groundY);
+        sopts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", sopts.maxPanelDim)), 128, 1024);
+        sopts.maxZoomPanels = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxZoomPanels", sopts.maxZoomPanels)), 1, 12);
+        const std::string rawPath = strProp(optsRoot.get(), "path");
+        if (!rawPath.empty()) {
+            requirePathAccess(rawPath, /*write=*/true);
+            sopts.path = rawPath;
+        }
+        Value igVal = ev::getProperty(optsRoot.get(), "ignoreFloating");
+        if (ev::isObject(igVal)) {
+            ev::Persistent ia(igVal);
+            const uint32_t in = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(ia.get(), "length")), 128.0)));
+            for (uint32_t i = 0; i < in; ++i) sopts.ignoreFloating.push_back(ev::toUtf8(ev::getElement(ia.get(), i)));
+        }
+        Value wpVal = ev::getProperty(optsRoot.get(), "watchPairs");
+        if (ev::isObject(wpVal)) {
+            ev::Persistent wa(wpVal);
+            const uint32_t wn = static_cast<uint32_t>(std::max(0.0, std::min(ev::toDouble(ev::getProperty(wa.get(), "length")), 64.0)));
+            for (uint32_t i = 0; i < wn; ++i) {
+                Value pairEl = ev::getElement(wa.get(), i);
+                if (!ev::isObject(pairEl)) continue;
+                ev::Persistent pe(pairEl);
+                sopts.watchPairs.emplace_back(ev::toUtf8(ev::getElement(pe.get(), 0)),
+                                              ev::toUtf8(ev::getElement(pe.get(), 1)));
+            }
+        }
+    }
+
+    const EyeStructureResult r = analyzeStructure(*graph, sopts);
+    ObjectBuilder o;
+    o.set("ok", ev::fromBool(r.ok));
+    o.set("meshCount", ev::fromDouble(r.meshCount));
+    o.set("invertedCount", ev::fromDouble(r.invertedCount));
+    o.set("floatingCount", ev::fromDouble(r.floatingCount));
+    o.set("overhangCount", ev::fromDouble(r.overhangCount));
+    o.set("gapCount", ev::fromDouble(r.gapCount));
+    o.set("issues", hostArrayOf(r.issues.size(), [&](size_t i) {
+        const auto& is = r.issues[i];
+        ObjectBuilder ib;
+        ib.set("kind", ev::fromUtf8(is.kind));
+        ib.set("severity", ev::fromUtf8(is.severity));
+        ib.set("nodeA", ev::fromUtf8(is.nodeA));
+        ib.set("nodeB", ev::fromUtf8(is.nodeB));
+        ib.set("value", ev::fromDouble(is.value));
+        ib.set("point", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(is.point[k]); }));
+        ib.set("radius", ev::fromDouble(is.radius));
+        ib.set("message", ev::fromUtf8(is.message));
+        return ib.get();
+    }));
+    o.set("watchedGaps", hostArrayOf(r.watchedGaps.size(), [&](size_t i) {
+        const auto& g = r.watchedGaps[i];
+        ObjectBuilder gb;
+        gb.set("nodeA", ev::fromUtf8(g.nodeA));
+        gb.set("nodeB", ev::fromUtf8(g.nodeB));
+        gb.set("gap", ev::fromDouble(g.gap));
+        gb.set("pointA", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(g.pointA[k]); }));
+        gb.set("pointB", hostArrayOf(3, [&](size_t k) { return ev::fromDouble(g.pointB[k]); }));
+        return gb.get();
     }));
     if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));
     return o.get();

@@ -303,3 +303,13 @@ bro.eye.probe = function(scene, opts) {};
  * @returns {{ok: boolean, posesChecked: number, totalMeshPairs: number, staticCollisionCount: number, dynamicCollisionCount: number, worstPoseIndex: number, collisions: {nodeA: string, nodeB: string, hitTriangles: number, poseIndex: number, centroid: number[], overlapDepth: number, dynamic: boolean}[], path?: string}}
  */
 bro.eye.clearance = function(scene, opts) {};
+
+/**
+ * Structural 3D assembly audit over a live SceneGraph: detects inside-out winding,
+ * disconnected floating parts, overhanging support footings, and unmeshed watch-pair gaps.
+ * Optionally writes an auto-zoomed macro defect contact sheet PNG (`path`).
+ * @param {Object} scene
+ * @param {{contactTol?: number, overhangTol?: number, groundY?: number, ignoreFloating?: string[], watchPairs?: [string, string][], path?: string, maxPanelDim?: number, maxZoomPanels?: number}} [opts]
+ * @returns {{ok: boolean, meshCount: number, invertedCount: number, floatingCount: number, overhangCount: number, gapCount: number, issues: Object[], watchedGaps: Object[], path?: string}}
+ */
+bro.eye.structure = function(scene, opts) {};
