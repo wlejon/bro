@@ -90,6 +90,9 @@ pub struct Surface {
     sun_diffuse: f32,
     to_sun: vec3<f32>,
     debug: vec4<f32>,
+    // Lit as foliage (> 0.5): the leaf terms a vegetation leaf gets
+    // (translucency, wrapped diffuse, its shadow floor and view floor).
+    leaf: f32,
 }
 
 pub struct FragOut {
@@ -112,6 +115,7 @@ pub fn debug(s: Surface, rgb: vec3<f32>) -> Surface {
         sun_diffuse: s.sun_diffuse,
         to_sun: s.to_sun,
         debug: vec4<f32>(rgb, 1.0),
+        leaf: s.leaf,
     };
 }
 
@@ -404,6 +408,7 @@ pub fn prepare_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, i
         sun_diffuse: 0.0,
         to_sun: lighting::to_sun(),
         debug: vec4<f32>(0.0, 0.0, 0.0, -1.0),
+        leaf: 0.0,
     };
 }
 
@@ -440,7 +445,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     let n = normalize(s_in.normal);
     let sky_n = dot(s_in.sky_normal, s_in.sky_normal) > 0.0001 ? normalize(s_in.sky_normal) : n;
     var translucency: f32 = 0.0;
-    if (veg_leaf) {
+    if (veg_leaf || s_in.leaf > 0.5) {
         translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
     }
     let ls = lighting::Surface {
@@ -559,6 +564,7 @@ pub fn shade_veg_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>,
         sun_diffuse: s0.sun_diffuse,
         to_sun: s0.to_sun,
         debug: s0.debug,
+        leaf: s0.leaf,
     };
 }
 
@@ -598,6 +604,7 @@ pub fn shade_bark(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv:
         sun_diffuse: s0.sun_diffuse,
         to_sun: s0.to_sun,
         debug: s0.debug,
+        leaf: s0.leaf,
     };
     return finish_surface(push, world_pos, normalize(in_normal), in_uv, s, in_veg_shade.w < 0.0, veg_ao);
 }

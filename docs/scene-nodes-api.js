@@ -526,7 +526,11 @@ class SceneNode {
    *
    * `fragment` runs after every material input is gathered and before lighting:
    * `s.base_color`, `s.normal` (world space, renormalised after), `s.metallic`,
-   * `s.roughness`, `s.emissive`, `s.alpha`.
+   * `s.roughness`, `s.emissive`, `s.alpha`, and `s.leaf` (0): set over 0.5,
+   * the surface is lit as a vegetation leaf is (light through it from
+   * behind, diffuse wrapped past the terminator, its shadow never darker
+   * than 0.1, its ambient taken at no less than a 0.6 view angle): foliage a
+   * hook draws itself, such as a tree impostor.
    *
    * `light` runs after `fragment` with `l.to_sun` (unit direction to the sun:
    * the atmosphere's, else the first directional light) and initial values
