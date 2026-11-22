@@ -290,7 +290,14 @@ class VoxelWorld {
 
     /** Pixel-cone LOD scale (1: a cell under a pixel shades prefiltered). */
     setLodScale(s) {}
-    /** March steps a region a pixel (default 128, min 8). */
+    /**
+     * March steps a region a pixel (default 128, min 8). A ray past half of
+     * them takes coarser cells, the cone doubling every eighth (16x by the
+     * last), so it ends on the content it crosses as a coarser shade rather
+     * than running out and missing, which would leave the pixel to every
+     * region behind it. A forest of tiles seen at a grazing angle is cheaper
+     * at 16 than at 64, and looks the same.
+     */
     setMaxRaySteps(n) {}
     setAnimTick(tick) {}
     setAnimFps(fps) {}
