@@ -20,8 +20,10 @@ struct MeshGeomRef {
 };
 
 struct LocalIsland {
+    bromath::AABB3 localBox = bromath::aempty3();
     std::vector<bromath::Vec3> localSamples;
     std::vector<uint32_t> triIndices;
+    std::vector<uint32_t> intersectingNeighbors;
     bool closed = false;
     double rawSignedVolume = 0.0;
     double badNormalRatioPos = 0.0;
@@ -34,6 +36,7 @@ struct IslandSummary {
     bromath::AABB3 worldBox{};
     std::vector<bromath::Vec3> samples;
     std::vector<uint32_t> triIndices;
+    std::vector<uint32_t> localIntersectingNeighbors;
     bool grounded = false;
     bool closed = false;
     double signedVolume = 0.0;
