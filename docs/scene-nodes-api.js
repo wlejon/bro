@@ -653,13 +653,15 @@ class SceneNode {
   /**
    * Upload a float texture for a `@binding(4, 1..8)` texture variable in the
    * custom shader module (`texture2d<vec4<f32>>`, `texture2d_array<vec4<f32>>`,
-   * or `texture3d<vec4<f32>>`). `data` holds width * height floats, row-major.
-   * With `x`/`y` given it writes a sub-rectangle of an existing slot instead
-   * (width * height floats for the rect alone; a rect outside the texture is
-   * ignored). A zero width or height releases the slot. `mipmap` builds a mip
-   * chain for `.sample_lod()`. With `layers` the slot is a 2D array for a
-   * `texture2d_array<vec4<f32>>`: `data` holds that many width * height slices
-   * one after another (whole slots only, no sub-rectangles). With `depth` in
+   * or `texture3d<vec4<f32>>`). `data` holds width * height texels of
+   * `channels` floats (1, 2 or 4: a `.x`, `.xy` or `.xyzw` read; 1 by
+   * default), row-major. With `x`/`y` given it writes a sub-rectangle of an
+   * existing slot instead (width * height texels of the slot's own channels
+   * for the rect alone; a rect outside the texture is ignored). A zero width
+   * or height releases the slot. `mipmap` builds a mip chain for
+   * `.sample_lod()`. With `layers` the slot is a 2D array for a
+   * `texture2d_array<vec4<f32>>`: `data` holds that many width * height
+   * slices one after another (whole slots only, no sub-rectangles). With `depth` in
    * its place the slices are the z of a 3D texture for a
    * `texture3d<vec4<f32>>`, filtered across them by the hardware (one fetch
    * for a tiling 3D field), never mipmapped, written whole. A data array

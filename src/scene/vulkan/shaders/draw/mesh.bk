@@ -316,6 +316,14 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
     return false;
 }
 
+// A fragment hook's own alpha against the cutoff: a hook that computes its
+// coverage (an impostor's atlas, a procedural leaf) cuts as a texture's
+// alpha does. One that leaves `alpha` alone keeps the material's, which
+// should_cut has already tested.
+pub fn hook_cut(push: Push, s: Surface) -> bool {
+    return push.pbr_params.z > 0.0 && s.alpha < push.pbr_params.z;
+}
+
 pub fn cost_heatmap(t_in: f32) -> vec3<f32> {
     let t = clamp(t_in, 0.0, 1.0);
     let r = clamp(1.5 - abs(4.0 * t - 3.0), 0.0, 1.0);

@@ -668,6 +668,9 @@ import hook;
     let v = mesh::make_frag_vertex(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, v0, v1, v2, v3, v4, v5, vi);
     let s0 = mesh::prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing());
     let s = hook::fragment(v, s0);
+    if (mesh::hook_cut(push, s)) {
+        discard_fragment();
+    }
     let out = mesh::finish_surface(push, world_pos, normalize(in_normal), in_uv, s, false, 1.0);
     set_frag_output(0, out.color);
 }
@@ -720,6 +723,9 @@ import hook;
     let v = mesh::make_frag_vertex(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, v0, v1, v2, v3, v4, v5, vi);
     let s0 = mesh::prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing());
     let s = hook::fragment(v, s0);
+    if (mesh::hook_cut(push, s)) {
+        discard_fragment();
+    }
     let out = mesh::finish_surface(push, world_pos, normalize(in_normal), in_uv, s, false, 1.0);
     set_frag_output(0, out.color);
     set_frag_output(1, out.indirect);
@@ -793,6 +799,9 @@ fn prep_light_surface(s: mesh::Surface) -> mesh::Surface {
     let v = mesh::make_frag_vertex(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, v0, v1, v2, v3, v4, v5, vi);
     let s0 = mesh::prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing());
     let s1 = prep_light_surface(hook::fragment(v, s0));
+    if (mesh::hook_cut(push, s1)) {
+        discard_fragment();
+    }
     let s = hook::light(v, s1);
     let out = mesh::finish_surface(push, world_pos, normalize(in_normal), in_uv, s, false, 1.0);
     set_frag_output(0, out.color);
@@ -847,6 +856,9 @@ fn prep_light_surface(s: mesh::Surface) -> mesh::Surface {
     let v = mesh::make_frag_vertex(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, v0, v1, v2, v3, v4, v5, vi);
     let s0 = mesh::prepare_surface(push, world_pos, in_normal, in_uv, in_color, in_tangent, in_bitangent, in_inst_color, front_facing());
     let s1 = prep_light_surface(hook::fragment(v, s0));
+    if (mesh::hook_cut(push, s1)) {
+        discard_fragment();
+    }
     let s = hook::light(v, s1);
     let out = mesh::finish_surface(push, world_pos, normalize(in_normal), in_uv, s, false, 1.0);
     set_frag_output(0, out.color);

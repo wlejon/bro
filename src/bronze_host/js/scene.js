@@ -675,7 +675,7 @@
         const x = opts.x || 0, y = opts.y || 0, w = opts.width || 0, h = opts.height || 0;
         const data = opts.data ? (opts.data instanceof Float32Array ? opts.data : Float32Array.from(opts.data)) : EMPTY_F32;
         __bro_native.scene.SceneNode_setShaderTexture(this, name, x, y, w, h, data, !!opts.mipmap, isSub,
-                                                      !!opts.repeat, layers, volume);
+                                                      !!opts.repeat, layers, volume, opts.channels || 1);
         return this;
     });
     fn(SceneNode.prototype, "capture", function capture() {

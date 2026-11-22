@@ -519,54 +519,60 @@ bool bro_scene_SceneNode_setShaderTextureBuffer(void* self, const char* name, ui
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,
                                           int32_t width, int32_t height,
                                           const float* data, uint32_t dataCount,
-                                          bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume) {
+                                          bool mipmap, bool isSub, bool repeat, int32_t layers, bool volume,
+                                          int32_t channels) {
     auto* n = nodeOf(self);
     if (!n || !name) return false;
+    if (channels != 1 && channels != 2 && channels != 4) {
+        ev::throwRangeError("setShaderTexture: channels must be 1, 2 or 4");
+        return false;
+    }
     auto apply = [&](auto* mn) -> bool {
         if (volume && isSub) {
             ev::throwTypeError("setShaderTexture: a 3D slot (depth) is written whole, not by sub-rects");
             return false;
         }
-        // An array slot: `layers` slices of width * height floats, one after
-        // another in `data`, for a sampler2DArray (a sampler3D's z with
-        // `volume`).
+        // An array slot: `layers` slices of width * height texels of
+        // `channels` floats, one after another in `data`, for a
+        // sampler2DArray (a sampler3D's z with `volume`).
         if (layers > 0 && !isSub) {
             if (width <= 0 || height <= 0) {
                 mn->clearCustomShaderTexture(name);
                 return true;
             }
-            const uint64_t slice = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+            const uint64_t slice = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) *
+                                   static_cast<uint64_t>(channels);
             if (!data || static_cast<uint64_t>(dataCount) < slice * static_cast<uint64_t>(layers)) {
-                ev::throwRangeError("setShaderTexture: data holds fewer than width * height * layers floats");
+                ev::throwRangeError("setShaderTexture: data holds fewer than width * height * channels * layers floats");
                 return false;
             }
-            if (!mn->setCustomShaderTextureArray(name, width, height, layers, 1, mipmap, repeat, false, volume))
+            if (!mn->setCustomShaderTextureArray(name, width, height, layers, channels, mipmap, repeat, false, volume))
                 return false;
             for (int32_t l = 0; l < layers; ++l)
                 if (!mn->setCustomShaderTextureArrayLayer(name, l, data + slice * static_cast<uint64_t>(l))) return false;
             return true;
         }
-        // The slot copies width * height * channels floats out of `data`: one
-        // channel for a new slot, the slot's own count for a sub-rect write
-        // (an engine-made slot may be RGBA). A shorter
-        // array is refused rather than read past. A zero or negative extent
-        // is the documented release, which reads nothing.
-        uint64_t channels = 1;
+        // The slot copies width * height * channels floats out of `data`:
+        // `channels` for a new slot, the slot's own count for a sub-rect
+        // write (an engine-made slot may be RGBA). A shorter array is
+        // refused rather than read past. A zero or negative extent is the
+        // documented release, which reads nothing.
+        uint64_t texel = static_cast<uint64_t>(channels);
         if (isSub) {
             for (const auto& t : mn->customShaderTextures()) {
-                if (t.name == name) { channels = static_cast<uint64_t>(std::max(t.channels, 1)); break; }
+                if (t.name == name) { texel = static_cast<uint64_t>(std::max(t.channels, 1)); break; }
             }
         }
         if (width > 0 && height > 0 && data &&
             static_cast<uint64_t>(dataCount) <
-                static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * channels) {
+                static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * texel) {
             ev::throwRangeError("setShaderTexture: data holds fewer than width * height * channels floats");
             return false;
         }
         if (isSub) {
             return mn->updateCustomShaderTexture(name, x, y, width, height, data);
         } else {
-            return mn->setCustomShaderTexture(name, width, height, data, mipmap, repeat);
+            return mn->setCustomShaderTexture(name, width, height, data, mipmap, repeat, false, channels);
         }
     };
     if (n->type() == scene::SceneNode::Type::Mesh) return apply(static_cast<scene::MeshNode*>(n));
