@@ -58,6 +58,9 @@ VkDescriptorSetLayout SceneVkDescriptorLayoutBuilder::createCameraLayout(VkDevic
     // (Compute too: the plants' leaf poses sway in the camera's wind.)
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
+    // Opaque scene colour and depth snapshots for refractive/depth-aware translucent passes.
+    builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     return builder.build(device);
 }
 

@@ -37,6 +37,27 @@ pub struct Camera {
 }
 
 @binding(0, 0) pub var camera: uniform<Camera>;
+@binding(0, 1) pub var scene_color_map: sampler2d<vec4<f32>>;
+@binding(0, 2) pub var scene_depth_map: sampler2d<vec4<f32>>;
+
+pub fn screen_uv(pixel: vec2<f32>) -> vec2<f32> {
+    let vp = max(camera.viewport.xy, vec2<f32>(1.0));
+    return clamp(pixel / vp, vec2<f32>(0.0), vec2<f32>(1.0));
+}
+
+pub fn sample_scene_color(uv: vec2<f32>) -> vec3<f32> {
+    return scene_color_map.sample(clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0))).xyz;
+}
+
+pub fn sample_scene_depth(uv: vec2<f32>) -> f32 {
+    return scene_depth_map.sample(clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0))).x;
+}
+
+pub fn linear_depth(ndc_z: f32) -> f32 {
+    let n = max(camera.viewport.z, 1e-4);
+    let f = max(camera.viewport.w, n + 1.0);
+    return (n * f) / max(ndc_z * (f - n) + n, 1e-6);
+}
 
 pub const PI: f32 = 3.14159265359;
 

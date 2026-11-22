@@ -20,6 +20,8 @@ if(BRO_WITH_3D)
         eye_clearance.cpp
         eye_structure.cpp
         eye_closeup.cpp
+        eye_lookdev.cpp
+        eye_trace.cpp
         eye_scene_form.cpp
     )
 endif()

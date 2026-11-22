@@ -223,4 +223,71 @@ inline EyeVisualResult assembleSheet(const std::vector<EyeImage>& panels,
     return res;
 }
 
+inline EyeImage fitBox(EyeImageView src, int maxW, int maxH) {
+    if (!src.valid() || maxW <= 0 || maxH <= 0) return {};
+    const double sx = static_cast<double>(maxW) / static_cast<double>(src.width);
+    const double sy = static_cast<double>(maxH) / static_cast<double>(src.height);
+    const double s = std::min(1.0, std::min(sx, sy));
+    const int nw = std::max(1, static_cast<int>(std::lround(src.width * s)));
+    const int nh = std::max(1, static_cast<int>(std::lround(src.height * s)));
+    if (nw == src.width && nh == src.height) {
+        EyeImage out{src.width, src.height, {}};
+        out.rgba.resize(static_cast<size_t>(src.width) * src.height * 4);
+        const int stride = src.effectiveStride();
+        for (int y = 0; y < src.height; ++y) {
+            std::memcpy(out.rgba.data() + static_cast<size_t>(y) * src.width * 4,
+                        src.rgba + static_cast<size_t>(y) * stride,
+                        static_cast<size_t>(src.width) * 4);
+        }
+        return out;
+    }
+    return resampleRgba(src, nw, nh);
+}
+
+inline EyeVisualResult assembleExactSheet(const std::vector<EyeImage>& panels,
+                                          const std::vector<std::string>& labels,
+                                          int cols, int rows,
+                                          int sheetW, int sheetH,
+                                          int fontScale = 1) {
+    EyeVisualResult res;
+    if (panels.empty() || sheetW < 64 || sheetH < 64) return res;
+    cols = std::max(1, cols);
+    rows = std::max(1, rows);
+    const int pad = 8;
+    const int sc = std::clamp(fontScale, 1, 3);
+    const int headerH = 7 * sc + 6;
+    const int cellW = std::max(16, (sheetW - pad * (cols + 1)) / cols);
+    const int cellH = std::max(16, (sheetH - pad * (rows + 1)) / rows - headerH);
+
+    EyeImage canvas{sheetW, sheetH, std::vector<uint8_t>(static_cast<size_t>(sheetW) * sheetH * 4, 22)};
+    for (size_t i = 3; i < canvas.rgba.size(); i += 4) canvas.rgba[i] = 255;
+
+    for (size_t i = 0; i < panels.size(); ++i) {
+        const int c = static_cast<int>(i % cols);
+        const int r = static_cast<int>(i / cols);
+        if (r >= rows) break;
+        const int x = pad + c * (cellW + pad);
+        const int y = pad + r * (headerH + cellH + pad);
+        std::string lbl = i < labels.size() ? labels[i] : ("panel " + std::to_string(i));
+        int lblScale = sc;
+        while (lblScale > 1 && static_cast<int>(lbl.size()) * 6 * lblScale > cellW) --lblScale;
+        const int maxChars = std::max(4, cellW / (6 * lblScale));
+        if (static_cast<int>(lbl.size()) > maxChars) lbl = lbl.substr(0, static_cast<size_t>(maxChars - 2)) + "..";
+        drawText(canvas, x, y + 2, lbl, lblScale, 235, 240, 245, false);
+
+        EyeImage fitted = fitBox(EyeImageView{panels[i].rgba.data(), panels[i].width, panels[i].height, panels[i].width * 4},
+                                 cellW, cellH);
+        const int ox = x + std::max(0, (cellW - fitted.width) / 2);
+        const int oy = y + headerH + std::max(0, (cellH - fitted.height) / 2);
+        blitPanel(canvas, ox, oy, fitted);
+        drawRectBox(canvas, ox, oy, fitted.width, fitted.height, 1, 68, 74, 84);
+        res.panels.push_back({lbl, ox, oy, fitted.width, fitted.height});
+    }
+
+    res.width = canvas.width;
+    res.height = canvas.height;
+    res.rgba = std::move(canvas.rgba);
+    return res;
+}
+
 }  // namespace bro::eye::draw

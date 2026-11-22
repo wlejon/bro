@@ -21,7 +21,9 @@ void copyWhole(VkCommandBuffer cmd, const SceneVkImage& src, const SceneVkImage&
 }  // namespace
 
 bool PassDepthSnapshot::active(const SceneFrame& frame) const {
-    if (frame.ssao || frame.ssr || frame.dof || !frame.lists.volumes.empty()) return true;
+    if (frame.ssao || frame.ssr || frame.dof || !frame.lists.volumes.empty() || !frame.lists.translucent.empty()) {
+        return true;
+    }
     for (const SceneNode* node : frame.lists.nodes) {
         if (node->type() == SceneNode::Type::Decal) return true;
         if (node->type() == SceneNode::Type::Particles3D) {
@@ -42,7 +44,7 @@ void PassDepthSnapshot::record(SceneFrame& frame) {
 }
 
 bool PassColorSnapshot::active(const SceneFrame& frame) const {
-    return frame.ssr;
+    return frame.ssr || !frame.lists.translucent.empty();
 }
 
 void PassColorSnapshot::declare(const SceneFrame& frame, PassIO& io) const {

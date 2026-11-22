@@ -174,6 +174,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_eye_marshal.cpp
     host_eye_taste.cpp
     host_eye_creative.cpp
+    host_eye_lookdev.cpp
     host_steam.cpp
     host_menu.cpp
     host_video.cpp

@@ -194,6 +194,8 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     VkDescriptorSet cameraSet = gpu.device.frameSet(gpu.defaults.cameraLayout);
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.writeImage(1, gpu.defaults.black.view, gpu.defaults.sampler);
+    camWriter.writeImage(2, gpu.defaults.black.view, gpu.defaults.nearestSampler);
     camWriter.updateSet(gpu.device.device(), cameraSet);
     // The face draws relative to the probe: its own lighting, and every draw
     // (prepared relative to the frame's eye) re-based onto it.

@@ -459,9 +459,17 @@ Value jsEyeCloseup(Value, std::span<const Value> a) {
     Value optsVal = a.size() >= 2 ? a[1] : ev::undefined();
     ev::Persistent optsRoot(optsVal);
     if (ev::isObject(optsRoot.get())) {
+        copts.mode = strProp(optsRoot.get(), "mode", copts.mode);
         copts.margin = std::clamp(numProp(optsRoot.get(), "margin", copts.margin), 1.1, 8.0);
-        copts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", copts.maxPanelDim)), 128, 1280);
+        copts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", copts.maxPanelDim)), 96, 1280);
         copts.maxPanels = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanels", copts.maxPanels)), 1, 24);
+        copts.sheetWidth = static_cast<int>(numProp(optsRoot.get(), "sheetWidth", copts.sheetWidth));
+        copts.sheetHeight = static_cast<int>(numProp(optsRoot.get(), "sheetHeight", copts.sheetHeight));
+        if (copts.sheetWidth > 0) copts.sheetWidth = std::clamp(copts.sheetWidth, 128, 1280);
+        if (copts.sheetHeight > 0) copts.sheetHeight = std::clamp(copts.sheetHeight, 128, 1280);
+        copts.isolate = boolProp(optsRoot.get(), "isolate", copts.isolate);
+        copts.showScale = boolProp(optsRoot.get(), "showScale", copts.showScale);
+        copts.showHeading = boolProp(optsRoot.get(), "showHeading", copts.showHeading);
         const std::string rawPath = strProp(optsRoot.get(), "path");
         if (!rawPath.empty()) {
             requirePathAccess(rawPath, /*write=*/true);
@@ -485,6 +493,8 @@ Value jsEyeCloseup(Value, std::span<const Value> a) {
     const EyeCloseupResult r = captureCloseup(*graph, copts);
     ObjectBuilder o;
     o.set("ok", ev::fromBool(r.ok));
+    o.set("width", ev::fromDouble(r.width));
+    o.set("height", ev::fromDouble(r.height));
     o.set("panelCount", ev::fromDouble(r.panelCount));
     o.set("targets", hostArrayOf(r.targets.size(), [&](size_t i) {
         const auto& t = r.targets[i];

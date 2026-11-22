@@ -7,7 +7,7 @@ namespace bro::scene::debug_views {
 
 namespace {
 std::mutex g_mutex;
-std::vector<std::string> g_names = {"cost"};   // id 1 is always "cost"
+std::vector<std::string> g_names = {"cost", "albedo", "roughness", "normals", "metallic"};   // ids 1..5
 } // namespace
 
 int idOf(const std::string& name) {

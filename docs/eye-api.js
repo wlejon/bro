@@ -315,11 +315,30 @@ bro.eye.clearance = function(scene, opts) {};
 bro.eye.structure = function(scene, opts) {};
 
 /**
- * Multi-angle macro close-up contact sheet over named (or auto-selected) 3D SceneGraph subjects
- * (`threeQuarter`, `front`, `side`, `grazing`, `underside`, `top`, `rear`) to catch micro-seams,
- * flat caps, levitating parts, and underside attachment gaps. Restores the active camera cleanly.
+ * Multi-angle macro close-up contact sheet over named or auto-discovered (`mode: 'inventory'`)
+ * 3D SceneGraph subjects (`threeQuarter`, `front`, `side`, `grazing`, `underside`, `top`, `rear`).
+ * Optionally isolates each subject (`isolate: true`), overlays metric scale (`showScale`), and projects
+ * local `+X` (cyan) and `+Z` (amber) axes (`showHeading`). Outputs an exact native-tile PNG (`sheetWidth x sheetHeight`).
  * @param {Object} scene
- * @param {{targets?: string[], angles?: string[], margin?: number, maxPanelDim?: number, maxPanels?: number, path?: string}} [opts]
- * @returns {{ok: boolean, panelCount: number, targets: {query: string, matchedNodes: number, center: number[], extent: number[], minY: number, maxY: number}[], path?: string}}
+ * @param {{mode?: 'targets'|'inventory', targets?: string[], angles?: string[], margin?: number, maxPanelDim?: number, maxPanels?: number, sheetWidth?: number, sheetHeight?: number, isolate?: boolean, showScale?: boolean, showHeading?: boolean, path?: string}} [opts]
+ * @returns {{ok: boolean, width: number, height: number, panelCount: number, targets: {query: string, matchedNodes: number, center: number[], extent: number[], minY: number, maxY: number}[], path?: string}}
  */
 bro.eye.closeup = function(scene, opts) {};
+
+/**
+ * Render an exact 2x2 PBR lookdev sheet (Beauty, Albedo, Roughness, Squint/Value) for a named target
+ * or the active camera view, reporting surface roughness, value contrast, saturation, and edge density.
+ * @param {Object} scene
+ * @param {{target?: string, angle?: string, isolate?: boolean, margin?: number, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
+ * @returns {{ok: boolean, width: number, height: number, matchedNodes: number, roughnessMean: number, roughnessStd: number, glossyFrac: number, valueMean: number, valueStd: number, valueContrast: number, albedoSaturationMean: number, silhouetteEdgeDensity: number, path?: string}}
+ */
+bro.eye.lookdev = function(scene, opts) {};
+
+/**
+ * Record 3D world trajectories of moving meshes across `stepFn(k, steps)` poses, detecting closed
+ * mid-air loops, teleports, water touchdowns, and nearest start static meshes.
+ * @param {Object} scene
+ * @param {{steps?: number, waterY?: number, minTravel?: number, filter?: string, stepFn?: (k: number, steps: number) => void, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]
+ * @returns {{ok: boolean, steps: number, trackCount: number, width: number, height: number, tracks: {name: string, startPos: number[], endPos: number[], minY: number, maxY: number, pathLength: number, maxStepJump: number, teleportCount: number, closedLoop: boolean, touchesWater: boolean, nearestStartStatic: string, nearestStartDist: number}[], path?: string}}
+ */
+bro.eye.trace = function(scene, opts) {};

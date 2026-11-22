@@ -154,9 +154,12 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
 void writeCameraSet(SceneFrame& frame) {
     const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
     const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
-    frame.cameraSet = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
+    const SceneDefaults& d = frame.gpu.defaults;
+    frame.cameraSet = frame.gpu.device.frameSet(d.cameraLayout);
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.writeImage(1, d.black.view, d.sampler);
+    camWriter.writeImage(2, d.black.view, d.nearestSampler);
     camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
 }
 

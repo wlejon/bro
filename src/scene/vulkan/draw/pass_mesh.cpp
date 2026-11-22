@@ -51,19 +51,32 @@ bool PassTranslucent::active(const SceneFrame& frame) const {
 
 void PassTranslucent::declare(const SceneFrame& frame, PassIO& io) const {
     io.hdr();
+    io.sample(frame.gpu.targets.colorSnapshot);
+    io.sample(frame.gpu.targets.depthSnapshot);
     // (Its draws light through the shadow pages' pool and overlays.)
     io.sample(frame.gpu.shadows.pool);
     io.sample(frame.gpu.shadows.scratch);
 }
 
 void PassTranslucent::record(SceneFrame& frame) {
+    const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
+    const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
+    const SceneDefaults& d = frame.gpu.defaults;
+    const SceneTargets& t = frame.gpu.targets;
+    VkDescriptorSet camSet = frame.gpu.device.frameSet(d.cameraLayout);
+    SceneVkDescriptorWriter camWriter;
+    camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.writeImage(1, t.colorSnapshot.view, d.sampler);
+    camWriter.writeImage(2, t.depthSnapshot.view, t.depthSnapshot.sampler);
+    camWriter.updateSet(frame.gpu.device.device(), camSet);
+
     // (Drawn whole, not cut to chunks: a blend's order is its triangles'.)
     for (uint32_t i : frame.lists.translucent) {
         const MeshDraw& draw = frame.lists.meshes[i];
         if (draw.culledIn(0))
-            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw.inView(0));
+            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, camSet, frame.lightingSet, draw.inView(0));
         else
-            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, frame.cameraSet, frame.lightingSet, draw);
+            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, camSet, frame.lightingSet, draw);
     }
 }
 
@@ -104,6 +117,8 @@ void PassOverlay::record(SceneFrame& frame) {
     VkDescriptorSet cameraSet = gpu.device.frameSet(gpu.defaults.cameraLayout);
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.writeImage(1, gpu.defaults.black.view, gpu.defaults.sampler);
+    camWriter.writeImage(2, gpu.defaults.black.view, gpu.defaults.nearestSampler);
     camWriter.updateSet(gpu.device.device(), cameraSet);
 
     VkRenderingAttachmentInfo colorAtt{};
