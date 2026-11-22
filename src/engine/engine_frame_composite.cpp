@@ -240,6 +240,12 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                                                     static_cast<float>(html.image->height)),
                                    nullptr);
             },
+            [&](const ShmClientLayer& src) {
+                if (!src.image) return;
+                frameKeyAdd(src.key);
+                for (float f : {quad.x, quad.y, quad.w, quad.h}) frameKeyAdd(std::bit_cast<uint32_t>(f));
+                if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, src.image, quad);
+            },
             [&](const render::ScrollLayerSource& src) {
                 // A scroller's content: its window's picture where the
                 // scroll puts it (the quad is the content origin at scroll

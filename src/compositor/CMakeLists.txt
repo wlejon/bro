@@ -1,5 +1,6 @@
 add_library(bro_compositor STATIC
     wayland_compositor.cpp
+    wayland_compositor_layers.cpp
 )
 target_include_directories(bro_compositor PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_compositor PUBLIC

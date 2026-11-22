@@ -8,6 +8,7 @@
 #include "render/layer_source.h"
 #include "render/skia_image.h"
 
+#include <include/core/SkImage.h>
 #include <include/core/SkSurface.h>
 #include <vulkan/vulkan.h>
 
@@ -20,6 +21,13 @@ struct HtmlLayer {
     render::SkiaImageRef image;
 };
 
+/// A CPU-composited Wayland client surface (wl_shm: GTK3 portals, software
+/// clients). Drawn into the frame segment at its exact stacking position.
+struct ShmClientLayer {
+    sk_sp<SkImage> image;
+    uint64_t key = 0;
+};
+
 /// One entry in the per-frame composite list, built by the raster thread as
 /// it replays a pass and breaks the HTML around separately composited
 /// content; consumed by the main thread when it composites. A non-HTML
@@ -27,11 +35,12 @@ struct HtmlLayer {
 /// the engine's registries at composite time, so a layer that outlives what
 /// it names draws nothing rather than dangling.
 struct UILayer {
-    using Content = std::variant<HtmlLayer, render::CanvasLayerSource, render::WebGLLayerSource,
-                                 render::SceneLayerSource, render::IframeLayerSource,
-                                 render::TerminalLayerSource, render::DmabufLayerSource,
-                                 render::ClientWindowsLayerSource, render::RemoteViewLayerSource,
-                                 render::ScrollLayerSource, render::KernelCanvasLayerSource>;
+    using Content = std::variant<HtmlLayer, ShmClientLayer, render::CanvasLayerSource,
+                                 render::WebGLLayerSource, render::SceneLayerSource,
+                                 render::IframeLayerSource, render::TerminalLayerSource,
+                                 render::DmabufLayerSource, render::ClientWindowsLayerSource,
+                                 render::RemoteViewLayerSource, render::ScrollLayerSource,
+                                 render::KernelCanvasLayerSource>;
     Content content;
     render::LayerQuad quad;  // non-HTML layers
 

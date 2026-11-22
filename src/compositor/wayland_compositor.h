@@ -12,6 +12,7 @@
 // Window and monitor snapshots are brocompositor's platform-neutral types; the
 // Wayland server behind them is Linux-only.
 #include <brocompositor/events.h>
+#include <include/core/SkImage.h>
 
 #if BRO_HAVE_WAYLAND_SERVER
 #include <brocompositor/linux/server.h>
@@ -236,11 +237,25 @@ public:
 
 private:
 #if BRO_HAVE_WAYLAND_SERVER
+    struct ShmSurfaceCache {
+        uint64_t imageId = 0;
+        uint64_t sequence = 0;
+        sk_sp<SkImage> image;
+    };
+
+    void appendSurfaceNode(const brocompositor::wl::SurfaceNode& node, float baseX, float baseY,
+                           std::vector<engine::UILayer>& outLayers,
+                           std::vector<LeasedSurfaceFrame>& leasedFrames,
+                           float scaleX = 1.0f, float scaleY = 1.0f);
+    void appendLayerShell(brocompositor::wl::Layer which, std::vector<engine::UILayer>& out,
+                          std::vector<LeasedSurfaceFrame>& leased);
+
     std::unique_ptr<brocompositor::wl::ServerBackend> backend_;
     std::shared_ptr<brocompositor::WindowManager> wm_;
     // Every image a returned frame showed, until takeRetiredImages finds it
     // retired.
     std::unordered_map<uint64_t, std::weak_ptr<brocompositor::wl::ClientSurface>> sampledImages_;
+    std::unordered_map<uint32_t, ShmSurfaceCache> shmSurfaces_;
 #endif
     bool running_ = false;
     std::string socketName_;
