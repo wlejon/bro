@@ -189,19 +189,10 @@ void PassDrawCounts::recordCulls(SceneFrame& frame) {
     const bool shadows = frame.gpu.shadows.ready();
     const bromath::Frustum* camera = frame.renderer.cullingFrustum();
     uint64_t words = 0;
-    // The most these draws could take, every shadow view of a plan reaching
-    // each that casts: the buffer is made that large, so a frame whose
-    // shadow views reach more of them than any before (their number moves
-    // frame to frame with the sun's pages) finds room. Made anew mid-run, the
-    // regions' first frame in fresh memory cost the frame a millisecond.
-    uint64_t most = 0;
     for (MeshDraw& d : frame.lists.meshes) {
         d.cullViews = nullptr;
         if (!d.cullSpheres || d.kind != MeshKind::Instanced || !d.cullSpheres->buffer()) continue;
         if (views_.size() >= kMaxRegions) break;
-        const uint64_t drawViews = ((camera && !d.cameraCulled && !d.shadowOnly) ? 1 : 0) +
-                                   ((shadows && d.castsShadow) ? SP_MAX_VIEWS : 0);
-        most += uint64_t(d.instanceCount) * 17 * drawViews;
         InstanceCullViews& cv = views_.emplace_back();
         const auto add = [&](int view, const bromath::Frustum* f) {
             if (regions.size() >= kMaxRegions) return;
@@ -234,7 +225,7 @@ void PassDrawCounts::recordCulls(SceneFrame& frame) {
     const VkDeviceSize outBytes = words * 4;
     if (cullOut_.size < outBytes) {
         gpu.allocator.destroyBuffer(cullOut_);
-        if (!gpu.allocator.createBuffer(std::max<VkDeviceSize>({outBytes + outBytes / 2, most * 4, 1 << 16}),
+        if (!gpu.allocator.createBuffer(std::max<VkDeviceSize>(outBytes + outBytes / 2, 1 << 16),
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, cullOut_)) {
             for (MeshDraw& d : frame.lists.meshes) d.cullViews = nullptr;
