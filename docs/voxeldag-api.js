@@ -19,9 +19,10 @@
  *   the scene or a nearer hit. A cell smaller than the pixel cone shades from
  *   its prefiltered colour, coverage and normal, so distance costs no more
  *   than near. Rays stop at the scene's depth.
- * - Rays are clipped to each region's content bounds (the cells its
- *   placements cover), so an empty region, or the sky over a flat forest,
- *   is not marched.
+ * - Rays are clipped to each region's content bounds (the box the solid
+ *   voxels of its placements fill, not their whole cells), so an empty
+ *   region, the air around a tree, or the sky over a flat forest, is not
+ *   marched.
  * - `minDist` / `fadeStart` / `maxDist` dither a region in and out, so nested
  *   rings of coarser voxels hand over without a seam.
  * - A voxel's alpha is its opacity: a ray passes it with probability

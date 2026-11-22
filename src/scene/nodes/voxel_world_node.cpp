@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 
 namespace bro::scene {
 
@@ -172,13 +173,16 @@ GpuVoxelRegion VoxelRegion::packGpu(const double eye[3]) const noexcept {
     return gpu;
 }
 
-void VoxelRegion::growContent(int ix, int iy, int iz, uint32_t targetDepth) noexcept {
+void VoxelRegion::growContent(int ix, int iy, int iz, uint32_t targetDepth,
+                              const float* lo, const float* hi) noexcept {
     const float cell = 1.0f / static_cast<float>(1u << std::min(targetDepth, 16u));
     const int c[3] = {ix, iy, iz};
     for (int k = 0; k < 3; ++k) {
-        const float a = std::clamp(static_cast<float>(c[k]) * cell, 0.0f, 1.0f);
-        contentMin[k] = std::min(contentMin[k], a);
-        contentMax[k] = std::max(contentMax[k], std::min(a + cell, 1.0f));
+        const float a = static_cast<float>(c[k]) * cell;
+        const float l = std::clamp(a + (lo ? lo[k] : 0.0f) * cell, 0.0f, 1.0f);
+        const float h = std::clamp(a + (hi ? hi[k] : 1.0f) * cell, 0.0f, 1.0f);
+        contentMin[k] = std::min(contentMin[k], l);
+        contentMax[k] = std::max(contentMax[k], h);
     }
 }
 
@@ -329,7 +333,8 @@ bool VoxelWorldNode::placeSubtree(uint32_t regionId, int ix, int iy, int iz,
         ix, iy, iz,
         childRef,
         isLeaf));
-    if (childRef != bromesh::kDagNullNode) reg->growContent(ix, iy, iz, targetDepth);
+    float lo[3], hi[3];
+    if (pool_.solidBounds(childRef, isLeaf, lo, hi)) reg->growContent(ix, iy, iz, targetDepth, lo, hi);
     refreshCarveFlag(*reg);
     reg->generation = ++regionsGen_;
     bumpChangeGeneration();
@@ -346,8 +351,17 @@ bool VoxelWorldNode::placeSubtreesBatch(uint32_t regionId,
         reg->rootNode,
         static_cast<int>(targetDepth),
         copy));
+    // What each placed subtree fills, found once a subtree (a batch places
+    // one archetype many times).
+    struct Fill { bool any; float lo[3], hi[3]; };
+    std::unordered_map<uint64_t, Fill> fills;
     for (const bromesh::DagPlacement& p : placements) {
-        if (p.childRef != bromesh::kDagNullNode) reg->growContent(p.ix, p.iy, p.iz, targetDepth);
+        if (p.childRef == bromesh::kDagNullNode) continue;
+        const uint64_t key = (static_cast<uint64_t>(p.childRef) << 1u) | (p.isLeaf ? 1u : 0u);
+        auto [it, fresh] = fills.try_emplace(key);
+        Fill& f = it->second;
+        if (fresh) f.any = pool_.solidBounds(p.childRef, p.isLeaf, f.lo, f.hi);
+        if (f.any) reg->growContent(p.ix, p.iy, p.iz, targetDepth, f.lo, f.hi);
     }
     refreshCarveFlag(*reg);
     reg->generation = ++regionsGen_;

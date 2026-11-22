@@ -76,8 +76,11 @@ struct VoxelRegion {
         return voxelSize * static_cast<float>(4u << maxDepth);
     }
 
-    /// Grow the content bounds by cell (ix, iy, iz) of the lattice at `targetDepth`.
-    void growContent(int ix, int iy, int iz, uint32_t targetDepth) noexcept;
+    /// Grow the content bounds by cell (ix, iy, iz) of the lattice at
+    /// `targetDepth`, or by the part [lo, hi] of it (the cell's [0, 1]^3)
+    /// what is placed there fills.
+    void growContent(int ix, int iy, int iz, uint32_t targetDepth,
+                     const float* lo = nullptr, const float* hi = nullptr) noexcept;
     void setContentEmpty() noexcept;
     void setContentFull() noexcept;
 
