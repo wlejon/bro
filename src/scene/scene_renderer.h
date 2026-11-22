@@ -554,8 +554,12 @@ public:
 
     /// This frame's lights (at most 32, root-attached and visible), or the
     /// implicit sun when the scene declares none. The shadow plan's per-light
-    /// arrays are indexed like this list.
+    /// arrays are indexed like this list. The lights that give light come
+    /// first; frameLitLights() of them. Those past it (intensity or colour
+    /// zero: a moon by day) are kept for their direction (the sky's sun) but
+    /// not shaded, so a dark light costs a surface nothing.
     const std::vector<LightNode*>& frameLights() const { return frameLights_; }
+    int frameLitLights() const { return frameLitLights_; }
 
     /// This frame's shadow plan (see shadow_plan.h).
     const ShadowPlan& shadowPlan() const { return shadowPlan_; }
@@ -578,14 +582,15 @@ private:
     };
     std::unordered_map<std::string, ShaderCheck> shaderChecks_;
 
-    // Rebuilds frameLights_ (see frameLights()).
-    void collectLights(std::vector<LightNode*>& out) const;
+    // Rebuilds frameLights_ (see frameLights()); returns how many are lit.
+    int collectLights(std::vector<LightNode*>& out) const;
 
     // Implicit directional sun used when the scene declares no lights, so
     // meshes are never pitch black. Per-renderer (configured once in the
     // constructor, never mutated afterwards).
     LightNode implicitSun_;
     std::vector<LightNode*> frameLights_;
+    int frameLitLights_ = 0;
 
     // --- Shadow planner (scene_renderer_shadow.cpp) ---
     // Meets the frame's casters (their motion, and what their changes

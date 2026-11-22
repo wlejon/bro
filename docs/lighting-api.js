@@ -296,6 +296,9 @@ class LightNode {
   color;
 
   /**
+   * A light at intensity 0 (or black) costs a surface nothing: it is not
+   * shaded, though a directional one still counts toward which is the sky's
+   * sun. So a moon by day, or a lamp switched off, can stay in the scene.
    * @type {number}
    */
   intensity;

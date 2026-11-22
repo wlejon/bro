@@ -131,7 +131,9 @@ SceneLightingUniforms sceneLighting(const SceneRenderer& renderer, const SceneGp
     light.ambientColor[2] = amb[2];
     light.ambientColor[3] = 1.0f;
 
-    light.params[0] = static_cast<float>(count);
+    // Shaded: the lit lights only (frameLights() puts them first); the dark
+    // ones' entries stay filled for the sun's direction.
+    light.params[0] = static_cast<float>(std::min(count, renderer.frameLitLights()));
     light.params[1] = static_cast<float>(plan.pcfTaps);
     light.params[2] = gpu.shadows.ready() ? 1.0f / static_cast<float>(gpu.shadows.pool.width) : 0.0f;
     light.params[3] = static_cast<float>(plan.poolColumns);

@@ -19,6 +19,7 @@
 
 #include "broimage/decode.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -156,7 +157,7 @@ bool SceneRenderer::cameraCulled(SceneNode* n) const {
     return !bromath::fintersects(cameraFrustum_, *bounds);
 }
 
-void SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
+int SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
     out.clear();
     const SceneNode* root = graph_.root();
     for (auto& [id, node] : graph_.nodes()) {
@@ -167,6 +168,13 @@ void SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
         out.push_back(static_cast<LightNode*>(node.get()));
         if (out.size() >= 32) break;
     }
+    // The lit first, each side in the order met.
+    const auto lit = [](const LightNode* l) {
+        const bromath::Vec3& c = l->color();
+        return l->intensity() > 0.0f && std::max(c.x, std::max(c.y, c.z)) > 0.0f;
+    };
+    const auto dark = std::stable_partition(out.begin(), out.end(), lit);
+    return static_cast<int>(dark - out.begin());
 }
 
 double SceneRenderer::takeGpuMs(bool wait) {
@@ -290,8 +298,11 @@ void SceneRenderer::render3D() {
     if (cullingActive_)
         cameraFrustum_ = makeFrustum(bromath::mmul(graph_.projectionMatrix(), graph_.viewMatrix()));
 
-    collectLights(frameLights_);
-    if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
+    frameLitLights_ = collectLights(frameLights_);
+    if (frameLights_.empty()) {
+        frameLights_.push_back(&implicitSun_);
+        frameLitLights_ = 1;
+    }
     exposureDt_ = pendingExposureDt_;
     pendingExposureDt_ = 0.0f;
     prepareShadows(frameLights_);
@@ -495,8 +506,11 @@ std::vector<SceneNodeProbeResult> SceneRenderer::probe(int x, int y) {
     cullingActive_ = frustumCullingEnabled_;
     if (cullingActive_)
         cameraFrustum_ = makeFrustum(bromath::mmul(graph_.projectionMatrix(), graph_.viewMatrix()));
-    collectLights(frameLights_);
-    if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
+    frameLitLights_ = collectLights(frameLights_);
+    if (frameLights_.empty()) {
+        frameLights_.push_back(&implicitSun_);
+        frameLitLights_ = 1;
+    }
     prepareShadows(frameLights_);
     return vkBridge_->probe(graph_, *this, x, y);
 }
