@@ -304,40 +304,49 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
         }
     }
 
+    struct DSU {
+        std::vector<size_t> p;
+        explicit DSU(size_t m) : p(m) { std::iota(p.begin(), p.end(), 0); }
+        size_t find(size_t x) {
+            while (p[x] != x) x = p[x] = p[p[x]];
+            return x;
+        }
+        void unite(size_t a, size_t b) {
+            a = find(a);
+            b = find(b);
+            if (a != b) p[b] = a;
+        }
+    } dsu(n + 1);
+    for (size_t i = 0; i < n; ++i) {
+        if (entries[i].grounded) dsu.unite(0, i + 1);
+    }
+
     std::vector<size_t> sweepOrder(n);
     std::iota(sweepOrder.begin(), sweepOrder.end(), 0);
     std::sort(sweepOrder.begin(), sweepOrder.end(), [&](size_t a, size_t b) {
         return entries[a].worldBox.min.x < entries[b].worldBox.min.x;
     });
 
-    std::vector<std::vector<size_t>> adj(n);
     for (size_t sa = 0; sa < n; ++sa) {
         const size_t i = sweepOrder[sa];
         const float maxXi = entries[i].worldBox.max.x + static_cast<float>(contactTol);
         for (size_t sb = sa + 1; sb < n; ++sb) {
             const size_t j = sweepOrder[sb];
             if (entries[j].worldBox.min.x > maxXi) break;
+            if (dsu.find(i + 1) == dsu.find(j + 1)) continue;
             if (aabbGap(entries[i].worldBox, entries[j].worldBox) > contactTol) continue;
             bromath::Vec3 pA{}, pB{};
             const double d = meshSurfaceDist(entries[i], entries[j], samples[i], samples[j], pA, pB);
             if (d <= contactTol) {
-                adj[i].push_back(j);
-                adj[j].push_back(i);
+                dsu.unite(i + 1, j + 1);
             }
         }
     }
 
+    const size_t groundRoot = dsu.find(0);
     std::vector<bool> reached(n, false);
-    std::queue<size_t> q;
     for (size_t i = 0; i < n; ++i) {
-        if (entries[i].grounded) { reached[i] = true; q.push(i); }
-    }
-    while (!q.empty()) {
-        const size_t u = q.front();
-        q.pop();
-        for (size_t v : adj[u]) {
-            if (!reached[v]) { reached[v] = true; q.push(v); }
-        }
+        reached[i] = (dsu.find(i + 1) == groundRoot);
     }
 
     for (size_t i = 0; i < n; ++i) {
