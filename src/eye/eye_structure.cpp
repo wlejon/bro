@@ -1,4 +1,5 @@
 #include "eye/eye_structure.h"
+#include "eye/eye_structure_islands.h"
 #include "eye/eye_draw_internal.h"
 
 #include "scene/nodes/mesh_node.h"
@@ -31,6 +32,7 @@ struct MeshEntry {
     bromath::AABB3 worldBox{};
     float detSign = 1.0f;
     bool ignored = false;
+    bool groundNamed = false;
     bool grounded = false;
 };
 
@@ -221,11 +223,11 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
             const bromath::Vec3 c0{d[0], d[1], d[2]}, c1{d[4], d[5], d[6]}, c2{d[8], d[9], d[10]};
             me.detSign = (bromath::vdot(c0, bromath::vcross(c1, c2)) < 0.0f) ? -1.0f : 1.0f;
             me.ignored = containsAny(me.name, opts.ignoreFloating);
-            const bool groundNamed = (me.name.find("Floor") != std::string::npos ||
-                                      me.name.find("Ground") != std::string::npos ||
-                                      me.name.find("Terrain") != std::string::npos ||
-                                      me.name.find("Bedplate") != std::string::npos);
-            me.grounded = groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
+            me.groundNamed = (me.name.find("Floor") != std::string::npos ||
+                              me.name.find("Ground") != std::string::npos ||
+                              me.name.find("Terrain") != std::string::npos ||
+                              me.name.find("Bedplate") != std::string::npos);
+            me.grounded = me.groundNamed || (me.worldBox.min.y <= opts.groundY + 0.05);
             entries.push_back(std::move(me));
         }
     });
@@ -235,12 +237,70 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
     if (n == 0) return res;
 
     std::vector<std::vector<bromath::Vec3>> samples(n);
-    for (size_t i = 0; i < n; ++i) samples[i] = sampleWorldSurface(entries[i]);
+    std::vector<std::vector<IslandSummary>> islandsPerNode(n);
+    for (size_t i = 0; i < n; ++i) {
+        samples[i] = sampleWorldSurface(entries[i]);
+        const auto& e = entries[i];
+        if (opts.checkIslands && !e.node->twoSided() && e.node->color()[3] >= 0.99f) {
+            islandsPerNode[i] = extractMeshIslands(*e.node, e.world, e.detSign, opts.groundY);
+        }
+    }
 
-    // A. Inverted face / winding checks (skip open two-sided cards/foliage and translucent sheets)
+    // A. Inverted face / winding checks (per connected island when decomposed, else whole-node fallback)
     for (size_t i = 0; i < n; ++i) {
         const auto& e = entries[i];
         if (e.node->twoSided() || e.node->color()[3] < 0.99f) continue;
+
+        if (!islandsPerNode[i].empty()) {
+            int badIslands = 0;
+            double worstVal = 0.0;
+            bromath::Vec3 worstCtr = bromath::acenter(e.worldBox);
+            bromath::Vec3 worstExt = bromath::aextent(e.worldBox);
+            double revMax = 0.0, badNMax = 0.0, minVol = 0.0;
+
+            for (const auto& isl : islandsPerNode[i]) {
+                const bromath::Vec3 iExt = bromath::aextent(isl.worldBox);
+                const float maxE = std::max({iExt.x, iExt.y, iExt.z});
+                const float minE = std::min({iExt.x, iExt.y, iExt.z});
+                if (maxE < 0.03f || minE < 0.008f) continue;
+
+                const bool mixedEdges = (isl.sharedEdges >= 6 && isl.reversedEdgeRatio > 0.12 &&
+                                         ((isl.closed && std::abs(isl.signedVolume) > 1e-4) || isl.badNormalRatio > 0.15));
+                const bool negVol = (isl.closed && iExt.y >= 0.015f && isl.signedVolume < -1e-6);
+                const bool badN = (isl.badNormalRatio > 0.35);
+                if (mixedEdges || negVol || badN) {
+                    const double score = std::max({isl.reversedEdgeRatio, isl.badNormalRatio, negVol ? 1.0 : 0.0});
+                    if (badIslands == 0 || score > worstVal) {
+                        worstVal = score;
+                        worstCtr = bromath::acenter(isl.worldBox);
+                        worstExt = iExt;
+                    }
+                    revMax = std::max(revMax, isl.reversedEdgeRatio);
+                    badNMax = std::max(badNMax, isl.badNormalRatio);
+                    minVol = std::min(minVol, isl.signedVolume);
+                    ++badIslands;
+                }
+            }
+            if (badIslands > 0) {
+                ++res.invertedCount;
+                res.invertedIslandCount += badIslands;
+                EyeStructureIssue iss;
+                iss.kind = "inverted-winding";
+                iss.severity = "error";
+                iss.nodeA = e.name;
+                iss.value = worstVal;
+                iss.point[0] = worstCtr.x; iss.point[1] = worstCtr.y; iss.point[2] = worstCtr.z;
+                iss.radius = std::max(0.20, 0.55 * bromath::vlen(worstExt));
+                char buf[192];
+                std::snprintf(buf, sizeof(buf),
+                              "%s has %d inverted/inside-out island(s) (revEdge=%.0f%%, badNrm=%.0f%%, minVol=%.4f)",
+                              e.name.c_str(), badIslands, revMax * 100.0, badNMax * 100.0, minVol);
+                iss.message = buf;
+                res.issues.push_back(std::move(iss));
+            }
+            continue;
+        }
+
         const WindingStats ws = inspectWinding(e);
         const bromath::Vec3 ext = bromath::aextent(e.worldBox);
         const bool flatDisc = (ext.y < 0.015f);
@@ -347,6 +407,47 @@ EyeStructureResult analyzeStructure(scene::SceneGraph& graph, const EyeStructure
                       entries[i].name.c_str(), entries[nearestIdx[i]].name.c_str(), nearestDist[i]);
         iss.message = buf;
         res.issues.push_back(std::move(iss));
+    }
+
+    // Intra-node per-island connectivity & gravity-aware external support audit
+    if (opts.checkIslands) {
+        std::vector<scene::MeshNode*> allNodes(n);
+        std::vector<bromath::Mat4> allWorlds(n), allInvWorlds(n);
+        std::vector<bromath::AABB3> allBoxes(n);
+        for (size_t i = 0; i < n; ++i) {
+            allNodes[i] = entries[i].node;
+            allWorlds[i] = entries[i].world;
+            allInvWorlds[i] = entries[i].invWorld;
+            allBoxes[i] = entries[i].worldBox;
+        }
+        for (size_t i = 0; i < n; ++i) {
+            const auto& e = entries[i];
+            if (!reached[i] || e.ignored || e.groundNamed) continue;
+            if (islandsPerNode[i].size() < 2 || islandsPerNode[i].size() > 128) continue;
+
+            int floatIsl = 0;
+            double worstGap = 0.0, worstRad = 0.24;
+            bromath::Vec3 worstCtr{};
+            auditIslandGrounding(islandsPerNode[i], i, allNodes, allWorlds, allInvWorlds, allBoxes,
+                                 contactTol, floatIsl, worstGap, worstCtr, worstRad);
+            if (floatIsl > 0) {
+                ++res.floatingCount;
+                res.floatingIslandCount += floatIsl;
+                EyeStructureIssue iss;
+                iss.kind = "floating";
+                iss.severity = "error";
+                iss.nodeA = e.name;
+                iss.value = worstGap;
+                iss.point[0] = worstCtr.x; iss.point[1] = worstCtr.y; iss.point[2] = worstCtr.z;
+                iss.radius = worstRad;
+                char buf[192];
+                std::snprintf(buf, sizeof(buf),
+                              "%s has %d floating/disconnected sub-part(s) (worst gap %.3fu)",
+                              e.name.c_str(), floatIsl, worstGap);
+                iss.message = buf;
+                res.issues.push_back(std::move(iss));
+            }
+        }
     }
 
     // C. Overhanging base footing check for resting flat-footed pillars/pedestals/supports

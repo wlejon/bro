@@ -33,6 +33,7 @@ void PassOpaque::record(SceneFrame& frame) {
         "opaque:vegetation", "opaque:instancedVegetation"};
     const SceneMeshDrawer::ChunkCull cull{frame.renderer.cullingFrustum(), frame.view.eye, true};
     const bool idView = frame.renderer.debugView() == 6;
+    const bool transIdView = frame.renderer.debugView() == 7;
     SceneMeshDrawer& meshes = frame.gpu.meshes;
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
@@ -42,6 +43,11 @@ void PassOpaque::record(SceneFrame& frame) {
             d.push.emissive[0] = static_cast<float>(nid & 0xFFu) / 255.0f;
             d.push.emissive[1] = static_cast<float>((nid >> 8) & 0xFFu) / 255.0f;
             d.push.emissive[2] = static_cast<float>((nid >> 16) & 0xFFu) / 255.0f;
+            d.push.emissive[3] = 1.0f;
+        } else if (transIdView) {
+            d.push.emissive[0] = 0.0f;
+            d.push.emissive[1] = 0.0f;
+            d.push.emissive[2] = 0.0f;
             d.push.emissive[3] = 1.0f;
         }
         // (A culled draw draws the instances the camera holds.)
@@ -76,13 +82,19 @@ void PassTranslucent::record(SceneFrame& frame) {
     camWriter.writeImage(2, t.depthSnapshot.view, t.depthSnapshot.sampler);
     camWriter.updateSet(frame.gpu.device.device(), camSet);
 
+    const bool transIdView = frame.renderer.debugView() == 7;
     // (Drawn whole, not cut to chunks: a blend's order is its triangles'.)
     for (uint32_t i : frame.lists.translucent) {
         const MeshDraw& draw = frame.lists.meshes[i];
-        if (draw.culledIn(0))
-            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, camSet, frame.lightingSet, draw.inView(0));
-        else
-            frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, camSet, frame.lightingSet, draw);
+        MeshDraw md = draw.culledIn(0) ? draw.inView(0) : draw;
+        if (transIdView) {
+            const uint32_t nid = md.nodeId;
+            md.push.emissive[0] = static_cast<float>(nid & 0xFFu) / 255.0f;
+            md.push.emissive[1] = static_cast<float>((nid >> 8) & 0xFFu) / 255.0f;
+            md.push.emissive[2] = static_cast<float>((nid >> 16) & 0xFFu) / 255.0f;
+            md.push.emissive[3] = 1.0f;
+        }
+        frame.gpu.meshes.record(frame.cmd, frame.hdrTarget, camSet, frame.lightingSet, md);
     }
 }
 

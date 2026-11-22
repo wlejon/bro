@@ -123,6 +123,47 @@ if (bro.scene && bro.scene.createGraph) {
   assert(dg.anomalies.some((a) => a.kind === "flat_plastic" && a.nodeName === "Stone Lantern"), "diagnose caught untextured Stone Lantern");
   assert(dg.anomalies.some((a) => a.kind === "tint_mismatch" && a.nodeName === "RedTintedWing"), "diagnose caught vertexColor tint mismatch");
 
+  // Coarse 16-segment twoSided translucent cone -> caught via id_translucent + translucent_striation
+  const coarseCone = bro.mesh.cone(0.55, 1.4, 16, 4, false);
+  scene.createMesh({
+    name: "CoarseBeamCone",
+    mesh: coarseCone,
+    color: [1.0, 0.85, 0.55, 0.30],
+    emissive: 0.35,
+    twoSided: true,
+    castsShadow: false,
+  }).setPosition(1.3, 1.1, 1.8);
+  const dgTrans = bro.eye.diagnose(scene, { minPixels: 16 });
+  assert(dgTrans.meshes.some((m) => m.name === "CoarseBeamCone" && m.translucent === true), "diagnose attributed translucent CoarseBeamCone");
+  assert(dgTrans.anomalies.some((a) => a.kind === "translucent_striation" && a.nodeName === "CoarseBeamCone"),
+         "diagnose flagged translucent_striation on coarse 16-seg twoSided cone");
+
+  // Merged mesh with inverted sub-island + floating upper stair step beneath a handrail
+  const basePlate = bro.mesh.box(0.5, 0.1, 0.5).translate(3.0, 0.1, 0.0);
+  const invIdx = Array.from(bro.mesh.box(0.2, 0.2, 0.2).indices);
+  for (let k = 0; k < invIdx.length; k += 3) {
+    const tmp = invIdx[k + 1]; invIdx[k + 1] = invIdx[k + 2]; invIdx[k + 2] = tmp;
+  }
+  const srcInv = bro.mesh.box(0.2, 0.2, 0.2);
+  const invBox = new Mesh({
+    positions: srcInv.positions, normals: srcInv.normals, uvs: srcInv.uvs, indices: new Uint32Array(invIdx),
+  }).translate(3.0, 0.4, 0.0);
+  scene.createMesh({ name: "MergedInvertedCorbel", mesh: Mesh.merge([basePlate, invBox]) });
+
+  const step0 = bro.mesh.box(0.3, 0.05, 0.3).translate(-3.2, 0.05, 2.0);
+  const step1 = bro.mesh.box(0.3, 0.05, 0.3).translate(-2.6, 0.55, 2.0);
+  scene.createMesh({ name: "MergedFloatingStairs", mesh: Mesh.merge([step0, step1]) });
+  const railPost = bro.mesh.cylinder(0.03, 0.25, 8).translate(-2.6, 0.85, 2.0);
+  const railGround = bro.mesh.cylinder(0.03, 0.42, 8).translate(-3.2, 0.47, 2.0);
+  const railBar = bro.mesh.box(0.35, 0.03, 0.03).translate(-2.9, 1.08, 2.0);
+  scene.createMesh({ name: "StairHandrail", mesh: Mesh.merge([railPost, railGround, railBar]) });
+
+  const stIsl = bro.eye.structure(scene, { groundY: 0.0, ignoreFloating: ["CoarseBeamCone", "RedTintedWing"] });
+  assert(stIsl.invertedCount >= 1 && stIsl.invertedIslandCount >= 1,
+         "structure caught inverted sub-island inside merged mesh: " + stIsl.invertedIslandCount);
+  assert(stIsl.floatingCount >= 1 && stIsl.floatingIslandCount >= 1,
+         "structure caught floating upper stair tread despite top handrail contact: " + stIsl.floatingIslandCount);
+
   // Surface-hugging BVH conformance check
   const slab = scene.createMesh({ name: "TestCliff", mesh: bro.mesh.box(2.0, 1.0, 0.5) }).setPosition(-3.0, 0.5, 0.0);
   const hugSheet = bro.mesh.plane(1.0, 0.8, 4, 4);

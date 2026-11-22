@@ -119,6 +119,8 @@ Value jsEyeDiagnose(Value, std::span<const Value> a) {
         mb.set("hasNormalMap", ev::fromBool(ms.hasNormalMap));
         mb.set("hasMRMap", ev::fromBool(ms.hasMRMap));
         mb.set("castsShadow", ev::fromBool(ms.castsShadow));
+        mb.set("translucent", ev::fromBool(ms.translucent));
+        mb.set("striationScore", ev::fromDouble(ms.striationScore));
         return mb.get();
     }));
     if (!r.visualPath.empty()) o.set("path", ev::fromUtf8(r.visualPath));

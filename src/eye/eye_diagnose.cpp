@@ -100,6 +100,82 @@ struct CropBox {
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 };
 
+void computeCurvedFacetStats(const bromesh::MeshData& md, int& outCurvedEdges, double& outMedianDeg) {
+    outCurvedEdges = 0;
+    outMedianDeg = 0.0;
+    const size_t vc = md.vertexCount(), tc = md.triangleCount();
+    if (vc == 0 || tc == 0 || tc > 16000) return;
+
+    struct QKey {
+        int64_t x, y, z;
+        bool operator==(const QKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct QHash {
+        size_t operator()(const QKey& k) const {
+            uint64_t h = static_cast<uint64_t>(k.x) * 73856093ULL ^
+                         static_cast<uint64_t>(k.y) * 19349663ULL ^
+                         static_cast<uint64_t>(k.z) * 83492791ULL;
+            return static_cast<size_t>(h ^ (h >> 30));
+        }
+    };
+    std::vector<uint32_t> weld(vc);
+    std::unordered_map<QKey, uint32_t, QHash> qmap;
+    qmap.reserve(vc);
+    uint32_t nextW = 0;
+    for (size_t i = 0; i < vc; ++i) {
+        const QKey k{
+            static_cast<int64_t>(std::llround(md.positions[i * 3 + 0] * 10000.0)),
+            static_cast<int64_t>(std::llround(md.positions[i * 3 + 1] * 10000.0)),
+            static_cast<int64_t>(std::llround(md.positions[i * 3 + 2] * 10000.0)),
+        };
+        auto [it, ins] = qmap.emplace(k, nextW);
+        if (ins) ++nextW;
+        weld[i] = it->second;
+    }
+
+    struct EdgeNorms {
+        double nx = 0, ny = 0, nz = 0;
+        int count = 0;
+    };
+    std::unordered_map<uint64_t, EdgeNorms> edgeMap;
+    edgeMap.reserve(tc * 2);
+    std::vector<double> curvedAngles;
+    curvedAngles.reserve(tc);
+
+    for (size_t t = 0; t < tc; ++t) {
+        const uint32_t i0 = md.indices[t * 3], i1 = md.indices[t * 3 + 1], i2 = md.indices[t * 3 + 2];
+        if (i0 >= vc || i1 >= vc || i2 >= vc) continue;
+        const double ax = md.positions[i0 * 3], ay = md.positions[i0 * 3 + 1], az = md.positions[i0 * 3 + 2];
+        const double bx = md.positions[i1 * 3] - ax, by = md.positions[i1 * 3 + 1] - ay, bz = md.positions[i1 * 3 + 2] - az;
+        const double cx = md.positions[i2 * 3] - ax, cy = md.positions[i2 * 3 + 1] - ay, cz = md.positions[i2 * 3 + 2] - az;
+        double fnx = by * cz - bz * cy, fny = bz * cx - bx * cz, fnz = bx * cy - by * cx;
+        const double len = std::sqrt(fnx * fnx + fny * fny + fnz * fnz);
+        if (len < 1e-8) continue;
+        fnx /= len; fny /= len; fnz /= len;
+
+        const uint32_t w[3] = {weld[i0], weld[i1], weld[i2]};
+        if (w[0] == w[1] || w[1] == w[2] || w[2] == w[0]) continue;
+        for (int e = 0; e < 3; ++e) {
+            const uint32_t u = std::min(w[e], w[(e + 1) % 3]), v = std::max(w[e], w[(e + 1) % 3]);
+            const uint64_t key = (static_cast<uint64_t>(u) << 32) | v;
+            auto& entry = edgeMap[key];
+            if (entry.count == 0) {
+                entry.nx = fnx; entry.ny = fny; entry.nz = fnz; entry.count = 1;
+            } else if (entry.count == 1) {
+                entry.count = 2;
+                const double dot = std::clamp(entry.nx * fnx + entry.ny * fny + entry.nz * fnz, -1.0, 1.0);
+                const double deg = std::acos(dot) * (180.0 / 3.14159265358979323846);
+                if (deg > 1.0 && deg < 45.0) curvedAngles.push_back(deg);
+            }
+        }
+    }
+    outCurvedEdges = static_cast<int>(curvedAngles.size());
+    if (!curvedAngles.empty()) {
+        std::nth_element(curvedAngles.begin(), curvedAngles.begin() + curvedAngles.size() / 2, curvedAngles.end());
+        outMedianDeg = curvedAngles[curvedAngles.size() / 2];
+    }
+}
+
 EyeImage extractAnnotatedCrop(const EyeImageView& beauty, const CropBox& cb) {
     const int cw = std::max(1, cb.x1 - cb.x0);
     const int ch = std::max(1, cb.y1 - cb.y0);
@@ -146,6 +222,14 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
     const int idRough = scene::debug_views::find("roughness");
     const int idNormals = scene::debug_views::find("normals");
     const int idObjId = scene::debug_views::find("id");
+    const int idTransId = scene::debug_views::find("id_translucent");
+
+    bool hasTranslucent = false;
+    graph.root()->traverse([&](scene::SceneNode* node) {
+        if (!node || !node->visible() || node->type() != scene::SceneNode::Type::Mesh) return;
+        const auto* mn = static_cast<const scene::MeshNode*>(node);
+        if (!mn->mesh().positions.empty() && mn->color()[3] < 0.99f) hasTranslucent = true;
+    });
 
     int w = 0, h = 0, aw = 0, ah = 0, rw = 0, rh = 0, nw = 0, nh = 0, iw = 0, ih = 0;
     const auto beauty = capDebug(0, w, h);
@@ -153,6 +237,11 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
     const auto rough = capDebug(idRough, rw, rh);
     const auto norms = capDebug(idNormals, nw, nh);
     const auto ids = capDebug(idObjId, iw, ih);
+    std::vector<uint8_t> transIds;
+    int itw = 0, ith = 0;
+    if (hasTranslucent && idTransId >= 0) {
+        transIds = capDebug(idTransId, itw, ith);
+    }
     graph.renderer().setDebugView(savedDebug);
 
     if (beauty.empty() || w <= 2 || h <= 2 || aw != w || ah != h || rw != w || rh != h || nw != w || nh != h || iw != w || ih != h) {
@@ -356,6 +445,113 @@ EyeDiagnoseResult diagnoseScene(scene::SceneGraph& graph, const EyeDiagnoseOptio
         }
 
         res.meshes.push_back(std::move(ms));
+    }
+
+    // Translucent mesh ID attribution + coarse facet / directional striation check
+    if (!transIds.empty() && itw == w && ith == h) {
+        std::vector<uint32_t> transBuf(totalPx, 0);
+        for (size_t i = 0; i < totalPx; ++i) {
+            const size_t o = i * 4;
+            transBuf[i] = static_cast<uint32_t>(transIds[o]) |
+                          (static_cast<uint32_t>(transIds[o + 1]) << 8) |
+                          (static_cast<uint32_t>(transIds[o + 2]) << 16);
+        }
+        struct TransAcc {
+            Accum base;
+            double d2Sum = 0.0;
+            int flipCnt = 0;
+            int sampleCnt = 0;
+        };
+        std::unordered_map<uint32_t, TransAcc> tMap;
+        std::vector<uint32_t> tOrder;
+        for (int y = 1; y + 1 < h; ++y) {
+            for (int x = 1; x + 1 < w; ++x) {
+                const size_t idx = static_cast<size_t>(y) * w + x;
+                const uint32_t nid = transBuf[idx];
+                if (nid == 0) continue;
+                if (transBuf[idx - 1] != nid || transBuf[idx + 1] != nid ||
+                    transBuf[idx - w] != nid || transBuf[idx + w] != nid) continue;
+                auto it = tMap.find(nid);
+                if (it == tMap.end()) {
+                    scene::SceneNode* sn = graph.findById(nid);
+                    if (!sn || (sn->type() != scene::SceneNode::Type::Mesh &&
+                                sn->type() != scene::SceneNode::Type::InstancedMesh)) {
+                        continue;
+                    }
+                    TransAcc ta;
+                    ta.base.id = nid;
+                    ta.base.name = sn->name().empty() ? ("node_" + std::to_string(nid)) : sn->name();
+                    if (sn->type() == scene::SceneNode::Type::Mesh) ta.base.mn = static_cast<scene::MeshNode*>(sn);
+                    tOrder.push_back(nid);
+                    it = tMap.emplace(nid, std::move(ta)).first;
+                }
+                TransAcc& ta = it->second;
+                const size_t o = idx * 4;
+                ta.base.minX = std::min(ta.base.minX, x); ta.base.maxX = std::max(ta.base.maxX, x);
+                ta.base.minY = std::min(ta.base.minY, y); ta.base.maxY = std::max(ta.base.maxY, y);
+                ++ta.base.count;
+
+                const double bLum = srgbLum(beauty.data() + o);
+                ta.base.lumHist[std::clamp(static_cast<int>(std::lround(bLum * 255.0)), 0, 255)] += 1;
+
+                const double lx0 = srgbLum(beauty.data() + o - 4), lx1 = srgbLum(beauty.data() + o + 4);
+                const double ly0 = srgbLum(beauty.data() + o - static_cast<size_t>(w) * 4);
+                const double ly1 = srgbLum(beauty.data() + o + static_cast<size_t>(w) * 4);
+                const double d2x = std::abs(lx0 + lx1 - 2.0 * bLum);
+                const double d2y = std::abs(ly0 + ly1 - 2.0 * bLum);
+                ta.d2Sum += 0.5 * (d2x + d2y);
+                const double gx0 = bLum - lx0, gx1 = lx1 - bLum;
+                const double gy0 = bLum - ly0, gy1 = ly1 - bLum;
+                if ((gx0 * gx1 < -2e-5) || (gy0 * gy1 < -2e-5)) ++ta.flipCnt;
+                ++ta.sampleCnt;
+            }
+        }
+
+        for (uint32_t nid : tOrder) {
+            const TransAcc& ta = tMap[nid];
+            if (ta.base.count < minPx) continue;
+            if (!mapAcc.count(nid)) ++res.visibleMeshes;
+
+            EyeDiagnoseMeshStats ms;
+            ms.name = ta.base.name;
+            ms.nodeId = nid;
+            ms.screenPx = ta.base.count;
+            ms.screenFrac = static_cast<double>(ta.base.count) / static_cast<double>(totalPx);
+            ms.p10Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.10);
+            ms.p50Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.50);
+            ms.p95Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.95);
+            ms.p99Lum = histQuantile(ta.base.lumHist, ta.base.count, 0.99);
+            ms.translucent = true;
+            if (ta.base.mn) {
+                ms.hasAlbedoMap = ta.base.mn->hasBaseColorTexture();
+                ms.hasNormalMap = ta.base.mn->hasNormalTexture();
+                ms.hasMRMap = ta.base.mn->hasMetallicRoughnessTexture();
+                ms.castsShadow = ta.base.mn->castsShadow();
+            }
+            const double span = std::max(0.08, ms.p95Lum - ms.p10Lum);
+            const double ridgeMean = ta.sampleCnt > 0 ? (ta.d2Sum / ta.sampleCnt) / span : 0.0;
+            const double flipFrac = ta.sampleCnt > 0 ? static_cast<double>(ta.flipCnt) / ta.sampleCnt : 0.0;
+            ms.striationScore = ridgeMean * 0.7 + flipFrac * 0.3;
+
+            int curvedEdges = 0;
+            double medianDeg = 0.0;
+            const bool twoSidedLowAlpha = ta.base.mn && ta.base.mn->twoSided() && ta.base.mn->color()[3] < 0.60f;
+            if (ta.base.mn && ta.base.mn->color()[3] < 0.65f) {
+                computeCurvedFacetStats(ta.base.mn->mesh(), curvedEdges, medianDeg);
+            }
+            const bool coarsePolys = twoSidedLowAlpha && curvedEdges >= 24 && medianDeg >= 10.0;
+            const bool visualStriation = (ta.base.count >= 400 && ms.striationScore > 0.22 && (twoSidedLowAlpha || medianDeg >= 10.0));
+            if (coarsePolys || visualStriation) {
+                char msg[192];
+                std::snprintf(msg, sizeof(msg),
+                              "translucent striations (twoSided=%d, medianDihedral=%.1fdeg, striation=%.2f)",
+                              twoSidedLowAlpha ? 1 : 0, medianDeg, ms.striationScore);
+                const std::string sev = (twoSidedLowAlpha && medianDeg >= 12.0) ? "error" : "warning";
+                pushAnomaly("translucent_striation", sev, ta.base,
+                            coarsePolys ? medianDeg : ms.striationScore * 100.0, msg);
+            }
+            res.meshes.push_back(std::move(ms));
+        }
     }
 
     // Detect global HDR bloom/specular hotspot clusters (even if not owned by an opaque ID)

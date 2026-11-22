@@ -33,6 +33,7 @@ struct EyeStructureOptions {
     double contactTol = 0.028;
     double overhangTol = 0.25;
     double groundY = 0.0;
+    bool checkIslands = true;
     std::vector<std::string> ignoreFloating;
     std::vector<std::pair<std::string, std::string>> watchPairs;
     std::string path;
@@ -45,6 +46,8 @@ struct EyeStructureResult {
     int meshCount = 0;
     int invertedCount = 0;
     int floatingCount = 0;
+    int invertedIslandCount = 0;
+    int floatingIslandCount = 0;
     int overhangCount = 0;
     int gapCount = 0;
     std::vector<EyeStructureIssue> issues;

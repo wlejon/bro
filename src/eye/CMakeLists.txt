@@ -19,6 +19,7 @@ if(BRO_WITH_3D)
         eye_probe.cpp
         eye_clearance.cpp
         eye_structure.cpp
+        eye_structure_islands.cpp
         eye_closeup.cpp
         eye_lookdev.cpp
         eye_trace.cpp

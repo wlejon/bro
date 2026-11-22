@@ -305,12 +305,13 @@ bro.eye.probe = function(scene, opts) {};
 bro.eye.clearance = function(scene, opts) {};
 
 /**
- * Structural 3D assembly audit over a live SceneGraph: detects inside-out winding,
- * disconnected floating parts, overhanging support footings, and unmeshed watch-pair gaps.
+ * Structural 3D assembly audit over a live SceneGraph: detects inside-out winding
+ * (both whole-node and per connected triangle island), disconnected floating nodes/sub-parts,
+ * overhanging support footings, and unmeshed watch-pair gaps.
  * Optionally writes an auto-zoomed macro defect contact sheet PNG (`path`).
  * @param {Object} scene
- * @param {{contactTol?: number, overhangTol?: number, groundY?: number, ignoreFloating?: string[], watchPairs?: [string, string][], path?: string, maxPanelDim?: number, maxZoomPanels?: number}} [opts]
- * @returns {{ok: boolean, meshCount: number, invertedCount: number, floatingCount: number, overhangCount: number, gapCount: number, issues: Object[], watchedGaps: Object[], path?: string}}
+ * @param {{contactTol?: number, overhangTol?: number, groundY?: number, checkIslands?: boolean, ignoreFloating?: string[], watchPairs?: [string, string][], path?: string, maxPanelDim?: number, maxZoomPanels?: number}} [opts]
+ * @returns {{ok: boolean, meshCount: number, invertedCount: number, floatingCount: number, invertedIslandCount: number, floatingIslandCount: number, overhangCount: number, gapCount: number, issues: Object[], watchedGaps: Object[], path?: string}}
  */
 bro.eye.structure = function(scene, opts) {};
 
@@ -353,9 +354,10 @@ bro.eye.sweep = function(scene, opts) {};
 bro.eye.trace = function(scene, opts) {};
 
 /**
- * Zero-image peripheral anomaly scanner over a live SceneGraph using GPU object-ID attribution.
- * Reports ranked intra-mesh bright outliers, texture-vs-albedo tint mismatches, flat/plastic surfaces,
- * axis-aligned grid artifacts, shadow-casting gaps, and HDR bloom hotspot clusters.
+ * Zero-image peripheral anomaly scanner over a live SceneGraph using opaque (`id`) and
+ * translucent (`id_translucent`) GPU object-ID attribution. Reports ranked bright outliers,
+ * texture-vs-albedo tint mismatches, flat/plastic surfaces, axis-grid repetition, shadow gaps,
+ * translucent facet striations (`translucent_striation`), and HDR bloom hotspot clusters.
  * Writes an auto-cropped sheet to `path` only when anomalies exist (or `alwaysRender: true`).
  * @param {Object} scene
  * @param {{minPixels?: number, alwaysRender?: boolean, sheetWidth?: number, sheetHeight?: number, path?: string}} [opts]

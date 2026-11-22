@@ -198,7 +198,7 @@ void PassPostFx::record(SceneFrame& frame) {
     exposure_.record(frame, hdr);
 
     TonemapPush push{};
-    const bool rawId = r.debugView() == 6;
+    const bool rawId = r.debugView() == 6 || r.debugView() == 7;
     push.gamma = rawId ? 1.0f : r.gamma();
     push.bloomIntensity = bloomOn ? r.bloomIntensity() : 0.0f;
     push.tonemapMode = rawId ? 3 : static_cast<int32_t>(debug ? SceneRenderer::ToneMap::Linear : r.toneMap());

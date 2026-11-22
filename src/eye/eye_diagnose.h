@@ -49,6 +49,8 @@ struct EyeDiagnoseMeshStats {
     bool hasNormalMap = false;
     bool hasMRMap = false;
     bool castsShadow = true;
+    bool translucent = false;
+    double striationScore = 0.0;
 };
 
 struct EyeDiagnoseResult {

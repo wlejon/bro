@@ -374,6 +374,7 @@ Value jsEyeStructure(Value, std::span<const Value> a) {
         sopts.contactTol = std::clamp(numProp(optsRoot.get(), "contactTol", sopts.contactTol), 0.001, 0.5);
         sopts.overhangTol = std::clamp(numProp(optsRoot.get(), "overhangTol", sopts.overhangTol), 0.05, 0.95);
         sopts.groundY = numProp(optsRoot.get(), "groundY", sopts.groundY);
+        sopts.checkIslands = boolProp(optsRoot.get(), "checkIslands", sopts.checkIslands);
         sopts.maxPanelDim = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxPanelDim", sopts.maxPanelDim)), 128, 1024);
         sopts.maxZoomPanels = std::clamp(static_cast<int>(numProp(optsRoot.get(), "maxZoomPanels", sopts.maxZoomPanels)), 1, 12);
         const std::string rawPath = strProp(optsRoot.get(), "path");
@@ -407,6 +408,8 @@ Value jsEyeStructure(Value, std::span<const Value> a) {
     o.set("meshCount", ev::fromDouble(r.meshCount));
     o.set("invertedCount", ev::fromDouble(r.invertedCount));
     o.set("floatingCount", ev::fromDouble(r.floatingCount));
+    o.set("invertedIslandCount", ev::fromDouble(r.invertedIslandCount));
+    o.set("floatingIslandCount", ev::fromDouble(r.floatingIslandCount));
     o.set("overhangCount", ev::fromDouble(r.overhangCount));
     o.set("gapCount", ev::fromDouble(r.gapCount));
     o.set("issues", hostArrayOf(r.issues.size(), [&](size_t i) {

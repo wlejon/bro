@@ -328,7 +328,7 @@ pub fn debug_pixel(debug_col: vec4<f32>, n: vec3<f32>, view: vec3<f32>,
                      base_color: vec3<f32>, roughness: f32, metallic: f32,
                      id_rgb: vec3<f32>) -> vec3<f32> {
     let dv = scene::debug_view();
-    if (dv == 6) {
+    if (dv == 6 || dv == 7) {
         return id_rgb;
     }
     if (debug_col.w > 0.0) {
@@ -411,7 +411,18 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
         } else if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
             color *= lighting::cell_shade(world_pos, geom_n);
         }
-        let out_a = scene::debug_view() == 6 ? 1.0 : ((fl & REFLECTANCE) != 0u ? 0.0 : mix(s_in.alpha, 0.0, air.fade));
+        let dv = scene::debug_view();
+        var out_a: f32 = mix(s_in.alpha, 0.0, air.fade);
+        if (dv == 6) {
+            out_a = 1.0;
+        } else if (dv == 7) {
+            out_a = 0.0;
+            if (s_in.alpha >= 0.015) {
+                out_a = 1.0;
+            }
+        } else if ((fl & REFLECTANCE) != 0u) {
+            out_a = 0.0;
+        }
         return FragOut {
             color: vec4<f32>(min(color, vec3<f32>(scene::HDR_MAX)), out_a),
             indirect: vec4<f32>(0.0),
@@ -474,6 +485,12 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
         indirect = vec3<f32>(0.0);
         if (scene::debug_view() == 6) {
             alpha = 1.0;
+        } else if (scene::debug_view() == 7) {
+            if (alpha >= 0.015) {
+                alpha = 1.0;
+            } else {
+                alpha = 0.0;
+            }
         } else if ((fl & REFLECTANCE) != 0u) {
             alpha = 0.0;
         }
