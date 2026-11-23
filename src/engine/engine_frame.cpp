@@ -432,7 +432,8 @@ void Engine::windowedFrame(bool modal) {
         // would all read the same vblank and see no time pass). Elsewhere the
         // frame start is the best guess there is.
         double clockAt = frameStart;
-        if (!vulkanSwapchain_ || vulkanSwapchain_->vsync()) {
+        if (!vulkanSwapchain_ || vulkanSwapchain_->vsync() ||
+            vulkanSwapchain_->presentMode() == VK_PRESENT_MODE_FIFO_KHR) {   // vsync off, no MAILBOX/IMMEDIATE
             const double last = frameTrace_->lastPresentationMs();
             const double period = frameTrace_->refreshPeriodMs();
             if (last > 0.0 && period > 0.0 && frameStart - last < 1000.0) {
