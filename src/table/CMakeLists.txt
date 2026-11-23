@@ -4,14 +4,25 @@ add_library(bro_table STATIC
     table_chunk.cpp
     table_index.h
     table_index.cpp
+    table_range_index.h
+    table_range_index.cpp
+    table_io.h
+    table_io.cpp
+    table_reactive.h
+    table_reactive.cpp
     table.h
     table.cpp
     query_ir.h
     query_ir.cpp
     query_eval.h
     query_eval.cpp
+    query_jit_emit.h
+    query_jit_agg.h
+    query_jit_agg.cpp
     query_jit.h
     query_jit.cpp
+    query_materialize.h
+    query_materialize.cpp
     query_exec.h
     query_exec.cpp
 )
@@ -34,4 +45,12 @@ if(BRO_BUILD_TESTS)
         bro_table
     )
     set_target_properties(bro_table_test PROPERTIES FOLDER "tests")
+
+    add_executable(bro_table_advanced_test
+        tests/test_table_advanced.cpp
+    )
+    target_link_libraries(bro_table_advanced_test PRIVATE
+        bro_table
+    )
+    set_target_properties(bro_table_advanced_test PROPERTIES FOLDER "tests")
 endif()

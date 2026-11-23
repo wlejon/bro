@@ -85,3 +85,76 @@
 //   // JIT cache inspection:
 //   const { hits, misses, entries } = bro.table.jitCacheStats();
 //   bro.table.clearJitCache();
+//
+// ----------------------------------------------------------------------------
+// SIMD Vectorization & Ungrouped JIT Aggregations
+// ----------------------------------------------------------------------------
+//   // Eligible filter predicates (`i32/u32/f32/i64/f64/dict`) and ungrouped
+//   // numeric aggregations (`count`, `sum`, `min`, `max`, `avg`) compile to
+//   // 128-bit brass SIMD / fused scalar-JIT chunk kernels. Inspect flags:
+//   const stats = tbl.query()
+//       .agg({ cnt: q.count(), total: q.sum('score'), avg: q.avg('score') })
+//       .runWithStats();
+//   // stats = { table, usedJit, usedSimd, usedJitAgg, usedIndex, usedRangeIndex, usedSpatialIndex }
+//
+// ----------------------------------------------------------------------------
+// Range Indexes & 2D/3D Spatial Indexes
+// ----------------------------------------------------------------------------
+//   tbl.createRangeIndex('score');
+//   tbl.hasRangeIndex('score');
+//   tbl.dropRangeIndex('score');
+//   // Accelerates `<`, `<=`, `>`, `>=`, range combinations, and Top-K `orderBy('score').limit(K)`.
+//
+//   tbl.createSpatialIndex('pos', ['x', 'y'], 16.0);       // 2D grid
+//   tbl.createSpatialIndex('pos3d', ['x', 'y', 'z'], 16.0); // 3D grid
+//   tbl.hasSpatialIndex('pos');
+//   tbl.dropSpatialIndex('pos');
+//
+//   const inBox = tbl.query().whereInAABB('pos', [0, 0], [50, 50]).run();
+//   const inBall = tbl.query().whereInRadius('pos3d', [10, 20, 5], 25.0).run();
+//   const kNear = tbl.nearest('pos', [10, 20], 5, 100.0); // includes `_distance` column
+//   // `.nearest(...)` also works directly on TableSnapshot.
+//
+// ----------------------------------------------------------------------------
+// Binary Persistence (.brotable) & Zero-Copy OS mmap
+// ----------------------------------------------------------------------------
+//   tbl.save('world/entities.brotable');     // also snap.save(path)
+//   const bytes = tbl.toBytes();             // Uint8Array (.brotable v1, 64B aligned)
+//
+//   const loaded = bro.table.load('world/entities.brotable');
+//   const fromBuf = bro.table.fromBytes(bytes);
+//
+//   const snap = bro.table.mmap('world/entities.brotable'); // snap.isMapped === true
+//   // Query/view directly on mapped OS pages; share `snap` across Workers via postMessage.
+//   const mut = snap.toTable();              // COW materialized mutable copy
+//   snap.close();                            // releases file mapping handle deterministically
+//
+// ----------------------------------------------------------------------------
+// Per-Chunk Dirty Tracking & Incremental ReactiveQuery
+// ----------------------------------------------------------------------------
+//   tbl.structureVersion;
+//   tbl.chunkDirtyVersion(0);
+//   tbl.dirtyChunksSince(prevVersion);
+//   tbl.markChunkDirty(chunkIdx);
+//
+//   const rq = tbl.query().where(q.gt('hp', 50)).reactive();
+//   rq.onChange((ev) => { /* ev: { table, changed, version, recomputedChunks, reusedChunks } */ });
+//   tbl.updateRow(5000, { hp: 200 });
+//   if (rq.dirty()) {
+//       const res = rq.refresh(); // only recomputes dirty chunks!
+//   }
+//   rq.dispose();
+//
+// ----------------------------------------------------------------------------
+// bro.kernel & bro.tensor Zero-Copy / Bulk Interop
+// ----------------------------------------------------------------------------
+//   // bro.kernel (`BRO_WITH_KERNEL`):
+//   const kb = tbl.chunkKernelBuffer(0, 'hp');   // zero-copy Host KernelBuffer (COW-detached)
+//   const packed = tbl.toKernelBuffer('hp', { residency: 'host' }); // or 'shared'/'gpu'
+//   tbl.readFromKernelBuffer(0, 'hp', kb);       // or tbl.readFromKernelBuffer('hp', packed)
+//   tbl.notifyColumnUpdated('hp');               // rebuilds indexes after direct chunkKernelBuffer writes
+//
+//   // bro.tensor (`BRO_WITH_TENSOR`):
+//   const t = tbl.toTensor(['x', 'y'], { dtype: 'f32', device: 'cpu' });
+//   const t2 = bro.table.fromTensor(t, ['x', 'y']);
+

@@ -2,6 +2,7 @@
 
 #include "table/query_eval.h"
 #include "table/query_jit.h"
+#include "table/query_materialize.h"
 
 #include <algorithm>
 #include <cstring>
@@ -59,6 +60,174 @@ IndexProbeSpec detectIndexProbe(const TableSnapshot& snap, const QueryPlan& plan
     return {};
 }
 
+bool tryRangeIndexLookup(const TableSnapshot& snap, const QueryPlan& plan,
+                         std::vector<RowLoc>& outMatches) {
+    struct ColBounds {
+        bool hasLo = false;
+        bool incLo = true;
+        ScalarValue lo;
+        bool hasHi = false;
+        bool incHi = true;
+        ScalarValue hi;
+        bool empty = false;
+    };
+
+    std::unordered_map<size_t, ColBounds> colBounds;
+    for (uint32_t fid : plan.filters) {
+        const ExprNode& n = plan.exprs.nodes[fid];
+        if (n.op != ExprOp::Eq && n.op != ExprOp::Lt && n.op != ExprOp::Le &&
+            n.op != ExprOp::Gt && n.op != ExprOp::Ge && n.op != ExprOp::StrEq) {
+            continue;
+        }
+        const ExprNode* colNode = &plan.exprs.nodes[n.lhs];
+        const ExprNode* litNode = &plan.exprs.nodes[n.rhs];
+        ExprOp op = n.op;
+        if (colNode->op == ExprOp::Const && litNode->op == ExprOp::ColRef) {
+            std::swap(colNode, litNode);
+            if (op == ExprOp::Lt) op = ExprOp::Gt;
+            else if (op == ExprOp::Le) op = ExprOp::Ge;
+            else if (op == ExprOp::Gt) op = ExprOp::Lt;
+            else if (op == ExprOp::Ge) op = ExprOp::Le;
+        }
+        if (colNode->op != ExprOp::ColRef || colNode->tableSide != 0 || colNode->resolvedCol < 0 ||
+            litNode->op != ExprOp::Const || litNode->literal.isNull) {
+            continue;
+        }
+        const size_t colIdx = static_cast<size_t>(colNode->resolvedCol);
+        if (!snap.findRangeIndex(colIdx)) continue;
+        ScalarValue bound = litNode->literal;
+        if (colTypeIsFloat(colNode->valueType) || colTypeIsFloat(bound.type)) {
+            const double d = colTypeIsFloat(bound.type) ? bound.f64 : static_cast<double>(bound.i64);
+            if (std::isnan(d)) continue;
+        }
+        ColBounds& b = colBounds[colIdx];
+        auto setLo = [&](const ScalarValue& sv, bool inc) {
+            if (!b.hasLo) { b.hasLo = true; b.lo = sv; b.incLo = inc; }
+            else {
+                const int cmp = compareScalar(sv, b.lo);
+                if (cmp > 0) { b.lo = sv; b.incLo = inc; }
+                else if (cmp == 0 && !inc) { b.incLo = false; }
+            }
+        };
+        auto setHi = [&](const ScalarValue& sv, bool inc) {
+            if (!b.hasHi) { b.hasHi = true; b.hi = sv; b.incHi = inc; }
+            else {
+                const int cmp = compareScalar(sv, b.hi);
+                if (cmp < 0) { b.hi = sv; b.incHi = inc; }
+                else if (cmp == 0 && !inc) { b.incHi = false; }
+            }
+        };
+        if (op == ExprOp::Eq || op == ExprOp::StrEq) { setLo(bound, true); setHi(bound, true); }
+        else if (op == ExprOp::Gt) { setLo(bound, false); }
+        else if (op == ExprOp::Ge) { setLo(bound, true); }
+        else if (op == ExprOp::Lt) { setHi(bound, false); }
+        else if (op == ExprOp::Le) { setHi(bound, true); }
+    }
+
+    size_t chosenCol = SIZE_MAX;
+    for (const auto& kv : colBounds) {
+        chosenCol = kv.first;
+        if (kv.second.hasLo && kv.second.hasHi) break;
+    }
+    if (chosenCol == SIZE_MAX) return false;
+
+    const ColBounds& b = colBounds[chosenCol];
+    const RangeIndex* ridx = snap.findRangeIndex(chosenCol);
+    std::vector<RowLoc> cands;
+    if (b.hasLo && b.hasHi) {
+        const int cmp = compareScalar(b.lo, b.hi);
+        if (cmp > 0 || (cmp == 0 && (!b.incLo || !b.incHi))) {
+            outMatches.clear();
+            return true;
+        }
+    }
+    ridx->lookupRange(b.hasLo ? &b.lo : nullptr, b.incLo,
+                      b.hasHi ? &b.hi : nullptr, b.incHi,
+                      snap.dict.get(), cands);
+    std::sort(cands.begin(), cands.end(), [](RowLoc a, RowLoc bLoc) {
+        return a.chunkIdx != bLoc.chunkIdx ? (a.chunkIdx < bLoc.chunkIdx) : (a.rowIdx < bLoc.rowIdx);
+    });
+    cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+    for (RowLoc loc : cands) {
+        if (loc.chunkIdx >= snap.chunks.size() || !snap.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
+            continue;
+        }
+        bool ok = true;
+        for (uint32_t f : plan.filters) {
+            if (!scalarTruthy(evalExpr(plan.exprs, f, snap, loc.chunkIdx, loc.rowIdx))) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) outMatches.push_back(loc);
+    }
+    return true;
+}
+
+bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
+                          std::shared_ptr<Table>& outTable) {
+    if (!plan.filters.empty() || plan.join.kind != JoinSpec::Kind::None ||
+        !plan.groupKeys.empty() || !plan.aggregates.empty() ||
+        plan.orderBy.size() != 1 || plan.limit < 0) {
+        return false;
+    }
+    const ExprNode& on = plan.exprs.nodes[plan.orderBy[0].expr];
+    if (on.op != ExprOp::ColRef || on.tableSide != 0 || on.resolvedCol < 0) return false;
+    const RangeIndex* ridx = left.findRangeIndex(static_cast<size_t>(on.resolvedCol));
+    if (!ridx || ridx->size() != left.totalAliveRows) return false;
+
+    const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
+    const size_t need = start + static_cast<size_t>(plan.limit);
+    const bool desc = plan.orderBy[0].descending;
+
+    std::vector<RowLoc> locs;
+    locs.reserve(need + 16);
+    ScalarValue boundKey;
+    bool haveBound = false;
+    ridx->forEachOrdered(desc, [&](RowLoc loc) {
+        if (loc.chunkIdx >= left.chunks.size() || !left.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
+            return true;
+        }
+        if (desc && locs.size() >= need) {
+            ScalarValue cur = left.getCell(static_cast<size_t>(on.resolvedCol), loc.chunkIdx, loc.rowIdx);
+            if (!haveBound) {
+                boundKey = left.getCell(static_cast<size_t>(on.resolvedCol), locs.back().chunkIdx, locs.back().rowIdx);
+                haveBound = true;
+            }
+            if (compareScalar(cur, boundKey) != 0) return false;
+        }
+        locs.push_back(loc);
+        return desc || locs.size() < need;
+    });
+
+    if (desc && locs.size() > 1) {
+        std::stable_sort(locs.begin(), locs.end(), [&](RowLoc a, RowLoc bLoc) {
+            ScalarValue ka = left.getCell(static_cast<size_t>(on.resolvedCol), a.chunkIdx, a.rowIdx);
+            ScalarValue kb = left.getCell(static_cast<size_t>(on.resolvedCol), bLoc.chunkIdx, bLoc.rowIdx);
+            const int cmp = compareScalar(ka, kb);
+            if (cmp != 0) return cmp > 0;
+            return a.chunkIdx != bLoc.chunkIdx ? (a.chunkIdx < bLoc.chunkIdx) : (a.rowIdx < bLoc.rowIdx);
+        });
+    }
+
+    std::vector<ColumnDef> outSchema;
+    for (const SelectItem& si : plan.selectItems) {
+        outSchema.push_back(ColumnDef{si.alias, si.outputType});
+    }
+    outTable = std::make_shared<Table>(std::move(outSchema));
+    outTable->setSharedDict(left.dict);
+    const size_t end = std::min(locs.size(), need);
+    std::vector<ScalarValue> rowBuf(plan.selectItems.size());
+    for (size_t i = start; i < end; ++i) {
+        const RowLoc p = locs[i];
+        for (size_t k = 0; k < plan.selectItems.size(); ++k) {
+            rowBuf[k] = evalExpr(plan.exprs, plan.selectItems[k].expr, left, p.chunkIdx, p.rowIdx);
+        }
+        outTable->appendRow(rowBuf);
+    }
+    return true;
+}
+
 bool passesResidualFilters(const QueryPlan& plan, const std::vector<uint32_t>& filterIndices,
                            const TableSnapshot& snap, uint32_t ci, uint32_t r) {
     for (uint32_t fi : filterIndices) {
@@ -82,107 +251,6 @@ struct ChunkScanOutput {
     std::vector<uint32_t> matchRows;
     std::shared_ptr<TableChunk> projectedChunk;  // populated in FilterAndProject fast path
 };
-
-struct MatchPair {
-    RowLoc left{};
-    RowLoc right{UINT32_MAX, UINT32_MAX};
-};
-
-void buildRightHashMap(const TableSnapshot& right, const JoinSpec& join,
-                       std::unordered_map<uint64_t, std::vector<RowLoc>>& out) {
-    for (uint32_t rci = 0; rci < right.chunks.size(); ++rci) {
-        const auto& rch = right.chunks[rci];
-        for (uint32_t rr = 0; rr < rch.rowCount; ++rr) {
-            if (!rch.isAlive(rr)) continue;
-            uint64_t h = 0x517cc1b727220a95ULL;
-            for (size_t k = 0; k < join.rightKeyCols.size(); ++k) {
-                ScalarValue kv = right.getCell(join.rightKeyCols[k], rci, rr);
-                h = combineHash64(h, hashScalarKey(join.keyTypes[k], kv));
-            }
-            out[h].push_back(RowLoc{rci, rr});
-        }
-    }
-}
-
-void writeOutCell(TableChunk& ch, size_t colIdx, uint32_t row, const ScalarValue& v,
-                  StringDictionary* dict) {
-    if (!v.isNull) ch.columns[colIdx]->writeCell(row, v, dict);
-}
-
-std::shared_ptr<Table> buildTableFromMatchPairs(const QueryPlan& plan, const TableSnapshot& left,
-                                                std::vector<MatchPair>& pairs) {
-    const TableSnapshot* right = (plan.join.kind != JoinSpec::Kind::None)
-                                     ? plan.join.rightTable.get()
-                                     : nullptr;
-
-    std::vector<ColumnDef> outSchema;
-    for (const SelectItem& si : plan.selectItems) {
-        outSchema.push_back(ColumnDef{si.alias, si.outputType});
-    }
-    auto outTable = std::make_shared<Table>(std::move(outSchema));
-
-    if (!plan.orderBy.empty() && !pairs.empty()) {
-        std::vector<std::vector<ScalarValue>> sortKeys(pairs.size());
-        for (size_t i = 0; i < pairs.size(); ++i) {
-            sortKeys[i].reserve(plan.orderBy.size());
-            for (const OrderByItem& ob : plan.orderBy) {
-                sortKeys[i].push_back(evalExpr(plan.exprs, ob.expr,
-                                               left, pairs[i].left.chunkIdx, pairs[i].left.rowIdx,
-                                               right, pairs[i].right.chunkIdx, pairs[i].right.rowIdx));
-            }
-        }
-        std::vector<size_t> perm(pairs.size());
-        for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
-
-        auto cmp = [&](size_t a, size_t b) {
-            for (size_t k = 0; k < plan.orderBy.size(); ++k) {
-                const int c = compareScalar(sortKeys[a][k], sortKeys[b][k]);
-                if (c != 0) return plan.orderBy[k].descending ? (c > 0) : (c < 0);
-            }
-            return a < b;
-        };
-
-        const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
-        const size_t need = (plan.limit >= 0) ? (start + static_cast<size_t>(plan.limit))
-                                              : perm.size();
-        if (need < perm.size()) {
-            std::partial_sort(perm.begin(), perm.begin() + static_cast<std::ptrdiff_t>(need),
-                              perm.end(), cmp);
-            perm.resize(need);
-        } else {
-            std::stable_sort(perm.begin(), perm.end(), cmp);
-        }
-
-        const size_t end = std::min(perm.size(), need);
-        std::vector<ScalarValue> rowBuf(plan.selectItems.size());
-        for (size_t i = start; i < end; ++i) {
-            const MatchPair& p = pairs[perm[i]];
-            for (size_t k = 0; k < plan.selectItems.size(); ++k) {
-                rowBuf[k] = evalExpr(plan.exprs, plan.selectItems[k].expr,
-                                     left, p.left.chunkIdx, p.left.rowIdx,
-                                     right, p.right.chunkIdx, p.right.rowIdx);
-            }
-            outTable->appendRow(rowBuf);
-        }
-        return outTable;
-    }
-
-    const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
-    const size_t end = (plan.limit >= 0)
-                           ? std::min(pairs.size(), start + static_cast<size_t>(plan.limit))
-                           : pairs.size();
-    std::vector<ScalarValue> rowBuf(plan.selectItems.size());
-    for (size_t i = start; i < end; ++i) {
-        const MatchPair& p = pairs[i];
-        for (size_t k = 0; k < plan.selectItems.size(); ++k) {
-            rowBuf[k] = evalExpr(plan.exprs, plan.selectItems[k].expr,
-                                 left, p.left.chunkIdx, p.left.rowIdx,
-                                 right, p.right.chunkIdx, p.right.rowIdx);
-        }
-        outTable->appendRow(rowBuf);
-    }
-    return outTable;
-}
 
 void runFilterKernelParallel(const CompiledKernel& kernel, const QueryPlan& plan,
                              const TableSnapshot& snap, bool useParallel,
@@ -234,164 +302,6 @@ void runFilterKernelParallel(const CompiledKernel& kernel, const QueryPlan& plan
     }
 }
 
-std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnapshot& left,
-                                         const std::vector<MatchPair>& pairs) {
-    const TableSnapshot* right = (plan.join.kind != JoinSpec::Kind::None)
-                                     ? plan.join.rightTable.get()
-                                     : nullptr;
-
-    std::vector<ColumnDef> outSchema;
-    for (size_t gi = 0; gi < plan.groupKeys.size(); ++gi) {
-        std::string name = gi < plan.groupAliases.size() ? plan.groupAliases[gi]
-                                                         : plan.exprs.nodes[plan.groupKeys[gi]].colName;
-        outSchema.push_back(ColumnDef{std::move(name),
-                                      plan.exprs.nodes[plan.groupKeys[gi]].valueType});
-    }
-    for (size_t ai = 0; ai < plan.aggregates.size(); ++ai) {
-        std::string name = !plan.aggregates[ai].alias.empty()
-                               ? plan.aggregates[ai].alias
-                               : ("agg_" + std::to_string(ai));
-        outSchema.push_back(ColumnDef{std::move(name), plan.aggregates[ai].outputType});
-    }
-
-    struct GroupState {
-        std::vector<ScalarValue> keys;
-        std::vector<double> aggF;
-        std::vector<int64_t> aggI;
-        std::vector<ScalarValue> aggExt;
-        uint64_t count = 0;
-    };
-    std::vector<GroupState> groups;
-    std::unordered_map<uint64_t, std::vector<size_t>> hashToGroup;
-
-    for (const MatchPair& p : pairs) {
-        std::vector<ScalarValue> keys;
-        uint64_t h = 0x517cc1b727220a95ULL;
-        for (size_t gi = 0; gi < plan.groupKeys.size(); ++gi) {
-            ScalarValue kv = evalExpr(plan.exprs, plan.groupKeys[gi],
-                                      left, p.left.chunkIdx, p.left.rowIdx,
-                                      right, p.right.chunkIdx, p.right.rowIdx);
-            h = combineHash64(h, hashScalarKey(plan.exprs.nodes[plan.groupKeys[gi]].valueType, kv));
-            keys.push_back(std::move(kv));
-        }
-        size_t gIdx = SIZE_MAX;
-        auto it = hashToGroup.find(h);
-        if (it != hashToGroup.end()) {
-            for (size_t cand : it->second) {
-                bool match = true;
-                for (size_t k = 0; k < keys.size(); ++k) {
-                    if (compareScalar(groups[cand].keys[k], keys[k]) != 0) {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match) { gIdx = cand; break; }
-            }
-        }
-        if (gIdx == SIZE_MAX) {
-            gIdx = groups.size();
-            GroupState g;
-            g.keys = std::move(keys);
-            g.aggF.assign(plan.aggregates.size(), 0.0);
-            g.aggI.assign(plan.aggregates.size(), 0);
-            g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
-            groups.push_back(std::move(g));
-            hashToGroup[h].push_back(gIdx);
-        }
-        GroupState& g = groups[gIdx];
-        const bool firstInGroup = (g.count == 0);
-        ++g.count;
-        for (size_t ai = 0; ai < plan.aggregates.size(); ++ai) {
-            const AggSpec& a = plan.aggregates[ai];
-            if (a.kind == AggSpec::Kind::Count) {
-                g.aggI[ai] += 1;
-                continue;
-            }
-            ScalarValue val = evalExpr(plan.exprs, a.expr,
-                                       left, p.left.chunkIdx, p.left.rowIdx,
-                                       right, p.right.chunkIdx, p.right.rowIdx);
-            double dv = colTypeIsFloat(val.type)
-                            ? val.f64
-                            : (colTypeIsUnsignedInt(val.type) ? static_cast<double>(val.u64)
-                                                             : static_cast<double>(val.i64));
-            if (a.kind == AggSpec::Kind::Sum || a.kind == AggSpec::Kind::Avg) {
-                if (a.outputType == ColType::I64) g.aggI[ai] += val.i64;
-                else g.aggF[ai] += dv;
-            } else if (a.kind == AggSpec::Kind::Min) {
-                if (firstInGroup || compareScalar(val, g.aggExt[ai]) < 0) g.aggExt[ai] = std::move(val);
-            } else if (a.kind == AggSpec::Kind::Max) {
-                if (firstInGroup || compareScalar(val, g.aggExt[ai]) > 0) g.aggExt[ai] = std::move(val);
-            }
-        }
-    }
-
-    if (plan.groupKeys.empty() && groups.empty()) {
-        GroupState g;
-        g.aggF.assign(plan.aggregates.size(), 0.0);
-        g.aggI.assign(plan.aggregates.size(), 0);
-        g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
-        groups.push_back(std::move(g));
-    }
-
-    std::vector<std::vector<ScalarValue>> outRows;
-    outRows.reserve(groups.size());
-    for (const GroupState& g : groups) {
-        std::vector<ScalarValue> row;
-        row.reserve(outSchema.size());
-        for (const ScalarValue& k : g.keys) row.push_back(k);
-        for (size_t ai = 0; ai < plan.aggregates.size(); ++ai) {
-            const AggSpec& a = plan.aggregates[ai];
-            if (a.kind == AggSpec::Kind::Count) {
-                row.push_back(ScalarValue::makeI64(g.aggI[ai]));
-            } else if (a.kind == AggSpec::Kind::Sum) {
-                row.push_back(a.outputType == ColType::I64 ? ScalarValue::makeI64(g.aggI[ai])
-                                                           : ScalarValue::makeF64(g.aggF[ai]));
-            } else if (a.kind == AggSpec::Kind::Avg) {
-                row.push_back(ScalarValue::makeF64(g.count > 0 ? (g.aggF[ai] / static_cast<double>(g.count)) : 0.0));
-            } else {
-                row.push_back(g.aggExt[ai]);
-            }
-        }
-        outRows.push_back(std::move(row));
-    }
-
-    if (!plan.orderBy.empty()) {
-        auto findOutCol = [&](uint32_t exprId) -> int {
-            const ExprNode& en = plan.exprs.nodes[exprId];
-            if (en.op != ExprOp::ColRef) return -1;
-            for (size_t c = 0; c < outSchema.size(); ++c) {
-                if (outSchema[c].name == en.colName) return static_cast<int>(c);
-            }
-            return -1;
-        };
-        std::vector<size_t> perm(outRows.size());
-        for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
-        std::stable_sort(perm.begin(), perm.end(), [&](size_t a, size_t b) {
-            for (const OrderByItem& ob : plan.orderBy) {
-                int oc = findOutCol(ob.expr);
-                if (oc < 0) continue;
-                const int cmp = compareScalar(outRows[a][oc], outRows[b][oc]);
-                if (cmp != 0) return ob.descending ? (cmp > 0) : (cmp < 0);
-            }
-            return a < b;
-        });
-        std::vector<std::vector<ScalarValue>> sorted;
-        sorted.reserve(outRows.size());
-        for (size_t idx : perm) sorted.push_back(std::move(outRows[idx]));
-        outRows = std::move(sorted);
-    }
-
-    auto outTable = std::make_shared<Table>(std::move(outSchema));
-    const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
-    const size_t end = (plan.limit >= 0)
-                           ? std::min(outRows.size(), start + static_cast<size_t>(plan.limit))
-                           : outRows.size();
-    for (size_t i = start; i < end; ++i) {
-        outTable->appendRow(outRows[i]);
-    }
-    return outTable;
-}
-
 }  // namespace
 
 QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOptions opts) {
@@ -403,23 +313,65 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
 
     const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
     const bool hasAgg = !plan.groupKeys.empty() || !plan.aggregates.empty();
+
+    // Only bypass SIMD filter into FilterAndProject if outputs perform real computation or SIMD filter doesn't apply.
+    bool hasComputedSelect = false;
+    for (const SelectItem& si : plan.selectItems) {
+        if (si.expr != kInvalidExpr && plan.exprs.nodes[si.expr].op != ExprOp::ColRef) {
+            hasComputedSelect = true;
+            break;
+        }
+    }
     const bool wantsDirectProject =
-        opts.useJit && !hasJoin && !hasAgg && plan.orderBy.empty() && !plan.selectItems.empty();
+        opts.useJit && !hasJoin && !hasAgg && plan.orderBy.empty() &&
+        plan.spatialFilter.kind == SpatialFilterSpec::Kind::None &&
+        !plan.selectItems.empty() &&
+        (hasComputedSelect || !canCompileSimdFilter(plan, left));
 
     std::vector<RowLoc> leftMatches;
-
-    // Step 1: Index probe fast path if eligible
     bool usedIndex = false;
-    if (opts.useIndexes && !plan.filters.empty()) {
+
+    // Priority 1: SpatialIndex probe
+    if (opts.useIndexes && plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        if (const SpatialIndex* si = left.findSpatialIndex(plan.spatialFilter.indexName)) {
+            std::vector<RowLoc> candidates;
+            if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::AABB) {
+                si->queryAABB(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
+                              plan.spatialFilter.b[0], plan.spatialFilter.b[1], plan.spatialFilter.b[2],
+                              candidates);
+            } else {
+                si->queryRadius(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
+                                plan.spatialFilter.radius, candidates);
+            }
+            std::sort(candidates.begin(), candidates.end(), [](const RowLoc& a, const RowLoc& b) {
+                return (a.chunkIdx != b.chunkIdx) ? (a.chunkIdx < b.chunkIdx) : (a.rowIdx < b.rowIdx);
+            });
+            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+            for (const RowLoc& loc : candidates) {
+                if (loc.chunkIdx >= left.chunks.size() || !left.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
+                    continue;
+                }
+                if (passesAllFilters(plan, plan.filters, left, loc.chunkIdx, loc.rowIdx, nullptr, 0, 0)) {
+                    leftMatches.push_back(loc);
+                }
+            }
+            usedIndex = true;
+            res.usedSpatialIndex = true;
+        }
+    }
+
+    // Priority 2: HashIndex equality probe
+    if (!usedIndex && opts.useIndexes && !plan.filters.empty() &&
+        plan.spatialFilter.kind == SpatialFilterSpec::Kind::None) {
         IndexProbeSpec probe = detectIndexProbe(left, plan);
         if (probe.valid) {
             const HashIndex* idx = left.findIndex(probe.colIdx);
             std::vector<RowLoc> candidates;
             idx->lookupKey(probe.key, candidates);
-            // Index lookup order may differ from physical order; restore chunk/row order so tie behavior & tests match!
             std::sort(candidates.begin(), candidates.end(), [](const RowLoc& a, const RowLoc& b) {
                 return (a.chunkIdx != b.chunkIdx) ? (a.chunkIdx < b.chunkIdx) : (a.rowIdx < b.rowIdx);
             });
+            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
             for (const RowLoc& loc : candidates) {
                 if (loc.chunkIdx >= left.chunks.size() || !left.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
                     continue;
@@ -433,8 +385,37 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
         }
     }
 
-    // Step 2: JIT parallel scan if index did not satisfy the scan
+    // Priority 3: RangeIndex probe or Top-K fast path
+    if (!usedIndex && opts.useIndexes && plan.spatialFilter.kind == SpatialFilterSpec::Kind::None) {
+        if (!plan.filters.empty() && tryRangeIndexLookup(left, plan, leftMatches)) {
+            usedIndex = true;
+            res.usedRangeIndex = true;
+        } else if (tryRangeTopKFastPath(left, plan, res.table)) {
+            res.usedRangeIndex = true;
+            return res;
+        }
+    }
+
+    // Priority 4: Fused JIT / SIMD Ungrouped Numeric Aggregation fast path
+    if (!usedIndex && !hasJoin && plan.groupKeys.empty() && !plan.aggregates.empty() &&
+        plan.spatialFilter.kind == SpatialFilterSpec::Kind::None &&
+        plan.orderBy.empty() && opts.useJit) {
+        std::string aggErr;
+        if (auto aggKernel = CompiledPlanCache::instance().getOrCompileAgg(plan, left, &aggErr)) {
+            res.table = runCompiledAgg(*aggKernel, plan, left, opts.useParallel);
+            res.usedJit = true;
+            res.usedJitAgg = true;
+            res.usedSimd = aggKernel->usesSimd;
+            return res;
+        }
+    }
+
+    // Priority 5: JIT (128-bit SIMD Filter or Scalar Filter/Project) parallel chunk scan
     if (!usedIndex) {
+        if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+            res.table = executePlanReference(left, plan);
+            return res;
+        }
         const size_t nChunks = left.chunks.size();
         std::shared_ptr<const CompiledKernel> kernel;
         if (opts.useJit) {
@@ -443,8 +424,12 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
                 plan, left,
                 wantsDirectProject ? JitMode::FilterAndProject : JitMode::Filter,
                 &jitErr);
-            if (kernel) res.usedJit = true;
-            else res.jitError = jitErr;
+            if (kernel) {
+                res.usedJit = true;
+                res.usedSimd = kernel->usesSimd;
+            } else {
+                res.jitError = jitErr;
+            }
         }
 
         if (kernel) {
@@ -514,7 +499,6 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
             }
 
             if (direct) {
-                // Fast columnar pack directly from JIT output chunks!
                 std::vector<ColumnDef> outSchema;
                 outSchema.reserve(nOutCols);
                 for (const SelectItem& si : plan.selectItems) {
@@ -564,89 +548,69 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
                 }
             }
         } else {
-            // Non-JIT fallback scan (opts.useJit == false or fallback path)
             res.table = executePlanReference(left, plan);
             return res;
         }
     }
 
-    // Step 3: Join + GroupBy + Project/Order/Limit on survivors
-    std::vector<MatchPair> pairs;
-    const TableSnapshot* right = hasJoin ? plan.join.rightTable.get() : nullptr;
-
-    if (!hasJoin) {
-        pairs.reserve(leftMatches.size());
-        for (RowLoc l : leftMatches) pairs.push_back(MatchPair{l, {UINT32_MAX, UINT32_MAX}});
-    } else {
-        const HashIndex* rightSingleIdx =
-            (plan.join.rightKeyCols.size() == 1)
-                ? right->findIndex(plan.join.rightKeyCols[0])
-                : nullptr;
-        std::unordered_map<uint64_t, std::vector<RowLoc>> rightHash;
-        if (!rightSingleIdx) {
-            buildRightHashMap(*right, plan.join, rightHash);
-        } else {
-            res.usedIndex = true;
-        }
-
-        std::vector<RowLoc> candidates;
-        std::vector<ScalarValue> lKeys(plan.join.leftKeyCols.size());
-        for (RowLoc ll : leftMatches) {
-            candidates.clear();
-            if (rightSingleIdx) {
-                lKeys[0] = left.getCell(plan.join.leftKeyCols[0], ll.chunkIdx, ll.rowIdx);
-                uint64_t key = 0;
-                if (HashIndex::scalarToKey(right->schema.columns[plan.join.rightKeyCols[0]].type,
-                                           lKeys[0], right->dict.get(), key)) {
-                    rightSingleIdx->lookupKey(key, candidates);
-                }
-            } else {
-                uint64_t h = 0x517cc1b727220a95ULL;
-                for (size_t k = 0; k < plan.join.leftKeyCols.size(); ++k) {
-                    lKeys[k] = left.getCell(plan.join.leftKeyCols[k], ll.chunkIdx, ll.rowIdx);
-                    h = combineHash64(h, hashScalarKey(plan.join.keyTypes[k], lKeys[k]));
-                }
-                auto it = rightHash.find(h);
-                if (it != rightHash.end()) candidates = it->second;
-            }
-
-            bool matchedAny = false;
-            for (RowLoc rl : candidates) {
-                if (rl.chunkIdx >= right->chunks.size() ||
-                    !right->chunks[rl.chunkIdx].isAlive(rl.rowIdx)) {
-                    continue;
-                }
-                bool eq = true;
-                for (size_t k = 0; k < plan.join.rightKeyCols.size(); ++k) {
-                    ScalarValue rk = right->getCell(plan.join.rightKeyCols[k], rl.chunkIdx, rl.rowIdx);
-                    if (compareScalar(lKeys[k], rk) != 0) {
-                        eq = false;
-                        break;
-                    }
-                }
-                if (!eq) continue;
-                if (!passesAllFilters(plan, plan.postJoinFilters, left, ll.chunkIdx, ll.rowIdx,
-                                      right, rl.chunkIdx, rl.rowIdx)) {
-                    continue;
-                }
-                matchedAny = true;
-                pairs.push_back(MatchPair{ll, rl});
-            }
-            if (!matchedAny && plan.join.kind == JoinSpec::Kind::Left) {
-                if (passesAllFilters(plan, plan.postJoinFilters, left, ll.chunkIdx, ll.rowIdx,
-                                     right, UINT32_MAX, UINT32_MAX)) {
-                    pairs.push_back(MatchPair{ll, {UINT32_MAX, UINT32_MAX}});
-                }
-            }
-        }
-    }
-
-    if (hasAgg) {
-        res.table = buildGroupedTable(plan, left, pairs);
-    } else {
-        res.table = buildTableFromMatchPairs(plan, left, pairs);
-    }
+    bool joinUsedIdx = false;
+    res.table = finishPlanFromLeftMatches(plan, left, leftMatches, &joinUsedIdx);
+    if (joinUsedIdx) res.usedIndex = true;
     return res;
+}
+
+void scanSingleChunkMatches(const CompiledKernel* kernel, const QueryPlan& boundPlan,
+                            const TableSnapshot& snap, size_t ci,
+                            std::vector<uint32_t>& outMatches) {
+    outMatches.clear();
+    if (ci >= snap.chunks.size()) return;
+    const auto& ch = snap.chunks[ci];
+    if (ch.aliveCount == 0 || ch.rowCount == 0) return;
+
+    if (kernel) {
+        const size_t nCols = snap.schema.size();
+        outMatches.resize(ch.rowCount);
+        std::vector<const void*> colPtrs(nCols);
+        for (size_t c = 0; c < nCols; ++c) colPtrs[c] = ch.columns[c]->rawData();
+
+        JitChunkContext ctx;
+        ctx.leftColPtrs = colPtrs.data();
+        ctx.aliveWords = ch.aliveWords.data();
+        ctx.hasAliveMask = ch.allAlive() ? 0u : 1u;
+        ctx.rowCount = ch.rowCount;
+        ctx.matchIndices = outMatches.data();
+        ctx.matchCount = 0;
+        kernel->entry(&ctx);
+
+        uint32_t m = ctx.matchCount;
+        if (!kernel->residualFilterIndices.empty() && m > 0) {
+            uint32_t kept = 0;
+            for (uint32_t i = 0; i < m; ++i) {
+                if (passesResidualFilters(boundPlan, kernel->residualFilterIndices,
+                                          snap, static_cast<uint32_t>(ci), outMatches[i])) {
+                    outMatches[kept++] = outMatches[i];
+                }
+            }
+            m = kept;
+        }
+        outMatches.resize(m);
+        return;
+    }
+
+    for (uint32_t r = 0; r < ch.rowCount; ++r) {
+        if (ch.isAlive(r) &&
+            passesAllFilters(boundPlan, boundPlan.filters, snap,
+                             static_cast<uint32_t>(ci), r, nullptr, 0, 0)) {
+            outMatches.push_back(r);
+        }
+    }
+}
+
+std::shared_ptr<Table> finishPlanFromLeftMatches(const QueryPlan& plan,
+                                                   const TableSnapshot& left,
+                                                   const std::vector<RowLoc>& leftMatches,
+                                                   bool* outUsedIndex) {
+    return finishPlanFromLeftMatchesImpl(plan, left, leftMatches, outUsedIndex);
 }
 
 MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts) {
@@ -701,7 +665,7 @@ MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts)
         for (size_t k = 0; k < plan.updates.size(); ++k) {
             const size_t colIdx = static_cast<size_t>(plan.updates[k].colIdx);
             targetPtrs[k] = mutChunk.mutableColumn(colIdx)->rawData();
-            if (table.hasIndex(colIdx)) modifiedIndexedCols.insert(colIdx);
+            modifiedIndexedCols.insert(colIdx);
         }
 
         JitChunkContext uctx;
@@ -710,6 +674,7 @@ MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts)
         uctx.matchIndices = matches.data();
         uctx.matchCount = static_cast<uint32_t>(matches.size());
         updateKernel->entry(&uctx);
+        table.markChunkDirty(ci);
         res.affectedRows += matches.size();
     }
 

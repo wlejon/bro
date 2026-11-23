@@ -120,10 +120,20 @@ struct UpdateAssignment {
     uint32_t expr = kInvalidExpr;
 };
 
+struct SpatialFilterSpec {
+    enum class Kind : uint8_t { None = 0, AABB, Radius };
+    Kind kind = Kind::None;
+    std::string indexName;
+    double a[3]{};      // AABB min, or Radius center
+    double b[3]{};      // AABB max
+    double radius = 0.0;
+};
+
 struct QueryPlan {
     ExprArena exprs;
     std::vector<uint32_t> filters;          // pre-join (side 0) or all filters if no join
     std::vector<uint32_t> postJoinFilters;  // populated by bind() for predicates touching side 1
+    SpatialFilterSpec spatialFilter;
     JoinSpec join;
     std::vector<uint32_t> groupKeys;
     std::vector<std::string> groupAliases;

@@ -444,6 +444,7 @@ void decorateTableProto(ev::ObjectBuilder& proto) {
         auto snap = tbl->snapshot();
         return tableRowsToJsArray(*snap);
     });
+    attachTableExtProto(proto);
 }
 
 void decorateSnapshotProto(ev::ObjectBuilder& proto) {
@@ -573,6 +574,17 @@ void decorateSnapshotProto(ev::ObjectBuilder& proto) {
         if (!snap) return ev::throwTypeError("TableSnapshot.toArray: invalid receiver");
         return tableRowsToJsArray(*snap);
     });
+
+    proto.def("close", 0, [](Value thisVal, std::span<const Value>) -> Value {
+        if (!g_snapshotClass.installed()) return ev::fromBool(false);
+        auto* h = static_cast<HostTableSnapshotHandle*>(g_snapshotClass.unwrap(thisVal));
+        if (!h) return ev::throwTypeError("TableSnapshot.close: invalid receiver");
+        const bool wasOpen = (h->snapshot != nullptr);
+        h->snapshot.reset();
+        return ev::fromBool(wasOpen);
+    });
+
+    attachSnapshotExtProto(proto);
 }
 
 }  // namespace
@@ -590,6 +602,10 @@ std::shared_ptr<bro::table::Table> hostMutableTableOf(Value val) {
     if (!g_tableClass.installed()) return nullptr;
     auto* h = static_cast<HostTableHandle*>(g_tableClass.unwrap(val));
     return h ? h->table : nullptr;
+}
+
+int resolveTableColumnArg(const bro::table::Schema& schema, Value arg) {
+    return resolveColumnArg(schema, arg);
 }
 
 std::shared_ptr<const bro::table::TableSnapshot> hostTableSnapshotOf(Value val) {
@@ -759,6 +775,7 @@ Value makeBroTableValue() {
     });
     ns.set("CHUNK_ROWS", static_cast<uint32_t>(bro::table::kChunkRows));
     populateQueryNamespace(ns);
+    populateTableExtNamespace(ns);
     return ns.obj.get();
 }
 
