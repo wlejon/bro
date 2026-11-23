@@ -7,12 +7,12 @@
 
 #include "engine/engine.h"
 #include "eye/eye_compose.h"
-#include "eye/eye_form.h"
 #include "eye/eye_layout.h"
 #include "eye/eye_visualize.h"
 
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
+#include "eye/eye_form.h"
 #include "scene/nodes/camera_node.h"
 #include "scene/nodes/light_node.h"
 #include "scene/nodes/mesh_node.h"
@@ -20,9 +20,8 @@
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/frame/scene_view_inspect.h"
 #include <bromath/aabb.h>
-#endif
-
 #include <bromesh/api.h>
+#endif
 
 #include <algorithm>
 #include <cmath>

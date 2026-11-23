@@ -65,10 +65,18 @@ if(BRO_BUILD_TESTS)
         target_compile_options(bro_eye_test PRIVATE /MP /permissive- /utf-8)
     endif()
     if(BRO_WITH_3D)
+        find_package(Vulkan REQUIRED)
         add_executable(bro_eye_structure_test tests/test_eye_structure.cpp)
         target_include_directories(bro_eye_structure_test PRIVATE ${bro_SOURCE_DIR}/src)
+        # Same cycle pattern as src/scene/CMakeLists.txt: a real SceneGraph pulls
+        # in the DOM, whose style code calls back into bro_engine, so bro_engine is
+        # named again after bro_dom. Avoids $<LINK_GROUP:RESCAN> (unsupported by
+        # Ninja+MSVC and Apple ld64), avoids hardcoding bro_a11y (absent when
+        # BRO_WITH_A11Y=OFF), and keeps brass ahead of bronze_runtime_shared on
+        # MSVC so parallel_runtime.obj does not collide on brass_parallel_for.
         target_link_libraries(bro_eye_structure_test PRIVATE
-            $<LINK_GROUP:RESCAN,bro_eye,bro_scene,bro_engine,bro_dom,bro_layout,bro_a11y>)
+            bro_eye bro_scene bro_engine bro_dom bro_engine
+            bro_render bro_platform bro_util brass skia Vulkan::Vulkan)
         target_compile_features(bro_eye_structure_test PRIVATE cxx_std_20)
         bro_apply_feature_defs(bro_eye_structure_test)
         if(MSVC)
