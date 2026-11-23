@@ -382,6 +382,19 @@ class SceneNode {
   fadeOutDist;
 
   /**
+   * Mesh, InstancedMesh: dithered in over [fadeInDist, 1.35x it] from the
+   * eye, by the same per-pixel value fadeOutDist dithers out with, so a
+   * coarse level with fadeInDist d and a fine one with fadeOutDist d share
+   * every pixel of the band: a level of detail hands over with neither a
+   * gap, an overlap nor a pop. With both set, each is kept to whole metres
+   * (under 4096). A nearClipDist takes precedence. 0 (default): none.
+   * @type {number}
+   * @example
+   *   near.fadeOutDist = 60; far.fadeInDist = 60; far.fadeOutDist = 400;
+   */
+  fadeInDist;
+
+  /**
    * Mesh, InstancedMesh: casts its shadow (with `castsShadow`) and draws
    * nothing else: in no colour pass and no reflection probe. A shadow proxy
    * for what draws itself another way, such as impostor quads, whose
@@ -1172,9 +1185,13 @@ class SceneNode {
    * drop out, each instance at its own hashed distance in
    * [maxDistance (1 - fade), maxDistance], so a set thins rather than ending
    * at a line. No hook runs for it: the cull pass does it per instance.
+   * `minDistance` (m, 0 by default: none) culls an instance whose sphere
+   * lies wholly nearer than it, in every view: a coarse level of detail
+   * drawn from its `fadeInDist` out (with minDistance the same) spends
+   * nothing on the near instances its fade would cut whole.
    *
    * @param {KernelBuffer|null} buffer
-   * @param {{maxDistance?: number, fade?: number}} [opts]
+   * @param {{maxDistance?: number, fade?: number, minDistance?: number}} [opts]
    * @returns {SceneNode}
    * @example
    *   // the kernel that deals creatures into levels writes each one's sphere

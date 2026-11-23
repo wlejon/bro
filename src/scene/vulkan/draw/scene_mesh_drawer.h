@@ -155,6 +155,7 @@ struct MeshDraw {
     const render::ComputeBuffer* cullSpheres = nullptr;
     float cullMaxDistance = 0.0f;   // and their maxDistance (0: none) and fade
     float cullFade = 0.0f;
+    float cullMinDistance = 0.0f;   // and minDistance (0: none)
     const InstanceCullViews* cullViews = nullptr;
 
     /// This draw as view `view` (InstanceCullViews) draws it.

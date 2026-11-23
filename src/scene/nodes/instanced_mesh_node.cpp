@@ -62,6 +62,7 @@ void InstancedMeshNode::setStaticBatch(bool b) {
 }
 
 void InstancedMeshNode::instancesChanged() {
+    ++instanceGeneration_;
     batchDirty_ = true;
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // instance set changed — its shadow pages are redrawn

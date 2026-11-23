@@ -657,7 +657,7 @@
     });
     fn(SceneNode.prototype, "setInstanceCullSpheres", function setInstanceCullSpheres(buffer, opts) {
         __bro_native.scene.SceneNode_setInstanceCullSpheres(this, buffer === undefined ? null : buffer,
-                                                            +(opts?.maxDistance ?? 0), +(opts?.fade ?? 0));
+                                                            +(opts?.maxDistance ?? 0), +(opts?.fade ?? 0), +(opts?.minDistance ?? 0));
         return this;
     });
     fn(SceneNode.prototype, "setCullBounds", function setCullBounds(min, max) {

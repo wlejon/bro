@@ -19,7 +19,7 @@ struct CullUBO {
     m0: vec4<f32>,   // the draw's model, relative to the eye: its first three rows
     m1: vec4<f32>,
     m2: vec4<f32>,
-    s: vec4<f32>,    // x: the model's largest axis scale, y: the max distance (0: none), z: its fade share
+    s: vec4<f32>,    // x: the model's largest axis scale, y: the max distance (0: none), z: its fade share, w: the min distance (0: none)
     a: vec4<u32>,    // count word (NONE: none), rows, rows' first word, the region's rows' first word
     b: vec4<u32>,    // the region's indices' first word, commands word, 0, 0
 }
@@ -51,6 +51,10 @@ fn instance_cull() {
     let r = spheres[s + 3] * u.s.x;
     if (behind(u.p0, c, r) || behind(u.p1, c, r) || behind(u.p2, c, r) ||
         behind(u.p3, c, r) || behind(u.p4, c, r) || behind(u.p5, c, r)) {
+        return;
+    }
+    // Wholly nearer than the min distance: culled in every view.
+    if (u.s.w > 0.0 && length(c) + r < u.s.w) {
         return;
     }
     // Past the max distance from the eye (each instance its own, hashed

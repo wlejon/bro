@@ -279,6 +279,13 @@ public:
     /// nearClipDist takes precedence).
     void setFadeOutDist(float d) { fadeOutDist_ = d > 0.0f ? d : 0.0f; }
     float fadeOutDist() const { return fadeOutDist_; }
+    /// Dithered in over [fadeInDist, 1.35x it] with the same dither, so a
+    /// mesh with fadeOutDist d and one with fadeInDist d share every pixel
+    /// of the band: one level of detail hands over to the next with neither
+    /// a gap nor an overlap (0: none). Both fades are kept to whole metres
+    /// below 4096 when both are set.
+    void setFadeInDist(float d) { fadeInDist_ = d > 0.0f ? d : 0.0f; }
+    float fadeInDist() const { return fadeInDist_; }
 
     /// Whether this mesh writes into the shadow pages. Default true. Set false
     /// for meshes that should illuminate with shadows but not cast their own
@@ -682,6 +689,7 @@ private:
     // Near clip distance — discard fragments closer than this (for LOD overlap)
     float nearClipDist_ = 0.0f;
     float fadeOutDist_ = 0.0f;
+    float fadeInDist_ = 0.0f;
 
     bool castsShadow_ = true;
     bool shadowOnly_ = false;

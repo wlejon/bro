@@ -80,6 +80,17 @@ struct GpuMesh {
     uint64_t generation = 0;
 };
 
+/// An instanced node's rows held on the GPU (SceneGpuResources::instances):
+/// 16 floats a row, and each row's own index (0..count-1).
+struct GpuInstances {
+    SceneVkBuffer rows;
+    SceneVkBuffer ids;
+    size_t count = 0;
+    uint64_t generation = 0;     // of the rows held (0: none)
+    uint64_t seen = 0;           // the generation last asked for
+    uint32_t stableRenders = 0;  // renders it has been asked for unchanged
+};
+
 class SceneGpuResources {
 public:
     /// Bytes per packed vertex (position, normal, uv, colour, tangent).
@@ -103,6 +114,14 @@ public:
     const GpuMesh* sharedMesh(const std::shared_ptr<const SharedGeometry>& geometry, bool chunked = false);
     /// Drop the copies of shared geometry nothing holds any more.
     void pruneShared();
+
+    /// Node `id`'s instance rows (`count` of them, 16 floats each) held on
+    /// the GPU once they have stayed at `generation` for kInstancesStable
+    /// renders, uploaded once and drawn from there until they change; null
+    /// while they are changing (the draw copies them into the frame's upload
+    /// memory instead, as rows that move every frame should be).
+    const GpuInstances* instances(uint32_t id, uint64_t generation, const float* rows, size_t count);
+    static constexpr uint32_t kInstancesStable = 3;
 
     /// A node's RGBA8 image as a mipmapped, repeating texture; null when empty.
     const SceneVkImage* texture(uint32_t id, TextureSlot slot, const NodeTexture& tex);
@@ -171,6 +190,7 @@ private:
     std::unordered_map<uint64_t, Shared> shared_;   // by SharedGeometry::generation
     std::map<uint64_t, Texture> textures_;
     std::unordered_map<uint32_t, Skin> skins_;
+    std::unordered_map<uint32_t, GpuInstances> instances_;
     std::unordered_map<uint32_t, std::unordered_map<std::string, UserTexture>> userTextures_;
     std::unordered_map<const uint8_t*, Texture> shadeMaps_;
 };

@@ -81,6 +81,8 @@ public:
     }
 
     const std::vector<float>& instanceData() const { return instanceData_; }
+    /// Moves whenever the instance rows change (setInstances, updateInstance, ...).
+    uint64_t instanceGeneration() const { return instanceGeneration_; }
 
     /// Moves whenever the mesh changes (the renderer re-uploads geometry).
     uint64_t geometryGeneration() const { return geometryGeneration_; }
@@ -306,6 +308,9 @@ public:
     /// As MeshNode::setFadeOutDist.
     void setFadeOutDist(float d) { fadeOutDist_ = d > 0.0f ? d : 0.0f; }
     float fadeOutDist() const { return fadeOutDist_; }
+    /// As MeshNode::setFadeInDist.
+    void setFadeInDist(float d) { fadeInDist_ = d > 0.0f ? d : 0.0f; }
+    float fadeInDist() const { return fadeInDist_; }
 
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
@@ -415,17 +420,22 @@ public:
     /// included (that page keeps what it was drawn with); `fade` (0-1) is the
     /// share of maxDistance over which instances drop out, each at its own
     /// hashed distance in [maxDistance (1 - fade), maxDistance], so a set
-    /// thins rather than ending at a line.
+    /// thins rather than ending at a line. `minDistance` (m, 0: none) culls
+    /// an instance whose sphere lies wholly nearer than it, in every view: a
+    /// coarse level of detail drawn from its fadeInDist out skips the
+    /// instances its fade would cut whole.
     void setInstanceCullSpheres(std::shared_ptr<render::ComputeBuffer> buffer, float maxDistance = 0.0f,
-                                float fade = 0.0f) {
+                                float fade = 0.0f, float minDistance = 0.0f) {
         cullSpheres_ = std::move(buffer);
         cullMaxDistance_ = maxDistance > 0.0f ? maxDistance : 0.0f;
         cullFade_ = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+        cullMinDistance_ = minDistance > 0.0f ? minDistance : 0.0f;
         bumpChangeGeneration();
     }
     const std::shared_ptr<render::ComputeBuffer>& instanceCullSpheres() const { return cullSpheres_; }
     float instanceCullMaxDistance() const { return cullMaxDistance_; }
     float instanceCullFade() const { return cullFade_; }
+    float instanceCullMinDistance() const { return cullMinDistance_; }
 
     using UserTexture = MeshNode::UserTexture;
     bool setCustomShaderTexture(const std::string& name, int width, int height, const float* data,
@@ -540,12 +550,14 @@ private:
     mutable bool bvhDirty_ = true;
 
     std::vector<float> instanceData_;
+    uint64_t instanceGeneration_ = 1;
     size_t instanceCount_ = 0;
     std::shared_ptr<render::ComputeBuffer> countBuffer_;   // setInstanceCountBuffer
     uint32_t countWord_ = 0;
     std::shared_ptr<render::ComputeBuffer> cullSpheres_;   // setInstanceCullSpheres
     float cullMaxDistance_ = 0.0f;                          // its maxDistance (0: none)
     float cullFade_ = 0.0f;                                 // and fade
+    float cullMinDistance_ = 0.0f;                          // its minDistance (0: none)
     std::optional<bromath::AABB3> cullBounds_;              // setCullBounds
     bool hookStill_ = false;                                // setHookStill
 
@@ -608,6 +620,7 @@ private:
     float depthBiasUnits_ = 0.0f;
     float nearClipDist_ = 0.0f;
     float fadeOutDist_ = 0.0f;
+    float fadeInDist_ = 0.0f;
 
     bool castsShadow_ = true;
     bool shadowOnly_ = false;

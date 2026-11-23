@@ -1,7 +1,7 @@
 // scene_extras.js — the SceneNode members over the hand-registered natives in
 // native_scene_extras.cpp: the per-type accessors (alphaCutoff, doubleSided,
 // interior, priority, emissiveColor, radius, fillColor / strokeColor /
-// strokeWidth, autoSync, pixelsPerUnit, billboard, nearClipDist, fadeOutDist,
+// strokeWidth, autoSync, pixelsPerUnit, billboard, nearClipDist, fadeOutDist, fadeInDist,
 // frameIndex),
 // the instanced-mesh operations (updateInstance, setInstancedMesh,
 // setAtlasGrid, setScatterSegments, setTubeSegments, updateInstances) and
@@ -56,6 +56,9 @@
     typed('fadeOutDist', isMeshOrInstanced,
         (n) => __bro_native.scene.SceneNode_fadeOutDist_get(n),
         (n, v) => __bro_native.scene.SceneNode_fadeOutDist_set(n, +v));
+    typed('fadeInDist', isMeshOrInstanced,
+        (n) => __bro_native.scene.SceneNode_fadeInDist_get(n),
+        (n, v) => __bro_native.scene.SceneNode_fadeInDist_set(n, +v));
     typed('emissiveColor', isMeshOrInstanced,
         (n) => Array.from(__bro_native.scene.SceneNode_emissiveColor_get(n)),
         (n, v) => {
@@ -231,6 +234,7 @@
         if (opts.doubleSided !== undefined) node.doubleSided = opts.doubleSided;
         if (opts.nearClipDist !== undefined) node.nearClipDist = opts.nearClipDist;
         if (opts.fadeOutDist !== undefined) node.fadeOutDist = opts.fadeOutDist;
+        if (opts.fadeInDist !== undefined) node.fadeInDist = opts.fadeInDist;
         if (opts.billboard !== undefined) node.billboard = opts.billboard;
         if (opts.radius !== undefined && isShape(node)) node.radius = opts.radius;
         if (opts.fillColor !== undefined && isShape(node)) node.fillColor = opts.fillColor;

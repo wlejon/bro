@@ -1,5 +1,6 @@
 #include "table/table_chunk.h"
 
+#include <mutex>
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>

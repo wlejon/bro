@@ -518,8 +518,17 @@ void SceneMeshDrawer::fillMaterial(const SceneFrame& frame, const Node& node, Me
     out.push.pbrParams[1] = node.roughness();
     out.push.pbrParams[2] = node.alphaCutoff();
     if constexpr (requires { node.alphaToCoverage(); }) out.coverage = node.alphaToCoverage();
-    // Positive: the near clip; negative: minus the distance it fades out from.
-    out.push.extra[0] = node.nearClipDist() > 0.0f ? node.nearClipDist() : -node.fadeOutDist();
+    // Positive: the near clip; negative: minus the fades, the fade-in's
+    // whole metres times 4096 plus where it fades out from (draw/mesh.bk).
+    if (node.nearClipDist() > 0.0f) {
+        out.push.extra[0] = node.nearClipDist();
+    } else if (node.fadeInDist() > 0.0f) {
+        const float fin = std::clamp(std::round(node.fadeInDist()), 1.0f, 4095.0f);
+        const float fout = node.fadeOutDist() > 0.0f ? std::clamp(std::round(node.fadeOutDist()), 1.0f, 4095.0f) : 0.0f;
+        out.push.extra[0] = -(fin * 4096.0f + fout);
+    } else {
+        out.push.extra[0] = -node.fadeOutDist();
+    }
     out.translucent = color[3] < 1.0f;
     // Unlit meshes never cast: they draw outside the lighting a shadow
     // belongs to (a custom shader suppresses unlit, so it casts).
@@ -782,13 +791,23 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     const GpuMesh* gm = frame.gpu.resources.mesh(node.id(), 0, generation, geometry);
     if (!gm) return false;
 
-    // This render's instance rows, read straight from the frame's upload memory.
+    // The instance rows: held on the GPU while they stay unchanged
+    // (SceneGpuResources::instances), else this render's copy in the frame's
+    // upload memory.
     static constexpr float kIdentityRow[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1};
     const size_t rowCount = batched ? 1 : count;
-    const size_t bytes = rowCount * 16 * sizeof(float);
-    const render::UploadSlice rows = frame.gpu.device.frameUpload(bytes);
-    if (!rows) return false;
-    std::memcpy(rows.mapped, batched ? kIdentityRow : node.instanceData().data(), bytes);
+    const GpuInstances* held = batched ? nullptr
+        : frame.gpu.resources.instances(node.id(), node.instanceGeneration(), node.instanceData().data(), rowCount);
+    render::UploadSlice rows{};
+    if (held) {
+        rows.buffer = held->rows.buffer;
+        rows.offset = 0;
+    } else {
+        const size_t bytes = rowCount * 16 * sizeof(float);
+        rows = frame.gpu.device.frameUpload(bytes);
+        if (!rows) return false;
+        std::memcpy(rows.mapped, batched ? kIdentityRow : node.instanceData().data(), bytes);
+    }
 
     // Per-instance vegetation records sway each instance (a static batch has
     // merged them away; a custom shader keeps the plain path).
@@ -810,7 +829,10 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     out.instances = rows.buffer;
     out.instanceOffset = rows.offset;
     out.instanceCount = static_cast<uint32_t>(rowCount);
-    if (out.kind == MeshKind::Instanced) {
+    if (out.kind == MeshKind::Instanced && held) {
+        out.instanceIds = held->ids.buffer;
+        out.instanceIdOffset = 0;
+    } else if (out.kind == MeshKind::Instanced) {
         // Each row's own index, 0..n-1 (a culled view draws its survivors').
         thread_local std::vector<uint32_t> iota;
         if (iota.size() < rowCount) {
@@ -832,6 +854,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
         out.cullSpheres = node.instanceCullSpheres().get();
         out.cullMaxDistance = node.instanceCullMaxDistance();
         out.cullFade = node.instanceCullFade();
+        out.cullMinDistance = node.instanceCullMinDistance();
     }
     fillMaterial(frame, node, out);
     out.twoSided = node.doubleSided();

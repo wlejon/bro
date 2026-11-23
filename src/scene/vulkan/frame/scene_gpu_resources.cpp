@@ -572,10 +572,42 @@ void SceneGpuResources::retainShadeMaps(const std::vector<const uint8_t*>& live)
     }
 }
 
+const GpuInstances* SceneGpuResources::instances(uint32_t id, uint64_t generation, const float* rows, size_t count) {
+    GpuInstances& e = instances_[id];
+    if (e.seen != generation) { e.seen = generation; e.stableRenders = 0; }
+    if (e.generation == generation && e.count == count && e.rows.buffer != VK_NULL_HANDLE) return &e;
+    if (++e.stableRenders < kInstancesStable || count == 0) return nullptr;
+    allocator_.destroyBuffer(e.rows);
+    allocator_.destroyBuffer(e.ids);
+    e.generation = 0;
+    const VkBufferUsageFlags usage =
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    const VkDeviceSize rowBytes = count * 16 * sizeof(float), idBytes = count * sizeof(uint32_t);
+    if (!allocator_.createBuffer(rowBytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, e.rows) ||
+        !allocator_.createBuffer(idBytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, e.ids) ||
+        !allocator_.stageAndUploadBuffer(e.rows.buffer, rows, rowBytes) ||
+        !allocator_.stageAndUploadBuffer(e.ids.buffer, idBytes, 0, [count](uint8_t* p) {
+            auto* o = reinterpret_cast<uint32_t*>(p);
+            for (size_t i = 0; i < count; ++i) o[i] = static_cast<uint32_t>(i);
+        })) {
+        allocator_.destroyBuffer(e.rows);
+        allocator_.destroyBuffer(e.ids);
+        return nullptr;
+    }
+    e.count = count;
+    e.generation = generation;
+    return &e;
+}
+
 void SceneGpuResources::releaseNodes(std::span<const uint32_t> ids) {
     // (Shared geometry the nodes were the last to hold goes with them.)
     pruneShared();
     for (uint32_t id : ids) {
+        if (auto it = instances_.find(id); it != instances_.end()) {
+            allocator_.destroyBuffer(it->second.rows);
+            allocator_.destroyBuffer(it->second.ids);
+            instances_.erase(it);
+        }
         eraseNode(meshes_, id, [&](GpuMesh& m) { destroy(m); });
         eraseNode(textures_, id, [&](Texture& t) { allocator_.destroyImage(t.image); });
         if (auto it = skins_.find(id); it != skins_.end()) {
@@ -598,6 +630,8 @@ void SceneGpuResources::cleanup() {
     textures_.clear();
     for (auto& [k, s] : skins_) allocator_.destroyBuffer(s.buffer);
     skins_.clear();
+    for (auto& [k, g] : instances_) { allocator_.destroyBuffer(g.rows); allocator_.destroyBuffer(g.ids); }
+    instances_.clear();
     for (auto& [id, slots] : userTextures_) {
         for (auto& [name, t] : slots) allocator_.destroyImage(t.image);
     }

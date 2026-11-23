@@ -440,7 +440,7 @@ bool bro_scene_SceneNode_setInstanceCountBuffer(void* self, uint64_t bufferBits,
     return true;
 }
 
-bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits, double maxDistance, double fade) {
+bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits, double maxDistance, double fade, double minDistance) {
     auto* n = nodeOf(self);
     if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;
     const Rooted value(ev::fromBits(bufferBits));
@@ -454,12 +454,12 @@ bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits,
             return false;
         }
     }
-    if (!(maxDistance >= 0.0) || !(fade >= 0.0 && fade <= 1.0)) {
-        ev::throwRangeError("setInstanceCullSpheres: maxDistance is 0 or more and fade from 0 to 1");
+    if (!(maxDistance >= 0.0) || !(fade >= 0.0 && fade <= 1.0) || !(minDistance >= 0.0)) {
+        ev::throwRangeError("setInstanceCullSpheres: maxDistance and minDistance are 0 or more and fade from 0 to 1");
         return false;
     }
     static_cast<scene::InstancedMeshNode*>(n)->setInstanceCullSpheres(std::move(buffer), static_cast<float>(maxDistance),
-                                                                      static_cast<float>(fade));
+                                                                      static_cast<float>(fade), static_cast<float>(minDistance));
     return true;
 }
 

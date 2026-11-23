@@ -306,11 +306,21 @@ pub fn should_cut(push: Push, world_pos: vec3<f32>, uv: vec2<f32>, in_color: vec
     if (push.extra.x > 0.0 && length(world_pos) < push.extra.x) {
         return true;
     }
-    // fadeOutDist (-extra.x): gone past mix(d, 1.35 d, u), where a voxeldag
-    // region whose minDist is d takes over pixel for pixel.
+    // The fades (-extra.x = fadeInDist * 4096 + fadeOutDist, fadeInDist
+    // whole metres): gone past mix(d, 1.35 d, u) for fadeOutDist d, where a
+    // voxeldag region whose minDist is d (or a mesh whose fadeInDist is d)
+    // takes over pixel for pixel; not yet in before mix(e, 1.35 e, u) for
+    // fadeInDist e.
     if (push.extra.x < 0.0) {
-        let d = -push.extra.x;
-        if (length(world_pos) >= mix(d, d * 1.35, scene::band_dither(frag_coord().xy))) {
+        let v = -push.extra.x;
+        let e = floor(v / 4096.0);
+        let d = v - e * 4096.0;
+        let at = mix(1.0, 1.35, scene::band_dither(frag_coord().xy));
+        let dist = length(world_pos);
+        if (d > 0.0 && dist >= d * at) {
+            return true;
+        }
+        if (e > 0.0 && dist < e * at) {
             return true;
         }
     }
