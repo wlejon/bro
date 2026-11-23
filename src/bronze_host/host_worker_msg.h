@@ -10,6 +10,10 @@
 #include <bromesh/mesh_data.h>
 #endif
 
+namespace bro::table {
+class TableSnapshot;
+}
+
 namespace bro::bronze_host {
 
 // An ImageBitmap in a message: its pixels by reference (they are immutable),
@@ -48,6 +52,7 @@ struct Message {
     // deserializeMessage, one-shot like a transfer — hence mutable.
     mutable std::vector<ByteBlock> buffers;
     std::vector<SerializedImage> transferredImages;
+    std::vector<std::shared_ptr<const bro::table::TableSnapshot>> sharedSnapshots;
     bool isError = false;
     std::string errorMessage;
     std::string errorFilename;

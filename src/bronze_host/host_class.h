@@ -116,5 +116,9 @@ inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
 inline constexpr uint32_t kHostAnimationTag = 0x414E494Du;  // 'ANIM'
 inline constexpr uint32_t kHostWorkerTag = 0x574F524Bu;     // 'WORK'
 inline constexpr uint32_t kHostWebGLContextTag = 0x57474C32u;  // 'WGL2'
+inline constexpr uint32_t kHostTableTag = 0x5441424Cu;         // 'TABL'
+inline constexpr uint32_t kHostTableSnapshotTag = 0x54534E50u; // 'TSNP'
+inline constexpr uint32_t kHostQueryBuilderTag = 0x51525942u;  // 'QRYB'
+inline constexpr uint32_t kHostExprRefTag = 0x45585052u;       // 'EXPR'
 
 }  // namespace bro::bronze_host

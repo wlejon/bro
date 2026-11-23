@@ -167,6 +167,10 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent gpu(makeBroGpuValue());
         ev::setProperty(bro->get(), "gpu", gpu.get());
     }
+    {
+        ev::Persistent tbl(makeBroTableValue());
+        ev::setProperty(bro->get(), "table", tbl.get());
+    }
 #if BRO_WITH_3D
     {
         // The SDF tracer's cached pipelines go before the engine's device.
@@ -467,6 +471,10 @@ void installWorkerBroRoot() {
     {
         ev::Persistent gpu(makeBroGpuValue());
         ev::setProperty(bro->get(), "gpu", gpu.get());
+    }
+    {
+        ev::Persistent tbl(makeBroTableValue());
+        ev::setProperty(bro->get(), "table", tbl.get());
     }
     {
         ev::Persistent media(makeBroMediaValue());

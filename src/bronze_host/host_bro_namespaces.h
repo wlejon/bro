@@ -23,6 +23,9 @@ Value makeBroTextValue();
 // bro.gpu (host_gpu.cpp): the runtime backend probe over brotensor/CPU fallback.
 Value makeBroGpuValue();
 
+// bro.table (host_table.cpp): off-heap chunked columnar store & brass JIT query engine.
+Value makeBroTableValue();
+
 // Menu (host_menu.cpp)
 Value makeBroMenuValue();
 

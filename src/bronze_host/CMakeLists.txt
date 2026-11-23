@@ -184,6 +184,8 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_terminal.cpp
     host_element_terminal_view.cpp
     host_media.cpp
+    host_table.cpp
+    host_table_query.cpp
 )
 
 # The physics and scene natives are bodies over src/physics and src/scene,
@@ -366,7 +368,7 @@ endfunction()
 # only through an engine's symbol table, so no link order is load-bearing.
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_eye bro_webgl broimage::broimage bronze::runtime_shared bronze::cli brasslua::bronze Vulkan::Vulkan
+    PUBLIC bro_engine bro_eye bro_webgl bro_table broimage::broimage bronze::runtime_shared bronze::cli brasslua::bronze Vulkan::Vulkan
 )
 
 # brokit_api supplies the Node half (require(), fs, path, os, child_process,

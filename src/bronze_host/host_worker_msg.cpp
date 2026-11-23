@@ -11,6 +11,7 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/host_worker_msg_format.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_table.h"
 #include "abi/bronze_abi.h"
 #include "embed/embed_clone.h"
 #include "runtime/heap.h"
@@ -357,6 +358,13 @@ bool Writer::object(Value val, int depth) {
 
 bool Writer::handle(uint32_t m) {
     Value val = mem_.at(m);
+    if (auto snap = hostTableSnapshotOf(val)) {
+        const uint32_t idx = static_cast<uint32_t>(msg_.sharedSnapshots.size());
+        msg_.sharedSnapshots.push_back(std::move(snap));
+        out_.u8(kTableSnapshot);
+        out_.u32(idx);
+        return true;
+    }
     if (auto* bmp = hostImageBitmapOfMut(val)) {
         if (bmp->closed) {
             ev::throwTypeError("postMessage: ImageBitmap is closed");
@@ -546,6 +554,7 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out,
     out.data.clear();
     out.buffers.clear();
     out.transferredImages.clear();
+    out.sharedSnapshots.clear();
 #if BRO_WITH_3D
     out.transferredMeshes.clear();
 #endif

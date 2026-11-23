@@ -49,6 +49,7 @@ enum Tag : uint8_t {
     kObjectLayout    = 0x17,
     kStringLatin1    = 0x18,  // u32 length + bytes
     kStringUtf16     = 0x19,  // u32 length + 2*length bytes
+    kTableSnapshot   = 0x1A,  // u32 index in Message::sharedSnapshots
 };
 
 inline constexpr uint32_t kLiteralKey = 0xFFFFFFFFu;

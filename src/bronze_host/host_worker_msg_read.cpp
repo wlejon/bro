@@ -11,6 +11,7 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/host_worker_msg_format.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_table.h"
 #include "abi/bronze_abi.h"
 #include "embed/embed_clone.h"
 #include "runtime/heap.h"
@@ -41,6 +42,7 @@ bool makesObject(uint8_t tag) {
     case kArray: case kObject: case kObjectLayout: case kArrayBuffer: case kBufferBlock:
     case kTypedArray: case kTransferImageBitmap: case kDate: case kRegExp:
     case kMap: case kSet: case kError: case kDataView: case kTransferMesh:
+    case kTableSnapshot:
         return true;
     default:
         return false;
@@ -216,6 +218,12 @@ Value ReaderState::tagged(uint8_t tag, size_t slot, int depth) {
         // upload here (wrapHostImageBitmap).
         const SerializedImage& simg = msg_.transferredImages[idx];
         return wrapHostImageBitmap(simg.pixels, simg.upload);
+    }
+    case kTableSnapshot: {
+        if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated table snapshot index");
+        const uint32_t idx = r_.u32();
+        if (idx >= msg_.sharedSnapshots.size()) return ev::throwTypeError("postMessage: invalid table snapshot index");
+        return wrapHostTableSnapshot(msg_.sharedSnapshots[idx]);
     }
     case kTransferMesh: {
         if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated mesh transfer index");
